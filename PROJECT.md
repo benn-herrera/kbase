@@ -54,7 +54,8 @@ or cloud — cloud gemma-4 service is cheap and fast).
   attention are served by the escape hatch (§2), not by an in-app experience.
 - **No business plan.** Evaluated and parked (see the insurance-gap-analysis strategy
   record); this is a personal tool with, at most, an OSS-release option later. That
-  option is why the open-by-inspection posture (§2) is chosen deliberately.
+  option is why the open-by-inspection posture (§2) is chosen deliberately. License:
+  MIT (decided 2026-08-06).
 
 ---
 
