@@ -66,7 +66,7 @@ quality, never correctness.
 
 ## Status
 
-Early. The design is settled ([PROJECT.md](PROJECT.md)); the code is at
+Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)); the code is at
 hello-world scaffolding. Validation plan: shakedown on the small Rojo v7 docs,
 then the Roblox `creator-docs` prose domains.
 
@@ -83,7 +83,8 @@ just dist       # cross-builds: darwin-arm64, windows-amd64, linux-amd64
 just cover      # aggregate test coverage
 ```
 
-Design record and rationale: [PROJECT.md](PROJECT.md).
+Design reference: [ARCHITECTURE.md](ARCHITECTURE.md). Implementation
+specifics and constants: [SPEC.md](SPEC.md).
 
 ## License
 

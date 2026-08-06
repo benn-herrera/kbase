@@ -1,4 +1,4 @@
-# kbase task recipes — two-gate discipline (PROJECT.md §4 "Tooling"):
+# kbase task recipes — two-gate discipline:
 # `edit-gate` after every change (cheap), `checkpoint` once at checkpoints (full).
 
 BIN_DIR := "bin"

@@ -18,20 +18,19 @@ hierarchical summaries, and mechanically generated bidirectional navigation link
 ## Build and Run
 
 ```sh
-just build    # debug build (cargo build)
-just release  # optimized build → target/release/laterm
-just test     # unit tests (cargo test)
-just check    # type-check all three release targets (validates cfg flags)
-just dist     # cross-build aarch64-apple-darwin, x86_64-unknown-linux-gnu,
-              #   x86_64-pc-windows-gnu via cargo-zigbuild → dist/
-just install  # copy this OS's dist binary to ~/bin (INSTALL_DIR overrides);
-              #   rm-then-cp for a fresh inode + dequarantine on macOS
-just fmt      # cargo fmt
-just lint     # cargo clippy --all-targets
-just setup    # rustup targets + cargo-zigbuild (needs zig: brew install zig)
+just            # list recipes
+just build      # host-platform build → bin/kbase
+just test       # unit tests (VERBOSE=1 for per-test output)
+just edit-gate  # cheap gate, run after every change: fmt-check + go vet
+just checkpoint # full gate, run at checkpoints: edit-gate + test + build
+just cover      # aggregate whole-suite coverage → cover.out
+just fmt        # gofmt -w over the Go source roots
+just dist       # cross-builds → bin/: darwin-arm64, windows-amd64, linux-amd64
+just add-dependency <module>@<version>  # pin ONE vetted module
 ```
 
-`just dist` cross-compiles every target from one host
+`just dist` cross-compiles every target from one host (pure Go, no extra
+toolchain setup needed).
 
 ---
 
@@ -50,11 +49,16 @@ TBD
 
 ## Key Architecture Constraints
 
-These are invariants from ARCHITECTURE.md. Violating any is a blocking defect.
+The invariants and design principles in ARCHITECTURE.md (§2, §3) bind every code
+change; violating any is a blocking defect. They are deliberately not restated
+here — ARCHITECTURE.md is the single source. Working habits they impose:
 
-### Isolation constraints
-
-TBD
+- Before writing code, have ARCHITECTURE.md §2–§3 fresh in context; check your
+  change against them before considering it done.
+- When a requested change collides with an invariant or principle, stop and
+  surface the collision — do not quietly pick a side.
+- Constants live in the ARCHITECTURE.md constants table and as named constants
+  in code; never introduce a magic number alongside them.
 
 ---
 
