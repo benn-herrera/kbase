@@ -55,7 +55,12 @@ or cloud — cloud gemma-4 service is cheap and fast).
 - **No business plan.** Evaluated and parked (see the insurance-gap-analysis strategy
   record); this is a personal tool with, at most, an OSS-release option later. That
   option is why the open-by-inspection posture (§2) is chosen deliberately. License:
-  MIT (decided 2026-08-06).
+  MIT (decided 2026-08-06). Deeper history:
+  `../insurance-gap-analysis/kb-personant-tech-monetization.md` (predates the parking
+  decisions, which live in that project's agent memory). Related market fact
+  (verified 2026-08-06): Roblox ships a first-party AI-docs surface (llms.txt,
+  per-page `.md` endpoints, Studio MCP) — retrieval tools; kbase's value claim is
+  the curated-topography/docent experience, not retrieval.
 
 ---
 

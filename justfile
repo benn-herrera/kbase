@@ -63,7 +63,7 @@ fmt:
 [doc("fail if any Go source is not canonically formatted")]
 fmt-check:
     @drift="$(gofmt -l {{GOSRCDIRS}})"; \
-    if [ -n "$drift" ]; then \
+    if [[ -n "$drift" ]]; then \
       echo "gofmt drift — these files are not canonically formatted:"; \
       echo "$drift" | sed 's/^/  /'; \
       echo "run 'just fmt' to fix."; \

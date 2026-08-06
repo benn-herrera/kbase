@@ -1,4 +1,4 @@
-# personant — working principles
+# kbase — working principles
 Full contract: AGENTS.md. This file is the drift-watch: rules quietly broken when AGENTS.md falls out of context.
 
 ## Conversational Tone
@@ -20,7 +20,7 @@ While planning, read the primary sources the plan depends on — actual current 
 
 ## Use existing task automation
 - Never do ad-hoc shell or code execution for tasks with existing `just` definitions.
-- Never `go build` or `go test` or any other go commands directly. Use the appropriate make target for the task e.g. `just build` or `just test`.
+- Never `go build` or `go test` or any other go commands directly. Use the appropriate just recipe for the task e.g. `just build` or `just test`.
 
 ## Coding
 - Use coder agents for coding work unless directed otherwise. Ensure coder agents receive AGENTS.md to understand full contract when working.

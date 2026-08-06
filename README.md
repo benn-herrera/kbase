@@ -83,8 +83,7 @@ just dist       # cross-builds: darwin-arm64, windows-amd64, linux-amd64
 just cover      # aggregate test coverage
 ```
 
-Design record and rationale: [PROJECT.md](PROJECT.md). Agent/contributor
-orientation: [AGENT_HANDOFF.md](AGENT_HANDOFF.md).
+Design record and rationale: [PROJECT.md](PROJECT.md).
 
 ## License
 
