@@ -45,6 +45,9 @@ internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
 internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
+internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
+                    CRITICAL/REMINDER trailer, per-slot churn hashes
+internal/tokens/    single chars-per-token estimator (§8)
 internal/version/   single-source version identity
 ```
 

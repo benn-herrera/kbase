@@ -344,7 +344,7 @@ prevention is holding against a real prefix cache.
 | Boundary overlap | percentage of neighbor sections | exact % TBD at calibration |
 | Min section size | > overlap size | pre-merged mechanically before refinement |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
-| Chars-per-token | TBD at calibration | gemma-4-specific constant; heuristic counter (§8), usage-refined |
+| Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
 | CRITICAL section cap | 100 words (provisional) | slot-8 trailer incl. injected acceptance criteria; enforced by build-time test + builder refusal (§7) |
 
