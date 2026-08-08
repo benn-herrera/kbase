@@ -283,6 +283,34 @@ concept, not wire messages.
   into review flags and regeneration cost. At well under 1% of a target call, the
   restatement is insurance priced at noise.
 
+### Phase-gated churn enforcement
+
+Slot stability is enforced at three layers, each covering what the previous one
+cannot reach:
+
+1. **Type system (builder).** Slots 1–3 are constructor-set on an immutable
+   per-stage context; slot 8 is derived and never directly settable. Mutating a
+   stable slot mid-loop is not a runtime error — it does not compile.
+2. **Phase matrix (orchestrator).** The orchestrator holds a phase enum
+   (job-setup → stage-setup → call-loop → section-transition → …) and an
+   allowed-operations matrix **as data**: every context-affecting operation
+   (rebuild a stage context, flush reference buffer A, …) checks the matrix, and a
+   disallowed operation is a loud defect. This closes the gap types cannot reach:
+   constructing a *fresh* stage context with different bytes mid-task is
+   type-legal but a churn bug — the risk is identity across instances, not
+   mutation of one.
+3. **Churn tripwire (per call, always on).** The builder emits per-slot byte
+   hashes with every built call; slots the current phase declares stable must
+   hash identically to the previous call, and a mismatch is a loud refusal —
+   the drift-gate discipline applied to prompt bytes. This is the production
+   form of the prefix-stability property; cheap (a few string hashes per call).
+
+Single source of truth: the phase matrix that gates operations also derives the
+expected-stability frontier asserted by the builder's sequence tests — tests and
+runtime enforce the same table. End-to-end verification signal: providers'
+`cached_tokens` usage accounting gives wire-level ground truth that churn
+prevention is holding against a real prefix cache.
+
 ---
 
 ## 8. Token counting
