@@ -2,6 +2,12 @@
 # `edit-gate` after every change (cheap), `checkpoint` once at checkpoints (full).
 
 BIN_DIR := "bin"
+DIST_DIR := "dist"
+
+# dist-only build trim: -trimpath drops local filesystem paths from the
+# binary; -s -w strips symbol table + DWARF (panic traces keep function
+# names). Local `just build` stays fat for debugging.
+RELEASE_FLAGS := "-trimpath -ldflags=-s\\ -w"
 GOPKGS := "./..."
 GOSRCDIRS := "cmd internal"
 
@@ -17,27 +23,44 @@ build:
 test:
     go test ${VERBOSE:+-v} ./...
 
+# run the unit tests under the race detector (slower; catches real data races)
+test-race:
+    go test -race ${VERBOSE:+-v} ./...
+
 # Cheap gate: run after every change.
 edit-gate: fmt-check
     go vet ./...
 
 # Full suite: run once at checkpoints.
-checkpoint: edit-gate test build
+checkpoint: edit-gate test-race build
 
 clean:
     @echo "cleaning local kbase build"
     @rm -f {{BIN_DIR}}/kbase
 
-# cross-platform dist builds: apple-silicon mac, x86_64 windows, x86_64 linux
+# cross-platform dist builds (apple-silicon mac, x86_64 windows, x86_64 linux),
+# staged with the user-facing README + LICENSE and tarballed as the user
+# distro artifact: {{DIST_DIR}}/kbase-dist-<version>.tar.gz, unpacking to
+# kbase-<version>/. Version comes from the binary itself (internal/version
+# stays the single source).
 dist: test
     @mkdir -p {{BIN_DIR}}
-    GOOS=darwin  GOARCH=arm64 go build -o {{BIN_DIR}}/kbase-darwin-arm64 ./cmd
-    GOOS=windows GOARCH=amd64 go build -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
-    GOOS=linux   GOARCH=amd64 go build -o {{BIN_DIR}}/kbase-linux-amd64 ./cmd
+    GOOS=darwin  GOARCH=arm64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-darwin-arm64 ./cmd
+    GOOS=windows GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
+    GOOS=linux   GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-linux-amd64 ./cmd
+    @ver="$(go run ./cmd --version)"; \
+    stage="{{DIST_DIR}}/kbase-$ver"; \
+    rm -rf "$stage" && mkdir -p "$stage" && \
+    cp {{BIN_DIR}}/kbase-* "$stage/" && \
+    cp USER_README.md "$stage/README.md" && \
+    cp USER_AGENTS.md "$stage/AGENTS.md" && \
+    cp LICENSE "$stage/" && \
+    tar -czf "{{DIST_DIR}}/kbase-dist-$ver.tar.gz" -C {{DIST_DIR}} "kbase-$ver" && \
+    echo "dist: {{DIST_DIR}}/kbase-dist-$ver.tar.gz"
 
 nuke:
     @echo "cleaning all kbase builds"
-    rm -rf {{BIN_DIR}}
+    rm -rf {{BIN_DIR}} {{DIST_DIR}}
 
 # cover reports aggregate test coverage across all packages. -coverpkg
 # instruments every package for every test binary, so the number

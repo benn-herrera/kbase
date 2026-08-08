@@ -37,13 +37,27 @@ toolchain setup needed).
 ## Module Structure
 
 ```
-cmd/
-internal/
+cmd/                kbase CLI (cobra): composition root + one file per verb
+internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
+                    config.toml choices (provider, [models] heavy/light tiers)
+internal/detect/    pure gemma-4 family/tier classifier over model-id lists
+                    (no I/O); precision-first matching
+internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
+                    ListModels, ConsultDrained (stream-and-drain), mock fabric
+internal/version/   single-source version identity
 ```
 
 ### Module responsibilities in brief
 
-TBD
+- **cmd/**: verb logic lives behind a plain options-struct function; the cobra
+  `RunE` is a thin loader shell, so verbs unit-test without process/network.
+- **internal/config**: loaders take explicit paths (tests never touch a real
+  home). Per-entry provider faults never abort the pool; fault reasons carry
+  no key material.
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey}` is the transport-level
+  slice of a provider. Long pipeline calls use `ConsultDrained` (streaming
+  transport, blocking semantics) for idle-timeout robustness. API keys never
+  appear in logs or error strings.
 
 ---
 

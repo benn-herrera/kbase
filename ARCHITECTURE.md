@@ -225,6 +225,64 @@ Careful, not complex — no stage ever legitimately needs the corpus in a window
 - Overflow behavior: **refuse-and-split** (loud), pushed back to the skeleton. Never
   truncate, never evict.
 
+### Per-call slot layout (stability-ordered)
+
+The builder assembles every call from an ordered slot stack, most stable content
+first:
+
+| # | Slot | Stability | Content |
+|---|---|---|---|
+| 1 | System frame | job-constant | process framing + job-stable specifics, generated **once at job start** from an embedded deterministic template; universal static text first, job-interpolated lines last. Churn prevented by construction. |
+| 2 | Agent definition | stage-constant | the stage's embedded definition, including its `## CRITICAL` section |
+| 3 | Task definition | task-constant | what this agent is working on; formatted-in specifics chosen for stability |
+| 4 | Task status | per-call | checklist/status lines ordered most→least stable, so the fastest-churning line (e.g. current file) is last |
+| 5 | Reference buffer A | multi-call | orchestrator-curated material stable across several calls (e.g. cross-file listings); flushed on stage/section transitions |
+| 6 | Content buffer | per-call | the source span / child summaries / prior output under work |
+| 7 | Reference buffer B | per-call | orchestrator-curated transient material specific to the current content |
+| 8 | Reminder trailer | per-call | `REMINDER:`-wrapped render of the `## CRITICAL` block + per-call acceptance criteria (see below) |
+
+The ordering is simultaneously:
+
+- **Cache-optimal.** Prefix caching pays for byte-identical leading tokens, and any
+  mutation invalidates everything after it — so descending stability maximizes the
+  reusable prefix across a stage's call fan-out. The same principle applies *within*
+  slot 4: when only its last line changes, the cache holds through everything above.
+- **Attention-safe.** Long-context degradation is U-shaped: primacy and recency
+  positions are well-attended (attention sinks + causal exposure at the front,
+  positional locality at the back); the middle sags. Slots 1–4 sit in the primacy
+  zone, the trailer in the recency zone; only the middle buffers hold at-risk
+  positions, and nothing load-bearing lives there without a trailer restatement.
+
+All slot content is deterministic from embedded templates + job inputs + task
+state — the model never writes into its own context (buffers are
+orchestrator-curated), and the provenance tuple reproduces exact prompt bytes.
+Gemma's chat template has no true system role, so the stack renders through one
+deterministic template into a single user turn; slot boundaries are a builder
+concept, not wire messages.
+
+### CRITICAL / REMINDER mechanism
+
+- An agent definition may carry a `## CRITICAL` section: the few constraints whose
+  violation is the stage's characteristic failure (e.g. verbatim-no-summarization
+  for distillation). The section is named for its *content*, so the label is true at
+  every position it renders.
+- The builder renders it **twice**: as-authored in slot 2 (primacy) and
+  `REMINDER:`-wrapped as slot 8 (recency) — stated up front, repeated last, the two
+  well-attended ends. Dual-render is a builder flag so the eval harness can A/B it
+  per stage/tier.
+- Slot 8 additionally carries the per-call acceptance criteria the taxonomy skeleton
+  already emits (tiling ranges, budgets) — data injection by the builder, never a
+  model judgment call, sharing the same cap.
+- The trailer is **hard-capped** (§9) and the cap is enforced loudly, never by
+  truncation: a unit test over the embedded definitions fails the build at dev time,
+  and the builder refuses an over-cap trailer at runtime (which also covers
+  user-adapted definition copies).
+- Why it exists: retrieval survives distance far better than *sustained adherence*
+  during long generations — constraint drift late in a long output is the
+  characteristic small-tier failure, and it compounds across thousands of leaf calls
+  into review flags and regeneration cost. At well under 1% of a target call, the
+  restatement is insurance priced at noise.
+
 ---
 
 ## 8. Token counting
@@ -259,6 +317,8 @@ Careful, not complex — no stage ever legitimately needs the corpus in a window
 | Min section size | > overlap size | pre-merged mechanically before refinement |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
 | Chars-per-token | TBD at calibration | gemma-4-specific constant; heuristic counter (§8), usage-refined |
+| Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
+| CRITICAL section cap | 100 words (provisional) | slot-8 trailer incl. injected acceptance criteria; enforced by build-time test + builder refusal (§7) |
 
 ---
 

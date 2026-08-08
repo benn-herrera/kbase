@@ -4,6 +4,11 @@ cover.out
 bin/kbase
 bin/kbase.exe
 
+# temp directory for assembling dist tarballs
+dist/
+# tarballs that may be copied around the tree by a messy developer
+*.tgz
+
 **/.claude/agents/
 **/.claude/agents
 **/.claude/commands/

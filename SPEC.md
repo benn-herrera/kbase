@@ -13,7 +13,36 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   is pure gemma-4; an out-of-family model runs a stage only via explicit manual
   override, never silently. (Rationale and tier mapping: ARCHITECTURE.md §3,
   §10. Generated KBs are consumed BYOM — §3, §5.)
-- Required config: provider API URL + key.
+- Config directory: `~/.config/kbase`, overridable by `$KBASE_CONFIG_DIR`, and
+  outermost by the `--config-dir` flag. Two files:
+  - `providers.toml` — the endpoint pool: name-keyed tables of
+    `baseUrl` + `apiKeyFile` (preferred; path relative to the file) or
+    `apiKeyUnsafe` (inline). An individually unusable entry is dropped with a
+    warning naming the reason (never key material); the rest of the pool
+    still loads.
+  - `config.toml` — the choices: `provider` (active pool entry) and
+    `[models]` with `heavy`/`light` tier assignments.
+- Provider selection (any verb): `--provider` flag, else config.toml's
+  `provider`, else the sole pool entry; with several entries and none chosen,
+  the command lists them and fails rather than picking one.
+- `kbase models [--provider NAME]` lists the selected provider's available
+  model identifiers, sorted, one per line.
+- `kbase configure [--provider NAME] [--model-map heavy=ID,light=ID]` scans
+  the provider's model list, auto-detects gemma-4 family models tolerant of
+  provider naming variance (`google/gemma-4-31b-it`, `gemma4:31b-a4b`, …), and
+  assigns tiers (31B → heavy; A4B or any 26B → light — a bare gemma-4 26B id
+  is treated as an alias of the A4B MoE). A tier fills
+  automatically only when exactly one candidate matches; zero or several
+  candidates fail loudly, listing every model id seen and the `--model-map`
+  syntax to assign manually — never a silent best-guess. `--model-map`
+  entries always win per-tier; a mapped id absent from the provider's list
+  warns but proceeds. On success the resolved choices are written into
+  config.toml by targeted update: only the `provider` value and the `[models]`
+  `heavy`/`light` keys change — config.toml is a primary user-editable file,
+  and every other line (comments, unknown keys, formatting) is preserved
+  byte-for-byte. A file whose layout defeats safe targeted editing (or is
+  invalid TOML) is refused with nothing written, never blind-overwritten. On
+  any failure nothing is written.
 - **Model auto-detection:** on configure, the app discovers available models from
   the provider and auto-selects gemma-4 family models (max-convenience default).
   Matching must be tolerant of provider naming variance (`google/gemma-4-31b-it`,
