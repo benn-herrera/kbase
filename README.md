@@ -69,10 +69,8 @@ quality, never correctness.
 Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)). Landed so
 far: config plumbing (`~/.config/kbase` provider pool + choices), the
 OpenAI-compatible client (blocking + streaming, mock fabric), and the
-`models` / `configure` verbs with gemma-4 tier auto-detection. The pipeline
-stages (ingest → survey → taxonomy → dissection → distillation → summaries)
-are next. Validation plan: shakedown on the small Rojo v7 docs, then the
-Roblox `creator-docs` prose domains.
+`models` / `configure` verbs with gemma-4 tier auto-detection. What's next
+lives in [ROADMAP.md](ROADMAP.md).
 
 ## Development
 

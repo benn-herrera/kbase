@@ -2,7 +2,8 @@
 
 Guidance for agents (automated or human) working on this codebase.
 **Read ARCHITECTURE.md first.** It is the authoritative design reference and
-supersedes any inference you draw from code alone.
+supersedes any inference you draw from code alone. The live task queue is
+ROADMAP.md; ephemeral per-burst plans live in `TEMP_*.md` files.
 
 ---
 
