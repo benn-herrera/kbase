@@ -2,7 +2,8 @@
 
 Ordered intentions, not commitments. This file churns freely; design truth
 lives in ARCHITECTURE.md / SPEC.md, per-burst execution detail in `TEMP_*.md`
-plans (gitignored-by-habit, disposed after landing). Finished items are
+plans (gitignored, disposed after landing — see AGENTS.md "Plan & Execute
+Process"). Finished items are
 deleted, not archived — git history is the log.
 
 ## Now

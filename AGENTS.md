@@ -77,6 +77,23 @@ here — ARCHITECTURE.md is the single source. Working habits they impose:
 
 ---
 
+## Plan & Execute Process
+
+Non-trivial work bursts follow a standard shape:
+
+1. Write the plan to `TEMP_PLAN_<SCREAMING_SNAKE_TOPIC>.md` at the repo root
+   (e.g. `TEMP_PLAN_CONTEXT_MANAGEMENT.md`), including decisions confirmed at
+   kickoff, work-package boundaries, and sequencing status.
+2. Execute out of the plan file — dispatched agents read it; status checkboxes
+   update as work packages land.
+3. Discard the file once the work is landed and reviewed. `TEMP_*.md` is
+   gitignored; these files are never committed.
+
+Why repo-root and not agent memory (`~/.claude/projects/<project>/memory/`):
+plans there are invisible to the human and accumulate forever. A root-level
+TEMP file is human-inspectable while live and dies when done. The durable
+task queue is ROADMAP.md; TEMP plans are per-burst execution detail only.
+
 ## Testing
 
 TBD
