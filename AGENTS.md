@@ -2,7 +2,8 @@
 
 Guidance for agents (automated or human) working on this codebase.
 **Read ARCHITECTURE.md first.** It is the authoritative design reference and
-supersedes any inference you draw from code alone.
+supersedes any inference you draw from code alone. The live task queue is
+ROADMAP.md; ephemeral per-burst plans live in `TEMP_*.md` files.
 
 ---
 
@@ -21,29 +22,73 @@ hierarchical summaries, and mechanically generated bidirectional navigation link
 just            # list recipes
 just build      # host-platform build → bin/kbase
 just test       # unit tests (VERBOSE=1 for per-test output)
+just test-race  # unit tests under the race detector
 just edit-gate  # cheap gate, run after every change: fmt-check + go vet
-just checkpoint # full gate, run at checkpoints: edit-gate + test + build
+just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
+just test-integration        # omnibus: every per-corpus integration test
+just test-integration-rojo   # pinned Rojo corpus: summary values + determinism
+just prep-test-integration-rojo  # fetch that corpus into build/test_data/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
-just dist       # cross-builds → bin/: darwin-arm64, windows-amd64, linux-amd64
+just fmt-check  # read-only counterpart of fmt; fails on formatting drift
+just clean      # remove the host build (bin/kbase)
+just nuke       # remove every build output (bin/, dist/)
+just dist       # checkpoint, then cross-builds → bin/ + a staged distro tarball
 just add-dependency <module>@<version>  # pin ONE vetted module
+just update-dependencies                # upgrade the WHOLE module graph
 ```
 
 `just dist` cross-compiles every target from one host (pure Go, no extra
-toolchain setup needed).
+toolchain setup needed) and runs `checkpoint` first — a cross-build is what
+users receive, so it ships only from a tree that passes the full gate.
+
+**No built binaries live in the repo.** `bin/` and `dist/` are local build
+products, gitignored entirely. The distribution artifact is the versioned
+tarball `just dist` stages, published as an artifact on a GitHub releases
+entry — publishing is the user's act. Agents may run `just dist` to verify
+the cross-build still succeeds; never commit build outputs or publish
+releases.
+
+**Test data layout.** `test_data/fixtures/` holds version-controlled test
+data we author, own, and maintain. `test_data/transient/` (gitignored) holds
+cloud-sourced corpus clones, generated test data, and test output. Never
+write generated or downloaded data into `fixtures/`.
 
 ---
 
 ## Module Structure
 
 ```
-cmd/
-internal/
+cmd/                kbase CLI (cobra): composition root + one file per verb
+internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
+                    config.toml choices (provider, [models] heavy/light tiers)
+internal/detect/    pure gemma-4 family/tier classifier over model-id lists
+                    (no I/O); precision-first matching
+internal/ingest/    Markdown corpus walk + immutable source custody (§4
+                    stage 1); per-file sha256 + corpus content hash
+internal/log/       leveled structured logging seam over log/slog; console
+                    plus optional file tee, built at the composition root
+internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
+                    ListModels, ConsultDrained (stream-and-drain), mock fabric
+internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
+                    CRITICAL/REMINDER trailer, per-slot churn hashes
+internal/survey/    per-file structural inventory (§4 stage 2): heading tree
+                    with byte offsets, section token sizes, link graph, gists
+internal/tokens/    single chars-per-token estimator (§8)
+internal/version/   single-source version identity
 ```
 
 ### Module responsibilities in brief
 
-TBD
+- **cmd/**: verb logic lives behind a plain options-struct function; the cobra
+  `RunE` is a thin loader shell, so verbs unit-test without process/network.
+- **internal/config**: loaders take explicit paths (tests never touch a real
+  home). Per-entry provider faults never abort the pool; fault reasons carry
+  no key material.
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey}` is the transport-level
+  slice of a provider. Long pipeline calls use `ConsultDrained` (streaming
+  transport, blocking semantics) for idle-timeout robustness. API keys never
+  appear in logs or error strings.
 
 ---
 
@@ -62,6 +107,23 @@ here — ARCHITECTURE.md is the single source. Working habits they impose:
 
 ---
 
+## Plan & Execute Process
+
+Non-trivial work bursts follow a standard shape:
+
+1. Write the plan to `TEMP_PLAN_<SCREAMING_SNAKE_TOPIC>.md` at the repo root
+   (e.g. `TEMP_PLAN_CONTEXT_MANAGEMENT.md`), including decisions confirmed at
+   kickoff, work-package boundaries, and sequencing status.
+2. Execute out of the plan file — dispatched agents read it; status checkboxes
+   update as work packages land.
+3. Discard the file once the work is landed and reviewed. `TEMP_*.md` is
+   gitignored; these files are never committed.
+
+Why repo-root and not agent memory (`~/.claude/projects/<project>/memory/`):
+plans there are invisible to the human and accumulate forever. A root-level
+TEMP file is human-inspectable while live and dies when done. The durable
+task queue is ROADMAP.md; TEMP plans are per-burst execution detail only.
+
 ## Testing
 
 TBD
@@ -76,4 +138,17 @@ TBD
 
 ## Logging
 
-TBD
+`internal/log` is the only logging seam: a four-method `Logger` interface
+(`Debug`/`Info`/`Warn`/`Error`, each taking alternating key/value pairs) with
+`log/slog` behind it.
+
+- It is built **once**, in the composition root (`cmd/main.go`), from the
+  persistent `--log-level` (debug|info|warn|error, default warn) and
+  `--log-file` flags. `--log-file` tees; it never redirects.
+- It is **threaded, not global**: a component that logs takes a `log.Logger`
+  parameter, so its logging is visible in its constructor signature. There is
+  no package-level logger and no setter; `log.Discard()` covers a caller with
+  nothing to hand it.
+- Never call `slog` directly, and never use `fmt.Fprintf(os.Stderr, ...)` for
+  a diagnostic. Verb *output* — a summary line, a user-facing warning — is a
+  different channel and stays on the verb's `Stderr` writer.

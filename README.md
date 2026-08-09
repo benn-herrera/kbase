@@ -66,9 +66,11 @@ quality, never correctness.
 
 ## Status
 
-Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)); the code is at
-hello-world scaffolding. Validation plan: shakedown on the small Rojo v7 docs,
-then the Roblox `creator-docs` prose domains.
+Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)). Landed so
+far: config plumbing (`~/.config/kbase` provider pool + choices), the
+OpenAI-compatible client (blocking + streaming, mock fabric), and the
+`models` / `configure` verbs with gemma-4 tier auto-detection. What's next
+lives in [ROADMAP.md](ROADMAP.md).
 
 ## Development
 
@@ -77,14 +79,23 @@ Task recipes use [`just`](https://github.com/casey/just):
 ```
 just            # list recipes
 just edit-gate  # cheap gate: run after every change (fmt-check + vet)
-just checkpoint # full gate: edit-gate + tests + build
+just checkpoint # full gate: edit-gate + race-enabled tests + build
 just build      # host-platform binary → bin/kbase
-just dist       # cross-builds: darwin-arm64, windows-amd64, linux-amd64
+just test       # unit tests (VERBOSE=1 for per-test output)
+just test-race  # unit tests under the race detector
+just dist       # cross-builds + user distro tarball → dist/kbase-dist-<version>.tar.gz
 just cover      # aggregate test coverage
 ```
 
+This file is the **developer** README. [USER_README.md](USER_README.md) and
+[USER_AGENTS.md](USER_AGENTS.md) are the user-facing pair — `just dist` ships
+them as `README.md` (humans) and `AGENTS.md` (AI agents) inside the distro
+tarball. No built binaries are committed to the repo: distribution is the
+dist tarball attached to a GitHub releases entry.
+
 Design reference: [ARCHITECTURE.md](ARCHITECTURE.md). Implementation
-specifics and constants: [SPEC.md](SPEC.md).
+specifics and constants: [SPEC.md](SPEC.md). Working contract for agents and
+contributors: [AGENTS.md](AGENTS.md).
 
 ## License
 

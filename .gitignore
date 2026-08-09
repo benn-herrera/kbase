@@ -1,8 +1,20 @@
 # test/coverage droppings
 cover.out
 
-bin/kbase
-bin/kbase.exe
+# build output for built debug and dist executables
+bin/
+# temp directory for assembling dist tarballs
+dist/
+
+# integration-test working data (pinned corpus clones etc.)
+# most test data will be pulled from cloud git repos.
+# manual local test fixtures
+test_data/transient/
+
+# tarballs that may be copied around the tree by a messy developer
+*.tgz
+
+TEMP_*.md
 
 **/.claude/agents/
 **/.claude/agents

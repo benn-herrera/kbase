@@ -84,7 +84,11 @@ judgment roles; the human at the edges.**
 
 - **Specified, not autonomous.** A fixed pipeline with a termination condition — not
   an agent free-roaming the corpus. Reproducibility requires same process → same
-  output.
+  output. Terminology guard (ruled 2026-08-09): in this codebase, "agent" names a
+  **Go-side construct** — a role with an embedded definition, slot-built context,
+  and one-shot model calls — never an LLM-driven tool-calling loop. Each pipeline
+  step is mechanical where possible; LLM execution is reserved for what cannot
+  practically be done any other way.
 
 - **Propose-and-verify at every model seam.** The model never mutates canonical bytes.
   It emits *data with a mechanically checkable post-condition* (a cut list that must
@@ -159,7 +163,7 @@ judgment roles; the human at the edges.**
 
 | # | Stage | Actor | Notes |
 |---|---|---|---|
-| 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. |
+| 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
 | 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists. For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
 | 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document skeleton: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
 | 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
@@ -225,6 +229,113 @@ Careful, not complex — no stage ever legitimately needs the corpus in a window
 - Overflow behavior: **refuse-and-split** (loud), pushed back to the skeleton. Never
   truncate, never evict.
 
+### Per-call slot layout (stability-ordered)
+
+The builder assembles every call from an ordered slot stack, most stable content
+first:
+
+| # | Slot | Stability | Content |
+|---|---|---|---|
+| 1 | System frame | job-constant | process framing + job-stable specifics, generated **once at job start** from an embedded deterministic template; universal static text first, job-interpolated lines last. Churn prevented by construction. |
+| 2 | Agent definition | stage-constant | the stage's embedded definition, including its `## CRITICAL` section |
+| 3 | Task definition | task-constant | what this agent is working on; formatted-in specifics chosen for stability |
+| 4 | Reference buffer A | multi-call | orchestrator-curated material stable across several calls (e.g. cross-file listings); flushed on stage/section transitions |
+| 5 | Task status | per-call | checklist/status lines ordered most→least stable, so the fastest-churning line (e.g. current file) is last |
+| 6 | Content buffer | per-call | the source span / child summaries / prior output under work |
+| 7 | Reference buffer B | per-call | orchestrator-curated transient material specific to the current content |
+| 8 | Reminder trailer | per-call | `REMINDER:`-wrapped render of the `## CRITICAL` block + per-call acceptance criteria (see below) |
+
+The ordering is simultaneously:
+
+- **Cache-optimal.** Prefix caching pays for byte-identical leading tokens, and any
+  mutation invalidates everything after it — so descending stability maximizes the
+  reusable prefix across a stage's call fan-out. The same principle applies *within*
+  slot 5: when only its last line changes, the cache holds through everything above.
+  This is why the multi-call buffer outranks the per-call status block: a status line
+  churning every call must not re-prefill a cross-file listing, and under stage-5
+  fan-out the buffer is shared across workers while the status block is per-worker.
+- **Attention-safe.** Long-context degradation is U-shaped: primacy and recency
+  positions are well-attended (attention sinks + causal exposure at the front,
+  positional locality at the back); the middle sags. Slots 1–5 sit in the primacy
+  zone, the trailer in the recency zone; only the middle buffers hold at-risk
+  positions, and nothing load-bearing lives there without a trailer restatement. The
+  status block pays for slot 4's position by sitting a buffer deeper — acceptable
+  because status lines are orienting, not load-bearing: the per-call facts that bind
+  (the span, the acceptance criteria) live in slot 6 and are restated in the trailer.
+
+The 4/5 ordering is **provisional**, pending the measurement §7 already names as
+ground truth: run the shakedown corpus both ways and read `cached_tokens` (plus
+per-call telemetry) rather than reasoning further about attention curves. It also
+**presumes reference buffer A is flushed at section/stage transitions** as the table
+says — that policy is the orchestrator's to enforce (phase matrix), and a buffer that
+churned per call would move the frontier *up*, making the ordering a loss rather than
+a win.
+
+All slot content is deterministic from embedded templates + job inputs + task
+state — the model never writes into its own context (buffers are
+orchestrator-curated), and the provenance tuple reproduces exact prompt bytes.
+Gemma's chat template has no true system role, so the stack renders through one
+deterministic template into a single user turn; slot boundaries are a builder
+concept, not wire messages.
+
+### CRITICAL / REMINDER mechanism
+
+- An agent definition may carry a `## CRITICAL` section: the few constraints whose
+  violation is the stage's characteristic failure (e.g. verbatim-no-summarization
+  for distillation). The section is named for its *content*, so the label is true at
+  every position it renders.
+- The builder renders it **twice**: as-authored in slot 2 (primacy) and
+  `REMINDER:`-wrapped as slot 8 (recency) — stated up front, repeated last, the two
+  well-attended ends. Dual-render is a builder flag so the eval harness can A/B it
+  per stage/tier.
+- Slot 8 additionally carries the per-call acceptance criteria the taxonomy skeleton
+  already emits (tiling ranges, budgets) — data injection by the builder, never a
+  model judgment call, under its own reserved share of the cap.
+- The trailer is **hard-capped** (§9) and the cap is enforced loudly, never by
+  truncation: a unit test over the embedded definitions fails the build at dev time,
+  and the builder refuses an over-cap trailer at runtime (which also covers
+  user-adapted definition copies). The cap is **split into reserved shares** —
+  authored section and injected criteria — and each half is enforced against its own
+  share, never against the sum. That is what makes the dev-time gate a *sufficient*
+  condition for the runtime one: a definition that passes cannot then be pushed over
+  by conforming criteria, which would be an unfixable failure (the definition ships
+  embedded and immutable, and splitting content does not shrink a trailer). The two
+  overruns are distinct error types, so a caller can tell the failure it caused from
+  the one it inherited.
+- Why it exists: retrieval survives distance far better than *sustained adherence*
+  during long generations — constraint drift late in a long output is the
+  characteristic small-tier failure, and it compounds across thousands of leaf calls
+  into review flags and regeneration cost. At well under 1% of a target call, the
+  restatement is insurance priced at noise.
+
+### Phase-gated churn enforcement
+
+Slot stability is enforced at three layers, each covering what the previous one
+cannot reach:
+
+1. **Type system (builder).** Slots 1–3 are constructor-set on an immutable
+   per-stage context; slot 8 is derived and never directly settable. Mutating a
+   stable slot mid-loop is not a runtime error — it does not compile.
+2. **Phase matrix (orchestrator).** The orchestrator holds a phase enum
+   (job-setup → stage-setup → call-loop → section-transition → …) and an
+   allowed-operations matrix **as data**: every context-affecting operation
+   (rebuild a stage context, flush reference buffer A, …) checks the matrix, and a
+   disallowed operation is a loud defect. This closes the gap types cannot reach:
+   constructing a *fresh* stage context with different bytes mid-task is
+   type-legal but a churn bug — the risk is identity across instances, not
+   mutation of one.
+3. **Churn tripwire (per call, always on).** The builder emits per-slot byte
+   hashes with every built call; slots the current phase declares stable must
+   hash identically to the previous call, and a mismatch is a loud refusal —
+   the drift-gate discipline applied to prompt bytes. This is the production
+   form of the prefix-stability property; cheap (a few string hashes per call).
+
+Single source of truth: the phase matrix that gates operations also derives the
+expected-stability frontier asserted by the builder's sequence tests — tests and
+runtime enforce the same table. End-to-end verification signal: providers'
+`cached_tokens` usage accounting gives wire-level ground truth that churn
+prevention is holding against a real prefix cache.
+
 ---
 
 ## 8. Token counting
@@ -258,7 +369,16 @@ Careful, not complex — no stage ever legitimately needs the corpus in a window
 | Boundary overlap | percentage of neighbor sections | exact % TBD at calibration |
 | Min section size | > overlap size | pre-merged mechanically before refinement |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
-| Chars-per-token | TBD at calibration | gemma-4-specific constant; heuristic counter (§8), usage-refined |
+| Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
+| Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
+| Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
+| Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
+| Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
+| Gist word cap | 40 words | survey routing hints and titles (`survey.gistWordCap`); word-capped, never mid-word |
+| Max corpus bytes | 256 MB (provisional) | in-memory ingest ceiling (`ingest.maxCorpusBytes`); loud refusal, no override flag |
+| CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.criticalWordCap`); the budget the two reserved shares below are cut from, never itself enforced |
+| — authored `## CRITICAL` share | 60 words (derived) | `prompt.authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
+| — injected criteria share | 40 words (provisional) | `prompt.maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |
 
 ---
 
