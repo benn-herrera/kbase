@@ -18,11 +18,14 @@ import "strings"
 // the whole grammar; there is no other place an id is inspected.
 const (
 	// markerFamily plus markerVersion is the split spelling of the family
-	// (`gemma-4`, `gemma_4`, `gemma.4`); markerFamilyFused is the same
-	// marker written as one token (`gemma4`, `gemma4:31b`).
-	markerFamily      = "gemma"
-	markerVersion     = "4"
-	markerFamilyFused = markerFamily + markerVersion
+	// (`gemma-4`, `gemma_4`); markerFamilyFused is the same marker written
+	// as one token (`gemma4`, `gemma4:31b`); markerFamilyDotted is the
+	// dotted spelling (`gemma.4`), matched whole because the family marker
+	// is read WITHOUT splitting on `.` — see familySeparators.
+	markerFamily       = "gemma"
+	markerVersion      = "4"
+	markerFamilyFused  = markerFamily + markerVersion
+	markerFamilyDotted = markerFamily + "." + markerVersion
 
 	// markerMoE is the 26B-A4B mixture-of-experts marker — the active-
 	// parameter count, which no dense variant carries.
@@ -40,9 +43,19 @@ const (
 )
 
 // separators are the characters providers use between an id's parts. All
-// are equivalent: normalization splits on any of them, so `gemma-4-31b`,
-// `gemma_4_31b` and `gemma4:31b` reduce to the same token sequence.
+// are equivalent when reading TIER markers: normalization splits on any of
+// them, so `gemma-4-31b`, `gemma_4_31b` and `gemma4:31b` reduce to the same
+// token sequence.
 const separators = "/:_-. "
+
+// familySeparators is separators without `.`, and is what the FAMILY marker
+// is read with. A point release is written with a dot, so keeping `4.1`
+// whole is what makes `gemma-4.1-31b` a non-member: split on the dot it
+// would read as `gemma` `4` and inherit this family's tier assignment,
+// which is a successor family's weights running an evaluated prompt set
+// nobody ran them against. The dotted spelling of the family itself is
+// still recognized — see isFamily.
+const familySeparators = "/:_- "
 
 // Result is one classification pass over a provider's catalogue. Every id
 // handed to Classify appears in exactly one bucket, and each bucket keeps
@@ -73,9 +86,16 @@ type Result struct {
 // An id is a family member when, after normalization, it contains the
 // family marker: `gemma` immediately followed by `4`, either fused
 // (`gemma4`) or as the next token (`gemma-4`, `gemma_4`, `gemma.4`). The
-// version token must be exactly `4`, so `gemma-3-27b`, `gemma34b` and a
+// version must be exactly `4`, so `gemma-3-27b`, `gemma34b`, a
 // hypothetical `gemma-4b` (a 4-billion-parameter model, not the family)
-// are all non-members.
+// and a `gemma-4.1-*` successor are all non-members.
+//
+// What this cannot see: a third-party finetune whose id is token-identical
+// to a first-party one — `someorg/gemma-4-31b-abliterated` differs from
+// the real thing only in a suffix no rule can enumerate, and the org
+// prefix is dropped precisely so that an org name never decides a family.
+// Such ids classify as first-party, and that is accepted: the alternative
+// is an allowlist of suffixes that goes stale the week it is written.
 //
 // Within the family, an `a4b` token means the MoE tier (Light) and wins
 // over any size token — `gemma4:31b-a4b` names the MoE by its total and
@@ -89,9 +109,9 @@ type Result struct {
 func Classify(ids []string) Result {
 	var res Result
 	for _, id := range ids {
-		tokens := tokenize(id)
+		tokens := tokenize(id, separators)
 		switch {
-		case !isFamily(tokens):
+		case !isFamily(tokenize(id, familySeparators)):
 			res.Others = append(res.Others, id)
 		case containsToken(tokens, markerMoE), containsToken(tokens, markerMoESize):
 			res.Light = append(res.Light, id)
@@ -106,28 +126,35 @@ func Classify(ids []string) Result {
 
 // tokenize normalizes one model id into lower-case tokens: the provider
 // prefix (everything up to the last `/`) is dropped, and the remainder is
-// split on every separator.
+// split on every character in seps — separators for tier markers,
+// familySeparators for the family marker.
 //
 // Dropping the prefix is what keeps an organization named after a model
 // family from being read as one — `gemma-labs/llama-3-8b` is a llama.
-func tokenize(id string) []string {
+func tokenize(id, seps string) []string {
 	name := id
 	if i := strings.LastIndex(name, "/"); i >= 0 {
 		name = name[i+1:]
 	}
 	return strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
-		return strings.ContainsRune(separators, r)
+		return strings.ContainsRune(seps, r)
 	})
 }
 
-// isFamily reports whether normalized tokens carry the gemma-4 family
-// marker in either of its two spellings.
+// isFamily reports whether tokens — split on familySeparators, so a dotted
+// version arrives whole — carry the gemma-4 family marker.
+//
+// Three spellings count and no others: fused (`gemma4`), dotted
+// (`gemma.4`), and split across two tokens (`gemma` `4`). A version token
+// that is anything but exactly `4` fails all three, which is what puts
+// `gemma-4.1-31b` and `gemma4.1-31b` outside the family rather than inside
+// it wearing its tier.
 func isFamily(tokens []string) bool {
 	for i, tok := range tokens {
-		if tok == markerFamilyFused {
+		switch {
+		case tok == markerFamilyFused, tok == markerFamilyDotted:
 			return true
-		}
-		if tok == markerFamily && i+1 < len(tokens) && tokens[i+1] == markerVersion {
+		case tok == markerFamily && i+1 < len(tokens) && tokens[i+1] == markerVersion:
 			return true
 		}
 	}

@@ -92,9 +92,13 @@ func TestParseDefinitionMultipleCritical(t *testing.T) {
 	}
 }
 
+// TestValidateDefinitionWordCap: the dev gate enforces the AUTHORED share of
+// the trailer cap, not the whole cap — the criteria's share is reserved and an
+// author cannot spend it. TestBuildDevGateGuaranteesRuntimePass is the other
+// half of that contract.
 func TestValidateDefinitionWordCap(t *testing.T) {
-	atCap := "## CRITICAL\n\n" + strings.TrimSpace(strings.Repeat("word ", CriticalWordCap)) + "\n"
-	overCap := "## CRITICAL\n\n" + strings.TrimSpace(strings.Repeat("word ", CriticalWordCap+1)) + "\n"
+	atCap := "## CRITICAL\n\n" + words("word", authoredCriticalCap) + "\n"
+	overCap := "## CRITICAL\n\n" + words("word", authoredCriticalCap+1) + "\n"
 
 	if err := ValidateDefinition(atCap); err != nil {
 		t.Errorf("definition at the cap should validate, got %v", err)
@@ -105,9 +109,9 @@ func TestValidateDefinitionWordCap(t *testing.T) {
 	if !errors.As(err, &target) {
 		t.Fatalf("err = %v, want ErrCriticalOverCap", err)
 	}
-	if target.Words != CriticalWordCap+1 || target.Cap != CriticalWordCap {
+	if target.Words != authoredCriticalCap+1 || target.Cap != authoredCriticalCap {
 		t.Errorf("got %d words / cap %d, want %d / %d",
-			target.Words, target.Cap, CriticalWordCap+1, CriticalWordCap)
+			target.Words, target.Cap, authoredCriticalCap+1, authoredCriticalCap)
 	}
 	if strings.Contains(err.Error(), "word word") {
 		t.Error("error message must not echo the section content")

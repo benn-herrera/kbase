@@ -32,6 +32,23 @@ type Config struct {
 
 	// Models maps the pipeline's tiers onto model ids at that provider.
 	Models ModelMap `toml:"models"`
+
+	// Dev holds the developer switches. The table is absent from an
+	// ordinary config.toml, and every switch's off position is its zero
+	// value, so absent and "turns nothing on" are the same state.
+	Dev DevConfig `toml:"dev"`
+}
+
+// DevConfig is the [dev] table: switches for diagnosing kbase itself.
+// Nothing here changes what the pipeline produces — a run with the whole
+// table on emits the same knowledge base as a run without it.
+type DevConfig struct {
+	// Telemetry enables local inference-timing diagnostics: the per-call
+	// timing a provider reports alongside a response, which is a second
+	// measurement channel for prompt-shape and prefill-vs-generation
+	// questions. Off by default, and consumed by the logging facility —
+	// the numbers land in the log, never in the user's output.
+	Telemetry bool `toml:"telemetry"`
 }
 
 // ModelMap is the [models] table: the tier→model-id resolution, written by

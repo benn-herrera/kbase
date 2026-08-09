@@ -9,7 +9,6 @@ package model
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -45,10 +44,11 @@ type Client interface {
 // flowing for the same work. Consult remains the right call for short
 // round-trips and for callers that must not pay the SSE decode.
 //
-// A stream that ends with an incomplete tool call reports that error instead
-// of io.EOF (see StreamReader); ConsultDrained propagates it and returns no
-// partial Response. Reasoning deltas are discarded along with the rest —
-// Response has no field for them by design (see Chunk.Reasoning).
+// A stream that fails mid-flight (transport error, decode error, idle
+// watchdog) reports that error instead of io.EOF; ConsultDrained propagates
+// it and returns no partial Response. Reasoning deltas are discarded along
+// with the rest — Response has no field for them by design (see
+// Chunk.Reasoning).
 func ConsultDrained(ctx context.Context, c Client, req Request) (Response, error) {
 	sr, err := c.ConsultStream(ctx, req)
 	if err != nil {
@@ -82,7 +82,6 @@ type ModelInfo struct {
 type Request struct {
 	Model    string
 	Messages []Message
-	Tools    []ToolSpec
 
 	// Temperature is the sampling temperature, always wired on the wire.
 	// 0 means deterministic (greedy decode); it is NOT a "use server
@@ -93,10 +92,6 @@ type Request struct {
 	// is a real value (no tokens) — not a "use server default" sentinel.
 	// Production callers should construct Requests via DefaultRequest.
 	MaxTokens int
-
-	// StopSequences is sent as `stop` in the wire payload; nil/empty →
-	// field omitted.
-	StopSequences []string
 
 	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
 	// chat-template-level kwargs through to the underlying tokenizer.
@@ -134,47 +129,16 @@ func DefaultRequest(model string, messages []Message) Request {
 	}
 }
 
-// Message is one turn in the chat history.
-//
-// Role is one of: "system", "user", "assistant", "tool". When Role is
-// "assistant" and the model returned tool calls, ToolCalls is populated.
-// When Role is "tool", Content carries the tool result and ToolCallID
-// identifies which prior assistant tool call this responds to.
+// Message is one turn in the chat history. Role is one of "system",
+// "user", or "assistant".
 type Message struct {
-	Role       string
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string
-}
-
-// ToolSpec describes a tool the model may call. Parameters is an
-// OpenAI-style JSON-Schema fragment passed through verbatim; this package
-// does not validate or transform it.
-type ToolSpec struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage
-}
-
-// ToolCall is one tool invocation requested by the model.
-//
-// Args is the raw JSON value of the wire `arguments` field, NOT the
-// decoded argument object. OpenAI-compatible providers send arguments as
-// a JSON-encoded string, so Args typically reads `"{\"q\":\"go\"}"` —
-// unmarshal it into a string first, then unmarshal that string into the
-// argument struct. Both the blocking and the streaming path produce this
-// same representation, and encodeRequest replays it verbatim when the
-// call is echoed back to the provider in an assistant message.
-type ToolCall struct {
-	ID       string
-	Function string
-	Args     json.RawMessage
+	Role    string
+	Content string
 }
 
 // Response is one chat-completions result.
 type Response struct {
 	Content      string
-	ToolCalls    []ToolCall
 	Usage        Usage
 	FinishReason string
 }
@@ -182,15 +146,6 @@ type Response struct {
 // Chunk is one delta in a streamed chat-completion response. Most chunks
 // carry a non-empty Content; the final chunk(s) typically carry empty
 // Content but a non-empty FinishReason and Usage.
-//
-// ToolCalls is an IDENTITY-ONLY progress signal, not executable calls:
-// one entry per tool call this chunk carried a fragment for, holding the
-// ID and Function name known so far. Args is deliberately always nil —
-// a chunk holds a slice of the argument string, which is not valid JSON
-// on its own, so there is nothing safe to put there.
-//
-// The complete, merged calls come from StreamReader.Final().ToolCalls,
-// which accumulates fragments by index across the whole stream.
 //
 // Reasoning carries thinking-mode output, kept strictly separate from
 // Content because they are different kinds of output: Content is the
@@ -203,7 +158,6 @@ type Response struct {
 type Chunk struct {
 	Content      string
 	Reasoning    string
-	ToolCalls    []ToolCall
 	FinishReason string
 	Usage        Usage
 }
@@ -225,6 +179,14 @@ type Chunk struct {
 //
 // Calling Close before EOF aborts the stream cleanly. Close is
 // idempotent; double-close is safe.
+//
+// CONCURRENCY: a StreamReader is single-goroutine. Next, Final, and Close
+// must all be called from the goroutine that owns it; nothing here is
+// guarded, and a second goroutine calling Close mid-Next is a data race.
+// Cross-goroutine abort is the context's job — the ctx passed to
+// ConsultStream is checked first on every Next, so cancelling it stops the
+// iteration from anywhere. Close then releases the transport, from the
+// owning goroutine, on the way out.
 type StreamReader interface {
 	Next() (Chunk, error)
 	Final() Response
@@ -336,14 +298,3 @@ func durationMillis(d time.Duration) float64 { return float64(d.Microseconds()) 
 // ErrMockExhausted is returned by a scripted MockClient when its response
 // queue has been drained. Tests check for this with errors.Is.
 var ErrMockExhausted = errors.New("model: mock client exhausted")
-
-// ErrConsultUnsupported is returned by a Client whose transport genuinely
-// cannot serve a blocking Consult (a hypothetical stream-only backend).
-// It is the ONLY error that authorizes a caller to fall back from Consult
-// to ConsultStream — every other Consult error (transient network, HTTP
-// status, decode) is a real failure and must propagate, not trigger a
-// second (cost-doubling) round-trip. No current client returns this; it
-// exists so a future stream-only client can opt into the fallback
-// explicitly rather than the fallback firing on any error. Match with
-// errors.Is.
-var ErrConsultUnsupported = errors.New("model: blocking Consult not supported by this client; use ConsultStream")

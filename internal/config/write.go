@@ -39,6 +39,12 @@ const (
 	// tableModels is the table holding the tier→model-id map; it mirrors
 	// Config's `toml` tag for Models.
 	tableModels = "models"
+
+	// commentGap separates a rewritten assignment from the trailing
+	// comment carried over from the line it replaced. The original spacing
+	// is not reproduced — the value's width changed, so the alignment it
+	// was chosen for is gone either way.
+	commentGap = "  "
 )
 
 // configTemplate is what a config.toml that does not exist yet is created
@@ -69,7 +75,9 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // file, so an existing one is updated line by line: the lines carrying the
 // keys above are rewritten and every other byte — comments, blank-line
 // grouping, key spelling and spacing, keys and tables Config does not model
-// — passes through untouched.
+// — passes through untouched. A rewritten line's own trailing comment
+// survives too: those three lines are the ones a user is likeliest to have
+// annotated. Only its spacing is normalized (see commentGap).
 //
 // The line editor understands the TOML layouts config.toml is written in,
 // not all of TOML (a multiline string whose text looks like a table header
@@ -129,7 +137,8 @@ func updateLines(src string, cfg Config) string {
 		found       = map[string]bool{}
 	)
 	for i, line := range lines {
-		trimmed := stripComment(strings.TrimSpace(line))
+		code, comment := splitComment(line)
+		trimmed := strings.TrimSpace(code)
 		if name, isHeader := tableHeader(trimmed); isHeader {
 			if table == tableModels && modelsEnd < 0 {
 				modelsEnd = i
@@ -141,9 +150,9 @@ func updateLines(src string, cfg Config) string {
 		key := lineKey(trimmed)
 		switch {
 		case table == "" && key == keyProvider && !found[keyProvider]:
-			lines[i] = assign(keyProvider, cfg.Provider)
+			lines[i] = withComment(assign(keyProvider, cfg.Provider), comment)
 		case table == tableModels && (key == TierHeavy || key == TierLight) && !found[key]:
-			lines[i] = assign(key, tierValue(cfg, key))
+			lines[i] = withComment(assign(key, tierValue(cfg, key)), comment)
 		default:
 			continue
 		}
@@ -220,22 +229,45 @@ func verifyUpdate(before, after string, cfg Config) error {
 }
 
 // installConfig writes content to path atomically, creating the containing
-// directory if it is missing.
+// directory if it is missing. A path that is a symlink is followed: the
+// write lands on the file the link names, and the link itself survives.
 func installConfig(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, configDirPerm); err != nil {
 		return fmt.Errorf("config: create %s: %w", dir, err)
 	}
 
-	tmp, err := os.CreateTemp(dir, configTempPattern)
+	// A config.toml symlinked into a dotfiles repo is a common setup for
+	// exactly this kind of file, and renaming over the link would replace
+	// it with a regular file — leaving the dotfiles copy stale, and the
+	// user's next `git status` there showing nothing. So the write targets
+	// what the link resolves to. A path that does not resolve is its own
+	// target: that is the ordinary case of a file being created.
+	target := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		target = resolved
+	}
+
+	// The temp file sits beside the RESOLVED target, so the rename stays
+	// within one filesystem even when the link crosses one.
+	tmpDir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(tmpDir, configTempPattern)
 	if err != nil {
-		return fmt.Errorf("config: create temp file in %s: %w", dir, err)
+		return fmt.Errorf("config: create temp file in %s: %w", tmpDir, err)
 	}
 	// Removing the temp file is a no-op once the rename has consumed it,
 	// and the cleanup that matters on every failure path below.
 	defer os.Remove(tmp.Name())
 
 	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("config: write %s: %w", path, err)
+	}
+	// The rename is atomic against a concurrent reader with or without
+	// this, but not against a crash: without the flush, the new name can
+	// come back pointing at an empty file. One sync closes the gap between
+	// what the doc comment above claims and what the write does.
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
@@ -248,7 +280,7 @@ func installConfig(path, content string) error {
 	if err := os.Chmod(tmp.Name(), configFilePerm); err != nil {
 		return fmt.Errorf("config: chmod %s: %w", path, err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := os.Rename(tmp.Name(), target); err != nil {
 		return fmt.Errorf("config: install %s: %w", path, err)
 	}
 	return nil
@@ -265,15 +297,42 @@ func tierValue(cfg Config, tier string) string {
 	return id
 }
 
-// stripComment removes a trailing comment from a trimmed line, so that a
-// commented table header still reads as one. It gives up when a quote
-// precedes the `#`, where the marker may be part of a value rather than a
-// comment — the resulting line simply matches nothing.
-func stripComment(trimmed string) string {
-	if i := strings.IndexByte(trimmed, '#'); i >= 0 && !strings.ContainsAny(trimmed[:i], `"'`) {
-		return strings.TrimSpace(trimmed[:i])
+// splitComment cuts a line at its trailing comment, returning the text
+// before the `#` and the comment from the `#` onward (empty when there is
+// none). It is what lets a commented table header still read as one, and
+// what lets a rewritten assignment keep the note beside it.
+//
+// The scan is quote-aware, because `#` is an ordinary character inside a
+// value: a basic string honours backslash escapes, a literal string does
+// not. A line whose quotes never close — in a real config.toml that means
+// a multiline string, whose interior this editor does not follow — yields
+// no comment, and matches nothing.
+func splitComment(line string) (code, comment string) {
+	var quote byte
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case quote == '"' && c == '\\':
+			i++ // an escaped character cannot close the string
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#':
+			return line[:i], line[i:]
+		}
 	}
-	return trimmed
+	return line, ""
+}
+
+// withComment re-attaches a preserved trailing comment to a rewritten
+// assignment.
+func withComment(assignment, comment string) string {
+	if comment == "" {
+		return assignment
+	}
+	return assignment + commentGap + comment
 }
 
 // tableHeader reports whether a trimmed line opens a table and, if so,

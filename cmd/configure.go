@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -13,7 +11,6 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/detect"
-	"kbase/internal/model"
 )
 
 const (
@@ -36,41 +33,21 @@ const (
 // names; this is the single source of the order.
 var configureTiers = []string{config.TierHeavy, config.TierLight}
 
-// configureOptions is the resolved input of the configure verb: the
-// already-loaded config-file state, the flag values, the path the result
-// is written to, and the process resources the verb is otherwise not
-// entitled to name for itself.
+// configureOptions is the resolved input of the configure verb: the shared
+// provider-reaching options plus this verb's own flag and the path the
+// result is written to.
+//
+// The embedded Config's [models] table is deliberately not consulted here —
+// re-running configure is how a stale model map is replaced.
 type configureOptions struct {
-	// Providers and Faults are LoadProviders' two returns: the usable
-	// pool and the entries that dropped out of it.
-	Providers config.Providers
-	Faults    []config.ProviderFault
-
-	// Config is the config.toml already on disk. It supplies the fallback
-	// provider choice when --provider is unset; its [models] table is not
-	// consulted, because re-running configure is how a stale model map is
-	// replaced.
-	Config config.Config
-
-	// Provider is the --provider flag; empty selects by the rules in
-	// selectProviderName.
-	Provider string
+	providerOptions
 
 	// ModelMap holds the raw --model-map values, one per occurrence of
 	// the flag, each possibly comma-separated.
 	ModelMap []string
 
-	// Timeout is the --timeout flag; zero or negative means
-	// defaultListTimeout.
-	Timeout time.Duration
-
 	// ConfigPath is the config.toml the resolved choices are written to.
 	ConfigPath string
-
-	Stderr io.Writer // warnings, failure detail, and the summary line
-
-	// NewClient is the client seam; nil means model.NewHTTPClient.
-	NewClient newClientFunc
 }
 
 // runConfigure resolves a provider, discovers its model catalogue, assigns
@@ -98,42 +75,15 @@ func runConfigure(ctx context.Context, opts configureOptions) error {
 		return err
 	}
 
-	// A provider dropped from the pool is a warning, not a failure: the
-	// one being configured may well have loaded. Fault reasons carry path
-	// and IO detail only, never key material.
-	for _, f := range opts.Faults {
-		fmt.Fprintf(opts.Stderr, "configure: provider %q unavailable: %s\n", f.Name, f.Reason)
-	}
-
-	name, err := selectProviderName(opts.Provider, opts.Config.Provider, opts.Providers)
+	name, client, ctx, release, err := opts.dial(ctx)
 	if err != nil {
 		return err
 	}
-	p, ok := opts.Providers[name]
-	if !ok {
-		return unresolvedProviderError(name, opts.Faults)
-	}
+	defer release()
 
-	newClient := opts.NewClient
-	if newClient == nil {
-		newClient = model.NewHTTPClient
-	}
-	client := newClient(model.Endpoint{Name: name, BaseURL: p.BaseURL, APIKey: p.APIKey})
-
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = defaultListTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	infos, err := client.ListModels(ctx)
+	ids, err := catalogueIDs(ctx, client)
 	if err != nil {
-		return fmt.Errorf("configure: list models: %w", err)
-	}
-	ids := make([]string, 0, len(infos))
-	for _, mi := range infos {
-		ids = append(ids, mi.ID)
+		return err
 	}
 
 	// A manually assigned id the provider does not list is a warning, not
@@ -290,37 +240,23 @@ mapping is a wrong answer that never announces itself. A model named in
 provider catalogues rotate.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir, err := resolveConfigDir()
+		dir, opts, err := loadVerbContext()
 		if err != nil {
 			return err
 		}
-		providers, faults, err := config.LoadProviders(config.ProvidersPath(dir))
-		if err != nil {
-			return err
-		}
-		cfg, err := config.LoadConfig(config.ConfigPath(dir))
-		if err != nil {
-			return err
-		}
+		opts.Provider = configureFlagProvider
+		opts.Timeout = configureFlagTimeout
 		return runConfigure(cmd.Context(), configureOptions{
-			Providers:  providers,
-			Faults:     faults,
-			Config:     cfg,
-			Provider:   configureFlagProvider,
-			ModelMap:   configureFlagModelMap,
-			Timeout:    configureFlagTimeout,
-			ConfigPath: config.ConfigPath(dir),
-			Stderr:     os.Stderr,
+			providerOptions: opts,
+			ModelMap:        configureFlagModelMap,
+			ConfigPath:      config.ConfigPath(dir),
 		})
 	},
 }
 
 func init() {
-	configureCmd.Flags().StringVar(&configureFlagProvider, "provider", "",
-		"pool entry from "+config.ProvidersFileName+" to configure (default: the provider named in "+config.ConfigFileName+", else the sole entry)")
+	registerProviderFlags(configureCmd, &configureFlagProvider, &configureFlagTimeout, "configure")
 	configureCmd.Flags().StringArrayVar(&configureFlagModelMap, "model-map", nil,
 		"explicit tier assignment, e.g. "+config.TierHeavy+"=<id>"+modelMapPairSep+config.TierLight+"=<id> (repeatable; unnamed tiers are auto-detected)")
-	configureCmd.Flags().DurationVar(&configureFlagTimeout, "timeout", defaultListTimeout,
-		"deadline for the catalogue request")
 	rootCmd.AddCommand(configureCmd)
 }

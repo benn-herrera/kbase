@@ -10,6 +10,29 @@ import "strings"
 // whitespace-separated fields, matching how the cap reads to a human author.
 const CriticalWordCap = 100
 
+// The trailer cap is split into two reserved shares, and the two halves are
+// enforced separately (never their sum). Otherwise the dev-time gate is not a
+// sufficient condition for the runtime one: a 95-word section validates,
+// ships embedded in an immutable binary, and then every call carrying
+// criteria fails with nothing anyone can do about it — the definition cannot
+// be edited and splitting content does not shrink a trailer.
+//
+// Neither figure is exported. A definition author reads them from §9; a
+// caller that overruns learns the cap from the error it gets back.
+const (
+	// maxCriteriaWords is the injected acceptance criteria's reserved share.
+	// The criteria the skeleton emits are a handful of mechanical lines
+	// (tiling ranges, budgets) — 40 words is several of them with room to
+	// spare, and it leaves the authored section the larger half, which is
+	// the half a human writes prose in.
+	maxCriteriaWords = 40
+
+	// authoredCriticalCap is what ValidateDefinition enforces: what is left
+	// of the trailer once the criteria's share is reserved. Passing it
+	// guarantees the runtime check passes for any conforming criteria set.
+	authoredCriticalCap = CriticalWordCap - maxCriteriaWords
+)
+
 // criticalHeading is the exact heading that opens the section, matched
 // case-sensitively at the start of a line. Strict on purpose: `## Critical`
 // or an indented variant is an authoring slip, and a near-miss that silently
@@ -66,22 +89,22 @@ func ParseDefinition(md string) (Definition, error) {
 			break
 		}
 	}
-	def.Critical = trimBlock(strings.Join(lines[start:end], "\n"))
+	def.Critical = normalizeSlot(strings.Join(lines[start:end], "\n"))
 	return def, nil
 }
 
 // ValidateDefinition is the dev-time gate on an agent definition: it parses,
-// checks the trailer cap against the authored section alone, and rejects
-// malformed placeholders. The embedded-definition test walks this; the
-// builder repeats the cap check at runtime because user-adapted copies never
-// pass through here.
+// checks the authored section against its reserved share of the trailer cap,
+// and rejects malformed placeholders. The embedded-definition test walks
+// this; passing it is a sufficient condition for the builder's runtime check,
+// which repeats it because user-adapted copies never pass through here.
 func ValidateDefinition(md string) error {
 	def, err := ParseDefinition(md)
 	if err != nil {
 		return err
 	}
-	if n := wordCount(def.Critical); n > CriticalWordCap {
-		return ErrCriticalOverCap{Words: n, Cap: CriticalWordCap}
+	if n := wordCount(def.Critical); n > authoredCriticalCap {
+		return ErrCriticalOverCap{Words: n, Cap: authoredCriticalCap}
 	}
 	if _, err := scanPlaceholders(md); err != nil {
 		return err
@@ -104,13 +127,6 @@ func headingLevel(line string) int {
 		return n
 	}
 	return 0
-}
-
-// trimBlock strips the blank lines and trailing whitespace around a block.
-// Leading whitespace on the first content line is preserved — it may be
-// list indentation, which is structure, not padding.
-func trimBlock(s string) string {
-	return strings.TrimRight(strings.TrimLeft(s, "\n\r"), " \t\n\r")
 }
 
 // wordCount counts whitespace-separated fields. Script-agnostic by

@@ -12,7 +12,8 @@ import (
 // slot whose input changed. These tests make that falsifiable, and in doing so
 // pin the delimiter scheme against regressions.
 
-// statusBlock renders slot 4 the way the builder does, from the input alone.
+// statusBlock renders the status slot the way the builder does, from the
+// input alone.
 func statusBlock(in CallInput) string { return strings.Join(in.StatusLines, statusLineDelimiter) }
 
 // perCallInput returns the input text behind a per-call slot, derived from
@@ -29,16 +30,16 @@ func perCallInput(in CallInput, s Slot) string {
 	case SlotRefB:
 		return in.RefB
 	case SlotReminder:
-		return strings.Join(in.AcceptanceCriteria, statusLineDelimiter)
+		return strings.Join(in.AcceptanceCriteria, trailerCriteriaDelimiter)
 	default:
 		return ""
 	}
 }
 
 // commonLinePrefix returns the length of the longest common prefix of a and b
-// that ends on a line boundary. Within slot 4 the guarantee is per line, not
-// per byte: when only the last status line changes, the bytes above it are
-// untouched and the cache holds through them.
+// that ends on a line boundary. Within the status slot the guarantee is per
+// line, not per byte: when only the last status line changes, the bytes above
+// it are untouched and the cache holds through them.
 func commonLinePrefix(a, b string) int {
 	n := 0
 	for n < len(a) && n < len(b) && a[n] == b[n] {
@@ -52,10 +53,10 @@ func commonLinePrefix(a, b string) int {
 
 // expectedFrontier computes the byte offset through which two built calls
 // must agree: the start of the first per-call slot whose input differs,
-// extended through the unchanged leading lines of slot 4.
+// extended through the unchanged leading lines of the status block.
 func expectedFrontier(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall) int {
 	t.Helper()
-	for _, s := range []Slot{SlotTaskStatus, SlotRefA, SlotContent, SlotRefB, SlotReminder} {
+	for _, s := range []Slot{SlotRefA, SlotTaskStatus, SlotContent, SlotRefB, SlotReminder} {
 		a, b := perCallInput(prevIn, s), perCallInput(curIn, s)
 		if a == b {
 			continue
@@ -93,7 +94,7 @@ func assertStablePrefix(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCa
 }
 
 func TestPrefixStabilityPairwise(t *testing.T) {
-	sc := NewStageContext(baseSpec(t))
+	sc := newContext(t, baseSpec(t))
 
 	for _, tc := range []struct {
 		name string
@@ -107,7 +108,7 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 		{
 			name:          "content only",
 			mutate:        func(in CallInput) CallInput { in.Content = "A different span entirely."; return in },
-			stableThrough: SlotRefA,
+			stableThrough: SlotTaskStatus,
 		},
 		{
 			name:          "transient reference only",
@@ -123,28 +124,32 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 			stableThrough: SlotRefB,
 		},
 		{
+			// The flush is the one per-call event that costs the whole
+			// stage-constant prefix and everything the buffer holds.
 			name: "multi-call reference flush",
 			mutate: func(in CallInput) CallInput {
 				in.RefA = "Cross-file listing:\n- c.md\n- d.md"
 				return in
 			},
-			stableThrough: SlotTaskStatus,
+			stableThrough: SlotTaskDef,
 		},
 		{
+			// Status sits BELOW the multi-call buffer, so churning it costs
+			// the status block and what follows — never the buffer.
 			name: "last status line only",
 			mutate: func(in CallInput) CallInput {
 				in.StatusLines = []string{"Sections done: 2/9", "Current file: guide/api.md"}
 				return in
 			},
-			stableThrough: SlotTaskDef,
+			stableThrough: SlotRefA,
 		},
 		{
-			name: "first status line invalidates the rest of slot 4",
+			name: "first status line invalidates the rest of the status block",
 			mutate: func(in CallInput) CallInput {
 				in.StatusLines = []string{"Sections done: 3/9", "Current file: guide/intro.md"}
 				return in
 			},
-			stableThrough: SlotTaskDef,
+			stableThrough: SlotRefA,
 		},
 		{
 			name:          "buffer emptied",
@@ -185,7 +190,7 @@ func TestPrefixStabilitySequence(t *testing.T) {
 		calls          = 12
 		refAFlushEvery = 4
 	)
-	sc := NewStageContext(baseSpec(t))
+	sc := newContext(t, baseSpec(t))
 
 	callInput := func(i int) CallInput {
 		return CallInput{
@@ -211,13 +216,20 @@ func TestPrefixStabilitySequence(t *testing.T) {
 		t.Run(fmt.Sprintf("call %02d", i), func(t *testing.T) {
 			assertStablePrefix(t, prevIn, curIn, prev, cur)
 
-			// Between flushes the multi-call buffer must hold its bytes.
-			// Note what this does NOT claim: slot 5 sits after slot 4, so
-			// a status line churning every call moves the frontier above
-			// it either way. Slot 5's stability is worth prefix cache only
-			// across calls whose status block is identical.
-			if i%refAFlushEvery != 0 && prev.Hashes[SlotRefA] != cur.Hashes[SlotRefA] {
-				t.Error("reference buffer A churned between flushes")
+			// Between flushes the multi-call buffer must hold its bytes —
+			// and now that it sits above the status block, holding them
+			// buys cache: the whole prefix through the buffer survives a
+			// per-call status change. That is the claim the pre-swap
+			// ordering could not make, because a status line churning
+			// every call moved the frontier above the buffer either way.
+			if i%refAFlushEvery != 0 {
+				if prev.Hashes[SlotRefA] != cur.Hashes[SlotRefA] {
+					t.Error("reference buffer A churned between flushes")
+				}
+				end := prev.Offsets[SlotRefA].End
+				if end != cur.Offsets[SlotRefA].End || prev.UserTurn[:end] != cur.UserTurn[:end] {
+					t.Error("status churn cost the prefix through the multi-call buffer")
+				}
 			}
 			// Only the last status line churns per call, so the cache must
 			// hold through the lines above it.

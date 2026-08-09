@@ -135,6 +135,67 @@ apiKeyFile = "not-here.key"
 	if strings.Contains(faults[0].Reason, fakeKey) {
 		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
 	}
+	if faults[0].Warning {
+		t.Error("a dropped provider was reported as a warning")
+	}
+}
+
+// TestLoadProvidersExposedKeyFile: a key file the whole machine can read is
+// worth saying out loud — but the key resolved, so the provider still
+// loads. A refusal here would be kbase declining to use a credential it
+// just read successfully, which is a puzzle rather than a safeguard.
+func TestLoadProvidersExposedKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := writeFile(t, dir, "reaper.key", fakeKey+"\n")
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Skipf("cannot chmod a fixture in this environment: %v", err)
+	}
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat key fixture: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		// Windows synthesizes modes, so there is no exposure to detect.
+		t.Skipf("the filesystem did not take the mode (got %v); nothing to test", info.Mode().Perm())
+	}
+	path := writeProviders(t, dir, `
+[reaper]
+baseUrl = "https://api.example.com/v1"
+apiKeyFile = "reaper.key"
+`)
+
+	got, faults, err := LoadProviders(path)
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
+	}
+	if p, ok := got["reaper"]; !ok || p.APIKey != fakeKey {
+		t.Fatal("an exposed key file is a warning, not a refusal: the provider must still load with its key")
+	}
+	if len(faults) != 1 || faults[0].Name != "reaper" || !faults[0].Warning {
+		t.Fatalf("want exactly one warning fault naming reaper, got %+v", faults)
+	}
+	if !strings.Contains(faults[0].Reason, keyPath) || !strings.Contains(faults[0].Reason, "0644") {
+		t.Errorf("fault reason %q names neither the path nor the mode", faults[0].Reason)
+	}
+	if strings.Contains(faults[0].Reason, fakeKey) {
+		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
+	}
+}
+
+// TestLoadProvidersOwnerOnlyKeyFile: the recommended setup must be silent.
+// A permission warning that fires on a correctly-permissioned file is a
+// warning users learn to scroll past.
+func TestLoadProvidersOwnerOnlyKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "reaper.key", fakeKey+"\n") // written 0600
+	path := writeProviders(t, dir, `
+[reaper]
+baseUrl = "https://api.example.com/v1"
+apiKeyFile = "reaper.key"
+`)
+	if _, faults, err := LoadProviders(path); err != nil || len(faults) != 0 {
+		t.Errorf("a 0600 key file produced %+v (err %v)", faults, err)
+	}
 }
 
 // TestLoadProvidersUnusableEntries: kbase is inference-only. An absent

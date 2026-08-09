@@ -20,7 +20,13 @@ deleted, not archived — git history is the log.
   stage; MAD is reserved for the deterministic pipeline spine when it lands.
 - **Tasking/orchestrator layer** — phase enum + allowed-operations matrix
   (ARCHITECTURE §7 layers 1–2), feeding the builder's `CheckStability`;
-  buffer flush policy execution.
+  buffer flush policy execution. Carries from the foundation review:
+  decide per-worker vs global stability frontier under stage-5 fan-out;
+  the phase matrix must become the single source the prefix/stability tests
+  derive frontiers from; RefA flush-at-section-transition must land here
+  (precondition for the slot-order swap staying safe); dev-telemetry
+  emission (`[dev] telemetry` switch exists; wire `TelemetryLogDetail`
+  through internal/log at the first pipeline call site).
 
 ## Later (build order exploits determinism-first)
 
@@ -31,7 +37,9 @@ deleted, not archived — git history is the log.
 - Embedded prompt/agent definitions + the family-tuning eval harness.
 - Distillation, hierarchical summaries, review stages; link generation;
   refresh/verify gates (kb_tools port).
-- Rojo v7 end-to-end shakedown → creator-docs prose domains.
+- Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
+  slot-order measurement: validate or reverse the RefA-before-status swap
+  via `cached_tokens` + dev-telemetry prefill timing.
 - Provenance receipt writer; chars-per-token calibration feature.
 - Author AGENTS.md's TBD sections (Testing, Dependency Policy, Logging) as
   their subjects accumulate enough reality to document.

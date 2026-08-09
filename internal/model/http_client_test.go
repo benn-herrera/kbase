@@ -22,6 +22,37 @@ func newTestEndpoint(baseURL string) Endpoint {
 	}
 }
 
+// runStream serves the given SSE body from a test server, drains the
+// stream, and returns every chunk observed, the accumulated Final(), and
+// the TERMINAL error from Next (io.EOF on a clean stream).
+func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte(sse))
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "go"}}))
+	if err != nil {
+		t.Fatalf("ConsultStream: %v", err)
+	}
+	defer sr.Close()
+
+	var chunks []Chunk
+	var termErr error
+	for {
+		chunk, err := sr.Next()
+		if err != nil {
+			termErr = err
+			break
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, sr.Final(), termErr
+}
+
 // TestHTTPClientHappyPath: verify the request body shape, the auth header,
 // the User-Agent header, and the response decode round-trip.
 func TestHTTPClientHappyPath(t *testing.T) {
@@ -189,44 +220,24 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 	}
 }
 
-// TestHTTPClientToolsSerialization: when Tools are present, the request
-// must include a tools array with the OpenAI shape and tool_choice = auto.
-func TestHTTPClientToolsSerialization(t *testing.T) {
-	var gotBody map[string]any
+// TestHTTPClientErrorBodyIsBounded: a provider that answers a failed call
+// with an enormous body (an HTML error page, a runaway log dump) must not
+// turn one request into an unbounded error string.
+func TestHTTPClientErrorBodyIsBounded(t *testing.T) {
+	const bodyBytes = 4 * errorBodyLimit
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &gotBody)
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(strings.Repeat("x", bodyBytes)))
 	}))
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	_, err := c.Consult(context.Background(), Request{
-		Model:    "m",
-		Messages: []Message{{Role: "user", Content: "search please"}},
-		Tools: []ToolSpec{{
-			Name:        "search",
-			Description: "do a search",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("Consult: %v", err)
+	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Fatal("expected error from 502, got nil")
 	}
-	if gotBody["tool_choice"] != "auto" {
-		t.Errorf("tool_choice: got %v, want auto", gotBody["tool_choice"])
-	}
-	tools, _ := gotBody["tools"].([]any)
-	if len(tools) != 1 {
-		t.Fatalf("tools count: got %d, want 1", len(tools))
-	}
-	tool := tools[0].(map[string]any)
-	if tool["type"] != "function" {
-		t.Errorf("tool type: got %v, want function", tool["type"])
-	}
-	fn := tool["function"].(map[string]any)
-	if fn["name"] != "search" {
-		t.Errorf("tool name: got %v, want search", fn["name"])
+	if n := strings.Count(err.Error(), "x"); n != errorBodyLimit {
+		t.Errorf("echoed body: got %d bytes, want the %d-byte cap (server sent %d)", n, errorBodyLimit, bodyBytes)
 	}
 }
 
@@ -593,5 +604,116 @@ func TestHTTPClientStreamCtxCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// openStream opens an SSE stream against handler over the real transport
+// and wraps the body in a reader whose idle watchdog is wound to `idle`
+// rather than the production streamIdleTimeout — the only way to exercise
+// a stall without pinning the suite to the real bound. The returned reader
+// owns the body; the caller must Close it (which also releases the request
+// context, letting a blocked handler return before the server shuts down).
+func openStream(t *testing.T, idle time.Duration, handler http.HandlerFunc) *httpStreamReader {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	if err != nil {
+		cancel(nil)
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		cancel(nil)
+		t.Fatalf("open stream: %v", err)
+	}
+	return newHTTPStreamReader(ctx, cancel, resp.Body, idle)
+}
+
+// sseContentDelta is one content-carrying SSE event, terminated by the
+// blank separator line.
+const sseContentDelta = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
+
+// TestStreamIdleWatchdogAbortsStall: a provider that opens a 2xx stream and
+// then goes silent must be abandoned, not waited on. Without the watchdog
+// this read blocks until the caller's context or the wall clock intervenes
+// — and the caller of a long generation has no useful deadline to give.
+func TestStreamIdleWatchdogAbortsStall(t *testing.T) {
+	sr := openStream(t, 50*time.Millisecond, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte(sseContentDelta))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Go silent. The watchdog's cancellation is the only way out.
+		<-r.Context().Done()
+	})
+	defer sr.Close()
+
+	chunk, err := sr.Next()
+	if err != nil {
+		t.Fatalf("first Next: %v", err)
+	}
+	if chunk.Content != "x" {
+		t.Errorf("first chunk: got %q, want %q", chunk.Content, "x")
+	}
+	// The stall names itself rather than surfacing as a bare "context
+	// canceled", which would read as the caller's doing.
+	if _, err := sr.Next(); !errors.Is(err, errStreamIdle) {
+		t.Fatalf("Next on a stalled stream: got %v, want errStreamIdle", err)
+	}
+	if _, err := sr.Next(); !errors.Is(err, io.EOF) {
+		t.Errorf("Next after the stall: got %v, want io.EOF", err)
+	}
+	if got := sr.Final().Content; got != "x" {
+		t.Errorf("Final.Content: got %q, want the delta observed before the stall", got)
+	}
+}
+
+// TestStreamIdleWatchdogToleratesSlowStream: the watchdog bounds the GAP
+// between reads, not the call. A stream whose total duration is well past
+// the idle window but which never goes quiet for one must run to [DONE].
+// Keepalive comment lines count as liveness — that is how a gateway holds
+// a connection open across a long prefill.
+func TestStreamIdleWatchdogToleratesSlowStream(t *testing.T) {
+	const (
+		events      = 20                     // 400ms total: double the idle window
+		gap         = 20 * time.Millisecond  // each gap well inside it
+		idle        = 200 * time.Millisecond // the window under test
+		contentEach = 5                      // every 5th event carries content
+	)
+	sr := openStream(t, idle, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", mimeEventStream)
+		f, _ := w.(http.Flusher)
+		for i := 1; i <= events; i++ {
+			time.Sleep(gap)
+			if i%contentEach == 0 {
+				_, _ = w.Write([]byte(sseContentDelta))
+			} else {
+				_, _ = w.Write([]byte(": ping\n\n"))
+			}
+			if f != nil {
+				f.Flush()
+			}
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if f != nil {
+			f.Flush()
+		}
+	})
+	defer sr.Close()
+
+	for {
+		if _, err := sr.Next(); err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("slow-but-flowing stream: got %v, want a clean io.EOF", err)
+			}
+			break
+		}
+	}
+	if got, want := sr.Final().Content, strings.Repeat("x", events/contentEach); got != want {
+		t.Errorf("Final.Content: got %q, want %q", got, want)
 	}
 }

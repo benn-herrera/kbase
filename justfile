@@ -1,6 +1,13 @@
 # kbase task recipes — two-gate discipline:
 # `edit-gate` after every change (cheap), `checkpoint` once at checkpoints (full).
 
+# Recipe bodies are bash, not just's default `sh`. Stating it makes the
+# contract explicit rather than inherited from whatever /bin/sh happens to be
+# on the host — bashisms like fmt-check's `[[ ]]` are then legal everywhere,
+# not portable by accident. `-u` (just's own default, kept) makes an unset
+# variable a failure instead of an empty string.
+set shell := ["bash", "-cu"]
+
 BIN_DIR := "bin"
 DIST_DIR := "dist"
 
@@ -34,6 +41,7 @@ edit-gate: fmt-check
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build
 
+[doc("remove the host build only (bin/kbase)")]
 clean:
     @echo "cleaning local kbase build"
     @rm -f {{BIN_DIR}}/kbase
@@ -42,8 +50,11 @@ clean:
 # staged with the user-facing README + LICENSE and tarballed as the user
 # distro artifact: {{DIST_DIR}}/kbase-dist-<version>.tar.gz, unpacking to
 # kbase-<version>/. Version comes from the binary itself (internal/version
-# stays the single source).
-dist: test
+# stays the single source). It runs the full checkpoint first: a cross-build
+# is what users receive, so it ships only from a tree that passes the gate
+# every commit passes.
+[doc("checkpoint, cross-build every target, stage the user distro tarball")]
+dist: checkpoint
     @mkdir -p {{BIN_DIR}}
     GOOS=darwin  GOARCH=arm64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-darwin-arm64 ./cmd
     GOOS=windows GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
@@ -58,6 +69,7 @@ dist: test
     tar -czf "{{DIST_DIR}}/kbase-dist-$ver.tar.gz" -C {{DIST_DIR}} "kbase-$ver" && \
     echo "dist: {{DIST_DIR}}/kbase-dist-$ver.tar.gz"
 
+[doc("remove every build output: bin/ and dist/ entirely")]
 nuke:
     @echo "cleaning all kbase builds"
     rm -rf {{BIN_DIR}} {{DIST_DIR}}
@@ -70,7 +82,7 @@ nuke:
 # line-by-line view run `go tool cover -html=cover.out`. cover.out is
 # a .gitignore'd derived artifact. Build-tagged tests are not included.
 [doc("aggregate whole-suite coverage; headline total on last line")]
-cover: build
+cover:
     go test -coverpkg={{GOPKGS}} -coverprofile=cover.out {{GOPKGS}} --count=1
     @go tool cover -func=cover.out | tail -1
 
@@ -109,6 +121,7 @@ add-dependency mod:
     go get {{mod}}
     go mod tidy
 
+[doc("upgrade the WHOLE module graph; use add-dependency for one module")]
 update-dependencies:
     go mod tidy
     go get -u ./...

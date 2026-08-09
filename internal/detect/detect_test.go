@@ -44,6 +44,15 @@ func TestClassifyOne(t *testing.T) {
 		{"mixed case", "Gemma-4-31B-Instruct", heavy},
 		{"prefixed, suffixed, quantized MoE", "some-org/gemma-4-26b-a4b-it-q4", light},
 		{"underscore separators", "gemma_4_31b_it", heavy},
+		{"dotted family spelling", "gemma.4-31b", heavy},
+
+		// A third-party finetune whose id is token-identical to a
+		// first-party one. It classifies as first-party, and that is
+		// ACCEPTED, not overlooked: the suffix is the only signal, no rule
+		// can enumerate the suffixes, and the org prefix is dropped on
+		// purpose so that an org name never decides a family. Pinned here
+		// so the acceptance is a recorded decision, not a surprise.
+		{"third-party derivative, token-identical", "someorg/gemma-4-31b-abliterated", heavy},
 
 		// The MoE named by its total parameter count alone.
 		{"bare MoE total size", "gemma-4-26b", light},
@@ -60,6 +69,10 @@ func TestClassifyOne(t *testing.T) {
 		{"other family, same version", "llama-4-31b", other},
 		{"unrelated model", "text-embedding-3-large", other},
 		{"parameter count, not version", "gemma-4b-it", other},
+		// A point release is a different family wearing a familiar name:
+		// out-of-family weights inherited the tier before this pinned.
+		{"point-release successor", "gemma-4.1-31b-it", other},
+		{"fused point-release successor", "gemma4.1-31b", other},
 		{"family-named organization", "gemma-labs/llama-3-8b", other},
 		{"empty id", "", other},
 	}

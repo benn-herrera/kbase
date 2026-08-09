@@ -61,10 +61,10 @@ func run(t *testing.T, opts modelsOptions, client *model.MockClient) result {
 // ascending order regardless of the order the provider returned them, the
 // endpoint is built from the pool entry, and the summary goes to stderr.
 func TestRunModelsSortedOutput(t *testing.T) {
-	got := run(t, modelsOptions{
+	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
-	}, model.NewScriptedMock(nil, catalogue("zeta", "alpha", "mu")))
+	}}, model.NewScriptedMock(nil, catalogue("zeta", "alpha", "mu")))
 
 	if got.err != nil {
 		t.Fatalf("runModels: %v", got.err)
@@ -90,10 +90,10 @@ func TestRunModelsSortedOutput(t *testing.T) {
 // TestRunModelsEmptyCatalogue: a provider serving nothing is not an error —
 // stdout is empty and the summary reports count=0.
 func TestRunModelsEmptyCatalogue(t *testing.T) {
-	got := run(t, modelsOptions{
+	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
-	}, model.NewScriptedMock(nil, nil))
+	}}, model.NewScriptedMock(nil, nil))
 
 	if got.err != nil {
 		t.Fatalf("runModels: %v", got.err)
@@ -110,17 +110,41 @@ func TestRunModelsEmptyCatalogue(t *testing.T) {
 // named on stderr — not vanish silently — while a healthy provider still
 // lists.
 func TestRunModelsFaultsAreWarnings(t *testing.T) {
-	got := run(t, modelsOptions{
+	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"good": provider("good", "http://provider.example/v1")},
 		Faults:    []config.ProviderFault{{Name: "bad", Reason: "read apiKeyFile: open missing.key: no such file or directory"}},
 		Provider:  "good",
-	}, model.NewScriptedMock(nil, catalogue("m1")))
+	}}, model.NewScriptedMock(nil, catalogue("m1")))
 
 	if got.err != nil {
 		t.Fatalf("runModels: %v", got.err)
 	}
-	if !strings.Contains(got.stderr, `models: provider "bad" unavailable: read apiKeyFile:`) {
+	if !strings.Contains(got.stderr, `provider "bad" unavailable: read apiKeyFile:`) {
 		t.Errorf("stderr should warn about the faulted provider; got %q", got.stderr)
+	}
+	if got.stdout != "m1\n" {
+		t.Errorf("stdout: got %q, want %q", got.stdout, "m1\n")
+	}
+}
+
+// TestRunModelsWarningFaultKeepsProvider: a fault the provider SURVIVED —
+// an exposed key file, say — must be reported without calling the provider
+// unavailable. It is still in the pool, still selected, and still listed.
+func TestRunModelsWarningFaultKeepsProvider(t *testing.T) {
+	const reason = "key file is readable by group or other"
+	got := run(t, modelsOptions{providerOptions: providerOptions{
+		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
+		Faults:    []config.ProviderFault{{Name: "solo", Reason: reason, Warning: true}},
+	}}, model.NewScriptedMock(nil, catalogue("m1")))
+
+	if got.err != nil {
+		t.Fatalf("runModels: %v", got.err)
+	}
+	if !strings.Contains(got.stderr, `provider "solo": `+reason) {
+		t.Errorf("stderr should carry the warning; got %q", got.stderr)
+	}
+	if strings.Contains(got.stderr, "unavailable") {
+		t.Errorf("a survived fault must not be reported as unavailable; got %q", got.stderr)
 	}
 	if got.stdout != "m1\n" {
 		t.Errorf("stdout: got %q, want %q", got.stdout, "m1\n")
@@ -146,35 +170,35 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		wantErr    string // substring of the expected error
 	}{{
 		name:       "flag beats config",
-		opts:       modelsOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}, Provider: "alpha"},
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}, Provider: "alpha"}},
 		wantChosen: "alpha",
 	}, {
 		name:       "config chosen when flag empty",
-		opts:       modelsOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}},
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
 		wantChosen: "beta",
 	}, {
 		name:       "sole entry needs no choice",
-		opts:       modelsOptions{Providers: pool("alpha")},
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha")}},
 		wantChosen: "alpha",
 	}, {
 		name:    "several entries, none chosen",
-		opts:    modelsOptions{Providers: pool("beta", "alpha")},
+		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("beta", "alpha")}},
 		wantErr: "no provider selected",
 	}, {
 		name:    "empty pool",
-		opts:    modelsOptions{Providers: config.Providers{}},
+		opts:    modelsOptions{providerOptions: providerOptions{Providers: config.Providers{}}},
 		wantErr: "no usable provider",
 	}, {
 		name: "named provider faulted out",
-		opts: modelsOptions{
+		opts: modelsOptions{providerOptions: providerOptions{
 			Providers: pool("good"),
 			Faults:    []config.ProviderFault{{Name: "bad", Reason: "no baseUrl declared"}},
 			Provider:  "bad",
-		},
+		}},
 		wantErr: `provider "bad" failed to load: no baseUrl declared`,
 	}, {
 		name:    "named provider never declared",
-		opts:    modelsOptions{Providers: pool("good"), Provider: "typo"},
+		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("good"), Provider: "typo"}},
 		wantErr: `provider "typo" not found`,
 	}}
 
@@ -206,12 +230,12 @@ func TestRunModelsProviderSelection(t *testing.T) {
 // TestRunModelsSelectionErrorListsCandidates: the failure with several
 // declared providers must name them, since resolving it means choosing one.
 func TestRunModelsSelectionErrorListsCandidates(t *testing.T) {
-	got := run(t, modelsOptions{
+	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{
 			"beta":  provider("beta", "http://beta.example/v1"),
 			"alpha": provider("alpha", "http://alpha.example/v1"),
 		},
-	}, model.NewScriptedMock(nil, nil))
+	}}, model.NewScriptedMock(nil, nil))
 
 	if got.err == nil {
 		t.Fatal("expected a selection error, got nil")
@@ -228,10 +252,10 @@ func TestRunModelsListErrorPropagates(t *testing.T) {
 	client := model.NewScriptedMock(nil, catalogue("m1"))
 	client.SetError(wantErr)
 
-	got := run(t, modelsOptions{
+	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
-	}, client)
+	}}, client)
 
 	if !errors.Is(got.err, wantErr) {
 		t.Fatalf("error: got %v, want it to wrap %v", got.err, wantErr)

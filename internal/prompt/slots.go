@@ -23,14 +23,18 @@ const (
 	SlotAgentDef
 	// SlotTaskDef is task-constant: what this agent is working on.
 	SlotTaskDef
+	// SlotRefA is the multi-call reference buffer: orchestrator-curated
+	// material stable across several calls, flushed on stage/section
+	// transitions. It sits ABOVE the per-call status block because it is the
+	// bulkier of the two and the more stable: a status line churning every
+	// call must not re-prefill a cross-file listing. That ordering is only
+	// worth its position while the flush-at-transition policy holds — RefA
+	// churning per call would move the frontier up instead.
+	SlotRefA
 	// SlotTaskStatus is per-call: checklist/status lines the caller has
 	// already ordered most→least stable, so the fastest-churning line is
 	// last and the cache holds through everything above it.
 	SlotTaskStatus
-	// SlotRefA is the multi-call reference buffer: orchestrator-curated
-	// material stable across several calls, flushed on stage/section
-	// transitions.
-	SlotRefA
 	// SlotContent is the per-call content buffer: the source span, child
 	// summaries, or prior output under work.
 	SlotContent
@@ -48,12 +52,14 @@ const (
 // slot, is over budget.
 const SlotTotal Slot = 0
 
-// allSlots is the render order. Every map BuiltCall returns is keyed over
-// exactly this set, so an empty slot has an entry (a hash, an offset) rather
-// than a hole a caller could misread as "unchanged".
+// allSlots is the render order, which is also ascending slot order — the two
+// are the same list because a slot's number IS its position, and
+// CheckStability walks it to a frontier on that basis. Every map BuiltCall
+// returns is keyed over exactly this set, so an empty slot has an entry (a
+// hash, an offset) rather than a hole a caller could misread as "unchanged".
 var allSlots = [...]Slot{
-	SlotSystemFrame, SlotAgentDef, SlotTaskDef, SlotTaskStatus,
-	SlotRefA, SlotContent, SlotRefB, SlotReminder,
+	SlotSystemFrame, SlotAgentDef, SlotTaskDef, SlotRefA,
+	SlotTaskStatus, SlotContent, SlotRefB, SlotReminder,
 }
 
 // String renders a slot for error messages: number and name, no content.
@@ -67,10 +73,10 @@ func (s Slot) String() string {
 		return "slot 2 (agent definition)"
 	case SlotTaskDef:
 		return "slot 3 (task definition)"
-	case SlotTaskStatus:
-		return "slot 4 (task status)"
 	case SlotRefA:
-		return "slot 5 (reference buffer A)"
+		return "slot 4 (reference buffer A)"
+	case SlotTaskStatus:
+		return "slot 5 (task status)"
 	case SlotContent:
 		return "slot 6 (content buffer)"
 	case SlotRefB:

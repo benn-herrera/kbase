@@ -19,9 +19,12 @@ Externally observable behaviors, contracts, and obligations — the *what*.
     `baseUrl` + `apiKeyFile` (preferred; path relative to the file) or
     `apiKeyUnsafe` (inline). An individually unusable entry is dropped with a
     warning naming the reason (never key material); the rest of the pool
-    still loads.
-  - `config.toml` — the choices: `provider` (active pool entry) and
-    `[models]` with `heavy`/`light` tier assignments.
+    still loads. A key file readable by group/other draws a warning without
+    dropping the entry.
+  - `config.toml` — the choices: `provider` (active pool entry), `[models]`
+    with `heavy`/`light` tier assignments, and an optional `[dev]` table
+    (`telemetry = true` enables local inference-timing diagnostics; default
+    off).
 - Provider selection (any verb): `--provider` flag, else config.toml's
   `provider`, else the sole pool entry; with several entries and none chosen,
   the command lists them and fails rather than picking one.
@@ -44,9 +47,12 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   invalid TOML) is refused with nothing written, never blind-overwritten. On
   any failure nothing is written.
 - **Model auto-detection:** on configure, the app discovers available models from
-  the provider and auto-selects gemma-4 family models (max-convenience default).
-  Matching must be tolerant of provider naming variance (`google/gemma-4-31b-it`,
-  `gemma4:31b-a4b`, …).
+  the provider and auto-selects gemma-4 family models. Matching must be tolerant
+  of provider naming variance (`google/gemma-4-31b-it`, `gemma4:31b-a4b`, …). A
+  tier auto-fills only when exactly one candidate matches. Real catalogues often
+  alias the same weights under several ids (`:free`, `-q4`, `-latest`), so on
+  such providers the expected common path is the fail-loud listing followed by an
+  explicit `--model-map` — never a tie-break guess.
 - **Fail loud and list** on ambiguity or no-match: "no gemma-4 family detected; found
   these; use `--model-map` to assign." Never silent best-guess — a wrong tier mapping
   is exactly the silent-platform failure mode.

@@ -30,6 +30,33 @@ light = "`+lightModel+`"
 	}
 }
 
+// TestLoadConfigDevSwitches: [dev] is optional and every switch is off
+// until the file says otherwise. An absent table and an explicit `false`
+// must be the same state — a diagnostic that turns itself on because a
+// user never wrote the table down is a diagnostic nobody asked for.
+func TestLoadConfigDevSwitches(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"absent table", "provider = \"reaper\"\n", false},
+		{"empty table", "[dev]\n", false},
+		{"explicitly off", "[dev]\ntelemetry = false\n", false},
+		{"on", "[dev]\ntelemetry = true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.Dev.Telemetry != tc.want {
+				t.Errorf("Dev.Telemetry = %v, want %v", cfg.Dev.Telemetry, tc.want)
+			}
+		})
+	}
+}
+
 // TestLoadConfigMissing: a fresh install has no config.toml. That is the
 // unconfigured state, not a failure — the caller decides which gaps are
 // fatal for the command it is running.

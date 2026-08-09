@@ -79,14 +79,23 @@ data: [DONE]
 		}
 	})
 
-	t.Run("predicate-and-log-detail", func(t *testing.T) {
+	t.Run("split-is-the-signal", func(t *testing.T) {
 		if !wantMLXUsage.HasTelemetry() {
 			t.Fatal("HasTelemetry = false on a block that carries telemetry")
 		}
-		const want = "ttft_ms=610.0 prefill_ms=610.0 gen_ms=6280.0 total_ms=6890.0 " +
-			"prefill_tps=1567.5 gen_tps=143.3 prompt_tokens=962 completion_tokens=900 cached_tokens=0"
-		if got := wantMLXUsage.TelemetryLogDetail(); got != want {
-			t.Errorf("TelemetryLogDetail =\n %q\nwant\n %q", got, want)
+		// The prefill/generation SPLIT is what the block is decoded for
+		// (ARCHITECTURE §9 budget calibration): a slow call is diagnosable
+		// only if the two halves arrive as distinct figures rather than
+		// collapsing into the total. Assert the decoded relationship, not
+		// a rendering of it.
+		tm := wantMLXUsage.Telemetry
+		if tm.PrefillDuration+tm.GenerationDuration > tm.TotalDuration {
+			t.Errorf("prefill %v + generation %v exceeds total %v",
+				tm.PrefillDuration, tm.GenerationDuration, tm.TotalDuration)
+		}
+		if tm.PrefillTokensPerSecond <= tm.GenerationTokensPerSecond {
+			t.Errorf("prefill %.1f tok/s should outpace generation %.1f tok/s on this capture",
+				tm.PrefillTokensPerSecond, tm.GenerationTokensPerSecond)
 		}
 	})
 }

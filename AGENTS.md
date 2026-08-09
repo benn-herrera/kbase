@@ -22,16 +22,27 @@ hierarchical summaries, and mechanically generated bidirectional navigation link
 just            # list recipes
 just build      # host-platform build → bin/kbase
 just test       # unit tests (VERBOSE=1 for per-test output)
+just test-race  # unit tests under the race detector
 just edit-gate  # cheap gate, run after every change: fmt-check + go vet
-just checkpoint # full gate, run at checkpoints: edit-gate + test + build
+just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
 just fmt        # gofmt -w over the Go source roots
-just dist       # cross-builds → bin/: darwin-arm64, windows-amd64, linux-amd64
+just fmt-check  # read-only counterpart of fmt; fails on formatting drift
+just clean      # remove the host build (bin/kbase)
+just nuke       # remove every build output (bin/, dist/)
+just dist       # checkpoint, then cross-builds → bin/ + a staged distro tarball
 just add-dependency <module>@<version>  # pin ONE vetted module
+just update-dependencies                # upgrade the WHOLE module graph
 ```
 
 `just dist` cross-compiles every target from one host (pure Go, no extra
-toolchain setup needed).
+toolchain setup needed) and runs `checkpoint` first — a cross-build is what
+users receive, so it ships only from a tree that passes the full gate.
+
+**Dist binaries are the user's to update.** The cross-built binaries under
+`bin/` are LFS-tracked, and only the user refreshes them unless you are
+directly instructed otherwise. Agents may run `just dist` to verify a
+cross-build still succeeds; never commit its outputs.
 
 ---
 
@@ -43,6 +54,8 @@ internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
+internal/log/       leveled structured logging seam over log/slog; console
+                    plus optional file tee, built at the composition root
 internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
@@ -111,4 +124,17 @@ TBD
 
 ## Logging
 
-TBD
+`internal/log` is the only logging seam: a four-method `Logger` interface
+(`Debug`/`Info`/`Warn`/`Error`, each taking alternating key/value pairs) with
+`log/slog` behind it.
+
+- It is built **once**, in the composition root (`cmd/main.go`), from the
+  persistent `--log-level` (debug|info|warn|error, default warn) and
+  `--log-file` flags. `--log-file` tees; it never redirects.
+- It is **threaded, not global**: a component that logs takes a `log.Logger`
+  parameter, so its logging is visible in its constructor signature. There is
+  no package-level logger and no setter; `log.Discard()` covers a caller with
+  nothing to hand it.
+- Never call `slog` directly, and never use `fmt.Fprintf(os.Stderr, ...)` for
+  a diagnostic. Verb *output* — a summary line, a user-facing warning — is a
+  different channel and stays on the verb's `Stderr` writer.

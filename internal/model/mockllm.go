@@ -14,8 +14,10 @@ import (
 // injected failures, and a streaming simulation whose chunk boundaries the
 // test chooses.
 //
-// All methods are safe for concurrent use; a fan-out stage under test may
-// share one MockClient across worker goroutines.
+// MockClient's own methods are safe for concurrent use, so a fan-out stage
+// under test may share one MockClient across worker goroutines. The
+// StreamReader a ConsultStream returns is NOT: like the production reader
+// it belongs to one goroutine (see StreamReader). Each worker gets its own.
 type MockClient struct {
 	mu sync.Mutex
 
@@ -159,8 +161,8 @@ func (m *MockClient) Consult(ctx context.Context, req Request) (Response, error)
 // error surfaces here too, from the stream-open call rather than from
 // Next — the shape a transport failure has.
 //
-// All non-content fields (FinishReason, Usage, ToolCalls) attach to the
-// final chunk so iteration order matches a real provider.
+// All non-content fields (FinishReason, Usage) attach to the final chunk
+// so iteration order matches a real provider.
 func (m *MockClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
 	resp, err := m.Consult(ctx, req)
 	if err != nil {
@@ -237,16 +239,17 @@ func (m *MockClient) Calls() []MockCall {
 }
 
 // mockStreamReader splits a Response.Content into N near-equal chunks and
-// hands them out one Next() call at a time. Tool-calls, finish_reason,
-// and usage attach to the final chunk so iteration matches a real
-// provider's emission order.
+// hands them out one Next() call at a time. finish_reason and usage attach
+// to the final chunk so iteration matches a real provider's emission order.
+//
+// Single-goroutine, matching the StreamReader contract and the production
+// reader: nothing here is guarded, and cancellation is the ctx's job.
 type mockStreamReader struct {
-	ctx     context.Context
-	pieces  []string
-	idx     int
-	full    Response
-	closed  bool
-	closeMu sync.Mutex
+	ctx    context.Context
+	pieces []string
+	idx    int
+	full   Response
+	closed bool
 }
 
 func newMockStreamReader(ctx context.Context, resp Response, chunks int) *mockStreamReader {
@@ -276,7 +279,6 @@ func (r *mockStreamReader) Next() (Chunk, error) {
 		// Final chunk carries the non-content fields.
 		chunk.FinishReason = r.full.FinishReason
 		chunk.Usage = r.full.Usage
-		chunk.ToolCalls = r.full.ToolCalls
 	}
 	return chunk, nil
 }
@@ -293,14 +295,11 @@ func (r *mockStreamReader) Final() Response {
 	if r.idx == len(r.pieces) {
 		out.FinishReason = r.full.FinishReason
 		out.Usage = r.full.Usage
-		out.ToolCalls = r.full.ToolCalls
 	}
 	return out
 }
 
 func (r *mockStreamReader) Close() error {
-	r.closeMu.Lock()
-	defer r.closeMu.Unlock()
 	r.closed = true
 	return nil
 }

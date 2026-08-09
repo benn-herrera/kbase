@@ -32,18 +32,44 @@ func (e ErrOverBudget) Error() string {
 		e.Slot, e.Estimate, e.Budget)
 }
 
-// ErrCriticalOverCap reports a slot-8 trailer over the §9 word cap. It is
-// returned both by ValidateDefinition (the authored `## CRITICAL` section
-// alone, the dev-time gate) and by Build (the combined trailer including
-// injected acceptance criteria, the runtime gate that also covers
-// user-adapted definition copies). Over-cap is refused, never truncated.
+// ErrCriticalOverCap reports an authored `## CRITICAL` section over its
+// reserved share of the §9 trailer cap. It comes from ValidateDefinition (the
+// dev-time gate) and from Build (the same check at runtime, which covers
+// user-adapted definition copies that never passed through the gate). The
+// definition is at fault: nothing the orchestrator does at call time can fix
+// it, which is exactly why it is a different type from ErrCriteriaOverCap.
 type ErrCriticalOverCap struct {
 	Words int
 	Cap   int
 }
 
 func (e ErrCriticalOverCap) Error() string {
-	return fmt.Sprintf("prompt: CRITICAL/REMINDER trailer is %d words, cap is %d", e.Words, e.Cap)
+	return fmt.Sprintf("prompt: authored CRITICAL section is %d words, cap is %d", e.Words, e.Cap)
+}
+
+// ErrCriteriaOverCap reports injected acceptance criteria over their reserved
+// share of the §9 trailer cap. This one IS the caller's to fix: the criteria
+// are per-call data the orchestrator assembles, so it can shorten them or
+// split the unit that needed so many.
+type ErrCriteriaOverCap struct {
+	Words int
+	Cap   int
+}
+
+func (e ErrCriteriaOverCap) Error() string {
+	return fmt.Sprintf("prompt: injected acceptance criteria are %d words, cap is %d", e.Words, e.Cap)
+}
+
+// ErrReservedBudgetKey reports a per-slot budget keyed by something that is
+// not a slot — today only SlotTotal, whose budget is CallCeiling. Refused at
+// construction rather than ignored at build time: a budget the caller set and
+// the builder never enforces is worse than no budget at all.
+type ErrReservedBudgetKey struct {
+	Slot Slot
+}
+
+func (e ErrReservedBudgetKey) Error() string {
+	return fmt.Sprintf("prompt: %s is not a per-slot budget key; the whole-call budget is CallCeiling", e.Slot)
 }
 
 // ErrMultipleCritical reports a definition carrying more than one
@@ -121,4 +147,20 @@ type ErrMissingHash struct {
 
 func (e ErrMissingHash) Error() string {
 	return fmt.Sprintf("prompt: stability check: no hash recorded for %s", e.Slot)
+}
+
+// ErrNoPreviousHashes reports a stability check with a frontier to enforce
+// and no previous call to compare against. It is loud rather than a silent
+// pass because the case that produces it is a refused Build: that call
+// returns a zero BuiltCall with no hashes, and treating "no hashes" as
+// "nothing to check" would disarm the tripwire for the call after the
+// failure — the worst possible moment. The first call in a phase has genuinely
+// nothing to compare and says so by passing the zero frontier.
+type ErrNoPreviousHashes struct {
+	Frontier Slot
+}
+
+func (e ErrNoPreviousHashes) Error() string {
+	return fmt.Sprintf("prompt: stability check through %s has no previous call to compare against",
+		e.Frontier)
 }

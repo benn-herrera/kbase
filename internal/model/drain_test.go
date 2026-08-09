@@ -5,17 +5,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
 
-// wantZeroResponse fails the test unless r is the zero Response. Response
-// holds slices and so is not comparable with ==; the fields are checked
-// individually.
+// wantZeroResponse fails the test unless r is the zero Response — the
+// "nothing partial escaped" check every error path here owes its caller.
 func wantZeroResponse(t *testing.T, r Response) {
 	t.Helper()
-	if r.Content != "" || r.FinishReason != "" || len(r.ToolCalls) != 0 || !r.Usage.IsZero() {
+	if r != (Response{}) {
 		t.Errorf("Response: got %+v, want zero", r)
 	}
 }
@@ -119,31 +117,6 @@ data: [DONE]
 	if got.Usage.TotalTokens != 6 {
 		t.Errorf("Usage.TotalTokens: got %d, want 6", got.Usage.TotalTokens)
 	}
-}
-
-// TestConsultDrainedIncompleteToolCall: a stream that ends mid-tool-call
-// reports the drop instead of io.EOF; ConsultDrained must surface that as
-// an error and hand back nothing, never a partial Response.
-func TestConsultDrainedIncompleteToolCall(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"one sec"}}]}
-
-data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"f","arguments":"{\"q\":\"go"}}]}}]}
-
-`))
-	}))
-	defer srv.Close()
-
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	got, err := ConsultDrained(context.Background(), c, DefaultRequest("m", []Message{{Role: "user", Content: "hi"}}))
-	if err == nil {
-		t.Fatal("expected an error from the incomplete tool call, got nil")
-	}
-	if !strings.Contains(err.Error(), "not valid JSON after merge") {
-		t.Errorf("error does not name the drop: %v", err)
-	}
-	wantZeroResponse(t, got)
 }
 
 // TestConsultDrainedContextCancellation: a context cancelled while the

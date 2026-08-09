@@ -100,7 +100,11 @@ func TestUpdateConfigCreatesDir(t *testing.T) {
 // annotated is a config.toml as a user leaves it: comments above and beside
 // keys, keys and tables kbase does not model, quoting and spacing kbase
 // would never emit. Every line of it except the three assignments must
-// survive an update byte for byte.
+// survive an update byte for byte — and those three keep their trailing
+// comments, which are the notes a user is likeliest to have written.
+//
+// The heavy value carries a `#` of its own: the comment scan must read it
+// as part of the string, not as the start of the note that follows it.
 const annotated = `# my kbase config — do not let a tool eat these notes
 #   (second line of the header block)
 
@@ -111,8 +115,8 @@ scratch = "keep me"
 
 [models]
 # heavy runs taxonomy design
-heavy = "old-heavy"
-light='old-light'
+heavy = "old#heavy"    # the id, hash and all
+light='old-light'# no space before the marker
 
 [experimental]
 notes = "an entire table kbase does not model"
@@ -122,6 +126,8 @@ notes = "an entire table kbase does not model"
 // rewrites the three lines it owns and nothing else. config.toml is a
 // primary hand-editing surface, so a write that eats a user's comments,
 // grouping, or unmodelled keys is a defect, not a documented limitation.
+// That holds for the owned lines too: only the value changes, and the note
+// beside it comes along (at normalized spacing — the value's width moved).
 func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, annotated)
 	update(t, path)
@@ -129,9 +135,9 @@ func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 
 	// The rewritten lines, keyed by their line number in the fixture.
 	rewritten := map[int]string{
-		3:  `provider = "` + newProvider + `"`,
-		10: `heavy = "` + heavyModel + `"`,
-		11: `light = "` + lightModel + `"`,
+		3:  `provider = "` + newProvider + `"` + commentGap + `# which providers.toml entry to use`,
+		10: `heavy = "` + heavyModel + `"` + commentGap + `# the id, hash and all`,
+		11: `light = "` + lightModel + `"` + commentGap + `# no space before the marker`,
 	}
 	before, after := strings.Split(annotated, "\n"), strings.Split(readBack(t, path), "\n")
 	if len(before) != len(after) {
@@ -247,6 +253,74 @@ func TestUpdateConfigRefusesMalformedFile(t *testing.T) {
 	}
 	if got := readBack(t, path); got != src {
 		t.Errorf("refused update still touched the file:\n%s", got)
+	}
+}
+
+// TestUpdateConfigFollowsSymlink: a config.toml symlinked into a dotfiles
+// repo is a common setup for exactly this kind of file. The update must
+// land on the file the link names — replacing the link with a regular file
+// leaves the dotfiles copy stale, and nothing tells the user.
+func TestUpdateConfigFollowsSymlink(t *testing.T) {
+	root := t.TempDir()
+	dotfiles := filepath.Join(root, "dotfiles")
+	confDir := filepath.Join(root, "kbase")
+	for _, dir := range []string{dotfiles, confDir} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	real := writeFile(t, dotfiles, ConfigFileName, "provider = \"old\"\n")
+	link := ConfigPath(confDir)
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	update(t, link)
+	assertValues(t, link)
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the update replaced the symlink with a %v", info.Mode().Type())
+	}
+	if got := readBack(t, real); !strings.Contains(got, newProvider) {
+		t.Errorf("the linked-to file did not receive the update:\n%s", got)
+	}
+}
+
+// TestUpdateConfigLeavesDevTableAlone: [dev] is hand-added and hand-owned.
+// `kbase configure` edits the provider and [models] values; a switch the
+// user turned on must not be reverted, reformatted, or moved by a verb
+// that has no opinion about it.
+func TestUpdateConfigLeavesDevTableAlone(t *testing.T) {
+	const src = `provider = "old"
+
+[models]
+heavy = "old-heavy"
+light = "old-light"
+
+[dev]
+# local inference-timing diagnostics
+telemetry = true
+`
+	path := writeFile(t, t.TempDir(), ConfigFileName, src)
+	update(t, path)
+
+	_, devTable, found := strings.Cut(readBack(t, path), "\n[dev]\n")
+	if !found {
+		t.Fatalf("the [dev] table did not survive the update:\n%s", readBack(t, path))
+	}
+	if want := "# local inference-timing diagnostics\ntelemetry = true\n"; devTable != want {
+		t.Errorf("[dev] table = %q, want %q", devTable, want)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.Dev.Telemetry {
+		t.Error("Dev.Telemetry was turned off by an update that does not own it")
 	}
 }
 

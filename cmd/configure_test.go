@@ -67,11 +67,17 @@ func soloPool() config.Providers {
 	return config.Providers{"solo": provider("solo", "http://provider.example/v1")}
 }
 
+// soloOpts is the baseline configure input: the single-entry pool and
+// nothing else. Tests set the one field they are about on the result.
+func soloOpts() configureOptions {
+	return configureOptions{providerOptions: providerOptions{Providers: soloPool()}}
+}
+
 // TestRunConfigureAutoDetect is the max-convenience default: one gemma-4
 // dense and one MoE in the catalogue resolve both tiers with no flags, and
 // the resolved ids land in config.toml.
 func TestRunConfigureAutoDetect(t *testing.T) {
-	got := runConfig(t, configureOptions{Providers: soloPool()},
+	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", denseID, moeID, "gemma-3-27b-it")))
 
 	if got.err != nil {
@@ -85,8 +91,11 @@ func TestRunConfigureAutoDetect(t *testing.T) {
 	if cfg != want {
 		t.Errorf("config.toml = %+v, want %+v", cfg, want)
 	}
-	if !strings.Contains(got.stderr, "configured: provider=solo heavy="+denseID+" light="+moeID+" (wrote ") {
-		t.Errorf("stderr: got %q, want the summary line", got.stderr)
+	for _, want := range []string{"configured:", "provider=solo",
+		config.TierHeavy + "=" + denseID, config.TierLight + "=" + moeID, config.ConfigPath(got.dir)} {
+		if !strings.Contains(got.stderr, want) {
+			t.Errorf("stderr: got %q, want it to report %q", got.stderr, want)
+		}
 	}
 	if strings.Contains(got.stderr, testAPIKey) {
 		t.Error("API key leaked into stderr")
@@ -98,7 +107,7 @@ func TestRunConfigureAutoDetect(t *testing.T) {
 // the flag that settles it — and nothing is written.
 func TestRunConfigureAmbiguous(t *testing.T) {
 	const otherDense = "gemma-4-31b-instruct"
-	got := runConfig(t, configureOptions{Providers: soloPool()},
+	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue(denseID, otherDense, moeID)))
 
 	if got.err == nil {
@@ -120,7 +129,7 @@ func TestRunConfigureAmbiguous(t *testing.T) {
 // unrecognized, called out separately as the likeliest intended targets.
 func TestRunConfigureNoMatch(t *testing.T) {
 	const familyNoTier = "gemma-4-9b"
-	got := runConfig(t, configureOptions{Providers: soloPool()},
+	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", familyNoTier, "gemma-3-27b-it")))
 
 	if got.err == nil {
@@ -187,8 +196,9 @@ func TestRunConfigureModelMapOverrides(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := runConfig(t, configureOptions{Providers: soloPool(), ModelMap: tt.modelMap},
-				model.NewScriptedMock(nil, catalogue(tt.ids...)))
+			opts := soloOpts()
+			opts.ModelMap = tt.modelMap
+			got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(tt.ids...)))
 
 			if got.err != nil {
 				t.Fatalf("runConfigure: %v", got.err)
@@ -212,14 +222,13 @@ func TestRunConfigureModelMapOverrides(t *testing.T) {
 func TestRunConfigureCreatesConfigDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "kbase")
 	var stderr bytes.Buffer
-	err := runConfigure(context.Background(), configureOptions{
-		Providers:  soloPool(),
-		ConfigPath: config.ConfigPath(dir),
-		Stderr:     &stderr,
-		NewClient: func(model.Endpoint) model.Client {
-			return model.NewScriptedMock(nil, catalogue(denseID, moeID))
-		},
-	})
+	opts := soloOpts()
+	opts.ConfigPath = config.ConfigPath(dir)
+	opts.Stderr = &stderr
+	opts.NewClient = func(model.Endpoint) model.Client {
+		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
+	}
+	err := runConfigure(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runConfigure: %v", err)
 	}
@@ -240,14 +249,13 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	err := runConfigure(context.Background(), configureOptions{
-		Providers:  soloPool(),
-		ConfigPath: path,
-		Stderr:     &stderr,
-		NewClient: func(model.Endpoint) model.Client {
-			return model.NewScriptedMock(nil, catalogue(denseID, moeID))
-		},
-	})
+	opts := soloOpts()
+	opts.ConfigPath = path
+	opts.Stderr = &stderr
+	opts.NewClient = func(model.Endpoint) model.Client {
+		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
+	}
+	err := runConfigure(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runConfigure: %v", err)
 	}
@@ -275,7 +283,7 @@ func TestRunConfigureListFailure(t *testing.T) {
 	client := model.NewScriptedMock(nil, catalogue(denseID, moeID))
 	client.SetError(errors.New("http 503: service unavailable"))
 
-	got := runConfig(t, configureOptions{Providers: soloPool()}, client)
+	got := runConfig(t, soloOpts(), client)
 
 	if got.err == nil {
 		t.Fatal("list failure: got nil error, want it propagated")
@@ -288,13 +296,22 @@ func TestRunConfigureListFailure(t *testing.T) {
 // TestRunConfigureBadModelMapSkipsNetwork: flag syntax is checked before
 // anything is dialed, so a typo costs no round trip.
 func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
-	client := model.NewScriptedMock(nil, catalogue(denseID, moeID))
-	client.RecordCalls = true
+	dir := t.TempDir()
+	var stderr bytes.Buffer
 
-	got := runConfig(t, configureOptions{
-		Providers: soloPool(),
-		ModelMap:  []string{"heavy"},
-	}, client)
+	// The client seam is the network: a factory that fails the test is how
+	// "no round trip" becomes an assertion rather than a claim.
+	opts := soloOpts()
+	opts.ModelMap = []string{"heavy"}
+	opts.ConfigPath = config.ConfigPath(dir)
+	opts.Stderr = &stderr
+	opts.NewClient = func(model.Endpoint) model.Client {
+		t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
+		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
+	}
+
+	err := runConfigure(context.Background(), opts)
+	got := configureResult{stderr: stderr.String(), dir: dir, err: err}
 
 	if got.err == nil {
 		t.Fatal("malformed --model-map: got nil error, want a syntax failure")

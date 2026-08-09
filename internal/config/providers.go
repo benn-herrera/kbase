@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -25,6 +26,12 @@ const (
 	// ProviderAPIOpenAI is the OpenAI-compatible HTTP protocol. The
 	// default, and the only protocol kbase speaks.
 	ProviderAPIOpenAI = "openai"
+
+	// keyFileExposedBits are the mode bits that make an apiKeyFile
+	// readable by an account other than its owner. A credential every
+	// local user can read has effectively already left the machine, which
+	// is worth saying out loud even though kbase still loads it.
+	keyFileExposedBits = 0o044
 )
 
 // A Provider declares WHERE and HOW to reach an endpoint — never WHICH
@@ -62,13 +69,21 @@ type Provider struct {
 // Providers is a name-keyed set of providers loaded from providers.toml.
 type Providers map[string]Provider
 
-// ProviderFault names a provider that parsed correctly but could not be
-// loaded — an unusable declaration, or an unreadable apiKeyFile. The
-// provider is omitted from the returned Providers; the fault lets the
-// caller surface the problem without discarding the rest of the pool.
+// ProviderFault names a provider that parsed correctly but did not load
+// cleanly — an unusable declaration, an unreadable apiKeyFile, or a key
+// file anyone on the machine can read. The fault lets the caller surface
+// the problem without discarding the rest of the pool.
 type ProviderFault struct {
 	Name   string
 	Reason string // never carries key content — path/IO detail only
+
+	// Warning distinguishes a fault the provider SURVIVED from one that
+	// dropped it. A warning entry is still in the Providers map and still
+	// usable; it exists to tell the user about something they should fix,
+	// not to explain a missing endpoint. The zero value is the dropping
+	// kind, so a fault built without considering this stays the strict
+	// one.
+	Warning bool
 }
 
 // Kind returns the normalized (trimmed, lower-cased) provider type,
@@ -131,6 +146,10 @@ func (p Provider) Validate() error {
 // NOT abort the load: it is omitted from the returned map and appended to
 // the returned []ProviderFault so the rest of the pool still loads.
 //
+// A loaded provider may also carry a WARNING fault (ProviderFault.Warning)
+// — today, a key file readable beyond its owner. It stays in the map and
+// stays usable; the fault is there to be reported, not to gate anything.
+//
 // Errors and faults are constructed without TOML value content or key
 // material — a parse error references line/column, and a key-file read
 // failure references the path, so no secret leaks.
@@ -145,6 +164,11 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 
 	raw := map[string]Provider{}
 	if _, err := toml.Decode(string(data), &raw); err != nil {
+		// Wrapped as-is on purpose. BurntSushi's ParseError.Error() reports
+		// line, column and key; its ErrorWithPosition() additionally prints
+		// the OFFENDING SOURCE LINE — which for a malformed apiKeyUnsafe
+		// entry is the secret itself, in a message headed for the console
+		// and any log behind it. Do not "improve" this error with it.
 		return nil, nil, fmt.Errorf("providers: parse %s: %w", path, err)
 	}
 
@@ -166,6 +190,9 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 			faults = append(faults, ProviderFault{Name: name, Reason: err.Error()})
 			continue
 		}
+		if reason := keyFileExposure(p, dir); reason != "" {
+			faults = append(faults, ProviderFault{Name: name, Reason: reason, Warning: true})
+		}
 		p.APIKey = key
 		out[name] = p
 	}
@@ -177,16 +204,52 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 // surrounding whitespace. The returned error never carries key content —
 // only the file path, on an I/O failure.
 func resolveAPIKey(p Provider, dir string) (string, error) {
-	if p.APIKeyFile != "" {
-		keyPath := p.APIKeyFile
-		if !filepath.IsAbs(keyPath) {
-			keyPath = filepath.Join(dir, keyPath)
-		}
-		b, err := os.ReadFile(keyPath)
-		if err != nil {
-			return "", fmt.Errorf("read apiKeyFile: %w", err)
-		}
-		return strings.TrimSpace(string(b)), nil
+	if p.APIKeyFile == "" {
+		return p.APIKeyUnsafe, nil
 	}
-	return p.APIKeyUnsafe, nil
+	b, err := os.ReadFile(keyFilePath(p, dir))
+	if err != nil {
+		return "", fmt.Errorf("read apiKeyFile: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// keyFilePath resolves the provider's apiKeyFile, relative paths against
+// the providers.toml directory.
+func keyFilePath(p Provider, dir string) string {
+	if filepath.IsAbs(p.APIKeyFile) {
+		return p.APIKeyFile
+	}
+	return filepath.Join(dir, p.APIKeyFile)
+}
+
+// keyFileExposure returns a warning reason when the provider's key file is
+// readable by group or other, and "" when it is not.
+//
+// A warning, not a refusal: ssh's hard refusal is right for a daemon's
+// identity, too strict for an appliance the user runs by hand — and kbase
+// refusing to talk to a provider whose key it just read successfully would
+// be a puzzle, not a safeguard. The reason names the path and the mode,
+// never the file's content.
+func keyFileExposure(p Provider, dir string) string {
+	// Windows file modes are synthesized (0666 / 0444) rather than real
+	// permission bits, so this check would fire on every install there and
+	// teach the user to ignore it. The ACL is the thing that would have to
+	// be read instead.
+	if p.APIKeyFile == "" || runtime.GOOS == "windows" {
+		return ""
+	}
+	path := keyFilePath(p, dir)
+	info, err := os.Stat(path)
+	if err != nil {
+		// The read above already succeeded, so a stat failure here is a
+		// race with something else on the filesystem, not a fact about the
+		// user's setup. One complaint per problem.
+		return ""
+	}
+	mode := info.Mode().Perm()
+	if mode&keyFileExposedBits == 0 {
+		return ""
+	}
+	return fmt.Sprintf("apiKeyFile %s is readable beyond its owner (mode %#o) — chmod 600 it", path, mode)
 }

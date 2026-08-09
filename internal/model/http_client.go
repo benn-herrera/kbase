@@ -15,10 +15,29 @@ import (
 // userAgent is the User-Agent header value sent with every request.
 const userAgent = "kbase/0.1"
 
-// requestTimeout is the hard upper bound on a single round-trip. Per-request
-// deadlines belong on the context; this only keeps a runaway handshake from
-// hanging forever when a caller forgets one.
-const requestTimeout = 5 * time.Minute
+// The OpenAI-compatible wire surface: the two paths that hang off
+// Endpoint.BaseURL, and the media types the three calls negotiate with.
+const (
+	pathChatCompletions = "chat/completions"
+	pathModels          = "models"
+	mimeJSON            = "application/json"
+	mimeEventStream     = "text/event-stream"
+)
+
+// responseHeaderTimeout bounds the HANDSHAKE alone: request written →
+// response headers received. It lives on the Transport, not on
+// http.Client.Timeout, because the latter also covers reading the body and
+// so would cap a streamed generation at a wall clock the generation has no
+// reason to respect. A server that withholds its headers until the first
+// token pays prefill time against this bound, hence the generous value; the
+// gap between chunks is bounded separately (streamIdleTimeout).
+const responseHeaderTimeout = 2 * time.Minute
+
+// errorBodyLimit caps how much of a non-2xx body is echoed into the
+// returned error. A provider that answers with an HTML error page — or a
+// runaway one — must not turn a single failed request into a megabyte of
+// error string.
+const errorBodyLimit = 8 << 10
 
 // Endpoint is the transport-level slice of a configured provider: where to
 // reach an OpenAI-compatible inference API and how to authenticate to it.
@@ -48,12 +67,26 @@ type HTTPClient struct {
 	http     *http.Client
 }
 
+// The constructor returns the concrete type (nil-interface traps stay out
+// of the wiring), so the interface it is meant to satisfy is asserted here
+// rather than discovered by a caller.
+var _ Client = (*HTTPClient)(nil)
+
 // NewHTTPClient constructs an HTTPClient for the given endpoint. A zero
 // Endpoint yields a client whose first call produces a clear error.
-func NewHTTPClient(e Endpoint) Client {
+//
+// The shared http.Client carries NO Timeout, deliberately: that field is a
+// total round-trip bound including the body read, which would kill exactly
+// the long streamed generations this package exists to carry. Bounds are
+// placed where they mean something instead — a call-site context deadline
+// for a blocking Consult, responseHeaderTimeout for the handshake, and
+// streamIdleTimeout for the gap between chunks of a stream.
+func NewHTTPClient(e Endpoint) *HTTPClient {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = responseHeaderTimeout
 	return &HTTPClient{
 		endpoint: e,
-		http:     &http.Client{Timeout: requestTimeout},
+		http:     &http.Client{Transport: tr},
 	}
 }
 
@@ -73,7 +106,7 @@ func (c *HTTPClient) Consult(ctx context.Context, req Request) (Response, error)
 		return Response{}, fmt.Errorf("encode request: %w", err)
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodPost, "chat/completions", "application/json", body)
+	resp, err := c.doRequest(ctx, http.MethodPost, pathChatCompletions, mimeJSON, body)
 	if err != nil {
 		return Response{}, err
 	}
@@ -117,7 +150,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string,
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	if body != nil {
-		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Content-Type", mimeJSON)
 	}
 	httpReq.Header.Set("Accept", accept)
 	httpReq.Header.Set("User-Agent", userAgent)
@@ -134,8 +167,8 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string,
 	}
 	if resp.StatusCode/100 != 2 {
 		// Read and discard so the connection can be reused; surface the
-		// body in the error after scrubbing.
-		respBody, _ := io.ReadAll(resp.Body)
+		// body in the error after scrubbing, capped at errorBodyLimit.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, scrubAuthorization(string(respBody), c.endpoint.APIKey))
 	}
@@ -167,13 +200,18 @@ func (c *HTTPClient) ConsultStream(ctx context.Context, req Request) (StreamRead
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodPost, "chat/completions", "text/event-stream", body)
+	// The request rides a cancellable child of the caller's context so the
+	// reader's idle watchdog has something to pull: cancelling this context
+	// is what unblocks a read waiting on bytes that are never coming.
+	streamCtx, cancel := context.WithCancelCause(ctx)
+	resp, err := c.doRequest(streamCtx, http.MethodPost, pathChatCompletions, mimeEventStream, body)
 	if err != nil {
+		cancel(nil)
 		return nil, err
 	}
 	// On 2xx the response body is owned by the StreamReader, which the
 	// caller must Close; doRequest leaves it unread for exactly this.
-	return newHTTPStreamReader(ctx, resp.Body), nil
+	return newHTTPStreamReader(streamCtx, cancel, resp.Body, streamIdleTimeout), nil
 }
 
 // ListModels performs a GET against <base>/models and returns the model
@@ -184,7 +222,7 @@ func (c *HTTPClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodGet, "models", "application/json", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, pathModels, mimeJSON, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -233,32 +271,8 @@ func scrubAuthorization(s, apiKey string) string {
 // --- wire format (OpenAI chat-completions) ---
 
 type wireMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
-	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-}
-
-type wireToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function wireToolFunction `json:"function"`
-}
-
-type wireToolFunction struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-}
-
-type wireToolSpec struct {
-	Type     string             `json:"type"`
-	Function wireToolSpecParams `json:"function"`
-}
-
-type wireToolSpecParams struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content,omitempty"`
 }
 
 // wireRequest is the chat-completions request body. Temperature and
@@ -269,11 +283,8 @@ type wireToolSpecParams struct {
 type wireRequest struct {
 	Model              string             `json:"model"`
 	Messages           []wireMessage      `json:"messages"`
-	Tools              []wireToolSpec     `json:"tools,omitempty"`
-	ToolChoice         string             `json:"tool_choice,omitempty"`
 	Temperature        float64            `json:"temperature"`
 	MaxTokens          int                `json:"max_tokens"`
-	Stop               []string           `json:"stop,omitempty"`
 	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"`
 	Stream             bool               `json:"stream,omitempty"`
 	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
@@ -402,7 +413,6 @@ func encodeRequest(req Request, stream bool) ([]byte, error) {
 	wr := wireRequest{
 		Model:              req.Model,
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
-		Stop:               req.StopSequences,
 		Temperature:        req.Temperature,
 		MaxTokens:          req.MaxTokens,
 		ChatTemplateKwargs: req.ChatTemplateKwargs,
@@ -412,35 +422,7 @@ func encodeRequest(req Request, stream bool) ([]byte, error) {
 		wr.StreamOptions = &wireStreamOptions{IncludeUsage: true}
 	}
 	for _, m := range req.Messages {
-		wm := wireMessage{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
-		}
-		for _, tc := range m.ToolCalls {
-			wm.ToolCalls = append(wm.ToolCalls, wireToolCall{
-				ID:   tc.ID,
-				Type: "function",
-				Function: wireToolFunction{
-					Name:      tc.Function,
-					Arguments: tc.Args,
-				},
-			})
-		}
-		wr.Messages = append(wr.Messages, wm)
-	}
-	if len(req.Tools) > 0 {
-		wr.ToolChoice = "auto"
-		for _, t := range req.Tools {
-			wr.Tools = append(wr.Tools, wireToolSpec{
-				Type: "function",
-				Function: wireToolSpecParams{
-					Name:        t.Name,
-					Description: t.Description,
-					Parameters:  t.Parameters,
-				},
-			})
-		}
+		wr.Messages = append(wr.Messages, wireMessage{Role: m.Role, Content: m.Content})
 	}
 	return json.Marshal(wr)
 }
@@ -454,17 +436,9 @@ func decodeResponse(body []byte) (Response, error) {
 		return Response{}, fmt.Errorf("response contains no choices")
 	}
 	choice := w.Choices[0]
-	out := Response{
+	return Response{
 		Content:      choice.Message.Content,
 		FinishReason: choice.FinishReason,
 		Usage:        w.Usage.usage(),
-	}
-	for _, tc := range choice.Message.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, ToolCall{
-			ID:       tc.ID,
-			Function: tc.Function.Name,
-			Args:     tc.Function.Arguments,
-		})
-	}
-	return out, nil
+	}, nil
 }

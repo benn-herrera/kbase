@@ -235,8 +235,8 @@ first:
 | 1 | System frame | job-constant | process framing + job-stable specifics, generated **once at job start** from an embedded deterministic template; universal static text first, job-interpolated lines last. Churn prevented by construction. |
 | 2 | Agent definition | stage-constant | the stage's embedded definition, including its `## CRITICAL` section |
 | 3 | Task definition | task-constant | what this agent is working on; formatted-in specifics chosen for stability |
-| 4 | Task status | per-call | checklist/status lines ordered most→least stable, so the fastest-churning line (e.g. current file) is last |
-| 5 | Reference buffer A | multi-call | orchestrator-curated material stable across several calls (e.g. cross-file listings); flushed on stage/section transitions |
+| 4 | Reference buffer A | multi-call | orchestrator-curated material stable across several calls (e.g. cross-file listings); flushed on stage/section transitions |
+| 5 | Task status | per-call | checklist/status lines ordered most→least stable, so the fastest-churning line (e.g. current file) is last |
 | 6 | Content buffer | per-call | the source span / child summaries / prior output under work |
 | 7 | Reference buffer B | per-call | orchestrator-curated transient material specific to the current content |
 | 8 | Reminder trailer | per-call | `REMINDER:`-wrapped render of the `## CRITICAL` block + per-call acceptance criteria (see below) |
@@ -246,12 +246,26 @@ The ordering is simultaneously:
 - **Cache-optimal.** Prefix caching pays for byte-identical leading tokens, and any
   mutation invalidates everything after it — so descending stability maximizes the
   reusable prefix across a stage's call fan-out. The same principle applies *within*
-  slot 4: when only its last line changes, the cache holds through everything above.
+  slot 5: when only its last line changes, the cache holds through everything above.
+  This is why the multi-call buffer outranks the per-call status block: a status line
+  churning every call must not re-prefill a cross-file listing, and under stage-5
+  fan-out the buffer is shared across workers while the status block is per-worker.
 - **Attention-safe.** Long-context degradation is U-shaped: primacy and recency
   positions are well-attended (attention sinks + causal exposure at the front,
-  positional locality at the back); the middle sags. Slots 1–4 sit in the primacy
+  positional locality at the back); the middle sags. Slots 1–5 sit in the primacy
   zone, the trailer in the recency zone; only the middle buffers hold at-risk
-  positions, and nothing load-bearing lives there without a trailer restatement.
+  positions, and nothing load-bearing lives there without a trailer restatement. The
+  status block pays for slot 4's position by sitting a buffer deeper — acceptable
+  because status lines are orienting, not load-bearing: the per-call facts that bind
+  (the span, the acceptance criteria) live in slot 6 and are restated in the trailer.
+
+The 4/5 ordering is **provisional**, pending the measurement §7 already names as
+ground truth: run the shakedown corpus both ways and read `cached_tokens` (plus
+per-call telemetry) rather than reasoning further about attention curves. It also
+**presumes reference buffer A is flushed at section/stage transitions** as the table
+says — that policy is the orchestrator's to enforce (phase matrix), and a buffer that
+churned per call would move the frontier *up*, making the ordering a loss rather than
+a win.
 
 All slot content is deterministic from embedded templates + job inputs + task
 state — the model never writes into its own context (buffers are
@@ -272,11 +286,18 @@ concept, not wire messages.
   per stage/tier.
 - Slot 8 additionally carries the per-call acceptance criteria the taxonomy skeleton
   already emits (tiling ranges, budgets) — data injection by the builder, never a
-  model judgment call, sharing the same cap.
+  model judgment call, under its own reserved share of the cap.
 - The trailer is **hard-capped** (§9) and the cap is enforced loudly, never by
   truncation: a unit test over the embedded definitions fails the build at dev time,
   and the builder refuses an over-cap trailer at runtime (which also covers
-  user-adapted definition copies).
+  user-adapted definition copies). The cap is **split into reserved shares** —
+  authored section and injected criteria — and each half is enforced against its own
+  share, never against the sum. That is what makes the dev-time gate a *sufficient*
+  condition for the runtime one: a definition that passes cannot then be pushed over
+  by conforming criteria, which would be an unfixable failure (the definition ships
+  embedded and immutable, and splitting content does not shrink a trailer). The two
+  overruns are distinct error types, so a caller can tell the failure it caused from
+  the one it inherited.
 - Why it exists: retrieval survives distance far better than *sustained adherence*
   during long generations — constraint drift late in a long output is the
   characteristic small-tier failure, and it compounds across thousands of leaf calls
@@ -346,7 +367,12 @@ prevention is holding against a real prefix cache.
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
-| CRITICAL section cap | 100 words (provisional) | slot-8 trailer incl. injected acceptance criteria; enforced by build-time test + builder refusal (§7) |
+| Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
+| Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
+| Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
+| CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.CriticalWordCap`); split into the two reserved shares below and never enforced as a sum |
+| — authored `## CRITICAL` share | 60 words (derived) | `authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
+| — injected criteria share | 40 words (provisional) | `maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |
 
 ---
 
