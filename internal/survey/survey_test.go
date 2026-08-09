@@ -3,6 +3,7 @@ package survey
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,6 +76,7 @@ Titleless above.
 
 	"front.md": `---
 title: Front Matter Doc
+description: What this document is for
 tags: [a, b]
 ---
 
@@ -86,6 +88,35 @@ Body.
 this block never closes
 
 # Heading After
+`,
+	// A document that opens with a thematic break and uses `---` as a
+	// section rule: delimited exactly like front matter, and content.
+	"front-thematic.md": `---
+
+An opening rule, then prose a delimiter-only scan would swallow whole.
+
+---
+
+# Survives The Scan
+
+Body.
+`,
+	// A leading blank line means the delimiter is not the first line, so
+	// there is no block — CommonMark reads what follows as a setext heading,
+	// and the survey reports the document it was given.
+	"front-blank-first.md": "\n---\ntitle: Not Front Matter\n---\n\nBody.\n",
+
+	// A BOM ahead of the delimiter is the misparse this branch exists to
+	// prevent, wearing a hat: without skipping it, line 1 is not a thematic
+	// break and the whole YAML block becomes a setext H2 title.
+	"front-bom.md": "\uFEFF---\ntitle: BOM Doc\n---\n\n# After The BOM\n\nBody.\n",
+	"plain-bom.md": "\uFEFF# Heading Under A BOM\n\nBody.\n",
+	"front-empty.md": `---
+---
+
+# Empty Block
+
+Body.
 `,
 	"guide/setup.md": `# Setup
 
@@ -106,19 +137,28 @@ Setup body.
 // tests free of the filesystem while still exercising the real path ids.
 func surveyFixtures(t *testing.T, files map[string]string) (ingest.Corpus, Artifact) {
 	t.Helper()
+	corpus, art, _ := surveyFixturesLogged(t, files)
+	return corpus, art
+}
+
+// surveyFixturesLogged is surveyFixtures for the cases that assert on what
+// the survey recorded as well as on what it produced.
+func surveyFixturesLogged(t *testing.T, files map[string]string) (ingest.Corpus, Artifact, *capture) {
+	t.Helper()
 	units := make([]ingest.Unit, 0, len(files))
 	for p, body := range files {
 		units = append(units, ingest.Unit{Path: p, Bytes: []byte(body)})
 	}
-	corpus, err := ingest.New("/corpus", units)
+	corpus, err := ingest.New(units)
 	if err != nil {
 		t.Fatalf("ingest.New: %v", err)
 	}
-	art, err := Survey(corpus, tokens.Estimator{})
+	lg := &capture{}
+	art, err := Survey(corpus, tokens.Estimator{}, lg)
 	if err != nil {
 		t.Fatalf("Survey: %v", err)
 	}
-	return corpus, art
+	return corpus, art, lg
 }
 
 // fileOf returns the surveyed file at path.
@@ -201,6 +241,21 @@ func TestHeadingTree(t *testing.T) {
 		name: "unterminated front matter is just content",
 		path: "front-unterminated.md",
 		want: []string{"1 Heading After"},
+	}, {
+		// The false positive the mapping gate kills: delimited like front
+		// matter, but its contents are prose, so the heading BELOW the
+		// second rule still has to be a section.
+		name: "a delimited prose block is content, not front matter",
+		path: "front-thematic.md",
+		want: []string{"1 Survives The Scan"},
+	}, {
+		name: "front matter behind a BOM is still detected",
+		path: "front-bom.md",
+		want: []string{"1 After The BOM"},
+	}, {
+		name: "an empty block is front matter carrying nothing",
+		path: "front-empty.md",
+		want: []string{"1 Empty Block"},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := outline(fileOf(t, art, tc.path))
@@ -300,7 +355,7 @@ func TestSectionTokensMatchTheirRange(t *testing.T) {
 // TestFrontMatter: the block is recorded as a byte range and excluded from
 // the parse, and the bytes before the first heading remain accounted for.
 func TestFrontMatter(t *testing.T) {
-	corpus, art := surveyFixtures(t, fixtures)
+	corpus, art, lg := surveyFixturesLogged(t, fixtures)
 	u, _ := corpus.Unit("front.md")
 	f := fileOf(t, art, "front.md")
 
@@ -308,7 +363,7 @@ func TestFrontMatter(t *testing.T) {
 		t.Fatal("front matter block was not detected")
 	}
 	got := string(u.Bytes[f.FrontMatter.Start:f.FrontMatter.End])
-	want := "---\ntitle: Front Matter Doc\ntags: [a, b]\n---\n"
+	want := "---\ntitle: Front Matter Doc\ndescription: What this document is for\ntags: [a, b]\n---\n"
 	if got != want {
 		t.Errorf("front matter range holds %q, want %q", got, want)
 	}
@@ -317,6 +372,91 @@ func TestFrontMatter(t *testing.T) {
 	}
 	if plain := fileOf(t, art, "front-unterminated.md"); plain.FrontMatter != nil {
 		t.Errorf("an unterminated block is not front matter; got %+v", plain.FrontMatter)
+	}
+	if !lg.has(t, "debug", "file", "front.md") {
+		t.Error("a front-matter decision must leave a debug record naming the file")
+	}
+}
+
+// TestFrontMatterRejection: a block that is delimited like front matter but
+// does not parse as a YAML MAPPING is content. This is the gate that keeps a
+// document opening with a thematic break from losing everything above its
+// second rule into an opaque range — a loss no tiling check can see, because
+// an opaque range tiles perfectly well.
+func TestFrontMatterRejection(t *testing.T) {
+	corpus, art, lg := surveyFixturesLogged(t, fixtures)
+
+	for _, path := range []string{"front-thematic.md", "front-blank-first.md", "plain-bom.md"} {
+		if f := fileOf(t, art, path); f.FrontMatter != nil {
+			t.Errorf("%s: recorded front matter %+v, want none", path, f.FrontMatter)
+		}
+	}
+	if !lg.has(t, "debug", "file", "front-thematic.md") {
+		t.Error("a rejected block must leave a debug record naming the file")
+	}
+
+	// The rejected bytes stay in the parse: the prose between the rules is
+	// still the file's preamble, and the whole file is still tiled.
+	f := fileOf(t, art, "front-thematic.md")
+	u, _ := corpus.Unit("front-thematic.md")
+	if f.Preamble == nil || f.Preamble.Start != 0 {
+		t.Fatalf("preamble must start at byte 0 when there is no front matter; got %+v", f.Preamble)
+	}
+	if !strings.Contains(string(u.Bytes[f.Preamble.Start:f.Preamble.End]), "delimiter-only scan") {
+		t.Error("the rejected block's prose must remain inside the surveyed preamble")
+	}
+}
+
+// TestFrontMatterFields: the labels stage 3 routes on are lifted out of the
+// block, because stage 3 consumes the survey and never the source. A block
+// that parses but carries none of them yields none, and no error.
+func TestFrontMatterFields(t *testing.T) {
+	_, art := surveyFixtures(t, fixtures)
+
+	f := fileOf(t, art, "front.md")
+	if f.Title != "Front Matter Doc" {
+		t.Errorf("title = %q", f.Title)
+	}
+	if f.Description != "What this document is for" {
+		t.Errorf("description = %q", f.Description)
+	}
+	if got := strings.Join(f.Tags, ","); got != "a,b" {
+		t.Errorf("tags = %q, want %q", got, "a,b")
+	}
+	if bom := fileOf(t, art, "front-bom.md"); bom.Title != "BOM Doc" {
+		t.Errorf("a BOM must not cost the file its title; got %q", bom.Title)
+	}
+	if empty := fileOf(t, art, "front-empty.md"); empty.Title != "" || empty.Tags != nil {
+		t.Errorf("an empty block carries no labels; got %+v", empty)
+	}
+
+	for _, tc := range []struct {
+		name, body string
+		want       File
+	}{{
+		name: "a mapping without the keys yields no fields",
+		body: "---\nsidebar_position: 3\n---\n\n# H\n",
+	}, {
+		name: "a mis-shaped optional value costs only that value",
+		body: "---\ntitle: Kept\ntags: sometimes\n---\n\n# H\n",
+		want: File{Title: "Kept"},
+	}, {
+		name: "values are collapsed and capped like gists",
+		body: "---\ntitle: |\n  wrapped\n  across lines\ntags: [\"  spaced  \", \"\"]\n---\n\n# H\n",
+		want: File{Title: "wrapped across lines", Tags: []string{"spaced"}},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := surveyOne(t, "fm.md", tc.body)
+			if f.FrontMatter == nil {
+				t.Fatal("block was not recorded as front matter")
+			}
+			if f.Title != tc.want.Title || f.Description != tc.want.Description {
+				t.Errorf("title/description = %q/%q, want %q/%q", f.Title, f.Description, tc.want.Title, tc.want.Description)
+			}
+			if !slices.Equal(f.Tags, tc.want.Tags) {
+				t.Errorf("tags = %v, want %v", f.Tags, tc.want.Tags)
+			}
+		})
 	}
 }
 
@@ -336,7 +476,7 @@ func TestFrontMatterWouldMisparse(t *testing.T) {
 			continue
 		}
 		if h.Lines().At(0).Start < len("---\ntitle: Front Matter Doc") {
-			fabricated = append(fabricated, collapse(plainText(h, src)))
+			fabricated = append(fabricated, capWords(plainText(h, src)))
 		}
 	}
 	if len(fabricated) == 0 {
@@ -399,8 +539,8 @@ func TestGists(t *testing.T) {
 // TestGistWordCap: a long paragraph is cut at a word boundary and marked, so
 // a routing hint never reads as a complete sentence it is not.
 func TestGistWordCap(t *testing.T) {
-	words := make([]string, 0, GistWordCap*2)
-	for i := range GistWordCap * 2 {
+	words := make([]string, 0, gistWordCap*2)
+	for i := range gistWordCap * 2 {
 		words = append(words, fmt.Sprintf("word%d", i))
 	}
 	long := strings.Join(words, " ")
@@ -411,11 +551,35 @@ func TestGistWordCap(t *testing.T) {
 		t.Errorf("capped gist %q must be marked as cut", got)
 	}
 	trimmed := strings.TrimSuffix(got, gistEllipsis)
-	if n := len(strings.Fields(trimmed)); n != GistWordCap {
-		t.Errorf("capped gist holds %d words, want %d", n, GistWordCap)
+	if n := len(strings.Fields(trimmed)); n != gistWordCap {
+		t.Errorf("capped gist holds %d words, want %d", n, gistWordCap)
 	}
-	if !strings.HasSuffix(trimmed, fmt.Sprintf("word%d", GistWordCap-1)) {
+	if !strings.HasSuffix(trimmed, fmt.Sprintf("word%d", gistWordCap-1)) {
 		t.Errorf("gist %q was cut mid-word", got)
+	}
+}
+
+// TestTitleWordCap: a title is capped by the same rule a gist is. The case
+// that makes this non-theoretical is setext — a setext heading's title is the
+// ENTIRE paragraph above the underline, so a long opening paragraph would
+// otherwise buy a title of the same length in an artifact whose whole design
+// constraint is compactness.
+func TestTitleWordCap(t *testing.T) {
+	words := make([]string, 0, gistWordCap*2)
+	for i := range gistWordCap * 2 {
+		words = append(words, fmt.Sprintf("word%d", i))
+	}
+	f := surveyOne(t, "setext-long.md", strings.Join(words, " ")+"\n---\n\nBody.\n")
+
+	if len(f.Sections) != 1 {
+		t.Fatalf("sections = %+v, want the one setext heading", f.Sections)
+	}
+	title := f.Sections[0].Title
+	if !strings.HasSuffix(title, gistEllipsis) {
+		t.Errorf("capped title %q must be marked as cut", title)
+	}
+	if n := len(strings.Fields(strings.TrimSuffix(title, gistEllipsis))); n != gistWordCap {
+		t.Errorf("capped title holds %d words, want %d", n, gistWordCap)
 	}
 }
 
@@ -429,11 +593,16 @@ func TestGistFlattensInlineMarkup(t *testing.T) {
 }
 
 // TestDeterminism: the artifact is the pipeline's reproducible input to the
-// taxonomy stage, so the same corpus must serialize to identical bytes —
-// including when the units arrive in a different order — and must contain no
-// machine-local path.
+// taxonomy stage, so the same corpus must serialize to identical bytes,
+// including when the units arrive in a different order.
+//
+// The corpus is the whole fixture set, front-matter labels included, because
+// those are the newest strings on the marshal path and a field order or a
+// map-backed collection introduced there would break reproducibility exactly
+// as a map on the section path would. (The machine-path check lives in
+// cmd/survey_test.go, over a real temporary directory — Corpus carries no
+// root for this test to leak.)
 func TestDeterminism(t *testing.T) {
-	const root = "/somewhere/local/corpus"
 	units := []ingest.Unit{}
 	for p, body := range fixtures {
 		units = append(units, ingest.Unit{Path: p, Bytes: []byte(body)})
@@ -445,11 +614,11 @@ func TestDeterminism(t *testing.T) {
 
 	render := func(us []ingest.Unit) string {
 		t.Helper()
-		corpus, err := ingest.New(root, us)
+		corpus, err := ingest.New(us)
 		if err != nil {
 			t.Fatalf("ingest.New: %v", err)
 		}
-		art, err := Survey(corpus, tokens.Estimator{})
+		art, err := Survey(corpus, tokens.Estimator{}, &capture{})
 		if err != nil {
 			t.Fatalf("Survey: %v", err)
 		}
@@ -467,11 +636,15 @@ func TestDeterminism(t *testing.T) {
 	if shuffled := render(reversed); shuffled != first {
 		t.Error("input order changed the artifact")
 	}
-	if strings.Contains(first, root) {
-		t.Error("the artifact leaked the corpus root path")
-	}
 	if !strings.Contains(first, `"schema": "`+SchemaVersion+`"`) {
 		t.Error("the artifact must carry its schema version")
+	}
+	// Guards the coverage above: if the fixture corpus stops carrying
+	// front-matter fields, this test silently stops exercising them.
+	for _, want := range []string{`"title": "Front Matter Doc"`, `"tags"`} {
+		if !strings.Contains(first, want) {
+			t.Errorf("the determinism corpus must exercise front-matter fields; %s is absent", want)
+		}
 	}
 }
 

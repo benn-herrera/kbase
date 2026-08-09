@@ -36,7 +36,8 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   tokens, sections, link partition) and, with `--json`, the deterministic
   survey artifact (schema `kbase.survey/1`; same corpus ⇒ byte-identical
   output). Sections exactly tile each file; front matter is detected and
-  recorded, never misparsed as content.
+  recorded, never misparsed as content, and its `title`, `description` and
+  `tags` are extracted when present.
 - `kbase configure [--provider NAME] [--model-map heavy=ID,light=ID]` scans
   the provider's model list, auto-detects gemma-4 family models tolerant of
   provider naming variance (`google/gemma-4-31b-it`, `gemma4:31b-a4b`, …), and

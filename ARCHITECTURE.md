@@ -374,7 +374,8 @@ prevention is holding against a real prefix cache.
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
 | Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
 | Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
-| Gist word cap | 40 words | survey routing hints (`survey.GistWordCap`); word-capped, never mid-word |
+| Gist word cap | 40 words | survey routing hints and titles (`survey.gistWordCap`); word-capped, never mid-word |
+| Max corpus bytes | 256 MB (provisional) | in-memory ingest ceiling (`ingest.maxCorpusBytes`); loud refusal, no override flag |
 | CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.criticalWordCap`); the budget the two reserved shares below are cut from, never itself enforced |
 | — authored `## CRITICAL` share | 60 words (derived) | `prompt.authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
 | — injected criteria share | 40 words (provisional) | `prompt.maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |

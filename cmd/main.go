@@ -101,6 +101,20 @@ func resolveConfigDir() (string, error) {
 	return config.Dir()
 }
 
+// requireStreams checks the writers a verb was handed before it does any
+// work. Both are required rather than defaulted: a verb whose stream is nil
+// was constructed wrong, and quietly substituting os.Stdout would send a
+// test's captured output to the terminal instead of failing.
+//
+// verb prefixes the message because this names a programming mistake at a
+// call site, and which call site is the first thing worth knowing.
+func requireStreams(stdout, stderr io.Writer, verb string) error {
+	if stdout == nil || stderr == nil {
+		return fmt.Errorf("%s: Stdout and Stderr are required", verb)
+	}
+	return nil
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagConfigDir, "config-dir", "",
 		"configuration directory (default: $"+config.EnvConfigDir+", else ~/.config/kbase)")

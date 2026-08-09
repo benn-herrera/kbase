@@ -26,6 +26,9 @@ just test-race  # unit tests under the race detector
 just edit-gate  # cheap gate, run after every change: fmt-check + go vet
 just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
+just test-integration        # omnibus: every per-corpus integration test
+just test-integration-rojo   # pinned Rojo corpus: summary values + determinism
+just prep-test-integration-rojo  # fetch that corpus into build/test_data/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
 just clean      # remove the host build (bin/kbase)
@@ -39,10 +42,17 @@ just update-dependencies                # upgrade the WHOLE module graph
 toolchain setup needed) and runs `checkpoint` first — a cross-build is what
 users receive, so it ships only from a tree that passes the full gate.
 
-**Dist binaries are the user's to update.** The cross-built binaries under
-`bin/` are LFS-tracked, and only the user refreshes them unless you are
-directly instructed otherwise. Agents may run `just dist` to verify a
-cross-build still succeeds; never commit its outputs.
+**No built binaries live in the repo.** `bin/` and `dist/` are local build
+products, gitignored entirely. The distribution artifact is the versioned
+tarball `just dist` stages, published as an artifact on a GitHub releases
+entry — publishing is the user's act. Agents may run `just dist` to verify
+the cross-build still succeeds; never commit build outputs or publish
+releases.
+
+**Test data layout.** `test_data/fixtures/` holds version-controlled test
+data we author, own, and maintain. `test_data/transient/` (gitignored) holds
+cloud-sourced corpus clones, generated test data, and test output. Never
+write generated or downloaded data into `fixtures/`.
 
 ---
 

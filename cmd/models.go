@@ -24,8 +24,8 @@ type modelsOptions struct {
 // Warnings and a one-line summary go to Stderr, keeping stdout a clean list
 // a pipeline can consume.
 func runModels(ctx context.Context, opts modelsOptions) error {
-	if opts.Stdout == nil || opts.Stderr == nil {
-		return fmt.Errorf("models: Stdout and Stderr are required")
+	if err := requireStreams(opts.Stdout, opts.Stderr, "models"); err != nil {
+		return err
 	}
 
 	name, client, ctx, release, err := opts.dial(ctx)

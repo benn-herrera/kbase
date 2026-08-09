@@ -9,7 +9,20 @@
 set shell := ["bash", "-cu"]
 
 BIN_DIR := "bin"
+TEST_DATA_DIR  := "test_data"
+# owned/version controlled test data
+TEST_DATA_FIXTURES_DIR := TEST_DATA_DIR / "fixtures"
+# test output, generated test data, cloud-sourced test data
+TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
+
 DIST_DIR := "dist"
+
+# Pinned integration corpus: the Rojo v7 docs at the commit the survey
+# expectations below were validated against. Bumping the pin means
+# re-validating the expectations in test-integration.
+ROJO_DOCS_REPO := "https://github.com/rojo-rbx/rojo.space"
+ROJO_DOCS_COMMIT := "8dbffe025b928e2ff62969b386813a88b5eb593f"
+ROJO_DOCS_DIR := TEST_DATA_TRANSIENT_DIR / "rojo.space"
 
 # dist-only build trim: -trimpath drops local filesystem paths from the
 # binary; -s -w strips symbol table + DWARF (panic traces keep function
@@ -38,13 +51,54 @@ test-race:
 edit-gate: fmt-check
     go vet ./...
 
+# Integration tests are per-corpus pairs — prep-test-integration-<corpus>
+# (pinned shallow fetch, no-op when present) + test-integration-<corpus>
+# (expectations beside their runner) — composed by the omnibus
+# `test-integration`. Each test pulls only its own data, so validating one
+# corpus never fetches another. Adding a corpus = one pin block above, one
+# pair here, one name on the omnibus.
+
+[doc("fetch the pinned Rojo docs corpus (no-op when present)")]
+prep-test-integration-rojo:
+    @if [[ -f "{{ROJO_DOCS_DIR}}/.git/HEAD" ]]; then \
+      echo "rojo docs present: {{ROJO_DOCS_DIR}}"; \
+    else \
+      mkdir -p "{{ROJO_DOCS_DIR}}" && \
+      git -C "{{ROJO_DOCS_DIR}}" init -q && \
+      git -C "{{ROJO_DOCS_DIR}}" fetch -q --depth 1 "{{ROJO_DOCS_REPO}}" "{{ROJO_DOCS_COMMIT}}" && \
+      git -C "{{ROJO_DOCS_DIR}}" checkout -q FETCH_HEAD && \
+      echo "rojo docs cloned at {{ROJO_DOCS_COMMIT}}"; \
+    fi
+
+# Survey the pinned Rojo corpus end-to-end. Asserts the summary matches the
+# values validated at the pinned commit, and that the artifact is
+# byte-deterministic across runs. Expectation changes are loud by design: a
+# constants change (e.g. chars-per-token) or a pin bump re-validates here.
+[doc("survey the pinned Rojo corpus; assert summary values + determinism")]
+test-integration-rojo: build prep-test-integration-rojo
+    @a="$(mktemp)"; b="$(mktemp)"; \
+    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$a" >/dev/null 2>&1 && \
+    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$b" >/dev/null 2>&1 || \
+      { echo "integration(rojo): survey run failed"; exit 1; }; \
+    cmp -s "$a" "$b" || { echo "integration(rojo): artifact is not deterministic"; exit 1; }; \
+    rm -f "$a" "$b"; \
+    summary="$(./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" 2>/dev/null)"; \
+    for want in "files=8 " "tokens=10553 " "sections=83 " "unresolved=5 "; do \
+      echo "$summary" | grep -qF "$want" || \
+        { echo "integration(rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
+    done; \
+    echo "integration(rojo) ok: surveyed, deterministic, summary matches"
+
+[doc("run every per-corpus integration test")]
+test-integration: test-integration-rojo
+
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build
 
-[doc("remove the host build only (bin/kbase)")]
+[doc("remove the host build only (bin/kbase, bin/kbase.exe)")]
 clean:
     @echo "cleaning local kbase build"
-    @rm -f {{BIN_DIR}}/kbase
+    @rm -f "{{BIN_DIR}}/kbase" "{{BIN_DIR}}/kbase.exe"
 
 # cross-platform dist builds (apple-silicon mac, x86_64 windows, x86_64 linux),
 # staged with the user-facing README + LICENSE and tarballed as the user
@@ -69,10 +123,10 @@ dist: checkpoint
     tar -czf "{{DIST_DIR}}/kbase-dist-$ver.tar.gz" -C {{DIST_DIR}} "kbase-$ver" && \
     echo "dist: {{DIST_DIR}}/kbase-dist-$ver.tar.gz"
 
-[doc("remove every build output: bin/ and dist/ entirely")]
+[doc("remove every build output: bin/, dist/, and build/ entirely")]
 nuke:
     @echo "cleaning all kbase builds"
-    rm -rf {{BIN_DIR}} {{DIST_DIR}}
+    rm -rf {{BIN_DIR}} {{DIST_DIR}} build
 
 # cover reports aggregate test coverage across all packages. -coverpkg
 # instruments every package for every test binary, so the number

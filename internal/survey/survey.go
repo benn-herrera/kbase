@@ -27,6 +27,7 @@ import (
 	"github.com/yuin/goldmark"
 
 	"kbase/internal/ingest"
+	"kbase/internal/log"
 	"kbase/internal/tokens"
 )
 
@@ -72,11 +73,20 @@ type LinkTotals struct {
 // no headings at all it is the whole document, which is why it is a Section
 // rather than a bare range: it carries the same token count and gist a
 // heading section does, and the taxonomy stage treats it the same way.
+//
+// Title, Description and Tags are the front-matter labels, absent when the
+// file has no front matter or the block does not carry them. They are the
+// only fields here that are neither an offset nor derived from the body: in
+// the Docusaurus/Hugo shape the block exists for, they are what the document
+// calls itself, and stage 3 has no other way to learn it.
 type File struct {
 	Path        string    `json:"path"`
 	SHA256      string    `json:"sha256"`
 	Bytes       int       `json:"bytes"`
 	Tokens      int       `json:"tokens"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
 	Gist        string    `json:"gist,omitempty"`
 	FrontMatter *Range    `json:"frontMatter,omitempty"`
 	Preamble    *Section  `json:"preamble,omitempty"`
@@ -150,7 +160,12 @@ type Link struct {
 // It fails rather than degrades: a file whose sections do not tile is a defect
 // in this package, and returning a plausible-looking artifact would push the
 // consequences into a stage that cannot see the cause.
-func Survey(corpus ingest.Corpus, est tokens.Estimator) (Artifact, error) {
+//
+// lg carries the decisions the artifact records only the outcome of — which
+// blocks were read as front matter, which links resolved by fold — plus one
+// warning for the corpus's unresolved-link total, which is the number stage 8
+// eventually has to answer for.
+func Survey(corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (Artifact, error) {
 	// One parser for the whole corpus. goldmark's parser holds no
 	// per-document state (each Parse builds its own context), so this is a
 	// setup cost paid once rather than per file.
@@ -162,7 +177,7 @@ func Survey(corpus ingest.Corpus, est tokens.Estimator) (Artifact, error) {
 		Files:  make([]File, 0, len(corpus.Units)),
 	}
 	for _, u := range corpus.Units {
-		f, err := surveyFile(p, u, corpus, est)
+		f, err := surveyFile(p, u, corpus, est, lg)
 		if err != nil {
 			return Artifact{}, err
 		}
@@ -186,6 +201,9 @@ func Survey(corpus ingest.Corpus, est tokens.Estimator) (Artifact, error) {
 				art.Corpus.Links.Anchor++
 			}
 		}
+	}
+	if n := art.Corpus.Links.Unresolved; n > 0 {
+		lg.Warn("survey found unresolved corpus links", "count", n, "files", len(art.Files))
 	}
 	return art, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/ingest"
+	"kbase/internal/log"
 	"kbase/internal/survey"
 	"kbase/internal/tokens"
 )
@@ -38,27 +39,39 @@ type surveyOptions struct {
 	// Stderr takes failure detail, and the summary when stdout is carrying
 	// the artifact.
 	Stderr io.Writer
+
+	// Logger takes the walk's and the survey's diagnostics — skipped files,
+	// front-matter decisions, folded link resolutions. It is a separate
+	// channel from Stderr, which carries the verb's own output; nil means
+	// the caller has none to hand over.
+	Logger log.Logger
 }
 
 // runSurvey ingests a corpus, surveys it, and reports.
 //
 // When the artifact is bound for stdout the summary moves to stderr, so a
-// caller piping the JSON gets JSON and nothing else. That is the same split
-// the models verb makes between its list and its summary line.
+// caller piping the JSON gets JSON and nothing else. The consequence is that
+// a script must know which --json value was passed to know which stream the
+// summary is on; the alternative, a summary interleaved with the payload,
+// makes the payload unparseable, which is worse.
 func runSurvey(opts surveyOptions) error {
-	if opts.Stdout == nil || opts.Stderr == nil {
-		return fmt.Errorf("survey: Stdout and Stderr are required")
+	if err := requireStreams(opts.Stdout, opts.Stderr, "survey"); err != nil {
+		return err
 	}
 	root := strings.TrimSpace(opts.Root)
 	if root == "" {
 		return fmt.Errorf("survey: a corpus directory is required")
 	}
+	lg := opts.Logger
+	if lg == nil {
+		lg = log.Discard()
+	}
 
-	corpus, err := ingest.WalkMarkdown(root)
+	corpus, err := ingest.WalkMarkdown(root, lg)
 	if err != nil {
 		return err
 	}
-	artifact, err := survey.Survey(corpus, tokens.Estimator{})
+	artifact, err := survey.Survey(corpus, tokens.Estimator{}, lg)
 	if err != nil {
 		return err
 	}
@@ -85,12 +98,18 @@ func runSurvey(opts surveyOptions) error {
 	return nil
 }
 
+// artifactFileMode is the mode a newly created artifact file is given. The
+// artifact carries gists and titles lifted out of the user's corpus — actual
+// content, not just metadata about it — so it is owner-only for the same
+// reason the log file and the provider key files are.
+const artifactFileMode = 0o600
+
 // writeArtifact writes the survey JSON to path, or to stdout for "-".
 func writeArtifact(artifact survey.Artifact, path string, stdout io.Writer) error {
 	if path == jsonToStdout {
 		return artifact.WriteJSON(stdout)
 	}
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, artifactFileMode)
 	if err != nil {
 		return fmt.Errorf("survey: create %s: %w", path, err)
 	}
@@ -131,6 +150,7 @@ modified: the same corpus always produces the same artifact.`,
 			JSONPath: surveyFlagJSON,
 			Stdout:   os.Stdout,
 			Stderr:   os.Stderr,
+			Logger:   processLog.logger,
 		})
 	},
 }

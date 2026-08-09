@@ -87,6 +87,16 @@ func TestRunSurveyJSONFile(t *testing.T) {
 		t.Errorf("stdout %q should still carry the summary", stdout)
 	}
 
+	// The artifact carries gists and titles lifted out of the user's corpus,
+	// so it is owner-only for the same reason the log file is.
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("stat artifact: %v", err)
+	}
+	if got := info.Mode().Perm(); got != artifactFileMode {
+		t.Errorf("artifact mode = %o, want %o", got, artifactFileMode)
+	}
+
 	raw, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("read artifact: %v", err)

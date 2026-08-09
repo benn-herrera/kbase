@@ -22,6 +22,12 @@ func TestEstimate(t *testing.T) {
 			if got := tc.est.Estimate(tc.in); got != tc.want {
 				t.Errorf("Estimate(%q) = %d, want %d", tc.in, got, tc.want)
 			}
+			// The two methods are one estimator with two entry points; a
+			// caller holding bytes must never get a different number from
+			// one holding the same text as a string.
+			if got := tc.est.EstimateBytes([]byte(tc.in)); got != tc.want {
+				t.Errorf("EstimateBytes(%q) = %d, want %d", tc.in, got, tc.want)
+			}
 		})
 	}
 }

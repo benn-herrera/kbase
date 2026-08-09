@@ -57,6 +57,29 @@ func run(t *testing.T, opts modelsOptions, client *model.MockClient) result {
 	return result{stdout: stdout.String(), stderr: stderr.String(), endpoints: seen, err: err}
 }
 
+// TestVerbStreamGuard: the guard both verbs share still names the verb that
+// tripped it. A shared helper that reported a generic message would send the
+// reader looking through the wrong command's call sites.
+func TestVerbStreamGuard(t *testing.T) {
+	for _, tc := range []struct {
+		verb string
+		call func() error
+	}{
+		{"models", func() error { return runModels(context.Background(), modelsOptions{}) }},
+		{"survey", func() error { return runSurvey(surveyOptions{Root: t.TempDir()}) }},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatal("a verb handed no streams must refuse before doing any work")
+			}
+			if !strings.HasPrefix(err.Error(), tc.verb+":") {
+				t.Errorf("error = %v, want it prefixed with the verb that tripped the guard", err)
+			}
+		})
+	}
+}
+
 // TestRunModelsSortedOutput is the happy path: ids land on stdout in
 // ascending order regardless of the order the provider returned them, the
 // endpoint is built from the pool entry, and the summary goes to stderr.

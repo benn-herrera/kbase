@@ -2,6 +2,7 @@ package survey
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -11,18 +12,21 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"gopkg.in/yaml.v3"
 
 	"kbase/internal/ingest"
+	"kbase/internal/log"
 	"kbase/internal/tokens"
 )
 
-// GistWordCap bounds a gist. A gist is a routing hint — enough for the
-// taxonomy stage to tell a section about installation from one about
-// scripting — and every one of them is paid for in the whole-corpus artifact
-// that stage reads, so the cap is deliberately short. It cuts at a word
-// boundary and marks the cut: a gist truncated mid-word reads as a typo, and
-// one truncated invisibly reads as a complete thought that was not.
-const GistWordCap = 40
+// gistWordCap bounds a gist, and every other string this package copies into
+// the artifact. A gist is a routing hint — enough for the taxonomy stage to
+// tell a section about installation from one about scripting — and every one
+// of them is paid for in the whole-corpus artifact that stage reads, so the
+// cap is deliberately short. It cuts at a word boundary and marks the cut: a
+// gist truncated mid-word reads as a typo, and one truncated invisibly reads
+// as a complete thought that was not.
+const gistWordCap = 40
 
 // gistEllipsis marks a gist the cap cut short.
 const gistEllipsis = "…"
@@ -32,36 +36,34 @@ const frontMatterDelim = "---"
 
 // surveyFile inventories one document.
 //
-// Front matter is skipped before parsing rather than parsed. Plain
-// CommonMark reads a leading `---` as a thematic break and the following
-// `key: value` lines as a paragraph — which the closing `---` then turns
-// into a setext H2 whose title is the whole YAML block. That is a fabricated
-// top-level section in a large share of real doc corpora. Detecting the block
-// mechanically costs a few lines and no dependency; its byte range is
-// recorded so nothing is lost, and the parse runs over the remaining bytes
-// with every offset rebased into the original file. The source itself is
-// never rewritten — the sub-slice is a read-only view handed to the parser.
-func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens.Estimator) (File, error) {
+// Front matter is lifted out before parsing rather than parsed as Markdown.
+// Plain CommonMark reads a leading `---` as a thematic break and the
+// following `key: value` lines as a paragraph — which the closing `---` then
+// turns into a setext H2 whose title is the whole YAML block. That is a
+// fabricated top-level section in a large share of real doc corpora. The
+// block's byte range is recorded so nothing is lost, its labels are read out
+// of it, and the parse runs over the remaining bytes with every offset
+// rebased into the original file. The source itself is never rewritten — the
+// sub-slice is a read-only view handed to the parser.
+func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (File, error) {
 	src := u.Bytes
 	f := File{
 		Path:   u.Path,
 		SHA256: u.SHA256,
 		Bytes:  len(src),
-		Tokens: est.Estimate(string(src)),
+		Tokens: est.EstimateBytes(src),
 	}
 
 	bodyStart := 0
-	if r, ok := frontMatter(src); ok {
+	if r, fm, ok := frontMatter(src, u.Path, lg); ok {
 		f.FrontMatter = &r
+		f.Title, f.Description, f.Tags = fm.Title, fm.Description, fm.Tags
 		bodyStart = r.End
 	}
 	body := src[bodyStart:]
 
 	doc := p.Parse(text.NewReader(body))
-	heads, paras, raws, err := scan(doc, body, bodyStart)
-	if err != nil {
-		return File{}, fmt.Errorf("survey: %s: %w", u.Path, err)
-	}
+	heads, paras, raws := scan(doc, body, bodyStart)
 	g := gister{src: src, body: body, paras: paras, est: est}
 
 	// Everything before the first heading is the preamble — for a file with
@@ -74,7 +76,7 @@ func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens
 		f.Preamble = &Section{
 			Start:  bodyStart,
 			End:    firstHeading,
-			Tokens: est.Estimate(string(src[bodyStart:firstHeading])),
+			Tokens: est.EstimateBytes(src[bodyStart:firstHeading]),
 			Gist:   g.forRange(bodyStart, firstHeading),
 		}
 	}
@@ -82,7 +84,7 @@ func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens
 		f.Sections = append(f.Sections, g.section(n))
 	}
 	f.Gist = g.forRange(bodyStart, len(src))
-	f.Links = resolveLinks(raws, u.Path, corpus)
+	f.Links = resolveLinks(raws, u.Path, corpus, lg)
 
 	if err := verifyTiling(f, len(src)); err != nil {
 		return File{}, fmt.Errorf("survey: %s: %w", u.Path, err)
@@ -100,9 +102,16 @@ type headingRef struct {
 
 // paraRef is a paragraph's start offset and node, kept so a gist is rendered
 // only for the paragraphs that turn out to lead a section.
+//
+// The two fields live in DIFFERENT coordinate systems, which the names say
+// out loud: srcStart is rebased into the original file (what every artifact
+// offset is measured in), while bodyNode's text segments index the
+// front-matter-stripped body the parser actually saw. Rendering a node
+// against the wrong buffer produces plausible text from the wrong place, and
+// no tiling check can see it.
 type paraRef struct {
-	start int
-	node  ast.Node
+	srcStart int
+	bodyNode ast.Node
 }
 
 // rawLink is a link destination exactly as written, before classification.
@@ -121,8 +130,13 @@ type rawLink struct {
 // no text (`##` alone on a line) is likewise not a boundary: goldmark records
 // no source line for it, and a titleless heading gives the taxonomy stage
 // nothing to route on.
-func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []paraRef, links []rawLink, err error) {
-	err = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+//
+// The walk has no failure mode of its own — the visitor never refuses a node —
+// so scan reports none. verifyTiling is where a structural mistake surfaces.
+func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []paraRef, links []rawLink) {
+	// The error is discarded, not ignored: ast.Walk only ever returns what
+	// the visitor returned, and this visitor returns nil on every path.
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
@@ -133,14 +147,14 @@ func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []para
 			}
 			heads = append(heads, headingRef{
 				level: t.Level,
-				title: collapse(plainText(t, body)),
+				title: capWords(plainText(t, body)),
 				start: base + lineStart(body, t.Lines().At(0).Start),
 			})
 		case *ast.Paragraph:
 			if t.Lines().Len() == 0 {
 				break
 			}
-			paras = append(paras, paraRef{start: base + t.Lines().At(0).Start, node: n})
+			paras = append(paras, paraRef{srcStart: base + t.Lines().At(0).Start, bodyNode: n})
 		case *ast.Link:
 			links = append(links, rawLink{target: string(t.Destination)})
 		case *ast.Image:
@@ -150,10 +164,7 @@ func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []para
 		}
 		return ast.WalkContinue, nil
 	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("walking the document: %w", err)
-	}
-	return heads, paras, links, nil
+	return heads, paras, links
 }
 
 // sectionNode is the heading tree under construction, before token counts and
@@ -216,7 +227,7 @@ func (g gister) section(n *sectionNode) Section {
 		Title:  n.title,
 		Start:  n.start,
 		End:    n.end,
-		Tokens: g.est.Estimate(string(g.src[n.start:n.end])),
+		Tokens: g.est.EstimateBytes(g.src[n.start:n.end]),
 		Gist:   g.forRange(n.start, ownEnd),
 	}
 	for _, c := range n.children {
@@ -229,11 +240,11 @@ func (g gister) section(n *sectionNode) Section {
 // gist, or "" when the range holds no paragraph.
 func (g gister) forRange(start, end int) string {
 	for _, p := range g.paras {
-		if p.start >= end {
+		if p.srcStart >= end {
 			break
 		}
-		if p.start >= start {
-			return capWords(plainText(p.node, g.body))
+		if p.srcStart >= start {
+			return capWords(plainText(p.bodyNode, g.body))
 		}
 	}
 	return ""
@@ -246,7 +257,7 @@ func (g gister) forRange(start, end int) string {
 //
 // An empty destination (`[text]()`) is dropped: it names nothing, so there is
 // no edge to record and nothing a later stage could act on.
-func resolveLinks(raws []rawLink, from string, corpus ingest.Corpus) []Link {
+func resolveLinks(raws []rawLink, from string, corpus ingest.Corpus, lg log.Logger) []Link {
 	seen := make(map[rawLink]bool, len(raws))
 	out := make([]Link, 0, len(raws))
 	for _, r := range raws {
@@ -254,7 +265,7 @@ func resolveLinks(raws []rawLink, from string, corpus ingest.Corpus) []Link {
 			continue
 		}
 		seen[r] = true
-		out = append(out, classifyLink(r, from, corpus))
+		out = append(out, classifyLink(r, from, corpus, lg))
 	}
 	slices.SortFunc(out, func(a, b Link) int {
 		if c := strings.Compare(a.Target, b.Target); c != 0 {
@@ -273,7 +284,7 @@ func resolveLinks(raws []rawLink, from string, corpus ingest.Corpus) []Link {
 }
 
 // classifyLink decides where one destination points.
-func classifyLink(r rawLink, from string, corpus ingest.Corpus) Link {
+func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) Link {
 	l := Link{Target: r.target, Image: r.image}
 	u, err := url.Parse(r.target)
 	if err != nil {
@@ -290,7 +301,7 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus) Link {
 	case u.Path == "":
 		l.Kind = LinkAnchor
 	default:
-		if target, ok := resolveTarget(u.Path, from, corpus); ok {
+		if target, ok := resolveTarget(u.Path, from, corpus, lg); ok {
 			l.Kind, l.Path = LinkInternal, target
 		} else {
 			l.Kind = LinkUnresolved
@@ -303,11 +314,19 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus) Link {
 // resolved against the corpus root, anything else against the linking file's
 // directory.
 //
-// The extensionless retry is there because doc sites routinely link a sibling
-// document by name alone (`[scope](scope)`) and leave the extension to the
-// site generator. Two lookups, no guessing beyond the corpus's own file
-// names: a target that matches nothing stays unresolved.
-func resolveTarget(p, from string, corpus ingest.Corpus) (string, bool) {
+// Two retries follow the exact lookup, in decreasing confidence:
+//
+//   - Extensionless. Doc sites routinely link a sibling by name alone
+//     (`[scope](scope)`) and leave the extension to the site generator.
+//   - Case-folded. Ingest accepts `.MD` because casing conveys nothing about
+//     a document (ingest.MarkdownExt), so resolution has to agree — otherwise
+//     every link into a Windows-authored file inflates the unresolved count.
+//     A fold that several documents answer to is ambiguous: it is reported as
+//     unresolved and warned about, never guessed at.
+//
+// The id returned is always the corpus's own byte-exact path. No target is
+// invented: anything the corpus does not hold stays unresolved.
+func resolveTarget(p, from string, corpus ingest.Corpus, lg log.Logger) (string, bool) {
 	var target string
 	if strings.HasPrefix(p, "/") {
 		target = path.Clean(strings.TrimPrefix(p, "/"))
@@ -320,8 +339,27 @@ func resolveTarget(p, from string, corpus ingest.Corpus) (string, bool) {
 	if corpus.Has(target) {
 		return target, true
 	}
-	if path.Ext(target) == "" && corpus.Has(target+ingest.MarkdownExt) {
-		return target + ingest.MarkdownExt, true
+
+	candidates := []string{target}
+	if path.Ext(target) == "" {
+		withExt := target + ingest.MarkdownExt
+		if corpus.Has(withExt) {
+			lg.Debug("survey resolved an extensionless link", "from", from, "target", p, "path", withExt)
+			return withExt, true
+		}
+		candidates = append(candidates, withExt)
+	}
+	for _, c := range candidates {
+		id, ambiguous := corpus.FoldedPath(c)
+		switch {
+		case ambiguous:
+			lg.Warn("survey link folds to several documents; leaving it unresolved",
+				"from", from, "target", p, "folded", c)
+			return "", false
+		case id != "":
+			lg.Debug("survey resolved a link by case fold", "from", from, "target", p, "path", id)
+			return id, true
+		}
 	}
 	return "", false
 }
@@ -355,17 +393,20 @@ func appendText(b *strings.Builder, n ast.Node, src []byte) {
 	}
 }
 
-// collapse reduces every run of whitespace to a single space and trims the
-// ends, so a title wrapped across source lines is one line in the artifact.
-func collapse(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-// capWords collapses whitespace and enforces GistWordCap.
+// capWords is the one normalization every copied string in the artifact goes
+// through: whitespace runs collapse to a single space (a title wrapped across
+// source lines is one line here), and the result is cut to gistWordCap words
+// with the cut marked.
+//
+// Titles run through it as well as gists. A title is paid for in the same
+// whole-corpus artifact and is bounded by nothing in the source — a setext
+// heading's title is the entire paragraph above the underline, so one
+// 300-word paragraph would otherwise buy a 300-word title. Truncating is safe
+// because a title is a label; the offsets it labels are untouched.
 func capWords(s string) string {
 	words := strings.Fields(s)
-	if len(words) > GistWordCap {
-		return strings.Join(words[:GistWordCap], " ") + gistEllipsis
+	if len(words) > gistWordCap {
+		return strings.Join(words[:gistWordCap], " ") + gistEllipsis
 	}
 	return strings.Join(words, " ")
 }
@@ -381,24 +422,137 @@ func lineStart(body []byte, at int) int {
 	return bytes.LastIndexByte(body[:at], '\n') + 1
 }
 
-// frontMatter reports the byte range of a leading YAML front-matter block:
-// a `---` line at the very start of the file, up to and including the next
-// `---` line. Without a closing delimiter there is no block — an unterminated
-// one is a thematic break followed by prose, which is what CommonMark says it
-// is.
-func frontMatter(src []byte) (Range, bool) {
-	first, next := readLine(src, 0)
+// frontMatterFields are the labels a front-matter mapping carries. They are
+// in the artifact because ARCHITECTURE.md §4 stage 3 consumes the survey and
+// never the raw source: in a corpus whose H1 lives in front matter and whose
+// body opens with prose — exactly the convention this branch exists because
+// of — a file with no title here surveys as a path and a gist, which is thin
+// material for designing a hierarchy out of.
+//
+// Unknown keys are ignored rather than recorded. Front matter is a site
+// generator's configuration; the taxonomy stage needs the labels a human
+// would recognize the document by, not `sidebar_position`.
+type frontMatterFields struct {
+	Title       string   `yaml:"title"`
+	Description string   `yaml:"description"`
+	Tags        []string `yaml:"tags"`
+}
+
+// normalized puts the values through the artifact's one string rule and drops
+// tags that carry nothing, so a `tags: [a, "", b]` block does not spend an
+// artifact slot on an empty string.
+func (f frontMatterFields) normalized() frontMatterFields {
+	f.Title, f.Description = capWords(f.Title), capWords(f.Description)
+	tags := make([]string, 0, len(f.Tags))
+	for _, t := range f.Tags {
+		if t = capWords(t); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	f.Tags = nil
+	if len(tags) > 0 {
+		f.Tags = tags
+	}
+	return f
+}
+
+// bomUTF8 is the byte-order mark editors on Windows put at the head of a
+// UTF-8 file.
+var bomUTF8 = []byte{0xEF, 0xBB, 0xBF}
+
+// frontMatter reports the byte range of a leading YAML front-matter block and
+// the labels it carries: a `---` line at the start of the file, up to and
+// including the next `---` line, whose contents parse as a YAML mapping.
+//
+// Three things it deliberately is not:
+//
+//   - Anchored at byte 0. A leading BOM is skipped before the delimiter
+//     check — with it in the way, line 1 is not a thematic break and
+//     CommonMark reads the whole YAML block as a setext H2 title, which is
+//     precisely the misparse this function exists to prevent. The BOM is
+//     folded INTO the recorded range rather than trimmed off it, so the
+//     range still starts at 0 and the file's ranges still tile it exactly.
+//   - Satisfied by delimiters alone. See parseFrontMatter.
+//   - Willing to run past a missing close. Without a closing delimiter there
+//     is no block: an unterminated one is a thematic break followed by prose,
+//     which is what CommonMark says it is.
+func frontMatter(src []byte, from string, lg log.Logger) (Range, frontMatterFields, bool) {
+	start := 0
+	if bytes.HasPrefix(src, bomUTF8) {
+		start = len(bomUTF8)
+	}
+	first, next := readLine(src, start)
 	if !isFrontMatterDelim(first) {
-		return Range{}, false
+		return Range{}, frontMatterFields{}, false
 	}
 	for off := next; off < len(src); {
 		line, after := readLine(src, off)
-		if isFrontMatterDelim(line) {
-			return Range{Start: 0, End: after}, true
+		if !isFrontMatterDelim(line) {
+			off = after
+			continue
 		}
-		off = after
+		fields, ok := parseFrontMatter(src[next:off])
+		if !ok {
+			// Not a rejection of the file — a decision that these bytes are
+			// content. They go back to the Markdown parse, where the headings
+			// and links inside them still count.
+			lg.Debug("survey read a delimited block as content, not front matter",
+				"file", from, "end", after, "reason", "not a YAML mapping")
+			return Range{}, frontMatterFields{}, false
+		}
+		lg.Debug("survey detected front matter", "file", from, "end", after,
+			"titled", fields.Title != "", "tags", len(fields.Tags))
+		return Range{Start: 0, End: after}, fields, true
 	}
-	return Range{}, false
+	return Range{}, frontMatterFields{}, false
+}
+
+// parseFrontMatter decides whether a delimited block really is front matter,
+// and lifts its labels out if so.
+//
+// The rule is exact rather than heuristic: front matter is a YAML MAPPING, or
+// it is empty. A document that opens with a thematic break and prose — `---`,
+// a paragraph, another `---` used as a section rule — parses as a scalar, not
+// a mapping, so it is content; without this gate its headings, links and
+// gists would vanish into an opaque front-matter range and no tiling check
+// would notice, because an opaque range tiles perfectly well. What survives
+// is the case where the opening prose genuinely reads `key: value`, which a
+// human would call ambiguous too.
+func parseFrontMatter(block []byte) (frontMatterFields, bool) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(block, &doc); err != nil {
+		return frontMatterFields{}, false
+	}
+	// An empty block (`---` immediately followed by `---`) parses to no node
+	// at all — the zero Kind. It is front matter carrying nothing, a shape
+	// real corpora have, and nothing is lost by recording it as such.
+	if doc.Kind == 0 {
+		return frontMatterFields{}, true
+	}
+	node := &doc
+	if node.Kind == yaml.DocumentNode {
+		if len(node.Content) == 0 {
+			return frontMatterFields{}, true
+		}
+		node = node.Content[0]
+	}
+	if node.Kind != yaml.MappingNode {
+		return frontMatterFields{}, false
+	}
+
+	var f frontMatterFields
+	if err := node.Decode(&f); err != nil {
+		// The block is already known to be a mapping, so the only failure
+		// left is a key whose value is the wrong shape (`tags: sometimes`).
+		// yaml fills in what it could, and the survey keeps that: a
+		// mis-shaped optional label is not grounds for throwing away a block
+		// both YAML and a human read as front matter.
+		var typeErr *yaml.TypeError
+		if !errors.As(err, &typeErr) {
+			return frontMatterFields{}, false
+		}
+	}
+	return f.normalized(), true
 }
 
 // readLine returns the line at off without its terminator, and the offset of

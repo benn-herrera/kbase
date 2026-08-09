@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/log"
 )
 
 // writeFile creates dir/name (parents included) with the given contents.
@@ -47,7 +49,8 @@ func TestWalkMarkdownSelection(t *testing.T) {
 	writeFile(t, root, ".dotfile.md", "# Dotfile\n")
 	writeFile(t, root, "guide/.draft.md", "# Draft\n")
 
-	c, err := WalkMarkdown(root)
+	lg := &capture{}
+	c, err := WalkMarkdown(root, lg)
 	if err != nil {
 		t.Fatalf("WalkMarkdown: %v", err)
 	}
@@ -55,11 +58,47 @@ func TestWalkMarkdownSelection(t *testing.T) {
 	if got := paths(c); !slices.Equal(got, want) {
 		t.Errorf("units: got %v, want %v", got, want)
 	}
-	if c.Root != root {
-		t.Errorf("Root = %q, want %q", c.Root, root)
-	}
 	if !c.Has("guide/setup.md") || c.Has("notes.txt") {
 		t.Error("Has must answer for ingested paths only")
+	}
+
+	// Every skip is silent in the corpus and visible in the log — the
+	// "why is that file not in my knowledge base" channel.
+	for _, skipped := range []string{".hidden", ".dotfile.md", "guide/.draft.md", "notes.txt"} {
+		if !lg.has(t, "debug", "path", skipped) {
+			t.Errorf("no debug record for skipped entry %q", skipped)
+		}
+	}
+}
+
+// TestFoldedPath: link resolution has to reach a `.MD` document written as
+// `.md`, and has to refuse when a fold cannot pick between two documents.
+func TestFoldedPath(t *testing.T) {
+	c, err := New([]Unit{
+		{Path: "guide/Setup.MD", Bytes: []byte("s")},
+		{Path: "twin.md", Bytes: []byte("a")},
+		{Path: "TWIN.md", Bytes: []byte("b")},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name, in, wantID string
+		wantAmbiguous    bool
+	}{
+		{name: "case-variant extension", in: "guide/setup.md", wantID: "guide/Setup.MD"},
+		{name: "case-variant path", in: "GUIDE/SETUP.MD", wantID: "guide/Setup.MD"},
+		{name: "exact spelling still folds to itself", in: "guide/Setup.MD", wantID: "guide/Setup.MD"},
+		{name: "absent", in: "guide/nope.md"},
+		{name: "two documents fold to one key", in: "twin.md", wantAmbiguous: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, ambiguous := c.FoldedPath(tc.in)
+			if id != tc.wantID || ambiguous != tc.wantAmbiguous {
+				t.Errorf("FoldedPath(%q) = (%q, %v), want (%q, %v)", tc.in, id, ambiguous, tc.wantID, tc.wantAmbiguous)
+			}
+		})
 	}
 }
 
@@ -72,7 +111,7 @@ func TestWalkMarkdownCustody(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "doc.md", body)
 
-	c, err := WalkMarkdown(root)
+	c, err := WalkMarkdown(root, log.Discard())
 	if err != nil {
 		t.Fatalf("WalkMarkdown: %v", err)
 	}
@@ -86,9 +125,11 @@ func TestWalkMarkdownCustody(t *testing.T) {
 	}
 }
 
-// TestWalkMarkdownSymlinks pins the two halves of the symlink policy: a file
-// link is content and is followed; a directory link is refused loudly rather
-// than walked into.
+// TestWalkMarkdownSymlinks pins the symlink policy, which splits on one
+// question: could this link have been hiding a document? A file link is
+// content and is followed. A directory link is refused, because a directory
+// can hold documents and WalkDir will not look inside it. A broken link is
+// fatal when it is named like a document and a skip when it is not.
 func TestWalkMarkdownSymlinks(t *testing.T) {
 	t.Run("file link is followed", func(t *testing.T) {
 		outside := t.TempDir()
@@ -99,7 +140,7 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		c, err := WalkMarkdown(root)
+		c, err := WalkMarkdown(root, log.Discard())
 		if err != nil {
 			t.Fatalf("WalkMarkdown: %v", err)
 		}
@@ -121,7 +162,7 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := WalkMarkdown(root)
+		_, err := WalkMarkdown(root, log.Discard())
 		if err == nil {
 			t.Fatal("expected a symlinked-directory refusal, got nil")
 		}
@@ -137,12 +178,32 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := WalkMarkdown(root)
+		_, err := WalkMarkdown(root, log.Discard())
 		if err == nil {
 			t.Fatal("expected a dangling-symlink failure, got nil")
 		}
 		if !strings.Contains(err.Error(), "dangling.md") {
 			t.Errorf("error = %v, want it to name the offending path", err)
+		}
+	})
+
+	t.Run("broken non-document link is skipped", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, root, "index.md", "# Index\n")
+		if err := os.Symlink(filepath.Join(root, "gone.png"), filepath.Join(root, "logo.png")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		lg := &capture{}
+		c, err := WalkMarkdown(root, lg)
+		if err != nil {
+			t.Fatalf("a broken link that cannot hold a document must not fail the corpus: %v", err)
+		}
+		if got, want := paths(c), []string{"index.md"}; !slices.Equal(got, want) {
+			t.Errorf("units: got %v, want %v", got, want)
+		}
+		if !lg.has(t, "debug", "path", "logo.png") {
+			t.Error("a skipped broken link must leave a debug record naming it")
 		}
 	})
 }
@@ -161,7 +222,7 @@ func TestWalkMarkdownRootFailures(t *testing.T) {
 		{"no markdown", t.TempDir(), "no .md files"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := WalkMarkdown(tc.root)
+			_, err := WalkMarkdown(tc.root, log.Discard())
 			if err == nil {
 				t.Fatalf("expected an error containing %q, got nil", tc.want)
 			}
@@ -175,7 +236,7 @@ func TestWalkMarkdownRootFailures(t *testing.T) {
 // TestNewOrdersAndRejects: New is the single constructor, so ordering and the
 // two malformed-input refusals are pinned here rather than through the walk.
 func TestNewOrdersAndRejects(t *testing.T) {
-	c, err := New("/corpus", []Unit{
+	c, err := New([]Unit{
 		{Path: "b.md", Bytes: []byte("b")},
 		{Path: "a/deep.md", Bytes: []byte("d")},
 		{Path: "a.md", Bytes: []byte("a")},
@@ -187,10 +248,10 @@ func TestNewOrdersAndRejects(t *testing.T) {
 		t.Errorf("units: got %v, want %v (sorted by path)", got, want)
 	}
 
-	if _, err := New("/corpus", []Unit{{Path: "x.md"}, {Path: "x.md"}}); err == nil {
+	if _, err := New([]Unit{{Path: "x.md"}, {Path: "x.md"}}); err == nil {
 		t.Error("duplicate paths must be refused")
 	}
-	if _, err := New("/corpus", []Unit{{Bytes: []byte("x")}}); err == nil {
+	if _, err := New([]Unit{{Bytes: []byte("x")}}); err == nil {
 		t.Error("a unit without a path must be refused")
 	}
 }
@@ -209,7 +270,7 @@ func TestContentHashIdentity(t *testing.T) {
 
 	hash := func(us []Unit) string {
 		t.Helper()
-		c, err := New("/corpus", us)
+		c, err := New(us)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

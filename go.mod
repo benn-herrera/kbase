@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.5
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

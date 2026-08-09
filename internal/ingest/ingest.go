@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"kbase/internal/log"
 )
 
 // MarkdownExt is the only extension this adapter ingests. Matching is
@@ -54,13 +56,12 @@ type Unit struct {
 
 // Corpus is an ingested document set: every unit, in path order, plus the
 // identity of the set as a whole.
+//
+// The directory the corpus was read from is deliberately not carried. An
+// absolute path is machine state — putting it in a derived artifact makes the
+// same corpus produce different bytes on two checkouts — and nothing
+// downstream needs it, because every id here is already relative.
 type Corpus struct {
-	// Root is the directory the corpus was read from. It is deliberately
-	// absent from every derived artifact — an absolute path is machine
-	// state, and putting it in an artifact makes the same corpus produce
-	// different bytes on two checkouts.
-	Root string
-
 	// Units are the source documents, sorted by Path.
 	Units []Unit
 
@@ -73,6 +74,13 @@ type Corpus struct {
 	// lookup rather than a scan per link. Unexported and never marshalled:
 	// map iteration order would be a determinism hazard in an artifact.
 	index map[string]int
+
+	// folded maps a case-folded path to every unit that folds to it. It
+	// exists because this adapter accepts `.MD` (see MarkdownExt) while a
+	// link to that document is routinely written `.md`; without the fold,
+	// accepting the file and resolving links to it disagree. It is a lookup
+	// aid only — the id itself stays byte-exact.
+	folded map[string][]int
 }
 
 // Has reports whether the corpus contains a document at the given
@@ -81,6 +89,29 @@ func (c Corpus) Has(path string) bool {
 	_, ok := c.index[path]
 	return ok
 }
+
+// FoldedPath resolves a slash-separated path case-insensitively to the
+// byte-exact id of the one document that folds to it.
+//
+// ambiguous is true when SEVERAL documents fold to the same key: a corpus
+// holding both `Setup.md` and `setup.MD` cannot say which one a link to
+// `setup.md` meant, and a guess would hand a later stage a silently wrong
+// edge. Callers treat that as unresolved and say so out loud.
+func (c Corpus) FoldedPath(path string) (id string, ambiguous bool) {
+	switch is := c.folded[foldPath(path)]; len(is) {
+	case 0:
+		return "", false
+	case 1:
+		return c.Units[is[0]].Path, false
+	default:
+		return "", true
+	}
+}
+
+// foldPath is the case-fold key: lowercasing, applied to the whole path,
+// extension included. The variance this exists for is a Windows-authored
+// `.MD` or a hand-typed `Setup.md`, not a Unicode special-casing rule.
+func foldPath(path string) string { return strings.ToLower(path) }
 
 // Unit returns the unit at the given slash-separated relative path.
 func (c Corpus) Unit(path string) (Unit, bool) {
@@ -101,11 +132,12 @@ func (c Corpus) Unit(path string) (Unit, bool) {
 // concatenated bytes means it changes when a file is renamed or removed, not
 // only when content changes — a rename reorganizes a knowledge base even
 // though no byte of any document moved.
-func New(root string, units []Unit) (Corpus, error) {
+func New(units []Unit) (Corpus, error) {
 	sorted := slices.Clone(units)
 	slices.SortFunc(sorted, func(a, b Unit) int { return strings.Compare(a.Path, b.Path) })
 
 	index := make(map[string]int, len(sorted))
+	folded := make(map[string][]int, len(sorted))
 	corpusDigest := sha256.New()
 	for i := range sorted {
 		u := &sorted[i]
@@ -116,6 +148,11 @@ func New(root string, units []Unit) (Corpus, error) {
 			return Corpus{}, fmt.Errorf("ingest: duplicate source path %q", u.Path)
 		}
 		index[u.Path] = i
+		// Every unit is recorded under its fold key, collisions included:
+		// dropping one would make the corpus quietly answer for a document
+		// it holds two of. See FoldedPath.
+		key := foldPath(u.Path)
+		folded[key] = append(folded[key], i)
 
 		sum := sha256.Sum256(u.Bytes)
 		u.SHA256 = hex.EncodeToString(sum[:])
@@ -123,12 +160,21 @@ func New(root string, units []Unit) (Corpus, error) {
 	}
 
 	return Corpus{
-		Root:        root,
 		Units:       sorted,
 		ContentHash: hex.EncodeToString(corpusDigest.Sum(nil)),
 		index:       index,
+		folded:      folded,
 	}, nil
 }
+
+// maxCorpusBytes bounds what one ingest reads into memory. The largest
+// intended target is tens of megabytes of prose, so the cap is provisional
+// headroom rather than a tuned figure — its job is to turn a mistyped root
+// pointed at a media tree or a whole home directory into the loud refusal
+// this package prefers everywhere else, instead of an OOM kill with nothing
+// to read afterwards. There is deliberately no override flag: nothing has
+// asked for one, and a limit with an escape hatch is a limit nobody reads.
+const maxCorpusBytes = 256 << 20 // 256 MB
 
 // WalkMarkdown ingests every Markdown document under root.
 //
@@ -142,15 +188,22 @@ func New(root string, units []Unit) (Corpus, error) {
 //   - Dot-prefixed entries are skipped, directories and files alike: `.git`
 //     and `.github` are tooling, not documentation.
 //   - A file symlink is followed — a corpus that assembles itself from
-//     elsewhere is legitimate. A symlinked DIRECTORY is refused, because
-//     following it invites a cycle and a corpus that never finishes walking,
-//     and because the same document reachable at two paths breaks the
-//     path-is-identity rule the whole pipeline rests on.
-//   - An unreadable file fails the ingest. A knowledge base silently missing
-//     a chapter is the failure mode this rule exists to prevent.
+//     elsewhere is legitimate. A symlinked DIRECTORY is refused: filepath
+//     .WalkDir does not follow one, so refusing is the only alternative to
+//     silently omitting a directory that may hold documents — and the same
+//     document reachable at two paths would break the path-is-identity rule
+//     the whole pipeline rests on.
+//   - An unreadable file fails the ingest when it could be a document — a
+//     knowledge base silently missing a chapter is the failure mode this
+//     rule exists to prevent. A broken symlink NOT named like a document
+//     (`logo.png -> gone`) cannot hide a chapter, so it is a skip.
 //   - A corpus with no Markdown at all fails: at this point in the pipeline
-//     it is a mistyped path, not an empty job.
-func WalkMarkdown(root string) (Corpus, error) {
+//     it is a mistyped path, not an empty job. So does one over
+//     maxCorpusBytes.
+//
+// Every skip is a debug record on lg, because "why is that file not in my
+// knowledge base" is the question the policies above generate.
+func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return Corpus{}, fmt.Errorf("ingest: corpus root: %w", err)
@@ -160,12 +213,22 @@ func WalkMarkdown(root string) (Corpus, error) {
 	}
 
 	var units []Unit
+	var total int64
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("ingest: walk %s: %w", p, err)
 		}
+		if p == root {
+			return nil
+		}
+		rel, err := relPath(root, p)
+		if err != nil {
+			return err
+		}
+
 		name := d.Name()
-		if p != root && strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(name, ".") {
+			lg.Debug("ingest skipping dot-prefixed entry", "path", rel, "dir", d.IsDir())
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -175,24 +238,24 @@ func WalkMarkdown(root string) (Corpus, error) {
 			return nil
 		}
 
-		rel, err := relPath(root, p)
-		if err != nil {
-			return err
-		}
-
+		markdown := isMarkdown(name)
 		regular := d.Type().IsRegular()
 		if d.Type()&fs.ModeSymlink != 0 {
 			target, err := os.Stat(p)
-			if err != nil {
+			switch {
+			case err != nil && !markdown:
+				lg.Debug("ingest skipping broken non-document symlink", "path", rel, "reason", err)
+				return nil
+			case err != nil:
 				return fmt.Errorf("ingest: %s: %w", rel, err)
-			}
-			if target.IsDir() {
-				return fmt.Errorf("ingest: %s is a symlink to a directory; "+
-					"symlinked directories are refused (link cycles, and one document at two paths)", rel)
+			case target.IsDir():
+				return fmt.Errorf("ingest: %s is a symlink to a directory; symlinked directories "+
+					"are refused (a linked directory may hold documents, and one document at two paths)", rel)
 			}
 			regular = target.Mode().IsRegular()
 		}
-		if !isMarkdown(name) {
+		if !markdown {
+			lg.Debug("ingest skipping non-Markdown file", "path", rel)
 			return nil
 		}
 		if !regular {
@@ -203,6 +266,16 @@ func WalkMarkdown(root string) (Corpus, error) {
 		if err != nil {
 			return fmt.Errorf("ingest: read %s: %w", rel, err)
 		}
+		// Checked after the read rather than before: the bound that matters
+		// is the whole corpus, and one document of overshoot is cheaper than
+		// stat-ing every file to pre-compute a total that the read would then
+		// produce anyway.
+		total += int64(len(b))
+		if total > maxCorpusBytes {
+			return fmt.Errorf("ingest: corpus under %s exceeds the %d-byte in-memory limit "+
+				"(reached at %s); there is no override — a tree this large is a mistyped root "+
+				"far more often than a document set", root, maxCorpusBytes, rel)
+		}
 		units = append(units, Unit{Path: rel, Bytes: b})
 		return nil
 	})
@@ -212,7 +285,7 @@ func WalkMarkdown(root string) (Corpus, error) {
 	if len(units) == 0 {
 		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", MarkdownExt, root)
 	}
-	return New(root, units)
+	return New(units)
 }
 
 // relPath renders p as the corpus-wide id: relative to root, slash-separated

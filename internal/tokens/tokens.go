@@ -45,10 +45,26 @@ type Estimator struct {
 // calibrated against real byte lengths, which folds any residual error into
 // the constant rather than into a second rule here.
 func (e Estimator) Estimate(s string) int {
-	if s == "" {
+	return e.estimate(len(s))
+}
+
+// EstimateBytes is Estimate over bytes a caller already holds.
+//
+// It exists because the estimate is byte-length-based (see Estimate) while
+// half the appliance measures ranges of a []byte source it holds under
+// custody: without it, every survey call site converts a slice to a string
+// purely to have its length taken. Both methods run the same arithmetic, so
+// there is still exactly one estimator.
+func (e Estimator) EstimateBytes(b []byte) int {
+	return e.estimate(len(b))
+}
+
+// estimate is the one implementation both public methods delegate to.
+func (e Estimator) estimate(n int) int {
+	if n == 0 {
 		return 0
 	}
-	return int(math.Ceil(float64(len(s)) / e.ratio()))
+	return int(math.Ceil(float64(n) / e.ratio()))
 }
 
 func (e Estimator) ratio() float64 {

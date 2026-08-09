@@ -80,6 +80,45 @@ See [setup](setup.md), then [setup again](setup.md).
 	}
 }
 
+// TestLinkCaseFolding: ingest accepts `.MD` because casing conveys nothing
+// about a document, so resolution has to reach it however the link spells it.
+// Without the fold, every link into a Windows-authored file inflates the
+// unresolved count the link stage has to adjudicate.
+func TestLinkCaseFolding(t *testing.T) {
+	_, art, lg := surveyFixturesLogged(t, map[string]string{
+		"guide/Setup.MD": "# Setup\n",
+		"index.md":       "[a](guide/Setup.MD) [b](guide/setup.md) [c](GUIDE/SETUP.MD) [d](guide/setup)\n",
+	})
+
+	for _, l := range fileOf(t, art, "index.md").Links {
+		if l.Kind != LinkInternal || l.Path != "guide/Setup.MD" {
+			t.Errorf("link %q = %+v, want internal at the corpus's own byte-exact id", l.Target, l)
+		}
+	}
+	if !lg.has(t, "debug", "target", "guide/setup.md") {
+		t.Error("a link resolved by case fold must leave a debug record")
+	}
+}
+
+// TestLinkAmbiguousFold: two documents that differ only by case fold to one
+// key, and the corpus cannot say which one a link meant. Guessing would hand
+// stage 8 a silently wrong edge, so the link is unresolved and loud.
+func TestLinkAmbiguousFold(t *testing.T) {
+	_, art, lg := surveyFixturesLogged(t, map[string]string{
+		"Twin.md":  "# Upper\n",
+		"twin.MD":  "# Lower\n",
+		"index.md": "[ambiguous](TWIN.MD)\n",
+	})
+
+	links := fileOf(t, art, "index.md").Links
+	if len(links) != 1 || links[0].Kind != LinkUnresolved {
+		t.Fatalf("links = %+v, want the ambiguous target left unresolved", links)
+	}
+	if !lg.has(t, "warn", "target", "TWIN.MD") {
+		t.Error("an ambiguous fold must warn, naming the target it refused to guess at")
+	}
+}
+
 // TestLinkTotals: the corpus roll-up counts what the per-file entries hold —
 // the unresolved figure in particular, which is the number the survey verb
 // reports and the link stage will have to answer for.
