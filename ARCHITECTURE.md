@@ -84,7 +84,11 @@ judgment roles; the human at the edges.**
 
 - **Specified, not autonomous.** A fixed pipeline with a termination condition — not
   an agent free-roaming the corpus. Reproducibility requires same process → same
-  output.
+  output. Terminology guard (ruled 2026-08-09): in this codebase, "agent" names a
+  **Go-side construct** — a role with an embedded definition, slot-built context,
+  and one-shot model calls — never an LLM-driven tool-calling loop. Each pipeline
+  step is mechanical where possible; LLM execution is reserved for what cannot
+  practically be done any other way.
 
 - **Propose-and-verify at every model seam.** The model never mutates canonical bytes.
   It emits *data with a mechanically checkable post-condition* (a cut list that must
