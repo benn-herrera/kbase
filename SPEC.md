@@ -30,6 +30,13 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   the command lists them and fails rather than picking one.
 - `kbase models [--provider NAME]` lists the selected provider's available
   model identifiers, sorted, one per line.
+- `kbase survey <corpus-dir> [--json <path|->]` — mechanical corpus survey,
+  no provider or config required: walks `.md` files (immutable byte custody,
+  per-file and corpus content hashes), emits a human summary (files, bytes,
+  tokens, sections, link partition) and, with `--json`, the deterministic
+  survey artifact (schema `kbase.survey/1`; same corpus ⇒ byte-identical
+  output). Sections exactly tile each file; front matter is detected and
+  recorded, never misparsed as content.
 - `kbase configure [--provider NAME] [--model-map heavy=ID,light=ID]` scans
   the provider's model list, auto-detects gemma-4 family models tolerant of
   provider naming variance (`google/gemma-4-31b-it`, `gemma4:31b-a4b`, …), and

@@ -229,7 +229,7 @@ func (sc *StageContext) Build(in CallInput) (BuiltCall, error) {
 	// the reserved shares rather than their sum is what makes the dev-time
 	// gate sufficient: a definition ValidateDefinition passed cannot be
 	// pushed over by conforming criteria, and neither party can spend the
-	// other's budget. The sum stays under CriticalWordCap by arithmetic.
+	// other's budget. The sum stays under criticalWordCap by arithmetic.
 	trailer, criticalWords, criteriaWords := sc.renderTrailer(in.AcceptanceCriteria)
 	// The authored section first: over cap, it fails every call this stage
 	// makes, which is the more useful thing to hear first.

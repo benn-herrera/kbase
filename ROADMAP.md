@@ -8,12 +8,11 @@ deleted, not archived — git history is the log.
 
 ## Now
 
-- **Small follow-ups from the foundation review's confirmation pass**: a
-  cmd-level test of the --log-level/--log-file wiring path (Execute-based);
-  resolve `prompt.CriticalWordCap` naming vs the enforced authored cap;
-  stream-reader micro-items (arm idle timer at first Next, route decode
-  errors through terminalErr); `expectedFrontier`'s hand-maintained slot
-  list. All small; one agent, one burst.
+- **Tasking/orchestrator planning discussion** — the per-worker vs global
+  stability-frontier decision needs Benn before the burst plan is written;
+  see the Next item for full scope.
+- ~~`.mdx` decision~~ ruled 2026-08-09: **ignored** (ARCHITECTURE §4 ingest
+  row) — watch what it actually costs; strip-and-scan only on evidence.
 
 ## Next
 - **Tasking/orchestrator layer** — the agent framework, where "agent" is a
@@ -38,10 +37,6 @@ deleted, not archived — git history is the log.
 
 ## Later (build order exploits determinism-first)
 
-- Markdown ingest adapter + survey stage (no model needed — testable against a
-  Rojo docs clone immediately). Parser: goldmark (CommonMark, maintained,
-  AST segments carry byte offsets into source — exactly what cut lists and
-  the heading-tree survey need).
 - Mechanical splitter → boundary refinement → verification → dissector
   (ARCHITECTURE §5). **MAD review here.**
 - Embedded prompt/agent definitions + the family-tuning eval harness.

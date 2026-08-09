@@ -163,7 +163,7 @@ judgment roles; the human at the edges.**
 
 | # | Stage | Actor | Notes |
 |---|---|---|---|
-| 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. |
+| 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
 | 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists. For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
 | 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document skeleton: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
 | 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
@@ -374,9 +374,10 @@ prevention is holding against a real prefix cache.
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
 | Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
 | Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
-| CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.CriticalWordCap`); split into the two reserved shares below and never enforced as a sum |
-| — authored `## CRITICAL` share | 60 words (derived) | `authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
-| — injected criteria share | 40 words (provisional) | `maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |
+| Gist word cap | 40 words | survey routing hints (`survey.GistWordCap`); word-capped, never mid-word |
+| CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.criticalWordCap`); the budget the two reserved shares below are cut from, never itself enforced |
+| — authored `## CRITICAL` share | 60 words (derived) | `prompt.authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
+| — injected criteria share | 40 words (provisional) | `prompt.maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |
 
 ---
 

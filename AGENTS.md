@@ -54,12 +54,16 @@ internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
+internal/ingest/    Markdown corpus walk + immutable source custody (§4
+                    stage 1); per-file sha256 + corpus content hash
 internal/log/       leveled structured logging seam over log/slog; console
                     plus optional file tee, built at the composition root
 internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
+internal/survey/    per-file structural inventory (§4 stage 2): heading tree
+                    with byte offsets, section token sizes, link graph, gists
 internal/tokens/    single chars-per-token estimator (§8)
 internal/version/   single-source version identity
 ```

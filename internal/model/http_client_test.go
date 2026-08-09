@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -715,5 +716,84 @@ func TestStreamIdleWatchdogToleratesSlowStream(t *testing.T) {
 	}
 	if got, want := sr.Final().Content, strings.Repeat("x", events/contentEach); got != want {
 		t.Errorf("Final.Content: got %q, want %q", got, want)
+	}
+}
+
+// TestStreamIdleWatchdogArmsAtFirstRead: the window bounds provider silence,
+// not caller latency. A caller that does its own work between ConsultStream
+// and its first read — building the next call, writing out the last one —
+// has kept nobody waiting, and must find the stream intact when it arrives.
+func TestStreamIdleWatchdogArmsAtFirstRead(t *testing.T) {
+	const idle = 50 * time.Millisecond
+	sr := openStream(t, idle, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte(sseContentDelta + "data: [DONE]\n\n"))
+	})
+	defer sr.Close()
+
+	// Well past the window a watchdog armed at construction would have run.
+	time.Sleep(4 * idle)
+
+	chunk, err := sr.Next()
+	if err != nil {
+		t.Fatalf("first Next after a delay: got %v, want the buffered chunk", err)
+	}
+	if chunk.Content != "x" {
+		t.Errorf("first chunk: got %q, want %q", chunk.Content, "x")
+	}
+	if _, err := sr.Next(); !errors.Is(err, io.EOF) {
+		t.Errorf("Next at [DONE]: got %v, want io.EOF", err)
+	}
+}
+
+// TestStreamDecodeErrorNamesTheDecode: with no stall in play, an
+// undecodable payload reports itself. This is the control for the test
+// below — terminalErr must not rewrite every failure as a stall.
+func TestStreamDecodeErrorNamesTheDecode(t *testing.T) {
+	_, _, err := runStream(t, "data: {\"choices\":[\n\n")
+	if err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
+		t.Fatalf("undecodable payload: got %v, want a decode error", err)
+	}
+	if errors.Is(err, errStreamIdle) {
+		t.Error("a decode failure with no stall must not be reported as one")
+	}
+}
+
+// truncatingBody trips a callback before handing over its payload — the
+// decode-versus-watchdog race made deterministic. It stands in for the real
+// sequence: the provider stalls mid-event, the watchdog cancels, and the
+// half-event already on the wire is what the scanner hands the decoder.
+type truncatingBody struct {
+	payload *strings.Reader
+	stall   func()
+	stalled bool
+}
+
+func (b *truncatingBody) Read(p []byte) (int, error) {
+	if !b.stalled {
+		b.stalled = true
+		b.stall()
+	}
+	return b.payload.Read(p)
+}
+
+func (b *truncatingBody) Close() error { return nil }
+
+// TestStreamDecodeErrorUnderStallNamesTheStall: when the watchdog has
+// already fired, the decode failure is a symptom of the stall, and the
+// caller needs the cause. Reporting the JSON error would send a reader
+// looking for a provider protocol bug that is not there.
+func TestStreamDecodeErrorUnderStallNamesTheStall(t *testing.T) {
+	const idle = time.Hour // long enough that only the scripted stall fires
+	ctx, cancel := context.WithCancelCause(context.Background())
+	body := &truncatingBody{
+		payload: strings.NewReader("data: {\"choices\":[\n\n"),
+		stall:   func() { cancel(fmt.Errorf("%w after %v", errStreamIdle, idle)) },
+	}
+	sr := newHTTPStreamReader(ctx, cancel, body, idle)
+	defer sr.Close()
+
+	if _, err := sr.Next(); !errors.Is(err, errStreamIdle) {
+		t.Fatalf("decode failure under a fired watchdog: got %v, want errStreamIdle", err)
 	}
 }

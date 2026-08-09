@@ -51,10 +51,13 @@ var errStreamIdle = errors.New("model: stream idle; provider stopped sending")
 // another goroutine, and it touches only context cancellation — which is
 // exactly why cancellation, not a flag, is the abort mechanism.
 type httpStreamReader struct {
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	body       io.ReadCloser
-	scanner    *bufio.Scanner
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	body    io.ReadCloser
+	scanner *bufio.Scanner
+
+	// idle is the watchdog timer, nil until the first Next arms it — see
+	// armIdle. idleWindow is the window it is armed with.
 	idle       *time.Timer
 	idleWindow time.Duration
 
@@ -81,13 +84,29 @@ type httpStreamReader struct {
 //
 // idle is the watchdog's window. Production passes streamIdleTimeout; it is
 // a parameter so a test can trip the watchdog in milliseconds rather than
-// pinning the suite to the real bound.
+// pinning the suite to the real bound. The watchdog is not started here —
+// the first Next arms it.
 func newHTTPStreamReader(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration) *httpStreamReader {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, sseInitialBufferBytes), sseMaxLineBytes)
-	r := &httpStreamReader{ctx: ctx, cancel: cancel, body: body, scanner: sc, idleWindow: idle}
-	r.idle = time.AfterFunc(idle, func() { cancel(fmt.Errorf("%w after %v", errStreamIdle, idle)) })
-	return r
+	return &httpStreamReader{ctx: ctx, cancel: cancel, body: body, scanner: sc, idleWindow: idle}
+}
+
+// armIdle starts the watchdog, or restarts it if it is already running.
+//
+// It is deliberately not called from the constructor. The window bounds the
+// gap between a read starting and bytes arriving — provider silence — and a
+// caller that does other work between ConsultStream and its first Next has
+// kept nobody waiting. Arming at construction would charge that work to the
+// provider and abort a stream that never misbehaved.
+func (r *httpStreamReader) armIdle() {
+	if r.idle == nil {
+		r.idle = time.AfterFunc(r.idleWindow, func() {
+			r.cancel(fmt.Errorf("%w after %v", errStreamIdle, r.idleWindow))
+		})
+		return
+	}
+	r.idle.Reset(r.idleWindow)
 }
 
 // Next returns the next chunk in the stream, or io.EOF when the stream has
@@ -97,6 +116,9 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 	if r.done {
 		return Chunk{}, io.EOF
 	}
+	// The read starts here, so the window the provider has to answer in
+	// starts here too — on the first Next and on every one after it.
+	r.armIdle()
 	for {
 		// Honor context first so a slow server can't outlast a deadline.
 		if err := r.ctx.Err(); err != nil {
@@ -112,7 +134,7 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 		}
 		// A line arrived, so the provider is alive — including the blank
 		// separators and comment lines skipped just below.
-		r.idle.Reset(r.idleWindow)
+		r.armIdle()
 		line := r.scanner.Bytes()
 		// SSE separators are blank lines; ignore them.
 		if len(bytes.TrimSpace(line)) == 0 {
@@ -135,7 +157,10 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 		chunk, err := parseSSEChunk(payload)
 		if err != nil {
 			r.finish()
-			return Chunk{}, fmt.Errorf("decode stream chunk: %w", err)
+			// Through terminalErr like every other failure: a payload
+			// that will not decode is what a stall truncated mid-event
+			// looks like, and the stall is the cause worth reporting.
+			return Chunk{}, r.terminalErr(fmt.Errorf("decode stream chunk: %w", err))
 		}
 		// Accumulate for Final().
 		if chunk.Content != "" {
@@ -156,10 +181,13 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 }
 
 // finish marks the stream drained and retires the watchdog. Every terminal
-// path runs through it, so no timer outlives the stream it was guarding.
+// path runs through it, so no timer outlives the stream it was guarding — a
+// stream closed before its first Next has no timer to retire.
 func (r *httpStreamReader) finish() {
 	r.done = true
-	r.idle.Stop()
+	if r.idle != nil {
+		r.idle.Stop()
+	}
 }
 
 // terminalErr names the stall instead of the symptom when the watchdog is

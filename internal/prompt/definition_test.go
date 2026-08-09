@@ -122,7 +122,7 @@ func TestValidateDefinitionWordCap(t *testing.T) {
 // rule against scripts that do not space-separate: the cap counts what a
 // human counts when they eyeball the section, not runes or bytes.
 func TestValidateDefinitionWordCountIsWhitespaceBased(t *testing.T) {
-	// Well over CriticalWordCap runes, three whitespace-separated words.
+	// Well over criticalWordCap runes, three whitespace-separated words.
 	long := strings.Repeat("日", 200) + " " + strings.Repeat("é", 200) + " " + strings.Repeat("x", 200)
 	if got := wordCount(long); got != 3 {
 		t.Fatalf("wordCount = %d, want 3", got)

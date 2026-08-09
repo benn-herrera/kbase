@@ -2,13 +2,13 @@ package prompt
 
 import "strings"
 
-// CriticalWordCap is the slot-8 trailer cap in words (ARCHITECTURE.md §9,
+// criticalWordCap is the slot-8 trailer cap in words (ARCHITECTURE.md §9,
 // "CRITICAL section cap"; provisional). It covers the whole trailer — the
 // authored `## CRITICAL` text plus the acceptance criteria the builder
 // injects — because the trailer's value is that it is short enough to sit in
 // the recency zone at well under 1% of a target call. Words are
 // whitespace-separated fields, matching how the cap reads to a human author.
-const CriticalWordCap = 100
+const criticalWordCap = 100
 
 // The trailer cap is split into two reserved shares, and the two halves are
 // enforced separately (never their sum). Otherwise the dev-time gate is not a
@@ -17,8 +17,11 @@ const CriticalWordCap = 100
 // criteria fails with nothing anyone can do about it — the definition cannot
 // be edited and splitting content does not shrink a trailer.
 //
-// Neither figure is exported. A definition author reads them from §9; a
-// caller that overruns learns the cap from the error it gets back.
+// No figure here is exported — not the shares, and not the total they come
+// out of: nothing enforces the total, so exporting it would advertise a
+// threshold no code applies. A definition author reads the numbers from §9;
+// a caller that overruns learns the cap that stopped it from the error it
+// gets back.
 const (
 	// maxCriteriaWords is the injected acceptance criteria's reserved share.
 	// The criteria the skeleton emits are a handful of mechanical lines
@@ -30,7 +33,7 @@ const (
 	// authoredCriticalCap is what ValidateDefinition enforces: what is left
 	// of the trailer once the criteria's share is reserved. Passing it
 	// guarantees the runtime check passes for any conforming criteria set.
-	authoredCriticalCap = CriticalWordCap - maxCriteriaWords
+	authoredCriticalCap = criticalWordCap - maxCriteriaWords
 )
 
 // criticalHeading is the exact heading that opens the section, matched

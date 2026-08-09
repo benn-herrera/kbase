@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,10 +17,33 @@ import (
 // input alone.
 func statusBlock(in CallInput) string { return strings.Join(in.StatusLines, statusLineDelimiter) }
 
+// stageConstantSlots are the slots no CallInput field can move: they are
+// fixed for the life of a stage, so a call loop can never churn them.
+var stageConstantSlots = []Slot{SlotSystemFrame, SlotAgentDef, SlotTaskDef}
+
+// perCallSlots is everything else, in render order, derived from allSlots
+// rather than listed again. A slot added to the stack therefore joins the
+// frontier scan by construction — a parallel list would let it slip in
+// unscanned, and the tests would keep passing while checking less.
+func perCallSlots() []Slot {
+	out := make([]Slot, 0, len(allSlots)-len(stageConstantSlots))
+	for _, s := range allSlots {
+		if !slices.Contains(stageConstantSlots, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // perCallInput returns the input text behind a per-call slot, derived from
 // CallInput rather than from the built call — the helper must be able to
 // predict the frontier without consulting the output it is checking.
-func perCallInput(in CallInput, s Slot) string {
+//
+// An unmapped slot is fatal, not empty: that is the other half of deriving
+// perCallSlots. A new slot reaches here with no case of its own, and
+// returning "" would report it as never changing.
+func perCallInput(t *testing.T, in CallInput, s Slot) string {
+	t.Helper()
 	switch s {
 	case SlotTaskStatus:
 		return statusBlock(in)
@@ -32,6 +56,7 @@ func perCallInput(in CallInput, s Slot) string {
 	case SlotReminder:
 		return strings.Join(in.AcceptanceCriteria, trailerCriteriaDelimiter)
 	default:
+		t.Fatalf("no CallInput mapping for %s", s)
 		return ""
 	}
 }
@@ -56,8 +81,8 @@ func commonLinePrefix(a, b string) int {
 // extended through the unchanged leading lines of the status block.
 func expectedFrontier(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall) int {
 	t.Helper()
-	for _, s := range []Slot{SlotRefA, SlotTaskStatus, SlotContent, SlotRefB, SlotReminder} {
-		a, b := perCallInput(prevIn, s), perCallInput(curIn, s)
+	for _, s := range perCallSlots() {
+		a, b := perCallInput(t, prevIn, s), perCallInput(t, curIn, s)
 		if a == b {
 			continue
 		}
@@ -86,7 +111,7 @@ func assertStablePrefix(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCa
 			f, prev.UserTurn[:f], cur.UserTurn[:f])
 	}
 	// Slots 1–3 are stage-constant: they can never churn across a call loop.
-	for _, s := range []Slot{SlotSystemFrame, SlotAgentDef, SlotTaskDef} {
+	for _, s := range stageConstantSlots {
 		if prev.Hashes[s] != cur.Hashes[s] {
 			t.Errorf("%s churned across a call", s)
 		}
