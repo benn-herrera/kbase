@@ -15,9 +15,13 @@ deleted, not archived — git history is the log.
 
 ## Next
 
-- **Adversarial code review of the foundations** (architect + go-coder, with a
-  security-lens pass over key handling). Deliberately lighter than MAD at this
-  stage; MAD is reserved for the deterministic pipeline spine when it lands.
+- **Small follow-ups from the foundation review's confirmation pass**: a
+  cmd-level test of the --log-level/--log-file wiring path (Execute-based);
+  resolve `prompt.CriticalWordCap` naming vs the enforced authored cap;
+  stream-reader micro-items (arm idle timer at first Next, route decode
+  errors through terminalErr); `expectedFrontier`'s hand-maintained slot
+  list. All small; fold into the orchestrator burst or any touch of the
+  owning package.
 - **Tasking/orchestrator layer** — phase enum + allowed-operations matrix
   (ARCHITECTURE §7 layers 1–2), feeding the builder's `CheckStability`;
   buffer flush policy execution. Carries from the foundation review:
