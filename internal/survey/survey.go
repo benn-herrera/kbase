@@ -88,7 +88,7 @@ type LinkTotals struct {
 // only fields here that are neither an offset nor derived from the body: in
 // the document conventions the block exists for, they are what the document
 // calls itself, and stage 3 has no other way to learn it. Like every string
-// the artifact copies, they are capped — see CapWords.
+// the artifact copies, they are capped — see WordCap.
 type File struct {
 	Path        string    `json:"path"`
 	SHA256      string    `json:"sha256"`

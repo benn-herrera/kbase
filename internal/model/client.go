@@ -273,27 +273,23 @@ func (u Usage) IsZero() bool { return u == Usage{} }
 // must treat it as absence, not as a fault.
 func (u Usage) HasTelemetry() bool { return u.Telemetry != InferenceTelemetry{} }
 
-// TelemetryLogDetail renders the telemetry as one greppable `key=value`
-// line. Durations are rendered in MILLISECONDS (the wire's fractional
-// seconds are unreadable at a glance next to other millisecond gauges);
-// rates are tokens/second. The token counts and the prompt-cache hit ride
-// along because a timing is only interpretable beside the work it measured.
+// StatusError is a non-2xx HTTP response from the provider: the status code
+// and the response body, with any Authorization material scrubbed.
 //
-// Callers must gate on HasTelemetry: this renders an all-zero line for an
-// absent block, and an all-zero line every call is noise that trains the
-// reader to skip the record.
-func (u Usage) TelemetryLogDetail() string {
-	t := u.Telemetry
-	return fmt.Sprintf("ttft_ms=%.1f prefill_ms=%.1f gen_ms=%.1f total_ms=%.1f "+
-		"prefill_tps=%.1f gen_tps=%.1f prompt_tokens=%d completion_tokens=%d cached_tokens=%d",
-		durationMillis(t.TimeToFirstToken), durationMillis(t.PrefillDuration),
-		durationMillis(t.GenerationDuration), durationMillis(t.TotalDuration),
-		t.PrefillTokensPerSecond, t.GenerationTokensPerSecond,
-		u.PromptTokens, u.CompletionTokens, u.CachedPromptTokens)
+// It is a typed error rather than a formatted string because the status is
+// the thing callers act on — a 429 means "later" and is worth retrying, a 400
+// means the request itself is wrong and will be just as wrong three times.
+// Match with errors.As over a value target, as elsewhere in this codebase.
+//
+// Both the blocking and the streaming path return it, because both go through
+// the one request helper: a caller's 429-awareness therefore holds on the
+// streaming transport the long pipeline calls actually use.
+type StatusError struct {
+	Code int
+	Body string
 }
 
-// durationMillis renders a Duration as fractional milliseconds.
-func durationMillis(d time.Duration) float64 { return float64(d.Microseconds()) / 1000.0 }
+func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }
 
 // ErrMockExhausted is returned by a scripted MockClient when its response
 // queue has been drained. Tests check for this with errors.Is.

@@ -30,7 +30,7 @@ func TestFrontMatter(t *testing.T) {
 	if plain := fileOf(t, art, "front-unterminated.md"); plain.Metadata != nil {
 		t.Errorf("an unterminated block is not front matter; got %+v", plain.Metadata)
 	}
-	if !lg.has(t, "debug", "file", "front.md") {
+	if !lg.Has(t, "debug", "file", "front.md") {
 		t.Error("a front-matter decision must leave a debug record naming the file")
 	}
 }
@@ -48,7 +48,7 @@ func TestFrontMatterRejection(t *testing.T) {
 			t.Errorf("%s: recorded metadata %+v, want none", path, f.Metadata)
 		}
 	}
-	if !lg.has(t, "debug", "file", "front-thematic.md") {
+	if !lg.Has(t, "debug", "file", "front-thematic.md") {
 		t.Error("a rejected block must leave a debug record naming the file")
 	}
 

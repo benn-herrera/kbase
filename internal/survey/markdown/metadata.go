@@ -8,6 +8,7 @@ import (
 
 	"kbase/internal/log"
 	"kbase/internal/survey"
+	"kbase/internal/text"
 )
 
 // frontMatterDelim opens and closes a YAML front-matter block. Front matter
@@ -33,13 +34,14 @@ type frontMatterFields struct {
 }
 
 // normalized puts the values through the artifact's one string rule
-// (survey.CapWords) and drops tags that carry nothing, so a `tags: [a, "", b]`
-// block does not spend an artifact slot on an empty string.
+// (text.CapWords at survey.WordCap) and drops tags that carry nothing, so a
+// `tags: [a, "", b]` block does not spend an artifact slot on an empty string.
 func (f frontMatterFields) normalized() frontMatterFields {
-	f.Title, f.Description = survey.CapWords(f.Title), survey.CapWords(f.Description)
+	f.Title = text.CapWords(f.Title, survey.WordCap)
+	f.Description = text.CapWords(f.Description, survey.WordCap)
 	tags := make([]string, 0, len(f.Tags))
 	for _, t := range f.Tags {
-		if t = survey.CapWords(t); t != "" {
+		if t = text.CapWords(t, survey.WordCap); t != "" {
 			tags = append(tags, t)
 		}
 	}

@@ -22,11 +22,12 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
+	gmtext "github.com/yuin/goldmark/text"
 
 	"kbase/internal/ingest"
 	"kbase/internal/log"
 	"kbase/internal/survey"
+	"kbase/internal/text"
 	"kbase/internal/tokens"
 )
 
@@ -93,7 +94,7 @@ func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens
 	}
 	body := src[bodyStart:]
 
-	doc := p.Parse(text.NewReader(body))
+	doc := p.Parse(gmtext.NewReader(body))
 	heads, paras, raws := scan(doc, body, bodyStart)
 	g := gister{src: src, body: body, paras: paras, est: est}
 
@@ -169,7 +170,7 @@ func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []para
 			}
 			heads = append(heads, headingRef{
 				level: t.Level,
-				title: survey.CapWords(plainText(t, body)),
+				title: text.CapWords(plainText(t, body), survey.WordCap),
 				start: base + lineStart(body, t.Lines().At(0).Start),
 			})
 		case *ast.Paragraph:
@@ -267,7 +268,7 @@ func (g gister) forRange(start, end int) string {
 			break
 		}
 		if p.srcStart >= start {
-			return survey.CapWords(plainText(p.bodyNode, g.body))
+			return text.CapWords(plainText(p.bodyNode, g.body), survey.WordCap)
 		}
 	}
 	return ""

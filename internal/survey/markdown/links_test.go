@@ -97,7 +97,7 @@ func TestLinkCaseFolding(t *testing.T) {
 			t.Errorf("link %q = %+v, want internal at the corpus's own byte-exact id", l.Target, l)
 		}
 	}
-	if !lg.has(t, "debug", "target", "guide/setup.md") {
+	if !lg.Has(t, "debug", "target", "guide/setup.md") {
 		t.Error("a link resolved by case fold must leave a debug record")
 	}
 }
@@ -116,7 +116,7 @@ func TestLinkAmbiguousFold(t *testing.T) {
 	if len(links) != 1 || links[0].Kind != survey.LinkUnresolved {
 		t.Fatalf("links = %+v, want the ambiguous target left unresolved", links)
 	}
-	if !lg.has(t, "warn", "target", "TWIN.MD") {
+	if !lg.Has(t, "warn", "target", "TWIN.MD") {
 		t.Error("an ambiguous fold must warn, naming the target it refused to guess at")
 	}
 }

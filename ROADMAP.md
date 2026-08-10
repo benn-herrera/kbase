@@ -8,37 +8,33 @@ deleted, not archived — git history is the log.
 
 ## Now
 
-- **Tasking/orchestrator planning discussion** — the per-worker vs global
-  stability-frontier decision needs Benn before the burst plan is written;
-  see the Next item for full scope.
 - ~~`.mdx` decision~~ ruled 2026-08-09: **ignored** (ARCHITECTURE §4 ingest
   row) — watch what it actually costs; strip-and-scan only on evidence.
 
 ## Next
-- **Tasking/orchestrator layer** — the agent framework, where "agent" is a
-  **Go-side construct** (ruled 2026-08-09): a role = embedded definition +
-  slot-built context + one-shot LLM calls; never an LLM-driven tool-calling
-  loop. Each pipeline step is mechanical where possible, LLM execution
-  reserved for what can't practically be done any other way. Pieces: agent
-  lifecycle; parent↔child communication only (no peer↔peer — matches the
-  map-reduce shape); coordinator that spawns sub-agents for tasks; file
-  read (full or offset+length) and file write as **orchestrator-side
-  deterministic capabilities** feeding the content buffer / landing
-  verified outputs — never LLM-callable tools. Plus phase enum +
-  allowed-operations matrix (ARCHITECTURE §7 layers 1–2), feeding the
-  builder's `CheckStability`; buffer flush policy execution. Carries from
-  the foundation review:
-  decide per-worker vs global stability frontier under stage-5 fan-out;
-  the phase matrix must become the single source the prefix/stability tests
-  derive frontiers from; RefA flush-at-section-transition must land here
-  (precondition for the slot-order swap staying safe); dev-telemetry
-  emission (`[dev] telemetry` switch exists; wire `TelemetryLogDetail`
-  through internal/log at the first pipeline call site).
-
-## Later (build order exploits determinism-first)
 
 - Mechanical splitter → boundary refinement → verification → dissector
-  (ARCHITECTURE §5). **MAD review here.**
+  (ARCHITECTURE §5). **Carries the R-6 verifier primitives**, which the
+  orchestrator burst did not land: §5's verification paragraph is design
+  with no code behind it, and the cut stage needs cut-list tiling, the
+  clamp, candidate-set membership and the whitespace-adjacency tripwire
+  before it can verify anything. (`internal/survey/tiling.go` is survey's
+  own unexported check over a different subject and is not this.)
+  Also reconcile here (ruled 2026-08-10, leave-and-watch): `Agent`/`Call`/
+  `CallRunner` stay exported though only the coordinator constructs them —
+  unexport or keep based on this burst's actual consumer set.
+
+## Later (build order exploits determinism-first)
+- **MAD review gate (ruled 2026-08-09): after the first end-to-end run
+  that turns the Rojo docs into a KB of the intended shape, before any
+  creator-docs scaling work.** Pre-E2E adversarial review is speculation,
+  which is not where model review earns its cost; the per-burst
+  architect/go-coder passes carry review until then. The E2E milestone's
+  deliverables include the evidence artifacts the MAD review interrogates:
+  the generated KB itself, a full run's results, the stepwise
+  recovery/resume forensics (including from a deliberately interrupted
+  run), and the telemetry/metrics data (`cached_tokens`, timing — which
+  also settles the slot-order measurement).
 - Embedded prompt/agent definitions + the family-tuning eval harness.
   Derive role knowledge from `.claude/agents/kb-*.md` as referents (process
   phasing, leaf-fidelity rules, review adversarialism) — not ports: kbase

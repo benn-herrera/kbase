@@ -170,7 +170,10 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string,
 		// body in the error after scrubbing, capped at errorBodyLimit.
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, scrubAuthorization(string(respBody), c.endpoint.APIKey))
+		return nil, StatusError{
+			Code: resp.StatusCode,
+			Body: scrubAuthorization(string(respBody), c.endpoint.APIKey),
+		}
 	}
 	return resp, nil
 }

@@ -1,12 +1,12 @@
 package survey
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
 	"kbase/internal/ingest"
 	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 )
 
 // twoDocuments is the corpus the Assemble cases run against: two documents of
@@ -58,7 +58,7 @@ func inventory() []File {
 // unresolved-link budget is announced rather than buried in the artifact.
 func TestAssembleTotals(t *testing.T) {
 	corpus := twoDocuments(t)
-	lg := &capture{}
+	lg := &logtest.Capture{}
 
 	art, err := Assemble(corpus, inventory(), lg)
 	if err != nil {
@@ -83,7 +83,7 @@ func TestAssembleTotals(t *testing.T) {
 	if art.Corpus != want {
 		t.Errorf("totals = %+v, want %+v", art.Corpus, want)
 	}
-	if !lg.has(t, "warn", "count", 2) {
+	if !lg.Has(t, "warn", "count", 2) {
 		t.Error("the corpus's unresolved-link total must be warned about; stage 8 has to answer for it")
 	}
 }
@@ -96,12 +96,12 @@ func TestAssembleNoUnresolvedIsQuiet(t *testing.T) {
 	files[0].Links = files[0].Links[:1]
 	files[1].Links = files[1].Links[:2]
 
-	lg := &capture{}
+	lg := &logtest.Capture{}
 	if _, err := Assemble(corpus, files, lg); err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	for _, r := range lg.records {
-		if r.level == "warn" {
+	for _, r := range lg.Snapshot() {
+		if r.Level == "warn" {
 			t.Errorf("a corpus with no unresolved links must warn about nothing; got %+v", r)
 		}
 	}
@@ -167,31 +167,6 @@ func TestAssembleRefusesBadInventory(t *testing.T) {
 			}
 			if len(art.Files) != 0 {
 				t.Errorf("a refused inventory must not yield a partial artifact; got %+v", art)
-			}
-		})
-	}
-}
-
-// TestCapWords covers the artifact's one string rule directly: collapse, then
-// cut at a word boundary and mark the cut.
-func TestCapWords(t *testing.T) {
-	long := make([]string, WordCap*2)
-	for i := range long {
-		long[i] = fmt.Sprintf("w%d", i)
-	}
-
-	for _, tc := range []struct {
-		name, in, want string
-	}{
-		{"whitespace runs collapse", " a\tb\n c ", "a b c"},
-		{"empty stays empty", "   \n\t ", ""},
-		{"under the cap is untouched", "just a few words", "just a few words"},
-		{"at the cap is not marked", strings.Join(long[:WordCap], " "), strings.Join(long[:WordCap], " ")},
-		{"over the cap is cut and marked", strings.Join(long, " "), strings.Join(long[:WordCap], " ") + CapEllipsis},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := CapWords(tc.in); got != tc.want {
-				t.Errorf("CapWords(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

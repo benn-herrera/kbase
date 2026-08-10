@@ -1,6 +1,9 @@
 package prompt
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Slot identifies one position in the per-call slot stack (ARCHITECTURE.md
 // §7, "Per-call slot layout"). Slots are ordered most-stable first, which is
@@ -61,6 +64,17 @@ var allSlots = [...]Slot{
 	SlotSystemFrame, SlotAgentDef, SlotTaskDef, SlotRefA,
 	SlotTaskStatus, SlotContent, SlotRefB, SlotReminder,
 }
+
+// AllSlots returns the render order, which is also ascending slot order.
+//
+// It is production surface rather than a test export because the orchestrator
+// derives sets from it — the stage-constant slots are "every slot at or below
+// the section-transition frontier", filtered from this. A caller enumerating
+// slots any other way would be keeping a second list, which is exactly the
+// drift the numeric contract above exists to prevent. It hands back a copy:
+// a caller that sorted or reversed the result in place would otherwise move
+// the render order itself.
+func AllSlots() []Slot { return slices.Clone(allSlots[:]) }
 
 // String renders a slot for error messages: number and name, no content.
 func (s Slot) String() string {

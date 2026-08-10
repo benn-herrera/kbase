@@ -62,6 +62,15 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 # ` + TierLight + `: dissection, distillation, review.
 %s
 %s
+
+# [dev] switches diagnose kbase itself and never change what it produces.
+# The table is absent by default and every switch is off when it is.
+#
+# [dev]
+# telemetry = true   # per-call inference timing, WHERE THE PROVIDER SENDS IT.
+#                    # It is recorded at info level, and the default log level
+#                    # is warn — so this switch shows nothing on its own; run
+#                    # with --log-level info to see it.
 `
 
 // UpdateConfig sets the provider choice and the [models] tiers in the

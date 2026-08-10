@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 )
 
 // writeFile creates dir/name (parents included) with the given contents.
@@ -55,7 +56,7 @@ func TestWalkSelection(t *testing.T) {
 	writeFile(t, root, ".dotfile.md", "# Dotfile\n")
 	writeFile(t, root, "guide/.draft.md", "# Draft\n")
 
-	lg := &capture{}
+	lg := &logtest.Capture{}
 	c, err := Walk(root, mdExts, lg)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -71,7 +72,7 @@ func TestWalkSelection(t *testing.T) {
 	// Every skip is silent in the corpus and visible in the log — the
 	// "why is that file not in my knowledge base" channel.
 	for _, skipped := range []string{".hidden", ".dotfile.md", "guide/.draft.md", "notes.txt"} {
-		if !lg.has(t, "debug", "path", skipped) {
+		if !lg.Has(t, "debug", "path", skipped) {
 			t.Errorf("no debug record for skipped entry %q", skipped)
 		}
 	}
@@ -232,7 +233,7 @@ func TestWalkSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		lg := &capture{}
+		lg := &logtest.Capture{}
 		c, err := Walk(root, mdExts, lg)
 		if err != nil {
 			t.Fatalf("a broken link that cannot hold a document must not fail the corpus: %v", err)
@@ -240,7 +241,7 @@ func TestWalkSymlinks(t *testing.T) {
 		if got, want := paths(c), []string{"index.md"}; !slices.Equal(got, want) {
 			t.Errorf("units: got %v, want %v", got, want)
 		}
-		if !lg.has(t, "debug", "path", "logo.png") {
+		if !lg.Has(t, "debug", "path", "logo.png") {
 			t.Error("a skipped broken link must leave a debug record naming it")
 		}
 	})

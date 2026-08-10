@@ -7,10 +7,12 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	gmtext "github.com/yuin/goldmark/text"
 
 	"kbase/internal/ingest"
+	"kbase/internal/log/logtest"
 	"kbase/internal/survey"
+	"kbase/internal/text"
 	"kbase/internal/tokens"
 )
 
@@ -142,7 +144,7 @@ func surveyFixtures(t *testing.T, files map[string]string) (ingest.Corpus, surve
 
 // surveyFixturesLogged is surveyFixtures for the cases that assert on what
 // the survey recorded as well as on what it produced.
-func surveyFixturesLogged(t *testing.T, files map[string]string) (ingest.Corpus, survey.Artifact, *capture) {
+func surveyFixturesLogged(t *testing.T, files map[string]string) (ingest.Corpus, survey.Artifact, *logtest.Capture) {
 	t.Helper()
 	units := make([]ingest.Unit, 0, len(files))
 	for p, body := range files {
@@ -152,7 +154,7 @@ func surveyFixturesLogged(t *testing.T, files map[string]string) (ingest.Corpus,
 	if err != nil {
 		t.Fatalf("ingest.New: %v", err)
 	}
-	lg := &capture{}
+	lg := &logtest.Capture{}
 	art, err := Survey(corpus, tokens.Estimator{}, lg)
 	if err != nil {
 		t.Fatalf("Survey: %v", err)
@@ -336,16 +338,16 @@ func TestGists(t *testing.T) {
 
 // TestGistWordCap: a long paragraph is cut at a word boundary and marked, so
 // a routing hint never reads as a complete sentence it is not. The rule
-// itself is the artifact's (survey.CapWords); this checks the adapter puts
+// itself is text.CapWords at the artifact's cap; this checks the adapter puts
 // gists through it.
 func TestGistWordCap(t *testing.T) {
 	f := surveyOne(t, "long.md", "# Long\n\n"+manyWords()+"\n")
 
 	got := f.Sections[0].Gist
-	if !strings.HasSuffix(got, survey.CapEllipsis) {
+	if !strings.HasSuffix(got, text.CapEllipsis) {
 		t.Errorf("capped gist %q must be marked as cut", got)
 	}
-	trimmed := strings.TrimSuffix(got, survey.CapEllipsis)
+	trimmed := strings.TrimSuffix(got, text.CapEllipsis)
 	if n := len(strings.Fields(trimmed)); n != survey.WordCap {
 		t.Errorf("capped gist holds %d words, want %d", n, survey.WordCap)
 	}
@@ -366,10 +368,10 @@ func TestTitleWordCap(t *testing.T) {
 		t.Fatalf("sections = %+v, want the one setext heading", f.Sections)
 	}
 	title := f.Sections[0].Title
-	if !strings.HasSuffix(title, survey.CapEllipsis) {
+	if !strings.HasSuffix(title, text.CapEllipsis) {
 		t.Errorf("capped title %q must be marked as cut", title)
 	}
-	if n := len(strings.Fields(strings.TrimSuffix(title, survey.CapEllipsis))); n != survey.WordCap {
+	if n := len(strings.Fields(strings.TrimSuffix(title, text.CapEllipsis))); n != survey.WordCap {
 		t.Errorf("capped title holds %d words, want %d", n, survey.WordCap)
 	}
 }
@@ -447,7 +449,7 @@ func TestExtensions(t *testing.T) {
 // skip becomes dead weight and this test says so.
 func TestFrontMatterWouldMisparse(t *testing.T) {
 	src := []byte(fixtures["front.md"])
-	doc := goldmark.DefaultParser().Parse(text.NewReader(src))
+	doc := goldmark.DefaultParser().Parse(gmtext.NewReader(src))
 
 	var fabricated []string
 	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
@@ -456,7 +458,7 @@ func TestFrontMatterWouldMisparse(t *testing.T) {
 			continue
 		}
 		if h.Lines().At(0).Start < len("---\ntitle: Front Matter Doc") {
-			fabricated = append(fabricated, survey.CapWords(plainText(h, src)))
+			fabricated = append(fabricated, text.CapWords(plainText(h, src), survey.WordCap))
 		}
 	}
 	if len(fabricated) == 0 {

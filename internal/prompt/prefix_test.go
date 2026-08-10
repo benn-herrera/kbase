@@ -1,10 +1,13 @@
-package prompt
+package prompt_test
 
 import (
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/pipeline"
+	"kbase/internal/prompt"
 )
 
 // The prefix-stability property is the whole reason for the slot ordering
@@ -12,23 +15,56 @@ import (
 // tokens, so the wire bytes of two calls must be identical up to the first
 // slot whose input changed. These tests make that falsifiable, and in doing so
 // pin the delimiter scheme against regressions.
+//
+// They are an EXTERNAL test package so they can import internal/pipeline. The
+// frontiers they assert are the ones the phase matrix declares — §12 names
+// these tests as one of the matrix's consumers, and deriving the expectations
+// there is what makes "single source" true rather than aspirational. A
+// hand-written frontier here would be a second source that agrees until the
+// day it does not.
+
+// frontier reads a phase's declared stability frontier out of the matrix. Any
+// failure here is fatal: a test that silently substituted a default frontier
+// would assert something the orchestrator does not enforce.
+func frontier(t *testing.T, p pipeline.Phase) prompt.Slot {
+	t.Helper()
+	f, err := pipeline.Frontier(p)
+	if err != nil {
+		t.Fatalf("pipeline.Frontier(%v): %v", p, err)
+	}
+	return f
+}
 
 // statusBlock renders the status slot the way the builder does, from the
 // input alone.
-func statusBlock(in CallInput) string { return strings.Join(in.StatusLines, statusLineDelimiter) }
+func statusBlock(in prompt.CallInput) string {
+	return strings.Join(in.StatusLines, prompt.StatusLineDelimiter)
+}
 
-// stageConstantSlots are the slots no CallInput field can move: they are
-// fixed for the life of a stage, so a call loop can never churn them.
-var stageConstantSlots = []Slot{SlotSystemFrame, SlotAgentDef, SlotTaskDef}
+// stageConstantSlots is the orchestrator's derivation, with its error
+// checked. A test that quietly substituted a default here would assert
+// something the orchestrator does not enforce.
+func stageConstantSlots(t *testing.T) []prompt.Slot {
+	t.Helper()
+	slots, err := pipeline.StageConstantSlots()
+	if err != nil {
+		t.Fatalf("pipeline.StageConstantSlots(): %v", err)
+	}
+	return slots
+}
 
-// perCallSlots is everything else, in render order, derived from allSlots
-// rather than listed again. A slot added to the stack therefore joins the
-// frontier scan by construction — a parallel list would let it slip in
-// unscanned, and the tests would keep passing while checking less.
-func perCallSlots() []Slot {
-	out := make([]Slot, 0, len(allSlots)-len(stageConstantSlots))
-	for _, s := range allSlots {
-		if !slices.Contains(stageConstantSlots, s) {
+// perCallSlots is everything the stage-constant set does not cover, in render
+// order, derived from AllSlots rather than listed again. A slot added to the
+// stack therefore joins the frontier scan by construction — a parallel list
+// would let it slip in unscanned, and the tests would keep passing while
+// checking less.
+func perCallSlots(t *testing.T) []prompt.Slot {
+	t.Helper()
+	stageConstant := stageConstantSlots(t)
+	all := prompt.AllSlots()
+	out := make([]prompt.Slot, 0, len(all)-len(stageConstant))
+	for _, s := range all {
+		if !slices.Contains(stageConstant, s) {
 			out = append(out, s)
 		}
 	}
@@ -42,19 +78,19 @@ func perCallSlots() []Slot {
 // An unmapped slot is fatal, not empty: that is the other half of deriving
 // perCallSlots. A new slot reaches here with no case of its own, and
 // returning "" would report it as never changing.
-func perCallInput(t *testing.T, in CallInput, s Slot) string {
+func perCallInput(t *testing.T, in prompt.CallInput, s prompt.Slot) string {
 	t.Helper()
 	switch s {
-	case SlotTaskStatus:
+	case prompt.SlotTaskStatus:
 		return statusBlock(in)
-	case SlotRefA:
+	case prompt.SlotRefA:
 		return in.RefA
-	case SlotContent:
+	case prompt.SlotContent:
 		return in.Content
-	case SlotRefB:
+	case prompt.SlotRefB:
 		return in.RefB
-	case SlotReminder:
-		return strings.Join(in.AcceptanceCriteria, trailerCriteriaDelimiter)
+	case prompt.SlotReminder:
+		return strings.Join(in.AcceptanceCriteria, prompt.TrailerCriteriaDelimiter)
 	default:
 		t.Fatalf("no CallInput mapping for %s", s)
 		return ""
@@ -79,9 +115,9 @@ func commonLinePrefix(a, b string) int {
 // expectedFrontier computes the byte offset through which two built calls
 // must agree: the start of the first per-call slot whose input differs,
 // extended through the unchanged leading lines of the status block.
-func expectedFrontier(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall) int {
+func expectedFrontier(t *testing.T, prevIn, curIn prompt.CallInput, prev, cur prompt.BuiltCall) int {
 	t.Helper()
-	for _, s := range perCallSlots() {
+	for _, s := range perCallSlots(t) {
 		a, b := perCallInput(t, prevIn, s), perCallInput(t, curIn, s)
 		if a == b {
 			continue
@@ -90,7 +126,7 @@ func expectedFrontier(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall
 		// the two calls disagree about where it starts; the earlier of the
 		// two positions is the honest frontier.
 		start := min(prev.Offsets[s].Start, cur.Offsets[s].Start)
-		if s == SlotTaskStatus {
+		if s == prompt.SlotTaskStatus {
 			return start + commonLinePrefix(a, b)
 		}
 		return start
@@ -99,7 +135,7 @@ func expectedFrontier(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall
 }
 
 // assertStablePrefix checks the general invariant for one transition.
-func assertStablePrefix(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCall) {
+func assertStablePrefix(t *testing.T, prevIn, curIn prompt.CallInput, prev, cur prompt.BuiltCall) {
 	t.Helper()
 	f := expectedFrontier(t, prevIn, curIn, prev, cur)
 	if f > len(prev.UserTurn) || f > len(cur.UserTurn) {
@@ -111,7 +147,7 @@ func assertStablePrefix(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCa
 			f, prev.UserTurn[:f], cur.UserTurn[:f])
 	}
 	// Slots 1–3 are stage-constant: they can never churn across a call loop.
-	for _, s := range stageConstantSlots {
+	for _, s := range stageConstantSlots(t) {
 		if prev.Hashes[s] != cur.Hashes[s] {
 			t.Errorf("%s churned across a call", s)
 		}
@@ -119,79 +155,99 @@ func assertStablePrefix(t *testing.T, prevIn, curIn CallInput, prev, cur BuiltCa
 }
 
 func TestPrefixStabilityPairwise(t *testing.T) {
-	sc := newContext(t, baseSpec(t))
+	sc := prompt.NewContext(t, prompt.BaseSpec(t))
+
+	// The two frontiers the matrix declares for a running stage. Every case
+	// below whose claim IS one of them states it this way, so a matrix edit
+	// moves the test with it.
+	var (
+		callLoop          = frontier(t, pipeline.PhaseCallLoop)
+		sectionTransition = frontier(t, pipeline.PhaseSectionTransition)
+	)
 
 	for _, tc := range []struct {
 		name string
 		// mutate produces the second call's input.
-		mutate func(CallInput) CallInput
+		mutate func(prompt.CallInput) prompt.CallInput
 		// stableThrough is the last slot whose bytes must be identical in
 		// both calls — the §7 claim stated per case, alongside the
 		// general property assertStablePrefix derives.
-		stableThrough Slot
+		stableThrough prompt.Slot
 	}{
 		{
-			name:          "content only",
-			mutate:        func(in CallInput) CallInput { in.Content = "A different span entirely."; return in },
-			stableThrough: SlotTaskStatus,
+			name: "content only",
+			mutate: func(in prompt.CallInput) prompt.CallInput {
+				in.Content = "A different span entirely."
+				return in
+			},
+			stableThrough: prompt.SlotTaskStatus,
 		},
 		{
-			name:          "transient reference only",
-			mutate:        func(in CallInput) CallInput { in.RefB = "Prior output ends: elsewhere."; return in },
-			stableThrough: SlotContent,
+			name: "transient reference only",
+			mutate: func(in prompt.CallInput) prompt.CallInput {
+				in.RefB = "Prior output ends: elsewhere."
+				return in
+			},
+			stableThrough: prompt.SlotContent,
 		},
 		{
 			name: "acceptance criteria only",
-			mutate: func(in CallInput) CallInput {
+			mutate: func(in prompt.CallInput) prompt.CallInput {
 				in.AcceptanceCriteria = []string{"- cover lines 43-77", "- budget 800 tokens"}
 				return in
 			},
-			stableThrough: SlotRefB,
+			stableThrough: prompt.SlotRefB,
 		},
 		{
 			// The flush is the one per-call event that costs the whole
-			// stage-constant prefix and everything the buffer holds.
+			// stage-constant prefix and everything the buffer holds — which
+			// is exactly what the section-transition row of the matrix
+			// declares, and why the flush is legal only in that phase.
 			name: "multi-call reference flush",
-			mutate: func(in CallInput) CallInput {
+			mutate: func(in prompt.CallInput) prompt.CallInput {
 				in.RefA = "Cross-file listing:\n- c.md\n- d.md"
 				return in
 			},
-			stableThrough: SlotTaskDef,
+			stableThrough: sectionTransition,
 		},
 		{
 			// Status sits BELOW the multi-call buffer, so churning it costs
-			// the status block and what follows — never the buffer.
+			// the status block and what follows — never the buffer. That is
+			// the call-loop frontier.
 			name: "last status line only",
-			mutate: func(in CallInput) CallInput {
+			mutate: func(in prompt.CallInput) prompt.CallInput {
 				in.StatusLines = []string{"Sections done: 2/9", "Current file: guide/api.md"}
 				return in
 			},
-			stableThrough: SlotRefA,
+			stableThrough: callLoop,
 		},
 		{
 			name: "first status line invalidates the rest of the status block",
-			mutate: func(in CallInput) CallInput {
+			mutate: func(in prompt.CallInput) prompt.CallInput {
 				in.StatusLines = []string{"Sections done: 3/9", "Current file: guide/intro.md"}
 				return in
 			},
-			stableThrough: SlotRefA,
+			stableThrough: callLoop,
 		},
 		{
-			name:          "buffer emptied",
-			mutate:        func(in CallInput) CallInput { in.RefB = ""; return in },
-			stableThrough: SlotContent,
+			name: "buffer emptied",
+			mutate: func(in prompt.CallInput) prompt.CallInput {
+				in.RefB = ""
+				return in
+			},
+			stableThrough: prompt.SlotContent,
 		},
 		{
 			name:          "identical inputs",
-			mutate:        func(in CallInput) CallInput { return in },
-			stableThrough: SlotReminder,
+			mutate:        func(in prompt.CallInput) prompt.CallInput { return in },
+			stableThrough: prompt.SlotReminder,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prevIn := baseInput()
-			curIn := tc.mutate(baseInput())
-			prev := build(t, sc, prevIn)
-			cur := build(t, sc, curIn)
+			prevIn := prompt.BaseInput()
+			curIn := tc.mutate(prompt.BaseInput())
+			prev := prompt.Build(t, sc, prevIn)
+			cur := prompt.Build(t, sc, curIn)
 
 			end := prev.Offsets[tc.stableThrough].End
 			if end != cur.Offsets[tc.stableThrough].End {
@@ -215,10 +271,21 @@ func TestPrefixStabilitySequence(t *testing.T) {
 		calls          = 12
 		refAFlushEvery = 4
 	)
-	sc := newContext(t, baseSpec(t))
+	sc := prompt.NewContext(t, prompt.BaseSpec(t))
 
-	callInput := func(i int) CallInput {
-		return CallInput{
+	// The subject is reference buffer A, which is what this case is ABOUT —
+	// "the buffer holds its bytes between flushes". The call-loop frontier
+	// happens to be the same slot today, and that agreement is worth
+	// asserting, but it is a separate claim: a frontier is "the last slot
+	// that must be stable", not "the slot this test is about", and reading
+	// the subject out of the matrix would silently start checking a
+	// different slot the day the matrix lowered it.
+	if callLoop := frontier(t, pipeline.PhaseCallLoop); callLoop != prompt.SlotRefA {
+		t.Fatalf("call-loop frontier = %v, want %v", callLoop, prompt.SlotRefA)
+	}
+
+	callInput := func(i int) prompt.CallInput {
+		return prompt.CallInput{
 			StatusLines: []string{
 				"Stage: distillation",
 				"Sections done: 3/9",
@@ -233,10 +300,10 @@ func TestPrefixStabilitySequence(t *testing.T) {
 	}
 
 	prevIn := callInput(0)
-	prev := build(t, sc, prevIn)
+	prev := prompt.Build(t, sc, prevIn)
 	for i := 1; i < calls; i++ {
 		curIn := callInput(i)
-		cur := build(t, sc, curIn)
+		cur := prompt.Build(t, sc, curIn)
 
 		t.Run(fmt.Sprintf("call %02d", i), func(t *testing.T) {
 			assertStablePrefix(t, prevIn, curIn, prev, cur)
@@ -248,12 +315,12 @@ func TestPrefixStabilitySequence(t *testing.T) {
 			// ordering could not make, because a status line churning
 			// every call moved the frontier above the buffer either way.
 			if i%refAFlushEvery != 0 {
-				if prev.Hashes[SlotRefA] != cur.Hashes[SlotRefA] {
-					t.Error("reference buffer A churned between flushes")
+				if prev.Hashes[prompt.SlotRefA] != cur.Hashes[prompt.SlotRefA] {
+					t.Errorf("%s churned between flushes", prompt.SlotRefA)
 				}
-				end := prev.Offsets[SlotRefA].End
-				if end != cur.Offsets[SlotRefA].End || prev.UserTurn[:end] != cur.UserTurn[:end] {
-					t.Error("status churn cost the prefix through the multi-call buffer")
+				end := prev.Offsets[prompt.SlotRefA].End
+				if end != cur.Offsets[prompt.SlotRefA].End || prev.UserTurn[:end] != cur.UserTurn[:end] {
+					t.Errorf("status churn cost the prefix through %s", prompt.SlotRefA)
 				}
 			}
 			// Only the last status line churns per call, so the cache must

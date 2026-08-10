@@ -166,8 +166,8 @@ judgment roles; the human at the edges.**
 | 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
 | 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists. For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
 | 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document skeleton: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
-| 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
-| 5 | **Distillation** | gemma-4-26B-A4B, parallel fan-out | Verbatim source→Markdown leaf translation. ~90% of tokens, translation-shaped. Parallel-safe by file ownership: one domain/leaf per worker. Worker context: exact source byte-range + taxonomy position + style contract + neighbor gists. |
+| 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions (ruled 2026-08-09), so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
+| 5 | **Distillation** | mechanical (Markdown); 26B-A4B translation for non-Markdown formats | **Markdown leaves are mechanical** (ruled 2026-08-09): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. Model translation exists only where a format adapter requires it (LaTeX→Markdown, later); there it is parallel fan-out, one domain per worker. The historical "~90% of tokens" estimate applied to translation and largely evaporates on the Markdown path. |
 | 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. |
 | 7 | **Review** | gemma-4-26B-A4B | Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
 | 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the skeleton by template. Dead links impossible by construction; the link checker demotes to regression tripwire. |
@@ -198,16 +198,25 @@ deferred to the second adapter, where it can be derived rather than guessed
    boundaries.
 2. **Model refinement pass** (26B-A4B): serial scan, each split loaded into the end of
    context with a percentage under/overlap of neighbors; each load overwrites the
-   previous (O(1) context, O(n) calls). The model's output is **only** a modified
-   offset+length list — it writes no text. Its authority is **clamped to the overlap
-   window**: it may move a proposed cut within the visible neighborhood, not invent or
-   delete sections. Optional per-boundary confidence emission; low-confidence
+   previous (O(1) context, O(n) calls). The model writes no text and emits no raw
+   offsets: the format adapter enumerates the **legal cut candidates** within the
+   overlap window (block boundaries — heading lines, fence edges, paragraph starts;
+   what "block" means is adapter knowledge behind the format seam), and the model's
+   output is a choice among those candidates. Its authority is clamped twice: to the
+   overlap window, and to the enumerated set — bisecting a heading is unrepresentable,
+   not merely detectable. Optional per-boundary confidence emission; low-confidence
    boundaries escalate (31B look or human).
-3. **Verification** (deterministic, all cheap): exact tiling — monotonic offsets, no
-   gaps/overlaps, sum = document length; every deviation within clamp; minimum section
-   size respected. Pass → dissect. Fail → retry once → fall back to mechanical cuts
-   and log. The mechanical list is always valid: refinement can only improve or be
-   discarded.
+3. **Verification** (deterministic, all cheap, format-neutral): exact tiling —
+   monotonic offsets, no gaps/overlaps, sum = document length; every deviation within
+   clamp; candidate-set membership; minimum section size respected; and the
+   **whitespace-adjacency tripwire**: at every cut, at least one adjacent byte must be
+   whitespace. Both-sides-non-whitespace cannot result from model misjudgment under
+   candidate constraint — it means OUR offset pipeline is broken (rebasing drift,
+   wrong buffer), so it is a loud-abort defect, not a retry. Orthogonal nets: the
+   membership check inspects structure, the tripwire inspects raw bytes; a bug must
+   thread both. Pass → dissect. Verification failure of the model's choice → retry
+   once → fall back to mechanical cuts and log. The mechanical list is always valid:
+   refinement can only improve or be discarded.
 4. **Dissector** (deterministic) slices the immutable source by verified offsets.
    Source is never sliced-and-retyped; the cut list is a derived overlay
    (content-anchored spans — same discipline as the contract-analysis design).
@@ -390,7 +399,14 @@ prevention is holding against a real prefix cache.
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
 | Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
 | Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
-| Gist word cap | 40 words | survey routing hints and titles (`survey.gistWordCap`); word-capped, never mid-word |
+| Gist word cap | 40 words | survey routing hints and titles (`survey.WordCap`, post-seam export); word-capped, never mid-word |
+| Transport retries | 3 attempts, 500ms base doubling | 429 retried, other 4xx not; ctx cancel never (`pipeline.transportAttempts`/`transportBackoffBase`) |
+| Semantic attempts | 2 | initial + one informed retry (`pipeline.semanticAttempts`) |
+| Corrective-note bound | 12 words + 4-word prefix | the retry's failure-reason note (`pipeline.correctiveNoteWords`) |
+| Worker pool default | 4 | domain-stream workers per stage (`pipeline.DefaultWorkers`) |
+| Job lock filename | `job.lock` | `pipeline.LockFileName`; O_EXCL, refuse on contention, never auto-broken |
+| Artifact stamp | `<artifact>.stamp.json`, schema 1 | `pipeline.StampSuffix` sidecar; schema mismatch ⇒ Invalid |
+| Job-dir modes | 0600 / 0700 | `pipeline.artifactFileMode`/`artifactDirMode`; matches log + key-file posture |
 | Max corpus bytes | 256 MB (provisional) | in-memory ingest ceiling (`ingest.maxCorpusBytes`); loud refusal, no override flag |
 | CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.criticalWordCap`); the budget the two reserved shares below are cut from, never itself enforced |
 | — authored `## CRITICAL` share | 60 words (derived) | `prompt.authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
@@ -427,3 +443,160 @@ disappoint. Default remains pure gemma-4.
   gates (tiling, link integrity, id/schema) are small and port cleanly; no shell-out,
   no Python runtime dependency. Deterministic pieces are internal Go functionality;
   AI-driven steps are the clearly delineated pipeline stages (§4).
+
+---
+
+## 12. Execution and resume (orchestration design, ruled 2026-08-09)
+
+The orchestration layer (`internal/pipeline`) runs the fixed pipeline. "Agent"
+here is the §3 Go-side construct: a role = embedded definition + tier +
+verifier (+ mechanical baseline where one exists), executing one-shot calls.
+
+### Phase matrix (single source)
+
+Worker execution moves through phases: `JobSetup → StageSetup → CallLoop ⇄
+SectionTransition → StageTeardown`. One data table maps each phase to (a) its
+allowed context-affecting operations and (b) its declared stability frontier
+(a `prompt.Slot`). Consumers — all of them, by design: runtime op-gating (a
+disallowed op is a loud defect), the per-call churn tripwire, the prompt
+package's prefix/stability tests (which derive expected frontiers here,
+closing §7's single-source claim), and crashpoint registration. `FlushRefA`
+is legal only in `SectionTransition` — the enforcement that makes the §7
+slot ordering safe.
+
+### Workers and frontiers
+
+A worker owns a **domain** and processes its leaves serially (domain-stream);
+parent↔child channels only, no peer↔peer. Stability is enforced per §7's
+three layers, concretized: all workers of a stage share ONE immutable
+StageContext, so the stage-constant slots are identical across workers by
+construction; each worker keeps its own previous-call hashes and frontier
+(per-worker tripwire); a cheap per-call assert checks every call's
+stage-constant slot hashes against canonical values — slots 2–3 against the
+ones captured at stage setup, and **slot 1 against the job's**, rendered
+once at job setup from the plan's single system frame. The slot-1 half is
+what makes §7's job-constant claim enforced rather than merely intended: a
+worker's previous-call hashes reset at every stream start, so its first call
+of every stage claims nothing and the per-worker tripwire can never compare
+slot 1 across a stage boundary. One job-level frame makes divergence
+unrepresentable; the canonical catches what construction cannot see — a
+builder change bleeding a per-call field into slots 1–3, which would render
+identically at setup and differently on the wire.
+
+### Call runner protocol
+
+Every model call passes through one runner: **build → frozen-prompt
+assertion → transport → mechanical validation → one informed retry → seam
+resolution**.
+
+- Build refusals (`ErrOverBudget`) are refuse-and-split — pushed back to the
+  skeleton, never retried at the runner.
+- The frozen-prompt assertion (tripwire) checks OUR stability contract; a
+  violation is a kbase defect: worker abort, never retry or fallback.
+- Transport failures (timeout, 5xx, dropped stream) say nothing about output
+  validity: bounded backoff retries, separately from semantic policy.
+- Mechanical validation is the propose-and-verify seam concrete: the
+  response is text claiming to be data; a deterministic verifier parses and
+  checks the stage's post-condition (tiling, budgets, schema). Typed
+  artifacts out; raw model text never escapes the runner.
+- The single semantic retry always carries the mechanical failure reason —
+  a blind identical resend hopes temperature fixes it, which is not design
+  (ruled).
+- Seam resolution: **refinement seams** (model improves an already-valid
+  mechanical baseline: cut refinement, review) fall back to the baseline,
+  logged, marked degraded. **Essential-inference seams** (taxonomy,
+  summaries, format translation) have no fallback by definition of why
+  inference was chosen: the unit fails loudly, sibling units complete, and
+  the job REFUSES EMISSION at assembly — "sorry, something rotted" beats
+  "here's your invalid crap" (ruled). Resumable rerun redoes only failures.
+- Accounting: per-call usage aggregation, failed units included — a unit
+  that burned two semantic attempts and produced nothing is exactly the one
+  a cost figure must not omit; `cached_tokens` logged as prefix-cache ground
+  truth; dev-telemetry emission (config-gated, off by default) as structured
+  records through the logging seam. The telemetry records emit at **info**
+  while the default log level is warn, so `[dev] telemetry = true` needs
+  `--log-level info` alongside it to show anything. It stays at info rather
+  than being promoted: a diagnostic that pollutes the default channel is one
+  everybody learns to ignore.
+
+### Chain-stamped artifacts and resume
+
+Resume is **structural, not temporal** — no journal, no cursor, no place to
+lose. Three properties: (1) every output unit is written atomically
+(temp+rename+fsync) — mid-write kill states do not exist; (2) every stage
+artifact carries a stamp: app version + input hashes (source identity +
+upstream artifact hashes) + output hash — validity is decidable by
+inspection with no knowledge of how the prior run died; (3) the worklist is
+stateless — resume scans outputs and re-derives it.
+
+Stage artifacts form a dependency chain (survey → skeleton → cuts → leaves →
+summaries → links). The chain is **described lazily, one stage at a time**:
+a stage says what units it owes when the walk REACHES it, not at job setup.
+That is not an optimization — it is forced. The skeleton stage 3 emits is
+what defines stage 4's leaf units, and stage 4's verified cut list defines
+stage 5's, so no job-setup description of those stages could exist. A
+resolver therefore reads artifacts that earlier stages have already been
+proven to hold, and its failure stops the job rather than resolving to an
+empty stage (an empty stage and a complete one are indistinguishable). Two
+consequences: a description defect in a later stage is refused when that
+stage is described rather than at job setup, and a job that stops before its
+chain is fully described is never emit-ready, because it never learned what
+the rest of the chain owed. A unit's declared upstreams may name an artifact
+**this chain does not produce** — a re-plan legitimately consumes the
+skeleton a previous planning epoch left behind — but only a *proven* one:
+the store is asked for its stamp, and an unstamped upstream is structural
+incoherence (nothing this chain runs would ever produce it), not a unit to
+redo. A unit may never name a sibling from its own stage: a stage's units
+run concurrently, so "earlier in the same stage" is not an ordering.
+
+Resume finds the **deepest provably-valid prefix**: first broken link in the
+chain is the restart point; everything downstream is invalid by definition
+(its inputs changed), everything upstream stands on proof. A stage past the
+boundary is simply never described — it is downstream of the frontier by
+definition, which is exactly what makes lazy description safe. Within the first incomplete stage, units are individually verdicted
+`Valid | Absent | Invalid` — reuse requires affirmative proof; ANY doubt
+(unparseable stamp, hash mismatch, version skew) is redone, priced in
+tokens; structural incoherence refuses the whole resume with `--fresh`
+guidance. This is the kb_tools drift-gate discipline applied to the
+pipeline's own execution.
+
+Resume is an **optimization, never load-bearing**: `--fresh` ignores all
+prior outputs unconditionally and is always sufficient. And at no tier does
+any path emit unverified material — assembly-time verification re-checks
+everything regardless of provenance (two independent nets).
+
+### Hardening (the Murphy set)
+
+Single-writer lockfile per job dir (refuse on contention). Resume verdict
+forensics logged (reused/redone counts, per-redo reasons).
+
+**After a hard kill** (SIGKILL, power loss) `job.lock` is left behind, and
+the lock is never broken automatically — pids mean nothing across hosts and
+containers, and an age threshold races exactly the long stage it exists for.
+So BOTH modes refuse until a human deletes that one file, which qualifies
+"`--fresh` is always sufficient": delete `job.lock`, then resume or
+`--fresh` both work. The refusal names the file.
+
+**Durability.** Writers temp+rename+fsync the file; directory entries are
+not fsynced, and that hole is safe rather than merely acknowledged. The
+artifact-before-stamp ordering means every partially-durable outcome lands
+on redo: lose the artifact's entry and a lone stamp verdicts Invalid, lose
+the stamp's and a lone artifact verdicts Invalid, lose both and the unit is
+Absent. No ordering of losses yields a stamp proving bytes that are not
+there, so no partial outcome can produce a false Valid. Cloud-synced output
+directories (Dropbox-class) break rename/inode assumptions and are
+documented unsupported.
+
+**Sweep.** A completed run removes every file under the job dir the chain
+does not account for — a killed write's temp residue, and artifacts of a
+prior run whose plan named different paths (internally consistent, so no
+verdict would ever catch them). It runs at the END of a run that described
+its whole chain, which under lazy description is the only moment the
+accounted-for set is complete: a job-setup sweep would delete the later
+stages' reusable artifacts before their stages had resolved.
+
+Crashpoint hooks at phase transitions and store writes; the resume test
+harness kills at every registered point and asserts byte-identical final
+output vs an uninterrupted run — including a kill at a stage boundary whose
+*next* stage derives its unit paths from the artifact the killed stage
+wrote.
