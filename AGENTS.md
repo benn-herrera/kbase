@@ -28,7 +28,7 @@ just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
 just test-integration        # omnibus: every per-corpus integration test
 just test-integration-rojo   # pinned Rojo corpus: summary values + determinism
-just prep-test-integration-rojo  # fetch that corpus into build/test_data/ (no-op if present)
+just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
 just clean      # remove the host build (bin/kbase)
@@ -64,16 +64,23 @@ internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
-internal/ingest/    Markdown corpus walk + immutable source custody (§4
-                    stage 1); per-file sha256 + corpus content hash
+internal/ingest/    corpus walk + immutable source custody (§4 stage 1);
+                    format-neutral (document extensions are a parameter);
+                    per-file sha256 + corpus content hash
 internal/log/       leveled structured logging seam over log/slog; console
                     plus optional file tee, built at the composition root
 internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
-internal/survey/    per-file structural inventory (§4 stage 2): heading tree
-                    with byte offsets, section token sizes, link graph, gists
+internal/survey/    the survey artifact (§4 stage 2) and NOTHING format-specific:
+                    heading tree with byte offsets, section token sizes, link
+                    graph, gists; corpus roll-up, tiling + custody checks,
+                    deterministic JSON; the import-policy test lives here
+internal/survey/markdown/
+                    the goldmark adapter — the only package that may import
+                    goldmark or yaml; produces survey.Artifact and owns the
+                    Markdown extension set
 internal/tokens/    single chars-per-token estimator (§8)
 internal/version/   single-source version identity
 ```

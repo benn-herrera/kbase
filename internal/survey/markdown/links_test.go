@@ -1,9 +1,11 @@
-package survey
+package markdown
 
 import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/survey"
 )
 
 // TestLinkClassification walks the destinations a real doc corpus contains
@@ -14,7 +16,7 @@ func TestLinkClassification(t *testing.T) {
 	_, art := surveyFixtures(t, fixtures)
 	f := fileOf(t, art, "guide/links.md")
 
-	byTarget := make(map[string]Link, len(f.Links))
+	byTarget := make(map[string]survey.Link, len(f.Links))
 	for _, l := range f.Links {
 		if _, dup := byTarget[l.Target]; dup {
 			t.Errorf("target %q recorded twice", l.Target)
@@ -25,20 +27,20 @@ func TestLinkClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		target string
-		want   Link
+		want   survey.Link
 	}{
-		{"sibling document", "./setup.md", Link{Kind: LinkInternal, Path: "guide/setup.md"}},
-		{"parent directory", "../nested.md", Link{Kind: LinkInternal, Path: "nested.md"}},
-		{"rooted at the corpus", "/flat.md", Link{Kind: LinkInternal, Path: "flat.md"}},
-		{"extension left to the site generator", "setup", Link{Kind: LinkInternal, Path: "guide/setup.md"}},
-		{"fragment on an internal target", "../nested.md#second", Link{Kind: LinkInternal, Path: "nested.md", Fragment: "second"}},
-		{"same-file anchor", "#local", Link{Kind: LinkAnchor, Fragment: "local"}},
-		{"absolute URL", "https://example.com/x", Link{Kind: LinkExternal}},
-		{"autolink", "https://auto.example/", Link{Kind: LinkExternal}},
-		{"mailto", "mailto:a@b.example", Link{Kind: LinkExternal}},
-		{"target that does not exist", "./gone.md", Link{Kind: LinkUnresolved}},
-		{"target outside the corpus root", "../../outside.md", Link{Kind: LinkUnresolved}},
-		{"image, unresolved", "../img/logo.png", Link{Kind: LinkUnresolved, Image: true}},
+		{"sibling document", "./setup.md", survey.Link{Kind: survey.LinkInternal, Path: "guide/setup.md"}},
+		{"parent directory", "../nested.md", survey.Link{Kind: survey.LinkInternal, Path: "nested.md"}},
+		{"rooted at the corpus", "/flat.md", survey.Link{Kind: survey.LinkInternal, Path: "flat.md"}},
+		{"extension left to the site generator", "setup", survey.Link{Kind: survey.LinkInternal, Path: "guide/setup.md"}},
+		{"fragment on an internal target", "../nested.md#second", survey.Link{Kind: survey.LinkInternal, Path: "nested.md", Fragment: "second"}},
+		{"same-file anchor", "#local", survey.Link{Kind: survey.LinkAnchor, Fragment: "local"}},
+		{"absolute URL", "https://example.com/x", survey.Link{Kind: survey.LinkExternal}},
+		{"autolink", "https://auto.example/", survey.Link{Kind: survey.LinkExternal}},
+		{"mailto", "mailto:a@b.example", survey.Link{Kind: survey.LinkExternal}},
+		{"target that does not exist", "./gone.md", survey.Link{Kind: survey.LinkUnresolved}},
+		{"target outside the corpus root", "../../outside.md", survey.Link{Kind: survey.LinkUnresolved}},
+		{"image, unresolved", "../img/logo.png", survey.Link{Kind: survey.LinkUnresolved, Image: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := byTarget[tc.target]
@@ -57,7 +59,7 @@ func TestLinkClassification(t *testing.T) {
 	if _, ok := byTarget[""]; ok {
 		t.Error("an empty destination must not produce a link")
 	}
-	if !slices.IsSortedFunc(f.Links, func(a, b Link) int { return strings.Compare(a.Target, b.Target) }) {
+	if !slices.IsSortedFunc(f.Links, func(a, b survey.Link) int { return strings.Compare(a.Target, b.Target) }) {
 		t.Errorf("links must be sorted by target for a stable artifact; got %+v", f.Links)
 	}
 }
@@ -80,7 +82,7 @@ See [setup](setup.md), then [setup again](setup.md).
 	}
 }
 
-// TestLinkCaseFolding: ingest accepts `.MD` because casing conveys nothing
+// TestLinkCaseFolding: the walk accepts `.MD` because casing conveys nothing
 // about a document, so resolution has to reach it however the link spells it.
 // Without the fold, every link into a Windows-authored file inflates the
 // unresolved count the link stage has to adjudicate.
@@ -91,7 +93,7 @@ func TestLinkCaseFolding(t *testing.T) {
 	})
 
 	for _, l := range fileOf(t, art, "index.md").Links {
-		if l.Kind != LinkInternal || l.Path != "guide/Setup.MD" {
+		if l.Kind != survey.LinkInternal || l.Path != "guide/Setup.MD" {
 			t.Errorf("link %q = %+v, want internal at the corpus's own byte-exact id", l.Target, l)
 		}
 	}
@@ -111,7 +113,7 @@ func TestLinkAmbiguousFold(t *testing.T) {
 	})
 
 	links := fileOf(t, art, "index.md").Links
-	if len(links) != 1 || links[0].Kind != LinkUnresolved {
+	if len(links) != 1 || links[0].Kind != survey.LinkUnresolved {
 		t.Fatalf("links = %+v, want the ambiguous target left unresolved", links)
 	}
 	if !lg.has(t, "warn", "target", "TWIN.MD") {
@@ -119,23 +121,23 @@ func TestLinkAmbiguousFold(t *testing.T) {
 	}
 }
 
-// TestLinkTotals: the corpus roll-up counts what the per-file entries hold —
-// the unresolved figure in particular, which is the number the survey verb
-// reports and the link stage will have to answer for.
-func TestLinkTotals(t *testing.T) {
+// TestLinkKindsExercised guards the corpus roll-up tested in internal/survey:
+// that test sums hand-built files, so the fixture corpus is where every link
+// kind has to actually occur.
+func TestLinkKindsExercised(t *testing.T) {
 	_, art := surveyFixtures(t, fixtures)
 
-	var got LinkTotals
+	var got survey.LinkTotals
 	for _, f := range art.Files {
 		for _, l := range f.Links {
 			switch l.Kind {
-			case LinkInternal:
+			case survey.LinkInternal:
 				got.Internal++
-			case LinkUnresolved:
+			case survey.LinkUnresolved:
 				got.Unresolved++
-			case LinkExternal:
+			case survey.LinkExternal:
 				got.External++
-			case LinkAnchor:
+			case survey.LinkAnchor:
 				got.Anchor++
 			}
 		}

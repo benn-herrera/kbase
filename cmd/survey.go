@@ -11,6 +11,7 @@ import (
 	"kbase/internal/ingest"
 	"kbase/internal/log"
 	"kbase/internal/survey"
+	"kbase/internal/survey/markdown"
 	"kbase/internal/tokens"
 )
 
@@ -67,11 +68,16 @@ func runSurvey(opts surveyOptions) error {
 		lg = log.Discard()
 	}
 
-	corpus, err := ingest.WalkMarkdown(root, lg)
+	// The composition root is where a source format is chosen: the neutral
+	// walk is told which extensions the adapter calls documents, and the
+	// adapter turns those bytes into the neutral artifact. One format exists,
+	// so this is one pair of calls — a registry or a format switch buys
+	// nothing until there is a second adapter to select between.
+	corpus, err := ingest.Walk(root, markdown.Extensions(), lg)
 	if err != nil {
 		return err
 	}
-	artifact, err := survey.Survey(corpus, tokens.Estimator{}, lg)
+	artifact, err := markdown.Survey(corpus, tokens.Estimator{}, lg)
 	if err != nil {
 		return err
 	}

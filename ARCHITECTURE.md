@@ -173,6 +173,22 @@ judgment roles; the human at the edges.**
 | 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the skeleton by template. Dead links impossible by construction; the link checker demotes to regression tripwire. |
 | 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. |
 
+**Format seam.** The survey artifact is the source-format independence
+boundary. Format-specific code lives only in an adapter package
+(`internal/survey/markdown` today, `internal/survey/latex` later); the adapter
+produces the neutral artifact, and every stage downstream consumes artifact
+fields and byte offsets into the custody bytes — never a parser node. The
+neutral package holds the artifact types, the corpus roll-up, and the tiling
+and custody checks it runs over every adapter's output; the ingest walk is
+neutral too, taking the adapter's document-extension set as a parameter. The
+boundary is enforced by an import-policy test that parses every file in the
+module (`internal/survey/importpolicy_test.go`): a parser library outside its
+adapter fails the build, naming the file, the import, and the rule. Adding a
+format is adding a row. No adapter *interface* exists yet — with one
+implementation there is nothing to compare against, so the abstraction is
+deferred to the second adapter, where it can be derived rather than guessed
+(ruled 2026-08-09).
+
 ---
 
 ## 5. Boundary refinement (stage 4 detail)

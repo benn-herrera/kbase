@@ -2,6 +2,11 @@
 // (ARCHITECTURE.md §4, stage 1): it walks a documentation corpus and takes
 // custody of the source bytes every later stage refers to.
 //
+// It holds no format knowledge: which extensions are documents is a
+// parameter (Walk), supplied by the caller's format adapter. Custody is
+// byte-level and format-blind, so the same walk serves a Markdown corpus and
+// a LaTeX one.
+//
 // Custody is the whole point. The bytes a Unit carries are the canonical
 // source: the survey records byte offsets into them, the dissector slices
 // them by verified offsets (§5), and nothing in between rewrites, re-encodes,
@@ -25,17 +30,6 @@ import (
 
 	"kbase/internal/log"
 )
-
-// MarkdownExt is the only extension this adapter ingests. Matching is
-// case-insensitive (`.MD` off a Windows-authored tree is the same document);
-// `.markdown` and friends are deliberately not accepted — a corpus that mixes
-// extensions should say so, and a silent near-miss is worse than a loud
-// absence.
-//
-// It is exported because link resolution needs the same constant: a corpus
-// link written without an extension names a document only if this is the
-// extension that document carries.
-const MarkdownExt = ".md"
 
 // Unit is one source document under custody: its corpus-wide identity, its
 // exact bytes, and their digest.
@@ -76,10 +70,10 @@ type Corpus struct {
 	index map[string]int
 
 	// folded maps a case-folded path to every unit that folds to it. It
-	// exists because this adapter accepts `.MD` (see MarkdownExt) while a
-	// link to that document is routinely written `.md`; without the fold,
-	// accepting the file and resolving links to it disagree. It is a lookup
-	// aid only — the id itself stays byte-exact.
+	// exists because the walk matches extensions case-insensitively — it
+	// accepts `.MD` — while a link to that document is routinely written
+	// `.md`; without the fold, accepting the file and resolving links to it
+	// disagree. It is a lookup aid only — the id itself stays byte-exact.
 	folded map[string][]int
 }
 
@@ -176,7 +170,13 @@ func New(units []Unit) (Corpus, error) {
 // asked for one, and a limit with an escape hatch is a limit nobody reads.
 const maxCorpusBytes = 256 << 20 // 256 MB
 
-// WalkMarkdown ingests every Markdown document under root.
+// Walk ingests every document under root whose name carries one of exts.
+//
+// exts is the format adapter's document-extension set (markdown.Extensions()
+// today). It is a parameter rather than a constant because "which files are
+// documents" is the one piece of format knowledge a walk needs, and this
+// package is not where format knowledge lives. Matching is case-insensitive:
+// `.MD` off a Windows-authored tree is the same document.
 //
 // It reads the whole corpus into memory. That is the right trade for a batch
 // appliance whose largest target is tens of megabytes of prose, and it is
@@ -197,13 +197,17 @@ const maxCorpusBytes = 256 << 20 // 256 MB
 //     knowledge base silently missing a chapter is the failure mode this
 //     rule exists to prevent. A broken symlink NOT named like a document
 //     (`logo.png -> gone`) cannot hide a chapter, so it is a skip.
-//   - A corpus with no Markdown at all fails: at this point in the pipeline
-//     it is a mistyped path, not an empty job. So does one over
+//   - A corpus with no matching document at all fails: at this point in the
+//     pipeline it is a mistyped path, not an empty job. So does one over
 //     maxCorpusBytes.
 //
 // Every skip is a debug record on lg, because "why is that file not in my
 // knowledge base" is the question the policies above generate.
-func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
+func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
+	if len(exts) == 0 {
+		return Corpus{}, fmt.Errorf("ingest: no document extensions given; " +
+			"the caller's format adapter must name at least one")
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return Corpus{}, fmt.Errorf("ingest: corpus root: %w", err)
@@ -238,12 +242,12 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 			return nil
 		}
 
-		markdown := isMarkdown(name)
+		document := hasExt(name, exts)
 		regular := d.Type().IsRegular()
 		if d.Type()&fs.ModeSymlink != 0 {
 			target, err := os.Stat(p)
 			switch {
-			case err != nil && !markdown:
+			case err != nil && !document:
 				lg.Debug("ingest skipping broken non-document symlink", "path", rel, "reason", err)
 				return nil
 			case err != nil:
@@ -254,8 +258,8 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 			}
 			regular = target.Mode().IsRegular()
 		}
-		if !markdown {
-			lg.Debug("ingest skipping non-Markdown file", "path", rel)
+		if !document {
+			lg.Debug("ingest skipping non-document file", "path", rel)
 			return nil
 		}
 		if !regular {
@@ -283,7 +287,7 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 		return Corpus{}, err
 	}
 	if len(units) == 0 {
-		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", MarkdownExt, root)
+		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", strings.Join(exts, ", "), root)
 	}
 	return New(units)
 }
@@ -298,8 +302,9 @@ func relPath(root, p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// isMarkdown reports whether a file name carries the Markdown extension,
+// hasExt reports whether a file name carries one of the document extensions,
 // case-insensitively.
-func isMarkdown(name string) bool {
-	return strings.EqualFold(filepath.Ext(name), MarkdownExt)
+func hasExt(name string, exts []string) bool {
+	got := filepath.Ext(name)
+	return slices.ContainsFunc(exts, func(e string) bool { return strings.EqualFold(got, e) })
 }

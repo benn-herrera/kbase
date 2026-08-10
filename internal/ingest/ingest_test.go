@@ -25,6 +25,12 @@ func writeFile(t *testing.T, root, name, body string) string {
 	return p
 }
 
+// mdExts is the extension set most cases walk with. It is spelled out here
+// rather than imported from the Markdown adapter: this package knows nothing
+// about formats, and a test that borrowed the adapter's constant would be
+// asserting the adapter's opinion instead of the walk's behavior.
+var mdExts = []string{".md"}
+
 // paths lists the ingested unit ids in order, which is the order tests assert
 // against: sorted, slash-separated, relative to the root.
 func paths(c Corpus) []string {
@@ -35,11 +41,11 @@ func paths(c Corpus) []string {
 	return out
 }
 
-// TestWalkMarkdownSelection covers what the walk collects and what it leaves
+// TestWalkSelection covers what the walk collects and what it leaves
 // alone: nested Markdown in path order, a case-variant extension, and the
 // three categories that are not documents (dot-directories, dot-files,
 // non-Markdown files).
-func TestWalkMarkdownSelection(t *testing.T) {
+func TestWalkSelection(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "index.md", "# Index\n")
 	writeFile(t, root, "guide/setup.md", "# Setup\n")
@@ -50,9 +56,9 @@ func TestWalkMarkdownSelection(t *testing.T) {
 	writeFile(t, root, "guide/.draft.md", "# Draft\n")
 
 	lg := &capture{}
-	c, err := WalkMarkdown(root, lg)
+	c, err := Walk(root, mdExts, lg)
 	if err != nil {
-		t.Fatalf("WalkMarkdown: %v", err)
+		t.Fatalf("Walk: %v", err)
 	}
 	want := []string{"guide/deep/nested.MD", "guide/setup.md", "index.md"}
 	if got := paths(c); !slices.Equal(got, want) {
@@ -68,6 +74,38 @@ func TestWalkMarkdownSelection(t *testing.T) {
 		if !lg.has(t, "debug", "path", skipped) {
 			t.Errorf("no debug record for skipped entry %q", skipped)
 		}
+	}
+}
+
+// TestWalkExtensions: which files are documents is the caller's format
+// knowledge, so the walk honours the set it is given — several extensions at
+// once, case-insensitively — and refuses an empty one rather than walking a
+// tree it can collect nothing from.
+func TestWalkExtensions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "doc.md", "# Doc\n")
+	writeFile(t, root, "paper.tex", "\\section{Paper}\n")
+	writeFile(t, root, "shout.TEX", "\\section{Shout}\n")
+	writeFile(t, root, "notes.txt", "neither\n")
+
+	c, err := Walk(root, []string{".md", ".tex"}, log.Discard())
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	want := []string{"doc.md", "paper.tex", "shout.TEX"}
+	if got := paths(c); !slices.Equal(got, want) {
+		t.Errorf("units: got %v, want %v", got, want)
+	}
+
+	if _, err := Walk(root, nil, log.Discard()); err == nil {
+		t.Error("an empty extension set must be refused")
+	} else if !strings.Contains(err.Error(), "at least one") {
+		t.Errorf("error = %v, want it to say the caller must name an extension", err)
+	}
+
+	_, err = Walk(root, []string{".rst"}, log.Discard())
+	if err == nil || !strings.Contains(err.Error(), "no .rst files") {
+		t.Errorf("error = %v, want it to name the extensions it looked for", err)
 	}
 }
 
@@ -102,18 +140,18 @@ func TestFoldedPath(t *testing.T) {
 	}
 }
 
-// TestWalkMarkdownCustody: the bytes under custody are the file's bytes,
+// TestWalkCustody: the bytes under custody are the file's bytes,
 // unnormalized, and the digest is over exactly those bytes. CRLF and a
 // missing trailing newline are the cases a "helpful" reader would silently
 // fix — fixing them would invalidate every byte offset the survey records.
-func TestWalkMarkdownCustody(t *testing.T) {
+func TestWalkCustody(t *testing.T) {
 	const body = "# Title\r\n\r\ntext without trailing newline"
 	root := t.TempDir()
 	writeFile(t, root, "doc.md", body)
 
-	c, err := WalkMarkdown(root, log.Discard())
+	c, err := Walk(root, mdExts, log.Discard())
 	if err != nil {
-		t.Fatalf("WalkMarkdown: %v", err)
+		t.Fatalf("Walk: %v", err)
 	}
 	u := c.Units[0]
 	if string(u.Bytes) != body {
@@ -125,12 +163,12 @@ func TestWalkMarkdownCustody(t *testing.T) {
 	}
 }
 
-// TestWalkMarkdownSymlinks pins the symlink policy, which splits on one
+// TestWalkSymlinks pins the symlink policy, which splits on one
 // question: could this link have been hiding a document? A file link is
 // content and is followed. A directory link is refused, because a directory
 // can hold documents and WalkDir will not look inside it. A broken link is
 // fatal when it is named like a document and a skip when it is not.
-func TestWalkMarkdownSymlinks(t *testing.T) {
+func TestWalkSymlinks(t *testing.T) {
 	t.Run("file link is followed", func(t *testing.T) {
 		outside := t.TempDir()
 		target := writeFile(t, outside, "external.md", "# External\n")
@@ -140,9 +178,9 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		c, err := WalkMarkdown(root, log.Discard())
+		c, err := Walk(root, mdExts, log.Discard())
 		if err != nil {
-			t.Fatalf("WalkMarkdown: %v", err)
+			t.Fatalf("Walk: %v", err)
 		}
 		if got, want := paths(c), []string{"index.md", "linked.md"}; !slices.Equal(got, want) {
 			t.Errorf("units: got %v, want %v", got, want)
@@ -162,7 +200,7 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := WalkMarkdown(root, log.Discard())
+		_, err := Walk(root, mdExts, log.Discard())
 		if err == nil {
 			t.Fatal("expected a symlinked-directory refusal, got nil")
 		}
@@ -178,7 +216,7 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		_, err := WalkMarkdown(root, log.Discard())
+		_, err := Walk(root, mdExts, log.Discard())
 		if err == nil {
 			t.Fatal("expected a dangling-symlink failure, got nil")
 		}
@@ -195,7 +233,7 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 		}
 
 		lg := &capture{}
-		c, err := WalkMarkdown(root, lg)
+		c, err := Walk(root, mdExts, lg)
 		if err != nil {
 			t.Fatalf("a broken link that cannot hold a document must not fail the corpus: %v", err)
 		}
@@ -208,9 +246,9 @@ func TestWalkMarkdownSymlinks(t *testing.T) {
 	})
 }
 
-// TestWalkMarkdownRootFailures: a mistyped or non-directory root is a loud
+// TestWalkRootFailures: a mistyped or non-directory root is a loud
 // failure, and so is a directory holding no Markdown at all.
-func TestWalkMarkdownRootFailures(t *testing.T) {
+func TestWalkRootFailures(t *testing.T) {
 	root := t.TempDir()
 	file := writeFile(t, root, "doc.md", "# Doc\n")
 
@@ -222,7 +260,7 @@ func TestWalkMarkdownRootFailures(t *testing.T) {
 		{"no markdown", t.TempDir(), "no .md files"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := WalkMarkdown(tc.root, log.Discard())
+			_, err := Walk(tc.root, mdExts, log.Discard())
 			if err == nil {
 				t.Fatalf("expected an error containing %q, got nil", tc.want)
 			}
