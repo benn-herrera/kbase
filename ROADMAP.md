@@ -13,16 +13,18 @@ deleted, not archived — git history is the log.
 
 ## Next
 
-- Mechanical splitter → boundary refinement → verification → dissector
-  (ARCHITECTURE §5). **Carries the R-6 verifier primitives**, which the
-  orchestrator burst did not land: §5's verification paragraph is design
-  with no code behind it, and the cut stage needs cut-list tiling, the
-  clamp, candidate-set membership and the whitespace-adjacency tripwire
-  before it can verify anything. (`internal/survey/tiling.go` is survey's
-  own unexported check over a different subject and is not this.)
-  Also reconcile here (ruled 2026-08-10, leave-and-watch): `Agent`/`Call`/
-  `CallRunner` stay exported though only the coordinator constructs them —
-  unexport or keep based on this burst's actual consumer set.
+- Stage 4 remainder (the §5 chain itself landed 2026-08-10 as
+  `internal/dissect`, mock-driven per that burst's R-1): wire it into a real
+  job plan once the taxonomy skeleton says what the spans are, and fold the
+  adjudicated per-boundary offsets back into one cut list for stage 5. Its
+  refinement definition text is a marked stub (`dissect.stubDefinition`) for
+  the embedded-definitions item below.
+- Export watch resolved (2026-08-10): `internal/dissect`, the first
+  out-of-package consumer, needs `CallRunner` (`NewCallRunner` returns it,
+  `NewCoordinator` takes it) and never touches `Agent` or `Call` — both are
+  still coordinator-internal, so unexporting them is now evidence-backed.
+  Left for whoever is next in `internal/pipeline`; it is a rename, not a
+  design question.
 
 ## Later (build order exploits determinism-first)
 - **MAD review gate (ruled 2026-08-09): after the first end-to-end run

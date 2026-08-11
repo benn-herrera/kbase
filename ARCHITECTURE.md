@@ -164,7 +164,7 @@ judgment roles; the human at the edges.**
 | # | Stage | Actor | Notes |
 |---|---|---|---|
 | 1 | **Ingest** | deterministic adapters | Markdown-set and LaTeX adapters; PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability — PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
-| 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists. For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
+| 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists, and the legal cut candidates stage 4 clamps the model to (§5). For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
 | 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document skeleton: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
 | 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions (ruled 2026-08-09), so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
 | 5 | **Distillation** | mechanical (Markdown); 26B-A4B translation for non-Markdown formats | **Markdown leaves are mechanical** (ruled 2026-08-09): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. Model translation exists only where a format adapter requires it (LaTeX→Markdown, later); there it is parallel fan-out, one domain per worker. The historical "~90% of tokens" estimate applied to translation and largely evaporates on the Markdown path. |
@@ -193,32 +193,55 @@ deferred to the second adapter, where it can be derived rather than guessed
 
 ## 5. Boundary refinement (stage 4 detail)
 
-1. **Mechanical splitter** proposes cuts at heuristic section breaks → offset+length
-   list. Pre-merges below-minimum fragments so the model only adjudicates real
-   boundaries.
-2. **Model refinement pass** (26B-A4B): serial scan, each split loaded into the end of
-   context with a percentage under/overlap of neighbors; each load overwrites the
-   previous (O(1) context, O(n) calls). The model writes no text and emits no raw
-   offsets: the format adapter enumerates the **legal cut candidates** within the
-   overlap window (block boundaries — heading lines, fence edges, paragraph starts;
-   what "block" means is adapter knowledge behind the format seam), and the model's
-   output is a choice among those candidates. Its authority is clamped twice: to the
-   overlap window, and to the enumerated set — bisecting a heading is unrepresentable,
-   not merely detectable. Optional per-boundary confidence emission; low-confidence
+Implemented in `internal/dissect` (format-neutral: it reads the survey
+artifact's neutral types and the custody bytes, never a parser).
+
+1. **Mechanical splitter** (`dissect.Split`) proposes cuts at heuristic section
+   breaks → offset+length list (`[]survey.Range`). It prefers the strongest
+   structure available before the budget (`survey.CutKind.Rank`: heading, then
+   fence, then paragraph) and fills toward the budget among equals. Pre-merges
+   below-minimum fragments so the model only adjudicates real boundaries. A
+   span whose candidates cannot cut it under the budget is refused by name
+   (`dissect.StarvedError`) and goes back to the stage that sized it —
+   refuse-and-split, never truncate. **Its output always passes verification**,
+   which is a property test over both synthetic adversarial spans and every
+   section of the pinned corpus.
+2. **Model refinement pass** (26B-A4B, `dissect.Refiner`): serial scan — one
+   unit per boundary in ONE domain stream, so a worker walks them in order and
+   each window load overwrites the previous (O(1) context, O(n) calls). Each
+   boundary's overlap window (`dissect.Window`, from `dissect.Windows`) renders
+   into the Content slot and its numbered candidate menu into reference buffer
+   B. The model writes no text and emits no raw offsets — it answers with a
+   menu NUMBER, and the menu is never shown an offset to echo. Candidates are
+   enumerated at survey time by the format adapter and carried in the artifact
+   as `survey.CutCandidate{Offset, Kind}` (ruled 2026-08-10, schema
+   `kbase.survey/2`), so refinement's whole input is reproducible from stamped
+   artifacts. Authority is clamped twice: to the overlap window, and to the
+   enumerated set — bisecting a heading is unrepresentable, not merely
+   detectable. Optional per-boundary confidence emission; low-confidence
    boundaries escalate (31B look or human).
-3. **Verification** (deterministic, all cheap, format-neutral): exact tiling —
-   monotonic offsets, no gaps/overlaps, sum = document length; every deviation within
-   clamp; candidate-set membership; minimum section size respected; and the
-   **whitespace-adjacency tripwire**: at every cut, at least one adjacent byte must be
-   whitespace. Both-sides-non-whitespace cannot result from model misjudgment under
-   candidate constraint — it means OUR offset pipeline is broken (rebasing drift,
-   wrong buffer), so it is a loud-abort defect, not a retry. Orthogonal nets: the
-   membership check inspects structure, the tripwire inspects raw bytes; a bug must
-   thread both. Pass → dissect. Verification failure of the model's choice → retry
-   once → fall back to mechanical cuts and log. The mechanical list is always valid:
-   refinement can only improve or be discarded.
-4. **Dissector** (deterministic) slices the immutable source by verified offsets.
-   Source is never sliced-and-retyped; the cut list is a derived overlay
+3. **Verification** (`dissect.Verify` — deterministic, all cheap,
+   format-neutral): exact tiling — monotonic offsets, no gaps/overlaps, sum =
+   document length; every deviation within clamp; candidate-set membership;
+   minimum section size respected; and the **whitespace-adjacency tripwire**
+   (`survey.WhitespaceAdjacent`, the same function that admitted the candidate
+   in the first place): at every cut, at least one adjacent byte must be
+   whitespace. Both-sides-non-whitespace cannot result from model misjudgment
+   under candidate constraint — it means OUR offset pipeline is broken
+   (rebasing drift, wrong buffer), so it is a loud-abort defect, not a retry.
+   Orthogonal nets: the membership check inspects structure, the tripwire
+   inspects raw bytes; a bug must thread both, and membership is checked FIRST
+   so only an offset the adapter really enumerated can reach the tripwire. The
+   two outcomes are distinct types: `dissect.RejectionError` (retry once, then
+   the baseline) and `dissect.OffsetDefectError` (never retried — it reaches
+   the runner wrapped in `pipeline.ErrVerifierDefect`, which aborts the
+   worker). The minimum applies to CHOICES: a one-section list is not refused
+   for the size of a span nobody chose. Pass → dissect. The mechanical list is
+   always valid — `dissect.NewRefiner` verifies it before the stage runs, since
+   it is what every failure falls back to.
+4. **Dissector** (`dissect.Dissect`, deterministic) slices the immutable source
+   by verified offsets. Source is never sliced-and-retyped; the leaves are
+   views into the custody bytes and the cut list is a derived overlay
    (content-anchored spans — same discipline as the contract-analysis design).
 
 ---
@@ -391,8 +414,8 @@ prevention is holding against a real prefix cache.
 |---|---|---|
 | Context ceiling | ~180K tokens | reliable zone of gemma-4's ~250K window |
 | Per-call target | 60–80K tokens | quality/cost operating point; nobody runs near ceiling |
-| Boundary overlap | percentage of neighbor sections | exact % TBD at calibration |
-| Min section size | > overlap size | pre-merged mechanically before refinement |
+| Boundary overlap | 20% of each neighbor, capped at 1K tokens/side | `dissect.overlapFraction`/`overlapCapTokens`; the window the model sees AND the clamp bound. Exact % still TBD at calibration |
+| Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
@@ -498,7 +521,16 @@ resolution**.
 - Mechanical validation is the propose-and-verify seam concrete: the
   response is text claiming to be data; a deterministic verifier parses and
   checks the stage's post-condition (tiling, budgets, schema). Typed
-  artifacts out; raw model text never escapes the runner.
+  artifacts out; raw model text never escapes the runner. The verifier is
+  given the UNIT as well as the response, because a post-condition can be
+  per-unit — stage 4 checks a cut against that boundary's own candidate menu
+  and clamp window — and the lookup table it selects from is built when the
+  stage's work is described, so the Role stays stage-constant and shared.
+  A verifier that concludes the failure is OURS rather than the model's says
+  so by wrapping `ErrVerifierDefect` (§5's tripwire is the first case): that
+  is neither retried nor fallen back, since both remedies trust the
+  derivation just indicted — the worker aborts, like a frozen-prompt
+  violation.
 - The single semantic retry always carries the mechanical failure reason —
   a blind identical resend hopes temperature fixes it, which is not design
   (ruled).

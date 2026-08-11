@@ -83,15 +83,29 @@ func newJobFrame(text string) (jobFrame, error) {
 // stage's mechanical post-condition. It returns a typed artifact or the reason
 // the response is not one. Raw model text never escapes the runner.
 //
-// It must be deterministic and side-effect free: the same response text has to
-// verdict the same way on the retry, on a resume, and in a test.
-type Verifier func(response string) (artifact any, err error)
+// unit is the store path of the unit being verified — the same string the
+// stage's Task named. A stage whose post-condition is the same for every unit
+// ignores it; a stage whose post-condition is per-unit (stage 4 checks a cut
+// against THIS boundary's candidate menu and clamp window) looks the unit up
+// in a table its role built when the stage's work was described. That keeps
+// the Role stage-constant, which is what lets every worker share one: the
+// table is fixed for the stage, and the unit is what selects a row.
+//
+// It must be deterministic and side-effect free: the same unit and response
+// text have to verdict the same way on the retry, on a resume, and in a test.
+//
+// A verifier that concludes the failure is OURS rather than the model's wraps
+// ErrVerifierDefect; see it for what the runner then does.
+type Verifier func(unit, response string) (artifact any, err error)
 
 // Baseline returns the deterministic artifact a refinement seam falls back to —
 // the mechanically produced result the model was asked to improve on, which was
 // already valid (§3 monotone safety). A Role that has one is a refinement seam;
 // a Role that does not is an essential-inference seam.
-type Baseline func() (artifact any)
+//
+// It takes the unit for the same reason Verifier does: the mechanical result
+// a boundary falls back to is that boundary's own cut, not the stage's.
+type Baseline func(unit string) (artifact any)
 
 // Encoder renders a verified artifact as the bytes the store keeps. It is
 // separate from the verifier because the two run at different times: the

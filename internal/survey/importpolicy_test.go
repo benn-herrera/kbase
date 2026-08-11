@@ -55,9 +55,11 @@ var importPolicy = []importRule{{
 }, {
 	path:      modulePath + "/internal/survey/markdown",
 	allow:     []string{"cmd"},
-	allowTest: []string{"internal/survey"},
-	why: "only the composition root picks a source format; internal/survey's tests may drive " +
-		"an adapter to check artifact properties, but its production code may not (that is an import cycle)",
+	allowTest: []string{"internal/survey", "internal/dissect"},
+	why: "only the composition root picks a source format; a downstream package's TESTS may drive an " +
+		"adapter to check a property over real corpus artifacts (internal/survey's own tests would " +
+		"otherwise be an import cycle, and internal/dissect's splitter property needs real sections), " +
+		"but no production code outside cmd may choose a format",
 }}
 
 // skipDirs are directories with no module source in them: build outputs, test

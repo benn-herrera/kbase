@@ -40,7 +40,9 @@ import (
 // SchemaVersion identifies the artifact shape. Consumers (the taxonomy
 // stage, a later survey-of-surveys rollup) check it rather than guessing
 // from the fields present, and a shape change bumps it.
-const SchemaVersion = "kbase.survey/1"
+//
+// /2 added File.Cuts: the legal cut candidates stage 4 clamps the model to.
+const SchemaVersion = "kbase.survey/2"
 
 // Artifact is a whole-corpus survey: the totals a planner needs up front,
 // then one entry per file in path order.
@@ -89,19 +91,25 @@ type LinkTotals struct {
 // the document conventions the block exists for, they are what the document
 // calls itself, and stage 3 has no other way to learn it. Like every string
 // the artifact copies, they are capped — see WordCap.
+//
+// Cuts is orthogonal to the tiling above: the sections say how the document
+// is ORGANISED, the candidates say where it may legally be CUT (§5). A
+// section boundary is always a candidate, and most candidates are not section
+// boundaries.
 type File struct {
-	Path        string    `json:"path"`
-	SHA256      string    `json:"sha256"`
-	Bytes       int       `json:"bytes"`
-	Tokens      int       `json:"tokens"`
-	Title       string    `json:"title,omitempty"`
-	Description string    `json:"description,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Gist        string    `json:"gist,omitempty"`
-	Metadata    *Range    `json:"metadata,omitempty"`
-	Preamble    *Section  `json:"preamble,omitempty"`
-	Sections    []Section `json:"sections,omitempty"`
-	Links       []Link    `json:"links,omitempty"`
+	Path        string         `json:"path"`
+	SHA256      string         `json:"sha256"`
+	Bytes       int            `json:"bytes"`
+	Tokens      int            `json:"tokens"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Gist        string         `json:"gist,omitempty"`
+	Metadata    *Range         `json:"metadata,omitempty"`
+	Preamble    *Section       `json:"preamble,omitempty"`
+	Sections    []Section      `json:"sections,omitempty"`
+	Cuts        []CutCandidate `json:"cuts,omitempty"`
+	Links       []Link         `json:"links,omitempty"`
 }
 
 // Range is a half-open byte range [Start, End) into a file's source bytes.
@@ -167,7 +175,8 @@ type Link struct {
 
 // Assemble turns a format adapter's per-file inventories into the corpus
 // artifact: it checks each file against the source under custody, verifies
-// the file tiles that source, and totals what the files report.
+// the file tiles that source and that its cut candidates are legal positions
+// in it, and totals what the files report.
 //
 // files must hold one entry per corpus unit, in the corpus's own path order.
 // That is not bookkeeping pedantry. The artifact's reproducibility IS the
@@ -205,6 +214,9 @@ func Assemble(corpus ingest.Corpus, files []File, lg log.Logger) (Artifact, erro
 				f.Path, f.Bytes, len(u.Bytes))
 		}
 		if err := verifyTiling(f, len(u.Bytes)); err != nil {
+			return Artifact{}, fmt.Errorf("survey: %s: %w", f.Path, err)
+		}
+		if err := verifyCuts(f.Cuts, u.Bytes); err != nil {
 			return Artifact{}, fmt.Errorf("survey: %s: %w", f.Path, err)
 		}
 

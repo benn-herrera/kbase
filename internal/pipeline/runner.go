@@ -64,6 +64,24 @@ const (
 	correctiveNotePrefix = "- previous attempt rejected:"
 )
 
+// ErrVerifierDefect marks a verification failure that is KBASE's defect
+// rather than the model's answer being wrong.
+//
+// The seam has two failure classes and they take opposite remedies. A
+// response that failed a mechanical post-condition is a rejection: retry once
+// with the reason, then keep the mechanical baseline (§3 monotone safety). A
+// response that failed a check no legal answer could fail — ARCHITECTURE.md
+// §5's whitespace-adjacency tripwire is the first of these, and the argument
+// for why it cannot be the model's doing is in internal/dissect — indicts the
+// derivation that produced BOTH the question and the baseline. Retrying it
+// re-asks something that was never asked wrong, and falling back to the
+// baseline trusts the same derivation, so the worker aborts instead.
+//
+// A verifier reports one by wrapping it (fmt.Errorf("%w: %w", …)), which
+// keeps the classification with the package that can make it and out of the
+// runner, which cannot.
+var ErrVerifierDefect = errors.New("pipeline: the verifier reported a kbase defect, not a model failure")
+
 // Crashpoints around a model call. pre-transport is the interesting one: it
 // kills with the prompt built and nothing sent, which is the state a resume
 // must treat as "this unit never happened". verified kills with a good
@@ -216,13 +234,20 @@ func (r *CallRunner) Run(ctx context.Context, c Call) (CallResult, error) {
 		res.Usage = addUsage(res.Usage, resp.Usage)
 		r.account(c, resp.Usage)
 
-		artifact, verr := c.Agent.role.Verify(resp.Content)
+		artifact, verr := c.Agent.role.Verify(c.Unit, resp.Content)
 		if verr == nil {
 			r.lg.Debug("call verified", "stage", c.Stage, "unit", c.Unit,
 				"attempt", attempt, "prompt", hash, "outcome", "verified")
 			crashpoint.At(cpCallVerified)
 			res.Artifact = artifact
 			return res, nil
+		}
+		if errors.Is(verr, ErrVerifierDefect) {
+			// Not a rejection: the verifier is saying the response could not
+			// be wrong in this way, so the fault is ours. Retrying re-asks a
+			// question that was never the problem, and falling back would
+			// trust the same broken derivation, so the worker stops.
+			return CallResult{}, WorkerAbortError{Stage: c.Stage, Unit: c.Unit, Err: verr}
 		}
 		lastErr, kind = verr, FailureVerification
 		r.lg.Warn("response failed mechanical verification", "stage", c.Stage, "unit", c.Unit,
@@ -280,7 +305,7 @@ func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c Call
 // otherwise would emit unverified material.
 func (r *CallRunner) resolveSeam(c Call, res CallResult, kind FailureKind, cause error) (CallResult, error) {
 	if c.Agent.Seam() == SeamRefinement {
-		res.Artifact = c.Agent.role.Baseline()
+		res.Artifact = c.Agent.role.Baseline(c.Unit)
 		res.Degraded = true
 		r.lg.Warn("keeping the mechanical baseline; the model's refinement did not verify",
 			"stage", c.Stage, "unit", c.Unit, "attempts", res.Attempts, "kind", string(kind), "reason", cause)

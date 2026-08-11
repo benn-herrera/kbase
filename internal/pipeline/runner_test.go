@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -324,6 +325,37 @@ func TestRunnerCorrectiveNoteIsBounded(t *testing.T) {
 	words := len(strings.Fields(note)) - len(strings.Fields(correctiveNotePrefix))
 	if words > correctiveNoteWords+1 { // +1 for the truncation mark
 		t.Errorf("note carries %d words of reason, cap is %d", words, correctiveNoteWords)
+	}
+}
+
+// TestRunnerVerifierDefectAbortsInsteadOfFallingBack: a verifier that reports
+// ErrVerifierDefect is saying the response could not be wrong in the way it
+// failed, so the fault is ours. Neither remedy applies — a retry re-asks a
+// question that was never asked wrong, and the fallback comes from the same
+// derivation the verifier just indicted — so the worker aborts on the FIRST
+// attempt, even on a refinement seam that has a baseline to stand on.
+func TestRunnerVerifierDefectAbortsInsteadOfFallingBack(t *testing.T) {
+	lg := &logtest.Capture{}
+	client := echoStub()
+	role := refinementRole(t)
+	role.Verify = func(string, string) (any, error) {
+		return nil, fmt.Errorf("%w: offsets do not match their bytes", ErrVerifierDefect)
+	}
+	_, call := newRunnerCall(t, role)
+
+	res, err := runnerFor(t, client, lg).Run(context.Background(), call)
+	var abort WorkerAbortError
+	if !errors.As(err, &abort) {
+		t.Fatalf("err = %v (%T), want a WorkerAbortError", err, err)
+	}
+	if !errors.Is(err, ErrVerifierDefect) {
+		t.Error("the abort must carry the verifier's own diagnosis")
+	}
+	if res.Artifact != nil || res.Degraded {
+		t.Errorf("result = %+v; a defect produces nothing, degraded or otherwise", res)
+	}
+	if client.callCount() != 1 {
+		t.Errorf("calls = %d, want 1; a defect is never retried", client.callCount())
 	}
 }
 

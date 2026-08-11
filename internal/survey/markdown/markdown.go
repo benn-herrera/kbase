@@ -95,7 +95,7 @@ func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens
 	body := src[bodyStart:]
 
 	doc := p.Parse(gmtext.NewReader(body))
-	heads, paras, raws := scan(doc, body, bodyStart)
+	heads, paras, raws, cuts := scan(doc, body, bodyStart)
 	g := gister{src: src, body: body, paras: paras, est: est}
 
 	// Everything before the first heading is the preamble — for a file with
@@ -115,6 +115,7 @@ func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens
 	for _, n := range buildTree(heads, len(src)) {
 		f.Sections = append(f.Sections, g.section(n))
 	}
+	f.Cuts = finalizeCuts(cuts, len(src))
 	f.Gist = g.forRange(bodyStart, len(src))
 	f.Links = resolveLinks(raws, u.Path, corpus, lg)
 	return f
@@ -153,10 +154,17 @@ type paraRef struct {
 // no source line for it, and a titleless heading gives the taxonomy stage
 // nothing to route on.
 //
+// The cut candidates come out of the same walk, from the same nodes, for the
+// same reason: what counts as a block boundary is format knowledge, and this
+// is where the format is known. Only document-level blocks contribute — a
+// paragraph inside a list item is a legal place to cut a paragraph and a
+// terrible place to cut a document — and a fenced block contributes its outer
+// EDGES only, never an offset between them.
+//
 // The walk has no failure mode of its own — the visitor never refuses a node —
-// so scan reports none. survey.Assemble's tiling check is where a structural
-// mistake surfaces.
-func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []paraRef, links []rawLink) {
+// so scan reports none. survey.Assemble's tiling and candidate checks are
+// where a structural mistake surfaces.
+func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []paraRef, links []rawLink, cuts []survey.CutCandidate) {
 	// The error is discarded, not ignored: ast.Walk only ever returns what
 	// the visitor returned, and this visitor returns nil on every path.
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -168,16 +176,29 @@ func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []para
 			if n.Parent() != doc || t.Lines().Len() == 0 {
 				break
 			}
+			start := base + lineStart(body, t.Lines().At(0).Start)
 			heads = append(heads, headingRef{
 				level: t.Level,
 				title: text.CapWords(plainText(t, body), survey.WordCap),
-				start: base + lineStart(body, t.Lines().At(0).Start),
+				start: start,
 			})
+			cuts = append(cuts, survey.CutCandidate{Offset: start, Kind: survey.CutHeading})
 		case *ast.Paragraph:
 			if t.Lines().Len() == 0 {
 				break
 			}
 			paras = append(paras, paraRef{srcStart: base + t.Lines().At(0).Start, bodyNode: n})
+			if n.Parent() == doc {
+				cuts = append(cuts, survey.CutCandidate{
+					Offset: base + lineStart(body, t.Lines().At(0).Start),
+					Kind:   survey.CutParagraph,
+				})
+			}
+		case *ast.FencedCodeBlock:
+			if n.Parent() != doc {
+				break
+			}
+			cuts = append(cuts, fenceEdges(body, base, t)...)
 		case *ast.Link:
 			links = append(links, rawLink{target: string(t.Destination)})
 		case *ast.Image:
@@ -187,7 +208,7 @@ func scan(doc ast.Node, body []byte, base int) (heads []headingRef, paras []para
 		}
 		return ast.WalkContinue, nil
 	})
-	return heads, paras, links
+	return heads, paras, links, cuts
 }
 
 // sectionNode is the heading tree under construction, before token counts and

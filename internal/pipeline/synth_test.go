@@ -101,7 +101,7 @@ const synthAccept = "OK"
 // something to be true of.
 type synthArtifact struct{ Text string }
 
-func synthVerify(response string) (any, error) {
+func synthVerify(_, response string) (any, error) {
 	if !strings.HasPrefix(response, synthAccept+" ") {
 		return nil, fmt.Errorf("response does not start with %q", synthAccept)
 	}
@@ -119,7 +119,7 @@ func synthEncode(artifact any) ([]byte, error) {
 // synthBaseline is the mechanical result a refinement seam falls back to.
 const synthBaselineText = "MECHANICAL BASELINE"
 
-func synthBaseline() any { return synthArtifact{Text: synthBaselineText} }
+func synthBaseline(string) any { return synthArtifact{Text: synthBaselineText} }
 
 func synthDef(t *testing.T, body string) prompt.Definition {
 	t.Helper()
