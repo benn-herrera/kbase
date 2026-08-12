@@ -275,8 +275,13 @@ func (r *CallRunner) assertFrozen(c Call, built prompt.BuiltCall) error {
 // bounded exponential backoff. ConsultDrained rather than Consult: a long
 // generation on a blocking request looks like a dead connection to every idle
 // timeout in the path.
+//
+// The effort is the ROLE's — the definition's declaration, threaded from the
+// registration site through the agent to here. The runner picks nothing: it
+// has no idea what is being asked, which is exactly why it is not the layer
+// that gets to say how hard to ask it.
 func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c Call) (model.Response, error) {
-	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}})
+	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, c.Agent.role.Effort)
 	var lastErr error
 	for attempt := 1; attempt <= transportAttempts; attempt++ {
 		if attempt > 1 {

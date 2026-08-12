@@ -10,6 +10,15 @@ deleted, not archived — git history is the log.
 
 - ~~`.mdx` decision~~ ruled 2026-08-09: **ignored** (ARCHITECTURE §4 ingest
   row) — watch what it actually costs; strip-and-scan only on evidence.
+- ~~thinking mode: on, off, or per-call?~~ ruled 2026-08-11, landed
+  2026-08-12: effort is per-DEFINITION and required by construction
+  (ARCHITECTURE §9 row, §12) — boundary refinement declares thinking **off**.
+  The A/B that settled it, both runs over the pinned `sync-details.md` at a
+  512-token budget: byte-identical cut lists, 4 completion tokens and 2.8s
+  with thinking off against 20,924 and 117s with it on, and the reasoning run
+  took the only compliance rejection of the two. Each definition added from
+  here states its own value; re-measure when the stub prompts are replaced
+  with the tuned ones, since that is the change that could move it.
 
 ## Next
 
@@ -21,22 +30,6 @@ deleted, not archived — git history is the log.
   also where a single-section span — no boundaries, so no calls and today no
   artifact — gets its answer. Its refinement definition text is a marked stub
   (`dissect.stubDefinition`) for the embedded-definitions item below.
-- **`kbase dev-refine <file>` verb (ruled 2026-08-11)** — LANDED 2026-08-11;
-  first live run: 4 boundaries over the pinned `sync-details.md` at a
-  512-token budget, 1 moved, 1 corrective retry (bare-number compliance),
-  0 fallbacks, `cached_tokens=0`, ~25s/boundary. Retire this item at burst
-  close. First
-  inference-in-the-loop smoke test: composition-root-only wiring (ingest +
-  survey one file, mechanical split, run the Refiner with the REAL client
-  on real spans). Requires explicit `--config-dir` (no home-dir fallback);
-  points at the committed fixture chain `test_data/fixtures/config/`
-  (config.toml + providers.toml templates; gitignored `api_keys/`, key
-  files read only at runtime by the binary — NEVER into agent context).
-  Measures plumbing, not quality (stub prompts): does 26B answer with a
-  bare menu number, corrective-retry rate, streaming under real latency,
-  first real `cached_tokens`/telemetry numbers. Later doubles as the
-  glimmer-30B head-to-head harness (challenger test post-E2E; tie counts
-  as win; low-cost-cloud availability check first).
 - Export watch resolved (2026-08-10): `internal/dissect`, the first
   out-of-package consumer, needs `CallRunner` (`NewCallRunner` returns it,
   `NewCoordinator` takes it) and never touches `Agent` or `Call` — both are
@@ -79,6 +72,9 @@ deleted, not archived — git history is the log.
     what is shown, not what may be chosen.
 - Distillation, hierarchical summaries, review stages; link generation;
   refresh/verify gates (kb_tools port).
+- glimmer-30B head-to-head, on the `dev-refine` harness (challenger test
+  post-E2E; a tie counts as a win for the incumbent; low-cost-cloud
+  availability check first).
 - Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
   slot-order measurement: validate or reverse the RefA-before-status swap
   via `cached_tokens` + dev-telemetry prefill timing.

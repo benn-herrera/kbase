@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,23 +57,30 @@ type devRefineResult struct {
 	stdout    string
 	stderr    string
 	endpoints []model.Endpoint
+	calls     []model.MockCall
 	err       error
 }
 
 // runDevRefineVerb invokes the verb with buffered streams and a client factory
-// that records its endpoint and serves the given answer to every call.
+// that records its endpoint and serves the given answer to every call. The
+// mock records its calls, so a test can read back what actually went on the
+// wire — the effort included.
 func runDevRefineVerb(t *testing.T, opts devRefineOptions, answer string) devRefineResult {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	var seen []model.Endpoint
 	opts.Stdout, opts.Stderr = &stdout, &stderr
 	client := model.NewScriptedMock([]model.Response{{Content: answer}}, nil)
+	client.RecordCalls = true
 	opts.NewClient = func(e model.Endpoint) model.Client {
 		seen = append(seen, e)
 		return client
 	}
 	err := runDevRefine(context.Background(), opts)
-	return devRefineResult{stdout: stdout.String(), stderr: stderr.String(), endpoints: seen, err: err}
+	return devRefineResult{
+		stdout: stdout.String(), stderr: stderr.String(),
+		endpoints: seen, calls: client.Calls(), err: err,
+	}
 }
 
 // devRefineOpts is the wired-up options value the tests vary from: one usable
@@ -159,6 +167,70 @@ func TestRunDevRefineWiring(t *testing.T) {
 	}
 	if strings.Contains(string(raw), testAPIKey) {
 		t.Error("API key leaked into the run record")
+	}
+}
+
+// TestRunDevRefineEffortDeclarationAndOverride: the effort every call asks
+// with is the definition's declaration unless --thinking replaces it, and the
+// effective value is both printed and recorded.
+//
+// All three places are checked together on purpose. The stdout line and the
+// run record are what an operator reads afterwards, and the wire is what
+// actually happened; a run whose report and whose request disagree is worse
+// than one that reported nothing, because the A/B it exists for would be
+// comparing the labels rather than the runs.
+func TestRunDevRefineEffortDeclarationAndOverride(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name       string
+		override   *bool
+		want       bool
+		overridden bool
+		wantLine   string
+	}{
+		{"the definition's declaration", nil, devRefineEffort.Thinking, false,
+			fmt.Sprintf("thinking: %t (declared)", devRefineEffort.Thinking)},
+		{"overridden on", &on, true, true, "thinking: true (--thinking override)"},
+		{"overridden off", &off, false, true, "thinking: false (--thinking override)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := devRefineFile(t, "sync.md", devRefineDoc())
+			out := filepath.Join(t.TempDir(), "job")
+			opts := devRefineOpts(t, file, out)
+			opts.Thinking = tc.override
+
+			got := runDevRefineVerb(t, opts, "1")
+			if got.err != nil {
+				t.Fatalf("runDevRefine: %v (stderr %q)", got.err, got.stderr)
+			}
+			if !strings.Contains(got.stdout, tc.wantLine) {
+				t.Errorf("stdout %q missing %q", got.stdout, tc.wantLine)
+			}
+
+			if len(got.calls) == 0 {
+				t.Fatal("no call reached the client; there is no effort to check")
+			}
+			for i, call := range got.calls {
+				for _, key := range []string{"thinking", "enable_thinking"} {
+					if v, ok := call.Request.ChatTemplateKwargs[key]; !ok || v != tc.want {
+						t.Errorf("call %d: %s = %v (present %t), want %t", i, key, v, ok, tc.want)
+					}
+				}
+			}
+
+			raw, err := os.ReadFile(filepath.Join(out, devRefineRecordName))
+			if err != nil {
+				t.Fatalf("read %s: %v", devRefineRecordName, err)
+			}
+			var rec devRefineRun
+			if err := json.Unmarshal(raw, &rec); err != nil {
+				t.Fatalf("%s is not valid JSON: %v", devRefineRecordName, err)
+			}
+			if rec.Thinking != tc.want || rec.ThinkingOverride != tc.overridden {
+				t.Errorf("record effort = {thinking %t, overridden %t}, want {%t, %t}",
+					rec.Thinking, rec.ThinkingOverride, tc.want, tc.overridden)
+			}
+		})
 	}
 }
 

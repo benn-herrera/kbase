@@ -130,12 +130,22 @@ func synthDef(t *testing.T, body string) prompt.Definition {
 	return def
 }
 
+// synthThinking and synthNoThinking are the two declared efforts the synthetic
+// roles ask with. They differ so a test can tell which role's declaration
+// reached the wire; that a heavy-tier role thinks and a light-tier one does not
+// is this fixture's convention, not a rule the pipeline knows.
+var (
+	synthThinking   = model.DeclareEffort(model.Effort{Thinking: true})
+	synthNoThinking = model.DeclareEffort(model.Effort{Thinking: false})
+)
+
 // essentialRole has no baseline: a failure fails the unit.
 func essentialRole(t *testing.T) Role {
 	t.Helper()
 	return Role{
 		Def:    synthDef(t, "# Surveyor\n\n## CRITICAL\n\nEmit only the inventory.\n"),
 		Tier:   config.TierHeavy,
+		Effort: synthThinking,
 		Verify: synthVerify,
 		Encode: synthEncode,
 	}
@@ -147,6 +157,7 @@ func refinementRole(t *testing.T) Role {
 	r := essentialRole(t)
 	r.Def = synthDef(t, "# Refiner\n\n## CRITICAL\n\nChoose from the listed candidates only.\n")
 	r.Tier = config.TierLight
+	r.Effort = synthNoThinking
 	r.Baseline = synthBaseline
 	return r
 }

@@ -474,6 +474,7 @@ prevention is holding against a real prefix cache.
 | Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
 | Boundary menu cap | 7 entries | `dissect.menuCap`: `dissect.menuSide` (3) candidates before the mechanical cut, the cut itself marked `(current)`, 3 after; a short side contributes what it has and lends nothing to the other. 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12) |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
+| Effort declaration | per definition; boundary refinement: thinking **off** | `model.Effort`, positional at the registration site (`cmd.devRefineEffort` → `dissect.NewRefiner`) and on `model.DefaultRequest`; `pipeline.Role` refuses an undeclared one. Both `chat_template_kwargs` keys are always sent, false included (§12). Non-pipeline calls (catalogue probes) use `model.UtilityEffort`, thinking off. Refinement's value is measured, not assumed: the 2026-08-12 A/B produced a byte-identical cut list for 4 completion tokens against 20,924 (ROADMAP) |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
@@ -620,6 +621,24 @@ resolution**.
   `--log-level info` alongside it to show anything. It stays at info rather
   than being promoted: a diagnostic that pollutes the default channel is one
   everybody learns to ignore.
+
+**Seams, asks, and declared effort** (ruled 2026-08-11). A *seam* is the
+mechanical→inference junction, and its only classification is what happens
+when inference fails: a refinement seam has a valid mechanical baseline to
+stand on, an essential one does not. That says nothing about how hard the
+model should work, so effort — thinking today, temperature next, one
+`model.Effort` value — attaches to the **definition**: one value per exact
+ask, declared where the definition is registered and threaded from there to
+the request. Not to the seam, and not to the stage. Today each seam happens
+to pose exactly one ask, so "per definition" and "per seam" would name the
+same values — which is precisely why the attachment is fixed by construction
+now (`model.Effort` is positional on both `dissect.NewRefiner` and
+`model.DefaultRequest`, and `pipeline.Role` refuses an undeclared value)
+rather than left to a terminology that a second ask at one seam would
+silently break. Both `chat_template_kwargs` keys are always sent, false
+included: an omitted key leaves the served chat template's default deciding,
+which is not a declaration. Calls that are not a definition's ask —
+catalogue probes and the like — say so with `model.UtilityEffort`.
 
 ### Chain-stamped artifacts and resume
 

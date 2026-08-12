@@ -106,25 +106,84 @@ type Request struct {
 // (ARCHITECTURE.md §9) and this value will be revisited there.
 const DefaultMaxTokens = 16384
 
+// Effort is how hard the model is asked to work on ONE exact ask.
+//
+// It is per-DEFINITION: the value belongs to the question, not to the stage
+// that asks it and not to the seam it crosses (ARCHITECTURE.md §12). A
+// definition states its effort where it is registered, and every
+// request-construction path takes one POSITIONALLY, so a call site cannot
+// inherit an effort nobody stated.
+//
+// Thinking is the only dial today. Temperature belongs here next, which is why
+// this is a struct with a named field rather than a bare bool: a second dial
+// joins as a field, and no call site that already states an effort has to
+// change to accommodate it.
+type Effort struct {
+	// Thinking asks the model to reason before answering. It is wired in
+	// BOTH directions (see DefaultRequest) — false is SENT as false, never
+	// omitted — because an omitted key leaves the chat template's own
+	// default in charge, which is the silent inheritance this type exists
+	// to prevent.
+	Thinking bool
+
+	// declared separates a stated effort from a zero value. An effort makes
+	// one hop through a struct field on its way to the runner
+	// (pipeline.Role), and a field is the one hop a positional parameter
+	// cannot make mandatory; this mark is what lets that hop be checked
+	// (pipeline.Role.validate) rather than assumed. It is unexported so
+	// DeclareEffort is the only way to obtain a declared value.
+	declared bool
+}
+
+// DeclareEffort marks e as STATED by its caller. It is the only constructor:
+// a bare composite literal is an undeclared value, and the pipeline refuses a
+// role carrying one.
+//
+// It takes the whole value rather than one parameter per dial so that adding
+// Temperature is a new field at the call sites that want it and nothing at all
+// at the ones that do not.
+func DeclareEffort(e Effort) Effort {
+	e.declared = true
+	return e
+}
+
+// Declared reports whether this effort was stated rather than left zero.
+func (e Effort) Declared() bool { return e.declared }
+
+// UtilityEffort is the effort of a call that is NOT a pipeline definition's
+// ask — a catalogue probe, a connectivity check, a round-trip a test needs but
+// is not about. Thinking is off: none of them poses a question worth reasoning
+// over, and naming the value is what puts their intent in the same vocabulary
+// the pipeline's definitions use instead of leaving it to a default.
+//
+// Read-only by convention, like the sentinel errors beside it.
+var UtilityEffort = DeclareEffort(Effort{Thinking: false})
+
 // DefaultRequest returns a Request prefilled with the appliance defaults.
-// The caller fills in Model and Messages; everything else is preset:
+// The caller fills in Model, Messages and the ask's declared Effort;
+// everything else is preset:
 //
 //   - Temperature: 0 (deterministic — reproducibility is a design property,
 //     not a tuning preference)
 //   - MaxTokens:   DefaultMaxTokens
-//   - ChatTemplateKwargs: {"thinking": true, "enable_thinking": true}
-//     — both keys are sent so models recognizing either get thinking
-//     on (the actual key varies by model; sending both is harmless
-//     to those that recognize neither).
-func DefaultRequest(model string, messages []Message) Request {
+//   - ChatTemplateKwargs: {"thinking": E, "enable_thinking": E} for the
+//     effort's Thinking value. Both keys are sent because the one a model
+//     recognizes varies by model, and sending both is harmless to a model
+//     that recognizes neither. Both are sent when E is FALSE as well: the
+//     alternative is omitting the field and hoping the served template
+//     defaults the way this ask wants, which is not a declaration.
+//
+// It is the only Request constructor, and Effort is positional in it, so
+// every call that goes on the wire states how hard it is asking.
+func DefaultRequest(model string, messages []Message, effort Effort) Request {
 	return Request{
 		Model:       model,
 		Messages:    messages,
 		Temperature: 0,
 		MaxTokens:   DefaultMaxTokens,
 		ChatTemplateKwargs: map[string]any{
-			"thinking":        true,
-			"enable_thinking": true,
+			"thinking":        effort.Thinking,
+			"enable_thinking": effort.Thinking,
 		},
 	}
 }

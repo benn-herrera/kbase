@@ -17,6 +17,7 @@ import (
 	"kbase/internal/dissect"
 	"kbase/internal/ingest"
 	"kbase/internal/log"
+	"kbase/internal/model"
 	"kbase/internal/pipeline"
 	"kbase/internal/survey"
 	"kbase/internal/survey/markdown"
@@ -82,11 +83,35 @@ const (
 	// catch is a provider that has stopped answering, not one that is slow.
 	devRefineTimeout = 30 * time.Minute
 
+	// devRefineThinkingFlag is the effort override's flag name. It is a
+	// constant because the tri-state reads it back — a flag whose default
+	// means "unset" has to be asked whether it was given, and the name is
+	// then in two places.
+	devRefineThinkingFlag = "thinking"
+
 	// outDirMode is the mode --out is created with when it does not exist.
 	// The directory holds a derived view of the user's document, so it gets
 	// the same owner-only posture the store gives the artifacts inside it.
 	outDirMode = 0o700
 )
+
+// devRefineEffort is the boundary-refinement definition's DECLARED effort —
+// the registration site's statement of how hard this exact ask is worth
+// asking, threaded from here through dissect.NewRefiner to the wire
+// (ARCHITECTURE.md §9, §12). It lives in cmd because this is where the
+// refinement stage is registered today; when the taxonomy stage wires the real
+// job plan, the declaration moves with the registration.
+//
+// Thinking is OFF. The menu choice is the narrowest ask in the pipeline — pick
+// one of at most seven numbered positions, in a window the model is already
+// shown — and the live A/B of 2026-08-12 measured what reasoning bought on it:
+// a byte-identical cut list for 20,924 completion tokens instead of 4, two
+// minutes instead of three seconds, and one MORE compliance rejection (a
+// reasoning run answered boundary 2 with something other than a bare number).
+// It bought nothing and cost everything. The off value is stated rather than
+// defaulted so that a later ask which IS worth reasoning over has to say so on
+// its own line.
+var devRefineEffort = model.DeclareEffort(model.Effort{Thinking: false})
 
 // devRefineOptions is the resolved input of the dev-refine verb: the shared
 // provider-reaching options, the one document under work, and where its
@@ -105,6 +130,13 @@ type devRefineOptions struct {
 	// Budget is the per-section token budget the mechanical splitter fills
 	// toward, and half of what identifies the cut list it produces.
 	Budget int
+
+	// Thinking is the --thinking override, tri-state: nil takes the
+	// definition's own declaration (devRefineEffort), non-nil replaces it.
+	// A verb does not get to decide how hard a definition asks — this is an
+	// experiment switch, and it exists so the two configurations can be run
+	// against the same document and compared.
+	Thinking *bool
 
 	// Stdout takes the verb's report: what was dialed, and the composed cut
 	// list read back for a human.
@@ -191,7 +223,8 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		return nil
 	}
 
-	refiner, err := dissect.NewRefiner(src, span, doc.Cuts, mech, devRefineStage, params, lg)
+	effort, overridden := devRefineAsk(opts.Thinking)
+	refiner, err := dissect.NewRefiner(src, span, doc.Cuts, mech, devRefineStage, params, effort, lg)
 	if err != nil {
 		return err
 	}
@@ -207,6 +240,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	defer release()
 	fmt.Fprintf(opts.Stdout, "provider: %s (%s)\nmodel: %s (%s tier)\n",
 		name, opts.Providers[name].BaseURL, modelID, config.TierLight)
+	fmt.Fprintf(opts.Stdout, "thinking: %t (%s)\n", effort.Thinking, effortSource(overridden))
 
 	plan := pipeline.Plan{
 		SystemFrame: devRefineFrame,
@@ -260,6 +294,8 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		BaseURL:          opts.Providers[name].BaseURL,
 		Model:            modelID,
 		Tier:             config.TierLight,
+		Thinking:         effort.Thinking,
+		ThinkingOverride: overridden,
 		Source:           file,
 		SourceSHA256:     doc.SHA256,
 		BudgetTokens:     opts.Budget,
@@ -281,6 +317,28 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	}
 	fmt.Fprintf(opts.Stdout, "record: %s\n", path)
 	return nil
+}
+
+// devRefineAsk resolves the effort this run asks with, and reports whether the
+// declaration was overridden.
+//
+// Both halves are reported because both are evidence: a run.json saying
+// thinking was on means one thing if that is what the definition declares and
+// another if an operator asked for it, and a reader looking at two runs of the
+// same document has no other way to tell which one was the experiment.
+func devRefineAsk(override *bool) (model.Effort, bool) {
+	if override == nil {
+		return devRefineEffort, false
+	}
+	return model.DeclareEffort(model.Effort{Thinking: *override}), true
+}
+
+// effortSource labels where the effective effort came from, for the report.
+func effortSource(overridden bool) string {
+	if overridden {
+		return "--thinking override"
+	}
+	return "declared"
 }
 
 // ingestOne takes custody of the ONE document named on the command line.
@@ -373,9 +431,13 @@ func reportSections(w io.Writer, src []byte, est tokens.Estimator, cuts []survey
 // it carries no schema version and its field order proves nothing. What it
 // does carry is every identity a later reader would otherwise have to
 // reconstruct from a log: the model and endpoint, the document and its digest,
-// and the parameters the cut list beside it was adjudicated under. It carries
-// no credential: the API key is never in this process's output, only on the
-// wire.
+// the effort the calls were made at, and the parameters the cut list beside it
+// was adjudicated under. It carries no credential: the API key is never in
+// this process's output, only on the wire.
+//
+// The effort is two fields rather than one because "thinking was on" and "an
+// operator asked for thinking" are different facts, and an A/B of the same
+// document is exactly the reading where confusing them loses the experiment.
 //
 // Rejections — a boundary whose first answer failed verification and was
 // retried — are absent because no caller-visible value carries them:
@@ -388,6 +450,8 @@ type devRefineRun struct {
 	BaseURL          string `json:"baseUrl"`
 	Model            string `json:"model"`
 	Tier             string `json:"tier"`
+	Thinking         bool   `json:"thinking"`
+	ThinkingOverride bool   `json:"thinkingOverridden"`
 	Source           string `json:"source"`
 	SourceSHA256     string `json:"sourceSha256"`
 	BudgetTokens     int    `json:"budgetTokens"`
@@ -433,8 +497,9 @@ func requireConfigDirFlag(verb string) error {
 }
 
 var (
-	devRefineFlagOut    string
-	devRefineFlagBudget int
+	devRefineFlagOut      string
+	devRefineFlagBudget   int
+	devRefineFlagThinking bool
 )
 
 var devRefineCmd = &cobra.Command{
@@ -454,7 +519,13 @@ evidence about the seam and not about the document.
 --config-dir is required and has no default: a smoke run must reach the
 provider it was pointed at. --out is required too, and is kept — the artifact,
 its stamp and the run record are what the run leaves behind to read. The
-per-boundary outcomes are logged at info.`,
+per-boundary outcomes are logged at info.
+
+--thinking overrides the effort the refinement definition declares for its
+calls; left off, the definition's own declaration stands. It exists so the two
+configurations can be run against the same document and compared. The
+effective value and whether it was overridden are printed and recorded in the
+run record.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := requireConfigDirFlag(devRefineVerb); err != nil {
@@ -465,11 +536,20 @@ per-boundary outcomes are logged at info.`,
 			return err
 		}
 		opts.Timeout = devRefineTimeout
+		// Tri-state: the flag's VALUE means nothing unless it was given, so
+		// "unset" is the pointer being nil and not a third bool value. That
+		// keeps the definition's declaration the default in the one way that
+		// cannot be confused with an operator asking for thinking off.
+		var thinking *bool
+		if cmd.Flags().Changed(devRefineThinkingFlag) {
+			thinking = &devRefineFlagThinking
+		}
 		return runDevRefine(cmd.Context(), devRefineOptions{
 			providerOptions: opts,
 			File:            args[0],
 			Out:             devRefineFlagOut,
 			Budget:          devRefineFlagBudget,
+			Thinking:        thinking,
 			Stdout:          os.Stdout,
 			Logger:          processLog.logger,
 		})
@@ -481,5 +561,7 @@ func init() {
 		"job directory for the composed cut list, its stamp and "+devRefineRecordName+" (required; created if missing)")
 	devRefineCmd.Flags().IntVar(&devRefineFlagBudget, "budget", devRefineBudget,
 		"per-section token budget the mechanical splitter fills toward")
+	devRefineCmd.Flags().BoolVar(&devRefineFlagThinking, devRefineThinkingFlag, devRefineEffort.Thinking,
+		"override the refinement definition's declared thinking mode (default: what it declares)")
 	rootCmd.AddCommand(devRefineCmd)
 }

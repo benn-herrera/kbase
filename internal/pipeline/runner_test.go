@@ -79,6 +79,43 @@ func TestRunnerVerifiedCall(t *testing.T) {
 	}
 }
 
+// TestRunnerSendsTheRolesDeclaredEffort: the effort on the wire is the ROLE's
+// declaration, whatever it says.
+//
+// The runner has no view of what is being asked — it sees a built turn and a
+// tier — so an effort it chose for itself would be the layer with the least
+// information deciding how hard to think. Both rows are asserted because a
+// runner that hardcoded either value would pass a single-row test.
+func TestRunnerSendsTheRolesDeclaredEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		role Role
+		want bool
+	}{
+		{"thinking declared on", essentialRole(t), true},
+		{"thinking declared off", refinementRole(t), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var kwargs map[string]any
+			client := echoStub()
+			inner := client.respond
+			client.respond = func(n int, req model.Request) (model.Response, error) {
+				kwargs = req.ChatTemplateKwargs
+				return inner(n, req)
+			}
+			_, call := newRunnerCall(t, tc.role)
+			if _, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			for _, key := range []string{"thinking", "enable_thinking"} {
+				if got, ok := kwargs[key]; !ok || got != tc.want {
+					t.Errorf("%s = %v (present %t), want %t", key, got, ok, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // TestRunnerBuildRefusalPropagates: refuse-and-split. An over-budget call is
 // the skeleton's problem, and the runner must hand the error back untouched
 // rather than retry it, wrap it, or fall back through it.

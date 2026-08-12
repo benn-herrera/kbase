@@ -73,6 +73,17 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   is exactly the silent-platform failure mode.
 - Manual explicit config (`--model-map`, per-stage overrides) always allowed.
 - Resolved model IDs (auto or manual) are stamped into the provenance receipt (§7).
+- `kbase dev-refine <file.md> --config-dir DIR --out DIR [--budget N]
+  [--thinking]` — development verb: runs the boundary-refinement stage over one
+  document against a real provider, keeping the composed cut list, its stamp
+  and a run record in `--out`. Every model call is made at the effort the
+  refinement definition declares (ARCHITECTURE.md §9, §12); `--thinking`
+  overrides that declaration for the run and is the only way to change it.
+  Unset means the declaration stands — the flag has no "off by default"
+  reading, since a definition may legitimately declare thinking on. The
+  effective value and whether it was overridden are both printed and recorded
+  in the run record, so two runs of one document are distinguishable after the
+  fact.
 
 ---
 

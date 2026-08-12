@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/model"
 	"kbase/internal/prompt"
 )
 
@@ -30,6 +31,12 @@ func TestRoleValidation(t *testing.T) {
 		{"no verifier", func(r *Role) { r.Verify = nil }, "verifier"},
 		{"no encoder", func(r *Role) { r.Encode = nil }, "encoder"},
 		{"unmapped tier", func(r *Role) { r.Tier = "medium" }, "tier"},
+		// A zero Effort is the shape of a forgotten field, and thinking-off
+		// is a real declaration some definition will legitimately make — so
+		// the two must not be the same value. Refusing here is what keeps
+		// "every ask states its effort" true of a struct field, which no
+		// positional parameter upstream can enforce.
+		{"undeclared effort", func(r *Role) { r.Effort = model.Effort{} }, "effort"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			role := essentialRole(t)

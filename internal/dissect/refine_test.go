@@ -39,6 +39,12 @@ const (
 	jobFrame = "Job: dissect the fixture span."
 )
 
+// testEffort stands in for the registration site's declaration. Thinking is ON
+// here, deliberately opposite to what the real registration declares
+// (cmd.devRefineEffort): these tests assert that the stage passes its caller's
+// value through, which a fixture agreeing with the default could not show.
+var testEffort = model.DeclareEffort(model.Effort{Thinking: true})
+
 // nearBoundaryDoc is a document whose blocks are sized so that a SECOND
 // candidate lands inside the boundary's overlap window: a big block, a short
 // one, a big one. Without the short block every menu would hold exactly the
@@ -67,7 +73,7 @@ func oneBoundary(t *testing.T, lg log.Logger) (*Refiner, []byte, Boundary) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, lg)
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -328,7 +334,7 @@ func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	}
 	poisoned := insertCandidate(cands, survey.CutCandidate{Offset: bad, Kind: survey.CutParagraph})
 
-	r, err := NewRefiner(src, span, poisoned, cuts, stageName, p, log.Discard())
+	r, err := NewRefiner(src, span, poisoned, cuts, stageName, p, testEffort, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -398,7 +404,7 @@ func TestRefinementScansSerially(t *testing.T) {
 		t.Fatalf("Split: %v", err)
 	}
 	lg := &logtest.Capture{}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, lg)
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -464,7 +470,7 @@ func TestNewRefinerVerifiesItsBaseline(t *testing.T) {
 	span := wholeSpan(src)
 	broken := []survey.Range{{Start: 0, End: 10}, {Start: 20, End: len(src)}}
 
-	if _, err := NewRefiner(src, span, cands, broken, stageName, params(250), log.Discard()); err == nil {
+	if _, err := NewRefiner(src, span, cands, broken, stageName, params(250), testEffort, log.Discard()); err == nil {
 		t.Fatal("a cut list that does not tile must not become a stage's baseline")
 	} else if !strings.Contains(err.Error(), "fall back") {
 		t.Errorf("error = %v, want it to name what the list was going to be", err)
@@ -503,7 +509,7 @@ func TestMenuIsCappedAroundTheIncumbent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, log.Discard())
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -560,7 +566,7 @@ func TestMenuShortSideContributesWhatItHas(t *testing.T) {
 	cuts := []survey.Range{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 	p := params(1_000_000)
 
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, log.Discard())
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -644,7 +650,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 	}
 
 	// A run that adjudicates the boundary and leaves its artifact behind.
-	first, err := NewRefiner(src, span, cands, cuts, stageName, p, log.Discard())
+	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -670,7 +676,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 		{"a different mechanical cut list", moved, p, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := NewRefiner(src, span, cands, tc.cuts, stageName, tc.p, log.Discard())
+			r, err := NewRefiner(src, span, cands, tc.cuts, stageName, tc.p, testEffort, log.Discard())
 			if err != nil {
 				t.Fatalf("NewRefiner: %v", err)
 			}
@@ -694,6 +700,22 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 				t.Errorf("reason = %q, want it to name the parameters that changed", v.Reason)
 			}
 		})
+	}
+}
+
+// TestStagePlanCarriesTheDeclaredEffort: the role this stage registers asks
+// with the effort its CONSTRUCTOR was given.
+//
+// The stage has no standing to hold an opinion here — the effort belongs to
+// the definition, and the definition is registered outside this package — so
+// what is asserted is pass-through, not a value. testEffort is deliberately
+// the opposite of what the real registration declares, which is what makes
+// pass-through distinguishable from a default.
+func TestStagePlanCarriesTheDeclaredEffort(t *testing.T) {
+	r, _, _ := oneBoundary(t, log.Discard())
+	got := r.StagePlan(stageName, nil).Role.Effort
+	if got != testEffort {
+		t.Errorf("role effort = %+v, want the declaration NewRefiner was given (%+v)", got, testEffort)
 	}
 }
 
@@ -766,7 +788,7 @@ func TestNewRefinerRefusesAnEmptyUnitDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	if _, err := NewRefiner(src, span, cands, cuts, "", p, log.Discard()); err == nil {
+	if _, err := NewRefiner(src, span, cands, cuts, "", p, testEffort, log.Discard()); err == nil {
 		t.Fatal("a stage with nowhere to write its boundaries must be refused")
 	}
 }
@@ -871,7 +893,7 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	}
 
 	lg := &logtest.Capture{}
-	r, rerr := NewRefiner(src, span, cands, cuts, stageName, p, lg)
+	r, rerr := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
 	if rerr != nil {
 		t.Fatalf("NewRefiner: %v", rerr)
 	}
@@ -952,7 +974,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	first, err := NewRefiner(src, span, cands, cuts, stageName, p, log.Discard())
+	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -982,7 +1004,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 
 	// The resume: a new process's refiner over the same span, same directory.
 	lg := &logtest.Capture{}
-	second, err := NewRefiner(src, span, cands, cuts, stageName, p, lg)
+	second, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}

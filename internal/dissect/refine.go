@@ -10,6 +10,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/model"
 	"kbase/internal/pipeline"
 	"kbase/internal/prompt"
 	"kbase/internal/survey"
@@ -169,6 +170,7 @@ type Refiner struct {
 	cands  []survey.CutCandidate
 	params Params
 	def    prompt.Definition
+	effort model.Effort
 	lg     log.Logger
 
 	// mech is the mechanical cut list, frozen. It is what the stage's
@@ -208,13 +210,19 @@ type Refiner struct {
 // the fold's seed: the working list starts as a copy of it and every
 // adjudication moves it from there.
 //
+// effort is the refinement definition's declared ask (model.Effort). It is
+// positional and unavoidable on purpose: the value belongs to whoever
+// registers this stage, and a package-level default here would be this
+// package quietly answering a question only the registration site can
+// (ARCHITECTURE.md §9, §12).
+//
 // It verifies the mechanical list first, and that is not a formality. The
 // baseline is what every failure falls back to, so a baseline that does not
 // check out is a fallback that would emit unverified material; and the
 // tripwire firing here — before a single call — is the offset pipeline being
 // broken in a way no model interaction could have caused. Both are worth
 // learning at stage setup rather than n calls later.
-func NewRefiner(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, unitDir string, p Params, lg log.Logger) (*Refiner, error) {
+func NewRefiner(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, unitDir string, p Params, effort model.Effort, lg log.Logger) (*Refiner, error) {
 	if unitDir == "" {
 		// Every path is built from it, so an empty one yields "/cutlist.txt"
 		// — a path the store refuses much later, naming the artifact rather
@@ -235,6 +243,7 @@ func NewRefiner(src []byte, span survey.Range, cands []survey.CutCandidate, cuts
 		cands:  cands,
 		params: p,
 		def:    def,
+		effort: effort,
 		lg:     lg,
 		// Cloned, both of them: the caller keeps its own slice (Split hands
 		// back one it built), and the fold writes into work.
@@ -364,7 +373,12 @@ func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.Stag
 			Def: r.def,
 			// The light tier: refinement is the parallel, checklist-shaped
 			// work §10 maps to 26B-A4B.
-			Tier:     config.TierLight,
+			Tier: config.TierLight,
+			// The caller's declaration, passed through untouched. This stage
+			// has an opinion about it and no standing to hold one: the ask
+			// is a property of the definition, and the definition is
+			// registered outside this package.
+			Effort:   r.effort,
 			Verify:   r.verify,
 			Encode:   encodeCutList,
 			Baseline: r.baseline,

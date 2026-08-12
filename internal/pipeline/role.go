@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"kbase/internal/config"
+	"kbase/internal/model"
 	"kbase/internal/prompt"
 )
 
@@ -144,6 +145,17 @@ type Role struct {
 	// business (§10).
 	Tier string
 
+	// Effort is what this definition asks of the model — thinking today,
+	// temperature next (model.Effort). It sits on the Role because the Role
+	// IS the definition here: one exact ask, one declared effort, and every
+	// call of the stage inherits it because every call asks that question.
+	//
+	// It is required. A stage registers its role by literal, so this is the
+	// one hop the positional parameters on NewRefiner and DefaultRequest
+	// cannot make mandatory — validate refuses an undeclared value rather
+	// than letting a forgotten field read as a deliberate "no thinking".
+	Effort model.Effort
+
 	// Verify is the mechanical post-condition. Required.
 	Verify Verifier
 
@@ -174,6 +186,8 @@ func (r Role) validate() error {
 		return fmt.Errorf("pipeline: role has no encoder; its artifact could not be written")
 	case r.Tier != config.TierHeavy && r.Tier != config.TierLight:
 		return fmt.Errorf("pipeline: role tier %q is neither %s nor %s", r.Tier, config.TierHeavy, config.TierLight)
+	case !r.Effort.Declared():
+		return fmt.Errorf("pipeline: role declares no effort; every definition states one for its exact ask (model.DeclareEffort)")
 	}
 	return nil
 }
