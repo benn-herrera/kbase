@@ -29,11 +29,11 @@ func runSynth(t *testing.T, dir string, client model.Client, workers int, lg log
 // the second.
 func TestPlanChainDerivesTheWorklist(t *testing.T) {
 	chain := synthPlan(t).Chain()
-	if len(chain) != 2 {
-		t.Fatalf("chain has %d stages, want 2", len(chain))
+	if len(chain) != 3 {
+		t.Fatalf("chain has %d stages, want 3", len(chain))
 	}
-	if chain[0].Name != "survey" || chain[1].Name != "leaves" {
-		t.Errorf("stage names = %q/%q", chain[0].Name, chain[1].Name)
+	if chain[0].Name != "survey" || chain[1].Name != synthFoldStage || chain[2].Name != "leaves" {
+		t.Errorf("stage names = %q/%q/%q", chain[0].Name, chain[1].Name, chain[2].Name)
 	}
 	store, _ := newStore(t)
 	n := 0
@@ -66,16 +66,18 @@ func TestCoordinatorRunsEveryUnit(t *testing.T) {
 	if !res.EmitReady() {
 		t.Error("a complete job with no failures must be emit-ready")
 	}
-	if client.callCount() != synthUnits {
+	// More calls than units, because the fold spends synthFoldCalls of them
+	// on one artifact.
+	if client.callCount() != synthCalls {
 		t.Errorf("%d calls for %d units", client.callCount(), synthUnits)
 	}
 	// Usage is aggregated per call into the job total.
-	if want := synthUnits * 100; res.Usage.PromptTokens != want {
+	if want := synthCalls * 100; res.Usage.PromptTokens != want {
 		t.Errorf("PromptTokens = %d, want %d", res.Usage.PromptTokens, want)
 	}
 
 	// Every unit is on disk with a stamp beside it.
-	store := NewStore(dir, lg)
+	store := synthStore(t, dir, lg)
 	chain := synthPlan(t).Chain()
 	for i := range chain {
 		units, err := store.resolveStage(chain, i)
@@ -98,7 +100,7 @@ func TestCoordinatorRunsEveryUnit(t *testing.T) {
 	}
 	// The lock is released on the way out; a job dir left locked after a
 	// clean run would refuse every later run.
-	if _, err := AcquireLock(dir, lg); err != nil {
+	if _, err := AcquireLock(storeRoot(dir), lg); err != nil {
 		t.Errorf("the job dir is still locked after a clean run: %v", err)
 	}
 }
@@ -117,11 +119,12 @@ func TestCoordinatorPhaseTraversal(t *testing.T) {
 			t.Errorf("%s was never entered", phase)
 		}
 	}
-	// One transition per stream plus one mid-stream section change.
-	if got, want := lg.Count("debug", "phase", PhaseSectionTransition.String()), 4; got != want {
+	// One transition per stream (four of them) plus one mid-stream section
+	// change.
+	if got, want := lg.Count("debug", "phase", PhaseSectionTransition.String()), 5; got != want {
 		t.Errorf("%d section transitions, want %d", got, want)
 	}
-	if got, want := lg.Count("debug", "phase", PhaseStageSetup.String()), 2; got != want {
+	if got, want := lg.Count("debug", "phase", PhaseStageSetup.String()), 3; got != want {
 		t.Errorf("%d stage setups for %d stages", got, want)
 	}
 }
@@ -192,12 +195,13 @@ func TestCoordinatorGracefulDegradation(t *testing.T) {
 	if res.Produced != synthUnits-3 {
 		t.Errorf("Produced = %d, want %d — a unit failure stopped its siblings", res.Produced, synthUnits-3)
 	}
-	// Three produced units, one attempt each, plus the rejected unit's two.
-	if want := (synthUnits - 3) + semanticAttempts; client.callCount() != want {
+	// The produced units, one call each except the fold's, plus the rejected
+	// unit's two attempts.
+	if want := (synthUnits - 3) + (synthFoldCalls - 1) + semanticAttempts; client.callCount() != want {
 		t.Errorf("%d calls, want %d; the cascaded units must not have consulted the model",
 			client.callCount(), want)
 	}
-	if _, err := NewStore(dir, log.Discard()).readStamp("survey/b.json"); err == nil {
+	if _, err := synthStore(t, dir, log.Discard()).readStamp("survey/b.json"); err == nil {
 		t.Error("a failed essential unit left an artifact behind")
 	}
 }
@@ -259,9 +263,10 @@ func TestCoordinatorCountsAFailedUnitsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Three units produced one call each, and the failed one made both its
-	// semantic attempts. Its two dependents cascaded and cost nothing.
-	if want := (synthUnits - 3 + semanticAttempts) * perCall; res.Usage.PromptTokens != want {
+	// The produced units cost one call each except the fold's, and the failed
+	// one made both its semantic attempts. Its two dependents cascaded and
+	// cost nothing.
+	if want := (synthUnits - 3 + synthFoldCalls - 1 + semanticAttempts) * perCall; res.Usage.PromptTokens != want {
 		t.Errorf("Usage.PromptTokens = %d, want %d — a failed unit's tokens went unaccounted",
 			res.Usage.PromptTokens, want)
 	}
@@ -339,7 +344,12 @@ func TestCoordinatorDegradedUnitsStillEmit(t *testing.T) {
 // goes back to the stage that sizes units.
 func TestCoordinatorBudgetRefusalIsInventoried(t *testing.T) {
 	plan := synthPlan(t)
-	plan.Stages[0].Spec.Budgets = prompt.Budgets{PerSlot: map[prompt.Slot]int{prompt.SlotContent: 1}}
+	// The survey stage and the fold stage, so the inventory covers both
+	// shapes: a refusal at a unit's own call, and a refusal at one of the
+	// CALLS an artifact is composed from.
+	for _, i := range []int{0, 1} {
+		plan.Stages[i].Spec.Budgets = prompt.Budgets{PerSlot: map[prompt.Slot]int{prompt.SlotContent: 1}}
+	}
 	client := echoStub()
 
 	res, err := newSynthCoordinator(t, t.TempDir(), client, 1, log.Discard()).
@@ -347,15 +357,18 @@ func TestCoordinatorBudgetRefusalIsInventoried(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(res.Failures) != synthUnits {
-		t.Fatalf("failures = %+v, want both survey units refused and all four dependents cascaded", res.Failures)
+	// Two survey units and the fold's first boundary refused; four leaves
+	// cascaded off the survey, and the fold's artifact off its own poisoned
+	// call.
+	if len(res.Failures) != 8 {
+		t.Fatalf("failures = %+v, want the three refusals and their five cascades", res.Failures)
 	}
 	kinds := map[FailureKind]int{}
 	for _, f := range res.Failures {
 		kinds[f.Kind]++
 	}
-	if kinds[FailureBudget] != 2 || kinds[FailureUpstream] != 4 {
-		t.Errorf("kinds = %v, want 2 %s and 4 %s", kinds, FailureBudget, FailureUpstream)
+	if kinds[FailureBudget] != 3 || kinds[FailureUpstream] != 5 {
+		t.Errorf("kinds = %v, want 3 %s and 5 %s", kinds, FailureBudget, FailureUpstream)
 	}
 	if client.callCount() != 0 {
 		t.Errorf("%d calls went on the wire for prompts that never built", client.callCount())
@@ -391,7 +404,7 @@ func TestCoordinatorNonUnitErrorStopsTheJob(t *testing.T) {
 // interleave artifacts into something a later resume would happily trust.
 func TestCoordinatorLockRefusesASecondWriter(t *testing.T) {
 	dir := t.TempDir()
-	held, err := AcquireLock(dir, log.Discard())
+	held, err := AcquireLock(storeRoot(dir), log.Discard())
 	if err != nil {
 		t.Fatalf("AcquireLock: %v", err)
 	}
@@ -418,8 +431,8 @@ func TestCoordinatorConcurrency(t *testing.T) {
 			synthTask(filepath.ToSlash("leaves/"+d+"/two.md"), "s2", "survey/b.json"),
 		}})
 	}
-	plan.Stages[1].Streams = staticStreams(streams...)
-	want := 2 + 12
+	plan.Stages[2].Streams = staticStreams(streams...)
+	want := 2 + 1 + 12
 
 	res, err := newSynthCoordinator(t, t.TempDir(), echoStub(), 3, &logtest.Capture{}).
 		Run(context.Background(), plan, ModeResume)
@@ -457,7 +470,7 @@ func TestCoordinatorCancellation(t *testing.T) {
 
 // readArtifact reads one artifact out of a job dir.
 func readArtifact(dir, rel string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+	data, err := os.ReadFile(filepath.Join(storeRoot(dir), filepath.FromSlash(rel)))
 	return string(data), err
 }
 
@@ -547,16 +560,16 @@ func TestCallOnlyTasksProduceNoArtifact(t *testing.T) {
 	if n := client.callCount(); n != 2 {
 		t.Errorf("%d calls, want one per task", n)
 	}
-	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash("leaves/one.md"))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(storeRoot(dir), filepath.FromSlash("leaves/one.md"))); !os.IsNotExist(err) {
 		t.Errorf("the CallOnly task left an artifact behind (err = %v)", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash("leaves/two.md"))); err != nil {
+	if _, err := os.Stat(filepath.Join(storeRoot(dir), filepath.FromSlash("leaves/two.md"))); err != nil {
 		t.Errorf("the producing task wrote nothing: %v", err)
 	}
 
 	// And the stage is complete on a rescan: the calls it made are not units
 	// anyone is waiting for.
-	scan, err := NewStore(dir, log.Discard()).Scan(plan.Chain(), ModeResume)
+	scan, err := synthStore(t, dir, log.Discard()).Scan(plan.Chain(), ModeResume)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -591,5 +604,122 @@ func TestCallOnlyDegradationIsCounted(t *testing.T) {
 	}
 	if res.Produced != 1 || res.Degraded != 1 || len(res.Failures) != 0 {
 		t.Fatalf("result = %+v, want the fallback counted against one produced unit", res)
+	}
+}
+
+// TestAFailedCallPoisonsTheArtifactItFeeds is the R-Q-A ruling made
+// falsifiable: the artifact exists exactly when EVERY call of its stream
+// succeeded.
+//
+// The failure this closes is quiet. A CallOnly failure refuses the run it
+// happens in, but if the producing task still wrote, the artifact would carry
+// a perfectly valid stamp — nothing in a stamp knows a call failed — so the
+// next run would verdict it Valid, drop the whole stream, and the failure
+// would have existed in one JobResult and nowhere else. Which is why the third
+// assertion is the load-bearing one: the next run redoes the fold WHOLE.
+func TestAFailedCallPoisonsTheArtifactItFeeds(t *testing.T) {
+	dir := t.TempDir()
+	// An essential role, so a response that does not verify is a FAILURE and
+	// not a fallback: the fold's own seam has a baseline, and what is under
+	// test here is what a failure does.
+	stage := func() Plan {
+		tasks := []Task{
+			synthTask("fold/0001.boundary", "span"),
+			synthTask("fold/0002.boundary", "span"),
+			synthTask(synthFoldUnit, "span"),
+		}
+		tasks[0].CallOnly, tasks[1].CallOnly = true, true
+		return Plan{SystemFrame: synthFrame, Stages: []*StagePlan{{
+			Name: synthFoldStage, Role: essentialRole(t), Spec: synthSpec("Task: synthetic."),
+			Streams: staticStreams(DomainStream{Domain: synthFoldStage, Tasks: tasks}),
+		}}}
+	}
+
+	// The first boundary's call never verifies; every other call would.
+	poison := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		if strings.Contains(req.Messages[0].Content, "fold/0001.boundary") {
+			return model.Response{Content: "not the token", FinishReason: "stop"}, nil
+		}
+		return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+	}}
+	res, err := newSynthCoordinator(t, dir, poison, 1, log.Discard()).
+		Run(context.Background(), stage(), ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// (a) The job is refused, and it names both the call that failed and the
+	// artifact that could not be written because of it.
+	if res.EmitReady() {
+		t.Errorf("result = %+v; a stream with a failed call owes an artifact it did not write", res)
+	}
+	kinds := map[string]FailureKind{}
+	for _, f := range res.Failures {
+		kinds[f.Path] = f.Kind
+	}
+	if kinds["fold/0001.boundary"] != FailureVerification {
+		t.Errorf("the failed call is %+v, want %s", res.Failures, FailureVerification)
+	}
+	if kinds[synthFoldUnit] != FailureUpstream {
+		t.Errorf("the artifact is %+v, want %s — the cascade of the call beside it", res.Failures, FailureUpstream)
+	}
+	// The calls after the poison are not spent: they would feed state nobody
+	// is going to record. Two semantic attempts at the first boundary, nothing
+	// else.
+	if got := poison.callCount(); got != semanticAttempts {
+		t.Errorf("%d calls, want %d: a poisoned stream stops spending", got, semanticAttempts)
+	}
+
+	// (b) Nothing landed on disk.
+	if state := storeState(t, dir); len(state) != 0 {
+		t.Errorf("the store holds %v; a stream with a failed call writes nothing at all", state)
+	}
+
+	// (c) And the next run redoes the fold whole — every call remade, because
+	// there is nothing for the scan to verdict Valid.
+	good := echoStub()
+	res, err = newSynthCoordinator(t, dir, good, 1, log.Discard()).
+		Run(context.Background(), stage(), ModeResume)
+	if err != nil {
+		t.Fatalf("the second run: %v", err)
+	}
+	if !res.EmitReady() || res.Produced != 1 || res.Reused != 0 {
+		t.Fatalf("result = %+v, want the fold redone whole and the artifact written", res)
+	}
+	if got := good.callCount(); got != synthFoldCalls {
+		t.Errorf("%d calls on the redo, want all %d of the stream's", got, synthFoldCalls)
+	}
+	if _, err := os.Stat(filepath.Join(storeRoot(dir), filepath.FromSlash(synthFoldUnit))); err != nil {
+		t.Errorf("the redone fold wrote nothing: %v", err)
+	}
+}
+
+// TestAStreamMayCarryCallsAndOneArtifact: filterStreams keeps or drops a
+// stream whole, so a stream carrying two artifacts and the calls that feed
+// them cannot be filtered honestly — keeping it for the second artifact's sake
+// re-spends the first's calls to feed state nobody records.
+//
+// Nothing builds that shape. The assertion is what makes the day someone does
+// a refusal rather than a quiet bill.
+func TestAStreamMayCarryCallsAndOneArtifact(t *testing.T) {
+	calls := []Task{synthTask("fold/0001.boundary", "span")}
+	calls[0].CallOnly = true
+	one := synthTask("fold/a.txt", "span")
+	two := synthTask("fold/b.txt", "span")
+
+	// Two artifacts with no calls between them is the ordinary leaf stream and
+	// is fine; adding a call is what makes the stream unfilterable.
+	if _, err := filterStreams([]DomainStream{{Domain: "d", Tasks: []Task{one, two}}}, nil); err != nil {
+		t.Errorf("a stream of independent artifacts is legal: %v", err)
+	}
+	_, err := filterStreams([]DomainStream{{
+		Domain: "d", Tasks: []Task{calls[0], one, two},
+	}}, nil)
+	var target MultiArtifactStreamError
+	if !errors.As(err, &target) {
+		t.Fatalf("err = %v (%T), want a MultiArtifactStreamError", err, err)
+	}
+	if target.Artifacts != 2 || target.Domain != "d" {
+		t.Errorf("err = %+v, want it to name the stream and how many artifacts it carries", target)
 	}
 }

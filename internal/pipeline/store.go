@@ -45,14 +45,18 @@ const (
 	// what makes that case Invalid.
 	stampSchema = 1
 
-	// artifactFileMode is the mode of every file the store writes. A job dir
-	// holds a user's corpus in derived form; it gets the same owner-only
-	// posture as the log file and the provider key files.
-	artifactFileMode = 0o600
+	// ArtifactFileMode is the mode of every file kbase writes under an output
+	// directory. A job dir holds a user's corpus in derived form; it gets the
+	// same owner-only posture as the log file and the provider key files.
+	//
+	// It is exported because `cmd` writes beside the store — a survey
+	// artifact, a run record — and an unexported constant there would be a
+	// second declaration of one fact (ARCHITECTURE.md §9).
+	ArtifactFileMode = 0o600
 
-	// artifactDirMode is the mode of directories the store creates —
-	// owner-only, matching the files inside them.
-	artifactDirMode = 0o700
+	// ArtifactDirMode is the mode of directories kbase creates under an
+	// output directory — owner-only, matching the files inside them.
+	ArtifactDirMode = 0o700
 
 	// tempSuffix starts the name of the temporary file a write lands in
 	// before the rename. It sits in the destination directory so the rename
@@ -131,9 +135,11 @@ type Stamp struct {
 	Output string `json:"output"`
 }
 
-// Store is stage-artifact custody rooted at one job directory. Every path it
-// takes is store-relative and slash-separated, so a chain description reads
-// the same on every platform.
+// Store is stage-artifact custody rooted at one job directory — in a real
+// run, the `temp-work` tree kbase created under the output directory (see
+// TempWork). Every path it takes is store-relative and slash-separated, so a
+// chain description reads the same on every platform, and the same relative
+// path names the scratch copy and its delivered counterpart.
 type Store struct {
 	root string
 	lg   log.Logger
@@ -416,7 +422,7 @@ func compareInputs(got, want []Input) string {
 // done.
 func writeAtomic(abs string, data []byte, cp string) error {
 	dir := filepath.Dir(abs)
-	if err := os.MkdirAll(dir, artifactDirMode); err != nil {
+	if err := os.MkdirAll(dir, ArtifactDirMode); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, filepath.Base(abs)+tempSuffix+"*")
@@ -463,8 +469,14 @@ func writeAtomic(abs string, data []byte, cp string) error {
 // account for: the temp-file residue a killed write left behind, and the
 // artifacts of a previous run whose plan named different paths. Neither is
 // visible to the resume scan, which only inspects paths the chain names, so
-// without this they accumulate in a directory that is (or becomes) the
-// emitted tree.
+// without this they accumulate in the tree the emit step draws from.
+//
+// WHERE it runs is what makes deleting safe, and it is structural rather than
+// a check: the store's root is the `temp-work` directory kbase itself created
+// under the output directory (TempWork), so the sweep cannot reach an
+// operator's files because it is not standing anywhere near them. The
+// tripwire below is a cheap second reading of the same fact — one string
+// comparison against the day someone hands this a root that was never ours.
 //
 // WHEN it runs is the whole design. Under the dynamic chain a stage's units
 // are not described until the stage is reached (see resolveStage), so a sweep
@@ -481,6 +493,10 @@ func writeAtomic(abs string, data []byte, cp string) error {
 // is untidiness, and failing a completed job over it would turn a successful
 // run into an error.
 func (s *Store) sweep(chain Chain) error {
+	if filepath.Base(s.root) != TempWorkDirName {
+		return fmt.Errorf("pipeline: refusing to sweep %s: a run's artifacts live in the %s directory "+
+			"kbase creates under the output directory, and this is not one", s.root, TempWorkDirName)
+	}
 	keep := map[string]bool{LockFileName: true}
 	for i := range chain {
 		units, err := chain[i].Units()

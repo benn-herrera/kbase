@@ -150,15 +150,6 @@ func DeclareEffort(e Effort) Effort {
 // Declared reports whether this effort was stated rather than left zero.
 func (e Effort) Declared() bool { return e.declared }
 
-// UtilityEffort is the effort of a call that is NOT a pipeline definition's
-// ask — a catalogue probe, a connectivity check, a round-trip a test needs but
-// is not about. Thinking is off: none of them poses a question worth reasoning
-// over, and naming the value is what puts their intent in the same vocabulary
-// the pipeline's definitions use instead of leaving it to a default.
-//
-// Read-only by convention, like the sentinel errors beside it.
-var UtilityEffort = DeclareEffort(Effort{Thinking: false})
-
 // DefaultRequest returns a Request prefilled with the appliance defaults.
 // The caller fills in Model, Messages and the ask's declared Effort;
 // everything else is preset:

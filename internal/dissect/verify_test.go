@@ -79,7 +79,7 @@ func TestVerifyRejections(t *testing.T) {
 	}, {
 		name: "the list starts after the span",
 		cuts: []survey.Range{{Start: 4, End: len(src)}},
-		want: "section 0 does not start where the one before it ended",
+		want: "a section does not start where the one before it ended",
 	}, {
 		name: "the list stops short of the span",
 		cuts: []survey.Range{{Start: 0, End: len(src) - 10}},
@@ -104,8 +104,10 @@ func TestVerifyRejections(t *testing.T) {
 			}
 			// The reason is what a corrective note is assembled from, so it
 			// carries no byte offset; the operator-facing Error adds the one
-			// byte the complaint is about.
+			// byte the complaint is about. Nor any menu number — see
+			// assertNoMenuNumbers.
 			assertNoOffsets(t, rej.Note(), offsetsOf(cands)...)
+			assertNoMenuNumbers(t, rej.Note())
 		})
 	}
 }
@@ -130,6 +132,9 @@ func TestVerifyRejectsAnUndersizedSection(t *testing.T) {
 	if !strings.Contains(err.Error(), "under the") {
 		t.Errorf("error = %v, want the minimum named", err)
 	}
+	// The minimum's own 64 is out of the menu's range and may stay; the
+	// section's index and its token count were in it and did not.
+	assertNoMenuNumbers(t, rej.Note())
 }
 
 // TestVerifyClampsToTheWindow: the model's authority is clamped twice (§5) —
@@ -157,6 +162,7 @@ func TestVerifyClampsToTheWindow(t *testing.T) {
 		t.Errorf("error = %v, want the clamp named", err)
 	}
 	assertNoOffsets(t, rej.Note(), windows[0].Lo, windows[0].Hi)
+	assertNoMenuNumbers(t, rej.Note())
 	if n := len(windows); n != len(mechanical)-1 {
 		t.Errorf("%d windows for %d sections, want one per interior boundary", n, len(mechanical))
 	}

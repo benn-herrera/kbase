@@ -92,20 +92,48 @@ func newJobFrame(text string) (jobFrame, error) {
 // the Role stage-constant, which is what lets every worker share one: the
 // table is fixed for the stage, and the unit is what selects a row.
 //
-// It must be deterministic and side-effect free: the same unit and response
-// text have to verdict the same way on the retry, on a resume, and in a test.
+// # What a verifier may and may not do
+//
+// Its VERDICT must be a function of (unit, response, the stage's state as of
+// the call) — nothing else. Same three, same answer, on the retry and in a
+// test.
+//
+// It MAY fold its result into the stage's own state; a verifier is allowed to
+// be an accumulator. Stage 4's fold is the case: each boundary's accepted
+// choice becomes the working cut list the next boundary's window, menu and
+// verification derive from, and the last one composes the artifact
+// (ARCHITECTURE.md §5). What it may never write is the STORE — the artifact
+// reaches disk through the runner and the encoder, once, on the attempt that
+// won.
+//
+// A stage that accumulates depends on guarantees the runner makes, so they
+// are stated here rather than discovered:
+//
+//   - Verify runs ONCE per semantic attempt, and never over a stored
+//     response: an attempt is a fresh call.
+//   - Verify never runs concurrently for one stage's stream. A stream is one
+//     worker's serial assignment, so the fold has one writer by construction
+//     (dissect.Refiner asserts it as well, at the seam that depends on it).
+//   - A rejected attempt must leave the stage state as it found it, which is
+//     what makes the single informed retry re-ask the SAME question.
 //
 // A verifier that concludes the failure is OURS rather than the model's wraps
 // ErrVerifierDefect; see it for what the runner then does.
 type Verifier func(unit, response string) (artifact any, err error)
 
-// Baseline returns the deterministic artifact a refinement seam falls back to —
-// the mechanically produced result the model was asked to improve on, which was
-// already valid (§3 monotone safety). A Role that has one is a refinement seam;
-// a Role that does not is an essential-inference seam.
+// Baseline returns the artifact a refinement seam falls back to — the
+// mechanically produced result the model was asked to improve on, which was
+// already valid (§3 monotone safety). A Role that has one is a refinement
+// seam; a Role that does not is an essential-inference seam.
 //
 // It takes the unit for the same reason Verifier does: the mechanical result
 // a boundary falls back to is that boundary's own cut, not the stage's.
+//
+// Like Verify it may touch the stage's own state and not the store, and the
+// runner's guarantee is narrower: Baseline is called AT MOST ONCE per unit,
+// and only after that unit's semantic attempts are exhausted. Stage 4's fold
+// relies on both — its baseline counts the fallback and, for the last
+// boundary, composes the artifact the stage still owes.
 type Baseline func(unit string) (artifact any)
 
 // Encoder renders a verified artifact as the bytes the store keeps. It is

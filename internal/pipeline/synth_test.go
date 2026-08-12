@@ -230,10 +230,75 @@ func synthTask(path, section string, upstreams ...string) Task {
 	}
 }
 
-// synthPlan is the two-stage fixture: an essential stage of two units in one
-// domain, then a refinement stage of four units across two domains — one of
-// which spans two sections, so the section-transition phase is crossed both
-// within a stream and at its start.
+// The fold stage's names. Its stream is the multi-call-artifact shape, so its
+// three tasks share one unit directory and only the last of them is a unit.
+const (
+	synthFoldStage   = "fold"
+	synthFoldSection = "span"
+	synthFoldUnit    = synthFoldStage + "/cutlist.txt"
+	// synthFoldCalls is how many calls that stream makes for its one unit.
+	synthFoldCalls = 3
+)
+
+// synthFoldPaths are the fold stream's tasks in order: two boundary calls
+// that write nothing, then the one that carries the composed artifact.
+var synthFoldPaths = []string{
+	synthFoldStage + "/0001.boundary",
+	synthFoldStage + "/0002.boundary",
+	synthFoldUnit,
+}
+
+// synthFoldPlan is the multi-call-artifact shape (Task.CallOnly) as a stage:
+// [CallOnly, CallOnly, producing] over ONE piece of stage state, which is
+// stage 4's boundary fold seen from the orchestration side.
+//
+// The state is a closure the stage's verifier folds every response into, and
+// every task's prompt renders it. So the producing task's prompt — and
+// therefore the artifact echoStub digests out of it — is a function of ALL
+// THREE calls. Byte-identical output after a kill then means the resumed run
+// really re-made every call of the stream, which is the property
+// filterStreams owes and which no per-unit comparison could show.
+func synthFoldPlan(t *testing.T) *StagePlan {
+	t.Helper()
+	role := refinementRole(t)
+	inner := role.Verify
+	folded := ""
+	role.Verify = func(unit, response string) (any, error) {
+		artifact, err := inner(unit, response)
+		if err != nil {
+			return nil, err
+		}
+		folded = HashBytes([]byte(folded + response))[:8]
+		return artifact, nil
+	}
+
+	tasks := make([]Task, 0, len(synthFoldPaths))
+	for i, path := range synthFoldPaths {
+		task := synthTask(path, synthFoldSection)
+		task.CallOnly = i < len(synthFoldPaths)-1
+		task.Input = func() prompt.CallInput {
+			in := synthTask(path, synthFoldSection).Input()
+			in.Content = fmt.Sprintf("%s [fold state %s]", in.Content, folded)
+			return in
+		}
+		tasks = append(tasks, task)
+	}
+	return &StagePlan{
+		Name:    synthFoldStage,
+		Role:    role,
+		Spec:    synthSpec("Task: adjudicate each boundary of the span."),
+		Streams: staticStreams(DomainStream{Domain: synthFoldStage, Tasks: tasks}),
+	}
+}
+
+// synthPlan is the three-stage fixture: an essential stage of two units in one
+// domain; a fold stage whose three calls produce one artifact; then a
+// refinement stage of four units across two domains — one of which spans two
+// sections, so the section-transition phase is crossed both within a stream
+// and at its start.
+//
+// The fold sits in the middle rather than at the end, which is where a real
+// one sits (§4) and which keeps the last stage the one a resume test poisons.
 func synthPlan(t *testing.T) Plan {
 	t.Helper()
 	return Plan{
@@ -251,6 +316,7 @@ func synthPlan(t *testing.T) Plan {
 					},
 				}),
 			},
+			synthFoldPlan(t),
 			{
 				Name: "leaves",
 				Role: refinementRole(t),
@@ -270,8 +336,13 @@ func synthPlan(t *testing.T) Plan {
 	}
 }
 
-// synthUnits is how many units synthPlan describes.
-const synthUnits = 6
+// synthUnits is how many units synthPlan describes, and synthCalls how many
+// model calls one complete run of it makes. They differ because the fold
+// spends synthFoldCalls calls on one unit.
+const (
+	synthUnits = 7
+	synthCalls = synthUnits + synthFoldCalls - 1
+)
 
 // synthDerivedPlan is the dynamic chain made concrete: stage 2's units do not
 // exist until stage 1 has run, because their PATHS are derived from the bytes
@@ -305,7 +376,7 @@ func synthDerivedPlan(t *testing.T, dir string) Plan {
 				Role: refinementRole(t),
 				Spec: synthSpec("Task: refine each leaf boundary."),
 				Streams: func() ([]DomainStream, error) {
-					data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(upstream)))
+					data, err := os.ReadFile(filepath.Join(storeRoot(dir), filepath.FromSlash(upstream)))
 					if err != nil {
 						return nil, fmt.Errorf("derive leaves from %s: %w", upstream, err)
 					}
@@ -330,15 +401,39 @@ func synthDerivedPlan(t *testing.T, dir string) Plan {
 // stages have resolved.
 const synthDerivedUnits = 3
 
-// newSynthCoordinator wires a coordinator over a job dir and a client.
+// newSynthCoordinator wires a coordinator over an OUTPUT dir and a client.
+//
+// dir is what an operator would pass as --out, and the store is rooted where
+// a real run roots it: the temp-work tree kbase creates inside it. Every
+// helper below reads the same place through storeRoot, so no test can
+// accidentally assert against a layout production does not use.
 func newSynthCoordinator(t *testing.T, dir string, client model.Client, workers int, lg log.Logger) *Coordinator {
 	t.Helper()
-	store := NewStore(dir, lg)
-	return NewCoordinator(store, NewCallRunner(client, synthConfig(), lg), workers, lg)
+	work, err := OpenTempWork(dir, lg)
+	if err != nil {
+		t.Fatalf("OpenTempWork: %v", err)
+	}
+	return NewCoordinator(work.Store(), NewCallRunner(client, synthConfig(), lg), workers, lg)
 }
 
-// storeState reads the job directory back as a path→bytes map — the thing two
-// runs must agree on byte for byte.
+// storeRoot is where a run under the output dir keeps its artifacts, stamps
+// and lockfile.
+func storeRoot(dir string) string { return filepath.Join(dir, TempWorkDirName) }
+
+// synthStore opens the store of an output dir the way a test that inspects
+// one does — same root the coordinator wrote through.
+func synthStore(t *testing.T, dir string, lg log.Logger) *Store {
+	t.Helper()
+	work, err := OpenTempWork(dir, lg)
+	if err != nil {
+		t.Fatalf("OpenTempWork: %v", err)
+	}
+	return work.Store()
+}
+
+// storeState reads an output directory's store back as a path→bytes map — the
+// thing two runs must agree on byte for byte. Paths are relative to the store
+// root, so they read as the chain's own unit paths.
 //
 // Two kinds of file are excluded, and for the same reason: they are not the
 // job's output. The lockfile is process bookkeeping, and a temp file is the
@@ -347,15 +442,16 @@ func newSynthCoordinator(t *testing.T, dir string, client model.Client, workers 
 // ARTIFACTS as an uninterrupted one, not the same litter.
 func storeState(t *testing.T, dir string) map[string]string {
 	t.Helper()
+	root := storeRoot(dir)
 	state := map[string]string{}
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		rel, relErr := filepath.Rel(dir, path)
+		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			return relErr
 		}

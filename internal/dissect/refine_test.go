@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,7 +78,7 @@ func oneBoundary(t *testing.T, lg log.Logger) (*Refiner, []byte, Boundary) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	bs := r.Boundaries()
+	bs := boundariesOf(t, r)
 	if len(bs) != 1 {
 		t.Fatalf("%d boundaries, want exactly one", len(bs))
 	}
@@ -85,6 +86,17 @@ func oneBoundary(t *testing.T, lg log.Logger) (*Refiner, []byte, Boundary) {
 		t.Fatalf("menu = %+v, want an alternative to the mechanical cut", bs[0].Menu)
 	}
 	return r, src, bs[0]
+}
+
+// boundariesOf reads a refiner's adjudications, which is legal only between
+// runs — Boundaries refuses while the fold is busy.
+func boundariesOf(t *testing.T, r *Refiner) []Boundary {
+	t.Helper()
+	bs, err := r.Boundaries()
+	if err != nil {
+		t.Fatalf("Boundaries: %v", err)
+	}
+	return bs
 }
 
 // menuNumber is the 1-based menu position of an offset, or 0.
@@ -124,7 +136,7 @@ func runStage(t *testing.T, r *Refiner, client model.Client, lg log.Logger) (pip
 func runStageIn(t *testing.T, dir string, r *Refiner, client model.Client, lg log.Logger) (pipeline.JobResult, error) {
 	t.Helper()
 	cfg := config.Config{Models: config.ModelMap{Heavy: "gemma-4-31b", Light: "gemma-4-26b-a4b"}}
-	coord := pipeline.NewCoordinator(pipeline.NewStore(dir, lg), pipeline.NewCallRunner(client, cfg, lg), 1, lg)
+	coord := pipeline.NewCoordinator(storeIn(t, dir, lg), pipeline.NewCallRunner(client, cfg, lg), 1, lg)
 
 	plan := pipeline.Plan{
 		SystemFrame: jobFrame,
@@ -140,19 +152,34 @@ func runStageIn(t *testing.T, dir string, r *Refiner, client model.Client, lg lo
 // consumes it will get at it.
 func cutListIn(t *testing.T, dir, unit string) []survey.Range {
 	t.Helper()
-	data, err := pipeline.NewStore(dir, log.Discard()).Get(unit)
+	data, err := storeIn(t, dir, log.Discard()).Get(unit)
 	if err != nil {
 		t.Fatalf("read %s: %v", unit, err)
 	}
-	var cuts []survey.Range
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		var r survey.Range
-		if _, err := fmt.Sscanf(line, "%d %d", &r.Start, &r.End); err != nil {
-			t.Fatalf("artifact %s has the line %q, not a section: %v", unit, line, err)
-		}
-		cuts = append(cuts, r)
+	// Through DecodeCutList rather than a Sscanf of its own: a test that
+	// re-implements the format cannot fail when the format and its decoder
+	// disagree, which is the failure worth catching.
+	cuts, err := DecodeCutList(data)
+	if err != nil {
+		t.Fatalf("artifact %s does not decode: %v", unit, err)
 	}
 	return cuts
+}
+
+// storeIn opens the store of an output directory where a real run roots it:
+// the temp-work tree kbase creates inside it.
+func storeIn(t *testing.T, dir string, lg log.Logger) *pipeline.Store {
+	t.Helper()
+	work, err := pipeline.OpenTempWork(dir, lg)
+	if err != nil {
+		t.Fatalf("OpenTempWork: %v", err)
+	}
+	return work.Store()
+}
+
+// storePath is the on-disk path of a store-relative unit under an output dir.
+func storePath(dir, unit string) string {
+	return filepath.Join(dir, pipeline.TempWorkDirName, filepath.FromSlash(unit))
 }
 
 // cutAt is the offset of boundary i in a composed cut list.
@@ -338,7 +365,7 @@ func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	b := r.Boundaries()[0]
+	b := boundariesOf(t, r)[0]
 	number := menuNumber(b, bad)
 	if number == 0 {
 		t.Fatalf("the poisoned candidate is not in the menu %+v", b.Menu)
@@ -362,7 +389,7 @@ func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	if n := len(client.Calls()); n != 1 {
 		t.Errorf("%d calls; a defect is never retried", n)
 	}
-	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(b.Unit))); err == nil {
+	if _, err := os.Stat(storePath(dir, b.Unit)); err == nil {
 		t.Error("a defect must not fall back to the baseline; it comes from the same offsets")
 	}
 }
@@ -408,7 +435,7 @@ func TestRefinementScansSerially(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	bs := r.Boundaries()
+	bs := boundariesOf(t, r)
 	if len(bs) < 2 {
 		t.Fatalf("%d boundaries, want a scan with more than one step", len(bs))
 	}
@@ -452,7 +479,7 @@ func TestRefinementScansSerially(t *testing.T) {
 	// Every boundary but the last writes nothing at all: a fold that was
 	// interrupted leaves no half-list for a resume to mistake for a whole one.
 	for _, b := range bs[:len(bs)-1] {
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(b.Unit))); err == nil {
+		if _, err := os.Stat(storePath(dir, b.Unit)); err == nil {
 			t.Errorf("%s exists; a boundary call produces stage state, not an artifact", b.Unit)
 		}
 	}
@@ -513,7 +540,7 @@ func TestMenuIsCappedAroundTheIncumbent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	b := r.Boundaries()[0]
+	b := boundariesOf(t, r)[0]
 
 	// The window really does hold more than the cap, or the case is vacuous.
 	inWindow := 0
@@ -570,7 +597,7 @@ func TestMenuShortSideContributesWhatItHas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	b := r.Boundaries()[0]
+	b := boundariesOf(t, r)[0]
 
 	before := 0
 	for _, c := range b.Menu {
@@ -622,6 +649,7 @@ func TestParseChoiceRequiresANumber(t *testing.T) {
 				t.Fatalf("parseChoice(%q) = %d, want a rejection", tc.response, got)
 			case tc.want == 0:
 				assertNoOffsets(t, err.Error(), 1234, 8392)
+				assertNoMenuNumbers(t, err.Error())
 			case err != nil:
 				t.Fatalf("parseChoice(%q): %v", tc.response, err)
 			case got != tc.want:
@@ -654,7 +682,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	number, _ := alternative(t, first.Boundaries()[0])
+	number, _ := alternative(t, boundariesOf(t, first)[0])
 	client := model.NewScriptedMock([]model.Response{{Content: fmt.Sprint(number), FinishReason: "stop"}}, nil)
 	res, dir, err := runStage(t, first, client, log.Discard())
 	if err != nil || res.Produced != 1 {
@@ -725,7 +753,7 @@ func scanOf(t *testing.T, dir string, r *Refiner) pipeline.ScanResult {
 	plan := pipeline.Plan{SystemFrame: jobFrame, Stages: []*pipeline.StagePlan{
 		r.StagePlan(stageName, []pipeline.Input{{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))}}),
 	}}
-	scan, err := pipeline.NewStore(dir, log.Discard()).Scan(plan.Chain(), pipeline.ModeResume)
+	scan, err := storeIn(t, dir, log.Discard()).Scan(plan.Chain(), pipeline.ModeResume)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -740,16 +768,20 @@ func scanOf(t *testing.T, dir string, r *Refiner) pipeline.ScanResult {
 // routed to the model burns a retry and then emits a degraded unit derived
 // from a broken derivation, while a model failure routed to the defect path
 // stops the job loudly. The default therefore has to be self-blame.
+// A fresh Refiner per case, which is not incidental: composing a cut list
+// spends the Refiner (Refiner.enter), so the accept case cannot be followed by
+// another adjudication on the same instance. That is the constraint under test
+// in TestARefinerIsOneRuns.
 func TestVerifyBlamesTheModelOnlyForRejections(t *testing.T) {
-	r, _, b := oneBoundary(t, log.Discard())
-	number, _ := alternative(t, b)
-
-	if _, err := r.verify(b.Unit, fmt.Sprint(number)); err != nil {
+	accepted, _, ab := oneBoundary(t, log.Discard())
+	number, _ := alternative(t, ab)
+	if _, err := accepted.verify(ab.Unit, fmt.Sprint(number)); err != nil {
 		t.Fatalf("a legal choice must verify: %v", err)
 	}
 
 	// A rejection: the model's answer, retried once and then discarded for the
 	// baseline. It must NOT be a defect, or a bad answer would stop the job.
+	r, _, b := oneBoundary(t, log.Discard())
 	_, err := r.verify(b.Unit, "99")
 	if err == nil {
 		t.Fatal("a choice outside the menu must be rejected")
@@ -774,6 +806,140 @@ func TestVerifyBlamesTheModelOnlyForRejections(t *testing.T) {
 	r.windows = append(r.windows, Window{})
 	if _, err := r.verify(b.Unit, fmt.Sprint(number)); !errors.Is(err, pipeline.ErrVerifierDefect) {
 		t.Errorf("err = %v, want a plain verifier error classified as our defect", err)
+	}
+}
+
+// TestNoNoteHandsTheModelALegalAnswer: every corrective note the fold can send
+// back is a PROMPT, and the model's whole vocabulary here is a menu number.
+//
+// The rejection reasons the parser produces are the ones with a number in
+// reach — a message naming how many positions were listed names one of the
+// legal answers — so this drives them through the fold's own reject path and
+// reads the Note the retry would carry. Verify's own reasons are covered where
+// they are constructed (TestVerifyRejections and its siblings).
+func TestNoNoteHandsTheModelALegalAnswer(t *testing.T) {
+	for _, response := range []string{"", "somewhere in the middle", "0", "99", "3 4", "Answer: 2"} {
+		t.Run(response, func(t *testing.T) {
+			r, _, b := oneBoundary(t, log.Discard())
+			_, err := r.verify(b.Unit, response)
+			var rej RejectionError
+			if !errors.As(err, &rej) {
+				t.Fatalf("err = %v (%T), want a rejection for %q", err, err, response)
+			}
+			assertNoMenuNumbers(t, rej.Note())
+			assertNoOffsets(t, rej.Note(), b.Cut, b.Window.Lo, b.Window.Hi)
+		})
+	}
+}
+
+// TestARefinerIsOneRuns: a Refiner is per RUN, and this is what makes that
+// structural rather than a convention the tests happen to keep.
+//
+// Its working list, windows and counters are seeded once and never reset, so a
+// second fold over the same instance would restart from a half-folded list and
+// re-adjudicate boundary 1 against positions later boundaries had already
+// moved to. The composed list would still verify — which is exactly the
+// problem: nothing would be loud about an answer to a question nobody asked.
+func TestARefinerIsOneRuns(t *testing.T) {
+	r, _, b := oneBoundary(t, log.Discard())
+	number, _ := alternative(t, b)
+	if _, err := r.verify(b.Unit, fmt.Sprint(number)); err != nil {
+		t.Fatalf("the first run must adjudicate: %v", err)
+	}
+
+	_, err := r.verify(b.Unit, fmt.Sprint(number))
+	if !errors.Is(err, pipeline.ErrVerifierDefect) {
+		t.Fatalf("err = %v, want a defect: a composed Refiner is spent", err)
+	}
+	if !strings.Contains(err.Error(), "new Refiner per run") {
+		t.Errorf("err = %v, want the remedy named", err)
+	}
+}
+
+// TestTheFoldRefusesABoundaryOutOfTurn: the ordinal half of the single-owner
+// assertion, at the seam it exists for.
+//
+// The exclusivity CAS alone covers the WRITE path. The read that builds a
+// boundary's prompt happens earlier, in the worker goroutine, so two streams
+// over one Refiner would race on the working list before any CAS could fire
+// and the menu they produced would already be derived from a torn read. One
+// int catches it from either side.
+func TestTheFoldRefusesABoundaryOutOfTurn(t *testing.T) {
+	src, cands := scanDoc()
+	span := wholeSpan(src)
+	p := params(250)
+	cuts, err := Split(src, span, cands, p)
+	if err != nil {
+		t.Fatalf("Split: %v", err)
+	}
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	if err != nil {
+		t.Fatalf("NewRefiner: %v", err)
+	}
+	bs := boundariesOf(t, r)
+	if len(bs) < 2 {
+		t.Fatalf("%d boundaries; the case needs a fold with a second step", len(bs))
+	}
+
+	// The second boundary asked first: a legal answer to a question the fold
+	// has not reached.
+	second := bs[1]
+	number := menuNumber(second, second.Cut)
+	if number == 0 {
+		t.Fatalf("boundary %+v does not offer its own cut", second)
+	}
+	_, err = r.verify(second.Unit, fmt.Sprint(number))
+	if !errors.Is(err, pipeline.ErrVerifierDefect) {
+		t.Fatalf("err = %v, want a defect for a boundary out of turn", err)
+	}
+
+	// And the retry does NOT trip it: a rejection is not terminal, so the fold
+	// still expects the same boundary.
+	fresh, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	if err != nil {
+		t.Fatalf("NewRefiner: %v", err)
+	}
+	first := boundariesOf(t, fresh)[0]
+	if _, err := fresh.verify(first.Unit, "not a number"); errors.Is(err, pipeline.ErrVerifierDefect) {
+		t.Fatalf("err = %v, want a plain rejection", err)
+	}
+	if _, err := fresh.verify(first.Unit, fmt.Sprint(menuNumber(first, first.Cut))); err != nil {
+		t.Errorf("the informed retry must re-ask the same boundary: %v", err)
+	}
+}
+
+// TestCutListRoundTrip: one encoder, one decoder, and the composed list a
+// later run reads is the one this run wrote.
+func TestCutListRoundTrip(t *testing.T) {
+	src, cands := scanDoc()
+	span := wholeSpan(src)
+	cuts, err := Split(src, span, cands, params(250))
+	if err != nil {
+		t.Fatalf("Split: %v", err)
+	}
+	data, err := encodeCutList(CutList{Unit: "cuts/cutlist.txt", Cuts: cuts})
+	if err != nil {
+		t.Fatalf("encodeCutList: %v", err)
+	}
+	got, err := DecodeCutList(data)
+	if err != nil {
+		t.Fatalf("DecodeCutList: %v", err)
+	}
+	if !slices.Equal(got, cuts) {
+		t.Errorf("round trip = %+v, want %+v", got, cuts)
+	}
+
+	for _, tc := range []struct{ name, data string }{
+		{"empty", ""},
+		{"one number on a line", "0 10\n20\n"},
+		{"a word where an offset belongs", "0 ten\n"},
+		{"a third column", "0 10 20\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := DecodeCutList([]byte(tc.data)); err == nil {
+				t.Errorf("DecodeCutList(%q) succeeded; the format is the contract between two runs", tc.data)
+			}
+		})
 	}
 }
 
@@ -897,7 +1063,7 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("NewRefiner: %v", rerr)
 	}
-	bs := r.Boundaries()
+	bs := boundariesOf(t, r)
 	if len(bs) != 2 {
 		t.Fatalf("%d boundaries, want the two ends of the middle section", len(bs))
 	}
@@ -963,7 +1129,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	// resume.
 	script := func(r *Refiner) []model.Response {
 		var out []model.Response
-		for _, b := range r.Boundaries() {
+		for _, b := range boundariesOf(t, r) {
 			n := menuNumber(b, b.Cut)
 			if n == 0 {
 				t.Fatalf("boundary %+v does not offer its own cut", b)
@@ -978,7 +1144,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
-	boundaries := first.Boundaries()
+	boundaries := boundariesOf(t, first)
 	if len(boundaries) < 2 {
 		t.Fatalf("%d boundaries; a mid-fold kill needs a fold with a middle", len(boundaries))
 	}
@@ -993,12 +1159,12 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	if !errors.As(err, &crash) {
 		t.Fatalf("err = %v, want the armed crash", err)
 	}
-	if _, err := pipeline.NewStore(dir, log.Discard()).Get(unit); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := storeIn(t, dir, log.Discard()).Get(unit); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the killed fold left %s behind (err = %v); a half-fold must not be on disk", unit, err)
 	}
 	// The in-process crash unwinds through the lock's release, so this is the
 	// remedy a real kill would need rather than one this test always uses.
-	if err := os.Remove(filepath.Join(dir, pipeline.LockFileName)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(storePath(dir, pipeline.LockFileName)); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the lockfile: %v", err)
 	}
 

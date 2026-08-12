@@ -63,14 +63,13 @@ func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []s
 	// section is checked against where the previous one ended, so a gap and an
 	// overlap are the same comparison read in two directions.
 	cursor := span.Start
-	for i, c := range cuts {
+	for _, c := range cuts {
 		if c.Start != cursor {
-			return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-				"section %d does not start where the one before it ended", i)}
+			return RejectionError{Offset: c.Start,
+				Reason: "a section does not start where the one before it ended"}
 		}
 		if c.End <= c.Start {
-			return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-				"section %d is empty or inverted", i)}
+			return RejectionError{Offset: c.Start, Reason: "a section is empty or inverted"}
 		}
 		cursor = c.End
 	}
@@ -95,11 +94,10 @@ func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []s
 	// span is the size it is, and refusing it would refuse a small document
 	// rather than a bad cut.
 	if len(cuts) > 1 {
-		for i, c := range cuts {
+		for _, c := range cuts {
 			if p.underMinimum(src, c) {
 				return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-					"section %d is %d tokens, under the %d-token minimum",
-					i, p.estimate(src[c.Start:c.End]), minTokens)}
+					"a section is under the %d-token minimum", minTokens)}
 			}
 		}
 	}
@@ -132,15 +130,19 @@ func isCandidate(cands []survey.CutCandidate, off int) bool {
 //
 // It has TWO renderings and the difference is the point (§5): Error is
 // operator-facing and names the byte, Note is what may be shown to a model and
-// names no byte at all. Reason is the shared half and carries no offset, which
-// is a contract this type states and every construction of it must keep — the
-// note is assembled from Reason, so an offset formatted into a reason is an
-// offset in the next call's prompt.
+// names no byte at all. Reason is the shared half and carries NO NUMBER the
+// model could act on — not a byte offset, and not a small integer either. That
+// is a contract this type states and every construction of it must keep: the
+// note is assembled from Reason, the model's whole vocabulary is a menu number
+// in 1..menuCap, and a section index or a menu size formatted into a reason is
+// a legal answer sitting in the next call's prompt. What the operator loses is
+// covered by Error's offset, which locates the section exactly.
 type RejectionError struct {
 	// Offset is the byte the complaint is about.
 	Offset int
-	// Reason is the mechanical fact, WITHOUT any byte offset (Error adds the
-	// one offset this rejection is about).
+	// Reason is the mechanical fact, carrying neither a byte offset (Error
+	// adds the one offset this rejection is about) nor any number in the
+	// menu's own range.
 	Reason string
 }
 

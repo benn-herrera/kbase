@@ -189,7 +189,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 
 	t.Run("a directory where an artifact belongs", func(t *testing.T) {
 		s, _ := newStore(t)
-		if err := os.MkdirAll(filepath.Join(s.root, "a.md"), artifactDirMode); err != nil {
+		if err := os.MkdirAll(filepath.Join(s.root, "a.md"), ArtifactDirMode); err != nil {
 			t.Fatal(err)
 		}
 		_, _, err := s.verify("a.md", nil)
@@ -263,16 +263,16 @@ func TestPutFileModes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != artifactFileMode {
-			t.Errorf("%s mode %o, want %o", rel, got, artifactFileMode)
+		if got := info.Mode().Perm(); got != ArtifactFileMode {
+			t.Errorf("%s mode %o, want %o", rel, got, ArtifactFileMode)
 		}
 	}
 	dir, err := os.Stat(filepath.Join(s.root, "nested"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dir.Mode().Perm(); got != artifactDirMode {
-		t.Errorf("directory mode %o, want %o", got, artifactDirMode)
+	if got := dir.Mode().Perm(); got != ArtifactDirMode {
+		t.Errorf("directory mode %o, want %o", got, ArtifactDirMode)
 	}
 }
 
@@ -390,7 +390,7 @@ func read(t *testing.T, s *Store, rel string) string {
 
 func write(t *testing.T, s *Store, rel, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(s.root, filepath.FromSlash(rel)), []byte(content), artifactFileMode); err != nil {
+	if err := os.WriteFile(filepath.Join(s.root, filepath.FromSlash(rel)), []byte(content), ArtifactFileMode); err != nil {
 		t.Fatal(err)
 	}
 }

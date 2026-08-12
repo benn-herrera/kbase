@@ -23,12 +23,26 @@ Externally observable behaviors, contracts, and obligations — the *what*.
     dropping the entry.
   - `config.toml` — the choices: `provider` (active pool entry), `[models]`
     with `heavy`/`light` tier assignments, and an optional `[dev]` table
-    (`telemetry = true` enables local inference-timing diagnostics; default
-    off).
+    (`telemetry = true` enables local inference-timing diagnostics;
+    `keep_temp_work = true` keeps a successful run's scratch tree — see the
+    output-directory contract below; both default off).
 - Both files are read strictly: a key or table kbase does not model refuses the
   load, naming the file and every offending key — a misspelled setting fails
   loudly rather than silently doing nothing (provider names, being the
-  user's own, are never unknown).
+  user's own, are never unknown). The consequence is deliberate (ruled
+  2026-08-12): a config.toml with a typo'd key cannot be repaired by `kbase
+  configure` either, because every verb loads configuration first. The refusal
+  names the key, so the remedy is one hand edit — and a command that could
+  write over a file it refuses to read is the worse trade.
+- **Output-directory contract (every verb that writes one).** `--out` receives
+  only DELIVERED artifacts. Everything transient — stage artifacts, their
+  stamps, the job lock, the residue of an interrupted write — lives under
+  `<out>/temp-work/`, a directory kbase creates and is the only thing it ever
+  deletes inside. Files already in `--out` are never touched, so pointing a
+  run at a populated directory (`--out notes`, `--out .`) is safe. A run that
+  succeeds removes `temp-work/`; a run that fails or is interrupted keeps it,
+  because that is what a resume reads. `[dev] keep_temp_work = true`, or
+  `--keep-temp-work` on the verb, keeps it after a successful run too.
 - Provider selection (any verb): `--provider` flag, else config.toml's
   `provider`, else the sole pool entry; with several entries and none chosen,
   the command lists them and fails rather than picking one.
@@ -74,9 +88,10 @@ Externally observable behaviors, contracts, and obligations — the *what*.
 - Manual explicit config (`--model-map`, per-stage overrides) always allowed.
 - Resolved model IDs (auto or manual) are stamped into the provenance receipt (§7).
 - `kbase dev-refine <file.md> --config-dir DIR --out DIR [--budget N]
-  [--thinking]` — development verb: runs the boundary-refinement stage over one
-  document against a real provider, keeping the composed cut list, its stamp
-  and a run record in `--out`. Every model call is made at the effort the
+  [--thinking] [--keep-temp-work]` — development verb: runs the
+  boundary-refinement stage over one document against a real provider,
+  delivering the composed cut list and a run record into `--out` under the
+  output-directory contract above. Every model call is made at the effort the
   refinement definition declares (ARCHITECTURE.md §9, §12); `--thinking`
   overrides that declaration for the run and is the only way to change it.
   Unset means the declaration stands — the flag has no "off by default"

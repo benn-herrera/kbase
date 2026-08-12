@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/dissect"
 	"kbase/internal/model"
 	"kbase/internal/pipeline"
 )
@@ -116,7 +117,7 @@ func TestRunDevRefineWiring(t *testing.T) {
 		"boundaries:",
 		"sections:",
 		"outcome:",
-		"artifact: cuts/cutlist.txt",
+		"artifact: " + filepath.Join(out, "cuts", "cutlist.txt"),
 	} {
 		if !strings.Contains(got.stdout, want) {
 			t.Errorf("stdout %q missing %q", got.stdout, want)
@@ -129,12 +130,19 @@ func TestRunDevRefineWiring(t *testing.T) {
 		t.Error("API key leaked into an output stream")
 	}
 
-	// The stage's artifact and its proof: the verb's real output, and what a
-	// later stage would consume.
-	for _, rel := range []string{"cuts/cutlist.txt", "cuts/cutlist.txt" + pipeline.StampSuffix} {
-		if _, err := os.Stat(filepath.Join(out, rel)); err != nil {
-			t.Errorf("expected %s in the job directory: %v", rel, err)
-		}
+	// The delivered artifact: the composed cut list, in --out proper, and
+	// decodable by the one decoder a later stage would use.
+	data, err := os.ReadFile(filepath.Join(out, "cuts", "cutlist.txt"))
+	if err != nil {
+		t.Fatalf("the composed cut list was not delivered: %v", err)
+	}
+	if _, err := dissect.DecodeCutList(data); err != nil {
+		t.Errorf("the delivered cut list does not decode: %v", err)
+	}
+	// And the scratch tree is gone: a run that succeeded and delivered has
+	// nothing left to keep (ARCHITECTURE.md §12).
+	if _, err := os.Stat(filepath.Join(out, pipeline.TempWorkDirName)); !os.IsNotExist(err) {
+		t.Errorf("%s survived a successful run (err = %v)", pipeline.TempWorkDirName, err)
 	}
 
 	path := filepath.Join(out, devRefineRecordName)
@@ -142,8 +150,8 @@ func TestRunDevRefineWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat %s: %v", devRefineRecordName, err)
 	}
-	if mode := info.Mode().Perm(); mode != artifactFileMode {
-		t.Errorf("%s mode = %o, want %o", devRefineRecordName, mode, artifactFileMode)
+	if mode := info.Mode().Perm(); mode != pipeline.ArtifactFileMode {
+		t.Errorf("%s mode = %o, want %o", devRefineRecordName, mode, pipeline.ArtifactFileMode)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -162,7 +170,7 @@ func TestRunDevRefineWiring(t *testing.T) {
 	if rec.Boundaries != rec.BoundariesMoved+rec.BoundariesKept || rec.Boundaries < 1 {
 		t.Errorf("record outcomes = %+v, want every boundary accounted for as moved or kept", rec)
 	}
-	if rec.SectionsAfter != rec.Boundaries+1 {
+	if rec.Sections != rec.Boundaries+1 {
 		t.Errorf("record sections = %+v, want one more section than boundaries", rec)
 	}
 	if strings.Contains(string(raw), testAPIKey) {
@@ -307,6 +315,191 @@ func TestRunDevRefineRefusals(t *testing.T) {
 			}
 			if len(got.endpoints) != 0 {
 				t.Errorf("a refused run must not dial; got %d client constructions", len(got.endpoints))
+			}
+		})
+	}
+}
+
+// TestRunDevRefineLeavesTheOutputDirectoryAlone is the case the temp-work
+// rooting exists for (ARCHITECTURE.md §12).
+//
+// A completed run sweeps every file its store's root holds that the chain does
+// not account for. What keeps that away from an operator's files is not a
+// check but a place: the store is rooted in a directory kbase created one
+// level below --out. So `kbase dev-refine notes/sync.md --out notes` — which
+// is the first thing anyone will type — leaves notes/ exactly as it found it.
+func TestRunDevRefineLeavesTheOutputDirectoryAlone(t *testing.T) {
+	file := devRefineFile(t, "sync.md", devRefineDoc())
+	out := t.TempDir()
+
+	const foreign = "notes.md"
+	want := "the operator's own document, which this run has no business deleting\n"
+	if err := os.WriteFile(filepath.Join(out, foreign), []byte(want), 0o600); err != nil {
+		t.Fatalf("write the operator's file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(out, "chapter"), 0o700); err != nil {
+		t.Fatalf("make the operator's directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "chapter", "deeper.md"), []byte(want), 0o600); err != nil {
+		t.Fatalf("write the operator's nested file: %v", err)
+	}
+
+	got := runDevRefineVerb(t, devRefineOpts(t, file, out), "1")
+	if got.err != nil {
+		t.Fatalf("runDevRefine: %v (stderr %q)", got.err, got.stderr)
+	}
+
+	for _, rel := range []string{foreign, filepath.Join("chapter", "deeper.md")} {
+		data, err := os.ReadFile(filepath.Join(out, rel))
+		if err != nil {
+			t.Errorf("%s did not survive the run: %v", rel, err)
+			continue
+		}
+		if string(data) != want {
+			t.Errorf("%s = %q, want it untouched", rel, data)
+		}
+	}
+	// And the run still delivered what it owed, and cleaned up after itself.
+	for _, rel := range []string{devRefineRecordName, filepath.Join("cuts", "cutlist.txt")} {
+		if _, err := os.Stat(filepath.Join(out, rel)); err != nil {
+			t.Errorf("%s was not delivered: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, pipeline.TempWorkDirName)); !os.IsNotExist(err) {
+		t.Errorf("%s survived a successful run (err = %v)", pipeline.TempWorkDirName, err)
+	}
+}
+
+// TestRunDevRefineKeepsTempWorkWhenAsked: the one switch over the teardown,
+// and what it keeps is the resume machinery a delivered artifact does not
+// carry — the stamp above all.
+func TestRunDevRefineKeepsTempWorkWhenAsked(t *testing.T) {
+	file := devRefineFile(t, "sync.md", devRefineDoc())
+	out := filepath.Join(t.TempDir(), "job")
+
+	opts := devRefineOpts(t, file, out)
+	opts.KeepTempWork = true
+	got := runDevRefineVerb(t, opts, "1")
+	if got.err != nil {
+		t.Fatalf("runDevRefine: %v (stderr %q)", got.err, got.stderr)
+	}
+
+	work := filepath.Join(out, pipeline.TempWorkDirName)
+	for _, rel := range []string{
+		filepath.Join("cuts", "cutlist.txt"),
+		filepath.Join("cuts", "cutlist.txt") + pipeline.StampSuffix,
+	} {
+		if _, err := os.Stat(filepath.Join(work, rel)); err != nil {
+			t.Errorf("%s was not kept: %v", rel, err)
+		}
+	}
+	if !strings.Contains(got.stdout, "temp work kept: "+work) {
+		t.Errorf("stdout %q does not say where the kept scratch tree is", got.stdout)
+	}
+}
+
+// TestRunDevRefineKeepsTempWorkAfterAnInterruptedRun: the asymmetry is the
+// rule. A run that did not deliver keeps its intermediates unconditionally —
+// they are what a resume reads, and litter around a broken job is evidence.
+func TestRunDevRefineKeepsTempWorkAfterAnInterruptedRun(t *testing.T) {
+	file := devRefineFile(t, "sync.md", devRefineDoc())
+	out := filepath.Join(t.TempDir(), "job")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var stdout, stderr bytes.Buffer
+	opts := devRefineOpts(t, file, out)
+	opts.Stdout, opts.Stderr = &stdout, &stderr
+	opts.NewClient = func(model.Endpoint) model.Client { return cancellingClient{cancel: cancel} }
+
+	if err := runDevRefine(ctx, opts); err == nil {
+		t.Fatal("a cancelled run must return an error, not a report")
+	}
+	if _, err := os.Stat(filepath.Join(out, pipeline.TempWorkDirName)); err != nil {
+		t.Errorf("an interrupted run threw away its intermediates: %v", err)
+	}
+	// Nothing was delivered: delivery happens only after the job succeeded.
+	if _, err := os.Stat(filepath.Join(out, devRefineRecordName)); !os.IsNotExist(err) {
+		t.Errorf("a run that did not finish left a run record (err = %v)", err)
+	}
+}
+
+// cancellingClient stops the run from inside its first call — the shape of a
+// Ctrl-C, which is the interruption a development verb actually meets.
+type cancellingClient struct{ cancel context.CancelFunc }
+
+func (c cancellingClient) Consult(ctx context.Context, _ model.Request) (model.Response, error) {
+	c.cancel()
+	return model.Response{}, context.Canceled
+}
+
+func (c cancellingClient) ConsultStream(ctx context.Context, _ model.Request) (model.StreamReader, error) {
+	c.cancel()
+	return nil, context.Canceled
+}
+
+func (c cancellingClient) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
+
+// TestDevRefineThinkingIsTriState pins the half of the override that lives
+// entirely in cobra, through the flag the command really registers.
+//
+// `--thinking=false` against a declaration of false must still read as an
+// OVERRIDE. The value cannot say so — it is the declaration's own — so the
+// fact lives entirely in whether the flag was GIVEN, and a plumbing that read
+// the value would look correct on every row but this one. This is the row an
+// A/B of one document turns on.
+func TestDevRefineThinkingIsTriState(t *testing.T) {
+	flags := devRefineCmd.Flags()
+	t.Cleanup(func() {
+		flags.Lookup(devRefineThinkingFlag).Changed = false
+		devRefineFlagThinking = devRefineEffort.Thinking
+	})
+
+	if got := devRefineThinking(flags); got != nil {
+		t.Fatalf("an unset flag reads as %t, want nil: the definition's declaration stands", *got)
+	}
+	if effort, overridden := devRefineAsk(devRefineThinking(flags)); overridden || effort != devRefineEffort {
+		t.Errorf("unset = {%+v, overridden %t}, want the declaration untouched", effort, overridden)
+	}
+
+	// The declared value, given explicitly — the row that separates "given"
+	// from "equal to the default".
+	declared := fmt.Sprint(devRefineEffort.Thinking)
+	if err := flags.Parse([]string{"--" + devRefineThinkingFlag + "=" + declared}); err != nil {
+		t.Fatalf("parse --%s=%s: %v", devRefineThinkingFlag, declared, err)
+	}
+	got := devRefineThinking(flags)
+	if got == nil {
+		t.Fatal("a flag that was given must read as an override, whatever its value")
+	}
+	if *got != devRefineEffort.Thinking {
+		t.Errorf("the flag reads %t, want the %t it was given", *got, devRefineEffort.Thinking)
+	}
+	effort, overridden := devRefineAsk(got)
+	if !overridden {
+		t.Error("--thinking=<the declared value> is still an override; a run record that said otherwise would lose the experiment")
+	}
+	if !effort.Declared() || effort.Thinking != devRefineEffort.Thinking {
+		t.Errorf("effort = %+v, want a declared %t", effort, devRefineEffort.Thinking)
+	}
+}
+
+// TestSafeBaseURL: run.json is by design an artifact an operator shares as
+// evidence, and a base URL with userinfo in it is a legal providers.toml
+// value. The key never reaches the record; this is the other way a credential
+// could have.
+func TestSafeBaseURL(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"no userinfo", "https://host/v1", "https://host/v1"},
+		{"a user and a password", "https://user:secret@host/v1", "https://host/v1"},
+		{"a user alone", "https://user@host/v1", "https://host/v1"},
+		{"not a URL at all", "://nonsense", "://nonsense"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := safeBaseURL(tc.in); got != tc.want {
+				t.Errorf("safeBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(safeBaseURL(tc.in), "secret") {
+				t.Error("a credential survived into the recorded base URL")
 			}
 		})
 	}

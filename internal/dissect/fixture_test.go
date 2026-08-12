@@ -2,6 +2,7 @@ package dissect
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -99,6 +100,44 @@ func assertNoOffsets(t *testing.T, s string, offsets ...int) {
 			t.Errorf("text renders the raw byte offset %s; the model's vocabulary is menu numbers (§5)", d)
 		}
 	}
+}
+
+// assertNoMenuNumbers fails unless s renders no integer in the MENU's own
+// range as a standalone number.
+//
+// It is assertNoOffsets' sibling and closes the same hole from the other end.
+// A corrective note is a prompt, and the model's whole vocabulary at this seam
+// is a number in 1..menuCap (§5) — so a note reading "section 3 is under the
+// minimum" or "not one of the 5 listed positions" puts a legal answer in front
+// of a model that is most likely to be pattern-matching precisely when its
+// last answer was rejected. A number outside the range is harmless, which is
+// why the minimum's own 64 may stay.
+func assertNoMenuNumbers(t *testing.T, s string) {
+	t.Helper()
+	for _, run := range digitRuns(s) {
+		n, err := strconv.Atoi(run)
+		if err == nil && n >= 1 && n <= menuCap {
+			t.Errorf("text renders %d, which is a legal menu answer: %q", n, s)
+		}
+	}
+}
+
+// digitRuns is every maximal run of digits in s. Maximal, so "64" is one
+// number and not a 6 and a 4.
+func digitRuns(s string) []string {
+	var out []string
+	start := -1
+	for i := 0; i <= len(s); i++ {
+		digit := i < len(s) && s[i] >= '0' && s[i] <= '9'
+		switch {
+		case digit && start < 0:
+			start = i
+		case !digit && start >= 0:
+			out = append(out, s[start:i])
+			start = -1
+		}
+	}
+	return out
 }
 
 // assertVerifies fails the test unless the cut list passes the same Verify

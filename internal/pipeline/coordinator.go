@@ -340,11 +340,16 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 			err = serr
 			break
 		}
+		runnable, ferr := filterStreams(streams, valid)
+		if ferr != nil {
+			err = fmt.Errorf("pipeline: stage %s: %w", sp.Name, ferr)
+			break
+		}
 		// A stage that stops takes the job with it, but the summary below
 		// still runs: what a job managed before it died is the first thing
 		// anyone will want, and reporting it only on the happy path is
 		// reporting it when it is least needed.
-		if err = c.runStage(ctx, sp, frame, filterStreams(streams, valid), &res); err != nil {
+		if err = c.runStage(ctx, sp, frame, runnable, &res); err != nil {
 			break
 		}
 		res.Stages++
@@ -518,6 +523,27 @@ type worker struct {
 // run processes one stream's units in order. A unit failure is reported and
 // the stream continues (graceful degradation: siblings are worth finishing);
 // an abort class stops the stream and is returned.
+//
+// # A failed call POISONS the artifact its calls were feeding
+//
+// The CallOnly tasks before a producing task are that artifact's calls: their
+// answers are the stage state it is composed from (see Task.CallOnly). So the
+// invariant this loop keeps is "the artifact exists exactly when every call of
+// its stream succeeded" — one failed boundary and the composed list is not
+// written at all, the same state a kill mid-fold leaves (§12).
+//
+// Suppressing the write rather than inventorying the failure alone is what
+// makes the next run redo the fold WHOLE. A written artifact would carry a
+// perfectly valid stamp — the source hash and parameter digest do not know a
+// call failed — so the scan would verdict it Valid, filterStreams would drop
+// the whole stream, and the failure would exist in exactly one run's
+// JobResult and nowhere on disk. The remaining calls of a poisoned artifact
+// are skipped for the same reason: they would spend tokens feeding state
+// nobody is going to record.
+//
+// The poison is cleared at the producing task, so a stream carrying two
+// artifacts (a shape filterStreams refuses today, and asserts it refuses)
+// would not have the first's failure suppress the second.
 func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitResult) (err error) {
 	// A panic cannot cross a goroutine boundary to the coordinator, so the
 	// simulated-crash sentinel is caught here and returned as an error.
@@ -526,9 +552,23 @@ func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitRe
 	w.traversed = []Phase{PhaseStageSetup}
 	w.prev = nil
 	section := ""
+	poisoned := false
 	for i, task := range stream.Tasks {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if poisoned {
+			if task.CallOnly {
+				w.lg.Warn("skipping a call whose artifact a failed call already poisoned",
+					"stage", w.stage, "unit", task.Unit.Path)
+				continue
+			}
+			out <- unitResult{Domain: stream.Domain, Path: task.Unit.Path, Failure: &UnitFailure{
+				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream,
+				Err: PoisonedStreamError{Stage: w.stage, Path: task.Unit.Path},
+			}}
+			poisoned = false
+			continue
 		}
 		if i == 0 || task.Section != section {
 			// The first task's buffer fill goes through the transition too:
@@ -549,6 +589,7 @@ func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitRe
 		if err != nil {
 			return err
 		}
+		poisoned = task.CallOnly && res.Failure != nil
 		out <- res
 	}
 	return nil
@@ -761,9 +802,30 @@ func validPaths(scan ScanResult) map[string]bool {
 // artifact to write. A stream whose every producing task is already valid is
 // dropped entire, calls and all: its remaining calls would spend tokens
 // feeding state nobody is going to record.
-func filterStreams(streams []DomainStream, valid map[string]bool) []DomainStream {
+//
+// Which is exactly why a stream that carries calls may carry only ONE
+// artifact, and why that is asserted here rather than assumed. Given
+// [fold-A calls…, artifact-A, fold-B calls…, artifact-B] with A already
+// valid, this filter would keep the stream for B's sake and re-spend every
+// one of fold A's calls to feed state nobody records. Nothing builds that
+// shape today; the assertion is what makes the day someone does a loud
+// refusal rather than a quiet bill.
+func filterStreams(streams []DomainStream, valid map[string]bool) ([]DomainStream, error) {
+	for _, s := range streams {
+		calls, produces := 0, 0
+		for _, t := range s.Tasks {
+			if t.CallOnly {
+				calls++
+				continue
+			}
+			produces++
+		}
+		if calls > 0 && produces > 1 {
+			return nil, MultiArtifactStreamError{Domain: s.Domain, Artifacts: produces}
+		}
+	}
 	if len(valid) == 0 {
-		return streams
+		return streams, nil
 	}
 	out := make([]DomainStream, 0, len(streams))
 	for _, s := range streams {
@@ -780,5 +842,34 @@ func filterStreams(streams []DomainStream, valid map[string]bool) []DomainStream
 			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
 		}
 	}
-	return out
+	return out, nil
+}
+
+// PoisonedStreamError reports an artifact that was not written because one of
+// the calls feeding it failed. It is the cascade of the failure beside it in
+// the inventory, and the remedy is that one — which is why the unit is
+// classified FailureUpstream and costs no tokens.
+type PoisonedStreamError struct {
+	Stage string
+	Path  string
+}
+
+func (e PoisonedStreamError) Error() string {
+	return fmt.Sprintf("pipeline: %s: %s was not written; a call it is composed from failed, "+
+		"so the whole stream is redone rather than half-recorded", e.Stage, e.Path)
+}
+
+// MultiArtifactStreamError reports a stream that mixes CallOnly tasks with
+// more than one artifact — see filterStreams for why that shape cannot be
+// filtered honestly.
+type MultiArtifactStreamError struct {
+	Domain    string
+	Artifacts int
+}
+
+func (e MultiArtifactStreamError) Error() string {
+	return fmt.Sprintf("pipeline: domain stream %q carries calls and %d artifacts; "+
+		"a stream whose tasks feed an artifact may carry exactly one, "+
+		"or a resume would re-spend the calls of an artifact it already proved",
+		e.Domain, e.Artifacts)
 }

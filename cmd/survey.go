@@ -10,6 +10,7 @@ import (
 
 	"kbase/internal/ingest"
 	"kbase/internal/log"
+	"kbase/internal/pipeline"
 	"kbase/internal/survey"
 	"kbase/internal/survey/markdown"
 	"kbase/internal/tokens"
@@ -104,18 +105,18 @@ func runSurvey(opts surveyOptions) error {
 	return nil
 }
 
-// artifactFileMode is the mode a newly created artifact file is given. The
-// artifact carries gists and titles lifted out of the user's corpus — actual
-// content, not just metadata about it — so it is owner-only for the same
-// reason the log file and the provider key files are.
-const artifactFileMode = 0o600
-
 // writeArtifact writes the survey JSON to path, or to stdout for "-".
+//
+// The mode is pipeline.ArtifactFileMode rather than a local copy of the same
+// number: the artifact carries gists and titles lifted out of the user's
+// corpus — actual content, not just metadata about it — so it is owner-only
+// for the same reason every other derived file is, and §9's constants table
+// names one place for that fact.
 func writeArtifact(artifact survey.Artifact, path string, stdout io.Writer) error {
 	if path == jsonToStdout {
 		return artifact.WriteJSON(stdout)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, artifactFileMode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, pipeline.ArtifactFileMode)
 	if err != nil {
 		return fmt.Errorf("survey: create %s: %w", path, err)
 	}

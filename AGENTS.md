@@ -9,8 +9,10 @@ ROADMAP.md; ephemeral per-burst plans live in `TEMP_*.md` files.
 
 ## Project Overview
 kbase is a **standalone application/appliance** that converts a human-targeted
-documentation corpus — a Markdown doc set or LaTeX source (PDF via a preprocessing
-adapter, later) — into an **agent-friendly knowledge base**: a navigable Markdown tree
+documentation corpus — a Markdown doc set; LaTeX and PDF arrive later as
+markdown via external conversion (a separate tex→md converter module and a
+PDF preprocessing slot — never native ingest) — into an **agent-friendly
+knowledge base**: a navigable Markdown tree
 (entry-point → domain index → subtopic index → leaf) with verbatim leaves, progressive
 hierarchical summaries, and mechanically generated bidirectional navigation links.
 

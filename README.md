@@ -4,7 +4,8 @@
 base.**
 
 kbase is a standalone batch appliance: point it at a Markdown doc set (LaTeX
-later; PDF only via external preprocessing tools), and it produces a navigable
+later via a separate tex→md converter module; PDF only via external
+preprocessing tools), and it produces a navigable
 Markdown tree — entry point → domain index → subtopic index → leaf — with:
 
 - **Verbatim leaves.** Leaf pages are faithful translations of the source, not

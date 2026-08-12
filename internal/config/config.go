@@ -49,6 +49,14 @@ type DevConfig struct {
 	// questions. Off by default, and consumed by the logging facility —
 	// the numbers land in the log, never in the user's output.
 	Telemetry bool `toml:"telemetry"`
+
+	// KeepTempWork keeps a SUCCESSFUL run's `<out>/temp-work/` tree instead
+	// of deleting it (ARCHITECTURE.md §12). A failed or interrupted run keeps
+	// it unconditionally, so this switch only ever answers "the run succeeded
+	// and I still want to see what it did". Off by default: the intermediates
+	// of a run that delivered are, by then, a copy of what it delivered plus
+	// the proof machinery that got it there.
+	KeepTempWork bool `toml:"keep_temp_work"`
 }
 
 // ModelMap is the [models] table: the tier→model-id resolution, written by

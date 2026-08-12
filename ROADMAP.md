@@ -86,4 +86,12 @@ deleted, not archived — git history is the log.
 
 - Community KB share layer — design captured in SHARE_DESIGN.md; post-v1.
 - MCP serve mode — hold until evidence agents fumble the CLI.
-- LaTeX ingest adapter; PDF preprocessing-adapter slot.
+- **`tex→md` converter module** (reshaped 2026-08-12, ARCHITECTURE §4): a
+  SEPARATE module with its own `go.mod` — filesystem in, filesystem out, no
+  knowledge of kbase — whose Markdown output kbase ingests through the normal
+  front door. It replaces the withdrawn native `internal/survey/latex`
+  adapter, and it takes the "26B translation for non-Markdown formats"
+  distillation variant with it: conversion is deterministic, so leaves stay
+  mechanical in every format. Contract in §4; pandoc is a dev-time
+  differential oracle, never a shipped dependency.
+- PDF preprocessing-adapter slot.

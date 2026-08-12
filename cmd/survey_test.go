@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/pipeline"
 	"kbase/internal/survey"
 )
 
@@ -93,8 +94,8 @@ func TestRunSurveyJSONFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat artifact: %v", err)
 	}
-	if got := info.Mode().Perm(); got != artifactFileMode {
-		t.Errorf("artifact mode = %o, want %o", got, artifactFileMode)
+	if got := info.Mode().Perm(); got != pipeline.ArtifactFileMode {
+		t.Errorf("artifact mode = %o, want %o", got, pipeline.ArtifactFileMode)
 	}
 
 	raw, err := os.ReadFile(out)

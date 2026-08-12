@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"kbase/internal/config"
 	"kbase/internal/dissect"
@@ -72,9 +74,10 @@ const (
 	devRefineSourceInput = "corpus"
 
 	// devRefineRecordName is the run record this verb leaves in --out: what
-	// was dialed, what was asked, and what came back. It is written AFTER the
-	// job, because a completed run sweeps every file the chain does not
-	// account for (pipeline.Store.sweep) and this is not one of them.
+	// was dialed, what was asked, and what came back. It is one of this verb's
+	// two DELIVERED artifacts (the composed cut list is the other), so it
+	// lands in the output directory proper rather than in the scratch tree —
+	// which is also why the sweep can no longer reach it.
 	devRefineRecordName = "run.json"
 
 	// devRefineTimeout bounds the WHOLE fold rather than one call: n boundary
@@ -89,10 +92,9 @@ const (
 	// then in two places.
 	devRefineThinkingFlag = "thinking"
 
-	// outDirMode is the mode --out is created with when it does not exist.
-	// The directory holds a derived view of the user's document, so it gets
-	// the same owner-only posture the store gives the artifacts inside it.
-	outDirMode = 0o700
+	// devRefineKeepFlag turns off the successful run's temp-work teardown for
+	// one run, over whatever `[dev] keep_temp_work` says.
+	devRefineKeepFlag = "keep-temp-work"
 )
 
 // devRefineEffort is the boundary-refinement definition's DECLARED effort —
@@ -122,10 +124,22 @@ type devRefineOptions struct {
 	// File is the Markdown document to adjudicate.
 	File string
 
-	// Out is the job directory: the store's root, and where the run record
-	// lands. Required — there is no temporary directory anywhere in this
-	// verb, because the artifacts and stamps ARE the smoke test's evidence.
+	// Out is the OUTPUT directory: where this run's delivered artifacts land
+	// — the composed cut list and the run record — and, while it runs, where
+	// its `temp-work/` scratch tree sits (ARCHITECTURE.md §12). Required, and
+	// never a system temporary directory, because the run's output IS the
+	// smoke test's evidence.
+	//
+	// Nothing already in it is touched. Everything kbase deletes it deleted
+	// out of a directory it created one level down.
 	Out string
+
+	// KeepTempWork keeps `<out>/temp-work/` after a run that succeeded — the
+	// stamps, the scratch copy of the cut list, and the rest of the resume
+	// machinery. It is the --keep-temp-work flag ORed with `[dev]
+	// keep_temp_work`; a failed or interrupted run keeps the tree whatever
+	// either says.
+	KeepTempWork bool
 
 	// Budget is the per-section token budget the mechanical splitter fills
 	// toward, and half of what identifies the cut list it produces.
@@ -167,7 +181,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	}
 	out := strings.TrimSpace(opts.Out)
 	if out == "" {
-		return fmt.Errorf("%s: --out is required; this verb writes artifacts and stamps and never uses a temporary directory", devRefineVerb)
+		return fmt.Errorf("%s: --out is required; this verb delivers a cut list and a run record and never uses a temporary directory", devRefineVerb)
 	}
 	if opts.Budget <= 0 {
 		return fmt.Errorf("%s: --budget is %d; a section budget is a positive number of tokens", devRefineVerb, opts.Budget)
@@ -186,7 +200,9 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		return fmt.Errorf("%s: no model is configured for the %q tier in %s; refinement is light-tier work",
 			devRefineVerb, config.TierLight, config.ConfigFileName)
 	}
-	if err := os.MkdirAll(out, outDirMode); err != nil {
+	// The output directory, created if missing — but nothing transient goes
+	// in it. The scratch tree is opened later, once there is work to do.
+	if err := os.MkdirAll(out, pipeline.ArtifactDirMode); err != nil {
 		return fmt.Errorf("%s: create %s: %w", devRefineVerb, out, err)
 	}
 
@@ -231,15 +247,19 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	// Read BEFORE the fold runs: Boundaries is a view of live stage state, so
 	// this is the mechanical list and the same call after the run is the
 	// composed one. The difference between them is what the report is about.
-	before := refiner.Boundaries()
+	before, err := refiner.Boundaries()
+	if err != nil {
+		return err
+	}
 
 	name, client, callCtx, release, err := opts.dial(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	baseURL := safeBaseURL(opts.Providers[name].BaseURL)
 	fmt.Fprintf(opts.Stdout, "provider: %s (%s)\nmodel: %s (%s tier)\n",
-		name, opts.Providers[name].BaseURL, modelID, config.TierLight)
+		name, baseURL, modelID, config.TierLight)
 	fmt.Fprintf(opts.Stdout, "thinking: %t (%s)\n", effort.Thinking, effortSource(overridden))
 
 	plan := pipeline.Plan{
@@ -248,10 +268,16 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 			{Name: devRefineSourceInput, Hash: artifact.Corpus.ContentHash},
 		})},
 	}
-	coord := pipeline.NewCoordinator(
-		pipeline.NewStore(out, lg),
-		pipeline.NewCallRunner(client, opts.Config, lg),
-		1, lg)
+	// Everything the job writes goes under <out>/temp-work/ — stamps, the
+	// scratch cut list, the lock — and the delivered artifacts are copied out
+	// below. That is what makes `--out .` survivable: the sweep at the end of
+	// a completed run operates inside a directory this call created.
+	work, err := pipeline.OpenTempWork(out, lg)
+	if err != nil {
+		return err
+	}
+	store := work.Store()
+	coord := pipeline.NewCoordinator(store, pipeline.NewCallRunner(client, opts.Config, lg), 1, lg)
 
 	// ModeFresh, always. Resume would reuse a proven cut list and make no call
 	// at all, which for a verb whose entire purpose is live traffic is a
@@ -259,6 +285,9 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	start := time.Now()
 	res, err := coord.Run(callCtx, plan, pipeline.ModeFresh)
 	elapsed := time.Since(start)
+	// Every early return from here down keeps temp-work: a run that failed or
+	// was interrupted leaves its intermediates for a resume and for a human
+	// (ARCHITECTURE.md §12).
 	if err != nil {
 		return err
 	}
@@ -270,10 +299,22 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 			devRefineVerb, res.Produced, res.Units, len(res.Failures))
 	}
 
-	after := refiner.Boundaries()
-	cuts := composedCuts(span, after)
+	after, err := refiner.Boundaries()
+	if err != nil {
+		return err
+	}
 	unit := after[len(after)-1].Unit
-	data, err := pipeline.NewStore(out, lg).Get(unit)
+	data, err := store.Get(unit)
+	if err != nil {
+		return err
+	}
+	// The artifact's own bytes decoded, not the fold's boundaries re-derived:
+	// one decoder for this format, and what is reported is what was written.
+	cuts, err := dissect.DecodeCutList(data)
+	if err != nil {
+		return err
+	}
+	artifactPath, err := deliver(out, unit, data)
 	if err != nil {
 		return err
 	}
@@ -285,13 +326,13 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	fmt.Fprintf(opts.Stdout, "usage: prompt=%d cached=%d completion=%d\n",
 		res.Usage.PromptTokens, res.Usage.CachedPromptTokens, res.Usage.CompletionTokens)
 	fmt.Fprintf(opts.Stdout, "elapsed: %s\n", elapsed.Round(time.Millisecond))
-	fmt.Fprintf(opts.Stdout, "artifact: %s (%d bytes, %d lines) + %s\n",
-		unit, len(data), bytes.Count(data, []byte("\n")), unit+pipeline.StampSuffix)
+	fmt.Fprintf(opts.Stdout, "artifact: %s (%d bytes, %d lines)\n",
+		artifactPath, len(data), bytes.Count(data, []byte("\n")))
 
 	record := devRefineRun{
 		Version:          version.Current,
 		Provider:         name,
-		BaseURL:          opts.Providers[name].BaseURL,
+		BaseURL:          baseURL,
 		Model:            modelID,
 		Tier:             config.TierLight,
 		Thinking:         effort.Thinking,
@@ -299,8 +340,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		Source:           file,
 		SourceSHA256:     doc.SHA256,
 		BudgetTokens:     opts.Budget,
-		SectionsBefore:   len(mech),
-		SectionsAfter:    len(cuts),
+		Sections:         len(cuts),
 		Boundaries:       len(after),
 		BoundariesMoved:  moved,
 		BoundariesKept:   len(after) - moved,
@@ -316,7 +356,50 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "record: %s\n", path)
-	return nil
+
+	// The run succeeded and both delivered artifacts are out. The scratch tree
+	// goes unless someone asked to keep it.
+	if opts.KeepTempWork {
+		fmt.Fprintf(opts.Stdout, "temp work kept: %s\n", work.Root())
+		return nil
+	}
+	return work.Discard()
+}
+
+// safeBaseURL is a provider's base URL with any userinfo removed.
+//
+// `https://user:pass@host/v1` is a legal providers.toml value, and run.json is
+// by design an artifact an operator shares as evidence — a credential in it
+// would travel with the run report. The API key never appears here (it lives
+// on the Endpoint and goes on the wire), so this closes the one remaining way
+// a secret could reach the record or the console. An unparseable value is
+// passed through: this process already dialed it, and nothing here could
+// establish which part of a non-URL is a credential.
+func safeBaseURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
+
+// deliver writes one of the job's artifacts into the output directory proper,
+// at the same relative path it had in the scratch tree — the mirror
+// hierarchy read in the delivering direction (ARCHITECTURE.md §12).
+//
+// The bytes are the store's, verbatim: this is a copy out, not a second
+// rendering of the artifact, so the delivered file and the one the stamp
+// proves are the same bytes.
+func deliver(out, rel string, data []byte) (string, error) {
+	path := filepath.Join(out, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), pipeline.ArtifactDirMode); err != nil {
+		return "", fmt.Errorf("%s: create %s: %w", devRefineVerb, filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, data, pipeline.ArtifactFileMode); err != nil {
+		return "", fmt.Errorf("%s: write %s: %w", devRefineVerb, path, err)
+	}
+	return path, nil
 }
 
 // devRefineAsk resolves the effort this run asks with, and reports whether the
@@ -331,6 +414,26 @@ func devRefineAsk(override *bool) (model.Effort, bool) {
 		return devRefineEffort, false
 	}
 	return model.DeclareEffort(model.Effort{Thinking: *override}), true
+}
+
+// devRefineThinking reads the tri-state --thinking override off a command's
+// flags.
+//
+// The flag's VALUE means nothing unless it was GIVEN, so "unset" is the
+// pointer being nil rather than a third bool value: a flag whose default is
+// the definition's own declaration cannot distinguish "left alone" from
+// "asked for that value" any other way. `--thinking=false` against a
+// declaration of false is an override and has to record as one, which is the
+// row an A/B of one document turns on and the only row a plumbing that read
+// the value alone would get wrong.
+//
+// It is a function rather than four lines in RunE so that the reading is
+// testable without a process, a network and a configuration directory.
+func devRefineThinking(flags *pflag.FlagSet) *bool {
+	if !flags.Changed(devRefineThinkingFlag) {
+		return nil
+	}
+	return &devRefineFlagThinking
 }
 
 // effortSource labels where the effective effort came from, for the report.
@@ -361,24 +464,6 @@ func ingestOne(path string) (ingest.Corpus, error) {
 	// path to be relative to, and an absolute path in a derived artifact is
 	// machine state (see ingest.Corpus).
 	return ingest.New([]ingest.Unit{{Path: filepath.Base(path), Bytes: b}})
-}
-
-// composedCuts rebuilds the section list from the fold's final boundaries.
-//
-// The stage's own composed list is on disk as bytes and there is no exported
-// decoder for it, so this derives the same list from the positions the fold
-// arrived at — the values the artifact was encoded from. The verb reads the
-// artifact back as well, and reports its size and line count beside these
-// sections, so the two readings are visible together rather than one standing
-// in for the other.
-func composedCuts(span survey.Range, bs []dissect.Boundary) []survey.Range {
-	cuts := make([]survey.Range, 0, len(bs)+1)
-	start := span.Start
-	for _, b := range bs {
-		cuts = append(cuts, survey.Range{Start: start, End: b.Cut})
-		start = b.Cut
-	}
-	return append(cuts, survey.Range{Start: start, End: span.End})
 }
 
 // reportBoundaries prints one line per boundary and returns how many moved.
@@ -455,8 +540,12 @@ type devRefineRun struct {
 	Source           string `json:"source"`
 	SourceSHA256     string `json:"sourceSha256"`
 	BudgetTokens     int    `json:"budgetTokens"`
-	SectionsBefore   int    `json:"sectionsBefore"`
-	SectionsAfter    int    `json:"sectionsAfter"`
+	// Sections is one field rather than a before/after pair: the fold
+	// re-tiles a span and never re-sizes it, which is the same property
+	// dissect.Refiner's stage-constant reference buffer depends on, so the
+	// two numbers were equal by construction and a reader could only ever
+	// have compared them to itself.
+	Sections         int    `json:"sections"`
 	Boundaries       int    `json:"boundaries"`
 	BoundariesMoved  int    `json:"boundariesMoved"`
 	BoundariesKept   int    `json:"boundariesKept"`
@@ -468,18 +557,14 @@ type devRefineRun struct {
 	Artifact         string `json:"artifact"`
 }
 
-// writeRunRecord writes the run record into the job directory and returns its
-// path. Owner-only, like everything else under a job directory.
+// writeRunRecord writes the run record into the output directory and returns
+// its path. Owner-only, like everything else kbase writes there.
 func writeRunRecord(dir string, rec devRefineRun) (string, error) {
-	path := filepath.Join(dir, devRefineRecordName)
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("%s: encode %s: %w", devRefineVerb, devRefineRecordName, err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), artifactFileMode); err != nil {
-		return "", fmt.Errorf("%s: write %s: %w", devRefineVerb, path, err)
-	}
-	return path, nil
+	return deliver(dir, devRefineRecordName, append(data, '\n'))
 }
 
 // requireConfigDirFlag refuses the implicit configuration directory.
@@ -500,6 +585,7 @@ var (
 	devRefineFlagOut      string
 	devRefineFlagBudget   int
 	devRefineFlagThinking bool
+	devRefineFlagKeep     bool
 )
 
 var devRefineCmd = &cobra.Command{
@@ -517,9 +603,13 @@ until the embedded-definitions work lands, so the cut list it produces is
 evidence about the seam and not about the document.
 
 --config-dir is required and has no default: a smoke run must reach the
-provider it was pointed at. --out is required too, and is kept — the artifact,
-its stamp and the run record are what the run leaves behind to read. The
-per-boundary outcomes are logged at info.
+provider it was pointed at. --out is required too, and is where the run
+delivers what it produced: the composed cut list and a run record. Nothing
+already in that directory is touched — every intermediate the job writes lives
+under <out>/temp-work/, which kbase creates and, on a successful run, removes.
+A failed or interrupted run keeps it; --keep-temp-work (or [dev]
+keep_temp_work) keeps it after a successful one too. The per-boundary outcomes
+are logged at info.
 
 --thinking overrides the effort the refinement definition declares for its
 calls; left off, the definition's own declaration stands. It exists so the two
@@ -536,29 +626,28 @@ run record.`,
 			return err
 		}
 		opts.Timeout = devRefineTimeout
-		// Tri-state: the flag's VALUE means nothing unless it was given, so
-		// "unset" is the pointer being nil and not a third bool value. That
-		// keeps the definition's declaration the default in the one way that
-		// cannot be confused with an operator asking for thinking off.
-		var thinking *bool
-		if cmd.Flags().Changed(devRefineThinkingFlag) {
-			thinking = &devRefineFlagThinking
-		}
 		return runDevRefine(cmd.Context(), devRefineOptions{
 			providerOptions: opts,
 			File:            args[0],
 			Out:             devRefineFlagOut,
 			Budget:          devRefineFlagBudget,
-			Thinking:        thinking,
-			Stdout:          os.Stdout,
-			Logger:          processLog.logger,
+			Thinking:        devRefineThinking(cmd.Flags()),
+			// The flag turns keeping ON and cannot turn it off: the only
+			// reason to insist on deletion is disk, and that remedy is one
+			// `rm -r` away, while the reason to keep is a run whose evidence
+			// someone wants and cannot get back.
+			KeepTempWork: devRefineFlagKeep || opts.Config.Dev.KeepTempWork,
+			Stdout:       os.Stdout,
+			Logger:       processLog.logger,
 		})
 	},
 }
 
 func init() {
 	devRefineCmd.Flags().StringVar(&devRefineFlagOut, "out", "",
-		"job directory for the composed cut list, its stamp and "+devRefineRecordName+" (required; created if missing)")
+		"output directory for the composed cut list and "+devRefineRecordName+" (required; created if missing)")
+	devRefineCmd.Flags().BoolVar(&devRefineFlagKeep, devRefineKeepFlag, false,
+		"keep <out>/"+pipeline.TempWorkDirName+"/ after a run that succeeded (a failed run always keeps it)")
 	devRefineCmd.Flags().IntVar(&devRefineFlagBudget, "budget", devRefineBudget,
 		"per-section token budget the mechanical splitter fills toward")
 	devRefineCmd.Flags().BoolVar(&devRefineFlagThinking, devRefineThinkingFlag, devRefineEffort.Thinking,

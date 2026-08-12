@@ -64,7 +64,7 @@ func runToCompletion(t *testing.T, dir string, mode Mode) (*stubClient, JobResul
 // leftover lock directly and pins the remedy the documentation promises.
 func clearLock(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.Remove(filepath.Join(dir, LockFileName)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(filepath.Join(storeRoot(dir), LockFileName)); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove the stale lockfile: %v", err)
 	}
 }
@@ -97,8 +97,8 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 	if len(want) != 2*synthUnits {
 		t.Fatalf("uninterrupted run left %d files, want an artifact and a stamp per unit", len(want))
 	}
-	if uninterrupted.callCount() != synthUnits {
-		t.Fatalf("uninterrupted run made %d calls for %d units", uninterrupted.callCount(), synthUnits)
+	if uninterrupted.callCount() != synthCalls {
+		t.Fatalf("uninterrupted run made %d calls, want %d", uninterrupted.callCount(), synthCalls)
 	}
 
 	points := crashpoint.RegisteredNames()
@@ -122,9 +122,23 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 				resumed, res := runToCompletion(t, dir, ModeResume)
 				assertSameState(t, want, storeState(t, dir), "after "+point)
 
+				// The fold's own claim, which no per-unit comparison can
+				// make: its stream is redone WHOLE or not at all. A
+				// half-redone fold would compose a list from a prefix
+				// nothing recorded the dependencies of (§12).
+				fold := foldCalls(resumed)
+				if fold != 0 && fold != synthFoldCalls {
+					t.Errorf("the fold made %d of its %d calls; an interrupted fold is redone whole",
+						fold, synthFoldCalls)
+				}
 				// Reuse means the model was not consulted. Every unit the
-				// resume did not redo is a call it did not make.
-				if got := resumed.callCount(); got != res.Produced {
+				// resume did not redo is a call it did not make — plus the
+				// fold's extra calls, if the fold was one of the redone.
+				extra := 0
+				if fold > 0 {
+					extra = fold - 1
+				}
+				if got := resumed.callCount(); got != res.Produced+extra {
 					t.Errorf("%d calls to produce %d units: a reused unit was re-executed",
 						got, res.Produced)
 				}
@@ -134,6 +148,20 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 			})
 		}
 	}
+}
+
+// foldCalls counts the calls a run made on the fold stage's stream, read off
+// the prompts the client recorded. It is how a test asks whether the fold ran
+// at all, without the coordinator having to report per-stream call counts
+// nobody else needs.
+func foldCalls(c *stubClient) int {
+	n := 0
+	for _, p := range c.recorded() {
+		if strings.Contains(p, "Unit: "+synthFoldStage+"/") {
+			n++
+		}
+	}
+	return n
 }
 
 // crossedAtLeast reports whether point is crossed at least n times in one
@@ -176,8 +204,8 @@ func TestFreshAfterCrashEqualsUninterrupted(t *testing.T) {
 	if res.Reused != 0 || res.Produced != synthUnits {
 		t.Errorf("a fresh run reused %d units; it must ignore the store entirely", res.Reused)
 	}
-	if client.callCount() != synthUnits {
-		t.Errorf("%d calls, want %d — a fresh run rebuilds everything", client.callCount(), synthUnits)
+	if client.callCount() != synthCalls {
+		t.Errorf("%d calls, want %d — a fresh run rebuilds everything", client.callCount(), synthCalls)
 	}
 }
 
@@ -190,8 +218,8 @@ func TestPoisonedStampRedoesOnlyItsUnit(t *testing.T) {
 	want := storeState(t, dir)
 
 	const poisoned = "leaves/d1/two.md"
-	stamp := filepath.Join(dir, filepath.FromSlash(poisoned)+StampSuffix)
-	if err := os.WriteFile(stamp, []byte("{ this is not a stamp"), artifactFileMode); err != nil {
+	stamp := filepath.Join(storeRoot(dir), filepath.FromSlash(poisoned)+StampSuffix)
+	if err := os.WriteFile(stamp, []byte("{ this is not a stamp"), ArtifactFileMode); err != nil {
 		t.Fatalf("poison the stamp: %v", err)
 	}
 
@@ -263,7 +291,7 @@ func TestCrashLeavesNoUnprovenArtifactTrusted(t *testing.T) {
 
 	// Exactly the shape the window produces: an artifact with no stamp.
 	var orphan string
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(storeRoot(dir), func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.Contains(d.Name(), tempSuffix) || d.Name() == LockFileName {
 			return err
 		}
@@ -282,11 +310,11 @@ func TestCrashLeavesNoUnprovenArtifactTrusted(t *testing.T) {
 		t.Fatal("the pre-stamp crash left no unproven artifact; the window under test was not reached")
 	}
 
-	rel, err := filepath.Rel(dir, orphan)
+	rel, err := filepath.Rel(storeRoot(dir), orphan)
 	if err != nil {
 		t.Fatalf("rel: %v", err)
 	}
-	store := NewStore(dir, log.Discard())
+	store := synthStore(t, dir, log.Discard())
 	v, reason, err := store.verify(filepath.ToSlash(rel), []Input{corpusInput})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
@@ -371,7 +399,7 @@ func TestSweepClearsWhatTheChainDoesNotAccountFor(t *testing.T) {
 
 	// And a previous plan's artifact, stamped and internally consistent.
 	const orphan = "leaves/from-an-older-taxonomy.md"
-	store := NewStore(dir, log.Discard())
+	store := synthStore(t, dir, log.Discard())
 	if err := store.Put(orphan, []byte("a previous plan's leaf\n"), []Input{corpusInput}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -385,7 +413,7 @@ func TestSweepClearsWhatTheChainDoesNotAccountFor(t *testing.T) {
 			t.Errorf("%s survived the sweep", path)
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(dir, "survey"))
+	entries, err := os.ReadDir(filepath.Join(storeRoot(dir), "survey"))
 	if err != nil {
 		t.Fatalf("read the job dir: %v", err)
 	}
@@ -416,7 +444,7 @@ func TestAHardKillsLockfileRefusesEveryModeUntilRemoved(t *testing.T) {
 	want := storeState(t, dir)
 
 	// What the kill left: a lockfile whose holder is gone.
-	held, err := AcquireLock(dir, log.Discard())
+	held, err := AcquireLock(storeRoot(dir), log.Discard())
 	if err != nil {
 		t.Fatalf("AcquireLock: %v", err)
 	}

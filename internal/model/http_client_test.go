@@ -35,7 +35,7 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "go"}}, UtilityEffort))
+	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "go"}}, testEffort))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -461,10 +461,14 @@ func TestEffortDeclaration(t *testing.T) {
 			t.Errorf("DeclareEffort(Effort{Thinking: %t}) = %+v, want declared with that value", want, got)
 		}
 	}
-	if !UtilityEffort.Declared() || UtilityEffort.Thinking {
-		t.Errorf("UtilityEffort = %+v, want a declared effort with thinking off", UtilityEffort)
-	}
 }
+
+// testEffort is the effort the transport-level tests declare for the requests
+// they build. It is a fixture and nothing more: this package has no opinion
+// about how hard anything is worth asking, and a package-level "utility"
+// effort here would be an API with a test-only population — the declaration
+// belongs at the site that registers a definition (ARCHITECTURE.md §9, §12).
+var testEffort = DeclareEffort(Effort{Thinking: false})
 
 // TestHTTPClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
 // not emit a `chat_template_kwargs: null` or `: {}` field on the wire —
@@ -517,7 +521,7 @@ data: [DONE]
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, UtilityEffort)
+	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, testEffort)
 	sr, err := c.ConsultStream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
@@ -574,7 +578,7 @@ func TestHTTPClientStreamErrorWraps(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	_, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, UtilityEffort))
+	_, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
 	}
@@ -607,7 +611,7 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, UtilityEffort))
+	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -647,7 +651,7 @@ func TestHTTPClientStreamCtxCancellation(t *testing.T) {
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
-	sr, err := c.ConsultStream(ctx, DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, UtilityEffort))
+	sr, err := c.ConsultStream(ctx, DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
