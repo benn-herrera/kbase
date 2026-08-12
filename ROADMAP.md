@@ -22,6 +22,29 @@ deleted, not archived — git history is the log.
 
 ## Next
 
+- **v0.2.0 arc with hybrid MAD sequence (ruled 2026-08-12)**:
+  1. Architect reshape design against the ModernCorp exemplar
+     (`../ModernCorp/kb-root` + source traced from `ModernCorp.tex`) —
+     skeleton schema, output anatomy (index/leaf/entry-point grammar),
+     stages 3/5/6/8 design; Benn rules on open points.
+     Snapshot prep first: exclusion-copy the exemplar doc tree into
+     `test_data/transient/mad-reference/` (drop `.index/`, `session/`,
+     `claim-quality.md` wholesale; never edit file contents; manifest
+     lists exclusions + in-file elements out of scope), and trace the
+     source reference graph from `ModernCorp/ModernCorp.tex` (sole
+     entry point), flagging KB content whose source can't be located.
+  2. **MAD #1 — design review, shapes-only charter**: evaluate major
+     forms (stage composition, skeleton schema, output grammar,
+     converter contract); atomic detail stays flexible by declaration.
+     Retirement gate: a finding must claim a SHAPE is wrong (wrong
+     stage boundary, wrong artifact grammar, missing/superfluous major
+     mechanism) or it retires; parameter-level findings get logged as
+     build-phase notes, never debated. LaTeX-specific questions graded
+     design-level (converter is post-v0.2.0).
+  3. Build the arc burst-by-burst, per-burst architect+go-coder
+     reviews as usual.
+  4. **MAD #2 = the standing E2E gate below** (design + implementation
+     + generated Rojo KB + exemplar comparison).
 - Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,
   mock-driven per that burst's R-1; the serial fold landed 2026-08-11 —
   boundaries are adjudicated against current state and the stage writes one
