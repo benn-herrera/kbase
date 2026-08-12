@@ -21,6 +21,18 @@ deleted, not archived — git history is the log.
   also where a single-section span — no boundaries, so no calls and today no
   artifact — gets its answer. Its refinement definition text is a marked stub
   (`dissect.stubDefinition`) for the embedded-definitions item below.
+- **`kbase dev-refine <file>` verb (ruled 2026-08-11)** — first
+  inference-in-the-loop smoke test: composition-root-only wiring (ingest +
+  survey one file, mechanical split, run the Refiner with the REAL client
+  on real spans). Requires explicit `--config-dir` (no home-dir fallback);
+  points at the committed fixture chain `test_data/fixtures/config/`
+  (config.toml + providers.toml templates; gitignored `api_keys/`, key
+  files read only at runtime by the binary — NEVER into agent context).
+  Measures plumbing, not quality (stub prompts): does 26B answer with a
+  bare menu number, corrective-retry rate, streaming under real latency,
+  first real `cached_tokens`/telemetry numbers. Later doubles as the
+  glimmer-30B head-to-head harness (challenger test post-E2E; tie counts
+  as win; low-cost-cloud availability check first).
 - Export watch resolved (2026-08-10): `internal/dissect`, the first
   out-of-package consumer, needs `CallRunner` (`NewCallRunner` returns it,
   `NewCoordinator` takes it) and never touches `Agent` or `Call` — both are
