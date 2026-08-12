@@ -21,7 +21,11 @@ deleted, not archived — git history is the log.
   also where a single-section span — no boundaries, so no calls and today no
   artifact — gets its answer. Its refinement definition text is a marked stub
   (`dissect.stubDefinition`) for the embedded-definitions item below.
-- **`kbase dev-refine <file>` verb (ruled 2026-08-11)** — first
+- **`kbase dev-refine <file>` verb (ruled 2026-08-11)** — LANDED 2026-08-11;
+  first live run: 4 boundaries over the pinned `sync-details.md` at a
+  512-token budget, 1 moved, 1 corrective retry (bare-number compliance),
+  0 fallbacks, `cached_tokens=0`, ~25s/boundary. Retire this item at burst
+  close. First
   inference-in-the-loop smoke test: composition-root-only wiring (ingest +
   survey one file, mechanical split, run the Refiner with the REAL client
   on real spans). Requires explicit `--config-dir` (no home-dir fallback);
