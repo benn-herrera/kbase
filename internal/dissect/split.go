@@ -2,16 +2,26 @@ package dissect
 
 import (
 	"fmt"
+	"sort"
 
 	"kbase/internal/survey"
-	"kbase/internal/tokens"
 )
 
-// overlapCapBytes is overlapCapTokens in the unit windows are actually cut
-// in. The estimator is a chars-per-token ratio (§8), so its inverse is that
-// same constant read the other way — there is no second calibration here,
-// just the one arithmetic.
-const overlapCapBytes = int(overlapCapTokens * tokens.DefaultCharsPerToken)
+// overlapCapBytes is overlapCapTokens in the unit windows are actually cut in,
+// derived THROUGH the estimator rather than from the ratio constant.
+//
+// Reading tokens.DefaultCharsPerToken here would be the second estimation path
+// tokens.Estimator exists to prevent (§8): it agrees with the estimator only
+// while the estimator is the default one, and it is the line that would go
+// stale silently when calibration moves the ratio. The estimate is monotone in
+// length, so the largest prefix the estimator counts at or under the cap is a
+// search over lengths — exact, and with no arithmetic of ours to keep in
+// agreement with the estimator's.
+func (p Params) overlapCapBytes(src []byte) int {
+	return sort.Search(len(src), func(n int) bool {
+		return p.estimate(src[:n+1]) > overlapCapTokens
+	})
+}
 
 // Split proposes the mechanical cut list for one span: the always-valid
 // baseline the whole seam stands on (§3 monotone safety). Its output passes
@@ -31,27 +41,27 @@ const overlapCapBytes = int(overlapCapTokens * tokens.DefaultCharsPerToken)
 // A span it cannot cut under the budget is refused, loudly, naming the span
 // (StarvedError). Truncation is nobody's job, and refuse-and-split is stage
 // 3's: an oversized unit goes back to the skeleton that sized it.
-func Split(src []byte, span survey.Range, cands []survey.CutCandidate, budgetTokens int) ([]survey.Range, error) {
+func Split(src []byte, span survey.Range, cands []survey.CutCandidate, p Params) ([]survey.Range, error) {
 	if err := checkSpan(src, span); err != nil {
 		return nil, err
 	}
 
 	var cuts []survey.Range
 	cursor := span.Start
-	for estimate(src[cursor:span.End]) > budgetTokens {
-		at, ok := pick(src, cands, cursor, span.End, budgetTokens)
+	for p.estimate(src[cursor:span.End]) > p.BudgetTokens {
+		at, ok := pick(src, cands, cursor, span.End, p)
 		if !ok {
 			return nil, StarvedError{
 				Span:   survey.Range{Start: cursor, End: span.End},
-				Tokens: estimate(src[cursor:span.End]),
-				Budget: budgetTokens,
+				Tokens: p.estimate(src[cursor:span.End]),
+				Budget: p.BudgetTokens,
 			}
 		}
 		cuts = append(cuts, survey.Range{Start: cursor, End: at})
 		cursor = at
 	}
 	cuts = append(cuts, survey.Range{Start: cursor, End: span.End})
-	return premerge(src, cuts), nil
+	return premerge(src, cuts, p), nil
 }
 
 // pick chooses the next cut after from: the strongest kind among the
@@ -62,7 +72,7 @@ func Split(src []byte, span survey.Range, cands []survey.CutCandidate, budgetTok
 // the merge has at most a tail to deal with: a below-minimum section is never
 // proposed in the first place, and the greedy walk cannot paint itself into a
 // corner of fragments.
-func pick(src []byte, cands []survey.CutCandidate, from, to, budget int) (int, bool) {
+func pick(src []byte, cands []survey.CutCandidate, from, to int, p Params) (int, bool) {
 	best, bestRank := 0, 0
 	found := false
 	for _, c := range cands {
@@ -72,12 +82,11 @@ func pick(src []byte, cands []survey.CutCandidate, from, to, budget int) (int, b
 		if c.Offset >= to {
 			break
 		}
-		n := estimate(src[from:c.Offset])
-		if n > budget {
+		if p.estimate(src[from:c.Offset]) > p.BudgetTokens {
 			// Candidates are sorted, so everything after this one is larger.
 			break
 		}
-		if n < minTokens {
+		if p.underMinimum(src, survey.Range{Start: from, End: c.Offset}) {
 			continue
 		}
 		rank := c.Kind.Rank()
@@ -97,11 +106,11 @@ func pick(src []byte, cands []survey.CutCandidate, from, to, budget int) (int, b
 // the right trade: the budget is a target the taxonomy stage owns and can
 // re-split against, while a 12-token leaf is a boundary decision nobody would
 // have made on purpose.
-func premerge(src []byte, cuts []survey.Range) []survey.Range {
+func premerge(src []byte, cuts []survey.Range, p Params) []survey.Range {
 	for len(cuts) > 1 {
 		i := -1
 		for j, c := range cuts {
-			if estimate(src[c.Start:c.End]) < minTokens {
+			if p.underMinimum(src, c) {
 				i = j
 				break
 			}
@@ -129,34 +138,42 @@ func premerge(src []byte, cuts []survey.Range) []survey.Range {
 // long section and a short one reaches further back than forward, because
 // what the model needs is context proportional to what it is deciding
 // between, and the short side simply has less of it.
-func Windows(src []byte, cuts []survey.Range) []Window {
+func Windows(src []byte, cuts []survey.Range, p Params) []Window {
 	if len(cuts) < 2 {
 		return nil
 	}
+	capBytes := p.overlapCapBytes(src)
 	out := make([]Window, 0, len(cuts)-1)
 	for i := 1; i < len(cuts); i++ {
 		at := cuts[i].Start
 		out = append(out, Window{
-			Lo: at - overlap(src, cuts[i-1]),
-			Hi: at + overlap(src, cuts[i]),
+			Lo: at - overlap(cuts[i-1], capBytes),
+			Hi: at + overlap(cuts[i], capBytes),
 		})
 	}
 	return out
 }
 
 // overlap is one side's reach into one section: a fraction of it, capped.
-func overlap(src []byte, sec survey.Range) int {
+func overlap(sec survey.Range, capBytes int) int {
 	n := int(float64(sec.End-sec.Start) * overlapFraction)
-	if n > overlapCapBytes {
-		return overlapCapBytes
+	if n > capBytes {
+		return capBytes
 	}
 	return n
 }
 
-// StarvedError refuses a span the enumerated candidates cannot cut under the
-// budget: every legal position leaves a section too large, or the span has no
-// legal position at all (a single enormous code fence, a table nobody broke
-// up).
+// StarvedError refuses a span this splitter could not cut under the budget:
+// from where its greedy walk stood, every legal position left a section too
+// large, or there was no legal position at all (a single enormous code fence,
+// a table nobody broke up).
+//
+// The claim is deliberately about the WALK and not about the span. Split is
+// greedy — it fills toward the budget and takes the strongest structure before
+// it — so an earlier, shorter cut might have tiled a span this refuses, and
+// "the span holds no legal cut" would be claiming more than the walk proved.
+// The remedy is the same either way, which is exactly why the diagnosis can
+// afford to be accurate.
 //
 // It names the span rather than trimming it. Refuse-and-split is the §3
 // invariant: the remedy is at the stage that decides how big a unit is, and a
@@ -168,6 +185,7 @@ type StarvedError struct {
 }
 
 func (e StarvedError) Error() string {
-	return fmt.Sprintf("dissect: span [%d,%d) is %d tokens against a %d-token budget and holds no legal cut "+
-		"that fits; it must be re-split at the stage that sized it", e.Span.Start, e.Span.End, e.Tokens, e.Budget)
+	return fmt.Sprintf("dissect: span [%d,%d) is %d tokens against a %d-token budget and this greedy walk "+
+		"found no legal cut that fits; it must be re-split at the stage that sized it",
+		e.Span.Start, e.Span.End, e.Tokens, e.Budget)
 }

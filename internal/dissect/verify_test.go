@@ -37,16 +37,17 @@ func TestVerifyAcceptsALegalList(t *testing.T) {
 	src, cands := verifyDoc()
 	span := wholeSpan(src)
 	cuts := cutsAt(span, cands[0].Offset, cands[2].Offset)
-	assertVerifies(t, src, span, cands, cuts)
+	p := params(0)
+	assertVerifies(t, src, span, cands, cuts, p)
 
 	// A single section is a legal list too, and the minimum does not apply to
 	// it: nobody chose the size of a span.
-	if err := Verify(src, span, cands, []survey.Range{span}, nil); err != nil {
+	if err := Verify(src, span, cands, []survey.Range{span}, nil, p); err != nil {
 		t.Errorf("an uncut span must verify: %v", err)
 	}
 	tiny := []byte("hello\n")
 	small := wholeSpan(tiny)
-	if err := Verify(tiny, small, nil, []survey.Range{small}, nil); err != nil {
+	if err := Verify(tiny, small, nil, []survey.Range{small}, nil, p); err != nil {
 		t.Errorf("a span under the minimum must still verify as one section: %v", err)
 	}
 }
@@ -70,19 +71,19 @@ func TestVerifyRejections(t *testing.T) {
 	}, {
 		name: "a gap between two sections",
 		cuts: []survey.Range{{Start: 0, End: at - 20}, {Start: at, End: len(src)}},
-		want: "the span covered up to",
+		want: "does not start where the one before it ended",
 	}, {
 		name: "two sections overlapping",
 		cuts: []survey.Range{{Start: 0, End: at + 20}, {Start: at, End: len(src)}},
-		want: "the span covered up to",
+		want: "does not start where the one before it ended",
 	}, {
 		name: "the list starts after the span",
 		cuts: []survey.Range{{Start: 4, End: len(src)}},
-		want: "the span covered up to 0",
+		want: "section 0 does not start where the one before it ended",
 	}, {
 		name: "the list stops short of the span",
 		cuts: []survey.Range{{Start: 0, End: len(src) - 10}},
-		want: "the span ends at",
+		want: "do not reach the end of the span",
 	}, {
 		name: "an empty section",
 		cuts: []survey.Range{{Start: 0, End: 0}, {Start: 0, End: len(src)}},
@@ -93,7 +94,7 @@ func TestVerifyRejections(t *testing.T) {
 		want: "not an enumerated cut candidate",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Verify(src, span, cands, tc.cuts, nil)
+			err := Verify(src, span, cands, tc.cuts, nil, params(0))
 			var rej RejectionError
 			if !errors.As(err, &rej) {
 				t.Fatalf("err = %v (%T), want a RejectionError", err, err)
@@ -101,6 +102,10 @@ func TestVerifyRejections(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error = %v, want substring %q", err, tc.want)
 			}
+			// The reason is what a corrective note is assembled from, so it
+			// carries no byte offset; the operator-facing Error adds the one
+			// byte the complaint is about.
+			assertNoOffsets(t, rej.Note(), offsetsOf(cands)...)
 		})
 	}
 }
@@ -117,7 +122,7 @@ func TestVerifyRejectsAnUndersizedSection(t *testing.T) {
 	span := wholeSpan(src)
 	cuts := cutsAt(span, cands[0].Offset, cands[1].Offset)
 
-	err := Verify(src, span, cands, cuts, nil)
+	err := Verify(src, span, cands, cuts, nil, params(0))
 	var rej RejectionError
 	if !errors.As(err, &rej) {
 		t.Fatalf("err = %v (%T), want a RejectionError", err, err)
@@ -135,26 +140,35 @@ func TestVerifyClampsToTheWindow(t *testing.T) {
 	src, cands := verifyDoc()
 	span := wholeSpan(src)
 	mechanical := cutsAt(span, cands[1].Offset)
-	windows := Windows(src, mechanical)
+	p := params(0)
+	windows := Windows(src, mechanical, p)
 
-	if err := Verify(src, span, cands, mechanical, windows); err != nil {
+	if err := Verify(src, span, cands, mechanical, windows, p); err != nil {
 		t.Fatalf("the mechanical cut sits at the centre of its own window: %v", err)
 	}
 	// Move it to a candidate far outside the window.
 	moved := cutsAt(span, cands[0].Offset)
-	err := Verify(src, span, cands, moved, windows)
+	err := Verify(src, span, cands, moved, windows, p)
 	var rej RejectionError
 	if !errors.As(err, &rej) {
 		t.Fatalf("err = %v (%T), want a RejectionError", err, err)
 	}
-	if !strings.Contains(err.Error(), "clamp window") {
+	if !strings.Contains(err.Error(), "the range this boundary may move in") {
 		t.Errorf("error = %v, want the clamp named", err)
 	}
+	assertNoOffsets(t, rej.Note(), windows[0].Lo, windows[0].Hi)
 	if n := len(windows); n != len(mechanical)-1 {
 		t.Errorf("%d windows for %d sections, want one per interior boundary", n, len(mechanical))
 	}
-	if err := Verify(src, span, cands, mechanical, windows[:0]); err == nil {
-		t.Error("a window count that does not match the boundaries must be refused")
+	// A window count that does not match the boundaries is nobody's answer: it
+	// is a plain error, which the seam classifies as OUR defect rather than
+	// retrying it at a model.
+	wrong := Verify(src, span, cands, mechanical, windows[:0], p)
+	if wrong == nil {
+		t.Fatal("a window count that does not match the boundaries must be refused")
+	}
+	if errors.As(wrong, &rej) {
+		t.Errorf("err = %v, want a plain error rather than a rejected choice", wrong)
 	}
 }
 
@@ -170,7 +184,7 @@ func TestVerifyTripwireIsADefectNotARejection(t *testing.T) {
 	// no model could choose it if one had not.
 	cands := []survey.CutCandidate{{Offset: 2, Kind: survey.CutParagraph}}
 
-	err := Verify(src, span, cands, cutsAt(span, 2), nil)
+	err := Verify(src, span, cands, cutsAt(span, 2), nil, params(0))
 	var defect OffsetDefectError
 	if !errors.As(err, &defect) {
 		t.Fatalf("err = %v (%T), want an OffsetDefectError", err, err)
@@ -192,7 +206,7 @@ func TestVerifyTripwireIsADefectNotARejection(t *testing.T) {
 // is a plain error rather than a rejection the seam would retry.
 func TestVerifyRefusesAnImpossibleSpan(t *testing.T) {
 	src := []byte("short\n")
-	err := Verify(src, survey.Range{Start: 0, End: 99}, nil, []survey.Range{{Start: 0, End: 99}}, nil)
+	err := Verify(src, survey.Range{Start: 0, End: 99}, nil, []survey.Range{{Start: 0, End: 99}}, nil, params(0))
 	if err == nil {
 		t.Fatal("a span past the end of the source must be refused")
 	}

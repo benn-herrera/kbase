@@ -48,7 +48,7 @@ func (w Window) Contains(off int) bool { return off >= w.Lo && off <= w.Hi }
 // really did enumerate can reach the tripwire, and one that reaches it and
 // fails is the evidence that these are not the bytes those candidates were
 // enumerated against.
-func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, windows []Window) error {
+func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, windows []Window, p Params) error {
 	if err := checkSpan(src, span); err != nil {
 		return err
 	}
@@ -66,17 +66,16 @@ func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []s
 	for i, c := range cuts {
 		if c.Start != cursor {
 			return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-				"section %d starts at %d; the span covered up to %d", i, c.Start, cursor)}
+				"section %d does not start where the one before it ended", i)}
 		}
 		if c.End <= c.Start {
 			return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-				"section %d is empty or inverted: [%d,%d)", i, c.Start, c.End)}
+				"section %d is empty or inverted", i)}
 		}
 		cursor = c.End
 	}
 	if cursor != span.End {
-		return RejectionError{Offset: cursor, Reason: fmt.Sprintf(
-			"the sections end at %d; the span ends at %d", cursor, span.End)}
+		return RejectionError{Offset: cursor, Reason: "the sections do not reach the end of the span"}
 	}
 
 	for i := 1; i < len(cuts); i++ {
@@ -85,8 +84,7 @@ func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []s
 			return RejectionError{Offset: at, Reason: "not an enumerated cut candidate"}
 		}
 		if windows != nil && !windows[i-1].Contains(at) {
-			return RejectionError{Offset: at, Reason: fmt.Sprintf(
-				"outside its clamp window [%d,%d]", windows[i-1].Lo, windows[i-1].Hi)}
+			return RejectionError{Offset: at, Reason: "outside the range this boundary may move in"}
 		}
 		if !survey.WhitespaceAdjacent(src, at) {
 			return OffsetDefectError{Offset: at}
@@ -98,9 +96,10 @@ func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []s
 	// rather than a bad cut.
 	if len(cuts) > 1 {
 		for i, c := range cuts {
-			if n := estimate(src[c.Start:c.End]); n < minTokens {
+			if p.underMinimum(src, c) {
 				return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-					"section %d is %d tokens, under the %d-token minimum", i, n, minTokens)}
+					"section %d is %d tokens, under the %d-token minimum",
+					i, p.estimate(src[c.Start:c.End]), minTokens)}
 			}
 		}
 	}
@@ -130,16 +129,34 @@ func isCandidate(cands []survey.CutCandidate, off int) bool {
 // because the runner caps the corrective note it becomes at a dozen words
 // (pipeline.correctiveNoteWords) — a sentence of prose there is a sentence
 // the model never sees the end of.
+//
+// It has TWO renderings and the difference is the point (§5): Error is
+// operator-facing and names the byte, Note is what may be shown to a model and
+// names no byte at all. Reason is the shared half and carries no offset, which
+// is a contract this type states and every construction of it must keep — the
+// note is assembled from Reason, so an offset formatted into a reason is an
+// offset in the next call's prompt.
 type RejectionError struct {
 	// Offset is the byte the complaint is about.
 	Offset int
-	// Reason is the mechanical fact, without the offset (Error adds it).
+	// Reason is the mechanical fact, WITHOUT any byte offset (Error adds the
+	// one offset this rejection is about).
 	Reason string
 }
 
 func (e RejectionError) Error() string {
 	return fmt.Sprintf("dissect: cut at %d: %s", e.Offset, e.Reason)
 }
+
+// Note is the model-facing rendering: the mechanical fact alone.
+//
+// The runner turns whatever error a verifier returns into the corrective note
+// the retry carries, capped at twelve words. Error's operator prefix would
+// spend four of them on "dissect: cut at 8392:" — before any content, and
+// truncating the actionable half — and it would put a raw byte offset in the
+// prompt of the very next call, in the same numeric shape the model is being
+// asked to answer in. The model emits no raw offsets, so it is shown none.
+func (e RejectionError) Note() string { return e.Reason }
 
 // OffsetDefectError is the whitespace-adjacency tripwire firing: a cut that
 // the candidate set admits and that still lands between two non-whitespace

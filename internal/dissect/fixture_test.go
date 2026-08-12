@@ -56,18 +56,56 @@ func words(tag string, n int) string {
 	return strings.Join(parts, " ")
 }
 
+// params is the stage parameter value the tests run under: the default
+// estimator, plus whatever budget the case is about.
+func params(budget int) Params { return Params{BudgetTokens: budget} }
+
 // tokensOf is the estimate the package itself uses, for tests that need to
 // size a block against minTokens or a budget.
-func tokensOf(s string) int { return estimate([]byte(s)) }
+func tokensOf(s string) int { return params(0).estimate([]byte(s)) }
 
 // wholeSpan is the span covering a whole document.
 func wholeSpan(src []byte) survey.Range { return survey.Range{Start: 0, End: len(src)} }
 
+// offsetsOf is every candidate's byte offset — the numbers §5 says never reach
+// the model.
+func offsetsOf(cands []survey.CutCandidate) []int {
+	out := make([]int, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.Offset)
+	}
+	return out
+}
+
+// assertNoOffsets fails unless s renders none of these byte offsets as a
+// decimal number.
+//
+// A plain substring check is the strict reading and it is the right one here:
+// the fixtures' filler words are "a00 a01 …", so a multi-digit offset cannot
+// collide with document text by accident, and a guard that can only fail on
+// the exact string a bug would emit is the guard that catches the bug.
+//
+// A single-digit offset is not evidence of anything — it is also what a menu
+// number, a boundary count and a word of filler look like — so it is skipped
+// rather than asserted on. The only one that arises is a span starting at byte
+// zero.
+func assertNoOffsets(t *testing.T, s string, offsets ...int) {
+	t.Helper()
+	for _, off := range offsets {
+		if off < 10 {
+			continue
+		}
+		if d := fmt.Sprint(off); strings.Contains(s, d) {
+			t.Errorf("text renders the raw byte offset %s; the model's vocabulary is menu numbers (§5)", d)
+		}
+	}
+}
+
 // assertVerifies fails the test unless the cut list passes the same Verify
 // production runs, under the windows derived from itself.
-func assertVerifies(t *testing.T, src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range) {
+func assertVerifies(t *testing.T, src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, p Params) {
 	t.Helper()
-	if err := Verify(src, span, cands, cuts, Windows(src, cuts)); err != nil {
+	if err := Verify(src, span, cands, cuts, Windows(src, cuts, p), p); err != nil {
 		t.Fatalf("cut list %+v does not verify: %v", cuts, err)
 	}
 	// The tiling check is arithmetic; this is the same claim read out of the

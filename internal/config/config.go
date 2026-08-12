@@ -84,6 +84,9 @@ func (c Config) ModelFor(tier string) (string, bool) {
 // No key material is resolved here: config.toml holds CHOICES, and every
 // credential lives on its providers.toml pool entry, resolved by
 // LoadProviders.
+//
+// The decode is strict: a key or table Config does not model refuses the
+// load, naming the file and every offending key (see rejectUnknownKeys).
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,8 +96,12 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
 	var cfg Config
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
+	md, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	if err := rejectUnknownKeys(path, md); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	return cfg, nil
 }

@@ -31,13 +31,57 @@ const DefaultWorkers = 4
 // deepest-valid-prefix walk exists to answer.
 var cpStageComplete = crashpoint.Register("pipeline.coordinator.stage.complete")
 
+// InputBuilder produces a task's per-call prompt input at the moment the
+// worker reaches the task, rather than when the stage was described.
+//
+// Most stages know their inputs up front and pass ConstInput. A stage whose
+// question depends on what the stage itself has decided so far cannot: stage
+// 4's boundary fold judges each boundary against the cut list its earlier
+// boundaries produced, so the window and the menu for boundary i do not exist
+// until boundary i-1 has been adjudicated (ARCHITECTURE.md §5). Deferring the
+// build is the whole of what that needs — a serial stream already guarantees
+// the ordering, and everything downstream of the build is unchanged: the
+// frozen-prompt assertion, the budget refusal and the churn tripwire all run
+// against the BUILT input exactly as they did against a stored one.
+//
+// It returns no error on purpose. A builder assembles material the stage
+// already holds and already verified; the failure that can arise from a call's
+// size — a slot over its budget — is the prompt builder's to raise, and it
+// raises it at Build with the refuse-and-split classification the runner
+// already routes.
+type InputBuilder func() prompt.CallInput
+
+// ConstInput is the builder for a task whose per-call input is fully known
+// when the stage is described — every stage but the fold.
+func ConstInput(in prompt.CallInput) InputBuilder {
+	return func() prompt.CallInput { return in }
+}
+
 // Task is one unit of work: the artifact it must produce and the per-call
 // context that produces it.
 type Task struct {
 	// Unit describes the output artifact and what it is derived from. It is
 	// the SAME description the resume scan verdicts, which is what keeps the
 	// worklist stateless — there is no second place that says what a unit is.
+	//
+	// For a CallOnly task it is not an output description at all: only Path
+	// is read, as the call's name in the log and the key the stage's verifier
+	// correlates a response with.
 	Unit Unit
+
+	// CallOnly marks a task whose result is STAGE STATE rather than an
+	// artifact: the call is made, its response is verified, and nothing is
+	// written.
+	//
+	// It exists for stage 4's boundary fold, where n model calls produce one
+	// artifact. Each boundary's answer updates the stage's working cut list;
+	// the composed list is the stage's only output, carried by the last task
+	// of the stream. That is what makes the fold's resume stage-granular by
+	// construction (ARCHITECTURE.md §12): there is no per-boundary artifact
+	// for a scan to verdict Valid, so an interrupted fold is redone whole
+	// rather than resumed against a prefix whose dependencies nothing
+	// recorded.
+	CallOnly bool
 
 	// Section names the section this unit belongs to. A change between
 	// consecutive tasks is what drives the worker through
@@ -49,12 +93,12 @@ type Task struct {
 	// orchestrator-curated material stable across the section's calls.
 	SectionRef string
 
-	// Input is the per-call half of the prompt, with RefA left EMPTY — the
-	// worker owns slot 4 and fills it from SectionRef at the transition. A
-	// non-empty RefA here is refused rather than overwritten, because
-	// silently discarding a caller's buffer is how slot 4 would start
-	// churning per call without anyone noticing.
-	Input prompt.CallInput
+	// Input builds the per-call half of the prompt, with RefA left EMPTY —
+	// the worker owns slot 4 and fills it from SectionRef at the transition.
+	// A non-empty RefA is refused rather than overwritten, because silently
+	// discarding a caller's buffer is how slot 4 would start churning per
+	// call without anyone noticing.
+	Input InputBuilder
 }
 
 // DomainStream is one worker's whole assignment: a domain and its units in
@@ -108,6 +152,12 @@ func (sp *StagePlan) resolve() ([]DomainStream, error) {
 // UnitResolver the chain walks, which is what keeps the worklist and the thing
 // resume verdicts ONE description: a unit that is planned is a unit that is
 // scanned.
+//
+// CallOnly tasks describe no unit, because they produce no artifact. That is
+// the same statement read from the resume side: what a stage owes is what it
+// writes, so a fold's boundary calls are invisible to the scan and its
+// composed list is the whole of what the stage must have on disk to count as
+// complete.
 func (sp *StagePlan) units() ([]Unit, error) {
 	streams, err := sp.resolve()
 	if err != nil {
@@ -116,6 +166,9 @@ func (sp *StagePlan) units() ([]Unit, error) {
 	var units []Unit
 	for _, ds := range streams {
 		for _, t := range ds.Tasks {
+			if t.CallOnly {
+				continue
+			}
 			units = append(units, t.Unit)
 		}
 	}
@@ -166,8 +219,14 @@ type JobResult struct {
 	Reused int
 	// Produced is how many this run wrote, degraded ones included.
 	Produced int
-	// Degraded counts produced units that kept a mechanical baseline
-	// because the model's refinement did not verify.
+	// Degraded counts refinement CALLS that kept a mechanical baseline
+	// because the model's answer did not verify.
+	//
+	// Per call rather than per unit, because stage 4's fold spends n calls on
+	// one artifact (see Task.CallOnly). Counting units there would report a
+	// composed cut list holding three fallbacks as one degradation, which is
+	// the number that hides the fact worth knowing; for every stage whose
+	// units are one call each, the two readings coincide.
 	Degraded int
 	// Failures is the inventory, sorted by path so two runs of the same
 	// broken job report it identically.
@@ -398,6 +457,10 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 			if r.Degraded {
 				res.Degraded++
 			}
+		case r.Degraded:
+			// A CallOnly call that fell back: it wrote nothing, and the
+			// artifact it fed is degraded all the same.
+			res.Degraded++
 		}
 	}
 	abortMu.Lock()
@@ -495,11 +558,21 @@ func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitRe
 // back. The phase guards live here rather than inside the runner because the
 // phase is the worker's state — the runner is stateless and shared.
 func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult, error) {
-	if task.Input.RefA != "" {
-		return unitResult{}, TaskOwnsRefAError{Stage: w.stage, Path: task.Unit.Path}
+	if task.Input == nil {
+		// A task with nothing to say is a plan defect, not a unit to redo:
+		// there is no call to make and no artifact any remedy would produce.
+		return unitResult{}, fmt.Errorf("pipeline: %s: task %s has no input builder", w.stage, task.Unit.Path)
 	}
 	if err := guard(w.phase, OpBuildCall); err != nil {
 		return unitResult{}, err
+	}
+	// Built HERE, at the unit, which is what lets a stage's later questions
+	// depend on its own earlier answers (see InputBuilder). Everything that
+	// judges a call — the RefA refusal below, the budget refusal and the
+	// frozen-prompt assertion inside the runner — judges what came out of it.
+	in := task.Input()
+	if in.RefA != "" {
+		return unitResult{}, TaskOwnsRefAError{Stage: w.stage, Path: task.Unit.Path}
 	}
 
 	// The input set is resolved BEFORE the model is consulted, not at write
@@ -507,15 +580,19 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 	// produced is knowable in advance — and spending a model call on work
 	// that cannot be recorded is spending tokens to learn nothing. It is also
 	// the SAME function the scan uses, so a stamp can never be written under
-	// one derivation and checked under another.
-	inputs, err := w.store.resolveInputs(task.Unit)
-	if err != nil {
-		return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
-			Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream, Err: err,
-		}}, nil
+	// one derivation and checked under another. A CallOnly task records
+	// nothing, so there is nothing to resolve and nothing that could be
+	// unrecordable.
+	var inputs []Input
+	if !task.CallOnly {
+		var err error
+		if inputs, err = w.store.resolveInputs(task.Unit); err != nil {
+			return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
+				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream, Err: err,
+			}}, nil
+		}
 	}
 
-	in := task.Input
 	in.RefA = w.refA
 	// A worker with no previous call claims nothing, which is what the
 	// matrix's job-setup row already says — read from there rather than
@@ -549,6 +626,18 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 		return unitResult{}, err
 	}
 	w.prev = res.Hashes
+
+	if task.CallOnly {
+		// The answer is in the stage's own state — the verifier folded it in
+		// — so the unit ends here: nothing to encode, nothing to write, and
+		// nothing for the scan to find. A degraded call is still reported,
+		// because a fold that fell back on a boundary produced a composed
+		// artifact that is correct and less good than it was meant to be.
+		if err := guard(w.phase, OpAdvanceUnit); err != nil {
+			return unitResult{}, err
+		}
+		return unitResult{Domain: domain, Path: task.Unit.Path, Degraded: res.Degraded, Usage: res.Usage}, nil
+	}
 
 	if err := guard(w.phase, OpWriteArtifact); err != nil {
 		return unitResult{}, err
@@ -666,6 +755,12 @@ func validPaths(scan ScanResult) map[string]bool {
 // filterStreams drops the tasks the scan proved and the streams that empty out.
 // This is the resume made operational: the scan's verdicts ARE the worklist
 // filter, so there is no second decision about what to redo.
+//
+// A CallOnly task is never proved — it produces nothing to verdict — so it
+// survives the filter only as long as some task in its stream still has an
+// artifact to write. A stream whose every producing task is already valid is
+// dropped entire, calls and all: its remaining calls would spend tokens
+// feeding state nobody is going to record.
 func filterStreams(streams []DomainStream, valid map[string]bool) []DomainStream {
 	if len(valid) == 0 {
 		return streams
@@ -673,12 +768,15 @@ func filterStreams(streams []DomainStream, valid map[string]bool) []DomainStream
 	out := make([]DomainStream, 0, len(streams))
 	for _, s := range streams {
 		kept := make([]Task, 0, len(s.Tasks))
+		produces := false
 		for _, t := range s.Tasks {
-			if !valid[t.Unit.Path] {
-				kept = append(kept, t)
+			if !t.CallOnly && valid[t.Unit.Path] {
+				continue
 			}
+			produces = produces || !t.CallOnly
+			kept = append(kept, t)
 		}
-		if len(kept) > 0 {
+		if produces {
 			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
 		}
 	}

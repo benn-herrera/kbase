@@ -56,6 +56,12 @@ func TestSplitAlwaysPassesVerify(t *testing.T) {
 		"a single block with no candidates at all": {
 			{survey.CutParagraph, words("a", 1000)},
 		},
+		// A whole document under the minimum. Nothing is chosen, so nothing is
+		// refused: the minimum applies to CHOICES, and a small document is not
+		// a bad cut.
+		"a document under the minimum": {
+			{survey.CutParagraph, words("a", 8)},
+		},
 	}
 	budgets := []int{minTokens, 100, 250, 500, 1000, 100_000}
 
@@ -64,8 +70,9 @@ func TestSplitAlwaysPassesVerify(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/budget=%d", name, budget), func(t *testing.T) {
 				src, cands := buildDoc(blocks...)
 				span := wholeSpan(src)
+				p := params(budget)
 
-				cuts, err := Split(src, span, cands, budget)
+				cuts, err := Split(src, span, cands, p)
 				var starved StarvedError
 				if errors.As(err, &starved) {
 					// A refusal must name the span it could not cut, and
@@ -81,9 +88,48 @@ func TestSplitAlwaysPassesVerify(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Split: %v", err)
 				}
-				assertVerifies(t, src, span, cands, cuts)
+				assertVerifies(t, src, span, cands, cuts, p)
 			})
 		}
+	}
+}
+
+// TestSplitRefusesASpanWithNoBytes: a span with no bytes is not a span to cut,
+// and the refusal blames the caller who handed it over rather than the cut
+// list it would have produced.
+//
+// It is reachable — an empty document surveys as a file of zero bytes, and a
+// whole-file span over it is {0,0} — and before checkSpan covered it, Split
+// returned a one-section list that its own Verify then rejected as "empty or
+// inverted": the right refusal with the wrong diagnosis.
+func TestSplitRefusesASpanWithNoBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  []byte
+		span survey.Range
+	}{
+		{"an empty document", nil, survey.Range{}},
+		{"an empty span inside a document", []byte("some words here\n"), survey.Range{Start: 5, End: 5}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := params(100)
+			cuts, err := Split(tc.src, tc.span, nil, p)
+			if err == nil {
+				t.Fatalf("Split returned %+v; a span with no bytes is not a span to cut", cuts)
+			}
+			if cuts != nil {
+				t.Errorf("a refusal returned %+v, want nothing at all", cuts)
+			}
+			var rej RejectionError
+			if errors.As(err, &rej) {
+				t.Errorf("error = %v, want a caller defect rather than a rejected cut list", err)
+			}
+			// Verify refuses it at the same gate, which is what makes one
+			// check cover every entry point.
+			if verr := Verify(tc.src, tc.span, nil, []survey.Range{tc.span}, nil, p); verr == nil {
+				t.Error("Verify accepted a span with no bytes")
+			}
+		})
 	}
 }
 
@@ -102,15 +148,15 @@ func TestSplitPrefersStrongerStructure(t *testing.T) {
 
 	// A budget two paragraphs PAST the heading: the furthest candidate that
 	// fits is a paragraph, so a splitter that only filled would cut there.
-	budget := tokensOf(string(src[:cands[2].Offset])) + 10
-	cuts, err := Split(src, span, cands, budget)
+	p := params(tokensOf(string(src[:cands[2].Offset])) + 10)
+	cuts, err := Split(src, span, cands, p)
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
 	if len(cuts) < 2 || cuts[0].End != heading {
 		t.Fatalf("first cut at %d, want the heading at %d (cuts %+v)", cuts[0].End, heading, cuts)
 	}
-	assertVerifies(t, src, span, cands, cuts)
+	assertVerifies(t, src, span, cands, cuts, p)
 }
 
 // TestSplitFillsTowardTheBudget: among equals, the furthest candidate that
@@ -125,16 +171,16 @@ func TestSplitFillsTowardTheBudget(t *testing.T) {
 	)
 	span := wholeSpan(src)
 	// Room for the first three blocks but not the fourth.
-	budget := tokensOf(string(src[:cands[2].Offset]))
+	p := params(tokensOf(string(src[:cands[2].Offset])))
 
-	cuts, err := Split(src, span, cands, budget)
+	cuts, err := Split(src, span, cands, p)
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
 	if cuts[0].End != cands[2].Offset {
 		t.Errorf("first cut at %d, want the last candidate within budget at %d", cuts[0].End, cands[2].Offset)
 	}
-	assertVerifies(t, src, span, cands, cuts)
+	assertVerifies(t, src, span, cands, cuts, p)
 }
 
 // TestSplitPreMergesFragments: §5 step 1 — below-minimum fragments are gone
@@ -149,9 +195,9 @@ func TestSplitPreMergesFragments(t *testing.T) {
 	span := wholeSpan(src)
 	// One block per section exactly, which leaves the trailing fragment as a
 	// section of its own for the merge to deal with.
-	budget := tokensOf(string(src[:cands[0].Offset]))
+	p := params(tokensOf(string(src[:cands[0].Offset])))
 
-	cuts, err := Split(src, span, cands, budget)
+	cuts, err := Split(src, span, cands, p)
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
@@ -159,14 +205,14 @@ func TestSplitPreMergesFragments(t *testing.T) {
 		t.Fatalf("cuts = %+v, want two sections: the fragment merged into the one before it", cuts)
 	}
 	for i, c := range cuts {
-		if n := estimate(src[c.Start:c.End]); n < minTokens {
+		if n := p.estimate(src[c.Start:c.End]); n < minTokens {
 			t.Errorf("section %d is %d tokens, under the %d-token minimum", i, n, minTokens)
 		}
 	}
 	if last := cuts[len(cuts)-1]; last.End != span.End {
 		t.Errorf("the merged tail ends at %d, want %d", last.End, span.End)
 	}
-	assertVerifies(t, src, span, cands, cuts)
+	assertVerifies(t, src, span, cands, cuts, p)
 }
 
 // TestSplitRefusesAStarvedSpan: no legal cut fits, so the span goes back to
@@ -179,7 +225,7 @@ func TestSplitRefusesAStarvedSpan(t *testing.T) {
 	)
 	span := wholeSpan(src)
 
-	cuts, err := Split(src, span, cands, 200)
+	cuts, err := Split(src, span, cands, params(200))
 	var starved StarvedError
 	if !errors.As(err, &starved) {
 		t.Fatalf("err = %v (%T), want a StarvedError", err, err)
@@ -205,7 +251,7 @@ func TestSplitLeavesASmallSpanWhole(t *testing.T) {
 	)
 	span := wholeSpan(src)
 
-	cuts, err := Split(src, span, cands, 100_000)
+	cuts, err := Split(src, span, cands, params(100_000))
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
@@ -226,14 +272,15 @@ func TestSplitWorksOnASubSpan(t *testing.T) {
 	)
 	span := survey.Range{Start: cands[0].Offset, End: cands[2].Offset}
 
-	cuts, err := Split(src, span, cands, 250)
+	p := params(250)
+	cuts, err := Split(src, span, cands, p)
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
 	if cuts[0].Start != span.Start || cuts[len(cuts)-1].End != span.End {
 		t.Errorf("cuts %+v do not tile the sub-span %+v", cuts, span)
 	}
-	assertVerifies(t, src, span, cands, cuts)
+	assertVerifies(t, src, span, cands, cuts, p)
 }
 
 // TestWindowsReachIntoBothNeighbours: the window is §9's boundary overlap made
@@ -247,7 +294,8 @@ func TestWindowsReachIntoBothNeighbours(t *testing.T) {
 	span := wholeSpan(src)
 	cuts := []survey.Range{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 
-	got := Windows(src, cuts)
+	p := params(0)
+	got := Windows(src, cuts, p)
 	if len(got) != 1 {
 		t.Fatalf("%d windows, want 1", len(got))
 	}
@@ -269,11 +317,11 @@ func TestWindowsReachIntoBothNeighbours(t *testing.T) {
 		blk{survey.CutParagraph, words("b", 20_000)},
 	)
 	bigCuts := []survey.Range{{Start: 0, End: bigCands[0].Offset}, {Start: bigCands[0].Offset, End: len(big)}}
-	bw := Windows(big, bigCuts)[0]
-	if bw.Hi-bw.Lo != 2*overlapCapBytes {
-		t.Errorf("capped window spans %d bytes, want %d", bw.Hi-bw.Lo, 2*overlapCapBytes)
+	bw := Windows(big, bigCuts, p)[0]
+	if want := 2 * p.overlapCapBytes(big); bw.Hi-bw.Lo != want {
+		t.Errorf("capped window spans %d bytes, want %d", bw.Hi-bw.Lo, want)
 	}
-	if estimate(big[bw.Lo:bigCuts[1].Start]) > overlapCapTokens {
+	if p.estimate(big[bw.Lo:bigCuts[1].Start]) > overlapCapTokens {
 		t.Errorf("one side of the window is over the %d-token cap", overlapCapTokens)
 	}
 }

@@ -325,6 +325,82 @@ func TestLoadProvidersMalformed(t *testing.T) {
 	}
 }
 
+// TestLoadProvidersUnknownField: the table headers are provider NAMES and
+// stay open, but the fields inside an entry are a fixed set. A misspelled
+// one decodes into nothing, leaving an entry that points nowhere — so the
+// load refuses and names it, listing every offender at once. The refusal
+// must name keys only: providers.toml holds credentials.
+func TestLoadProvidersUnknownField(t *testing.T) {
+	dir := t.TempDir()
+	path := writeProviders(t, dir, `
+[local]
+baseUrl = "http://127.0.0.1:8080/v1"
+apiKeyUnsafe = "`+fakeKey+`"
+
+[reaper]
+url = "https://api.example.com/v1"
+apiKeyPath = "reaper.key"
+`)
+	_, _, err := LoadProviders(path)
+	if err == nil {
+		t.Fatal("a misspelled provider field left the entry unroutable and the load allowed it: got nil error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"providers:", path, `"reaper.url"`, `"reaper.apiKeyPath"`, unknownKeyHint} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q does not name %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, fakeKey) {
+		t.Errorf("refusal carries key material: %q", msg)
+	}
+}
+
+// TestLoadProvidersFieldCaseInsensitive: TOML field matching is
+// case-insensitive, so "baseURL" is the field, not a typo. Pinning that
+// here keeps a future strictness pass from turning a working config into a
+// refusal.
+func TestLoadProvidersFieldCaseInsensitive(t *testing.T) {
+	path := writeProviders(t, t.TempDir(), `
+[reaper]
+BaseURL = "https://api.example.com/v1"
+APIKEYUNSAFE = "`+fakeKey+`"
+`)
+	got, faults, err := LoadProviders(path)
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
+	}
+	if len(faults) != 0 {
+		t.Fatalf("unexpected faults: %+v", faults)
+	}
+	if p := got["reaper"]; p.BaseURL == "" || p.APIKey != fakeKey {
+		t.Errorf("case-variant field spellings did not decode: %+v", Provider{BaseURL: p.BaseURL})
+	}
+}
+
+// TestLoadProvidersDynamicNames: provider names are the user's own, so no
+// spelling of a table header is unknown — only the fields beneath it are
+// checked. A pool of oddly-named entries must load without complaint.
+func TestLoadProvidersDynamicNames(t *testing.T) {
+	path := writeProviders(t, t.TempDir(), `
+[some-box_2]
+baseUrl = "http://127.0.0.1:8080/v1"
+
+["quoted.name"]
+baseUrl = "http://127.0.0.1:8081/v1"
+`)
+	got, faults, err := LoadProviders(path)
+	if err != nil {
+		t.Fatalf("a provider name is not a schema key: %v", err)
+	}
+	if len(faults) != 0 {
+		t.Errorf("unexpected faults: %+v", faults)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected both entries, got %v", keysOf(got))
+	}
+}
+
 // TestLoadProvidersKeyAbsentFromParseError: when one table is malformed,
 // the wrapped parse error must not contain the apiKey value from a sibling
 // table that did parse.

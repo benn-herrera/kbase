@@ -25,6 +25,10 @@ Externally observable behaviors, contracts, and obligations — the *what*.
     with `heavy`/`light` tier assignments, and an optional `[dev]` table
     (`telemetry = true` enables local inference-timing diagnostics; default
     off).
+- Both files are read strictly: a key or table kbase does not model refuses the
+  load, naming the file and every offending key — a misspelled setting fails
+  loudly rather than silently doing nothing (provider names, being the
+  user's own, are never unknown).
 - Provider selection (any verb): `--provider` flag, else config.toml's
   `provider`, else the sole pool entry; with several entries and none chosen,
   the command lists them and fails rather than picking one.
@@ -34,10 +38,13 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   no provider or config required: walks `.md` files (immutable byte custody,
   per-file and corpus content hashes), emits a human summary (files, bytes,
   tokens, sections, link partition) and, with `--json`, the deterministic
-  survey artifact (schema `kbase.survey/1`; same corpus ⇒ byte-identical
+  survey artifact (schema `kbase.survey/2`; same corpus ⇒ byte-identical
   output). Sections exactly tile each file; front matter is detected and
   recorded, never misparsed as content, and its `title`, `description` and
-  `tags` are extracted when present.
+  `tags` are extracted when present. Each file also carries `cuts`: the legal
+  cut candidates dissection may place a boundary at, each an offset into the
+  file's bytes plus the kind of structure that begins there, ascending and
+  interior (never a file's own first or last byte).
 - `kbase configure [--provider NAME] [--model-map heavy=ID,light=ID]` scans
   the provider's model list, auto-detects gemma-4 family models tolerant of
   provider naming variance (`google/gemma-4-31b-it`, `gemma4:31b-a4b`, …), and

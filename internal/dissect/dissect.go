@@ -66,11 +66,44 @@ const (
 	minTokens = 64
 )
 
-// estimate is the appliance's single token estimator (§8) applied to bytes
-// this package already holds. The zero-value Estimator is the calibrated
-// default and there is no second one; when calibration exists it moves there,
-// not here.
-func estimate(b []byte) int { return tokens.Estimator{}.EstimateBytes(b) }
+// Params is what a cut list for one span was derived under: the estimator
+// every size question in this package goes through, and the budget the
+// mechanical splitter filled toward.
+//
+// It is a plain value threaded through Split, Windows, Verify and NewRefiner —
+// the shape internal/survey already uses for the same estimator, not an
+// abstraction. The point is that calibration has ONE place to land (§8): a
+// package that read tokens.Estimator{} at each call site would be the second
+// estimation path the estimator's own doc comment exists to prevent.
+type Params struct {
+	// Est is the appliance's single token estimator (§8). The zero value
+	// estimates at the calibrated default, so a caller with nothing to
+	// calibrate leaves it alone.
+	Est tokens.Estimator
+
+	// BudgetTokens is the per-section budget Split fills toward.
+	//
+	// It is NOT a verification rule — premerge may legitimately push a
+	// section past it (see premerge) — so Verify never reads it. It travels
+	// with the estimator because it is half of what identifies a cut list:
+	// Refiner.StagePlan digests it, so a re-plan at a different budget
+	// invalidates the cut list adjudicated under the old one.
+	BudgetTokens int
+}
+
+// estimate is the appliance's single token estimator applied to bytes this
+// package already holds.
+func (p Params) estimate(b []byte) int { return p.Est.EstimateBytes(b) }
+
+// underMinimum reports whether a section is below the minimum size.
+//
+// One spelling, because this is the predicate the proposer and the verifier
+// must never disagree about: premerge folds a section away when it is true and
+// Verify rejects a list when it is true, and two copies of it would drift on
+// exactly the day the difference decided whether a cut list was legal.
+func (p Params) underMinimum(src []byte, r survey.Range) bool {
+	return p.estimate(src[r.Start:r.End]) < minTokens
+}
 
 // Dissect returns one byte slice per section of a VERIFIED cut list, in
 // order.
@@ -95,13 +128,25 @@ func Dissect(src []byte, cuts []survey.Range) [][]byte {
 	return out
 }
 
-// checkSpan refuses a span that is not a range of src. It is a caller defect
-// rather than either error class this package classifies — no model chose it,
-// and no cut list is in question yet — so it is a plain error.
+// checkSpan refuses a span that is not a range of src, or that is a range of
+// no bytes. It is a caller defect rather than either error class this package
+// classifies — no model chose it, and no cut list is in question yet — so it
+// is a plain error.
+//
+// The empty case is refused HERE rather than at each entry point because that
+// is what makes one refusal cover Split, Verify and everything added later. An
+// empty span is reachable (an empty document, a whole-file span over zero
+// bytes) and Split's answer to it was a one-section list that its own Verify
+// then rejected as "empty or inverted" — the right refusal blaming the wrong
+// party, since the caller handed over a span with nothing in it.
 func checkSpan(src []byte, span survey.Range) error {
 	if span.Start < 0 || span.End < span.Start || span.End > len(src) {
 		return fmt.Errorf("dissect: span [%d,%d) is not a range of the %d-byte source",
 			span.Start, span.End, len(src))
+	}
+	if span.End == span.Start {
+		return fmt.Errorf("dissect: span [%d,%d) holds no bytes; a span with no bytes is not a span to cut",
+			span.Start, span.End)
 	}
 	return nil
 }

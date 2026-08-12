@@ -131,8 +131,11 @@ notes = "an entire table kbase does not model"
 func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, annotated)
 	update(t, path)
-	assertValues(t, path)
 
+	// Not read back through LoadConfig: this fixture carries keys Config
+	// does not model, and a strict load refuses those on purpose. The
+	// line-by-line comparison below covers the written values exactly.
+	//
 	// The rewritten lines, keyed by their line number in the fixture.
 	rewritten := map[int]string{
 		3:  `provider = "` + newProvider + `"` + commentGap + `# which providers.toml entry to use`,
@@ -188,7 +191,9 @@ func TestUpdateConfigInsertsMissingKeys(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeFile(t, t.TempDir(), ConfigFileName, tt.src)
 			update(t, path)
-			assertValues(t, path)
+			// The whole-file comparison is the assertion: some of these
+			// sources carry tables Config does not model, which a strict
+			// LoadConfig refuses by design.
 			if got := readBack(t, path); got != tt.want {
 				t.Errorf("file =\n%s\nwant\n%s", got, tt.want)
 			}

@@ -83,7 +83,8 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // It is an editor, not a serializer. config.toml is a primary user-editable
 // file, so an existing one is updated line by line: the lines carrying the
 // keys above are rewritten and every other byte — comments, blank-line
-// grouping, key spelling and spacing, keys and tables Config does not model
+// grouping, key spelling and spacing, keys and tables Config does not
+// model (which survive the edit, though LoadConfig then refuses the file)
 // — passes through untouched. A rewritten line's own trailing comment
 // survives too: those three lines are the ones a user is likeliest to have
 // annotated. Only its spacing is normalized (see commentGap).

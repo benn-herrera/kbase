@@ -140,7 +140,10 @@ func (p Provider) Validate() error {
 // nil error — a fresh install has no populated providers.toml yet.
 //
 // The error return is reserved for file-level failures only: the
-// providers.toml file unreadable (non-not-exist) or malformed TOML. A
+// providers.toml file unreadable (non-not-exist), malformed TOML, or a
+// field no Provider models — the table headers are provider names and so
+// stay open, but the fields inside them are a fixed set and a misspelled
+// one refuses the load (see rejectUnknownKeys). A
 // provider that is individually unusable — a mismatched `type`/`api`
 // pair, a missing baseUrl, or an apiKeyFile that cannot be read — does
 // NOT abort the load: it is omitted from the returned map and appended to
@@ -163,13 +166,22 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 	}
 
 	raw := map[string]Provider{}
-	if _, err := toml.Decode(string(data), &raw); err != nil {
+	md, err := toml.Decode(string(data), &raw)
+	if err != nil {
 		// Wrapped as-is on purpose. BurntSushi's ParseError.Error() reports
 		// line, column and key; its ErrorWithPosition() additionally prints
 		// the OFFENDING SOURCE LINE — which for a malformed apiKeyUnsafe
 		// entry is the secret itself, in a message headed for the console
 		// and any log behind it. Do not "improve" this error with it.
 		return nil, nil, fmt.Errorf("providers: parse %s: %w", path, err)
+	}
+	// A file-level refusal, like a parse error: the provider NAMES are the
+	// table headers and stay open, but a misspelled field inside an entry
+	// ("baseURL") would otherwise leave the entry pointing nowhere with
+	// nothing said. Runs before the per-entry loop so no key file is read
+	// for a file that is going to be rejected.
+	if err := rejectUnknownKeys(path, md); err != nil {
+		return nil, nil, fmt.Errorf("providers: %w", err)
 	}
 
 	dir := filepath.Dir(path)

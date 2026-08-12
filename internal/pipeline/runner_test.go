@@ -34,7 +34,7 @@ func newRunnerCall(t *testing.T, role Role) (*Agent, Call) {
 	task := synthTask("survey/a.json", "all")
 	return agent, Call{
 		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
-		Input: task.Input, Frontier: prompt.SlotTotal,
+		Input: task.Input(), Frontier: prompt.SlotTotal,
 	}
 }
 
@@ -99,7 +99,7 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 
 	res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), Call{
 		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
-		Input: task.Input, Frontier: prompt.SlotTotal,
+		Input: task.Input(), Frontier: prompt.SlotTotal,
 	})
 	var target prompt.ErrOverBudget
 	if !errors.As(err, &target) {

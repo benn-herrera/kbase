@@ -1,6 +1,7 @@
 package dissect
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,15 +47,16 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 		for _, span := range spansOf(f) {
 			for _, budget := range []int{minTokens, 120, 400, 1500} {
 				spans++
-				cuts, err := Split(u.Bytes, span, f.Cuts, budget)
+				p := params(budget)
+				cuts, err := Split(u.Bytes, span, f.Cuts, p)
 				if err != nil {
 					var starved StarvedError
-					if !asStarved(err, &starved) {
+					if !errors.As(err, &starved) {
 						t.Fatalf("%s %+v at budget %d: %v", f.Path, span, budget, err)
 					}
 					continue
 				}
-				if verr := Verify(u.Bytes, span, f.Cuts, cuts, Windows(u.Bytes, cuts)); verr != nil {
+				if verr := Verify(u.Bytes, span, f.Cuts, cuts, Windows(u.Bytes, cuts, p), p); verr != nil {
 					t.Fatalf("%s %+v at budget %d: Split produced a list its own verifier rejects: %v",
 						f.Path, span, budget, verr)
 				}
@@ -68,25 +70,25 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 	}
 }
 
-// spansOf is the file itself plus each of its top-level sections — the spans
-// a taxonomy skeleton will actually hand stage 4, at both the sizes it hands
-// them.
+// spansOf is the file itself plus every section at every depth — the spans a
+// taxonomy skeleton will actually hand stage 4.
+//
+// The recursion is the point rather than thoroughness for its own sake: leaf
+// assignments land on sections deep in the heading tree, and those are the
+// small ones, where the minimum, the pre-merge and the starved refusal all
+// live. Top-level sections alone are the sizes least likely to exercise any of
+// it.
 func spansOf(f survey.File) []survey.Range {
 	spans := []survey.Range{{Start: 0, End: f.Bytes}}
-	for _, s := range f.Sections {
-		spans = append(spans, survey.Range{Start: s.Start, End: s.End})
+	var walk func(secs []survey.Section)
+	walk = func(secs []survey.Section) {
+		for _, s := range secs {
+			spans = append(spans, survey.Range{Start: s.Start, End: s.End})
+			walk(s.Children)
+		}
 	}
+	walk(f.Sections)
 	return spans
-}
-
-// asStarved is errors.As with the one target this file cares about, named so
-// the assertion above reads as the claim it makes.
-func asStarved(err error, target *StarvedError) bool {
-	s, ok := err.(StarvedError)
-	if ok {
-		*target = s
-	}
-	return ok
 }
 
 // realArtifact surveys the pinned corpus, or skips.

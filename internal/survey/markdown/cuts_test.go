@@ -167,21 +167,38 @@ func TestCutsAreSortedUniqueAndInterior(t *testing.T) {
 // candidate that skipped the rebase would still look plausible — it would
 // just point at the wrong line — so the check is that it addresses the same
 // text in the source.
+//
+// It scans for the heading candidate NEAREST the real offset and asserts what
+// that one addresses, rather than filtering to candidates already AT it: the
+// filtered form could only ever fail by finding nothing, which catches a
+// rebase dropped entirely and not one that is off by a few bytes.
 func TestCutsRebaseOverFrontMatter(t *testing.T) {
 	at := strings.Index(fenceDoc, "# Guide")
+	nearest, best := -1, 0
 	for _, c := range cutsOf(t, fenceDoc) {
 		if c.Kind != survey.CutHeading {
 			continue
 		}
-		if c.Offset != at {
-			continue
+		if d := max(c.Offset-at, at-c.Offset); nearest < 0 || d < best {
+			nearest, best = c.Offset, d
 		}
-		if !strings.HasPrefix(fenceDoc[c.Offset:], "# Guide") {
-			t.Fatalf("candidate %d does not address the heading it was enumerated from", c.Offset)
-		}
-		return
 	}
-	t.Fatalf("the first heading (offset %d) is not among the candidates", at)
+	if nearest < 0 {
+		t.Fatalf("no heading candidate at all; the first heading is at offset %d", at)
+	}
+	if !strings.HasPrefix(fenceDoc[nearest:], "# Guide") {
+		t.Fatalf("the heading candidate nearest offset %d is at %d, which addresses %q — the offsets were "+
+			"not rebased over the front matter", at, nearest, firstLine(fenceDoc[nearest:]))
+	}
+}
+
+// firstLine is a candidate's own line, for a failure message that shows what
+// the offset actually points at.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // TestCutsOnADocumentWithNoBlocks: an empty or single-block document has no

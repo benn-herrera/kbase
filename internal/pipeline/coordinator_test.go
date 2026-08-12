@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -135,7 +136,11 @@ func TestCoordinatorRefusesTaskOwnedRefA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	streams[0].Tasks[0].Input.RefA = "sneaked in"
+	// The refusal is against the BUILT input, so the sneak goes in the
+	// builder — which is the only place a call-time input could carry one.
+	sneaky := streams[0].Tasks[0].Input()
+	sneaky.RefA = "sneaked in"
+	streams[0].Tasks[0].Input = ConstInput(sneaky)
 
 	_, err = newSynthCoordinator(t, t.TempDir(), echoStub(), 1, log.Discard()).
 		Run(context.Background(), plan, ModeResume)
@@ -454,4 +459,137 @@ func TestCoordinatorCancellation(t *testing.T) {
 func readArtifact(dir, rel string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 	return string(data), err
+}
+
+// TestTaskInputIsBuiltAtTheUnit: a task's prompt input is assembled when the
+// worker reaches it, not when the stage was described.
+//
+// It is what stage 4's fold needs — each boundary's question comes off the cut
+// list the previous boundary produced — so the test states the same shape: a
+// stream whose second call must carry a value that did not exist when the
+// stream was described.
+func TestTaskInputIsBuiltAtTheUnit(t *testing.T) {
+	answered := 0
+	role := essentialRole(t)
+	inner := role.Verify
+	role.Verify = func(unit, response string) (any, error) {
+		art, err := inner(unit, response)
+		if err == nil {
+			answered++
+		}
+		return art, err
+	}
+
+	tasks := make([]Task, 0, 2)
+	for _, path := range []string{"leaves/one.md", "leaves/two.md"} {
+		base := synthTask(path, "s1")
+		base.Input = func() prompt.CallInput {
+			in := synthTask(path, "s1").Input()
+			in.Content = fmt.Sprintf("%s, with %d answered before it", in.Content, answered)
+			return in
+		}
+		tasks = append(tasks, base)
+	}
+
+	client := echoStub()
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{{
+		Name: "leaves", Role: role, Spec: synthSpec("Task: synthetic."),
+		Streams: staticStreams(DomainStream{Domain: "d", Tasks: tasks}),
+	}}}
+	res, err := newSynthCoordinator(t, t.TempDir(), client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Produced != 2 || len(res.Failures) != 0 {
+		t.Fatalf("result = %+v, want both units", res)
+	}
+	prompts := client.recorded()
+	if len(prompts) != 2 {
+		t.Fatalf("%d prompts, want one per unit", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "with 0 answered before it") {
+		t.Errorf("the first call was not built against the state it ran under:\n%s", prompts[0])
+	}
+	// The claim: a value that changed AFTER the stage was described reached
+	// the second prompt. A stored input could not carry it.
+	if !strings.Contains(prompts[1], "with 1 answered before it") {
+		t.Errorf("the second call was built before its predecessor ran:\n%s", prompts[1])
+	}
+}
+
+// TestCallOnlyTasksProduceNoArtifact: a CallOnly task is a call whose result
+// is the stage's own state. It writes nothing, describes no unit, and is
+// therefore invisible to the resume scan — which is what makes a multi-call
+// artifact (stage 4's fold) redone whole rather than resumed against a prefix
+// no stamp describes.
+func TestCallOnlyTasksProduceNoArtifact(t *testing.T) {
+	dir := t.TempDir()
+	tasks := []Task{synthTask("leaves/one.md", "s1"), synthTask("leaves/two.md", "s1")}
+	tasks[0].CallOnly = true
+
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{{
+		Name: "leaves", Role: essentialRole(t), Spec: synthSpec("Task: synthetic."),
+		Streams: staticStreams(DomainStream{Domain: "d", Tasks: tasks}),
+	}}}
+	client := echoStub()
+	res, err := newSynthCoordinator(t, dir, client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Units != 1 || res.Produced != 1 || len(res.Failures) != 0 {
+		t.Fatalf("result = %+v, want two calls behind one unit", res)
+	}
+	if !res.EmitReady() {
+		t.Error("a stage whose calls outnumber its units is still complete")
+	}
+	if n := client.callCount(); n != 2 {
+		t.Errorf("%d calls, want one per task", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash("leaves/one.md"))); !os.IsNotExist(err) {
+		t.Errorf("the CallOnly task left an artifact behind (err = %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash("leaves/two.md"))); err != nil {
+		t.Errorf("the producing task wrote nothing: %v", err)
+	}
+
+	// And the stage is complete on a rescan: the calls it made are not units
+	// anyone is waiting for.
+	scan, err := NewStore(dir, log.Discard()).Scan(plan.Chain(), ModeResume)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !scan.Complete() || scan.Reused != 1 {
+		t.Errorf("scan = %+v, want the one unit proven and the stage complete", scan)
+	}
+}
+
+// TestCallOnlyDegradationIsCounted: a CallOnly call that kept its mechanical
+// baseline degraded the artifact it fed, even though it wrote nothing itself.
+// Counting only produced units would report a composed artifact with a
+// fallback in it as clean.
+func TestCallOnlyDegradationIsCounted(t *testing.T) {
+	tasks := []Task{synthTask("leaves/one.md", "s1"), synthTask("leaves/two.md", "s1")}
+	tasks[0].CallOnly = true
+
+	// Refuse the first call twice, so it exhausts its attempts and falls back.
+	client := &stubClient{respond: func(n int, req model.Request) (model.Response, error) {
+		if strings.Contains(req.Messages[0].Content, "leaves/one.md") {
+			return model.Response{Content: "not the token", FinishReason: "stop"}, nil
+		}
+		return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+	}}
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{{
+		Name: "leaves", Role: refinementRole(t), Spec: synthSpec("Task: synthetic."),
+		Streams: staticStreams(DomainStream{Domain: "d", Tasks: tasks}),
+	}}}
+	res, err := newSynthCoordinator(t, t.TempDir(), client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Produced != 1 || res.Degraded != 1 || len(res.Failures) != 0 {
+		t.Fatalf("result = %+v, want the fallback counted against one produced unit", res)
+	}
 }

@@ -1,13 +1,5 @@
-[embedding]
-model = "reaper/nomicai-embed"
+provider = "reaper"
 
-[chat]
-defaultModel = "reaper/gemma-4-heavy"
-# defaultModel = "reaper/gemma-4-main"
-
-[search]
-provider = "exa"
-
-[user]
-name = "Benn Herrera"
-email = "benn.herrera@gmail.com"
+[models]
+heavy = "gemma-4-heavy"
+light = "gemma-4-main"

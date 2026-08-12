@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,84 @@ func TestLoadConfigMissing(t *testing.T) {
 	}
 	if cfg != (Config{}) {
 		t.Errorf("missing config should yield zero Config, got %+v", cfg)
+	}
+}
+
+// TestLoadConfigUnknownKey: a key config.toml does not model decodes into
+// nothing, so a typo silently costs the user the setting they thought they
+// changed. The load refuses instead, naming the file and EVERY offending
+// key — one refusal, not one per round of trial and error.
+func TestLoadConfigUnknownKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want []string
+		// absent names keys that must NOT appear: the parent table of an
+		// unknown key locates nothing the leaf does not.
+		absent []string
+	}{
+		{
+			name: "misspelled top-level key",
+			body: "provdier = \"reaper\"\n",
+			want: []string{`"provdier"`},
+		},
+		{
+			name: "misspelled tier",
+			body: "[models]\nheavy = \"" + heavyModel + "\"\nhevy = \"" + lightModel + "\"\n",
+			want: []string{`"models.hevy"`},
+		},
+		{
+			name: "misspelled table",
+			body: "[modles]\nheavy = \"" + heavyModel + "\"\n",
+			want: []string{`"modles.heavy"`},
+			// The table itself is unknown too, but "modles.heavy" is
+			// where the user's eye needs to land.
+			absent: []string{`"modles"`},
+		},
+		{
+			name: "several unknowns in one refusal",
+			body: "provdier = \"reaper\"\n[models]\nhevy = \"x\"\n[dev]\ntelemitry = true\n",
+			want: []string{`"provdier"`, `"models.hevy"`, `"dev.telemitry"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeFile(t, t.TempDir(), ConfigFileName, tc.body)
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("an unknown key decoded into nothing and the load said so: got nil error")
+			}
+			msg := err.Error()
+			for _, want := range append([]string{path, unknownKeyHint}, tc.want...) {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal %q does not name %s", msg, want)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(msg, absent) {
+					t.Errorf("refusal %q names the parent table %s as well as its key", msg, absent)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadConfigFixture: the committed fixture is what a hand-written
+// config.toml looks like, so strict decoding must accept it. Only
+// config.toml is read here — the fixture providers.toml names a key file,
+// and no test reads a credential.
+func TestLoadConfigFixture(t *testing.T) {
+	path := filepath.Join("..", "..", "test_data", "fixtures", "config", ConfigFileName)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("the committed fixture no longer loads: %v", err)
+	}
+	if cfg.Provider == "" {
+		t.Error("fixture config.toml names no provider")
+	}
+	for _, tier := range []string{TierHeavy, TierLight} {
+		if _, ok := cfg.ModelFor(tier); !ok {
+			t.Errorf("fixture config.toml leaves the %s tier unmapped", tier)
+		}
 	}
 }
 

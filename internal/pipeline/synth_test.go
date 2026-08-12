@@ -210,12 +210,12 @@ func synthTask(path, section string, upstreams ...string) Task {
 
 		Section:    section,
 		SectionRef: "Cross-file listing for " + section + ":\n- one.md\n- two.md",
-		Input: prompt.CallInput{
+		Input: ConstInput(prompt.CallInput{
 			StatusLines:        []string{"Section: " + section, "Unit: " + path},
 			Content:            "Source span for " + path + ": the quick brown fox.",
 			RefB:               "Prior unit ended at " + path,
 			AcceptanceCriteria: []string{"- answer with " + synthAccept},
-		},
+		}),
 	}
 }
 

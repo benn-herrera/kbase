@@ -215,6 +215,31 @@ func (s *Store) Put(rel string, data []byte, inputs []Input) error {
 	return nil
 }
 
+// Get returns the bytes of the artifact at rel — Put's counterpart, through
+// the same path validation, so a chain description that could not have
+// written a path cannot read one either.
+//
+// It reads and does not prove. Proof is the stamp's job and the scan's, and
+// the two are already joined: a stage that consumes an upstream artifact names
+// it in Unit.Upstreams, which puts that artifact's output hash in this unit's
+// stamp, so a consumer that read bytes nobody proved produces a unit nothing
+// will verdict Valid. Folding a verification in here would be the second
+// derivation of a proof the store already has exactly one of.
+//
+// A missing artifact comes back wrapping fs.ErrNotExist, so "not there yet" is
+// a case a caller can test for rather than a string it has to match.
+func (s *Store) Get(rel string) ([]byte, error) {
+	abs, err := s.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: read %s: %w", rel, err)
+	}
+	return data, nil
+}
+
 // verify inspects the artifact at rel against the inputs it should have been
 // derived from and returns a verdict, a short reason for the log, and an
 // error.

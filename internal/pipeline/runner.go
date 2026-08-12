@@ -490,9 +490,13 @@ func (e UnitFailure) Error() string {
 
 func (e UnitFailure) Unwrap() error { return e.Err }
 
-// WorkerAbortError reports the frozen-prompt assertion firing: the prompt
-// bytes this run is sending are not the ones its own stability contract says
-// it is sending.
+// WorkerAbortError reports a kbase defect a worker cannot run through. It has
+// two causes and they are the same failure seen from two places: the
+// frozen-prompt assertion firing (the prompt bytes this run is sending are not
+// the ones its own stability contract says it is sending), and a verifier
+// declaring the failure OURS by wrapping ErrVerifierDefect (the response could
+// not be wrong in the way the check found, so the derivation that produced
+// both the question and the baseline is what is broken).
 //
 // It is never retried and never falls back, because neither would address it.
 // The unit is not what failed — the orchestrator's model of its own state is,

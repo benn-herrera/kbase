@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -422,4 +423,31 @@ func restamp(t *testing.T, s *Store, rel string, edit func(*Stamp)) {
 		t.Fatal(err)
 	}
 	write(t, s, rel+StampSuffix, string(b)+"\n")
+}
+
+// TestStoreGetIsPutsCounterpart: what Put wrote comes back byte for byte, an
+// artifact that was never written is fs.ErrNotExist a caller can test for, and
+// a path Put would have refused is refused here too — one path rule, both
+// directions.
+func TestStoreGetIsPutsCounterpart(t *testing.T) {
+	s, _ := newStore(t)
+	put(t, s, "cuts/cutlist.txt", "0 120\n120 400\n")
+
+	got, err := s.Get("cuts/cutlist.txt")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "0 120\n120 400\n" {
+		t.Errorf("Get returned %q, want the bytes Put wrote", got)
+	}
+
+	if _, err := s.Get("cuts/absent.txt"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("err = %v, want it to wrap fs.ErrNotExist", err)
+	}
+	for _, rel := range []string{"", "../escape.md", LockFileName, "cuts/cutlist.txt" + StampSuffix} {
+		var bad BadPathError
+		if _, err := s.Get(rel); !errors.As(err, &bad) {
+			t.Errorf("Get(%q) = %v, want the same refusal Put gives", rel, err)
+		}
+	}
 }

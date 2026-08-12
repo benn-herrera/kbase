@@ -206,19 +206,45 @@ artifact's neutral types and the custody bytes, never a parser).
    refuse-and-split, never truncate. **Its output always passes verification**,
    which is a property test over both synthetic adversarial spans and every
    section of the pinned corpus.
-2. **Model refinement pass** (26B-A4B, `dissect.Refiner`): serial scan — one
-   unit per boundary in ONE domain stream, so a worker walks them in order and
-   each window load overwrites the previous (O(1) context, O(n) calls). Each
-   boundary's overlap window (`dissect.Window`, from `dissect.Windows`) renders
-   into the Content slot and its numbered candidate menu into reference buffer
-   B. The model writes no text and emits no raw offsets — it answers with a
-   menu NUMBER, and the menu is never shown an offset to echo. Candidates are
+2. **Model refinement pass** (26B-A4B, `dissect.Refiner`): a serial FOLD — one
+   call per boundary in ONE domain stream, so a worker walks them in order and
+   each window load overwrites the previous (O(1) context, O(n) calls). The
+   scan judges each boundary against the cut list **as it stands now**: an
+   accepted choice updates the working list, and the next boundary's window,
+   menu and verification all derive from that updated list. The stage's output
+   is therefore ONE artifact — the composed cut list, whole-list-`Verify`d
+   before it is written — and the per-boundary calls produce none
+   (`pipeline.Task.CallOnly`), which is what makes the fold's resume
+   stage-granular (§12). Each boundary's overlap window (`dissect.Window`, from
+   `dissect.Windows`) renders into the Content slot and its numbered candidate
+   menu into reference buffer B, capped at `dissect.menuCap` entries around the
+   incumbent, which is marked `(current)` so confirming the boundary — the most
+   common correct answer at a refinement seam — is a choice the model can
+   deliberately make.
+   A boundary's question does not exist until its predecessor is adjudicated,
+   so the per-call input is BUILT when the worker reaches the unit
+   (`pipeline.InputBuilder`, §12) rather than when the stage was described.
+   The model writes no text and **is shown no raw byte offset anywhere**: not
+   in the menu, not in the status lines, not in reference buffer A, and not in
+   the corrective note a retry carries (`dissect.RejectionError.Note`, the
+   model-facing rendering, against `Error`'s operator-facing one). It answers
+   with a menu NUMBER and the answer must BE that number —
+   `dissect.parseChoice` rejects a number embedded in a sentence, because the
+   prompt necessarily contains other numbers (menu positions, "boundary 3 of
+   12") and a mis-mapped choice is a legal menu entry that then verifies. A
+   visible retry is cheaper than a silently wrong-but-valid cut. Candidates are
    enumerated at survey time by the format adapter and carried in the artifact
    as `survey.CutCandidate{Offset, Kind}` (ruled 2026-08-10, schema
    `kbase.survey/2`), so refinement's whole input is reproducible from stamped
-   artifacts. Authority is clamped twice: to the overlap window, and to the
-   enumerated set — bisecting a heading is unrepresentable, not merely
-   detectable. Optional per-boundary confidence emission; low-confidence
+   artifacts. Authority is clamped twice: to the overlap window ∩ the menu, and
+   to the enumerated set — bisecting a heading is unrepresentable, not merely
+   detectable. The composed cut list is stamped with the stage's **parameter
+   digest** (span + budget + the mechanical cut list): the list is computed
+   in-process rather than read from an upstream artifact, so without it a
+   re-plan's `cuts/cutlist.txt` and this one's are indistinguishable to the
+   resume scan (§12). The digest is taken over the MECHANICAL list, which the
+   fold never touches — it identifies the questions the stage asked, and the
+   working list is the answers. Optional per-boundary confidence emission; low-confidence
    boundaries escalate (31B look or human).
 3. **Verification** (`dissect.Verify` — deterministic, all cheap,
    format-neutral): exact tiling — monotonic offsets, no gaps/overlaps, sum =
@@ -235,10 +261,40 @@ artifact's neutral types and the custody bytes, never a parser).
    two outcomes are distinct types: `dissect.RejectionError` (retry once, then
    the baseline) and `dissect.OffsetDefectError` (never retried — it reaches
    the runner wrapped in `pipeline.ErrVerifierDefect`, which aborts the
-   worker). The minimum applies to CHOICES: a one-section list is not refused
-   for the size of a span nobody chose. Pass → dissect. The mechanical list is
-   always valid — `dissect.NewRefiner` verifies it before the stage runs, since
-   it is what every failure falls back to.
+   worker). The split between them is exhaustive **by construction, not by
+   enumeration**: `RejectionError` is the only class a model's answer can be
+   responsible for, so the seam wraps everything else — the tripwire, a window
+   count that does not match the boundaries, a span that is not a range of the
+   source, any plain error a later check adds — as our defect. The two
+   mistakes do not cost the same: a defect routed to the model burns a retry
+   and then emits a degraded unit from a broken derivation, while a model
+   failure routed to the defect path stops the job loudly. The minimum applies
+   to CHOICES: a one-section list is not refused for the size of a span nobody
+   chose. An empty span is refused before any of this (`dissect.checkSpan`) —
+   a span with no bytes is not a span to cut, and the refusal names the caller
+   rather than the one-section list it would otherwise have produced. Pass →
+   dissect. The mechanical list is always valid — `dissect.NewRefiner` verifies
+   it before the stage runs, since it is what every failure falls back to.
+
+   **Verification against frozen neighbours does not compose — which is why
+   the scan is a fold** (ruled 2026-08-11). Judge each boundary against the
+   ORIGINAL positions of its neighbours and the list the stage stands on is the
+   composition of *n* independent moves. Tiling survives that (windows cannot
+   overlap: each reaches `overlapFraction` and 2 × 0.2 < 1), and so do
+   membership and the tripwire. The **minimum does not**: a 70-token section
+   whose left boundary moves 6 tokens in and whose right boundary then moves 6
+   tokens back composes to 58, under the floor, with each move having verified
+   on its own. Judged against CURRENT state the second move is simply refused,
+   and the minimum is enforced exactly: the slack is real, finite, and
+   allocated first-adjudicated-first-served — no worst-case pre-rationing, no
+   freedom halved. A refused move is an ordinary rejection (retry once with the
+   reason, then the boundary stands where it is), so the cost of running out of
+   slack is quality, never correctness. Before the composed list is written it
+   goes through `Verify` once more, whole. That check is unreachable by
+   construction — every accepted move verified the same list — so its failure
+   is a `pipeline.ErrVerifierDefect` and not a rejection: nothing the model
+   answered could produce it. It stays because the composing step is exactly
+   where this would otherwise be discovered rather than remembered.
 4. **Dissector** (`dissect.Dissect`, deterministic) slices the immutable source
    by verified offsets. Source is never sliced-and-retyped; the leaves are
    views into the custody bytes and the cut list is a derived overlay
@@ -416,6 +472,7 @@ prevention is holding against a real prefix cache.
 | Per-call target | 60–80K tokens | quality/cost operating point; nobody runs near ceiling |
 | Boundary overlap | 20% of each neighbor, capped at 1K tokens/side | `dissect.overlapFraction`/`overlapCapTokens`; the window the model sees AND the clamp bound. Exact % still TBD at calibration |
 | Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
+| Boundary menu cap | 7 entries | `dissect.menuCap`: `dissect.menuSide` (3) candidates before the mechanical cut, the cut itself marked `(current)`, 3 after; a short side contributes what it has and lends nothing to the other. 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12) |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
@@ -514,6 +571,19 @@ resolution**.
 
 - Build refusals (`ErrOverBudget`) are refuse-and-split — pushed back to the
   skeleton, never retried at the runner.
+- **Every seam's inputs are bounded by construction** (ruled 2026-08-11).
+  Each thing a stage renders into a prompt is capped at its source, or the
+  source refuses and splits: the refinement window is a fraction capped per
+  side, its menu is capped in entries (§9), and stage 7's gist checklists get
+  the same treatment when they arrive. The consequence is the point —
+  once every input to a call is bounded by a named constant, an over-budget
+  build is not a runtime condition to be resilient to. It is a **defect
+  class**: our own sizing arithmetic is wrong, and the only way to learn that
+  is the hard failure. So `ErrOverBudget` keeps its current routing even at a
+  refinement seam that has a valid baseline in hand — a graceful fallback
+  there would silently paper over the one thing the constant table exists to
+  make impossible. Bounding at the source is the work; the hard fail is what
+  makes the bounding checkable.
 - The frozen-prompt assertion (tripwire) checks OUR stability contract; a
   violation is a kbase defect: worker abort, never retry or fallback.
 - Transport failures (timeout, 5xx, dropped stream) say nothing about output
@@ -596,6 +666,39 @@ Resume is an **optimization, never load-bearing**: `--fresh` ignores all
 prior outputs unconditionally and is always sufficient. And at no tier does
 any path emit unverified material — assembly-time verification re-checks
 everything regardless of provenance (two independent nets).
+
+**Call-time task inputs.** A task's prompt input may be a value or a builder
+(`pipeline.InputBuilder`); a builder runs when the worker REACHES the unit.
+Every stage whose questions are known up front passes `ConstInput` and is
+unaffected in every respect — the frozen-prompt assertion, the per-slot budget
+refusal and the churn tripwire all judge the built input exactly as they judged
+a stored one. It exists for one shape: a stage whose later questions depend on
+its own earlier answers. Stage 4's fold is that shape (§5), and a serial domain
+stream already guarantees the ordering the deferral needs, so the extension is
+the deferral and nothing else.
+
+**Multi-call artifacts and stage-granular resume.** A task may be marked
+`CallOnly`: it makes its call, its response is verified, and it writes nothing
+— its result is the stage's own state. The stage's units are what it WRITES, so
+those calls are invisible to the resume scan. Stage 4's fold uses this: *n*
+boundary calls produce one composed cut list, carried by the last task of the
+stream.
+
+That makes an interrupted fold redone **whole**, and the alternative is why.
+Per-boundary artifacts would each be individually provable and individually
+reusable — but boundary *i+1* was adjudicated against boundary *i*'s ACCEPTED
+position, a dependency no stamp records, so a resume that reused *i+1* while
+redoing *i* would compose an answer to a question nobody asked. Honest
+alternatives were a chained per-boundary parameter digest or stage granularity;
+the ruling took granularity (2026-08-11), because resume is an optimization and
+this is the shape where the proof machinery costs more than the work it saves.
+A kill mid-fold therefore leaves nothing at all on disk, which is exactly why
+there is nothing to salvage. What is built instead is the measurement: the fold
+logs each boundary's outcome (accepted/rejected/fallback, move distance in
+tokens, the window's size) and, at the composed write, the whole stage's
+adjudicated-token cost — which IS what a redo re-spends, since granularity is
+the stage. If that number ever justifies finer salvage, it will have said so
+first.
 
 ### Hardening (the Murphy set)
 

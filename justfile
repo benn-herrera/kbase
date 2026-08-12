@@ -74,8 +74,16 @@ prep-test-integration-rojo:
 # values validated at the pinned commit, and that the artifact is
 # byte-deterministic across runs. Expectation changes are loud by design: a
 # constants change (e.g. chars-per-token) or a pin bump re-validates here.
+#
+# It also runs the dissection property over the same corpus. That test skips
+# when the corpus is absent — correct for a unit test, which must not reach the
+# network — so `just test` on a clean machine gives no signal on the half of
+# ARCHITECTURE §5.1's claim that says "every section of the pinned corpus".
+# Here the corpus is guaranteed present, which makes this the gate where the
+# claim is true.
 [doc("survey the pinned Rojo corpus; assert summary values + determinism")]
 test-integration-rojo: build prep-test-integration-rojo
+    go test -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
     @a="$(mktemp)"; b="$(mktemp)"; \
     ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$a" >/dev/null 2>&1 && \
     ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$b" >/dev/null 2>&1 || \

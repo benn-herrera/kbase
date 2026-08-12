@@ -56,7 +56,7 @@ func TestNewAgentCapturesCanonicalHashes(t *testing.T) {
 		t.Fatalf("newAgent: %v", err)
 	}
 
-	built, err := agent.ctx.Build(synthTask("survey/a.json", "all").Input)
+	built, err := agent.ctx.Build(synthTask("survey/a.json", "all").Input())
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

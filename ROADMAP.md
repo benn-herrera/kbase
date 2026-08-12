@@ -13,12 +13,14 @@ deleted, not archived — git history is the log.
 
 ## Next
 
-- Stage 4 remainder (the §5 chain itself landed 2026-08-10 as
-  `internal/dissect`, mock-driven per that burst's R-1): wire it into a real
-  job plan once the taxonomy skeleton says what the spans are, and fold the
-  adjudicated per-boundary offsets back into one cut list for stage 5. Its
-  refinement definition text is a marked stub (`dissect.stubDefinition`) for
-  the embedded-definitions item below.
+- Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,
+  mock-driven per that burst's R-1; the serial fold landed 2026-08-11 —
+  boundaries are adjudicated against current state and the stage writes one
+  composed, whole-list-`Verify`d cut list): what is left is **wiring it into a
+  real job plan** once the taxonomy skeleton says what the spans are, which is
+  also where a single-section span — no boundaries, so no calls and today no
+  artifact — gets its answer. Its refinement definition text is a marked stub
+  (`dissect.stubDefinition`) for the embedded-definitions item below.
 - Export watch resolved (2026-08-10): `internal/dissect`, the first
   out-of-package consumer, needs `CallRunner` (`NewCallRunner` returns it,
   `NewCoordinator` takes it) and never touches `Agent` or `Call` — both are
@@ -41,6 +43,24 @@ deleted, not archived — git history is the log.
   Derive role knowledge from `.claude/agents/kb-*.md` as referents (process
   phasing, leaf-fidelity rules, review adversarialism) — not ports: kbase
   definitions are gemma-4-narrow, CRITICAL-sectioned, embedded, evaled.
+  Three rules carried from the dissection review (2026-08-11), each about
+  wording rather than mechanism, which is why they wait for this burst:
+  - **Say it once per channel.** The refinement stub states "answer with one
+    number and nothing else" four times: the `## CRITICAL` section, the
+    trailer's automatic re-render of it (§7's dual render, by design), the
+    task definition, and a per-call acceptance criterion. The fourth is not
+    free — acceptance criteria share a word-capped reserved share with the
+    machine-generated corrective note, so a redundant criterion competes with
+    the retry feedback that has to fit beside it.
+  - **Echo verification.** Have the answer be the number *plus* the entry text
+    it names, and let the verifier check the two agree. That kills silent
+    mis-mapping at the source rather than at the parser — worth an eval
+    against the strict-number rule, which is the cheaper form of the same
+    protection.
+  - **See more than you may touch.** The display window may be allowed to grow
+    beyond the clamp: the model judges a boundary better with more context
+    than it is allowed to move within. The clamp is unchanged — this is about
+    what is shown, not what may be chosen.
 - Distillation, hierarchical summaries, review stages; link generation;
   refresh/verify gates (kb_tools port).
 - Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
