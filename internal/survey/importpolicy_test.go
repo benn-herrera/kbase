@@ -55,10 +55,11 @@ var importPolicy = []importRule{{
 }, {
 	path:      modulePath + "/internal/survey/markdown",
 	allow:     []string{"cmd"},
-	allowTest: []string{"internal/survey", "internal/dissect"},
+	allowTest: []string{"internal/survey", "internal/dissect", "internal/skeleton"},
 	why: "only the composition root picks a source format; a downstream package's TESTS may drive an " +
 		"adapter to check a property over real corpus artifacts (internal/survey's own tests would " +
-		"otherwise be an import cycle, and internal/dissect's splitter property needs real sections), " +
+		"otherwise be an import cycle, internal/dissect's splitter property needs real sections, and " +
+		"internal/skeleton's verifier property needs a real survey to compose a tree over), " +
 		"but no production code outside cmd may choose a format",
 }}
 

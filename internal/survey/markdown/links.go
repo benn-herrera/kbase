@@ -68,7 +68,12 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 	case u.Path == "":
 		l.Kind = survey.LinkAnchor
 	default:
-		if target, ok := resolveTarget(u.Path, from, corpus, lg); ok {
+		// u.Path is the percent-DECODED destination, and that decode is the
+		// one way a target can arrive in a spelling the corpus ids are not
+		// in: custody made the source bytes NFC, but `%CC%81` is plain ASCII
+		// in those bytes and becomes a combining mark only here. A target
+		// written literally is already NFC and this is a no-op on it.
+		if target, ok := resolveTarget(ingest.NormalizePath(u.Path), from, corpus, lg); ok {
 			l.Kind, l.Path = survey.LinkInternal, target
 		} else {
 			l.Kind = survey.LinkUnresolved
@@ -90,6 +95,12 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 //     link into a Windows-authored file inflates the unresolved count. A fold
 //     that several documents answer to is ambiguous: it is reported as
 //     unresolved and warned about, never guessed at.
+//
+// Every comparison here is byte equality (or the case fold) against the
+// corpus's ids, with no normalization of its own. It can be, because both
+// sides are already NFC: the ids because ingest normalized them, and p
+// because it came out of NFC custody bytes — via classifyLink, which is where
+// the one spelling that does NOT arrive that way is dealt with.
 //
 // The id returned is always the corpus's own byte-exact path. No target is
 // invented: anything the corpus does not hold stays unresolved.

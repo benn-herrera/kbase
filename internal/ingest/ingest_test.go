@@ -3,6 +3,7 @@ package ingest
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,8 +142,9 @@ func TestFoldedPath(t *testing.T) {
 	}
 }
 
-// TestWalkCustody: the bytes under custody are the file's bytes,
-// unnormalized, and the digest is over exactly those bytes. CRLF and a
+// TestWalkCustody: the bytes under custody are the file's bytes, and the
+// digest is over exactly those bytes. Unicode normalization is the ONE
+// transform (see TestNFCPrePass); everything else is left alone. CRLF and a
 // missing trailing newline are the cases a "helpful" reader would silently
 // fix — fixing them would invalidate every byte offset the survey records.
 func TestWalkCustody(t *testing.T) {
@@ -162,6 +164,264 @@ func TestWalkCustody(t *testing.T) {
 	if want := hex.EncodeToString(sum[:]); u.SHA256 != want {
 		t.Errorf("SHA256 = %q, want %q", u.SHA256, want)
 	}
+}
+
+// The two spellings of the same document. Both are written out of explicit
+// code points rather than pasted literals: an invisible combining mark in
+// source is a test nobody can review.
+const (
+	combiningAcute = string(rune(0x0301)) // the decomposed accent
+	eAcute         = string(rune(0x00e9)) // é, the composed one
+	iAcute         = string(rune(0x00ed)) // í
+)
+
+// NFD is what a macOS filesystem and several editors hand back; NFC is what
+// most of the world writes. They render identically and no reader can tell
+// them apart.
+const (
+	nfdBody = "# Cafe" + combiningAcute + " Re" + combiningAcute + "sume" + combiningAcute + "\n\nsi" + combiningAcute + "\n"
+	nfcBody = "# Caf" + eAcute + " R" + eAcute + "sum" + eAcute + "\n\ns" + iAcute + "\n"
+)
+
+// TestNFCPrePass: custody bytes are NFC bytes, and provenance keeps both
+// digests. The payoff is the last assertion — two corpora that differ only in
+// Unicode spelling have ONE identity, so every hash, title, slug and
+// comparison downstream sees one document rather than two.
+func TestNFCPrePass(t *testing.T) {
+	t.Run("normalizes and records both hashes", func(t *testing.T) {
+		c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfdBody)}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		u := c.Units[0]
+		if string(u.Bytes) != nfcBody {
+			t.Errorf("custody bytes = %q, want the NFC spelling %q", u.Bytes, nfcBody)
+		}
+		if want := hexDigest(nfcBody); u.SHA256 != want {
+			t.Errorf("SHA256 = %q, want the custody digest %q", u.SHA256, want)
+		}
+		if want := hexDigest(nfdBody); u.SourceSHA256 != want {
+			t.Errorf("SourceSHA256 = %q, want the digest of the bytes as read %q", u.SourceSHA256, want)
+		}
+		if !u.BytesNormalized() {
+			t.Error("BytesNormalized() = false for a document the pre-pass rewrote")
+		}
+	})
+
+	t.Run("already-NFC content is untouched and records no transform", func(t *testing.T) {
+		// The common case, ASCII included: no transform happened, so the two
+		// digests must be the same string and not merely both present.
+		for _, body := range []string{nfcBody, "# Plain ASCII\n", ""} {
+			c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(body)}})
+			if err != nil {
+				t.Fatalf("New(%q): %v", body, err)
+			}
+			u := c.Units[0]
+			if string(u.Bytes) != body {
+				t.Errorf("custody bytes = %q, want %q unchanged", u.Bytes, body)
+			}
+			if u.SHA256 != u.SourceSHA256 || u.BytesNormalized() {
+				t.Errorf("%q: hashes must be equal when nothing was transformed: %q vs %q",
+					body, u.SHA256, u.SourceSHA256)
+			}
+		}
+	})
+
+	t.Run("invalid utf-8 is never touched", func(t *testing.T) {
+		// Normalizing bytes that are not UTF-8 would be a guess about an
+		// encoding this package cannot verify, and a guess that rewrites
+		// custody is the one thing custody exists to prevent.
+		body := "# Title\n\n\xff\xfe not utf-8 \x80\n"
+		c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(body)}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		u := c.Units[0]
+		if string(u.Bytes) != body {
+			t.Errorf("custody bytes = %q, want the bytes as read %q", u.Bytes, body)
+		}
+		if u.BytesNormalized() {
+			t.Error("BytesNormalized() = true for bytes the pre-pass must not have touched")
+		}
+	})
+
+	t.Run("both spellings reach one corpus identity", func(t *testing.T) {
+		nfd, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfdBody)}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		nfc, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfcBody)}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if nfd.ContentHash != nfc.ContentHash {
+			t.Errorf("content hash differs by Unicode spelling alone: %q vs %q",
+				nfd.ContentHash, nfc.ContentHash)
+		}
+		if nfd.Units[0].SourceSHA256 == nfc.Units[0].SourceSHA256 {
+			t.Error("SourceSHA256 must still tell the two uploads apart")
+		}
+	})
+}
+
+// The two spellings of one document NAME, built the same explicit way the
+// body constants are. A filesystem picks the spelling with no more author
+// involvement than an editor picks the one in the text.
+const (
+	nfdName = "guide/caf" + "e" + combiningAcute + ".md"
+	nfcName = "guide/caf" + eAcute + ".md"
+)
+
+// TestNFCPathPrePass: the id is normalized on the same terms the bytes are.
+// The payoff is the same too — one document has ONE identity however the
+// filesystem spelled its name — but ordering makes it sharper here: path
+// order is the corpus's canonical order, so the order has to be over the ids.
+func TestNFCPathPrePass(t *testing.T) {
+	t.Run("normalizes the id and keeps the spelling as given", func(t *testing.T) {
+		c, err := New([]Unit{{Path: nfdName, Bytes: []byte("x")}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		u := c.Units[0]
+		if u.Path != nfcName {
+			t.Errorf("Path = %+q, want the NFC spelling %+q", u.Path, nfcName)
+		}
+		if u.SourcePath != nfdName {
+			t.Errorf("SourcePath = %+q, want the path as given %+q", u.SourcePath, nfdName)
+		}
+		if !u.PathNormalized() {
+			t.Error("PathNormalized() = false for a path the pre-pass rewrote")
+		}
+		// The id is the id: the corpus answers to it and to nothing else.
+		if !c.Has(nfcName) || c.Has(nfdName) {
+			t.Error("the corpus must answer for the NFC id, not for the spelling it was handed")
+		}
+	})
+
+	t.Run("an already-NFC id records no transform", func(t *testing.T) {
+		c, err := New([]Unit{{Path: nfcName, Bytes: []byte("x")}, {Path: "plain.md", Bytes: []byte("y")}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		for _, u := range c.Units {
+			if u.Path != u.SourcePath || u.PathNormalized() {
+				t.Errorf("%+q: path fields must be equal when nothing was transformed, got %+q",
+					u.Path, u.SourcePath)
+			}
+		}
+	})
+
+	t.Run("order is over the ids, not the spellings", func(t *testing.T) {
+		// The witness: `cafe` + combining acute sorts BEFORE `cafz.md` on its
+		// source bytes (`e` < `z`) and AFTER it on its NFC id (the composed
+		// e-acute starts 0xc3). Normalizing after the sort would leave the
+		// corpus — and the content hash, which reads this order — spelling-
+		// dependent.
+		c, err := New([]Unit{
+			{Path: nfdName, Bytes: []byte("x")},
+			{Path: "guide/cafz.md", Bytes: []byte("y")},
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if got, want := paths(c), []string{"guide/cafz.md", nfcName}; !slices.Equal(got, want) {
+			t.Errorf("units: got %+q, want %+q (sorted by the NFC id)", got, want)
+		}
+	})
+
+	t.Run("both spellings reach one corpus identity", func(t *testing.T) {
+		hash := func(name string) string {
+			t.Helper()
+			c, err := New([]Unit{
+				{Path: name, Bytes: []byte("body")},
+				{Path: "guide/cafz.md", Bytes: []byte("other")},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			return c.ContentHash
+		}
+		if hash(nfdName) != hash(nfcName) {
+			t.Error("content hash differs by the Unicode spelling of a filename alone")
+		}
+	})
+
+	t.Run("two spellings of one name are one document, and refused as two", func(t *testing.T) {
+		_, err := New([]Unit{
+			{Path: nfdName, Bytes: []byte("x")},
+			{Path: nfcName, Bytes: []byte("y")},
+		})
+		if err == nil {
+			t.Fatal("two spellings of one path must be refused as a duplicate")
+		}
+		// Both spellings render identically, so an error that names only the
+		// id would be unactionable; it has to show the code points.
+		if !strings.Contains(err.Error(), "two Unicode spellings") {
+			t.Errorf("error = %v, want it to say the two paths are one name in two spellings", err)
+		}
+		// The assertion is over the ESCAPED spelling the error was asked to
+		// print, constructed here rather than pasted: a combining acute in a
+		// source literal is invisible to a reviewer.
+		for _, want := range []string{fmt.Sprintf("%+q", nfdName), fmt.Sprintf("%+q", nfcName)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to contain %s, the form that tells the spellings apart", err, want)
+			}
+		}
+	})
+
+	t.Run("an id that is not utf-8 is never touched", func(t *testing.T) {
+		// A filesystem may hand back a name that is raw bytes. Normalizing it
+		// would be a guess about an encoding this package cannot verify.
+		raw := "guide/\xff\xfe.md"
+		c, err := New([]Unit{{Path: raw, Bytes: []byte("x")}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		u := c.Units[0]
+		if u.Path != raw || u.PathNormalized() {
+			t.Errorf("Path = %+q, want the bytes as given %+q untouched", u.Path, raw)
+		}
+	})
+}
+
+// TestWalkPathNFC: the walk reads by the on-disk name and hands the id to New
+// to normalize, so a decomposed filename on disk becomes a composed id with
+// the disk's own spelling kept beside it.
+func TestWalkPathNFC(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, nfdName, "# Cafe\n")
+
+	c, err := Walk(root, mdExts, log.Discard())
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	u := c.Units[0]
+	if u.Path != nfcName {
+		t.Errorf("Path = %+q, want the NFC id %+q", u.Path, nfcName)
+	}
+	// Filesystems disagree about what they store: APFS and ext4 keep the
+	// decomposed name, others hand back a composed one. Only the id above is
+	// a property of this package; what SourcePath holds is a property of the
+	// disk, and asserting it unconditionally would be asserting the disk's
+	// behavior.
+	switch u.SourcePath {
+	case nfdName:
+		if !u.PathNormalized() {
+			t.Error("PathNormalized() = false for a name the disk stored decomposed")
+		}
+	case nfcName:
+		t.Log("this filesystem composed the name on write; the pre-pass had nothing to do")
+	default:
+		t.Errorf("SourcePath = %+q, want one of the two spellings of the name written", u.SourcePath)
+	}
+}
+
+// hexDigest is the test's own sha256, spelled out rather than borrowed from
+// the package: a test that reuses the implementation's helper cannot catch
+// the implementation hashing the wrong bytes.
+func hexDigest(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // TestWalkSymlinks pins the symlink policy, which splits on one

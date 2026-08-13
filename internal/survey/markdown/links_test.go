@@ -121,6 +121,117 @@ func TestLinkAmbiguousFold(t *testing.T) {
 	}
 }
 
+// The two spellings of one document name, and the two of one accented
+// character, built out of explicit code points: a combining mark pasted into
+// a source literal is a fixture nobody can review.
+const (
+	combiningAcute = string(rune(0x0301))
+	eAcute         = string(rune(0x00e9))
+
+	nfdName = "guide/caf" + "e" + combiningAcute + ".md"
+	nfcName = "guide/caf" + eAcute + ".md"
+)
+
+// TestLinkUnicodeSpelling: a reference reaches its document whichever of the
+// two Unicode spellings each side was written in. Both sides are NFC by the
+// time they meet — the id because ingest normalized it, the target because it
+// came out of NFC custody bytes — so resolution stays plain byte equality and
+// the four combinations collapse to one comparison.
+func TestLinkUnicodeSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		corpusPath string // the spelling the corpus was ingested under
+		target     string // the spelling the link was written in
+	}{
+		{"decomposed on disk, composed link", nfdName, nfcName},
+		{"composed on disk, decomposed link", nfcName, nfdName},
+		{"decomposed on both sides", nfdName, nfdName},
+		{"composed on both sides", nfcName, nfcName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, art := surveyFixtures(t, map[string]string{
+				tc.corpusPath: "# Cafe\n",
+				"index.md":    "[cafe](" + tc.target + ")\n",
+			})
+
+			links := fileOf(t, art, "index.md").Links
+			if len(links) != 1 {
+				t.Fatalf("links = %+v, want the one reference", links)
+			}
+			// The resolved id is the corpus's own, which is NFC whatever the
+			// corpus was handed; the target is preserved exactly as written.
+			if links[0].Kind != survey.LinkInternal || links[0].Path != nfcName {
+				t.Errorf("link = %+v, want internal at the NFC id %+q", links[0], nfcName)
+			}
+			// Target is the destination as it stands in CUSTODY, which is
+			// the NFC spelling however the author typed it: the content
+			// pre-pass reached a literal link destination before the parser
+			// did. That is why resolution needs no normalization of its own.
+			if links[0].Target != nfcName {
+				t.Errorf("Target = %+q, want the custody spelling %+q", links[0].Target, nfcName)
+			}
+		})
+	}
+}
+
+// TestLinkPercentDecodedSpelling: percent-encoding is the one way a target
+// arrives in a spelling custody never saw. `%CC%81` is plain ASCII in the
+// source bytes, so the NFC pre-pass has nothing to normalize there and the
+// combining mark appears only after url.Parse decodes it — an editor that
+// escapes a decomposed filename would otherwise produce a link that cannot
+// resolve to a file that plainly exists.
+func TestLinkPercentDecodedSpelling(t *testing.T) {
+	for _, tc := range []struct{ name, target string }{
+		{"decomposed", "guide/cafe%CC%81.md"},
+		{"composed", "guide/caf%C3%A9.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, art := surveyFixtures(t, map[string]string{
+				nfdName:    "# Cafe\n",
+				"index.md": "[cafe](" + tc.target + ")\n",
+			})
+
+			links := fileOf(t, art, "index.md").Links
+			if len(links) != 1 || links[0].Kind != survey.LinkInternal || links[0].Path != nfcName {
+				t.Fatalf("links = %+v, want the escaped target resolved to the NFC id %+q", links, nfcName)
+			}
+		})
+	}
+}
+
+// TestArtifactSpellingDeterminism: the artifact is the stage-3 input and its
+// reproducibility is the corpus's ordering, so two corpora that differ only in
+// how a filename was spelled must serialize to the same bytes — twice over, to
+// catch a per-run source of order as well as a per-spelling one.
+func TestArtifactSpellingDeterminism(t *testing.T) {
+	render := func(corpusPath string) string {
+		t.Helper()
+		_, art := surveyFixtures(t, map[string]string{
+			corpusPath:      "# Cafe\n\nBody.\n",
+			"guide/cafz.md": "# Cafz\n\n[cafe](" + nfdName + ")\n",
+			"index.md":      "# Index\n\n[cafe](/" + nfcName + ") [cafz](/guide/cafz.md)\n",
+		})
+		var b strings.Builder
+		if err := art.WriteJSON(&b); err != nil {
+			t.Fatalf("WriteJSON: %v", err)
+		}
+		return b.String()
+	}
+
+	want := render(nfdName)
+	for _, got := range []string{render(nfdName), render(nfcName), render(nfcName)} {
+		if got != want {
+			t.Fatal("the artifact differs by the Unicode spelling of a filename, or between runs")
+		}
+	}
+	// Guard against the whole comparison passing over an artifact that never
+	// resolved anything: the sameness above is only worth something if the
+	// links in it are edges.
+	if !strings.Contains(want, `"kind": "internal"`) {
+		t.Error("the fixture corpus must actually resolve its links")
+	}
+}
+
 // TestLinkKindsExercised guards the corpus roll-up tested in internal/survey:
 // that test sums hand-built files, so the fixture corpus is where every link
 // kind has to actually occur.

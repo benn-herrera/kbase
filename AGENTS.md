@@ -75,6 +75,10 @@ internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
+internal/skeleton/  the skeleton artifact (§4 stage 3 output, kbase.skeleton/1):
+                    planned KB tree + groups + annexes, namer/slugger, the
+                    mechanical verifier (partition/caps/G-1/G-2, design-time
+                    split expansion, restructuring operators), deterministic JSON
 internal/survey/    the survey artifact (§4 stage 2) and NOTHING format-specific:
                     heading tree with byte offsets, section token sizes, link
                     graph, gists; corpus roll-up, tiling + custody checks,
@@ -135,13 +139,52 @@ task queue is ROADMAP.md; TEMP plans are per-burst execution detail only.
 
 ## Testing
 
-TBD
+**No important verification is a one-off** (ruled 2026-08-13). When we go
+to the trouble of devising a way to verify something works, that way is
+preserved so it can run repeatedly — regression protection first, coverage
+extension second. Concretely:
+
+- Every verification lands as a repeatable invocation: a unit test, an
+  integration recipe (`test-integration-*`), or a dev verb — never an
+  ad-hoc command sequence that lives only in a conversation.
+- Observational evidence (counts, measurements, composed artifacts, A/B
+  numbers) is emitted to an inspectable location — `test_data/transient/
+  <name>/` for test-produced artifacts, an explicit `--out` for verbs —
+  not left in ephemeral agent reports or terminal scrollback.
+- Unit tests live beside their packages and must pass hermetically (no
+  network, no corpus). Corpus-driven tests skip when the pinned corpus is
+  absent and are wired into `test-integration-rojo`, where the corpus is
+  guaranteed present — a corpus property that only runs "sometimes" is
+  coverage that silently isn't.
+
+**Results are part of the test** (ruled 2026-08-13). Results that cannot
+be examined are not results — they are phantasms leading to delusions of
+progress and hallucinations of adequacy. Concretely:
+
+- Every **integration test** preserves its log output under
+  `test_data/transient/<test-name>/`. Where the relevant information is
+  in the log, that is sufficient; where gathered stats ARE the results,
+  those stats are dumped to files under the same location.
+- The **artifacts** of integration test runs are preserved under
+  `test_data/transient/` — nothing is ever written to an ephemeral
+  location and tossed. The temp-work keep switch is ALWAYS on for
+  integration tests, with one deliberate exception: the test that proves
+  correct behavior in the switch's absence (guarding against logic that
+  silently depends on it).
+- **Unit tests** run under `go test`, which already logs expected-vs-
+  actual and pass/fail to stdout/stderr; preserving that log under
+  `test_data/transient/unit_tests/<test_name>_log.txt` is sufficient.
 
 ---
 
 ## Dependency Policy
 
-TBD
+TBD. One ruling stands: `golang.org/x/text/unicode/norm` is sanctioned
+(2026-08-13) for the NFC pre-pass at ingest (ARCHITECTURE.md §4 stage 1, §9).
+It is the Go project's own module, it brings no transitive dependency, and the
+tables it applies are frozen by the Unicode normalization stability policy.
+Add a module with `just add-dependency <module>@<version>` and only after the
+import exists — `go mod tidy` drops a dependency nothing imports.
 
 ---
 

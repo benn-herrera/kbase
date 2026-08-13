@@ -116,3 +116,9 @@ deleted, not archived — git history is the log.
   mechanical in every format. Contract in §4; pandoc is a dev-time
   differential oracle, never a shipped dependency.
 - PDF preprocessing-adapter slot.
+- i18n hardening (ruled 2026-08-13, indefinitely parked): spaceless-script
+  word caps fail open (CJK/Thai — byte/token fallback cap needed) and
+  non-Latin titles degenerate under ASCII-only slugs (NFC-pinned slugs or
+  transliteration). Offsets/slicing are already rune-safe by construction
+  and the whitespace tripwire catches mid-rune cuts as defects. Revisit
+  only with global distribution and a team to feed.

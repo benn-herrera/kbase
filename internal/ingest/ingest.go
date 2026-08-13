@@ -9,10 +9,17 @@
 //
 // Custody is the whole point. The bytes a Unit carries are the canonical
 // source: the survey records byte offsets into them, the dissector slices
-// them by verified offsets (§5), and nothing in between rewrites, re-encodes,
-// or normalizes them. A stage that wants a transformed view derives an
-// overlay; it never replaces the custody bytes, because the moment two
-// versions of a document exist the offset discipline stops meaning anything.
+// them by verified offsets (§5), and nothing in between rewrites or
+// re-encodes them. A stage that wants a transformed view derives an overlay;
+// it never replaces the custody bytes, because the moment two versions of a
+// document exist the offset discipline stops meaning anything.
+//
+// There is exactly ONE transform, and it happens before custody begins: the
+// Unicode NFC pre-pass in New (ruled 2026-08-13). Custody bytes are NFC
+// bytes, so every offset, slice, hash, title, slug and comparison downstream
+// works on one spelling of every character instead of two. The same pass
+// covers the id: a Unit's Path is its NFC spelling, so a document has one
+// identity however the filesystem spelled its name. See New.
 //
 // Everything here is offline and deterministic: the same tree produces the
 // same Corpus, hash included.
@@ -27,6 +34,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"kbase/internal/log"
 )
@@ -34,19 +44,54 @@ import (
 // Unit is one source document under custody: its corpus-wide identity, its
 // exact bytes, and their digest.
 type Unit struct {
-	// Path is the slash-separated path relative to the corpus root. It is
-	// the corpus-wide id — link resolution, the survey artifact, and the
-	// taxonomy all name documents this way, so the id is stable across the
-	// operating systems a corpus is checked out on.
+	// Path is the slash-separated path relative to the corpus root, in
+	// Unicode NFC. It is the corpus-wide id — link resolution, the survey
+	// artifact, and the taxonomy all name documents this way, so the id is
+	// stable across the operating systems a corpus is checked out on, and
+	// across the two spellings Unicode allows for the same name. New derives
+	// it from the path the caller supplied.
 	Path string
 
-	// Bytes is the file exactly as it was read. Callers read it and index
-	// into it; nobody writes to it.
+	// SourcePath is the path as it was GIVEN — the on-disk spelling the walk
+	// found the file under, before the NFC pre-pass. It is UPLOAD identity in
+	// the same sense SourceSHA256 is: the id resolves references, this names
+	// the file a human has to go and open. Filled in by New. It equals Path
+	// for an already-NFC name, which is the overwhelmingly common case. See
+	// PathNormalized.
+	SourcePath string
+
+	// Bytes is the document under custody: the file as it was read, put
+	// through the NFC pre-pass by New. Callers read it and index into it;
+	// nobody writes to it.
 	Bytes []byte
 
-	// SHA256 is the hex digest of Bytes, filled in by New.
+	// SHA256 is the hex digest of Bytes — CUSTODY identity, the hash every
+	// downstream artifact quotes. Filled in by New.
 	SHA256 string
+
+	// SourceSHA256 is the hex digest of the bytes as they were READ, before
+	// the NFC pre-pass — UPLOAD identity, the hash that ties a unit back to
+	// the file on disk. Filled in by New. It equals SHA256 for an already-NFC
+	// file, which is the overwhelmingly common case; the two differ exactly
+	// when normalization changed something, and that difference IS the
+	// record that it did. See Normalized.
+	SourceSHA256 string
 }
+
+// BytesNormalized reports whether the NFC pre-pass changed this document's
+// bytes; PathNormalized, whether it changed the document's path. They are
+// separate questions — a corpus can hold an NFD filename over already-NFC
+// content, and the reverse — so there is no single "was this unit
+// normalized" answer to give.
+//
+// Both are derived rather than stored: a flag beside the two hashes (or the
+// two paths) could disagree with them, and provenance that can contradict
+// itself is worse than no provenance.
+func (u Unit) BytesNormalized() bool { return u.SourceSHA256 != u.SHA256 }
+
+// PathNormalized reports whether the NFC pre-pass changed this document's
+// path. See BytesNormalized.
+func (u Unit) PathNormalized() bool { return u.SourcePath != u.Path }
 
 // Corpus is an ingested document set: every unit, in path order, plus the
 // identity of the set as a whole.
@@ -117,17 +162,54 @@ func (c Corpus) Unit(path string) (Unit, bool) {
 }
 
 // New assembles a Corpus from units that already have Path and Bytes set: it
-// sorts them by path, digests each one, and derives the corpus content hash.
-// It is the only constructor, so hashing has exactly one implementation, and
-// it is the seam tests build in-memory corpora through.
+// sorts them by path, runs the NFC pre-pass, digests each one, and derives
+// the corpus content hash. It is the only constructor, so normalization and
+// hashing have exactly one implementation each, and it is the seam tests
+// build in-memory corpora through.
 //
-// ContentHash is the sha256 of the "<path>\x00<per-file hex digest>\n" lines
-// in path order. Deriving it from the per-file digests rather than from the
-// concatenated bytes means it changes when a file is renamed or removed, not
-// only when content changes — a rename reorganizes a knowledge base even
+// The NFC pre-pass is the one transform custody permits (ruled 2026-08-13).
+// Unicode spells many characters two ways — `é` is one code point or `e` plus
+// a combining acute, and the two render identically — and which one a corpus
+// carries is decided by the authoring editor and the filesystem it was
+// checked out on, not by the author. Two spellings of the same document mean
+// two hashes, two titles, two slugs, and comparisons that fail for a
+// difference nobody can see. NFC picks one, before any offset exists to be
+// invalidated. It is canonical equivalence and not a rewrite of the text: the
+// rendering is identical and the wording untouched — the bytes move, the
+// document does not.
+//
+// The pre-pass covers the id as well as the bytes. A filesystem decides how
+// it spells a filename with no more author involvement than an editor deciding
+// how it spells the text — macOS hands back a decomposed name where Linux
+// hands back whatever was written — so a document referenced as `caf<e-acute>.md`
+// must reach a file stored as `cafe<combining acute>.md` and vice versa.
+// Normalizing the id makes every comparison downstream NFC-against-NFC byte
+// equality, with no re-normalization at any use site to remember or forget.
+//
+// Provenance keeps both spellings of each: SourceSHA256 over the bytes as
+// read and SourcePath as the path was given, beside the custody SHA256 and
+// the NFC Path. Equal pairs mean the file was already NFC and nothing was
+// transformed; different ones are the record that something was. Invalid
+// UTF-8 is never touched, in a path or in content — normalizing it would be a
+// guess about an encoding this package cannot verify.
+//
+// ContentHash is the sha256 of the "<path>\x00<per-file CUSTODY digest>\n"
+// lines in path order. Deriving it from the per-file digests rather than from
+// the concatenated bytes means it changes when a file is renamed or removed,
+// not only when content changes — a rename reorganizes a knowledge base even
 // though no byte of any document moved.
 func New(units []Unit) (Corpus, error) {
 	sorted := slices.Clone(units)
+	// Ids are normalized BEFORE the sort, not alongside the digests below.
+	// Path order IS the corpus's canonical order, and the thing ordered has
+	// to be the id: sorting the source spellings would let two units whose
+	// names differ only by Unicode spelling come out in an order their ids do
+	// not agree with, and the corpus content hash reads that order.
+	for i := range sorted {
+		u := &sorted[i]
+		u.SourcePath = u.Path
+		u.Path = NormalizePath(u.Path)
+	}
 	slices.SortFunc(sorted, func(a, b Unit) int { return strings.Compare(a.Path, b.Path) })
 
 	index := make(map[string]int, len(sorted))
@@ -138,7 +220,15 @@ func New(units []Unit) (Corpus, error) {
 		if u.Path == "" {
 			return Corpus{}, fmt.Errorf("ingest: unit %d has no path", i)
 		}
-		if _, dup := index[u.Path]; dup {
+		if j, dup := index[u.Path]; dup {
+			// Two units can now collide on an id they never shared a spelling
+			// of. NFD and NFC names render identically, so naming the id twice
+			// would explain nothing — %+q escapes the code points, which is
+			// the only form in which the two are told apart on a terminal.
+			if prev := sorted[j].SourcePath; prev != u.SourcePath {
+				return Corpus{}, fmt.Errorf("ingest: %+q and %+q are one document path in two "+
+					"Unicode spellings; the corpus can hold only one", prev, u.SourcePath)
+			}
 			return Corpus{}, fmt.Errorf("ingest: duplicate source path %q", u.Path)
 		}
 		index[u.Path] = i
@@ -148,8 +238,13 @@ func New(units []Unit) (Corpus, error) {
 		key := foldPath(u.Path)
 		folded[key] = append(folded[key], i)
 
-		sum := sha256.Sum256(u.Bytes)
-		u.SHA256 = hex.EncodeToString(sum[:])
+		u.SourceSHA256 = digest(u.Bytes)
+		if utf8.Valid(u.Bytes) && !norm.NFC.IsNormal(u.Bytes) {
+			u.Bytes = norm.NFC.Bytes(u.Bytes)
+			u.SHA256 = digest(u.Bytes)
+		} else {
+			u.SHA256 = u.SourceSHA256
+		}
 		fmt.Fprintf(corpusDigest, "%s\x00%s\n", u.Path, u.SHA256)
 	}
 
@@ -159,6 +254,30 @@ func New(units []Unit) (Corpus, error) {
 		index:       index,
 		folded:      folded,
 	}, nil
+}
+
+// NormalizePath is the NFC pre-pass applied to an id, and the one place a
+// path is normalized in this pipeline. New calls it on every unit; a caller
+// that has obtained a path from OUTSIDE custody bytes — a percent-decoded
+// link destination is the live case — calls it to bring that path onto the
+// same footing before comparing it against an id. Anything already read out
+// of custody is NFC and needs no second pass.
+//
+// Invalid UTF-8 passes through for the reason content does: a filesystem may
+// hand back a name that is raw bytes, and normalizing those would be a guess
+// about an encoding this package cannot verify. Such a name stays byte-exact
+// and still works as an id — it just answers only to itself.
+func NormalizePath(p string) string {
+	if !utf8.ValidString(p) || norm.NFC.IsNormalString(p) {
+		return p
+	}
+	return norm.NFC.String(p)
+}
+
+// digest is the one spelling of "sha256 of these bytes, hex" in this package.
+func digest(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // maxCorpusBytes bounds what one ingest reads into memory. The largest
@@ -280,6 +399,10 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 				"(reached at %s); there is no override — a tree this large is a mistyped root "+
 				"far more often than a document set", root, maxCorpusBytes, rel)
 		}
+		// rel is the on-disk spelling, which is what the read above needed and
+		// what New keeps as SourcePath. The NFC id is derived from it there,
+		// after every file has been read: nothing in the walk may depend on
+		// the id, because the id is not what opens a file.
 		units = append(units, Unit{Path: rel, Bytes: b})
 		return nil
 	})

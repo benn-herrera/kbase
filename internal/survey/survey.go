@@ -96,6 +96,15 @@ type LinkTotals struct {
 // is ORGANISED, the candidates say where it may legally be CUT (§5). A
 // section boundary is always a candidate, and most candidates are not section
 // boundaries.
+//
+// Path and SHA256 are both CUSTODY identity: the NFC id ingest derived and
+// the digest of the NFC bytes. Their upload counterparts — the path as the
+// filesystem spelled it, the digest of the bytes as read — are deliberately
+// not here. The artifact is what later stages compute over, and every one of
+// them (link graph, skeleton, the stage-9 path check) compares ids to ids;
+// carrying a second spelling would be offering a second thing to key on. The
+// spelling a human has to be told to go and open lives on the ingest.Unit,
+// which the pipeline still holds when it writes a receipt.
 type File struct {
 	Path        string         `json:"path"`
 	SHA256      string         `json:"sha256"`

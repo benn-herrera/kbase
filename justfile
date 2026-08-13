@@ -5,8 +5,11 @@
 # contract explicit rather than inherited from whatever /bin/sh happens to be
 # on the host — bashisms like fmt-check's `[[ ]]` are then legal everywhere,
 # not portable by accident. `-u` (just's own default, kept) makes an unset
-# variable a failure instead of an empty string.
-set shell := ["bash", "-cu"]
+# variable a failure instead of an empty string. `-o pipefail` makes a
+# pipeline fail when ANY stage does: the test recipes below pipe through
+# `tee` to preserve their logs, and without it a failing `go test` would be
+# masked by a successful `tee` and the gate would go green on a red run.
+set shell := ["bash", "-cuo", "pipefail"]
 
 BIN_DIR := "bin"
 TEST_DATA_DIR  := "test_data"
@@ -14,6 +17,13 @@ TEST_DATA_DIR  := "test_data"
 TEST_DATA_FIXTURES_DIR := TEST_DATA_DIR / "fixtures"
 # test output, generated test data, cloud-sourced test data
 TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
+
+# Per-test output roots. AGENTS.md's "results are part of the test" rule:
+# every test run leaves its log — and, where the gathered stats ARE the
+# result, its stats and artifacts — somewhere they can be read afterwards.
+# One directory per test name, all under the gitignored transient tree.
+UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
+ROJO_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-rojo"
 
 DIST_DIR := "dist"
 
@@ -39,13 +49,22 @@ build:
     @mkdir -p {{BIN_DIR}}
     go build -o {{BIN_DIR}}/kbase ./cmd
 
+# Both unit recipes tee their output to {{UNIT_TEST_OUT_DIR}}. `go test ./...`
+# is ONE process emitting ONE combined stream, so the preserved log is
+# per-recipe (test_log.txt, test-race_log.txt) rather than per-test — splitting
+# it per test would mean parsing `go test -json`, which is machinery this rule
+# does not need. Each run overwrites the previous log: the interesting one is
+# always the last one, and an append would bury it.
+
 # run the unit tests. VERBOSE=1 for per-test output.
 test:
-    go test ${VERBOSE:+-v} ./...
+    @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
+    go test ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test_log.txt"
 
 # run the unit tests under the race detector (slower; catches real data races)
 test-race:
-    go test -race ${VERBOSE:+-v} ./...
+    @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
+    go test -race ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-race_log.txt"
 
 # Cheap gate: run after every change.
 edit-gate: fmt-check
@@ -75,28 +94,53 @@ prep-test-integration-rojo:
 # byte-deterministic across runs. Expectation changes are loud by design: a
 # constants change (e.g. chars-per-token) or a pin bump re-validates here.
 #
-# It also runs the dissection property over the same corpus. That test skips
-# when the corpus is absent — correct for a unit test, which must not reach the
-# network — so `just test` on a clean machine gives no signal on the half of
+# It also runs the corpus properties — the dissection one over every section,
+# and the skeleton one over a whole composed tree. Those tests skip when the
+# corpus is absent — correct for a unit test, which must not reach the network
+# — so `just test` on a clean machine gives no signal on the half of
 # ARCHITECTURE §5.1's claim that says "every section of the pinned corpus".
 # Here the corpus is guaranteed present, which makes this the gate where the
 # claim is true.
 [doc("survey the pinned Rojo corpus; assert summary values + determinism")]
-test-integration-rojo: build prep-test-integration-rojo
-    go test -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
-    @a="$(mktemp)"; b="$(mktemp)"; \
-    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$a" >/dev/null 2>&1 && \
-    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$b" >/dev/null 2>&1 || \
+test-integration-rojo:
+    @mkdir -p "{{ROJO_TEST_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-rojo 2>&1 | tee "{{ROJO_TEST_OUT_DIR}}/log.txt"
+
+# The body, split out only so the wrapper above can tee ONE stream. just runs
+# each recipe line in its own shell, so a per-line redirect would truncate the
+# log four times over; a wrapper around the whole recipe — dependencies
+# included — is the one invocation that captures the build, the fetch, both go
+# test binaries and every line the surveyed binary writes.
+#
+# The two go test runs are -v here and nowhere else: `just test` wants a
+# pass/fail list, but a preserved integration log wants the t.Logf lines that
+# say what the corpus actually measured. The numbers those lines summarise are
+# written as JSON beside this log by the tests themselves.
+[private]
+_test-integration-rojo: build prep-test-integration-rojo
+    go test -v -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
+    go test -v -run TestSkeletonOverRealCorpus -count=1 ./internal/skeleton
+    @a="{{ROJO_TEST_OUT_DIR}}/survey.json"; \
+    b="{{ROJO_TEST_OUT_DIR}}/survey-rerun.json"; \
+    s="{{ROJO_TEST_OUT_DIR}}/summary.txt"; \
+    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$a" && \
+    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$b" || \
       { echo "integration(rojo): survey run failed"; exit 1; }; \
     cmp -s "$a" "$b" || { echo "integration(rojo): artifact is not deterministic"; exit 1; }; \
-    rm -f "$a" "$b"; \
-    summary="$(./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" 2>/dev/null)"; \
+    ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" > "$s" || \
+      { echo "integration(rojo): survey run failed"; exit 1; }; \
+    summary="$(cat "$s")"; \
+    echo "$summary"; \
     for want in "files=8 " "tokens=10553 " "sections=83 " "unresolved=5 "; do \
       echo "$summary" | grep -qF "$want" || \
         { echo "integration(rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
     echo "integration(rojo) ok: surveyed, deterministic, summary matches"
 
+# The omnibus composes the per-corpus recipes and writes no log of its own:
+# each of them already preserves its full output under its own name, and a
+# second copy of the same bytes under a second name is a file that can go
+# stale against the one anybody reads.
 [doc("run every per-corpus integration test")]
 test-integration: test-integration-rojo
 
