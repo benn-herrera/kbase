@@ -11,6 +11,8 @@ dist/
 # manual local test fixtures
 test_data/transient/
 
+mad-*/
+
 # tarballs that may be copied around the tree by a messy developer
 *.tgz
 
