@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"kbase/internal/config"
@@ -291,14 +292,75 @@ func synthFoldPlan(t *testing.T) *StagePlan {
 	}
 }
 
-// synthPlan is the three-stage fixture: an essential stage of two units in one
-// domain; a fold stage whose three calls produce one artifact; then a
+// The mechanical stage's names. Its tasks derive their artifacts in process
+// (Task.Produce), so the stage has no Role, makes no call, and carries its own
+// encoder.
+const (
+	synthProduceStage = "assemble"
+	synthProduceUnits = 2
+)
+
+// synthProduceRuns counts the producers that have run since the last reset. It
+// is how a test asks how much of a mechanical stage a resume redid — the
+// question foldCalls answers for the model stages by reading the recorded
+// prompts, which a stage that sends none cannot be asked.
+//
+// A package-level counter is safe here for the reason the crashpoints are:
+// nothing in this package runs in parallel.
+var synthProduceRuns atomic.Int64
+
+// synthProduceText is what a mechanical unit derives: a function of the unit's
+// own path, so no two units can be confused and a resumed run's artifact is
+// comparable byte for byte with an uninterrupted one's.
+func synthProduceText(path string) string { return "assembled " + path + "\n" }
+
+// synthEncodeText is the mechanical stage's encoder — the counterpart of
+// synthEncode, which belongs to a Role the stage does not have.
+func synthEncodeText(artifact any) ([]byte, error) {
+	s, ok := artifact.(string)
+	if !ok {
+		return nil, fmt.Errorf("artifact is %T, not a string", artifact)
+	}
+	return []byte(s), nil
+}
+
+// synthProducePlan is the whole-stage mechanical shape: every task a Producer,
+// no Role, no Spec, no seam — stages 1, 4, 8 and 9 of the real pipeline seen
+// from the orchestration side (ARCHITECTURE.md §12).
+//
+// Its units declare a real upstream, so they are chain-stamped like any other:
+// an upstream that changes invalidates them, and an upstream that never got
+// produced cascades to them without the producer running.
+func synthProducePlan() *StagePlan {
+	tasks := make([]Task, 0, synthProduceUnits)
+	for _, name := range []string{"one", "two"} {
+		path := synthProduceStage + "/" + name + ".md"
+		tasks = append(tasks, Task{
+			Unit:    Unit{Path: path, Inputs: []Input{corpusInput}, Upstreams: []string{"survey/a.json"}},
+			Section: "assembly",
+			Produce: func() (any, error) {
+				synthProduceRuns.Add(1)
+				return synthProduceText(path), nil
+			},
+		})
+	}
+	return &StagePlan{
+		Name:    synthProduceStage,
+		Encode:  synthEncodeText,
+		Streams: staticStreams(DomainStream{Domain: synthProduceStage, Tasks: tasks}),
+	}
+}
+
+// synthPlan is the four-stage fixture: an essential stage of two units in one
+// domain; a fold stage whose three calls produce one artifact; a mechanical
+// stage whose two units are produced in process and spend nothing; then a
 // refinement stage of four units across two domains — one of which spans two
 // sections, so the section-transition phase is crossed both within a stream
 // and at its start.
 //
-// The fold sits in the middle rather than at the end, which is where a real
-// one sits (§4) and which keeps the last stage the one a resume test poisons.
+// The fold and the mechanical stage sit in the middle rather than at the end,
+// which is where real ones sit (§4) and which keeps the last stage the one a
+// resume test poisons.
 func synthPlan(t *testing.T) Plan {
 	t.Helper()
 	return Plan{
@@ -317,6 +379,7 @@ func synthPlan(t *testing.T) Plan {
 				}),
 			},
 			synthFoldPlan(t),
+			synthProducePlan(),
 			{
 				Name: "leaves",
 				Role: refinementRole(t),
@@ -337,11 +400,12 @@ func synthPlan(t *testing.T) Plan {
 }
 
 // synthUnits is how many units synthPlan describes, and synthCalls how many
-// model calls one complete run of it makes. They differ because the fold
-// spends synthFoldCalls calls on one unit.
+// model calls one complete run of it makes. They differ in both directions:
+// the fold spends synthFoldCalls calls on one unit, and the mechanical stage's
+// units are produced without any.
 const (
-	synthUnits = 7
-	synthCalls = synthUnits + synthFoldCalls - 1
+	synthUnits = 9
+	synthCalls = synthUnits - synthProduceUnits + synthFoldCalls - 1
 )
 
 // synthDerivedPlan is the dynamic chain made concrete: stage 2's units do not

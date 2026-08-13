@@ -98,7 +98,7 @@ var (
 // facts of the system rather than habits each stage re-implements.
 //
 // It is stateless and safe for concurrent use: every worker of a stage shares
-// one runner, and everything that varies per call arrives in the Call.
+// one runner, and everything that varies per call arrives in the call.
 type CallRunner struct {
 	client model.Client
 	cfg    config.Config
@@ -117,14 +117,14 @@ func NewCallRunner(client model.Client, cfg config.Config, lg log.Logger) *CallR
 	return &CallRunner{client: client, cfg: cfg, lg: lg, backoff: transportBackoffBase}
 }
 
-// Call is one unit's model call.
-type Call struct {
+// call is one unit's model call.
+type call struct {
 	// Stage and Unit name the work, for the log and for a UnitFailure.
 	Stage string
 	Unit  string
 
 	// Agent is the stage's shared agent.
-	Agent *Agent
+	Agent *agent
 
 	// Input is the per-call half of the prompt.
 	Input prompt.CallInput
@@ -181,7 +181,7 @@ type CallResult struct {
 //     artifact", so both land in seam resolution: a refinement seam keeps its
 //     baseline and is marked degraded, an essential seam returns UnitFailure
 //     and produces nothing.
-func (r *CallRunner) Run(ctx context.Context, c Call) (CallResult, error) {
+func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 	modelID, ok := r.cfg.ModelFor(c.Agent.role.Tier)
 	if !ok {
 		return CallResult{}, fmt.Errorf("pipeline: %s: no model is configured for the %q tier", c.Stage, c.Agent.role.Tier)
@@ -261,7 +261,7 @@ func (r *CallRunner) Run(ctx context.Context, c Call) (CallResult, error) {
 // plus the stage-level canonical check. Both are OUR contract, so a violation
 // is a defect in kbase and not a condition to recover from — the worker aborts
 // and its siblings drain.
-func (r *CallRunner) assertFrozen(c Call, built prompt.BuiltCall) error {
+func (r *CallRunner) assertFrozen(c call, built prompt.BuiltCall) error {
 	if err := prompt.CheckStability(c.Frontier, c.Prev, built.Hashes); err != nil {
 		return WorkerAbortError{Stage: c.Stage, Unit: c.Unit, Err: err}
 	}
@@ -280,7 +280,7 @@ func (r *CallRunner) assertFrozen(c Call, built prompt.BuiltCall) error {
 // registration site through the agent to here. The runner picks nothing: it
 // has no idea what is being asked, which is exactly why it is not the layer
 // that gets to say how hard to ask it.
-func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c Call) (model.Response, error) {
+func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c call) (model.Response, error) {
 	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, c.Agent.role.Effort)
 	var lastErr error
 	for attempt := 1; attempt <= transportAttempts; attempt++ {
@@ -308,7 +308,7 @@ func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c Call
 // back. The branch is the whole point of classifying seams — a refinement seam
 // has somewhere valid to stand and an essential one does not, so pretending
 // otherwise would emit unverified material.
-func (r *CallRunner) resolveSeam(c Call, res CallResult, kind FailureKind, cause error) (CallResult, error) {
+func (r *CallRunner) resolveSeam(c call, res CallResult, kind FailureKind, cause error) (CallResult, error) {
 	if c.Agent.Seam() == SeamRefinement {
 		res.Artifact = c.Agent.role.Baseline(c.Unit)
 		res.Degraded = true
@@ -342,7 +342,7 @@ func (r *CallRunner) resolveSeam(c Call, res CallResult, kind FailureKind, cause
 // TelemetryLogDetail line: a structured record whose fields are one opaque
 // string is a string, and the point of the logging seam is that a field is a
 // field.
-func (r *CallRunner) account(c Call, u model.Usage) {
+func (r *CallRunner) account(c call, u model.Usage) {
 	r.lg.Debug("call usage", "stage", c.Stage, "unit", c.Unit,
 		"prompt_tokens", u.PromptTokens, "cached_tokens", u.CachedPromptTokens,
 		"completion_tokens", u.CompletionTokens, "reasoning_tokens", u.ReasoningTokens)
@@ -451,9 +451,20 @@ const (
 	// cannot be recorded is not worth generating. It is the cascade of some
 	// other failure, and the remedy is that one.
 	FailureUpstream FailureKind = "upstream"
+	// FailureCascade is a unit that was never attempted because a unit it
+	// consumes failed EARLIER IN THIS RUN (see markCascades). It is distinct
+	// from FailureUpstream so the inventory separates root cause from
+	// consequence: an upstream failure says the store cannot supply an input,
+	// a cascade names the failure whose remedy is the remedy for both.
+	FailureCascade FailureKind = "cascade"
 	// FailureWrite is a verified artifact that could not be encoded or
 	// stored.
 	FailureWrite FailureKind = "write"
+	// FailureProduce is a mechanical unit whose own derivation failed
+	// (Task.Produce). It costs no tokens and has no retry: the same inputs
+	// derive the same failure, so the remedy is upstream data or a kbase
+	// defect fix, never asking again.
+	FailureProduce FailureKind = "produce"
 )
 
 // UnitFailure is one unit the job could not produce. It is an error so a

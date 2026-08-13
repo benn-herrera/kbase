@@ -25,14 +25,14 @@ func stageConstantFrontier(t *testing.T) prompt.Slot {
 
 // newRunnerCall builds an agent and a call over it, with the frontier a
 // worker's first call declares (nothing claimed, nothing to compare against).
-func newRunnerCall(t *testing.T, role Role) (*Agent, Call) {
+func newRunnerCall(t *testing.T, role Role) (*agent, call) {
 	t.Helper()
 	agent, err := newAgent(role, synthSpec("Task: synthetic."), synthJobFrame(t))
 	if err != nil {
 		t.Fatalf("newAgent: %v", err)
 	}
 	task := synthTask("survey/a.json", "all")
-	return agent, Call{
+	return agent, call{
 		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
 		Input: task.Input(), Frontier: prompt.SlotTotal,
 	}
@@ -134,7 +134,7 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 	}
 	task := synthTask("survey/a.json", "all")
 
-	res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), Call{
+	res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call{
 		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
 		Input: task.Input(), Frontier: prompt.SlotTotal,
 	})

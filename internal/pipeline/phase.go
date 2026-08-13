@@ -178,7 +178,7 @@ var matrix = [...]phaseRule{
 		// frontier: a worker's previous-call hashes are reset at every
 		// stream start, so no call ever compares slot 1 against the last
 		// stage's call. The job-constant canonical does that (see
-		// jobFrame and Agent.checkCanonical); this row is the composable
+		// jobFrame and agent.checkCanonical); this row is the composable
 		// claim for LowestFrontier, not the tripwire.
 		frontier: prompt.SlotSystemFrame,
 		// RESERVED, 2026-08-09: no code path writes a stage-level artifact

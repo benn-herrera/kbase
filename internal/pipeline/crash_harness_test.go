@@ -43,6 +43,7 @@ const crashWorkers = 2
 func runToCompletion(t *testing.T, dir string, mode Mode) (*stubClient, JobResult) {
 	t.Helper()
 	client := echoStub()
+	synthProduceRuns.Store(0)
 	res, err := newSynthCoordinator(t, dir, client, crashWorkers, log.Discard()).
 		Run(context.Background(), synthPlan(t), mode)
 	if err != nil {
@@ -133,14 +134,17 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 				}
 				// Reuse means the model was not consulted. Every unit the
 				// resume did not redo is a call it did not make — plus the
-				// fold's extra calls, if the fold was one of the redone.
+				// fold's extra calls, if the fold was one of the redone, and
+				// minus the mechanical units, which are produced in process
+				// and consult nothing at all.
 				extra := 0
 				if fold > 0 {
 					extra = fold - 1
 				}
-				if got := resumed.callCount(); got != res.Produced+extra {
-					t.Errorf("%d calls to produce %d units: a reused unit was re-executed",
-						got, res.Produced)
+				produced := int(synthProduceRuns.Load())
+				if got := resumed.callCount(); got != res.Produced-produced+extra {
+					t.Errorf("%d calls to produce %d units (%d of them mechanical): a reused unit was re-executed",
+						got, res.Produced, produced)
 				}
 				if res.Reused+res.Produced != synthUnits {
 					t.Errorf("reused %d + produced %d != %d units", res.Reused, res.Produced, synthUnits)

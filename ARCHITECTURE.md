@@ -763,6 +763,26 @@ its own earlier answers. Stage 4's fold is that shape (§5), and a serial domain
 stream already guarantees the ordering the deferral needs, so the extension is
 the deferral and nothing else.
 
+**Two task modes: a call, or a producer** (ruled 2026-08-12). Four stages of
+the pipeline infer nothing — ingest/survey, distillation, assembly, verify —
+and running them outside the coordinator would forfeit resume, stamps, the
+sweep and the single worklist for exactly the stages that produce the
+deliverable. So a task either asks a model (`Task.Input`) or derives its
+artifact in process (`Task.Produce`), exactly one of the two, and the worker
+calls the producer where it would have called the runner. Everything else is
+identical: the unit description, the input set resolved and hashed BEFORE the
+derivation runs, the encoder, the atomic write, the stamp, the resume scan, the
+sweep, and the failure inventory — a producer's failure is an inventoried unit
+failure with no baseline and no retry, since the same inputs derive the same
+failure. A producer touches no prompt machinery, so a mechanical stage declares
+no Role at all and carries its own encoder instead. The modes do not MIX within
+a stage: everything stage-scoped here is declared per stage — one Role, one
+shared StageContext, one seam, one tier, one encoder — so a half-mechanical
+stage has no honest answer for what its seam is, and the description is refused.
+The rejected alternatives were a null Role with a fake verifier, which lies to
+the seam classification, and leaving the deterministic stages outside the
+orchestration entirely.
+
 **Multi-call artifacts and stage-granular resume.** A task may be marked
 `CallOnly`: it makes its call, its response is verified, and it writes nothing
 — its result is the stage's own state. The stage's units are what it WRITES, so
@@ -801,6 +821,27 @@ tokens, the window's size) and, at the composed write, the whole stage's
 adjudicated-token cost — which IS what a redo re-spends, since granularity is
 the stage. If that number ever justifies finer salvage, it will have said so
 first.
+
+**And a unit whose in-chain upstream failed THIS RUN is cascade-failed**
+(ruled 2026-08-12). It is the poisoning discipline applied across a chain edge,
+and it is stated because neither neighbouring rule reaches the case: poisoning
+is intra-stream, while "an unstamped upstream is structural incoherence" is
+scoped by its own justification — nothing this chain runs would ever produce it
+— which is false for an artifact whose producing unit failed a moment ago.
+Applying the incoherence rule anyway would refuse the whole resume with
+`--fresh` guidance and discard every proven artifact in the job over one failed
+unit. So the dependent is marked cascade-failed instead: not attempted, no call
+spent, nothing written, inventoried beside its cause under its own failure kind
+and naming the ROOT of the chain rather than its immediate predecessor. It
+propagates transitively, since a cascade-failed unit is itself a failure the
+next stage reads, and a dependent stream's remaining calls are dropped with it.
+The marking happens where the stage's streams are filtered, not at the unit: a
+fold's calls all precede the task that writes what they compose, and a unit that
+failed this run may still have a PREVIOUS run's artifact on disk, which would
+resolve happily and buy a call spent deriving from superseded bytes. It is
+RUN-SCOPED bookkeeping — no new stamp, no persisted state, no change to the
+scan; next run the cause and its cascade are both simply Absent and both are
+redone, which is why the extension needs no artifact machinery at all.
 
 ### Hardening (the Murphy set)
 

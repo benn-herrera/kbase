@@ -42,7 +42,11 @@ deleted, not archived — git history is the log.
      build-phase notes, never debated. LaTeX-specific questions graded
      design-level (converter is post-v0.2.0).
   3. Build the arc burst-by-burst, per-burst architect+go-coder
-     reviews as usual.
+     reviews as usual. **Burst A landed 2026-08-12**: `Task.Produce`
+     (O-2) and cross-stage cascade marking (MAD1 F-8) in
+     `internal/pipeline`, both written into ARCHITECTURE §12; the
+     queued `Agent`/`Call` unexport went with it (evidence recorded
+     2026-08-10: `internal/dissect` needs only `CallRunner`).
   4. **MAD #2 = the standing E2E gate below** (design + implementation
      + generated Rojo KB + exemplar comparison).
 - Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,
@@ -53,12 +57,6 @@ deleted, not archived — git history is the log.
   also where a single-section span — no boundaries, so no calls and today no
   artifact — gets its answer. Its refinement definition text is a marked stub
   (`dissect.stubDefinition`) for the embedded-definitions item below.
-- Export watch resolved (2026-08-10): `internal/dissect`, the first
-  out-of-package consumer, needs `CallRunner` (`NewCallRunner` returns it,
-  `NewCoordinator` takes it) and never touches `Agent` or `Call` — both are
-  still coordinator-internal, so unexporting them is now evidence-backed.
-  Left for whoever is next in `internal/pipeline`; it is a rename, not a
-  design question.
 
 ## Later (build order exploits determinism-first)
 - **MAD review gate (ruled 2026-08-09): after the first end-to-end run

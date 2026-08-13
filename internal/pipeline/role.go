@@ -220,7 +220,7 @@ func (r Role) validate() error {
 	return nil
 }
 
-// Agent is the §3 Go-side construct: one role bound to one immutable
+// agent is the §3 Go-side construct: one role bound to one immutable
 // StageContext, shared by every worker of the stage. It is never an LLM-driven
 // loop — it makes one-shot calls and nothing else.
 //
@@ -229,7 +229,7 @@ func (r Role) validate() error {
 // and frontiers), and one Plan.SystemFrame does the same for slot 1 across
 // stages. The canonical hashes below are what catches the failures
 // construction cannot see; see checkCanonical for what those are.
-type Agent struct {
+type agent struct {
 	role      Role
 	ctx       *prompt.StageContext
 	slots     []prompt.Slot
@@ -252,7 +252,7 @@ type Agent struct {
 // section is over cap fails here, at stage setup, instead of on every call the
 // stage makes — and it is where a stage that somehow renders slot 1 differently
 // from the job is refused, one loud failure per stage instead of one per call.
-func newAgent(role Role, spec prompt.StageSpec, frame jobFrame) (*Agent, error) {
+func newAgent(role Role, spec prompt.StageSpec, frame jobFrame) (*agent, error) {
 	if err := role.validate(); err != nil {
 		return nil, err
 	}
@@ -280,11 +280,11 @@ func newAgent(role Role, spec prompt.StageSpec, frame jobFrame) (*Agent, error) 
 	// The job's value, not the probe's — identical here, and the point is
 	// that every later comparison is against the JOB.
 	canonical[prompt.SlotSystemFrame] = frame.hash
-	return &Agent{role: role, ctx: sc, slots: slots, canonical: canonical}, nil
+	return &agent{role: role, ctx: sc, slots: slots, canonical: canonical}, nil
 }
 
 // Seam reports the agent's failure policy.
-func (a *Agent) Seam() Seam { return a.role.Seam() }
+func (a *agent) Seam() Seam { return a.role.Seam() }
 
 // checkCanonical asserts that a built call's stage-constant slots are the
 // values captured at setup — slot 1 against the JOB's canonical, slots 2–3
@@ -302,7 +302,7 @@ func (a *Agent) Seam() Seam { return a.role.Seam() }
 //   - Slot 1 drifting across a stage boundary. The per-worker churn tripwire
 //     cannot see that: a worker's previous-call hashes are reset at the start
 //     of every stream, so its first call of every stage claims nothing.
-func (a *Agent) checkCanonical(got map[prompt.Slot][32]byte) error {
+func (a *agent) checkCanonical(got map[prompt.Slot][32]byte) error {
 	for _, s := range a.slots {
 		h, ok := got[s]
 		if !ok {
@@ -316,7 +316,7 @@ func (a *Agent) checkCanonical(got map[prompt.Slot][32]byte) error {
 }
 
 // StageContextMismatchError reports a call whose stage-constant slots are not
-// the canonical ones — see Agent.checkCanonical for what that means in
+// the canonical ones — see agent.checkCanonical for what that means in
 // practice. It is distinct from prompt.ErrSlotChurn because the diagnosis
 // differs: churn is one worker's own bytes moving between its calls, while
 // this is a call disagreeing with the values the job and the stage froze,

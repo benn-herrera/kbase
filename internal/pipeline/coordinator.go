@@ -31,6 +31,11 @@ const DefaultWorkers = 4
 // deepest-valid-prefix walk exists to answer.
 var cpStageComplete = crashpoint.Register("pipeline.coordinator.stage.complete")
 
+// cpProduced kills a mechanical unit with its artifact derived and nothing
+// written — the produce path's counterpart of pipeline.runner.verified, and the
+// same claim: work that is done and unrecorded is redone, never guessed at.
+var cpProduced = crashpoint.Register("pipeline.coordinator.produce.done")
+
 // InputBuilder produces a task's per-call prompt input at the moment the
 // worker reaches the task, rather than when the stage was described.
 //
@@ -56,6 +61,24 @@ type InputBuilder func() prompt.CallInput
 func ConstInput(in prompt.CallInput) InputBuilder {
 	return func() prompt.CallInput { return in }
 }
+
+// Producer derives a unit's artifact in process, with no model involved. It is
+// the deterministic half of the pipeline (ARCHITECTURE.md §4: ingest, survey,
+// distillation, assembly, verify) expressed as a task, so those stages get the
+// resume, the stamps, the sweep accounting and the one worklist that the model
+// stages already have.
+//
+// It runs where the runner would have run, and everything around it is the
+// same: the unit is described identically, its input set is resolved and hashed
+// BEFORE it runs, its artifact goes through the stage's encoder and Store.Put,
+// and a failure is an inventoried unit failure rather than an abort. A producer
+// is not a call: it makes no prompt, touches no agent, and spends no tokens.
+//
+// It returns an error where InputBuilder does not, because the two failures are
+// different. A builder assembles material the stage already verified; a
+// producer does the stage's actual work, and a leaf whose cut list does not
+// tile is a unit that failed.
+type Producer func() (artifact any, err error)
 
 // Task is one unit of work: the artifact it must produce and the per-call
 // context that produces it.
@@ -98,7 +121,14 @@ type Task struct {
 	// A non-empty RefA is refused rather than overwritten, because silently
 	// discarding a caller's buffer is how slot 4 would start churning per
 	// call without anyone noticing.
+	//
+	// Exactly one of Input and Produce is set; see StagePlan.validate.
 	Input InputBuilder
+
+	// Produce derives the artifact in process instead of asking a model for
+	// it. A task that has one asks nothing, so it has no Input, no Section
+	// material that reaches a prompt, and no Role behind it.
+	Produce Producer
 }
 
 // DomainStream is one worker's whole assignment: a domain and its units in
@@ -122,10 +152,24 @@ type StreamResolver func() ([]DomainStream, error)
 
 // StagePlan is one stage: the role every worker of the stage runs, the stage
 // context spec they all share, and the domain streams that produce its units.
+//
+// A stage is EITHER a model stage or a mechanical one, and the difference is
+// which of the two task modes its tasks use (see StagePlan.validate for why
+// mixing them is refused). A model stage carries Role and Spec, and its
+// artifacts are encoded by Role.Encode. A mechanical stage — every task a
+// Producer — carries neither, because there is nothing to tell a model and no
+// seam to classify; its encoder is the field below, which is that stage's only
+// piece of Role-shaped state.
 type StagePlan struct {
 	Name string
 	Role Role
 	Spec prompt.StageSpec
+
+	// Encode renders a MECHANICAL stage's artifacts for the store — the
+	// counterpart of Role.Encode, which a stage with no Role cannot have.
+	// Required on a mechanical stage and refused on a model one: two
+	// encoders where one is used is one silently ignored.
+	Encode Encoder
 
 	// Streams resolves the stage's work when the stage is reached.
 	Streams StreamResolver
@@ -139,13 +183,70 @@ type StagePlan struct {
 	done       bool
 }
 
-// resolve produces the stage's streams, once.
+// resolve produces the stage's streams, once, and refuses a description whose
+// task modes do not describe one coherent stage.
 func (sp *StagePlan) resolve() ([]DomainStream, error) {
 	if !sp.done {
 		sp.resolved, sp.resolveErr = sp.Streams()
+		if sp.resolveErr == nil {
+			sp.resolveErr = sp.validate()
+		}
 		sp.done = true
 	}
 	return sp.resolved, sp.resolveErr
+}
+
+// validate refuses a stage description that cannot be executed as one stage.
+// It runs where the stage is DESCRIBED — which under the lazy chain is the
+// first moment the tasks exist — so a plan defect is a loud refusal before any
+// worker starts rather than a nil dereference in the middle of a run.
+//
+// Two rules, and they are the same rule seen at two scopes:
+//
+//   - A task asks a model or produces its artifact itself, never both and
+//     never neither. Both would mean the plan does not know which one made the
+//     artifact it is about to stamp; neither is a unit nothing could produce.
+//     A Producer cannot be CallOnly either: CallOnly means "the result is the
+//     stage's state, not an artifact", and a producer that writes nothing and
+//     calls nothing is a task with no effect at all.
+//   - A STAGE is uniform. Everything stage-scoped here is declared per stage
+//     and not per task — one Role, one shared StageContext, one seam, one
+//     tier, one encoder — so a half-mechanical stage has no honest answer for
+//     what its seam is or which encoder its artifacts went through. The
+//     pipeline's stages are whole-stage mechanical or whole-stage inference
+//     (ARCHITECTURE.md §4), so the uniformity costs nothing and buys the
+//     absence of a state nothing could describe.
+func (sp *StagePlan) validate() error {
+	produce, ask := 0, 0
+	for _, ds := range sp.resolved {
+		for _, t := range ds.Tasks {
+			switch {
+			case (t.Produce == nil) == (t.Input == nil):
+				return StageModeError{Stage: sp.Name, Path: t.Unit.Path,
+					Reason: "a task sets exactly one of Produce and Input"}
+			case t.Produce != nil && t.CallOnly:
+				return StageModeError{Stage: sp.Name, Path: t.Unit.Path,
+					Reason: "a Produce task makes no call, so it cannot be CallOnly"}
+			case t.Produce != nil:
+				produce++
+			default:
+				ask++
+			}
+		}
+	}
+	switch {
+	case produce > 0 && ask > 0:
+		return StageModeError{Stage: sp.Name, Reason: fmt.Sprintf(
+			"%d of its tasks produce their artifacts and %d ask a model; a stage is one or the other",
+			produce, ask)}
+	case produce > 0 && sp.Encode == nil:
+		return StageModeError{Stage: sp.Name,
+			Reason: "a mechanical stage needs StagePlan.Encode; it has no Role to carry one"}
+	case ask > 0 && sp.Encode != nil:
+		return StageModeError{Stage: sp.Name,
+			Reason: "a model stage's artifacts are encoded by its Role, so StagePlan.Encode would never run"}
+	}
+	return nil
 }
 
 // units derives the stage's output units from its resolved streams. It is the
@@ -313,6 +414,12 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 
 	res = JobResult{Mode: mode, Scan: scan, Reused: scan.Reused}
 	valid := validPaths(scan)
+	// What has already failed in this run, and the root cause behind each —
+	// the whole of cascade-failure's state, and it lives here because it is
+	// run-scoped: nothing about it is written down, and the next run sees both
+	// the cause and its cascade as simply Absent.
+	roots := map[string]string{}
+	inventoried := 0
 
 	for i, sp := range plan.Stages {
 		// The stage is described HERE, not at job setup — for a stage past
@@ -345,6 +452,8 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 			err = fmt.Errorf("pipeline: stage %s: %w", sp.Name, ferr)
 			break
 		}
+		runnable, cascaded := markCascades(sp.Name, runnable, roots)
+		res.Failures = append(res.Failures, cascaded...)
 		// A stage that stops takes the job with it, but the summary below
 		// still runs: what a job managed before it died is the first thing
 		// anyone will want, and reporting it only on the happy path is
@@ -352,6 +461,13 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 		if err = c.runStage(ctx, sp, frame, runnable, &res); err != nil {
 			break
 		}
+		// Every worker of the stage has exited, so the stage's failures are
+		// complete and the NEXT stage's dependents can be told apart from
+		// their causes. A stage boundary is the only place this can be read:
+		// within a stage the units run concurrently, and a unit may not name
+		// a sibling anyway (see Store.validateStage).
+		noteFailures(roots, res.Failures[inventoried:])
+		inventoried = len(res.Failures)
 		res.Stages++
 	}
 
@@ -377,8 +493,13 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 	return res, err
 }
 
-// runStage builds the stage's one shared agent and runs its streams through
-// the pool.
+// runStage builds the stage's one shared agent, if it has one, and runs its
+// streams through the pool.
+//
+// A mechanical stage has none: its tasks produce their artifacts in process, so
+// there is no context to freeze, no definition to render and no tier to
+// resolve. Skipping the construction is what makes "no Role needed" true rather
+// than a null Role passing a validation it was never going to satisfy.
 func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobFrame, streams []DomainStream, res *JobResult) error {
 	if len(streams) == 0 {
 		return nil
@@ -386,14 +507,22 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 	if err := enterPhase(PhaseStageSetup, c.lg); err != nil {
 		return err
 	}
-	if err := guard(PhaseStageSetup, OpRebuildStageContext); err != nil {
-		return err
+	var (
+		ag     *agent
+		encode = stage.Encode
+		mode   = "mechanical"
+	)
+	if !mechanicalStage(streams) {
+		if err := guard(PhaseStageSetup, OpRebuildStageContext); err != nil {
+			return err
+		}
+		built, err := newAgent(stage.Role, stage.Spec, frame)
+		if err != nil {
+			return fmt.Errorf("pipeline: stage %s: %w", stage.Name, err)
+		}
+		ag, encode, mode = built, stage.Role.Encode, string(built.Seam())
 	}
-	agent, err := newAgent(stage.Role, stage.Spec, frame)
-	if err != nil {
-		return fmt.Errorf("pipeline: stage %s: %w", stage.Name, err)
-	}
-	c.lg.Info("stage started", "stage", stage.Name, "seam", string(agent.Seam()),
+	c.lg.Info("stage started", "stage", stage.Name, "mode", mode,
 		"tier", stage.Role.Tier, "streams", len(streams))
 
 	// A worker that aborts stops the whole stage: the abort classes are
@@ -422,7 +551,7 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w := &worker{stage: stage.Name, agent: agent, runner: c.runner, store: c.store, lg: c.lg}
+			w := &worker{stage: stage.Name, agent: ag, encode: encode, runner: c.runner, store: c.store, lg: c.lg}
 			// Ranging to completion rather than breaking on the first
 			// abort: the feeder is only unblocked by this loop or by the
 			// cancellation it already received, and leaving it blocked
@@ -499,8 +628,11 @@ type unitResult struct {
 // buffer are per-worker state precisely so the churn tripwire is per-worker
 // (R-1), and nothing here is shared with a sibling.
 type worker struct {
-	stage  string
-	agent  *Agent
+	stage string
+	// agent is the stage's shared agent, nil on a mechanical stage — the one
+	// piece of a worker that a Produce task never reaches.
+	agent  *agent
+	encode Encoder
 	runner *CallRunner
 	store  *Store
 	lg     log.Logger
@@ -595,15 +727,32 @@ func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitRe
 	return nil
 }
 
-// unit runs one task: build and call through the runner, then write what came
-// back. The phase guards live here rather than inside the runner because the
-// phase is the worker's state — the runner is stateless and shared.
+// unit runs one task: derive the artifact — by call or by producer — and write
+// it. The phase guards live here rather than inside the runner because the
+// phase is the worker's state; the runner is stateless and shared, and a
+// producer knows nothing about phases at all.
 func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult, error) {
-	if task.Input == nil {
-		// A task with nothing to say is a plan defect, not a unit to redo:
-		// there is no call to make and no artifact any remedy would produce.
-		return unitResult{}, fmt.Errorf("pipeline: %s: task %s has no input builder", w.stage, task.Unit.Path)
+	// The input set is resolved BEFORE the artifact is derived, not at write
+	// time. It reads the upstream stamps, so a unit whose upstream never got
+	// produced is knowable in advance — and spending a model call, or a
+	// producer's work, on something that cannot be recorded is spending it to
+	// learn nothing. It is also the SAME function the scan uses, so a stamp
+	// can never be written under one derivation and checked under another. A
+	// CallOnly task records nothing, so there is nothing to resolve and
+	// nothing that could be unrecordable.
+	var inputs []Input
+	if !task.CallOnly {
+		var err error
+		if inputs, err = w.store.resolveInputs(task.Unit); err != nil {
+			return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
+				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream, Err: err,
+			}}, nil
+		}
 	}
+	if task.Produce != nil {
+		return w.produce(domain, task, inputs)
+	}
+
 	if err := guard(w.phase, OpBuildCall); err != nil {
 		return unitResult{}, err
 	}
@@ -614,24 +763,6 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 	in := task.Input()
 	if in.RefA != "" {
 		return unitResult{}, TaskOwnsRefAError{Stage: w.stage, Path: task.Unit.Path}
-	}
-
-	// The input set is resolved BEFORE the model is consulted, not at write
-	// time. It reads the upstream stamps, so a unit whose upstream never got
-	// produced is knowable in advance — and spending a model call on work
-	// that cannot be recorded is spending tokens to learn nothing. It is also
-	// the SAME function the scan uses, so a stamp can never be written under
-	// one derivation and checked under another. A CallOnly task records
-	// nothing, so there is nothing to resolve and nothing that could be
-	// unrecordable.
-	var inputs []Input
-	if !task.CallOnly {
-		var err error
-		if inputs, err = w.store.resolveInputs(task.Unit); err != nil {
-			return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
-				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream, Err: err,
-			}}, nil
-		}
 	}
 
 	in.RefA = w.refA
@@ -650,7 +781,7 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 		frontier = f
 	}
 
-	res, err := w.runner.Run(ctx, Call{
+	res, err := w.runner.Run(ctx, call{
 		Stage: w.stage, Unit: task.Unit.Path, Agent: w.agent,
 		Input: in, Frontier: frontier, Prev: w.prev,
 	})
@@ -680,10 +811,43 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 		return unitResult{Domain: domain, Path: task.Unit.Path, Degraded: res.Degraded, Usage: res.Usage}, nil
 	}
 
+	return w.write(domain, task, res.Artifact, inputs, res)
+}
+
+// produce runs a mechanical task: the unit's own derivation, in process, where
+// the call would have been. Everything on both sides of it is the model path's
+// — the inputs were resolved and hashed before it ran, and what it returns goes
+// through the same encoder, the same Put and the same stamp.
+//
+// A producer's failure is an inventoried unit failure, not an abort. It is the
+// deterministic counterpart of an essential seam's verification failure: there
+// is no baseline to fall back to and no retry worth making (the same inputs
+// would derive the same failure), so the unit fails, its siblings finish, and
+// the job refuses emission.
+func (w *worker) produce(domain string, task Task, inputs []Input) (unitResult, error) {
+	artifact, err := task.Produce()
+	if err != nil {
+		return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
+			Stage: w.stage, Path: task.Unit.Path, Kind: FailureProduce, Err: err,
+		}}, nil
+	}
+	crashpoint.At(cpProduced)
+	return w.write(domain, task, artifact, inputs, CallResult{})
+}
+
+// write encodes a derived artifact and puts it in the store under the input set
+// resolved for it. It is shared by both task modes on purpose: a produced
+// artifact and a verified one reach disk the same way, or "everything else is
+// unchanged" would be a claim rather than a fact.
+//
+// res carries what the derivation cost, and a produced unit passes the zero
+// value: no call was made, so there are no attempts, no tokens and no seam to
+// have degraded.
+func (w *worker) write(domain string, task Task, artifact any, inputs []Input, res CallResult) (unitResult, error) {
 	if err := guard(w.phase, OpWriteArtifact); err != nil {
 		return unitResult{}, err
 	}
-	data, err := w.agent.role.Encode(res.Artifact)
+	data, err := w.encode(artifact)
 	if err != nil {
 		return w.writeFailure(domain, task, res, fmt.Errorf("encode: %w", err)), nil
 	}
@@ -830,19 +994,180 @@ func filterStreams(streams []DomainStream, valid map[string]bool) ([]DomainStrea
 	out := make([]DomainStream, 0, len(streams))
 	for _, s := range streams {
 		kept := make([]Task, 0, len(s.Tasks))
-		produces := false
 		for _, t := range s.Tasks {
 			if !t.CallOnly && valid[t.Unit.Path] {
 				continue
 			}
-			produces = produces || !t.CallOnly
 			kept = append(kept, t)
 		}
-		if produces {
+		if producing(kept) {
 			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
 		}
 	}
 	return out, nil
+}
+
+// mechanicalStage reports whether the stage's tasks derive their artifacts in
+// process. Task modes are uniform per stage (StagePlan.validate), so the first
+// task answers for the stage; the loop is over streams only because which
+// stream holds it is not fixed.
+func mechanicalStage(streams []DomainStream) bool {
+	for _, s := range streams {
+		for _, t := range s.Tasks {
+			return t.Produce != nil
+		}
+	}
+	return false
+}
+
+// StageModeError refuses a stage description whose task modes do not describe
+// one coherent stage — see StagePlan.validate for the two rules. It is a plan
+// defect: no unit here could be produced by any remedy the run has, so it stops
+// the job at the moment the stage is described rather than per unit.
+type StageModeError struct {
+	Stage  string
+	Path   string
+	Reason string
+}
+
+func (e StageModeError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("pipeline: stage %s: task %s: %s", e.Stage, e.Path, e.Reason)
+	}
+	return fmt.Sprintf("pipeline: stage %s: %s", e.Stage, e.Reason)
+}
+
+// markCascades holds back the units whose upstream failed EARLIER IN THIS RUN,
+// and with them the calls that were going to feed them. It returns the streams
+// still worth running and the inventory of what it abandoned.
+//
+// ARCHITECTURE.md §12 has two rules either side of this case and neither
+// reaches it. "A failed call poisons the stream it is in" is intra-stream, and
+// this is a chain edge. "An unstamped upstream is structural incoherence" is
+// scoped by its own justification — nothing this chain runs would ever produce
+// it — which is exactly false for an artifact whose producing unit failed a
+// moment ago; applying it anyway would refuse the whole resume with `--fresh`
+// guidance and discard every proven artifact in the job over one failed unit.
+// So the poisoning discipline is applied ACROSS the chain edge instead: the
+// dependent is marked cascade-failed — not attempted, no call spent, nothing
+// written, inventoried beside its cause and naming the root of the chain — and
+// it propagates transitively, because a cascade-failed unit is itself a failure
+// the next stage reads.
+//
+// It is RUN-SCOPED bookkeeping: no new stamp, no persisted state, no change to
+// the resume scan. Next run both the cause and its cascade are simply Absent
+// and both are redone, which is why this needs no artifact machinery at all.
+//
+// Marking HERE rather than at the unit is what makes "spends nothing" true, in
+// two ways a worker-side check could not. A fold stream's calls come before the
+// task that writes its artifact, so a worker would have spent every one of them
+// before reaching the unit that could not be recorded. And a unit that failed
+// this run may still have a PREVIOUS run's artifact and stamp sitting on disk —
+// resolveInputs would resolve it happily and the dependent would spend a call
+// deriving from bytes this run has already superseded. resolveInputs remains
+// the second net, for what this map cannot know (an artifact deleted under a
+// running job); this is the first.
+func markCascades(stage string, streams []DomainStream, roots map[string]string) ([]DomainStream, []UnitFailure) {
+	if len(roots) == 0 {
+		return streams, nil
+	}
+	var (
+		out      []DomainStream
+		cascaded []UnitFailure
+	)
+	for _, s := range streams {
+		kept := make([]Task, 0, len(s.Tasks))
+		for _, t := range s.Tasks {
+			up, ok := failedUpstream(t, roots)
+			if !ok {
+				kept = append(kept, t)
+				continue
+			}
+			cascaded = append(cascaded, UnitFailure{
+				Stage: stage, Path: t.Unit.Path, Kind: FailureCascade,
+				Err: CascadeFailureError{
+					Stage: stage, Path: t.Unit.Path, Upstream: up, Root: roots[up],
+				},
+			})
+		}
+		// A stream with nothing left to write is dropped whole, calls and
+		// all — the same rule filterStreams keeps, for the same reason: its
+		// remaining calls would feed state nobody is going to record.
+		if producing(kept) {
+			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
+		}
+	}
+	return out, cascaded
+}
+
+// failedUpstream returns the first upstream of t that failed this run. It reads
+// the upstreams in their declared order, so a unit with two failed dependencies
+// names the same one in every run of the same broken job.
+//
+// A CallOnly task consumes nothing of its own — its unit description is a name,
+// not an artifact (see Task.Unit) — so it never cascades by itself; it is
+// dropped with the stream whose artifact did.
+func failedUpstream(t Task, roots map[string]string) (string, bool) {
+	if t.CallOnly {
+		return "", false
+	}
+	for _, up := range t.Unit.Upstreams {
+		if _, ok := roots[up]; ok {
+			return up, true
+		}
+	}
+	return "", false
+}
+
+// noteFailures records a stage's failures as causes the next stage's units may
+// cascade off, carrying the ROOT of each chain forward: a unit that cascaded
+// off a cascade names the failure whose remedy fixes the whole line, not its
+// immediate predecessor.
+func noteFailures(roots map[string]string, failures []UnitFailure) {
+	for _, f := range failures {
+		root := f.Path
+		var cascade CascadeFailureError
+		if errors.As(f.Err, &cascade) {
+			root = cascade.Root
+		}
+		roots[f.Path] = root
+	}
+}
+
+// producing reports whether the tasks still hold an artifact to write. A stream
+// that does not is dropped: whatever calls it has left would be spent feeding
+// state nobody records.
+func producing(tasks []Task) bool {
+	for _, t := range tasks {
+		if !t.CallOnly {
+			return true
+		}
+	}
+	return false
+}
+
+// CascadeFailureError reports a unit that was never attempted because a unit it
+// consumes failed earlier in the same run.
+//
+// Upstream is the dependency that failed; Root is the failure at the head of
+// the chain. They are the same path for a one-hop cascade, and differ down a
+// chain of stages — the level-sliced summary stages are the case this exists
+// for — where the remedy is Root's and reporting the immediate predecessor
+// would send a reader one hop at a time.
+type CascadeFailureError struct {
+	Stage    string
+	Path     string
+	Upstream string
+	Root     string
+}
+
+func (e CascadeFailureError) Error() string {
+	if e.Root != "" && e.Root != e.Upstream {
+		return fmt.Sprintf("pipeline: %s: %s was not attempted: its upstream %s failed this run, "+
+			"in the cascade of %s", e.Stage, e.Path, e.Upstream, e.Root)
+	}
+	return fmt.Sprintf("pipeline: %s: %s was not attempted: its upstream %s failed this run",
+		e.Stage, e.Path, e.Upstream)
 }
 
 // PoisonedStreamError reports an artifact that was not written because one of

@@ -29,11 +29,12 @@ func runSynth(t *testing.T, dir string, client model.Client, workers int, lg log
 // the second.
 func TestPlanChainDerivesTheWorklist(t *testing.T) {
 	chain := synthPlan(t).Chain()
-	if len(chain) != 3 {
-		t.Fatalf("chain has %d stages, want 3", len(chain))
+	if len(chain) != 4 {
+		t.Fatalf("chain has %d stages, want 4", len(chain))
 	}
-	if chain[0].Name != "survey" || chain[1].Name != synthFoldStage || chain[2].Name != "leaves" {
-		t.Errorf("stage names = %q/%q/%q", chain[0].Name, chain[1].Name, chain[2].Name)
+	if chain[0].Name != "survey" || chain[1].Name != synthFoldStage ||
+		chain[2].Name != synthProduceStage || chain[3].Name != "leaves" {
+		t.Errorf("stage names = %q/%q/%q/%q", chain[0].Name, chain[1].Name, chain[2].Name, chain[3].Name)
 	}
 	store, _ := newStore(t)
 	n := 0
@@ -119,12 +120,12 @@ func TestCoordinatorPhaseTraversal(t *testing.T) {
 			t.Errorf("%s was never entered", phase)
 		}
 	}
-	// One transition per stream (four of them) plus one mid-stream section
-	// change.
-	if got, want := lg.Count("debug", "phase", PhaseSectionTransition.String()), 5; got != want {
+	// One transition per stream (five of them, the mechanical stage's
+	// included) plus one mid-stream section change.
+	if got, want := lg.Count("debug", "phase", PhaseSectionTransition.String()), 6; got != want {
 		t.Errorf("%d section transitions, want %d", got, want)
 	}
-	if got, want := lg.Count("debug", "phase", PhaseStageSetup.String()), 3; got != want {
+	if got, want := lg.Count("debug", "phase", PhaseStageSetup.String()), 4; got != want {
 		t.Errorf("%d stage setups for %d stages", got, want)
 	}
 }
@@ -177,11 +178,19 @@ func TestCoordinatorGracefulDegradation(t *testing.T) {
 	if f := byPath["survey/b.json"]; f.Kind != FailureVerification || f.Stage != "survey" {
 		t.Errorf("survey/b.json failed as %+v, want %s in survey", f, FailureVerification)
 	}
-	// Its two dependents cascade — and cost nothing, because an
-	// underivable input set is caught before the model is consulted.
+	// Its two dependents cascade — and cost nothing, because a unit that
+	// failed this run is known before the stage that consumes it starts. Each
+	// names the failure that caused it, which is the remedy for all three.
 	for _, path := range []string{"leaves/d2/one.md", "leaves/d2/two.md"} {
-		if f := byPath[path]; f.Kind != FailureUpstream {
-			t.Errorf("%s failed as %q, want %s", path, f.Kind, FailureUpstream)
+		f := byPath[path]
+		if f.Kind != FailureCascade {
+			t.Errorf("%s failed as %q, want %s", path, f.Kind, FailureCascade)
+		}
+		var cascade CascadeFailureError
+		if !errors.As(f.Err, &cascade) {
+			t.Errorf("%s carries %v, want a CascadeFailureError", path, f.Err)
+		} else if cascade.Upstream != "survey/b.json" || cascade.Root != "survey/b.json" {
+			t.Errorf("%s cascade = %+v, want it to name survey/b.json as cause and root", path, cascade)
 		}
 	}
 	if len(res.Failures) != 3 {
@@ -195,9 +204,9 @@ func TestCoordinatorGracefulDegradation(t *testing.T) {
 	if res.Produced != synthUnits-3 {
 		t.Errorf("Produced = %d, want %d — a unit failure stopped its siblings", res.Produced, synthUnits-3)
 	}
-	// The produced units, one call each except the fold's, plus the rejected
-	// unit's two attempts.
-	if want := (synthUnits - 3) + (synthFoldCalls - 1) + semanticAttempts; client.callCount() != want {
+	// The produced units, one call each except the fold's and the mechanical
+	// stage's, plus the rejected unit's two attempts.
+	if want := (synthUnits - 3 - synthProduceUnits) + (synthFoldCalls - 1) + semanticAttempts; client.callCount() != want {
 		t.Errorf("%d calls, want %d; the cascaded units must not have consulted the model",
 			client.callCount(), want)
 	}
@@ -263,10 +272,10 @@ func TestCoordinatorCountsAFailedUnitsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// The produced units cost one call each except the fold's, and the failed
-	// one made both its semantic attempts. Its two dependents cascaded and
-	// cost nothing.
-	if want := (synthUnits - 3 + synthFoldCalls - 1 + semanticAttempts) * perCall; res.Usage.PromptTokens != want {
+	// The produced units cost one call each except the fold's and the
+	// mechanical stage's, and the failed one made both its semantic attempts.
+	// Its two dependents cascaded and cost nothing.
+	if want := (synthUnits - 3 - synthProduceUnits + synthFoldCalls - 1 + semanticAttempts) * perCall; res.Usage.PromptTokens != want {
 		t.Errorf("Usage.PromptTokens = %d, want %d — a failed unit's tokens went unaccounted",
 			res.Usage.PromptTokens, want)
 	}
@@ -357,18 +366,22 @@ func TestCoordinatorBudgetRefusalIsInventoried(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Two survey units and the fold's first boundary refused; four leaves
-	// cascaded off the survey, and the fold's artifact off its own poisoned
-	// call.
-	if len(res.Failures) != 8 {
-		t.Fatalf("failures = %+v, want the three refusals and their five cascades", res.Failures)
+	// Two survey units and the fold's first boundary refused; four leaves and
+	// the two mechanical units cascaded off the survey, and the fold's
+	// artifact off its own poisoned call.
+	if len(res.Failures) != 10 {
+		t.Fatalf("failures = %+v, want the three refusals and their seven cascades", res.Failures)
 	}
 	kinds := map[FailureKind]int{}
 	for _, f := range res.Failures {
 		kinds[f.Kind]++
 	}
-	if kinds[FailureBudget] != 3 || kinds[FailureUpstream] != 5 {
-		t.Errorf("kinds = %v, want 3 %s and 5 %s", kinds, FailureBudget, FailureUpstream)
+	// Three kinds, three stories: the refusals themselves, the composed
+	// artifact one of them poisoned inside its own stream, and the six units
+	// of later stages that consume what the refusals did not produce.
+	if kinds[FailureBudget] != 3 || kinds[FailureUpstream] != 1 || kinds[FailureCascade] != 6 {
+		t.Errorf("kinds = %v, want 3 %s, 1 %s and 6 %s",
+			kinds, FailureBudget, FailureUpstream, FailureCascade)
 	}
 	if client.callCount() != 0 {
 		t.Errorf("%d calls went on the wire for prompts that never built", client.callCount())
@@ -431,8 +444,8 @@ func TestCoordinatorConcurrency(t *testing.T) {
 			synthTask(filepath.ToSlash("leaves/"+d+"/two.md"), "s2", "survey/b.json"),
 		}})
 	}
-	plan.Stages[2].Streams = staticStreams(streams...)
-	want := 2 + 1 + 12
+	plan.Stages[3].Streams = staticStreams(streams...)
+	want := 2 + 1 + synthProduceUnits + 12
 
 	res, err := newSynthCoordinator(t, t.TempDir(), echoStub(), 3, &logtest.Capture{}).
 		Run(context.Background(), plan, ModeResume)
@@ -691,6 +704,307 @@ func TestAFailedCallPoisonsTheArtifactItFeeds(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(storeRoot(dir), filepath.FromSlash(synthFoldUnit))); err != nil {
 		t.Errorf("the redone fold wrote nothing: %v", err)
+	}
+}
+
+// TestCascadeCrossesStagesWithoutSpending is the F-8 extension made
+// falsifiable: a unit whose upstream failed THIS RUN is not attempted at all,
+// and neither is what depends on it, all the way down the chain.
+//
+// The chain here is three stages deep and the middle one is mechanical, so the
+// claim covers both task modes: the model stage below the failure makes no
+// call, and the producer between them never runs. Each cascade names the
+// failure at the head of the chain rather than its immediate predecessor,
+// which is the difference between an inventory that states one remedy and one
+// that makes a reader walk the chain a hop at a time.
+func TestCascadeCrossesStagesWithoutSpending(t *testing.T) {
+	dir := t.TempDir()
+	const root = "survey/a.json"
+	synthProduceRuns.Store(0)
+
+	// The one call this run has any business making is the one that fails.
+	client := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		if !strings.Contains(req.Messages[0].Content, root) {
+			t.Errorf("a call was made below a failed unit:\n%s", req.Messages[0].Content)
+		}
+		return model.Response{Content: "not data at all", FinishReason: "stop"}, nil
+	}}
+
+	const middle = "assemble/one.md"
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{
+		{
+			Name: "survey", Role: essentialRole(t), Spec: synthSpec("Task: inventory."),
+			Streams: staticStreams(DomainStream{Domain: "corpus", Tasks: []Task{synthTask(root, "all")}}),
+		},
+		{
+			Name: synthProduceStage, Encode: synthEncodeText,
+			Streams: staticStreams(DomainStream{Domain: "d", Tasks: []Task{{
+				Unit:    Unit{Path: middle, Inputs: []Input{corpusInput}, Upstreams: []string{root}},
+				Produce: func() (any, error) { synthProduceRuns.Add(1); return synthProduceText(middle), nil },
+			}}}),
+		},
+		{
+			Name: "leaves", Role: essentialRole(t), Spec: synthSpec("Task: distil."),
+			Streams: staticStreams(DomainStream{Domain: "d", Tasks: []Task{
+				synthTask("leaves/one.md", "s1", middle),
+			}}),
+		},
+	}}
+
+	res, err := newSynthCoordinator(t, dir, client, 2, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	byPath := map[string]UnitFailure{}
+	for _, f := range res.Failures {
+		byPath[f.Path] = f
+	}
+	if len(res.Failures) != 3 {
+		t.Fatalf("failures = %+v, want the failed unit and its two descendants", res.Failures)
+	}
+	if f := byPath[root]; f.Kind != FailureVerification {
+		t.Errorf("the root failure is %+v, want %s", f, FailureVerification)
+	}
+	for _, tc := range []struct{ path, upstream string }{{middle, root}, {"leaves/one.md", middle}} {
+		f := byPath[tc.path]
+		if f.Kind != FailureCascade {
+			t.Errorf("%s failed as %q, want %s", tc.path, f.Kind, FailureCascade)
+		}
+		var cascade CascadeFailureError
+		if !errors.As(f.Err, &cascade) {
+			t.Fatalf("%s carries %v, want a CascadeFailureError", tc.path, f.Err)
+		}
+		if cascade.Upstream != tc.upstream || cascade.Root != root {
+			t.Errorf("%s cascade = %+v, want upstream %s and root %s", tc.path, cascade, tc.upstream, root)
+		}
+		if f.Usage != (model.Usage{}) || f.SemanticAttempts != 0 {
+			t.Errorf("%s cost %+v over %d attempts; a cascade spends nothing",
+				tc.path, f.Usage, f.SemanticAttempts)
+		}
+	}
+
+	// Nothing was spent and nothing was written: one failed call, no producer
+	// run, an empty store, and a job that refuses emission.
+	if client.callCount() != semanticAttempts {
+		t.Errorf("%d calls, want the failing unit's %d and nothing else", client.callCount(), semanticAttempts)
+	}
+	if n := synthProduceRuns.Load(); n != 0 {
+		t.Errorf("the producer ran %d times under a failed upstream", n)
+	}
+	if state := storeState(t, dir); len(state) != 0 {
+		t.Errorf("the store holds %v; nothing in this run had a recordable input set", state)
+	}
+	if res.EmitReady() {
+		t.Error("a job whose chain failed at the top must refuse emission")
+	}
+	// And it is run-scoped: no stamp, no state, so the next run simply redoes
+	// all three (here, the first of them, which fails the same way).
+	scan, err := synthStore(t, dir, log.Discard()).Scan(plan.Chain(), ModeResume)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if scan.ResumeStage != 0 || scan.Reused != 0 {
+		t.Errorf("scan = %+v, want the next run to start at the failure", scan)
+	}
+	if v := scan.Verdicts[0]; v.Verdict != VerdictAbsent {
+		t.Errorf("verdict = %s, want %s: a cascade leaves nothing behind to verdict",
+			v.Verdict, VerdictAbsent)
+	}
+}
+
+// TestCascadeDropsTheCallsThatFedIt: a fold's calls come BEFORE the task that
+// writes what they compose, so a cascade recognised at the unit would already
+// have spent all of them on an artifact nobody was going to write.
+func TestCascadeDropsTheCallsThatFedIt(t *testing.T) {
+	const root = "survey/a.json"
+	client := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		return model.Response{Content: "not data at all", FinishReason: "stop"}, nil
+	}}
+
+	fold := []Task{
+		synthTask("fold/0001.boundary", "span", root),
+		synthTask("fold/0002.boundary", "span", root),
+		synthTask(synthFoldUnit, "span", root),
+	}
+	fold[0].CallOnly, fold[1].CallOnly = true, true
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{
+		{
+			Name: "survey", Role: essentialRole(t), Spec: synthSpec("Task: inventory."),
+			Streams: staticStreams(DomainStream{Domain: "corpus", Tasks: []Task{synthTask(root, "all")}}),
+		},
+		{
+			Name: synthFoldStage, Role: essentialRole(t), Spec: synthSpec("Task: adjudicate."),
+			Streams: staticStreams(DomainStream{Domain: synthFoldStage, Tasks: fold}),
+		},
+	}}
+
+	res, err := newSynthCoordinator(t, t.TempDir(), client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Failures) != 2 {
+		t.Fatalf("failures = %+v, want the failed unit and the artifact that cascaded off it", res.Failures)
+	}
+	if client.callCount() != semanticAttempts {
+		t.Errorf("%d calls, want the failing unit's %d: a dropped artifact drops its calls with it",
+			client.callCount(), semanticAttempts)
+	}
+}
+
+// TestStageModeIsValidatedAtDescription: a task asks a model or produces its
+// artifact itself, a stage is all of one kind, and the encoder lives wherever
+// the stage's artifacts actually come from. Every violation is a plan defect,
+// so it is refused when the stage is DESCRIBED — before a worker starts, and
+// therefore before any of it could be half-executed.
+func TestStageModeIsValidatedAtDescription(t *testing.T) {
+	produce := func() (any, error) { return "produced\n", nil }
+	model := synthTask("stage/model.md", "s1")
+	mech := Task{Unit: Unit{Path: "stage/mech.md", Inputs: []Input{corpusInput}}, Produce: produce}
+
+	both := model
+	both.Produce = produce
+	neither := model
+	neither.Input = nil
+	callOnly := mech
+	callOnly.CallOnly = true
+
+	tests := []struct {
+		name   string
+		tasks  []Task
+		encode Encoder
+		want   string
+	}{
+		{"both modes", []Task{both}, nil, "exactly one"},
+		{"neither mode", []Task{neither}, nil, "exactly one"},
+		{"a produce task that is CallOnly", []Task{callOnly}, synthEncodeText, "cannot be CallOnly"},
+		{"a mixed stage", []Task{model, mech}, nil, "one or the other"},
+		{"a mechanical stage with no encoder", []Task{mech}, nil, "needs StagePlan.Encode"},
+		{"a model stage with one", []Task{model}, synthEncodeText, "encoded by its Role"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := &StagePlan{
+				Name: "stage", Role: essentialRole(t), Spec: synthSpec("Task: synthetic."),
+				Encode:  tc.encode,
+				Streams: staticStreams(DomainStream{Domain: "d", Tasks: tc.tasks}),
+			}
+			_, err := sp.resolve()
+			var target StageModeError
+			if !errors.As(err, &target) {
+				t.Fatalf("err = %v (%T), want a StageModeError", err, err)
+			}
+			if !strings.Contains(target.Reason, tc.want) {
+				t.Errorf("reason = %q, want it to name %q", target.Reason, tc.want)
+			}
+			// The same description is what the scan reads, so the refusal
+			// reaches a run through the chain as well.
+			if _, err := sp.units(); !errors.As(err, &target) {
+				t.Errorf("the chain resolved a stage the plan refuses: %v", err)
+			}
+		})
+	}
+}
+
+// TestProduceRunsInPlaceOfTheCall: a mechanical stage's units are described,
+// stamped, swept and resumed exactly like a model stage's — the only
+// difference is that nothing was asked.
+//
+// The stage declares NO Role, which is the load-bearing half: a run that built
+// an agent for it would be refused by Role.validate for having no verifier, no
+// tier and no declared effort. Reaching a produced artifact at all proves the
+// produce path never went near the prompt machinery.
+func TestProduceRunsInPlaceOfTheCall(t *testing.T) {
+	dir := t.TempDir()
+	client := echoStub()
+	synthProduceRuns.Store(0)
+
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{synthProducePlan()}}
+	plan.Stages[0].Streams = staticStreams(DomainStream{Domain: "d", Tasks: []Task{
+		{Unit: Unit{Path: "assemble/one.md", Inputs: []Input{corpusInput}},
+			Produce: func() (any, error) { synthProduceRuns.Add(1); return synthProduceText("assemble/one.md"), nil }},
+	}})
+
+	res, err := newSynthCoordinator(t, dir, client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Produced != 1 || res.Units != 1 || len(res.Failures) != 0 || !res.EmitReady() {
+		t.Fatalf("result = %+v, want one produced unit and a clean job", res)
+	}
+	if client.callCount() != 0 {
+		t.Errorf("%d calls; a mechanical stage consults nothing", client.callCount())
+	}
+	data, err := readArtifact(dir, "assemble/one.md")
+	if err != nil {
+		t.Fatalf("read the produced artifact: %v", err)
+	}
+	if data != synthProduceText("assemble/one.md") {
+		t.Errorf("artifact = %q, want the producer's own bytes", data)
+	}
+
+	// And the proof beside it is the ordinary one, so the next run reuses it
+	// and the producer does not run again.
+	synthProduceRuns.Store(0)
+	res, err = newSynthCoordinator(t, dir, client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("the second run: %v", err)
+	}
+	if res.Reused != 1 || res.Produced != 0 {
+		t.Errorf("result = %+v, want the produced unit reused on its stamp", res)
+	}
+	if n := synthProduceRuns.Load(); n != 0 {
+		t.Errorf("the producer ran %d times over a proven artifact", n)
+	}
+}
+
+// TestProduceFailureIsInventoried: a producer's failure is a unit failure like
+// any other — the siblings finish, the inventory names it under its own kind,
+// nothing is written for it, and the job refuses emission.
+func TestProduceFailureIsInventoried(t *testing.T) {
+	dir := t.TempDir()
+	broken := errors.New("the cut list does not tile the span")
+	tasks := []Task{
+		{Unit: Unit{Path: "assemble/bad.md", Inputs: []Input{corpusInput}},
+			Produce: func() (any, error) { return nil, broken }},
+		{Unit: Unit{Path: "assemble/good.md", Inputs: []Input{corpusInput}},
+			Produce: func() (any, error) { return synthProduceText("assemble/good.md"), nil }},
+	}
+	plan := Plan{SystemFrame: synthFrame, Stages: []*StagePlan{{
+		Name: synthProduceStage, Encode: synthEncodeText,
+		Streams: staticStreams(DomainStream{Domain: "d", Tasks: tasks}),
+	}}}
+
+	client := echoStub()
+	res, err := newSynthCoordinator(t, dir, client, 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Failures) != 1 || res.Failures[0].Path != "assemble/bad.md" {
+		t.Fatalf("failures = %+v, want just the unit whose producer failed", res.Failures)
+	}
+	if f := res.Failures[0]; f.Kind != FailureProduce || !errors.Is(f.Err, broken) {
+		t.Errorf("failure = %+v, want %s carrying the producer's own error", f, FailureProduce)
+	}
+	if res.Failures[0].Usage != (model.Usage{}) || res.Failures[0].SemanticAttempts != 0 {
+		t.Errorf("failure = %+v, want no attempts and no tokens: nothing was asked", res.Failures[0])
+	}
+	if res.EmitReady() {
+		t.Error("a job with a failed mechanical unit must refuse emission")
+	}
+	if res.Produced != 1 {
+		t.Errorf("Produced = %d, want the sibling finished", res.Produced)
+	}
+	if _, err := readArtifact(dir, "assemble/bad.md"); !os.IsNotExist(err) {
+		t.Errorf("the failed unit left something behind (err = %v)", err)
+	}
+	if client.callCount() != 0 {
+		t.Errorf("%d calls; a mechanical stage consults nothing, failing or not", client.callCount())
 	}
 }
 
