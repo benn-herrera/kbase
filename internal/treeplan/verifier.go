@@ -10,7 +10,7 @@ import (
 	"kbase/internal/survey"
 )
 
-// Verifier composes and checks skeletons over ONE corpus.
+// Verifier composes and checks tree plans over ONE corpus.
 //
 // It holds the survey artifact (the taxonomy stage's only view of the corpus,
 // ARCHITECTURE §4 row 3) and the source under custody, because §2.4's split

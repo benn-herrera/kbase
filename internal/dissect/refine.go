@@ -475,7 +475,7 @@ func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.Stag
 			// registered outside this package.
 			Effort:   r.effort,
 			Verify:   r.verify,
-			Encode:   encodeCutList,
+			Encode:   EncodeCutList,
 			Fallback: r.fallback,
 		},
 		Spec: prompt.StageSpec{TaskDef: stubTaskDef},
@@ -764,7 +764,7 @@ func (r rejection) Unwrap() error { return r.err }
 func (r *Refiner) fallback(artifactPath string) any {
 	// An unknown unit cannot arrive through the coordinator (the calls and
 	// this table are built from one loop), and a MechanicalFallback has no way to
-	// refuse. The empty list is one encodeCutList rejects, so the case
+	// refuse. The empty list is one EncodeCutList rejects, so the case
 	// surfaces as a loud write failure rather than as a plausible artifact.
 	i, ok := r.byUnit[artifactPath]
 	if !ok {
@@ -814,8 +814,13 @@ type CutList struct {
 	Cuts []survey.Span
 }
 
-// encodeCutList renders the composed cut list: one section per line, start and
+// EncodeCutList renders the composed cut list: one section per line, start and
 // end, in document order.
+//
+// Exported for the same reason DecodeCutList is: there is more than one writer
+// of this format. The refinement stage composes a cut list from a model fold,
+// and the mechanical cuts stage writes dissect.Split's output directly — one
+// format, one encoder, whichever stage produced the list.
 //
 // Two decimals a line rather than the interior cuts alone, because a list that
 // carries its own endpoints is checkable without knowing the span it came from
@@ -823,7 +828,7 @@ type CutList struct {
 // different run. Which boundaries the model moved is not in the bytes: it is
 // not a property of the cut list, and the fold's log records it where a
 // question about model performance is answered.
-func encodeCutList(artifact any) ([]byte, error) {
+func EncodeCutList(artifact any) ([]byte, error) {
 	l, ok := artifact.(CutList)
 	if !ok {
 		return nil, fmt.Errorf("dissect: artifact is %T, not a CutList", artifact)
@@ -839,7 +844,7 @@ func encodeCutList(artifact any) ([]byte, error) {
 }
 
 // DecodeCutList reads an encoded cut list back into the sections it records —
-// encodeCutList's counterpart, and the ONE decoder of this format.
+// EncodeCutList's counterpart, and the ONE decoder of this format.
 //
 // One, because there were nearly three: the dev verb re-derived the section
 // list from the fold's own boundaries rather than from the bytes, the tests

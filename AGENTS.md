@@ -30,6 +30,8 @@ just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
 just test-integration        # omnibus: every per-corpus integration test
 just test-integration-rojo   # pinned Rojo corpus: summary values + determinism
+just test-integration-rojo-build  # build a whole KB from that corpus, offline,
+                                  # and assert the nine verify gates
 just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
@@ -62,10 +64,17 @@ write generated or downloaded data into `fixtures/`.
 
 ```
 cmd/                kbase CLI (cobra): composition root + one file per verb
+internal/assemble/  stages 8+9: the index and entry-point grammar (§4.2/§4.3),
+                    the closed class-B fixture manifest shipped with every KB,
+                    and the nine verify gates, each scoped to a file class
 internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
+internal/distill/   stage 5: a page's bytes (span from the tree plan, interior
+                    boundaries from the cut list), the §4.4 rebase map, §4.1's
+                    page grammar, and the up-link/relative-path/provenance
+                    renderers stage 8 shares
 internal/ingest/    corpus walk + immutable source custody (§4 stage 1);
                     format-neutral (document extensions are a parameter);
                     per-file sha256 + corpus content hash

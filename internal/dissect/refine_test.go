@@ -917,9 +917,9 @@ func TestCutListRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	data, err := encodeCutList(CutList{Unit: "cuts/cutlist.txt", Cuts: cuts})
+	data, err := EncodeCutList(CutList{Unit: "cuts/cutlist.txt", Cuts: cuts})
 	if err != nil {
-		t.Fatalf("encodeCutList: %v", err)
+		t.Fatalf("EncodeCutList: %v", err)
 	}
 	got, err := DecodeCutList(data)
 	if err != nil {
@@ -1227,7 +1227,7 @@ func TestComposedCutListFailureIsADefect(t *testing.T) {
 		// MechanicalFallback cannot refuse, so it refuses by producing nothing the
 		// encoder will write — a loud write failure rather than a cut list
 		// nobody verified.
-		if _, err := encodeCutList(r.fallback(b.Unit)); err == nil {
+		if _, err := EncodeCutList(r.fallback(b.Unit)); err == nil {
 			t.Error("an unverifiable composition must not encode into an artifact")
 		}
 	})

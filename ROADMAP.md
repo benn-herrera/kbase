@@ -47,6 +47,17 @@ deleted, not archived — git history is the log.
      `internal/pipeline`, both written into ARCHITECTURE §12; the
      queued `Agent`/`Call` unexport went with it (evidence recorded
      2026-08-10: `internal/dissect` needs only `CallRunner`).
+     **Burst B landed 2026-08-13**: `internal/treeplan`.
+     **Bursts C+D landed 2026-08-13**: the mechanical spine —
+     `internal/distill` (stage 5: byte derivation, the rebase map, §4.1's
+     page grammar), `internal/assemble` (stages 8+9: index/entry-point
+     grammar, the §8.1 fixture manifest, the nine verify gates,
+     delivery), the `SourceStructureProposal` dev/baseline tree plan, and
+     `kbase dev-build`, which composes all of it into a walkable Rojo KB
+     with no model in the loop (`just test-integration-rojo-build`).
+     Two findings from it are queued below: link byte offsets on
+     `survey.Link`, and the anchor-grammar guess the rebase map makes
+     without them.
   4. **MAD #2 = the standing E2E gate below** (design + implementation
      + generated Rojo KB + exemplar comparison).
 - Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,
@@ -93,8 +104,27 @@ deleted, not archived — git history is the log.
     beyond the clamp: the model judges a boundary better with more context
     than it is allowed to move within. The clamp is unchanged — this is about
     what is shown, not what may be chosen.
-- Distillation, hierarchical summaries, review stages; link generation;
-  refresh/verify gates (kb_tools port).
+- Hierarchical summaries and review stages (distillation, link generation and
+  the verify gates landed with bursts C+D).
+- **Link byte offsets on `survey.Link`** (finding, bursts C+D). §4.4 asks
+  stage 5 to rewrite link targets inside a page's bytes; the survey artifact
+  carries each destination as written, its resolution and its fragment, but no
+  offsets, and it collapses repeats of one target to a single entry. So
+  `internal/distill` ships its own destination SCANNER (`distill/scan.go`) —
+  two hard-coded Markdown facts (`](…)` and `[label]: …`), fenced blocks
+  skipped, and no interpretation of what it finds. The adapter already knows
+  the offsets (goldmark hands them over). Emitting them is a `kbase.survey/3`
+  change, after which that file is deleted and `Destinations` becomes a read of
+  the artifact. Not taken unilaterally in C+D because a schema bump is a shape
+  decision.
+- **The anchor grammar the rebase map guesses** (finding, bursts C+D). §4.4
+  rule 1 lands a `#fragment` on the page hosting the section it names, and
+  matching a fragment to a section needs the heading→anchor convention of
+  whatever renders the source site — which no artifact states and kbase cannot
+  learn. `distill.anchorSlug` implements the common one (lowercase, strip,
+  hyphenate) and a miss falls through to rule 2, so being wrong costs a hop of
+  precision and never a broken link. Revisit if a corpus shows the fallthrough
+  is routing badly.
 - glimmer-30B head-to-head, on the `dev-refine` harness (challenger test
   post-E2E; a tie counts as a win for the incumbent; low-cost-cloud
   availability check first).

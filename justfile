@@ -24,6 +24,7 @@ TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
 # One directory per test name, all under the gitignored transient tree.
 UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
 ROJO_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-rojo"
+ROJO_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-rojo-build"
 
 DIST_DIR := "dist"
 
@@ -137,12 +138,44 @@ _test-integration-rojo: build prep-test-integration-rojo
     done; \
     echo "integration(rojo) ok: surveyed, deterministic, summary matches"
 
+# Build a whole knowledge base out of the pinned Rojo corpus and walk it.
+#
+# This is the mechanical spine end to end — survey, tree plan, cuts, pages,
+# assembly, the nine verify gates, delivery — with no model in the loop, so it
+# runs offline in a second and any drift in the deterministic half of the
+# pipeline fails it.
+#
+# The KB *is* the evidence, so unlike the other recipes this one keeps its
+# whole output: the delivered tree under {{ROJO_BUILD_OUT_DIR}}/kb, the run
+# record beside it, the job's intermediates in its temp-work/, the measured
+# stats in stats.json, and the full log. A build that left nothing to walk
+# would be a green tick nobody can check.
+[doc("build a KB from the pinned Rojo corpus; assert the nine verify gates and walk the tree")]
+test-integration-rojo-build:
+    @mkdir -p "{{ROJO_BUILD_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-rojo-build 2>&1 | tee "{{ROJO_BUILD_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-rojo.
+[private]
+_test-integration-rojo-build: build prep-test-integration-rojo
+    go test -v -run TestDevBuildOverRealCorpus -count=1 ./cmd
+    @kb="{{ROJO_BUILD_OUT_DIR}}/kb"; \
+    for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
+      [[ -f "$kb/$want" ]] || { echo "integration(rojo-build): $want was not delivered"; exit 1; }; \
+    done; \
+    echo "integration(rojo-build): delivered tree at $kb"; \
+    find "$kb" -name '*.md' | wc -l | xargs echo "  markdown pages:"; \
+    echo "  tree to depth 2:"; \
+    find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
+    echo "integration(rojo-build) ok: nine gates green, tree delivered"
+
 # The omnibus composes the per-corpus recipes and writes no log of its own:
 # each of them already preserves its full output under its own name, and a
 # second copy of the same bytes under a second name is a file that can go
 # stale against the one anybody reads.
 [doc("run every per-corpus integration test")]
-test-integration: test-integration-rojo
+test-integration: test-integration-rojo test-integration-rojo-build
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

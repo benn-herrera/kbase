@@ -87,7 +87,7 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 	}
 }
 
-// TestSkeletonOverRealCorpusUnderStress is the same plan at leaf budgets small
+// TestTreePlanOverRealCorpusUnderStress is the same plan at leaf budgets small
 // enough that the pinned corpus's own sections have to be split.
 //
 // The shipped budget leaves every Rojo section under one leaf, so the split
@@ -100,7 +100,7 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 // Rejection naming what the model would have to do differently. There is no
 // third outcome — in particular, no defect, which would mean the verifier
 // disagreed with itself over real bytes.
-func TestSkeletonOverRealCorpusUnderStress(t *testing.T) {
+func TestTreePlanOverRealCorpusUnderStress(t *testing.T) {
 	art, corpus := realArtifact(t)
 	plan := planByFile(t, art)
 
@@ -176,7 +176,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeP
 	return v, TreePlan{}, sweepOutcome{LeafTokens: leafTokens, Outcome: "rejected", Rejection: rej}
 }
 
-// TestSkeletonOverRealCorpusEvidence writes down what the two properties above
+// TestTreePlanOverRealCorpusEvidence writes down what the two properties above
 // measured.
 //
 // The properties assert; this records. AGENTS.md's rule is that results which
@@ -188,7 +188,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeP
 // It re-composes rather than reading what the properties built: a test that
 // depended on another test having run first is an ordering constraint go test
 // does not promise, and the composition is milliseconds.
-func TestSkeletonOverRealCorpusEvidence(t *testing.T) {
+func TestTreePlanOverRealCorpusEvidence(t *testing.T) {
 	art, corpus := realArtifact(t)
 	plan := planByFile(t, art)
 
@@ -379,60 +379,17 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 	t.Logf("evidence: %s (%d bytes)", path, len(data))
 }
 
-// planByFile is the mechanical grouping both corpus tests compose: one domain
-// per document, one page per top-level section.
+// planByFile is the mechanical grouping both corpus tests compose, and it is
+// the shipped dev/baseline helper rather than a test-local copy of it: the
+// property is about the tree `kbase dev-build` actually produces, so it has to
+// be composed from the same proposal that verb composes.
 func planByFile(t *testing.T, art survey.Artifact) TreeProposal {
 	t.Helper()
-	plan := TreeProposal{Title: "Rojo Documentation", Scope: "the pinned Rojo docs corpus"}
-	for _, f := range art.Files {
-		title := f.Title
-		if title == "" {
-			title = f.Path
-		}
-		var leaves []ProposalNode
-		for _, span := range topLevelSpans(f) {
-			leaves = append(leaves, ProposalNode{
-				Title:   spanTitle(f, span),
-				Scope:   "scope of " + spanTitle(f, span),
-				Kind:    KindLeaf,
-				Sources: []Span{{File: f.Path, Start: span.Start, End: span.End}},
-			})
-		}
-		if len(leaves) == 0 {
-			continue
-		}
-		plan.Children = append(plan.Children, ProposalNode{
-			Title: title, Scope: "scope of " + title, Kind: KindIndex, Children: leaves,
-		})
-	}
-	if len(plan.Children) == 0 {
-		t.Fatal("the corpus produced no domains to plan")
+	plan, err := SourceStructureProposal(art, "Rojo Documentation", "the pinned Rojo docs corpus")
+	if err != nil {
+		t.Fatalf("SourceStructureProposal: %v", err)
 	}
 	return plan
-}
-
-// topLevelSpans is the preamble plus every top-level section of a file: the
-// ranges that tile it, since a section's children nest inside it.
-func topLevelSpans(f survey.File) []survey.Span {
-	var out []survey.Span
-	if f.Preamble != nil && f.Preamble.End > f.Preamble.Start {
-		out = append(out, survey.Span{Start: f.Preamble.Start, End: f.Preamble.End})
-	}
-	for _, s := range f.Sections {
-		out = append(out, survey.Span{Start: s.Start, End: s.End})
-	}
-	return out
-}
-
-// spanTitle names a span for the plan: the section's own title, or the file's
-// when the span is the headingless preamble.
-func spanTitle(f survey.File, r survey.Span) string {
-	for _, s := range f.Sections {
-		if s.Start == r.Start && s.Title != "" {
-			return s.Title
-		}
-	}
-	return "Introduction to " + f.Path
 }
 
 // realArtifact surveys the pinned corpus, or skips.
