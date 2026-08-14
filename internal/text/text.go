@@ -31,3 +31,22 @@ func CapWords(s string, n int) string {
 	}
 	return strings.Join(words, " ")
 }
+
+// JSONObject extracts a JSON object from a model's response: everything from
+// the first `{` to the last `}`. The second return is false when there is no
+// such range.
+//
+// Every seam whose answer is data has the same problem — the object is what
+// the post-condition is about, and a fenced block, a leading "Here is the
+// grouping:" or a trailing remark around it is not a wrong answer, it is a
+// model being conversational. Extracting is the smallest thing that tolerates
+// that without tolerating prose INSTEAD of an answer, and it lives here
+// because two stages parse two different schemas out of one wrapper.
+func JSONObject(response string) (string, bool) {
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+	if start < 0 || end <= start {
+		return "", false
+	}
+	return response[start : end+1], true
+}

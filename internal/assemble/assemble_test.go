@@ -67,7 +67,7 @@ func newScene(t *testing.T) scene {
 		t.Fatalf("Compose: %v", err)
 	}
 	prov := distill.Provenance{CorpusHash: art.Corpus.ContentHash, BuildDate: "2026-08-13"}
-	r, err := NewRenderer(plan, prov)
+	r, err := NewRenderer(plan, prov, nil)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestVerifyCatchesTitleDrift(t *testing.T) {
 		}
 	}
 	v.Plan = plan
-	r, err := NewRenderer(plan, distill.Provenance{CorpusHash: plan.CorpusHash, BuildDate: "2026-08-13"})
+	r, err := NewRenderer(plan, distill.Provenance{CorpusHash: plan.CorpusHash, BuildDate: "2026-08-13"}, nil)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}

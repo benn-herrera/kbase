@@ -58,6 +58,19 @@ deleted, not archived — git history is the log.
      Two findings from it are queued below: link byte offsets on
      `survey.Link`, and the anchor-grammar guess the rebase map makes
      without them.
+     **Bursts E+F landed 2026-08-13**: the two no-fallback seams —
+     `internal/taxonomy` (stage 3's container descent, composed as a
+     fold over one serial lane) and `internal/summarize` (stage 6's
+     four level-sliced stages, per-child-kind inputs, JSON summary
+     artifacts) — plus `dev-build --config-dir`, which runs both LIVE
+     and delivers a Rojo KB with a model-designed tree and real
+     conclusions blocks. Both definitions are marked stubs. Two
+     findings from the burst: page granularity is capped at a
+     document's top-level sections (the landed coverage gate wants
+     every surveyed section inside ONE group span, so a section cannot
+     be descended into — an oversized one is split mechanically), and
+     a container the answer above it placed on a page still spends its
+     enumerated call, whose answer is then discarded.
   4. **MAD #2 = the standing E2E gate below** (design + implementation
      + generated Rojo KB + exemplar comparison).
 - Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,

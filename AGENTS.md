@@ -84,6 +84,9 @@ internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
+internal/summarize/ stage 6: the four level-sliced summary stages (deepest
+                    first), the per-child-kind input rule, the JSON summary
+                    artifact and its §6.4 verifier; a no-fallback seam
 internal/survey/    the survey artifact (§4 stage 2) and NOTHING format-specific:
                     heading tree with byte offsets, section token sizes, link
                     graph, gists; corpus roll-up, tiling + custody checks,
@@ -92,6 +95,10 @@ internal/survey/markdown/
                     the goldmark adapter — the only package that may import
                     goldmark or yaml; produces survey.Artifact and owns the
                     Markdown extension set
+internal/taxonomy/  stage 3: the container descent that designs the tree —
+                    the mechanical question set enumerated from the survey, the
+                    grouping answer's JSON transport, and the fold that composes
+                    treeplan.json; a no-fallback seam
 internal/tokens/    single chars-per-token estimator (§8)
 internal/treeplan/  the tree plan artifact (§4 stage 3 output, kbase.treeplan/1):
                     planned KB tree + split groups + annexes, namer/slugger, the

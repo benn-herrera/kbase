@@ -300,14 +300,14 @@ func (v *Verifier) checkCoverage(s TreePlan) error {
 			return DefectError{Subject: g.ID, Reason: fmt.Sprintf(
 				"draws on %s, which the survey does not describe", g.Source.File)}
 		}
-		if a, ok := annexedBy(g.Source.File, s.Annexes); ok {
+		if a, ok := AnnexedBy(g.Source.File, s.Annexes); ok {
 			return DefectError{Subject: g.ID, Reason: fmt.Sprintf(
 				"draws on %s, which the annex %q excludes", g.Source.File, a)}
 		}
 	}
 
 	for _, f := range v.art.Files {
-		if _, annexed := annexedBy(f.Path, s.Annexes); annexed {
+		if _, annexed := AnnexedBy(f.Path, s.Annexes); annexed {
 			continue
 		}
 		spans := byFile[f.Path]

@@ -168,7 +168,7 @@ func (v *Verifier) checkSources(root *buildNode, annexes []Annex) error {
 					"span [%d,%d) is not a range of the %d-byte file %s", s.Start, s.End, f.Bytes, s.File)}
 				return
 			}
-			if a, ok := annexedBy(s.File, annexes); ok {
+			if a, ok := AnnexedBy(s.File, annexes); ok {
 				err = DefectError{Subject: n.title, Reason: fmt.Sprintf(
 					"draws on %s, which the annex %q excludes from distillation", s.File, a)}
 				return
@@ -178,12 +178,17 @@ func (v *Verifier) checkSources(root *buildNode, annexes []Annex) error {
 	return err
 }
 
-// annexedBy reports the declared annex prefix that claims a corpus path.
+// AnnexedBy reports the declared annex prefix that claims a corpus path.
 //
 // A prefix claims the directory it names and everything beneath it. It is a
 // path-segment comparison rather than a string prefix: `guide` must not claim
 // `guidebook.md`.
-func annexedBy(file string, annexes []Annex) (string, bool) {
+//
+// It is exported because the stage that ENUMERATES the corpus asks the same
+// question before this one does — §3.2's descent does not enumerate annexed
+// material at all — and two spellings of "does this prefix claim this file"
+// is one rule with two places to drift.
+func AnnexedBy(file string, annexes []Annex) (string, bool) {
 	for _, a := range annexes {
 		if file == a.Prefix || strings.HasPrefix(file, a.Prefix+"/") {
 			return a.Prefix, true

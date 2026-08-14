@@ -87,21 +87,30 @@ Externally observable behaviors, contracts, and obligations — the *what*.
   is exactly the silent-platform failure mode.
 - Manual explicit config (`--model-map`, per-stage overrides) always allowed.
 - Resolved model IDs (auto or manual) are stamped into the provenance receipt (§7).
-- `kbase dev-build <corpus-dir> --out DIR [--budget N] [--build-date YYYY-MM-DD]
-  [--keep-temp-work]` — development verb: builds a complete, verified knowledge
-  base out of a corpus with **no model, no provider, no API key and no
-  configuration directory** — every stage it runs is deterministic, so it works
-  offline. It delivers, under the output-directory contract above, the tree
-  (`entry-point.md`, one `index.md` per section directory, one page per leaf),
-  the `.agents/` fixtures and root `AGENTS.md`/`README.md` of the §3 contract,
-  and a run record naming the corpus and its hash, the budgets, the node counts
-  and each verify gate's result. Two things the shipped pipeline supplies are
-  absent and visible in the output: the tree is grouped by the source's own
-  file structure rather than by a designed taxonomy, and index pages carry no
-  summary prose. Nothing is delivered unless every verify gate passes; a
-  failure names the offending node and writes no tree. `--build-date` stamps
-  the provenance receipt (§7) and defaults to today (UTC); pinning it makes two
-  builds of one corpus byte-identical.
+- `kbase dev-build <corpus-dir> --out DIR [--config-dir DIR] [--budget N]
+  [--build-date YYYY-MM-DD] [--keep-temp-work]` — development verb: builds a
+  complete, verified knowledge base out of a corpus. It delivers, under the
+  output-directory contract above, the tree (`entry-point.md`, one `index.md`
+  per section directory, one page per leaf), the `.agents/` fixtures and root
+  `AGENTS.md`/`README.md` of the §3 contract, and a run record naming the
+  corpus and its hash, the budgets, the node counts and each verify gate's
+  result. Nothing is delivered unless every verify gate passes; a failure names
+  the offending node and writes no tree. `--build-date` stamps the provenance
+  receipt (§7) and defaults to today (UTC); pinning it makes two builds of one
+  corpus byte-identical.
+  `--config-dir` selects which half of the pipeline runs, and it is read as
+  given rather than resolved — absent means no model, never "find one
+  somewhere else". **Absent:** every stage is deterministic, so the build needs
+  no provider, no API key and no configuration directory and works offline; two
+  things the shipped pipeline supplies are then absent and visible in the
+  output, in that the tree is grouped by the source's own file structure rather
+  than by a designed taxonomy and section pages carry no summary prose.
+  **Present:** the taxonomy and the summaries are written by the heavy-tier
+  model configured there, both are essential seams (a unit that fails twice
+  fails the job and nothing is delivered), and the run record additionally
+  names the provider, the model, the tier, the declared effort and the token
+  usage. Page boundaries stay mechanical in both shapes — the
+  boundary-refinement seam has its own verb below.
 - `kbase dev-refine <file.md> --config-dir DIR --out DIR [--budget N]
   [--thinking] [--keep-temp-work]` — development verb: runs the
   boundary-refinement stage over one document against a real provider,
