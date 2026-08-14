@@ -364,7 +364,7 @@ func TestHTTPClientWiresSamplingDefaults(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, DeclareEffort(Effort{Thinking: true}))
+	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, DeclareEffort(RequestEffort{Thinking: true}))
 	if _, err := c.Consult(context.Background(), req); err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestHTTPClientWiresDeclaredEffort(t *testing.T) {
 
 			c := NewHTTPClient(newTestEndpoint(srv.URL))
 			req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}},
-				DeclareEffort(Effort{Thinking: thinking}))
+				DeclareEffort(RequestEffort{Thinking: thinking}))
 			if _, err := c.Consult(context.Background(), req); err != nil {
 				t.Fatalf("Consult: %v", err)
 			}
@@ -447,18 +447,18 @@ func TestHTTPClientWiresDeclaredEffort(t *testing.T) {
 	}
 }
 
-// TestEffortDeclaration: a bare Effort literal is NOT a declaration, and
+// TestEffortDeclaration: a bare RequestEffort literal is NOT a declaration, and
 // DeclareEffort is what makes one. The distinction is what lets the pipeline
-// refuse a role that never stated an effort instead of reading a forgotten
+// refuse an ask that never stated an effort instead of reading a forgotten
 // field as a deliberate "no thinking".
 func TestEffortDeclaration(t *testing.T) {
-	if (Effort{Thinking: true}).Declared() {
+	if (RequestEffort{Thinking: true}).Declared() {
 		t.Error("a composite literal must not count as a declared effort")
 	}
 	for _, want := range []bool{true, false} {
-		got := DeclareEffort(Effort{Thinking: want})
+		got := DeclareEffort(RequestEffort{Thinking: want})
 		if !got.Declared() || got.Thinking != want {
-			t.Errorf("DeclareEffort(Effort{Thinking: %t}) = %+v, want declared with that value", want, got)
+			t.Errorf("DeclareEffort(RequestEffort{Thinking: %t}) = %+v, want declared with that value", want, got)
 		}
 	}
 }
@@ -468,7 +468,7 @@ func TestEffortDeclaration(t *testing.T) {
 // about how hard anything is worth asking, and a package-level "utility"
 // effort here would be an API with a test-only population — the declaration
 // belongs at the site that registers a definition (ARCHITECTURE.md §9, §12).
-var testEffort = DeclareEffort(Effort{Thinking: false})
+var testEffort = DeclareEffort(RequestEffort{Thinking: false})
 
 // TestHTTPClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
 // not emit a `chat_template_kwargs: null` or `: {}` field on the wire —

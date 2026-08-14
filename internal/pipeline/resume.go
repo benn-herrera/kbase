@@ -11,9 +11,9 @@ import (
 // mismatch reads as "artifact:survey.json changed".
 const upstreamInputPrefix = "artifact:"
 
-// Unit is one artifact a stage produces, described well enough to decide
+// OwedArtifact is one artifact a stage produces, described well enough to decide
 // whether an existing copy can be trusted.
-type Unit struct {
+type OwedArtifact struct {
 	// Path is the store-relative, slash-separated output path.
 	Path string
 	// Inputs are the named hashes the caller derives: source identity
@@ -28,17 +28,17 @@ type Unit struct {
 	Upstreams []string
 }
 
-// UnitResolver describes a stage's output units. It is called when the chain
+// OwedArtifactResolver describes a stage's output units. It is called when the chain
 // walk REACHES the stage, not at job setup.
 //
 // That is the whole of the dynamic chain: a stage's unit set is not always
-// knowable before its upstream ran. Stage 3 emits the skeleton that defines
+// knowable before its upstream ran. Stage 3 emits the tree plan that defines
 // stage 4's leaves, and stage 4's verified cut list defines stage 5's
 // (ARCHITECTURE.md §4). A resolver therefore reads artifacts that earlier
 // stages have already been proven to hold, which is why it can fail and why
 // the failure is returned rather than swallowed into an empty stage — an
 // empty stage is indistinguishable from a complete one.
-type UnitResolver func() ([]Unit, error)
+type OwedArtifactResolver func() ([]OwedArtifact, error)
 
 // Stage is one link of the chain: a name for forensics and a description of
 // the units it must have produced to count as complete.
@@ -51,16 +51,16 @@ type Stage struct {
 	// It must be deterministic. The walk calls it again while validating a
 	// later stage against what this one produces, and a description that
 	// changed in between would mean the scan verdicted one chain and the run
-	// executed another. Plan.Chain's resolvers are backed by a per-stage memo
+	// executed another. Plan.StageChain's resolvers are backed by a per-stage memo
 	// of the caller's own resolution, so determinism costs nothing there.
-	Units UnitResolver
+	Units OwedArtifactResolver
 }
 
-// Chain is the stage dependency chain in execution order, upstream first
-// (survey → skeleton → cuts → leaves → summaries → links). Stages are
+// StageChain is the stage dependency chain in execution order, upstream first
+// (survey → tree plan → cuts → leaves → summaries → links). Stages are
 // pointers because a chain is walked, described and verdicted as one object
 // across the scan and the run rather than copied between them.
-type Chain []*Stage
+type StageChain []*Stage
 
 // Mode selects whether a scan may reuse anything.
 type Mode string
@@ -75,19 +75,19 @@ const (
 	ModeFresh Mode = "fresh"
 )
 
-// UnitVerdict is one unit's inspection result. Reason is empty for
+// OwedArtifactVerdict is one unit's inspection result. Reason is empty for
 // VerdictValid and otherwise says, in one line without content, why the unit
 // could not be proven.
-type UnitVerdict struct {
+type OwedArtifactVerdict struct {
 	Path    string
 	Verdict Verdict
 	Reason  string
 }
 
-// ScanResult is where a run picks up: the deepest provably valid prefix of
+// ResumeScanResult is where a run picks up: the deepest provably valid prefix of
 // the chain, and the per-unit picture inside the first stage that is not
 // complete.
-type ScanResult struct {
+type ResumeScanResult struct {
 	// Mode is the mode the scan ran in.
 	Mode Mode
 	// Stages is the length of the chain that was scanned.
@@ -102,7 +102,7 @@ type ScanResult struct {
 	// Units in later stages are not verdicted: their inputs are about to
 	// change, so they are invalid by definition and inspecting them would
 	// only produce reasons nobody should act on.
-	Verdicts []UnitVerdict
+	Verdicts []OwedArtifactVerdict
 	// Reused counts units proven valid across every stage inspected,
 	// complete stages included.
 	Reused int
@@ -111,9 +111,9 @@ type ScanResult struct {
 }
 
 // Complete reports whether the chain is already fully built — nothing to do.
-func (r ScanResult) Complete() bool { return r.ResumeStage >= r.Stages }
+func (r ResumeScanResult) Complete() bool { return r.ResumeStage >= r.Stages }
 
-// Scan walks the chain upstream→downstream and returns the resume boundary.
+// ResumeScan walks the chain upstream→downstream and returns the resume boundary.
 //
 // A stage is complete when every one of its units is VerdictValid; the walk
 // stops at the first stage that is not. That is the deepest-provably-valid
@@ -137,26 +137,26 @@ func (r ScanResult) Complete() bool { return r.ResumeStage >= r.Stages }
 // frontier by definition, its inputs are about to change, and under the
 // dynamic chain its description may not exist yet. The run resolves it when
 // it reaches it (see Coordinator.Run).
-func (s *Store) Scan(chain Chain, mode Mode) (ScanResult, error) {
+func (s *ArtifactStore) ResumeScan(chain StageChain, mode Mode) (ResumeScanResult, error) {
 	if len(chain) == 0 {
-		return ScanResult{}, errors.New("pipeline: resume scan over an empty stage chain")
+		return ResumeScanResult{}, errors.New("pipeline: resume scan over an empty stage chain")
 	}
 	switch mode {
 	case ModeResume, ModeFresh:
 	default:
-		return ScanResult{}, fmt.Errorf("pipeline: unknown resume mode %q (want %s or %s)", mode, ModeResume, ModeFresh)
+		return ResumeScanResult{}, fmt.Errorf("pipeline: unknown resume mode %q (want %s or %s)", mode, ModeResume, ModeFresh)
 	}
 
-	res := ScanResult{Mode: mode, Stages: len(chain), ResumeStage: len(chain)}
+	res := ResumeScanResult{Mode: mode, Stages: len(chain), ResumeStage: len(chain)}
 	if mode == ModeFresh {
 		units, err := s.resolveStage(chain, 0)
 		if err != nil {
-			return ScanResult{}, err
+			return ResumeScanResult{}, err
 		}
 		res.ResumeStage = 0
 		res.StageName = chain[0].Name
 		for _, u := range units {
-			res.Verdicts = append(res.Verdicts, UnitVerdict{
+			res.Verdicts = append(res.Verdicts, OwedArtifactVerdict{
 				Path: u.Path, Verdict: VerdictAbsent, Reason: "fresh run: prior outputs ignored",
 			})
 		}
@@ -169,14 +169,14 @@ func (s *Store) Scan(chain Chain, mode Mode) (ScanResult, error) {
 	for i, stage := range chain {
 		units, err := s.resolveStage(chain, i)
 		if err != nil {
-			return ScanResult{}, err
+			return ResumeScanResult{}, err
 		}
-		verdicts := make([]UnitVerdict, 0, len(units))
+		verdicts := make([]OwedArtifactVerdict, 0, len(units))
 		valid := 0
 		for _, u := range units {
 			v, err := s.verdict(u)
 			if err != nil {
-				return ScanResult{}, err
+				return ResumeScanResult{}, err
 			}
 			if v.Verdict == VerdictValid {
 				valid++
@@ -217,20 +217,20 @@ func (s *Store) Scan(chain Chain, mode Mode) (ScanResult, error) {
 // upstream artifact with no readable stamp — is the unit's own doubt, not a
 // refusal: it means the thing this unit was built from is not proven either,
 // and the answer to doubt is to redo.
-func (s *Store) verdict(u Unit) (UnitVerdict, error) {
+func (s *ArtifactStore) verdict(u OwedArtifact) (OwedArtifactVerdict, error) {
 	inputs, err := s.resolveInputs(u)
 	if err != nil {
 		var inc IncoherentStoreError
 		if errors.As(err, &inc) {
-			return UnitVerdict{}, err
+			return OwedArtifactVerdict{}, err
 		}
-		return UnitVerdict{Path: u.Path, Verdict: VerdictInvalid, Reason: err.Error()}, nil
+		return OwedArtifactVerdict{Path: u.Path, Verdict: VerdictInvalid, Reason: err.Error()}, nil
 	}
 	v, reason, err := s.verify(u.Path, inputs)
 	if err != nil {
-		return UnitVerdict{}, err
+		return OwedArtifactVerdict{}, err
 	}
-	return UnitVerdict{Path: u.Path, Verdict: v, Reason: reason}, nil
+	return OwedArtifactVerdict{Path: u.Path, Verdict: v, Reason: reason}, nil
 }
 
 // resolveInputs derives a unit's full input set: the caller's named hashes
@@ -239,7 +239,7 @@ func (s *Store) verdict(u Unit) (UnitVerdict, error) {
 // proof use — the writer passes it to Put, the scan passes it to verify — so
 // a stamp can never be written under one derivation and checked under
 // another.
-func (s *Store) resolveInputs(u Unit) ([]Input, error) {
+func (s *ArtifactStore) resolveInputs(u OwedArtifact) ([]Input, error) {
 	inputs := make([]Input, 0, len(u.Inputs)+len(u.Upstreams))
 	inputs = append(inputs, u.Inputs...)
 	for _, up := range u.Upstreams {
@@ -268,11 +268,11 @@ func (s *Store) resolveInputs(u Unit) ([]Input, error) {
 // re-derives at most nine slices from memoized resolutions, which is cheaper
 // than a second piece of walk state that the scan starts and the run has to
 // finish in step.
-func (s *Store) resolveStage(chain Chain, i int) ([]Unit, error) {
+func (s *ArtifactStore) resolveStage(chain StageChain, i int) ([]OwedArtifact, error) {
 	var (
 		seen     = map[string]bool{} // every unit path described so far
 		produced = map[string]bool{} // unit paths from strictly earlier stages
-		units    []Unit
+		units    []OwedArtifact
 	)
 	for j := 0; j <= i; j++ {
 		var err error
@@ -297,7 +297,7 @@ func (s *Store) resolveStage(chain Chain, i int) ([]Unit, error) {
 //
 // An upstream no earlier stage produces is not a defect by itself. Under the
 // dynamic chain a stage may legitimately consume an artifact this chain never
-// produces — a skeleton a previous planning epoch left behind — so the store
+// produces — a tree plan a previous planning epoch left behind — so the store
 // is asked whether it holds a stamp for it. An unstamped one refuses the run:
 // nothing this chain does would ever produce it, which makes it structural
 // incoherence rather than a unit to redo.
@@ -306,7 +306,7 @@ func (s *Store) resolveStage(chain Chain, i int) ([]Unit, error) {
 // concurrently across the worker pool, so "earlier in the same stage" is not
 // an ordering, and a chain that assumed it would be a race with a plausible
 // stamp on the far side of it.
-func (s *Store) validateStage(units []Unit, seen, produced map[string]bool) error {
+func (s *ArtifactStore) validateStage(units []OwedArtifact, seen, produced map[string]bool) error {
 	for _, u := range units {
 		if _, err := validatePath(u.Path); err != nil {
 			return err

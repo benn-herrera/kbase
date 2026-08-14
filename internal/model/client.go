@@ -106,7 +106,7 @@ type Request struct {
 // (ARCHITECTURE.md §9) and this value will be revisited there.
 const DefaultMaxTokens = 16384
 
-// Effort is how hard the model is asked to work on ONE exact ask.
+// RequestEffort is how hard the model is asked to work on ONE exact ask.
 //
 // It is per-DEFINITION: the value belongs to the question, not to the stage
 // that asks it and not to the seam it crosses (ARCHITECTURE.md §12). A
@@ -118,7 +118,7 @@ const DefaultMaxTokens = 16384
 // this is a struct with a named field rather than a bare bool: a second dial
 // joins as a field, and no call site that already states an effort has to
 // change to accommodate it.
-type Effort struct {
+type RequestEffort struct {
 	// Thinking asks the model to reason before answering. It is wired in
 	// BOTH directions (see DefaultRequest) — false is SENT as false, never
 	// omitted — because an omitted key leaves the chat template's own
@@ -128,30 +128,30 @@ type Effort struct {
 
 	// declared separates a stated effort from a zero value. An effort makes
 	// one hop through a struct field on its way to the runner
-	// (pipeline.Role), and a field is the one hop a positional parameter
+	// (pipeline.AskSpec), and a field is the one hop a positional parameter
 	// cannot make mandatory; this mark is what lets that hop be checked
-	// (pipeline.Role.validate) rather than assumed. It is unexported so
+	// (pipeline.AskSpec.validate) rather than assumed. It is unexported so
 	// DeclareEffort is the only way to obtain a declared value.
 	declared bool
 }
 
 // DeclareEffort marks e as STATED by its caller. It is the only constructor:
-// a bare composite literal is an undeclared value, and the pipeline refuses a
-// role carrying one.
+// a bare composite literal is an undeclared value, and the pipeline refuses an
+// ask spec carrying one.
 //
 // It takes the whole value rather than one parameter per dial so that adding
 // Temperature is a new field at the call sites that want it and nothing at all
 // at the ones that do not.
-func DeclareEffort(e Effort) Effort {
+func DeclareEffort(e RequestEffort) RequestEffort {
 	e.declared = true
 	return e
 }
 
 // Declared reports whether this effort was stated rather than left zero.
-func (e Effort) Declared() bool { return e.declared }
+func (e RequestEffort) Declared() bool { return e.declared }
 
 // DefaultRequest returns a Request prefilled with the appliance defaults.
-// The caller fills in Model, Messages and the ask's declared Effort;
+// The caller fills in Model, Messages and the ask's declared RequestEffort;
 // everything else is preset:
 //
 //   - Temperature: 0 (deterministic — reproducibility is a design property,
@@ -164,9 +164,9 @@ func (e Effort) Declared() bool { return e.declared }
 //     alternative is omitting the field and hoping the served template
 //     defaults the way this ask wants, which is not a declaration.
 //
-// It is the only Request constructor, and Effort is positional in it, so
+// It is the only Request constructor, and RequestEffort is positional in it, so
 // every call that goes on the wire states how hard it is asking.
-func DefaultRequest(model string, messages []Message, effort Effort) Request {
+func DefaultRequest(model string, messages []Message, effort RequestEffort) Request {
 	return Request{
 		Model:       model,
 		Messages:    messages,

@@ -13,7 +13,7 @@ import (
 // remain accounted for.
 func TestFrontMatter(t *testing.T) {
 	corpus, art, lg := surveyFixturesLogged(t, fixtures)
-	u, _ := corpus.Unit("front.md")
+	u, _ := corpus.Doc("front.md")
 	f := fileOf(t, art, "front.md")
 
 	if f.Metadata == nil {
@@ -55,7 +55,7 @@ func TestFrontMatterRejection(t *testing.T) {
 	// The rejected bytes stay in the parse: the prose between the rules is
 	// still the file's preamble, and the whole file is still tiled.
 	f := fileOf(t, art, "front-thematic.md")
-	u, _ := corpus.Unit("front-thematic.md")
+	u, _ := corpus.Doc("front-thematic.md")
 	if f.Preamble == nil || f.Preamble.Start != 0 {
 		t.Fatalf("preamble must start at byte 0 when there is no front matter; got %+v", f.Preamble)
 	}

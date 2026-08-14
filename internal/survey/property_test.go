@@ -47,9 +47,9 @@ var shapes = map[string]string{
 // adapter.
 func surveyShapes(t *testing.T, files map[string]string) (ingest.Corpus, survey.Artifact) {
 	t.Helper()
-	units := make([]ingest.Unit, 0, len(files))
+	units := make([]ingest.SourceDoc, 0, len(files))
 	for p, body := range files {
-		units = append(units, ingest.Unit{Path: p, Bytes: []byte(body)})
+		units = append(units, ingest.SourceDoc{Path: p, Bytes: []byte(body)})
 	}
 	corpus, err := ingest.New(units)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestTilingProperty(t *testing.T) {
 	corpus, art := surveyShapes(t, shapes)
 	for _, f := range art.Files {
 		t.Run(f.Path, func(t *testing.T) {
-			u, ok := corpus.Unit(f.Path)
+			u, ok := corpus.Doc(f.Path)
 			if !ok {
 				t.Fatalf("no source unit for %q", f.Path)
 			}
@@ -137,16 +137,16 @@ func TestShapesCoverTheRangeKinds(t *testing.T) {
 // cmd/survey_test.go, over a real temporary directory; ingest.Corpus carries
 // no root for this test to leak.)
 func TestDeterminism(t *testing.T) {
-	units := make([]ingest.Unit, 0, len(shapes))
+	units := make([]ingest.SourceDoc, 0, len(shapes))
 	for p, body := range shapes {
-		units = append(units, ingest.Unit{Path: p, Bytes: []byte(body)})
+		units = append(units, ingest.SourceDoc{Path: p, Bytes: []byte(body)})
 	}
-	reversed := make([]ingest.Unit, len(units))
+	reversed := make([]ingest.SourceDoc, len(units))
 	for i, u := range units {
 		reversed[len(units)-1-i] = u
 	}
 
-	render := func(us []ingest.Unit) string {
+	render := func(us []ingest.SourceDoc) string {
 		t.Helper()
 		corpus, err := ingest.New(us)
 		if err != nil {

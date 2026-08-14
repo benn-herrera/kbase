@@ -75,10 +75,6 @@ internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
-internal/skeleton/  the skeleton artifact (§4 stage 3 output, kbase.skeleton/1):
-                    planned KB tree + groups + annexes, namer/slugger, the
-                    mechanical verifier (partition/caps/G-1/G-2, design-time
-                    split expansion, restructuring operators), deterministic JSON
 internal/survey/    the survey artifact (§4 stage 2) and NOTHING format-specific:
                     heading tree with byte offsets, section token sizes, link
                     graph, gists; corpus roll-up, tiling + custody checks,
@@ -88,6 +84,10 @@ internal/survey/markdown/
                     goldmark or yaml; produces survey.Artifact and owns the
                     Markdown extension set
 internal/tokens/    single chars-per-token estimator (§8)
+internal/treeplan/  the tree plan artifact (§4 stage 3 output, kbase.treeplan/1):
+                    planned KB tree + split groups + annexes, namer/slugger, the
+                    mechanical verifier (partition/caps/G-1/G-2, design-time
+                    split expansion, restructuring operators), deterministic JSON
 internal/version/   single-source version identity
 ```
 

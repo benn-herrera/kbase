@@ -85,14 +85,14 @@ judgment roles; the human at the edges.**
 - **Specified, not autonomous.** A fixed pipeline with a termination condition — not
   an agent free-roaming the corpus. Reproducibility requires same process → same
   output. Terminology guard (ruled 2026-08-09): in this codebase, "agent" names a
-  **Go-side construct** — a role with an embedded definition, slot-built context,
+  **Go-side construct** — an ask with an embedded definition, slot-built context,
   and one-shot model calls — never an LLM-driven tool-calling loop. Each pipeline
   step is mechanical where possible; LLM execution is reserved for what cannot
   practically be done any other way.
 
 - **Propose-and-verify at every model seam.** The model never mutates canonical bytes.
   It emits *data with a mechanically checkable post-condition* (a cut list that must
-  tile the document; summary-review flags; a taxonomy skeleton). Deterministic code
+  tile the document; summary-review flags; a taxonomy tree plan). Deterministic code
   validates and executes.
 
 - **Monotone safety: mechanical fallbacks are always valid.** Every model-refined
@@ -102,7 +102,7 @@ judgment roles; the human at the edges.**
 
 - **Refuse-and-split, never truncate.** A batch pipeline needs no eviction; it needs
   loud errors that push oversized units back to the stage that can fix them (the
-  skeleton). Silent truncation is how a verbatim-leaf discipline dies unnoticed.
+  tree plan). Silent truncation is how a verbatim-leaf discipline dies unnoticed.
 
 - **Verbatim leaves; summaries route, leaves answer.** Leaves are verbatim slices of
   **NFC-normalized custody** (ruled 2026-08-13): ingest applies Unicode NFC once, at
@@ -167,14 +167,14 @@ judgment roles; the human at the edges.**
 
 | # | Stage | Actor | Notes |
 |---|---|---|---|
-| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (ruled 2026-08-13, §9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes** (ruled 2026-08-13): `Unit.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `Unit.SourcePath` keeps the spelling as read, exactly as `SourceSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** (ruled 2026-08-12) — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
+| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (ruled 2026-08-13, §9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes** (ruled 2026-08-13): `SourceDoc.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `SourceDoc.UploadPath` keeps the spelling as read, exactly as `UploadSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** (ruled 2026-08-12) — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
 | 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists, and the legal cut candidates stage 4 clamps the model to (§5). For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
-| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document skeleton: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
+| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document tree plan: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. |
 | 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions (ruled 2026-08-09), so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
 | 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. |
 | 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. |
 | 7 | **Review** | gemma-4-26B-A4B | Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
-| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the skeleton by template. Dead links impossible by construction; the link checker demotes to regression tripwire. |
+| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. |
 | 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. |
 
 **Format seam.** The survey artifact is the source-format independence
@@ -231,37 +231,37 @@ Implemented in `internal/dissect` (format-neutral: it reads the survey
 artifact's neutral types and the custody bytes, never a parser).
 
 1. **Mechanical splitter** (`dissect.Split`) proposes cuts at heuristic section
-   breaks → offset+length list (`[]survey.Range`). It prefers the strongest
+   breaks → offset+length list (`[]survey.Span`). It prefers the strongest
    structure available before the budget (`survey.CutKind.Rank`: heading, then
    fence, then paragraph) and fills toward the budget among equals. Pre-merges
    below-minimum fragments so the model only adjudicates real boundaries. A
    span whose candidates cannot cut it under the budget is refused by name
-   (`dissect.StarvedError`) and goes back to the stage that sized it —
+   (`dissect.StarvedRejection`) and goes back to the stage that sized it —
    refuse-and-split, never truncate. **Its output always passes verification**,
    which is a property test over both synthetic adversarial spans and every
    section of the pinned corpus.
 2. **Model refinement pass** (26B-A4B, `dissect.Refiner`): a serial FOLD — one
-   call per boundary in ONE domain stream, so a worker walks them in order and
+   call per boundary in ONE serial lane, so a worker walks them in order and
    each window load overwrites the previous (O(1) context, O(n) calls). The
    scan judges each boundary against the cut list **as it stands now**: an
    accepted choice updates the working list, and the next boundary's window,
    menu and verification all derive from that updated list. The stage's output
    is therefore ONE artifact — the composed cut list, whole-list-`Verify`d
-   before it is written and carried by the LAST task of the stream; every
-   earlier boundary's call is `pipeline.Task.CallOnly` and produces nothing at
+   before it is written and carried by the LAST task of the lane; every
+   earlier boundary's call is `pipeline.LaneTask.Contributes` and produces nothing at
    all, which is what makes the fold's resume stage-granular (§12). Each
-   boundary's overlap window (`dissect.Window`, from
-   `dissect.Windows`) renders into the Content slot and its numbered candidate
-   menu into reference buffer B, capped at `dissect.menuCap` entries around the
+   boundary's overlap window (`dissect.MoveWindow`, from
+   `dissect.MoveWindows`) renders into the Content slot and its numbered candidate
+   menu into call reference buffer, capped at `dissect.menuCap` entries around the
    incumbent, which is marked `(current)` so confirming the boundary — the most
-   common correct answer at a refinement seam — is a choice the model can
+   common correct answer at a fallback-backed seam — is a choice the model can
    deliberately make.
    A boundary's question does not exist until its predecessor is adjudicated,
    so the per-call input is BUILT when the worker reaches the unit
    (`pipeline.InputBuilder`, §12) rather than when the stage was described.
    The model writes no text and **is shown no raw byte offset anywhere**: not
-   in the menu, not in the status lines, not in reference buffer A, and not in
-   the corrective note a retry carries (`dissect.RejectionError.Note`, the
+   in the menu, not in the status lines, not in stage reference buffer, and not in
+   the retry note a retry carries (`dissect.RejectionError.Note`, the
    model-facing rendering, against `Error`'s operator-facing one). It answers
    with a menu NUMBER and the answer must BE that number —
    `dissect.parseChoice` rejects a number embedded in a sentence, because the
@@ -307,7 +307,7 @@ artifact's neutral types and the custody bytes, never a parser).
    inspects raw bytes; a bug must thread both, and membership is checked FIRST
    so only an offset the adapter really enumerated can reach the tripwire. The
    two outcomes are distinct types: `dissect.RejectionError` (retry once, then
-   the baseline) and `dissect.OffsetDefectError` (never retried — it reaches
+   the fallback) and `dissect.OffsetDefectError` (never retried — it reaches
    the runner wrapped in `pipeline.ErrVerifierDefect`, which aborts the
    worker). The split between them is exhaustive **by construction, not by
    enumeration**: `RejectionError` is the only class a model's answer can be
@@ -343,7 +343,7 @@ artifact's neutral types and the custody bytes, never a parser).
    is a `pipeline.ErrVerifierDefect` and not a rejection: nothing the model
    answered could produce it. It stays because the composing step is exactly
    where this would otherwise be discovered rather than remembered.
-4. **Dissector** (`dissect.Dissect`, deterministic) slices the immutable source
+4. **Dissector** (`dissect.SliceLeaves`, deterministic) slices the immutable source
    by verified offsets. Source is never sliced-and-retyped; the leaves are
    views into the custody bytes and the cut list is a derived overlay
    (content-anchored spans — same discipline as the contract-analysis design).
@@ -378,7 +378,7 @@ Careful, not complex — no stage ever legitimately needs the corpus in a window
   the reliable zone of gemma-4's window; the target keeps every call far below it —
   attention quality, especially on small models, degrades well before the window
   fills, and decomposition's whole point is that nobody runs near the ceiling.
-- Overflow behavior: **refuse-and-split** (loud), pushed back to the skeleton. Never
+- Overflow behavior: **refuse-and-split** (loud), pushed back to the tree plan. Never
   truncate, never evict.
 
 ### Per-call slot layout (stability-ordered)
@@ -418,8 +418,8 @@ The ordering is simultaneously:
 The 4/5 ordering is **provisional**, pending the measurement §7 already names as
 ground truth: run the shakedown corpus both ways and read `cached_tokens` (plus
 per-call telemetry) rather than reasoning further about attention curves. It also
-**presumes reference buffer A is flushed at section/stage transitions** as the table
-says — that policy is the orchestrator's to enforce (phase matrix), and a buffer that
+**presumes stage reference buffer is flushed at section/stage transitions** as the table
+says — that policy is the orchestrator's to enforce (phase-op table), and a buffer that
 churned per call would move the frontier *up*, making the ordering a loss rather than
 a win.
 
@@ -440,7 +440,7 @@ concept, not wire messages.
   `REMINDER:`-wrapped as slot 8 (recency) — stated up front, repeated last, the two
   well-attended ends. Dual-render is a builder flag so the eval harness can A/B it
   per stage/tier.
-- Slot 8 additionally carries the per-call acceptance criteria the taxonomy skeleton
+- Slot 8 additionally carries the per-call acceptance criteria the taxonomy tree plan
   already emits (tiling ranges, budgets) — data injection by the builder, never a
   model judgment call, under its own reserved share of the cap.
 - The trailer is **hard-capped** (§9) and the cap is enforced loudly, never by
@@ -468,10 +468,10 @@ cannot reach:
 1. **Type system (builder).** Slots 1–3 are constructor-set on an immutable
    per-stage context; slot 8 is derived and never directly settable. Mutating a
    stable slot mid-loop is not a runtime error — it does not compile.
-2. **Phase matrix (orchestrator).** The orchestrator holds a phase enum
+2. **Phase-op table (orchestrator).** The orchestrator holds a phase enum
    (job-setup → stage-setup → call-loop → section-transition → …) and an
-   allowed-operations matrix **as data**: every context-affecting operation
-   (rebuild a stage context, flush reference buffer A, …) checks the matrix, and a
+   allowed-operations table **as data**: every context-affecting operation
+   (rebuild a stage context, flush stage reference buffer, …) checks the table, and a
    disallowed operation is a loud defect. This closes the gap types cannot reach:
    constructing a *fresh* stage context with different bytes mid-task is
    type-legal but a churn bug — the risk is identity across instances, not
@@ -482,7 +482,7 @@ cannot reach:
    the drift-gate discipline applied to prompt bytes. This is the production
    form of the prefix-stability property; cheap (a few string hashes per call).
 
-Single source of truth: the phase matrix that gates operations also derives the
+Single source of truth: the phase-op table that gates operations also derives the
 expected-stability frontier asserted by the builder's sequence tests — tests and
 runtime enforce the same table. End-to-end verification signal: providers'
 `cached_tokens` usage accounting gives wire-level ground truth that churn
@@ -522,26 +522,26 @@ prevention is holding against a real prefix cache.
 | Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
 | Boundary menu cap | 7 entries | `dissect.menuCap`: `dissect.menuSide` (3) candidates before the mechanical cut, the cut itself marked `(current)`, 3 after; a short side contributes what it has and lends nothing to the other. 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12) |
 | Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
-| Effort declaration | per definition; boundary refinement: thinking **off** | `model.Effort`, positional at the registration site (`cmd.devRefineEffort` → `dissect.NewRefiner`) and on `model.DefaultRequest`; `pipeline.Role.validate` is the gate that refuses an undeclared one (§12). Both `chat_template_kwargs` keys are always sent, false included (§12). EVERY `Request` this appliance builds is a definition's ask — the catalogue probe goes through `Client.ListModels`, which builds no `Request` — so there is no second class of call and no constant naming one. It joins the stage's parameter digest (§5). Refinement's value is measured, not assumed: the 2026-08-12 A/B produced a byte-identical cut list for 4 completion tokens against 20,924 (ROADMAP) |
+| Effort declaration | per definition; boundary refinement: thinking **off** | `model.RequestEffort`, positional at the registration site (`cmd.devRefineEffort` → `dissect.NewRefiner`) and on `model.DefaultRequest`; `pipeline.AskSpec.validate` is the gate that refuses an undeclared one (§12). Both `chat_template_kwargs` keys are always sent, false included (§12). EVERY `Request` this appliance builds is a definition's ask — the catalogue probe goes through `Client.ListModels`, which builds no `Request` — so there is no second class of call and no constant naming one. It joins the stage's parameter digest (§5). Refinement's value is measured, not assumed: the 2026-08-12 A/B produced a byte-identical cut list for 4 completion tokens against 20,924 (ROADMAP) |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
 | Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
 | Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
 | Gist word cap | 40 words | survey routing hints and titles (`survey.WordCap`, post-seam export); word-capped, never mid-word |
-| Leaf token budget | 4000 (provisional) | `skeleton.defaultLeafTokens`; guarantee G-1 — the span budget the stage-3 verifier splits toward, and what bounds stage 4's and stage 5's per-call input. Carried in the artifact (`Skeleton.budgets`), so a consumer reads the number the tree was verified against and never this constant |
-| Summary input budget | 60K tokens (provisional) | `skeleton.defaultSummaryInputTokens`; guarantee G-2 — the whole input one stage-6 call may read, summed per child KIND (leaf children as bodies, index children at the summary cap). Provable from the skeleton before stage 6 runs |
-| Summary cap | 400 tokens (provisional) | `skeleton.defaultSummaryTokens`; what one index child costs its parent, and the cap stage 6's own verifier holds a summary to |
-| Entry-point ceiling | 3000 tokens (provisional) | `skeleton.defaultEntryPointTokens`; enforced by refusal at stage 9, where the rendered bytes exist to measure |
-| Index depth cap | 4 levels | `skeleton.defaultDepthCap`; entry-point, domain, subtopic, sub-subtopic, leaves at level five. Mechanical rather than stylistic: stage 6 declares one static stage per level, so an uncapped depth would make the stage list depend on an artifact that does not exist at job setup |
-| Fan-out cap | 12 children (provisional) | `skeleton.defaultFanOutCap`; a group of one is legal. Breaches are repaired by index interposition, not truncated |
-| Taxonomy candidate cap | 120 entries (provisional) | `skeleton.defaultCandidateCap`; one container call's candidate list. A container with more direct children is mechanically pre-batched, so a breach reaching the verifier is our arithmetic and not a runtime condition |
-| Slug cap | 8 words, 64 bytes | `skeleton.slugWordCap`/`slugByteCap`; the generated name grammar. A slug keeps the title's own bytes — math symbols, accents and CJK survive — filtered only by `skeleton.slugHostile` (path separators, the Windows-illegal set, `#`, `%`, `.`, parentheses) plus whitespace, invisible and dash runs collapsed to one hyphen; ASCII letters lowercase, no Unicode case mapping. The byte cut lands on a word boundary and never inside a rune. Stage 9 still compares delivered paths to skeleton paths byte-for-byte; that is safe because the NFC pre-pass gave every title one spelling before the namer saw it (ruled 2026-08-13) |
-| NFC pre-pass | Unicode NFC, at ingest — **content bytes and path ids alike** | `ingest.New`, via `golang.org/x/text/unicode/norm` — the sanctioned dependency this row exists for. Determinism does not rest on the module version: the normalization tables are frozen by the Unicode normalization stability policy, so the same bytes normalize the same way forever. Provenance keeps `Unit.SourceSHA256` (bytes as read) beside `Unit.SHA256` (custody) and `Unit.SourcePath` (path as read) beside `Unit.Path` (the NFC id); equal pairs mean nothing was transformed. `ingest.NormalizePath` is the one implementation of the id pre-pass — `New` applies it to every unit, and a caller holding a path that did NOT come out of custody bytes (a percent-decoded link destination is the live case) applies it before comparing against an id. The survey artifact carries custody identity only (`File.Path`, `File.SHA256`); the upload spellings stay on the unit |
-| Transport retries | 3 attempts, 500ms base doubling | 429 retried, other 4xx not; ctx cancel never (`pipeline.transportAttempts`/`transportBackoffBase`) |
-| Semantic attempts | 2 | initial + one informed retry (`pipeline.semanticAttempts`) |
-| Corrective-note bound | 12 words + 4-word prefix | the retry's failure-reason note (`pipeline.correctiveNoteWords`) |
-| Worker pool default | 4 | domain-stream workers per stage (`pipeline.DefaultWorkers`) |
+| Leaf token budget | 4000 (provisional) | `treeplan.defaultLeafTokens`; guarantee G-1 — the span budget the stage-3 verifier splits toward, and what bounds stage 4's and stage 5's per-call input. Carried in the artifact (`TreePlan.budgets`), so a consumer reads the number the tree was verified against and never this constant |
+| Summary input budget | 60K tokens (provisional) | `treeplan.defaultSummaryInputTokens`; guarantee G-2 — the whole input one stage-6 call may read, summed per child KIND (leaf children as bodies, index children at the summary cap). Provable from the tree plan before stage 6 runs |
+| Summary cap | 400 tokens (provisional) | `treeplan.defaultSummaryTokens`; what one index child costs its parent, and the cap stage 6's own verifier holds a summary to |
+| Entry-point ceiling | 3000 tokens (provisional) | `treeplan.defaultEntryPointTokens`; enforced by refusal at stage 9, where the rendered bytes exist to measure |
+| Index depth cap | 4 levels | `treeplan.defaultDepthCap`; entry-point, domain, subtopic, sub-subtopic, leaves at level five. Mechanical rather than stylistic: stage 6 declares one static stage per level, so an uncapped depth would make the stage list depend on an artifact that does not exist at job setup |
+| Fan-out cap | 12 children (provisional) | `treeplan.defaultFanOutCap`; a group of one is legal. Breaches are repaired by index interposition, not truncated |
+| Taxonomy candidate cap | 120 entries (provisional) | `treeplan.defaultCandidateCap`; one container call's candidate list. A container with more direct children is mechanically pre-batched, so a breach reaching the verifier is our arithmetic and not a runtime condition |
+| Slug cap | 8 words, 64 bytes | `treeplan.slugWordCap`/`slugByteCap`; the generated name grammar. A slug keeps the title's own bytes — math symbols, accents and CJK survive — filtered only by `treeplan.slugHostile` (path separators, the Windows-illegal set, `#`, `%`, `.`, parentheses) plus whitespace, invisible and dash runs collapsed to one hyphen; ASCII letters lowercase, no Unicode case mapping. The byte cut lands on a word boundary and never inside a rune. Stage 9 still compares delivered paths to tree plan paths byte-for-byte; that is safe because the NFC pre-pass gave every title one spelling before the namer saw it (ruled 2026-08-13) |
+| NFC pre-pass | Unicode NFC, at ingest — **content bytes and path ids alike** | `ingest.New`, via `golang.org/x/text/unicode/norm` — the sanctioned dependency this row exists for. Determinism does not rest on the module version: the normalization tables are frozen by the Unicode normalization stability policy, so the same bytes normalize the same way forever. Provenance keeps `SourceDoc.UploadSHA256` (bytes as read) beside `SourceDoc.SHA256` (custody) and `SourceDoc.UploadPath` (path as read) beside `SourceDoc.Path` (the NFC id); equal pairs mean nothing was transformed. `ingest.NormalizePath` is the one implementation of the id pre-pass — `New` applies it to every unit, and a caller holding a path that did NOT come out of custody bytes (a percent-decoded link destination is the live case) applies it before comparing against an id. The survey artifact carries custody identity only (`File.Path`, `File.SHA256`); the upload spellings stay on the unit |
+| Wire retries | 3 attempts, 500ms base doubling | 429 retried, other 4xx not; ctx cancel never (`pipeline.wireAttempts`/`wireBackoffBase`) |
+| Model attempts | 2 | initial + one informed retry (`pipeline.modelAttempts`) |
+| Retry-note bound | 12 words + 4-word prefix | the retry's failure-reason note (`pipeline.retryNoteWords`) |
+| Worker pool default | 4 | serial-lane workers per stage (`pipeline.DefaultWorkers`) |
 | Job lock filename | `job.lock` | `pipeline.LockFileName`; O_EXCL, refuse on contention, never auto-broken; lives inside `temp-work/` with everything else transient |
 | Artifact stamp | `<artifact>.stamp.json`, schema 1 | `pipeline.StampSuffix` sidecar; schema mismatch ⇒ Invalid |
 | Temporary-work directory | `<out>/temp-work/` | `pipeline.TempWorkDirName`; the store's root, kbase-created, swept and torn down only inside it (§12) |
@@ -588,10 +588,10 @@ disappoint. Default remains pure gemma-4.
 ## 12. Execution and resume (orchestration design, ruled 2026-08-09)
 
 The orchestration layer (`internal/pipeline`) runs the fixed pipeline. "Agent"
-here is the §3 Go-side construct: a role = embedded definition + tier +
-verifier (+ mechanical baseline where one exists), executing one-shot calls.
+here is the §3 Go-side construct: an ask = embedded definition + tier +
+verifier (+ mechanical fallback where one exists), executing one-shot calls.
 
-### Phase matrix (single source)
+### Phase-op table (single source)
 
 Worker execution moves through phases: `JobSetup → StageSetup → CallLoop ⇄
 SectionTransition → StageTeardown`. One data table maps each phase to (a) its
@@ -605,7 +605,7 @@ slot ordering safe.
 
 ### Workers and frontiers
 
-A worker owns a **domain** and processes its leaves serially (domain-stream);
+A worker owns a **domain** and processes its leaves serially (one serial lane);
 parent↔child channels only, no peer↔peer. Stability is enforced per §7's
 three layers, concretized: all workers of a stage share ONE immutable
 StageContext, so the stage-constant slots are identical across workers by
@@ -613,9 +613,9 @@ construction; each worker keeps its own previous-call hashes and frontier
 (per-worker tripwire); a cheap per-call assert checks every call's
 stage-constant slot hashes against canonical values — slots 2–3 against the
 ones captured at stage setup, and **slot 1 against the job's**, rendered
-once at job setup from the plan's single system frame. The slot-1 half is
+once at job setup from the plan's single job frame. The slot-1 half is
 what makes §7's job-constant claim enforced rather than merely intended: a
-worker's previous-call hashes reset at every stream start, so its first call
+worker's previous-call hashes reset at every lane start, so its first call
 of every stage claims nothing and the per-worker tripwire can never compare
 slot 1 across a stage boundary. One job-level frame makes divergence
 unrepresentable; the canonical catches what construction cannot see — a
@@ -629,7 +629,7 @@ assertion → transport → mechanical validation → one informed retry → sea
 resolution**.
 
 - Build refusals (`ErrOverBudget`) are refuse-and-split — pushed back to the
-  skeleton, never retried at the runner.
+  tree plan, never retried at the runner.
 - **Every seam's inputs are bounded by construction** (ruled 2026-08-11).
   Each thing a stage renders into a prompt is capped at its source, or the
   source refuses and splits: the refinement window is a fraction capped per
@@ -639,14 +639,14 @@ resolution**.
   build is not a runtime condition to be resilient to. It is a **defect
   class**: our own sizing arithmetic is wrong, and the only way to learn that
   is the hard failure. So `ErrOverBudget` keeps its current routing even at a
-  refinement seam that has a valid baseline in hand — a graceful fallback
+  fallback-backed seam that has a valid fallback in hand — a graceful fallback
   there would silently paper over the one thing the constant table exists to
   make impossible. Bounding at the source is the work; the hard fail is what
   makes the bounding checkable.
 - The frozen-prompt assertion (tripwire) checks OUR stability contract; a
   violation is a kbase defect: worker abort, never retry or fallback.
 - Transport failures (timeout, 5xx, dropped stream) say nothing about output
-  validity: bounded backoff retries, separately from semantic policy.
+  validity: bounded backoff retries, separately from model-attempt policy.
 - Mechanical validation is the propose-and-verify seam concrete: the
   response is text claiming to be data; a deterministic verifier parses and
   checks the stage's post-condition (tiling, budgets, schema). Typed
@@ -654,7 +654,7 @@ resolution**.
   given the UNIT as well as the response, because a post-condition can be
   per-unit — stage 4 checks a cut against that boundary's own candidate menu
   and clamp window — and the lookup table it selects from is built when the
-  stage's work is described, so the Role stays stage-constant and shared.
+  stage's work is described, so the AskSpec stays stage-constant and shared.
   A verifier that concludes the failure is OURS rather than the model's says
   so by wrapping `ErrVerifierDefect` (§5's tripwire is the first case): that
   is neither retried nor fallen back, since both remedies trust the
@@ -667,23 +667,23 @@ resolution**.
   may never write the store: the artifact reaches disk through the runner and
   the encoder, once, on the attempt that won. The guarantees that makes safe
   are stated where they are depended on (`pipeline.Verifier`,
-  `pipeline.Baseline`) rather than discovered: `Verify` runs once per semantic
+  `pipeline.MechanicalFallback`) rather than discovered: `Verify` runs once per model
   attempt and never over a stored response, never concurrently within one
-  stage's stream, and a rejected attempt leaves the stage state untouched so
-  the informed retry re-asks the same question; `Baseline` runs at most once
+  stage's lane, and a rejected attempt leaves the stage state untouched so
+  the informed retry re-asks the same question; `MechanicalFallback` runs at most once
   per unit and only after that unit's attempts are exhausted.
-- The single semantic retry always carries the mechanical failure reason —
+- The single informed retry always carries the mechanical failure reason —
   a blind identical resend hopes temperature fixes it, which is not design
   (ruled).
-- Seam resolution: **refinement seams** (model improves an already-valid
-  mechanical baseline: cut refinement, review) fall back to the baseline,
-  logged, marked degraded. **Essential-inference seams** (taxonomy,
+- Seam resolution: **fallback-backed seams** (model improves an already-valid
+  mechanical fallback: cut refinement, review) fall back to the fallback,
+  logged, marked as fallen back. **No-fallback seams** (taxonomy,
   summaries, format translation) have no fallback by definition of why
   inference was chosen: the unit fails loudly, sibling units complete, and
   the job REFUSES EMISSION at assembly — "sorry, something rotted" beats
   "here's your invalid crap" (ruled). Resumable rerun redoes only failures.
 - Accounting: per-call usage aggregation, failed units included — a unit
-  that burned two semantic attempts and produced nothing is exactly the one
+  that burned two model attempts and produced nothing is exactly the one
   a cost figure must not omit; `cached_tokens` logged as prefix-cache ground
   truth; dev-telemetry emission (config-gated, off by default) as structured
   records through the logging seam. The telemetry records emit at **info**
@@ -694,25 +694,25 @@ resolution**.
 
 **Seams, asks, and declared effort** (ruled 2026-08-11). A *seam* is the
 mechanical→inference junction, and its only classification is what happens
-when inference fails: a refinement seam has a valid mechanical baseline to
+when inference fails: a fallback-backed seam has a valid mechanical fallback to
 stand on, an essential one does not. That says nothing about how hard the
 model should work, so effort — thinking today, temperature next, one
-`model.Effort` value — attaches to the **definition**: one value per exact
+`model.RequestEffort` value — attaches to the **definition**: one value per exact
 ask, declared where the definition is registered and threaded from there to
 the request. Not to the seam, and not to the stage. Today each seam happens
 to pose exactly one ask, so "per definition" and "per seam" would name the
 same values — which is precisely why the attachment is fixed by construction
-now (`model.Effort` is positional on both `dissect.NewRefiner` and
+now (`model.RequestEffort` is positional on both `dissect.NewRefiner` and
 `model.DefaultRequest`) rather than left to a terminology that a second ask at
 one seam would silently break. Both `chat_template_kwargs` keys are always
 sent, false included: an omitted key leaves the served chat template's default
 deciding, which is not a declaration.
 
-The DECLARED BIT is gated in exactly one place: `Role.validate`, which refuses
-a role whose effort was never declared before any agent exists (ruled
+The DECLARED BIT is gated in exactly one place: `AskSpec.validate`, which refuses
+an ask whose effort was never declared before any agent exists (ruled
 2026-08-12). Positional parameters make the value *stated*, not *declared* —
-`model.Effort{}` passed directly compiles and reads as a deliberate "no
-thinking" — and the Role is the one hop every production request passes
+`model.RequestEffort{}` passed directly compiles and reads as a deliberate "no
+thinking" — and the AskSpec is the one hop every production request passes
 through, so a second runtime check in `DefaultRequest` would guard a path that
 cannot ship. There is also no second CLASS of call to declare for: every
 `Request` this appliance builds is a definition's ask, and the catalogue probe
@@ -730,10 +730,10 @@ upstream artifact hashes) + output hash — validity is decidable by
 inspection with no knowledge of how the prior run died; (3) the worklist is
 stateless — resume scans outputs and re-derives it.
 
-Stage artifacts form a dependency chain (survey → skeleton → cuts → leaves →
+Stage artifacts form a dependency chain (survey → tree plan → cuts → leaves →
 summaries → links). The chain is **described lazily, one stage at a time**:
 a stage says what units it owes when the walk REACHES it, not at job setup.
-That is not an optimization — it is forced. The skeleton stage 3 emits is
+That is not an optimization — it is forced. The tree plan stage 3 emits is
 what defines stage 4's leaf units, and stage 4's verified cut list defines
 stage 5's, so no job-setup description of those stages could exist. A
 resolver therefore reads artifacts that earlier stages have already been
@@ -744,7 +744,7 @@ stage is described rather than at job setup, and a job that stops before its
 chain is fully described is never emit-ready, because it never learned what
 the rest of the chain owed. A unit's declared upstreams may name an artifact
 **this chain does not produce** — a re-plan legitimately consumes the
-skeleton a previous planning epoch left behind — but only a *proven* one:
+tree plan a previous planning epoch left behind — but only a *proven* one:
 the store is asked for its stamp, and an unstamped upstream is structural
 incoherence (nothing this chain runs would ever produce it), not a unit to
 redo. A unit may never name a sibling from its own stage: a stage's units
@@ -773,35 +773,35 @@ unaffected in every respect — the frozen-prompt assertion, the per-slot budget
 refusal and the churn tripwire all judge the built input exactly as they judged
 a stored one. It exists for one shape: a stage whose later questions depend on
 its own earlier answers. Stage 4's fold is that shape (§5), and a serial domain
-stream already guarantees the ordering the deferral needs, so the extension is
+lane already guarantees the ordering the deferral needs, so the extension is
 the deferral and nothing else.
 
 **Two task modes: a call, or a producer** (ruled 2026-08-12). Four stages of
 the pipeline infer nothing — ingest/survey, distillation, assembly, verify —
 and running them outside the coordinator would forfeit resume, stamps, the
 sweep and the single worklist for exactly the stages that produce the
-deliverable. So a task either asks a model (`Task.Input`) or derives its
-artifact in process (`Task.Produce`), exactly one of the two, and the worker
+deliverable. So a task either asks a model (`LaneTask.Input`) or derives its
+artifact in process (`LaneTask.Produce`), exactly one of the two, and the worker
 calls the producer where it would have called the runner. Everything else is
 identical: the unit description, the input set resolved and hashed BEFORE the
 derivation runs, the encoder, the atomic write, the stamp, the resume scan, the
 sweep, and the failure inventory — a producer's failure is an inventoried unit
-failure with no baseline and no retry, since the same inputs derive the same
+failure with no fallback and no retry, since the same inputs derive the same
 failure. A producer touches no prompt machinery, so a mechanical stage declares
-no Role at all and carries its own encoder instead. The modes do not MIX within
-a stage: everything stage-scoped here is declared per stage — one Role, one
+no AskSpec at all and carries its own encoder instead. The modes do not MIX within
+a stage: everything stage-scoped here is declared per stage — one AskSpec, one
 shared StageContext, one seam, one tier, one encoder — so a half-mechanical
 stage has no honest answer for what its seam is, and the description is refused.
-The rejected alternatives were a null Role with a fake verifier, which lies to
+The rejected alternatives were a null AskSpec with a fake verifier, which lies to
 the seam classification, and leaving the deterministic stages outside the
 orchestration entirely.
 
 **Multi-call artifacts and stage-granular resume.** A task may be marked
-`CallOnly`: it makes its call, its response is verified, and it writes nothing
+`Contributes`: it makes its call, its response is verified, and it writes nothing
 — its result is the stage's own state. The stage's units are what it WRITES, so
 those calls are invisible to the resume scan. Stage 4's fold uses this: *n*
 boundary calls produce one composed cut list, carried by the last task of the
-stream.
+lane.
 
 That makes an interrupted fold redone **whole**, and the alternative is why.
 Per-boundary artifacts would each be individually provable and individually
@@ -814,16 +814,16 @@ this is the shape where the proof machinery costs more than the work it saves.
 A kill mid-fold therefore leaves nothing at all on disk, which is exactly why
 there is nothing to salvage.
 
-**A failed call poisons the stream it is in** (ruled 2026-08-12). The artifact
-exists exactly when EVERY call of its stream succeeded: one inventoried failure
-among the `CallOnly` tasks feeding it and the producing task writes nothing,
+**A failed call poisons the lane it is in** (ruled 2026-08-12). The artifact
+exists exactly when EVERY call of its lane succeeded: one inventoried failure
+among the `Contributes` tasks feeding it and the producing task writes nothing,
 the remaining calls of that artifact are not spent, and the artifact is
 reported as the cascade of the failure beside it. This is the same discipline
 as the mid-kill case and needs no new stamp machinery — which is the whole
 argument for it. The alternative was to write the artifact anyway and rely on
 the run's own `JobResult` to refuse: but the stamp would be perfectly valid
 (nothing in a stamp knows a call failed), so the next run would verdict it
-Valid, drop the stream, and the failure would have existed in one run's report
+Valid, drop the lane, and the failure would have existed in one run's report
 and nowhere on disk. A build refusal at a boundary (`ErrOverBudget`, the one
 failure the bounded-inputs principle exists to make loud) is the reachable
 case, and a rerun would have laundered it.
@@ -838,7 +838,7 @@ first.
 **And a unit whose in-chain upstream failed THIS RUN is cascade-failed**
 (ruled 2026-08-12). It is the poisoning discipline applied across a chain edge,
 and it is stated because neither neighbouring rule reaches the case: poisoning
-is intra-stream, while "an unstamped upstream is structural incoherence" is
+is intra-lane, while "an unstamped upstream is structural incoherence" is
 scoped by its own justification — nothing this chain runs would ever produce it
 — which is false for an artifact whose producing unit failed a moment ago.
 Applying the incoherence rule anyway would refuse the whole resume with
@@ -847,8 +847,8 @@ unit. So the dependent is marked cascade-failed instead: not attempted, no call
 spent, nothing written, inventoried beside its cause under its own failure kind
 and naming the ROOT of the chain rather than its immediate predecessor. It
 propagates transitively, since a cascade-failed unit is itself a failure the
-next stage reads, and a dependent stream's remaining calls are dropped with it.
-The marking happens where the stage's streams are filtered, not at the unit: a
+next stage reads, and a dependent lane's remaining calls are dropped with it.
+The marking happens where the stage's lanes are filtered, not at the unit: a
 fold's calls all precede the task that writes what they compose, and a unit that
 failed this run may still have a PREVIOUS run's artifact on disk, which would
 resolve happily and buy a call spent deriving from superseded bytes. It is

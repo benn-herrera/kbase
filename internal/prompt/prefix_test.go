@@ -17,20 +17,20 @@ import (
 // pin the delimiter scheme against regressions.
 //
 // They are an EXTERNAL test package so they can import internal/pipeline. The
-// frontiers they assert are the ones the phase matrix declares — §12 names
-// these tests as one of the matrix's consumers, and deriving the expectations
+// frontiers they assert are the ones the phase-op table declares — §12 names
+// these tests as one of the phaseOpTable's consumers, and deriving the expectations
 // there is what makes "single source" true rather than aspirational. A
 // hand-written frontier here would be a second source that agrees until the
 // day it does not.
 
-// frontier reads a phase's declared stability frontier out of the matrix. Any
+// frontier reads a phase's declared stability frontier out of the phaseOpTable. Any
 // failure here is fatal: a test that silently substituted a default frontier
 // would assert something the orchestrator does not enforce.
-func frontier(t *testing.T, p pipeline.Phase) prompt.Slot {
+func frontier(t *testing.T, p pipeline.JobPhase) prompt.Slot {
 	t.Helper()
-	f, err := pipeline.Frontier(p)
+	f, err := pipeline.StabilityFrontier(p)
 	if err != nil {
-		t.Fatalf("pipeline.Frontier(%v): %v", p, err)
+		t.Fatalf("pipeline.StabilityFrontier(%v): %v", p, err)
 	}
 	return f
 }
@@ -83,13 +83,13 @@ func perCallInput(t *testing.T, in prompt.CallInput, s prompt.Slot) string {
 	switch s {
 	case prompt.SlotTaskStatus:
 		return statusBlock(in)
-	case prompt.SlotRefA:
-		return in.RefA
+	case prompt.SlotStageRef:
+		return in.StageRef
 	case prompt.SlotContent:
 		return in.Content
-	case prompt.SlotRefB:
-		return in.RefB
-	case prompt.SlotReminder:
+	case prompt.SlotCallRef:
+		return in.CallRef
+	case prompt.SlotCriticalEcho:
 		return strings.Join(in.AcceptanceCriteria, prompt.TrailerCriteriaDelimiter)
 	default:
 		t.Fatalf("no CallInput mapping for %s", s)
@@ -157,8 +157,8 @@ func assertStablePrefix(t *testing.T, prevIn, curIn prompt.CallInput, prev, cur 
 func TestPrefixStabilityPairwise(t *testing.T) {
 	sc := prompt.NewContext(t, prompt.BaseSpec(t))
 
-	// The two frontiers the matrix declares for a running stage. Every case
-	// below whose claim IS one of them states it this way, so a matrix edit
+	// The two frontiers the phaseOpTable declares for a running stage. Every case
+	// below whose claim IS one of them states it this way, so a table edit
 	// moves the test with it.
 	var (
 		callLoop          = frontier(t, pipeline.PhaseCallLoop)
@@ -185,7 +185,7 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 		{
 			name: "transient reference only",
 			mutate: func(in prompt.CallInput) prompt.CallInput {
-				in.RefB = "Prior output ends: elsewhere."
+				in.CallRef = "Prior output ends: elsewhere."
 				return in
 			},
 			stableThrough: prompt.SlotContent,
@@ -196,16 +196,16 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 				in.AcceptanceCriteria = []string{"- cover lines 43-77", "- budget 800 tokens"}
 				return in
 			},
-			stableThrough: prompt.SlotRefB,
+			stableThrough: prompt.SlotCallRef,
 		},
 		{
 			// The flush is the one per-call event that costs the whole
 			// stage-constant prefix and everything the buffer holds — which
-			// is exactly what the section-transition row of the matrix
+			// is exactly what the section-transition row of the phaseOpTable
 			// declares, and why the flush is legal only in that phase.
 			name: "multi-call reference flush",
 			mutate: func(in prompt.CallInput) prompt.CallInput {
-				in.RefA = "Cross-file listing:\n- c.md\n- d.md"
+				in.StageRef = "Cross-file listing:\n- c.md\n- d.md"
 				return in
 			},
 			stableThrough: sectionTransition,
@@ -232,7 +232,7 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 		{
 			name: "buffer emptied",
 			mutate: func(in prompt.CallInput) prompt.CallInput {
-				in.RefB = ""
+				in.CallRef = ""
 				return in
 			},
 			stableThrough: prompt.SlotContent,
@@ -240,7 +240,7 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 		{
 			name:          "identical inputs",
 			mutate:        func(in prompt.CallInput) prompt.CallInput { return in },
-			stableThrough: prompt.SlotReminder,
+			stableThrough: prompt.SlotCriticalEcho,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -264,24 +264,24 @@ func TestPrefixStabilityPairwise(t *testing.T) {
 
 // TestPrefixStabilitySequence walks a distillation-shaped call loop: status
 // and content churn every call, the transient reference with them, and the
-// multi-call reference buffer flushes every refAFlushEvery calls. The
+// multi-call reference buffer flushes every stageRefFlushEvery calls. The
 // invariant must hold at every transition, not just in isolated pairs.
 func TestPrefixStabilitySequence(t *testing.T) {
 	const (
-		calls          = 12
-		refAFlushEvery = 4
+		calls              = 12
+		stageRefFlushEvery = 4
 	)
 	sc := prompt.NewContext(t, prompt.BaseSpec(t))
 
-	// The subject is reference buffer A, which is what this case is ABOUT —
-	// "the buffer holds its bytes between flushes". The call-loop frontier
-	// happens to be the same slot today, and that agreement is worth
+	// The subject is the stage reference buffer, which is what this case is
+	// ABOUT — "the buffer holds its bytes between flushes". The call-loop
+	// frontier happens to be the same slot today, and that agreement is worth
 	// asserting, but it is a separate claim: a frontier is "the last slot
 	// that must be stable", not "the slot this test is about", and reading
-	// the subject out of the matrix would silently start checking a
-	// different slot the day the matrix lowered it.
-	if callLoop := frontier(t, pipeline.PhaseCallLoop); callLoop != prompt.SlotRefA {
-		t.Fatalf("call-loop frontier = %v, want %v", callLoop, prompt.SlotRefA)
+	// the subject out of the phaseOpTable would silently start checking a
+	// different slot the day the phaseOpTable lowered it.
+	if callLoop := frontier(t, pipeline.PhaseCallLoop); callLoop != prompt.SlotStageRef {
+		t.Fatalf("call-loop frontier = %v, want %v", callLoop, prompt.SlotStageRef)
 	}
 
 	callInput := func(i int) prompt.CallInput {
@@ -292,9 +292,9 @@ func TestPrefixStabilitySequence(t *testing.T) {
 				fmt.Sprintf("Leaves done: %d/%d", i, calls),
 				fmt.Sprintf("Current file: guide/leaf-%02d.md", i),
 			},
-			RefA:               fmt.Sprintf("Cross-file listing (batch %d):\n- a.md\n- b.md", i/refAFlushEvery),
+			StageRef:           fmt.Sprintf("Cross-file listing (batch %d):\n- a.md\n- b.md", i/stageRefFlushEvery),
 			Content:            fmt.Sprintf("Source span %d: the quick brown fox jumps over the lazy dog.", i),
-			RefB:               fmt.Sprintf("Prior leaf ended at line %d.", 40*i),
+			CallRef:            fmt.Sprintf("Prior leaf ended at line %d.", 40*i),
 			AcceptanceCriteria: []string{fmt.Sprintf("- cover lines %d-%d", 40*i, 40*i+39)},
 		}
 	}
@@ -314,13 +314,13 @@ func TestPrefixStabilitySequence(t *testing.T) {
 			// per-call status change. That is the claim the pre-swap
 			// ordering could not make, because a status line churning
 			// every call moved the frontier above the buffer either way.
-			if i%refAFlushEvery != 0 {
-				if prev.Hashes[prompt.SlotRefA] != cur.Hashes[prompt.SlotRefA] {
-					t.Errorf("%s churned between flushes", prompt.SlotRefA)
+			if i%stageRefFlushEvery != 0 {
+				if prev.Hashes[prompt.SlotStageRef] != cur.Hashes[prompt.SlotStageRef] {
+					t.Errorf("%s churned between flushes", prompt.SlotStageRef)
 				}
-				end := prev.Offsets[prompt.SlotRefA].End
-				if end != cur.Offsets[prompt.SlotRefA].End || prev.UserTurn[:end] != cur.UserTurn[:end] {
-					t.Errorf("status churn cost the prefix through %s", prompt.SlotRefA)
+				end := prev.Offsets[prompt.SlotStageRef].End
+				if end != cur.Offsets[prompt.SlotStageRef].End || prev.UserTurn[:end] != cur.UserTurn[:end] {
+					t.Errorf("status churn cost the prefix through %s", prompt.SlotStageRef)
 				}
 			}
 			// Only the last status line churns per call, so the cache must

@@ -24,7 +24,7 @@ func (p Params) overlapCapBytes(src []byte) int {
 }
 
 // Split proposes the mechanical cut list for one span: the always-valid
-// baseline the whole seam stands on (§3 monotone safety). Its output passes
+// fallback the whole seam stands on (§3 monotone safety). Its output passes
 // Verify by construction, and that is a property test rather than a comment.
 //
 // The heuristic is one sentence: fill toward the budget, and cut at the
@@ -39,28 +39,28 @@ func (p Params) overlapCapBytes(src []byte) int {
 // needs no taxonomy stage to exist and no knowledge of what the span is for.
 //
 // A span it cannot cut under the budget is refused, loudly, naming the span
-// (StarvedError). Truncation is nobody's job, and refuse-and-split is stage
-// 3's: an oversized unit goes back to the skeleton that sized it.
-func Split(src []byte, span survey.Range, cands []survey.CutCandidate, p Params) ([]survey.Range, error) {
+// (StarvedRejection). Truncation is nobody's job, and refuse-and-split is stage
+// 3's: an oversized unit goes back to the tree plan that sized it.
+func Split(src []byte, span survey.Span, cands []survey.CutCandidate, p Params) ([]survey.Span, error) {
 	if err := checkSpan(src, span); err != nil {
 		return nil, err
 	}
 
-	var cuts []survey.Range
+	var cuts []survey.Span
 	cursor := span.Start
 	for p.estimate(src[cursor:span.End]) > p.BudgetTokens {
 		at, ok := pick(src, cands, cursor, span.End, p)
 		if !ok {
-			return nil, StarvedError{
-				Span:   survey.Range{Start: cursor, End: span.End},
+			return nil, StarvedRejection{
+				Span:   survey.Span{Start: cursor, End: span.End},
 				Tokens: p.estimate(src[cursor:span.End]),
 				Budget: p.BudgetTokens,
 			}
 		}
-		cuts = append(cuts, survey.Range{Start: cursor, End: at})
+		cuts = append(cuts, survey.Span{Start: cursor, End: at})
 		cursor = at
 	}
-	cuts = append(cuts, survey.Range{Start: cursor, End: span.End})
+	cuts = append(cuts, survey.Span{Start: cursor, End: span.End})
 	return premerge(src, cuts, p), nil
 }
 
@@ -86,7 +86,7 @@ func pick(src []byte, cands []survey.CutCandidate, from, to int, p Params) (int,
 			// Candidates are sorted, so everything after this one is larger.
 			break
 		}
-		if p.underMinimum(src, survey.Range{Start: from, End: c.Offset}) {
+		if p.underMinimum(src, survey.Span{Start: from, End: c.Offset}) {
 			continue
 		}
 		rank := c.Kind.Rank()
@@ -106,7 +106,7 @@ func pick(src []byte, cands []survey.CutCandidate, from, to int, p Params) (int,
 // the right trade: the budget is a target the taxonomy stage owns and can
 // re-split against, while a 12-token leaf is a boundary decision nobody would
 // have made on purpose.
-func premerge(src []byte, cuts []survey.Range, p Params) []survey.Range {
+func premerge(src []byte, cuts []survey.Span, p Params) []survey.Span {
 	for len(cuts) > 1 {
 		i := -1
 		for j, c := range cuts {
@@ -129,7 +129,7 @@ func premerge(src []byte, cuts []survey.Range, p Params) []survey.Range {
 	return cuts
 }
 
-// Windows returns one clamp window per INTERIOR boundary of a cut list, in
+// MoveWindows returns one clamp window per INTERIOR boundary of a cut list, in
 // order — what the refinement pass shows the model and what Verify measures
 // its answer against. A list with no interior boundary produces none.
 //
@@ -138,15 +138,15 @@ func premerge(src []byte, cuts []survey.Range, p Params) []survey.Range {
 // long section and a short one reaches further back than forward, because
 // what the model needs is context proportional to what it is deciding
 // between, and the short side simply has less of it.
-func Windows(src []byte, cuts []survey.Range, p Params) []Window {
+func MoveWindows(src []byte, cuts []survey.Span, p Params) []MoveWindow {
 	if len(cuts) < 2 {
 		return nil
 	}
 	capBytes := p.overlapCapBytes(src)
-	out := make([]Window, 0, len(cuts)-1)
+	out := make([]MoveWindow, 0, len(cuts)-1)
 	for i := 1; i < len(cuts); i++ {
 		at := cuts[i].Start
-		out = append(out, Window{
+		out = append(out, MoveWindow{
 			Lo: at - overlap(cuts[i-1], capBytes),
 			Hi: at + overlap(cuts[i], capBytes),
 		})
@@ -155,7 +155,7 @@ func Windows(src []byte, cuts []survey.Range, p Params) []Window {
 }
 
 // overlap is one side's reach into one section: a fraction of it, capped.
-func overlap(sec survey.Range, capBytes int) int {
+func overlap(sec survey.Span, capBytes int) int {
 	n := int(float64(sec.End-sec.Start) * overlapFraction)
 	if n > capBytes {
 		return capBytes
@@ -163,7 +163,7 @@ func overlap(sec survey.Range, capBytes int) int {
 	return n
 }
 
-// StarvedError refuses a span this splitter could not cut under the budget:
+// StarvedRejection refuses a span this splitter could not cut under the budget:
 // from where its greedy walk stood, every legal position left a section too
 // large, or there was no legal position at all (a single enormous code fence,
 // a table nobody broke up).
@@ -178,13 +178,13 @@ func overlap(sec survey.Range, capBytes int) int {
 // It names the span rather than trimming it. Refuse-and-split is the §3
 // invariant: the remedy is at the stage that decides how big a unit is, and a
 // silently truncated leaf is how a verbatim-leaf discipline dies unnoticed.
-type StarvedError struct {
-	Span   survey.Range
+type StarvedRejection struct {
+	Span   survey.Span
 	Tokens int
 	Budget int
 }
 
-func (e StarvedError) Error() string {
+func (e StarvedRejection) Error() string {
 	return fmt.Sprintf("dissect: span [%d,%d) is %d tokens against a %d-token budget and this greedy walk "+
 		"found no legal cut that fits; it must be re-split at the stage that sized it",
 		e.Span.Start, e.Span.End, e.Tokens, e.Budget)

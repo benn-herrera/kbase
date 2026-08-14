@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"errors"
@@ -16,7 +16,7 @@ func TestCheckAnswer(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
-		answer     Answer
+		answer     GroupingAnswer
 		candidates int
 		depth      int
 		wantOK     bool
@@ -24,68 +24,68 @@ func TestCheckAnswer(t *testing.T) {
 		wantIn     string
 	}{{
 		name:       "a partition of three into two",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 2), group("Reference", KindIndex, 1)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 2), group("Reference", KindIndex, 1)}},
 		candidates: 3, depth: 2, wantOK: true,
 	}, {
 		name:       "one group of one is legal",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
 		candidates: 1, depth: 2, wantOK: true,
 	}, {
 		name:       "a dropped candidate",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
 		candidates: 2, depth: 2, wantIn: "left out",
 	}, {
 		name:       "a duplicated candidate",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0), group("Other", KindLeaf, 0, 1)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0), group("Other", KindLeaf, 0, 1)}},
 		candidates: 2, depth: 2, wantIn: "two groups",
 	}, {
 		name:       "a candidate nobody offered",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 7)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 7)}},
 		candidates: 2, depth: 2, wantIn: "not on the list",
 	}, {
 		name:       "an empty group",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 1), group("Empty", KindLeaf)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0, 1), group("Empty", KindLeaf)}},
 		candidates: 2, depth: 2, wantIn: "holds no entries",
 	}, {
 		name:       "no groups at all",
-		answer:     Answer{},
+		answer:     GroupingAnswer{},
 		candidates: 2, depth: 2, wantIn: "no groups",
 	}, {
 		name: "over the fan-out cap",
-		answer: Answer{Groups: []AnswerGroup{
+		answer: GroupingAnswer{Groups: []AnswerGroup{
 			group("A", KindLeaf, 0), group("B", KindLeaf, 1), group("C", KindLeaf, 2),
 			group("D", KindLeaf, 3), group("E", KindLeaf, 4),
 		}},
 		candidates: 5, depth: 2, wantIn: "too many groups",
 	}, {
 		name:       "an untitled group",
-		answer:     Answer{Groups: []AnswerGroup{group("   ", KindLeaf, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("   ", KindLeaf, 0)}},
 		candidates: 1, depth: 2, wantIn: "no title",
 	}, {
 		name: "two groups sharing a title",
-		answer: Answer{Groups: []AnswerGroup{
+		answer: GroupingAnswer{Groups: []AnswerGroup{
 			group("Setup", KindLeaf, 0), group("Setup", KindLeaf, 1)}},
 		candidates: 2, depth: 2, wantIn: "share a title",
 	}, {
 		name: "a group with no scope line",
-		answer: Answer{Groups: []AnswerGroup{
+		answer: GroupingAnswer{Groups: []AnswerGroup{
 			{Title: "Setup", Kind: KindLeaf, Members: []int{0}}}},
 		candidates: 1, depth: 2, wantIn: "no one-line scope",
 	}, {
 		name:       "a group that is neither page nor section",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", "annex", 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", "annex", 0)}},
 		candidates: 1, depth: 2, wantIn: "neither a page nor a section",
 	}, {
 		name:       "a section asked for below the last level",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindIndex, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindIndex, 0)}},
 		candidates: 1, depth: 5, wantIn: "no level left",
 	}, {
 		name:       "a page at the last level is fine",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
 		candidates: 1, depth: 5, wantOK: true,
 	}, {
 		name:       "a candidate list past the cap is our defect",
-		answer:     Answer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
+		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
 		candidates: testBudgets().CandidateCap + 1, depth: 2, wantDefect: true,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,8 +118,8 @@ func TestCheckAnswer(t *testing.T) {
 	}
 }
 
-// A note becomes the corrective note of the one informed retry
-// (pipeline.correctiveNoteWords), so it is short, it names no node, and it
+// A note becomes the retry note of the one informed retry
+// (pipeline.retryNoteWords), so it is short, it names no node, and it
 // carries no path — a path in it would be a node name the model is forbidden
 // to emit, sitting in the very next prompt (I-2).
 func assertNoteIsPromptable(t *testing.T, r Rejection) {

@@ -38,7 +38,7 @@ func TestNothingOutsideTempWorkIsTouched(t *testing.T) {
 	if client.callCount() != synthCalls {
 		t.Fatalf("%d calls, want a complete run of %d", client.callCount(), synthCalls)
 	}
-	if res.Scan.Stages != res.Stages {
+	if res.ResumeScan.Stages != res.Stages {
 		t.Fatalf("the run did not describe its whole chain, so it never swept: %+v", res)
 	}
 
@@ -76,7 +76,7 @@ func TestNothingOutsideTempWorkIsTouched(t *testing.T) {
 // create for this purpose.
 func TestSweepRefusesARootItDidNotMake(t *testing.T) {
 	dir := t.TempDir()
-	err := NewStore(dir, log.Discard()).sweep(synthPlan(t).Chain())
+	err := NewArtifactStore(dir, log.Discard()).sweep(synthPlan(t).StageChain())
 	if err == nil {
 		t.Fatal("a sweep over a root that is not a temp-work directory must be refused")
 	}
@@ -99,7 +99,7 @@ func TestTempWorkMirrorsTheOutputTreeOnDemand(t *testing.T) {
 	}
 
 	const rel = "ch1/sec2/leaf.md"
-	if err := work.Store().Put(rel, []byte("body\n"), []Input{corpusInput}); err != nil {
+	if err := work.ArtifactStore().Put(rel, []byte("body\n"), []Input{corpusInput}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(work.Root(), filepath.FromSlash(rel))); err != nil {

@@ -24,7 +24,7 @@ const criticalWordCap = 100
 // gets back.
 const (
 	// maxCriteriaWords is the injected acceptance criteria's reserved share.
-	// The criteria the skeleton emits are a handful of mechanical lines
+	// The criteria the tree plan emits are a handful of mechanical lines
 	// (tiling ranges, budgets) — 40 words is several of them with room to
 	// spare, and it leaves the authored section the larger half, which is
 	// the half a human writes prose in.

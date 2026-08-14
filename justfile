@@ -95,7 +95,7 @@ prep-test-integration-rojo:
 # constants change (e.g. chars-per-token) or a pin bump re-validates here.
 #
 # It also runs the corpus properties — the dissection one over every section,
-# and the skeleton one over a whole composed tree. Those tests skip when the
+# and the tree-plan one over a whole composed tree. Those tests skip when the
 # corpus is absent — correct for a unit test, which must not reach the network
 # — so `just test` on a clean machine gives no signal on the half of
 # ARCHITECTURE §5.1's claim that says "every section of the pinned corpus".
@@ -119,7 +119,7 @@ test-integration-rojo:
 [private]
 _test-integration-rojo: build prep-test-integration-rojo
     go test -v -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
-    go test -v -run TestSkeletonOverRealCorpus -count=1 ./internal/skeleton
+    go test -v -run TestTreePlanOverRealCorpus -count=1 ./internal/treeplan
     @a="{{ROJO_TEST_OUT_DIR}}/survey.json"; \
     b="{{ROJO_TEST_OUT_DIR}}/survey-rerun.json"; \
     s="{{ROJO_TEST_OUT_DIR}}/summary.txt"; \

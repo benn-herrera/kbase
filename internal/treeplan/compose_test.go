@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"errors"
@@ -27,7 +27,7 @@ func oneSectionDoc(path, title string) docSpec {
 
 func TestComposeMechanicalTree(t *testing.T) {
 	v, art := verifierFor(t, testParams(), smallDoc("guide.md", "Guide"))
-	plan := Plan{Title: "The Corpus", Scope: "everything", Children: []PlanNode{
+	plan := TreeProposal{Title: "The Corpus", Scope: "everything", Children: []ProposalNode{
 		indexNode("Getting Started",
 			leafFor(art, "guide.md", 0, "First Steps"),
 			leafFor(art, "guide.md", 1, "Second Steps")),
@@ -72,11 +72,11 @@ func TestComposeMechanicalTree(t *testing.T) {
 }
 
 // §2.4: an over-budget span is split at design time, becomes n sibling leaves
-// sharing one group, and the skeleton records the count and no boundary.
+// sharing one group, and the tree plan records the count and no boundary.
 func TestComposeSplitsAnOversizedSpan(t *testing.T) {
 	big := docSpec{path: "big.md", title: "Big", secs: []secSpec{{title: "Long", paras: 8, words: 60}}}
 	v, art := verifierFor(t, testParams(), big)
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		leafFor(art, "big.md", 0, "Long Chapter"),
 	}}
 
@@ -104,11 +104,11 @@ func TestComposeSplitsAnOversizedSpan(t *testing.T) {
 		if n.Title != wantTitle {
 			t.Errorf("%s title = %q, want %q", wantPath, n.Title, wantTitle)
 		}
-		if n.Group != g.ID || n.Part != k {
-			t.Errorf("%s names group %q part %d, want %q part %d", wantPath, n.Group, n.Part, g.ID, k)
+		if n.SplitGroup != g.ID || n.Part != k {
+			t.Errorf("%s names group %q part %d, want %q part %d", wantPath, n.SplitGroup, n.Part, g.ID, k)
 		}
 	}
-	// F-2: the span the skeleton states is the WHOLE group's, and no interior
+	// F-2: the span the tree plan states is the WHOLE group's, and no interior
 	// boundary appears anywhere in the artifact.
 	f := fileOf(art, "big.md")
 	if g.Source.Start != 0 || g.Source.End != f.Bytes {
@@ -118,11 +118,11 @@ func TestComposeSplitsAnOversizedSpan(t *testing.T) {
 }
 
 // §2.4 step 4: a span the splitter cannot cut is a rejection carrying the
-// corrective note, not a truncation and not a defect.
+// retry note, not a truncation and not a defect.
 func TestComposeRefusesAnUncuttableSpan(t *testing.T) {
 	wall := docSpec{path: "wall.md", title: "Wall", secs: []secSpec{{title: "Solid", paras: 1, words: 400}}}
 	v, art := verifierFor(t, testParams(), wall)
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		leafFor(art, "wall.md", 0, "Solid Wall"),
 	}}
 
@@ -135,9 +135,9 @@ func TestComposeRefusesAnUncuttableSpan(t *testing.T) {
 		t.Fatalf("want a StarvedRejection, got %T: %v", err, err)
 	}
 	// It wraps the dissector's own refusal, so a caller can reach the span.
-	var se dissect.StarvedError
+	var se dissect.StarvedRejection
 	if !errors.As(err, &se) {
-		t.Fatalf("the rejection does not carry dissect.StarvedError: %v", err)
+		t.Fatalf("the rejection does not carry dissect.StarvedRejection: %v", err)
 	}
 	r, ok := AsRejection(err)
 	if !ok {
@@ -154,7 +154,7 @@ func TestComposeRefusesAnUncuttableSpan(t *testing.T) {
 func TestComposeCollapsesASingleChildChain(t *testing.T) {
 	v, art := verifierFor(t, testParams(), oneSectionDoc("d.md", "D"))
 	leaf := wholeFileLeaf(art, "d.md", "The Page")
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		indexNode("L2", indexNode("L3", indexNode("L4", indexNode("L5", leaf)))),
 	}}
 
@@ -188,7 +188,7 @@ func TestComposeMergesAncestorsWhenChainsAreNotEnough(t *testing.T) {
 	for i, title := range []string{"L5", "L4", "L3", "L2"} {
 		node = indexNode(title, node, wholeFileLeaf(art, fmt.Sprintf("d%d.md", 4-i), fmt.Sprintf("Page %d", 4-i)))
 	}
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{node}}
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{node}}
 
 	s, err := v.Compose(plan, nil)
 	if err != nil {
@@ -207,14 +207,14 @@ func TestComposeDissolvesAMultiFileGroup(t *testing.T) {
 	// naming fallback are exercised: the survey's title, then the base name.
 	v, art := verifierFor(t, testParams(),
 		oneSectionDoc("a.md", "Alpha"), oneSectionDoc("notes/beta-doc.md", ""))
-	multi := PlanNode{
+	multi := ProposalNode{
 		Title: "Both", Scope: "two files at once", Kind: KindLeaf,
 		Sources: []Span{
 			{File: "a.md", Start: 0, End: fileOf(art, "a.md").Bytes},
 			{File: "notes/beta-doc.md", Start: 0, End: fileOf(art, "notes/beta-doc.md").Bytes},
 		},
 	}
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{multi}}
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{multi}}
 
 	s, err := v.Compose(plan, nil)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestComposeDissolvesAMultiFileGroup(t *testing.T) {
 // into ordered batches under synthetic indexes, mechanically titled.
 func TestComposeInterposesOverTheFanOutCap(t *testing.T) {
 	docs := []docSpec{}
-	var children []PlanNode
+	var children []ProposalNode
 	for i := 1; i <= 6; i++ {
 		docs = append(docs, oneSectionDoc(fmt.Sprintf("d%d.md", i), fmt.Sprintf("D%d", i)))
 	}
@@ -247,7 +247,7 @@ func TestComposeInterposesOverTheFanOutCap(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		children = append(children, wholeFileLeaf(art, fmt.Sprintf("d%d.md", i), fmt.Sprintf("Page %d", i)))
 	}
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{indexNode("Domain", children...)}}
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{indexNode("Domain", children...)}}
 
 	s, err := v.Compose(plan, nil)
 	if err != nil {
@@ -270,19 +270,19 @@ func TestComposeInterposesOverTheFanOutCap(t *testing.T) {
 }
 
 // §2.7's stated refusal: an interposition that re-breaches the depth cap is
-// not re-collapsed. It says so, once, with a corrective note.
+// not re-collapsed. It says so, once, with a retry note.
 func TestComposeRefusesAnInterpositionThatNeedsAFifthLevel(t *testing.T) {
 	docs := []docSpec{}
 	for i := 1; i <= 6; i++ {
 		docs = append(docs, oneSectionDoc(fmt.Sprintf("d%d.md", i), fmt.Sprintf("D%d", i)))
 	}
 	v, art := verifierFor(t, testParams(), docs...)
-	var leaves []PlanNode
+	var leaves []ProposalNode
 	for i := 1; i <= 6; i++ {
 		leaves = append(leaves, wholeFileLeaf(art, fmt.Sprintf("d%d.md", i), fmt.Sprintf("Page %d", i)))
 	}
 	// The breaching index already sits at the deepest permitted level.
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		indexNode("L2", indexNode("L3", indexNode("L4", leaves...))),
 	}}
 
@@ -310,11 +310,11 @@ func TestComposeInterposesOverTheSummaryInputBudget(t *testing.T) {
 			secs: []secSpec{{title: "Body", paras: 2, words: 60}}})
 	}
 	v, art := verifierFor(t, p, docs...)
-	var leaves []PlanNode
+	var leaves []ProposalNode
 	for i := 1; i <= 4; i++ {
 		leaves = append(leaves, wholeFileLeaf(art, fmt.Sprintf("d%d.md", i), fmt.Sprintf("Page %d", i)))
 	}
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{indexNode("Domain", leaves...)}}
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{indexNode("Domain", leaves...)}}
 
 	s, err := v.Compose(plan, nil)
 	if err != nil {
@@ -330,13 +330,13 @@ func TestComposeInterposesOverTheSummaryInputBudget(t *testing.T) {
 // path, parent and cap is fine.
 func TestComposeRefusesUncoveredMaterial(t *testing.T) {
 	v, art := verifierFor(t, testParams(), smallDoc("guide.md", "Guide"))
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		leafFor(art, "guide.md", 0, "Only The First"),
 	}}
 
 	_, err := v.Compose(plan, nil)
 	if err == nil {
-		t.Fatal("two thirds of the corpus went missing and the skeleton verified")
+		t.Fatal("two thirds of the corpus went missing and the tree plan verified")
 	}
 	r, ok := AsRejection(err)
 	if !ok {
@@ -353,7 +353,7 @@ func TestComposeRefusesUncoveredMaterial(t *testing.T) {
 func TestComposeAnnexes(t *testing.T) {
 	v, art := verifierFor(t, testParams(),
 		oneSectionDoc("guide.md", "Guide"), oneSectionDoc("ref/api.md", "API"))
-	plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		wholeFileLeaf(art, "guide.md", "The Guide"),
 	}}
 
@@ -385,26 +385,26 @@ func TestComposeRefusesMalformedPlans(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		plan Plan
+		plan TreeProposal
 	}{
-		{"no corpus title", Plan{Scope: "all", Children: []PlanNode{leaf}}},
-		{"no domains", Plan{Title: "Corpus", Scope: "all"}},
-		{"an untitled group", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Scope: "s", Kind: KindLeaf, Sources: leaf.Sources}}}},
-		{"a group with no scope", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Kind: KindLeaf, Sources: leaf.Sources}}}},
-		{"a page with children", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Scope: "s", Kind: KindLeaf, Sources: leaf.Sources,
-				Children: []PlanNode{leaf}}}}},
-		{"a page over nothing", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Scope: "s", Kind: KindLeaf}}}},
-		{"an empty section", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Scope: "s", Kind: KindIndex}}}},
-		{"a section over source material", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Scope: "s", Kind: KindIndex, Sources: leaf.Sources,
-				Children: []PlanNode{leaf}}}}},
-		{"an unknown kind", Plan{Title: "Corpus", Scope: "all",
-			Children: []PlanNode{{Title: "T", Scope: "s", Kind: "annex", Sources: leaf.Sources}}}},
+		{"no corpus title", TreeProposal{Scope: "all", Children: []ProposalNode{leaf}}},
+		{"no domains", TreeProposal{Title: "Corpus", Scope: "all"}},
+		{"an untitled group", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Scope: "s", Kind: KindLeaf, Sources: leaf.Sources}}}},
+		{"a group with no scope", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Kind: KindLeaf, Sources: leaf.Sources}}}},
+		{"a page with children", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Scope: "s", Kind: KindLeaf, Sources: leaf.Sources,
+				Children: []ProposalNode{leaf}}}}},
+		{"a page over nothing", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Scope: "s", Kind: KindLeaf}}}},
+		{"an empty section", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Scope: "s", Kind: KindIndex}}}},
+		{"a section over source material", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Scope: "s", Kind: KindIndex, Sources: leaf.Sources,
+				Children: []ProposalNode{leaf}}}}},
+		{"an unknown kind", TreeProposal{Title: "Corpus", Scope: "all",
+			Children: []ProposalNode{{Title: "T", Scope: "s", Kind: "annex", Sources: leaf.Sources}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := v.Compose(tc.plan, nil)
@@ -430,7 +430,7 @@ func TestComposeTreatsBadSpansAsDefects(t *testing.T) {
 		{"empty", Span{File: "guide.md", Start: 4, End: 4}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := Plan{Title: "Corpus", Scope: "all", Children: []PlanNode{
+			plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 				{Title: "T", Scope: "s", Kind: KindLeaf, Sources: []Span{tc.span}}}}
 			_, err := v.Compose(plan, nil)
 			var defect DefectError
@@ -462,8 +462,8 @@ func TestNewVerifierRefusesMismatchedInputs(t *testing.T) {
 
 // assertGroupsMatchTheSplitter is §3.5's acceptance criterion read directly:
 // re-running the mechanical splitter over a group's span at its budget yields
-// exactly the part count the skeleton claims.
-func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s Skeleton) {
+// exactly the part count the tree plan claims.
+func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s TreePlan) {
 	t.Helper()
 	for _, g := range s.Groups {
 		cuts, err := v.split(g.Source)
@@ -479,7 +479,7 @@ func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s Skeleton) {
 // assertWithinCaps checks the structural caps over the artifact the way a
 // consumer would: from the parent chain, not from anything the verifier
 // remembers.
-func assertWithinCaps(t *testing.T, s Skeleton, b Budgets) {
+func assertWithinCaps(t *testing.T, s TreePlan, b Budgets) {
 	t.Helper()
 	levels := levelsOf(s)
 	fanOut := map[string]int{}
@@ -498,7 +498,7 @@ func assertWithinCaps(t *testing.T, s Skeleton, b Budgets) {
 	}
 }
 
-func indexCount(s Skeleton) int {
+func indexCount(s TreePlan) int {
 	n := 0
 	for _, node := range s.Nodes {
 		if node.Kind == KindIndex {

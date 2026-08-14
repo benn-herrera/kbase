@@ -17,7 +17,7 @@ import (
 func oneDocument(t *testing.T) (ingest.Corpus, []byte) {
 	t.Helper()
 	src := []byte("aaaa bbbb cccc dddd\n")
-	c, err := ingest.New([]ingest.Unit{{Path: "a.md", Bytes: src}})
+	c, err := ingest.New([]ingest.SourceDoc{{Path: "a.md", Bytes: src}})
 	if err != nil {
 		t.Fatalf("ingest.New: %v", err)
 	}

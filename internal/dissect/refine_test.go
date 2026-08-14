@@ -20,10 +20,10 @@ import (
 	"kbase/internal/survey"
 )
 
-// The refinement seam driven end to end through the REAL orchestrator:
+// The fallback-backed seam driven end to end through the REAL orchestrator:
 // Coordinator → CallRunner → model.MockClient. Nothing here stubs the
 // pipeline, because what is being tested is the seam's behaviour under the
-// pipeline's own policies — one informed retry, then the mechanical baseline
+// pipeline's own policies — one informed retry, then the mechanical fallback
 // (§12) — and a stub would be a second implementation of exactly the rules in
 // question.
 //
@@ -44,7 +44,7 @@ const (
 // here, deliberately opposite to what the real registration declares
 // (cmd.devRefineEffort): these tests assert that the stage passes its caller's
 // value through, which a fixture agreeing with the default could not show.
-var testEffort = model.DeclareEffort(model.Effort{Thinking: true})
+var testEffort = model.DeclareEffort(model.RequestEffort{Thinking: true})
 
 // nearBoundaryDoc is a document whose blocks are sized so that a SECOND
 // candidate lands inside the boundary's overlap window: a big block, a short
@@ -139,7 +139,7 @@ func runStageIn(t *testing.T, dir string, r *Refiner, client model.Client, lg lo
 	coord := pipeline.NewCoordinator(storeIn(t, dir, lg), pipeline.NewCallRunner(client, cfg, lg), 1, lg)
 
 	plan := pipeline.Plan{
-		SystemFrame: jobFrame,
+		JobFrame: jobFrame,
 		Stages: []*pipeline.StagePlan{r.StagePlan(stageName, []pipeline.Input{
 			{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))},
 		})},
@@ -150,7 +150,7 @@ func runStageIn(t *testing.T, dir string, r *Refiner, client model.Client, lg lo
 // cutListIn reads the stage's composed artifact back as the cut list it
 // records — through the store's own reader, which is how the stage that
 // consumes it will get at it.
-func cutListIn(t *testing.T, dir, unit string) []survey.Range {
+func cutListIn(t *testing.T, dir, unit string) []survey.Span {
 	t.Helper()
 	data, err := storeIn(t, dir, log.Discard()).Get(unit)
 	if err != nil {
@@ -168,13 +168,13 @@ func cutListIn(t *testing.T, dir, unit string) []survey.Range {
 
 // storeIn opens the store of an output directory where a real run roots it:
 // the temp-work tree kbase creates inside it.
-func storeIn(t *testing.T, dir string, lg log.Logger) *pipeline.Store {
+func storeIn(t *testing.T, dir string, lg log.Logger) *pipeline.ArtifactStore {
 	t.Helper()
 	work, err := pipeline.OpenTempWork(dir, lg)
 	if err != nil {
 		t.Fatalf("OpenTempWork: %v", err)
 	}
-	return work.Store()
+	return work.ArtifactStore()
 }
 
 // storePath is the on-disk path of a store-relative unit under an output dir.
@@ -183,7 +183,7 @@ func storePath(dir, unit string) string {
 }
 
 // cutAt is the offset of boundary i in a composed cut list.
-func cutAt(t *testing.T, cuts []survey.Range, i int) int {
+func cutAt(t *testing.T, cuts []survey.Span, i int) int {
 	t.Helper()
 	if i < 1 || i >= len(cuts) {
 		t.Fatalf("boundary %d is not interior to a %d-section list", i, len(cuts))
@@ -205,10 +205,10 @@ func TestRefinementAcceptsAChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Produced != 1 || res.Degraded != 0 || len(res.Failures) != 0 {
+	if res.Produced != 1 || res.FallbackCount != 0 || len(res.Failures) != 0 {
 		t.Fatalf("result = %+v, want one clean unit", res)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		t.Error("a clean refinement run must be emit-ready")
 	}
 	if got := cutAt(t, cutListIn(t, dir, b.Unit), b.Index); got != offset {
@@ -263,7 +263,7 @@ func TestRefinementRetriesWithTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Produced != 1 || res.Degraded != 0 {
+	if res.Produced != 1 || res.FallbackCount != 0 {
 		t.Fatalf("result = %+v, want the retry to have been accepted", res)
 	}
 	if got := cutAt(t, cutListIn(t, dir, b.Unit), b.Index); got != offset {
@@ -275,14 +275,14 @@ func TestRefinementRetriesWithTheReason(t *testing.T) {
 	}
 	retry := calls[1].Request.Messages[0].Content
 	if !strings.Contains(retry, "previous attempt rejected") {
-		t.Error("the retry did not carry the corrective note")
+		t.Error("the retry did not carry the retry note")
 	}
 	// The note is model-facing text, so the two things that made it useless
 	// are asserted here: the operator prefix (four of the note's twelve
 	// budgeted words, spent before any content) and the raw byte offset it
 	// carried into the prompt of the very next call.
 	if strings.Contains(retry, "dissect: cut at") {
-		t.Error("the corrective note carries the operator-facing prefix")
+		t.Error("the retry note carries the operator-facing prefix")
 	}
 	assertNoOffsets(t, retry, offsetsOf(b.Menu)...)
 	assertNoOffsets(t, retry, b.Cut, b.Window.Lo, b.Window.Hi)
@@ -292,8 +292,8 @@ func TestRefinementRetriesWithTheReason(t *testing.T) {
 }
 
 // TestRefinementFallsBackToTheMechanicalCut: two rejections exhaust the
-// semantic attempts, and a refinement seam has somewhere valid to stand. The
-// unit is produced, marked degraded, and the artifact is the mechanical cut —
+// model attempts, and a fallback-backed seam has somewhere valid to stand. The
+// unit is produced, marked as fallen back, and the artifact is the mechanical cut —
 // model failure costs quality, never correctness (§3).
 func TestRefinementFallsBackToTheMechanicalCut(t *testing.T) {
 	for _, tc := range []struct {
@@ -318,10 +318,10 @@ func TestRefinementFallsBackToTheMechanicalCut(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			if res.Produced != 1 || res.Degraded != 1 || len(res.Failures) != 0 {
+			if res.Produced != 1 || res.FallbackCount != 1 || len(res.Failures) != 0 {
 				t.Fatalf("result = %+v, want one degraded unit", res)
 			}
-			if !res.EmitReady() {
+			if !res.DeliveryReady() {
 				t.Error("a degraded refinement is still correct; the job must be emit-ready")
 			}
 			if got := cutAt(t, cutListIn(t, dir, b.Unit), b.Index); got != b.Cut {
@@ -342,7 +342,7 @@ func TestRefinementFallsBackToTheMechanicalCut(t *testing.T) {
 // — the shape a rebasing bug has — and the model chooses it. It is a legal
 // menu entry, so nothing about the model's answer is wrong; the offsets are.
 //
-// So it must NOT be retried and must NOT fall back: the baseline comes from
+// So it must NOT be retried and must NOT fall back: the fallback comes from
 // the same derivation. The worker aborts and the job reports a defect.
 func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	src, cands := nearBoundaryDoc()
@@ -383,14 +383,14 @@ func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	if !errors.As(runErr, &defect) || defect.Offset != bad {
 		t.Errorf("err = %v, want the tripwire's own diagnosis at %d", runErr, bad)
 	}
-	if res.EmitReady() {
+	if res.DeliveryReady() {
 		t.Error("a job that aborted on a defect must not be emit-ready")
 	}
 	if n := len(client.Calls()); n != 1 {
 		t.Errorf("%d calls; a defect is never retried", n)
 	}
 	if _, err := os.Stat(storePath(dir, b.Unit)); err == nil {
-		t.Error("a defect must not fall back to the baseline; it comes from the same offsets")
+		t.Error("a defect must not fall back to the fallback; it comes from the same offsets")
 	}
 }
 
@@ -413,7 +413,7 @@ func insertCandidate(cands []survey.CutCandidate, c survey.CutCandidate) []surve
 }
 
 // TestRefinementScansSerially is §5's shape: one call per boundary, in
-// document order, each carrying its own window. One domain stream is what
+// document order, each carrying its own window. One serial lane is what
 // makes that true — a worker owns a domain and runs it serially, so the
 // windows overwrite each other instead of accumulating.
 func TestRefinementScansSerially(t *testing.T) {
@@ -459,7 +459,7 @@ func TestRefinementScansSerially(t *testing.T) {
 	}
 	// One artifact, however many boundaries: the calls are the fold's steps
 	// and the composed cut list is the only thing the stage owes.
-	if res.Produced != 1 || res.Degraded != 0 {
+	if res.Produced != 1 || res.FallbackCount != 0 {
 		t.Fatalf("result = %+v, want the one composed cut list", res)
 	}
 	calls := client.Calls()
@@ -495,10 +495,10 @@ func TestRefinementScansSerially(t *testing.T) {
 func TestNewRefinerVerifiesItsBaseline(t *testing.T) {
 	src, cands := nearBoundaryDoc()
 	span := wholeSpan(src)
-	broken := []survey.Range{{Start: 0, End: 10}, {Start: 20, End: len(src)}}
+	broken := []survey.Span{{Start: 0, End: 10}, {Start: 20, End: len(src)}}
 
 	if _, err := NewRefiner(src, span, cands, broken, stageName, params(250), testEffort, log.Discard()); err == nil {
-		t.Fatal("a cut list that does not tile must not become a stage's baseline")
+		t.Fatal("a cut list that does not tile must not become a stage's fallback")
 	} else if !strings.Contains(err.Error(), "fall back") {
 		t.Errorf("error = %v, want it to name what the list was going to be", err)
 	}
@@ -526,7 +526,7 @@ func denseBlocks(n int) []blk {
 // dense window can offer a hundred candidates, which is a reference buffer the
 // size of the content it annotates and a hundred-way question for a 26B model.
 // The incumbent is always in the menu because confirming the boundary is the
-// most common correct answer at a refinement seam.
+// most common correct answer at a fallback-backed seam.
 func TestMenuIsCappedAroundTheIncumbent(t *testing.T) {
 	src, cands := buildDoc(denseBlocks(60)...)
 	span := wholeSpan(src)
@@ -590,7 +590,7 @@ func TestMenuShortSideContributesWhatItHas(t *testing.T) {
 		[]blk{{survey.CutHeading, "# One\n\n" + words("q", 400)}},
 		denseBlocks(40)...)...)
 	span := wholeSpan(src)
-	cuts := []survey.Range{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
+	cuts := []survey.Span{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 	p := params(1_000_000)
 
 	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
@@ -634,7 +634,7 @@ func TestParseChoiceRequiresANumber(t *testing.T) {
 		{"surrounded by whitespace", "  3\n", 3},
 		{"with a full stop", "3.", 3},
 		{"with closing punctuation", "3)", 3},
-		{"a number in a sentence", "Answer: 3", 0},
+		{"a number in a sentence", "GroupingAnswer: 3", 0},
 		{"a leading count the model echoed", "Boundary 2 of 3 — I would move it to 1", 0},
 		{"prose with no number", "I do not think either is right.", 0},
 		{"empty", "", 0},
@@ -691,11 +691,11 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 
 	// A second cut list over the same document with the same boundary count,
 	// so the unit PATHS collide exactly. Only the parameters differ.
-	moved := []survey.Range{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
+	moved := []survey.Span{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 
 	for _, tc := range []struct {
 		name  string
-		cuts  []survey.Range
+		cuts  []survey.Span
 		p     Params
 		reuse bool
 	}{
@@ -731,7 +731,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 	}
 }
 
-// TestStagePlanCarriesTheDeclaredEffort: the role this stage registers asks
+// TestStagePlanCarriesTheDeclaredEffort: the ask this stage registers asks
 // with the effort its CONSTRUCTOR was given.
 //
 // The stage has no standing to hold an opinion here — the effort belongs to
@@ -741,21 +741,21 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 // pass-through distinguishable from a default.
 func TestStagePlanCarriesTheDeclaredEffort(t *testing.T) {
 	r, _, _ := oneBoundary(t, log.Discard())
-	got := r.StagePlan(stageName, nil).Role.Effort
+	got := r.StagePlan(stageName, nil).Ask.Effort
 	if got != testEffort {
-		t.Errorf("role effort = %+v, want the declaration NewRefiner was given (%+v)", got, testEffort)
+		t.Errorf("ask effort = %+v, want the declaration NewRefiner was given (%+v)", got, testEffort)
 	}
 }
 
 // scanOf runs the resume scan a job over this refiner would run.
-func scanOf(t *testing.T, dir string, r *Refiner) pipeline.ScanResult {
+func scanOf(t *testing.T, dir string, r *Refiner) pipeline.ResumeScanResult {
 	t.Helper()
-	plan := pipeline.Plan{SystemFrame: jobFrame, Stages: []*pipeline.StagePlan{
+	plan := pipeline.Plan{JobFrame: jobFrame, Stages: []*pipeline.StagePlan{
 		r.StagePlan(stageName, []pipeline.Input{{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))}}),
 	}}
-	scan, err := storeIn(t, dir, log.Discard()).Scan(plan.Chain(), pipeline.ModeResume)
+	scan, err := storeIn(t, dir, log.Discard()).ResumeScan(plan.StageChain(), pipeline.ModeResume)
 	if err != nil {
-		t.Fatalf("Scan: %v", err)
+		t.Fatalf("ResumeScan: %v", err)
 	}
 	return scan
 }
@@ -780,7 +780,7 @@ func TestVerifyBlamesTheModelOnlyForRejections(t *testing.T) {
 	}
 
 	// A rejection: the model's answer, retried once and then discarded for the
-	// baseline. It must NOT be a defect, or a bad answer would stop the job.
+	// fallback. It must NOT be a defect, or a bad answer would stop the job.
 	r, _, b := oneBoundary(t, log.Discard())
 	_, err := r.verify(b.Unit, "99")
 	if err == nil {
@@ -803,13 +803,13 @@ func TestVerifyBlamesTheModelOnlyForRejections(t *testing.T) {
 	// A plain error out of Verify — a window count that does not match the
 	// boundaries. Unreachable by construction today, which is exactly why the
 	// classification must not depend on anyone enumerating it.
-	r.windows = append(r.windows, Window{})
+	r.windows = append(r.windows, MoveWindow{})
 	if _, err := r.verify(b.Unit, fmt.Sprint(number)); !errors.Is(err, pipeline.ErrVerifierDefect) {
 		t.Errorf("err = %v, want a plain verifier error classified as our defect", err)
 	}
 }
 
-// TestNoNoteHandsTheModelALegalAnswer: every corrective note the fold can send
+// TestNoNoteHandsTheModelALegalAnswer: every retry note the fold can send
 // back is a PROMPT, and the model's whole vocabulary here is a menu number.
 //
 // The rejection reasons the parser produces are the ones with a number in
@@ -818,7 +818,7 @@ func TestVerifyBlamesTheModelOnlyForRejections(t *testing.T) {
 // reads the Note the retry would carry. Verify's own reasons are covered where
 // they are constructed (TestVerifyRejections and its siblings).
 func TestNoNoteHandsTheModelALegalAnswer(t *testing.T) {
-	for _, response := range []string{"", "somewhere in the middle", "0", "99", "3 4", "Answer: 2"} {
+	for _, response := range []string{"", "somewhere in the middle", "0", "99", "3 4", "GroupingAnswer: 2"} {
 		t.Run(response, func(t *testing.T) {
 			r, _, b := oneBoundary(t, log.Discard())
 			_, err := r.verify(b.Unit, response)
@@ -860,7 +860,7 @@ func TestARefinerIsOneRuns(t *testing.T) {
 // assertion, at the seam it exists for.
 //
 // The exclusivity CAS alone covers the WRITE path. The read that builds a
-// boundary's prompt happens earlier, in the worker goroutine, so two streams
+// boundary's prompt happens earlier, in the worker goroutine, so two lanes
 // over one Refiner would race on the working list before any CAS could fire
 // and the menu they produced would already be derived from a torn read. One
 // int catches it from either side.
@@ -985,7 +985,7 @@ func slackDoc() ([]byte, []survey.CutCandidate) {
 }
 
 // tokensIn is the estimated size of a section of src.
-func tokensIn(src []byte, r survey.Range) int { return params(0).estimate(src[r.Start:r.End]) }
+func tokensIn(src []byte, r survey.Span) int { return params(0).estimate(src[r.Start:r.End]) }
 
 // logField returns the value the first record at level carrying key holds.
 // logtest matches key/value pairs; this reads one out, for the metrics whose
@@ -1017,7 +1017,7 @@ func logField(t *testing.T, lg *logtest.Capture, level, key string) any {
 // slack is spent, the move is refused, and the boundary stays where it is.
 //
 // Nothing is rationed and no freedom is halved: the first boundary adjudicated
-// gets the whole of the slack, and the second is told, in the corrective note,
+// gets the whole of the slack, and the second is told, in the retry note,
 // exactly what the answer was wrong about.
 func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	src, cands := slackDoc()
@@ -1025,7 +1025,7 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	// A stated cut list rather than a searched one: the case is about the
 	// sizes, and Split choosing differently would make it about Split.
 	p := params(1_000_000)
-	cuts := []survey.Range{
+	cuts := []survey.Span{
 		{Start: 0, End: cands[0].Offset},
 		{Start: cands[0].Offset, End: cands[3].Offset},
 		{Start: cands[3].Offset, End: span.End},
@@ -1033,15 +1033,15 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 
 	// The fixture IS the counterexample, or the test proves nothing. Each move
 	// alone leaves the middle section over the floor; together they do not.
-	left := []survey.Range{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[3].Offset}, cuts[2]}
-	right := []survey.Range{cuts[0], {Start: cands[0].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
-	both := []survey.Range{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
+	left := []survey.Span{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[3].Offset}, cuts[2]}
+	right := []survey.Span{cuts[0], {Start: cands[0].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
+	both := []survey.Span{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
 	if got := tokensIn(src, cuts[1]); got < minTokens {
 		t.Fatalf("the middle section is %d tokens; the fixture must start over the %d-token floor", got, minTokens)
 	}
 	for _, one := range []struct {
 		name string
-		cuts []survey.Range
+		cuts []survey.Span
 	}{{"the left move alone", left}, {"the right move alone", right}} {
 		if err := Verify(src, span, cands, one.cuts, nil, p); err != nil {
 			t.Fatalf("%s must be legal on its own, or the case is not the counterexample: %v", one.name, err)
@@ -1084,10 +1084,10 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Produced != 1 || res.Degraded != 1 || len(res.Failures) != 0 {
+	if res.Produced != 1 || res.FallbackCount != 1 || len(res.Failures) != 0 {
 		t.Fatalf("result = %+v, want one composed list with one degraded boundary", res)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		t.Error("a refused move is a degraded refinement, not a broken job")
 	}
 
@@ -1180,7 +1180,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if res.Produced != 1 || !res.EmitReady() {
+	if res.Produced != 1 || !res.DeliveryReady() {
 		t.Fatalf("result = %+v, want the composed cut list", res)
 	}
 	list := cutListIn(t, dir, unit)
@@ -1224,10 +1224,10 @@ func TestComposedCutListFailureIsADefect(t *testing.T) {
 	t.Run("through the fallback path", func(t *testing.T) {
 		r, _, b := oneBoundary(t, log.Discard())
 		r.work[0].End--
-		// Baseline cannot refuse, so it refuses by producing nothing the
+		// MechanicalFallback cannot refuse, so it refuses by producing nothing the
 		// encoder will write — a loud write failure rather than a cut list
 		// nobody verified.
-		if _, err := encodeCutList(r.baseline(b.Unit)); err == nil {
+		if _, err := encodeCutList(r.fallback(b.Unit)); err == nil {
 			t.Error("an unverifiable composition must not encode into an artifact")
 		}
 	})

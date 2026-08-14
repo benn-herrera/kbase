@@ -146,9 +146,9 @@ func surveyFixtures(t *testing.T, files map[string]string) (ingest.Corpus, surve
 // the survey recorded as well as on what it produced.
 func surveyFixturesLogged(t *testing.T, files map[string]string) (ingest.Corpus, survey.Artifact, *logtest.Capture) {
 	t.Helper()
-	units := make([]ingest.Unit, 0, len(files))
+	units := make([]ingest.SourceDoc, 0, len(files))
 	for p, body := range files {
-		units = append(units, ingest.Unit{Path: p, Bytes: []byte(body)})
+		units = append(units, ingest.SourceDoc{Path: p, Bytes: []byte(body)})
 	}
 	corpus, err := ingest.New(units)
 	if err != nil {
@@ -271,7 +271,7 @@ func TestHeadingTree(t *testing.T) {
 // not at the heading text, so a leaf sliced out by offset arrives titled.
 func TestSectionRangesCarryTheirHeading(t *testing.T) {
 	corpus, art := surveyFixtures(t, fixtures)
-	u, _ := corpus.Unit("nested.md")
+	u, _ := corpus.Doc("nested.md")
 	f := fileOf(t, art, "nested.md")
 
 	top := f.Sections[0]
@@ -290,7 +290,7 @@ func TestPreamble(t *testing.T) {
 	corpus, art := surveyFixtures(t, fixtures)
 
 	flat := fileOf(t, art, "flat.md")
-	u, _ := corpus.Unit("flat.md")
+	u, _ := corpus.Doc("flat.md")
 	if flat.Preamble == nil {
 		t.Fatal("a headingless file must still report its content")
 	}
@@ -404,7 +404,7 @@ func TestSectionTokensMatchTheirRange(t *testing.T) {
 	corpus, art := surveyFixtures(t, fixtures)
 	var est tokens.Estimator
 	for _, f := range art.Files {
-		u, _ := corpus.Unit(f.Path)
+		u, _ := corpus.Doc(f.Path)
 		if f.Tokens != est.Estimate(string(u.Bytes)) {
 			t.Errorf("%s: file tokens %d disagree with its bytes", f.Path, f.Tokens)
 		}

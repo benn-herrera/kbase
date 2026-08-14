@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"bytes"
@@ -22,7 +22,7 @@ import (
 // of this verifier, at the budgets the appliance actually ships with.
 //
 // It drives the Markdown adapter to get there, which is why internal/survey's
-// import policy names this package: a property about a real skeleton needs a
+// import policy names this package: a property about a real tree plan needs a
 // real survey, and a survey comes from an adapter. What crosses the seam is
 // still only neutral types — sections, ranges and cut candidates — and no
 // parser node reaches this package.
@@ -37,9 +37,9 @@ const rojoDocs = "test_data/transient/rojo.space/docs"
 // AGENTS.md's testing rule: a measurement worth taking is worth being able to
 // look at afterwards. It is under test_data/transient/ because it is test
 // output — generated, gitignored, and rewritten from scratch every run.
-const evidenceDir = "test_data/transient/skeleton-rojo"
+const evidenceDir = "test_data/transient/treeplan-rojo"
 
-// TestSkeletonOverRealCorpus composes the mechanical skeleton a descent would
+// TestTreePlanOverRealCorpus composes the mechanical tree plan a descent would
 // produce over the pinned corpus if it grouped by file — one domain per
 // document, one page per top-level section — and holds it to every composed
 // post-condition at the shipped budgets.
@@ -49,7 +49,7 @@ const evidenceDir = "test_data/transient/skeleton-rojo"
 // every surveyed section is covered, so the tiling check is live; every span
 // is a real one, so the splitter runs over real material; and the fan-out cap
 // bites on whichever documents have more top-level sections than the cap.
-func TestSkeletonOverRealCorpus(t *testing.T) {
+func TestTreePlanOverRealCorpus(t *testing.T) {
 	art, corpus := realArtifact(t)
 	v, err := NewVerifier(art, corpus, DefaultParams())
 	if err != nil {
@@ -62,11 +62,11 @@ func TestSkeletonOverRealCorpus(t *testing.T) {
 		t.Fatalf("Compose over the pinned corpus: %v", err)
 	}
 	if err := v.Check(s); err != nil {
-		t.Fatalf("the composed skeleton does not re-verify: %v", err)
+		t.Fatalf("the composed tree plan does not re-verify: %v", err)
 	}
 
 	c := countsOf(s)
-	t.Logf("rojo skeleton at the shipped budgets: %d nodes (%d leaves, %d indexes), "+
+	t.Logf("rojo tree plan at the shipped budgets: %d nodes (%d leaves, %d indexes), "+
 		"%d groups of which %d split into %d parts; %d source files, %d surveyed sections",
 		c.Nodes, c.Leaves, c.Indexes, c.Groups, c.SplitGroups, c.SplitParts,
 		art.Corpus.Files, art.Corpus.Sections)
@@ -96,7 +96,7 @@ func TestSkeletonOverRealCorpus(t *testing.T) {
 // where they wanted them, not where a fixture put them.
 //
 // The claim is the same shape as the dissector's own corpus property: Compose
-// either produces a skeleton its own Check accepts, or refuses with a
+// either produces a tree plan its own Check accepts, or refuses with a
 // Rejection naming what the model would have to do differently. There is no
 // third outcome — in particular, no defect, which would mean the verifier
 // disagreed with itself over real bytes.
@@ -112,7 +112,7 @@ func TestSkeletonOverRealCorpusUnderStress(t *testing.T) {
 				return
 			}
 			if err := v.Check(s); err != nil {
-				t.Fatalf("Compose produced a skeleton its own Check rejects: %v", err)
+				t.Fatalf("Compose produced a tree plan its own Check rejects: %v", err)
 			}
 			c := out.Counts
 			t.Logf("leafTokens=%d: %d nodes (%d leaves, %d indexes), %d groups, %d split into %d parts",
@@ -130,14 +130,14 @@ func TestSkeletonOverRealCorpusUnderStress(t *testing.T) {
 func stressLeafBudgets() []int { return []int{64, 200, 800, 2000} }
 
 // sweepAt composes the plan at one leaf budget and classifies the outcome the
-// way §3.3 says there are only two of: a skeleton, or a Rejection naming what
+// way §3.3 says there are only two of: a tree plan, or a Rejection naming what
 // the model would have to do differently. A DefectError is neither, and fails
 // the test here rather than being recorded as evidence — the verifier
 // disagreeing with itself over real bytes is not an observation, it is a bug.
 //
 // It is the single place both corpus sweeps ask that question: the stress
 // property asserts over what it returns, the evidence emission records it.
-func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan Plan, leafTokens int) (*Verifier, Skeleton, sweepOutcome) {
+func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeProposal, leafTokens int) (*Verifier, TreePlan, sweepOutcome) {
 	t.Helper()
 	p := DefaultParams()
 	p.Budgets.LeafTokens = leafTokens
@@ -158,7 +158,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan Plan,
 	}
 	r, ok := AsRejection(err)
 	if !ok {
-		t.Fatalf("neither a skeleton nor a rejection: %T: %v", err, err)
+		t.Fatalf("neither a tree plan nor a rejection: %T: %v", err, err)
 	}
 	rej := &rejectionEvidence{Kind: "structural", Note: r.Note(), Detail: err.Error()}
 	var starved StarvedRejection
@@ -173,7 +173,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan Plan,
 			Budget:  starved.Starved.Budget,
 		}
 	}
-	return v, Skeleton{}, sweepOutcome{LeafTokens: leafTokens, Outcome: "rejected", Rejection: rej}
+	return v, TreePlan{}, sweepOutcome{LeafTokens: leafTokens, Outcome: "rejected", Rejection: rej}
 }
 
 // TestSkeletonOverRealCorpusEvidence writes down what the two properties above
@@ -206,7 +206,7 @@ func TestSkeletonOverRealCorpusEvidence(t *testing.T) {
 	if err := s.WriteJSON(&buf); err != nil {
 		t.Fatalf("WriteJSON: %v", err)
 	}
-	writeEvidence(t, dir, "skeleton.json", buf.Bytes())
+	writeEvidence(t, dir, "treeplan.json", buf.Bytes())
 
 	ev := corpusEvidence{
 		Corpus:  art.Corpus,
@@ -288,7 +288,7 @@ type starvedSpan struct {
 // countsOf counts a composed tree. leafCount and indexCount are the fixture
 // helpers the synthetic tests already ask with; asking differently here would
 // be a second definition of "leaf".
-func countsOf(s Skeleton) counts {
+func countsOf(s TreePlan) counts {
 	c := counts{
 		Nodes:   len(s.Nodes),
 		Leaves:  leafCount(s),
@@ -307,7 +307,7 @@ func countsOf(s Skeleton) counts {
 // domainsOf is the entry-point's children with their subtree sizes, in tree
 // order — which is the artifact's own node order, so the slice is
 // deterministic without a sort.
-func domainsOf(s Skeleton) []domainFanOut {
+func domainsOf(s TreePlan) []domainFanOut {
 	var root string
 	for _, n := range s.Nodes {
 		if n.Kind == KindEntryPoint {
@@ -381,17 +381,17 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 
 // planByFile is the mechanical grouping both corpus tests compose: one domain
 // per document, one page per top-level section.
-func planByFile(t *testing.T, art survey.Artifact) Plan {
+func planByFile(t *testing.T, art survey.Artifact) TreeProposal {
 	t.Helper()
-	plan := Plan{Title: "Rojo Documentation", Scope: "the pinned Rojo docs corpus"}
+	plan := TreeProposal{Title: "Rojo Documentation", Scope: "the pinned Rojo docs corpus"}
 	for _, f := range art.Files {
 		title := f.Title
 		if title == "" {
 			title = f.Path
 		}
-		var leaves []PlanNode
+		var leaves []ProposalNode
 		for _, span := range topLevelSpans(f) {
-			leaves = append(leaves, PlanNode{
+			leaves = append(leaves, ProposalNode{
 				Title:   spanTitle(f, span),
 				Scope:   "scope of " + spanTitle(f, span),
 				Kind:    KindLeaf,
@@ -401,7 +401,7 @@ func planByFile(t *testing.T, art survey.Artifact) Plan {
 		if len(leaves) == 0 {
 			continue
 		}
-		plan.Children = append(plan.Children, PlanNode{
+		plan.Children = append(plan.Children, ProposalNode{
 			Title: title, Scope: "scope of " + title, Kind: KindIndex, Children: leaves,
 		})
 	}
@@ -413,20 +413,20 @@ func planByFile(t *testing.T, art survey.Artifact) Plan {
 
 // topLevelSpans is the preamble plus every top-level section of a file: the
 // ranges that tile it, since a section's children nest inside it.
-func topLevelSpans(f survey.File) []survey.Range {
-	var out []survey.Range
+func topLevelSpans(f survey.File) []survey.Span {
+	var out []survey.Span
 	if f.Preamble != nil && f.Preamble.End > f.Preamble.Start {
-		out = append(out, survey.Range{Start: f.Preamble.Start, End: f.Preamble.End})
+		out = append(out, survey.Span{Start: f.Preamble.Start, End: f.Preamble.End})
 	}
 	for _, s := range f.Sections {
-		out = append(out, survey.Range{Start: s.Start, End: s.End})
+		out = append(out, survey.Span{Start: s.Start, End: s.End})
 	}
 	return out
 }
 
 // spanTitle names a span for the plan: the section's own title, or the file's
 // when the span is the headingless preamble.
-func spanTitle(f survey.File, r survey.Range) string {
+func spanTitle(f survey.File, r survey.Span) string {
 	for _, s := range f.Sections {
 		if s.Start == r.Start && s.Title != "" {
 			return s.Title

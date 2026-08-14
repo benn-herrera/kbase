@@ -33,15 +33,15 @@ func baseSpec(t *testing.T) StageSpec {
 	if err != nil {
 		t.Fatalf("ParseDefinition: %v", err)
 	}
-	return StageSpec{SystemFrame: testFrame, AgentDef: def, TaskDef: testTaskDef}
+	return StageSpec{JobFrame: testFrame, AgentDef: def, TaskDef: testTaskDef}
 }
 
 func baseInput() CallInput {
 	return CallInput{
 		StatusLines:        []string{"Sections done: 2/9", "Current file: guide/intro.md"},
-		RefA:               "Cross-file listing:\n- a.md\n- b.md",
+		StageRef:           "Cross-file listing:\n- a.md\n- b.md",
 		Content:            "The quick brown fox.",
-		RefB:               "Prior output ends: ...",
+		CallRef:            "Prior output ends: ...",
 		AcceptanceCriteria: []string{"- cover lines 10-42", "- budget 800 tokens"},
 	}
 }
@@ -176,7 +176,7 @@ func TestBuildEmptySlotsRenderAsNothing(t *testing.T) {
 	if strings.Contains(got.UserTurn, "\n\n\n") {
 		t.Error("empty slots left orphan delimiters in the turn")
 	}
-	for _, s := range []Slot{SlotRefA, SlotContent, SlotRefB, SlotReminder} {
+	for _, s := range []Slot{SlotStageRef, SlotContent, SlotCallRef, SlotCriticalEcho} {
 		if got.Hashes[s] != sha256.Sum256(nil) {
 			t.Errorf("%s does not hash as empty", s)
 		}
@@ -184,10 +184,10 @@ func TestBuildEmptySlotsRenderAsNothing(t *testing.T) {
 	// An empty slot in the middle of a filled stack collapses to the byte it
 	// would have started at — the end of the last slot above it, before the
 	// delimiter that slot's presence would have added.
-	if span := got.Offsets[SlotRefA]; span.Start != span.End || span.Start != got.Offsets[SlotTaskDef].End {
-		t.Errorf("%s span = %+v, want an empty span at %d", SlotRefA, span, got.Offsets[SlotTaskDef].End)
+	if span := got.Offsets[SlotStageRef]; span.Start != span.End || span.Start != got.Offsets[SlotTaskDef].End {
+		t.Errorf("%s span = %+v, want an empty span at %d", SlotStageRef, span, got.Offsets[SlotTaskDef].End)
 	}
-	for _, s := range []Slot{SlotContent, SlotRefB, SlotReminder} {
+	for _, s := range []Slot{SlotContent, SlotCallRef, SlotCriticalEcho} {
 		span := got.Offsets[s]
 		if span.Start != span.End || span.Start != len(got.UserTurn) {
 			t.Errorf("%s span = %+v, want an empty span at %d", s, span, len(got.UserTurn))
@@ -213,9 +213,9 @@ func TestBuildNormalizesSlotWhitespace(t *testing.T) {
 	}
 
 	// A whitespace-only slot is an empty slot.
-	in.RefB = "  \n\t\n"
+	in.CallRef = "  \n\t\n"
 	got = build(t, sc, in)
-	if got.Hashes[SlotRefB] != sha256.Sum256(nil) {
+	if got.Hashes[SlotCallRef] != sha256.Sum256(nil) {
 		t.Error("whitespace-only slot should render as empty")
 	}
 }
@@ -277,7 +277,7 @@ func TestBuildTrailer(t *testing.T) {
 			in.AcceptanceCriteria = tc.criteria
 
 			got := build(t, newContext(t, spec), in)
-			span := got.Offsets[SlotReminder]
+			span := got.Offsets[SlotCriticalEcho]
 			if trailer := got.UserTurn[span.Start:span.End]; trailer != tc.want {
 				t.Errorf("trailer = %q, want %q", trailer, tc.want)
 			}
@@ -404,12 +404,12 @@ func TestBuildBudgets(t *testing.T) {
 	})
 
 	t.Run("zero budget requires an empty slot", func(t *testing.T) {
-		budgets := Budgets{PerSlot: map[Slot]int{SlotRefA: 0}}
+		budgets := Budgets{PerSlot: map[Slot]int{SlotStageRef: 0}}
 		if _, err := sc(t, budgets).Build(baseInput()); err == nil {
 			t.Error("a filled slot budgeted at 0 tokens must be refused")
 		}
 		in := baseInput()
-		in.RefA = ""
+		in.StageRef = ""
 		if _, err := sc(t, budgets).Build(in); err != nil {
 			t.Errorf("an empty slot budgeted at 0 tokens must pass, got %v", err)
 		}

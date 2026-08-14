@@ -15,7 +15,7 @@ import (
 // arithmetic and refusal, both of which are format-independent.
 func twoDocuments(t *testing.T) ingest.Corpus {
 	t.Helper()
-	c, err := ingest.New([]ingest.Unit{
+	c, err := ingest.New([]ingest.SourceDoc{
 		{Path: "a.md", Bytes: []byte(strings.Repeat("a", 10))},
 		{Path: "b.md", Bytes: []byte(strings.Repeat("b", 20))},
 	})

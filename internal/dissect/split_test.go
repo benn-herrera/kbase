@@ -73,7 +73,7 @@ func TestSplitAlwaysPassesVerify(t *testing.T) {
 				p := params(budget)
 
 				cuts, err := Split(src, span, cands, p)
-				var starved StarvedError
+				var starved StarvedRejection
 				if errors.As(err, &starved) {
 					// A refusal must name the span it could not cut, and
 					// must not have produced anything.
@@ -106,10 +106,10 @@ func TestSplitRefusesASpanWithNoBytes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		src  []byte
-		span survey.Range
+		span survey.Span
 	}{
-		{"an empty document", nil, survey.Range{}},
-		{"an empty span inside a document", []byte("some words here\n"), survey.Range{Start: 5, End: 5}},
+		{"an empty document", nil, survey.Span{}},
+		{"an empty span inside a document", []byte("some words here\n"), survey.Span{Start: 5, End: 5}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := params(100)
@@ -126,7 +126,7 @@ func TestSplitRefusesASpanWithNoBytes(t *testing.T) {
 			}
 			// Verify refuses it at the same gate, which is what makes one
 			// check cover every entry point.
-			if verr := Verify(tc.src, tc.span, nil, []survey.Range{tc.span}, nil, p); verr == nil {
+			if verr := Verify(tc.src, tc.span, nil, []survey.Span{tc.span}, nil, p); verr == nil {
 				t.Error("Verify accepted a span with no bytes")
 			}
 		})
@@ -226,9 +226,9 @@ func TestSplitRefusesAStarvedSpan(t *testing.T) {
 	span := wholeSpan(src)
 
 	cuts, err := Split(src, span, cands, params(200))
-	var starved StarvedError
+	var starved StarvedRejection
 	if !errors.As(err, &starved) {
-		t.Fatalf("err = %v (%T), want a StarvedError", err, err)
+		t.Fatalf("err = %v (%T), want a StarvedRejection", err, err)
 	}
 	if cuts != nil {
 		t.Errorf("cuts = %+v, want nothing at all", cuts)
@@ -270,7 +270,7 @@ func TestSplitWorksOnASubSpan(t *testing.T) {
 		blk{survey.CutHeading, "# Three\n\n" + words("c", 200)},
 		blk{survey.CutHeading, "# Four\n\n" + words("d", 200)},
 	)
-	span := survey.Range{Start: cands[0].Offset, End: cands[2].Offset}
+	span := survey.Span{Start: cands[0].Offset, End: cands[2].Offset}
 
 	p := params(250)
 	cuts, err := Split(src, span, cands, p)
@@ -292,10 +292,10 @@ func TestWindowsReachIntoBothNeighbours(t *testing.T) {
 		blk{survey.CutParagraph, words("b", 100)},
 	)
 	span := wholeSpan(src)
-	cuts := []survey.Range{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
+	cuts := []survey.Span{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 
 	p := params(0)
-	got := Windows(src, cuts, p)
+	got := MoveWindows(src, cuts, p)
 	if len(got) != 1 {
 		t.Fatalf("%d windows, want 1", len(got))
 	}
@@ -316,8 +316,8 @@ func TestWindowsReachIntoBothNeighbours(t *testing.T) {
 		blk{survey.CutParagraph, words("a", 20_000)},
 		blk{survey.CutParagraph, words("b", 20_000)},
 	)
-	bigCuts := []survey.Range{{Start: 0, End: bigCands[0].Offset}, {Start: bigCands[0].Offset, End: len(big)}}
-	bw := Windows(big, bigCuts, p)[0]
+	bigCuts := []survey.Span{{Start: 0, End: bigCands[0].Offset}, {Start: bigCands[0].Offset, End: len(big)}}
+	bw := MoveWindows(big, bigCuts, p)[0]
 	if want := 2 * p.overlapCapBytes(big); bw.Hi-bw.Lo != want {
 		t.Errorf("capped window spans %d bytes, want %d", bw.Hi-bw.Lo, want)
 	}

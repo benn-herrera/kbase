@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -44,7 +44,7 @@ type docSpec struct {
 // package takes: the survey artifact and the source under custody.
 func buildCorpus(t *testing.T, docs ...docSpec) (survey.Artifact, ingest.Corpus) {
 	t.Helper()
-	units := make([]ingest.Unit, 0, len(docs))
+	units := make([]ingest.SourceDoc, 0, len(docs))
 	files := make([]survey.File, 0, len(docs))
 	for _, d := range docs {
 		u, f := buildDoc(d)
@@ -58,7 +58,7 @@ func buildCorpus(t *testing.T, docs ...docSpec) (survey.Artifact, ingest.Corpus)
 	// ingest.New sorts by path; the survey artifact is one file per document
 	// in corpus order, so the inventory follows.
 	sorted := make([]survey.File, 0, len(files))
-	for _, u := range corpus.Units {
+	for _, u := range corpus.Docs {
 		for _, f := range files {
 			if f.Path == u.Path {
 				sorted = append(sorted, f)
@@ -72,7 +72,7 @@ func buildCorpus(t *testing.T, docs ...docSpec) (survey.Artifact, ingest.Corpus)
 	return art, corpus
 }
 
-func buildDoc(d docSpec) (ingest.Unit, survey.File) {
+func buildDoc(d docSpec) (ingest.SourceDoc, survey.File) {
 	var sb strings.Builder
 	var sections []survey.Section
 	var cands []survey.CutCandidate
@@ -103,7 +103,7 @@ func buildDoc(d docSpec) (ingest.Unit, survey.File) {
 	}
 
 	src := []byte(sb.String())
-	return ingest.Unit{Path: d.path, Bytes: src}, survey.File{
+	return ingest.SourceDoc{Path: d.path, Bytes: src}, survey.File{
 		Path:     d.path,
 		Bytes:    len(src),
 		Tokens:   est.EstimateBytes(src),
@@ -152,10 +152,10 @@ func verifierFor(t *testing.T, p Params, docs ...docSpec) (*Verifier, survey.Art
 }
 
 // leafFor is a plan leaf over one surveyed section.
-func leafFor(art survey.Artifact, file string, section int, title string) PlanNode {
+func leafFor(art survey.Artifact, file string, section int, title string) ProposalNode {
 	f := fileOf(art, file)
 	s := f.Sections[section]
-	return PlanNode{
+	return ProposalNode{
 		Title:   title,
 		Scope:   "scope of " + title,
 		Kind:    KindLeaf,
@@ -164,9 +164,9 @@ func leafFor(art survey.Artifact, file string, section int, title string) PlanNo
 }
 
 // wholeFileLeaf is a plan leaf over one whole document.
-func wholeFileLeaf(art survey.Artifact, file, title string) PlanNode {
+func wholeFileLeaf(art survey.Artifact, file, title string) ProposalNode {
 	f := fileOf(art, file)
-	return PlanNode{
+	return ProposalNode{
 		Title:   title,
 		Scope:   "scope of " + title,
 		Kind:    KindLeaf,
@@ -175,8 +175,8 @@ func wholeFileLeaf(art survey.Artifact, file, title string) PlanNode {
 }
 
 // indexNode is a plan index over children.
-func indexNode(title string, children ...PlanNode) PlanNode {
-	return PlanNode{Title: title, Scope: "scope of " + title, Kind: KindIndex, Children: children}
+func indexNode(title string, children ...ProposalNode) ProposalNode {
+	return ProposalNode{Title: title, Scope: "scope of " + title, Kind: KindIndex, Children: children}
 }
 
 func fileOf(art survey.Artifact, path string) survey.File {
@@ -188,8 +188,8 @@ func fileOf(art survey.Artifact, path string) survey.File {
 	panic("no such file in the fixture: " + path)
 }
 
-// paths is every node path of a skeleton, in artifact order.
-func paths(s Skeleton) []string {
+// paths is every node path of a tree plan, in artifact order.
+func paths(s TreePlan) []string {
 	out := make([]string, 0, len(s.Nodes))
 	for _, n := range s.Nodes {
 		out = append(out, n.Path)
@@ -199,7 +199,7 @@ func paths(s Skeleton) []string {
 
 // levelsOf is each node's level, computed from the parent chain the way every
 // consumer of the artifact has to.
-func levelsOf(s Skeleton) map[string]int {
+func levelsOf(s TreePlan) map[string]int {
 	levels := map[string]int{}
 	for _, n := range s.Nodes {
 		if n.Parent == "" {
@@ -211,7 +211,7 @@ func levelsOf(s Skeleton) map[string]int {
 	return levels
 }
 
-func maxLevel(s Skeleton) int {
+func maxLevel(s TreePlan) int {
 	max := 0
 	for _, l := range levelsOf(s) {
 		if l > max {
@@ -221,7 +221,7 @@ func maxLevel(s Skeleton) int {
 	return max
 }
 
-func leafCount(s Skeleton) int {
+func leafCount(s TreePlan) int {
 	n := 0
 	for _, node := range s.Nodes {
 		if node.Kind == KindLeaf {

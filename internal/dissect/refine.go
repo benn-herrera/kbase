@@ -24,14 +24,14 @@ import (
 // The shape §5 specifies is a serial scan — one call per boundary, each
 // window loaded into the end of the context and overwriting the previous, so
 // the context stays O(1) while the calls are O(n). That is why StagePlan
-// emits ONE domain stream: a worker owns a domain and runs it serially, so a
-// single stream IS the serial scan, and the per-call Content slot holding
+// emits ONE serial lane: a worker owns a domain and runs it serially, so a
+// single lane IS the serial scan, and the per-call Content slot holding
 // this boundary's window IS the overwrite.
 //
 // # The scan is a FOLD
 //
 // The serial scan judges each boundary against the cut list as it stands NOW,
-// not against the frozen mechanical baseline. An accepted choice updates the
+// not against the frozen mechanical fallback. An accepted choice updates the
 // working list, and every later boundary's window, menu and verification come
 // off that updated list.
 //
@@ -47,11 +47,11 @@ import (
 // Two consequences run through the rest of this file. The stage's output is
 // ONE artifact — the composed cut list, whole-list-Verified before it is
 // written — so the per-boundary calls produce no artifacts and are
-// pipeline.Task.CallOnly. And the Refiner is MUTABLE while the stage runs,
-// which is sound only because the stage is one domain stream and therefore one
+// pipeline.LaneTask.Contributes. And the Refiner is MUTABLE while the stage runs,
+// which is sound only because the stage is one serial lane and therefore one
 // worker: see Refiner.enter, which asserts it rather than assuming it.
 //
-// It is a refinement seam in the §12 sense: the mechanical cut list is
+// It is a fallback-backed seam in the §12 sense: the mechanical cut list is
 // already valid, so a model that answers badly, or not at all, costs quality
 // and never correctness. The one failure that is not treated that way is the
 // tripwire — see ErrVerifierDefect below and the package comment above it.
@@ -80,7 +80,7 @@ const (
 	menuSide = (menuCap - 1) / 2
 
 	// incumbentMark labels the mechanical cut in the rendered menu. Confirming
-	// the boundary is the most common correct answer at a refinement seam, and
+	// the boundary is the most common correct answer at a fallback-backed seam, and
 	// a model that cannot see which entry it is cannot deliberately give it.
 	incumbentMark = " (current)"
 
@@ -113,7 +113,7 @@ const (
 // TODO(embedded-definitions): the real gemma-4-tuned definition, its
 // `## CRITICAL` section and its eval belong to the embedded-definitions burst
 // (ROADMAP). What is being exercised here is the seam — window, menu,
-// verifier, baseline, retry, fallback — and none of that depends on the
+// verifier, fallback, retry, fallback — and none of that depends on the
 // wording. Keeping a stub visible and marked is honest; inventing tuned text
 // nobody evaluated would look like the real thing.
 const (
@@ -121,7 +121,7 @@ const (
 		"You are given the end of one section, the start of the next, and a numbered list of the\n" +
 		"positions the boundary between them may be moved to.\n\n" +
 		"## CRITICAL\n\n" +
-		"Answer with one number from the list and nothing else.\n"
+		"GroupingAnswer with one number from the list and nothing else.\n"
 
 	stubTaskDef = "Task: choose the position in the numbered list that best separates the two sections."
 )
@@ -146,11 +146,11 @@ type Boundary struct {
 	// Cut, so cuts[Index-1] and cuts[Index] are the two neighbours.
 	Index int
 	// Cut is the incumbent: where this boundary stands now, which is its
-	// mechanical cut until it is adjudicated. It is the baseline, the window's
+	// mechanical cut until it is adjudicated. It is the fallback, the window's
 	// centre, and the entry marked (current) in the menu.
 	Cut int
-	// Window is the clamp (Windows).
-	Window Window
+	// Window is the clamp (MoveWindows).
+	Window MoveWindow
 	// Menu is the candidates inside the window, in document order. Menu[0]
 	// is choice 1.
 	Menu []survey.CutCandidate
@@ -163,21 +163,21 @@ type Boundary struct {
 // It is built when the stage's work is described and MUTATES while the stage
 // runs — the working list is the fold. That is safe for exactly one reason,
 // stated here because everything below depends on it: the stage is one domain
-// stream, so one worker walks its boundaries in order and no second goroutine
+// lane, so one worker walks its boundaries in order and no second goroutine
 // is ever inside the fold. enter asserts it.
 type Refiner struct {
 	src    []byte
-	span   survey.Range
+	span   survey.Span
 	cands  []survey.CutCandidate
 	params Params
 	def    prompt.Definition
-	effort model.Effort
+	effort model.RequestEffort
 	lg     log.Logger
 
 	// mech is the mechanical cut list, frozen. It is what the stage's
 	// parameter digest is taken over, and the list NewRefiner verified before
 	// any of this was allowed to run.
-	mech []survey.Range
+	mech []survey.Span
 
 	// calls names each interior boundary's call, in document order;
 	// calls[i-1] belongs to boundary i. The LAST one is the composed
@@ -191,7 +191,7 @@ type Refiner struct {
 	// where a stage learns what it is called.
 	stage string
 
-	// --- fold state, owned by the single worker running the stage's stream.
+	// --- fold state, owned by the single worker running the stage's lane.
 	//
 	// busy and next are that ownership asserted rather than assumed — the
 	// exclusivity and the ordinal halves of it. work is the cut list as it
@@ -200,8 +200,8 @@ type Refiner struct {
 	// own lifecycle: logged once, run once.
 	busy     atomic.Bool
 	next     int
-	work     []survey.Range
-	windows  []Window
+	work     []survey.Span
+	windows  []MoveWindow
 	moved    int
 	falls    int
 	rejects  int
@@ -223,19 +223,19 @@ type Refiner struct {
 // the fold's seed: the working list starts as a copy of it and every
 // adjudication moves it from there.
 //
-// effort is the refinement definition's declared ask (model.Effort). It is
+// effort is the refinement definition's declared ask (model.RequestEffort). It is
 // positional and unavoidable on purpose: the value belongs to whoever
 // registers this stage, and a package-level default here would be this
 // package quietly answering a question only the registration site can
 // (ARCHITECTURE.md §9, §12).
 //
 // It verifies the mechanical list first, and that is not a formality. The
-// baseline is what every failure falls back to, so a baseline that does not
+// fallback is what every failure falls back to, so a fallback that does not
 // check out is a fallback that would emit unverified material; and the
 // tripwire firing here — before a single call — is the offset pipeline being
 // broken in a way no model interaction could have caused. Both are worth
 // learning at stage setup rather than n calls later.
-func NewRefiner(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, unitDir string, p Params, effort model.Effort, lg log.Logger) (*Refiner, error) {
+func NewRefiner(src []byte, span survey.Span, cands []survey.CutCandidate, cuts []survey.Span, unitDir string, p Params, effort model.RequestEffort, lg log.Logger) (*Refiner, error) {
 	if unitDir == "" {
 		// Every path is built from it, so an empty one yields "/cutlist.txt"
 		// — a path the store refuses much later, naming the artifact rather
@@ -266,7 +266,7 @@ func NewRefiner(src []byte, span survey.Range, cands []survey.CutCandidate, cuts
 		// The fold starts at the first interior boundary and walks forward.
 		next: 1,
 	}
-	r.windows = Windows(src, r.work, p)
+	r.windows = MoveWindows(src, r.work, p)
 	for i := 1; i < len(cuts); i++ {
 		// The last boundary's call carries the composed artifact, so its name
 		// IS the artifact's path — one name for the call and the thing the
@@ -307,7 +307,7 @@ func (r *Refiner) Boundaries() ([]Boundary, error) {
 //
 // The fold is a serial scan, so the only boundary that can legitimately be
 // asked is the one it expects next. Checking that catches interleaving on the
-// BUILD path as well as the verify path — two streams over one Refiner race on
+// BUILD path as well as the verify path — two lanes over one Refiner race on
 // the working list inside callInput, before the exclusivity CAS in verify
 // could fire, and the menu they raced to build would already be derived from a
 // torn read. next advances only on a terminal outcome (accept, fallback), so
@@ -343,15 +343,15 @@ func (r *Refiner) last(i int) bool { return i == len(r.calls) }
 // claim takes the fold's state for the calling goroutine, and refuses if
 // anyone else already holds it.
 //
-// The fold is single-writer by construction — one domain stream, one worker —
+// The fold is single-writer by construction — one serial lane, one worker —
 // and this is that construction asserted at every seam that depends on it,
 // the read path included. A plan that fanned these boundaries across two
-// streams would otherwise interleave two scans over one working list and
+// lanes would otherwise interleave two scans over one working list and
 // produce a cut list neither of them adjudicated.
 func (r *Refiner) claim() error {
 	if !r.busy.CompareAndSwap(false, true) {
 		return errors.New("dissect: this span's fold is already in use; " +
-			"it is one serial scan over one working list and the stage plans exactly one domain stream")
+			"it is one serial scan over one working list and the stage plans exactly one serial lane")
 	}
 	return nil
 }
@@ -420,8 +420,8 @@ func (r *Refiner) refuse(err error) prompt.CallInput {
 	return prompt.CallInput{}
 }
 
-// StagePlan describes the stage for the coordinator: the role every worker
-// runs, the stage-constant context, and one serial stream of boundary calls
+// StagePlan describes the stage for the coordinator: the ask every worker
+// runs, the stage-constant context, and one serial lane of boundary calls
 // ending in the one unit the stage owes.
 //
 // inputs are the named hashes the composed cut list is stamped with — the
@@ -436,7 +436,7 @@ func (r *Refiner) refuse(err error) prompt.CallInput {
 // than it appears to is the one failure §12 does not permit, so the stage
 // derives the input it alone can derive.
 //
-// Every task but the last is CallOnly: its answer lands in the working list
+// Every task but the last contributes: its answer lands in the working list
 // and nothing else. The last one carries the artifact, so the stage's unit
 // exists exactly when the whole fold has run — which is what makes an
 // interrupted fold Absent rather than half-proven.
@@ -448,23 +448,23 @@ func (r *Refiner) refuse(err error) prompt.CallInput {
 func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.StagePlan {
 	r.stage = name
 	stamped := slices.Concat(inputs, []pipeline.Input{{Name: paramsInput, Hash: r.digest()}})
-	tasks := make([]pipeline.Task, 0, len(r.calls))
+	tasks := make([]pipeline.LaneTask, 0, len(r.calls))
 	for i := 1; i <= len(r.calls); i++ {
-		task := pipeline.Task{
-			Unit:       pipeline.Unit{Path: r.calls[i-1]},
-			CallOnly:   !r.last(i),
-			Section:    name,
-			SectionRef: r.sectionRef(),
-			Input:      func() prompt.CallInput { return r.callInput(i) },
+		task := pipeline.LaneTask{
+			Owed:        pipeline.OwedArtifact{Path: r.calls[i-1]},
+			Contributes: !r.last(i),
+			Section:     name,
+			SectionRef:  r.sectionRef(),
+			Input:       func() prompt.CallInput { return r.callInput(i) },
 		}
 		if r.last(i) {
-			task.Unit.Inputs = stamped
+			task.Owed.Inputs = stamped
 		}
 		tasks = append(tasks, task)
 	}
 	return &pipeline.StagePlan{
 		Name: name,
-		Role: pipeline.Role{
+		Ask: pipeline.AskSpec{
 			Def: r.def,
 			// The light tier: refinement is the parallel, checklist-shaped
 			// work §10 maps to 26B-A4B.
@@ -476,14 +476,14 @@ func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.Stag
 			Effort:   r.effort,
 			Verify:   r.verify,
 			Encode:   encodeCutList,
-			Baseline: r.baseline,
+			Fallback: r.fallback,
 		},
 		Spec: prompt.StageSpec{TaskDef: stubTaskDef},
-		Streams: func() ([]pipeline.DomainStream, error) {
-			// One stream, so the boundaries are walked in order by one
+		Lanes: func() ([]pipeline.SerialLane, error) {
+			// One lane, so the boundaries are walked in order by one
 			// worker: §5's serial scan, and the reason each window can
 			// overwrite the last.
-			return []pipeline.DomainStream{{Domain: name, Tasks: tasks}}, nil
+			return []pipeline.SerialLane{{Domain: name, Tasks: tasks}}, nil
 		},
 	}
 }
@@ -519,14 +519,14 @@ func (r *Refiner) digest() string {
 	return pipeline.HashBytes([]byte(sb.String()))
 }
 
-// sectionRef is reference buffer A for the stage: what is stable across every
-// call of this span's scan.
+// sectionRef is the stage reference buffer for the stage: what is stable
+// across every call of this span's scan.
 //
 // The counts it renders are the section count and the boundary count, and the
 // fold moves neither — a cut list is re-tiled, never re-sized — so slot 4 is
 // stage-constant under the fold as it was before it. That is not decoration:
 // the churn tripwire aborts the worker if this text changes between calls of
-// one stream.
+// one lane.
 //
 // No byte offsets. The model answers with a menu number and has no use for a
 // raw offset, so showing it one is an invitation to answer with one — and
@@ -542,10 +542,10 @@ func (r *Refiner) sectionRef() string {
 // fold's current cut list implies, not the ones the mechanical list did.
 //
 // The window goes in the Content slot — it is the material under work — and
-// the menu in reference buffer B, which is §7's slot for transient material
-// specific to the current content. The status lines are ordered most→least
-// stable, so the line that changes every call is last. Like sectionRef, none
-// of it renders a byte offset.
+// the menu in the call reference buffer, which is §7's slot for transient
+// material specific to the current content. The status lines are ordered
+// most→least stable, so the line that changes every call is last. Like
+// sectionRef, none of it renders a byte offset.
 func (r *Refiner) callInput(i int) prompt.CallInput {
 	// The build reads the working list, so it takes the fold's own guard: the
 	// hazard W1 named is a torn read HERE, in the worker goroutine, before any
@@ -563,7 +563,7 @@ func (r *Refiner) callInput(i int) prompt.CallInput {
 			fmt.Sprintf("Boundary %d of %d", b.Index, len(r.calls)),
 		},
 		Content:            string(r.src[b.Window.Lo:b.Window.Hi]),
-		RefB:               renderMenu(r.src, b),
+		CallRef:            renderMenu(r.src, b),
 		AcceptanceCriteria: []string{"- answer with one number from the list, nothing else"},
 	}
 }
@@ -598,10 +598,10 @@ func (r *Refiner) callInput(i int) prompt.CallInput {
 // not symmetric: a defect routed to the model burns a retry and then emits a
 // degraded unit from a broken derivation, while a model failure routed to the
 // defect path stops the job loudly.
-func (r *Refiner) verify(unit, response string) (any, error) {
-	i, ok := r.byUnit[unit]
+func (r *Refiner) verify(artifactPath, response string) (any, error) {
+	i, ok := r.byUnit[artifactPath]
 	if !ok {
-		return nil, r.defect(fmt.Errorf("dissect: %s is not a boundary of this span", unit))
+		return nil, r.defect(fmt.Errorf("dissect: %s is not a boundary of this span", artifactPath))
 	}
 	if err := r.enter(); err != nil {
 		return nil, r.defect(err)
@@ -637,13 +637,13 @@ func (r *Refiner) verify(unit, response string) (any, error) {
 
 	// Every boundary but the last hands its answer to the working list and
 	// nothing else; the last one composes what they all built. A nil artifact
-	// rather than a copy of the list, because the task is CallOnly and the
+	// rather than a copy of the list, because the task contributes and the
 	// worker discards what it hands back — n−1 clones of the cut list per fold
 	// with no reader is a cost the doc comment above already explains away.
 	if !r.last(i) {
 		return nil, nil
 	}
-	list, err := r.compose(unit)
+	list, err := r.compose(artifactPath)
 	if err != nil {
 		return nil, err
 	}
@@ -662,9 +662,9 @@ func (r *Refiner) verify(unit, response string) (any, error) {
 // It is one of the two TERMINAL outcomes, so it is where the fold's ordinal
 // advances: a rejection changes nothing and the informed retry re-asks this
 // same boundary.
-func (r *Refiner) accept(b Boundary, moved []survey.Range, at int) {
+func (r *Refiner) accept(b Boundary, moved []survey.Span, at int) {
 	r.work = moved
-	r.windows = Windows(r.src, r.work, r.params)
+	r.windows = MoveWindows(r.src, r.work, r.params)
 	r.next++
 
 	if at != b.Cut {
@@ -713,9 +713,9 @@ func (r *Refiner) windowTokens(b Boundary) int {
 // move was made, against the window the model was actually shown; re-checking
 // it against windows recomputed from the final list would be checking a
 // different claim and calling it the same one.
-func (r *Refiner) compose(unit string) (CutList, error) {
+func (r *Refiner) compose(artifactPath string) (CutList, error) {
 	if err := Verify(r.src, r.span, r.cands, r.work, nil, r.params); err != nil {
-		r.lg.Info("cut list composed", "stage", r.stage, "unit", unit,
+		r.lg.Info("cut list composed", "stage", r.stage, "unit", artifactPath,
 			"boundaries", len(r.calls), "verify", "failed")
 		return CutList{}, r.defect(fmt.Errorf("dissect: the composed cut list does not verify: %w", err))
 	}
@@ -723,20 +723,20 @@ func (r *Refiner) compose(unit string) (CutList, error) {
 	// an interruption anywhere in this stage re-spends. A second one of these
 	// records for the same span is a fold that was redone; what it would have
 	// taken to salvage part of it is the difference between the two.
-	r.lg.Info("cut list composed", "stage", r.stage, "unit", unit,
+	r.lg.Info("cut list composed", "stage", r.stage, "unit", artifactPath,
 		"sections", len(r.work), "boundaries", len(r.calls),
 		"moved", r.moved, "fallbacks", r.falls, "rejections", r.rejects,
 		"adjudicated_tokens", r.tokens, "verify", "ok")
 	// The fold is finished, and finishing it spends this Refiner: see enter
 	// for what a second run over a half-folded working list would produce.
 	r.composed = true
-	return CutList{Unit: unit, Cuts: slices.Clone(r.work)}, nil
+	return CutList{Unit: artifactPath, Cuts: slices.Clone(r.work)}, nil
 }
 
 // defect hands the runner the classification this package is the only one that
 // can make: no answer to the question we asked could land here, so it is not
 // the model that is wrong. Neither remedy the runner has applies — a retry
-// re-asks a question that was never the problem, and the baseline comes from
+// re-asks a question that was never the problem, and the fallback comes from
 // the same derivation — so the worker aborts.
 func (r *Refiner) defect(err error) error {
 	return fmt.Errorf("%w: %w", pipeline.ErrVerifierDefect, err)
@@ -753,7 +753,7 @@ type rejection struct{ err RejectionError }
 func (r rejection) Error() string { return r.err.Note() }
 func (r rejection) Unwrap() error { return r.err }
 
-// baseline is the §3 fallback: the boundary stays where the fold has it,
+// fallback is the §3 fallback: the boundary stays where the fold has it,
 // which for a boundary nobody has adjudicated yet is its mechanical cut.
 //
 // Standing still is the whole of it — the working list already holds the
@@ -761,25 +761,25 @@ func (r rejection) Unwrap() error { return r.err }
 // can invalidate. What it does have to do is compose, when the boundary that
 // failed is the last one: the artifact is still owed, and it is owed whether
 // the final answer was the model's or ours.
-func (r *Refiner) baseline(unit string) any {
+func (r *Refiner) fallback(artifactPath string) any {
 	// An unknown unit cannot arrive through the coordinator (the calls and
-	// this table are built from one loop), and a Baseline has no way to
+	// this table are built from one loop), and a MechanicalFallback has no way to
 	// refuse. The empty list is one encodeCutList rejects, so the case
 	// surfaces as a loud write failure rather than as a plausible artifact.
-	i, ok := r.byUnit[unit]
+	i, ok := r.byUnit[artifactPath]
 	if !ok {
-		return CutList{Unit: unit}
+		return CutList{Unit: artifactPath}
 	}
 	if err := r.enter(); err != nil {
-		r.lg.Error("the boundary fold refused a fallback", "stage", r.stage, "unit", unit, "error", err)
-		return CutList{Unit: unit}
+		r.lg.Error("the boundary fold refused a fallback", "stage", r.stage, "unit", artifactPath, "error", err)
+		return CutList{Unit: artifactPath}
 	}
 	defer r.leave()
 
 	b, err := r.at(i)
 	if err != nil {
-		r.lg.Error("the boundary fold refused a fallback", "stage", r.stage, "unit", unit, "error", err)
-		return CutList{Unit: unit}
+		r.lg.Error("the boundary fold refused a fallback", "stage", r.stage, "unit", artifactPath, "error", err)
+		return CutList{Unit: artifactPath}
 	}
 	r.falls++
 	// The other terminal outcome: the boundary stands where it is and the fold
@@ -791,18 +791,18 @@ func (r *Refiner) baseline(unit string) any {
 		"boundary", b.Index, "of", len(r.calls), "outcome", "fallback",
 		"move_tokens", 0, "window_tokens", spent)
 
-	// Nothing to hand back: the task is CallOnly and its artifact is discarded
+	// Nothing to hand back: the task contributes and its artifact is discarded
 	// (see verify).
 	if !r.last(i) {
 		return nil
 	}
-	list, err := r.compose(unit)
+	list, err := r.compose(artifactPath)
 	if err != nil {
-		// Baseline cannot refuse, so the refusal is the artifact: an empty
+		// MechanicalFallback cannot refuse, so the refusal is the artifact: an empty
 		// list, which the encoder turns into a loud write failure. The defect
 		// is logged here because this is the only place it is diagnosed.
-		r.lg.Error("the composed cut list does not verify", "stage", r.stage, "unit", unit, "error", err)
-		return CutList{Unit: unit}
+		r.lg.Error("the composed cut list does not verify", "stage", r.stage, "unit", artifactPath, "error", err)
+		return CutList{Unit: artifactPath}
 	}
 	return list
 }
@@ -811,7 +811,7 @@ func (r *Refiner) baseline(unit string) any {
 // every boundary has been adjudicated.
 type CutList struct {
 	Unit string
-	Cuts []survey.Range
+	Cuts []survey.Span
 }
 
 // encodeCutList renders the composed cut list: one section per line, start and
@@ -850,8 +850,8 @@ func encodeCutList(artifact any) ([]byte, error) {
 // It is strict about the line shape for the same reason the encoder writes
 // both endpoints: this artifact crosses a run boundary, so the reader that
 // consumes it cannot ask the writer what it meant.
-func DecodeCutList(data []byte) ([]survey.Range, error) {
-	var cuts []survey.Range
+func DecodeCutList(data []byte) ([]survey.Span, error) {
+	var cuts []survey.Span
 	for n, line := range strings.Split(string(data), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -861,7 +861,7 @@ func DecodeCutList(data []byte) ([]survey.Range, error) {
 			return nil, fmt.Errorf("dissect: cut list line %d is %q; a section is a start and an end", n+1, line)
 		}
 		var (
-			c   survey.Range
+			c   survey.Span
 			err error
 		)
 		if c.Start, err = strconv.Atoi(fields[0]); err != nil {
@@ -893,11 +893,11 @@ func DecodeCutList(data []byte) ([]survey.Range, error) {
 // cut is where the boundary currently stands, which is always a candidate
 // inside its own window: the mechanical list Verify passed at NewRefiner for a
 // boundary the fold has not reached, and a candidate the fold itself accepted
-// for one it has — and Windows centres a window on the cut it belongs to. A
+// for one it has — and MoveWindows centres a window on the cut it belongs to. A
 // cut that is somehow neither yields the window's first entries and no
 // incumbent to mark — which cannot happen, and is not worth a second spelling
 // of a check the fold already made.
-func menu(cands []survey.CutCandidate, w Window, cut int) []survey.CutCandidate {
+func menu(cands []survey.CutCandidate, w MoveWindow, cut int) []survey.CutCandidate {
 	var in []survey.CutCandidate
 	incumbent := 0
 	for _, c := range cands {
@@ -944,7 +944,7 @@ func renderMenu(src []byte, b Boundary) string {
 // content slot is src[Window.Lo:Window.Hi], so a label running past Hi to its
 // end of line would put bytes in the prompt that the window says are not in
 // it, and a boundary read back out of a log would show two different extents.
-func label(src []byte, off int, w Window) string {
+func label(src []byte, off int, w MoveWindow) string {
 	end := off
 	for end < len(src) && end < w.Hi && src[end] != '\n' {
 		end++
@@ -971,7 +971,7 @@ func label(src []byte, off int, w Window) string {
 // rejection here costs one visible retry; a mis-map costs a wrong boundary and
 // says nothing at all.
 //
-// Neither message names a number. They become the retry's corrective note
+// Neither message names a number. They become the retry's retry note
 // (RejectionError.Note), and the menu's own size is a legal answer — telling a
 // model that answered "99" that there are five positions hands it "5" in the
 // one prompt where it is most likely to be pattern-matching.

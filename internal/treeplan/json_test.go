@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"bytes"
@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// composeFixture is one non-trivial skeleton: a split group, a nested index,
+// composeFixture is one non-trivial tree plan: a split group, a nested index,
 // and an annex, so the round-trip covers every field of every type.
-func composeFixture(t *testing.T) (*Verifier, Skeleton) {
+func composeFixture(t *testing.T) (*Verifier, TreePlan) {
 	t.Helper()
 	v, art := verifierFor(t, testParams(),
 		docSpec{path: "big.md", title: "Big", secs: []secSpec{
@@ -18,7 +18,7 @@ func composeFixture(t *testing.T) (*Verifier, Skeleton) {
 			{title: "Short", paras: 1, words: 20},
 		}},
 		oneSectionDoc("ref/api.md", "API"))
-	plan := Plan{Title: "The Corpus", Scope: "everything under one roof", Children: []PlanNode{
+	plan := TreeProposal{Title: "The Corpus", Scope: "everything under one roof", Children: []ProposalNode{
 		indexNode("Chapters",
 			leafFor(art, "big.md", 0, "Long Chapter"),
 			leafFor(art, "big.md", 1, "Short Chapter")),
@@ -86,10 +86,10 @@ func TestReadJSONRefusesWhatThisBuildCannotRead(t *testing.T) {
 		name string
 		body string
 	}{
-		{"another schema", `{"schema":"kbase.skeleton/99","corpusHash":"x","budgets":{},"nodes":[],"groups":[]}`},
+		{"another schema", `{"schema":"kbase.treeplan/99","corpusHash":"x","budgets":{},"nodes":[],"groups":[]}`},
 		{"no schema", `{"corpusHash":"x","budgets":{},"nodes":[],"groups":[]}`},
 		{"a field this build has never heard of",
-			`{"schema":"kbase.skeleton/1","corpusHash":"x","budgets":{},"nodes":[],"groups":[],"related":[]}`},
+			`{"schema":"kbase.treeplan/1","corpusHash":"x","budgets":{},"nodes":[],"groups":[],"related":[]}`},
 		{"not json", `nodes: []`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,13 +101,13 @@ func TestReadJSONRefusesWhatThisBuildCannotRead(t *testing.T) {
 }
 
 // The artifact carries no interior boundary of a split group, by construction
-// (I-1, F-2): the skeleton owns which bytes, the cut list owns where inside
+// (I-1, F-2): the tree plan owns which bytes, the cut list owns where inside
 // them the boundaries fall. The check is on the BYTES rather than on the
 // struct, because a field added later would pass a struct-shaped assertion.
 func TestArtifactCarriesNoInteriorBoundary(t *testing.T) {
 	v, s := composeFixture(t)
 
-	var multi Group
+	var multi SplitGroup
 	for _, g := range s.Groups {
 		if g.Parts > 1 {
 			multi = g

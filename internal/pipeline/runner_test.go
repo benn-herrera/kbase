@@ -23,17 +23,17 @@ func stageConstantFrontier(t *testing.T) prompt.Slot {
 	return f
 }
 
-// newRunnerCall builds an agent and a call over it, with the frontier a
+// newRunnerCall builds a bound ask and a call over it, with the frontier a
 // worker's first call declares (nothing claimed, nothing to compare against).
-func newRunnerCall(t *testing.T, role Role) (*agent, call) {
+func newRunnerCall(t *testing.T, ask AskSpec) (*boundAsk, call) {
 	t.Helper()
-	agent, err := newAgent(role, synthSpec("Task: synthetic."), synthJobFrame(t))
+	bound, err := newBoundAsk(ask, synthSpec("Task: synthetic."), synthJobFrame(t))
 	if err != nil {
-		t.Fatalf("newAgent: %v", err)
+		t.Fatalf("newBoundAsk: %v", err)
 	}
 	task := synthTask("survey/a.json", "all")
-	return agent, call{
-		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
+	return bound, call{
+		Stage: "survey", ArtifactPath: task.Owed.Path, BoundAsk: bound,
 		Input: task.Input(), Frontier: prompt.SlotTotal,
 	}
 }
@@ -54,7 +54,7 @@ func runnerFor(t *testing.T, client model.Client, lg *logtest.Capture) *CallRunn
 func TestRunnerVerifiedCall(t *testing.T) {
 	lg := &logtest.Capture{}
 	client := echoStub()
-	_, call := newRunnerCall(t, essentialRole(t))
+	_, call := newRunnerCall(t, noFallbackAsk(t))
 
 	res, err := runnerFor(t, client, lg).Run(context.Background(), call)
 	if err != nil {
@@ -63,8 +63,8 @@ func TestRunnerVerifiedCall(t *testing.T) {
 	if _, ok := res.Artifact.(synthArtifact); !ok {
 		t.Errorf("Artifact is %T, want a typed synthArtifact", res.Artifact)
 	}
-	if res.Attempts != 1 || res.Degraded {
-		t.Errorf("Attempts = %d, Degraded = %v; want 1, false", res.Attempts, res.Degraded)
+	if res.Attempts != 1 || res.FellBack {
+		t.Errorf("Attempts = %d, FellBack = %v; want 1, false", res.Attempts, res.FellBack)
 	}
 	if res.Usage.PromptTokens != 100 || res.Usage.CachedPromptTokens != 40 {
 		t.Errorf("Usage = %+v, want the provider's figures", res.Usage)
@@ -89,11 +89,11 @@ func TestRunnerVerifiedCall(t *testing.T) {
 func TestRunnerSendsTheRolesDeclaredEffort(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		role Role
+		ask  AskSpec
 		want bool
 	}{
-		{"thinking declared on", essentialRole(t), true},
-		{"thinking declared off", refinementRole(t), false},
+		{"thinking declared on", noFallbackAsk(t), true},
+		{"thinking declared off", fallbackBackedAsk(t), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var kwargs map[string]any
@@ -103,7 +103,7 @@ func TestRunnerSendsTheRolesDeclaredEffort(t *testing.T) {
 				kwargs = req.ChatTemplateKwargs
 				return inner(n, req)
 			}
-			_, call := newRunnerCall(t, tc.role)
+			_, call := newRunnerCall(t, tc.ask)
 			if _, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -117,12 +117,12 @@ func TestRunnerSendsTheRolesDeclaredEffort(t *testing.T) {
 }
 
 // TestRunnerBuildRefusalPropagates: refuse-and-split. An over-budget call is
-// the skeleton's problem, and the runner must hand the error back untouched
+// the tree plan's problem, and the runner must hand the error back untouched
 // rather than retry it, wrap it, or fall back through it.
 func TestRunnerBuildRefusalPropagates(t *testing.T) {
 	client := echoStub()
-	role := refinementRole(t) // a baseline exists, and must NOT be used here
-	agent, err := newAgent(role, prompt.StageSpec{
+	ask := fallbackBackedAsk(t) // a fallback exists, and must NOT be used here
+	bound, err := newBoundAsk(ask, prompt.StageSpec{
 		TaskDef: "Task: synthetic.",
 		// A content budget no real span fits in. Budgeting the slot rather
 		// than the whole call keeps the stage's own constant slots buildable,
@@ -130,12 +130,12 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 		Budgets: prompt.Budgets{PerSlot: map[prompt.Slot]int{prompt.SlotContent: 1}},
 	}, synthJobFrame(t))
 	if err != nil {
-		t.Fatalf("newAgent: %v", err)
+		t.Fatalf("newBoundAsk: %v", err)
 	}
 	task := synthTask("survey/a.json", "all")
 
 	res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call{
-		Stage: "survey", Unit: task.Unit.Path, Agent: agent,
+		Stage: "survey", ArtifactPath: task.Owed.Path, BoundAsk: bound,
 		Input: task.Input(), Frontier: prompt.SlotTotal,
 	})
 	var target prompt.ErrOverBudget
@@ -143,7 +143,7 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 		t.Fatalf("err = %v, want prompt.ErrOverBudget", err)
 	}
 	if res.Artifact != nil {
-		t.Error("a refused build must not produce an artifact, baseline or otherwise")
+		t.Error("a refused build must not produce an artifact, fallback or otherwise")
 	}
 	if client.callCount() != 0 {
 		t.Errorf("%d calls went on the wire for a prompt that was never built", client.callCount())
@@ -151,17 +151,17 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 }
 
 // TestRunnerFrozenPromptViolationAborts: the tripwire firing is a kbase
-// defect. Never retried, never fallen back — even on a refinement seam, where
+// defect. Never retried, never fallen back — even on a fallback-backed seam, where
 // a fallback exists and would paper over it.
 func TestRunnerFrozenPromptViolation(t *testing.T) {
 	t.Run("per-worker churn", func(t *testing.T) {
 		client := echoStub()
-		_, call := newRunnerCall(t, refinementRole(t))
+		_, call := newRunnerCall(t, fallbackBackedAsk(t))
 		// A previous call from a DIFFERENT stage context, with a frontier
 		// that claims the stage-constant slots held.
-		otherAgent, err := newAgent(refinementRole(t), synthSpec("Task: something else."), synthJobFrame(t))
+		otherAgent, err := newBoundAsk(fallbackBackedAsk(t), synthSpec("Task: something else."), synthJobFrame(t))
 		if err != nil {
-			t.Fatalf("newAgent: %v", err)
+			t.Fatalf("newBoundAsk: %v", err)
 		}
 		prevBuilt, err := otherAgent.ctx.Build(call.Input)
 		if err != nil {
@@ -180,7 +180,7 @@ func TestRunnerFrozenPromptViolation(t *testing.T) {
 			t.Errorf("the abort does not carry the churn it saw: %v", err)
 		}
 		if res.Artifact != nil {
-			t.Error("a defect must not fall back to the mechanical baseline")
+			t.Error("a defect must not fall back to the mechanical fallback")
 		}
 		if client.callCount() != 0 {
 			t.Error("a prompt that failed its own stability contract went on the wire")
@@ -189,8 +189,8 @@ func TestRunnerFrozenPromptViolation(t *testing.T) {
 
 	t.Run("wrong stage context", func(t *testing.T) {
 		client := echoStub()
-		agent, call := newRunnerCall(t, refinementRole(t))
-		agent.canonical[prompt.SlotTaskDef] = [32]byte{0xBB}
+		bound, call := newRunnerCall(t, fallbackBackedAsk(t))
+		bound.canonicalHashes[prompt.SlotTaskDef] = [32]byte{0xBB}
 
 		_, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
 		var target StageContextMismatchError
@@ -212,7 +212,7 @@ func TestRunnerTransportRetries(t *testing.T) {
 		}
 		return model.Response{Content: synthAccept + " recovered", FinishReason: "stop"}, nil
 	}}
-	_, call := newRunnerCall(t, essentialRole(t))
+	_, call := newRunnerCall(t, noFallbackAsk(t))
 
 	start := time.Now()
 	res, err := NewCallRunner(client, synthConfig(), &logtest.Capture{}).Run(context.Background(), call)
@@ -223,14 +223,14 @@ func TestRunnerTransportRetries(t *testing.T) {
 		t.Errorf("calls = %d, want 2 (one failure, one retry)", client.callCount())
 	}
 	if res.Attempts != 1 {
-		t.Errorf("Attempts = %d; a transport retry is not a semantic attempt", res.Attempts)
+		t.Errorf("Attempts = %d; a wire retry is not a model attempt", res.Attempts)
 	}
-	if elapsed := time.Since(start); elapsed < transportBackoffBase {
-		t.Errorf("retried after %v, want at least the %v backoff", elapsed, transportBackoffBase)
+	if elapsed := time.Since(start); elapsed < wireBackoffBase {
+		t.Errorf("retried after %v, want at least the %v backoff", elapsed, wireBackoffBase)
 	}
 	prompts := client.recorded()
 	if len(prompts) == 2 && prompts[0] != prompts[1] {
-		t.Error("the transport retry changed the prompt; it must resend the identical request")
+		t.Error("the wire retry changed the prompt; it must resend the identical request")
 	}
 }
 
@@ -247,26 +247,26 @@ func TestRunnerTransportClassification(t *testing.T) {
 		err       error
 		wantCalls int
 	}{
-		{"rate limit is retried", model.StatusError{Code: 429, Body: "slow down"}, transportAttempts},
+		{"rate limit is retried", model.StatusError{Code: 429, Body: "slow down"}, wireAttempts},
 		{"a bad request is not", model.StatusError{Code: 400, Body: "unknown model"}, 1},
 		{"unauthorized is not", model.StatusError{Code: 401, Body: "bad key"}, 1},
-		{"a server error is", model.StatusError{Code: 500, Body: "boom"}, transportAttempts},
-		{"an error carrying no status is", errors.New("dial tcp: connection refused"), transportAttempts},
+		{"a server error is", model.StatusError{Code: 500, Body: "boom"}, wireAttempts},
+		{"an error carrying no status is", errors.New("dial tcp: connection refused"), wireAttempts},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &stubClient{respond: func(int, model.Request) (model.Response, error) {
 				return model.Response{}, tc.err
 			}}
-			// A refinement seam, so the exhausted transport resolves rather
+			// A fallback-backed seam, so the exhausted transport resolves rather
 			// than failing the unit — what is under test is the call count.
-			_, call := newRunnerCall(t, refinementRole(t))
+			_, call := newRunnerCall(t, fallbackBackedAsk(t))
 
 			res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			if !res.Degraded {
-				t.Error("an exhausted transport must leave a refinement seam degraded")
+			if !res.FellBack {
+				t.Error("an exhausted transport must leave a fallback-backed seam degraded")
 			}
 			if client.callCount() != tc.wantCalls {
 				t.Errorf("calls = %d, want %d", client.callCount(), tc.wantCalls)
@@ -284,7 +284,7 @@ func TestRunnerContextCancellationIsNotRetried(t *testing.T) {
 		return model.Response{}, context.Canceled
 	}}
 	// Refinement seam again: cancellation must beat the fallback.
-	_, call := newRunnerCall(t, refinementRole(t))
+	_, call := newRunnerCall(t, fallbackBackedAsk(t))
 
 	res, err := runnerFor(t, client, &logtest.Capture{}).Run(ctx, call)
 	if !errors.Is(err, context.Canceled) {
@@ -310,16 +310,16 @@ func TestRunnerSemanticRetryCarriesTheReason(t *testing.T) {
 		}
 		return model.Response{Content: synthAccept + " corrected", FinishReason: "stop"}, nil
 	}}
-	_, call := newRunnerCall(t, essentialRole(t))
+	_, call := newRunnerCall(t, noFallbackAsk(t))
 
 	res, err := runnerFor(t, client, lg).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Attempts != semanticAttempts {
-		t.Errorf("Attempts = %d, want %d", res.Attempts, semanticAttempts)
+	if res.Attempts != modelAttempts {
+		t.Errorf("Attempts = %d, want %d", res.Attempts, modelAttempts)
 	}
-	if res.Degraded {
+	if res.FellBack {
 		t.Error("a call the retry rescued is not degraded")
 	}
 
@@ -330,16 +330,16 @@ func TestRunnerSemanticRetryCarriesTheReason(t *testing.T) {
 	if prompts[0] == prompts[1] {
 		t.Fatal("the semantic retry resent the identical prompt")
 	}
-	if !strings.Contains(prompts[1], correctiveNotePrefix) {
-		t.Error("the retry does not carry the corrective note")
+	if !strings.Contains(prompts[1], retryNotePrefix) {
+		t.Error("the retry does not carry the retry note")
 	}
 	if !strings.Contains(prompts[1], synthAccept) {
-		t.Error("the corrective note does not carry the verifier's reason")
+		t.Error("the retry note does not carry the verifier's reason")
 	}
 	// The note goes in the acceptance-criteria channel, which renders in the
 	// trailer — the recency end, beside the other per-call binding facts.
-	if trailer := prompts[1][strings.LastIndex(prompts[1], "REMINDER:"):]; !strings.Contains(trailer, correctiveNotePrefix) {
-		t.Error("the corrective note did not land in the trailer")
+	if trailer := prompts[1][strings.LastIndex(prompts[1], "REMINDER:"):]; !strings.Contains(trailer, retryNotePrefix) {
+		t.Error("the retry note did not land in the trailer")
 	}
 	// Both attempts are on the record with their prompt identity, so a
 	// rejected response and its retry can be told apart afterwards.
@@ -348,20 +348,20 @@ func TestRunnerSemanticRetryCarriesTheReason(t *testing.T) {
 	}
 }
 
-// TestRunnerCorrectiveNoteIsBounded: the note takes a small fixed bite of the
+// TestRunnerRetryNoteIsBounded: the note takes a small fixed bite of the
 // acceptance criteria's reserved share (§9), so a verbose verifier cannot
-// squeeze out the criteria the skeleton emitted.
-func TestRunnerCorrectiveNoteIsBounded(t *testing.T) {
+// squeeze out the criteria the tree plan emitted.
+func TestRunnerRetryNoteIsBounded(t *testing.T) {
 	long := errors.New(strings.TrimSpace(strings.Repeat("verbose ", 200)))
-	got := withCorrectiveNote(prompt.CallInput{AcceptanceCriteria: []string{"- keep me"}}, long)
+	got := withRetryNote(prompt.CallInput{AcceptanceCriteria: []string{"- keep me"}}, long)
 
 	if len(got.AcceptanceCriteria) != 2 || got.AcceptanceCriteria[0] != "- keep me" {
 		t.Fatalf("criteria = %q, want the caller's own kept and the note appended", got.AcceptanceCriteria)
 	}
 	note := got.AcceptanceCriteria[1]
-	words := len(strings.Fields(note)) - len(strings.Fields(correctiveNotePrefix))
-	if words > correctiveNoteWords+1 { // +1 for the truncation mark
-		t.Errorf("note carries %d words of reason, cap is %d", words, correctiveNoteWords)
+	words := len(strings.Fields(note)) - len(strings.Fields(retryNotePrefix))
+	if words > retryNoteWords+1 { // +1 for the truncation mark
+		t.Errorf("note carries %d words of reason, cap is %d", words, retryNoteWords)
 	}
 }
 
@@ -370,15 +370,15 @@ func TestRunnerCorrectiveNoteIsBounded(t *testing.T) {
 // failed, so the fault is ours. Neither remedy applies — a retry re-asks a
 // question that was never asked wrong, and the fallback comes from the same
 // derivation the verifier just indicted — so the worker aborts on the FIRST
-// attempt, even on a refinement seam that has a baseline to stand on.
+// attempt, even on a fallback-backed seam that has a fallback to stand on.
 func TestRunnerVerifierDefectAbortsInsteadOfFallingBack(t *testing.T) {
 	lg := &logtest.Capture{}
 	client := echoStub()
-	role := refinementRole(t)
-	role.Verify = func(string, string) (any, error) {
+	ask := fallbackBackedAsk(t)
+	ask.Verify = func(string, string) (any, error) {
 		return nil, fmt.Errorf("%w: offsets do not match their bytes", ErrVerifierDefect)
 	}
-	_, call := newRunnerCall(t, role)
+	_, call := newRunnerCall(t, ask)
 
 	res, err := runnerFor(t, client, lg).Run(context.Background(), call)
 	var abort WorkerAbortError
@@ -388,7 +388,7 @@ func TestRunnerVerifierDefectAbortsInsteadOfFallingBack(t *testing.T) {
 	if !errors.Is(err, ErrVerifierDefect) {
 		t.Error("the abort must carry the verifier's own diagnosis")
 	}
-	if res.Artifact != nil || res.Degraded {
+	if res.Artifact != nil || res.FellBack {
 		t.Errorf("result = %+v; a defect produces nothing, degraded or otherwise", res)
 	}
 	if client.callCount() != 1 {
@@ -397,7 +397,7 @@ func TestRunnerVerifierDefectAbortsInsteadOfFallingBack(t *testing.T) {
 }
 
 // TestRunnerSeamResolution is R-4 step 6, both branches side by side: the same
-// unverifiable model output degrades a refinement seam and fails an essential
+// unverifiable model output degrades a fallback-backed seam and fails an essential
 // one. That difference IS why seams are classified.
 func TestRunnerSeamResolution(t *testing.T) {
 	rejectAlways := func() *stubClient {
@@ -406,24 +406,24 @@ func TestRunnerSeamResolution(t *testing.T) {
 		}}
 	}
 
-	t.Run("refinement keeps its baseline", func(t *testing.T) {
+	t.Run("refinement keeps its fallback", func(t *testing.T) {
 		lg := &logtest.Capture{}
 		client := rejectAlways()
-		_, call := newRunnerCall(t, refinementRole(t))
+		_, call := newRunnerCall(t, fallbackBackedAsk(t))
 
 		res, err := runnerFor(t, client, lg).Run(context.Background(), call)
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-		if !res.Degraded {
-			t.Error("Degraded = false; a fallback is a quality loss and must say so")
+		if !res.FellBack {
+			t.Error("FellBack = false; a fallback is a quality loss and must say so")
 		}
 		artifact, ok := res.Artifact.(synthArtifact)
 		if !ok || artifact.Text != synthBaselineText {
-			t.Errorf("Artifact = %v, want the mechanical baseline", res.Artifact)
+			t.Errorf("Artifact = %v, want the mechanical fallback", res.Artifact)
 		}
-		if client.callCount() != semanticAttempts {
-			t.Errorf("calls = %d, want %d", client.callCount(), semanticAttempts)
+		if client.callCount() != modelAttempts {
+			t.Errorf("calls = %d, want %d", client.callCount(), modelAttempts)
 		}
 		if !lg.Has(t, "warn", "kind", string(FailureVerification)) {
 			t.Error("the fallback was not logged")
@@ -432,21 +432,21 @@ func TestRunnerSeamResolution(t *testing.T) {
 
 	t.Run("essential fails the unit", func(t *testing.T) {
 		client := rejectAlways()
-		_, call := newRunnerCall(t, essentialRole(t))
+		_, call := newRunnerCall(t, noFallbackAsk(t))
 
 		res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
-		var target UnitFailure
+		var target OwedArtifactFailure
 		if !errors.As(err, &target) {
-			t.Fatalf("err = %v, want UnitFailure", err)
+			t.Fatalf("err = %v, want OwedArtifactFailure", err)
 		}
-		if target.Kind != FailureVerification || target.SemanticAttempts != semanticAttempts {
-			t.Errorf("failure = %+v, want %s after %d attempts", target, FailureVerification, semanticAttempts)
+		if target.Kind != FailureVerification || target.ModelAttempts != modelAttempts {
+			t.Errorf("failure = %+v, want %s after %d attempts", target, FailureVerification, modelAttempts)
 		}
-		if target.Path != call.Unit || target.Stage != call.Stage {
-			t.Errorf("failure names %s/%s, want %s/%s", target.Stage, target.Path, call.Stage, call.Unit)
+		if target.Path != call.ArtifactPath || target.Stage != call.Stage {
+			t.Errorf("failure names %s/%s, want %s/%s", target.Stage, target.Path, call.Stage, call.ArtifactPath)
 		}
 		if res.Artifact != nil {
-			t.Error("an essential seam must produce NOTHING when it cannot verify")
+			t.Error("a no-fallback seam must produce NOTHING when it cannot verify")
 		}
 	})
 
@@ -454,21 +454,21 @@ func TestRunnerSeamResolution(t *testing.T) {
 		client := &stubClient{respond: func(int, model.Request) (model.Response, error) {
 			return model.Response{}, errors.New("http 502: bad gateway")
 		}}
-		_, call := newRunnerCall(t, essentialRole(t))
+		_, call := newRunnerCall(t, noFallbackAsk(t))
 
 		_, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
-		var target UnitFailure
+		var target OwedArtifactFailure
 		if !errors.As(err, &target) {
-			t.Fatalf("err = %v, want UnitFailure", err)
+			t.Fatalf("err = %v, want OwedArtifactFailure", err)
 		}
 		if target.Kind != FailureTransport {
 			t.Errorf("Kind = %s, want %s", target.Kind, FailureTransport)
 		}
 		// Nothing was verified, so there is nothing to correct: a semantic
 		// retry after a dead wire is a second guess, not an informed one.
-		if client.callCount() != transportAttempts {
+		if client.callCount() != wireAttempts {
 			t.Errorf("calls = %d, want %d — no semantic retry after transport exhaustion",
-				client.callCount(), transportAttempts)
+				client.callCount(), wireAttempts)
 		}
 	})
 }
@@ -477,8 +477,8 @@ func TestRunnerSeamResolution(t *testing.T) {
 // failure, and substituting the other tier's model would be a silent wrong
 // answer.
 func TestRunnerUnmappedTier(t *testing.T) {
-	_, call := newRunnerCall(t, essentialRole(t))
-	runner := NewCallRunner(echoStub(), synthConfigWithout(t, call.Agent.role.Tier), &logtest.Capture{})
+	_, call := newRunnerCall(t, noFallbackAsk(t))
+	runner := NewCallRunner(echoStub(), synthConfigWithout(t, call.BoundAsk.ask.Tier), &logtest.Capture{})
 
 	if _, err := runner.Run(context.Background(), call); err == nil ||
 		!strings.Contains(err.Error(), "no model is configured") {
@@ -513,7 +513,7 @@ func TestRunnerDevTelemetry(t *testing.T) {
 		lg := &logtest.Capture{}
 		cfg := synthConfig()
 		cfg.Dev.Telemetry = true
-		_, call := newRunnerCall(t, essentialRole(t))
+		_, call := newRunnerCall(t, noFallbackAsk(t))
 
 		if _, err := NewCallRunner(withTelemetry(), cfg, lg).Run(context.Background(), call); err != nil {
 			t.Fatalf("Run: %v", err)
@@ -525,7 +525,7 @@ func TestRunnerDevTelemetry(t *testing.T) {
 
 	t.Run("silent when switched off", func(t *testing.T) {
 		lg := &logtest.Capture{}
-		_, call := newRunnerCall(t, essentialRole(t))
+		_, call := newRunnerCall(t, noFallbackAsk(t))
 
 		if _, err := runnerFor(t, withTelemetry(), lg).Run(context.Background(), call); err != nil {
 			t.Fatalf("Run: %v", err)
@@ -539,7 +539,7 @@ func TestRunnerDevTelemetry(t *testing.T) {
 		lg := &logtest.Capture{}
 		cfg := synthConfig()
 		cfg.Dev.Telemetry = true
-		_, call := newRunnerCall(t, essentialRole(t))
+		_, call := newRunnerCall(t, noFallbackAsk(t))
 
 		if _, err := NewCallRunner(echoStub(), cfg, lg).Run(context.Background(), call); err != nil {
 			t.Fatalf("Run: %v", err)
@@ -563,14 +563,14 @@ func TestRunnerFailedUnitReportsItsTokens(t *testing.T) {
 			Usage: model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
 		}, nil
 	}}
-	_, call := newRunnerCall(t, essentialRole(t))
+	_, call := newRunnerCall(t, noFallbackAsk(t))
 
 	_, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
-	var target UnitFailure
+	var target OwedArtifactFailure
 	if !errors.As(err, &target) {
-		t.Fatalf("err = %v, want UnitFailure", err)
+		t.Fatalf("err = %v, want OwedArtifactFailure", err)
 	}
-	if want := semanticAttempts * 100; target.Usage.PromptTokens != want {
+	if want := modelAttempts * 100; target.Usage.PromptTokens != want {
 		t.Errorf("Usage.PromptTokens = %d, want %d — both attempts cost real tokens",
 			target.Usage.PromptTokens, want)
 	}

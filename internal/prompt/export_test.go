@@ -6,7 +6,7 @@ import "testing"
 //
 // The prefix and stability tests live in `package prompt_test` so they can
 // import internal/pipeline and derive their expected frontiers from the phase
-// matrix (ARCHITECTURE.md §12) — pipeline imports prompt, so an in-package test
+// phaseOpTable (ARCHITECTURE.md §12) — pipeline imports prompt, so an in-package test
 // could not. What those tests still need from in here is the render scheme's
 // own vocabulary (a helper predicting a slot's content has to join it the way
 // the builder does) and the shared fixture the in-package tests already build

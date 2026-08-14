@@ -14,11 +14,11 @@ import (
 func TestGuard(t *testing.T) {
 	cases := []struct {
 		name  string
-		phase Phase
+		phase JobPhase
 		op    Op
 		allow bool
 	}{
-		{"job setup renders the system frame", PhaseJobSetup, OpBuildSystemFrame, true},
+		{"job setup renders the job frame", PhaseJobSetup, OpBuildJobFrame, true},
 		{"job setup scans the store", PhaseJobSetup, OpResumeScan, true},
 		{"job setup does not build calls", PhaseJobSetup, OpBuildCall, false},
 		{"stage setup rebuilds the stage context", PhaseStageSetup, OpRebuildStageContext, true},
@@ -26,17 +26,17 @@ func TestGuard(t *testing.T) {
 		{"call loop builds calls", PhaseCallLoop, OpBuildCall, true},
 		{"call loop advances units", PhaseCallLoop, OpAdvanceUnit, true},
 		{"call loop writes artifacts", PhaseCallLoop, OpWriteArtifact, true},
-		{"call loop may not flush ref A", PhaseCallLoop, OpFlushRefA, false},
+		{"call loop may not flush stage ref", PhaseCallLoop, OpFlushStageRef, false},
 		{"call loop may not rebuild the stage context", PhaseCallLoop, OpRebuildStageContext, false},
-		{"call loop may not re-render the system frame", PhaseCallLoop, OpBuildSystemFrame, false},
+		{"call loop may not re-render the job frame", PhaseCallLoop, OpBuildJobFrame, false},
 		{"call loop may not rescan the store", PhaseCallLoop, OpResumeScan, false},
-		{"section transition flushes ref A", PhaseSectionTransition, OpFlushRefA, true},
+		{"section transition flushes stage ref", PhaseSectionTransition, OpFlushStageRef, true},
 		{"section transition advances units", PhaseSectionTransition, OpAdvanceUnit, true},
 		{"section transition does not build calls", PhaseSectionTransition, OpBuildCall, false},
 		{"stage teardown writes the stage artifact", PhaseStageTeardown, OpWriteArtifact, true},
-		{"stage teardown may not flush ref A", PhaseStageTeardown, OpFlushRefA, false},
-		{"a phase outside the matrix allows nothing", Phase(99), OpBuildCall, false},
-		{"an op outside the matrix is allowed nowhere", PhaseCallLoop, Op(99), false},
+		{"stage teardown may not flush stage ref", PhaseStageTeardown, OpFlushStageRef, false},
+		{"a phase outside the phaseOpTable allows nothing", JobPhase(99), OpBuildCall, false},
+		{"an op outside the phaseOpTable is allowed nowhere", PhaseCallLoop, Op(99), false},
 	}
 
 	for _, tc := range cases {
@@ -60,25 +60,25 @@ func TestGuard(t *testing.T) {
 	}
 }
 
-// TestFlushRefAIsSectionTransitionOnly states the enforcement R-3 names by
-// itself, because it is the one matrix cell the §7 slot ordering rests on: a
+// TestFlushStageRefIsSectionTransitionOnly states the enforcement R-3 names by
+// itself, because it is the one table cell the §7 slot ordering rests on: a
 // reference buffer flushed anywhere else churns slot 4 per call, which makes
 // its position above the status block a loss instead of a win.
-func TestFlushRefAIsSectionTransitionOnly(t *testing.T) {
-	for _, r := range matrix {
-		err := guard(r.phase, OpFlushRefA)
+func TestFlushStageRefIsSectionTransitionOnly(t *testing.T) {
+	for _, r := range phaseOpTable {
+		err := guard(r.phase, OpFlushStageRef)
 		if want := r.phase == PhaseSectionTransition; (err == nil) != want {
-			t.Errorf("guard(%s, %s) = %v, allowed=%v want allowed=%v", r.phase, OpFlushRefA, err, err == nil, want)
+			t.Errorf("guard(%s, %s) = %v, allowed=%v want allowed=%v", r.phase, OpFlushStageRef, err, err == nil, want)
 		}
 	}
 }
 
-// TestMatrixCompleteness is the table's own gate: every phase carries a
+// TestPhaseOpTableCompleteness is the table's own gate: every phase carries a
 // frontier, at least one operation and a registered crashpoint, and every
 // operation is legal somewhere. An op no phase permits is dead code that
 // reads like policy; a phase with no frontier is a hole the tripwire falls
 // through.
-func TestMatrixCompleteness(t *testing.T) {
+func TestPhaseOpTableCompleteness(t *testing.T) {
 	// The ops come from opNames, which String also reads — one enumeration,
 	// so an op added to the const block and forgotten cannot be silently
 	// uncovered by the very test that exists to notice it.
@@ -86,19 +86,19 @@ func TestMatrixCompleteness(t *testing.T) {
 	for op := range opNames {
 		allOps = append(allOps, op)
 	}
-	allPhases := []Phase{
+	allPhases := []JobPhase{
 		PhaseJobSetup, PhaseStageSetup, PhaseCallLoop,
 		PhaseSectionTransition, PhaseStageTeardown,
 	}
 
-	if len(matrix) != len(allPhases) {
-		t.Fatalf("matrix has %d rows, %d phases are declared", len(matrix), len(allPhases))
+	if len(phaseOpTable) != len(allPhases) {
+		t.Fatalf("phaseOpTable has %d rows, %d phases are declared", len(phaseOpTable), len(allPhases))
 	}
 	registered := crashpoint.RegisteredNames()
 	for _, p := range allPhases {
 		r, ok := rule(p)
 		if !ok {
-			t.Errorf("phase %s has no matrix row", p)
+			t.Errorf("phase %s has no table row", p)
 			continue
 		}
 		if len(r.ops) == 0 {
@@ -107,13 +107,13 @@ func TestMatrixCompleteness(t *testing.T) {
 		if r.name == "" {
 			t.Errorf("phase %d has no name", int(p))
 		}
-		if _, err := Frontier(p); err != nil {
+		if _, err := StabilityFrontier(p); err != nil {
 			t.Errorf("phase %s has no frontier: %v", p, err)
 		}
 		// The zero frontier is a legitimate declaration (job setup claims
 		// nothing), but it must be a stated one, so the row is checked for
 		// a value in range rather than for a non-zero value.
-		if r.frontier < prompt.SlotTotal || r.frontier > prompt.SlotReminder {
+		if r.frontier < prompt.SlotTotal || r.frontier > prompt.SlotCriticalEcho {
 			t.Errorf("phase %s declares frontier %v, outside the slot stack", p, r.frontier)
 		}
 		if r.crash == "" {
@@ -126,7 +126,7 @@ func TestMatrixCompleteness(t *testing.T) {
 
 	for _, op := range allOps {
 		legal := false
-		for _, r := range matrix {
+		for _, r := range phaseOpTable {
 			if guard(r.phase, op) == nil {
 				legal = true
 			}
@@ -142,34 +142,35 @@ func TestMatrixCompleteness(t *testing.T) {
 
 // TestFrontierDropsAtSectionTransition makes the §7 slot-swap safety
 // falsifiable rather than asserted in prose: the call loop claims stability
-// through reference buffer A, the section transition — which is where that
-// buffer is legally replaced — claims strictly less, and the churn tripwire
-// agrees with both. Raise the section-transition frontier to SlotRefA and the
-// last check here fails, which is exactly the bug (a flushed buffer reported
-// as stable) that would otherwise surface as a silently destroyed cache.
+// through the stage reference buffer, the section transition — which is where
+// that buffer is legally replaced — claims strictly less, and the churn
+// tripwire agrees with both. Raise the section-transition frontier to
+// SlotStageRef and the last check here fails, which is exactly the bug (a
+// flushed buffer reported as stable) that would otherwise surface as a
+// silently destroyed cache.
 func TestFrontierDropsAtSectionTransition(t *testing.T) {
-	loop, err := Frontier(PhaseCallLoop)
+	loop, err := StabilityFrontier(PhaseCallLoop)
 	if err != nil {
 		t.Fatal(err)
 	}
-	transition, err := Frontier(PhaseSectionTransition)
+	transition, err := StabilityFrontier(PhaseSectionTransition)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loop != prompt.SlotRefA {
-		t.Errorf("call-loop frontier is %v, want %v", loop, prompt.SlotRefA)
+	if loop != prompt.SlotStageRef {
+		t.Errorf("call-loop frontier is %v, want %v", loop, prompt.SlotStageRef)
 	}
 	if transition >= loop {
 		t.Fatalf("section-transition frontier %v does not drop below the call-loop frontier %v", transition, loop)
 	}
 
-	// Two calls that differ only in reference buffer A: the flush that the
+	// Two calls that differ only in the stage reference buffer: the flush that the
 	// section transition exists to perform.
-	prev := hashes(map[prompt.Slot]byte{prompt.SlotRefA: 1})
-	cur := hashes(map[prompt.Slot]byte{prompt.SlotRefA: 2})
+	prev := hashes(map[prompt.Slot]byte{prompt.SlotStageRef: 1})
+	cur := hashes(map[prompt.Slot]byte{prompt.SlotStageRef: 2})
 
 	var churn prompt.ErrSlotChurn
-	if err := prompt.CheckStability(loop, prev, cur); !errors.As(err, &churn) || churn.Slot != prompt.SlotRefA {
+	if err := prompt.CheckStability(loop, prev, cur); !errors.As(err, &churn) || churn.Slot != prompt.SlotStageRef {
 		t.Errorf("call-loop frontier accepted a flushed reference buffer: %v", err)
 	}
 	if err := prompt.CheckStability(transition, prev, cur); err != nil {
@@ -180,23 +181,23 @@ func TestFrontierDropsAtSectionTransition(t *testing.T) {
 func TestLowestFrontier(t *testing.T) {
 	cases := []struct {
 		name   string
-		phases []Phase
+		phases []JobPhase
 		want   prompt.Slot
 	}{
-		{"steady call loop", []Phase{PhaseCallLoop}, prompt.SlotRefA},
+		{"steady call loop", []JobPhase{PhaseCallLoop}, prompt.SlotStageRef},
 		{
 			"a section transition since the last call",
-			[]Phase{PhaseCallLoop, PhaseSectionTransition, PhaseCallLoop},
+			[]JobPhase{PhaseCallLoop, PhaseSectionTransition, PhaseCallLoop},
 			prompt.SlotTaskDef,
 		},
 		{
 			"a stage boundary since the last call",
-			[]Phase{PhaseStageTeardown, PhaseStageSetup, PhaseCallLoop},
-			prompt.SlotSystemFrame,
+			[]JobPhase{PhaseStageTeardown, PhaseStageSetup, PhaseCallLoop},
+			prompt.SlotJobFrame,
 		},
 		{
 			"the first call of the job claims nothing",
-			[]Phase{PhaseJobSetup, PhaseStageSetup, PhaseCallLoop},
+			[]JobPhase{PhaseJobSetup, PhaseStageSetup, PhaseCallLoop},
 			prompt.SlotTotal,
 		},
 	}
@@ -215,14 +216,14 @@ func TestLowestFrontier(t *testing.T) {
 	if _, err := lowestFrontier(); err == nil {
 		t.Error("lowestFrontier() over no phases returned a frontier")
 	}
-	if _, err := lowestFrontier(PhaseCallLoop, Phase(99)); err == nil {
-		t.Error("lowestFrontier() accepted a phase outside the matrix")
+	if _, err := lowestFrontier(PhaseCallLoop, JobPhase(99)); err == nil {
+		t.Error("lowestFrontier() accepted a phase outside the phaseOpTable")
 	}
 }
 
 func TestEnterPhase(t *testing.T) {
 	lg := &logtest.Capture{}
-	for _, r := range matrix {
+	for _, r := range phaseOpTable {
 		if err := enterPhase(r.phase, lg); err != nil {
 			t.Fatalf("enterPhase(%s): %v", r.phase, err)
 		}
@@ -230,8 +231,8 @@ func TestEnterPhase(t *testing.T) {
 			t.Errorf("entering %s recorded no debug record", r.phase)
 		}
 	}
-	if err := enterPhase(Phase(99), lg); err == nil {
-		t.Error("enterPhase accepted a phase outside the matrix")
+	if err := enterPhase(JobPhase(99), lg); err == nil {
+		t.Error("enterPhase accepted a phase outside the phaseOpTable")
 	}
 }
 
@@ -255,7 +256,7 @@ func TestEnterPhaseCrashpoint(t *testing.T) {
 // values and never interprets them.
 func hashes(distinct map[prompt.Slot]byte) map[prompt.Slot][32]byte {
 	out := map[prompt.Slot][32]byte{}
-	for s := prompt.SlotSystemFrame; s <= prompt.SlotReminder; s++ {
+	for s := prompt.SlotJobFrame; s <= prompt.SlotCriticalEcho; s++ {
 		var h [32]byte
 		h[0] = distinct[s]
 		out[s] = h

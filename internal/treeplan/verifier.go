@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ import (
 // It holds the survey artifact (the taxonomy stage's only view of the corpus,
 // ARCHITECTURE §4 row 3) and the source under custody, because §2.4's split
 // expansion runs dissect.Split for real: the number of parts an oversized span
-// becomes is knowable at design time, and knowing it is what lets the skeleton
+// becomes is knowable at design time, and knowing it is what lets the tree plan
 // name the leaves before stage 4 has cut anything.
 //
 // One is built per job and used for every call of the descent
@@ -34,7 +34,7 @@ type Verifier struct {
 // NewVerifier returns a verifier over one corpus.
 //
 // It refuses a survey and a custody set that describe different bytes. The
-// skeleton names byte ranges into ingested files and dissect.Split reads those
+// tree plan names byte ranges into ingested files and dissect.Split reads those
 // bytes; a survey taken over a different state of the corpus would produce
 // offsets that index the wrong material, and every check below would pass over
 // it.
@@ -43,11 +43,11 @@ func NewVerifier(art survey.Artifact, corpus ingest.Corpus, p Params) (*Verifier
 		return nil, err
 	}
 	if art.Schema != survey.SchemaVersion {
-		return nil, fmt.Errorf("skeleton: survey declares schema %q, this build reads %q",
+		return nil, fmt.Errorf("treeplan: survey declares schema %q, this build reads %q",
 			art.Schema, survey.SchemaVersion)
 	}
 	if art.Corpus.ContentHash != corpus.ContentHash {
-		return nil, fmt.Errorf("skeleton: the survey describes corpus %s and custody holds %s",
+		return nil, fmt.Errorf("treeplan: the survey describes corpus %s and custody holds %s",
 			art.Corpus.ContentHash, corpus.ContentHash)
 	}
 	v := &Verifier{art: art, corpus: corpus, p: p, files: make(map[string]int, len(art.Files))}
@@ -68,7 +68,7 @@ func (v *Verifier) file(path string) (survey.File, bool) {
 
 // bytes returns one document's source under custody.
 func (v *Verifier) bytes(path string) ([]byte, bool) {
-	u, ok := v.corpus.Unit(path)
+	u, ok := v.corpus.Doc(path)
 	if !ok {
 		return nil, false
 	}
@@ -80,9 +80,9 @@ func (v *Verifier) bytes(path string) ([]byte, bool) {
 // It is the single place this package asks how many leaves a span becomes.
 // Compose asks it during expansion and Check asks it again over the finished
 // artifact, and the two agreeing is the artifact's whole claim about a group:
-// the skeleton owns the span, the budget and the count, and the count is
+// the tree plan owns the span, the budget and the count, and the count is
 // whatever Split says it is.
-func (v *Verifier) split(span Span) ([]survey.Range, error) {
+func (v *Verifier) split(span Span) ([]survey.Span, error) {
 	f, ok := v.file(span.File)
 	if !ok {
 		return nil, DefectError{Subject: span.File, Reason: "no survey inventory for this file"}
@@ -91,7 +91,7 @@ func (v *Verifier) split(span Span) ([]survey.Range, error) {
 	if !ok {
 		return nil, DefectError{Subject: span.File, Reason: "no source under custody for this file"}
 	}
-	return dissect.Split(src, survey.Range{Start: span.Start, End: span.End}, f.Cuts,
+	return dissect.Split(src, survey.Span{Start: span.Start, End: span.End}, f.Cuts,
 		dissect.Params{Est: v.p.Est, BudgetTokens: v.p.Budgets.LeafTokens})
 }
 
@@ -109,35 +109,35 @@ func (v *Verifier) split(span Span) ([]survey.Range, error) {
 //
 // Compose runs Check over its own output rather than trusting the construction
 // that produced it. That is not belt-and-braces: Check is the sole statement of
-// what a valid skeleton is, and running it here makes "produced by Compose"
+// what a valid tree plan is, and running it here makes "produced by Compose"
 // and "passes Check" the same predicate — which is what stage 9 later relies
 // on when it re-checks an artifact it did not build.
-func (v *Verifier) Compose(p Plan, annexes []Annex) (Skeleton, error) {
+func (v *Verifier) Compose(p TreeProposal, annexes []Annex) (TreePlan, error) {
 	if err := checkAnnexes(annexes, v.art); err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 	root, err := toBuild(p)
 	if err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 	if err := v.checkSources(root, annexes); err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 
 	collapse(root, v.p.Budgets.DepthCap)
 	v.dissolve(root)
 	groups, err := v.expand(root)
 	if err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 	if err := v.interpose(root); err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 	if err := v.recheck(root); err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 
-	s := Skeleton{
+	s := TreePlan{
 		Schema:     SchemaVersion,
 		CorpusHash: v.art.Corpus.ContentHash,
 		Budgets:    v.p.Budgets,
@@ -148,7 +148,7 @@ func (v *Verifier) Compose(p Plan, annexes []Annex) (Skeleton, error) {
 		s.Annexes = append([]Annex(nil), annexes...)
 	}
 	if err := v.Check(s); err != nil {
-		return Skeleton{}, err
+		return TreePlan{}, err
 	}
 	return s, nil
 }
@@ -191,13 +191,13 @@ func (v *Verifier) nameChildren(n *buildNode, dir, parent string, out *[]Node) {
 				name = partName(base, c.part)
 			}
 			*out = append(*out, Node{
-				Path:   joinDir(dir, name+mdExt),
-				Kind:   KindLeaf,
-				Parent: parent,
-				Title:  c.title,
-				Scope:  c.scope,
-				Group:  c.group,
-				Part:   c.part,
+				Path:       joinDir(dir, name+mdExt),
+				Kind:       KindLeaf,
+				Parent:     parent,
+				Title:      c.title,
+				Scope:      c.scope,
+				SplitGroup: c.group,
+				Part:       c.part,
 			})
 			continue
 		}
@@ -229,15 +229,15 @@ func dirOf(nodePath string) string {
 // sectionsOf flattens one file's surveyed sections: the preamble and the whole
 // heading tree at every depth. Coverage is stated over these, because they are
 // what the survey claims the document is made of.
-func sectionsOf(f survey.File) []survey.Range {
-	out := make([]survey.Range, 0, 8)
+func sectionsOf(f survey.File) []survey.Span {
+	out := make([]survey.Span, 0, 8)
 	if f.Preamble != nil {
-		out = append(out, survey.Range{Start: f.Preamble.Start, End: f.Preamble.End})
+		out = append(out, survey.Span{Start: f.Preamble.Start, End: f.Preamble.End})
 	}
 	var rec func(secs []survey.Section)
 	rec = func(secs []survey.Section) {
 		for _, s := range secs {
-			out = append(out, survey.Range{Start: s.Start, End: s.End})
+			out = append(out, survey.Span{Start: s.Start, End: s.End})
 			rec(s.Children)
 		}
 	}
@@ -247,11 +247,11 @@ func sectionsOf(f survey.File) []survey.Range {
 
 // spansByFile groups the artifact's group spans per file, in start order, for
 // the disjointness and coverage checks.
-func spansByFile(groups []Group) map[string][]survey.Range {
-	byFile := map[string][]survey.Range{}
+func spansByFile(groups []SplitGroup) map[string][]survey.Span {
+	byFile := map[string][]survey.Span{}
 	for _, g := range groups {
 		byFile[g.Source.File] = append(byFile[g.Source.File],
-			survey.Range{Start: g.Source.Start, End: g.Source.End})
+			survey.Span{Start: g.Source.Start, End: g.Source.End})
 	}
 	for _, rs := range byFile {
 		sort.Slice(rs, func(i, j int) bool { return rs[i].Start < rs[j].Start })

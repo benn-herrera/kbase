@@ -72,14 +72,14 @@ var bomUTF8 = []byte{0xEF, 0xBB, 0xBF}
 //   - Willing to run past a missing close. Without a closing delimiter there
 //     is no block: an unterminated one is a thematic break followed by prose,
 //     which is what CommonMark says it is.
-func frontMatter(src []byte, from string, lg log.Logger) (survey.Range, frontMatterFields, bool) {
+func frontMatter(src []byte, from string, lg log.Logger) (survey.Span, frontMatterFields, bool) {
 	start := 0
 	if bytes.HasPrefix(src, bomUTF8) {
 		start = len(bomUTF8)
 	}
 	first, next := readLine(src, start)
 	if !isFrontMatterDelim(first) {
-		return survey.Range{}, frontMatterFields{}, false
+		return survey.Span{}, frontMatterFields{}, false
 	}
 	for off := next; off < len(src); {
 		line, after := readLine(src, off)
@@ -94,13 +94,13 @@ func frontMatter(src []byte, from string, lg log.Logger) (survey.Range, frontMat
 			// and links inside them still count.
 			lg.Debug("survey read a delimited block as content, not front matter",
 				"file", from, "end", after, "reason", "not a YAML mapping")
-			return survey.Range{}, frontMatterFields{}, false
+			return survey.Span{}, frontMatterFields{}, false
 		}
 		lg.Debug("survey detected front matter", "file", from, "end", after,
 			"titled", fields.Title != "", "tags", len(fields.Tags))
-		return survey.Range{Start: 0, End: after}, fields, true
+		return survey.Span{Start: 0, End: after}, fields, true
 	}
-	return survey.Range{}, frontMatterFields{}, false
+	return survey.Span{}, frontMatterFields{}, false
 }
 
 // parseFrontMatter decides whether a delimited block really is front matter,

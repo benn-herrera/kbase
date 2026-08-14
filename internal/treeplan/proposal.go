@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -8,38 +8,38 @@ import (
 	"kbase/internal/survey"
 )
 
-// Plan is the descent's composed answer, before any of §2.7's operators have
+// TreeProposal is the descent's composed answer, before any of §2.7's operators have
 // run: the tree the model asked for, in the model's own terms.
 //
-// It is what the taxonomy stage builds by folding one Answer per enumerated
-// container (§3.2), and it is deliberately not the artifact. Between Plan and
-// Skeleton sit the level-structure operators, the split expansion, the namer
+// It is what the taxonomy stage builds by folding one GroupingAnswer per enumerated
+// container (§3.2), and it is deliberately not the artifact. Between TreeProposal and
+// TreePlan sit the level-structure operators, the split expansion, the namer
 // and every post-condition in §3.3 — which is the whole point: the model
 // states grouping semantics, and the verifier states the tree.
-type Plan struct {
+type TreeProposal struct {
 	// Title and Scope are the corpus's own, for the entry-point node.
 	Title string
 	Scope string
 	// Children are the domains.
-	Children []PlanNode
+	Children []ProposalNode
 }
 
-// PlanNode is one proposed node.
+// ProposalNode is one proposed node.
 //
 // A leaf names the source material it draws from and has no children; an index
 // names children and no sources. A leaf naming more than one span is legal
-// input and is repaired mechanically (§2.7's dissolution): Group.Source is
+// input and is repaired mechanically (§2.7's dissolution): SplitGroup.Source is
 // single-file, so a multi-file leaf is not representable in the artifact.
-type PlanNode struct {
+type ProposalNode struct {
 	Title    string
 	Scope    string
 	Kind     Kind
 	Sources  []Span
-	Children []PlanNode
+	Children []ProposalNode
 }
 
 // buildNode is the mutable tree the operators rewrite. It is unexported
-// because every rewrite between Plan and Skeleton is this package's business:
+// because every rewrite between TreeProposal and TreePlan is this package's business:
 // a caller that could hold one could hold a tree in a state no post-condition
 // has been run over.
 type buildNode struct {
@@ -63,9 +63,9 @@ type buildNode struct {
 	tokens int    // this part's own token count, for G-2
 }
 
-// toBuild converts a Plan into the mutable tree, checking what is decidable
+// toBuild converts a TreeProposal into the mutable tree, checking what is decidable
 // without looking at the corpus: kinds, shape, and non-empty labels.
-func toBuild(p Plan) (*buildNode, error) {
+func toBuild(p TreeProposal) (*buildNode, error) {
 	root := &buildNode{
 		title: normalizeLabel(p.Title),
 		scope: normalizeLabel(p.Scope),
@@ -87,7 +87,7 @@ func toBuild(p Plan) (*buildNode, error) {
 	return root, nil
 }
 
-func toBuildNode(p PlanNode) (*buildNode, error) {
+func toBuildNode(p ProposalNode) (*buildNode, error) {
 	n := &buildNode{
 		title: normalizeLabel(p.Title),
 		scope: normalizeLabel(p.Scope),
@@ -200,10 +200,10 @@ func annexedBy(file string, annexes []Annex) (string, bool) {
 func checkAnnexes(annexes []Annex, art survey.Artifact) error {
 	for i, a := range annexes {
 		if a.Prefix == "" {
-			return fmt.Errorf("skeleton: annex %d declares an empty prefix", i+1)
+			return fmt.Errorf("treeplan: annex %d declares an empty prefix", i+1)
 		}
 		if a.Prefix != path.Clean(a.Prefix) || strings.HasPrefix(a.Prefix, "/") {
-			return fmt.Errorf("skeleton: annex %q is not a clean corpus-relative prefix", a.Prefix)
+			return fmt.Errorf("treeplan: annex %q is not a clean corpus-relative prefix", a.Prefix)
 		}
 		hit := false
 		for _, f := range art.Files {
@@ -213,7 +213,7 @@ func checkAnnexes(annexes []Annex, art survey.Artifact) error {
 			}
 		}
 		if !hit {
-			return fmt.Errorf("skeleton: annex %q names no surveyed document; "+
+			return fmt.Errorf("treeplan: annex %q names no surveyed document; "+
 				"an annex that excludes nothing is a flag that did not do what it said", a.Prefix)
 		}
 		for j, b := range annexes {
@@ -221,7 +221,7 @@ func checkAnnexes(annexes []Annex, art survey.Artifact) error {
 				continue
 			}
 			if a.Prefix == b.Prefix || strings.HasPrefix(a.Prefix, b.Prefix+"/") {
-				return fmt.Errorf("skeleton: annexes %q and %q nest; declare the outer one only", b.Prefix, a.Prefix)
+				return fmt.Errorf("treeplan: annexes %q and %q nest; declare the outer one only", b.Prefix, a.Prefix)
 			}
 		}
 	}

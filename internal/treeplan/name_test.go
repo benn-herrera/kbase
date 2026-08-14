@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"strings"
@@ -151,7 +151,7 @@ func TestNamerReservesTheWholeSplitFamily(t *testing.T) {
 // O-8: a part's name and title are functions of the group's title and the
 // part's ordinal, and of nothing else. Stage 4 moves the boundaries inside a
 // group, so a name that knew where a boundary landed would falsify the
-// skeleton the moment refinement ran.
+// tree plan the moment refinement ran.
 func TestPartNamesAreIndependentOfBoundaries(t *testing.T) {
 	if got, want := partName("guide", 2), "guide-2"; got != want {
 		t.Errorf("partName = %q, want %q", got, want)

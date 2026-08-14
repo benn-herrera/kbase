@@ -6,21 +6,21 @@ import (
 	"kbase/internal/survey"
 )
 
-// Window is the inclusive interval of byte offsets one boundary's cut may
+// MoveWindow is the inclusive interval of byte offsets one boundary's cut may
 // land in: the model's clamp, and the same bytes it was shown around the
 // mechanical cut (§5 step 2).
 //
-// It is inclusive at both ends, which is why it is not a survey.Range: a
+// It is inclusive at both ends, which is why it is not a survey.Span: a
 // Range is half-open because it describes bytes, and this describes
 // POSITIONS. Both of a window's ends are positions a cut may legally take,
 // and the mechanical cut sits at the centre of its own window — which a
 // half-open interval would exclude whenever the overlap rounded to zero.
-type Window struct {
+type MoveWindow struct {
 	Lo, Hi int
 }
 
 // Contains reports whether off is a legal position in the window.
-func (w Window) Contains(off int) bool { return off >= w.Lo && off <= w.Hi }
+func (w MoveWindow) Contains(off int) bool { return off >= w.Lo && off <= w.Hi }
 
 // Verify checks a cut list against every rule ARCHITECTURE.md §5 names, in
 // the order that makes a failure diagnostic rather than merely true.
@@ -31,13 +31,13 @@ func (w Window) Contains(off int) bool { return off >= w.Lo && off <= w.Hi }
 // span are the bytes it claims to tile, cands is the enumerated candidate set
 // from the survey artifact, and windows carries one clamp per INTERIOR
 // boundary (len(cuts)-1 of them) or is nil for a list nobody clamped — the
-// mechanical baseline, which is measured against nothing because it is what
+// mechanical fallback, which is measured against nothing because it is what
 // everything else is measured against.
 //
 // Every failure is one of two types and the distinction is the point:
 //
 //   - RejectionError is a choice that did not check out. The runner retries
-//     once with the reason attached and then keeps the mechanical baseline
+//     once with the reason attached and then keeps the mechanical fallback
 //     (§3 monotone safety) — model failure costs quality, never correctness.
 //   - OffsetDefectError is the whitespace tripwire, and it is not
 //     recoverable. See the package comment for why a cut can only fail it if
@@ -48,7 +48,7 @@ func (w Window) Contains(off int) bool { return off >= w.Lo && off <= w.Hi }
 // really did enumerate can reach the tripwire, and one that reaches it and
 // fails is the evidence that these are not the bytes those candidates were
 // enumerated against.
-func Verify(src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, windows []Window, p Params) error {
+func Verify(src []byte, span survey.Span, cands []survey.CutCandidate, cuts []survey.Span, windows []MoveWindow, p Params) error {
 	if err := checkSpan(src, span); err != nil {
 		return err
 	}
@@ -124,8 +124,8 @@ func isCandidate(cands []survey.CutCandidate, off int) bool {
 // cut outside its clamp, a section under the minimum.
 //
 // It is the retryable class. Its message is one short mechanical fact,
-// because the runner caps the corrective note it becomes at a dozen words
-// (pipeline.correctiveNoteWords) — a sentence of prose there is a sentence
+// because the runner caps the retry note it becomes at a dozen words
+// (pipeline.retryNoteWords) — a sentence of prose there is a sentence
 // the model never sees the end of.
 //
 // It has TWO renderings and the difference is the point (§5): Error is
@@ -152,7 +152,7 @@ func (e RejectionError) Error() string {
 
 // Note is the model-facing rendering: the mechanical fact alone.
 //
-// The runner turns whatever error a verifier returns into the corrective note
+// The runner turns whatever error a verifier returns into the retry note
 // the retry carries, capped at twelve words. Error's operator prefix would
 // spend four of them on "dissect: cut at 8392:" — before any content, and
 // truncating the actionable half — and it would put a raw byte offset in the

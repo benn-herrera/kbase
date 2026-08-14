@@ -164,7 +164,7 @@ func TestRunDevRefineWiring(t *testing.T) {
 	if rec.Model != "gemma-4-26b-a4b" || rec.Tier != config.TierLight || rec.Provider != "solo" {
 		t.Errorf("record identity = %+v, want the dialed provider, model and tier", rec)
 	}
-	if rec.BudgetTokens != 128 || rec.Source != file || rec.SourceSHA256 == "" {
+	if rec.BudgetTokens != 128 || rec.Source != file || rec.UploadSHA256 == "" {
 		t.Errorf("record inputs = %+v, want the budget and the document it was run over", rec)
 	}
 	if rec.Boundaries != rec.BoundariesMoved+rec.BoundariesKept || rec.Boundaries < 1 {

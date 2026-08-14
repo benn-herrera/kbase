@@ -12,31 +12,31 @@ import (
 // would make the scan any more exercised.
 const (
 	relSurvey   = "1-survey/survey.json"
-	relSkeleton = "2-skeleton/skeleton.json"
+	relTreePlan = "2-treeplan/treeplan.json"
 	relLeafA    = "3-leaves/a.md"
 	relLeafB    = "3-leaves/b.md"
 )
 
 var sourceInput = Input{Name: "source", Hash: HashBytes([]byte("corpus bytes"))}
 
-// fixedUnits is the UnitResolver for a stage whose description is known up
+// fixedUnits is the OwedArtifactResolver for a stage whose description is known up
 // front. Most test chains are this; the ones exercising the dynamic chain use
 // a resolver that reads the store.
-func fixedUnits(units ...Unit) UnitResolver {
-	return func() ([]Unit, error) { return units, nil }
+func fixedUnits(units ...OwedArtifact) OwedArtifactResolver {
+	return func() ([]OwedArtifact, error) { return units, nil }
 }
 
-func testChain() Chain {
-	return Chain{
+func testChain() StageChain {
+	return StageChain{
 		{Name: "survey", Units: fixedUnits(
-			Unit{Path: relSurvey, Inputs: []Input{sourceInput}},
+			OwedArtifact{Path: relSurvey, Inputs: []Input{sourceInput}},
 		)},
-		{Name: "skeleton", Units: fixedUnits(
-			Unit{Path: relSkeleton, Inputs: []Input{sourceInput}, Upstreams: []string{relSurvey}},
+		{Name: "treeplan", Units: fixedUnits(
+			OwedArtifact{Path: relTreePlan, Inputs: []Input{sourceInput}, Upstreams: []string{relSurvey}},
 		)},
 		{Name: "leaves", Units: fixedUnits(
-			Unit{Path: relLeafA, Inputs: []Input{sourceInput}, Upstreams: []string{relSkeleton}},
-			Unit{Path: relLeafB, Inputs: []Input{sourceInput}, Upstreams: []string{relSkeleton}},
+			OwedArtifact{Path: relLeafA, Inputs: []Input{sourceInput}, Upstreams: []string{relTreePlan}},
+			OwedArtifact{Path: relLeafB, Inputs: []Input{sourceInput}, Upstreams: []string{relTreePlan}},
 		)},
 	}
 }
@@ -44,7 +44,7 @@ func testChain() Chain {
 // build writes the named units of the chain, deriving each unit's inputs the
 // same way the scan will — which is the point of ResolveInputs being one
 // function rather than two.
-func build(t *testing.T, s *Store, chain Chain, paths ...string) {
+func build(t *testing.T, s *ArtifactStore, chain StageChain, paths ...string) {
 	t.Helper()
 	want := map[string]bool{}
 	for _, p := range paths {
@@ -68,17 +68,17 @@ func build(t *testing.T, s *Store, chain Chain, paths ...string) {
 	}
 }
 
-func scan(t *testing.T, s *Store, chain Chain, mode Mode) ScanResult {
+func scan(t *testing.T, s *ArtifactStore, chain StageChain, mode Mode) ResumeScanResult {
 	t.Helper()
-	res, err := s.Scan(chain, mode)
+	res, err := s.ResumeScan(chain, mode)
 	if err != nil {
-		t.Fatalf("Scan: %v", err)
+		t.Fatalf("ResumeScan: %v", err)
 	}
 	return res
 }
 
 func TestScanEmptyStore(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	res := scan(t, s, testChain(), ModeResume)
 
 	if res.ResumeStage != 0 || res.StageName != "survey" {
@@ -99,9 +99,9 @@ func TestScanEmptyStore(t *testing.T) {
 // proven, a third half done, so the restart point is the third stage and only
 // its unfinished unit is redone.
 func TestScanDeepestValidPrefix(t *testing.T) {
-	s, lg := newStore(t)
+	s, lg := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton, relLeafA)
+	build(t, s, chain, relSurvey, relTreePlan, relLeafA)
 	lg.Reset() // the assertions below are about the scan, not the setup
 
 	res := scan(t, s, chain, ModeResume)
@@ -111,7 +111,7 @@ func TestScanDeepestValidPrefix(t *testing.T) {
 	if res.Reused != 3 || res.Redo != 1 {
 		t.Errorf("reused %d redo %d, want 3 and 1", res.Reused, res.Redo)
 	}
-	byPath := map[string]UnitVerdict{}
+	byPath := map[string]OwedArtifactVerdict{}
 	for _, v := range res.Verdicts {
 		byPath[v.Path] = v
 	}
@@ -136,9 +136,9 @@ func TestScanDeepestValidPrefix(t *testing.T) {
 }
 
 func TestScanCompleteChain(t *testing.T) {
-	s, lg := newStore(t)
+	s, lg := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton, relLeafA, relLeafB)
+	build(t, s, chain, relSurvey, relTreePlan, relLeafA, relLeafB)
 
 	res := scan(t, s, chain, ModeResume)
 	if !res.Complete() {
@@ -160,17 +160,17 @@ func TestScanCompleteChain(t *testing.T) {
 // unit derived from it loses its proof without anyone propagating an
 // invalidation.
 func TestScanUpstreamChangeInvalidatesDownstream(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton, relLeafA, relLeafB)
+	build(t, s, chain, relSurvey, relTreePlan, relLeafA, relLeafB)
 
 	// The survey stage re-runs and produces different bytes from the same
 	// inputs. It stays valid itself; everything downstream must not.
 	put(t, s, relSurvey, "a different survey", sourceInput)
 
 	res := scan(t, s, chain, ModeResume)
-	if res.ResumeStage != 1 || res.StageName != "skeleton" {
-		t.Fatalf("resume at stage %d (%q), want stage 1 (skeleton)", res.ResumeStage, res.StageName)
+	if res.ResumeStage != 1 || res.StageName != "treeplan" {
+		t.Fatalf("resume at stage %d (%q), want stage 1 (treeplan)", res.ResumeStage, res.StageName)
 	}
 	if res.Reused != 1 || res.Redo != 1 {
 		t.Errorf("reused %d redo %d, want 1 and 1", res.Reused, res.Redo)
@@ -184,9 +184,9 @@ func TestScanUpstreamChangeInvalidatesDownstream(t *testing.T) {
 // carries no proof is not complete, so the walk stops there rather than
 // reading the downstream artifacts derived from it.
 func TestScanStopsAtAnUnstampedArtifact(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton)
+	build(t, s, chain, relSurvey, relTreePlan)
 	rm(t, s, relSurvey+StampSuffix)
 
 	res := scan(t, s, chain, ModeResume)
@@ -202,9 +202,9 @@ func TestScanStopsAtAnUnstampedArtifact(t *testing.T) {
 // from the first stage. Resume is an optimization; --fresh is the button that
 // never has to be argued with.
 func TestScanFreshIgnoresTheStore(t *testing.T) {
-	s, lg := newStore(t)
+	s, lg := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton, relLeafA, relLeafB)
+	build(t, s, chain, relSurvey, relTreePlan, relLeafA, relLeafB)
 
 	res := scan(t, s, chain, ModeFresh)
 	if res.ResumeStage != 0 || res.StageName != "survey" {
@@ -222,12 +222,12 @@ func TestScanFreshIgnoresTheStore(t *testing.T) {
 }
 
 func TestScanRefusesIncoherentStore(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	chain := testChain()
-	build(t, s, chain, relSurvey, relSkeleton)
+	build(t, s, chain, relSurvey, relTreePlan)
 	restamp(t, s, relSurvey, func(st *Stamp) { st.Path = "elsewhere.json" })
 
-	_, err := s.Scan(chain, ModeResume)
+	_, err := s.ResumeScan(chain, ModeResume)
 	assertIncoherent(t, err)
 }
 
@@ -239,46 +239,46 @@ func TestScanRefusesIncoherentStore(t *testing.T) {
 func TestScanRefusesBadChains(t *testing.T) {
 	cases := []struct {
 		name  string
-		chain Chain
+		chain StageChain
 	}{
-		{"empty", Chain{}},
+		{"empty", StageChain{}},
 		{
 			name: "a path produced by two stages",
-			chain: Chain{
-				{Name: "a", Units: fixedUnits(Unit{Path: "x.md"})},
-				{Name: "b", Units: fixedUnits(Unit{Path: "x.md"})},
+			chain: StageChain{
+				{Name: "a", Units: fixedUnits(OwedArtifact{Path: "x.md"})},
+				{Name: "b", Units: fixedUnits(OwedArtifact{Path: "x.md"})},
 			},
 		},
 		{
 			name: "an upstream nothing produces and nothing proves",
-			chain: Chain{
-				{Name: "a", Units: fixedUnits(Unit{Path: "x.md"})},
-				{Name: "b", Units: fixedUnits(Unit{Path: "y.md", Upstreams: []string{"nowhere.md"}})},
+			chain: StageChain{
+				{Name: "a", Units: fixedUnits(OwedArtifact{Path: "x.md"})},
+				{Name: "b", Units: fixedUnits(OwedArtifact{Path: "y.md", Upstreams: []string{"nowhere.md"}})},
 			},
 		},
 		{
 			name: "an upstream from the same stage",
-			chain: Chain{
+			chain: StageChain{
 				{Name: "a", Units: fixedUnits(
-					Unit{Path: "x.md"},
-					Unit{Path: "y.md", Upstreams: []string{"x.md"}},
+					OwedArtifact{Path: "x.md"},
+					OwedArtifact{Path: "y.md", Upstreams: []string{"x.md"}},
 				)},
 			},
 		},
 		{
 			name:  "a path outside the job directory",
-			chain: Chain{{Name: "a", Units: fixedUnits(Unit{Path: "../x.md"})}},
+			chain: StageChain{{Name: "a", Units: fixedUnits(OwedArtifact{Path: "../x.md"})}},
 		},
 		{
 			name:  "a description that cannot be resolved at all",
-			chain: Chain{{Name: "a", Units: func() ([]Unit, error) { return nil, errors.New("no skeleton to read") }}},
+			chain: StageChain{{Name: "a", Units: func() ([]OwedArtifact, error) { return nil, errors.New("no tree plan to read") }}},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := newStore(t)
-			if _, err := s.Scan(tc.chain, ModeResume); err == nil && len(tc.chain) == 0 {
-				t.Fatal("Scan accepted an empty chain")
+			s, _ := newArtifactStore(t)
+			if _, err := s.ResumeScan(tc.chain, ModeResume); err == nil && len(tc.chain) == 0 {
+				t.Fatal("ResumeScan accepted an empty chain")
 			}
 			if len(tc.chain) == 0 {
 				return
@@ -291,35 +291,35 @@ func TestScanRefusesBadChains(t *testing.T) {
 }
 
 func TestScanUnknownMode(t *testing.T) {
-	s, _ := newStore(t)
-	if _, err := s.Scan(testChain(), Mode("maybe")); err == nil {
-		t.Fatal("Scan accepted an unknown mode")
+	s, _ := newArtifactStore(t)
+	if _, err := s.ResumeScan(testChain(), Mode("maybe")); err == nil {
+		t.Fatal("ResumeScan accepted an unknown mode")
 	}
 }
 
 // TestChainMayConsumeAProvenArtifactItDoesNotProduce is the other half of the
 // dynamic chain: a stage's upstream need not be produced by this chain at all
-// — a re-plan consumes the skeleton a previous epoch left behind — but it must
+// — a re-plan consumes the tree plan a previous epoch left behind — but it must
 // be PROVEN. So the store is asked for the stamp, and an upstream nothing
 // proves refuses the run rather than being verdicted, since no amount of
 // running this chain would ever produce it.
 func TestChainMayConsumeAProvenArtifactItDoesNotProduce(t *testing.T) {
-	const external = "epoch1/skeleton.json"
-	chain := func() Chain {
-		return Chain{{Name: "leaves", Units: fixedUnits(
-			Unit{Path: relLeafA, Inputs: []Input{sourceInput}, Upstreams: []string{external}},
+	const external = "epoch1/treeplan.json"
+	chain := func() StageChain {
+		return StageChain{{Name: "leaves", Units: fixedUnits(
+			OwedArtifact{Path: relLeafA, Inputs: []Input{sourceInput}, Upstreams: []string{external}},
 		)}}
 	}
 
 	t.Run("unproven is a refusal naming --fresh", func(t *testing.T) {
-		s, _ := newStore(t)
-		_, err := s.Scan(chain(), ModeResume)
+		s, _ := newArtifactStore(t)
+		_, err := s.ResumeScan(chain(), ModeResume)
 		assertIncoherent(t, err)
 	})
 
 	t.Run("stamped is legal, and its hash enters the unit", func(t *testing.T) {
-		s, _ := newStore(t)
-		put(t, s, external, "a previous epoch's skeleton", sourceInput)
+		s, _ := newArtifactStore(t)
+		put(t, s, external, "a previous epoch's tree plan", sourceInput)
 
 		res := scan(t, s, chain(), ModeResume)
 		if res.ResumeStage != 0 || res.Redo != 1 {
@@ -354,19 +354,19 @@ func TestChainMayConsumeAProvenArtifactItDoesNotProduce(t *testing.T) {
 // stage N+1's units may not be knowable until stage N has run — and it is a
 // property of the walk, not an accident of the fixture.
 func TestStageIsDescribedWhenItIsReached(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	described := 0
-	chain := Chain{
-		{Name: "survey", Units: fixedUnits(Unit{Path: relSurvey, Inputs: []Input{sourceInput}})},
-		{Name: "skeleton", Units: func() ([]Unit, error) {
+	chain := StageChain{
+		{Name: "survey", Units: fixedUnits(OwedArtifact{Path: relSurvey, Inputs: []Input{sourceInput}})},
+		{Name: "treeplan", Units: func() ([]OwedArtifact, error) {
 			described++
-			return []Unit{{Path: relSkeleton, Inputs: []Input{sourceInput}, Upstreams: []string{relSurvey}}}, nil
+			return []OwedArtifact{{Path: relTreePlan, Inputs: []Input{sourceInput}, Upstreams: []string{relSurvey}}}, nil
 		}},
 	}
 
 	// The first stage is absent, so the walk stops there.
-	if _, err := s.Scan(chain, ModeResume); err != nil {
-		t.Fatalf("Scan: %v", err)
+	if _, err := s.ResumeScan(chain, ModeResume); err != nil {
+		t.Fatalf("ResumeScan: %v", err)
 	}
 	if described != 0 {
 		t.Errorf("the second stage was described %d times before the first was complete", described)
@@ -376,8 +376,8 @@ func TestStageIsDescribedWhenItIsReached(t *testing.T) {
 	// Written directly rather than through build, which describes every
 	// stage of the chain it is handed and would be counted here.
 	put(t, s, relSurvey, "content of "+relSurvey, sourceInput)
-	if _, err := s.Scan(chain, ModeResume); err != nil {
-		t.Fatalf("Scan: %v", err)
+	if _, err := s.ResumeScan(chain, ModeResume); err != nil {
+		t.Fatalf("ResumeScan: %v", err)
 	}
 	if described != 1 {
 		t.Errorf("the second stage was described %d times, want once", described)
@@ -389,15 +389,15 @@ func TestStageIsDescribedWhenItIsReached(t *testing.T) {
 // function, so an upstream's identity enters the stamp under a name that
 // cannot drift.
 func TestResolveInputsIsTheOneDerivation(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	chain := testChain()
 	build(t, s, chain, relSurvey)
 
-	skeleton, err := chain[1].Units()
+	treePlan, err := chain[1].Units()
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := s.resolveInputs(skeleton[0])
+	inputs, err := s.resolveInputs(treePlan[0])
 	if err != nil {
 		t.Fatalf("resolveInputs: %v", err)
 	}

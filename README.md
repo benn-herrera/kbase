@@ -13,7 +13,7 @@ Markdown tree — entry point → domain index → subtopic index → leaf — w
   contract states it plainly: *summaries route, leaves answer*.
 - **Progressive hierarchical summaries** for navigation, built bottom-up.
 - **Mechanically generated links.** Bidirectional tree navigation is emitted
-  deterministically from the KB skeleton — dead links are impossible by
+  deterministically from the KB tree plan — dead links are impossible by
   construction. Cross-references come only from the source's own links; no
   inferred "related topics."
 - **Self-description.** Every generated KB ships a `.agents/` directory with
@@ -41,7 +41,7 @@ A fixed multi-stage pipeline, deterministic wherever possible:
 
 1. **Ingest + survey** (deterministic) — structural inventory: heading trees,
    section sizes, link graph.
-2. **Taxonomy design** (model) — the KB skeleton, designed from the survey,
+2. **Taxonomy design** (model) — the KB tree plan, designed from the survey,
    never from raw source.
 3. **Dissection** (mechanical cuts, model-refined, mechanically verified) —
    the source is sliced by verified byte offsets, never retyped.

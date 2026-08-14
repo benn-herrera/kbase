@@ -66,7 +66,7 @@ func params(budget int) Params { return Params{BudgetTokens: budget} }
 func tokensOf(s string) int { return params(0).estimate([]byte(s)) }
 
 // wholeSpan is the span covering a whole document.
-func wholeSpan(src []byte) survey.Range { return survey.Range{Start: 0, End: len(src)} }
+func wholeSpan(src []byte) survey.Span { return survey.Span{Start: 0, End: len(src)} }
 
 // offsetsOf is every candidate's byte offset — the numbers §5 says never reach
 // the model.
@@ -106,7 +106,7 @@ func assertNoOffsets(t *testing.T, s string, offsets ...int) {
 // range as a standalone number.
 //
 // It is assertNoOffsets' sibling and closes the same hole from the other end.
-// A corrective note is a prompt, and the model's whole vocabulary at this seam
+// A retry note is a prompt, and the model's whole vocabulary at this seam
 // is a number in 1..menuCap (§5) — so a note reading "section 3 is under the
 // minimum" or "not one of the 5 listed positions" puts a legal answer in front
 // of a model that is most likely to be pattern-matching precisely when its
@@ -142,15 +142,15 @@ func digitRuns(s string) []string {
 
 // assertVerifies fails the test unless the cut list passes the same Verify
 // production runs, under the windows derived from itself.
-func assertVerifies(t *testing.T, src []byte, span survey.Range, cands []survey.CutCandidate, cuts []survey.Range, p Params) {
+func assertVerifies(t *testing.T, src []byte, span survey.Span, cands []survey.CutCandidate, cuts []survey.Span, p Params) {
 	t.Helper()
-	if err := Verify(src, span, cands, cuts, Windows(src, cuts, p), p); err != nil {
+	if err := Verify(src, span, cands, cuts, MoveWindows(src, cuts, p), p); err != nil {
 		t.Fatalf("cut list %+v does not verify: %v", cuts, err)
 	}
 	// The tiling check is arithmetic; this is the same claim read out of the
 	// BYTES, which is what the dissector will actually hand downstream.
 	var b strings.Builder
-	for _, leaf := range Dissect(src, cuts) {
+	for _, leaf := range SliceLeaves(src, cuts) {
 		b.Write(leaf)
 	}
 	if got, want := b.String(), string(src[span.Start:span.End]); got != want {

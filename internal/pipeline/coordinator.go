@@ -44,7 +44,7 @@ var cpProduced = crashpoint.Register("pipeline.coordinator.produce.done")
 // 4's boundary fold judges each boundary against the cut list its earlier
 // boundaries produced, so the window and the menu for boundary i do not exist
 // until boundary i-1 has been adjudicated (ARCHITECTURE.md §5). Deferring the
-// build is the whole of what that needs — a serial stream already guarantees
+// build is the whole of what that needs — a serial lane already guarantees
 // the ordering, and everything downstream of the build is unchanged: the
 // frozen-prompt assertion, the budget refusal and the churn tripwire all run
 // against the BUILT input exactly as they did against a stored one.
@@ -70,9 +70,9 @@ func ConstInput(in prompt.CallInput) InputBuilder {
 //
 // It runs where the runner would have run, and everything around it is the
 // same: the unit is described identically, its input set is resolved and hashed
-// BEFORE it runs, its artifact goes through the stage's encoder and Store.Put,
+// BEFORE it runs, its artifact goes through the stage's encoder and ArtifactStore.Put,
 // and a failure is an inventoried unit failure rather than an abort. A producer
-// is not a call: it makes no prompt, touches no agent, and spends no tokens.
+// is not a call: it makes no prompt, touches no bound ask, and spends no tokens.
 //
 // It returns an error where InputBuilder does not, because the two failures are
 // different. A builder assembles material the stage already verified; a
@@ -80,45 +80,45 @@ func ConstInput(in prompt.CallInput) InputBuilder {
 // tile is a unit that failed.
 type Producer func() (artifact any, err error)
 
-// Task is one unit of work: the artifact it must produce and the per-call
+// LaneTask is one unit of work: the artifact it must produce and the per-call
 // context that produces it.
-type Task struct {
-	// Unit describes the output artifact and what it is derived from. It is
+type LaneTask struct {
+	// Owed describes the output artifact and what it is derived from. It is
 	// the SAME description the resume scan verdicts, which is what keeps the
 	// worklist stateless — there is no second place that says what a unit is.
 	//
-	// For a CallOnly task it is not an output description at all: only Path
+	// For a contributing task it is not an output description at all: only Path
 	// is read, as the call's name in the log and the key the stage's verifier
 	// correlates a response with.
-	Unit Unit
+	Owed OwedArtifact
 
-	// CallOnly marks a task whose result is STAGE STATE rather than an
+	// Contributes marks a task whose result is STAGE STATE rather than an
 	// artifact: the call is made, its response is verified, and nothing is
 	// written.
 	//
 	// It exists for stage 4's boundary fold, where n model calls produce one
 	// artifact. Each boundary's answer updates the stage's working cut list;
 	// the composed list is the stage's only output, carried by the last task
-	// of the stream. That is what makes the fold's resume stage-granular by
+	// of the lane. That is what makes the fold's resume stage-granular by
 	// construction (ARCHITECTURE.md §12): there is no per-boundary artifact
 	// for a scan to verdict Valid, so an interrupted fold is redone whole
 	// rather than resumed against a prefix whose dependencies nothing
 	// recorded.
-	CallOnly bool
+	Contributes bool
 
 	// Section names the section this unit belongs to. A change between
 	// consecutive tasks is what drives the worker through
 	// PhaseSectionTransition, which is the only phase that may flush
-	// reference buffer A.
+	// the stage reference buffer.
 	Section string
 
-	// SectionRef is reference buffer A's content for that section: the
+	// SectionRef is the stage reference buffer's content for that section: the
 	// orchestrator-curated material stable across the section's calls.
 	SectionRef string
 
-	// Input builds the per-call half of the prompt, with RefA left EMPTY —
+	// Input builds the per-call half of the prompt, with StageRef left EMPTY —
 	// the worker owns slot 4 and fills it from SectionRef at the transition.
-	// A non-empty RefA is refused rather than overwritten, because silently
+	// A non-empty StageRef is refused rather than overwritten, because silently
 	// discarding a caller's buffer is how slot 4 would start churning per
 	// call without anyone noticing.
 	//
@@ -127,67 +127,67 @@ type Task struct {
 
 	// Produce derives the artifact in process instead of asking a model for
 	// it. A task that has one asks nothing, so it has no Input, no Section
-	// material that reaches a prompt, and no Role behind it.
+	// material that reaches a prompt, and no AskSpec behind it.
 	Produce Producer
 }
 
-// DomainStream is one worker's whole assignment: a domain and its units in
+// SerialLane is one worker's whole assignment: a domain and its units in
 // order (R-2). A worker owns a domain and processes it serially, so the
-// stability state a stream depends on — previous-call hashes, the phases
+// stability state a lane depends on — previous-call hashes, the phases
 // traversed, the current section buffer — is never shared.
-type DomainStream struct {
+type SerialLane struct {
 	Domain string
-	Tasks  []Task
+	Tasks  []LaneTask
 }
 
-// StreamResolver produces a stage's domain streams. It is called ONCE per
+// LaneResolver produces a stage's serial lanes. It is called ONCE per
 // job, when the chain walk reaches the stage — the plan half of the dynamic
-// chain (see UnitResolver, which this backs).
+// chain (see OwedArtifactResolver, which this backs).
 //
 // A stage whose work is known up front returns a fixed slice and ignores the
 // laziness. A stage whose work is not — stage 4's leaves come out of the
-// skeleton stage 3 emitted, stage 5's out of the cut list stage 4 verified —
-// reads what its upstream left in the store and builds its streams from that.
-type StreamResolver func() ([]DomainStream, error)
+// tree plan stage 3 emitted, stage 5's out of the cut list stage 4 verified —
+// reads what its upstream left in the store and builds its lanes from that.
+type LaneResolver func() ([]SerialLane, error)
 
-// StagePlan is one stage: the role every worker of the stage runs, the stage
-// context spec they all share, and the domain streams that produce its units.
+// StagePlan is one stage: the ask every worker of the stage runs, the stage
+// context spec they all share, and the serial lanes that produce its units.
 //
 // A stage is EITHER a model stage or a mechanical one, and the difference is
 // which of the two task modes its tasks use (see StagePlan.validate for why
-// mixing them is refused). A model stage carries Role and Spec, and its
-// artifacts are encoded by Role.Encode. A mechanical stage — every task a
+// mixing them is refused). A model stage carries AskSpec and Spec, and its
+// artifacts are encoded by AskSpec.Encode. A mechanical stage — every task a
 // Producer — carries neither, because there is nothing to tell a model and no
 // seam to classify; its encoder is the field below, which is that stage's only
-// piece of Role-shaped state.
+// piece of AskSpec-shaped state.
 type StagePlan struct {
 	Name string
-	Role Role
+	Ask  AskSpec
 	Spec prompt.StageSpec
 
 	// Encode renders a MECHANICAL stage's artifacts for the store — the
-	// counterpart of Role.Encode, which a stage with no Role cannot have.
+	// counterpart of AskSpec.Encode, which a stage with no AskSpec cannot have.
 	// Required on a mechanical stage and refused on a model one: two
 	// encoders where one is used is one silently ignored.
 	Encode Encoder
 
-	// Streams resolves the stage's work when the stage is reached.
-	Streams StreamResolver
+	// Lanes resolves the stage's work when the stage is reached.
+	Lanes LaneResolver
 
 	// The resolution memo. It is what makes "called once" true: the scan
-	// asks for this stage's units and the run then asks for its streams,
+	// asks for this stage's units and the run then asks for its lanes,
 	// and both must be looking at the same description — a resolver that
 	// ran twice could read a store the run itself had changed in between.
-	resolved   []DomainStream
+	resolved   []SerialLane
 	resolveErr error
 	done       bool
 }
 
-// resolve produces the stage's streams, once, and refuses a description whose
+// resolve produces the stage's lanes, once, and refuses a description whose
 // task modes do not describe one coherent stage.
-func (sp *StagePlan) resolve() ([]DomainStream, error) {
+func (sp *StagePlan) resolve() ([]SerialLane, error) {
 	if !sp.done {
-		sp.resolved, sp.resolveErr = sp.Streams()
+		sp.resolved, sp.resolveErr = sp.Lanes()
 		if sp.resolveErr == nil {
 			sp.resolveErr = sp.validate()
 		}
@@ -206,11 +206,11 @@ func (sp *StagePlan) resolve() ([]DomainStream, error) {
 //   - A task asks a model or produces its artifact itself, never both and
 //     never neither. Both would mean the plan does not know which one made the
 //     artifact it is about to stamp; neither is a unit nothing could produce.
-//     A Producer cannot be CallOnly either: CallOnly means "the result is the
+//     A Producer cannot contribute either: Contributes means "the result is the
 //     stage's state, not an artifact", and a producer that writes nothing and
 //     calls nothing is a task with no effect at all.
 //   - A STAGE is uniform. Everything stage-scoped here is declared per stage
-//     and not per task — one Role, one shared StageContext, one seam, one
+//     and not per task — one AskSpec, one shared StageContext, one seam, one
 //     tier, one encoder — so a half-mechanical stage has no honest answer for
 //     what its seam is or which encoder its artifacts went through. The
 //     pipeline's stages are whole-stage mechanical or whole-stage inference
@@ -222,11 +222,11 @@ func (sp *StagePlan) validate() error {
 		for _, t := range ds.Tasks {
 			switch {
 			case (t.Produce == nil) == (t.Input == nil):
-				return StageModeError{Stage: sp.Name, Path: t.Unit.Path,
+				return StageModeError{Stage: sp.Name, Path: t.Owed.Path,
 					Reason: "a task sets exactly one of Produce and Input"}
-			case t.Produce != nil && t.CallOnly:
-				return StageModeError{Stage: sp.Name, Path: t.Unit.Path,
-					Reason: "a Produce task makes no call, so it cannot be CallOnly"}
+			case t.Produce != nil && t.Contributes:
+				return StageModeError{Stage: sp.Name, Path: t.Owed.Path,
+					Reason: "a Produce task makes no call, so it cannot Contribute"}
 			case t.Produce != nil:
 				produce++
 			default:
@@ -241,61 +241,61 @@ func (sp *StagePlan) validate() error {
 			produce, ask)}
 	case produce > 0 && sp.Encode == nil:
 		return StageModeError{Stage: sp.Name,
-			Reason: "a mechanical stage needs StagePlan.Encode; it has no Role to carry one"}
+			Reason: "a mechanical stage needs StagePlan.Encode; it has no AskSpec to carry one"}
 	case ask > 0 && sp.Encode != nil:
 		return StageModeError{Stage: sp.Name,
-			Reason: "a model stage's artifacts are encoded by its Role, so StagePlan.Encode would never run"}
+			Reason: "a model stage's artifacts are encoded by its AskSpec, so StagePlan.Encode would never run"}
 	}
 	return nil
 }
 
-// units derives the stage's output units from its resolved streams. It is the
-// UnitResolver the chain walks, which is what keeps the worklist and the thing
+// units derives the stage's output units from its resolved lanes. It is the
+// OwedArtifactResolver the chain walks, which is what keeps the worklist and the thing
 // resume verdicts ONE description: a unit that is planned is a unit that is
 // scanned.
 //
-// CallOnly tasks describe no unit, because they produce no artifact. That is
+// contributing tasks describe no unit, because they produce no artifact. That is
 // the same statement read from the resume side: what a stage owes is what it
 // writes, so a fold's boundary calls are invisible to the scan and its
 // composed list is the whole of what the stage must have on disk to count as
 // complete.
-func (sp *StagePlan) units() ([]Unit, error) {
-	streams, err := sp.resolve()
+func (sp *StagePlan) units() ([]OwedArtifact, error) {
+	lanes, err := sp.resolve()
 	if err != nil {
 		return nil, err
 	}
-	var units []Unit
-	for _, ds := range streams {
+	var units []OwedArtifact
+	for _, ds := range lanes {
 		for _, t := range ds.Tasks {
-			if t.CallOnly {
+			if t.Contributes {
 				continue
 			}
-			units = append(units, t.Unit)
+			units = append(units, t.Owed)
 		}
 	}
 	return units, nil
 }
 
-// Plan is the whole job: the job-constant system frame and the stages in
-// order — the same order the resume chain walks, because Chain derives from
+// Plan is the whole job: the job-constant job frame and the stages in
+// order — the same order the resume chain walks, because StageChain derives from
 // it.
 type Plan struct {
-	// SystemFrame is slot 1 as final bytes: process framing plus job-stable
+	// JobFrame is slot 1 as final bytes: process framing plus job-stable
 	// specifics (ARCHITECTURE.md §7). It lives on the JOB rather than on
 	// each stage because §7 calls slot 1 job-constant, and one field is the
 	// only way to say that which cannot be contradicted — a per-stage frame
 	// would let a plan re-render slot 1 at a stage boundary and stay
 	// internally consistent while silently costing the whole cross-stage
 	// prefix.
-	SystemFrame string
+	JobFrame string
 
 	// Stages are the pipeline's stages in execution order.
 	Stages []*StagePlan
 }
 
-// Chain derives the resume chain from the plan.
-func (p Plan) Chain() Chain {
-	chain := make(Chain, 0, len(p.Stages))
+// StageChain derives the resume chain from the plan.
+func (p Plan) StageChain() StageChain {
+	chain := make(StageChain, 0, len(p.Stages))
 	for _, sp := range p.Stages {
 		chain = append(chain, &Stage{Name: sp.Name, Units: sp.units})
 	}
@@ -306,57 +306,57 @@ func (p Plan) Chain() Chain {
 type JobResult struct {
 	// Mode is the resume mode the job ran in.
 	Mode Mode
-	// Scan is the resume scan's verdicts — the forensics for why anything
+	// ResumeScan is the resume scan's verdicts — the forensics for why anything
 	// was reused or redone.
-	Scan ScanResult
+	ResumeScan ResumeScanResult
 	// Stages is how many stages this run described. Under the dynamic
 	// chain that is not known until the run gets there, so a job that
 	// stopped early describes fewer stages than its chain has — which is
-	// the fact EmitReady needs and the unit counts alone cannot carry.
+	// the fact DeliveryReady needs and the unit counts alone cannot carry.
 	Stages int
 	// Units is how many units the stages described so far hold.
 	Units int
 	// Reused is how many were proven valid and skipped.
 	Reused int
-	// Produced is how many this run wrote, degraded ones included.
+	// Produced is how many this run wrote, fallen-back ones included.
 	Produced int
-	// Degraded counts refinement CALLS that kept a mechanical baseline
+	// FallbackCount counts fallback-backed CALLS that kept a mechanical fallback
 	// because the model's answer did not verify.
 	//
 	// Per call rather than per unit, because stage 4's fold spends n calls on
-	// one artifact (see Task.CallOnly). Counting units there would report a
+	// one artifact (see LaneTask.Contributes). Counting units there would report a
 	// composed cut list holding three fallbacks as one degradation, which is
 	// the number that hides the fact worth knowing; for every stage whose
 	// units are one call each, the two readings coincide.
-	Degraded int
+	FallbackCount int
 	// Failures is the inventory, sorted by path so two runs of the same
 	// broken job report it identically.
-	Failures []UnitFailure
+	Failures []OwedArtifactFailure
 	// Usage is the token accounting summed over every call the job made.
 	Usage model.Usage
 }
 
-// EmitReady reports whether the job may go on to assemble and emit.
+// DeliveryReady reports whether the job may go on to assemble and emit.
 //
 // It is derived rather than stored: the three conditions ARE the definition,
 // and a stored flag is a fourth place for them to disagree. Any failure at all
-// refuses — an essential seam produced nothing, a build refusal means a unit
+// refuses — a no-fallback seam produced nothing, a build refusal means a unit
 // was never sized right. So does any shortfall in the unit count, which is how
 // an aborted worker's untouched units are caught even though nothing reported
 // them individually. And so does a chain not described to its end: under the
 // dynamic chain a run that stopped before a stage resolved never learned what
 // that stage owed, so counting only what it did learn would let a job that
 // died at stage 2 of 5 report a tidy, complete-looking two stages.
-func (r JobResult) EmitReady() bool {
-	return len(r.Failures) == 0 && r.Stages == r.Scan.Stages && r.Reused+r.Produced == r.Units
+func (r JobResult) DeliveryReady() bool {
+	return len(r.Failures) == 0 && r.Stages == r.ResumeScan.Stages && r.Reused+r.Produced == r.Units
 }
 
 // Coordinator runs a plan: lock, scan, then stage by stage, a bounded pool of
-// domain-stream workers. Workers talk to it and to nothing else (R-2) — one
-// channel of streams down, one channel of results up — so there is no shared
+// serial-lane workers. Workers talk to it and to nothing else (R-2) — one
+// channel of lanes down, one channel of results up — so there is no shared
 // mutable state between them to synchronize.
 type Coordinator struct {
-	store   *Store
+	store   *ArtifactStore
 	runner  *CallRunner
 	workers int
 	lg      log.Logger
@@ -364,7 +364,7 @@ type Coordinator struct {
 
 // NewCoordinator returns a coordinator over store and runner. workers ≤ 0
 // selects DefaultWorkers.
-func NewCoordinator(store *Store, runner *CallRunner, workers int, lg log.Logger) *Coordinator {
+func NewCoordinator(store *ArtifactStore, runner *CallRunner, workers int, lg log.Logger) *Coordinator {
 	if workers <= 0 {
 		workers = DefaultWorkers
 	}
@@ -377,7 +377,7 @@ func NewCoordinator(store *Store, runner *CallRunner, workers int, lg log.Logger
 // coherent — including one full of failures — and an error only for the
 // classes that make the result meaningless: lock contention, an incoherent
 // store, a worker abort (a kbase defect), context cancellation, or a simulated
-// crash. A caller checks the error first and EmitReady second.
+// crash. A caller checks the error first and DeliveryReady second.
 func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobResult, err error) {
 	// Outermost defer, so it runs last and catches a simulated crash raised
 	// anywhere below — including out of the lock's own release path.
@@ -396,23 +396,23 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 	if err = enterPhase(PhaseJobSetup, c.lg); err != nil {
 		return JobResult{}, err
 	}
-	if err = guard(PhaseJobSetup, OpBuildSystemFrame); err != nil {
+	if err = guard(PhaseJobSetup, OpBuildJobFrame); err != nil {
 		return JobResult{}, err
 	}
-	frame, err := newJobFrame(plan.SystemFrame)
+	frame, err := newJobFrame(plan.JobFrame)
 	if err != nil {
 		return JobResult{}, err
 	}
 	if err = guard(PhaseJobSetup, OpResumeScan); err != nil {
 		return JobResult{}, err
 	}
-	chain := plan.Chain()
-	scan, err := c.store.Scan(chain, mode)
+	chain := plan.StageChain()
+	scan, err := c.store.ResumeScan(chain, mode)
 	if err != nil {
 		return JobResult{}, err
 	}
 
-	res = JobResult{Mode: mode, Scan: scan, Reused: scan.Reused}
+	res = JobResult{Mode: mode, ResumeScan: scan, Reused: scan.Reused}
 	valid := validPaths(scan)
 	// What has already failed in this run, and the root cause behind each —
 	// the whole of cascade-failure's state, and it lives here because it is
@@ -435,19 +435,19 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 		res.Units += len(units)
 
 		// Stages before the resume boundary stand on proof: their units are
-		// already counted in scan.Reused, and not building their agent is
+		// already counted in scan.Reused, and not building their bound ask is
 		// what makes "reused" mean the model was never consulted.
 		if i < scan.ResumeStage {
 			res.Stages++
 			c.lg.Info("stage reused whole", "stage", sp.Name)
 			continue
 		}
-		streams, serr := sp.resolve()
+		lanes, serr := sp.resolve()
 		if serr != nil {
 			err = serr
 			break
 		}
-		runnable, ferr := filterStreams(streams, valid)
+		runnable, ferr := filterLanes(lanes, valid)
 		if ferr != nil {
 			err = fmt.Errorf("pipeline: stage %s: %w", sp.Name, ferr)
 			break
@@ -465,65 +465,65 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 		// complete and the NEXT stage's dependents can be told apart from
 		// their causes. A stage boundary is the only place this can be read:
 		// within a stage the units run concurrently, and a unit may not name
-		// a sibling anyway (see Store.validateStage).
+		// a sibling anyway (see ArtifactStore.validateStage).
 		noteFailures(roots, res.Failures[inventoried:])
 		inventoried = len(res.Failures)
 		res.Stages++
 	}
 
 	// Only a run that described its whole chain knows what belongs in the
-	// job directory; see Store.sweep for why that is the one safe moment.
+	// job directory; see ArtifactStore.sweep for why that is the one safe moment.
 	if err == nil && res.Stages == len(chain) {
 		if serr := c.store.sweep(chain); serr != nil {
 			err = serr
 		}
 	}
 
-	slices.SortFunc(res.Failures, func(a, b UnitFailure) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(res.Failures, func(a, b OwedArtifactFailure) int { return strings.Compare(a.Path, b.Path) })
 	c.lg.Info("job finished",
 		"mode", string(mode), "stages", res.Stages, "units", res.Units,
 		"reused", res.Reused, "produced", res.Produced,
-		"degraded", res.Degraded, "failed", len(res.Failures), "emit_ready", res.EmitReady(),
+		"fallbacks", res.FallbackCount, "failed", len(res.Failures), "emit_ready", res.DeliveryReady(),
 		"prompt_tokens", res.Usage.PromptTokens, "cached_tokens", res.Usage.CachedPromptTokens,
 		"completion_tokens", res.Usage.CompletionTokens)
 	for _, f := range res.Failures {
 		c.lg.Error("unit failed", "stage", f.Stage, "path", f.Path,
-			"kind", string(f.Kind), "attempts", f.SemanticAttempts, "error", f.Err)
+			"kind", string(f.Kind), "attempts", f.ModelAttempts, "error", f.Err)
 	}
 	return res, err
 }
 
-// runStage builds the stage's one shared agent, if it has one, and runs its
-// streams through the pool.
+// runStage builds the stage's one shared bound ask, if it has one, and runs its
+// lanes through the pool.
 //
 // A mechanical stage has none: its tasks produce their artifacts in process, so
 // there is no context to freeze, no definition to render and no tier to
-// resolve. Skipping the construction is what makes "no Role needed" true rather
-// than a null Role passing a validation it was never going to satisfy.
-func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobFrame, streams []DomainStream, res *JobResult) error {
-	if len(streams) == 0 {
+// resolve. Skipping the construction is what makes "no AskSpec needed" true rather
+// than a null AskSpec passing a validation it was never going to satisfy.
+func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobFrame, lanes []SerialLane, res *JobResult) error {
+	if len(lanes) == 0 {
 		return nil
 	}
 	if err := enterPhase(PhaseStageSetup, c.lg); err != nil {
 		return err
 	}
 	var (
-		ag     *agent
+		ag     *boundAsk
 		encode = stage.Encode
 		mode   = "mechanical"
 	)
-	if !mechanicalStage(streams) {
+	if !mechanicalStage(lanes) {
 		if err := guard(PhaseStageSetup, OpRebuildStageContext); err != nil {
 			return err
 		}
-		built, err := newAgent(stage.Role, stage.Spec, frame)
+		built, err := newBoundAsk(stage.Ask, stage.Spec, frame)
 		if err != nil {
 			return fmt.Errorf("pipeline: stage %s: %w", stage.Name, err)
 		}
-		ag, encode, mode = built, stage.Role.Encode, string(built.Seam())
+		ag, encode, mode = built, stage.Ask.Encode, string(built.Seam())
 	}
 	c.lg.Info("stage started", "stage", stage.Name, "mode", mode,
-		"tier", stage.Role.Tier, "streams", len(streams))
+		"tier", stage.Ask.Tier, "lanes", len(lanes))
 
 	// A worker that aborts stops the whole stage: the abort classes are
 	// defects and cancellation, and neither is something the remaining
@@ -532,7 +532,7 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 	defer cancel()
 
 	var (
-		pending  = make(chan DomainStream)
+		pending  = make(chan SerialLane)
 		results  = make(chan unitResult)
 		wg       sync.WaitGroup
 		abortMu  sync.Mutex
@@ -547,11 +547,11 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 		cancel()
 	}
 
-	for range min(c.workers, len(streams)) {
+	for range min(c.workers, len(lanes)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w := &worker{stage: stage.Name, agent: ag, encode: encode, runner: c.runner, store: c.store, lg: c.lg}
+			w := &worker{stage: stage.Name, boundAsk: ag, encode: encode, runner: c.runner, store: c.store, lg: c.lg}
 			// Ranging to completion rather than breaking on the first
 			// abort: the feeder is only unblocked by this loop or by the
 			// cancellation it already received, and leaving it blocked
@@ -565,7 +565,7 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 	}
 	go func() {
 		defer close(pending)
-		for _, s := range streams {
+		for _, s := range lanes {
 			select {
 			case pending <- s:
 			case <-ctx.Done():
@@ -588,13 +588,13 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 			res.Failures = append(res.Failures, *r.Failure)
 		case r.Produced:
 			res.Produced++
-			if r.Degraded {
-				res.Degraded++
+			if r.FellBack {
+				res.FallbackCount++
 			}
-		case r.Degraded:
-			// A CallOnly call that fell back: it wrote nothing, and the
+		case r.FellBack:
+			// A contributing call that fell back: it wrote nothing, and the
 			// artifact it fed is degraded all the same.
-			res.Degraded++
+			res.FallbackCount++
 		}
 	}
 	abortMu.Lock()
@@ -618,110 +618,110 @@ type unitResult struct {
 	Domain   string
 	Path     string
 	Produced bool
-	Degraded bool
+	FellBack bool
 	Usage    model.Usage
-	Failure  *UnitFailure
+	Failure  *OwedArtifactFailure
 }
 
-// worker runs one domain stream at a time. Everything on it is owned by one
+// worker runs one serial lane at a time. Everything on it is owned by one
 // goroutine: the phase traversal, the previous call's hashes, and the section
 // buffer are per-worker state precisely so the churn tripwire is per-worker
 // (R-1), and nothing here is shared with a sibling.
 type worker struct {
 	stage string
-	// agent is the stage's shared agent, nil on a mechanical stage — the one
+	// boundAsk is the stage's shared bound ask, nil on a mechanical stage — the one
 	// piece of a worker that a Produce task never reaches.
-	agent  *agent
-	encode Encoder
-	runner *CallRunner
-	store  *Store
-	lg     log.Logger
+	boundAsk *boundAsk
+	encode   Encoder
+	runner   *CallRunner
+	store    *ArtifactStore
+	lg       log.Logger
 
-	phase Phase
+	phase JobPhase
 	// traversed is every phase entered since the last call was built. The
 	// honest frontier for the next call is the minimum over these, not the
 	// frontier of wherever the worker happens to be standing.
-	traversed []Phase
+	traversed []JobPhase
 	// prev is the last built call's hashes, nil when the worker has nothing
 	// to compare against — its first call, and its first call after a
 	// failure, which claim nothing rather than claim against a call that
 	// may never have been sent.
 	prev map[prompt.Slot][32]byte
-	// refA is slot 4's current content, replaced only at a section
+	// stageRef is slot 4's current content, replaced only at a section
 	// transition.
-	refA string
+	stageRef string
 }
 
-// run processes one stream's units in order. A unit failure is reported and
-// the stream continues (graceful degradation: siblings are worth finishing);
-// an abort class stops the stream and is returned.
+// run processes one lane's units in order. A unit failure is reported and
+// the lane continues (graceful degradation: siblings are worth finishing);
+// an abort class stops the lane and is returned.
 //
 // # A failed call POISONS the artifact its calls were feeding
 //
-// The CallOnly tasks before a producing task are that artifact's calls: their
-// answers are the stage state it is composed from (see Task.CallOnly). So the
+// The contributing tasks before a producing task are that artifact's calls: their
+// answers are the stage state it is composed from (see LaneTask.Contributes). So the
 // invariant this loop keeps is "the artifact exists exactly when every call of
-// its stream succeeded" — one failed boundary and the composed list is not
+// its lane succeeded" — one failed boundary and the composed list is not
 // written at all, the same state a kill mid-fold leaves (§12).
 //
 // Suppressing the write rather than inventorying the failure alone is what
 // makes the next run redo the fold WHOLE. A written artifact would carry a
 // perfectly valid stamp — the source hash and parameter digest do not know a
-// call failed — so the scan would verdict it Valid, filterStreams would drop
-// the whole stream, and the failure would exist in exactly one run's
+// call failed — so the scan would verdict it Valid, filterLanes would drop
+// the whole lane, and the failure would exist in exactly one run's
 // JobResult and nowhere on disk. The remaining calls of a poisoned artifact
 // are skipped for the same reason: they would spend tokens feeding state
 // nobody is going to record.
 //
-// The poison is cleared at the producing task, so a stream carrying two
-// artifacts (a shape filterStreams refuses today, and asserts it refuses)
+// The poison is cleared at the producing task, so a lane carrying two
+// artifacts (a shape filterLanes refuses today, and asserts it refuses)
 // would not have the first's failure suppress the second.
-func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitResult) (err error) {
+func (w *worker) run(ctx context.Context, lane SerialLane, out chan<- unitResult) (err error) {
 	// A panic cannot cross a goroutine boundary to the coordinator, so the
 	// simulated-crash sentinel is caught here and returned as an error.
 	defer crashGuard(&err)
 
-	w.traversed = []Phase{PhaseStageSetup}
+	w.traversed = []JobPhase{PhaseStageSetup}
 	w.prev = nil
 	section := ""
 	poisoned := false
-	for i, task := range stream.Tasks {
+	for i, task := range lane.Tasks {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if poisoned {
-			if task.CallOnly {
+			if task.Contributes {
 				w.lg.Warn("skipping a call whose artifact a failed call already poisoned",
-					"stage", w.stage, "unit", task.Unit.Path)
+					"stage", w.stage, "unit", task.Owed.Path)
 				continue
 			}
-			out <- unitResult{Domain: stream.Domain, Path: task.Unit.Path, Failure: &UnitFailure{
-				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream,
-				Err: PoisonedStreamError{Stage: w.stage, Path: task.Unit.Path},
+			out <- unitResult{Domain: lane.Domain, Path: task.Owed.Path, Failure: &OwedArtifactFailure{
+				Stage: w.stage, Path: task.Owed.Path, Kind: FailureUpstream,
+				Err: PoisonedLaneError{Stage: w.stage, Path: task.Owed.Path},
 			}}
 			poisoned = false
 			continue
 		}
 		if i == 0 || task.Section != section {
 			// The first task's buffer fill goes through the transition too:
-			// one path, so the flush is gated by the matrix every time
+			// one path, so the flush is gated by the phaseOpTable every time
 			// rather than every time but once.
 			if err := w.enter(PhaseSectionTransition); err != nil {
 				return err
 			}
-			if err := guard(w.phase, OpFlushRefA); err != nil {
+			if err := guard(w.phase, OpFlushStageRef); err != nil {
 				return err
 			}
-			w.refA, section = task.SectionRef, task.Section
+			w.stageRef, section = task.SectionRef, task.Section
 			if err := w.enter(PhaseCallLoop); err != nil {
 				return err
 			}
 		}
-		res, err := w.unit(ctx, stream.Domain, task)
+		res, err := w.unit(ctx, lane.Domain, task)
 		if err != nil {
 			return err
 		}
-		poisoned = task.CallOnly && res.Failure != nil
+		poisoned = task.Contributes && res.Failure != nil
 		out <- res
 	}
 	return nil
@@ -731,21 +731,21 @@ func (w *worker) run(ctx context.Context, stream DomainStream, out chan<- unitRe
 // it. The phase guards live here rather than inside the runner because the
 // phase is the worker's state; the runner is stateless and shared, and a
 // producer knows nothing about phases at all.
-func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult, error) {
+func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitResult, error) {
 	// The input set is resolved BEFORE the artifact is derived, not at write
 	// time. It reads the upstream stamps, so a unit whose upstream never got
 	// produced is knowable in advance — and spending a model call, or a
 	// producer's work, on something that cannot be recorded is spending it to
 	// learn nothing. It is also the SAME function the scan uses, so a stamp
 	// can never be written under one derivation and checked under another. A
-	// CallOnly task records nothing, so there is nothing to resolve and
+	// contributing task records nothing, so there is nothing to resolve and
 	// nothing that could be unrecordable.
 	var inputs []Input
-	if !task.CallOnly {
+	if !task.Contributes {
 		var err error
-		if inputs, err = w.store.resolveInputs(task.Unit); err != nil {
-			return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
-				Stage: w.stage, Path: task.Unit.Path, Kind: FailureUpstream, Err: err,
+		if inputs, err = w.store.resolveInputs(task.Owed); err != nil {
+			return unitResult{Domain: domain, Path: task.Owed.Path, Failure: &OwedArtifactFailure{
+				Stage: w.stage, Path: task.Owed.Path, Kind: FailureUpstream, Err: err,
 			}}, nil
 		}
 	}
@@ -758,18 +758,18 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 	}
 	// Built HERE, at the unit, which is what lets a stage's later questions
 	// depend on its own earlier answers (see InputBuilder). Everything that
-	// judges a call — the RefA refusal below, the budget refusal and the
+	// judges a call — the StageRef refusal below, the budget refusal and the
 	// frozen-prompt assertion inside the runner — judges what came out of it.
 	in := task.Input()
-	if in.RefA != "" {
-		return unitResult{}, TaskOwnsRefAError{Stage: w.stage, Path: task.Unit.Path}
+	if in.StageRef != "" {
+		return unitResult{}, TaskOwnsStageRefError{Stage: w.stage, Path: task.Owed.Path}
 	}
 
-	in.RefA = w.refA
+	in.StageRef = w.stageRef
 	// A worker with no previous call claims nothing, which is what the
-	// matrix's job-setup row already says — read from there rather than
+	// phaseOpTable's job-setup row already says — read from there rather than
 	// spelled a second time here.
-	frontier, err := Frontier(PhaseJobSetup)
+	frontier, err := StabilityFrontier(PhaseJobSetup)
 	if err != nil {
 		return unitResult{}, err
 	}
@@ -782,33 +782,33 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 	}
 
 	res, err := w.runner.Run(ctx, call{
-		Stage: w.stage, Unit: task.Unit.Path, Agent: w.agent,
+		Stage: w.stage, ArtifactPath: task.Owed.Path, BoundAsk: w.boundAsk,
 		Input: in, Frontier: frontier, Prev: w.prev,
 	})
 	// A call was attempted, so the traversal restarts from whatever phase
 	// the worker is standing in — w.phase rather than the literal, so a
 	// phase inserted between the build and here cannot make the traversal
 	// lie about where the next call was built.
-	w.traversed = []Phase{w.phase}
+	w.traversed = []JobPhase{w.phase}
 	if err != nil {
 		w.prev = nil
 		if f, ok := w.classify(task, err); ok {
-			return unitResult{Domain: domain, Path: task.Unit.Path, Usage: f.Usage, Failure: f}, nil
+			return unitResult{Domain: domain, Path: task.Owed.Path, Usage: f.Usage, Failure: f}, nil
 		}
 		return unitResult{}, err
 	}
 	w.prev = res.Hashes
 
-	if task.CallOnly {
+	if task.Contributes {
 		// The answer is in the stage's own state — the verifier folded it in
 		// — so the unit ends here: nothing to encode, nothing to write, and
-		// nothing for the scan to find. A degraded call is still reported,
+		// nothing for the scan to find. a call that fell back is still reported,
 		// because a fold that fell back on a boundary produced a composed
 		// artifact that is correct and less good than it was meant to be.
 		if err := guard(w.phase, OpAdvanceUnit); err != nil {
 			return unitResult{}, err
 		}
-		return unitResult{Domain: domain, Path: task.Unit.Path, Degraded: res.Degraded, Usage: res.Usage}, nil
+		return unitResult{Domain: domain, Path: task.Owed.Path, FellBack: res.FellBack, Usage: res.Usage}, nil
 	}
 
 	return w.write(domain, task, res.Artifact, inputs, res)
@@ -820,15 +820,15 @@ func (w *worker) unit(ctx context.Context, domain string, task Task) (unitResult
 // through the same encoder, the same Put and the same stamp.
 //
 // A producer's failure is an inventoried unit failure, not an abort. It is the
-// deterministic counterpart of an essential seam's verification failure: there
-// is no baseline to fall back to and no retry worth making (the same inputs
+// deterministic counterpart of a no-fallback seam's verification failure: there
+// is no fallback to fall back to and no retry worth making (the same inputs
 // would derive the same failure), so the unit fails, its siblings finish, and
 // the job refuses emission.
-func (w *worker) produce(domain string, task Task, inputs []Input) (unitResult, error) {
+func (w *worker) produce(domain string, task LaneTask, inputs []Input) (unitResult, error) {
 	artifact, err := task.Produce()
 	if err != nil {
-		return unitResult{Domain: domain, Path: task.Unit.Path, Failure: &UnitFailure{
-			Stage: w.stage, Path: task.Unit.Path, Kind: FailureProduce, Err: err,
+		return unitResult{Domain: domain, Path: task.Owed.Path, Failure: &OwedArtifactFailure{
+			Stage: w.stage, Path: task.Owed.Path, Kind: FailureProduce, Err: err,
 		}}, nil
 	}
 	crashpoint.At(cpProduced)
@@ -843,7 +843,7 @@ func (w *worker) produce(domain string, task Task, inputs []Input) (unitResult, 
 // res carries what the derivation cost, and a produced unit passes the zero
 // value: no call was made, so there are no attempts, no tokens and no seam to
 // have degraded.
-func (w *worker) write(domain string, task Task, artifact any, inputs []Input, res CallResult) (unitResult, error) {
+func (w *worker) write(domain string, task LaneTask, artifact any, inputs []Input, res CallResult) (unitResult, error) {
 	if err := guard(w.phase, OpWriteArtifact); err != nil {
 		return unitResult{}, err
 	}
@@ -851,33 +851,33 @@ func (w *worker) write(domain string, task Task, artifact any, inputs []Input, r
 	if err != nil {
 		return w.writeFailure(domain, task, res, fmt.Errorf("encode: %w", err)), nil
 	}
-	if err := w.store.Put(task.Unit.Path, data, inputs); err != nil {
+	if err := w.store.Put(task.Owed.Path, data, inputs); err != nil {
 		return w.writeFailure(domain, task, res, err), nil
 	}
 	if err := guard(w.phase, OpAdvanceUnit); err != nil {
 		return unitResult{}, err
 	}
 	return unitResult{
-		Domain: domain, Path: task.Unit.Path, Produced: true,
-		Degraded: res.Degraded, Usage: res.Usage,
+		Domain: domain, Path: task.Owed.Path, Produced: true,
+		FellBack: res.FellBack, Usage: res.Usage,
 	}, nil
 }
 
 // classify sorts a runner error into "inventory it and keep going" or "stop".
-// The dividing line is whether the rest of the stream is still worth running:
+// The dividing line is whether the rest of the lane is still worth running:
 // a unit that failed verification says nothing about its siblings, while a
 // frozen-prompt violation or a cancelled context says everything.
-func (w *worker) classify(task Task, err error) (*UnitFailure, bool) {
-	var unit UnitFailure
+func (w *worker) classify(task LaneTask, err error) (*OwedArtifactFailure, bool) {
+	var unit OwedArtifactFailure
 	if errors.As(err, &unit) {
 		return &unit, true
 	}
 	var budget prompt.ErrOverBudget
 	if errors.As(err, &budget) {
 		// Refuse-and-split: the unit is too big for one call, which is the
-		// skeleton's problem and not this run's. Inventoried so the report
+		// tree plan's problem and not this run's. Inventoried so the report
 		// names what to re-split.
-		return &UnitFailure{Stage: w.stage, Path: task.Unit.Path, Kind: FailureBudget, Err: err}, true
+		return &OwedArtifactFailure{Stage: w.stage, Path: task.Owed.Path, Kind: FailureBudget, Err: err}, true
 	}
 	return nil, false
 }
@@ -886,18 +886,18 @@ func (w *worker) classify(task Task, err error) (*UnitFailure, bool) {
 // unit failure rather than an abort: one unwritable path (a name collision, a
 // full disk on one volume) does not mean the next one fails too, and the
 // inventory is more useful than the first error.
-func (w *worker) writeFailure(domain string, task Task, res CallResult, err error) unitResult {
+func (w *worker) writeFailure(domain string, task LaneTask, res CallResult, err error) unitResult {
 	return unitResult{
-		Domain: domain, Path: task.Unit.Path, Usage: res.Usage,
-		Failure: &UnitFailure{
-			Stage: w.stage, Path: task.Unit.Path, Kind: FailureWrite,
-			SemanticAttempts: res.Attempts, Usage: res.Usage, Err: err,
+		Domain: domain, Path: task.Owed.Path, Usage: res.Usage,
+		Failure: &OwedArtifactFailure{
+			Stage: w.stage, Path: task.Owed.Path, Kind: FailureWrite,
+			ModelAttempts: res.Attempts, Usage: res.Usage, Err: err,
 		},
 	}
 }
 
 // enter moves the worker into a phase and records the traversal.
-func (w *worker) enter(p Phase) error {
+func (w *worker) enter(p JobPhase) error {
 	if err := enterPhase(p, w.lg); err != nil {
 		return err
 	}
@@ -906,19 +906,19 @@ func (w *worker) enter(p Phase) error {
 	return nil
 }
 
-// TaskOwnsRefAError reports a task that filled reference buffer A itself.
-// Slot 4 is the worker's, replaced only at a section transition, and a task
-// that set it would be a per-call buffer wearing the multi-call buffer's
+// TaskOwnsStageRefError reports a task that filled the stage reference buffer
+// itself. Slot 4 is the worker's, replaced only at a section transition, and a
+// task that set it would be a per-call buffer wearing the multi-call buffer's
 // position — the one thing the §7 slot ordering cannot survive. It is a
 // typed value like every other refusal here, so a caller can tell it from an
 // I/O failure.
-type TaskOwnsRefAError struct {
+type TaskOwnsStageRefError struct {
 	Stage string
 	Path  string
 }
 
-func (e TaskOwnsRefAError) Error() string {
-	return fmt.Sprintf("pipeline: %s: task %s set reference buffer A directly; the worker fills it from SectionRef",
+func (e TaskOwnsStageRefError) Error() string {
+	return fmt.Sprintf("pipeline: %s: task %s set the stage reference buffer directly; the worker fills it from SectionRef",
 		e.Stage, e.Path)
 }
 
@@ -947,7 +947,7 @@ func crashGuard(errp *error) {
 // validPaths collects the resume stage's proven units. Units in later stages
 // are absent from it because the scan does not verdict them — their inputs are
 // about to change, so nothing there is reusable by definition.
-func validPaths(scan ScanResult) map[string]bool {
+func validPaths(scan ResumeScanResult) map[string]bool {
 	valid := make(map[string]bool)
 	for _, v := range scan.Verdicts {
 		if v.Verdict == VerdictValid {
@@ -957,62 +957,62 @@ func validPaths(scan ScanResult) map[string]bool {
 	return valid
 }
 
-// filterStreams drops the tasks the scan proved and the streams that empty out.
+// filterLanes drops the tasks the scan proved and the lanes that empty out.
 // This is the resume made operational: the scan's verdicts ARE the worklist
 // filter, so there is no second decision about what to redo.
 //
-// A CallOnly task is never proved — it produces nothing to verdict — so it
-// survives the filter only as long as some task in its stream still has an
-// artifact to write. A stream whose every producing task is already valid is
+// A contributing task is never proved — it produces nothing to verdict — so it
+// survives the filter only as long as some task in its lane still has an
+// artifact to write. A lane whose every producing task is already valid is
 // dropped entire, calls and all: its remaining calls would spend tokens
 // feeding state nobody is going to record.
 //
-// Which is exactly why a stream that carries calls may carry only ONE
+// Which is exactly why a lane that carries calls may carry only ONE
 // artifact, and why that is asserted here rather than assumed. Given
 // [fold-A calls…, artifact-A, fold-B calls…, artifact-B] with A already
-// valid, this filter would keep the stream for B's sake and re-spend every
+// valid, this filter would keep the lane for B's sake and re-spend every
 // one of fold A's calls to feed state nobody records. Nothing builds that
 // shape today; the assertion is what makes the day someone does a loud
 // refusal rather than a quiet bill.
-func filterStreams(streams []DomainStream, valid map[string]bool) ([]DomainStream, error) {
-	for _, s := range streams {
+func filterLanes(lanes []SerialLane, valid map[string]bool) ([]SerialLane, error) {
+	for _, s := range lanes {
 		calls, produces := 0, 0
 		for _, t := range s.Tasks {
-			if t.CallOnly {
+			if t.Contributes {
 				calls++
 				continue
 			}
 			produces++
 		}
 		if calls > 0 && produces > 1 {
-			return nil, MultiArtifactStreamError{Domain: s.Domain, Artifacts: produces}
+			return nil, MultiArtifactLaneError{Domain: s.Domain, Artifacts: produces}
 		}
 	}
 	if len(valid) == 0 {
-		return streams, nil
+		return lanes, nil
 	}
-	out := make([]DomainStream, 0, len(streams))
-	for _, s := range streams {
-		kept := make([]Task, 0, len(s.Tasks))
+	out := make([]SerialLane, 0, len(lanes))
+	for _, s := range lanes {
+		kept := make([]LaneTask, 0, len(s.Tasks))
 		for _, t := range s.Tasks {
-			if !t.CallOnly && valid[t.Unit.Path] {
+			if !t.Contributes && valid[t.Owed.Path] {
 				continue
 			}
 			kept = append(kept, t)
 		}
 		if producing(kept) {
-			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
+			out = append(out, SerialLane{Domain: s.Domain, Tasks: kept})
 		}
 	}
 	return out, nil
 }
 
 // mechanicalStage reports whether the stage's tasks derive their artifacts in
-// process. Task modes are uniform per stage (StagePlan.validate), so the first
-// task answers for the stage; the loop is over streams only because which
-// stream holds it is not fixed.
-func mechanicalStage(streams []DomainStream) bool {
-	for _, s := range streams {
+// process. LaneTask modes are uniform per stage (StagePlan.validate), so the first
+// task answers for the stage; the loop is over lanes only because which
+// lane holds it is not fixed.
+func mechanicalStage(lanes []SerialLane) bool {
+	for _, s := range lanes {
 		for _, t := range s.Tasks {
 			return t.Produce != nil
 		}
@@ -1038,11 +1038,11 @@ func (e StageModeError) Error() string {
 }
 
 // markCascades holds back the units whose upstream failed EARLIER IN THIS RUN,
-// and with them the calls that were going to feed them. It returns the streams
+// and with them the calls that were going to feed them. It returns the lanes
 // still worth running and the inventory of what it abandoned.
 //
 // ARCHITECTURE.md §12 has two rules either side of this case and neither
-// reaches it. "A failed call poisons the stream it is in" is intra-stream, and
+// reaches it. "A failed call poisons the lane it is in" is intra-lane, and
 // this is a chain edge. "An unstamped upstream is structural incoherence" is
 // scoped by its own justification — nothing this chain runs would ever produce
 // it — which is exactly false for an artifact whose producing unit failed a
@@ -1059,7 +1059,7 @@ func (e StageModeError) Error() string {
 // and both are redone, which is why this needs no artifact machinery at all.
 //
 // Marking HERE rather than at the unit is what makes "spends nothing" true, in
-// two ways a worker-side check could not. A fold stream's calls come before the
+// two ways a worker-side check could not. A fold lane's calls come before the
 // task that writes its artifact, so a worker would have spent every one of them
 // before reaching the unit that could not be recorded. And a unit that failed
 // this run may still have a PREVIOUS run's artifact and stamp sitting on disk —
@@ -1067,34 +1067,34 @@ func (e StageModeError) Error() string {
 // deriving from bytes this run has already superseded. resolveInputs remains
 // the second net, for what this map cannot know (an artifact deleted under a
 // running job); this is the first.
-func markCascades(stage string, streams []DomainStream, roots map[string]string) ([]DomainStream, []UnitFailure) {
+func markCascades(stage string, lanes []SerialLane, roots map[string]string) ([]SerialLane, []OwedArtifactFailure) {
 	if len(roots) == 0 {
-		return streams, nil
+		return lanes, nil
 	}
 	var (
-		out      []DomainStream
-		cascaded []UnitFailure
+		out      []SerialLane
+		cascaded []OwedArtifactFailure
 	)
-	for _, s := range streams {
-		kept := make([]Task, 0, len(s.Tasks))
+	for _, s := range lanes {
+		kept := make([]LaneTask, 0, len(s.Tasks))
 		for _, t := range s.Tasks {
 			up, ok := failedUpstream(t, roots)
 			if !ok {
 				kept = append(kept, t)
 				continue
 			}
-			cascaded = append(cascaded, UnitFailure{
-				Stage: stage, Path: t.Unit.Path, Kind: FailureCascade,
+			cascaded = append(cascaded, OwedArtifactFailure{
+				Stage: stage, Path: t.Owed.Path, Kind: FailureCascade,
 				Err: CascadeFailureError{
-					Stage: stage, Path: t.Unit.Path, Upstream: up, Root: roots[up],
+					Stage: stage, Path: t.Owed.Path, Upstream: up, Root: roots[up],
 				},
 			})
 		}
-		// A stream with nothing left to write is dropped whole, calls and
-		// all — the same rule filterStreams keeps, for the same reason: its
+		// A lane with nothing left to write is dropped whole, calls and
+		// all — the same rule filterLanes keeps, for the same reason: its
 		// remaining calls would feed state nobody is going to record.
 		if producing(kept) {
-			out = append(out, DomainStream{Domain: s.Domain, Tasks: kept})
+			out = append(out, SerialLane{Domain: s.Domain, Tasks: kept})
 		}
 	}
 	return out, cascaded
@@ -1104,14 +1104,14 @@ func markCascades(stage string, streams []DomainStream, roots map[string]string)
 // the upstreams in their declared order, so a unit with two failed dependencies
 // names the same one in every run of the same broken job.
 //
-// A CallOnly task consumes nothing of its own — its unit description is a name,
-// not an artifact (see Task.Unit) — so it never cascades by itself; it is
-// dropped with the stream whose artifact did.
-func failedUpstream(t Task, roots map[string]string) (string, bool) {
-	if t.CallOnly {
+// A contributing task consumes nothing of its own — its unit description is a name,
+// not an artifact (see LaneTask.Owed) — so it never cascades by itself; it is
+// dropped with the lane whose artifact did.
+func failedUpstream(t LaneTask, roots map[string]string) (string, bool) {
+	if t.Contributes {
 		return "", false
 	}
-	for _, up := range t.Unit.Upstreams {
+	for _, up := range t.Owed.Upstreams {
 		if _, ok := roots[up]; ok {
 			return up, true
 		}
@@ -1123,7 +1123,7 @@ func failedUpstream(t Task, roots map[string]string) (string, bool) {
 // cascade off, carrying the ROOT of each chain forward: a unit that cascaded
 // off a cascade names the failure whose remedy fixes the whole line, not its
 // immediate predecessor.
-func noteFailures(roots map[string]string, failures []UnitFailure) {
+func noteFailures(roots map[string]string, failures []OwedArtifactFailure) {
 	for _, f := range failures {
 		root := f.Path
 		var cascade CascadeFailureError
@@ -1134,12 +1134,12 @@ func noteFailures(roots map[string]string, failures []UnitFailure) {
 	}
 }
 
-// producing reports whether the tasks still hold an artifact to write. A stream
+// producing reports whether the tasks still hold an artifact to write. A lane
 // that does not is dropped: whatever calls it has left would be spent feeding
 // state nobody records.
-func producing(tasks []Task) bool {
+func producing(tasks []LaneTask) bool {
 	for _, t := range tasks {
-		if !t.CallOnly {
+		if !t.Contributes {
 			return true
 		}
 	}
@@ -1170,31 +1170,31 @@ func (e CascadeFailureError) Error() string {
 		e.Stage, e.Path, e.Upstream)
 }
 
-// PoisonedStreamError reports an artifact that was not written because one of
+// PoisonedLaneError reports an artifact that was not written because one of
 // the calls feeding it failed. It is the cascade of the failure beside it in
 // the inventory, and the remedy is that one — which is why the unit is
 // classified FailureUpstream and costs no tokens.
-type PoisonedStreamError struct {
+type PoisonedLaneError struct {
 	Stage string
 	Path  string
 }
 
-func (e PoisonedStreamError) Error() string {
+func (e PoisonedLaneError) Error() string {
 	return fmt.Sprintf("pipeline: %s: %s was not written; a call it is composed from failed, "+
-		"so the whole stream is redone rather than half-recorded", e.Stage, e.Path)
+		"so the whole lane is redone rather than half-recorded", e.Stage, e.Path)
 }
 
-// MultiArtifactStreamError reports a stream that mixes CallOnly tasks with
-// more than one artifact — see filterStreams for why that shape cannot be
+// MultiArtifactLaneError reports a lane that mixes contributing tasks with
+// more than one artifact — see filterLanes for why that shape cannot be
 // filtered honestly.
-type MultiArtifactStreamError struct {
+type MultiArtifactLaneError struct {
 	Domain    string
 	Artifacts int
 }
 
-func (e MultiArtifactStreamError) Error() string {
-	return fmt.Sprintf("pipeline: domain stream %q carries calls and %d artifacts; "+
-		"a stream whose tasks feed an artifact may carry exactly one, "+
+func (e MultiArtifactLaneError) Error() string {
+	return fmt.Sprintf("pipeline: serial lane %q carries calls and %d artifacts; "+
+		"a lane whose tasks feed an artifact may carry exactly one, "+
 		"or a resume would re-spend the calls of an artifact it already proved",
 		e.Domain, e.Artifacts)
 }

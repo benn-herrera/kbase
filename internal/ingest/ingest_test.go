@@ -33,11 +33,11 @@ func writeFile(t *testing.T, root, name, body string) string {
 // asserting the adapter's opinion instead of the walk's behavior.
 var mdExts = []string{".md"}
 
-// paths lists the ingested unit ids in order, which is the order tests assert
+// paths lists the ingested document ids in order, which is the order tests assert
 // against: sorted, slash-separated, relative to the root.
 func paths(c Corpus) []string {
-	out := make([]string, 0, len(c.Units))
-	for _, u := range c.Units {
+	out := make([]string, 0, len(c.Docs))
+	for _, u := range c.Docs {
 		out = append(out, u.Path)
 	}
 	return out
@@ -64,7 +64,7 @@ func TestWalkSelection(t *testing.T) {
 	}
 	want := []string{"guide/deep/nested.MD", "guide/setup.md", "index.md"}
 	if got := paths(c); !slices.Equal(got, want) {
-		t.Errorf("units: got %v, want %v", got, want)
+		t.Errorf("docs: got %v, want %v", got, want)
 	}
 	if !c.Has("guide/setup.md") || c.Has("notes.txt") {
 		t.Error("Has must answer for ingested paths only")
@@ -96,7 +96,7 @@ func TestWalkExtensions(t *testing.T) {
 	}
 	want := []string{"doc.md", "paper.tex", "shout.TEX"}
 	if got := paths(c); !slices.Equal(got, want) {
-		t.Errorf("units: got %v, want %v", got, want)
+		t.Errorf("docs: got %v, want %v", got, want)
 	}
 
 	if _, err := Walk(root, nil, log.Discard()); err == nil {
@@ -114,7 +114,7 @@ func TestWalkExtensions(t *testing.T) {
 // TestFoldedPath: link resolution has to reach a `.MD` document written as
 // `.md`, and has to refuse when a fold cannot pick between two documents.
 func TestFoldedPath(t *testing.T) {
-	c, err := New([]Unit{
+	c, err := New([]SourceDoc{
 		{Path: "guide/Setup.MD", Bytes: []byte("s")},
 		{Path: "twin.md", Bytes: []byte("a")},
 		{Path: "TWIN.md", Bytes: []byte("b")},
@@ -156,7 +156,7 @@ func TestWalkCustody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
-	u := c.Units[0]
+	u := c.Docs[0]
 	if string(u.Bytes) != body {
 		t.Errorf("custody bytes = %q, want %q", u.Bytes, body)
 	}
@@ -189,19 +189,19 @@ const (
 // comparison downstream sees one document rather than two.
 func TestNFCPrePass(t *testing.T) {
 	t.Run("normalizes and records both hashes", func(t *testing.T) {
-		c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfdBody)}})
+		c, err := New([]SourceDoc{{Path: "doc.md", Bytes: []byte(nfdBody)}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		u := c.Units[0]
+		u := c.Docs[0]
 		if string(u.Bytes) != nfcBody {
 			t.Errorf("custody bytes = %q, want the NFC spelling %q", u.Bytes, nfcBody)
 		}
 		if want := hexDigest(nfcBody); u.SHA256 != want {
 			t.Errorf("SHA256 = %q, want the custody digest %q", u.SHA256, want)
 		}
-		if want := hexDigest(nfdBody); u.SourceSHA256 != want {
-			t.Errorf("SourceSHA256 = %q, want the digest of the bytes as read %q", u.SourceSHA256, want)
+		if want := hexDigest(nfdBody); u.UploadSHA256 != want {
+			t.Errorf("UploadSHA256 = %q, want the digest of the bytes as read %q", u.UploadSHA256, want)
 		}
 		if !u.BytesNormalized() {
 			t.Error("BytesNormalized() = false for a document the pre-pass rewrote")
@@ -212,17 +212,17 @@ func TestNFCPrePass(t *testing.T) {
 		// The common case, ASCII included: no transform happened, so the two
 		// digests must be the same string and not merely both present.
 		for _, body := range []string{nfcBody, "# Plain ASCII\n", ""} {
-			c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(body)}})
+			c, err := New([]SourceDoc{{Path: "doc.md", Bytes: []byte(body)}})
 			if err != nil {
 				t.Fatalf("New(%q): %v", body, err)
 			}
-			u := c.Units[0]
+			u := c.Docs[0]
 			if string(u.Bytes) != body {
 				t.Errorf("custody bytes = %q, want %q unchanged", u.Bytes, body)
 			}
-			if u.SHA256 != u.SourceSHA256 || u.BytesNormalized() {
+			if u.SHA256 != u.UploadSHA256 || u.BytesNormalized() {
 				t.Errorf("%q: hashes must be equal when nothing was transformed: %q vs %q",
-					body, u.SHA256, u.SourceSHA256)
+					body, u.SHA256, u.UploadSHA256)
 			}
 		}
 	})
@@ -232,11 +232,11 @@ func TestNFCPrePass(t *testing.T) {
 		// encoding this package cannot verify, and a guess that rewrites
 		// custody is the one thing custody exists to prevent.
 		body := "# Title\n\n\xff\xfe not utf-8 \x80\n"
-		c, err := New([]Unit{{Path: "doc.md", Bytes: []byte(body)}})
+		c, err := New([]SourceDoc{{Path: "doc.md", Bytes: []byte(body)}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		u := c.Units[0]
+		u := c.Docs[0]
 		if string(u.Bytes) != body {
 			t.Errorf("custody bytes = %q, want the bytes as read %q", u.Bytes, body)
 		}
@@ -246,11 +246,11 @@ func TestNFCPrePass(t *testing.T) {
 	})
 
 	t.Run("both spellings reach one corpus identity", func(t *testing.T) {
-		nfd, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfdBody)}})
+		nfd, err := New([]SourceDoc{{Path: "doc.md", Bytes: []byte(nfdBody)}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		nfc, err := New([]Unit{{Path: "doc.md", Bytes: []byte(nfcBody)}})
+		nfc, err := New([]SourceDoc{{Path: "doc.md", Bytes: []byte(nfcBody)}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -258,8 +258,8 @@ func TestNFCPrePass(t *testing.T) {
 			t.Errorf("content hash differs by Unicode spelling alone: %q vs %q",
 				nfd.ContentHash, nfc.ContentHash)
 		}
-		if nfd.Units[0].SourceSHA256 == nfc.Units[0].SourceSHA256 {
-			t.Error("SourceSHA256 must still tell the two uploads apart")
+		if nfd.Docs[0].UploadSHA256 == nfc.Docs[0].UploadSHA256 {
+			t.Error("UploadSHA256 must still tell the two uploads apart")
 		}
 	})
 }
@@ -278,16 +278,16 @@ const (
 // order is the corpus's canonical order, so the order has to be over the ids.
 func TestNFCPathPrePass(t *testing.T) {
 	t.Run("normalizes the id and keeps the spelling as given", func(t *testing.T) {
-		c, err := New([]Unit{{Path: nfdName, Bytes: []byte("x")}})
+		c, err := New([]SourceDoc{{Path: nfdName, Bytes: []byte("x")}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		u := c.Units[0]
+		u := c.Docs[0]
 		if u.Path != nfcName {
 			t.Errorf("Path = %+q, want the NFC spelling %+q", u.Path, nfcName)
 		}
-		if u.SourcePath != nfdName {
-			t.Errorf("SourcePath = %+q, want the path as given %+q", u.SourcePath, nfdName)
+		if u.UploadPath != nfdName {
+			t.Errorf("UploadPath = %+q, want the path as given %+q", u.UploadPath, nfdName)
 		}
 		if !u.PathNormalized() {
 			t.Error("PathNormalized() = false for a path the pre-pass rewrote")
@@ -299,14 +299,14 @@ func TestNFCPathPrePass(t *testing.T) {
 	})
 
 	t.Run("an already-NFC id records no transform", func(t *testing.T) {
-		c, err := New([]Unit{{Path: nfcName, Bytes: []byte("x")}, {Path: "plain.md", Bytes: []byte("y")}})
+		c, err := New([]SourceDoc{{Path: nfcName, Bytes: []byte("x")}, {Path: "plain.md", Bytes: []byte("y")}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		for _, u := range c.Units {
-			if u.Path != u.SourcePath || u.PathNormalized() {
+		for _, u := range c.Docs {
+			if u.Path != u.UploadPath || u.PathNormalized() {
 				t.Errorf("%+q: path fields must be equal when nothing was transformed, got %+q",
-					u.Path, u.SourcePath)
+					u.Path, u.UploadPath)
 			}
 		}
 	})
@@ -317,7 +317,7 @@ func TestNFCPathPrePass(t *testing.T) {
 		// e-acute starts 0xc3). Normalizing after the sort would leave the
 		// corpus — and the content hash, which reads this order — spelling-
 		// dependent.
-		c, err := New([]Unit{
+		c, err := New([]SourceDoc{
 			{Path: nfdName, Bytes: []byte("x")},
 			{Path: "guide/cafz.md", Bytes: []byte("y")},
 		})
@@ -325,14 +325,14 @@ func TestNFCPathPrePass(t *testing.T) {
 			t.Fatalf("New: %v", err)
 		}
 		if got, want := paths(c), []string{"guide/cafz.md", nfcName}; !slices.Equal(got, want) {
-			t.Errorf("units: got %+q, want %+q (sorted by the NFC id)", got, want)
+			t.Errorf("docs: got %+q, want %+q (sorted by the NFC id)", got, want)
 		}
 	})
 
 	t.Run("both spellings reach one corpus identity", func(t *testing.T) {
 		hash := func(name string) string {
 			t.Helper()
-			c, err := New([]Unit{
+			c, err := New([]SourceDoc{
 				{Path: name, Bytes: []byte("body")},
 				{Path: "guide/cafz.md", Bytes: []byte("other")},
 			})
@@ -347,7 +347,7 @@ func TestNFCPathPrePass(t *testing.T) {
 	})
 
 	t.Run("two spellings of one name are one document, and refused as two", func(t *testing.T) {
-		_, err := New([]Unit{
+		_, err := New([]SourceDoc{
 			{Path: nfdName, Bytes: []byte("x")},
 			{Path: nfcName, Bytes: []byte("y")},
 		})
@@ -373,11 +373,11 @@ func TestNFCPathPrePass(t *testing.T) {
 		// A filesystem may hand back a name that is raw bytes. Normalizing it
 		// would be a guess about an encoding this package cannot verify.
 		raw := "guide/\xff\xfe.md"
-		c, err := New([]Unit{{Path: raw, Bytes: []byte("x")}})
+		c, err := New([]SourceDoc{{Path: raw, Bytes: []byte("x")}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		u := c.Units[0]
+		u := c.Docs[0]
 		if u.Path != raw || u.PathNormalized() {
 			t.Errorf("Path = %+q, want the bytes as given %+q untouched", u.Path, raw)
 		}
@@ -395,16 +395,16 @@ func TestWalkPathNFC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
-	u := c.Units[0]
+	u := c.Docs[0]
 	if u.Path != nfcName {
 		t.Errorf("Path = %+q, want the NFC id %+q", u.Path, nfcName)
 	}
 	// Filesystems disagree about what they store: APFS and ext4 keep the
 	// decomposed name, others hand back a composed one. Only the id above is
-	// a property of this package; what SourcePath holds is a property of the
+	// a property of this package; what UploadPath holds is a property of the
 	// disk, and asserting it unconditionally would be asserting the disk's
 	// behavior.
-	switch u.SourcePath {
+	switch u.UploadPath {
 	case nfdName:
 		if !u.PathNormalized() {
 			t.Error("PathNormalized() = false for a name the disk stored decomposed")
@@ -412,7 +412,7 @@ func TestWalkPathNFC(t *testing.T) {
 	case nfcName:
 		t.Log("this filesystem composed the name on write; the pre-pass had nothing to do")
 	default:
-		t.Errorf("SourcePath = %+q, want one of the two spellings of the name written", u.SourcePath)
+		t.Errorf("UploadPath = %+q, want one of the two spellings of the name written", u.UploadPath)
 	}
 }
 
@@ -444,11 +444,11 @@ func TestWalkSymlinks(t *testing.T) {
 			t.Fatalf("Walk: %v", err)
 		}
 		if got, want := paths(c), []string{"index.md", "linked.md"}; !slices.Equal(got, want) {
-			t.Errorf("units: got %v, want %v", got, want)
+			t.Errorf("docs: got %v, want %v", got, want)
 		}
-		u, _ := c.Unit("linked.md")
+		u, _ := c.Doc("linked.md")
 		if string(u.Bytes) != "# External\n" {
-			t.Errorf("linked unit bytes = %q, want the link target's content", u.Bytes)
+			t.Errorf("linked document bytes = %q, want the link target's content", u.Bytes)
 		}
 	})
 
@@ -499,7 +499,7 @@ func TestWalkSymlinks(t *testing.T) {
 			t.Fatalf("a broken link that cannot hold a document must not fail the corpus: %v", err)
 		}
 		if got, want := paths(c), []string{"index.md"}; !slices.Equal(got, want) {
-			t.Errorf("units: got %v, want %v", got, want)
+			t.Errorf("docs: got %v, want %v", got, want)
 		}
 		if !lg.Has(t, "debug", "path", "logo.png") {
 			t.Error("a skipped broken link must leave a debug record naming it")
@@ -535,7 +535,7 @@ func TestWalkRootFailures(t *testing.T) {
 // TestNewOrdersAndRejects: New is the single constructor, so ordering and the
 // two malformed-input refusals are pinned here rather than through the walk.
 func TestNewOrdersAndRejects(t *testing.T) {
-	c, err := New([]Unit{
+	c, err := New([]SourceDoc{
 		{Path: "b.md", Bytes: []byte("b")},
 		{Path: "a/deep.md", Bytes: []byte("d")},
 		{Path: "a.md", Bytes: []byte("a")},
@@ -544,30 +544,30 @@ func TestNewOrdersAndRejects(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	if got, want := paths(c), []string{"a.md", "a/deep.md", "b.md"}; !slices.Equal(got, want) {
-		t.Errorf("units: got %v, want %v (sorted by path)", got, want)
+		t.Errorf("docs: got %v, want %v (sorted by path)", got, want)
 	}
 
-	if _, err := New([]Unit{{Path: "x.md"}, {Path: "x.md"}}); err == nil {
+	if _, err := New([]SourceDoc{{Path: "x.md"}, {Path: "x.md"}}); err == nil {
 		t.Error("duplicate paths must be refused")
 	}
-	if _, err := New([]Unit{{Bytes: []byte("x")}}); err == nil {
-		t.Error("a unit without a path must be refused")
+	if _, err := New([]SourceDoc{{Bytes: []byte("x")}}); err == nil {
+		t.Error("a document without a path must be refused")
 	}
 }
 
 // TestContentHashIdentity: the corpus hash is the source identity in the
 // provenance stamp, so it must be stable for identical input, insensitive to
-// the order units arrive in, and sensitive to a rename that moves no bytes.
+// the order docs arrive in, and sensitive to a rename that moves no bytes.
 func TestContentHashIdentity(t *testing.T) {
-	base := []Unit{
+	base := []SourceDoc{
 		{Path: "a.md", Bytes: []byte("alpha")},
 		{Path: "b.md", Bytes: []byte("beta")},
 	}
-	shuffled := []Unit{base[1], base[0]}
-	renamed := []Unit{{Path: "a.md", Bytes: []byte("alpha")}, {Path: "c.md", Bytes: []byte("beta")}}
-	edited := []Unit{{Path: "a.md", Bytes: []byte("alpha!")}, {Path: "b.md", Bytes: []byte("beta")}}
+	shuffled := []SourceDoc{base[1], base[0]}
+	renamed := []SourceDoc{{Path: "a.md", Bytes: []byte("alpha")}, {Path: "c.md", Bytes: []byte("beta")}}
+	edited := []SourceDoc{{Path: "a.md", Bytes: []byte("alpha!")}, {Path: "b.md", Bytes: []byte("beta")}}
 
-	hash := func(us []Unit) string {
+	hash := func(us []SourceDoc) string {
 		t.Helper()
 		c, err := New(us)
 		if err != nil {

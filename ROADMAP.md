@@ -25,7 +25,7 @@ deleted, not archived — git history is the log.
 - **v0.2.0 arc with hybrid MAD sequence (ruled 2026-08-12)**:
   1. Architect reshape design against the ModernCorp exemplar
      (`../ModernCorp/kb-root` + source traced from `ModernCorp.tex`) —
-     skeleton schema, output anatomy (index/leaf/entry-point grammar),
+     tree plan schema, output anatomy (index/leaf/entry-point grammar),
      stages 3/5/6/8 design; Benn rules on open points.
      Snapshot prep first: exclusion-copy the exemplar doc tree into
      `test_data/transient/mad-reference/` (drop `.index/`, `session/`,
@@ -34,7 +34,7 @@ deleted, not archived — git history is the log.
      source reference graph from `ModernCorp/ModernCorp.tex` (sole
      entry point), flagging KB content whose source can't be located.
   2. **MAD #1 — design review, shapes-only charter**: evaluate major
-     forms (stage composition, skeleton schema, output grammar,
+     forms (stage composition, tree plan schema, output grammar,
      converter contract); atomic detail stays flexible by declaration.
      Retirement gate: a finding must claim a SHAPE is wrong (wrong
      stage boundary, wrong artifact grammar, missing/superfluous major
@@ -42,7 +42,7 @@ deleted, not archived — git history is the log.
      build-phase notes, never debated. LaTeX-specific questions graded
      design-level (converter is post-v0.2.0).
   3. Build the arc burst-by-burst, per-burst architect+go-coder
-     reviews as usual. **Burst A landed 2026-08-12**: `Task.Produce`
+     reviews as usual. **Burst A landed 2026-08-12**: `LaneTask.Produce`
      (O-2) and cross-stage cascade marking (MAD1 F-8) in
      `internal/pipeline`, both written into ARCHITECTURE §12; the
      queued `Agent`/`Call` unexport went with it (evidence recorded
@@ -53,22 +53,24 @@ deleted, not archived — git history is the log.
   mock-driven per that burst's R-1; the serial fold landed 2026-08-11 —
   boundaries are adjudicated against current state and the stage writes one
   composed, whole-list-`Verify`d cut list): what is left is **wiring it into a
-  real job plan** once the taxonomy skeleton says what the spans are, which is
+  real job plan** once the taxonomy tree plan says what the spans are, which is
   also where a single-section span — no boundaries, so no calls and today no
   artifact — gets its answer. Its refinement definition text is a marked stub
   (`dissect.stubDefinition`) for the embedded-definitions item below.
 
 ## Later (build order exploits determinism-first)
-- **MAD review gate (ruled 2026-08-09): after the first end-to-end run
-  that turns the Rojo docs into a KB of the intended shape, before any
-  creator-docs scaling work.** Pre-E2E adversarial review is speculation,
-  which is not where model review earns its cost; the per-burst
-  architect/go-coder passes carry review until then. The E2E milestone's
-  deliverables include the evidence artifacts the MAD review interrogates:
-  the generated KB itself, a full run's results, the stepwise
-  recovery/resume forensics (including from a deliberately interrupted
-  run), and the telemetry/metrics data (`cached_tokens`, timing — which
-  also settles the slot-order measurement).
+- **MAD #2 gate (re-ruled 2026-08-13): fires on the complete v0.1
+  artifact** — a tree with model-grouped taxonomy AND summaries that
+  should in theory be usable/navigable (stub-definition prose quality is
+  explicitly post-v0.1 tuning territory; the charter says so, so
+  reviewers judge shape and navigability, not prose). Velocity path
+  (ruled 2026-08-13): C+D combined (mechanical spine → walkable Rojo KB
+  with empty summaries), then E+F combined (taxonomy + summaries, live,
+  stub definitions) → v0.1 → MAD #2. Stage-7 review/regen, definition
+  tuning, and the full-E2E evidence run (resume forensics, telemetry,
+  `cached_tokens` slot-order measurement) come AFTER, informed by the
+  review. Per-burst reviews collapse into one batched review of the
+  C–F delta once the KB is real.
 - Embedded prompt/agent definitions + the family-tuning eval harness.
   Derive role knowledge from `.claude/agents/kb-*.md` as referents (process
   phasing, leaf-fidelity rules, review adversarialism) — not ports: kbase
@@ -80,7 +82,7 @@ deleted, not archived — git history is the log.
     trailer's automatic re-render of it (§7's dual render, by design), the
     task definition, and a per-call acceptance criterion. The fourth is not
     free — acceptance criteria share a word-capped reserved share with the
-    machine-generated corrective note, so a redundant criterion competes with
+    machine-generated retry note, so a redundant criterion competes with
     the retry feedback that has to fit beside it.
   - **Echo verification.** Have the answer be the number *plus* the entry text
     it names, and let the verifier check the two agree. That kills silent
@@ -97,7 +99,7 @@ deleted, not archived — git history is the log.
   post-E2E; a tie counts as a win for the incumbent; low-cost-cloud
   availability check first).
 - Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
-  slot-order measurement: validate or reverse the RefA-before-status swap
+  slot-order measurement: validate or reverse the StageRef-before-status swap
   via `cached_tokens` + dev-telemetry prefill timing.
 - Provenance receipt writer; chars-per-token calibration feature.
 - Author AGENTS.md's TBD sections (Testing, Dependency Policy, Logging) as
@@ -116,9 +118,9 @@ deleted, not archived — git history is the log.
   mechanical in every format. Contract in §4; pandoc is a dev-time
   differential oracle, never a shipped dependency.
 - PDF preprocessing-adapter slot.
-- i18n hardening (ruled 2026-08-13, indefinitely parked): spaceless-script
-  word caps fail open (CJK/Thai — byte/token fallback cap needed) and
-  non-Latin titles degenerate under ASCII-only slugs (NFC-pinned slugs or
-  transliteration). Offsets/slicing are already rune-safe by construction
+- i18n hardening (ruled 2026-08-13, indefinitely parked; slug half
+  RESOLVED same day by verbatim-bytes slugs + NFC custody): remaining
+  item is spaceless-script word caps failing open (CJK/Thai — byte/token
+  fallback cap needed). Offsets/slicing are rune-safe by construction
   and the whitespace tripwire catches mid-rune cuts as defects. Revisit
   only with global distribution and a team to feed.

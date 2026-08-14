@@ -102,7 +102,7 @@ const (
 // Input is one named hash a stage artifact was derived from — the source
 // corpus's content hash, an upstream artifact's output hash, a stage's
 // parameter digest. The name is what makes a mismatch diagnosable ("the
-// skeleton changed" rather than "hash 3 differs").
+// tree plan changed" rather than "hash 3 differs").
 type Input struct {
 	Name string `json:"name"`
 	Hash string `json:"hash"`
@@ -135,23 +135,23 @@ type Stamp struct {
 	Output string `json:"output"`
 }
 
-// Store is stage-artifact custody rooted at one job directory — in a real
+// ArtifactStore is stage-artifact custody rooted at one job directory — in a real
 // run, the `temp-work` tree kbase created under the output directory (see
 // TempWork). Every path it takes is store-relative and slash-separated, so a
 // chain description reads the same on every platform, and the same relative
 // path names the scratch copy and its delivered counterpart.
-type Store struct {
+type ArtifactStore struct {
 	root string
 	lg   log.Logger
 }
 
-// NewStore returns a store rooted at jobDir, logging through lg (which must
+// NewArtifactStore returns a store rooted at jobDir, logging through lg (which must
 // be non-nil; log.Discard covers a caller with nothing to hand it). The
 // directory is created lazily by the first write, so constructing a store
 // touches no disk — a resume scan over a job dir that does not exist yet is a
 // legitimate call that should report Absent, not fail.
-func NewStore(jobDir string, lg log.Logger) *Store {
-	return &Store{root: jobDir, lg: lg}
+func NewArtifactStore(jobDir string, lg log.Logger) *ArtifactStore {
+	return &ArtifactStore{root: jobDir, lg: lg}
 }
 
 // HashBytes returns the hex sha256 of b — the one hash function on both
@@ -167,7 +167,7 @@ func HashBytes(b []byte) string {
 // The stamp is built here rather than accepted from the caller: app version
 // and output hash are facts of the write, and a caller that could supply them
 // could stamp a lie. The caller supplies only what it knows and the store
-// cannot — the named input hashes (see Store.resolveInputs, which derives
+// cannot — the named input hashes (see ArtifactStore.resolveInputs, which derives
 // them for a chain unit so the writer and the verifier never derive them
 // differently).
 //
@@ -190,7 +190,7 @@ func HashBytes(b []byte) string {
 // false Valid. Cloud-synced output directories are a different matter and are
 // documented unsupported (§12): they break the rename/inode assumptions
 // underneath all of this.
-func (s *Store) Put(rel string, data []byte, inputs []Input) error {
+func (s *ArtifactStore) Put(rel string, data []byte, inputs []Input) error {
 	abs, err := s.resolve(rel)
 	if err != nil {
 		return err
@@ -227,14 +227,14 @@ func (s *Store) Put(rel string, data []byte, inputs []Input) error {
 //
 // It reads and does not prove. Proof is the stamp's job and the scan's, and
 // the two are already joined: a stage that consumes an upstream artifact names
-// it in Unit.Upstreams, which puts that artifact's output hash in this unit's
+// it in OwedArtifact.Upstreams, which puts that artifact's output hash in this unit's
 // stamp, so a consumer that read bytes nobody proved produces a unit nothing
 // will verdict Valid. Folding a verification in here would be the second
 // derivation of a proof the store already has exactly one of.
 //
 // A missing artifact comes back wrapping fs.ErrNotExist, so "not there yet" is
 // a case a caller can test for rather than a string it has to match.
-func (s *Store) Get(rel string) ([]byte, error) {
+func (s *ArtifactStore) Get(rel string) ([]byte, error) {
 	abs, err := s.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func (s *Store) Get(rel string) ([]byte, error) {
 // The error return is reserved for structural incoherence: the store
 // contradicting itself in a way redoing the unit cannot fix (see
 // IncoherentStoreError). It refuses the resume rather than verdicting it.
-func (s *Store) verify(rel string, want []Input) (Verdict, string, error) {
+func (s *ArtifactStore) verify(rel string, want []Input) (Verdict, string, error) {
 	abs, err := s.resolve(rel)
 	if err != nil {
 		return VerdictInvalid, err.Error(), nil
@@ -317,7 +317,7 @@ func (s *Store) verify(rel string, want []Input) (Verdict, string, error) {
 // readStamp returns the stamp sidecar for rel. A missing sidecar surfaces as
 // an error wrapping fs.ErrNotExist, which is how verify tells absent from
 // unparseable.
-func (s *Store) readStamp(rel string) (Stamp, error) {
+func (s *ArtifactStore) readStamp(rel string) (Stamp, error) {
 	abs, err := s.resolve(rel)
 	if err != nil {
 		return Stamp{}, err
@@ -368,7 +368,7 @@ func validatePath(rel string) (string, error) {
 }
 
 // resolve turns a store-relative path into an absolute one under the job dir.
-func (s *Store) resolve(rel string) (string, error) {
+func (s *ArtifactStore) resolve(rel string) (string, error) {
 	local, err := validatePath(rel)
 	if err != nil {
 		return "", err
@@ -492,7 +492,7 @@ func writeAtomic(abs string, data []byte, cp string) error {
 // Removal failures are logged and not returned: a file that will not delete
 // is untidiness, and failing a completed job over it would turn a successful
 // run into an error.
-func (s *Store) sweep(chain Chain) error {
+func (s *ArtifactStore) sweep(chain StageChain) error {
 	if filepath.Base(s.root) != TempWorkDirName {
 		return fmt.Errorf("pipeline: refusing to sweep %s: a run's artifacts live in the %s directory "+
 			"kbase creates under the output directory, and this is not one", s.root, TempWorkDirName)

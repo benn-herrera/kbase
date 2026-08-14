@@ -15,15 +15,15 @@ import (
 	"kbase/internal/version"
 )
 
-// newStore returns a store over a fresh temp job dir plus its capture logger.
-func newStore(t *testing.T) (*Store, *logtest.Capture) {
+// newArtifactStore returns a store over a fresh temp job dir plus its capture logger.
+func newArtifactStore(t *testing.T) (*ArtifactStore, *logtest.Capture) {
 	t.Helper()
 	lg := &logtest.Capture{}
-	return NewStore(t.TempDir(), lg), lg
+	return NewArtifactStore(t.TempDir(), lg), lg
 }
 
 // put writes a unit and fails the test if the write does.
-func put(t *testing.T, s *Store, rel string, data string, inputs ...Input) {
+func put(t *testing.T, s *ArtifactStore, rel string, data string, inputs ...Input) {
 	t.Helper()
 	if err := s.Put(rel, []byte(data), inputs); err != nil {
 		t.Fatalf("Put(%s): %v", rel, err)
@@ -32,7 +32,7 @@ func put(t *testing.T, s *Store, rel string, data string, inputs ...Input) {
 
 // verify runs Verify and fails the test on a refusal, which is a distinct
 // outcome from a verdict and never what a verdict assertion means to check.
-func verify(t *testing.T, s *Store, rel string, inputs ...Input) (Verdict, string) {
+func verify(t *testing.T, s *ArtifactStore, rel string, inputs ...Input) (Verdict, string) {
 	t.Helper()
 	v, reason, err := s.verify(rel, inputs)
 	if err != nil {
@@ -42,7 +42,7 @@ func verify(t *testing.T, s *Store, rel string, inputs ...Input) (Verdict, strin
 }
 
 func TestPutVerifyRoundTrip(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	in := []Input{{Name: "source", Hash: HashBytes([]byte("corpus"))}}
 
 	put(t, s, "stage1/survey.json", "artifact bytes", in...)
@@ -71,11 +71,11 @@ func TestPutVerifyRoundTrip(t *testing.T) {
 // affirmative proof, so everything short of it lands on the same verdict.
 func TestVerifyDoubtIsInvalid(t *testing.T) {
 	const rel = "stage1/unit.md"
-	good := []Input{{Name: "source", Hash: "aaa"}, {Name: "skeleton", Hash: "bbb"}}
+	good := []Input{{Name: "source", Hash: "aaa"}, {Name: "plan", Hash: "bbb"}}
 
 	cases := []struct {
 		name    string
-		damage  func(t *testing.T, s *Store)
+		damage  func(t *testing.T, s *ArtifactStore)
 		check   []Input
 		want    Verdict
 		wantMsg string
@@ -87,44 +87,44 @@ func TestVerifyDoubtIsInvalid(t *testing.T) {
 		},
 		{
 			name:    "nothing written at all",
-			damage:  func(t *testing.T, s *Store) { rm(t, s, rel); rm(t, s, rel+StampSuffix) },
+			damage:  func(t *testing.T, s *ArtifactStore) { rm(t, s, rel); rm(t, s, rel+StampSuffix) },
 			check:   good,
 			want:    VerdictAbsent,
 			wantMsg: "no artifact",
 		},
 		{
 			name:    "artifact with no stamp",
-			damage:  func(t *testing.T, s *Store) { rm(t, s, rel+StampSuffix) },
+			damage:  func(t *testing.T, s *ArtifactStore) { rm(t, s, rel+StampSuffix) },
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "no stamp",
 		},
 		{
 			name:    "stamp with no artifact",
-			damage:  func(t *testing.T, s *Store) { rm(t, s, rel) },
+			damage:  func(t *testing.T, s *ArtifactStore) { rm(t, s, rel) },
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "no artifact",
 		},
 		{
 			name:    "unparseable stamp",
-			damage:  func(t *testing.T, s *Store) { write(t, s, rel+StampSuffix, "{not json") },
+			damage:  func(t *testing.T, s *ArtifactStore) { write(t, s, rel+StampSuffix, "{not json") },
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "unusable",
 		},
 		{
 			name:    "artifact edited underneath its stamp",
-			damage:  func(t *testing.T, s *Store) { write(t, s, rel, "tampered") },
+			damage:  func(t *testing.T, s *ArtifactStore) { write(t, s, rel, "tampered") },
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "do not match",
 		},
 		{
 			name:    "an input hash changed",
-			check:   []Input{{Name: "source", Hash: "aaa"}, {Name: "skeleton", Hash: "CHANGED"}},
+			check:   []Input{{Name: "source", Hash: "aaa"}, {Name: "plan", Hash: "CHANGED"}},
 			want:    VerdictInvalid,
-			wantMsg: `"skeleton" changed`,
+			wantMsg: `"plan" changed`,
 		},
 		{
 			name:    "an input the stamp never carried",
@@ -139,15 +139,19 @@ func TestVerifyDoubtIsInvalid(t *testing.T) {
 			wantMsg: `where "source" was expected`,
 		},
 		{
-			name:    "written by another app version",
-			damage:  func(t *testing.T, s *Store) { restamp(t, s, rel, func(st *Stamp) { st.Version = "9.9.9-other" }) },
+			name: "written by another app version",
+			damage: func(t *testing.T, s *ArtifactStore) {
+				restamp(t, s, rel, func(st *Stamp) { st.Version = "9.9.9-other" })
+			},
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "running",
 		},
 		{
-			name:    "written under another stamp schema",
-			damage:  func(t *testing.T, s *Store) { restamp(t, s, rel, func(st *Stamp) { st.Schema = stampSchema + 1 }) },
+			name: "written under another stamp schema",
+			damage: func(t *testing.T, s *ArtifactStore) {
+				restamp(t, s, rel, func(st *Stamp) { st.Schema = stampSchema + 1 })
+			},
 			check:   good,
 			want:    VerdictInvalid,
 			wantMsg: "schema",
@@ -156,7 +160,7 @@ func TestVerifyDoubtIsInvalid(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := newStore(t)
+			s, _ := newArtifactStore(t)
 			put(t, s, rel, "body", good...)
 			if tc.damage != nil {
 				tc.damage(t, s)
@@ -179,7 +183,7 @@ func TestVerifyDoubtIsInvalid(t *testing.T) {
 // fix, which are refusals rather than verdicts and must name --fresh.
 func TestVerifyRefusesIncoherentStore(t *testing.T) {
 	t.Run("stamp belonging to another artifact", func(t *testing.T) {
-		s, _ := newStore(t)
+		s, _ := newArtifactStore(t)
 		put(t, s, "a.md", "body")
 		restamp(t, s, "a.md", func(st *Stamp) { st.Path = "somewhere/else.md" })
 
@@ -188,7 +192,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 	})
 
 	t.Run("a directory where an artifact belongs", func(t *testing.T) {
-		s, _ := newStore(t)
+		s, _ := newArtifactStore(t)
 		if err := os.MkdirAll(filepath.Join(s.root, "a.md"), ArtifactDirMode); err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +202,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 }
 
 func TestStoreRejectsUnusablePaths(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	for _, rel := range []string{"", "../escape.md", "/absolute.md", "unit.md" + StampSuffix, LockFileName} {
 		t.Run(rel, func(t *testing.T) {
 			err := s.Put(rel, []byte("x"), nil)
@@ -214,8 +218,8 @@ func TestStoreRejectsUnusablePaths(t *testing.T) {
 // on: the same facts produce the same bytes, whatever order the caller
 // happened to list its inputs in.
 func TestStampIsDeterministic(t *testing.T) {
-	a, _ := newStore(t)
-	b, _ := newStore(t)
+	a, _ := newArtifactStore(t)
+	b, _ := newArtifactStore(t)
 	in := []Input{{Name: "zeta", Hash: "222"}, {Name: "alpha", Hash: "111"}}
 	reversed := []Input{in[1], in[0]}
 
@@ -233,7 +237,7 @@ func TestStampIsDeterministic(t *testing.T) {
 }
 
 func TestPutOverwritesInPlace(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	old := []Input{{Name: "source", Hash: "111"}}
 	put(t, s, "x.md", "first", old...)
 
@@ -255,7 +259,7 @@ func TestPutFileModes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix file modes")
 	}
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	put(t, s, "nested/x.md", "body")
 
 	for _, rel := range []string{"nested/x.md", "nested/x.md" + StampSuffix} {
@@ -296,7 +300,7 @@ func TestPutCrashpointSeams(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := newStore(t)
+			s, _ := newArtifactStore(t)
 			defer crashpoint.Arm(tc.point)()
 
 			crashed := crashedAt(t, tc.point, func() {
@@ -324,7 +328,7 @@ func TestPutCrashpointSeams(t *testing.T) {
 // so the armed simulation must too, or the harness would be testing a tidier
 // world than the one it claims to test.
 func TestPutPreRenameLeavesResidue(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	defer crashpoint.Arm(cpPutPreRename)()
 
 	if !crashedAt(t, cpPutPreRename, func() { _ = s.Put("unit.md", []byte("body"), nil) }) {
@@ -379,7 +383,7 @@ func assertIncoherent(t *testing.T, err error) {
 	}
 }
 
-func read(t *testing.T, s *Store, rel string) string {
+func read(t *testing.T, s *ArtifactStore, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(rel)))
 	if err != nil {
@@ -388,21 +392,21 @@ func read(t *testing.T, s *Store, rel string) string {
 	return string(b)
 }
 
-func write(t *testing.T, s *Store, rel, content string) {
+func write(t *testing.T, s *ArtifactStore, rel, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(s.root, filepath.FromSlash(rel)), []byte(content), ArtifactFileMode); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func rm(t *testing.T, s *Store, rel string) {
+func rm(t *testing.T, s *ArtifactStore, rel string) {
 	t.Helper()
 	if err := os.Remove(filepath.Join(s.root, filepath.FromSlash(rel))); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func exists(t *testing.T, s *Store, rel string) bool {
+func exists(t *testing.T, s *ArtifactStore, rel string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(s.root, filepath.FromSlash(rel)))
 	return err == nil
@@ -411,7 +415,7 @@ func exists(t *testing.T, s *Store, rel string) bool {
 // restamp rewrites an artifact's stamp sidecar through edit, which is how a
 // test produces a stamp this build would never write (another app version,
 // another schema, another artifact's path).
-func restamp(t *testing.T, s *Store, rel string, edit func(*Stamp)) {
+func restamp(t *testing.T, s *ArtifactStore, rel string, edit func(*Stamp)) {
 	t.Helper()
 	stamp, err := s.readStamp(rel)
 	if err != nil {
@@ -430,7 +434,7 @@ func restamp(t *testing.T, s *Store, rel string, edit func(*Stamp)) {
 // a path Put would have refused is refused here too — one path rule, both
 // directions.
 func TestStoreGetIsPutsCounterpart(t *testing.T) {
-	s, _ := newStore(t)
+	s, _ := newArtifactStore(t)
 	put(t, s, "cuts/cutlist.txt", "0 120\n120 400\n")
 
 	got, err := s.Get("cuts/cutlist.txt")

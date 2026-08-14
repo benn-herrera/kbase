@@ -95,9 +95,9 @@ type Budgets struct {
 
 // StageSpec is the constructor input for a stage context.
 type StageSpec struct {
-	// SystemFrame is slot 1 as final bytes — rendered once at job start by
+	// JobFrame is slot 1 as final bytes — rendered once at job start by
 	// the orchestrator, which owns the template and the interpolation.
-	SystemFrame string
+	JobFrame string
 
 	// AgentDef is slot 2 plus the trailer's source text.
 	AgentDef Definition
@@ -127,20 +127,20 @@ type StageSpec struct {
 // enforcement layer: mutating a stable slot mid-loop is not a runtime error
 // to be caught, it does not compile. The layer above it — a fresh context
 // built with different bytes mid-task, which is type-legal and still a churn
-// bug — is the orchestrator's phase matrix, and the layer below it is
+// bug — is the orchestrator's phase-op table, and the layer below it is
 // CheckStability.
 type StageContext struct {
-	systemFrame string
-	agentDef    Definition
-	taskDef     string
-	budgets     Budgets
-	dualRender  bool
-	est         tokens.Estimator
+	jobFrame   string
+	agentDef   Definition
+	taskDef    string
+	budgets    Budgets
+	dualRender bool
+	est        tokens.Estimator
 }
 
 // NewStageContext freezes a stage's constant slots. Construct once per stage;
 // constructing a second one mid-stage with different bytes is the churn bug
-// the orchestrator's phase matrix exists to catch.
+// the orchestrator's phase-op table exists to catch.
 //
 // It refuses a SlotTotal per-slot budget (ErrReservedBudgetKey) rather than
 // ignoring it, and it fills in the default ceiling for a stage that set none.
@@ -156,12 +156,12 @@ func NewStageContext(spec StageSpec) (*StageContext, error) {
 		budgets.CallCeiling = DefaultCallCeiling
 	}
 	return &StageContext{
-		systemFrame: spec.SystemFrame,
-		agentDef:    spec.AgentDef,
-		taskDef:     spec.TaskDef,
-		budgets:     budgets,
-		dualRender:  !spec.DisableDualRender,
-		est:         spec.Est,
+		jobFrame:   spec.JobFrame,
+		agentDef:   spec.AgentDef,
+		taskDef:    spec.TaskDef,
+		budgets:    budgets,
+		dualRender: !spec.DisableDualRender,
+		est:        spec.Est,
 	}, nil
 }
 
@@ -175,13 +175,13 @@ type CallInput struct {
 	// better.
 	StatusLines []string
 
-	// RefA, Content and RefB are slots 4, 6 and 7. Any may be empty, and an
+	// StageRef, Content and CallRef are slots 4, 6 and 7. Any may be empty, and an
 	// empty one renders as nothing at all.
-	RefA    string
-	Content string
-	RefB    string
+	StageRef string
+	Content  string
+	CallRef  string
 
-	// AcceptanceCriteria are the per-call criteria the taxonomy skeleton
+	// AcceptanceCriteria are the per-call criteria the taxonomy tree plan
 	// already emits (tiling ranges, budgets), injected into the trailer as
 	// data. They have their own reserved share of the trailer cap
 	// (maxCriteriaWords), so they cannot be squeezed out by a definition
@@ -241,14 +241,14 @@ func (sc *StageContext) Build(in CallInput) (BuiltCall, error) {
 	}
 
 	content := map[Slot]string{
-		SlotSystemFrame: sc.systemFrame,
-		SlotAgentDef:    sc.agentDef.Body,
-		SlotTaskDef:     sc.taskDef,
-		SlotTaskStatus:  strings.Join(in.StatusLines, statusLineDelimiter),
-		SlotRefA:        in.RefA,
-		SlotContent:     in.Content,
-		SlotRefB:        in.RefB,
-		SlotReminder:    trailer,
+		SlotJobFrame:     sc.jobFrame,
+		SlotAgentDef:     sc.agentDef.Body,
+		SlotTaskDef:      sc.taskDef,
+		SlotTaskStatus:   strings.Join(in.StatusLines, statusLineDelimiter),
+		SlotStageRef:     in.StageRef,
+		SlotContent:      in.Content,
+		SlotCallRef:      in.CallRef,
+		SlotCriticalEcho: trailer,
 	}
 
 	var b strings.Builder

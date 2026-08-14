@@ -1,62 +1,62 @@
-package skeleton
+package treeplan
 
 import (
 	"errors"
 	"testing"
 )
 
-// Check is the sole statement of what a valid skeleton is, and stage 9 runs it
+// Check is the sole statement of what a valid tree plan is, and stage 9 runs it
 // over an artifact it did not build. These are the tamperings that artifact
 // could arrive with — each one a claim the composed checks have to catch on
 // their own, without anything the composer remembers.
 func TestCheckCatchesTampering(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		mutate     func(*Skeleton)
+		mutate     func(*TreePlan)
 		wantDefect bool
 	}{{
 		name:       "a duplicated path",
-		mutate:     func(s *Skeleton) { s.Nodes[3].Path = s.Nodes[2].Path },
+		mutate:     func(s *TreePlan) { s.Nodes[3].Path = s.Nodes[2].Path },
 		wantDefect: true,
 	}, {
 		name:       "a parent that is not there",
-		mutate:     func(s *Skeleton) { s.Nodes[2].Parent = "elsewhere/index.md" },
+		mutate:     func(s *TreePlan) { s.Nodes[2].Parent = "elsewhere/index.md" },
 		wantDefect: true,
 	}, {
 		name:       "a child outside its parent's directory",
-		mutate:     func(s *Skeleton) { s.Nodes[2].Path = "somewhere-else.md" },
+		mutate:     func(s *TreePlan) { s.Nodes[2].Path = "somewhere-else.md" },
 		wantDefect: true,
 	}, {
 		name:       "a leaf naming a group nobody holds",
-		mutate:     func(s *Skeleton) { s.Nodes[2].Group = "g9999" },
+		mutate:     func(s *TreePlan) { s.Nodes[2].SplitGroup = "g9999" },
 		wantDefect: true,
 	}, {
 		name:       "a part number past the group's count",
-		mutate:     func(s *Skeleton) { s.Nodes[2].Part = 99 },
+		mutate:     func(s *TreePlan) { s.Nodes[2].Part = 99 },
 		wantDefect: true,
 	}, {
 		name:       "a part count the splitter disagrees with",
-		mutate:     func(s *Skeleton) { s.Groups[0].Parts++ },
+		mutate:     func(s *TreePlan) { s.Groups[0].Parts++ },
 		wantDefect: true,
 	}, {
 		name:       "a group nobody draws on",
-		mutate:     func(s *Skeleton) { s.Groups = append(s.Groups, s.Groups[0]) },
+		mutate:     func(s *TreePlan) { s.Groups = append(s.Groups, s.Groups[0]) },
 		wantDefect: true,
 	}, {
 		name:       "a budget the group was not cut against",
-		mutate:     func(s *Skeleton) { s.Groups[0].Budget = 7 },
+		mutate:     func(s *TreePlan) { s.Groups[0].Budget = 7 },
 		wantDefect: true,
 	}, {
 		name:       "a second entry-point",
-		mutate:     func(s *Skeleton) { s.Nodes[1].Kind = KindEntryPoint },
+		mutate:     func(s *TreePlan) { s.Nodes[1].Kind = KindEntryPoint },
 		wantDefect: true,
 	}, {
 		name:       "another corpus",
-		mutate:     func(s *Skeleton) { s.CorpusHash = "0000" },
+		mutate:     func(s *TreePlan) { s.CorpusHash = "0000" },
 		wantDefect: true,
 	}, {
 		name: "a span shrunk so material falls out of the tree",
-		mutate: func(s *Skeleton) {
+		mutate: func(s *TreePlan) {
 			s.Groups[len(s.Groups)-1].Source.End = s.Groups[len(s.Groups)-1].Source.Start + 8
 		},
 	}} {
@@ -83,7 +83,7 @@ func TestCheckCatchesTampering(t *testing.T) {
 	}
 }
 
-// The composed skeleton's own budgets travel with it, so a consumer that reads
+// The composed tree plan's own budgets travel with it, so a consumer that reads
 // them back gets the numbers the tree was verified against and not this
 // build's constants.
 func TestArtifactCarriesTheBudgetsItWasVerifiedAgainst(t *testing.T) {

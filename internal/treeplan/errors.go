@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"errors"
@@ -12,7 +12,7 @@ import (
 // index asked for at the depth cap, a span too large to be one leaf.
 //
 // The stage-3 seam retries once with Note attached and then fails the unit —
-// taxonomy is an essential seam, so there is no mechanical baseline to fall
+// taxonomy is a no-fallback seam, so there is no mechanical fallback to fall
 // back to (I-7, §3.4). The interface is declared here rather than at that seam
 // because the classification is knowledge this package has and the runner does
 // not.
@@ -23,8 +23,8 @@ type Rejection interface {
 	error
 
 	// Note is the model-facing rendering: the mechanical fact alone, no path
-	// and no byte offset. The runner caps the corrective note it becomes at
-	// twelve words (pipeline.correctiveNoteWords), so a sentence of prose
+	// and no byte offset. The runner caps the retry note it becomes at
+	// twelve words (pipeline.retryNoteWords), so a sentence of prose
 	// here is a sentence the model never sees the end of — and a path in it
 	// would be a node name the model is forbidden to emit sitting in the very
 	// next prompt (I-2).
@@ -48,9 +48,9 @@ type RejectionError struct {
 
 func (e RejectionError) Error() string {
 	if e.Subject == "" {
-		return "skeleton: " + e.Reason
+		return "treeplan: " + e.Reason
 	}
-	return fmt.Sprintf("skeleton: %s: %s", e.Subject, e.Reason)
+	return fmt.Sprintf("treeplan: %s: %s", e.Subject, e.Reason)
 }
 
 // Note is the model-facing rendering: the mechanical fact alone.
@@ -60,9 +60,9 @@ func (e RejectionError) Note() string { return e.Reason }
 // the leaf budget, so the material cannot be placed where the model placed it.
 //
 // It is a rejection and not a defect: the remedy is at the stage that decides
-// how big a unit is (dissect.StarvedError says so in its own words), and here
+// how big a unit is (dissect.StarvedRejection says so in its own words), and here
 // that stage is the model — the usual correction is to descend one level. A
-// second failure fails the unit loudly, because taxonomy has no baseline.
+// second failure fails the unit loudly, because taxonomy has no fallback.
 //
 // It wraps the dissector's own error, so a caller that wants the span and the
 // walk's diagnosis reaches it with errors.As. The Note deliberately carries
@@ -75,11 +75,11 @@ type StarvedRejection struct {
 	File string
 	// Starved is the dissector's refusal, with the span, its token count and
 	// the budget it was measured against.
-	Starved dissect.StarvedError
+	Starved dissect.StarvedRejection
 }
 
 func (e StarvedRejection) Error() string {
-	return fmt.Sprintf("skeleton: %s: %s in %s", e.Subject, e.Starved.Error(), e.File)
+	return fmt.Sprintf("treeplan: %s: %s in %s", e.Subject, e.Starved.Error(), e.File)
 }
 
 // Note names the size and the remedy, and nothing that locates bytes.
@@ -111,9 +111,9 @@ type DefectError struct {
 
 func (e DefectError) Error() string {
 	if e.Subject == "" {
-		return "skeleton: " + e.Reason
+		return "treeplan: " + e.Reason
 	}
-	return fmt.Sprintf("skeleton: %s: %s", e.Subject, e.Reason)
+	return fmt.Sprintf("treeplan: %s: %s", e.Subject, e.Reason)
 }
 
 // AsRejection reports the Rejection in err, if err is one.

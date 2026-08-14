@@ -22,32 +22,32 @@ import (
 // says the model produced the wrong thing and a blind resend would only hope
 // temperature fixes it.
 const (
-	// transportAttempts is how many times ONE call goes on the wire before
+	// wireAttempts is how many times ONE call goes on the wire before
 	// the runner concludes the network is not going to cooperate. Three is
 	// the smallest count that survives a single blip plus its retry landing
 	// in the same blip; more attempts on a batch job spend real minutes per
 	// unit for a case a resume already handles.
-	transportAttempts = 3
+	wireAttempts = 3
 
-	// transportBackoffBase is the wait before the second attempt; each
+	// wireBackoffBase is the wait before the second attempt; each
 	// further attempt doubles it (500ms, then 1s). Half a second is long
 	// enough for a load balancer to pick a different backend and short
 	// enough to be invisible against a call that takes tens of seconds.
-	transportBackoffBase = 500 * time.Millisecond
+	wireBackoffBase = 500 * time.Millisecond
 
-	// semanticAttempts is the first attempt plus ONE informed retry — the §9
+	// modelAttempts is the first attempt plus ONE informed retry — the §9
 	// "1 retry, then mechanical fallback" policy. The retry is worth making
 	// only because it carries the mechanical failure reason; a second one
 	// would be the blind resend that was ruled out.
-	semanticAttempts = 2
+	modelAttempts = 2
 
-	// correctiveNoteWords bounds the machine-generated corrective note. The
+	// retryNoteWords bounds the machine-generated retry note. The
 	// acceptance-criteria channel has a reserved word share (§9) that the
 	// stage's own criteria are also spending, so the note takes a small,
 	// fixed bite of it. A verifier's message is one sentence of mechanical
 	// fact ("cuts do not tile: gap at 4120"); twelve words carries that and
 	// truncates only prose nobody should be writing there.
-	correctiveNoteWords = 12
+	retryNoteWords = 12
 
 	// promptHashChars is how much of a prompt's digest identifies it in the
 	// provenance log: sixteen hex characters, eight bytes. Both attempts of a
@@ -58,10 +58,10 @@ const (
 	// noise around the few that distinguish anything.
 	promptHashChars = 16
 
-	// correctiveNotePrefix labels the note as machine-generated feedback
-	// rather than a criterion the skeleton emitted. Kept to four words so
+	// retryNotePrefix labels the note as machine-generated feedback
+	// rather than a criterion the tree plan emitted. Kept to four words so
 	// the note as a whole stays well inside the reserved share.
-	correctiveNotePrefix = "- previous attempt rejected:"
+	retryNotePrefix = "- previous attempt rejected:"
 )
 
 // ErrVerifierDefect marks a verification failure that is KBASE's defect
@@ -69,13 +69,13 @@ const (
 //
 // The seam has two failure classes and they take opposite remedies. A
 // response that failed a mechanical post-condition is a rejection: retry once
-// with the reason, then keep the mechanical baseline (§3 monotone safety). A
+// with the reason, then keep the mechanical fallback (§3 monotone safety). A
 // response that failed a check no legal answer could fail — ARCHITECTURE.md
 // §5's whitespace-adjacency tripwire is the first of these, and the argument
 // for why it cannot be the model's doing is in internal/dissect — indicts the
-// derivation that produced BOTH the question and the baseline. Retrying it
+// derivation that produced BOTH the question and the fallback. Retrying it
 // re-asks something that was never asked wrong, and falling back to the
-// baseline trusts the same derivation, so the worker aborts instead.
+// fallback trusts the same derivation, so the worker aborts instead.
 //
 // A verifier reports one by wrapping it (fmt.Errorf("%w: %w", …)), which
 // keeps the classification with the package that can make it and out of the
@@ -104,7 +104,7 @@ type CallRunner struct {
 	cfg    config.Config
 	lg     log.Logger
 
-	// backoff is the first inter-attempt wait, transportBackoffBase in every
+	// backoff is the first inter-attempt wait, wireBackoffBase in every
 	// production path. It is a field only so the tests that count attempts
 	// need not spend the real waits to do it; the one test that asserts the
 	// wait actually happens uses the constant.
@@ -114,17 +114,17 @@ type CallRunner struct {
 // NewCallRunner returns a runner over client, resolving tiers through cfg and
 // logging through lg (log.Discard for a caller with nothing to hand it).
 func NewCallRunner(client model.Client, cfg config.Config, lg log.Logger) *CallRunner {
-	return &CallRunner{client: client, cfg: cfg, lg: lg, backoff: transportBackoffBase}
+	return &CallRunner{client: client, cfg: cfg, lg: lg, backoff: wireBackoffBase}
 }
 
 // call is one unit's model call.
 type call struct {
-	// Stage and Unit name the work, for the log and for a UnitFailure.
-	Stage string
-	Unit  string
+	// Stage and ArtifactPath name the work, for the log and for a OwedArtifactFailure.
+	Stage        string
+	ArtifactPath string
 
-	// Agent is the stage's shared agent.
-	Agent *agent
+	// BoundAsk is the stage's shared bound ask.
+	BoundAsk *boundAsk
 
 	// Input is the per-call half of the prompt.
 	Input prompt.CallInput
@@ -143,19 +143,19 @@ type call struct {
 
 // CallResult is what one unit's call produced.
 type CallResult struct {
-	// Artifact is the verified, typed artifact — or the mechanical baseline
-	// when a refinement seam fell back. Never raw model text.
+	// Artifact is the verified, typed artifact — or the mechanical fallback
+	// when a fallback-backed seam fell back. Never raw model text.
 	Artifact any
 
 	// Usage is the sum over every attempt this call made, which is what the
 	// unit actually cost.
 	Usage model.Usage
 
-	// Degraded reports a refinement seam that kept its baseline: the unit is
+	// FellBack reports a fallback-backed seam that kept its fallback: the unit is
 	// correct and less good than it was meant to be.
-	Degraded bool
+	FellBack bool
 
-	// Attempts is how many semantic attempts ran (1 or semanticAttempts).
+	// Attempts is how many model attempts ran (1 or modelAttempts).
 	Attempts int
 
 	// Hashes is the last built call's per-slot hashes, which the caller
@@ -178,13 +178,13 @@ type CallResult struct {
 //   - Context cancellation returns the context's error. It is not network
 //     weather and not a model failure; the job is stopping.
 //   - Transport exhaustion and verification exhaustion both mean "no verified
-//     artifact", so both land in seam resolution: a refinement seam keeps its
-//     baseline and is marked degraded, an essential seam returns UnitFailure
+//     artifact", so both land in seam resolution: a fallback-backed seam keeps its
+//     fallback and is marked as fallen back, a no-fallback seam returns OwedArtifactFailure
 //     and produces nothing.
 func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
-	modelID, ok := r.cfg.ModelFor(c.Agent.role.Tier)
+	modelID, ok := r.cfg.ModelFor(c.BoundAsk.ask.Tier)
 	if !ok {
-		return CallResult{}, fmt.Errorf("pipeline: %s: no model is configured for the %q tier", c.Stage, c.Agent.role.Tier)
+		return CallResult{}, fmt.Errorf("pipeline: %s: no model is configured for the %q tier", c.Stage, c.BoundAsk.ask.Tier)
 	}
 
 	var (
@@ -193,19 +193,19 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 		kind    FailureKind
 		in      = c.Input
 	)
-	for attempt := 1; attempt <= semanticAttempts; attempt++ {
-		built, err := c.Agent.ctx.Build(in)
+	for attempt := 1; attempt <= modelAttempts; attempt++ {
+		built, err := c.BoundAsk.ctx.Build(in)
 		if err != nil {
 			if attempt == 1 {
 				return CallResult{}, err
 			}
 			// The informed retry could not be assembled — most plausibly
-			// the corrective note pushed the acceptance criteria over their
+			// the retry note pushed the acceptance criteria over their
 			// reserved share. The retry simply does not happen; monotone
 			// safety still owes this unit its seam resolution, and skipping
 			// that would turn a recoverable model failure into a hard one.
-			r.lg.Warn("corrective retry could not be built; resolving the seam without it",
-				"stage", c.Stage, "unit", c.Unit, "error", err)
+			r.lg.Warn("retry could not be built; resolving the seam without it",
+				"stage", c.Stage, "unit", c.ArtifactPath, "error", err)
 			break
 		}
 		res.Hashes = built.Hashes
@@ -214,7 +214,7 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 			return CallResult{}, err
 		}
 		if built.Warning != "" {
-			r.lg.Warn("call is over the per-call target", "stage", c.Stage, "unit", c.Unit, "detail", built.Warning)
+			r.lg.Warn("call is over the per-call target", "stage", c.Stage, "unit", c.ArtifactPath, "detail", built.Warning)
 		}
 		hash := HashBytes([]byte(built.UserTurn))[:promptHashChars]
 
@@ -224,9 +224,9 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 				return CallResult{}, ctxErr
 			}
 			lastErr, kind = err, FailureTransport
-			r.lg.Warn("call failed on the wire", "stage", c.Stage, "unit", c.Unit,
+			r.lg.Warn("call failed on the wire", "stage", c.Stage, "unit", c.ArtifactPath,
 				"attempt", attempt, "prompt", hash, "outcome", "transport-exhausted", "error", err)
-			// A retry with a corrective note is a semantic remedy for a
+			// A retry with a retry note is a semantic remedy for a
 			// semantic problem. Nothing was verified here, so there is
 			// nothing to correct.
 			break
@@ -234,9 +234,9 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 		res.Usage = addUsage(res.Usage, resp.Usage)
 		r.account(c, resp.Usage)
 
-		artifact, verr := c.Agent.role.Verify(c.Unit, resp.Content)
+		artifact, verr := c.BoundAsk.ask.Verify(c.ArtifactPath, resp.Content)
 		if verr == nil {
-			r.lg.Debug("call verified", "stage", c.Stage, "unit", c.Unit,
+			r.lg.Debug("call verified", "stage", c.Stage, "unit", c.ArtifactPath,
 				"attempt", attempt, "prompt", hash, "outcome", "verified")
 			crashpoint.At(cpCallVerified)
 			res.Artifact = artifact
@@ -247,26 +247,26 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 			// be wrong in this way, so the fault is ours. Retrying re-asks a
 			// question that was never the problem, and falling back would
 			// trust the same broken derivation, so the worker stops.
-			return CallResult{}, WorkerAbortError{Stage: c.Stage, Unit: c.Unit, Err: verr}
+			return CallResult{}, WorkerAbortError{Stage: c.Stage, ArtifactPath: c.ArtifactPath, Err: verr}
 		}
 		lastErr, kind = verr, FailureVerification
-		r.lg.Warn("response failed mechanical verification", "stage", c.Stage, "unit", c.Unit,
+		r.lg.Warn("response failed mechanical verification", "stage", c.Stage, "unit", c.ArtifactPath,
 			"attempt", attempt, "prompt", hash, "outcome", "rejected", "reason", verr)
-		in = withCorrectiveNote(c.Input, verr)
+		in = withRetryNote(c.Input, verr)
 	}
 	return r.resolveSeam(c, res, kind, lastErr)
 }
 
 // assertFrozen is the frozen-prompt assertion: the per-worker churn tripwire
-// plus the stage-level canonical check. Both are OUR contract, so a violation
+// plus the stage-level canonical-hash check. Both are OUR contract, so a violation
 // is a defect in kbase and not a condition to recover from — the worker aborts
 // and its siblings drain.
 func (r *CallRunner) assertFrozen(c call, built prompt.BuiltCall) error {
 	if err := prompt.CheckStability(c.Frontier, c.Prev, built.Hashes); err != nil {
-		return WorkerAbortError{Stage: c.Stage, Unit: c.Unit, Err: err}
+		return WorkerAbortError{Stage: c.Stage, ArtifactPath: c.ArtifactPath, Err: err}
 	}
-	if err := c.Agent.checkCanonical(built.Hashes); err != nil {
-		return WorkerAbortError{Stage: c.Stage, Unit: c.Unit, Err: err}
+	if err := c.BoundAsk.checkCanonicalHashes(built.Hashes); err != nil {
+		return WorkerAbortError{Stage: c.Stage, ArtifactPath: c.ArtifactPath, Err: err}
 	}
 	return nil
 }
@@ -277,13 +277,13 @@ func (r *CallRunner) assertFrozen(c call, built prompt.BuiltCall) error {
 // timeout in the path.
 //
 // The effort is the ROLE's — the definition's declaration, threaded from the
-// registration site through the agent to here. The runner picks nothing: it
+// registration site through the bound ask to here. The runner picks nothing: it
 // has no idea what is being asked, which is exactly why it is not the layer
 // that gets to say how hard to ask it.
 func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c call) (model.Response, error) {
-	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, c.Agent.role.Effort)
+	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, c.BoundAsk.ask.Effort)
 	var lastErr error
-	for attempt := 1; attempt <= transportAttempts; attempt++ {
+	for attempt := 1; attempt <= wireAttempts; attempt++ {
 		if attempt > 1 {
 			if err := sleep(ctx, r.backoff<<(attempt-2)); err != nil {
 				return model.Response{}, err
@@ -298,35 +298,35 @@ func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c call
 		if !retryableTransport(ctx, err) {
 			break
 		}
-		r.lg.Warn("transport failure; retrying", "stage", c.Stage, "unit", c.Unit,
-			"attempt", attempt, "of", transportAttempts, "error", err)
+		r.lg.Warn("transport failure; retrying", "stage", c.Stage, "unit", c.ArtifactPath,
+			"attempt", attempt, "of", wireAttempts, "error", err)
 	}
 	return model.Response{}, fmt.Errorf("transport: %w", lastErr)
 }
 
 // resolveSeam is R-4's step 6: what happens when no verified artifact came
-// back. The branch is the whole point of classifying seams — a refinement seam
+// back. The branch is the whole point of classifying seams — a fallback-backed seam
 // has somewhere valid to stand and an essential one does not, so pretending
 // otherwise would emit unverified material.
 func (r *CallRunner) resolveSeam(c call, res CallResult, kind FailureKind, cause error) (CallResult, error) {
-	if c.Agent.Seam() == SeamRefinement {
-		res.Artifact = c.Agent.role.Baseline(c.Unit)
-		res.Degraded = true
-		r.lg.Warn("keeping the mechanical baseline; the model's refinement did not verify",
-			"stage", c.Stage, "unit", c.Unit, "attempts", res.Attempts, "kind", string(kind), "reason", cause)
+	if c.BoundAsk.Seam() == FallbackBackedSeam {
+		res.Artifact = c.BoundAsk.ask.Fallback(c.ArtifactPath)
+		res.FellBack = true
+		r.lg.Warn("keeping the mechanical fallback; the model's refinement did not verify",
+			"stage", c.Stage, "unit", c.ArtifactPath, "attempts", res.Attempts, "kind", string(kind), "reason", cause)
 		return res, nil
 	}
 	// The tokens a failed essential unit burned are its own: two semantic
 	// attempts that produced nothing still cost what they cost, and the
 	// aggregate that left them out was understating exactly the units that
 	// cost the most and delivered least.
-	return CallResult{}, UnitFailure{
-		Stage:            c.Stage,
-		Path:             c.Unit,
-		Kind:             kind,
-		SemanticAttempts: res.Attempts,
-		Usage:            res.Usage,
-		Err:              cause,
+	return CallResult{}, OwedArtifactFailure{
+		Stage:         c.Stage,
+		Path:          c.ArtifactPath,
+		Kind:          kind,
+		ModelAttempts: res.Attempts,
+		Usage:         res.Usage,
+		Err:           cause,
 	}
 }
 
@@ -343,7 +343,7 @@ func (r *CallRunner) resolveSeam(c call, res CallResult, kind FailureKind, cause
 // string is a string, and the point of the logging seam is that a field is a
 // field.
 func (r *CallRunner) account(c call, u model.Usage) {
-	r.lg.Debug("call usage", "stage", c.Stage, "unit", c.Unit,
+	r.lg.Debug("call usage", "stage", c.Stage, "unit", c.ArtifactPath,
 		"prompt_tokens", u.PromptTokens, "cached_tokens", u.CachedPromptTokens,
 		"completion_tokens", u.CompletionTokens, "reasoning_tokens", u.ReasoningTokens)
 
@@ -351,7 +351,7 @@ func (r *CallRunner) account(c call, u model.Usage) {
 		return
 	}
 	t := u.Telemetry
-	r.lg.Info("call telemetry", "stage", c.Stage, "unit", c.Unit,
+	r.lg.Info("call telemetry", "stage", c.Stage, "unit", c.ArtifactPath,
 		"time_to_first_token", t.TimeToFirstToken, "prefill", t.PrefillDuration,
 		"generation", t.GenerationDuration, "total", t.TotalDuration,
 		"prefill_tps", t.PrefillTokensPerSecond, "generation_tps", t.GenerationTokensPerSecond,
@@ -359,16 +359,16 @@ func (r *CallRunner) account(c call, u model.Usage) {
 		"cached_tokens", u.CachedPromptTokens)
 }
 
-// withCorrectiveNote returns a copy of in carrying the mechanical failure
+// withRetryNote returns a copy of in carrying the mechanical failure
 // reason in the acceptance-criteria channel — the trailer, where the per-call
 // binding facts already live and where the model is most likely to still be
 // reading by the time it starts generating.
 //
 // It is built from the ORIGINAL input, not from the previous attempt's, so a
 // second note could never stack on a first.
-func withCorrectiveNote(in prompt.CallInput, cause error) prompt.CallInput {
+func withRetryNote(in prompt.CallInput, cause error) prompt.CallInput {
 	out := in
-	note := correctiveNotePrefix + " " + text.CapWords(cause.Error(), correctiveNoteWords)
+	note := retryNotePrefix + " " + text.CapWords(cause.Error(), retryNoteWords)
 	out.AcceptanceCriteria = slices.Concat(in.AcceptanceCriteria, []string{note})
 	return out
 }
@@ -403,7 +403,7 @@ func retryableTransport(ctx context.Context, err error) bool {
 	}
 	var status model.StatusError
 	if !errors.As(err, &status) {
-		// Not a status at all — a dial failure, a dropped stream, a
+		// Not a status at all — a dial failure, a dropped lane, a
 		// timeout. Retrying is the right default for every one of them.
 		return true
 	}
@@ -431,16 +431,16 @@ func addUsage(a, b model.Usage) model.Usage {
 
 // FailureKind classifies a unit failure for the inventory a refused job
 // reports. The classes exist because they take different remedies: a budget
-// failure is re-split at the skeleton, a verification failure is a prompt or
+// failure is re-split at the tree plan, a verification failure is a prompt or
 // model problem, a transport failure is a resume once the provider is back,
 // and a write failure is the filesystem.
 type FailureKind string
 
 const (
-	// FailureVerification is an essential seam whose response did not verify
+	// FailureVerification is a no-fallback seam whose response did not verify
 	// on either attempt.
 	FailureVerification FailureKind = "verification"
-	// FailureTransport is an essential seam whose call never completed.
+	// FailureTransport is a no-fallback seam whose call never completed.
 	FailureTransport FailureKind = "transport"
 	// FailureBudget is a build refusal — refuse-and-split (§3). The unit is
 	// too big for one call and belongs back at the stage that sizes units.
@@ -461,31 +461,31 @@ const (
 	// stored.
 	FailureWrite FailureKind = "write"
 	// FailureProduce is a mechanical unit whose own derivation failed
-	// (Task.Produce). It costs no tokens and has no retry: the same inputs
+	// (LaneTask.Produce). It costs no tokens and has no retry: the same inputs
 	// derive the same failure, so the remedy is upstream data or a kbase
 	// defect fix, never asking again.
 	FailureProduce FailureKind = "produce"
 )
 
-// UnitFailure is one unit the job could not produce. It is an error so a
+// OwedArtifactFailure is one unit the job could not produce. It is an error so a
 // caller can errors.As it out of a call, and a value in the job's inventory so
 // the report lists every one rather than the first.
 //
 // A unit failure is NOT fatal to the job: siblings finish (graceful
 // degradation), the inventory is reported, and emission is refused at
 // assembly — "sorry, something rotted" beats "here is your invalid crap".
-type UnitFailure struct {
+type OwedArtifactFailure struct {
 	Stage string
 	Path  string
 	Kind  FailureKind
 
-	// SemanticAttempts is how many times the unit was ASKED — the first
+	// ModelAttempts is how many times the unit was ASKED — the first
 	// attempt plus the informed retry, never the wire attempts underneath
 	// them. The distinction is the whole reason the two retry policies are
-	// separate: a transport failure reports one semantic attempt over three
+	// separate: a transport failure reports one model attempt over three
 	// wire requests, and a reader deciding whether to blame the provider
 	// needs the message to say the first rather than imply the second.
-	SemanticAttempts int
+	ModelAttempts int
 
 	// Usage is what the unit burned before it failed. A failed essential
 	// unit is not free, and an accounting that treated it as free would
@@ -495,16 +495,16 @@ type UnitFailure struct {
 	Err error
 }
 
-func (e UnitFailure) Error() string {
+func (e OwedArtifactFailure) Error() string {
 	attempts := "attempts"
-	if e.SemanticAttempts == 1 {
+	if e.ModelAttempts == 1 {
 		attempts = "attempt"
 	}
 	return fmt.Sprintf("pipeline: %s: unit %s failed (%s, %d semantic %s): %v",
-		e.Stage, e.Path, e.Kind, e.SemanticAttempts, attempts, e.Err)
+		e.Stage, e.Path, e.Kind, e.ModelAttempts, attempts, e.Err)
 }
 
-func (e UnitFailure) Unwrap() error { return e.Err }
+func (e OwedArtifactFailure) Unwrap() error { return e.Err }
 
 // WorkerAbortError reports a kbase defect a worker cannot run through. It has
 // two causes and they are the same failure seen from two places: the
@@ -512,20 +512,20 @@ func (e UnitFailure) Unwrap() error { return e.Err }
 // the ones its own stability contract says it is sending), and a verifier
 // declaring the failure OURS by wrapping ErrVerifierDefect (the response could
 // not be wrong in the way the check found, so the derivation that produced
-// both the question and the baseline is what is broken).
+// both the question and the fallback is what is broken).
 //
 // It is never retried and never falls back, because neither would address it.
 // The unit is not what failed — the orchestrator's model of its own state is,
 // and every later call from that worker would be built on the same wrong
 // belief. So the worker stops and the job reports a defect.
 type WorkerAbortError struct {
-	Stage string
-	Unit  string
-	Err   error
+	Stage        string
+	ArtifactPath string
+	Err          error
 }
 
 func (e WorkerAbortError) Error() string {
-	return fmt.Sprintf("pipeline: %s: worker aborted at unit %s: %v", e.Stage, e.Unit, e.Err)
+	return fmt.Sprintf("pipeline: %s: worker aborted at unit %s: %v", e.Stage, e.ArtifactPath, e.Err)
 }
 
 func (e WorkerAbortError) Unwrap() error { return e.Err }

@@ -7,7 +7,7 @@
 // byte-level and format-blind, so the same walk serves a Markdown corpus and
 // a LaTeX one.
 //
-// Custody is the whole point. The bytes a Unit carries are the canonical
+// Custody is the whole point. The bytes a SourceDoc carries are the canonical
 // source: the survey records byte offsets into them, the dissector slices
 // them by verified offsets (§5), and nothing in between rewrites or
 // re-encodes them. A stage that wants a transformed view derives an overlay;
@@ -18,7 +18,7 @@
 // Unicode NFC pre-pass in New (ruled 2026-08-13). Custody bytes are NFC
 // bytes, so every offset, slice, hash, title, slug and comparison downstream
 // works on one spelling of every character instead of two. The same pass
-// covers the id: a Unit's Path is its NFC spelling, so a document has one
+// covers the id: a SourceDoc's Path is its NFC spelling, so a document has one
 // identity however the filesystem spelled its name. See New.
 //
 // Everything here is offline and deterministic: the same tree produces the
@@ -41,9 +41,9 @@ import (
 	"kbase/internal/log"
 )
 
-// Unit is one source document under custody: its corpus-wide identity, its
+// SourceDoc is one source document under custody: its corpus-wide identity, its
 // exact bytes, and their digest.
-type Unit struct {
+type SourceDoc struct {
 	// Path is the slash-separated path relative to the corpus root, in
 	// Unicode NFC. It is the corpus-wide id — link resolution, the survey
 	// artifact, and the taxonomy all name documents this way, so the id is
@@ -52,13 +52,13 @@ type Unit struct {
 	// it from the path the caller supplied.
 	Path string
 
-	// SourcePath is the path as it was GIVEN — the on-disk spelling the walk
+	// UploadPath is the path as it was GIVEN — the on-disk spelling the walk
 	// found the file under, before the NFC pre-pass. It is UPLOAD identity in
-	// the same sense SourceSHA256 is: the id resolves references, this names
+	// the same sense UploadSHA256 is: the id resolves references, this names
 	// the file a human has to go and open. Filled in by New. It equals Path
 	// for an already-NFC name, which is the overwhelmingly common case. See
 	// PathNormalized.
-	SourcePath string
+	UploadPath string
 
 	// Bytes is the document under custody: the file as it was read, put
 	// through the NFC pre-pass by New. Callers read it and index into it;
@@ -69,31 +69,31 @@ type Unit struct {
 	// downstream artifact quotes. Filled in by New.
 	SHA256 string
 
-	// SourceSHA256 is the hex digest of the bytes as they were READ, before
-	// the NFC pre-pass — UPLOAD identity, the hash that ties a unit back to
+	// UploadSHA256 is the hex digest of the bytes as they were READ, before
+	// the NFC pre-pass — UPLOAD identity, the hash that ties a document back to
 	// the file on disk. Filled in by New. It equals SHA256 for an already-NFC
 	// file, which is the overwhelmingly common case; the two differ exactly
 	// when normalization changed something, and that difference IS the
 	// record that it did. See Normalized.
-	SourceSHA256 string
+	UploadSHA256 string
 }
 
 // BytesNormalized reports whether the NFC pre-pass changed this document's
 // bytes; PathNormalized, whether it changed the document's path. They are
 // separate questions — a corpus can hold an NFD filename over already-NFC
-// content, and the reverse — so there is no single "was this unit
+// content, and the reverse — so there is no single "was this document
 // normalized" answer to give.
 //
 // Both are derived rather than stored: a flag beside the two hashes (or the
 // two paths) could disagree with them, and provenance that can contradict
 // itself is worse than no provenance.
-func (u Unit) BytesNormalized() bool { return u.SourceSHA256 != u.SHA256 }
+func (d SourceDoc) BytesNormalized() bool { return d.UploadSHA256 != d.SHA256 }
 
 // PathNormalized reports whether the NFC pre-pass changed this document's
 // path. See BytesNormalized.
-func (u Unit) PathNormalized() bool { return u.SourcePath != u.Path }
+func (d SourceDoc) PathNormalized() bool { return d.UploadPath != d.Path }
 
-// Corpus is an ingested document set: every unit, in path order, plus the
+// Corpus is an ingested document set: every document, in path order, plus the
 // identity of the set as a whole.
 //
 // The directory the corpus was read from is deliberately not carried. An
@@ -101,20 +101,20 @@ func (u Unit) PathNormalized() bool { return u.SourcePath != u.Path }
 // same corpus produce different bytes on two checkouts — and nothing
 // downstream needs it, because every id here is already relative.
 type Corpus struct {
-	// Units are the source documents, sorted by Path.
-	Units []Unit
+	// Docs are the source documents, sorted by Path.
+	Docs []SourceDoc
 
 	// ContentHash is the corpus-level source identity used by the
 	// provenance stamp (ARCHITECTURE.md §3) when the corpus is not a git
 	// checkout. See New for how it is derived.
 	ContentHash string
 
-	// index maps Path to a position in Units, so link resolution is a map
+	// index maps Path to a position in Docs, so link resolution is a map
 	// lookup rather than a scan per link. Unexported and never marshalled:
 	// map iteration order would be a determinism hazard in an artifact.
 	index map[string]int
 
-	// folded maps a case-folded path to every unit that folds to it. It
+	// folded maps a case-folded path to every document that folds to it. It
 	// exists because the walk matches extensions case-insensitively — it
 	// accepts `.MD` — while a link to that document is routinely written
 	// `.md`; without the fold, accepting the file and resolving links to it
@@ -141,7 +141,7 @@ func (c Corpus) FoldedPath(path string) (id string, ambiguous bool) {
 	case 0:
 		return "", false
 	case 1:
-		return c.Units[is[0]].Path, false
+		return c.Docs[is[0]].Path, false
 	default:
 		return "", true
 	}
@@ -152,16 +152,16 @@ func (c Corpus) FoldedPath(path string) (id string, ambiguous bool) {
 // `.MD` or a hand-typed `Setup.md`, not a Unicode special-casing rule.
 func foldPath(path string) string { return strings.ToLower(path) }
 
-// Unit returns the unit at the given slash-separated relative path.
-func (c Corpus) Unit(path string) (Unit, bool) {
+// Doc returns the source document at the given slash-separated relative path.
+func (c Corpus) Doc(path string) (SourceDoc, bool) {
 	i, ok := c.index[path]
 	if !ok {
-		return Unit{}, false
+		return SourceDoc{}, false
 	}
-	return c.Units[i], true
+	return c.Docs[i], true
 }
 
-// New assembles a Corpus from units that already have Path and Bytes set: it
+// New assembles a Corpus from docs that already have Path and Bytes set: it
 // sorts them by path, runs the NFC pre-pass, digests each one, and derives
 // the corpus content hash. It is the only constructor, so normalization and
 // hashing have exactly one implementation each, and it is the seam tests
@@ -186,8 +186,8 @@ func (c Corpus) Unit(path string) (Unit, bool) {
 // Normalizing the id makes every comparison downstream NFC-against-NFC byte
 // equality, with no re-normalization at any use site to remember or forget.
 //
-// Provenance keeps both spellings of each: SourceSHA256 over the bytes as
-// read and SourcePath as the path was given, beside the custody SHA256 and
+// Provenance keeps both spellings of each: UploadSHA256 over the bytes as
+// read and UploadPath as the path was given, beside the custody SHA256 and
 // the NFC Path. Equal pairs mean the file was already NFC and nothing was
 // transformed; different ones are the record that something was. Invalid
 // UTF-8 is never touched, in a path or in content — normalizing it would be a
@@ -198,19 +198,19 @@ func (c Corpus) Unit(path string) (Unit, bool) {
 // the concatenated bytes means it changes when a file is renamed or removed,
 // not only when content changes — a rename reorganizes a knowledge base even
 // though no byte of any document moved.
-func New(units []Unit) (Corpus, error) {
-	sorted := slices.Clone(units)
+func New(docs []SourceDoc) (Corpus, error) {
+	sorted := slices.Clone(docs)
 	// Ids are normalized BEFORE the sort, not alongside the digests below.
 	// Path order IS the corpus's canonical order, and the thing ordered has
-	// to be the id: sorting the source spellings would let two units whose
+	// to be the id: sorting the source spellings would let two docs whose
 	// names differ only by Unicode spelling come out in an order their ids do
 	// not agree with, and the corpus content hash reads that order.
 	for i := range sorted {
 		u := &sorted[i]
-		u.SourcePath = u.Path
+		u.UploadPath = u.Path
 		u.Path = NormalizePath(u.Path)
 	}
-	slices.SortFunc(sorted, func(a, b Unit) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(sorted, func(a, b SourceDoc) int { return strings.Compare(a.Path, b.Path) })
 
 	index := make(map[string]int, len(sorted))
 	folded := make(map[string][]int, len(sorted))
@@ -218,38 +218,38 @@ func New(units []Unit) (Corpus, error) {
 	for i := range sorted {
 		u := &sorted[i]
 		if u.Path == "" {
-			return Corpus{}, fmt.Errorf("ingest: unit %d has no path", i)
+			return Corpus{}, fmt.Errorf("ingest: document %d has no path", i)
 		}
 		if j, dup := index[u.Path]; dup {
-			// Two units can now collide on an id they never shared a spelling
+			// Two docs can now collide on an id they never shared a spelling
 			// of. NFD and NFC names render identically, so naming the id twice
 			// would explain nothing — %+q escapes the code points, which is
 			// the only form in which the two are told apart on a terminal.
-			if prev := sorted[j].SourcePath; prev != u.SourcePath {
+			if prev := sorted[j].UploadPath; prev != u.UploadPath {
 				return Corpus{}, fmt.Errorf("ingest: %+q and %+q are one document path in two "+
-					"Unicode spellings; the corpus can hold only one", prev, u.SourcePath)
+					"Unicode spellings; the corpus can hold only one", prev, u.UploadPath)
 			}
 			return Corpus{}, fmt.Errorf("ingest: duplicate source path %q", u.Path)
 		}
 		index[u.Path] = i
-		// Every unit is recorded under its fold key, collisions included:
+		// Every document is recorded under its fold key, collisions included:
 		// dropping one would make the corpus quietly answer for a document
 		// it holds two of. See FoldedPath.
 		key := foldPath(u.Path)
 		folded[key] = append(folded[key], i)
 
-		u.SourceSHA256 = digest(u.Bytes)
+		u.UploadSHA256 = digest(u.Bytes)
 		if utf8.Valid(u.Bytes) && !norm.NFC.IsNormal(u.Bytes) {
 			u.Bytes = norm.NFC.Bytes(u.Bytes)
 			u.SHA256 = digest(u.Bytes)
 		} else {
-			u.SHA256 = u.SourceSHA256
+			u.SHA256 = u.UploadSHA256
 		}
 		fmt.Fprintf(corpusDigest, "%s\x00%s\n", u.Path, u.SHA256)
 	}
 
 	return Corpus{
-		Units:       sorted,
+		Docs:        sorted,
 		ContentHash: hex.EncodeToString(corpusDigest.Sum(nil)),
 		index:       index,
 		folded:      folded,
@@ -257,7 +257,7 @@ func New(units []Unit) (Corpus, error) {
 }
 
 // NormalizePath is the NFC pre-pass applied to an id, and the one place a
-// path is normalized in this pipeline. New calls it on every unit; a caller
+// path is normalized in this pipeline. New calls it on every document; a caller
 // that has obtained a path from OUTSIDE custody bytes — a percent-decoded
 // link destination is the live case — calls it to bring that path onto the
 // same footing before comparing it against an id. Anything already read out
@@ -335,7 +335,7 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 		return Corpus{}, fmt.Errorf("ingest: corpus root %s is not a directory", root)
 	}
 
-	var units []Unit
+	var docs []SourceDoc
 	var total int64
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -400,19 +400,19 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 				"far more often than a document set", root, maxCorpusBytes, rel)
 		}
 		// rel is the on-disk spelling, which is what the read above needed and
-		// what New keeps as SourcePath. The NFC id is derived from it there,
+		// what New keeps as UploadPath. The NFC id is derived from it there,
 		// after every file has been read: nothing in the walk may depend on
 		// the id, because the id is not what opens a file.
-		units = append(units, Unit{Path: rel, Bytes: b})
+		docs = append(docs, SourceDoc{Path: rel, Bytes: b})
 		return nil
 	})
 	if err != nil {
 		return Corpus{}, err
 	}
-	if len(units) == 0 {
+	if len(docs) == 0 {
 		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", strings.Join(exts, ", "), root)
 	}
-	return New(units)
+	return New(docs)
 }
 
 // relPath renders p as the corpus-wide id: relative to root, slash-separated

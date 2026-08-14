@@ -16,7 +16,7 @@ import (
 // ErrOverBudget is the refuse-and-split signal (ARCHITECTURE.md §3, §7): a
 // slot, or the whole call, exceeds the budget the orchestrator set. Slot is
 // SlotTotal when the ceiling was the limit breached. The orchestrator maps
-// this back to the skeleton and splits the unit; nothing is ever truncated.
+// this back to the tree plan and splits the unit; nothing is ever truncated.
 type ErrOverBudget struct {
 	Slot     Slot
 	Estimate int

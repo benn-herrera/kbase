@@ -49,7 +49,7 @@ func runToCompletion(t *testing.T, dir string, mode Mode) (*stubClient, JobResul
 	if err != nil {
 		t.Fatalf("run in %s mode: %v", mode, err)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		t.Fatalf("run in %s mode is not emit-ready: %+v", mode, res)
 	}
 	return client, res
@@ -124,7 +124,7 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 				assertSameState(t, want, storeState(t, dir), "after "+point)
 
 				// The fold's own claim, which no per-unit comparison can
-				// make: its stream is redone WHOLE or not at all. A
+				// make: its lane is redone WHOLE or not at all. A
 				// half-redone fold would compose a list from a prefix
 				// nothing recorded the dependencies of (§12).
 				fold := foldCalls(resumed)
@@ -154,9 +154,9 @@ func TestResumeAfterEveryCrashpoint(t *testing.T) {
 	}
 }
 
-// foldCalls counts the calls a run made on the fold stage's stream, read off
+// foldCalls counts the calls a run made on the fold stage's lane, read off
 // the prompts the client recorded. It is how a test asks whether the fold ran
-// at all, without the coordinator having to report per-stream call counts
+// at all, without the coordinator having to report per-lane call counts
 // nobody else needs.
 func foldCalls(c *stubClient) int {
 	n := 0
@@ -175,7 +175,7 @@ func foldCalls(c *stubClient) int {
 //
 // The probe runs with ONE worker, deliberately. How MANY times a point is
 // crossed is worker-count independent — every point here is crossed per unit,
-// per stream or per stage, and the pool changes only the order — but with two
+// per lane or per stage, and the pool changes only the order — but with two
 // workers racing, a probe that lands mid-flight can answer differently between
 // runs, and a skip that varies is a coverage gate that sometimes is not one.
 func crossedAtLeast(t *testing.T, point string, n int) bool {
@@ -231,14 +231,14 @@ func TestPoisonedStampRedoesOnlyItsUnit(t *testing.T) {
 
 	// The forensics: the scan stopped at the stage holding the poisoned
 	// unit, verdicted that unit and only that unit non-valid, and said why.
-	if res.Scan.StageName != "leaves" {
-		t.Errorf("resume stage = %q, want leaves", res.Scan.StageName)
+	if res.ResumeScan.StageName != "leaves" {
+		t.Errorf("resume stage = %q, want leaves", res.ResumeScan.StageName)
 	}
-	if res.Scan.Redo != 1 {
-		t.Errorf("Redo = %d, want 1", res.Scan.Redo)
+	if res.ResumeScan.Redo != 1 {
+		t.Errorf("Redo = %d, want 1", res.ResumeScan.Redo)
 	}
-	var redone []UnitVerdict
-	for _, v := range res.Scan.Verdicts {
+	var redone []OwedArtifactVerdict
+	for _, v := range res.ResumeScan.Verdicts {
 		if v.Verdict != VerdictValid {
 			redone = append(redone, v)
 		}
@@ -272,14 +272,14 @@ func TestResumeOfACompleteJobDoesNothing(t *testing.T) {
 	want := storeState(t, dir)
 
 	client, res := runToCompletion(t, dir, ModeResume)
-	if !res.Scan.Complete() {
-		t.Errorf("scan = %+v, want a complete chain", res.Scan)
+	if !res.ResumeScan.Complete() {
+		t.Errorf("scan = %+v, want a complete chain", res.ResumeScan)
 	}
 	if client.callCount() != 0 || res.Produced != 0 || res.Reused != synthUnits {
 		t.Errorf("%d calls, produced %d, reused %d; want 0/0/%d",
 			client.callCount(), res.Produced, res.Reused, synthUnits)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		t.Error("a job with everything already proven is emit-ready")
 	}
 	assertSameState(t, want, storeState(t, dir), "after a no-op resume")
@@ -347,7 +347,7 @@ func TestResumeAcrossADerivedStageBoundary(t *testing.T) {
 	goldenClient := echoStub()
 	goldenRes, err := newSynthCoordinator(t, golden, goldenClient, crashWorkers, log.Discard()).
 		Run(context.Background(), synthDerivedPlan(t, golden), ModeResume)
-	if err != nil || !goldenRes.EmitReady() {
+	if err != nil || !goldenRes.DeliveryReady() {
 		t.Fatalf("uninterrupted derived run: err = %v, result = %+v", err, goldenRes)
 	}
 	if goldenRes.Units != synthDerivedUnits {
@@ -372,7 +372,7 @@ func TestResumeAcrossADerivedStageBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		t.Fatalf("the resumed derived run is not emit-ready: %+v", res)
 	}
 	assertSameState(t, want, storeState(t, dir), "after a kill at the derived stage boundary")
@@ -408,7 +408,7 @@ func TestSweepClearsWhatTheChainDoesNotAccountFor(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if _, res := runToCompletion(t, dir, ModeResume); !res.EmitReady() {
+	if _, res := runToCompletion(t, dir, ModeResume); !res.DeliveryReady() {
 		t.Fatalf("the completing run is not emit-ready: %+v", res)
 	}
 

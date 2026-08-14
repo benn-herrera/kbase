@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -60,7 +60,7 @@ const (
 	// slugWordCap bounds a slug's word count. A title is already capped at
 	// survey.WordCap (40 words) and forty words is not a filename; eight is
 	// the length past which a path stops being readable in a terminal, and
-	// the skeleton — not the filename — is what identifies a node anyway.
+	// the tree plan — not the filename — is what identifies a node anyway.
 	slugWordCap = 8
 
 	// slugByteCap bounds a slug's length. Eight words of a technical title
@@ -275,7 +275,7 @@ func (n *namer) tryClaim(cand string, parts int) (string, bool) {
 // The name is a function of the group's title and the part's ORDINAL, and of
 // nothing else. That independence is not provisional (O-8): stage 4 moves the
 // boundaries inside a group, and a name derived from where a boundary landed
-// would falsify the skeleton the moment refinement ran.
+// would falsify the tree plan the moment refinement ran.
 func partName(base string, k int) string {
 	return fmt.Sprintf("%s%s%d", base, slugSep, k)
 }

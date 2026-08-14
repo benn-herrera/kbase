@@ -29,7 +29,7 @@ import (
 
 // dev-refine runs stage 4's boundary fold over ONE document against a REAL
 // provider. It is a development verb: the first place the orchestrator, the
-// refinement seam and a live model meet, and the only place today where they
+// fallback-backed seam and a live model meet, and the only place today where they
 // do — the taxonomy stage that will eventually say what the spans are does not
 // exist yet, so this verb supplies the one span it can name without inventing
 // anything: the whole file (ARCHITECTURE.md §5, ROADMAP).
@@ -58,7 +58,7 @@ const (
 	// nothing to adjudicate.
 	devRefineBudget = 512
 
-	// devRefineStage names the stage, its one domain stream, and the store
+	// devRefineStage names the stage, its one serial lane, and the store
 	// directory its composed cut list lands in — one name, so a failure names
 	// one thing rather than three.
 	devRefineStage = "cuts"
@@ -113,7 +113,7 @@ const (
 // It bought nothing and cost everything. The off value is stated rather than
 // defaulted so that a later ask which IS worth reasoning over has to say so on
 // its own line.
-var devRefineEffort = model.DeclareEffort(model.Effort{Thinking: false})
+var devRefineEffort = model.DeclareEffort(model.RequestEffort{Thinking: false})
 
 // devRefineOptions is the resolved input of the dev-refine verb: the shared
 // provider-reaching options, the one document under work, and where its
@@ -218,8 +218,8 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	// One document in, one file out — Survey returns one File per corpus unit,
 	// in corpus order, and survey.Assemble has already refused any other shape.
 	doc := artifact.Files[0]
-	src := corpus.Units[0].Bytes
-	span := survey.Range{Start: 0, End: len(src)}
+	src := corpus.Docs[0].Bytes
+	span := survey.Span{Start: 0, End: len(src)}
 	params := dissect.Params{Est: est, BudgetTokens: opts.Budget}
 
 	mech, err := dissect.Split(src, span, doc.Cuts, params)
@@ -263,7 +263,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	fmt.Fprintf(opts.Stdout, "thinking: %t (%s)\n", effort.Thinking, effortSource(overridden))
 
 	plan := pipeline.Plan{
-		SystemFrame: devRefineFrame,
+		JobFrame: devRefineFrame,
 		Stages: []*pipeline.StagePlan{refiner.StagePlan(devRefineStage, []pipeline.Input{
 			{Name: devRefineSourceInput, Hash: artifact.Corpus.ContentHash},
 		})},
@@ -276,7 +276,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	if err != nil {
 		return err
 	}
-	store := work.Store()
+	store := work.ArtifactStore()
 	coord := pipeline.NewCoordinator(store, pipeline.NewCallRunner(client, opts.Config, lg), 1, lg)
 
 	// ModeFresh, always. Resume would reuse a proven cut list and make no call
@@ -294,7 +294,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	for _, f := range res.Failures {
 		fmt.Fprintf(opts.Stderr, "unit %s failed (%s): %v\n", f.Path, f.Kind, f.Err)
 	}
-	if !res.EmitReady() {
+	if !res.DeliveryReady() {
 		return fmt.Errorf("%s: the refinement job did not complete: %d of %d units produced, %d failed",
 			devRefineVerb, res.Produced, res.Units, len(res.Failures))
 	}
@@ -322,7 +322,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	moved := reportBoundaries(opts.Stdout, src, est, before, after)
 	reportSections(opts.Stdout, src, est, cuts)
 	fmt.Fprintf(opts.Stdout, "outcome: %d boundaries, %d moved, %d kept, %d fell back to the mechanical cut\n",
-		len(after), moved, len(after)-moved, res.Degraded)
+		len(after), moved, len(after)-moved, res.FallbackCount)
 	fmt.Fprintf(opts.Stdout, "usage: prompt=%d cached=%d completion=%d\n",
 		res.Usage.PromptTokens, res.Usage.CachedPromptTokens, res.Usage.CompletionTokens)
 	fmt.Fprintf(opts.Stdout, "elapsed: %s\n", elapsed.Round(time.Millisecond))
@@ -338,13 +338,13 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 		Thinking:         effort.Thinking,
 		ThinkingOverride: overridden,
 		Source:           file,
-		SourceSHA256:     doc.SHA256,
+		UploadSHA256:     doc.SHA256,
 		BudgetTokens:     opts.Budget,
 		Sections:         len(cuts),
 		Boundaries:       len(after),
 		BoundariesMoved:  moved,
 		BoundariesKept:   len(after) - moved,
-		Fallbacks:        res.Degraded,
+		Fallbacks:        res.FallbackCount,
 		PromptTokens:     res.Usage.PromptTokens,
 		CachedTokens:     res.Usage.CachedPromptTokens,
 		CompletionTokens: res.Usage.CompletionTokens,
@@ -409,11 +409,11 @@ func deliver(out, rel string, data []byte) (string, error) {
 // thinking was on means one thing if that is what the definition declares and
 // another if an operator asked for it, and a reader looking at two runs of the
 // same document has no other way to tell which one was the experiment.
-func devRefineAsk(override *bool) (model.Effort, bool) {
+func devRefineAsk(override *bool) (model.RequestEffort, bool) {
 	if override == nil {
 		return devRefineEffort, false
 	}
-	return model.DeclareEffort(model.Effort{Thinking: *override}), true
+	return model.DeclareEffort(model.RequestEffort{Thinking: *override}), true
 }
 
 // devRefineThinking reads the tri-state --thinking override off a command's
@@ -463,7 +463,7 @@ func ingestOne(path string) (ingest.Corpus, error) {
 	// The corpus id is the base name: a one-document corpus has no tree for a
 	// path to be relative to, and an absolute path in a derived artifact is
 	// machine state (see ingest.Corpus).
-	return ingest.New([]ingest.Unit{{Path: filepath.Base(path), Bytes: b}})
+	return ingest.New([]ingest.SourceDoc{{Path: filepath.Base(path), Bytes: b}})
 }
 
 // reportBoundaries prints one line per boundary and returns how many moved.
@@ -471,7 +471,7 @@ func ingestOne(path string) (ingest.Corpus, error) {
 // Moved-or-kept is the whole of what a caller outside the stage can say about
 // an individual boundary: which ones fell back to the mechanical cut, and
 // which were rejected once and retried, are the fold's own records and land in
-// the log at info (see dissect.Refiner.accept/reject/baseline). A fallback
+// the log at info (see dissect.Refiner.accept/reject/fallback). A fallback
 // keeps the incumbent, so it reads as "kept" here — the stage-level fallback
 // count is reported separately, and the log is what attributes it.
 //
@@ -501,7 +501,7 @@ func reportBoundaries(w io.Writer, src []byte, est tokens.Estimator, before, aft
 
 // reportSections prints the composed cut list: one line per section, its byte
 // range and its size.
-func reportSections(w io.Writer, src []byte, est tokens.Estimator, cuts []survey.Range) {
+func reportSections(w io.Writer, src []byte, est tokens.Estimator, cuts []survey.Span) {
 	fmt.Fprintln(w, "sections:")
 	for i, c := range cuts {
 		fmt.Fprintf(w, "  %3d [%d,%d) %d bytes, %d tokens\n",
@@ -526,7 +526,7 @@ func reportSections(w io.Writer, src []byte, est tokens.Estimator, cuts []survey
 //
 // Rejections — a boundary whose first answer failed verification and was
 // retried — are absent because no caller-visible value carries them:
-// pipeline.JobResult reports fallbacks (Degraded) and not semantic attempts,
+// pipeline.JobResult reports fallbacks (FallbackCount) and not model attempts,
 // and the fold's own counters are unexported. They are in the log, at info,
 // one record per boundary.
 type devRefineRun struct {
@@ -538,7 +538,7 @@ type devRefineRun struct {
 	Thinking         bool   `json:"thinking"`
 	ThinkingOverride bool   `json:"thinkingOverridden"`
 	Source           string `json:"source"`
-	SourceSHA256     string `json:"sourceSha256"`
+	UploadSHA256     string `json:"sourceSha256"`
 	BudgetTokens     int    `json:"budgetTokens"`
 	// Sections is one field rather than a before/after pair: the fold
 	// re-tiles a span and never re-sizes it, which is the same property

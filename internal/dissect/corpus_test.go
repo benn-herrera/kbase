@@ -67,7 +67,7 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 
 	spans := 0
 	for _, f := range art.Files {
-		u, ok := corpus.Unit(f.Path)
+		u, ok := corpus.Doc(f.Path)
 		if !ok {
 			t.Fatalf("no source under custody for %s", f.Path)
 		}
@@ -79,7 +79,7 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 				p := params(budget)
 				cuts, err := Split(u.Bytes, span, f.Cuts, p)
 				if err != nil {
-					var starved StarvedError
+					var starved StarvedRejection
 					if !errors.As(err, &starved) {
 						t.Fatalf("%s %+v at budget %d: %v", f.Path, span, budget, err)
 					}
@@ -93,7 +93,7 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 					})
 					continue
 				}
-				if verr := Verify(u.Bytes, span, f.Cuts, cuts, Windows(u.Bytes, cuts, p), p); verr != nil {
+				if verr := Verify(u.Bytes, span, f.Cuts, cuts, MoveWindows(u.Bytes, cuts, p), p); verr != nil {
 					t.Fatalf("%s %+v at budget %d: Split produced a list its own verifier rejects: %v",
 						f.Path, span, budget, verr)
 				}
@@ -196,19 +196,19 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 }
 
 // spansOf is the file itself plus every section at every depth — the spans a
-// taxonomy skeleton will actually hand stage 4.
+// taxonomy tree plan will actually hand stage 4.
 //
 // The recursion is the point rather than thoroughness for its own sake: leaf
 // assignments land on sections deep in the heading tree, and those are the
 // small ones, where the minimum, the pre-merge and the starved refusal all
 // live. Top-level sections alone are the sizes least likely to exercise any of
 // it.
-func spansOf(f survey.File) []survey.Range {
-	spans := []survey.Range{{Start: 0, End: f.Bytes}}
+func spansOf(f survey.File) []survey.Span {
+	spans := []survey.Span{{Start: 0, End: f.Bytes}}
 	var walk func(secs []survey.Section)
 	walk = func(secs []survey.Section) {
 		for _, s := range secs {
-			spans = append(spans, survey.Range{Start: s.Start, End: s.End})
+			spans = append(spans, survey.Span{Start: s.Start, End: s.End})
 			walk(s.Children)
 		}
 	}

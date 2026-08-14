@@ -18,7 +18,7 @@ import (
 	"kbase/internal/prompt"
 )
 
-// A synthetic two-stage pipeline: mock transport, invented roles, invented
+// A synthetic two-stage pipeline: mock transport, invented asks, invented
 // verifiers, no real prompts and no real stage implementations. What is under
 // test is the ORCHESTRATION — phases, seams, retries, resume — and a real
 // stage would only add content whose correctness is a different question.
@@ -117,10 +117,10 @@ func synthEncode(artifact any) ([]byte, error) {
 	return []byte(a.Text + "\n"), nil
 }
 
-// synthBaseline is the mechanical result a refinement seam falls back to.
+// synthFallback is the mechanical result a fallback-backed seam falls back to.
 const synthBaselineText = "MECHANICAL BASELINE"
 
-func synthBaseline(string) any { return synthArtifact{Text: synthBaselineText} }
+func synthFallback(string) any { return synthArtifact{Text: synthBaselineText} }
 
 func synthDef(t *testing.T, body string) prompt.Definition {
 	t.Helper()
@@ -132,18 +132,18 @@ func synthDef(t *testing.T, body string) prompt.Definition {
 }
 
 // synthThinking and synthNoThinking are the two declared efforts the synthetic
-// roles ask with. They differ so a test can tell which role's declaration
-// reached the wire; that a heavy-tier role thinks and a light-tier one does not
+// asks ask with. They differ so a test can tell which ask's declaration
+// reached the wire; that a heavy-tier ask thinks and a light-tier one does not
 // is this fixture's convention, not a rule the pipeline knows.
 var (
-	synthThinking   = model.DeclareEffort(model.Effort{Thinking: true})
-	synthNoThinking = model.DeclareEffort(model.Effort{Thinking: false})
+	synthThinking   = model.DeclareEffort(model.RequestEffort{Thinking: true})
+	synthNoThinking = model.DeclareEffort(model.RequestEffort{Thinking: false})
 )
 
-// essentialRole has no baseline: a failure fails the unit.
-func essentialRole(t *testing.T) Role {
+// noFallbackAsk has no fallback: a failure fails the unit.
+func noFallbackAsk(t *testing.T) AskSpec {
 	t.Helper()
-	return Role{
+	return AskSpec{
 		Def:    synthDef(t, "# Surveyor\n\n## CRITICAL\n\nEmit only the inventory.\n"),
 		Tier:   config.TierHeavy,
 		Effort: synthThinking,
@@ -152,14 +152,14 @@ func essentialRole(t *testing.T) Role {
 	}
 }
 
-// refinementRole has one: a failure keeps the mechanical result and degrades.
-func refinementRole(t *testing.T) Role {
+// fallbackBackedAsk has one: a failure keeps the mechanical result and degrades.
+func fallbackBackedAsk(t *testing.T) AskSpec {
 	t.Helper()
-	r := essentialRole(t)
+	r := noFallbackAsk(t)
 	r.Def = synthDef(t, "# Refiner\n\n## CRITICAL\n\nChoose from the listed candidates only.\n")
 	r.Tier = config.TierLight
 	r.Effort = synthNoThinking
-	r.Baseline = synthBaseline
+	r.Fallback = synthFallback
 	return r
 }
 
@@ -172,7 +172,7 @@ func synthSpec(taskDef string) prompt.StageSpec {
 }
 
 // synthJobFrame is the canonical job frame the runner-level tests build their
-// agents against, since they construct an Agent without going through Run.
+// agents against, since they construct an BoundAsk without going through Run.
 func synthJobFrame(t *testing.T) jobFrame {
 	t.Helper()
 	frame, err := newJobFrame(synthFrame)
@@ -182,20 +182,20 @@ func synthJobFrame(t *testing.T) jobFrame {
 	return frame
 }
 
-// staticStreams is the StreamResolver a stage whose work is known up front
+// staticLanes is the LaneResolver a stage whose work is known up front
 // uses. Most stages are this; the dynamic resolution exists for the ones that
 // are not (see synthDerivedPlan).
-func staticStreams(streams ...DomainStream) StreamResolver {
-	return func() ([]DomainStream, error) { return streams, nil }
+func staticLanes(lanes ...SerialLane) LaneResolver {
+	return func() ([]SerialLane, error) { return lanes, nil }
 }
 
-// synthConfig maps both tiers, since a role that names an unmapped tier is a
+// synthConfig maps both tiers, since an ask that names an unmapped tier is a
 // configuration failure and not the thing under test.
 func synthConfig() config.Config {
 	return config.Config{Models: config.ModelMap{Heavy: "gemma-4-31b", Light: "gemma-4-26b-a4b"}}
 }
 
-// synthConfigWithout drops one tier's mapping, for the case where a role names
+// synthConfigWithout drops one tier's mapping, for the case where an ask names
 // a tier the deployment never configured.
 func synthConfigWithout(t *testing.T, tier string) config.Config {
 	t.Helper()
@@ -216,32 +216,32 @@ var corpusInput = Input{Name: "corpus", Hash: HashBytes([]byte("synthetic corpus
 
 // synthTask builds one task. The content is unique per path, so every unit's
 // prompt — and therefore every unit's artifact — is its own.
-func synthTask(path, section string, upstreams ...string) Task {
-	return Task{
-		Unit: Unit{Path: path, Inputs: []Input{corpusInput}, Upstreams: upstreams},
+func synthTask(path, section string, upstreams ...string) LaneTask {
+	return LaneTask{
+		Owed: OwedArtifact{Path: path, Inputs: []Input{corpusInput}, Upstreams: upstreams},
 
 		Section:    section,
 		SectionRef: "Cross-file listing for " + section + ":\n- one.md\n- two.md",
 		Input: ConstInput(prompt.CallInput{
 			StatusLines:        []string{"Section: " + section, "Unit: " + path},
 			Content:            "Source span for " + path + ": the quick brown fox.",
-			RefB:               "Prior unit ended at " + path,
+			CallRef:            "Prior unit ended at " + path,
 			AcceptanceCriteria: []string{"- answer with " + synthAccept},
 		}),
 	}
 }
 
-// The fold stage's names. Its stream is the multi-call-artifact shape, so its
+// The fold stage's names. Its lane is the multi-call-artifact shape, so its
 // three tasks share one unit directory and only the last of them is a unit.
 const (
 	synthFoldStage   = "fold"
 	synthFoldSection = "span"
 	synthFoldUnit    = synthFoldStage + "/cutlist.txt"
-	// synthFoldCalls is how many calls that stream makes for its one unit.
+	// synthFoldCalls is how many calls that lane makes for its one unit.
 	synthFoldCalls = 3
 )
 
-// synthFoldPaths are the fold stream's tasks in order: two boundary calls
+// synthFoldPaths are the fold lane's tasks in order: two boundary calls
 // that write nothing, then the one that carries the composed artifact.
 var synthFoldPaths = []string{
 	synthFoldStage + "/0001.boundary",
@@ -249,23 +249,23 @@ var synthFoldPaths = []string{
 	synthFoldUnit,
 }
 
-// synthFoldPlan is the multi-call-artifact shape (Task.CallOnly) as a stage:
-// [CallOnly, CallOnly, producing] over ONE piece of stage state, which is
+// synthFoldPlan is the multi-call-artifact shape (LaneTask.Contributes) as a stage:
+// [Contributes, Contributes, producing] over ONE piece of stage state, which is
 // stage 4's boundary fold seen from the orchestration side.
 //
 // The state is a closure the stage's verifier folds every response into, and
 // every task's prompt renders it. So the producing task's prompt — and
 // therefore the artifact echoStub digests out of it — is a function of ALL
 // THREE calls. Byte-identical output after a kill then means the resumed run
-// really re-made every call of the stream, which is the property
-// filterStreams owes and which no per-unit comparison could show.
+// really re-made every call of the lane, which is the property
+// filterLanes owes and which no per-unit comparison could show.
 func synthFoldPlan(t *testing.T) *StagePlan {
 	t.Helper()
-	role := refinementRole(t)
-	inner := role.Verify
+	ask := fallbackBackedAsk(t)
+	inner := ask.Verify
 	folded := ""
-	role.Verify = func(unit, response string) (any, error) {
-		artifact, err := inner(unit, response)
+	ask.Verify = func(artifactPath, response string) (any, error) {
+		artifact, err := inner(artifactPath, response)
 		if err != nil {
 			return nil, err
 		}
@@ -273,10 +273,10 @@ func synthFoldPlan(t *testing.T) *StagePlan {
 		return artifact, nil
 	}
 
-	tasks := make([]Task, 0, len(synthFoldPaths))
+	tasks := make([]LaneTask, 0, len(synthFoldPaths))
 	for i, path := range synthFoldPaths {
 		task := synthTask(path, synthFoldSection)
-		task.CallOnly = i < len(synthFoldPaths)-1
+		task.Contributes = i < len(synthFoldPaths)-1
 		task.Input = func() prompt.CallInput {
 			in := synthTask(path, synthFoldSection).Input()
 			in.Content = fmt.Sprintf("%s [fold state %s]", in.Content, folded)
@@ -285,15 +285,15 @@ func synthFoldPlan(t *testing.T) *StagePlan {
 		tasks = append(tasks, task)
 	}
 	return &StagePlan{
-		Name:    synthFoldStage,
-		Role:    role,
-		Spec:    synthSpec("Task: adjudicate each boundary of the span."),
-		Streams: staticStreams(DomainStream{Domain: synthFoldStage, Tasks: tasks}),
+		Name:  synthFoldStage,
+		Ask:   ask,
+		Spec:  synthSpec("Task: adjudicate each boundary of the span."),
+		Lanes: staticLanes(SerialLane{Domain: synthFoldStage, Tasks: tasks}),
 	}
 }
 
 // The mechanical stage's names. Its tasks derive their artifacts in process
-// (Task.Produce), so the stage has no Role, makes no call, and carries its own
+// (LaneTask.Produce), so the stage has no AskSpec, makes no call, and carries its own
 // encoder.
 const (
 	synthProduceStage = "assemble"
@@ -315,7 +315,7 @@ var synthProduceRuns atomic.Int64
 func synthProduceText(path string) string { return "assembled " + path + "\n" }
 
 // synthEncodeText is the mechanical stage's encoder — the counterpart of
-// synthEncode, which belongs to a Role the stage does not have.
+// synthEncode, which belongs to an AskSpec the stage does not have.
 func synthEncodeText(artifact any) ([]byte, error) {
 	s, ok := artifact.(string)
 	if !ok {
@@ -325,18 +325,18 @@ func synthEncodeText(artifact any) ([]byte, error) {
 }
 
 // synthProducePlan is the whole-stage mechanical shape: every task a Producer,
-// no Role, no Spec, no seam — stages 1, 4, 8 and 9 of the real pipeline seen
+// no AskSpec, no Spec, no seam — stages 1, 4, 8 and 9 of the real pipeline seen
 // from the orchestration side (ARCHITECTURE.md §12).
 //
 // Its units declare a real upstream, so they are chain-stamped like any other:
 // an upstream that changes invalidates them, and an upstream that never got
 // produced cascades to them without the producer running.
 func synthProducePlan() *StagePlan {
-	tasks := make([]Task, 0, synthProduceUnits)
+	tasks := make([]LaneTask, 0, synthProduceUnits)
 	for _, name := range []string{"one", "two"} {
 		path := synthProduceStage + "/" + name + ".md"
-		tasks = append(tasks, Task{
-			Unit:    Unit{Path: path, Inputs: []Input{corpusInput}, Upstreams: []string{"survey/a.json"}},
+		tasks = append(tasks, LaneTask{
+			Owed:    OwedArtifact{Path: path, Inputs: []Input{corpusInput}, Upstreams: []string{"survey/a.json"}},
 			Section: "assembly",
 			Produce: func() (any, error) {
 				synthProduceRuns.Add(1)
@@ -345,9 +345,9 @@ func synthProducePlan() *StagePlan {
 		})
 	}
 	return &StagePlan{
-		Name:    synthProduceStage,
-		Encode:  synthEncodeText,
-		Streams: staticStreams(DomainStream{Domain: synthProduceStage, Tasks: tasks}),
+		Name:   synthProduceStage,
+		Encode: synthEncodeText,
+		Lanes:  staticLanes(SerialLane{Domain: synthProduceStage, Tasks: tasks}),
 	}
 }
 
@@ -355,7 +355,7 @@ func synthProducePlan() *StagePlan {
 // domain; a fold stage whose three calls produce one artifact; a mechanical
 // stage whose two units are produced in process and spend nothing; then a
 // refinement stage of four units across two domains — one of which spans two
-// sections, so the section-transition phase is crossed both within a stream
+// sections, so the section-transition phase is crossed both within a lane
 // and at its start.
 //
 // The fold and the mechanical stage sit in the middle rather than at the end,
@@ -364,15 +364,15 @@ func synthProducePlan() *StagePlan {
 func synthPlan(t *testing.T) Plan {
 	t.Helper()
 	return Plan{
-		SystemFrame: synthFrame,
+		JobFrame: synthFrame,
 		Stages: []*StagePlan{
 			{
 				Name: "survey",
-				Role: essentialRole(t),
+				Ask:  noFallbackAsk(t),
 				Spec: synthSpec("Task: inventory each domain."),
-				Streams: staticStreams(DomainStream{
+				Lanes: staticLanes(SerialLane{
 					Domain: "corpus",
-					Tasks: []Task{
+					Tasks: []LaneTask{
 						synthTask("survey/a.json", "all"),
 						synthTask("survey/b.json", "all"),
 					},
@@ -382,14 +382,14 @@ func synthPlan(t *testing.T) Plan {
 			synthProducePlan(),
 			{
 				Name: "leaves",
-				Role: refinementRole(t),
+				Ask:  fallbackBackedAsk(t),
 				Spec: synthSpec("Task: refine each leaf boundary."),
-				Streams: staticStreams(
-					DomainStream{Domain: "d1", Tasks: []Task{
+				Lanes: staticLanes(
+					SerialLane{Domain: "d1", Tasks: []LaneTask{
 						synthTask("leaves/d1/one.md", "s1", "survey/a.json"),
 						synthTask("leaves/d1/two.md", "s2", "survey/a.json"),
 					}},
-					DomainStream{Domain: "d2", Tasks: []Task{
+					SerialLane{Domain: "d2", Tasks: []LaneTask{
 						synthTask("leaves/d2/one.md", "s1", "survey/b.json"),
 						synthTask("leaves/d2/two.md", "s1", "survey/b.json"),
 					}},
@@ -412,7 +412,7 @@ const (
 // exist until stage 1 has run, because their PATHS are derived from the bytes
 // stage 1 wrote.
 //
-// This is the shape stages 4–9 have (ARCHITECTURE.md §4): the skeleton stage 3
+// This is the shape stages 4–9 have (ARCHITECTURE.md §4): the tree plan stage 3
 // emits defines stage 4's leaves, and stage 4's verified cut list defines stage
 // 5's. Nothing in the plan could name those units at job setup, which is why
 // the resolver runs when the stage is reached.
@@ -424,22 +424,22 @@ func synthDerivedPlan(t *testing.T, dir string) Plan {
 	t.Helper()
 	const upstream = "survey/a.json"
 	return Plan{
-		SystemFrame: synthFrame,
+		JobFrame: synthFrame,
 		Stages: []*StagePlan{
 			{
 				Name: "survey",
-				Role: essentialRole(t),
+				Ask:  noFallbackAsk(t),
 				Spec: synthSpec("Task: inventory each domain."),
-				Streams: staticStreams(DomainStream{
+				Lanes: staticLanes(SerialLane{
 					Domain: "corpus",
-					Tasks:  []Task{synthTask(upstream, "all")},
+					Tasks:  []LaneTask{synthTask(upstream, "all")},
 				}),
 			},
 			{
 				Name: "leaves",
-				Role: refinementRole(t),
+				Ask:  fallbackBackedAsk(t),
 				Spec: synthSpec("Task: refine each leaf boundary."),
-				Streams: func() ([]DomainStream, error) {
+				Lanes: func() ([]SerialLane, error) {
 					data, err := os.ReadFile(filepath.Join(storeRoot(dir), filepath.FromSlash(upstream)))
 					if err != nil {
 						return nil, fmt.Errorf("derive leaves from %s: %w", upstream, err)
@@ -450,11 +450,11 @@ func synthDerivedPlan(t *testing.T, dir string) Plan {
 					// resume that reused stage 1 and a run that rebuilt it
 					// agree only if stage 1 really is the same artifact.
 					id := HashBytes(data)[:8]
-					var tasks []Task
+					var tasks []LaneTask
 					for _, n := range []string{"one", "two"} {
 						tasks = append(tasks, synthTask("leaves/"+id+"/"+n+".md", "s1", upstream))
 					}
-					return []DomainStream{{Domain: id, Tasks: tasks}}, nil
+					return []SerialLane{{Domain: id, Tasks: tasks}}, nil
 				},
 			},
 		},
@@ -477,7 +477,7 @@ func newSynthCoordinator(t *testing.T, dir string, client model.Client, workers 
 	if err != nil {
 		t.Fatalf("OpenTempWork: %v", err)
 	}
-	return NewCoordinator(work.Store(), NewCallRunner(client, synthConfig(), lg), workers, lg)
+	return NewCoordinator(work.ArtifactStore(), NewCallRunner(client, synthConfig(), lg), workers, lg)
 }
 
 // storeRoot is where a run under the output dir keeps its artifacts, stamps
@@ -486,13 +486,13 @@ func storeRoot(dir string) string { return filepath.Join(dir, TempWorkDirName) }
 
 // synthStore opens the store of an output dir the way a test that inspects
 // one does — same root the coordinator wrote through.
-func synthStore(t *testing.T, dir string, lg log.Logger) *Store {
+func synthStore(t *testing.T, dir string, lg log.Logger) *ArtifactStore {
 	t.Helper()
 	work, err := OpenTempWork(dir, lg)
 	if err != nil {
 		t.Fatalf("OpenTempWork: %v", err)
 	}
-	return work.Store()
+	return work.ArtifactStore()
 }
 
 // storeState reads an output directory's store back as a path→bytes map — the

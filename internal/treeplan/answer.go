@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"kbase/internal/text"
 )
 
-// Answer is one container call's answer in the taxonomy descent (§3.2): the
+// GroupingAnswer is one container call's answer in the taxonomy descent (§3.2): the
 // model was shown a numbered candidate list — that container's direct children
 // — and grouped them.
 //
@@ -15,7 +15,7 @@ import (
 // of what the model writes here, and they are for the nodes it is creating
 // (I-2). The names come from Slug and the paths from the tree, downstream of
 // this type.
-type Answer struct {
+type GroupingAnswer struct {
 	Groups []AnswerGroup
 }
 
@@ -59,7 +59,7 @@ type AnswerGroup struct {
 // same material arriving as source STRUCTURE — a directory chain deeper than
 // the cap — is not the model's doing and is repaired mechanically by chain
 // collapse and dissolution instead.
-func (v *Verifier) CheckAnswer(a Answer, candidates, depth int) error {
+func (v *Verifier) CheckAnswer(a GroupingAnswer, candidates, depth int) error {
 	if candidates <= 0 {
 		return DefectError{Reason: fmt.Sprintf(
 			"a container call presented %d candidates; a call with nothing to group is a call nobody should describe",

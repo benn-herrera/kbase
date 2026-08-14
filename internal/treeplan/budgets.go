@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 // Constants from ARCHITECTURE.md §9 (provisional starting values per
 // TEMP_DESIGN_V020_RESHAPE; calibrated later like everything else in that
 // table). They are the defaults DefaultBudgets hands out; the numbers a given
-// skeleton was verified against travel in the artifact, because a consumer
+// tree plan was verified against travel in the artifact, because a consumer
 // re-reading a constant would be the second source I-1 forbids.
 const (
 	// defaultLeafTokens is G-1: the per-leaf source budget stage 4 cuts
@@ -111,23 +111,23 @@ func (b Budgets) Validate() error {
 		{"candidateCap", b.CandidateCap},
 	} {
 		if f.v <= 0 {
-			return fmt.Errorf("skeleton: budget %s is %d; every budget and cap is positive", f.name, f.v)
+			return fmt.Errorf("treeplan: budget %s is %d; every budget and cap is positive", f.name, f.v)
 		}
 	}
 	if b.LeafTokens > b.SummaryInputTokens {
-		return fmt.Errorf("skeleton: leafTokens (%d) exceeds summaryInputTokens (%d); "+
+		return fmt.Errorf("treeplan: leafTokens (%d) exceeds summaryInputTokens (%d); "+
 			"one leaf child could then never be digested and no operator could repair it",
 			b.LeafTokens, b.SummaryInputTokens)
 	}
 	if b.SummaryTokens > b.SummaryInputTokens {
-		return fmt.Errorf("skeleton: summaryTokens (%d) exceeds summaryInputTokens (%d); "+
+		return fmt.Errorf("treeplan: summaryTokens (%d) exceeds summaryInputTokens (%d); "+
 			"one index child could then never be digested and no operator could repair it",
 			b.SummaryTokens, b.SummaryInputTokens)
 	}
 	return nil
 }
 
-// Params is what a skeleton is verified under: the appliance's single token
+// Params is what a tree plan is verified under: the appliance's single token
 // estimator and the budgets it is measured against.
 //
 // It is the shape internal/dissect already uses (dissect.Params), not an

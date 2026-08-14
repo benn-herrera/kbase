@@ -59,8 +59,8 @@ func Survey(corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (survey.A
 	// setup cost paid once rather than per file.
 	p := goldmark.DefaultParser()
 
-	files := make([]survey.File, 0, len(corpus.Units))
-	for _, u := range corpus.Units {
+	files := make([]survey.File, 0, len(corpus.Docs))
+	for _, u := range corpus.Docs {
 		files = append(files, surveyFile(p, u, corpus, est, lg))
 	}
 	return survey.Assemble(corpus, files, lg)
@@ -77,7 +77,7 @@ func Survey(corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (survey.A
 // of it, and the parse runs over the remaining bytes with every offset
 // rebased into the original file. The source itself is never rewritten — the
 // sub-slice is a read-only view handed to the parser.
-func surveyFile(p parser.Parser, u ingest.Unit, corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) survey.File {
+func surveyFile(p parser.Parser, u ingest.SourceDoc, corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) survey.File {
 	src := u.Bytes
 	f := survey.File{
 		Path:   u.Path,

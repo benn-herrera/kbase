@@ -1,6 +1,6 @@
 // Package dissect is pipeline stage 4 (ARCHITECTURE.md §4, §5): the
 // mechanical splitter, the verifier primitives every cut list passes through,
-// the model-facing refinement seam, and the dissector that finally slices the
+// the model-facing fallback-backed seam, and the dissector that finally slices the
 // source.
 //
 // It is format-neutral. It reads the survey artifact's neutral types —
@@ -20,7 +20,7 @@
 //     heading or lands inside a code fence is unrepresentable rather than
 //     merely detectable. A cut that is not in the set is the model having
 //     invented one: a rejection, retried once and then discarded for the
-//     mechanical baseline.
+//     mechanical fallback.
 //   - The whitespace-adjacency tripwire inspects RAW BYTES. At every cut at
 //     least one neighbouring byte must be whitespace (survey.WhitespaceAdjacent
 //     — the same function that admitted the candidate in the first place).
@@ -70,7 +70,7 @@ const (
 // every size question in this package goes through, and the budget the
 // mechanical splitter filled toward.
 //
-// It is a plain value threaded through Split, Windows, Verify and NewRefiner —
+// It is a plain value threaded through Split, MoveWindows, Verify and NewRefiner —
 // the shape internal/survey already uses for the same estimator, not an
 // abstraction. The point is that calibration has ONE place to land (§8): a
 // package that read tokens.Estimator{} at each call site would be the second
@@ -101,11 +101,11 @@ func (p Params) estimate(b []byte) int { return p.Est.EstimateBytes(b) }
 // must never disagree about: premerge folds a section away when it is true and
 // Verify rejects a list when it is true, and two copies of it would drift on
 // exactly the day the difference decided whether a cut list was legal.
-func (p Params) underMinimum(src []byte, r survey.Range) bool {
+func (p Params) underMinimum(src []byte, r survey.Span) bool {
 	return p.estimate(src[r.Start:r.End]) < minTokens
 }
 
-// Dissect returns one byte slice per section of a VERIFIED cut list, in
+// SliceLeaves returns one byte slice per section of a VERIFIED cut list, in
 // order.
 //
 // The slices are views into src, not copies: the cut list is a derived
@@ -120,7 +120,7 @@ func (p Params) underMinimum(src []byte, r survey.Range) bool {
 // two implementations of one rule with nothing keeping them in agreement.
 // Passing an unverified list is a caller defect, and the doc comment is the
 // contract.
-func Dissect(src []byte, cuts []survey.Range) [][]byte {
+func SliceLeaves(src []byte, cuts []survey.Span) [][]byte {
 	out := make([][]byte, 0, len(cuts))
 	for _, c := range cuts {
 		out = append(out, src[c.Start:c.End])
@@ -139,7 +139,7 @@ func Dissect(src []byte, cuts []survey.Range) [][]byte {
 // bytes) and Split's answer to it was a one-section list that its own Verify
 // then rejected as "empty or inverted" — the right refusal blaming the wrong
 // party, since the caller handed over a span with nothing in it.
-func checkSpan(src []byte, span survey.Range) error {
+func checkSpan(src []byte, span survey.Span) error {
 	if span.Start < 0 || span.End < span.Start || span.End > len(src) {
 		return fmt.Errorf("dissect: span [%d,%d) is not a range of the %d-byte source",
 			span.Start, span.End, len(src))

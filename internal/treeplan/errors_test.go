@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"strings"
@@ -20,26 +20,26 @@ func TestErrorRenderings(t *testing.T) {
 	}{{
 		name:   "a located rejection",
 		err:    RejectionError{Subject: "guide/sync.md", Reason: "too many entries under one heading"},
-		wantIn: []string{"skeleton:", "guide/sync.md", "too many entries"},
+		wantIn: []string{"treeplan:", "guide/sync.md", "too many entries"},
 	}, {
 		name:    "a rejection with nothing to locate",
 		err:     RejectionError{Reason: "no groups; every candidate belongs to one group"},
-		wantIn:  []string{"skeleton:", "no groups"},
+		wantIn:  []string{"treeplan:", "no groups"},
 		wantOut: []string{"::"},
 	}, {
 		name:   "a located defect",
 		err:    DefectError{Subject: "g0007", Reason: "part 2 is on no page"},
-		wantIn: []string{"skeleton:", "g0007", "part 2"},
+		wantIn: []string{"treeplan:", "g0007", "part 2"},
 	}, {
 		name:    "a defect with nothing to locate",
 		err:     DefectError{Reason: "the artifact holds no nodes"},
-		wantIn:  []string{"skeleton:", "no nodes"},
+		wantIn:  []string{"treeplan:", "no nodes"},
 		wantOut: []string{"::"},
 	}, {
 		name: "a starved span",
 		err: StarvedRejection{Subject: "Property Type Support", File: "properties.md",
-			Starved: dissect.StarvedError{Span: survey.Range{Start: 281, End: 4736}, Tokens: 1114, Budget: 800}},
-		wantIn: []string{"skeleton:", "Property Type Support", "properties.md", "281"},
+			Starved: dissect.StarvedRejection{Span: survey.Span{Start: 281, End: 4736}, Tokens: 1114, Budget: 800}},
+		wantIn: []string{"treeplan:", "Property Type Support", "properties.md", "281"},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.err.Error()
@@ -55,7 +55,7 @@ func TestErrorRenderings(t *testing.T) {
 			}
 			if r, ok := AsRejection(tc.err); ok {
 				assertNoteIsPromptable(t, r)
-				if strings.Contains(r.Note(), "skeleton:") {
+				if strings.Contains(r.Note(), "treeplan:") {
 					t.Errorf("Note() = %q carries the operator prefix", r.Note())
 				}
 			}

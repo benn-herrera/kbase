@@ -1,12 +1,12 @@
 // Package pipeline is the orchestration layer: it runs the fixed stage
 // pipeline (ARCHITECTURE.md §4) and owns the machinery that makes a run safe
-// to interrupt (§12). "Agent" here is the §3 Go-side construct — a role with
+// to interrupt (§12). "Agent" here is the §3 Go-side construct — an ask with
 // an embedded definition, slot-built context and one-shot calls — never an
 // LLM-driven loop.
 //
 // Three separable pieces live here:
 //
-//   - The phase matrix (this file): ONE data table mapping each execution
+//   - The phase-op table (this file): ONE data table mapping each execution
 //     phase to the operations it permits and the prompt-stability frontier it
 //     declares. It is the single source §7 promises: runtime op-gating, the
 //     per-call churn tripwire, and the prefix-stability tests all read this
@@ -29,18 +29,18 @@ import (
 	"kbase/internal/prompt"
 )
 
-// Phase is one position in a worker's execution cycle:
+// JobPhase is one position in a worker's execution cycle:
 //
 //	JobSetup → StageSetup → CallLoop ⇄ SectionTransition → StageTeardown
 //
-// The phase is what the matrix is keyed on, so it is the one piece of
+// The phase is what the phaseOpTable is keyed on, so it is the one piece of
 // execution state every gated operation has to name.
-type Phase int
+type JobPhase int
 
 const (
 	// PhaseJobSetup runs once per job: the lock is taken, the store is
-	// scanned, and the job-constant system frame (slot 1) is rendered.
-	PhaseJobSetup Phase = iota + 1
+	// scanned, and the job-constant job frame (slot 1) is rendered.
+	PhaseJobSetup JobPhase = iota + 1
 	// PhaseStageSetup builds the stage's one shared immutable
 	// StageContext — the construction that makes the stage-constant slots
 	// identical across every worker of the stage (§12, workers and
@@ -49,7 +49,7 @@ const (
 	// PhaseCallLoop is the per-unit steady state: build a call, run it,
 	// write what it produced, advance.
 	PhaseCallLoop
-	// PhaseSectionTransition is the only phase in which reference buffer A
+	// PhaseSectionTransition is the only phase in which the stage reference buffer
 	// may be flushed. That restriction is what makes the §7 slot ordering
 	// safe rather than a loss: slot 4 outranks the per-call status block
 	// only while it churns at section boundaries and not per call.
@@ -61,16 +61,16 @@ const (
 
 // Op is a gated operation. The set is deliberately small: an operation earns
 // a place here by being able to invalidate the prefix cache or to change what
-// is on disk, which is the same as saying the matrix is the list of things
+// is on disk, which is the same as saying the phaseOpTable is the list of things
 // that can go quietly wrong.
 type Op int
 
 const (
-	// OpBuildSystemFrame renders slot 1. It is job-constant by
+	// OpBuildJobFrame renders slot 1. It is job-constant by
 	// construction (§7 layer 1) and job-constant by gating here: rendering
 	// it a second time mid-job would move the frontier to the floor for
 	// every call that followed.
-	OpBuildSystemFrame Op = iota + 1
+	OpBuildJobFrame Op = iota + 1
 	// OpResumeScan reads the store to derive the worklist. Gating it to
 	// job setup is what keeps the worklist stateless-but-stable: it is
 	// derived once from the outputs on disk, not re-derived mid-run
@@ -87,14 +87,14 @@ const (
 	// OpAdvanceUnit moves the worker to the next unit of work, which is
 	// what churns the per-call slots.
 	OpAdvanceUnit
-	// OpFlushRefA replaces the multi-call reference buffer. Legal in
+	// OpFlushStageRef replaces the multi-call reference buffer. Legal in
 	// exactly one phase; see PhaseSectionTransition.
-	OpFlushRefA
+	OpFlushStageRef
 	// OpWriteArtifact puts a unit or stage artifact into the store.
 	OpWriteArtifact
 )
 
-// opNames is the ops' one enumeration: String reads it, and the matrix
+// opNames is the ops' one enumeration: String reads it, and the phaseOpTable
 // completeness test iterates it. The const block above is the other half of
 // the same declaration — a new op added there and forgotten here has no name,
 // which is loud — but a switch would have let a new op be forgotten by the
@@ -102,12 +102,12 @@ const (
 // spelling. The spellings match the identifiers so a message greps back to
 // its call site.
 var opNames = map[Op]string{
-	OpBuildSystemFrame:    "build-system-frame",
+	OpBuildJobFrame:       "build-job-frame",
 	OpResumeScan:          "resume-scan",
 	OpRebuildStageContext: "rebuild-stage-context",
 	OpBuildCall:           "build-call",
 	OpAdvanceUnit:         "advance-unit",
-	OpFlushRefA:           "flush-ref-a",
+	OpFlushStageRef:       "flush-stage-ref",
 	OpWriteArtifact:       "write-artifact",
 }
 
@@ -116,19 +116,19 @@ var opNames = map[Op]string{
 // crashpoint.RegisteredNames rather than by knowing this package.
 const phaseCrashpointPrefix = "pipeline.phase.enter."
 
-// phaseRule is one row of the matrix. The frontier and the op set live in the
+// phaseRule is one row of the phaseOpTable. The frontier and the op set live in the
 // same row because they are the same policy seen from two sides: the ops a
 // phase permits are exactly the ones that cannot break the stability it
 // declares.
 type phaseRule struct {
-	phase    Phase
+	phase    JobPhase
 	name     string
 	frontier prompt.Slot
 	ops      []Op
 	crash    string
 }
 
-// matrix is THE table (ARCHITECTURE.md §12, "Phase matrix"). It is a slice in
+// phaseOpTable is THE table (ARCHITECTURE.md §12, "Phase-op table"). It is a slice in
 // phase order rather than a map so that every enumeration over it — tests,
 // coverage gates, documentation — is deterministic without sorting.
 //
@@ -140,25 +140,25 @@ type phaseRule struct {
 // call after it may only claim through slot 3; a stage boundary rebuilt slots
 // 2 and 3, so only slot 1 survives; and job setup, having no previous call at
 // all, claims nothing. LowestFrontier composes them for a traversal.
-var matrix = [...]phaseRule{
+var phaseOpTable = [...]phaseRule{
 	{
 		phase:    PhaseJobSetup,
 		name:     "job-setup",
 		frontier: prompt.SlotTotal,
-		ops:      []Op{OpBuildSystemFrame, OpResumeScan},
+		ops:      []Op{OpBuildJobFrame, OpResumeScan},
 		crash:    crashpoint.Register(phaseCrashpointPrefix + "job-setup"),
 	},
 	{
 		phase:    PhaseStageSetup,
 		name:     "stage-setup",
-		frontier: prompt.SlotSystemFrame,
+		frontier: prompt.SlotJobFrame,
 		ops:      []Op{OpRebuildStageContext},
 		crash:    crashpoint.Register(phaseCrashpointPrefix + "stage-setup"),
 	},
 	{
 		phase:    PhaseCallLoop,
 		name:     "call-loop",
-		frontier: prompt.SlotRefA,
+		frontier: prompt.SlotStageRef,
 		ops:      []Op{OpBuildCall, OpAdvanceUnit, OpWriteArtifact},
 		crash:    crashpoint.Register(phaseCrashpointPrefix + "call-loop"),
 	},
@@ -166,7 +166,7 @@ var matrix = [...]phaseRule{
 		phase:    PhaseSectionTransition,
 		name:     "section-transition",
 		frontier: prompt.SlotTaskDef,
-		ops:      []Op{OpFlushRefA, OpAdvanceUnit},
+		ops:      []Op{OpFlushStageRef, OpAdvanceUnit},
 		crash:    crashpoint.Register(phaseCrashpointPrefix + "section-transition"),
 	},
 	{
@@ -176,27 +176,27 @@ var matrix = [...]phaseRule{
 		// survives. Slot 1 is job-constant and does survive, and this row
 		// says so — but what ENFORCES that across the boundary is not this
 		// frontier: a worker's previous-call hashes are reset at every
-		// stream start, so no call ever compares slot 1 against the last
-		// stage's call. The job-constant canonical does that (see
-		// jobFrame and agent.checkCanonical); this row is the composable
-		// claim for LowestFrontier, not the tripwire.
-		frontier: prompt.SlotSystemFrame,
+		// lane start, so no call ever compares slot 1 against the last
+		// stage's call. The job-constant canonical hash does that (see
+		// jobFrame and boundAsk.checkCanonicalHashes); this row is the
+		// composable claim for LowestFrontier, not the tripwire.
+		frontier: prompt.SlotJobFrame,
 		// RESERVED, 2026-08-09: no code path writes a stage-level artifact
 		// yet. It is here for the stage-level roll-up a stage with a
 		// whole-stage output will need (§4's roll-up stages), and it MUST
 		// be deleted if nothing has wired it after about a week of
-		// development — a matrix cell nothing exercises reads like enforced
+		// development — a table cell nothing exercises reads like enforced
 		// policy, and dropping it leaves this phase with zero ops, which
-		// TestMatrixCompleteness rejects, so the deletion is a decision
+		// TestPhaseOpTableCompleteness rejects, so the deletion is a decision
 		// rather than a quiet edit.
 		ops:   []Op{OpWriteArtifact},
 		crash: crashpoint.Register(phaseCrashpointPrefix + "stage-teardown"),
 	},
 }
 
-// rule returns the matrix row for p.
-func rule(p Phase) (phaseRule, bool) {
-	for _, r := range matrix {
+// rule returns the table row for p.
+func rule(p JobPhase) (phaseRule, bool) {
+	for _, r := range phaseOpTable {
 		if r.phase == p {
 			return r, true
 		}
@@ -205,7 +205,7 @@ func rule(p Phase) (phaseRule, bool) {
 }
 
 // String names the phase as it appears in log records and error messages.
-func (p Phase) String() string {
+func (p JobPhase) String() string {
 	if r, ok := rule(p); ok {
 		return r.name
 	}
@@ -221,7 +221,7 @@ func (o Op) String() string {
 }
 
 // guard reports whether op is permitted in phase p, and is the runtime half
-// of the matrix: every gated operation calls it and treats a non-nil result
+// of the phaseOpTable: every gated operation calls it and treats a non-nil result
 // as fatal.
 //
 // A refusal is a defect class, not a condition to recover from. The
@@ -230,7 +230,7 @@ func (o Op) String() string {
 // fresh stamp) shows up far from the cause. Returning an error rather than
 // panicking keeps the failure on the caller's own error path, where a worker
 // can abort itself and let its siblings drain.
-func guard(p Phase, o Op) error {
+func guard(p JobPhase, o Op) error {
 	r, ok := rule(p)
 	if !ok {
 		return UnknownPhaseError{Phase: p}
@@ -243,14 +243,14 @@ func guard(p Phase, o Op) error {
 	return OpNotAllowedError{Phase: p, Op: o}
 }
 
-// Frontier reports the prompt-stability frontier p declares — the slot
+// StabilityFrontier reports the prompt-stability frontier p declares — the slot
 // through which a call built in (or after) this phase must hash identically
 // to the previous call. It is what the caller hands prompt.CheckStability.
 //
 // An unknown phase is an error rather than a permissive zero: a frontier that
 // quietly degraded to "nothing is stable" would disarm the tripwire at
 // exactly the moment the orchestrator had lost track of its own state.
-func Frontier(p Phase) (prompt.Slot, error) {
+func StabilityFrontier(p JobPhase) (prompt.Slot, error) {
 	r, ok := rule(p)
 	if !ok {
 		return prompt.SlotTotal, UnknownPhaseError{Phase: p}
@@ -272,13 +272,13 @@ var errNoPhases = errors.New("pipeline: frontier over an empty phase traversal")
 // call loop. Taking the minimum is safe in the one direction that matters —
 // it can only under-claim stability, never assert a prefix the phases already
 // invalidated.
-func lowestFrontier(phases ...Phase) (prompt.Slot, error) {
+func lowestFrontier(phases ...JobPhase) (prompt.Slot, error) {
 	if len(phases) == 0 {
 		return prompt.SlotTotal, errNoPhases
 	}
 	lowest := prompt.Slot(-1)
 	for _, p := range phases {
-		f, err := Frontier(p)
+		f, err := StabilityFrontier(p)
 		if err != nil {
 			return prompt.SlotTotal, err
 		}
@@ -295,9 +295,9 @@ func lowestFrontier(phases ...Phase) (prompt.Slot, error) {
 // It is the single declaration site for "I am now in phase p", which is what
 // gives every phase boundary a kill point without each caller knowing the
 // crashpoint vocabulary. It holds no state — the caller owns its own current
-// phase, because in a domain-stream worker model there is no single current
+// phase, because in a serial-lane worker model there is no single current
 // phase to hold.
-func enterPhase(p Phase, lg log.Logger) error {
+func enterPhase(p JobPhase, lg log.Logger) error {
 	r, ok := rule(p)
 	if !ok {
 		return UnknownPhaseError{Phase: p}
@@ -309,11 +309,11 @@ func enterPhase(p Phase, lg log.Logger) error {
 
 // OpNotAllowedError reports an operation the current phase does not permit
 // (ARCHITECTURE.md §12). It is a kbase defect: the orchestrator asked for
-// something the phase matrix forbids, which means its state and its actions
+// something the phase-op table forbids, which means its state and its actions
 // have diverged. Errors here are value types — match with errors.As over a
 // value target, as in internal/prompt.
 type OpNotAllowedError struct {
-	Phase Phase
+	Phase JobPhase
 	Op    Op
 }
 
@@ -321,13 +321,13 @@ func (e OpNotAllowedError) Error() string {
 	return fmt.Sprintf("pipeline: operation %s is not allowed in phase %s", e.Op, e.Phase)
 }
 
-// UnknownPhaseError reports a phase value the matrix has no row for. The
-// matrix is the single source, so a phase outside it is not an unsupported
+// UnknownPhaseError reports a phase value the phaseOpTable has no row for. The
+// phaseOpTable is the single source, so a phase outside it is not an unsupported
 // case — it is a value that was never a phase.
 type UnknownPhaseError struct {
-	Phase Phase
+	Phase JobPhase
 }
 
 func (e UnknownPhaseError) Error() string {
-	return fmt.Sprintf("pipeline: no phase matrix row for %s", e.Phase)
+	return fmt.Sprintf("pipeline: no phase-op table row for %s", e.Phase)
 }

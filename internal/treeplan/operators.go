@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"errors"
@@ -26,7 +26,7 @@ import (
 //
 // Collapse strictly decreases depth and interposition strictly increases it,
 // so an interposition that re-breaches the depth cap is NOT re-collapsed: it
-// is a rejection carrying the corrective note, the model is asked once to
+// is a rejection carrying the retry note, the model is asked once to
 // regroup flatter, and a second failure fails the unit loudly (I-7). That is
 // the one shape kbase genuinely cannot host, and it says so rather than
 // looping.
@@ -157,7 +157,7 @@ func walkParent(n *buildNode, level int, parent *buildNode, fn func(*buildNode, 
 }
 
 // dissolve is §2.7's third operator: a group holding more than one source span
-// cannot be one leaf, because Group.Source is a single span in a single file.
+// cannot be one leaf, because SplitGroup.Source is a single span in a single file.
 // Its spans become sibling leaves in its place.
 //
 // The design names this at the deepest permitted index level, where the pincer
@@ -209,21 +209,21 @@ func (v *Verifier) fileLabel(file string) string {
 
 // expand is §2.4: every leaf span is run through dissect.Split at the leaf
 // budget, and a span that needs n parts becomes n sibling leaves sharing one
-// Group.
+// SplitGroup.
 //
 // Split runs over EVERY span, not only the ones an estimate says are over
 // budget. It is the same answer — Split's loop does nothing to a span already
 // under budget — and it makes the artifact's own acceptance criterion true by
 // construction rather than by a second arithmetic path: for every one-part
 // group, Split over its span returns a one-section list; for every multi-part
-// group, exactly Group.Parts sections (§3.5).
+// group, exactly SplitGroup.Parts sections (§3.5).
 //
 // The parts' names and titles come from the group's title and the part's
 // ordinal, and from nothing else. Stage 4 will MOVE the boundaries inside the
 // group, and a name derived from where a boundary landed would falsify the
-// skeleton the moment refinement ran (O-8).
-func (v *Verifier) expand(root *buildNode) ([]Group, error) {
-	groups := make([]Group, 0, 16)
+// tree plan the moment refinement ran (O-8).
+func (v *Verifier) expand(root *buildNode) ([]SplitGroup, error) {
+	groups := make([]SplitGroup, 0, 16)
 	var err error
 	walk(root, 1, func(n *buildNode, _ int) {
 		if err != nil || n.kind == KindLeaf {
@@ -251,19 +251,19 @@ func (v *Verifier) expand(root *buildNode) ([]Group, error) {
 	return groups, nil
 }
 
-// splitLeaf turns one leaf node into its Group and the leaves that name it.
-func (v *Verifier) splitLeaf(n *buildNode, ordinal int) (Group, []*buildNode, error) {
+// splitLeaf turns one leaf node into its SplitGroup and the leaves that name it.
+func (v *Verifier) splitLeaf(n *buildNode, ordinal int) (SplitGroup, []*buildNode, error) {
 	if len(n.sources) != 1 {
-		return Group{}, nil, DefectError{Subject: n.title, Reason: fmt.Sprintf(
+		return SplitGroup{}, nil, DefectError{Subject: n.title, Reason: fmt.Sprintf(
 			"holds %d source spans at split time; dissolution leaves exactly one", len(n.sources))}
 	}
 	span := n.sources[0]
 	cuts, err := v.split(span)
 	if err != nil {
-		return Group{}, nil, starved(n.title, span, err)
+		return SplitGroup{}, nil, starved(n.title, span, err)
 	}
 
-	g := Group{
+	g := SplitGroup{
 		ID:     groupID(ordinal),
 		Source: span,
 		Budget: v.p.Budgets.LeafTokens,
@@ -297,7 +297,7 @@ func (v *Verifier) splitLeaf(n *buildNode, ordinal int) (Group, []*buildNode, er
 // so it is a safe path segment by construction.
 //
 // It is an ordinal rather than a content-derived identity on purpose. The
-// skeleton is one whole-corpus artifact: any change to the corpus redoes it
+// tree plan is one whole-corpus artifact: any change to the corpus redoes it
 // and invalidates every cut list downstream regardless, so a "stable" id would
 // buy nothing and cost a second naming grammar.
 func groupID(ordinal int) string { return fmt.Sprintf("g%04d", ordinal) }
@@ -305,7 +305,7 @@ func groupID(ordinal int) string { return fmt.Sprintf("g%04d", ordinal) }
 // starved wraps a Split refusal as the rejection §2.4 step 4 describes, and
 // leaves anything else alone — a bad span is our defect, not the model's.
 func starved(subject string, span Span, err error) error {
-	var se dissect.StarvedError
+	var se dissect.StarvedRejection
 	if errors.As(err, &se) {
 		return StarvedRejection{Subject: subject, File: span.File, Starved: se}
 	}
@@ -313,7 +313,7 @@ func starved(subject string, span Span, err error) error {
 }
 
 // interpose is §2.7's second operator: an index violating G-2 or the fan-out
-// cap has its children partitioned into m ordered batches in skeleton node
+// cap has its children partitioned into m ordered batches in tree plan node
 // order, each batch parented to a synthetic index one level down.
 //
 // The batching is greedy and order-preserving: children stay in the order the
@@ -435,7 +435,7 @@ func (v *Verifier) recheck(root *buildNode) error {
 }
 
 // tokensOf estimates one range of one file, through the threaded estimator.
-func (v *Verifier) tokensOf(file string, r survey.Range) int {
+func (v *Verifier) tokensOf(file string, r survey.Span) int {
 	src, ok := v.bytes(file)
 	if !ok {
 		return 0

@@ -101,9 +101,9 @@ type LinkTotals struct {
 // the digest of the NFC bytes. Their upload counterparts — the path as the
 // filesystem spelled it, the digest of the bytes as read — are deliberately
 // not here. The artifact is what later stages compute over, and every one of
-// them (link graph, skeleton, the stage-9 path check) compares ids to ids;
+// them (link graph, tree plan, the stage-9 path check) compares ids to ids;
 // carrying a second spelling would be offering a second thing to key on. The
-// spelling a human has to be told to go and open lives on the ingest.Unit,
+// spelling a human has to be told to go and open lives on the ingest.SourceDoc,
 // which the pipeline still holds when it writes a receipt.
 type File struct {
 	Path        string         `json:"path"`
@@ -114,15 +114,19 @@ type File struct {
 	Description string         `json:"description,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Gist        string         `json:"gist,omitempty"`
-	Metadata    *Range         `json:"metadata,omitempty"`
+	Metadata    *Span          `json:"metadata,omitempty"`
 	Preamble    *Section       `json:"preamble,omitempty"`
 	Sections    []Section      `json:"sections,omitempty"`
 	Cuts        []CutCandidate `json:"cuts,omitempty"`
 	Links       []Link         `json:"links,omitempty"`
 }
 
-// Range is a half-open byte range [Start, End) into a file's source bytes.
-type Range struct {
+// Span is a half-open byte range [Start, End) into a file's source bytes. It
+// carries no file identity: the file is whatever survey.File it hangs off, or
+// whatever source bytes a caller passes alongside it. The tree plan's Span is
+// the file-carrying one (treeplan.Span adds File), which is why the two are
+// not interchangeable and neither is defined in terms of the other.
+type Span struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
@@ -202,9 +206,9 @@ type Link struct {
 // lg takes one warning for the corpus's unresolved-link total, which is the
 // number stage 8 eventually has to answer for.
 func Assemble(corpus ingest.Corpus, files []File, lg log.Logger) (Artifact, error) {
-	if len(files) != len(corpus.Units) {
+	if len(files) != len(corpus.Docs) {
 		return Artifact{}, fmt.Errorf("survey: inventory holds %d files, the corpus holds %d documents",
-			len(files), len(corpus.Units))
+			len(files), len(corpus.Docs))
 	}
 
 	art := Artifact{
@@ -213,7 +217,7 @@ func Assemble(corpus ingest.Corpus, files []File, lg log.Logger) (Artifact, erro
 		Files:  files,
 	}
 	for i, f := range files {
-		u := corpus.Units[i]
+		u := corpus.Docs[i]
 		if f.Path != u.Path {
 			return Artifact{}, fmt.Errorf("survey: inventory %d is %q, the corpus holds %q there "+
 				"(one file per document, in corpus order)", i, f.Path, u.Path)

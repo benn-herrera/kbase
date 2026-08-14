@@ -9,7 +9,7 @@ import (
 )
 
 // The tripwire's frontier is not a fact about this package — it is whatever
-// the orchestrator's phase matrix declares for the phase the call is built in
+// the orchestrator's phase-op table declares for the phase the call is built in
 // (ARCHITECTURE.md §12). These tests read it from there, which is why they are
 // an external test package: pipeline imports prompt, so an in-package test
 // could not ask.
@@ -61,7 +61,7 @@ func TestCheckStabilityCatchesChurn(t *testing.T) {
 func TestCheckStabilityEmptySlots(t *testing.T) {
 	sc := prompt.NewContext(t, prompt.BaseSpec(t))
 	in := prompt.BaseInput()
-	in.RefA = ""
+	in.StageRef = ""
 
 	first := prompt.Build(t, sc, in)
 	in.Content = "A different span."
@@ -87,7 +87,7 @@ func TestCheckStabilityEdges(t *testing.T) {
 	})
 
 	// Job setup declares exactly that zero frontier, because it has no
-	// previous call at all — the matrix and the tripwire agree on what a
+	// previous call at all — the phaseOpTable and the tripwire agree on what a
 	// worker may claim before it has built anything.
 	t.Run("job setup declares the zero frontier", func(t *testing.T) {
 		if f := frontier(t, pipeline.PhaseJobSetup); f != prompt.SlotTotal {
@@ -127,7 +127,7 @@ func TestCheckStabilityEdges(t *testing.T) {
 	})
 
 	t.Run("missing hash is reported, not skipped", func(t *testing.T) {
-		partial := map[prompt.Slot][32]byte{prompt.SlotSystemFrame: cur[prompt.SlotSystemFrame]}
+		partial := map[prompt.Slot][32]byte{prompt.SlotJobFrame: cur[prompt.SlotJobFrame]}
 		err := prompt.CheckStability(stableFrontier, partial, cur)
 		var target prompt.ErrMissingHash
 		if !errors.As(err, &target) {

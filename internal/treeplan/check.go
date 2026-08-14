@@ -1,4 +1,4 @@
-package skeleton
+package treeplan
 
 import (
 	"fmt"
@@ -7,9 +7,9 @@ import (
 	"kbase/internal/survey"
 )
 
-// Check runs §3.3's composed post-conditions over a whole skeleton.
+// Check runs §3.3's composed post-conditions over a whole tree plan.
 //
-// It is the sole statement of what a valid skeleton is. Compose runs it over
+// It is the sole statement of what a valid tree plan is. Compose runs it over
 // its own output, and stage 9 runs it over an artifact it did not build; both
 // therefore mean the same thing by "valid", which is what makes a resumed job
 // and a fresh one comparable at all.
@@ -24,7 +24,7 @@ import (
 // this package could have caused — a duplicate path when the namer guarantees
 // uniqueness, a group named by the wrong number of leaves, a part count that
 // disagrees with the splitter that produced it (§3.4).
-func (v *Verifier) Check(s Skeleton) error {
+func (v *Verifier) Check(s TreePlan) error {
 	if s.Schema != SchemaVersion {
 		return DefectError{Reason: fmt.Sprintf("artifact declares schema %q, this build writes %q",
 			s.Schema, SchemaVersion)}
@@ -60,7 +60,7 @@ func (v *Verifier) Check(s Skeleton) error {
 // checkTree proves the node list is a tree: one entry-point, unique paths,
 // every parent present and already seen, and every path in its parent's own
 // directory under the name grammar. It returns each node's level.
-func checkTree(s Skeleton) (map[string]int, error) {
+func checkTree(s TreePlan) (map[string]int, error) {
 	if len(s.Nodes) == 0 {
 		return nil, DefectError{Reason: "the artifact holds no nodes"}
 	}
@@ -129,7 +129,7 @@ func checkPathGrammar(n Node) error {
 
 // checkCaps is §3.3's depth and fan-out conditions over the composed tree,
 // after every §2.7 operator has run.
-func checkCaps(s Skeleton, levels map[string]int) error {
+func checkCaps(s TreePlan, levels map[string]int) error {
 	fanOut := map[string]int{}
 	for _, n := range s.Nodes {
 		if n.Kind != KindLeaf && levels[n.Path] > s.Budgets.DepthCap {
@@ -155,17 +155,17 @@ func checkCaps(s Skeleton, levels map[string]int) error {
 // leaf's own byte range.
 //
 // G-1 is stated as the splitter's own answer rather than as a second token
-// comparison: for every group, re-running dissect.Split over Group.Source at
-// Group.Budget returns exactly Group.Parts sections. That is what "no leaf's
+// comparison: for every group, re-running dissect.Split over SplitGroup.Source at
+// SplitGroup.Budget returns exactly SplitGroup.Parts sections. That is what "no leaf's
 // span exceeds the per-call budget" means operationally — the mechanical
-// baseline stage 4 refines and stage 5 slices IS this list — and stating it
+// fallback stage 4 refines and stage 5 slices IS this list — and stating it
 // twice, once as arithmetic and once as the splitter, would be two rules with
 // nothing keeping them in agreement.
 //
 // It is also the only statement the artifact can make about parts, because the
 // artifact deliberately holds no interior boundary (I-1, F-2).
-func (v *Verifier) checkGroups(s Skeleton) (map[string]survey.Range, error) {
-	byID := make(map[string]Group, len(s.Groups))
+func (v *Verifier) checkGroups(s TreePlan) (map[string]survey.Span, error) {
+	byID := make(map[string]SplitGroup, len(s.Groups))
 	for _, g := range s.Groups {
 		if _, dup := byID[g.ID]; dup {
 			return nil, DefectError{Subject: g.ID, Reason: "two groups share an id"}
@@ -181,7 +181,7 @@ func (v *Verifier) checkGroups(s Skeleton) (map[string]survey.Range, error) {
 	}
 
 	// Every group's part ranges, from the splitter itself.
-	cuts := make(map[string][]survey.Range, len(s.Groups))
+	cuts := make(map[string][]survey.Span, len(s.Groups))
 	for _, g := range s.Groups {
 		got, err := v.split(g.Source)
 		if err != nil {
@@ -197,18 +197,18 @@ func (v *Verifier) checkGroups(s Skeleton) (map[string]survey.Range, error) {
 
 	// Every group named by exactly Parts leaves, parts 1..n, no repeats.
 	seen := map[string][]bool{}
-	ranges := make(map[string]survey.Range, len(s.Nodes))
+	ranges := make(map[string]survey.Span, len(s.Nodes))
 	for _, n := range s.Nodes {
 		if n.Kind != KindLeaf {
-			if n.Group != "" || n.Part != 0 {
+			if n.SplitGroup != "" || n.Part != 0 {
 				return nil, DefectError{Subject: n.Path, Reason: "only a page names a group"}
 			}
 			continue
 		}
-		g, ok := byID[n.Group]
+		g, ok := byID[n.SplitGroup]
 		if !ok {
 			return nil, DefectError{Subject: n.Path, Reason: fmt.Sprintf(
-				"names group %q, which the artifact does not hold", n.Group)}
+				"names group %q, which the artifact does not hold", n.SplitGroup)}
 		}
 		if n.Part < 1 || n.Part > g.Parts {
 			return nil, DefectError{Subject: n.Path, Reason: fmt.Sprintf(
@@ -245,8 +245,8 @@ func (v *Verifier) checkGroups(s Skeleton) (map[string]survey.Range, error) {
 //
 // This is the guarantee that makes stage 6's per-call input bounded before
 // stage 6 exists, which is exactly what §11.7 asks for: provable from the
-// skeleton without running the stage.
-func (v *Verifier) checkDigest(s Skeleton, parts map[string]survey.Range) error {
+// tree plan without running the stage.
+func (v *Verifier) checkDigest(s TreePlan, parts map[string]survey.Span) error {
 	sums := map[string]int{}
 	for _, n := range s.Nodes {
 		if n.Parent == "" {
@@ -254,7 +254,7 @@ func (v *Verifier) checkDigest(s Skeleton, parts map[string]survey.Range) error 
 		}
 		if n.Kind == KindLeaf {
 			r := parts[n.Path]
-			sums[n.Parent] += v.tokensOf(groupFile(s, n.Group), r)
+			sums[n.Parent] += v.tokensOf(groupFile(s, n.SplitGroup), r)
 			continue
 		}
 		sums[n.Parent] += s.Budgets.SummaryTokens
@@ -272,8 +272,8 @@ func (v *Verifier) checkDigest(s Skeleton, parts map[string]survey.Range) error 
 }
 
 // groupFile is the corpus file a group draws from.
-func groupFile(s Skeleton, id string) string {
-	g, ok := s.Group(id)
+func groupFile(s TreePlan, id string) string {
+	g, ok := s.SplitGroup(id)
 	if !ok {
 		return ""
 	}
@@ -290,7 +290,7 @@ func groupFile(s Skeleton, id string) string {
 // Coverage is stated over SECTIONS and not over bytes: a file's metadata block
 // is surveyed as an out-of-band range rather than as a section, and a KB that
 // does not distil YAML front matter has not dropped a chapter.
-func (v *Verifier) checkCoverage(s Skeleton) error {
+func (v *Verifier) checkCoverage(s TreePlan) error {
 	byFile := spansByFile(s.Groups)
 
 	// Groups first, in artifact order, so a failure is reported the same way
@@ -336,7 +336,7 @@ func (v *Verifier) checkCoverage(s Skeleton) error {
 // covered reports whether a section falls inside one span. The spans are
 // disjoint by the time this is asked, so "inside one" and "inside exactly one"
 // are the same question.
-func covered(spans []survey.Range, sec survey.Range) bool {
+func covered(spans []survey.Span, sec survey.Span) bool {
 	for _, s := range spans {
 		if sec.Start >= s.Start && sec.End <= s.End {
 			return true
