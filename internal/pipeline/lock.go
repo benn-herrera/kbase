@@ -47,14 +47,14 @@ type Lock struct {
 // mode of guessing is two writers in one job dir. So the error names the file
 // and quotes its contents, and the human makes the call in about a second.
 func AcquireLock(jobDir string, lg log.Logger) (*Lock, error) {
-	if err := os.MkdirAll(jobDir, ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(jobDir, CreateDirMode); err != nil {
 		return nil, fmt.Errorf("pipeline: create %s: %w", jobDir, err)
 	}
 	path := filepath.Join(jobDir, LockFileName)
 
 	// O_EXCL is the whole mechanism: the create either wins or reports that
 	// someone else already did. There is no read-then-write window to lose.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, ArtifactFileMode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, CreateFileMode)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return nil, LockedError{Path: path, Holder: readHolder(path)}

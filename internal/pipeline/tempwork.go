@@ -56,7 +56,7 @@ func OpenTempWork(out string, lg log.Logger) (*TempWork, error) {
 		return nil, errors.New("pipeline: temporary work needs an output directory to sit under")
 	}
 	root := filepath.Join(out, TempWorkDirName)
-	if err := os.MkdirAll(root, ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(root, CreateDirMode); err != nil {
 		return nil, fmt.Errorf("pipeline: create %s: %w", root, err)
 	}
 	return &TempWork{root: root, store: NewArtifactStore(root, lg), lg: lg}, nil

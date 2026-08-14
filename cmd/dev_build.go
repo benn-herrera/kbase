@@ -188,7 +188,7 @@ func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, err
 	if buildDate == "" {
 		buildDate = time.Now().UTC().Format(buildDateLayout)
 	}
-	if err := os.MkdirAll(out, pipeline.ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(out, pipeline.CreateDirMode); err != nil {
 		return devBuildResult{}, fmt.Errorf("%s: create %s: %w", devBuildVerb, out, err)
 	}
 
@@ -740,10 +740,10 @@ func (j *devBuildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
 			return nil, err
 		}
 		dst := filepath.Join(j.out, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(dst), pipeline.ArtifactDirMode); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), pipeline.CreateDirMode); err != nil {
 			return nil, fmt.Errorf("%s: create %s: %w", devBuildVerb, filepath.Dir(dst), err)
 		}
-		if err := os.WriteFile(dst, data, pipeline.ArtifactFileMode); err != nil {
+		if err := os.WriteFile(dst, data, pipeline.CreateFileMode); err != nil {
 			return nil, fmt.Errorf("%s: write %s: %w", devBuildVerb, dst, err)
 		}
 	}
@@ -984,7 +984,7 @@ func writeDevBuildRecord(dir string, rec devBuildRun) (string, error) {
 		return "", fmt.Errorf("%s: encode %s: %w", devBuildVerb, devBuildRecordName, err)
 	}
 	path := filepath.Join(dir, devBuildRecordName)
-	if err := os.WriteFile(path, append(data, '\n'), pipeline.ArtifactFileMode); err != nil {
+	if err := os.WriteFile(path, append(data, '\n'), pipeline.CreateFileMode); err != nil {
 		return "", fmt.Errorf("%s: write %s: %w", devBuildVerb, path, err)
 	}
 	return path, nil

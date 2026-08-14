@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"kbase/internal/pipeline"
 )
 
 // executeRoot runs the REAL root command — flag parsing, PersistentPreRunE,
@@ -44,6 +47,8 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr *bytes.Buffer, er
 // one. Emitting at debug is also what proves --log-level arrived: at the warn
 // default the record would be dropped and the file would stay empty.
 func TestRootLoggingWiring(t *testing.T) {
+	// The umask is set before Execute, which is what creates the log file.
+	mask := setTestUmask(t)
 	path := filepath.Join(t.TempDir(), "run.log")
 
 	stdout, stderr, err := executeRoot(t, "--log-level", "debug", "--log-file", path)
@@ -68,9 +73,13 @@ func TestRootLoggingWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("log file: %v", err)
 	}
-	// A log carries diagnostics about the user's corpus and provider set.
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Errorf("log file mode: got %v, want 0600", got)
+	// The log file is created like every other kbase output: permissive
+	// mode asked for, the user's umask deciding (ruled 2026-08-14).
+	// log.logFileMode is unexported and is the same ruled number as the one
+	// §9's table names, which is what this compares against.
+	want := os.FileMode(pipeline.CreateFileMode) &^ mask
+	if runtime.GOOS != "windows" && info.Mode().Perm() != want {
+		t.Errorf("log file mode: got %v, want %v", info.Mode().Perm(), want)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {

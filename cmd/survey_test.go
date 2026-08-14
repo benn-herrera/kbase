@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,6 +78,7 @@ func TestRunSurveySummary(t *testing.T) {
 // TestRunSurveyJSONFile: --json writes the artifact where it was told to, and
 // the summary still goes to stdout.
 func TestRunSurveyJSONFile(t *testing.T) {
+	mask := setTestUmask(t)
 	root := surveyFixtureDir(t, surveyCorpus)
 	out := filepath.Join(t.TempDir(), "survey.json")
 
@@ -88,14 +90,15 @@ func TestRunSurveyJSONFile(t *testing.T) {
 		t.Errorf("stdout %q should still carry the summary", stdout)
 	}
 
-	// The artifact carries gists and titles lifted out of the user's corpus,
-	// so it is owner-only for the same reason the log file is.
+	// The artifact is created the way every kbase output is: permissive mode
+	// asked for, the user's umask deciding (ruled 2026-08-14).
 	info, err := os.Stat(out)
 	if err != nil {
 		t.Fatalf("stat artifact: %v", err)
 	}
-	if got := info.Mode().Perm(); got != pipeline.ArtifactFileMode {
-		t.Errorf("artifact mode = %o, want %o", got, pipeline.ArtifactFileMode)
+	want := os.FileMode(pipeline.CreateFileMode) &^ mask
+	if runtime.GOOS != "windows" && info.Mode().Perm() != want {
+		t.Errorf("artifact mode = %v, want %v", info.Mode().Perm(), want)
 	}
 
 	raw, err := os.ReadFile(out)

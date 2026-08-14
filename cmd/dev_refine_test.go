@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -103,6 +104,7 @@ func devRefineOpts(t *testing.T, file, out string) devRefineOptions {
 // list and its stamp land in --out beside the run record, and the report names
 // what was dialed.
 func TestRunDevRefineWiring(t *testing.T) {
+	mask := setTestUmask(t)
 	file := devRefineFile(t, "sync.md", devRefineDoc())
 	out := filepath.Join(t.TempDir(), "job")
 
@@ -150,8 +152,11 @@ func TestRunDevRefineWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat %s: %v", devRefineRecordName, err)
 	}
-	if mode := info.Mode().Perm(); mode != pipeline.ArtifactFileMode {
-		t.Errorf("%s mode = %o, want %o", devRefineRecordName, mode, pipeline.ArtifactFileMode)
+	// The run record is created like every kbase output: permissive mode
+	// asked for, the user's umask deciding (ruled 2026-08-14).
+	wantMode := os.FileMode(pipeline.CreateFileMode) &^ mask
+	if runtime.GOOS != "windows" && info.Mode().Perm() != wantMode {
+		t.Errorf("%s mode = %v, want %v", devRefineRecordName, info.Mode().Perm(), wantMode)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

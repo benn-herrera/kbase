@@ -31,11 +31,13 @@ const (
 	// rojoBuildEvidence is this test's output root, named for the recipe that
 	// runs it so the log the recipe tees and the artifacts the test writes sit
 	// together.
-	rojoBuildEvidence = "test_data/transient/test-integration-rojo-build"
+	rojoBuildEvidence = "test_data/transient/test-integration-build-mechanical-rojo"
 
 	// rojoBuildDate is pinned so two runs of this test produce a
 	// byte-identical tree — the determinism §8.1 asks for, which a clock would
-	// otherwise break once a day.
+	// otherwise break once a day. The justfile mirrors this value as
+	// ROJO_BUILD_DATE for the live build recipe, so the two builds over this
+	// corpus are comparable page for page.
 	rojoBuildDate = "2026-01-01"
 )
 

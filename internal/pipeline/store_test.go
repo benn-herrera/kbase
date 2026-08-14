@@ -193,7 +193,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 
 	t.Run("a directory where an artifact belongs", func(t *testing.T) {
 		s, _ := newArtifactStore(t)
-		if err := os.MkdirAll(filepath.Join(s.root, "a.md"), ArtifactDirMode); err != nil {
+		if err := os.MkdirAll(filepath.Join(s.root, "a.md"), CreateDirMode); err != nil {
 			t.Fatal(err)
 		}
 		_, _, err := s.verify("a.md", nil)
@@ -255,10 +255,18 @@ func TestPutOverwritesInPlace(t *testing.T) {
 	}
 }
 
+// TestPutFileModes pins the ruling of 2026-08-14: kbase is a documentation
+// tool, not a keystore, so it asks for the permissive creation modes and the
+// user's umask decides the rest. The artifact, its stamp and the directory
+// made for them must all come out masked — including the artifact, which
+// reaches its name through a temporary file whose own creation is where an
+// os.CreateTemp would quietly reimpose 0600.
 func TestPutFileModes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix file modes")
 	}
+	mask := setTestUmask(t)
+	wantFile, wantDir := CreateFileMode&^mask, CreateDirMode&^mask
 	s, _ := newArtifactStore(t)
 	put(t, s, "nested/x.md", "body")
 
@@ -267,16 +275,16 @@ func TestPutFileModes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != ArtifactFileMode {
-			t.Errorf("%s mode %o, want %o", rel, got, ArtifactFileMode)
+		if got := info.Mode().Perm(); got != wantFile {
+			t.Errorf("%s mode %o, want %o", rel, got, wantFile)
 		}
 	}
 	dir, err := os.Stat(filepath.Join(s.root, "nested"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dir.Mode().Perm(); got != ArtifactDirMode {
-		t.Errorf("directory mode %o, want %o", got, ArtifactDirMode)
+	if got := dir.Mode().Perm(); got != wantDir {
+		t.Errorf("directory mode %o, want %o", got, wantDir)
 	}
 }
 
@@ -394,7 +402,7 @@ func read(t *testing.T, s *ArtifactStore, rel string) string {
 
 func write(t *testing.T, s *ArtifactStore, rel, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(s.root, filepath.FromSlash(rel)), []byte(content), ArtifactFileMode); err != nil {
+	if err := os.WriteFile(filepath.Join(s.root, filepath.FromSlash(rel)), []byte(content), CreateFileMode); err != nil {
 		t.Fatal(err)
 	}
 }

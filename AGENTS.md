@@ -28,10 +28,12 @@ just test-race  # unit tests under the race detector
 just edit-gate  # cheap gate, run after every change: fmt-check + go vet
 just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
-just test-integration        # omnibus: every per-corpus integration test
-just test-integration-rojo   # pinned Rojo corpus: summary values + determinism
-just test-integration-rojo-build  # build a whole KB from that corpus, offline,
-                                  # and assert the nine verify gates
+just test-integration        # omnibus: every hermetic integration test
+just test-integration-survey-rojo  # pinned Rojo corpus: summary values + determinism
+just test-integration-build-mechanical-rojo  # build a whole KB from that corpus,
+                                  # offline, and assert the nine verify gates
+just test-integration-build-live-rojo  # the same build with the model in the loop;
+                                  # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
@@ -163,13 +165,19 @@ extension second. Concretely:
 - Every verification lands as a repeatable invocation: a unit test, an
   integration recipe (`test-integration-*`), or a dev verb — never an
   ad-hoc command sequence that lives only in a conversation.
+- Integration recipes are named `test-integration-<process>-<corpus>`
+  (ruled 2026-08-14): the process first, the input corpus LAST, because
+  a corpus is served by several processes and more corpora are coming.
+  The corpus fetch is shared: `prep-test-integration-<corpus>`. A recipe
+  that needs a live provider or the network is excluded from the omnibus
+  `test-integration`, which stays hermetic, and says so in its `[doc]`.
 - Observational evidence (counts, measurements, composed artifacts, A/B
   numbers) is emitted to an inspectable location — `test_data/transient/
   <name>/` for test-produced artifacts, an explicit `--out` for verbs —
   not left in ephemeral agent reports or terminal scrollback.
 - Unit tests live beside their packages and must pass hermetically (no
   network, no corpus). Corpus-driven tests skip when the pinned corpus is
-  absent and are wired into `test-integration-rojo`, where the corpus is
+  absent and are wired into `test-integration-survey-rojo`, where the corpus is
   guaranteed present — a corpus property that only runs "sometimes" is
   coverage that silently isn't.
 

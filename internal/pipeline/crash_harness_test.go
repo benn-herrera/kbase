@@ -223,7 +223,7 @@ func TestPoisonedStampRedoesOnlyItsUnit(t *testing.T) {
 
 	const poisoned = "leaves/d1/two.md"
 	stamp := filepath.Join(storeRoot(dir), filepath.FromSlash(poisoned)+StampSuffix)
-	if err := os.WriteFile(stamp, []byte("{ this is not a stamp"), ArtifactFileMode); err != nil {
+	if err := os.WriteFile(stamp, []byte("{ this is not a stamp"), CreateFileMode); err != nil {
 		t.Fatalf("poison the stamp: %v", err)
 	}
 

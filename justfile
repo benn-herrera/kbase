@@ -23,8 +23,21 @@ TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
 # result, its stats and artifacts — somewhere they can be read afterwards.
 # One directory per test name, all under the gitignored transient tree.
 UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
-ROJO_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-rojo"
-ROJO_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-rojo-build"
+SURVEY_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-survey-rojo"
+BUILD_MECHANICAL_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-mechanical-rojo"
+BUILD_LIVE_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-rojo"
+
+# The configuration the live build dials: the checked-in fixture pool, whose
+# provider entry names a key FILE the built binary reads for itself. No recipe
+# ever reads a key.
+LIVE_CONFIG_DIR := TEST_DATA_FIXTURES_DIR / "config"
+
+# The build date both build recipes stamp into every page's provenance
+# receipt. Pinned rather than today's date so two runs produce a byte-identical
+# tree (§8.1) — a clock would otherwise break that once a day. The mechanical
+# build's Go test mirrors this value as rojoBuildDate; they are the same
+# constant in two languages.
+ROJO_BUILD_DATE := "2026-01-01"
 
 DIST_DIR := "dist"
 
@@ -71,12 +84,15 @@ test-race:
 edit-gate: fmt-check
     go vet ./...
 
-# Integration tests are per-corpus pairs — prep-test-integration-<corpus>
-# (pinned shallow fetch, no-op when present) + test-integration-<corpus>
-# (expectations beside their runner) — composed by the omnibus
-# `test-integration`. Each test pulls only its own data, so validating one
-# corpus never fetches another. Adding a corpus = one pin block above, one
-# pair here, one name on the omnibus.
+# Integration recipes are named test-integration-<process>-<corpus>: the
+# process first, the input corpus last, because a corpus is served by several
+# processes and more corpora are coming. Each is paired with a
+# prep-test-integration-<corpus> (pinned shallow fetch, no-op when present)
+# that is shared by every process over that corpus, and the hermetic ones are
+# composed by the omnibus `test-integration`. Each test pulls only its own
+# data, so validating one corpus never fetches another. Adding a corpus = one
+# pin block above, one prep recipe, one recipe per process, and the hermetic
+# names on the omnibus.
 
 [doc("fetch the pinned Rojo docs corpus (no-op when present)")]
 prep-test-integration-rojo:
@@ -103,9 +119,9 @@ prep-test-integration-rojo:
 # Here the corpus is guaranteed present, which makes this the gate where the
 # claim is true.
 [doc("survey the pinned Rojo corpus; assert summary values + determinism")]
-test-integration-rojo:
-    @mkdir -p "{{ROJO_TEST_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-rojo 2>&1 | tee "{{ROJO_TEST_OUT_DIR}}/log.txt"
+test-integration-survey-rojo:
+    @mkdir -p "{{SURVEY_ROJO_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-survey-rojo 2>&1 | tee "{{SURVEY_ROJO_OUT_DIR}}/log.txt"
 
 # The body, split out only so the wrapper above can tee ONE stream. just runs
 # each recipe line in its own shell, so a per-line redirect would truncate the
@@ -118,25 +134,25 @@ test-integration-rojo:
 # say what the corpus actually measured. The numbers those lines summarise are
 # written as JSON beside this log by the tests themselves.
 [private]
-_test-integration-rojo: build prep-test-integration-rojo
+_test-integration-survey-rojo: build prep-test-integration-rojo
     go test -v -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
     go test -v -run TestTreePlanOverRealCorpus -count=1 ./internal/treeplan
-    @a="{{ROJO_TEST_OUT_DIR}}/survey.json"; \
-    b="{{ROJO_TEST_OUT_DIR}}/survey-rerun.json"; \
-    s="{{ROJO_TEST_OUT_DIR}}/summary.txt"; \
+    @a="{{SURVEY_ROJO_OUT_DIR}}/survey.json"; \
+    b="{{SURVEY_ROJO_OUT_DIR}}/survey-rerun.json"; \
+    s="{{SURVEY_ROJO_OUT_DIR}}/summary.txt"; \
     ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$a" && \
     ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" --json "$b" || \
-      { echo "integration(rojo): survey run failed"; exit 1; }; \
-    cmp -s "$a" "$b" || { echo "integration(rojo): artifact is not deterministic"; exit 1; }; \
+      { echo "integration(survey-rojo): survey run failed"; exit 1; }; \
+    cmp -s "$a" "$b" || { echo "integration(survey-rojo): artifact is not deterministic"; exit 1; }; \
     ./{{BIN_DIR}}/kbase survey "{{ROJO_DOCS_DIR}}/docs" > "$s" || \
-      { echo "integration(rojo): survey run failed"; exit 1; }; \
+      { echo "integration(survey-rojo): survey run failed"; exit 1; }; \
     summary="$(cat "$s")"; \
     echo "$summary"; \
     for want in "files=8 " "tokens=10553 " "sections=83 " "unresolved=5 "; do \
       echo "$summary" | grep -qF "$want" || \
-        { echo "integration(rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
+        { echo "integration(survey-rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
-    echo "integration(rojo) ok: surveyed, deterministic, summary matches"
+    echo "integration(survey-rojo) ok: surveyed, deterministic, summary matches"
 
 # Build a whole knowledge base out of the pinned Rojo corpus and walk it.
 #
@@ -146,36 +162,87 @@ _test-integration-rojo: build prep-test-integration-rojo
 # pipeline fails it.
 #
 # The KB *is* the evidence, so unlike the other recipes this one keeps its
-# whole output: the delivered tree under {{ROJO_BUILD_OUT_DIR}}/kb, the run
-# record beside it, the job's intermediates in its temp-work/, the measured
-# stats in stats.json, and the full log. A build that left nothing to walk
-# would be a green tick nobody can check.
-[doc("build a KB from the pinned Rojo corpus; assert the nine verify gates and walk the tree")]
-test-integration-rojo-build:
-    @mkdir -p "{{ROJO_BUILD_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-rojo-build 2>&1 | tee "{{ROJO_BUILD_OUT_DIR}}/log.txt"
+# whole output: the delivered tree under {{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb,
+# the run record beside it, the job's intermediates in its temp-work/, the
+# measured stats in stats.json, and the full log. A build that left nothing to
+# walk would be a green tick nobody can check.
+[doc("build a KB from the pinned Rojo corpus with no model in the loop; assert the nine verify gates and walk the tree")]
+test-integration-build-mechanical-rojo:
+    @mkdir -p "{{BUILD_MECHANICAL_ROJO_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-build-mechanical-rojo 2>&1 | tee "{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/log.txt"
 
 # The body, split out so the wrapper above can tee ONE stream — same reason as
-# _test-integration-rojo.
+# _test-integration-survey-rojo.
 [private]
-_test-integration-rojo-build: build prep-test-integration-rojo
+_test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     go test -v -run TestDevBuildOverRealCorpus -count=1 ./cmd
-    @kb="{{ROJO_BUILD_OUT_DIR}}/kb"; \
+    @kb="{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb"; \
     for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
-      [[ -f "$kb/$want" ]] || { echo "integration(rojo-build): $want was not delivered"; exit 1; }; \
+      [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-rojo): $want was not delivered"; exit 1; }; \
     done; \
-    echo "integration(rojo-build): delivered tree at $kb"; \
+    echo "integration(build-mechanical-rojo): delivered tree at $kb"; \
     find "$kb" -name '*.md' | wc -l | xargs echo "  markdown pages:"; \
     echo "  tree to depth 2:"; \
     find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
-    echo "integration(rojo-build) ok: nine gates green, tree delivered"
+    echo "integration(build-mechanical-rojo) ok: nine gates green, tree delivered"
 
-# The omnibus composes the per-corpus recipes and writes no log of its own:
-# each of them already preserves its full output under its own name, and a
+# The same build with the model IN the loop: stages 3 and 6 — the container
+# descent that designs the tree, and the four level stages that summarise it —
+# run against the provider configured in {{LIVE_CONFIG_DIR}}. Everything else
+# is the same code on the same artifacts as the mechanical build, which is what
+# makes the pair readable side by side.
+#
+# It is NOT composed into `test-integration`, deliberately: that omnibus is
+# hermetic and offline, and this recipe needs a reachable provider, a key file
+# and minutes of model time. Run it by name when the live seams are what you
+# are checking.
+#
+# The recipe invokes the built binary and nothing else — the API key stays a
+# path in providers.toml that the binary reads for itself, and no recipe, log
+# or evidence file ever holds it.
+[doc("LIVE (excluded from test-integration: needs a provider + network): build a KB from the pinned Rojo corpus with the model in the loop; assert the nine verify gates")]
+test-integration-build-live-rojo:
+    @mkdir -p "{{BUILD_LIVE_ROJO_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-build-live-rojo 2>&1 | tee "{{BUILD_LIVE_ROJO_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-survey-rojo.
+#
+# The gates are read from run.json rather than from the summary: the record is
+# the artifact that outlives the terminal, so asserting over it is asserting
+# over the evidence that gets kept.
+[private]
+_test-integration-build-live-rojo: build prep-test-integration-rojo
+    @kb="{{BUILD_LIVE_ROJO_OUT_DIR}}/kb"; \
+    rm -rf "$kb"; \
+    ./{{BIN_DIR}}/kbase dev-build "{{ROJO_DOCS_DIR}}/docs" \
+      --config-dir "{{LIVE_CONFIG_DIR}}" \
+      --out "$kb" \
+      --build-date "{{ROJO_BUILD_DATE}}" \
+      --keep-temp-work || \
+      { echo "integration(build-live-rojo): the live build failed"; exit 1; }; \
+    rec="$kb/run.json"; \
+    [[ -f "$rec" ]] || { echo "integration(build-live-rojo): no run record at $rec"; exit 1; }; \
+    green="$(grep -c '"ok": true' "$rec" || true)"; \
+    red="$(grep -c '"ok": false' "$rec" || true)"; \
+    [[ "$red" == 0 ]] || { echo "integration(build-live-rojo): $red of the nine gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 9 ]] || { echo "integration(build-live-rojo): $green gates reported, want nine; see $rec"; exit 1; }; \
+    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+      [[ -f "$kb/$want" ]] || { echo "integration(build-live-rojo): $want was not delivered"; exit 1; }; \
+    done; \
+    echo "integration(build-live-rojo): delivered tree at $kb"; \
+    find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
+    echo "  tree to depth 2:"; \
+    find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
+    echo "integration(build-live-rojo) ok: nine gates green, tree delivered, temp work kept"
+
+# The omnibus composes the HERMETIC per-corpus recipes and writes no log of its
+# own: each of them already preserves its full output under its own name, and a
 # second copy of the same bytes under a second name is a file that can go
-# stale against the one anybody reads.
-[doc("run every per-corpus integration test")]
-test-integration: test-integration-rojo test-integration-rojo-build
+# stale against the one anybody reads. test-integration-build-live-rojo is
+# excluded on purpose — see its doc string.
+[doc("run every hermetic integration test (the live ones are excluded; run those by name)")]
+test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

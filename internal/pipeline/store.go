@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"kbase/internal/log"
@@ -45,18 +47,24 @@ const (
 	// what makes that case Invalid.
 	stampSchema = 1
 
-	// ArtifactFileMode is the mode of every file kbase writes under an output
-	// directory. A job dir holds a user's corpus in derived form; it gets the
-	// same owner-only posture as the log file and the provider key files.
+	// CreateFileMode is the mode kbase ASKS FOR when it creates a file:
+	// artifacts and their stamps, the delivered KB tree, run records, the
+	// job lock. It is not a permission posture — it is the ordinary
+	// permissive creation mode, and the user's umask decides what actually
+	// lands on disk. kbase is a documentation tool, not a keystore (ruled
+	// 2026-08-14): the output is a doc set the user shares, and a tool that
+	// second-guesses their umask makes that harder for no security gained.
+	// Passed to OpenFile/MkdirAll/WriteFile only — never to Chmod, which
+	// does not consult the umask and would hand out the raw bits.
 	//
 	// It is exported because `cmd` writes beside the store — a survey
 	// artifact, a run record — and an unexported constant there would be a
 	// second declaration of one fact (ARCHITECTURE.md §9).
-	ArtifactFileMode = 0o600
+	CreateFileMode = 0o666
 
-	// ArtifactDirMode is the mode of directories kbase creates under an
-	// output directory — owner-only, matching the files inside them.
-	ArtifactDirMode = 0o700
+	// CreateDirMode is the same rule for directories kbase creates, up to
+	// the execute bits a directory needs to be traversable at all.
+	CreateDirMode = 0o777
 
 	// tempSuffix starts the name of the temporary file a write lands in
 	// before the rename. It sits in the destination directory so the rename
@@ -422,10 +430,10 @@ func compareInputs(got, want []Input) string {
 // done.
 func writeAtomic(abs string, data []byte, cp string) error {
 	dir := filepath.Dir(abs)
-	if err := os.MkdirAll(dir, ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(dir, CreateDirMode); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(abs)+tempSuffix+"*")
+	tmp, err := createTemp(dir, filepath.Base(abs)+tempSuffix)
 	if err != nil {
 		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
@@ -453,8 +461,8 @@ func writeAtomic(abs string, data []byte, cp string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", abs, err)
 	}
-	// os.CreateTemp opens at 0600, which is the mode these files want, so
-	// there is nothing to chmod before the name becomes visible.
+	// The file already carries the mode it will have under its real name
+	// (see createTemp), so there is nothing to chmod before the rename.
 
 	if cp != "" {
 		crashpoint.AtStaging(cp, func() { keep = true })
@@ -463,6 +471,27 @@ func writeAtomic(abs string, data []byte, cp string) error {
 		return fmt.Errorf("install %s: %w", abs, err)
 	}
 	return nil
+}
+
+// createTemp creates a new file in dir whose name starts with prefix, opened
+// for writing, at CreateFileMode.
+//
+// It exists because os.CreateTemp hard-codes 0600 and the fix is not a chmod:
+// chmod does not consult the umask, so chmodding the temp file to 0666 would
+// deliver a world-writable artifact to every user on the machine. The mode has
+// to be asked for at CREATE time, and asking means naming the file ourselves.
+// O_EXCL plus a random suffix is what os.CreateTemp does for the same reason —
+// two workers must never open the same name.
+func createTemp(dir, prefix string) (*os.File, error) {
+	for range 1000 {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36))
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, CreateFileMode)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("no unused %s* name in %s", prefix, dir)
 }
 
 // sweep removes every file under the job directory that the chain does not

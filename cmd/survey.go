@@ -107,16 +107,15 @@ func runSurvey(opts surveyOptions) error {
 
 // writeArtifact writes the survey JSON to path, or to stdout for "-".
 //
-// The mode is pipeline.ArtifactFileMode rather than a local copy of the same
-// number: the artifact carries gists and titles lifted out of the user's
-// corpus — actual content, not just metadata about it — so it is owner-only
-// for the same reason every other derived file is, and §9's constants table
-// names one place for that fact.
+// The mode is pipeline.CreateFileMode rather than a local copy of the same
+// number: the artifact is created the way every other kbase output is —
+// permissive request, user's umask decides — and §9's constants table names
+// one place for that fact.
 func writeArtifact(artifact survey.Artifact, path string, stdout io.Writer) error {
 	if path == jsonToStdout {
 		return artifact.WriteJSON(stdout)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, pipeline.ArtifactFileMode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, pipeline.CreateFileMode)
 	if err != nil {
 		return fmt.Errorf("survey: create %s: %w", path, err)
 	}

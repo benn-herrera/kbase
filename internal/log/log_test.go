@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -168,9 +169,16 @@ func TestFileTeeAppends(t *testing.T) {
 	}
 }
 
-// TestFileTeeMode pins the owner-only mode: a log carries corpus and
-// provider detail, so it is not world-readable.
+// TestFileTeeMode pins the ruling of 2026-08-14: the log file is created the
+// way every other kbase output is — permissive mode asked for, user's umask
+// deciding. A transcript the user asked for by name is one they may hand to
+// someone else, and no key material is ever written here. The mask is set to
+// a distinctive value first, so a hard-coded mode fails this.
 func TestFileTeeMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	mask := setTestUmask(t)
 	path := filepath.Join(t.TempDir(), "kbase.log")
 	_, closer, err := New(Options{FilePath: path, Console: io.Discard})
 	if err != nil {
@@ -182,8 +190,8 @@ func TestFileTeeMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat log file: %v", err)
 	}
-	if got := info.Mode().Perm(); got != logFileMode {
-		t.Errorf("log file mode = %o, want %o", got, logFileMode)
+	if want := os.FileMode(logFileMode) &^ mask; info.Mode().Perm() != want {
+		t.Errorf("log file mode = %o, want %o", info.Mode().Perm(), want)
 	}
 }
 

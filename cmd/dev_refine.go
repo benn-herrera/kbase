@@ -202,7 +202,7 @@ func runDevRefine(ctx context.Context, opts devRefineOptions) error {
 	}
 	// The output directory, created if missing — but nothing transient goes
 	// in it. The scratch tree is opened later, once there is work to do.
-	if err := os.MkdirAll(out, pipeline.ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(out, pipeline.CreateDirMode); err != nil {
 		return fmt.Errorf("%s: create %s: %w", devRefineVerb, out, err)
 	}
 
@@ -393,10 +393,10 @@ func safeBaseURL(raw string) string {
 // proves are the same bytes.
 func deliver(out, rel string, data []byte) (string, error) {
 	path := filepath.Join(out, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(path), pipeline.ArtifactDirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), pipeline.CreateDirMode); err != nil {
 		return "", fmt.Errorf("%s: create %s: %w", devRefineVerb, filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, data, pipeline.ArtifactFileMode); err != nil {
+	if err := os.WriteFile(path, data, pipeline.CreateFileMode); err != nil {
 		return "", fmt.Errorf("%s: write %s: %w", devRefineVerb, path, err)
 	}
 	return path, nil

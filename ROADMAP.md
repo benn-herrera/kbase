@@ -54,7 +54,7 @@ deleted, not archived — git history is the log.
      grammar, the §8.1 fixture manifest, the nine verify gates,
      delivery), the `SourceStructureProposal` dev/baseline tree plan, and
      `kbase dev-build`, which composes all of it into a walkable Rojo KB
-     with no model in the loop (`just test-integration-rojo-build`).
+     with no model in the loop (`just test-integration-build-mechanical-rojo`).
      Two findings from it are queued below: link byte offsets on
      `survey.Link`, and the anchor-grammar guess the rebase map makes
      without them.
@@ -160,7 +160,16 @@ deleted, not archived — git history is the log.
   distillation variant with it: conversion is deterministic, so leaves stay
   mechanical in every format. Contract in §4; pandoc is a dev-time
   differential oracle, never a shipped dependency.
-- PDF preprocessing-adapter slot.
+- PDF preprocessing-adapter slot. **Early probe path (noted 2026-08-14):**
+  oMLX serves MarkItDown as a model (already visible in reaper's catalog),
+  so PDF→markdown is reachable through the provider API we speak — a
+  cheap evaluation of whether PDF corpora yield worthwhile KBs before any
+  docling-class integration. Shape when taken: small dev-convert verb
+  through the existing client (no ad-hoc scripts, key hygiene standing),
+  conversion stamped (PDF hash + converting model id), determinism
+  verified empirically (the wrapper, not MarkItDown itself, is the
+  unknown), output tree fed to dev-build. Extraction-grade caveat:
+  a negative result indicts the extractor, not the corpus class.
 - i18n hardening (ruled 2026-08-13, indefinitely parked; slug half
   RESOLVED same day by verbatim-bytes slugs + NFC custody): remaining
   item is spaceless-script word caps failing open (CJK/Thai — byte/token

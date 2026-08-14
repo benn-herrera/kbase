@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,20 +17,25 @@ import (
 )
 
 const (
-	// configDirPerm is the mode UpdateConfig creates a missing config
-	// directory with. config.toml holds choices, never credentials — the
-	// secrets live in the files providers.toml points at — so the
-	// directory is ordinary user data, not a keystore.
-	configDirPerm = 0o755
+	// configDirPerm is the mode UpdateConfig ASKS FOR when it creates a
+	// missing config directory: the ordinary permissive creation mode, left
+	// to the user's umask to narrow. config.toml holds choices, never
+	// credentials — the secrets live in the files providers.toml points at —
+	// so the directory is ordinary user data, not a keystore (ruled
+	// 2026-08-14). Same number as pipeline.CreateDirMode, declared here
+	// because this package is below it.
+	configDirPerm = 0o777
 
-	// configFilePerm is the mode of the written config.toml. It is a file
-	// the user is expected to open and hand-edit.
-	configFilePerm = 0o644
+	// configFilePerm is the mode the written config.toml is created with —
+	// same rule, and the same number as pipeline.CreateFileMode. It is a
+	// file the user is expected to open and hand-edit.
+	configFilePerm = 0o666
 
-	// configTempPattern names the temporary file UpdateConfig writes
-	// before renaming it into place. It sits in the destination directory
-	// so the rename is within one filesystem, and therefore atomic.
-	configTempPattern = ConfigFileName + ".tmp*"
+	// configTempPrefix starts the name of the temporary file UpdateConfig
+	// writes before renaming it into place. It sits in the destination
+	// directory so the rename is within one filesystem, and therefore
+	// atomic.
+	configTempPrefix = ConfigFileName + ".tmp"
 
 	// keyProvider is the top-level key holding the provider choice; it
 	// mirrors Config's `toml` tag. The [models] table's keys are the tier
@@ -262,7 +269,7 @@ func installConfig(path, content string) error {
 	// The temp file sits beside the RESOLVED target, so the rename stays
 	// within one filesystem even when the link crosses one.
 	tmpDir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(tmpDir, configTempPattern)
+	tmp, err := createTemp(tmpDir, configTempPrefix)
 	if err != nil {
 		return fmt.Errorf("config: create temp file in %s: %w", tmpDir, err)
 	}
@@ -285,16 +292,37 @@ func installConfig(path, content string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
-	// CreateTemp opens at 0600; config.toml is meant to be readable and
-	// hand-editable, so the mode is set before the file becomes visible
-	// under its real name.
-	if err := os.Chmod(tmp.Name(), configFilePerm); err != nil {
-		return fmt.Errorf("config: chmod %s: %w", path, err)
-	}
+	// No chmod before the rename: the temp file was already created at
+	// configFilePerm (see createTemp), which is the mode config.toml is
+	// meant to have.
 	if err := os.Rename(tmp.Name(), target); err != nil {
 		return fmt.Errorf("config: install %s: %w", path, err)
 	}
 	return nil
+}
+
+// createTemp creates a new file in dir whose name starts with prefix, opened
+// for writing, at configFilePerm.
+//
+// It exists because os.CreateTemp hard-codes 0600 and the fix is not a chmod:
+// chmod does not consult the umask, so chmodding to 0666 would install a
+// world-writable config.toml. The mode has to be asked for at CREATE time,
+// and asking means naming the file ourselves. O_EXCL plus a random suffix is
+// what os.CreateTemp does for the same reason — two `kbase configure`
+// processes must never open the same name.
+//
+// pipeline.writeAtomic carries the twin of this function. They cannot be one
+// declaration: pipeline imports config, so the dependency only runs that way.
+func createTemp(dir, prefix string) (*os.File, error) {
+	for range 1000 {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36))
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, configFilePerm)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("no unused %s* name in %s", prefix, dir)
 }
 
 // assign renders one `key = "value"` line. Go's quoting and TOML's basic
