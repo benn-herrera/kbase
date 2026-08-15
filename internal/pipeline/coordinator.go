@@ -37,7 +37,8 @@ var cpStageComplete = crashpoint.Register("pipeline.coordinator.stage.complete")
 var cpProduced = crashpoint.Register("pipeline.coordinator.produce.done")
 
 // InputBuilder produces a task's per-call prompt input at the moment the
-// worker reaches the task, rather than when the stage was described.
+// worker reaches the task, rather than when the stage was described — or
+// reports that the task NEEDS NO CALL at all.
 //
 // Most stages know their inputs up front and pass ConstInput. A stage whose
 // question depends on what the stage itself has decided so far cannot: stage
@@ -49,17 +50,39 @@ var cpProduced = crashpoint.Register("pipeline.coordinator.produce.done")
 // frozen-prompt assertion, the budget refusal and the churn tripwire all run
 // against the BUILT input exactly as they did against a stored one.
 //
+// # The needed result
+//
+// A stage that decides its own questions can also decide that one of them
+// stopped being a question. Stage 3's descent is the case: its container calls
+// are enumerated from the SOURCE tree before the first of them runs, and a
+// container whose parent's answer put its material on a page is ABSORBED — the
+// answer to its call would be thrown away (ARCHITECTURE.md §3.2). A call whose
+// answer is discarded must not be able to fail the build, and the cheapest way
+// to guarantee that is for it not to exist.
+//
+// So a builder returns needed=false to say the call is not wanted. The worker
+// then makes none: no prompt is built, no tokens are spent, no response is
+// verified, and the task can produce no failure of any kind. It is counted, in
+// JobResult.Skipped, because "we planned n calls and made n-k" is a fact about
+// the run rather than an absence.
+//
+// It is legal only on a CONTRIBUTING task, and the worker refuses otherwise
+// (SkippedArtifactError). A task that owes an artifact and makes no call has
+// nothing to write, so skipping it would leave the stage short a unit that
+// nothing reported and no resume could tell from an interruption.
+//
 // It returns no error on purpose. A builder assembles material the stage
 // already holds and already verified; the failure that can arise from a call's
 // size — a slot over its budget — is the prompt builder's to raise, and it
 // raises it at Build with the refuse-and-split classification the runner
 // already routes.
-type InputBuilder func() prompt.CallInput
+type InputBuilder func() (in prompt.CallInput, needed bool)
 
 // ConstInput is the builder for a task whose per-call input is fully known
-// when the stage is described — every stage but the fold.
+// when the stage is described — every stage but the fold. Its call is always
+// needed: an input fixed before the stage ran cannot have learned otherwise.
 func ConstInput(in prompt.CallInput) InputBuilder {
-	return func() prompt.CallInput { return in }
+	return func() (prompt.CallInput, bool) { return in, true }
 }
 
 // Producer derives a unit's artifact in process, with no model involved. It is
@@ -120,7 +143,8 @@ type LaneTask struct {
 	// the worker owns slot 4 and fills it from SectionRef at the transition.
 	// A non-empty StageRef is refused rather than overwritten, because silently
 	// discarding a caller's buffer is how slot 4 would start churning per
-	// call without anyone noticing.
+	// call without anyone noticing. A builder that reports the call unneeded
+	// (see InputBuilder) makes this task cost nothing at all.
 	//
 	// Exactly one of Input and Produce is set; see StagePlan.validate.
 	Input InputBuilder
@@ -320,6 +344,16 @@ type JobResult struct {
 	Reused int
 	// Produced is how many this run wrote, fallen-back ones included.
 	Produced int
+	// Skipped counts CALLS a stage said it no longer needed (see
+	// InputBuilder) — planned questions that stopped being questions, so no
+	// prompt was built and no tokens were spent.
+	//
+	// Per call rather than per unit, and it never enters DeliveryReady's
+	// arithmetic: only a contributing task may be skipped, and a contributing
+	// task describes no unit. Reported because a descent that enumerated nine
+	// container calls and made six is a run whose cost nobody could otherwise
+	// account for.
+	Skipped int
 	// FallbackCount counts fallback-backed CALLS that kept a mechanical fallback
 	// because the model's answer did not verify.
 	//
@@ -482,7 +516,7 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 	slices.SortFunc(res.Failures, func(a, b OwedArtifactFailure) int { return strings.Compare(a.Path, b.Path) })
 	c.lg.Info("job finished",
 		"mode", string(mode), "stages", res.Stages, "units", res.Units,
-		"reused", res.Reused, "produced", res.Produced,
+		"reused", res.Reused, "produced", res.Produced, "calls_skipped", res.Skipped,
 		"fallbacks", res.FallbackCount, "failed", len(res.Failures), "emit_ready", res.DeliveryReady(),
 		"prompt_tokens", res.Usage.PromptTokens, "cached_tokens", res.Usage.CachedPromptTokens,
 		"completion_tokens", res.Usage.CompletionTokens)
@@ -586,6 +620,8 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 		switch {
 		case r.Failure != nil:
 			res.Failures = append(res.Failures, *r.Failure)
+		case r.Skipped:
+			res.Skipped++
 		case r.Produced:
 			res.Produced++
 			if r.FellBack {
@@ -612,12 +648,15 @@ func (c *Coordinator) runStage(ctx context.Context, stage *StagePlan, frame jobF
 	return enterPhase(PhaseStageTeardown, c.lg)
 }
 
-// unitResult is one unit's outcome on its way back to the coordinator. Exactly
-// one of Failure and Produced is set.
+// unitResult is one unit's outcome on its way back to the coordinator. At most
+// one of Failure, Produced and Skipped is set.
 type unitResult struct {
 	Domain   string
 	Path     string
 	Produced bool
+	// Skipped is a contributing task whose builder said its call was not
+	// wanted (see InputBuilder). It cost nothing and failed at nothing.
+	Skipped  bool
 	FellBack bool
 	Usage    model.Usage
 	Failure  *OwedArtifactFailure
@@ -760,7 +799,10 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	// depend on its own earlier answers (see InputBuilder). Everything that
 	// judges a call — the StageRef refusal below, the budget refusal and the
 	// frozen-prompt assertion inside the runner — judges what came out of it.
-	in := task.Input()
+	in, needed := task.Input()
+	if !needed {
+		return w.skip(domain, task)
+	}
 	if in.StageRef != "" {
 		return unitResult{}, TaskOwnsStageRefError{Stage: w.stage, Path: task.Owed.Path}
 	}
@@ -812,6 +854,29 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	}
 
 	return w.write(domain, task, res.Artifact, inputs, res)
+}
+
+// skip completes a task whose builder said its call was not wanted. Nothing
+// happens: no prompt was built, so there is nothing to send, nothing to verify
+// and nothing to carry forward — w.prev and the phase traversal are left as the
+// last BUILT call left them, because that is what the next call's stability
+// claim is measured against.
+//
+// The refusal is the whole reason this is a separate path rather than a branch
+// in the caller. A skipped task that owed an artifact would leave the stage one
+// unit short, reported by nobody: the coordinator would see neither a failure
+// nor a production, DeliveryReady would refuse with no inventory to point at,
+// and the next run's scan would find the unit Absent and be unable to tell that
+// from an interruption. It is a plan defect, so it stops the worker.
+func (w *worker) skip(domain string, task LaneTask) (unitResult, error) {
+	if !task.Contributes {
+		return unitResult{}, SkippedArtifactError{Stage: w.stage, Path: task.Owed.Path}
+	}
+	if err := guard(w.phase, OpAdvanceUnit); err != nil {
+		return unitResult{}, err
+	}
+	w.lg.Info("call not needed; none made", "stage", w.stage, "unit", task.Owed.Path)
+	return unitResult{Domain: domain, Path: task.Owed.Path, Skipped: true}, nil
 }
 
 // produce runs a mechanical task: the unit's own derivation, in process, where
@@ -919,6 +984,23 @@ type TaskOwnsStageRefError struct {
 
 func (e TaskOwnsStageRefError) Error() string {
 	return fmt.Sprintf("pipeline: %s: task %s set the stage reference buffer directly; the worker fills it from SectionRef",
+		e.Stage, e.Path)
+}
+
+// SkippedArtifactError reports a task that skipped its call (see InputBuilder)
+// while still owing an artifact. A skip is the statement "this call's answer
+// would be thrown away", and an answer that is going to be written down is not
+// one of those — see worker.skip for what the silent version would cost. It is
+// a plan defect and stops the worker, like every other statement the
+// orchestrator makes about itself that turns out not to hold.
+type SkippedArtifactError struct {
+	Stage string
+	Path  string
+}
+
+func (e SkippedArtifactError) Error() string {
+	return fmt.Sprintf("pipeline: %s: task %s skipped its call but owes an artifact; "+
+		"only a contributing task may skip, since a skipped unit is one nothing would write and nothing would report",
 		e.Stage, e.Path)
 }
 

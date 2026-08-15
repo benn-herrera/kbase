@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +33,10 @@ func newRunnerCall(t *testing.T, ask AskSpec) (*boundAsk, call) {
 		t.Fatalf("newBoundAsk: %v", err)
 	}
 	task := synthTask("survey/a.json", "all")
+	in, _ := task.Input()
 	return bound, call{
 		Stage: "survey", ArtifactPath: task.Owed.Path, BoundAsk: bound,
-		Input: task.Input(), Frontier: prompt.SlotTotal,
+		Input: in, Frontier: prompt.SlotTotal,
 	}
 }
 
@@ -133,10 +135,11 @@ func TestRunnerBuildRefusalPropagates(t *testing.T) {
 		t.Fatalf("newBoundAsk: %v", err)
 	}
 	task := synthTask("survey/a.json", "all")
+	in, _ := task.Input()
 
 	res, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call{
 		Stage: "survey", ArtifactPath: task.Owed.Path, BoundAsk: bound,
-		Input: task.Input(), Frontier: prompt.SlotTotal,
+		Input: in, Frontier: prompt.SlotTotal,
 	})
 	var target prompt.ErrOverBudget
 	if !errors.As(err, &target) {
@@ -316,8 +319,8 @@ func TestRunnerSemanticRetryCarriesTheReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Attempts != modelAttempts {
-		t.Errorf("Attempts = %d, want %d", res.Attempts, modelAttempts)
+	if res.Attempts != synthRetry.Attempts {
+		t.Errorf("Attempts = %d, want %d", res.Attempts, synthRetry.Attempts)
 	}
 	if res.FellBack {
 		t.Error("a call the retry rescued is not degraded")
@@ -348,20 +351,96 @@ func TestRunnerSemanticRetryCarriesTheReason(t *testing.T) {
 	}
 }
 
+// TestRunnerRetryAsksAtTheDeclaredRetryEffort: an ask has TWO declared efforts
+// — the first attempt's and the informed retry's — and the runner sends the one
+// belonging to the attempt it is making.
+//
+// Both rows are asserted, because a runner that read either field for both
+// attempts would pass a single-row test: the escalating declaration proves the
+// retry's value is not the ask's, and the flat one proves the retry does not
+// simply always reason.
+func TestRunnerRetryAsksAtTheDeclaredRetryEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		retry RetryPolicy
+		want  []bool // thinking, per attempt
+	}{
+		{"escalating declaration", synthEscalatingRetry, []bool{true, true}},
+		{"flat declaration", DeclareRetry(RetryPolicy{Effort: synthNoThinking}), []bool{true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var thinking []bool
+			// The first attempt is rejected, so there is a second one to look at.
+			client := &stubClient{respond: func(n int, req model.Request) (model.Response, error) {
+				on, _ := req.ChatTemplateKwargs["thinking"].(bool)
+				thinking = append(thinking, on)
+				if n == 1 {
+					return model.Response{Content: "prose", FinishReason: "stop"}, nil
+				}
+				return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+			}}
+			ask := noFallbackAsk(t) // Effort: thinking ON
+			ask.Retry = tc.retry
+			_, call := newRunnerCall(t, ask)
+
+			lg := &logtest.Capture{}
+			res, err := runnerFor(t, client, lg).Run(context.Background(), call)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.Attempts != 2 {
+				t.Fatalf("Attempts = %d, want the first plus its informed retry", res.Attempts)
+			}
+			if !slices.Equal(thinking, tc.want) {
+				t.Errorf("thinking per attempt = %v, want %v", thinking, tc.want)
+			}
+			// The retry is on the record with what it asked at, so a run that
+			// paid for reasoning tokens can be told from one that did not.
+			if !lg.Has(t, "warn", "thinking", tc.want[1]) {
+				t.Error("the informed retry's effort was not recorded")
+			}
+		})
+	}
+}
+
+// TestRunnerAttemptCountIsTheDefinitions: how many semantic attempts an ask
+// gets is the definition's declaration, not a constant in the runner. A
+// definition that declares three gets three, and the count reported on the
+// failure is that one.
+func TestRunnerAttemptCountIsTheDefinitions(t *testing.T) {
+	const declared = 3
+	client := &stubClient{respond: func(int, model.Request) (model.Response, error) {
+		return model.Response{Content: "prose", FinishReason: "stop"}, nil
+	}}
+	ask := noFallbackAsk(t)
+	ask.Retry = DeclareRetry(RetryPolicy{Effort: synthNoThinking, Attempts: declared})
+	_, call := newRunnerCall(t, ask)
+
+	_, err := runnerFor(t, client, &logtest.Capture{}).Run(context.Background(), call)
+	var target OwedArtifactFailure
+	if !errors.As(err, &target) {
+		t.Fatalf("err = %v, want OwedArtifactFailure", err)
+	}
+	if client.callCount() != declared || target.ModelAttempts != declared {
+		t.Errorf("%d calls, %d reported attempts; the declaration says %d",
+			client.callCount(), target.ModelAttempts, declared)
+	}
+}
+
 // TestRunnerRetryNoteIsBounded: the note takes a small fixed bite of the
 // acceptance criteria's reserved share (§9), so a verbose verifier cannot
 // squeeze out the criteria the tree plan emitted.
 func TestRunnerRetryNoteIsBounded(t *testing.T) {
 	long := errors.New(strings.TrimSpace(strings.Repeat("verbose ", 200)))
-	got := withRetryNote(prompt.CallInput{AcceptanceCriteria: []string{"- keep me"}}, long)
+	got := withRetryNote(prompt.CallInput{AcceptanceCriteria: []string{"- keep me"}}, long, synthRetry.NoteWords)
 
 	if len(got.AcceptanceCriteria) != 2 || got.AcceptanceCriteria[0] != "- keep me" {
 		t.Fatalf("criteria = %q, want the caller's own kept and the note appended", got.AcceptanceCriteria)
 	}
 	note := got.AcceptanceCriteria[1]
 	words := len(strings.Fields(note)) - len(strings.Fields(retryNotePrefix))
-	if words > retryNoteWords+1 { // +1 for the truncation mark
-		t.Errorf("note carries %d words of reason, cap is %d", words, retryNoteWords)
+	if words > synthRetry.NoteWords+1 { // +1 for the truncation mark
+		t.Errorf("note carries %d words of reason, cap is %d", words, synthRetry.NoteWords)
 	}
 }
 
@@ -422,8 +501,8 @@ func TestRunnerSeamResolution(t *testing.T) {
 		if !ok || artifact.Text != synthBaselineText {
 			t.Errorf("Artifact = %v, want the mechanical fallback", res.Artifact)
 		}
-		if client.callCount() != modelAttempts {
-			t.Errorf("calls = %d, want %d", client.callCount(), modelAttempts)
+		if client.callCount() != synthRetry.Attempts {
+			t.Errorf("calls = %d, want %d", client.callCount(), synthRetry.Attempts)
 		}
 		if !lg.Has(t, "warn", "kind", string(FailureVerification)) {
 			t.Error("the fallback was not logged")
@@ -439,8 +518,8 @@ func TestRunnerSeamResolution(t *testing.T) {
 		if !errors.As(err, &target) {
 			t.Fatalf("err = %v, want OwedArtifactFailure", err)
 		}
-		if target.Kind != FailureVerification || target.ModelAttempts != modelAttempts {
-			t.Errorf("failure = %+v, want %s after %d attempts", target, FailureVerification, modelAttempts)
+		if target.Kind != FailureVerification || target.ModelAttempts != synthRetry.Attempts {
+			t.Errorf("failure = %+v, want %s after %d attempts", target, FailureVerification, synthRetry.Attempts)
 		}
 		if target.Path != call.ArtifactPath || target.Stage != call.Stage {
 			t.Errorf("failure names %s/%s, want %s/%s", target.Stage, target.Path, call.Stage, call.ArtifactPath)
@@ -570,7 +649,7 @@ func TestRunnerFailedUnitReportsItsTokens(t *testing.T) {
 	if !errors.As(err, &target) {
 		t.Fatalf("err = %v, want OwedArtifactFailure", err)
 	}
-	if want := modelAttempts * 100; target.Usage.PromptTokens != want {
+	if want := synthRetry.Attempts * 100; target.Usage.PromptTokens != want {
 		t.Errorf("Usage.PromptTokens = %d, want %d — both attempts cost real tokens",
 			target.Usage.PromptTokens, want)
 	}

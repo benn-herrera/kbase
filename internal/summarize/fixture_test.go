@@ -31,6 +31,14 @@ const (
 
 var testEffort = model.DeclareEffort(model.RequestEffort{Thinking: false})
 
+// testRetry stands in for the definition's retry declaration. It does NOT
+// escalate, where the shipped Retry does: what these tests assert is that the
+// stage passes its caller's declaration through, which a fixture agreeing with
+// the real one could not show.
+var testRetry = pipeline.DeclareRetry(pipeline.RetryPolicy{
+	Effort: model.DeclareEffort(model.RequestEffort{Thinking: false}),
+})
+
 // testBudgets is §9's arithmetic scaled down, so a fixture that exercises G-2
 // is a few hundred bytes rather than a megabyte.
 func testBudgets() treeplan.Budgets {
@@ -68,7 +76,7 @@ func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *sce
 	if err != nil {
 		t.Fatalf("treeplan.NewVerifier: %v", err)
 	}
-	proposal, err := treeplan.SourceStructureProposal(art, "Fixture knowledge base", "the fixture corpus")
+	proposal, err := treeplan.SourceStructureProposal(art, "Fixture knowledge base", "the fixture corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}
@@ -99,6 +107,7 @@ func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *sce
 		SummariesDir: summariesDir,
 		Params:       params,
 		Effort:       testEffort,
+		Retry:        testRetry,
 	}, lg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

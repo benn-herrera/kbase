@@ -95,6 +95,14 @@ func (v *Verifier) split(span Span) ([]survey.Span, error) {
 		dissect.Params{Est: v.p.Est, BudgetTokens: v.p.Budgets.LeafTokens})
 }
 
+// CheckAnnexes validates declared prefixes against the survey.
+//
+// Compose checks them too, but that is at the END of the taxonomy fold, by
+// which point every container call has been spent on a descent whose
+// composition is about to be rejected. §2.8 requires a prefix naming nothing
+// to refuse at JOB SETUP, and this is what the composing verb calls there.
+func (v *Verifier) CheckAnnexes(annexes []Annex) error { return checkAnnexes(annexes, v.art) }
+
 // Compose turns a descent's plan into a verified artifact.
 //
 // The sequence is §2.7's fixed order with §2.4's expansion in it, and the
@@ -145,7 +153,13 @@ func (v *Verifier) Compose(p TreeProposal, annexes []Annex) (TreePlan, error) {
 		Groups:     groups,
 	}
 	if len(annexes) > 0 {
-		s.Annexes = append([]Annex(nil), annexes...)
+		s.Annexes = make([]Annex, 0, len(annexes))
+		for _, a := range annexes {
+			if a.Convention == "" {
+				a.Convention = annexConvention(v.art, a.Prefix)
+			}
+			s.Annexes = append(s.Annexes, a)
+		}
 	}
 	if err := v.Check(s); err != nil {
 		return TreePlan{}, err

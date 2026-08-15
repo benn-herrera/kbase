@@ -265,31 +265,42 @@ func TestPageGroupOfSeveralEntriesBecomesSeveralPages(t *testing.T) {
 	}
 }
 
-// TestAnswersAboveAPageAreNotUsed: the question set is enumerated from the
-// SOURCE tree, so a container the answer above it put on a page still gets its
-// call. Its answer is discarded and recorded, and the run is otherwise clean —
-// the alternative is a lane whose task list depends on answers that have not
-// been given.
-func TestAnswersAboveAPageAreNotUsed(t *testing.T) {
+// absorbedByTheRoot is the E+F-observed shape: the root groups every document
+// onto a page of its own, so every document container that follows in the
+// question set has been absorbed before its turn comes.
+func absorbedByTheRoot(a *ask) answer {
+	out := perCandidate(a)
+	if a.c.kind != candFolder {
+		return out
+	}
+	for i := range out.Groups {
+		out.Groups[i].Kind = kindPage
+	}
+	return out
+}
+
+// TestAnAbsorbedContainerSpendsNoCall: the question set is enumerated from the
+// SOURCE tree, but the CALLS are not. A container the answer above it put on a
+// page has no node for its groups to attach to, so its answer would be thrown
+// away — and the descent makes no call for it at all: zero tokens, and no way
+// for a discarded answer to fail the lane the artifact is composed in.
+//
+// Three documents, so the absorbed set contains containers that are not the
+// last one. The last is the exception the design states: its call writes the
+// composed plan, so it is made even though its own answer is discarded too.
+func TestAnAbsorbedContainerSpendsNoCall(t *testing.T) {
 	lg := &logtest.Capture{}
 	docs := []docSpec{
 		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 40}, {"Beta", 40}}},
 		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 40}, {"Delta", 40}}},
+		{path: "three.md", title: "Document Three", secs: []secSpec{{"Epsilon", 40}, {"Zeta", 40}}},
 	}
 	d := designerFor(t, lg, testBudgets(), docs...)
-	// The root puts both documents on pages, so neither document's own call
-	// has anywhere to attach.
-	rootPages := func(a *ask) answer {
-		if a.c.kind != candFolder {
-			return perCandidate(a)
-		}
-		out := perCandidate(a)
-		for i := range out.Groups {
-			out.Groups[i].Kind = kindPage
-		}
-		return out
+	if d.Calls() != 4 {
+		t.Fatalf("the descent enumerated %d containers, want the root and one per document", d.Calls())
 	}
-	client := model.NewScriptedMockPerConsult(script(d, rootPages))
+	client := model.NewScriptedMockPerConsult(script(d, absorbedByTheRoot))
+	client.RecordCalls = true
 
 	res, dir, err := runDescent(t, d, client, lg)
 	if err != nil {
@@ -298,11 +309,69 @@ func TestAnswersAboveAPageAreNotUsed(t *testing.T) {
 	if !res.DeliveryReady() {
 		t.Fatalf("result = %+v, want a clean run", res)
 	}
-	if got := leafCount(planIn(t, dir)); got != 2 {
+	// Two of the four enumerated questions stopped being questions before
+	// their turn came, and the coordinator says so.
+	if res.Skipped != 2 {
+		t.Errorf("Skipped = %d, want the two absorbed containers that do not carry the artifact", res.Skipped)
+	}
+	calls := client.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want the root's and the artifact-carrying last one", len(calls))
+	}
+	// Named rather than counted: the calls that survive are the root's and
+	// the last container's, and no absorbed container in between put a prompt
+	// on the wire.
+	for _, c := range calls {
+		for _, absorbed := range []string{"Container 2 of", "Container 3 of"} {
+			if strings.Contains(c.Request.Messages[0].Content, absorbed) {
+				t.Errorf("an absorbed container's call went on the wire:\n%s", c.Request.Messages[0].Content)
+			}
+		}
+	}
+	if !lg.Has(t, "info", "call", "skipped") {
+		t.Error("the skipped containers were not recorded")
+	}
+	// The last container is absorbed as well, so this also proves the artifact
+	// still gets composed when the call that carries it has nothing to fold.
+	if got := leafCount(planIn(t, dir)); got != 3 {
 		t.Errorf("%d pages, want one per document", got)
 	}
-	if !lg.Has(t, "info", "reason", "a group above it placed this material on a page") {
-		t.Error("the unused answers were not recorded")
+	if !lg.Has(t, "info", "call", "spent") {
+		t.Error("the artifact-carrying container's discarded answer was not recorded")
+	}
+}
+
+// TestAnAbsorbedContainerCannotFailTheLane is the live-blocker case: whatever
+// the model says for a container whose answer is discarded, it cannot fail the
+// build. For every absorbed container but the last there is no call to fail;
+// for the last there is a call, and its response is dropped before anything
+// parses it — so a response that would be a rejection anywhere else is not one
+// here.
+func TestAnAbsorbedContainerCannotFailTheLane(t *testing.T) {
+	lg := &logtest.Capture{}
+	docs := []docSpec{
+		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 40}, {"Beta", 40}}},
+		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 40}, {"Delta", 40}}},
+	}
+	d := designerFor(t, lg, testBudgets(), docs...)
+	// The root answers; every call after it gets prose, which is the rejection
+	// that killed the first live run.
+	queue := []model.Response{
+		{Content: mustJSON(absorbedByTheRoot(d.asks[0])), FinishReason: "stop"},
+		{Content: "I would group these by topic.", FinishReason: "stop"},
+		{Content: "I would group these by topic.", FinishReason: "stop"},
+	}
+	client := model.NewScriptedMockPerConsult(queue)
+
+	res, dir, err := runDescent(t, d, client, lg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.DeliveryReady() || len(res.Failures) != 0 {
+		t.Fatalf("result = %+v, want a clean run: no answer that is thrown away may fail the build", res)
+	}
+	if got := leafCount(planIn(t, dir)); got != 2 {
+		t.Errorf("%d pages, want one per document", got)
 	}
 }
 

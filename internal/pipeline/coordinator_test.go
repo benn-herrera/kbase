@@ -142,7 +142,7 @@ func TestCoordinatorRefusesTaskOwnedStageRef(t *testing.T) {
 	}
 	// The refusal is against the BUILT input, so the sneak goes in the
 	// builder — which is the only place a call-time input could carry one.
-	sneaky := lanes[0].Tasks[0].Input()
+	sneaky, _ := lanes[0].Tasks[0].Input()
 	sneaky.StageRef = "sneaked in"
 	lanes[0].Tasks[0].Input = ConstInput(sneaky)
 
@@ -206,7 +206,7 @@ func TestCoordinatorGracefulDegradation(t *testing.T) {
 	}
 	// The produced units, one call each except the fold's and the mechanical
 	// stage's, plus the rejected unit's two attempts.
-	if want := (synthUnits - 3 - synthProduceUnits) + (synthFoldCalls - 1) + modelAttempts; client.callCount() != want {
+	if want := (synthUnits - 3 - synthProduceUnits) + (synthFoldCalls - 1) + synthRetry.Attempts; client.callCount() != want {
 		t.Errorf("%d calls, want %d; the cascaded units must not have consulted the model",
 			client.callCount(), want)
 	}
@@ -275,7 +275,7 @@ func TestCoordinatorCountsAFailedUnitsTokens(t *testing.T) {
 	// The produced units cost one call each except the fold's and the
 	// mechanical stage's, and the failed one made both its model attempts.
 	// Its two dependents cascaded and cost nothing.
-	if want := (synthUnits - 3 - synthProduceUnits + synthFoldCalls - 1 + modelAttempts) * perCall; res.Usage.PromptTokens != want {
+	if want := (synthUnits - 3 - synthProduceUnits + synthFoldCalls - 1 + synthRetry.Attempts) * perCall; res.Usage.PromptTokens != want {
 		t.Errorf("Usage.PromptTokens = %d, want %d — a failed unit's tokens went unaccounted",
 			res.Usage.PromptTokens, want)
 	}
@@ -285,12 +285,12 @@ func TestCoordinatorCountsAFailedUnitsTokens(t *testing.T) {
 			failed = f
 		}
 	}
-	if failed.Usage.PromptTokens != modelAttempts*perCall {
+	if failed.Usage.PromptTokens != synthRetry.Attempts*perCall {
 		t.Errorf("the failure itself carries %d prompt tokens, want %d",
-			failed.Usage.PromptTokens, modelAttempts*perCall)
+			failed.Usage.PromptTokens, synthRetry.Attempts*perCall)
 	}
-	if failed.ModelAttempts != modelAttempts {
-		t.Errorf("ModelAttempts = %d, want %d", failed.ModelAttempts, modelAttempts)
+	if failed.ModelAttempts != synthRetry.Attempts {
+		t.Errorf("ModelAttempts = %d, want %d", failed.ModelAttempts, synthRetry.Attempts)
 	}
 }
 
@@ -509,10 +509,10 @@ func TestTaskInputIsBuiltAtTheUnit(t *testing.T) {
 	tasks := make([]LaneTask, 0, 2)
 	for _, path := range []string{"leaves/one.md", "leaves/two.md"} {
 		base := synthTask(path, "s1")
-		base.Input = func() prompt.CallInput {
-			in := synthTask(path, "s1").Input()
+		base.Input = func() (prompt.CallInput, bool) {
+			in, _ := synthTask(path, "s1").Input()
 			in.Content = fmt.Sprintf("%s, with %d answered before it", in.Content, answered)
-			return in
+			return in, true
 		}
 		tasks = append(tasks, base)
 	}
@@ -541,6 +541,88 @@ func TestTaskInputIsBuiltAtTheUnit(t *testing.T) {
 	// the second prompt. A stored input could not carry it.
 	if !strings.Contains(prompts[1], "with 1 answered before it") {
 		t.Errorf("the second call was built before its predecessor ran:\n%s", prompts[1])
+	}
+}
+
+// skipBuilder is an InputBuilder that reports the call unneeded — the shape a
+// stage returns for a question it has since answered another way.
+func skipBuilder() InputBuilder {
+	return func() (prompt.CallInput, bool) { return prompt.CallInput{}, false }
+}
+
+// TestASkippedCallIsNotMade: a stage that decides its own questions may decide
+// one of them stopped being a question. The task then costs nothing — no
+// prompt, no tokens, no verification, and no way to fail — and the run says how
+// many of its planned calls it did not make.
+//
+// This is stage 3's absorbed container (ARCHITECTURE.md §3.2) at the level the
+// pipeline can see it: an answer that would be thrown away must not be able to
+// fail the build, and the cheapest guarantee of that is a call that never
+// happens.
+func TestASkippedCallIsNotMade(t *testing.T) {
+	tasks := []LaneTask{
+		synthTask("leaves/one.md", "s1"),
+		synthTask("leaves/two.md", "s1"),
+		synthTask("leaves/three.md", "s1"),
+	}
+	tasks[0].Contributes = true
+	tasks[1].Contributes = true
+	tasks[1].Input = skipBuilder()
+
+	lg := &logtest.Capture{}
+	client := echoStub()
+	plan := Plan{JobFrame: synthFrame, Stages: []*StagePlan{{
+		Name: "leaves", Ask: noFallbackAsk(t), Spec: synthSpec("Task: synthetic."),
+		Lanes: staticLanes(SerialLane{Domain: "d", Tasks: tasks}),
+	}}}
+	res, err := newSynthCoordinator(t, t.TempDir(), client, 1, lg).
+		Run(context.Background(), plan, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Produced != 1 || len(res.Failures) != 0 || !res.DeliveryReady() {
+		t.Fatalf("result = %+v, want the artifact written and nothing failed", res)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want the one call the stage said it did not need", res.Skipped)
+	}
+	if got := client.callCount(); got != 2 {
+		t.Errorf("%d calls, want the two the stage still wanted", got)
+	}
+	// A skipped call is invisible to DeliveryReady's arithmetic: only a
+	// contributing task may skip, and a contributing task describes no unit.
+	if res.Reused+res.Produced != res.Units {
+		t.Errorf("units = %d, reused+produced = %d: a skipped call left the unit accounting short",
+			res.Units, res.Reused+res.Produced)
+	}
+	if !lg.Has(t, "info", "unit", "leaves/two.md") {
+		t.Error("the skipped call was not recorded")
+	}
+}
+
+// TestSkippingAnArtifactIsRefused: a task that owes an artifact may not skip
+// its call. Nothing would write the unit and nothing would report it — the
+// coordinator would see neither a failure nor a production, and the next run's
+// scan could not tell the missing artifact from an interruption. So it is a
+// plan defect and stops the job, like every other statement the orchestrator
+// makes about itself that turns out not to hold.
+func TestSkippingAnArtifactIsRefused(t *testing.T) {
+	task := synthTask("leaves/one.md", "s1")
+	task.Input = skipBuilder()
+
+	plan := Plan{JobFrame: synthFrame, Stages: []*StagePlan{{
+		Name: "leaves", Ask: noFallbackAsk(t), Spec: synthSpec("Task: synthetic."),
+		Lanes: staticLanes(SerialLane{Domain: "d", Tasks: []LaneTask{task}}),
+	}}}
+	_, err := newSynthCoordinator(t, t.TempDir(), echoStub(), 1, log.Discard()).
+		Run(context.Background(), plan, ModeResume)
+
+	var target SkippedArtifactError
+	if !errors.As(err, &target) {
+		t.Fatalf("err = %v, want SkippedArtifactError", err)
+	}
+	if target.Path != "leaves/one.md" {
+		t.Errorf("Path = %q, want the unit that would have gone unwritten", target.Path)
 	}
 }
 
@@ -679,8 +761,8 @@ func TestAFailedCallPoisonsTheArtifactItFeeds(t *testing.T) {
 	// The calls after the poison are not spent: they would feed state nobody
 	// is going to record. Two model attempts at the first boundary, nothing
 	// else.
-	if got := poison.callCount(); got != modelAttempts {
-		t.Errorf("%d calls, want %d: a poisoned lane stops spending", got, modelAttempts)
+	if got := poison.callCount(); got != synthRetry.Attempts {
+		t.Errorf("%d calls, want %d: a poisoned lane stops spending", got, synthRetry.Attempts)
 	}
 
 	// (b) Nothing landed on disk.
@@ -787,8 +869,8 @@ func TestCascadeCrossesStagesWithoutSpending(t *testing.T) {
 
 	// Nothing was spent and nothing was written: one failed call, no producer
 	// run, an empty store, and a job that refuses emission.
-	if client.callCount() != modelAttempts {
-		t.Errorf("%d calls, want the failing unit's %d and nothing else", client.callCount(), modelAttempts)
+	if client.callCount() != synthRetry.Attempts {
+		t.Errorf("%d calls, want the failing unit's %d and nothing else", client.callCount(), synthRetry.Attempts)
 	}
 	if n := synthProduceRuns.Load(); n != 0 {
 		t.Errorf("the producer ran %d times under a failed upstream", n)
@@ -848,9 +930,9 @@ func TestCascadeDropsTheCallsThatFedIt(t *testing.T) {
 	if len(res.Failures) != 2 {
 		t.Fatalf("failures = %+v, want the failed unit and the artifact that cascaded off it", res.Failures)
 	}
-	if client.callCount() != modelAttempts {
+	if client.callCount() != synthRetry.Attempts {
 		t.Errorf("%d calls, want the failing unit's %d: a dropped artifact drops its calls with it",
-			client.callCount(), modelAttempts)
+			client.callCount(), synthRetry.Attempts)
 	}
 }
 

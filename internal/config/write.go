@@ -47,6 +47,14 @@ const (
 	// Config's `toml` tag for Models.
 	tableModels = "models"
 
+	// keyBuildDate and keyTreePlan are the two [dev] switches the template
+	// below documents, mirroring DevConfig's `toml` tags the way keyProvider
+	// mirrors Config's (struct tags cannot reference constants). The line
+	// editor never rewrites them — `kbase configure` touches the provider
+	// and the tiers and nothing else.
+	keyBuildDate = "build_date"
+	keyTreePlan  = "tree_plan"
+
 	// commentGap separates a rewritten assignment from the trailing
 	// comment carried over from the line it replaced. The original spacing
 	// is not reproduced — the value's width changed, so the alignment it
@@ -70,8 +78,10 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 %s
 
-# [dev] switches diagnose kbase itself and never change what it produces.
-# The table is absent by default and every switch is off when it is.
+# [dev] switches diagnose kbase itself. The table is absent by default and
+# every switch is off when it is. They live here rather than on the verbs
+# because a verb's flags are the user's surface; each one below names the
+# upstream cause that makes it necessary.
 #
 # [dev]
 # telemetry = true   # per-call inference timing, WHERE THE PROVIDER SENDS IT.
@@ -80,6 +90,17 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 #                    # with --log-level info to see it.
 # keep_temp_work = true  # keep <out>/temp-work/ after a run that SUCCEEDED.
 #                        # A failed or interrupted run keeps it either way.
+# ` + keyBuildDate + ` = "2026-01-01"  # pin the date stamped into every page's
+#                          # provenance receipt (default: today, UTC).
+#                          # CAUSE: the receipt is dated by design, so two runs
+#                          # either side of midnight deliver different bytes and
+#                          # byte-determinism becomes untestable.
+# ` + keyTreePlan + ` = "` + TreePlanMechanical + `"  # take the tree plan from the source's own file
+#                          # structure and dial no provider at all — no model
+#                          # call anywhere, so no summary prose either.
+#                          # CAUSE: taxonomy design is a no-fallback model seam,
+#                          # so a hermetic end-to-end run has no other way in.
+#                          # The run records that it took it.
 `
 
 // UpdateConfig sets the provider choice and the [models] tiers in the

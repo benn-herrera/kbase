@@ -1,6 +1,9 @@
 package summarize
 
-import "kbase/internal/model"
+import (
+	"kbase/internal/model"
+	"kbase/internal/pipeline"
+)
 
 // stubDefinition and stubTaskDef are PLACEHOLDER prompt text.
 //
@@ -55,3 +58,20 @@ const (
 // the stub. The value is stated on its own line so the tuning burst's A/B
 // moves it here and nowhere else.
 var Effort = model.DeclareEffort(model.RequestEffort{Thinking: false})
+
+// Retry is the summary definition's DECLARED retry policy (ARCHITECTURE.md §9,
+// §12): the shipped attempt count and note budget, and an informed retry that
+// asks with thinking ON.
+//
+// The same escalation the taxonomy definition declares, for the same reason and
+// with one of its own. A rejected summary was rejected on a mechanical fact —
+// over the summary cap, a link where §6.4 permits none, an empty framing — and
+// the retry carries that fact, which makes it the one attempt where reasoning
+// has something to reason about. What is particular here is the ask: this is
+// the generative seam, where a second cold pass is most likely to reproduce the
+// first, so the retry needs a reason to be different, and the escalation is it.
+// A summary that fails twice fails the unit and refuses the delivery, so the
+// retry is the last thing standing between one bad answer and no knowledge base.
+var Retry = pipeline.DeclareRetry(pipeline.RetryPolicy{
+	Effort: model.DeclareEffort(model.RequestEffort{Thinking: true}),
+})

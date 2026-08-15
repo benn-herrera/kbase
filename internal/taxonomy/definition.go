@@ -1,6 +1,9 @@
 package taxonomy
 
-import "kbase/internal/model"
+import (
+	"kbase/internal/model"
+	"kbase/internal/pipeline"
+)
 
 // stubDefinition and stubTaskDef are PLACEHOLDER prompt text.
 //
@@ -49,3 +52,21 @@ const (
 // the effort is a property of the ask, and the ask is this package's. A verb
 // that wants the other value overrides it explicitly, and records that it did.
 var Effort = model.DeclareEffort(model.RequestEffort{Thinking: false})
+
+// Retry is the taxonomy definition's DECLARED retry policy (ARCHITECTURE.md
+// §9, §12): the attempt count and note budget are the shipped defaults, and the
+// informed retry asks with thinking ON.
+//
+// The escalation is the point, and the asymmetry with Effort above is the
+// argument for it. The first attempt asks cold, where the A/B says reasoning
+// buys nothing on a partition; the retry does not ask cold — it carries the
+// verifier's mechanical statement of what was wrong with the last answer ("a
+// group holds no entries", "entry 4 belongs to two groups"), and a rule the
+// answer already broke once is exactly the kind of thing worth reasoning over
+// before answering again. It is also the cheap side of the trade: an escalated
+// retry costs reasoning tokens only on the calls that already failed, and what
+// it buys is a container that would otherwise fail the unit, poison the lane
+// and take the whole job's tree plan with it (this is a no-fallback seam).
+var Retry = pipeline.DeclareRetry(pipeline.RetryPolicy{
+	Effort: model.DeclareEffort(model.RequestEffort{Thinking: true}),
+})

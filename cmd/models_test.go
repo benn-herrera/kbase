@@ -67,7 +67,10 @@ func TestVerbStreamGuard(t *testing.T) {
 	}{
 		{"models", func() error { return runModels(context.Background(), modelsOptions{}) }},
 		{"survey", func() error { return runSurvey(surveyOptions{Root: t.TempDir()}) }},
-		{"dev-refine", func() error { return runDevRefine(context.Background(), devRefineOptions{}) }},
+		{"build", func() error {
+			_, err := runBuild(context.Background(), buildOptions{Root: t.TempDir()})
+			return err
+		}},
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
 			err := tc.call()

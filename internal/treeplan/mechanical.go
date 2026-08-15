@@ -17,8 +17,8 @@ import (
 // not "already acceptable", and a stage that quietly produced one when the
 // model failed would ship a KB whose organisation nobody chose while reporting
 // success. Nothing in the shipped pipeline may call this in that position, and
-// the one caller today is the `dev-build` verb, whose entire premise is a run
-// with no model in it.
+// the one caller today is `kbase build` under `[dev] tree_plan = "mechanical"`,
+// a switch whose entire premise is a run with no model in it.
 //
 // # What it is for
 //
@@ -31,19 +31,27 @@ import (
 //     live; every span is real, so the splitter runs over real bytes; and the
 //     fan-out cap bites on whichever documents have more top-level sections
 //     than the cap.
-//   - `kbase dev-build` needs a tree plan before the taxonomy stage exists, so
-//     that stages 5, 8 and 9 can be exercised end-to-end over a real corpus and
-//     produce a walkable KB.
+//   - A hermetic end-to-end run needs a tree plan without a model in it, so
+//     that stages 5, 8 and 9 can be exercised over a real corpus and produce a
+//     walkable KB.
+//
+// Material under a declared annex is skipped, exactly as §3.2's descent does
+// not enumerate it. An annex is a property of the CORPUS, so which shape of
+// stage 3 is running has no bearing on it — and a proposal that covered
+// annexed material would be refused by the coverage check for doing so.
 //
 // Scope lines are mechanical and say so: the survey's gist where there is one,
 // and the title otherwise. A model writes the real ones (§2.1).
-func SourceStructureProposal(art survey.Artifact, title, scope string) (TreeProposal, error) {
+func SourceStructureProposal(art survey.Artifact, title, scope string, annexes []Annex) (TreeProposal, error) {
 	if art.Schema != survey.SchemaVersion {
 		return TreeProposal{}, fmt.Errorf("treeplan: survey declares schema %q, this build reads %q",
 			art.Schema, survey.SchemaVersion)
 	}
 	p := TreeProposal{Title: title, Scope: scope}
 	for _, f := range art.Files {
+		if _, annexed := AnnexedBy(f.Path, annexes); annexed {
+			continue
+		}
 		docTitle := f.Title
 		if docTitle == "" {
 			docTitle = f.Path

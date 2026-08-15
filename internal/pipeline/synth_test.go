@@ -140,6 +140,16 @@ var (
 	synthNoThinking = model.DeclareEffort(model.RequestEffort{Thinking: false})
 )
 
+// synthRetry and synthEscalatingRetry are the two declared retry policies the
+// synthetic asks carry: one that re-asks exactly as it asked, and one that
+// escalates to thinking on the informed retry. Both take the shipped attempt
+// count and note budget, so a test that says nothing about either is testing
+// what every definition ships with.
+var (
+	synthRetry           = DeclareRetry(RetryPolicy{Effort: synthNoThinking})
+	synthEscalatingRetry = DeclareRetry(RetryPolicy{Effort: synthThinking})
+)
+
 // noFallbackAsk has no fallback: a failure fails the unit.
 func noFallbackAsk(t *testing.T) AskSpec {
 	t.Helper()
@@ -147,6 +157,7 @@ func noFallbackAsk(t *testing.T) AskSpec {
 		Def:    synthDef(t, "# Surveyor\n\n## CRITICAL\n\nEmit only the inventory.\n"),
 		Tier:   config.TierHeavy,
 		Effort: synthThinking,
+		Retry:  synthRetry,
 		Verify: synthVerify,
 		Encode: synthEncode,
 	}
@@ -277,10 +288,10 @@ func synthFoldPlan(t *testing.T) *StagePlan {
 	for i, path := range synthFoldPaths {
 		task := synthTask(path, synthFoldSection)
 		task.Contributes = i < len(synthFoldPaths)-1
-		task.Input = func() prompt.CallInput {
-			in := synthTask(path, synthFoldSection).Input()
+		task.Input = func() (prompt.CallInput, bool) {
+			in, _ := synthTask(path, synthFoldSection).Input()
 			in.Content = fmt.Sprintf("%s [fold state %s]", in.Content, folded)
-			return in
+			return in, true
 		}
 		tasks = append(tasks, task)
 	}

@@ -86,8 +86,9 @@ type Params struct {
 	// It is NOT a verification rule — premerge may legitimately push a
 	// section past it (see premerge) — so Verify never reads it. It travels
 	// with the estimator because it is half of what identifies a cut list:
-	// Refiner.StagePlan digests it, so a re-plan at a different budget
-	// invalidates the cut list adjudicated under the old one.
+	// the fold's parameter digest (Refiner.digest) covers it, so a re-plan at
+	// a different budget invalidates the cut list adjudicated under the old
+	// one.
 	BudgetTokens int
 }
 

@@ -385,7 +385,7 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 // be composed from the same proposal that verb composes.
 func planByFile(t *testing.T, art survey.Artifact) TreeProposal {
 	t.Helper()
-	plan, err := SourceStructureProposal(art, "Rojo Documentation", "the pinned Rojo docs corpus")
+	plan, err := SourceStructureProposal(art, "Rojo Documentation", "the pinned Rojo docs corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}

@@ -30,40 +30,43 @@ import (
 	"kbase/internal/version"
 )
 
-// dev-build composes §10's plan table into one job and delivers a knowledge
-// base out of a corpus. It has TWO shapes, and `--config-dir` selects between
-// them.
+// build composes §10's plan table into one job and delivers a knowledge base
+// out of a corpus. It is THE verb: what a user runs, and what an integration
+// test runs, because those have to be the same thing.
 //
-// WITHOUT it, the job is the mechanical spine: every stage deterministic, no
-// client dialed, the tree grouped by treeplan.SourceStructureProposal — the
-// source's own file structure — and every index rendered with its framing and
-// conclusions blocks absent, which O-1's grammar makes legal rather than
-// broken. That is not an omission to be filled in later: it is the property
-// that makes this verb a regression gate, running offline in seconds over a
-// pinned corpus, where any drift in the mechanical half fails it.
-//
-// WITH it, stages 3 and 6 run LIVE against the configured provider: the
+// Stages 3 and 6 are model work against the configured provider: the
 // container-descent fold designs the tree (internal/taxonomy, heavy tier,
 // no-fallback seam) and the four level stages write the summaries
-// (internal/summarize, heavy tier, no-fallback seam). Everything else is the
-// same code on the same artifacts — which is the point of having built the
-// spine first.
+// (internal/summarize, heavy tier, no-fallback seam). Configuration is
+// therefore required in the ordinary path — an unconfigured tier refuses
+// before the job directory is opened rather than failing halfway through it.
 //
-// Stage 4's own live seam (boundary refinement) is NOT wired here: it has its
-// own verb (`dev-refine`) and its own place in the composing verb, and this
-// verb's cut lists stay dissect.Split's mechanical output (ROADMAP).
+// `[dev] tree_plan = "mechanical"` (config.TreePlanMechanical) is the one way
+// out of that, and it exists for a stated reason rather than as a mode: with
+// taxonomy a ruled no-fallback seam, a hermetic end-to-end run of the
+// delivered binary has no other entrance. Under it the tree is grouped by
+// treeplan.SourceStructureProposal — the source's own file structure — no
+// provider is dialed at all, and every index renders with its framing and
+// conclusions blocks absent, which O-1's grammar makes legal rather than
+// broken. The run record says the run took that route.
+//
+// Stage 4 is model work too, on the other tier and on the other kind of seam:
+// a LIVE run's cut lists are the boundary-refinement fold's (internal/dissect,
+// light tier, fallback-backed), so the light tier is required exactly as the
+// heavy one is. Under the mechanical switch the cuts stage stays
+// dissect.Split's own output, which is what "no model call anywhere" means.
 const (
-	devBuildVerb = "dev-build"
+	buildVerb = "build"
 
 	// The two job frames — slot 1, job-constant (§7). A frame is the first
 	// thing a model reads, so the mechanical one says what it is and is never
 	// sent, while the live one describes the job the calls belong to.
-	devBuildFrame     = "kbase dev-build: assembling a knowledge base with no model in the loop."
-	devBuildLiveFrame = "kbase dev-build: turning a documentation corpus into a knowledge base — " +
+	buildFrame     = "kbase build: assembling a knowledge base with no model in the loop."
+	buildLiveFrame = "kbase build: turning a documentation corpus into a knowledge base — " +
 		"a navigable tree of verbatim pages under sections that summarise them."
 
-	// devBuildRecordName is the run record delivered beside the tree.
-	devBuildRecordName = "run.json"
+	// buildRecordName is the run record delivered beside the tree.
+	buildRecordName = "run.json"
 
 	// The store layout — §10's plan table, which is the composing verb's to
 	// declare. Every stage below writes at one of these prefixes and every
@@ -101,24 +104,35 @@ const (
 	// buildDateLayout is the provenance receipt's date format (SPEC §7).
 	buildDateLayout = "2006-01-02"
 
-	// devBuildTimeout bounds the WHOLE live job rather than one call: tens of
+	// treePlanModel and treePlanMechanical are what the run record says about
+	// where the tree plan came from. It is recorded on every run, not just the
+	// dev one: "this tree was designed by a model" is the more load-bearing of
+	// the two statements, and a field that appears only in the odd case reads
+	// as an anomaly rather than as provenance.
+	treePlanModel      = "model"
+	treePlanMechanical = config.TreePlanMechanical + " (dev)"
+
+	// keepTempWorkFlag turns off the successful run's temp-work teardown for
+	// one run, over whatever `[dev] keep_temp_work` says.
+	keepTempWorkFlag = "keep-temp-work"
+
+	// buildTimeout bounds the WHOLE live job rather than one call: tens of
 	// heavy-tier calls — one per container of the descent, one per section of
 	// the tree — plus the transport policy's own retries underneath each of
 	// them. It is generous because the failure it exists to catch is a
 	// provider that has stopped answering, not one that is slow.
-	devBuildTimeout = 2 * time.Hour
+	buildTimeout = 2 * time.Hour
 )
 
-// devBuildOptions is the resolved input of the dev-build verb.
-type devBuildOptions struct {
+// buildOptions is the resolved input of the build verb.
+type buildOptions struct {
 	// Root is the corpus directory to build from.
 	Root string
 
-	// Live is the provider pool and configuration, present exactly when
-	// --config-dir was given. Nil is the mechanical build, and nil is the
-	// honest value for it: wiring the pool into a run that makes no call would
-	// invent a failure mode ("no provider selected") on a command that never
-	// dials one.
+	// Live is the provider pool and configuration. Nil selects the mechanical
+	// tree plan — `[dev] tree_plan` — and nil is the honest value for it:
+	// wiring the pool into a run that makes no call would invent a failure
+	// mode ("no provider selected") on a job that never dials one.
 	Live *providerOptions
 
 	// Out is the OUTPUT directory: the delivered knowledge base and the run
@@ -127,9 +141,12 @@ type devBuildOptions struct {
 	// touched.
 	Out string
 
-	// Budget is the per-leaf token budget (G-1) the tree plan is verified at
-	// and the splitter fills toward.
-	Budget int
+	// Annexes are the corpus-relative prefixes declared by --annex:
+	// territories deliberately not distilled (§2.8). They are a property of
+	// the corpus, so they are the invocation's to state — and configuration's
+	// alone, since a model that can place material out of scope can hide its
+	// own failures (O-12).
+	Annexes []string
 
 	// KeepTempWork keeps `<out>/temp-work/` after a run that succeeded. A
 	// failed or interrupted run keeps it whatever this says.
@@ -148,9 +165,9 @@ type devBuildOptions struct {
 	Logger log.Logger
 }
 
-// devBuildResult is what a completed run produced — returned for the tests,
+// buildResult is what a completed run produced — returned for the tests,
 // which assert over it rather than over parsed stdout.
-type devBuildResult struct {
+type buildResult struct {
 	Plan   treeplan.TreePlan
 	Report assemble.Report
 	Job    pipeline.JobResult
@@ -158,38 +175,35 @@ type devBuildResult struct {
 	Delivered []string
 }
 
-// runDevBuild ingests a corpus and builds a knowledge base out of it.
+// runBuild ingests a corpus and builds a knowledge base out of it.
 //
 // The order of the refusals is the same one every other verb keeps: everything
 // refusable offline is refused before the job directory is opened, so a
 // misconfigured run leaves nothing behind to clean up.
-func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, error) {
-	if err := requireStreams(opts.Stdout, opts.Stderr, devBuildVerb); err != nil {
-		return devBuildResult{}, err
+func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
+	if err := requireStreams(opts.Stdout, opts.Stderr, buildVerb); err != nil {
+		return buildResult{}, err
 	}
 	root := strings.TrimSpace(opts.Root)
 	if root == "" {
-		return devBuildResult{}, fmt.Errorf("%s: a corpus directory is required", devBuildVerb)
+		return buildResult{}, fmt.Errorf("%s: a corpus directory is required", buildVerb)
 	}
 	out := strings.TrimSpace(opts.Out)
 	if out == "" {
-		return devBuildResult{}, fmt.Errorf(
-			"%s: --out is required; this verb delivers a knowledge base and never uses a temporary directory", devBuildVerb)
+		return buildResult{}, fmt.Errorf(
+			"%s: --out is required; this verb delivers a knowledge base and never uses a temporary directory", buildVerb)
 	}
-	if opts.Budget <= 0 {
-		return devBuildResult{}, fmt.Errorf(
-			"%s: --budget is %d; a leaf budget is a positive number of tokens", devBuildVerb, opts.Budget)
-	}
+	annexes := declaredAnnexes(opts.Annexes)
 	lg := opts.Logger
 	if lg == nil {
 		lg = log.Discard()
 	}
-	buildDate := strings.TrimSpace(opts.BuildDate)
-	if buildDate == "" {
-		buildDate = time.Now().UTC().Format(buildDateLayout)
+	buildDate, err := resolveBuildDate(opts.BuildDate)
+	if err != nil {
+		return buildResult{}, err
 	}
 	if err := os.MkdirAll(out, pipeline.CreateDirMode); err != nil {
-		return devBuildResult{}, fmt.Errorf("%s: create %s: %w", devBuildVerb, out, err)
+		return buildResult{}, fmt.Errorf("%s: create %s: %w", buildVerb, out, err)
 	}
 
 	// Ingest and survey run in process, at job setup: §10's table has ingest
@@ -199,24 +213,37 @@ func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, err
 	// same value to the store, which is what puts it in the chain.
 	corpus, err := ingest.Walk(root, markdown.Extensions(), lg)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	est := tokens.Estimator{}
 	art, err := markdown.Survey(corpus, est, lg)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 
+	// The budgets are the shipped ones (ARCHITECTURE §9). They are not a flag:
+	// every one of them is a calibrated constant with a guarantee hanging off
+	// it — G-1 bounds stage 4's and stage 5's per-call input, G-2 bounds stage
+	// 6's — so a number a user could pass is a number that could quietly
+	// invalidate a guarantee the pipeline states elsewhere.
 	params := treeplan.DefaultParams()
 	params.Est = est
-	params.Budgets.LeafTokens = opts.Budget
 	verifier, err := treeplan.NewVerifier(art, corpus, params)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	prov := distill.Provenance{CorpusHash: art.Corpus.ContentHash, BuildDate: buildDate}
 	if err := prov.Validate(); err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
+	}
+	// The declared annexes are checked against the survey HERE, at job setup,
+	// and not where Compose checks them again at the end of the taxonomy fold:
+	// a prefix that names nothing must cost no calls (§2.8).
+	// The refusal is wrapped with the flag's name rather than restated here:
+	// treeplan owns what a legal prefix is, and the user needs to know which
+	// input to fix.
+	if err := verifier.CheckAnnexes(annexes); err != nil {
+		return buildResult{}, fmt.Errorf("%s: --annex: %w", buildVerb, err)
 	}
 
 	// The live half, dialed only after everything refusable offline has been
@@ -227,95 +254,122 @@ func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, err
 	// use goes.
 	var (
 		runner *pipeline.CallRunner
-		live   devBuildLive
+		live   buildLive
 		runCtx = ctx
 	)
 	if opts.Live != nil {
+		// Both tiers, both required, both refused here — before the job
+		// directory is opened. A live build asks the heavy tier to design the
+		// tree and write the summaries and the light tier to adjudicate every
+		// page boundary; a tier that is unmapped would abort a worker three
+		// stages in, having already spent the other tier's tokens.
 		id, ok := opts.Live.Config.ModelFor(config.TierHeavy)
 		if !ok {
-			return devBuildResult{}, fmt.Errorf(
+			return buildResult{}, fmt.Errorf(
 				"%s: no model is configured for the %q tier in %s; taxonomy design and summaries are heavy-tier work",
-				devBuildVerb, config.TierHeavy, config.ConfigFileName)
+				buildVerb, config.TierHeavy, config.ConfigFileName)
+		}
+		lightID, ok := opts.Live.Config.ModelFor(config.TierLight)
+		if !ok {
+			return buildResult{}, fmt.Errorf(
+				"%s: no model is configured for the %q tier in %s; page-boundary refinement is light-tier work",
+				buildVerb, config.TierLight, config.ConfigFileName)
 		}
 		name, client, callCtx, release, err := opts.Live.dial(ctx)
 		if err != nil {
-			return devBuildResult{}, err
+			return buildResult{}, err
 		}
 		defer release()
-		live = devBuildLive{
-			Provider: name,
-			BaseURL:  safeBaseURL(opts.Live.Providers[name].BaseURL),
-			Model:    id,
-			Tier:     config.TierHeavy,
-			Thinking: taxonomy.Effort.Thinking,
+		live = buildLive{
+			Provider:      name,
+			BaseURL:       safeBaseURL(opts.Live.Providers[name].BaseURL),
+			Model:         id,
+			Tier:          config.TierHeavy,
+			LightModel:    lightID,
+			Thinking:      taxonomy.Effort.Thinking,
+			RetryThinking: taxonomy.Retry.Effort.Thinking,
 		}
 		runner, runCtx = pipeline.NewCallRunner(client, opts.Live.Config, lg), callCtx
-		fmt.Fprintf(opts.Stdout, "provider: %s (%s)\nmodel: %s (%s tier)\n",
-			live.Provider, live.BaseURL, live.Model, live.Tier)
+		fmt.Fprintf(opts.Stdout, "provider: %s (%s)\nmodel: %s (%s tier), %s (%s tier)\n",
+			live.Provider, live.BaseURL, live.Model, live.Tier, live.LightModel, config.TierLight)
 	}
 
 	work, err := pipeline.OpenTempWork(out, lg)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	store := work.ArtifactStore()
-	job := &devBuildJob{
+	job := &buildJob{
 		opts: opts, out: out, corpus: corpus, art: art, params: params,
 		verifier: verifier, prov: prov, est: est, store: store, lg: lg,
-		live: opts.Live != nil,
+		annexes: annexes, live: opts.Live != nil,
 		inputs: []pipeline.Input{
 			{Name: corpusInput, Hash: art.Corpus.ContentHash},
+			// The operating point every unit is stamped against. The annex
+			// prefixes are in it because changing them changes the tree
+			// (§3.1), and the tree-plan source is in it because the two
+			// shapes produce different tree plans from the same corpus at the
+			// same budgets — without it, switching modes over one --out would
+			// reuse the other mode's artifact and call it fresh.
 			{Name: paramsInput, Hash: pipeline.HashBytes([]byte(fmt.Sprintf(
-				"leafTokens=%d;buildDate=%s;version=%s", opts.Budget, buildDate, version.Current)))},
+				"leafTokens=%d;buildDate=%s;treePlan=%s;annexes=%s;version=%s",
+				params.Budgets.LeafTokens, buildDate, treePlanSource(opts.Live != nil),
+				strings.Join(annexPrefixList(annexes), ","), version.Current)))},
 		},
 	}
 	if job.live {
 		if err := job.wireModelStages(corpusTitle(opts.Root), corpusScope(opts.Root)); err != nil {
-			return devBuildResult{}, err
+			return buildResult{}, err
 		}
 		live.TaxonomyCalls = job.designer.Calls()
 		fmt.Fprintf(opts.Stdout, "taxonomy: %d container calls\n", live.TaxonomyCalls)
 	}
 
+	jobPlan, err := job.plan()
+	if err != nil {
+		return buildResult{}, err
+	}
 	coord := pipeline.NewCoordinator(store, runner, pipeline.DefaultWorkers, lg)
 	start := time.Now()
-	res, err := coord.Run(runCtx, job.plan(), pipeline.ModeResume)
+	res, err := coord.Run(runCtx, jobPlan, pipeline.ModeResume)
 	elapsed := time.Since(start)
 	// Every return from here down keeps temp-work: a failed or interrupted run
 	// leaves its intermediates for a resume and for a human.
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	for _, f := range res.Failures {
 		fmt.Fprintf(opts.Stderr, "unit %s failed (%s): %v\n", f.Path, f.Kind, f.Err)
 	}
 	if !res.DeliveryReady() {
-		return devBuildResult{}, fmt.Errorf("%s: the build did not complete: %d of %d units produced, %d failed",
-			devBuildVerb, res.Produced, res.Units, len(res.Failures))
+		return buildResult{}, fmt.Errorf("%s: the build did not complete: %d of %d units produced, %d failed",
+			buildVerb, res.Produced, res.Units, len(res.Failures))
 	}
 
 	plan, err := job.readTreePlan()
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	report, err := job.readReport()
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	delivered, err := job.deliver(plan)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 
 	summaries, err := job.summaryCount(plan)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
-	record := devBuildRun{
+	record := buildRun{
 		Version:     version.Current,
 		Corpus:      root,
 		CorpusHash:  art.Corpus.ContentHash,
 		BuildDate:   buildDate,
+		TreePlan:    treePlanSource(job.live),
+		Annexes:     annexPrefixList(annexes),
 		Budgets:     plan.Budgets,
 		Files:       art.Corpus.Files,
 		Sections:    art.Corpus.Sections,
@@ -323,7 +377,7 @@ func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, err
 		Leaves:      report.Leaves,
 		Indexes:     report.Indexes,
 		Groups:      len(plan.Groups),
-		SplitGroups: splitGroups(plan),
+		SplitGroups: splitGroupCount(plan),
 		Summaries:   summaries,
 		Delivered:   len(delivered),
 		Units:       res.Units,
@@ -336,33 +390,41 @@ func runDevBuild(ctx context.Context, opts devBuildOptions) (devBuildResult, err
 		// Only a live run has a model, a tier and a token bill; a mechanical
 		// one would report zeroes, which read as "it cost nothing" rather than
 		// as "nothing was asked".
+		if err := job.readRefinement(); err != nil {
+			return buildResult{}, err
+		}
+		live.BoundariesAdjudicated = job.refined.Boundaries
+		live.BoundariesMoved = job.refined.Moved
+		live.BoundariesFellBack = job.refined.Fallbacks
+		live.BoundaryRejections = job.refined.Rejections
+		live.CallsSkipped = res.Skipped
 		live.PromptTokens = res.Usage.PromptTokens
 		live.CachedTokens = res.Usage.CachedPromptTokens
 		live.CompletionTokens = res.Usage.CompletionTokens
 		live.ReasoningTokens = res.Usage.ReasoningTokens
 		record.Live = &live
 	}
-	recordPath, err := writeDevBuildRecord(out, record)
+	recordPath, err := writeBuildRecord(out, record)
 	if err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
 	job.report(plan, report, res, elapsed, len(delivered), summaries, recordPath)
 
 	if opts.KeepTempWork {
 		fmt.Fprintf(opts.Stdout, "temp work kept: %s\n", work.Root())
-		return devBuildResult{Plan: plan, Report: report, Job: res, Delivered: delivered}, nil
+		return buildResult{Plan: plan, Report: report, Job: res, Delivered: delivered}, nil
 	}
 	if err := work.Discard(); err != nil {
-		return devBuildResult{}, err
+		return buildResult{}, err
 	}
-	return devBuildResult{Plan: plan, Report: report, Job: res, Delivered: delivered}, nil
+	return buildResult{Plan: plan, Report: report, Job: res, Delivered: delivered}, nil
 }
 
-// devBuildJob is the job's composition: everything the six stages share, in one
+// buildJob is the job's composition: everything the six stages share, in one
 // value, so a stage description is a method rather than a closure over a dozen
 // locals.
-type devBuildJob struct {
-	opts     devBuildOptions
+type buildJob struct {
+	opts     buildOptions
 	out      string
 	corpus   ingest.Corpus
 	art      survey.Artifact
@@ -374,11 +436,26 @@ type devBuildJob struct {
 	inputs   []pipeline.Input
 	lg       log.Logger
 
-	// live says whether stages 3 and 6 ask a model. The two model stages are
-	// nil when it is false, and the plan below is then the mechanical spine.
+	// annexes are the declared territories, validated against the survey at
+	// job setup. They reach the artifact through whichever stage 3 shape runs
+	// — the descent carries them, and the mechanical proposal hands them to
+	// the same Compose.
+	annexes []treeplan.Annex
+
+	// live says whether stages 3, 4 and 6 ask a model. The two model stages
+	// built here are nil when it is false, and the plan below is then the
+	// mechanical spine.
 	live       bool
 	designer   *taxonomy.Designer
 	summarizer *summarize.Summarizer
+
+	// folds are stage 4's per-group refiners, kept from the moment the stage
+	// resolved its work so the run record can report what they did. Written
+	// once, when the coordinator describes the cuts stage, and read once the
+	// job has finished — never concurrently with the workers that drive them.
+	// refined is that reading (readRefinement).
+	folds   []*dissect.Refiner
+	refined dissect.Stats
 }
 
 // wireModelStages builds the two no-fallback seams this verb can run: the
@@ -386,18 +463,21 @@ type devBuildJob struct {
 // it.
 //
 // Both are built here, at the composition root, because that is where a stage
-// is registered and therefore where its declared effort is threaded from
-// (ARCHITECTURE.md §9, §12) — the values are the definitions' own
-// (taxonomy.Effort, summarize.Effort), passed through untouched.
-func (j *devBuildJob) wireModelStages(title, scope string) error {
+// is registered and therefore where its declared effort and retry policy are
+// threaded from (ARCHITECTURE.md §9, §12) — the values are the definitions' own
+// (taxonomy.Effort/taxonomy.Retry, summarize.Effort/summarize.Retry), passed
+// through untouched.
+func (j *buildJob) wireModelStages(title, scope string) error {
 	designer, err := taxonomy.New(taxonomy.Design{
 		Survey:   j.art,
 		Verifier: j.verifier,
 		Params:   j.params,
 		Title:    title,
 		Scope:    scope,
+		Annexes:  j.annexes,
 		Unit:     treePlanUnit,
 		Effort:   taxonomy.Effort,
+		Retry:    taxonomy.Retry,
 	}, j.lg)
 	if err != nil {
 		return err
@@ -409,6 +489,7 @@ func (j *devBuildJob) wireModelStages(title, scope string) error {
 		SummariesDir: summariesDir,
 		Params:       j.params,
 		Effort:       summarize.Effort,
+		Retry:        summarize.Retry,
 	}, j.lg)
 	if err != nil {
 		return err
@@ -418,29 +499,28 @@ func (j *devBuildJob) wireModelStages(title, scope string) error {
 }
 
 // plan is §10's table: survey, tree plan, cuts, pages, summaries, assemble,
-// verify — with stages 3 and 6 asking a model when this run is live and
+// verify — with stages 3, 4 and 6 asking a model when this run is live and
 // deriving their artifacts mechanically when it is not.
-//
-// Stage 4's live refinement is deliberately absent from both shapes: the cut
-// lists here are dissect.Split's own output, which every consumer already
-// treats as the always-valid fallback, and wiring the refinement fold into a
-// job plan is its own item (ROADMAP).
-func (j *devBuildJob) plan() pipeline.Plan {
-	frame := devBuildFrame
+func (j *buildJob) plan() (pipeline.Plan, error) {
+	frame := buildFrame
 	if j.live {
-		frame = devBuildLiveFrame
+		frame = buildLiveFrame
+	}
+	cuts, err := j.cutsStage()
+	if err != nil {
+		return pipeline.Plan{}, err
 	}
 	stages := []*pipeline.StagePlan{
-		j.surveyStage(), j.treePlanStage(), j.cutsStage(), j.leavesStage(),
+		j.surveyStage(), j.treePlanStage(), cuts, j.leavesStage(),
 	}
 	stages = append(stages, j.summaryStages()...)
 	stages = append(stages, j.assembleStage(), j.verifyStage())
-	return pipeline.Plan{JobFrame: frame, Stages: stages}
+	return pipeline.Plan{JobFrame: frame, Stages: stages}, nil
 }
 
 // summaryStages is stage 6: one stage per index level, deepest first, and none
 // at all when no model is in the loop.
-func (j *devBuildJob) summaryStages() []*pipeline.StagePlan {
+func (j *buildJob) summaryStages() []*pipeline.StagePlan {
 	if j.summarizer == nil {
 		return nil
 	}
@@ -451,7 +531,7 @@ func (j *devBuildJob) summaryStages() []*pipeline.StagePlan {
 
 // owed describes one unit: the job's two derived inputs plus whatever store
 // artifacts it consumed.
-func (j *devBuildJob) owed(path string, upstreams ...string) pipeline.OwedArtifact {
+func (j *buildJob) owed(path string, upstreams ...string) pipeline.OwedArtifact {
 	return pipeline.OwedArtifact{Path: path, Inputs: j.inputs, Upstreams: upstreams}
 }
 
@@ -465,7 +545,7 @@ func oneLane(name string, task pipeline.LaneTask) pipeline.LaneResolver {
 // surveyStage writes the survey artifact the rest of the chain is stamped
 // against. Its producer hands over the value computed at job setup rather than
 // re-surveying: one survey per run, and the artifact is the record of it.
-func (j *devBuildJob) surveyStage() *pipeline.StagePlan {
+func (j *buildJob) surveyStage() *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name: stageSurvey,
 		Lanes: oneLane(stageSurvey, pipeline.LaneTask{
@@ -476,7 +556,7 @@ func (j *devBuildJob) surveyStage() *pipeline.StagePlan {
 		Encode: func(artifact any) ([]byte, error) {
 			a, ok := artifact.(survey.Artifact)
 			if !ok {
-				return nil, fmt.Errorf("%s: artifact is %T, not a survey artifact", devBuildVerb, artifact)
+				return nil, fmt.Errorf("%s: artifact is %T, not a survey artifact", buildVerb, artifact)
 			}
 			var buf bytes.Buffer
 			if err := a.WriteJSON(&buf); err != nil {
@@ -495,7 +575,7 @@ func (j *devBuildJob) surveyStage() *pipeline.StagePlan {
 // and every §3.3 post-condition run over both — so what the mechanical shape
 // skips is the model that would have chosen the grouping, not any of the
 // checking that grouping has to survive.
-func (j *devBuildJob) treePlanStage() *pipeline.StagePlan {
+func (j *buildJob) treePlanStage() *pipeline.StagePlan {
 	if j.designer != nil {
 		return j.designer.StagePlan(stageTreePlan, j.inputs, surveyUnit)
 	}
@@ -505,11 +585,12 @@ func (j *devBuildJob) treePlanStage() *pipeline.StagePlan {
 			Owed:    j.owed(treePlanUnit, surveyUnit),
 			Section: stageTreePlan,
 			Produce: func() (any, error) {
-				proposal, err := treeplan.SourceStructureProposal(j.art, corpusTitle(j.opts.Root), corpusScope(j.opts.Root))
+				proposal, err := treeplan.SourceStructureProposal(
+					j.art, corpusTitle(j.opts.Root), corpusScope(j.opts.Root), j.annexes)
 				if err != nil {
 					return nil, err
 				}
-				return j.verifier.Compose(proposal, nil)
+				return j.verifier.Compose(proposal, j.annexes)
 			},
 		}),
 		// The same encoder the live stage uses: one artifact, one encoder,
@@ -518,28 +599,45 @@ func (j *devBuildJob) treePlanStage() *pipeline.StagePlan {
 	}
 }
 
-// cutsStage writes one cut list per SPLIT group — and none at all when no
+// cutsStage is stage 4: one cut list per SPLIT group — and none at all when no
 // group splits, which is the ordinary outcome at the shipped budget over a
 // corpus of documentation-sized sections.
 //
-// The list is dissect.Split's own output, which is always valid by
-// construction. The live refiner replaces this stage without moving the
-// artifact: same path, same encoder, same contract, boundaries adjudicated
-// instead of taken.
-func (j *devBuildJob) cutsStage() *pipeline.StagePlan {
+// Two shapes, one artifact. A LIVE run adjudicates every interior boundary
+// against the light tier (§5's serial fold, one lane per group), and a
+// mechanical one writes dissect.Split's own output, which is always valid by
+// construction and is what the fold falls back to boundary by boundary. The
+// refined stage does not move the artifact: same path, same encoder, same
+// contract, boundaries adjudicated instead of taken — which is why the stages
+// downstream of it cannot tell the two shapes apart.
+func (j *buildJob) cutsStage() (*pipeline.StagePlan, error) {
+	if !j.live {
+		return j.mechanicalCutsStage(), nil
+	}
+	return dissect.StagePlan(stageCuts, dissect.CutJob{
+		// The refinement definition's own declaration, passed through
+		// untouched — this is the site that registers the stage, and both
+		// halves of the ask are its to state (ARCHITECTURE.md §9, §12).
+		Effort: dissect.Effort,
+		Retry:  dissect.Retry,
+		Folds:  j.cutFolds,
+		Owed: func(unit string) pipeline.OwedArtifact {
+			return j.owed(unit, treePlanUnit, surveyUnit)
+		},
+	}, j.lg)
+}
+
+func (j *buildJob) mechanicalCutsStage() *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name:   stageCuts,
 		Encode: dissect.EncodeCutList,
 		Lanes: func() ([]pipeline.SerialLane, error) {
-			plan, err := j.readTreePlan()
+			groups, err := j.splitGroups()
 			if err != nil {
 				return nil, err
 			}
 			var tasks []pipeline.LaneTask
-			for _, g := range plan.Groups {
-				if g.Parts == 1 {
-					continue
-				}
+			for _, g := range groups {
 				unit := cutListPath(g.ID)
 				tasks = append(tasks, pipeline.LaneTask{
 					Owed:    j.owed(unit, treePlanUnit, surveyUnit),
@@ -548,7 +646,7 @@ func (j *devBuildJob) cutsStage() *pipeline.StagePlan {
 				})
 			}
 			if len(tasks) == 0 {
-				j.lg.Info("no group needs cutting", "stage", stageCuts, "groups", len(plan.Groups))
+				j.lg.Info("no group needs cutting", "stage", stageCuts)
 				return nil, nil
 			}
 			return []pipeline.SerialLane{{Domain: stageCuts, Tasks: tasks}}, nil
@@ -556,20 +654,13 @@ func (j *devBuildJob) cutsStage() *pipeline.StagePlan {
 	}
 }
 
-func (j *devBuildJob) cutProducer(g treeplan.SplitGroup, unit string) pipeline.Producer {
+func (j *buildJob) cutProducer(g treeplan.SplitGroup, unit string) pipeline.Producer {
 	return func() (any, error) {
-		doc, ok := j.corpus.Doc(g.Source.File)
-		if !ok {
-			return nil, fmt.Errorf("%s: group %s draws on %s, which is not under custody",
-				devBuildVerb, g.ID, g.Source.File)
+		src, err := j.groupSource(g)
+		if err != nil {
+			return nil, err
 		}
-		f, ok := surveyFile(j.art, g.Source.File)
-		if !ok {
-			return nil, fmt.Errorf("%s: group %s draws on %s, which the survey does not describe",
-				devBuildVerb, g.ID, g.Source.File)
-		}
-		cuts, err := dissect.Split(doc.Bytes, survey.Span{Start: g.Source.Start, End: g.Source.End}, f.Cuts,
-			dissect.Params{Est: j.est, BudgetTokens: g.Budget})
+		cuts, err := dissect.Split(src.bytes, src.span, src.cands, src.params)
 		if err != nil {
 			return nil, err
 		}
@@ -577,10 +668,125 @@ func (j *devBuildJob) cutProducer(g treeplan.SplitGroup, unit string) pipeline.P
 	}
 }
 
+// cutFolds is the live stage's lazy half: one Refiner per split group, built
+// when the coordinator reaches stage 4 — the first moment the tree plan that
+// says which groups split is on disk (§12's lazy chain).
+//
+// The folds are kept, because they are the only place the run's refinement
+// outcome exists: the fold logs each boundary as it adjudicates it, and the
+// run record needs the totals (see refinement).
+func (j *buildJob) cutFolds() ([]*dissect.Refiner, error) {
+	groups, err := j.splitGroups()
+	if err != nil {
+		return nil, err
+	}
+	folds := make([]*dissect.Refiner, 0, len(groups))
+	for _, g := range groups {
+		src, err := j.groupSource(g)
+		if err != nil {
+			return nil, err
+		}
+		mech, err := dissect.Split(src.bytes, src.span, src.cands, src.params)
+		if err != nil {
+			return nil, err
+		}
+		// The unit DIRECTORY, not the cut list's path: the fold names its own
+		// artifact inside it, so the refined list lands exactly where the
+		// mechanical one would have.
+		r, err := dissect.NewRefiner(src.bytes, src.span, src.cands, mech,
+			cutsDir+"/"+g.ID, src.params, dissect.Effort, dissect.Retry, j.lg)
+		if err != nil {
+			return nil, err
+		}
+		folds = append(folds, r)
+	}
+	j.folds = folds
+	return folds, nil
+}
+
+// splitGroups is the tree plan's groups that need cutting at all — the ones
+// stage 3 sized into more than one page. Both cuts shapes read it, so "which
+// groups does stage 4 work on" is one answer rather than two that could drift.
+func (j *buildJob) splitGroups() ([]treeplan.SplitGroup, error) {
+	plan, err := j.readTreePlan()
+	if err != nil {
+		return nil, err
+	}
+	var out []treeplan.SplitGroup
+	for _, g := range plan.Groups {
+		if g.Parts > 1 {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+// groupSource is everything stage 4 needs about one split group: the custody
+// bytes, the span the group covers, the cut candidates the adapter enumerated
+// inside the document, and the budget the group was sized to.
+//
+// One resolver for both shapes. The mechanical producer and the fold's seed
+// must be the same material or the fold would be improving on a list nothing
+// else would have produced.
+type groupSource struct {
+	bytes  []byte
+	span   survey.Span
+	cands  []survey.CutCandidate
+	params dissect.Params
+}
+
+func (j *buildJob) groupSource(g treeplan.SplitGroup) (groupSource, error) {
+	doc, ok := j.corpus.Doc(g.Source.File)
+	if !ok {
+		return groupSource{}, fmt.Errorf("%s: group %s draws on %s, which is not under custody",
+			buildVerb, g.ID, g.Source.File)
+	}
+	f, ok := surveyFile(j.art, g.Source.File)
+	if !ok {
+		return groupSource{}, fmt.Errorf("%s: group %s draws on %s, which the survey does not describe",
+			buildVerb, g.ID, g.Source.File)
+	}
+	return groupSource{
+		bytes:  doc.Bytes,
+		span:   survey.Span{Start: g.Source.Start, End: g.Source.End},
+		cands:  f.Cuts,
+		params: dissect.Params{Est: j.est, BudgetTokens: g.Budget},
+	}, nil
+}
+
+// readRefinement collects what the fold did, summed over every group: the
+// boundaries it adjudicated, how many it moved, and how many kept the
+// mechanical cut because no answer verified.
+//
+// Read ONCE, after the job, which is the only moment it is readable:
+// Refiner.Stats refuses while a fold is running, and the coordinator's return
+// is the point at which every worker has exited. It is then read from the
+// field by both the record and the console report, so the artifact and the
+// terminal cannot state different numbers.
+//
+// A run with no split group has no fold and reports zeroes — the honest
+// reading of "there was no boundary for anyone to choose", not of "the stage
+// did not run".
+func (j *buildJob) readRefinement() error {
+	var total dissect.Stats
+	for _, r := range j.folds {
+		s, err := r.Stats()
+		if err != nil {
+			return fmt.Errorf("%s: reading the boundary fold's outcome: %w", buildVerb, err)
+		}
+		total.Boundaries += s.Boundaries
+		total.Moved += s.Moved
+		total.Fallbacks += s.Fallbacks
+		total.Rejections += s.Rejections
+	}
+	j.refined = total
+	return nil
+}
+
 // leavesStage is stage 5: one Produce task per leaf, lanes per domain, units
 // resolved from the tree plan ∪ the cut lists — ARCHITECTURE §12's lazy chain
 // description, where stage 4's verified cut list defines stage 5's work.
-func (j *devBuildJob) leavesStage() *pipeline.StagePlan {
+func (j *buildJob) leavesStage() *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name:   stageLeaves,
 		Encode: distill.Encode,
@@ -611,7 +817,7 @@ func (j *devBuildJob) leavesStage() *pipeline.StagePlan {
 // Leaves are COPIED. Rebasing happened once, at stage 5, and this stage does
 // not touch leaf bytes [MAD1: F-9] — which is what makes the delivered page
 // and the artifact stage 9 re-derives against the same bytes by construction.
-func (j *devBuildJob) assembleStage() *pipeline.StagePlan {
+func (j *buildJob) assembleStage() *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name:   stageAssemble,
 		Encode: encodeBytes,
@@ -666,7 +872,7 @@ func (j *devBuildJob) assembleStage() *pipeline.StagePlan {
 // statement of what it read — and what makes a re-run after one page changed
 // redo the gates rather than reuse a verdict about a tree that no longer
 // exists.
-func (j *devBuildJob) verifyStage() *pipeline.StagePlan {
+func (j *buildJob) verifyStage() *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name:   stageVerify,
 		Encode: assemble.EncodeReport,
@@ -688,7 +894,7 @@ func (j *devBuildJob) verifyStage() *pipeline.StagePlan {
 	}
 }
 
-func (j *devBuildJob) verifyProducer() pipeline.Producer {
+func (j *buildJob) verifyProducer() pipeline.Producer {
 	return func() (any, error) {
 		plan, cuts, err := j.readPlanAndCuts()
 		if err != nil {
@@ -732,7 +938,7 @@ func (j *devBuildJob) verifyProducer() pipeline.Producer {
 // mirror hierarchy read in the delivering direction, with the `tree/` prefix
 // dropped because that prefix is the store's own namespace and not part of the
 // knowledge base's shape.
-func (j *devBuildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
+func (j *buildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
 	paths := deliveredPaths(plan)
 	for _, p := range paths {
 		data, err := j.store.Get(treeDir + "/" + p)
@@ -741,17 +947,17 @@ func (j *devBuildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
 		}
 		dst := filepath.Join(j.out, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(dst), pipeline.CreateDirMode); err != nil {
-			return nil, fmt.Errorf("%s: create %s: %w", devBuildVerb, filepath.Dir(dst), err)
+			return nil, fmt.Errorf("%s: create %s: %w", buildVerb, filepath.Dir(dst), err)
 		}
 		if err := os.WriteFile(dst, data, pipeline.CreateFileMode); err != nil {
-			return nil, fmt.Errorf("%s: write %s: %w", devBuildVerb, dst, err)
+			return nil, fmt.Errorf("%s: write %s: %w", buildVerb, dst, err)
 		}
 	}
 	return paths, nil
 }
 
 // report prints the human summary.
-func (j *devBuildJob) report(plan treeplan.TreePlan, rep assemble.Report,
+func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 	res pipeline.JobResult, elapsed time.Duration, delivered, summaries int, recordPath string) {
 
 	w := j.opts.Stdout
@@ -760,8 +966,10 @@ func (j *devBuildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 		j.opts.Root, t.Files, t.Sections, t.Tokens, t.ContentHash)
 	fmt.Fprintf(w, "budget: %d tokens per page\n", plan.Budgets.LeafTokens)
 	fmt.Fprintf(w, "tree plan: %d nodes (%d pages, %d sections), %d groups, %d split\n",
-		len(plan.Nodes), rep.Leaves, rep.Indexes, len(plan.Groups), splitGroups(plan))
+		len(plan.Nodes), rep.Leaves, rep.Indexes, len(plan.Groups), splitGroupCount(plan))
 	if j.live {
+		fmt.Fprintf(w, "boundaries: %d adjudicated, %d moved, %d fell back to the mechanical cut\n",
+			j.refined.Boundaries, j.refined.Moved, j.refined.Fallbacks)
 		fmt.Fprintf(w, "summaries: %d of %d sections\n", summaries, rep.Indexes)
 		fmt.Fprintf(w, "usage: prompt=%d cached=%d completion=%d reasoning=%d\n",
 			res.Usage.PromptTokens, res.Usage.CachedPromptTokens,
@@ -788,7 +996,7 @@ func (j *devBuildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 // re-render — because check 5 compares the delivered bytes against a fresh
 // render, and a renderer holding different summaries would be comparing two
 // different pages and calling the difference a defect.
-func (j *devBuildJob) renderer(plan treeplan.TreePlan) (*assemble.Renderer, error) {
+func (j *buildJob) renderer(plan treeplan.TreePlan) (*assemble.Renderer, error) {
 	summaries, err := summarize.All(j.store, summariesDir, plan)
 	if err != nil {
 		return nil, err
@@ -798,7 +1006,7 @@ func (j *devBuildJob) renderer(plan treeplan.TreePlan) (*assemble.Renderer, erro
 
 // summaryCount is how many sections a summary was written for — the live
 // stage's own yield, reported beside the node counts.
-func (j *devBuildJob) summaryCount(plan treeplan.TreePlan) (int, error) {
+func (j *buildJob) summaryCount(plan treeplan.TreePlan) (int, error) {
 	summaries, err := summarize.All(j.store, summariesDir, plan)
 	if err != nil {
 		return 0, err
@@ -810,7 +1018,7 @@ func (j *devBuildJob) summaryCount(plan treeplan.TreePlan) (int, error) {
 // chain's own idiom: a stage reads what its upstream left, rather than a value
 // the verb happened to keep, so a resumed run and a fresh one read the same
 // bytes.
-func (j *devBuildJob) readTreePlan() (treeplan.TreePlan, error) {
+func (j *buildJob) readTreePlan() (treeplan.TreePlan, error) {
 	data, err := j.store.Get(treePlanUnit)
 	if err != nil {
 		return treeplan.TreePlan{}, err
@@ -819,7 +1027,7 @@ func (j *devBuildJob) readTreePlan() (treeplan.TreePlan, error) {
 }
 
 // readPlanAndCuts reads the tree plan and every split group's cut list.
-func (j *devBuildJob) readPlanAndCuts() (treeplan.TreePlan, map[string][]survey.Span, error) {
+func (j *buildJob) readPlanAndCuts() (treeplan.TreePlan, map[string][]survey.Span, error) {
 	plan, err := j.readTreePlan()
 	if err != nil {
 		return treeplan.TreePlan{}, nil, err
@@ -843,14 +1051,14 @@ func (j *devBuildJob) readPlanAndCuts() (treeplan.TreePlan, map[string][]survey.
 }
 
 // readReport reads stage 9's artifact back for the run record.
-func (j *devBuildJob) readReport() (assemble.Report, error) {
+func (j *buildJob) readReport() (assemble.Report, error) {
 	data, err := j.store.Get(verifyUnit)
 	if err != nil {
 		return assemble.Report{}, err
 	}
 	var rep assemble.Report
 	if err := json.Unmarshal(data, &rep); err != nil {
-		return assemble.Report{}, fmt.Errorf("%s: read the verify report: %w", devBuildVerb, err)
+		return assemble.Report{}, fmt.Errorf("%s: read the verify report: %w", buildVerb, err)
 	}
 	return rep, nil
 }
@@ -869,7 +1077,7 @@ func deliveredPaths(plan treeplan.TreePlan) []string {
 
 func cutListPath(group string) string { return cutsDir + "/" + group + "/" + cutListName }
 
-func splitGroups(plan treeplan.TreePlan) int {
+func splitGroupCount(plan treeplan.TreePlan) int {
 	n := 0
 	for _, g := range plan.Groups {
 		if g.Parts > 1 {
@@ -904,10 +1112,10 @@ func corpusScope(root string) string {
 func encodeBytes(artifact any) ([]byte, error) {
 	b, ok := artifact.([]byte)
 	if !ok {
-		return nil, fmt.Errorf("%s: artifact is %T, not rendered bytes", devBuildVerb, artifact)
+		return nil, fmt.Errorf("%s: artifact is %T, not rendered bytes", buildVerb, artifact)
 	}
 	if len(b) == 0 {
-		return nil, fmt.Errorf("%s: a node rendered no bytes", devBuildVerb)
+		return nil, fmt.Errorf("%s: a node rendered no bytes", buildVerb)
 	}
 	return b, nil
 }
@@ -920,21 +1128,33 @@ func constProducer(data []byte) pipeline.Producer {
 	return func() (any, error) { return data, nil }
 }
 
-func (j *devBuildJob) copyProducer(unit string) pipeline.Producer {
+func (j *buildJob) copyProducer(unit string) pipeline.Producer {
 	return func() (any, error) { return j.store.Get(unit) }
 }
 
-// devBuildRun is the run record delivered beside the tree: what was built, from
+// buildRun is the run record delivered beside the tree: what was built, from
 // what, under which budgets, and what the gates said.
 //
 // It is a development record rather than a stamp — nothing reads it back — but
 // it carries every identity a later reader would otherwise reconstruct from a
 // log, and the nine verify results, because those ARE the result of the run.
-type devBuildRun struct {
-	Version     string                 `json:"version"`
-	Corpus      string                 `json:"corpus"`
-	CorpusHash  string                 `json:"corpusHash"`
-	BuildDate   string                 `json:"buildDate"`
+type buildRun struct {
+	Version    string `json:"version"`
+	Corpus     string `json:"corpus"`
+	CorpusHash string `json:"corpusHash"`
+	BuildDate  string `json:"buildDate"`
+
+	// TreePlan is where stage 3's artifact came from — treePlanModel, or
+	// treePlanMechanical for a run under the [dev] switch. It is stated on
+	// every run: a KB whose organisation nobody designed is the one thing a
+	// later reader must not have to infer from an absence.
+	TreePlan string `json:"treePlan"`
+
+	// Annexes are the declared prefixes, in the order they were declared.
+	// Absent when there are none — an empty list would read as a decision to
+	// annex nothing, which is not what a run without the flag made.
+	Annexes []string `json:"annexes,omitempty"`
+
 	Budgets     treeplan.Budgets       `json:"budgets"`
 	Files       int                    `json:"sourceFiles"`
 	Sections    int                    `json:"sourceSections"`
@@ -954,121 +1174,195 @@ type devBuildRun struct {
 	// Live is present exactly when a model was in the loop. Absent rather than
 	// zeroed: a mechanical run reporting `"promptTokens": 0` reads as "it cost
 	// nothing" where the truth is "nothing was asked".
-	Live *devBuildLive `json:"live,omitempty"`
+	Live *buildLive `json:"live,omitempty"`
 }
 
-// devBuildLive is what a live run dialed, asked and spent. It carries no
+// buildLive is what a live run dialed, asked and spent. It carries no
 // credential: the API key is never in this process's output, only on the wire,
 // and the base URL has any userinfo stripped (safeBaseURL).
-type devBuildLive struct {
+type buildLive struct {
 	Provider string `json:"provider"`
 	BaseURL  string `json:"baseUrl"`
-	Model    string `json:"model"`
-	Tier     string `json:"tier"`
-	// Thinking is the effort the two definitions declare. Both stages are
-	// heavy-tier and both declare the same value today; the day they differ,
-	// this becomes two fields rather than one lie.
-	Thinking bool `json:"thinking"`
-	// TaxonomyCalls is how many container calls the descent enumerated — the
+	// Model and Tier are the HEAVY tier's: the model that designed the tree
+	// and wrote the summaries. LightModel is the one that adjudicated the page
+	// boundaries — the other tier a live run requires, and a different model
+	// id whenever the two tiers are mapped to different variants (§10).
+	Model      string `json:"model"`
+	Tier       string `json:"tier"`
+	LightModel string `json:"lightModel"`
+	// Thinking and RetryThinking are the efforts the two HEAVY definitions
+	// declare — the first attempt's and the informed retry's
+	// (ARCHITECTURE.md §9). Taxonomy and summaries declare the same pair
+	// today, so one pair is the truth about both; refinement declares its own
+	// (dissect.Effort/dissect.Retry, off/off) and is not folded in here,
+	// because two definitions averaged into one row is a row that is true of
+	// neither.
+	Thinking      bool `json:"thinking"`
+	RetryThinking bool `json:"retryThinking"`
+	// TaxonomyCalls is how many container calls the descent ENUMERATED — the
 	// stage's cost before it runs, and what an interrupted run re-spends.
-	TaxonomyCalls    int `json:"taxonomyCalls"`
+	// CallsSkipped is how many calls of the whole job were not made because the
+	// stage that planned them found it no longer needed the answer (an absorbed
+	// container, §3.2), so the two together are what the run actually asked.
+	TaxonomyCalls int `json:"taxonomyCalls"`
+	CallsSkipped  int `json:"callsSkipped"`
+
+	// What stage 4's fold did, summed over every split group. Zero across the
+	// board is the CORRECT reading of a corpus whose groups all fit one page:
+	// there was no boundary for anyone to choose, so the stage planned no call
+	// — not a stage that failed to run. BoundariesFellBack is the degradation
+	// count: a boundary whose answers did not verify keeps the mechanical cut,
+	// which costs quality and never correctness (§3 monotone safety).
+	BoundariesAdjudicated int `json:"boundariesAdjudicated"`
+	BoundariesMoved       int `json:"boundariesMoved"`
+	BoundariesFellBack    int `json:"boundariesFellBack"`
+	BoundaryRejections    int `json:"boundaryRejections"`
+
 	PromptTokens     int `json:"promptTokens"`
 	CachedTokens     int `json:"cachedTokens"`
 	CompletionTokens int `json:"completionTokens"`
 	ReasoningTokens  int `json:"reasoningTokens"`
 }
 
-func writeDevBuildRecord(dir string, rec devBuildRun) (string, error) {
+func writeBuildRecord(dir string, rec buildRun) (string, error) {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("%s: encode %s: %w", devBuildVerb, devBuildRecordName, err)
+		return "", fmt.Errorf("%s: encode %s: %w", buildVerb, buildRecordName, err)
 	}
-	path := filepath.Join(dir, devBuildRecordName)
+	path := filepath.Join(dir, buildRecordName)
 	if err := os.WriteFile(path, append(data, '\n'), pipeline.CreateFileMode); err != nil {
-		return "", fmt.Errorf("%s: write %s: %w", devBuildVerb, path, err)
+		return "", fmt.Errorf("%s: write %s: %w", buildVerb, path, err)
 	}
 	return path, nil
 }
 
-// devBuildProvider resolves the live half of this verb, or nil for the
-// mechanical build.
+// declaredAnnexes turns the --annex values into annex declarations.
 //
-// The flag's PRESENCE is the switch, so this reads flagConfigDir directly
-// rather than through resolveConfigDir: an absent flag here means "no model",
-// not "find one somewhere else". Everything it loads is loaded before a client
-// is dialed and before the job directory is opened, so a broken configuration
-// costs nothing.
-func devBuildProvider() (*providerOptions, error) {
-	if strings.TrimSpace(flagConfigDir) == "" {
-		return nil, nil
+// Only the prefix is set. §2.8 gives the convention text to the stage-3
+// verifier, which authors it from the survey so stage 9 can re-derive it; a
+// string carried in from a flag is the one field it could not. The flag order
+// is preserved, because it is the order the entry-point's annex lookup renders
+// in, and everything else a prefix has to satisfy is treeplan's to say.
+func declaredAnnexes(flags []string) []treeplan.Annex {
+	if len(flags) == 0 {
+		return nil
 	}
-	_, opts, err := loadVerbContext()
-	if err != nil {
-		return nil, err
+	out := make([]treeplan.Annex, 0, len(flags))
+	for _, f := range flags {
+		out = append(out, treeplan.Annex{Prefix: strings.TrimSpace(f)})
 	}
-	opts.Timeout = devBuildTimeout
-	return &opts, nil
+	return out
+}
+
+// annexPrefixList is the declared prefixes, for the run record and the
+// parameter digest.
+func annexPrefixList(annexes []treeplan.Annex) []string {
+	if len(annexes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(annexes))
+	for _, a := range annexes {
+		out = append(out, a.Prefix)
+	}
+	return out
+}
+
+// treePlanSource names where stage 3's artifact came from, for the record.
+func treePlanSource(live bool) string {
+	if live {
+		return treePlanModel
+	}
+	return treePlanMechanical
+}
+
+// resolveBuildDate is the date every provenance receipt is stamped with: the
+// pinned [dev] build_date, else today, UTC.
+//
+// A malformed pin is refused rather than passed through. The renderer treats
+// the date as an opaque string, so an unparsed value would land in the footer
+// of every delivered page and be noticed only by whoever read one.
+func resolveBuildDate(pinned string) (string, error) {
+	date := strings.TrimSpace(pinned)
+	if date == "" {
+		return time.Now().UTC().Format(buildDateLayout), nil
+	}
+	if _, err := time.Parse(buildDateLayout, date); err != nil {
+		return "", fmt.Errorf("%s: [dev] build_date is %q; the format is %s",
+			buildVerb, pinned, buildDateLayout)
+	}
+	return date, nil
 }
 
 var (
-	devBuildFlagOut       string
-	devBuildFlagBudget    int
-	devBuildFlagKeep      bool
-	devBuildFlagBuildDate string
+	buildFlagOut     string
+	buildFlagKeep    bool
+	buildFlagAnnexes []string
 )
 
-var devBuildCmd = &cobra.Command{
-	Use:   "dev-build <corpus-dir>",
-	Short: "build a knowledge base from a corpus, with or without a model in the loop",
+var buildCmd = &cobra.Command{
+	Use:   "build <corpus-dir>",
+	Short: "build a knowledge base from a documentation corpus",
 	Long: `Walk a Markdown corpus and assemble a complete, verified knowledge base out of
 it: entry point, section indexes, verbatim pages, navigation links, the shipped
 agent fixtures, and the nine verify gates that stand between the assembled tree
 and the delivered one.
 
-This is a development verb with two shapes, and --config-dir selects between
-them.
+kbase is a model-driven appliance, so this needs a configured provider, and
+both tiers. The tree is designed by a descent over the corpus's own containers
+and every section page carries the framing and conclusions a model wrote for
+it — both heavy-tier, and both essential seams: a unit that fails twice fails
+the job and nothing is delivered. Page boundaries inside an oversized section
+are adjudicated by the light tier against the mechanical splitter's proposal,
+which is a refinement seam: a boundary whose answers do not verify keeps the
+mechanical cut, so that half costs quality and never correctness.
+Configuration is resolved the way every verb resolves it (--config-dir, else
+$KBASE_CONFIG_DIR, else ~/.config/kbase); an unconfigured tier refuses before
+the corpus is read, so a misconfigured run costs nothing.
 
-WITHOUT --config-dir it runs the MECHANICAL half of the pipeline. No model, no
-provider, no API key, no configuration directory — every stage is
-deterministic, so it works offline and finishes in seconds. Two things the
-shipped pipeline supplies are absent, and their absence is visible in the
-output: the tree is grouped by the source's own file structure rather than by a
-designed taxonomy, and the section pages carry no summary prose. Both are legal
-shapes, and everything else — the byte derivation, the link rebasing, the page
-grammar, the gates — is the shipped article.
-
-WITH --config-dir the taxonomy and the summaries are written by the heavy-tier
-model configured there: the tree is designed by a descent over the corpus's own
-containers, and every section page carries the framing and conclusions a model
-wrote for it. Both are essential seams — a unit that fails twice fails the job,
-and nothing is delivered. The prompts behind both are marked stubs until the
-definitions work lands, so a live run is evidence about the seam before it is
-evidence about the prose. Page boundaries stay mechanical in both shapes:
-wiring the boundary-refinement fold into this plan is separate work, and
-'kbase dev-refine' is where that seam is exercised today.
-
---out is required and receives the knowledge base plus a run record. Nothing
+--out is required and receives the knowledge base plus a run record naming the
+corpus and its hash, the budgets, the counts and each gate's verdict. Nothing
 already in it is touched: every intermediate lives under <out>/temp-work/,
 which kbase creates and, on a successful run, removes. A failed or interrupted
-run keeps it; --keep-temp-work keeps it after a successful one too.`,
+run keeps it; --keep-temp-work (or [dev] keep_temp_work) keeps it after a
+successful one too.
+
+--annex is repeatable and is the only way a corpus territory becomes an annex:
+the material under the prefix is not distilled, not enumerated by the taxonomy
+descent and not required to be covered, and the entry point gains a lookup
+section saying where it lives and how it is laid out. A prefix naming no
+surveyed document refuses at job setup rather than excluding nothing quietly.
+It is a flag and not a model decision on purpose — a model that can place
+material out of scope can hide its own failures.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// --config-dir is what selects the live shape, and it is read as GIVEN
-		// rather than resolved: this verb has a complete offline meaning, so
-		// falling back to the environment or to ~/.config/kbase would put a
-		// model in the loop of a run nobody asked to be live — and send the
-		// corpus to a provider they did not name.
-		live, err := devBuildProvider()
+		_, opts, err := loadVerbContext()
 		if err != nil {
 			return err
 		}
-		_, err = runDevBuild(cmd.Context(), devBuildOptions{
-			Root:         args[0],
-			Live:         live,
-			Out:          devBuildFlagOut,
-			Budget:       devBuildFlagBudget,
-			KeepTempWork: devBuildFlagKeep,
-			BuildDate:    devBuildFlagBuildDate,
+		opts.Timeout = buildTimeout
+
+		// The one switch that decides whether this run dials at all. It is
+		// read before anything else so a typo in it fails here rather than
+		// resolving to whichever shape the code happened to fall into.
+		mechanical, err := opts.Config.Dev.MechanicalTreePlan()
+		if err != nil {
+			return err
+		}
+		live := &opts
+		if mechanical {
+			live = nil
+		}
+		_, err = runBuild(cmd.Context(), buildOptions{
+			Root:    args[0],
+			Live:    live,
+			Out:     buildFlagOut,
+			Annexes: buildFlagAnnexes,
+			// The flag turns keeping ON and cannot turn it off: the only
+			// reason to insist on deletion is disk, and that remedy is one
+			// `rm -r` away, while the reason to keep is a run whose evidence
+			// someone wants and cannot get back.
+			KeepTempWork: buildFlagKeep || opts.Config.Dev.KeepTempWork,
+			BuildDate:    opts.Config.Dev.BuildDate,
 			Stdout:       cmd.OutOrStdout(),
 			Stderr:       cmd.ErrOrStderr(),
 			Logger:       processLog.logger,
@@ -1078,13 +1372,11 @@ run keeps it; --keep-temp-work keeps it after a successful one too.`,
 }
 
 func init() {
-	devBuildCmd.Flags().StringVar(&devBuildFlagOut, "out", "",
-		"output directory for the knowledge base and "+devBuildRecordName+" (required; created if missing)")
-	devBuildCmd.Flags().IntVar(&devBuildFlagBudget, "budget", treeplan.DefaultBudgets().LeafTokens,
-		"per-page source token budget (G-1); pages over it are split")
-	devBuildCmd.Flags().BoolVar(&devBuildFlagKeep, devRefineKeepFlag, false,
+	buildCmd.Flags().StringVar(&buildFlagOut, "out", "",
+		"output directory for the knowledge base and "+buildRecordName+" (required; created if missing)")
+	buildCmd.Flags().StringArrayVar(&buildFlagAnnexes, "annex", nil,
+		"corpus-relative prefix to leave undistilled and list in the entry point's annex lookup (repeatable)")
+	buildCmd.Flags().BoolVar(&buildFlagKeep, keepTempWorkFlag, false,
 		"keep <out>/"+pipeline.TempWorkDirName+"/ after a run that succeeded (a failed run always keeps it)")
-	devBuildCmd.Flags().StringVar(&devBuildFlagBuildDate, "build-date", "",
-		"date stamped into every page's provenance receipt, YYYY-MM-DD (default: today, UTC)")
-	rootCmd.AddCommand(devBuildCmd)
+	rootCmd.AddCommand(buildCmd)
 }

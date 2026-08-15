@@ -54,7 +54,7 @@ func newScene(t *testing.T) scene {
 	if err != nil {
 		t.Fatalf("survey.Assemble: %v", err)
 	}
-	proposal, err := treeplan.SourceStructureProposal(art, "Test Corpus", "a two-document corpus")
+	proposal, err := treeplan.SourceStructureProposal(art, "Test Corpus", "a two-document corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}

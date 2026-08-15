@@ -24,9 +24,11 @@ import (
 // The shape §5 specifies is a serial scan — one call per boundary, each
 // window loaded into the end of the context and overwriting the previous, so
 // the context stays O(1) while the calls are O(n). That is why StagePlan
-// emits ONE serial lane: a worker owns a domain and runs it serially, so a
-// single lane IS the serial scan, and the per-call Content slot holding
-// this boundary's window IS the overwrite.
+// emits ONE serial lane PER SPAN: a worker owns a domain and runs it
+// serially, so a single lane IS one span's serial scan, and the per-call
+// Content slot holding this boundary's window IS the overwrite. A job that
+// must cut several spans gets several lanes, which fan out across workers
+// while each span's own fold stays strictly in order.
 //
 // # The scan is a FOLD
 //
@@ -108,24 +110,6 @@ const (
 	paramsInput = "dissect:parameters"
 )
 
-// stubDefinition and stubTaskDef are PLACEHOLDER prompt text.
-//
-// TODO(embedded-definitions): the real gemma-4-tuned definition, its
-// `## CRITICAL` section and its eval belong to the embedded-definitions burst
-// (ROADMAP). What is being exercised here is the seam — window, menu,
-// verifier, fallback, retry, fallback — and none of that depends on the
-// wording. Keeping a stub visible and marked is honest; inventing tuned text
-// nobody evaluated would look like the real thing.
-const (
-	stubDefinition = "# Boundary refinement\n\n" +
-		"You are given the end of one section, the start of the next, and a numbered list of the\n" +
-		"positions the boundary between them may be moved to.\n\n" +
-		"## CRITICAL\n\n" +
-		"GroupingAnswer with one number from the list and nothing else.\n"
-
-	stubTaskDef = "Task: choose the position in the numbered list that best separates the two sections."
-)
-
 // Boundary is one adjudication as the fold currently has it: the cut between
 // two sections, the window the model may move it within, and the candidates
 // inside that window as a numbered menu.
@@ -172,6 +156,7 @@ type Refiner struct {
 	params Params
 	def    prompt.Definition
 	effort model.RequestEffort
+	retry  pipeline.RetryPolicy
 	lg     log.Logger
 
 	// mech is the mechanical cut list, frozen. It is what the stage's
@@ -186,6 +171,11 @@ type Refiner struct {
 	// a response can be routed back to the boundary it answers.
 	calls  []string
 	byUnit map[string]int
+
+	// unitDir is the store directory this fold's cut list lands in. It names
+	// the fold as well as its artifact: a stage over several spans gives each
+	// one its own lane, and this is that lane's domain and section.
+	unitDir string
 
 	// stage is the stage's name, for the log. Set by StagePlan, which is
 	// where a stage learns what it is called.
@@ -223,8 +213,9 @@ type Refiner struct {
 // the fold's seed: the working list starts as a copy of it and every
 // adjudication moves it from there.
 //
-// effort is the refinement definition's declared ask (model.RequestEffort). It is
-// positional and unavoidable on purpose: the value belongs to whoever
+// effort and retry are the refinement definition's declared ask
+// (model.RequestEffort) and its declared retry policy (pipeline.RetryPolicy).
+// They are positional and unavoidable on purpose: both values belong to whoever
 // registers this stage, and a package-level default here would be this
 // package quietly answering a question only the registration site can
 // (ARCHITECTURE.md §9, §12).
@@ -235,7 +226,7 @@ type Refiner struct {
 // tripwire firing here — before a single call — is the offset pipeline being
 // broken in a way no model interaction could have caused. Both are worth
 // learning at stage setup rather than n calls later.
-func NewRefiner(src []byte, span survey.Span, cands []survey.CutCandidate, cuts []survey.Span, unitDir string, p Params, effort model.RequestEffort, lg log.Logger) (*Refiner, error) {
+func NewRefiner(src []byte, span survey.Span, cands []survey.CutCandidate, cuts []survey.Span, unitDir string, p Params, effort model.RequestEffort, retry pipeline.RetryPolicy, lg log.Logger) (*Refiner, error) {
 	if unitDir == "" {
 		// Every path is built from it, so an empty one yields "/cutlist.txt"
 		// — a path the store refuses much later, naming the artifact rather
@@ -251,13 +242,15 @@ func NewRefiner(src []byte, span survey.Span, cands []survey.CutCandidate, cuts 
 	}
 
 	r := &Refiner{
-		src:    src,
-		span:   span,
-		cands:  cands,
-		params: p,
-		def:    def,
-		effort: effort,
-		lg:     lg,
+		src:     src,
+		span:    span,
+		cands:   cands,
+		params:  p,
+		def:     def,
+		effort:  effort,
+		retry:   retry,
+		unitDir: unitDir,
+		lg:      lg,
 		// Cloned, both of them: the caller keeps its own slice (Split hands
 		// back one it built), and the fold writes into work.
 		mech:   slices.Clone(cuts),
@@ -399,7 +392,8 @@ func (r *Refiner) enter() error {
 // instead, and verify raises it as a defect on the same boundary: the next
 // thing this unit does, and a seam that can classify it. The empty input is
 // deliberate; a fold that has refused the question has no legitimate prompt to
-// build for it.
+// build for it — and the call is still reported as NEEDED, because a skipped
+// task never reaches the seam that would raise the latch.
 func (r *Refiner) latch(err error) {
 	r.latchMu.Lock()
 	defer r.latchMu.Unlock()
@@ -414,78 +408,236 @@ func (r *Refiner) latchedErr() error {
 	return r.latched
 }
 
-func (r *Refiner) refuse(err error) prompt.CallInput {
+func (r *Refiner) refuse(err error) (prompt.CallInput, bool) {
 	r.latch(err)
 	r.lg.Error("the boundary fold refused to build a call", "stage", r.stage, "error", err)
-	return prompt.CallInput{}
+	return prompt.CallInput{}, true
+}
+
+// CutJob is the boundary-refinement stage's registration: the definition's
+// declared ask, the folds the stage runs, and how each composed cut list is
+// described to the store.
+type CutJob struct {
+	// Effort and Retry are the refinement definition's declared ask (Effort,
+	// Retry in definition.go). They are the caller's to state for the same
+	// reason they are positional on NewRefiner: an ask is a property of the
+	// definition, threaded from the site that registers the stage to the wire
+	// (ARCHITECTURE.md §9, §12). The two must be the same values the folds
+	// were built with — the digest below is taken over them, so a stage
+	// asking at one effort while its stamps claim another is a stamp that
+	// proves less than it appears to. StagePlan refuses that rather than
+	// trusting it.
+	Effort model.RequestEffort
+	Retry  pipeline.RetryPolicy
+
+	// Folds resolves one Refiner per span the job must cut, when the
+	// coordinator reaches this stage.
+	//
+	// It is a function and not a slice because of WHEN the spans are known:
+	// they come out of the tree plan an earlier stage wrote, so no
+	// description made at job setup could hold them (the lazy chain, §12). A
+	// job with nothing to cut returns none, and the stage resolves to zero
+	// lanes — which is the ordinary outcome at the shipped budget.
+	Folds func() ([]*Refiner, error)
+
+	// Owed describes one composed cut list: the job identity it is stamped
+	// against and the artifacts it was derived from. The stage appends its
+	// own parameter digest, because the artifact means nothing without it and
+	// the caller cannot derive it.
+	Owed func(unit string) pipeline.OwedArtifact
 }
 
 // StagePlan describes the stage for the coordinator: the ask every worker
-// runs, the stage-constant context, and one serial lane of boundary calls
-// ending in the one unit the stage owes.
+// runs, the stage-constant context, and one serial lane per span — each a run
+// of boundary calls ending in the one unit that span owes.
 //
-// inputs are the named hashes the composed cut list is stamped with — the
-// source identity and the upstream artifacts this cut list was derived from.
-// They are the caller's because the caller is the one that knows what job
-// this span came out of.
-//
-// The stage's OWN parameters are appended here rather than trusted to the
-// caller, because the artifact means nothing without them: this run's
-// `cuts/cutlist.txt` and a re-plan's are the same path holding a list
-// adjudicated for two different sets of questions. A stamp that proves less
-// than it appears to is the one failure §12 does not permit, so the stage
-// derives the input it alone can derive.
-//
-// Every task but the last contributes: its answer lands in the working list
-// and nothing else. The last one carries the artifact, so the stage's unit
-// exists exactly when the whole fold has run — which is what makes an
-// interrupted fold Absent rather than half-proven.
+// Every task but its lane's last contributes: its answer lands in that fold's
+// working list and nothing else. The last one carries the artifact, so a
+// span's unit exists exactly when its whole fold has run — which is what makes
+// an interrupted fold Absent rather than half-proven.
 //
 // Each task's input is BUILT when the worker reaches it
 // (pipeline.InputBuilder). It has to be: boundary i's window and menu come off
 // the list boundary i-1 left behind, so they do not exist when this plan is
 // described.
-func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.StagePlan {
-	r.stage = name
-	stamped := slices.Concat(inputs, []pipeline.Input{{Name: paramsInput, Hash: r.digest()}})
-	tasks := make([]pipeline.LaneTask, 0, len(r.calls))
-	for i := 1; i <= len(r.calls); i++ {
-		task := pipeline.LaneTask{
-			Owed:        pipeline.OwedArtifact{Path: r.calls[i-1]},
-			Contributes: !r.last(i),
-			Section:     name,
-			SectionRef:  r.sectionRef(),
-			Input:       func() prompt.CallInput { return r.callInput(i) },
-		}
-		if r.last(i) {
-			task.Owed.Inputs = stamped
-		}
-		tasks = append(tasks, task)
+//
+// The verifier and the fallback are the STAGE's, and route by unit to the fold
+// that owns it — one ask spec per stage is pipeline's shape, and a job cutting
+// several spans has several folds behind it. Routing is what Refiner.byUnit
+// already does within one span; this is the same lookup one level up.
+func StagePlan(name string, job CutJob, lg log.Logger) (*pipeline.StagePlan, error) {
+	switch {
+	case name == "":
+		return nil, fmt.Errorf("dissect: the refinement stage has no name; it names its lanes, its log records and its units")
+	case job.Folds == nil:
+		return nil, fmt.Errorf("dissect: the refinement stage has no folds resolver; the spans it cuts come from the caller's tree plan")
+	case job.Owed == nil:
+		return nil, fmt.Errorf("dissect: the refinement stage has no unit description; a composed cut list nothing stamps is a cut list nothing can reuse")
 	}
+	def, err := prompt.ParseDefinition(stubDefinition)
+	if err != nil {
+		return nil, fmt.Errorf("dissect: parsing the refinement definition: %w", err)
+	}
+	if lg == nil {
+		lg = log.Discard()
+	}
+	s := &cutsStage{name: name, job: job, lg: lg, byUnit: map[string]*Refiner{}}
 	return &pipeline.StagePlan{
 		Name: name,
 		Ask: pipeline.AskSpec{
-			Def: r.def,
+			Def: def,
 			// The light tier: refinement is the parallel, checklist-shaped
 			// work §10 maps to 26B-A4B.
 			Tier: config.TierLight,
 			// The caller's declaration, passed through untouched. This stage
-			// has an opinion about it and no standing to hold one: the ask
-			// is a property of the definition, and the definition is
-			// registered outside this package.
-			Effort:   r.effort,
-			Verify:   r.verify,
+			// has an opinion about it and no standing to hold one.
+			Effort:   job.Effort,
+			Retry:    job.Retry,
+			Verify:   s.verify,
 			Encode:   EncodeCutList,
-			Fallback: r.fallback,
+			Fallback: s.fallback,
 		},
-		Spec: prompt.StageSpec{TaskDef: stubTaskDef},
-		Lanes: func() ([]pipeline.SerialLane, error) {
-			// One lane, so the boundaries are walked in order by one
-			// worker: §5's serial scan, and the reason each window can
-			// overwrite the last.
-			return []pipeline.SerialLane{{Domain: name, Tasks: tasks}}, nil
-		},
+		Spec:  prompt.StageSpec{TaskDef: stubTaskDef},
+		Lanes: s.lanes,
+	}, nil
+}
+
+// cutsStage is the stage's own state: the folds it resolved and the table that
+// routes a unit back to the one that owns it.
+//
+// It holds no lock. lanes runs once, before any worker starts (the coordinator
+// resolves a stage's work and only then runs it), and the table is read-only
+// from there on — so the map is written by one goroutine and read by many with
+// a happens-before between them.
+type cutsStage struct {
+	name   string
+	job    CutJob
+	lg     log.Logger
+	byUnit map[string]*Refiner
+}
+
+// lanes builds one serial lane per span the job must cut.
+func (s *cutsStage) lanes() ([]pipeline.SerialLane, error) {
+	folds, err := s.job.Folds()
+	if err != nil {
+		return nil, err
 	}
+	out := make([]pipeline.SerialLane, 0, len(folds))
+	for _, r := range folds {
+		if r.effort != s.job.Effort || r.retry != s.job.Retry {
+			return nil, fmt.Errorf(
+				"dissect: the fold over %s was built with an ask this stage does not make; "+
+					"the digest its cut list is stamped with is taken over the fold's declaration "+
+					"and the calls are made at the stage's", r.unitDir)
+		}
+		lane := r.lane(s.name, s.job.Owed)
+		for _, t := range lane.Tasks {
+			s.byUnit[t.Owed.Path] = r
+		}
+		out = append(out, lane)
+	}
+	if len(out) == 0 {
+		s.lg.Info("no span needs its boundaries adjudicated", "stage", s.name)
+	}
+	return out, nil
+}
+
+// verify and fallback route a unit to the fold that owns it. An unknown unit
+// cannot arrive through the coordinator — the table and the lanes are built
+// from one loop — so it is diagnosed as ours rather than the model's, which is
+// the same classification Refiner.verify makes for the same reason.
+func (s *cutsStage) verify(artifactPath, response string) (any, error) {
+	r, ok := s.byUnit[artifactPath]
+	if !ok {
+		return nil, fmt.Errorf("%w: dissect: %s is not a boundary of any span this stage cuts",
+			pipeline.ErrVerifierDefect, artifactPath)
+	}
+	return r.verify(artifactPath, response)
+}
+
+func (s *cutsStage) fallback(artifactPath string) any {
+	r, ok := s.byUnit[artifactPath]
+	if !ok {
+		// A MechanicalFallback has no way to refuse. The empty list is one
+		// EncodeCutList rejects, so the case surfaces as a loud write failure
+		// rather than as a plausible artifact.
+		s.lg.Error("the cuts stage was asked for a fallback it owns no fold for",
+			"stage", s.name, "unit", artifactPath)
+		return CutList{Unit: artifactPath}
+	}
+	return r.fallback(artifactPath)
+}
+
+// lane is one span's whole assignment: its boundary calls in document order,
+// ending in the task that writes its composed cut list.
+//
+// The stage's OWN parameters are appended to that task's stamp rather than
+// trusted to the caller, because the artifact means nothing without them: this
+// run's `cuts/<group>/cutlist.txt` and a re-plan's are the same path holding a
+// list adjudicated for two different sets of questions. A stamp that proves
+// less than it appears to is the one failure §12 does not permit, so the stage
+// derives the input it alone can derive.
+func (r *Refiner) lane(stage string, owed func(unit string) pipeline.OwedArtifact) pipeline.SerialLane {
+	r.stage = stage
+	tasks := make([]pipeline.LaneTask, 0, len(r.calls))
+	for i := 1; i <= len(r.calls); i++ {
+		unit := r.calls[i-1]
+		task := pipeline.LaneTask{
+			Owed:        pipeline.OwedArtifact{Path: unit},
+			Contributes: !r.last(i),
+			// The span, not the stage: each fold's reference buffer names its
+			// own section and boundary counts, so two spans in one stage are
+			// two sections and the buffer is flushed between them.
+			Section:    r.unitDir,
+			SectionRef: r.sectionRef(),
+			Input:      func() (prompt.CallInput, bool) { return r.callInput(i) },
+		}
+		if r.last(i) {
+			o := owed(unit)
+			// The path is the FOLD's, not the caller's: it is the name a
+			// response is routed back through (byUnit), so a caller that
+			// returned a different one would describe a unit nothing could
+			// verify.
+			o.Path = unit
+			o.Inputs = slices.Concat(o.Inputs, []pipeline.Input{{Name: paramsInput, Hash: r.digest()}})
+			task.Owed = o
+		}
+		tasks = append(tasks, task)
+	}
+	// One lane, so this span's boundaries are walked in order by one worker:
+	// §5's serial scan, and the reason each window can overwrite the last.
+	return pipeline.SerialLane{Domain: r.unitDir, Tasks: tasks}
+}
+
+// Stats are one fold's outcome counters, for a caller that reports what a run
+// cost: how many boundaries it adjudicated, how many it moved, how many kept
+// the mechanical cut because no answer verified, and how many answers were
+// rejected on the way there.
+//
+// The fold logs each of these as it happens (see accept, reject, fallback);
+// this is the same series summed, for a run record that must state the
+// outcome without a log to parse.
+type Stats struct {
+	Boundaries int
+	Moved      int
+	Fallbacks  int
+	Rejections int
+}
+
+// Stats reports this fold's counters. Like Boundaries it reads live stage
+// state, so it refuses while the fold is running: a mid-scan total is half of
+// one answer and half of none.
+func (r *Refiner) Stats() (Stats, error) {
+	if err := r.claim(); err != nil {
+		return Stats{}, err
+	}
+	defer r.leave()
+	return Stats{
+		Boundaries: len(r.calls),
+		Moved:      r.moved,
+		Fallbacks:  r.falls,
+		Rejections: r.rejects,
+	}, nil
 }
 
 // digest is the stage's parameter digest: a canonical rendering of everything
@@ -504,15 +656,22 @@ func (r *Refiner) StagePlan(name string, inputs []pipeline.Input) *pipeline.Stag
 //
 // The effort is in it because §3's claim is that the provenance tuple
 // REPRODUCES the artifact, and a cut list adjudicated with thinking on and one
-// adjudicated with it off are two answers to two askings. Today nothing can
-// observe the difference (`dev-refine` runs ModeFresh), which is the reason to
-// close it now rather than the reason not to: the day a resume meets an
-// artifact from an operator's experiment is not the day to discover that the
-// stamp never recorded which one it was.
+// adjudicated with it off are two answers to two askings. Nothing ships a way
+// to run this ask at a second effort today, which is the reason to close it
+// now rather than the reason not to: the day a resume meets an artifact from
+// an operator's experiment is not the day to discover that the stamp never
+// recorded which one it was. The declaration it reads is the fold's own, and
+// StagePlan refuses a fold whose declaration is not the one its calls are
+// made at — so the digest cannot describe an asking that did not happen.
 func (r *Refiner) digest() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "span %d %d\nbudget %d\nthinking %t\n",
 		r.span.Start, r.span.End, r.params.BudgetTokens, r.effort.Thinking)
+	// The retry declaration identifies the asking as much as the effort does: a
+	// list adjudicated where a rejected boundary was re-asked with reasoning is
+	// not the list a re-ask without it would have produced.
+	fmt.Fprintf(&sb, "retryThinking %t\nattempts %d\nretryNoteWords %d\n",
+		r.retry.Effort.Thinking, r.retry.Attempts, r.retry.NoteWords)
 	for _, c := range r.mech {
 		fmt.Fprintf(&sb, "cut %d %d\n", c.Start, c.End)
 	}
@@ -546,7 +705,11 @@ func (r *Refiner) sectionRef() string {
 // material specific to the current content. The status lines are ordered
 // most→least stable, so the line that changes every call is last. Like
 // sectionRef, none of it renders a byte offset.
-func (r *Refiner) callInput(i int) prompt.CallInput {
+//
+// Every call of this fold is needed (pipeline.InputBuilder). A boundary that
+// exists still has to be adjudicated whatever its neighbours did: the fold
+// moves cuts, and never removes one.
+func (r *Refiner) callInput(i int) (prompt.CallInput, bool) {
 	// The build reads the working list, so it takes the fold's own guard: the
 	// hazard W1 named is a torn read HERE, in the worker goroutine, before any
 	// exclusivity check in verify could fire.
@@ -565,7 +728,7 @@ func (r *Refiner) callInput(i int) prompt.CallInput {
 		Content:            string(r.src[b.Window.Lo:b.Window.Hi]),
 		CallRef:            renderMenu(r.src, b),
 		AcceptanceCriteria: []string{"- answer with one number from the list, nothing else"},
-	}
+	}, true
 }
 
 // verify maps a response back to a byte offset and folds it into the working

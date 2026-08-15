@@ -21,6 +21,14 @@ import (
 // says nothing at all about the output (§12), while a verification failure
 // says the model produced the wrong thing and a blind resend would only hope
 // temperature fixes it.
+//
+// The wire policy is the runner's, and the constants below are it: network
+// weather is the same weather for every ask, so nothing about a definition
+// could inform it. The MODEL policy is not — how many semantic attempts an ask
+// gets, how hard the retry asks and how much of the reason it carries are
+// properties of the question, declared per definition (RetryPolicy). What is
+// left here of that half is the two defaults a definition inherits by saying
+// nothing.
 const (
 	// wireAttempts is how many times ONE call goes on the wire before
 	// the runner concludes the network is not going to cooperate. Three is
@@ -35,19 +43,25 @@ const (
 	// enough to be invisible against a call that takes tens of seconds.
 	wireBackoffBase = 500 * time.Millisecond
 
-	// modelAttempts is the first attempt plus ONE informed retry — the §9
-	// "1 retry, then mechanical fallback" policy. The retry is worth making
+	// defaultModelAttempts is the first attempt plus ONE informed retry — the
+	// §9 "1 retry, then mechanical fallback" policy. The retry is worth making
 	// only because it carries the mechanical failure reason; a second one
 	// would be the blind resend that was ruled out.
-	modelAttempts = 2
+	//
+	// It is the value a definition that states no count gets (DeclareRetry),
+	// not the value the runner applies: the policy is per-definition, and this
+	// is what "unchanged" means for every definition that has not moved off it.
+	defaultModelAttempts = 2
 
-	// retryNoteWords bounds the machine-generated retry note. The
+	// defaultRetryNoteWords bounds the machine-generated retry note. The
 	// acceptance-criteria channel has a reserved word share (§9) that the
 	// stage's own criteria are also spending, so the note takes a small,
 	// fixed bite of it. A verifier's message is one sentence of mechanical
 	// fact ("cuts do not tile: gap at 4120"); twelve words carries that and
 	// truncates only prose nobody should be writing there.
-	retryNoteWords = 12
+	//
+	// The same default-not-policy reading as defaultModelAttempts above.
+	defaultRetryNoteWords = 12
 
 	// promptHashChars is how much of a prompt's digest identifies it in the
 	// provenance log: sixteen hex characters, eight bytes. Both attempts of a
@@ -155,7 +169,8 @@ type CallResult struct {
 	// correct and less good than it was meant to be.
 	FellBack bool
 
-	// Attempts is how many model attempts ran (1 or modelAttempts).
+	// Attempts is how many model attempts ran, up to the definition's declared
+	// RetryPolicy.Attempts.
 	Attempts int
 
 	// Hashes is the last built call's per-slot hashes, which the caller
@@ -181,6 +196,11 @@ type CallResult struct {
 //     artifact", so both land in seam resolution: a fallback-backed seam keeps its
 //     fallback and is marked as fallen back, a no-fallback seam returns OwedArtifactFailure
 //     and produces nothing.
+//
+// How many attempts there are, how hard each one asks and how much of the
+// rejection reason the retry carries are the DEFINITION's (AskSpec.Retry). The
+// runner reads them; it decides none of them, for the same reason it has never
+// decided the effort — it does not know what is being asked.
 func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 	modelID, ok := r.cfg.ModelFor(c.BoundAsk.ask.Tier)
 	if !ok {
@@ -191,9 +211,17 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 		res     CallResult
 		lastErr error
 		kind    FailureKind
+		retry   = c.BoundAsk.ask.Retry
 		in      = c.Input
 	)
-	for attempt := 1; attempt <= modelAttempts; attempt++ {
+	for attempt := 1; attempt <= retry.Attempts; attempt++ {
+		// The first attempt asks what the definition says the question costs;
+		// every attempt after it asks what the definition says the question
+		// costs once the previous answer has been named as wrong.
+		effort := c.BoundAsk.ask.Effort
+		if attempt > 1 {
+			effort = retry.Effort
+		}
 		built, err := c.BoundAsk.ctx.Build(in)
 		if err != nil {
 			if attempt == 1 {
@@ -217,8 +245,24 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 			r.lg.Warn("call is over the per-call target", "stage", c.Stage, "unit", c.ArtifactPath, "detail", built.Warning)
 		}
 		hash := HashBytes([]byte(built.UserTurn))[:promptHashChars]
+		if attempt > 1 {
+			// The retry, on the record: what it is asking at, and whether that
+			// is an escalation over the first attempt. A definition that
+			// escalates buys reasoning tokens on some fraction of its calls,
+			// and this is the line that says which ones.
+			//
+			// At WARN, unlike the telemetry records, and the test is whether it
+			// can fire on a healthy run: it cannot. It is emitted only after an
+			// attempt was rejected, which is a warn already — so this costs the
+			// default channel nothing and its absence would leave a reader
+			// seeing the failure with no record of the remedy.
+			r.lg.Warn("informed retry", "stage", c.Stage, "unit", c.ArtifactPath,
+				"attempt", attempt, "of", retry.Attempts, "prompt", hash,
+				"thinking", effort.Thinking,
+				"escalated", effort.Thinking && !c.BoundAsk.ask.Effort.Thinking)
+		}
 
-		resp, err := r.transport(ctx, modelID, built.UserTurn, c)
+		resp, err := r.transport(ctx, modelID, built.UserTurn, c, effort)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return CallResult{}, ctxErr
@@ -252,7 +296,7 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 		lastErr, kind = verr, FailureVerification
 		r.lg.Warn("response failed mechanical verification", "stage", c.Stage, "unit", c.ArtifactPath,
 			"attempt", attempt, "prompt", hash, "outcome", "rejected", "reason", verr)
-		in = withRetryNote(c.Input, verr)
+		in = withRetryNote(c.Input, verr, retry.NoteWords)
 	}
 	return r.resolveSeam(c, res, kind, lastErr)
 }
@@ -279,9 +323,11 @@ func (r *CallRunner) assertFrozen(c call, built prompt.BuiltCall) error {
 // The effort is the ROLE's — the definition's declaration, threaded from the
 // registration site through the bound ask to here. The runner picks nothing: it
 // has no idea what is being asked, which is exactly why it is not the layer
-// that gets to say how hard to ask it.
-func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c call) (model.Response, error) {
-	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, c.BoundAsk.ask.Effort)
+// that gets to say how hard to ask it. It is a parameter rather than read off
+// the ask because ONE ask has two of them: the first attempt's and the informed
+// retry's (RetryPolicy), and which one this call is, is Run's to know.
+func (r *CallRunner) transport(ctx context.Context, modelID, turn string, c call, effort model.RequestEffort) (model.Response, error) {
+	req := model.DefaultRequest(modelID, []model.Message{{Role: "user", Content: turn}}, effort)
 	var lastErr error
 	for attempt := 1; attempt <= wireAttempts; attempt++ {
 		if attempt > 1 {
@@ -365,10 +411,11 @@ func (r *CallRunner) account(c call, u model.Usage) {
 // reading by the time it starts generating.
 //
 // It is built from the ORIGINAL input, not from the previous attempt's, so a
-// second note could never stack on a first.
-func withRetryNote(in prompt.CallInput, cause error) prompt.CallInput {
+// second note could never stack on a first. words is the definition's declared
+// budget for it (RetryPolicy.NoteWords).
+func withRetryNote(in prompt.CallInput, cause error, words int) prompt.CallInput {
 	out := in
-	note := retryNotePrefix + " " + text.CapWords(cause.Error(), retryNoteWords)
+	note := retryNotePrefix + " " + text.CapWords(cause.Error(), words)
 	out.AcceptanceCriteria = slices.Concat(in.AcceptanceCriteria, []string{note})
 	return out
 }
@@ -480,11 +527,12 @@ type OwedArtifactFailure struct {
 	Kind  FailureKind
 
 	// ModelAttempts is how many times the unit was ASKED — the first
-	// attempt plus the informed retry, never the wire attempts underneath
-	// them. The distinction is the whole reason the two retry policies are
-	// separate: a transport failure reports one model attempt over three
-	// wire requests, and a reader deciding whether to blame the provider
-	// needs the message to say the first rather than imply the second.
+	// attempt plus the definition's informed retries, never the wire attempts
+	// underneath them. The distinction is the whole reason the two retry
+	// policies are separate: a transport failure reports one model attempt
+	// over three wire requests, and a reader deciding whether to blame the
+	// provider needs the message to say the first rather than imply the
+	// second.
 	ModelAttempts int
 
 	// Usage is what the unit burned before it failed. A failed essential

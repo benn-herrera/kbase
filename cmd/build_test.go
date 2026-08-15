@@ -29,8 +29,12 @@ import (
 // corpus links document to document and section to section, so the delivered
 // tree here has rebased targets in it — and the gates get to prove they
 // resolve.
+// These are UNIT tests of the verb's logic: they call runBuild in process,
+// with no binary and no network. The integration tests that prove the same
+// pipeline through the front door are the `just test-integration-build-*`
+// recipes, which run ./bin/kbase and nothing else.
 const (
-	devBuildDate = "2026-08-13"
+	pinnedBuildDate = "2026-08-13"
 
 	corpusIntro = `# Introduction
 
@@ -69,25 +73,24 @@ func writeCorpus(t *testing.T) string {
 	return dir
 }
 
-func build(t *testing.T, root, out string) (devBuildResult, string) {
+func build(t *testing.T, root, out string) (buildResult, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	res, err := runDevBuild(context.Background(), devBuildOptions{
+	res, err := runBuild(context.Background(), buildOptions{
 		Root:      root,
 		Out:       out,
-		Budget:    treeplan.DefaultBudgets().LeafTokens,
-		BuildDate: devBuildDate,
+		BuildDate: pinnedBuildDate,
 		Stdout:    &stdout,
 		Stderr:    &stderr,
 		Logger:    log.Discard(),
 	})
 	if err != nil {
-		t.Fatalf("runDevBuild: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
 	}
 	return res, stdout.String()
 }
 
-func TestDevBuildDeliversAVerifiedTree(t *testing.T) {
+func TestBuildDeliversAVerifiedTree(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	res, stdout := build(t, root, out)
@@ -113,7 +116,7 @@ func TestDevBuildDeliversAVerifiedTree(t *testing.T) {
 			t.Errorf("%s is in the delivered set and not on disk: %v", p, err)
 		}
 	}
-	for _, name := range []string{"entry-point.md", assemble.AgentsFixture, assemble.ReadmeFixture, devBuildRecordName} {
+	for _, name := range []string{"entry-point.md", assemble.AgentsFixture, assemble.ReadmeFixture, buildRecordName} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Errorf("%s was not delivered: %v", name, err)
 		}
@@ -128,7 +131,7 @@ func TestDevBuildDeliversAVerifiedTree(t *testing.T) {
 // The spot check the design's check 7 makes over the whole tree, made here
 // from outside the job: a delivered page is byte-identical to a fresh
 // derivation from the corpus bytes, the tree plan and the rebase map.
-func TestDevBuildPagesReDeriveFromSource(t *testing.T) {
+func TestBuildPagesReDeriveFromSource(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	res, _ := build(t, root, out)
@@ -142,7 +145,7 @@ func TestDevBuildPagesReDeriveFromSource(t *testing.T) {
 		t.Fatalf("Survey: %v", err)
 	}
 	d, err := distill.New(res.Plan, art, corpus, nil,
-		distill.Provenance{CorpusHash: art.Corpus.ContentHash, BuildDate: devBuildDate})
+		distill.Provenance{CorpusHash: art.Corpus.ContentHash, BuildDate: pinnedBuildDate})
 	if err != nil {
 		t.Fatalf("distill.New: %v", err)
 	}
@@ -168,7 +171,7 @@ func TestDevBuildPagesReDeriveFromSource(t *testing.T) {
 
 // The rebase, end to end: a source link that resolved becomes a link to a
 // delivered file, and one that did not stays exactly as the author wrote it.
-func TestDevBuildRebasesResolvedLinksOnly(t *testing.T) {
+func TestBuildRebasesResolvedLinksOnly(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	res, _ := build(t, root, out)
@@ -215,7 +218,7 @@ func TestDevBuildRebasesResolvedLinksOnly(t *testing.T) {
 
 // Same inputs, byte-identical tree (§8.1). The build date is an input, which
 // is exactly why it is a flag and not a clock read inside the renderer.
-func TestDevBuildIsDeterministic(t *testing.T) {
+func TestBuildIsDeterministic(t *testing.T) {
 	root := writeCorpus(t)
 	base := t.TempDir()
 	first, _ := build(t, root, filepath.Join(base, "a"))
@@ -242,22 +245,29 @@ func TestDevBuildIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestDevBuildRefusals(t *testing.T) {
+func TestBuildRefusals(t *testing.T) {
 	root := writeCorpus(t)
 	tests := []struct {
 		name string
-		opts devBuildOptions
+		opts buildOptions
 	}{
-		{"no corpus", devBuildOptions{Out: t.TempDir(), Budget: 100}},
-		{"no out", devBuildOptions{Root: root, Budget: 100}},
-		{"a budget of zero", devBuildOptions{Root: root, Out: t.TempDir(), Budget: 0}},
-		{"a negative budget", devBuildOptions{Root: root, Out: t.TempDir(), Budget: -1}},
+		{"no corpus", buildOptions{Out: t.TempDir()}},
+		{"no out", buildOptions{Root: root}},
+		{"a build date that is not one", buildOptions{
+			Root: root, Out: t.TempDir(), BuildDate: "August 2026"}},
+		// §2.8, acceptance criterion 14: an annex naming nothing is a flag
+		// that did not do what it said, so it refuses rather than excluding
+		// nothing quietly.
+		{"an annex naming no document", buildOptions{
+			Root: root, Out: t.TempDir(), Annexes: []string{"reference"}}},
+		{"nested annexes", buildOptions{
+			Root: root, Out: t.TempDir(), Annexes: []string{"sync.md", "sync.md"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := tt.opts
 			opts.Stdout, opts.Stderr, opts.Logger = &bytes.Buffer{}, &bytes.Buffer{}, log.Discard()
-			if _, err := runDevBuild(context.Background(), opts); err == nil {
+			if _, err := runBuild(context.Background(), opts); err == nil {
 				t.Fatal("the verb accepted an invocation it cannot honour")
 			}
 		})
@@ -268,45 +278,98 @@ func TestDevBuildRefusals(t *testing.T) {
 // proves the scratch tree is torn down on success, and this one proves the
 // switch overrides that. Together they guard against logic that silently
 // depends on either.
-func TestDevBuildKeepsTempWorkOnRequest(t *testing.T) {
+func TestBuildKeepsTempWorkOnRequest(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	var stdout, stderr bytes.Buffer
-	if _, err := runDevBuild(context.Background(), devBuildOptions{
-		Root: root, Out: out, Budget: treeplan.DefaultBudgets().LeafTokens,
-		BuildDate: devBuildDate, KeepTempWork: true,
+	if _, err := runBuild(context.Background(), buildOptions{
+		Root: root, Out: out,
+		BuildDate: pinnedBuildDate, KeepTempWork: true,
 		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
 	}); err != nil {
-		t.Fatalf("runDevBuild: %v", err)
+		t.Fatalf("runBuild: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(out, pipeline.TempWorkDirName)); err != nil {
 		t.Fatalf("--keep-temp-work did not keep the scratch tree: %v", err)
 	}
 }
 
-func TestDevBuildRunRecord(t *testing.T) {
+func TestBuildRunRecord(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	res, _ := build(t, root, out)
 
-	data, err := os.ReadFile(filepath.Join(out, devBuildRecordName))
+	data, err := os.ReadFile(filepath.Join(out, buildRecordName))
 	if err != nil {
 		t.Fatalf("read the run record: %v", err)
 	}
-	var rec devBuildRun
+	var rec buildRun
 	if err := json.Unmarshal(data, &rec); err != nil {
 		t.Fatalf("decode the run record: %v", err)
 	}
 	if rec.CorpusHash != res.Plan.CorpusHash {
 		t.Errorf("the record names corpus %s, the tree plan %s", rec.CorpusHash, res.Plan.CorpusHash)
 	}
-	if rec.BuildDate != devBuildDate {
-		t.Errorf("the record stamps %s, the build stamped %s", rec.BuildDate, devBuildDate)
+	if rec.BuildDate != pinnedBuildDate {
+		t.Errorf("the record stamps %s, the build stamped %s", rec.BuildDate, pinnedBuildDate)
 	}
 	if len(rec.Verify) != 9 {
 		t.Errorf("the record carries %d verify results, want nine", len(rec.Verify))
 	}
 	if rec.Nodes != len(res.Plan.Nodes) {
 		t.Errorf("the record counts %d nodes, the tree plan holds %d", rec.Nodes, len(res.Plan.Nodes))
+	}
+	// A tree nobody designed says so. The live half asserts the other value
+	// (TestBuildLiveWritesTaxonomyAndSummaries).
+	if rec.TreePlan != treePlanMechanical {
+		t.Errorf("the record says the tree plan came from %q, want %q", rec.TreePlan, treePlanMechanical)
+	}
+	if rec.Budgets.LeafTokens != treeplan.DefaultBudgets().LeafTokens {
+		t.Errorf("the record was built at a leaf budget of %d, want the shipped %d",
+			rec.Budgets.LeafTokens, treeplan.DefaultBudgets().LeafTokens)
+	}
+}
+
+// The annex, end to end through the verb: the declared prefix is exempt from
+// coverage, contributes no page, and reaches the delivered entry point as a
+// lookup entry whose convention text the verifier wrote from the survey
+// (§2.8). A build with no --annex distils the whole corpus, which every other
+// test here already proves.
+func TestBuildDeliversDeclaredAnnexes(t *testing.T) {
+	root := writeCorpus(t)
+	if err := os.MkdirAll(filepath.Join(root, "reference"), 0o700); err != nil {
+		t.Fatalf("create the annex directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "reference", "api.md"),
+		[]byte("# API\n\nEvery entry point, listed.\n"), 0o600); err != nil {
+		t.Fatalf("write the annexed document: %v", err)
+	}
+
+	out := filepath.Join(t.TempDir(), "kb")
+	var stdout, stderr bytes.Buffer
+	res, err := runBuild(context.Background(), buildOptions{
+		Root: root, Out: out, Annexes: []string{"reference"},
+		BuildDate: pinnedBuildDate,
+		Stdout:    &stdout, Stderr: &stderr, Logger: log.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !res.Report.Passed() {
+		t.Fatalf("the gates did not pass with an annex declared:\n%s", stdout.String())
+	}
+	for _, p := range res.Delivered {
+		if strings.HasPrefix(p, "reference") {
+			t.Errorf("%s was delivered; the annex was supposed to exclude it", p)
+		}
+	}
+	entry, err := os.ReadFile(filepath.Join(out, "entry-point.md"))
+	if err != nil {
+		t.Fatalf("read the entry point: %v", err)
+	}
+	for _, want := range []string{"## Annex lookup", "reference/<name>.md, e.g. reference/api.md"} {
+		if !strings.Contains(string(entry), want) {
+			t.Errorf("the entry point is missing %q:\n%s", want, entry)
+		}
 	}
 }

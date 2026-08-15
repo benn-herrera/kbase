@@ -158,6 +158,79 @@ const (
 	NoFallbackSeam InferenceSeam = "essential"
 )
 
+// RetryPolicy is what a definition declares about its own informed retry
+// (ARCHITECTURE.md §9): how hard the retry asks, how many model attempts the
+// ask gets in all, and how many words of the mechanical failure reason the
+// retry note carries.
+//
+// It is per-DEFINITION for the same reason model.RequestEffort is: the values
+// belong to the QUESTION, not to the stage that asks it and not to the seam it
+// crosses. One size fitted every ask only for as long as every ask retried the
+// same way — and escalation is the case that breaks that. "Ask cheaply, and
+// reason about it only if the cheap pass produced something the verifier could
+// name as wrong" is a statement about one exact ask, made by whoever knows what
+// that ask is worth; the runner has no idea what is being asked and is
+// therefore not the layer that gets to say how hard to re-ask it.
+//
+// Escalating on the retry rather than on the first attempt is the whole shape:
+// the first pass is what the definition thinks the question costs, and the
+// retry is the only attempt that carries new information — the reason the
+// previous answer was rejected. Reasoning over a mechanical fact is a use for
+// reasoning; reasoning over the question cold is the thing the 2026-08-12 A/B
+// measured and found worthless (§9).
+type RetryPolicy struct {
+	// Effort is what the INFORMED RETRY asks at — the retry's own
+	// model.RequestEffort, declared like any other. It is a separate value
+	// from AskSpec.Effort rather than a delta on it, because "escalate" is
+	// not a dimension: what a retry asks is as much a stated property of the
+	// definition as what the first attempt asks.
+	Effort model.RequestEffort
+
+	// Attempts is how many MODEL attempts the ask gets in all — the first plus
+	// its informed retries, never the wire attempts underneath them. Zero
+	// takes defaultModelAttempts, which is what every definition declares
+	// today; a definition that wants a different count states it.
+	Attempts int
+
+	// NoteWords bounds the machine-generated retry note (see withRetryNote).
+	// Zero takes defaultRetryNoteWords. It is per-definition because the
+	// acceptance-criteria channel's reserved share is spent by the stage's own
+	// criteria too, so how much of it the note may take is a property of the
+	// definition that wrote them.
+	NoteWords int
+
+	// declared separates a stated policy from a zero value, exactly as
+	// model.RequestEffort.declared does and for the same reason: this makes
+	// one hop through a struct field (AskSpec.Retry) on its way to the runner,
+	// and a field is the one hop a positional parameter cannot make
+	// mandatory. Unexported, so DeclareRetry is the only way to obtain one.
+	declared bool
+}
+
+// DeclareRetry marks p as STATED by its caller and fills the two counts a
+// definition leaves at zero with the shipped defaults. It is the only
+// constructor: a bare composite literal is an undeclared value, and
+// AskSpec.validate refuses an ask carrying one.
+//
+// Defaulting the counts while requiring the effort is the honest split. A
+// missing count reads as "today's policy", which is a real and common
+// statement; a missing effort would read as "no thinking", which is the silent
+// inheritance model.DeclareEffort exists to prevent — so the retry's effort
+// must itself be declared, and validate says so.
+func DeclareRetry(p RetryPolicy) RetryPolicy {
+	if p.Attempts == 0 {
+		p.Attempts = defaultModelAttempts
+	}
+	if p.NoteWords == 0 {
+		p.NoteWords = defaultRetryNoteWords
+	}
+	p.declared = true
+	return p
+}
+
+// Declared reports whether this policy was stated rather than left zero.
+func (p RetryPolicy) Declared() bool { return p.declared }
+
 // AskSpec is one stage's model-facing construct: what the model is told, which
 // tier answers, how the answer is checked, and what happens when it does not
 // check out. It carries no per-call state — one AskSpec serves every unit of its
@@ -183,6 +256,12 @@ type AskSpec struct {
 	// cannot make mandatory — validate refuses an undeclared value rather
 	// than letting a forgotten field read as a deliberate "no thinking".
 	Effort model.RequestEffort
+
+	// Retry is what this definition declares about its informed retry: the
+	// effort the retry asks at, the attempt count and the retry note's word
+	// budget (RetryPolicy). Required, and declared at the registration site
+	// beside Effort, for the same reason Effort is.
+	Retry RetryPolicy
 
 	// Verify is the mechanical post-condition. Required.
 	Verify Verifier
@@ -217,6 +296,14 @@ func (r AskSpec) validate() error {
 		return fmt.Errorf("pipeline: this ask's tier %q is neither %s nor %s", r.Tier, config.TierHeavy, config.TierLight)
 	case !r.Effort.Declared():
 		return fmt.Errorf("pipeline: this ask declares no effort; every definition states one for its exact ask (model.DeclareEffort)")
+	case !r.Retry.Declared():
+		return fmt.Errorf("pipeline: this ask declares no retry policy; every definition states one for its exact ask (pipeline.DeclareRetry)")
+	case !r.Retry.Effort.Declared():
+		return fmt.Errorf("pipeline: this ask's retry declares no effort; a retry asks as deliberately as a first attempt (model.DeclareEffort)")
+	case r.Retry.Attempts < 1:
+		return fmt.Errorf("pipeline: this ask declares %d model attempts; an ask that is never attempted cannot produce anything", r.Retry.Attempts)
+	case r.Retry.NoteWords < 1:
+		return fmt.Errorf("pipeline: this ask gives its retry note %d words; a retry that carries no reason is the blind resend the policy rules out", r.Retry.NoteWords)
 	}
 	return nil
 }

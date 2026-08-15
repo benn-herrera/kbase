@@ -41,10 +41,19 @@ const (
 )
 
 // testEffort stands in for the registration site's declaration. Thinking is ON
-// here, deliberately opposite to what the real registration declares
-// (cmd.devRefineEffort): these tests assert that the stage passes its caller's
-// value through, which a fixture agreeing with the default could not show.
+// here, deliberately opposite to what the shipped definition declares
+// (Effort): these tests assert that the stage passes its caller's value
+// through, which a fixture agreeing with the default could not show.
 var testEffort = model.DeclareEffort(model.RequestEffort{Thinking: true})
+
+// testRetry stands in for the registration site's retry declaration, and is
+// deliberately not the shipped one either: it escalates, where Retry does
+// not. Same reason as testEffort — what these tests assert is that the stage
+// passes the caller's declaration through untouched, which a fixture agreeing
+// with the real one could not show.
+var testRetry = pipeline.DeclareRetry(pipeline.RetryPolicy{
+	Effort: model.DeclareEffort(model.RequestEffort{Thinking: true}),
+})
 
 // nearBoundaryDoc is a document whose blocks are sized so that a SECOND
 // candidate lands inside the boundary's overlap window: a big block, a short
@@ -74,7 +83,7 @@ func oneBoundary(t *testing.T, lg log.Logger) (*Refiner, []byte, Boundary) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -140,11 +149,33 @@ func runStageIn(t *testing.T, dir string, r *Refiner, client model.Client, lg lo
 
 	plan := pipeline.Plan{
 		JobFrame: jobFrame,
-		Stages: []*pipeline.StagePlan{r.StagePlan(stageName, []pipeline.Input{
-			{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))},
-		})},
+		Stages:   []*pipeline.StagePlan{stagePlanFor(t, r, fixtureInputs())},
 	}
 	return coord.Run(context.Background(), plan, pipeline.ModeResume)
+}
+
+// fixtureInputs is the job identity these runs stamp their cut list against —
+// a stand-in for the corpus hash a real job carries.
+func fixtureInputs() []pipeline.Input {
+	return []pipeline.Input{{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))}}
+}
+
+// stagePlanFor is the refinement stage over ONE fixture fold: the same shape
+// the composing verb builds, with a single span in it.
+func stagePlanFor(t *testing.T, r *Refiner, inputs []pipeline.Input) *pipeline.StagePlan {
+	t.Helper()
+	sp, err := StagePlan(stageName, CutJob{
+		Effort: testEffort,
+		Retry:  testRetry,
+		Folds:  func() ([]*Refiner, error) { return []*Refiner{r}, nil },
+		Owed: func(unit string) pipeline.OwedArtifact {
+			return pipeline.OwedArtifact{Path: unit, Inputs: inputs}
+		},
+	}, log.Discard())
+	if err != nil {
+		t.Fatalf("StagePlan: %v", err)
+	}
+	return sp
 }
 
 // cutListIn reads the stage's composed artifact back as the cut list it
@@ -361,7 +392,7 @@ func TestRefinementTripwireAbortsTheWorker(t *testing.T) {
 	}
 	poisoned := insertCandidate(cands, survey.CutCandidate{Offset: bad, Kind: survey.CutParagraph})
 
-	r, err := NewRefiner(src, span, poisoned, cuts, stageName, p, testEffort, log.Discard())
+	r, err := NewRefiner(src, span, poisoned, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -431,7 +462,7 @@ func TestRefinementScansSerially(t *testing.T) {
 		t.Fatalf("Split: %v", err)
 	}
 	lg := &logtest.Capture{}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -497,7 +528,7 @@ func TestNewRefinerVerifiesItsBaseline(t *testing.T) {
 	span := wholeSpan(src)
 	broken := []survey.Span{{Start: 0, End: 10}, {Start: 20, End: len(src)}}
 
-	if _, err := NewRefiner(src, span, cands, broken, stageName, params(250), testEffort, log.Discard()); err == nil {
+	if _, err := NewRefiner(src, span, cands, broken, stageName, params(250), testEffort, testRetry, log.Discard()); err == nil {
 		t.Fatal("a cut list that does not tile must not become a stage's fallback")
 	} else if !strings.Contains(err.Error(), "fall back") {
 		t.Errorf("error = %v, want it to name what the list was going to be", err)
@@ -536,7 +567,7 @@ func TestMenuIsCappedAroundTheIncumbent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -593,7 +624,7 @@ func TestMenuShortSideContributesWhatItHas(t *testing.T) {
 	cuts := []survey.Span{{Start: 0, End: cands[0].Offset}, {Start: cands[0].Offset, End: span.End}}
 	p := params(1_000_000)
 
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -678,7 +709,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 	}
 
 	// A run that adjudicates the boundary and leaves its artifact behind.
-	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -704,7 +735,7 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 		{"a different mechanical cut list", moved, p, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := NewRefiner(src, span, cands, tc.cuts, stageName, tc.p, testEffort, log.Discard())
+			r, err := NewRefiner(src, span, cands, tc.cuts, stageName, tc.p, testEffort, testRetry, log.Discard())
 			if err != nil {
 				t.Fatalf("NewRefiner: %v", err)
 			}
@@ -732,18 +763,42 @@ func TestBoundaryArtifactsAreBoundToTheirParameters(t *testing.T) {
 }
 
 // TestStagePlanCarriesTheDeclaredEffort: the ask this stage registers asks
-// with the effort its CONSTRUCTOR was given.
+// with the effort its REGISTRATION was given.
 //
 // The stage has no standing to hold an opinion here — the effort belongs to
-// the definition, and the definition is registered outside this package — so
-// what is asserted is pass-through, not a value. testEffort is deliberately
-// the opposite of what the real registration declares, which is what makes
-// pass-through distinguishable from a default.
+// the definition — so what is asserted is pass-through, not a value.
+// testEffort is deliberately the opposite of what the shipped definition
+// declares, which is what makes pass-through distinguishable from a default.
 func TestStagePlanCarriesTheDeclaredEffort(t *testing.T) {
 	r, _, _ := oneBoundary(t, log.Discard())
-	got := r.StagePlan(stageName, nil).Ask.Effort
+	got := stagePlanFor(t, r, nil).Ask.Effort
 	if got != testEffort {
-		t.Errorf("ask effort = %+v, want the declaration NewRefiner was given (%+v)", got, testEffort)
+		t.Errorf("ask effort = %+v, want the declaration the stage was registered with (%+v)", got, testEffort)
+	}
+}
+
+// TestStagePlanRefusesAFoldAskedDifferently: a fold built with one declaration
+// cannot be run by a stage that asks with another.
+//
+// The cut list is stamped with a digest taken over the FOLD's declared effort
+// and retry, and the calls are made at the STAGE's. Letting them differ would
+// be a stamp claiming to reproduce an artifact that was adjudicated under a
+// different asking — the one thing §12 does not permit — so the stage refuses
+// where the folds resolve rather than writing a stamp that proves less than it
+// appears to.
+func TestStagePlanRefusesAFoldAskedDifferently(t *testing.T) {
+	r, _, _ := oneBoundary(t, log.Discard())
+	sp, err := StagePlan(stageName, CutJob{
+		Effort: Effort,
+		Retry:  Retry,
+		Folds:  func() ([]*Refiner, error) { return []*Refiner{r}, nil },
+		Owed:   func(unit string) pipeline.OwedArtifact { return pipeline.OwedArtifact{Path: unit} },
+	}, log.Discard())
+	if err != nil {
+		t.Fatalf("StagePlan: %v", err)
+	}
+	if _, err := sp.Lanes(); err == nil {
+		t.Fatal("a fold built with a different declaration must not run under this stage's ask")
 	}
 }
 
@@ -751,7 +806,7 @@ func TestStagePlanCarriesTheDeclaredEffort(t *testing.T) {
 func scanOf(t *testing.T, dir string, r *Refiner) pipeline.ResumeScanResult {
 	t.Helper()
 	plan := pipeline.Plan{JobFrame: jobFrame, Stages: []*pipeline.StagePlan{
-		r.StagePlan(stageName, []pipeline.Input{{Name: "corpus", Hash: pipeline.HashBytes([]byte("fixture"))}}),
+		stagePlanFor(t, r, fixtureInputs()),
 	}}
 	scan, err := storeIn(t, dir, log.Discard()).ResumeScan(plan.StageChain(), pipeline.ModeResume)
 	if err != nil {
@@ -872,7 +927,7 @@ func TestTheFoldRefusesABoundaryOutOfTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	r, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -895,7 +950,7 @@ func TestTheFoldRefusesABoundaryOutOfTurn(t *testing.T) {
 
 	// And the retry does NOT trip it: a rejection is not terminal, so the fold
 	// still expects the same boundary.
-	fresh, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	fresh, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -954,7 +1009,7 @@ func TestNewRefinerRefusesAnEmptyUnitDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Split: %v", err)
 	}
-	if _, err := NewRefiner(src, span, cands, cuts, "", p, testEffort, log.Discard()); err == nil {
+	if _, err := NewRefiner(src, span, cands, cuts, "", p, testEffort, testRetry, log.Discard()); err == nil {
 		t.Fatal("a stage with nowhere to write its boundaries must be refused")
 	}
 }
@@ -1059,7 +1114,7 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	}
 
 	lg := &logtest.Capture{}
-	r, rerr := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
+	r, rerr := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, lg)
 	if rerr != nil {
 		t.Fatalf("NewRefiner: %v", rerr)
 	}
@@ -1140,7 +1195,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, log.Discard())
+	first, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, log.Discard())
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}
@@ -1170,7 +1225,7 @@ func TestAnInterruptedFoldIsRedoneWhole(t *testing.T) {
 
 	// The resume: a new process's refiner over the same span, same directory.
 	lg := &logtest.Capture{}
-	second, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, lg)
+	second, err := NewRefiner(src, span, cands, cuts, stageName, p, testEffort, testRetry, lg)
 	if err != nil {
 		t.Fatalf("NewRefiner: %v", err)
 	}

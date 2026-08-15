@@ -377,6 +377,31 @@ func TestComposeAnnexes(t *testing.T) {
 	}
 }
 
+// §2.8: a declared prefix carries no convention text, so the verifier writes
+// one from the survey — the path grammar the prefix's own files exhibit, the
+// dominant extension, and one worked example. A caller that supplied its own
+// keeps it (TestComposeAnnexes above).
+func TestComposeAuthorsAnnexConventions(t *testing.T) {
+	v, art := verifierFor(t, testParams(),
+		oneSectionDoc("guide.md", "Guide"),
+		oneSectionDoc("ref/api.md", "API"),
+		oneSectionDoc("ref/net/tcp.md", "TCP"))
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
+		wholeFileLeaf(art, "guide.md", "The Guide"),
+	}}
+
+	s, err := v.Compose(plan, []Annex{{Prefix: "ref"}})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	// One `<dir>/` for the deepest file under the prefix, `.md` as the
+	// dominant extension, and the lexicographically first file as the
+	// example — so the line reads as a rule plus an instance of it.
+	if want := "ref/<dir>/<name>.md, e.g. ref/api.md"; s.Annexes[0].Convention != want {
+		t.Errorf("convention = %q, want %q", s.Annexes[0].Convention, want)
+	}
+}
+
 // The plan's own shape is checked before anything reads the corpus, and the
 // failures are the model's.
 func TestComposeRefusesMalformedPlans(t *testing.T) {

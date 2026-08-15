@@ -4,14 +4,21 @@
 //
 // # The shape
 //
-// The question set is mechanical and fixed before the first call: one call per
-// container of the SOURCE's own tree — the corpus root, each folder, each
+// The question set is mechanical and fixed before the first call: one question
+// per container of the SOURCE's own tree — the corpus root, each folder, each
 // document — presenting that container's direct entries as a numbered
 // candidate list (see descent.go, which also states the two places this
 // narrows the design). The answer is data: a partition of the numbered entries
 // into groups, each with a title, a one-line scope and a `page`/`section`
 // flag. No path, no filename, no link — those are the namer's, downstream of
 // this package (I-2).
+//
+// The set is fixed; the CALLS are not. A container the descent reaches to find
+// already absorbed — its parent's answer put its material on a page — is a
+// question with no answer left to give, and its call is not made at all
+// (Designer.callInput). That is what keeps a discarded answer from being able
+// to fail anything: the cheapest guarantee that a call cannot fail is that it
+// does not exist.
 //
 // Every call but the last CONTRIBUTES: its answer lands in the working
 // proposal and nothing is written. The last call composes the proposal through
@@ -100,6 +107,10 @@ type Design struct {
 	// Effort is the definition's declared ask (model.RequestEffort), threaded
 	// from the registration site to the wire.
 	Effort model.RequestEffort
+
+	// Retry is the definition's declared retry policy (pipeline.RetryPolicy),
+	// threaded from the same place for the same reason.
+	Retry pipeline.RetryPolicy
 }
 
 // Designer is the descent over one corpus: the questions it asks, the fold
@@ -259,7 +270,7 @@ func (t *Designer) StagePlan(name string, inputs []pipeline.Input, upstreams ...
 			Contributes: !t.last(i),
 			Section:     name,
 			SectionRef:  t.sectionRef(),
-			Input:       func() prompt.CallInput { return t.callInput(i) },
+			Input:       func() (prompt.CallInput, bool) { return t.callInput(i) },
 		}
 		if t.last(i) {
 			task.Owed.Inputs, task.Owed.Upstreams = stamped, upstreams
@@ -275,6 +286,7 @@ func (t *Designer) StagePlan(name string, inputs []pipeline.Input, upstreams ...
 			// is what quality binds hardest on.
 			Tier:   config.TierHeavy,
 			Effort: t.in.Effort,
+			Retry:  t.in.Retry,
 			Verify: t.verify,
 			Encode: Encode,
 			// No Fallback: this is a no-fallback seam (O-1). The absence IS
@@ -296,15 +308,23 @@ func (t *Designer) last(i int) bool { return i == len(t.asks)-1 }
 
 // digest is the stage's parameter digest: a canonical rendering of everything
 // outside the store that determined this stage's questions — the corpus
-// identity, the budgets and caps the descent is bounded by, the effort they
-// were asked at, the entry-point's own labels, and the declared annex prefixes
-// (§3.1). Changing any of them changes the tree, so any of them must
-// invalidate the artifact.
+// identity, the budgets and caps the descent is bounded by, the effort and
+// retry policy they were asked under, the entry-point's own labels, and the
+// declared annex prefixes (§3.1). Changing any of them changes the tree, so any
+// of them must invalidate the artifact.
+//
+// The retry declaration is in it because the declaration IDENTIFIES the asking:
+// a tree designed where a rejected container was re-asked with reasoning is not
+// the same artifact as one where it was re-asked without, and a stamp that did
+// not say so would prove a run that never happened.
 func (t *Designer) digest() string {
 	b := t.in.Params.Budgets
+	r := t.in.Retry
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "corpus %s\ntitle %s\nscope %s\nthinking %t\n",
 		t.in.Survey.Corpus.ContentHash, t.in.Title, t.in.Scope, t.in.Effort.Thinking)
+	fmt.Fprintf(&sb, "retryThinking %t\nattempts %d\nretryNoteWords %d\n",
+		r.Effort.Thinking, r.Attempts, r.NoteWords)
 	fmt.Fprintf(&sb, "leafTokens %d\nsummaryInputTokens %d\nsummaryTokens %d\nentryPointTokens %d\n",
 		b.LeafTokens, b.SummaryInputTokens, b.SummaryTokens, b.EntryPointTokens)
 	fmt.Fprintf(&sb, "depthCap %d\nfanOutCap %d\ncandidateCap %d\ncalls %d\n",
@@ -331,13 +351,31 @@ func (t *Designer) sectionRef() string {
 }
 
 // callInput is one container's per-call half of the prompt, built when the
-// worker reaches it (pipeline.InputBuilder).
+// worker reaches it (pipeline.InputBuilder) — or the statement that this
+// container needs no call at all.
 //
 // It has to be built here rather than when the stage was described: a
 // container's candidate list is fixed, but the SCOPE its parent gave it is
 // not — it is whatever the group its parent's answer put it in says, and that
 // answer had not been given when this stage's work was described (§3.2).
-func (t *Designer) callInput(i int) prompt.CallInput {
+//
+// # An absorbed container spends nothing
+//
+// The same fact that supplies the scope also settles whether there is a
+// question left. The question set is enumerated from the SOURCE tree before the
+// first call, and a container whose parent's answer placed its material on a
+// page has no node for its groups to attach to: the descent would throw the
+// answer away. Since this is the moment that is known, the call is not made —
+// zero tokens, and no way for a discarded container to fail the lane it sits
+// in, which is what a call whose answer nobody reads must never be able to do.
+//
+// The one container that is asked anyway is the LAST, because its call is not
+// only its container's: the composed tree plan is written by it (see
+// StagePlan), and a task that owes an artifact may not skip. Its own answer is
+// still discarded — verify drops it before parsing — so what survives here is
+// one call per run at most, and it is the call the stage's whole output hangs
+// off rather than a question about an absorbed container.
+func (t *Designer) callInput(i int) (prompt.CallInput, bool) {
 	if err := t.enter(); err != nil {
 		return t.refuse(err)
 	}
@@ -348,6 +386,11 @@ func (t *Designer) callInput(i int) prompt.CallInput {
 				"the descent is one depth-first walk over one working proposal", i+1, t.next+1))
 	}
 	a := t.asks[i]
+	if t.attach[a.c] == nil && !t.last(i) {
+		t.discard(a, "skipped")
+		t.next++
+		return prompt.CallInput{}, false
+	}
 
 	status := []string{
 		fmt.Sprintf("Container %d of %d", i+1, len(t.asks)),
@@ -375,7 +418,19 @@ func (t *Designer) callInput(i int) prompt.CallInput {
 			"- every numbered entry belongs to exactly one group",
 			"- answer with the JSON object and nothing else",
 		},
-	}
+	}, true
+}
+
+// discard records a container the descent has no use for: the answer above it
+// placed this material on a page, so there is no node its groups could attach
+// to. spent says what the call cost — "skipped" where the question was dropped
+// before it was asked, "spent" for the one container that is asked anyway
+// because it carries the artifact (see callInput).
+func (t *Designer) discard(a *ask, spent string) {
+	t.dropped++
+	t.lg.Info("container answer not used", "stage", t.stage, "unit", a.unit,
+		"container", a.c.title, "call", spent,
+		"reason", "a group above it placed this material on a page")
 }
 
 // verify parses one container's answer, holds it to §3.3's per-call
@@ -412,14 +467,13 @@ func (t *Designer) verify(artifactPath, response string) (any, error) {
 
 	parent := t.attach[a.c]
 	if parent == nil {
-		// The container's own call is enumerated from the SOURCE tree, and the
-		// answer above it put this container's material on a page — so there
-		// is no node for its groups to attach to and its answer is not used.
-		// The call is still made: the question set is fixed before the first
-		// call, which is what makes the lane describable at all.
-		t.dropped++
-		t.lg.Info("container answer not used", "stage", t.stage, "unit", artifactPath,
-			"container", a.c.title, "reason", "a group above it placed this material on a page")
+		// The answer above this container put its material on a page, so there
+		// is no node for its groups to attach to. callInput normally drops the
+		// question before it is asked; the last container is the exception —
+		// its call writes the composed plan — so this is where that one answer
+		// is discarded, before anything parses it. A discarded answer therefore
+		// cannot be rejected, whatever the model said.
+		t.discard(a, "spent")
 		return t.advance(i, artifactPath)
 	}
 
@@ -605,10 +659,14 @@ func (t *Designer) latchedErr() error {
 	return t.latched
 }
 
-func (t *Designer) refuse(err error) prompt.CallInput {
+// refuse hands the builder back the only thing it has left to say: an empty
+// input, and NEEDED — the call still happens, so verify runs and raises the
+// latched defect on this unit. Skipping instead would swallow the defect, since
+// a skipped task never reaches a seam that could classify it.
+func (t *Designer) refuse(err error) (prompt.CallInput, bool) {
 	t.latch(err)
 	t.lg.Error("the taxonomy descent refused to build a call", "stage", t.stage, "error", err)
-	return prompt.CallInput{}
+	return prompt.CallInput{}, true
 }
 
 // reject records a rejected answer and returns it on its way to the model.

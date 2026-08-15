@@ -2,7 +2,9 @@ package treeplan
 
 import (
 	"fmt"
+	"maps"
 	"path"
+	"slices"
 	"strings"
 
 	"kbase/internal/survey"
@@ -195,6 +197,61 @@ func AnnexedBy(file string, annexes []Annex) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// annexConvention authors an annex's convention line mechanically from the
+// survey (§2.8): the path grammar its own files exhibit, the dominant file
+// extension under the prefix, and the lexicographically first file as the one
+// worked example SPEC §3 requires.
+//
+// It is authored HERE, and not carried in from the flag that declared the
+// prefix, because the text has to be re-derivable: stage 9 re-checks a tree
+// plan it did not build, and a hand-written string is the one field it could
+// not derive again. A caller that supplies its own Convention keeps it —
+// §2.8's deferred `--annex <prefix>=<convention.md>` form enters there and
+// nowhere else.
+//
+// The prefix is known to claim at least one surveyed file (checkAnnexes runs
+// first), so the empty return is unreachable through Compose; it is what an
+// unvalidated prefix would get rather than a panic.
+func annexConvention(art survey.Artifact, prefix string) string {
+	var (
+		example string
+		depth   int
+		exts    = map[string]int{}
+	)
+	for _, f := range art.Files {
+		if _, ok := AnnexedBy(f.Path, []Annex{{Prefix: prefix}}); !ok {
+			continue
+		}
+		rel := strings.TrimPrefix(f.Path, prefix+"/")
+		if d := strings.Count(rel, "/"); d > depth {
+			depth = d
+		}
+		exts[path.Ext(rel)]++
+		if example == "" || f.Path < example {
+			example = f.Path
+		}
+	}
+	if example == "" {
+		return ""
+	}
+	return prefix + "/" + strings.Repeat("<dir>/", depth) + "<name>" + dominantExt(exts) +
+		", e.g. " + example
+}
+
+// dominantExt is the most common extension in the tally, ties broken
+// lexicographically. The sort is not cosmetic: a map walk would make the
+// composed artifact depend on iteration order, and a tree plan that differs
+// between two runs over one corpus is the one thing it may never be.
+func dominantExt(tally map[string]int) string {
+	best, bestN := "", -1
+	for _, ext := range slices.Sorted(maps.Keys(tally)) {
+		if n := tally[ext]; n > bestN {
+			best, bestN = ext, n
+		}
+	}
+	return best
 }
 
 // checkAnnexes validates the declared prefixes against the survey.

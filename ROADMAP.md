@@ -53,8 +53,9 @@ deleted, not archived — git history is the log.
      page grammar), `internal/assemble` (stages 8+9: index/entry-point
      grammar, the §8.1 fixture manifest, the nine verify gates,
      delivery), the `SourceStructureProposal` dev/baseline tree plan, and
-     `kbase dev-build`, which composes all of it into a walkable Rojo KB
-     with no model in the loop (`just test-integration-build-mechanical-rojo`).
+     the composing build verb, which puts all of it into a walkable Rojo
+     KB with no model in the loop
+     (`just test-integration-build-mechanical-rojo`).
      Two findings from it are queued below: link byte offsets on
      `survey.Link`, and the anchor-grammar guess the rebase map makes
      without them.
@@ -62,25 +63,38 @@ deleted, not archived — git history is the log.
      `internal/taxonomy` (stage 3's container descent, composed as a
      fold over one serial lane) and `internal/summarize` (stage 6's
      four level-sliced stages, per-child-kind inputs, JSON summary
-     artifacts) — plus `dev-build --config-dir`, which runs both LIVE
-     and delivers a Rojo KB with a model-designed tree and real
-     conclusions blocks. Both definitions are marked stubs. Two
+     artifacts) — plus the live path through the build verb, which runs
+     both against a real provider and delivers a Rojo KB with a
+     model-designed tree and real conclusions blocks. Both definitions
+     are marked stubs. Two
      findings from the burst: page granularity is capped at a
      document's top-level sections (the landed coverage gate wants
      every surveyed section inside ONE group span, so a section cannot
      be descended into — an oversized one is split mechanically), and
      a container the answer above it placed on a page still spends its
      enumerated call, whose answer is then discarded.
+     **Verb surface landed early 2026-08-14, by ruling**: `dev-build`
+     became `kbase build` — the delivered verb, which is what the
+     integration recipes now drive, because "integration tests test what
+     we deliver". `--budget` and `--build-date` are gone from the flag
+     set (budgets are §9 constants; the date is `[dev] build_date`), the
+     offline shape moved to `[dev] tree_plan = "mechanical"`, and
+     `--annex` landed as the §2.8/F-13 declaration seam. The
+     burst-H item this belonged to keeps only its remaining half: the
+     full-E2E evidence run (resume forensics, telemetry,
+     `cached_tokens` slot-order measurement), still post-MAD #2.
   4. **MAD #2 = the standing E2E gate below** (design + implementation
      + generated Rojo KB + exemplar comparison).
-- Stage 4 remainder (the §5 chain landed 2026-08-10 as `internal/dissect`,
-  mock-driven per that burst's R-1; the serial fold landed 2026-08-11 —
-  boundaries are adjudicated against current state and the stage writes one
-  composed, whole-list-`Verify`d cut list): what is left is **wiring it into a
-  real job plan** once the taxonomy tree plan says what the spans are, which is
-  also where a single-section span — no boundaries, so no calls and today no
-  artifact — gets its answer. Its refinement definition text is a marked stub
-  (`dissect.stubDefinition`) for the embedded-definitions item below.
+- ~~Stage 4 remainder~~ **resolved 2026-08-14**: the fold is wired into
+  `kbase build` and `kbase dev-refine` is deleted with it (Cruft II — the
+  same antipattern the dev-build elimination ruled on). A live build's cuts
+  stage is `dissect.StagePlan`, one lane per split group, and the light tier
+  is now required for a live build exactly as the heavy one is; under
+  `[dev] tree_plan = "mechanical"` the stage stays `dissect.Split`'s output.
+  A group that fits one page has no boundary and costs no call, which the
+  run record states as `boundariesAdjudicated: 0`. The refinement definition
+  text remains a marked stub (`dissect.stubDefinition`) for the
+  embedded-definitions item below.
 
 ## Later (build order exploits determinism-first)
 - **MAD #2 gate (re-ruled 2026-08-13): fires on the complete v0.1
@@ -138,9 +152,12 @@ deleted, not archived — git history is the log.
   hyphenate) and a miss falls through to rule 2, so being wrong costs a hop of
   precision and never a broken link. Revisit if a corpus shows the fallthrough
   is routing badly.
-- glimmer-30B head-to-head, on the `dev-refine` harness (challenger test
-  post-E2E; a tie counts as a win for the incumbent; low-cost-cloud
-  availability check first).
+- glimmer-30B head-to-head, on the eval harness the embedded-definitions item
+  above builds (challenger test post-E2E; a tie counts as a win for the
+  incumbent; low-cost-cloud availability check first). It has no harness of
+  its own any more: `dev-refine` carried the A/B switch and went with the
+  verb, and a `[dev]` key to bring it back would need an upstream cause the
+  eval harness is the answer to.
 - Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
   slot-order measurement: validate or reverse the StageRef-before-status swap
   via `cached_tokens` + dev-telemetry prefill timing.
@@ -168,7 +185,7 @@ deleted, not archived — git history is the log.
   through the existing client (no ad-hoc scripts, key hygiene standing),
   conversion stamped (PDF hash + converting model id), determinism
   verified empirically (the wrapper, not MarkItDown itself, is the
-  unknown), output tree fed to dev-build. Extraction-grade caveat:
+  unknown), output tree fed to `kbase build`. Extraction-grade caveat:
   a negative result indicts the extractor, not the corpus class.
 - i18n hardening (ruled 2026-08-13, indefinitely parked; slug half
   RESOLVED same day by verbatim-bytes slugs + NFC custody): remaining

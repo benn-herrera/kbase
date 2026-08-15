@@ -43,6 +43,13 @@ const (
 // agreeing with the default could not show.
 var testEffort = model.DeclareEffort(model.RequestEffort{Thinking: true})
 
+// testRetry stands in for the definition's retry declaration, and is likewise
+// deliberately not the shipped one: it does NOT escalate, where Retry does.
+// Same reason as testEffort — what is asserted is pass-through.
+var testRetry = pipeline.DeclareRetry(pipeline.RetryPolicy{
+	Effort: model.DeclareEffort(model.RequestEffort{Thinking: false}),
+})
+
 type secSpec struct {
 	title string
 	words int
@@ -174,6 +181,7 @@ func designerFor(t *testing.T, lg log.Logger, budgets treeplan.Budgets, docs ...
 		Scope:    "everything built from the fixture corpus",
 		Unit:     planUnit,
 		Effort:   testEffort,
+		Retry:    testRetry,
 	}, lg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

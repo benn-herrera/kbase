@@ -37,6 +37,20 @@ func TestRoleValidation(t *testing.T) {
 		// "every ask states its effort" true of a struct field, which no
 		// positional parameter upstream can enforce.
 		{"undeclared effort", func(r *AskSpec) { r.Effort = model.RequestEffort{} }, "effort"},
+		// The retry declaration is gated the same way and for the same
+		// reason: a zero RetryPolicy is a forgotten field, and reading it as
+		// "two attempts, twelve words, no thinking" would be the pipeline
+		// answering a question only a definition can.
+		{"undeclared retry", func(r *AskSpec) { r.Retry = RetryPolicy{} }, "retry policy"},
+		{"undeclared retry effort", func(r *AskSpec) {
+			r.Retry = RetryPolicy{Attempts: 2, NoteWords: 12, declared: true}
+		}, "retry declares no effort"},
+		{"no attempts", func(r *AskSpec) {
+			r.Retry = RetryPolicy{Effort: synthNoThinking, NoteWords: 12, declared: true}
+		}, "model attempts"},
+		{"no retry note", func(r *AskSpec) {
+			r.Retry = RetryPolicy{Effort: synthNoThinking, Attempts: 2, declared: true}
+		}, "retry note"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ask := noFallbackAsk(t)
@@ -63,7 +77,8 @@ func TestNewAgentCapturesCanonicalHashes(t *testing.T) {
 		t.Fatalf("newBoundAsk: %v", err)
 	}
 
-	built, err := bound.ctx.Build(synthTask("survey/a.json", "all").Input())
+	in, _ := synthTask("survey/a.json", "all").Input()
+	built, err := bound.ctx.Build(in)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

@@ -1,0 +1,23 @@
+# The configuration the HERMETIC build recipes run under: no provider, no
+# network, no clock. It is a development fixture, not an example of a user's
+# config.toml — everything in it is a [dev] switch, and a delivered kbase
+# reads none of them.
+#
+# There is deliberately no `provider`, no [models] table and no providers.toml
+# beside this file. `tree_plan = "mechanical"` dials nothing, so a pool entry
+# here would be a declaration nothing reads and an API key path nothing opens.
+# (LoadProviders treats an absent providers.toml as an empty pool, which is
+# exactly what this run wants.) The live recipe points --config-dir at
+# test_data/fixtures/config/ instead, which has all three.
+
+[dev]
+# Pin the provenance date so two runs over one corpus deliver byte-identical
+# trees. Without it the receipt carries today's date and the determinism
+# check fails once a day, at midnight UTC.
+build_date = "2026-01-01"
+
+# Take the tree plan from the source's own file structure and dial no
+# provider at all. Taxonomy design is a no-fallback model seam, so this is
+# the only way an end-to-end run of the delivered binary stays hermetic; the
+# run record says it took this route.
+tree_plan = "mechanical"

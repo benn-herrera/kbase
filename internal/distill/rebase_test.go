@@ -80,7 +80,7 @@ func newFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatalf("survey.Assemble: %v", err)
 	}
-	proposal, err := treeplan.SourceStructureProposal(art, "Guide", "the guide corpus")
+	proposal, err := treeplan.SourceStructureProposal(art, "Guide", "the guide corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}

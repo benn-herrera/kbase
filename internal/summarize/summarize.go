@@ -96,6 +96,11 @@ type Job struct {
 
 	// Effort is the definition's declared ask, threaded to the wire.
 	Effort model.RequestEffort
+
+	// Retry is the definition's declared retry policy
+	// (pipeline.RetryPolicy), threaded from the same place for the same
+	// reason.
+	Retry pipeline.RetryPolicy
 }
 
 // Summarizer describes and verifies the four level stages of one job.
@@ -183,6 +188,7 @@ func (s *Summarizer) levelStage(name string, level int, owed func(string, []stri
 			// puts quality-binding judgement work on the 31B.
 			Tier:   config.TierHeavy,
 			Effort: s.job.Effort,
+			Retry:  s.job.Retry,
 			Verify: s.verify,
 			Encode: Encode,
 			// No Fallback: no-fallback seam (O-1).
@@ -224,7 +230,7 @@ func (s *Summarizer) lanes(stage string, level int, owed func(string, []string) 
 			Owed:       o,
 			Section:    u.domain,
 			SectionRef: s.sectionRef(level),
-			Input:      func() prompt.CallInput { return s.callInput(unitPath) },
+			Input:      func() (prompt.CallInput, bool) { return s.callInput(unitPath) },
 		})
 	}
 	if len(order) == 0 {
@@ -328,14 +334,21 @@ func (s *Summarizer) unitOf(path string) (*unit, bool) {
 }
 
 // digest is the stage's parameter digest: what outside the store determined
-// this summary — the caps its verifier holds it to and the effort it was asked
-// at. The tree plan and the children's artifacts are upstreams and carry their
-// own stamps, so they are not restated here.
+// this summary — the caps its verifier holds it to, and the effort and retry
+// policy it was asked under. The tree plan and the children's artifacts are
+// upstreams and carry their own stamps, so they are not restated here.
+//
+// The retry declaration is in it because the declaration identifies the asking:
+// a summary a rejected call re-wrote with reasoning is not the artifact a
+// re-ask without it would have produced.
 func (s *Summarizer) digest() string {
 	b := s.job.Params.Budgets
+	r := s.job.Retry
 	return pipeline.HashBytes([]byte(fmt.Sprintf(
-		"summaryTokens %d\nsummaryInputTokens %d\ndepthCap %d\nthinking %t\n",
-		b.SummaryTokens, b.SummaryInputTokens, b.DepthCap, s.job.Effort.Thinking)))
+		"summaryTokens %d\nsummaryInputTokens %d\ndepthCap %d\nthinking %t\n"+
+			"retryThinking %t\nattempts %d\nretryNoteWords %d\n",
+		b.SummaryTokens, b.SummaryInputTokens, b.DepthCap, s.job.Effort.Thinking,
+		r.Effort.Thinking, r.Attempts, r.NoteWords)))
 }
 
 // sectionRef is the stage reference buffer: stable across every call of a
@@ -349,7 +362,12 @@ func (s *Summarizer) sectionRef(level int) string {
 // callInput assembles one summary's call: the children's own material in the
 // content buffer, their titles and scope lines beside it as the routing
 // context (§6.3).
-func (s *Summarizer) callInput(unitPath string) prompt.CallInput {
+//
+// Every call of this stage is needed (pipeline.InputBuilder). A summary's
+// question is settled by the tree plan before the level's lanes are resolved,
+// so there is nothing this stage can learn between describing a unit and
+// reaching it that would make its call pointless.
+func (s *Summarizer) callInput(unitPath string) (prompt.CallInput, bool) {
 	u, ok := s.unitOf(unitPath)
 	if !ok {
 		return s.refuse(unitPath, fmt.Errorf("summarize: %s is not a summary of this job", unitPath))
@@ -388,7 +406,7 @@ func (s *Summarizer) callInput(unitPath string) prompt.CallInput {
 			"- answer with the JSON object and nothing else",
 			"- no links, no file names of this knowledge base",
 		},
-	}
+	}, true
 }
 
 // material is what one child contributes to its parent's call (F-10).
@@ -461,14 +479,18 @@ func (s *Summarizer) defect(err error) error {
 	return fmt.Errorf("%w: %w", pipeline.ErrVerifierDefect, err)
 }
 
-func (s *Summarizer) refuse(unitPath string, err error) prompt.CallInput {
+// refuse latches a defect the builder found and hands back an empty input that
+// is still NEEDED: the call happens, verify runs, and the latch is raised there
+// as a defect on this unit. A skip would swallow it — a task that makes no call
+// never reaches a seam that could classify anything.
+func (s *Summarizer) refuse(unitPath string, err error) (prompt.CallInput, bool) {
 	s.mu.Lock()
 	if _, seen := s.latched[unitPath]; !seen {
 		s.latched[unitPath] = err
 	}
 	s.mu.Unlock()
 	s.lg.Error("the summary stage refused to build a call", "unit", unitPath, "error", err)
-	return prompt.CallInput{}
+	return prompt.CallInput{}, true
 }
 
 func (s *Summarizer) latchedErr(unitPath string) error {
