@@ -36,6 +36,8 @@ just test-integration-build-live-rojo  # the same build with the model in the lo
 just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
 just test-integration-survey-omlx  # pinned oMLX docs corpus: summary values + determinism
 just test-integration-build-mechanical-omlx  # offline KB build over it, ten gates
+just test-integration-build-live-omlx  # the same build with the model in the loop;
+                                  # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
@@ -143,6 +145,32 @@ Non-trivial work bursts follow a standard shape:
 3. Discard the file once the work is landed and reviewed. `TEMP_*.md` is
    gitignored; these files are never committed. The durable task queue is
    ROADMAP.md; TEMP plans are per-burst execution detail only.
+
+## Coordinator Policy
+
+For the session-level agent managing dispatched coder agents.
+
+**Audit the diff, not the report.** After a dispatched agent reports, audit
+the DIFF before accepting — the report is an index, the diff is the
+evidence. Check the diff against the recurring violation classes:
+
+- integration tests invoke the app binary; no dev-only entry points, verbs,
+  or test scaffolds around the real surface
+- verifications are repeatable invocations; evidence lands in inspectable
+  artifacts, never only in the report
+- no special-case file lifecycles: delivered classified files and temp-work
+  are the only two path classes
+- no gate, pin, or assertion loosened to make something pass — expected-truth
+  updates must state the new truth they track
+- no second home for a value, string, or mechanism that has one
+- nothing beyond the dispatched scope, even improvements
+
+Violations block acceptance: fix (redispatch or direct) before commit.
+Style and judgment calls outside these classes: flag only if egregious.
+
+**Direct coding at the session level**: permitted, but read the
+topic-specific coder agent definition first (plus this file if not fresh in
+context) so session-level code holds the same contract dispatched code does.
 
 ## Testing
 

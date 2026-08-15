@@ -28,6 +28,7 @@ BUILD_MECHANICAL_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-bui
 BUILD_LIVE_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-rojo"
 SURVEY_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-survey-omlx"
 BUILD_MECHANICAL_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-mechanical-omlx"
+BUILD_LIVE_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-omlx"
 
 # The configuration the live build dials: the checked-in fixture pool, whose
 # provider entry names a key FILE the built binary reads for itself. No recipe
@@ -139,9 +140,9 @@ _write-evidence out_dir recipe invocation:
       [[ -f "{{out_dir}}/log.txt" ]]      && echo "- log.txt: full recipe log (tee'd stdout+stderr)"; \
       [[ -f "{{out_dir}}/survey.json" ]]  && echo "- survey.json, survey-rerun.json: survey artifact, first run + determinism rerun"; \
       [[ -f "{{out_dir}}/summary.txt" ]]  && echo "- summary.txt: human-readable survey summary"; \
-      [[ -d "{{out_dir}}/kb" ]]           && echo "- kb/: delivered knowledge base tree"; \
-      [[ -f "{{out_dir}}/kb/run.json" ]]  && echo "- kb/run.json: run record (stats, ten verify gates)"; \
-      [[ -d "{{out_dir}}/kb/temp-work" ]] && echo "- kb/temp-work/: kept pipeline intermediates (--keep-temp-work)"; \
+      [[ -d "{{out_dir}}/kb" ]]                    && echo "- kb/: delivered knowledge base tree"; \
+      [[ -d "{{out_dir}}/kb/temp-work" ]]           && echo "- kb/temp-work/: kept pipeline intermediates (--keep-temp-work)"; \
+      [[ -f "{{out_dir}}/kb/temp-work/run.json" ]]  && echo "- kb/temp-work/run.json: run record (stats, ten verify gates)"; \
       true; \
     } > "{{out_dir}}/EVIDENCE.md"
 
@@ -260,16 +261,16 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
       --out "$kb" \
       --keep-temp-work || \
       { echo "integration(build-mechanical-rojo): the build failed"; exit 1; }; \
-    rec="$kb/run.json"; \
+    rec="$kb/temp-work/run.json"; \
     [[ -f "$rec" ]] || { echo "integration(build-mechanical-rojo): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 41'; do \
+    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 40'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
+    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-rojo): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb-rerun"; \
@@ -278,7 +279,7 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
       --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
       --out "$kb2" || \
       { echo "integration(build-mechanical-rojo): the determinism rerun failed"; exit 1; }; \
-    diff -rq -x run.json -x temp-work "$kb" "$kb2" || \
+    diff -rq -x temp-work "$kb" "$kb2" || \
       { echo "integration(build-mechanical-rojo): delivered tree is not byte-deterministic across runs"; exit 1; }; \
     rm -rf "$kb2"; \
     echo "integration(build-mechanical-rojo): delivered tree at $kb"; \
@@ -331,7 +332,7 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
       --out "$kb" \
       --keep-temp-work || \
       { echo "integration(build-live-rojo): the live build failed"; exit 1; }; \
-    rec="$kb/run.json"; \
+    rec="$kb/temp-work/run.json"; \
     [[ -f "$rec" ]] || { echo "integration(build-live-rojo): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
@@ -355,10 +356,11 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
     {{just_executable()}} _write-evidence "{{BUILD_LIVE_ROJO_OUT_DIR}}" "test-integration-build-live-rojo" \
       "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_ROJO_OUT_DIR}}/kb --keep-temp-work"
 
-# The oMLX corpus, same two hermetic processes over it. There is no
-# test-integration-build-live-omlx: one live build is the seam check, and a
-# second corpus through the same live code would cost provider minutes to
-# re-answer a question already answered.
+# The oMLX corpus, the same two hermetic processes over it plus one LIVE
+# build (test-integration-build-live-omlx, below the mechanical pair) — a
+# second live seam check over a corpus of a different shape than Rojo's,
+# where the model (not the corpus) decides how many split groups and
+# boundaries there are.
 #
 # The fetch is sparse + partial rather than the plain shallow clone Rojo's
 # prep does — see the pin block for why. `sparse-checkout set docs` in cone
@@ -449,16 +451,16 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
       --out "$kb" \
       --keep-temp-work || \
       { echo "integration(build-mechanical-omlx): the build failed"; exit 1; }; \
-    rec="$kb/run.json"; \
+    rec="$kb/temp-work/run.json"; \
     [[ -f "$rec" ]] || { echo "integration(build-mechanical-omlx): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 19'; do \
+    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 18'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-omlx): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
+    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-omlx): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb-rerun"; \
@@ -467,7 +469,7 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
       --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
       --out "$kb2" || \
       { echo "integration(build-mechanical-omlx): the determinism rerun failed"; exit 1; }; \
-    diff -rq -x run.json -x temp-work "$kb" "$kb2" || \
+    diff -rq -x temp-work "$kb" "$kb2" || \
       { echo "integration(build-mechanical-omlx): delivered tree is not byte-deterministic across runs"; exit 1; }; \
     rm -rf "$kb2"; \
     echo "integration(build-mechanical-omlx): delivered tree at $kb"; \
@@ -478,11 +480,70 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     {{just_executable()}} _write-evidence "{{BUILD_MECHANICAL_OMLX_OUT_DIR}}" "test-integration-build-mechanical-omlx" \
       "./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb-rerun  # determinism rerun, diffed then discarded"
 
+# The same build with the model IN the loop, over the oMLX corpus — the same
+# pairing test-integration-build-live-rojo makes with its own mechanical
+# sibling, over a corpus of a different shape. See that recipe's comment for
+# the stage-3/4/6-in-the-loop shape and the front-door/no-key-in-recipe
+# reasoning, both unchanged here.
+#
+# It is NOT composed into `test-integration`, deliberately, for the same
+# reason test-integration-build-live-rojo is not: that omnibus is hermetic
+# and offline, and this recipe needs a reachable provider, a key file and
+# minutes of model time.
+[doc("LIVE (excluded from test-integration: needs a provider + network): build a KB from the pinned oMLX corpus with the model in the loop; assert the ten verify gates")]
+test-integration-build-live-omlx:
+    @mkdir -p "{{BUILD_LIVE_OMLX_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-build-live-omlx 2>&1 | tee "{{BUILD_LIVE_OMLX_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-survey-rojo.
+#
+# Unlike test-integration-build-live-rojo, this recipe does NOT pin
+# splitGroups/boundariesAdjudicated/boundariesFellBack/callsSkipped: Rojo's
+# zero split groups is a fact about the CORPUS (no group exceeds the leaf
+# budget, mechanically), but oMLX's mechanical sibling already pins
+# "splitGroups": 1 — and here stage 3 runs WITH the model, which designs the
+# tree itself, so how many groups it produces and how many boundaries stage 4
+# ends up adjudicating are model-dependent too, not knowable in advance. Those
+# counts are echoed into the log below instead of asserted, so the numbers
+# land in the preserved evidence; once enough live runs show them stable they
+# can graduate into pins the way the mechanical recipe's already are.
+[private]
+_test-integration-build-live-omlx: build prep-test-integration-omlx
+    @kb="{{BUILD_LIVE_OMLX_OUT_DIR}}/kb"; \
+    rm -rf "$kb"; \
+    ./{{BIN_DIR}}/kbase build "{{OMLX_DOCS_DIR}}/docs" \
+      --config-dir "{{LIVE_CONFIG_DIR}}" \
+      --out "$kb" \
+      --keep-temp-work || \
+      { echo "integration(build-live-omlx): the live build failed"; exit 1; }; \
+    rec="$kb/temp-work/run.json"; \
+    [[ -f "$rec" ]] || { echo "integration(build-live-omlx): no run record at $rec"; exit 1; }; \
+    green="$(grep -c '"ok": true' "$rec" || true)"; \
+    red="$(grep -c '"ok": false' "$rec" || true)"; \
+    [[ "$red" == 0 ]] || { echo "integration(build-live-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 10 ]] || { echo "integration(build-live-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
+    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+      [[ -f "$kb/$want" ]] || { echo "integration(build-live-omlx): $want was not delivered"; exit 1; }; \
+    done; \
+    grep -q '"lightModel": "..*"' "$rec" || \
+      { echo "integration(build-live-omlx): the run record names no light-tier model; see $rec"; exit 1; }; \
+    echo "integration(build-live-omlx): adjudication stats (corpus- and model-dependent, not pinned):"; \
+    grep -E '"splitGroups"|"boundariesAdjudicated"|"boundariesFellBack"|"callsSkipped"' "$rec" | sed 's/^/  /'; \
+    echo "integration(build-live-omlx): delivered tree at $kb"; \
+    find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
+    echo "  tree to depth 2:"; \
+    find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
+    echo "integration(build-live-omlx) ok: ten gates green, tree delivered, temp work kept"; \
+    {{just_executable()}} _write-evidence "{{BUILD_LIVE_OMLX_OUT_DIR}}" "test-integration-build-live-omlx" \
+      "./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_OMLX_OUT_DIR}}/kb --keep-temp-work"
+
 # The omnibus composes the HERMETIC per-corpus recipes and writes no log of its
 # own: each of them already preserves its full output under its own name, and a
 # second copy of the same bytes under a second name is a file that can go
-# stale against the one anybody reads. test-integration-build-live-rojo is
-# excluded on purpose — see its doc string.
+# stale against the one anybody reads. test-integration-build-live-rojo and
+# test-integration-build-live-omlx are excluded on purpose — see their doc
+# strings.
 [doc("run every hermetic integration test (the live ones are excluded; run those by name)")]
 test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo test-integration-survey-omlx test-integration-build-mechanical-omlx
 

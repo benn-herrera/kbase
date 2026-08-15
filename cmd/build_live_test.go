@@ -119,9 +119,12 @@ func TestBuildLiveWritesTaxonomyAndSummaries(t *testing.T) {
 			Stderr:    &stderr,
 		},
 		BuildDate: pinnedBuildDate,
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		Logger:    log.Discard(),
+		// Kept, because the run record this test reads lives at the temp-work
+		// root and an ordinary run tears it down with everything else there.
+		KeepTempWork: true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Logger:       log.Discard(),
 	})
 	if err != nil {
 		t.Fatalf("runBuild: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
@@ -174,7 +177,7 @@ func TestBuildLiveWritesTaxonomyAndSummaries(t *testing.T) {
 
 	// The run record carries what a live run dialed, asked and spent — and no
 	// credential.
-	data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+	data, err := os.ReadFile(recordPath(out))
 	if err != nil {
 		t.Fatalf("read the run record: %v", err)
 	}
@@ -370,9 +373,12 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string) {
 			Stderr:    &stderr,
 		},
 		BuildDate: pinnedBuildDate,
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		Logger:    log.Discard(),
+		// Kept, because the run record this test reads lives at the temp-work
+		// root and an ordinary run tears it down with everything else there.
+		KeepTempWork: true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Logger:       log.Discard(),
 	})
 	if err != nil {
 		t.Fatalf("runBuild: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
@@ -391,7 +397,7 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string) {
 		t.Errorf("the taxonomy calls went to %q, want the heavy tier's model", id)
 	}
 
-	data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+	data, err := os.ReadFile(recordPath(out))
 	if err != nil {
 		t.Fatalf("read the run record: %v", err)
 	}
@@ -535,11 +541,12 @@ func TestBuildRefusesAnUnmappedTier(t *testing.T) {
 func TestBuildWithoutConfigDirMakesNoCall(t *testing.T) {
 	root := writeLiveCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, stdout := build(t, root, out)
+	// Kept, because the run record this test reads lives at the temp-work root.
+	res, stdout := build(t, root, out, true)
 	if !res.Report.Passed() || !res.Job.DeliveryReady() {
 		t.Fatalf("the mechanical build did not deliver:\n%s", stdout)
 	}
-	data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+	data, err := os.ReadFile(recordPath(out))
 	if err != nil {
 		t.Fatalf("read the run record: %v", err)
 	}

@@ -65,7 +65,14 @@ const (
 	buildLiveFrame = "kbase build: turning a documentation corpus into a knowledge base — " +
 		"a navigable tree of verbatim pages under sections that summarise them."
 
-	// buildRecordName is the run record delivered beside the tree.
+	// buildRecordName is the run record, written at the temp-work ROOT — the
+	// temp mirror of the delivered tree, so the mirror's root is where the
+	// delivered tree's root would have held it (ruled 2026-08-15). It is a
+	// development record and nothing reads it back, and dev-grade records live
+	// in the dev mirror: `--out` holds only what a consumer of the knowledge
+	// base uses. The consequence is deliberate — a run without
+	// --keep-temp-work keeps no record, because §12's teardown takes it with
+	// the rest of temp-work.
 	buildRecordName = "run.json"
 
 	// The store layout — §10's plan table, which is the composing verb's to
@@ -147,10 +154,10 @@ type buildOptions struct {
 	// mode ("no provider selected") on a job that never dials one.
 	Live *providerOptions
 
-	// Out is the OUTPUT directory: the delivered knowledge base and the run
-	// record land here, and `<out>/temp-work/` holds everything transient
-	// while the job runs (ARCHITECTURE.md §12). Nothing already in it is
-	// touched.
+	// Out is the OUTPUT directory: the delivered knowledge base lands here,
+	// and `<out>/temp-work/` holds everything transient while the job runs —
+	// the stage artifacts, their stamps, the job lock and the run record
+	// (ARCHITECTURE.md §12). Nothing already in it is touched.
 	Out string
 
 	// Annexes are the corpus-relative prefixes declared by --annex:
@@ -421,9 +428,15 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		live.ReasoningTokens = res.Usage.ReasoningTokens
 		record.Live = &live
 	}
-	recordPath, err := writeBuildRecord(out, record)
+	recordPath, err := writeBuildRecord(work.Root(), record)
 	if err != nil {
 		return buildResult{}, err
+	}
+	// Reported only when temp-work survives: the teardown below is about to
+	// take the record with it, and a path this run is deleting would already be
+	// wrong by the time anyone read the line.
+	if !opts.KeepTempWork {
+		recordPath = ""
 	}
 	job.report(plan, report, res, elapsed, len(delivered), summaries, recordPath)
 
@@ -978,7 +991,9 @@ func (j *buildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
 	return paths, nil
 }
 
-// report prints the human summary.
+// report prints the human summary. recordPath is empty when the run record did
+// not survive the run — it lives in temp-work, which an ordinary run tears
+// down.
 func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 	res pipeline.JobResult, elapsed time.Duration, delivered, summaries int, recordPath string) {
 
@@ -1008,7 +1023,9 @@ func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 	fmt.Fprintf(w, "units: %d produced, %d reused, %d failed\n", res.Produced, res.Reused, len(res.Failures))
 	fmt.Fprintf(w, "elapsed: %s\n", elapsed.Round(time.Millisecond))
 	fmt.Fprintf(w, "delivered: %d files to %s\n", delivered, j.out)
-	fmt.Fprintf(w, "record: %s\n", recordPath)
+	if recordPath != "" {
+		fmt.Fprintf(w, "record: %s\n", recordPath)
+	}
 }
 
 // renderer builds stage 8's renderer over the tree plan and whatever summaries
@@ -1164,11 +1181,12 @@ func (j *buildJob) copyProducer(unit string) pipeline.Producer {
 	return func() (any, error) { return j.store.Get(unit) }
 }
 
-// buildRun is the run record delivered beside the tree: what was built, from
-// what, under which budgets, and what the gates said.
+// buildRun is the run record written at the temp-work root: what was built,
+// from what, under which budgets, and what the gates said.
 //
-// It is a development record rather than a stamp — nothing reads it back — but
-// it carries every identity a later reader would otherwise reconstruct from a
+// It is a development record rather than a stamp — nothing reads it back — and
+// that is why it sits in the dev mirror rather than in the delivered tree. It
+// carries every identity a later reader would otherwise reconstruct from a
 // log, and the ten verify results, because those ARE the result of the run.
 type buildRun struct {
 	Version string `json:"version"`
@@ -1261,6 +1279,10 @@ type buildLive struct {
 	ReasoningTokens  int `json:"reasoningTokens"`
 }
 
+// writeBuildRecord writes the record into the temp-work root. The moment
+// matters: it is after the coordinator returned, and therefore after the store
+// swept the job directory. The record is not a chain unit, so a sweep that ran
+// after this write would delete it as unaccounted-for.
 func writeBuildRecord(dir string, rec buildRun) (string, error) {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -1357,12 +1379,14 @@ Configuration is resolved the way every verb resolves it (--config-dir, else
 $KBASE_CONFIG_DIR, else ~/.config/kbase); an unconfigured tier refuses before
 the corpus is read, so a misconfigured run costs nothing.
 
---out is required and receives the knowledge base plus a run record naming the
-corpus and its hash, the budgets, the counts and each gate's verdict. Nothing
-already in it is touched: every intermediate lives under <out>/temp-work/,
-which kbase creates and, on a successful run, removes. A failed or interrupted
-run keeps it; --keep-temp-work (or [dev] keep_temp_work) keeps it after a
-successful one too.
+--out is required and receives the knowledge base and nothing else. Everything
+else the run produces lives under <out>/temp-work/, which kbase creates and, on
+a successful run, removes: every intermediate, and the run record naming the
+corpus and its hash, the budgets, the counts and each gate's verdict. A failed
+or interrupted run keeps it; --keep-temp-work (or [dev] keep_temp_work) keeps
+it after a successful one too — and a successful run without either keeps no
+run record, the record being a development record rather than something the
+knowledge base's readers use.
 
 --title is the original doc set's title as you would state it ("Rojo v7
 Documentation"); the knowledge base is named "KBase for <title>" and that name
@@ -1418,13 +1442,14 @@ material out of scope can hide its own failures.`,
 
 func init() {
 	buildCmd.Flags().StringVar(&buildFlagOut, "out", "",
-		"output directory for the knowledge base and "+buildRecordName+" (required; created if missing)")
+		"output directory for the knowledge base (required; created if missing)")
 	buildCmd.Flags().StringVar(&buildFlagTitle, "title", "",
 		"the documentation set's own title; the knowledge base is named \""+
 			kbTitlePrefix+"<title>\" (default: the corpus directory's name)")
 	buildCmd.Flags().StringArrayVar(&buildFlagAnnexes, "annex", nil,
 		"corpus-relative prefix to leave undistilled and list in the entry point's annex lookup (repeatable)")
 	buildCmd.Flags().BoolVar(&buildFlagKeep, keepTempWorkFlag, false,
-		"keep <out>/"+pipeline.TempWorkDirName+"/ after a run that succeeded (a failed run always keeps it)")
+		"keep <out>/"+pipeline.TempWorkDirName+"/, and with it "+buildRecordName+
+			", after a run that succeeded (a failed run always keeps it)")
 	rootCmd.AddCommand(buildCmd)
 }

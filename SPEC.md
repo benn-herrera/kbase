@@ -131,8 +131,8 @@ configured (§2.2) and refuses before the corpus is read if either is not,
 naming the missing one: the heavy tier designs the tree and writes the
 summaries, the light tier adjudicates page boundaries.
 
-- `--out` is required; receives the delivered tree under the
-  output-directory contract (§3.1).
+- `--out` is required; receives the delivered tree, and only the delivered
+  tree, under the output-directory contract (§3.1).
 - `--title TITLE` is the documentation set's own title as the user states
   it (`--title "Rojo v7 Documentation"`). The knowledge base is titled
   `KBase for <TITLE>`, and that is its entry-point heading, the text of
@@ -149,7 +149,8 @@ summaries, the light tier adjudicates page boundaries.
   (declare the outer one only). All annex validation happens before any
   model is dialed.
 - `--keep-temp-work` keeps `temp-work/` after a run that succeeds (a
-  failed or interrupted run always keeps it regardless).
+  failed or interrupted run always keeps it regardless), and with it the
+  run record (§3.8), which lives at the temp-work root.
 - Nothing is delivered unless every one of the ten guarantees (§4.8)
   holds; a failure refuses the whole delivery and names which guarantee
   failed (and, where applicable, the offending node) in the run record
@@ -279,11 +280,19 @@ bytes in place.
 
 ### 3.1 The output-directory contract
 
-`--out` receives **only** delivered artifacts. Nothing already present in `--out` is ever touched, so pointing
-a run at a populated directory is safe. Every transient thing a run
-produces — stage artifacts, their stamps, the job lock, the residue of an
-interrupted write — lives under `<out>/temp-work/`, a directory kbase
-creates and the only thing it ever deletes inside `--out`.
+`--out` receives **only** delivered artifacts, and the delivered set is
+exactly the classified one guarantee 5 (§4.8) enumerates: tree-plan nodes
+and the fixture manifest, nothing else. Nothing already present in `--out`
+is ever touched, so pointing a run at a populated directory is safe. Every
+other thing a run produces — stage artifacts, their stamps, the job lock,
+the run record (§3.8), the residue of an interrupted write — lives under
+`<out>/temp-work/`, a directory kbase creates and the only thing it ever
+deletes inside `--out`.
+
+No file kbase writes has a lifecycle of its own: there are exactly two
+kinds, delivered (permanent, classified) and temp-work (scratch, one
+teardown rule). Nothing is written outside `temp-work/` and later deleted,
+and nothing in the delivered tree is exempt from classification.
 
 A run that completes successfully removes `temp-work/`. A run that fails
 or is interrupted (including a hard kill) leaves it in place — the next
@@ -440,8 +449,12 @@ proceed normally.
 
 ### 3.8 `run.json` — the run record
 
-**`kbase build`**, written to `<out>/run.json` on every completed attempt
-(delivered or refused): `version`, `corpus` (path), `title` (the resolved
+**`kbase build`**, written to `<out>/temp-work/run.json` — the temp-work
+root, which mirrors the delivered tree's root — on every completed attempt
+(delivered or refused). It is a development record, so it lives in the dev
+mirror rather than in the delivered tree, and it is therefore subject to
+§3.1's teardown: a successful run without `--keep-temp-work` keeps no run
+record. Contents: `version`, `corpus` (path), `title` (the resolved
 doc-set title, §1.5), `corpusHash`, `buildDate`, `treePlan` (`"model"` or `"mechanical (dev)"`), `annexes`
 (omitted if none), `budgets` (§3.3's object), `sourceFiles`,
 `sourceSections`, `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
@@ -464,9 +477,10 @@ Mirrors the delivered tree's own relative paths one level down
 (`<out>/temp-work/<relative-path>`), plus stage-named siblings for
 artifacts that are never themselves delivered: a survey directory, a tree
 -plan directory, a per-domain leaves area, a pre-delivery render of the
-tree, a verify-report directory (schema `kbase.verify/1`), and
-`job.lock` at the root. Every file in it carries a `.stamp.json` sidecar
-(§3.6) except `job.lock` itself.
+tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`
+and `run.json` (§3.8) at the root. Every file in it carries a
+`.stamp.json` sidecar (§3.6) except `job.lock` and `run.json`, which are
+not stage artifacts.
 
 ---
 
@@ -583,7 +597,6 @@ CLAUDE.md
 .agents/docent.md
 .agents/maintainer.md
 .agents/README-ADAPTATION.md
-.agents/routing-eval.json
 ```
 
 - `AGENTS.md` — states the summaries-route/leaves-answer contract, a
@@ -605,9 +618,6 @@ CLAUDE.md
   states that these are copies for adaptation, that
   kbase itself never reads them, and recommends using a stronger model to
   write a version suited to its own capabilities.
-- `.agents/routing-eval.json` — schema `kbase.routing-eval/1`:
-  `{"schema","note","corpus": "<hash>","built": "<date>","questions": []}`;
-  `questions` is currently always empty (§6).
 
 Every fixture file carries the same provenance footer (§4.6) as a
 tree-plan node; the three definition fixtures additionally open with a
@@ -741,9 +751,11 @@ are not yet true of the current binary:
   boundary refinement, and the three `.agents/*.md` fixtures — is a marked
   stub; tuned, evaled definitions have not landed. A build today is
   evidence about the machinery, not about tree-design or summary quality.
-- **Routing-eval question generation.** `.agents/routing-eval.json` ships
-  with every KB, but `questions` is always empty; the generation stage is
-  not implemented. **PLANNED.**
+- **Routing-eval question generation.** No routing-eval question set is
+  produced or delivered. The empty `.agents/routing-eval.json` placeholder
+  a KB used to ship was removed (ruled 2026-08-15): it had no producer and
+  no consumer, and a dev-grade file has no home in the delivered tree. Its
+  home is decided when the generation stage lands. **PLANNED.**
 - **Chars-per-token calibration.** The token estimator uses a fixed,
   provisional constant; the configure-time calibration call and the
   usage-based refinement are not implemented, and no calibration source is

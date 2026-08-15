@@ -56,7 +56,7 @@ const (
 	// by AGENTS.md.
 	agentsPointer = "The `.agents/` directory beside this file holds the definitions that ship " +
 		"with every kbase knowledge base: a docent for navigating it, a maintainer for " +
-		"extending it, an adaptation note, and the routing-eval question set."
+		"extending it, and an adaptation note."
 
 	// generatedNotice marks a class-B fixture as machine-written. A file a
 	// human might reasonably edit has to say that kbase rewrote it, because

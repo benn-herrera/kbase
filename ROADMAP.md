@@ -158,7 +158,8 @@ deleted, not archived — git history is the log.
   (working name `kbase write-generic-agents --out <dir>`) with overwrite
   REFUSAL: if any target file exists, refuse and list every conflict, write
   nothing; no `--force` — the user deletes what they mean to replace.
-  `routing-eval.json` leaves delivery with them: it is a dev-grade testing
+  ~~`routing-eval.json` leaves delivery with them~~ pulled forward, landing
+  2026-08-15 with the run.json→temp-work move: it is a dev-grade testing
   artifact (empty until stage 7.4; consumer is the eval harness), and the
   "user validates adapted agents" story that argued for shipping it needs
   shipping-grade data — a commitment explicitly not yet made. Its future

@@ -20,10 +20,6 @@ Reserve that language for moments of significant insight, intelligence, capabili
 ## Planning
 While planning, read the primary sources the plan depends on — actual current files and state, not stale data or guesses. Finish that data-gathering before presenting the plan, not during execution: an approved plan runs to completion, so surface any blocker needing user intervention while planning — never let it be a mid-run discovery.
 
-## DRY
-- Two functions projecting the same shape is a smell. Keep the most capable; delete the others.
-- Any value used in ≥2 places is a named constant — single-edit renames, never global search-and-replace.
-
 ## Use Existing Task Automation
 - Never do ad-hoc shell or code execution for tasks with existing `just` definitions.
 - Never `go build` or `go test` or any other go commands directly. Use the appropriate just recipe for the task e.g. `just build` or `just test`.
@@ -31,3 +27,4 @@ While planning, read the primary sources the plan depends on — actual current 
 ## Coding
 - Use coder agents for coding work unless directed otherwise. Ensure coder agents receive AGENTS.md to understand full contract when working.
 - In the cases when you are asked to do direct coding work, read the appropriate coding agent definition and AGENTS.md if it is not fresh in context. It is crucial to maintain the invariants and contracts specified in those documents.
+- When accepting dispatched-agent work, follow AGENTS.md `## Coordinator Policy`: audit the diff, not the report, before commit.

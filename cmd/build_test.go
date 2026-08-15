@@ -73,16 +73,21 @@ func writeCorpus(t *testing.T) string {
 	return dir
 }
 
-func build(t *testing.T, root, out string) (buildResult, string) {
+// build runs the verb over a corpus. keepTempWork is a parameter rather than a
+// constant because the run record lives at the temp-work root: a test that
+// reads the record has to keep the scratch tree, and a test that asserts the
+// teardown must not.
+func build(t *testing.T, root, out string, keepTempWork bool) (buildResult, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{
-		Root:      root,
-		Out:       out,
-		BuildDate: pinnedBuildDate,
-		Stdout:    &stdout,
-		Stderr:    &stderr,
-		Logger:    log.Discard(),
+		Root:         root,
+		Out:          out,
+		BuildDate:    pinnedBuildDate,
+		KeepTempWork: keepTempWork,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Logger:       log.Discard(),
 	})
 	if err != nil {
 		t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
@@ -90,10 +95,17 @@ func build(t *testing.T, root, out string) (buildResult, string) {
 	return res, stdout.String()
 }
 
+// recordPath is the run record's home: the temp-work root, which mirrors the
+// delivered tree's root (ruled 2026-08-15). The record is a development record
+// and lives in the dev mirror, so it exists only for a run that kept it.
+func recordPath(out string) string {
+	return filepath.Join(out, pipeline.TempWorkDirName, buildRecordName)
+}
+
 func TestBuildDeliversAVerifiedTree(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, stdout := build(t, root, out)
+	res, stdout := build(t, root, out, false)
 
 	if !res.Report.Passed() {
 		t.Fatalf("the gates did not pass:\n%s", stdout)
@@ -117,15 +129,20 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"entry-point.md", assemble.AgentsFixture, assemble.ReadmeFixture,
-		assemble.ClaudeFixture, buildRecordName} {
+		assemble.ClaudeFixture} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Errorf("%s was not delivered: %v", name, err)
 		}
 	}
 
-	// A successful run tears the scratch tree down.
+	// A successful run tears the scratch tree down — and the run record goes
+	// with it, because it lives inside it.
 	if _, err := os.Stat(filepath.Join(out, pipeline.TempWorkDirName)); !os.IsNotExist(err) {
 		t.Errorf("%s survived a successful run", pipeline.TempWorkDirName)
+	}
+	if _, err := os.Stat(filepath.Join(out, buildRecordName)); !os.IsNotExist(err) {
+		t.Errorf("%s was delivered; the run record is a development record and belongs in %s",
+			buildRecordName, pipeline.TempWorkDirName)
 	}
 }
 
@@ -135,7 +152,7 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 func TestBuildPagesReDeriveFromSource(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, _ := build(t, root, out)
+	res, _ := build(t, root, out, false)
 
 	corpus, err := ingest.Walk(root, markdown.Extensions(), log.Discard())
 	if err != nil {
@@ -175,7 +192,7 @@ func TestBuildPagesReDeriveFromSource(t *testing.T) {
 func TestBuildRebasesResolvedLinksOnly(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, _ := build(t, root, out)
+	res, _ := build(t, root, out, false)
 
 	delivered := map[string]bool{}
 	for _, p := range res.Delivered {
@@ -222,8 +239,8 @@ func TestBuildRebasesResolvedLinksOnly(t *testing.T) {
 func TestBuildIsDeterministic(t *testing.T) {
 	root := writeCorpus(t)
 	base := t.TempDir()
-	first, _ := build(t, root, filepath.Join(base, "a"))
-	second, _ := build(t, root, filepath.Join(base, "b"))
+	first, _ := build(t, root, filepath.Join(base, "a"), false)
+	second, _ := build(t, root, filepath.Join(base, "b"), false)
 
 	if len(first.Delivered) != len(second.Delivered) {
 		t.Fatalf("the two runs delivered %d and %d files", len(first.Delivered), len(second.Delivered))
@@ -298,9 +315,11 @@ func TestBuildKeepsTempWorkOnRequest(t *testing.T) {
 func TestBuildRunRecord(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, _ := build(t, root, out)
+	// Kept, because the record lives in temp-work: reading it is exactly the
+	// case the keep switch exists for.
+	res, _ := build(t, root, out, true)
 
-	data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+	data, err := os.ReadFile(recordPath(out))
 	if err != nil {
 		t.Fatalf("read the run record: %v", err)
 	}
@@ -352,14 +371,16 @@ func TestBuildNamesTheKnowledgeBase(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if _, err := runBuild(context.Background(), buildOptions{
 				Root: root, Title: tt.title, Out: out, BuildDate: pinnedBuildDate,
-				Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+				// Kept, so the record this test reads survives the run.
+				KeepTempWork: true,
+				Stdout:       &stdout, Stderr: &stderr, Logger: log.Discard(),
 			}); err != nil {
 				t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
 			}
 			if head := entryHeading(t, out); head != "# "+tt.want {
 				t.Errorf("the entry point opens %q, want %q", head, "# "+tt.want)
 			}
-			data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+			data, err := os.ReadFile(recordPath(out))
 			if err != nil {
 				t.Fatalf("read the run record: %v", err)
 			}

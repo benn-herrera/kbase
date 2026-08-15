@@ -78,7 +78,7 @@ judgment roles; the human at the edges.**
 - **Cheap simplicity is a core principle, enforced against feature pressure.**
   Config is a provider URL + key. Single model family. No out-of-family machinery in
   the appliance, even for honesty checks — those move to the artifact (see BYOM eval,
-  SPEC.md §4.7). When a proposed addition breaks this, the addition loses.
+  SPEC.md §6, planned). When a proposed addition breaks this, the addition loses.
 
 - **Specified, not autonomous.** A fixed pipeline with a termination condition — not
   an agent free-roaming the corpus. Reproducibility requires same process → same
@@ -144,8 +144,8 @@ judgment roles; the human at the edges.**
 
 - **Artifact self-description.** Each generated KB ships a `.agents/` directory:
   docent (navigate me) and maintainer (repair me) definitions, the adaptation-guidance
-  note, the routing-eval question set, and the entry-point AGENTS.md contract. Any
-  agent that picks up the artifact finds its own operating manual inside.
+  note, and the entry-point AGENTS.md contract. Any agent that picks up the
+  artifact finds its own operating manual inside.
 
 - **BYOM consumption.** The KB is *created* with gemma-4 but consumed by whatever
   model the user brings. This is safe because the KB is **content, not prompts** —
@@ -954,6 +954,22 @@ transient lives anywhere else**. Not in a system temporary directory either: an
 interrupted run's intermediates are what its resume reads, and a location the
 OS may clear between runs would make resume a coin flip. Only DELIVERED
 artifacts live in the output hierarchy proper.
+
+**Two path classes, and no third** (ruled 2026-08-15). The appliance writes
+exactly two kinds of file: DELIVERED — class A by grammar, class B by the
+fixture manifest (SPEC.md §4.7), permanent, and classified without exception — and
+TEMP-WORK — scratch, under one teardown rule. **There are precisely zero
+special-case write-and-delete-when-done files of any kind; that is what
+`temp-work/` exists for.** Nothing is written outside `temp-work/` and later
+removed, and nothing in the delivered tree is exempt from classification. A
+file that has neither a consumer of the knowledge base nor a stage that reads
+it back is a development record, and a development record belongs in the dev
+mirror: `run.json` sits at the temp-work ROOT — the mirror of the delivered
+tree's own root — and is torn down with everything else there, so a run without
+the keep switch keeps no record (ruled acceptable; the switch is how you keep
+one). The rule forbids the class, not the two instances that prompted it: any
+new file wanting a lifecycle of its own is a design error, and the answer is
+always one of the two classes.
 
 The directory `temp-work/` **is** the store's root (`pipeline.OpenTempWork`,
 `pipeline.TempWorkDirName`), and it MIRRORS the output tree: scratch for
