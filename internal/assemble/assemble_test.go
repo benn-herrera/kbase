@@ -134,8 +134,8 @@ func TestVerifyGreen(t *testing.T) {
 	if !rep.Passed() {
 		t.Fatal("Passed() is false on a run with no error")
 	}
-	if len(rep.Checks) != 9 {
-		t.Fatalf("the report holds %d checks, want the nine of §9", len(rep.Checks))
+	if len(rep.Checks) != 10 {
+		t.Fatalf("the report holds %d checks, want the ten of §9", len(rep.Checks))
 	}
 	for i, c := range rep.Checks {
 		if c.Number != i+1 {
@@ -153,7 +153,7 @@ func TestVerifyGreen(t *testing.T) {
 // One mutation per gate: the tree is broken in one way, and the gate whose
 // subject that is must refuse it.
 //
-// "Must refuse it", not "must be the first to refuse it". The nine gates
+// "Must refuse it", not "must be the first to refuse it". The ten gates
 // overlap deliberately — a page with its up-link cut also stops being its own
 // re-derivation, and a fixture pointed somewhere else also has a dangling link
 // — and asserting an ordering would be asserting that the overlap does not
@@ -177,8 +177,24 @@ func TestVerifyGates(t *testing.T) {
 		check: 2,
 		break_: func(t *testing.T, sc scene, v *Verification) {
 			p := anyLeaf(t, sc)
-			_, rest, _ := strings.Cut(string(v.Files[p]), "\n")
-			v.Files[p] = []byte(rest)
+			var kept []string
+			for _, l := range strings.Split(string(v.Files[p]), "\n") {
+				if strings.HasPrefix(l, distill.UpLinkPrefix) {
+					continue
+				}
+				kept = append(kept, l)
+			}
+			v.Files[p] = []byte(strings.Join(kept, "\n"))
+			v.Leaves = withData(sc.leaves, p, v.Files[p])
+		},
+	}, {
+		name:  "an up-link whose label and target name different nodes",
+		check: 2,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			p := anyLeaf(t, sc)
+			node := nodeAt(t, sc, p)
+			v.Files[p] = []byte(strings.Replace(string(v.Files[p]),
+				distill.UpLinkPrefix+node.Parent+"]", distill.UpLinkPrefix+"elsewhere/index.md]", 1))
 			v.Leaves = withData(sc.leaves, p, v.Files[p])
 		},
 	}, {
@@ -230,6 +246,23 @@ func TestVerifyGates(t *testing.T) {
 		break_: func(t *testing.T, sc scene, v *Verification) {
 			p := anyIndex(t, sc)
 			v.Files[p] = []byte(strings.Replace(string(v.Files[p]), derivationsHeading, "## Elsewhere", 1))
+		},
+	}, {
+		name:  "a page declaring another page's Location",
+		check: 10,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			p := anyLeaf(t, sc)
+			v.Files[p] = []byte(strings.Replace(string(v.Files[p]),
+				"Location: "+p, "Location: somewhere/else.md", 1))
+			v.Leaves = withData(sc.leaves, p, v.Files[p])
+		},
+	}, {
+		name:  "a page delivered without its frontmatter block",
+		check: 10,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			p := anyIndex(t, sc)
+			_, body, _ := distill.ParseFrontmatter(v.Files[p])
+			v.Files[p] = []byte(strings.Join(body, "\n"))
 		},
 	}}
 
@@ -294,8 +327,11 @@ func TestEntryPointGrammar(t *testing.T) {
 			t.Errorf("the entry-point is missing a mandatory block:\n%s", want)
 		}
 	}
-	if strings.Contains(text, upLinkPrefix) {
+	if strings.Contains(text, distill.UpLinkPrefix) {
 		t.Error("the entry-point carries an up-link")
+	}
+	if loc, _, ok := distill.ParseFrontmatter(entry); !ok || loc != sc.renderer.EntryPointPath() {
+		t.Errorf("the entry-point declares Location %q (block found: %t), want its own path", loc, ok)
 	}
 	if strings.Contains(text, annexHeading) {
 		t.Error("the entry-point carries an annex section with no annexes declared")
@@ -309,9 +345,12 @@ func TestIndexRendersEmptySummariesLegally(t *testing.T) {
 	sc := newScene(t)
 	p := anyIndex(t, sc)
 	text := string(sc.files[p])
-	lines := strings.Split(text, "\n")
-	if !strings.HasPrefix(lines[0], upLinkPrefix) {
-		t.Errorf("an index does not open with its up-link:\n%s", text)
+	loc, body, ok := distill.ParseFrontmatter(sc.files[p])
+	if !ok || loc != p {
+		t.Errorf("an index does not open with its own Location block (%q, ok=%t):\n%s", loc, ok, text)
+	}
+	if !strings.HasPrefix(distill.FirstLine(body), distill.UpLinkPrefix) {
+		t.Errorf("an index does not carry its up-link under the block:\n%s", text)
 	}
 	if !strings.Contains(text, derivationsHeading) {
 		t.Errorf("an index has no down-link list:\n%s", text)
@@ -359,6 +398,19 @@ func anyLeaf(t *testing.T, sc scene) string {
 	}
 	t.Fatal("the fixture has no pages")
 	return ""
+}
+
+// nodeAt is one delivered path's tree-plan node, for a mutation that has to
+// know what the page says about itself.
+func nodeAt(t *testing.T, sc scene, path string) treeplan.Node {
+	t.Helper()
+	for _, n := range sc.plan.Nodes {
+		if n.Path == path {
+			return n
+		}
+	}
+	t.Fatalf("%s is not a node of the fixture's tree plan", path)
+	return treeplan.Node{}
 }
 
 func anyIndex(t *testing.T, sc scene) string {

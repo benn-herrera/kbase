@@ -21,8 +21,9 @@
 //
 // # What stage 8 borrows
 //
-// grammar.go's RelPath, UpLink and Provenance.Footer are §4's shared elements
-// and internal/assemble calls them for the index and entry-point kinds
+// grammar.go's Frontmatter, RelPath, UpLink and Provenance.Footer are §4's
+// shared elements and internal/assemble calls them for the index and
+// entry-point kinds, as stage 9 calls their readers
 // [MAD1: F-9]. The import direction runs downstream, the same way the pipeline
 // does.
 package distill
@@ -93,7 +94,8 @@ type Leaf struct {
 	// Node is the tree-plan path of the leaf, which is also the artifact's
 	// store path under the stage's prefix and its delivered path under <out>.
 	Node string
-	// Data is the whole §4.1 file: up-link, H1, rebased body, footer.
+	// Data is the whole §4.1 file: frontmatter, up-link, H1, rebased body,
+	// footer.
 	Data []byte
 	// Unresolved are the corpus-relative destinations in this leaf that the
 	// rebase map does not land — a target that is `LinkUnresolved` in the
@@ -125,8 +127,7 @@ func (d *Distiller) Render(n treeplan.Node) (Leaf, error) {
 		return Leaf{}, fmt.Errorf("distill: %s draws [%d,%d) of the %d-byte file %s",
 			n.Path, span.Start, span.End, len(doc.Bytes), g.Source.File)
 	}
-	parent, ok := d.titles[n.Parent]
-	if !ok {
+	if _, ok := d.titles[n.Parent]; !ok {
 		return Leaf{}, fmt.Errorf("distill: %s names parent %q, which the tree plan does not hold", n.Path, n.Parent)
 	}
 
@@ -135,7 +136,7 @@ func (d *Distiller) Render(n treeplan.Node) (Leaf, error) {
 	// one.
 	body := dissect.SliceLeaves(doc.Bytes, []survey.Span{span})[0]
 	rebased, left := d.rebase.apply(g.Source.File, n.Path, body)
-	return Leaf{Node: n.Path, Data: leaf(n, parent, rebased, d.prov), Unresolved: left}, nil
+	return Leaf{Node: n.Path, Data: leaf(n, rebased, d.prov), Unresolved: left}, nil
 }
 
 // Leaves is every leaf node of the plan, in tree-plan order.

@@ -104,6 +104,12 @@ const (
 	// buildDateLayout is the provenance receipt's date format (SPEC §7).
 	buildDateLayout = "2006-01-02"
 
+	// kbTitlePrefix opens the knowledge base's own title. A KB is named for the
+	// documentation it was built from — the thing a reader already knows the
+	// name of — and says that it is the kbase rendering of it rather than the
+	// documentation itself.
+	kbTitlePrefix = "KBase for "
+
 	// treePlanModel and treePlanMechanical are what the run record says about
 	// where the tree plan came from. It is recorded on every run, not just the
 	// dev one: "this tree was designed by a model" is the more load-bearing of
@@ -128,6 +134,12 @@ const (
 type buildOptions struct {
 	// Root is the corpus directory to build from.
 	Root string
+
+	// Title is the original doc set's title as the user states it (--title):
+	// "Rojo v7 Documentation", not the directory that happens to hold it. Empty
+	// falls back to the corpus directory's base name, which is the only name
+	// the verb has when nobody gave it one (resolveTitle).
+	Title string
 
 	// Live is the provider pool and configuration. Nil selects the mechanical
 	// tree plan — `[dev] tree_plan` — and nil is the honest value for it:
@@ -194,6 +206,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 			"%s: --out is required; this verb delivers a knowledge base and never uses a temporary directory", buildVerb)
 	}
 	annexes := declaredAnnexes(opts.Annexes)
+	title := resolveTitle(opts.Title, root)
 	lg := opts.Logger
 	if lg == nil {
 		lg = log.Discard()
@@ -302,7 +315,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 	job := &buildJob{
 		opts: opts, out: out, corpus: corpus, art: art, params: params,
 		verifier: verifier, prov: prov, est: est, store: store, lg: lg,
-		annexes: annexes, live: opts.Live != nil,
+		annexes: annexes, title: title, live: opts.Live != nil,
 		inputs: []pipeline.Input{
 			{Name: corpusInput, Hash: art.Corpus.ContentHash},
 			// The operating point every unit is stamped against. The annex
@@ -310,15 +323,18 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 			// (§3.1), and the tree-plan source is in it because the two
 			// shapes produce different tree plans from the same corpus at the
 			// same budgets — without it, switching modes over one --out would
-			// reuse the other mode's artifact and call it fresh.
+			// reuse the other mode's artifact and call it fresh. The resolved
+			// title is in it for the same reason: it names the entry-point in
+			// the tree plan, and a resume that did not see it change would
+			// deliver the old name out of a proven-fresh artifact.
 			{Name: paramsInput, Hash: pipeline.HashBytes([]byte(fmt.Sprintf(
-				"leafTokens=%d;buildDate=%s;treePlan=%s;annexes=%s;version=%s",
+				"leafTokens=%d;buildDate=%s;treePlan=%s;annexes=%s;title=%s;version=%s",
 				params.Budgets.LeafTokens, buildDate, treePlanSource(opts.Live != nil),
-				strings.Join(annexPrefixList(annexes), ","), version.Current)))},
+				strings.Join(annexPrefixList(annexes), ","), title, version.Current)))},
 		},
 	}
 	if job.live {
-		if err := job.wireModelStages(corpusTitle(opts.Root), corpusScope(opts.Root)); err != nil {
+		if err := job.wireModelStages(corpusTitle(title), corpusScope(title)); err != nil {
 			return buildResult{}, err
 		}
 		live.TaxonomyCalls = job.designer.Calls()
@@ -366,6 +382,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 	record := buildRun{
 		Version:     version.Current,
 		Corpus:      root,
+		Title:       title,
 		CorpusHash:  art.Corpus.ContentHash,
 		BuildDate:   buildDate,
 		TreePlan:    treePlanSource(job.live),
@@ -441,6 +458,11 @@ type buildJob struct {
 	// — the descent carries them, and the mechanical proposal hands them to
 	// the same Compose.
 	annexes []treeplan.Annex
+
+	// title is the resolved doc-set title (resolveTitle), from which both
+	// stage-3 shapes name the entry-point. Resolved once, at job setup, so the
+	// two shapes cannot name one corpus two ways.
+	title string
 
 	// live says whether stages 3, 4 and 6 ask a model. The two model stages
 	// built here are nil when it is false, and the plan below is then the
@@ -586,7 +608,7 @@ func (j *buildJob) treePlanStage() *pipeline.StagePlan {
 			Section: stageTreePlan,
 			Produce: func() (any, error) {
 				proposal, err := treeplan.SourceStructureProposal(
-					j.art, corpusTitle(j.opts.Root), corpusScope(j.opts.Root), j.annexes)
+					j.art, corpusTitle(j.title), corpusScope(j.title), j.annexes)
 				if err != nil {
 					return nil, err
 				}
@@ -865,7 +887,7 @@ func (j *buildJob) assembleStage() *pipeline.StagePlan {
 	}
 }
 
-// verifyStage is stage 9: the nine gates over the assembled tree in the store,
+// verifyStage is stage 9: the ten gates over the assembled tree in the store,
 // before any byte reaches <out> (I-5).
 //
 // It declares every delivered file as an upstream, which is the truthful
@@ -1096,16 +1118,26 @@ func surveyFile(art survey.Artifact, path string) (survey.File, bool) {
 	return survey.File{}, false
 }
 
-// corpusTitle and corpusScope name the entry-point of a dev build. They are the
-// corpus directory's own name, because the verb has nothing better: the real
-// ones are the taxonomy stage's to write (§2.1), and inventing something that
-// reads like a considered title would hide that.
-func corpusTitle(root string) string {
-	return filepath.Base(filepath.Clean(root)) + " knowledge base"
+// resolveTitle is the doc set's title: --title as the user stated it, else the
+// corpus directory's base name.
+//
+// The fallback is the raw material the old title was built from, and it is a
+// fallback rather than the rule because a directory name is what the corpus was
+// checked out into, not what the documentation is called.
+func resolveTitle(flag, root string) string {
+	if t := strings.TrimSpace(flag); t != "" {
+		return t
+	}
+	return filepath.Base(filepath.Clean(root))
 }
 
-func corpusScope(root string) string {
-	return "everything built from the " + filepath.Base(filepath.Clean(root)) + " corpus"
+// corpusTitle and corpusScope name the entry-point, from the one resolved title
+// (resolveTitle). Both stage-3 shapes call them, so a live tree and a mechanical
+// one over the same corpus are named the same way.
+func corpusTitle(title string) string { return kbTitlePrefix + title }
+
+func corpusScope(title string) string {
+	return "everything built from the " + title + " corpus"
 }
 
 // encodeBytes is the assemble stage's encoder: a rendered page IS its bytes.
@@ -1137,10 +1169,15 @@ func (j *buildJob) copyProducer(unit string) pipeline.Producer {
 //
 // It is a development record rather than a stamp — nothing reads it back — but
 // it carries every identity a later reader would otherwise reconstruct from a
-// log, and the nine verify results, because those ARE the result of the run.
+// log, and the ten verify results, because those ARE the result of the run.
 type buildRun struct {
-	Version    string `json:"version"`
-	Corpus     string `json:"corpus"`
+	Version string `json:"version"`
+	Corpus  string `json:"corpus"`
+	// Title is the resolved doc-set title the knowledge base is named for —
+	// --title, or the corpus directory's base name. It is recorded on every run
+	// because it is an output-affecting input: it names the entry-point, and it
+	// is stamped into the parameter digest that governs resume.
+	Title      string `json:"title"`
 	CorpusHash string `json:"corpusHash"`
 	BuildDate  string `json:"buildDate"`
 
@@ -1295,6 +1332,7 @@ func resolveBuildDate(pinned string) (string, error) {
 
 var (
 	buildFlagOut     string
+	buildFlagTitle   string
 	buildFlagKeep    bool
 	buildFlagAnnexes []string
 )
@@ -1304,7 +1342,7 @@ var buildCmd = &cobra.Command{
 	Short: "build a knowledge base from a documentation corpus",
 	Long: `Walk a Markdown corpus and assemble a complete, verified knowledge base out of
 it: entry point, section indexes, verbatim pages, navigation links, the shipped
-agent fixtures, and the nine verify gates that stand between the assembled tree
+agent fixtures, and the ten verify gates that stand between the assembled tree
 and the delivered one.
 
 kbase is a model-driven appliance, so this needs a configured provider, and
@@ -1325,6 +1363,12 @@ already in it is touched: every intermediate lives under <out>/temp-work/,
 which kbase creates and, on a successful run, removes. A failed or interrupted
 run keeps it; --keep-temp-work (or [dev] keep_temp_work) keeps it after a
 successful one too.
+
+--title is the original doc set's title as you would state it ("Rojo v7
+Documentation"); the knowledge base is named "KBase for <title>" and that name
+is its entry-point heading, the up-links pointing at it and the start link every
+shipped fixture carries. Without it the corpus directory's base name is used,
+which is the checkout's name rather than the documentation's.
 
 --annex is repeatable and is the only way a corpus territory becomes an annex:
 the material under the prefix is not distilled, not enumerated by the taxonomy
@@ -1354,6 +1398,7 @@ material out of scope can hide its own failures.`,
 		}
 		_, err = runBuild(cmd.Context(), buildOptions{
 			Root:    args[0],
+			Title:   buildFlagTitle,
 			Live:    live,
 			Out:     buildFlagOut,
 			Annexes: buildFlagAnnexes,
@@ -1374,6 +1419,9 @@ material out of scope can hide its own failures.`,
 func init() {
 	buildCmd.Flags().StringVar(&buildFlagOut, "out", "",
 		"output directory for the knowledge base and "+buildRecordName+" (required; created if missing)")
+	buildCmd.Flags().StringVar(&buildFlagTitle, "title", "",
+		"the documentation set's own title; the knowledge base is named \""+
+			kbTitlePrefix+"<title>\" (default: the corpus directory's name)")
 	buildCmd.Flags().StringArrayVar(&buildFlagAnnexes, "annex", nil,
 		"corpus-relative prefix to leave undistilled and list in the entry point's annex lookup (repeatable)")
 	buildCmd.Flags().BoolVar(&buildFlagKeep, keepTempWorkFlag, false,

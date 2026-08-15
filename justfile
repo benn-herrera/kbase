@@ -110,6 +110,41 @@ edit-gate: fmt-check
 # pin block above, one prep recipe, one recipe per process, and the hermetic
 # names on the omnibus.
 
+# Every integration recipe that preserves output under
+# test_data/transient/<test-name>/ overwrites an EVIDENCE.md there: which
+# recipe produced the directory, its exact invocation, and one line per
+# artifact kind actually present. "Results are part of the test" (AGENTS.md)
+# extends to the directory itself — a folder of logs that does not say what
+# produced it is not evidence.
+#
+# One shared writer, not five copies: every integration recipe draws
+# artifacts from the same small vocabulary (a log, a survey pair, or a
+# delivered kb/ tree), so a fixed checklist covers all five. It is called as
+# the LAST step of each private recipe body, via a recursive `just`
+# invocation — the same subprocess idiom the tee wrappers below use — because
+# a `just` dependency only runs BEFORE a recipe's own body, and this needs to
+# run after the artifacts it inspects already exist.
+[private]
+_write-evidence out_dir recipe invocation:
+    @{ \
+      echo "# EVIDENCE"; \
+      echo; \
+      echo "Producing recipe: just {{recipe}}"; \
+      echo; \
+      echo "Invocation:"; \
+      echo; \
+      printf '%b\n' "{{invocation}}" | sed 's/^/    /'; \
+      echo; \
+      echo "Artifacts present:"; \
+      [[ -f "{{out_dir}}/log.txt" ]]      && echo "- log.txt: full recipe log (tee'd stdout+stderr)"; \
+      [[ -f "{{out_dir}}/survey.json" ]]  && echo "- survey.json, survey-rerun.json: survey artifact, first run + determinism rerun"; \
+      [[ -f "{{out_dir}}/summary.txt" ]]  && echo "- summary.txt: human-readable survey summary"; \
+      [[ -d "{{out_dir}}/kb" ]]           && echo "- kb/: delivered knowledge base tree"; \
+      [[ -f "{{out_dir}}/kb/run.json" ]]  && echo "- kb/run.json: run record (stats, ten verify gates)"; \
+      [[ -d "{{out_dir}}/kb/temp-work" ]] && echo "- kb/temp-work/: kept pipeline intermediates (--keep-temp-work)"; \
+      true; \
+    } > "{{out_dir}}/EVIDENCE.md"
+
 [doc("fetch the pinned Rojo docs corpus (no-op when present)")]
 prep-test-integration-rojo:
     @if [[ -f "{{ROJO_DOCS_DIR}}/.git/HEAD" ]]; then \
@@ -151,8 +186,8 @@ test-integration-survey-rojo:
 # written as JSON beside this log by the tests themselves.
 [private]
 _test-integration-survey-rojo: build prep-test-integration-rojo
-    go test -v -run TestSplitOverRealCorpusSections -count=1 ./internal/dissect
-    go test -v -run TestTreePlanOverRealCorpus -count=1 ./internal/treeplan
+    go test -v -run 'TestSplitOverRealCorpusSections/rojo' -count=1 ./internal/dissect
+    go test -v -run 'TestTreePlanOverRealCorpus/rojo' -count=1 ./internal/treeplan
     @a="{{SURVEY_ROJO_OUT_DIR}}/survey.json"; \
     b="{{SURVEY_ROJO_OUT_DIR}}/survey-rerun.json"; \
     s="{{SURVEY_ROJO_OUT_DIR}}/summary.txt"; \
@@ -168,12 +203,14 @@ _test-integration-survey-rojo: build prep-test-integration-rojo
       echo "$summary" | grep -qF "$want" || \
         { echo "integration(survey-rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
-    echo "integration(survey-rojo) ok: surveyed, deterministic, summary matches"
+    echo "integration(survey-rojo) ok: surveyed, deterministic, summary matches"; \
+    {{just_executable()}} _write-evidence "{{SURVEY_ROJO_OUT_DIR}}" "test-integration-survey-rojo" \
+      "./{{BIN_DIR}}/kbase survey {{ROJO_DOCS_DIR}}/docs --json {{SURVEY_ROJO_OUT_DIR}}/survey.json\n./{{BIN_DIR}}/kbase survey {{ROJO_DOCS_DIR}}/docs --json {{SURVEY_ROJO_OUT_DIR}}/survey-rerun.json  # determinism rerun\n./{{BIN_DIR}}/kbase survey {{ROJO_DOCS_DIR}}/docs > {{SURVEY_ROJO_OUT_DIR}}/summary.txt"
 
 # Build a whole knowledge base out of the pinned Rojo corpus and walk it.
 #
 # This is the mechanical spine end to end — survey, tree plan, cuts, pages,
-# assembly, the nine verify gates, delivery — with no model in the loop, so it
+# assembly, the ten verify gates, delivery — with no model in the loop, so it
 # runs offline in a second and any drift in the deterministic half of the
 # pipeline fails it.
 #
@@ -182,7 +219,7 @@ _test-integration-survey-rojo: build prep-test-integration-rojo
 # the run record beside it, the job's intermediates in its temp-work/, the
 # measured stats in stats.json, and the full log. A build that left nothing to
 # walk would be a green tick nobody can check.
-[doc("build a KB from the pinned Rojo corpus with no model in the loop; assert the nine verify gates and walk the tree")]
+[doc("build a KB from the pinned Rojo corpus with no model in the loop; assert the ten verify gates and walk the tree")]
 test-integration-build-mechanical-rojo:
     @mkdir -p "{{BUILD_MECHANICAL_ROJO_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-mechanical-rojo 2>&1 | tee "{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/log.txt"
@@ -198,7 +235,7 @@ test-integration-build-mechanical-rojo:
 # exercise instead.
 #
 # The pinned counts below are read straight off run.json — the same record
-# test-integration-build-live-rojo asserts the nine gates from — rather than
+# test-integration-build-live-rojo asserts the ten gates from — rather than
 # recomputed against each other in process, because a shell recipe never has
 # the tree-plan struct to recompute them from. That is not a loss: gate 5
 # ("the delivered set is the tree plan's nodes plus the fixture manifest") and
@@ -227,9 +264,9 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     [[ -f "$rec" ]] || { echo "integration(build-mechanical-rojo): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
-    [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the nine gates refused; see $rec"; exit 1; }; \
-    [[ "$green" == 9 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want nine; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 40'; do \
+    [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 10 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
+    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 41'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
     for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
@@ -248,7 +285,9 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
     echo "  tree to depth 2:"; \
     find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
-    echo "integration(build-mechanical-rojo) ok: nine gates green, counts pinned, tree deterministic and delivered"
+    echo "integration(build-mechanical-rojo) ok: ten gates green, counts pinned, tree deterministic and delivered"; \
+    {{just_executable()}} _write-evidence "{{BUILD_MECHANICAL_ROJO_OUT_DIR}}" "test-integration-build-mechanical-rojo" \
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb-rerun  # determinism rerun, diffed then discarded"
 
 # The same build with the model IN the loop: stages 3, 4 and 6 — the container
 # descent that designs the tree, the boundary fold that adjudicates page cuts,
@@ -272,7 +311,7 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
 # The recipe invokes the built binary and nothing else — the API key stays a
 # path in providers.toml that the binary reads for itself, and no recipe, log
 # or evidence file ever holds it.
-[doc("LIVE (excluded from test-integration: needs a provider + network): build a KB from the pinned Rojo corpus with the model in the loop; assert the nine verify gates")]
+[doc("LIVE (excluded from test-integration: needs a provider + network): build a KB from the pinned Rojo corpus with the model in the loop; assert the ten verify gates")]
 test-integration-build-live-rojo:
     @mkdir -p "{{BUILD_LIVE_ROJO_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-live-rojo 2>&1 | tee "{{BUILD_LIVE_ROJO_OUT_DIR}}/log.txt"
@@ -296,8 +335,8 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
     [[ -f "$rec" ]] || { echo "integration(build-live-rojo): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
-    [[ "$red" == 0 ]] || { echo "integration(build-live-rojo): $red of the nine gates refused; see $rec"; exit 1; }; \
-    [[ "$green" == 9 ]] || { echo "integration(build-live-rojo): $green gates reported, want nine; see $rec"; exit 1; }; \
+    [[ "$red" == 0 ]] || { echo "integration(build-live-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 10 ]] || { echo "integration(build-live-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
     for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-live-rojo): $want was not delivered"; exit 1; }; \
     done; \
@@ -312,7 +351,9 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
     find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
     echo "  tree to depth 2:"; \
     find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
-    echo "integration(build-live-rojo) ok: nine gates green, tree delivered, temp work kept"
+    echo "integration(build-live-rojo) ok: ten gates green, tree delivered, temp work kept"; \
+    {{just_executable()}} _write-evidence "{{BUILD_LIVE_ROJO_OUT_DIR}}" "test-integration-build-live-rojo" \
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_ROJO_OUT_DIR}}/kb --keep-temp-work"
 
 # The oMLX corpus, same two hermetic processes over it. There is no
 # test-integration-build-live-omlx: one live build is the seam check, and a
@@ -344,10 +385,11 @@ prep-test-integration-omlx:
 # fewer, much larger documents. Expectation changes are loud by design here
 # too.
 #
-# It does NOT run the dissect and treeplan corpus properties. Those tests read
-# ONE pinned corpus, Rojo's, and run in the recipe where that corpus is
-# guaranteed present; pointing them at a second corpus is a change to those
-# tests, not to this recipe.
+# It also runs the dissect and treeplan corpus properties, same as
+# test-integration-survey-rojo — both are now parameterized per-corpus
+# subtests, so this recipe runs the /omlx subtest here, qualified exactly as
+# the rojo recipe qualifies its own /rojo subtest, over the corpus this
+# recipe (not that one) guarantees present.
 [doc("survey the pinned oMLX corpus; assert summary values + determinism")]
 test-integration-survey-omlx:
     @mkdir -p "{{SURVEY_OMLX_OUT_DIR}}"
@@ -355,8 +397,14 @@ test-integration-survey-omlx:
 
 # The body, split out so the wrapper above can tee ONE stream — same reason as
 # _test-integration-survey-rojo.
+#
+# The two go test runs are -v here and nowhere else, same reason as
+# _test-integration-survey-rojo: a preserved integration log wants the
+# t.Logf lines that say what the corpus actually measured.
 [private]
 _test-integration-survey-omlx: build prep-test-integration-omlx
+    go test -v -run 'TestSplitOverRealCorpusSections/omlx' -count=1 ./internal/dissect
+    go test -v -run 'TestTreePlanOverRealCorpus/omlx' -count=1 ./internal/treeplan
     @a="{{SURVEY_OMLX_OUT_DIR}}/survey.json"; \
     b="{{SURVEY_OMLX_OUT_DIR}}/survey-rerun.json"; \
     s="{{SURVEY_OMLX_OUT_DIR}}/summary.txt"; \
@@ -372,7 +420,9 @@ _test-integration-survey-omlx: build prep-test-integration-omlx
       echo "$summary" | grep -qF "$want" || \
         { echo "integration(survey-omlx): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
-    echo "integration(survey-omlx) ok: surveyed, deterministic, summary matches"
+    echo "integration(survey-omlx) ok: surveyed, deterministic, summary matches"; \
+    {{just_executable()}} _write-evidence "{{SURVEY_OMLX_OUT_DIR}}" "test-integration-survey-omlx" \
+      "./{{BIN_DIR}}/kbase survey {{OMLX_DOCS_DIR}}/docs --json {{SURVEY_OMLX_OUT_DIR}}/survey.json\n./{{BIN_DIR}}/kbase survey {{OMLX_DOCS_DIR}}/docs --json {{SURVEY_OMLX_OUT_DIR}}/survey-rerun.json  # determinism rerun\n./{{BIN_DIR}}/kbase survey {{OMLX_DOCS_DIR}}/docs > {{SURVEY_OMLX_OUT_DIR}}/summary.txt"
 
 # Build a whole knowledge base out of the pinned oMLX corpus and walk it — the
 # mechanical spine end to end, exactly as test-integration-build-mechanical-rojo
@@ -381,7 +431,7 @@ _test-integration-survey-omlx: build prep-test-integration-omlx
 #
 # It keeps its whole output for the same reason that one does: the KB is the
 # evidence.
-[doc("build a KB from the pinned oMLX corpus with no model in the loop; assert the nine verify gates and walk the tree")]
+[doc("build a KB from the pinned oMLX corpus with no model in the loop; assert the ten verify gates and walk the tree")]
 test-integration-build-mechanical-omlx:
     @mkdir -p "{{BUILD_MECHANICAL_OMLX_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-mechanical-omlx 2>&1 | tee "{{BUILD_MECHANICAL_OMLX_OUT_DIR}}/log.txt"
@@ -403,9 +453,9 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     [[ -f "$rec" ]] || { echo "integration(build-mechanical-omlx): no run record at $rec"; exit 1; }; \
     green="$(grep -c '"ok": true' "$rec" || true)"; \
     red="$(grep -c '"ok": false' "$rec" || true)"; \
-    [[ "$red" == 0 ]] || { echo "integration(build-mechanical-omlx): $red of the nine gates refused; see $rec"; exit 1; }; \
-    [[ "$green" == 9 ]] || { echo "integration(build-mechanical-omlx): $green gates reported, want nine; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 18'; do \
+    [[ "$red" == 0 ]] || { echo "integration(build-mechanical-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 10 ]] || { echo "integration(build-mechanical-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
+    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 19'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-omlx): expected $want in $rec"; exit 1; }; \
     done; \
     for want in entry-point.md AGENTS.md README.md .agents/docent.md run.json; do \
@@ -424,7 +474,9 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
     echo "  tree to depth 2:"; \
     find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
-    echo "integration(build-mechanical-omlx) ok: nine gates green, counts pinned, tree deterministic and delivered"
+    echo "integration(build-mechanical-omlx) ok: ten gates green, counts pinned, tree deterministic and delivered"; \
+    {{just_executable()}} _write-evidence "{{BUILD_MECHANICAL_OMLX_OUT_DIR}}" "test-integration-build-mechanical-omlx" \
+      "./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb-rerun  # determinism rerun, diffed then discarded"
 
 # The omnibus composes the HERMETIC per-corpus recipes and writes no log of its
 # own: each of them already preserves its full output under its own name, and a

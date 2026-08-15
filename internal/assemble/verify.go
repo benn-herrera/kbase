@@ -16,12 +16,13 @@ import (
 	"kbase/internal/treeplan"
 )
 
-// Stage 9 (§9): the nine gates, run over the assembled tree IN THE STORE,
+// Stage 9 (§9): the ten gates, run over the assembled tree IN THE STORE,
 // before any byte reaches <out> (I-5).
 //
 // Every check names the file class it applies to [MAD1: F-3]. Without that
-// scoping checks 2, 4 and 5 fail by construction on every green run, because
-// stage 8 ships fixtures that are not nodes and carry no up-link.
+// scoping checks 2, 4, 5 and 10 fail by construction on every green run,
+// because stage 8 ships fixtures that are not nodes and carry no up-link and
+// no Location.
 //
 // Any failure refuses delivery and names the node. There is no
 // deliver-with-warnings mode.
@@ -30,10 +31,6 @@ const (
 	// composing verb's run record and a human looking at a failed job — so it
 	// says what shape it is.
 	ReportSchema = "kbase.verify/1"
-
-	// upLinkPrefix opens the up-link line. Checks 2 and 9 count and locate
-	// up-links with it; check 5 compares the whole line.
-	upLinkPrefix = "[↑ "
 )
 
 // Verification is everything the gates read.
@@ -119,7 +116,7 @@ func EncodeReport(artifact any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Verify runs all nine gates and returns the report plus the first refusal.
+// Verify runs all ten gates and returns the report plus the first refusal.
 //
 // Every check runs even after one has failed: a report that stopped at the
 // first failure would make the second one a surprise on the next run, and the
@@ -140,7 +137,7 @@ func Verify(v Verification) (Report, error) {
 
 	rep.Checks = []CheckResult{
 		result(1, "every referenced file exists", v.checkLinksResolve(classA, classB)),
-		result(2, "one up-link, at line 1, on every class-A node but the entry-point", v.checkUpLinks(classA)),
+		result(2, "one up-link under the frontmatter block, label and target agreeing, on every class-A node but the entry-point", v.checkUpLinks(classA)),
 		result(3, "the entry-point exists and its domains exist", v.checkEntryPoint()),
 		result(4, "no unreachable documents, per class", v.checkReachable(classA, classB)),
 		result(5, "the delivered set is the tree plan's nodes plus the fixture manifest", v.checkConformance(classA, classB, stray)),
@@ -148,6 +145,7 @@ func Verify(v Verification) (Report, error) {
 		result(7, "leaf fidelity: every page re-derives byte-for-byte from source", v.checkLeafFidelity(classA)),
 		result(8, "structural caps: depth, fan-out, entry-point ceiling", v.checkCaps()),
 		result(9, "grammar conformance, per node kind and per fixture template", v.checkGrammar(classA, classB)),
+		result(10, "every class-A page declares its own delivered path in its frontmatter", v.checkLocation(classA)),
 	}
 	for _, c := range rep.Checks {
 		if !c.OK {
@@ -222,14 +220,21 @@ func (v Verification) checkLinksResolve(classA, classB []string) error {
 }
 
 // checkUpLinks is check 2: every class-A document except the entry-point has
-// exactly one up-link, at line 1. Class B carries none, by grammar.
+// exactly one up-link, it is the first line under the frontmatter block, and
+// its label and its target name the SAME node. Class B carries none, by
+// grammar.
+//
+// The agreement half is the point of the label carrying a root-relative path
+// (ruled 2026-08-15): two projections of one tree-plan fact, checked against
+// each other over the delivered bytes. The renderer cannot disagree with
+// itself — a copy, a rebase or a hand edit can, and this is where that shows.
 func (v Verification) checkUpLinks(classA []string) error {
 	entry := v.Renderer.EntryPointPath()
 	for _, p := range classA {
-		lines := strings.Split(string(v.Files[p]), "\n")
+		_, body, _ := distill.ParseFrontmatter(v.Files[p])
 		n := 0
-		for _, l := range lines {
-			if strings.HasPrefix(l, upLinkPrefix) {
+		for _, l := range strings.Split(string(v.Files[p]), "\n") {
+			if strings.HasPrefix(l, distill.UpLinkPrefix) {
 				n++
 			}
 		}
@@ -242,8 +247,13 @@ func (v Verification) checkUpLinks(classA []string) error {
 		if n != 1 {
 			return fmt.Errorf("%s carries %d up-links; a class-A node has exactly one", p, n)
 		}
-		if !strings.HasPrefix(lines[0], upLinkPrefix) {
+		label, target, ok := distill.ParseUpLink(distill.FirstLine(body))
+		if !ok {
 			return fmt.Errorf("%s does not open with its up-link", p)
+		}
+		if got := path.Clean(path.Join(path.Dir(p), target)); got != label {
+			return fmt.Errorf("%s: the up-link is labelled %q and points at %q, which is %s; "+
+				"the label and the target must name one node", p, label, target, got)
 		}
 	}
 	return nil
@@ -473,6 +483,34 @@ func (v Verification) checkGrammar(classA, classB []string) error {
 	for _, p := range classB {
 		if !bytes.Equal(fixtures[p], v.Files[p]) {
 			return fmt.Errorf("the fixture %s is not what its template renders to", p)
+		}
+	}
+	return nil
+}
+
+// checkLocation is check 10: every class-A page opens with a frontmatter block
+// declaring its own delivered path (SPEC §4.9). Class B carries none — a
+// fixture's name is root-obvious and `.agents/` is exempt by design.
+//
+// It is a free integrity tripwire rather than a restatement of the render: the
+// path compared against is the key the page was DELIVERED under, so a page
+// copied to the wrong node, or rebased against the wrong parent, fails here
+// even when every link in it still resolves.
+//
+// The read is the forgiving one (distill.ParseFrontmatter): fields this build does
+// not know are skipped, so a later kbase pass may add one. What is refused is
+// an absent block, an absent Location, and a Location that names another page.
+func (v Verification) checkLocation(classA []string) error {
+	for _, p := range classA {
+		loc, _, ok := distill.ParseFrontmatter(v.Files[p])
+		if !ok {
+			return fmt.Errorf("%s does not open with a frontmatter block", p)
+		}
+		if loc == "" {
+			return fmt.Errorf("%s carries a frontmatter block that declares no Location", p)
+		}
+		if loc != p {
+			return fmt.Errorf("%s declares Location %q; a page states the path it was delivered under", p, loc)
 		}
 	}
 	return nil

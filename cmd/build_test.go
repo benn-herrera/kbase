@@ -20,7 +20,7 @@ import (
 )
 
 // The hermetic end-to-end: a corpus this test writes, built by the same
-// function the verb calls, verified by the same nine gates.
+// function the verb calls, verified by the same ten gates.
 //
 // It is a synthetic corpus rather than the pinned one for a reason worth
 // stating: Rojo's docs resolve ZERO internal links (their destinations are
@@ -98,8 +98,8 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 	if !res.Report.Passed() {
 		t.Fatalf("the gates did not pass:\n%s", stdout)
 	}
-	if len(res.Report.Checks) != 9 {
-		t.Fatalf("the report holds %d checks, want nine", len(res.Report.Checks))
+	if len(res.Report.Checks) != 10 {
+		t.Fatalf("the report holds %d checks, want ten", len(res.Report.Checks))
 	}
 	if !res.Job.DeliveryReady() {
 		t.Fatalf("the job is not delivery-ready: %d units, %d produced, %d failed",
@@ -116,7 +116,8 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 			t.Errorf("%s is in the delivered set and not on disk: %v", p, err)
 		}
 	}
-	for _, name := range []string{"entry-point.md", assemble.AgentsFixture, assemble.ReadmeFixture, buildRecordName} {
+	for _, name := range []string{"entry-point.md", assemble.AgentsFixture, assemble.ReadmeFixture,
+		assemble.ClaudeFixture, buildRecordName} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Errorf("%s was not delivered: %v", name, err)
 		}
@@ -313,8 +314,8 @@ func TestBuildRunRecord(t *testing.T) {
 	if rec.BuildDate != pinnedBuildDate {
 		t.Errorf("the record stamps %s, the build stamped %s", rec.BuildDate, pinnedBuildDate)
 	}
-	if len(rec.Verify) != 9 {
-		t.Errorf("the record carries %d verify results, want nine", len(rec.Verify))
+	if len(rec.Verify) != 10 {
+		t.Errorf("the record carries %d verify results, want ten", len(rec.Verify))
 	}
 	if rec.Nodes != len(res.Plan.Nodes) {
 		t.Errorf("the record counts %d nodes, the tree plan holds %d", rec.Nodes, len(res.Plan.Nodes))
@@ -328,6 +329,93 @@ func TestBuildRunRecord(t *testing.T) {
 		t.Errorf("the record was built at a leaf budget of %d, want the shipped %d",
 			rec.Budgets.LeafTokens, treeplan.DefaultBudgets().LeafTokens)
 	}
+}
+
+// The knowledge base is named for the documentation it was built from: --title
+// as the user stated it, else the corpus directory's base name. The name is
+// asserted where a reader meets it — the entry-point's heading — and in the run
+// record, which is where a later reader finds what this run was told.
+func TestBuildNamesTheKnowledgeBase(t *testing.T) {
+	root := writeCorpus(t)
+	tests := []struct {
+		name  string
+		title string
+		want  string
+	}{
+		{"the stated title", "Rojo v7 Documentation", kbTitlePrefix + "Rojo v7 Documentation"},
+		{"blank falls back to the corpus directory", "   ", kbTitlePrefix + filepath.Base(root)},
+		{"absent falls back to the corpus directory", "", kbTitlePrefix + filepath.Base(root)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "kb")
+			var stdout, stderr bytes.Buffer
+			if _, err := runBuild(context.Background(), buildOptions{
+				Root: root, Title: tt.title, Out: out, BuildDate: pinnedBuildDate,
+				Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+			}); err != nil {
+				t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
+			}
+			if head := entryHeading(t, out); head != "# "+tt.want {
+				t.Errorf("the entry point opens %q, want %q", head, "# "+tt.want)
+			}
+			data, err := os.ReadFile(filepath.Join(out, buildRecordName))
+			if err != nil {
+				t.Fatalf("read the run record: %v", err)
+			}
+			var rec buildRun
+			if err := json.Unmarshal(data, &rec); err != nil {
+				t.Fatalf("decode the run record: %v", err)
+			}
+			if got := kbTitlePrefix + rec.Title; got != tt.want {
+				t.Errorf("the record names the doc set %q, the tree is titled %q", rec.Title, tt.want)
+			}
+		})
+	}
+}
+
+// A retitled run over the same --out delivers the new name. The title lands in
+// the tree plan, and a tree plan is reused when its inputs are unchanged — so
+// the title has to be one of those inputs or a resume would prove a stale
+// artifact fresh and deliver the old name out of it.
+func TestBuildRetitlesAResumedRun(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	run := func(title string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if _, err := runBuild(context.Background(), buildOptions{
+			Root: root, Title: title, Out: out, BuildDate: pinnedBuildDate,
+			// Kept, so the second run has the first one's artifacts to resume
+			// from — which is the case under test.
+			KeepTempWork: true,
+			Stdout:       &stdout, Stderr: &stderr, Logger: log.Discard(),
+		}); err != nil {
+			t.Fatalf("runBuild(%q): %v\nstderr:\n%s", title, err, stderr.String())
+		}
+	}
+	run("The First Manual")
+	run("The Second Manual")
+
+	want := "# " + kbTitlePrefix + "The Second Manual"
+	if head := entryHeading(t, out); head != want {
+		t.Errorf("the resumed run delivered %q, want %q", head, want)
+	}
+}
+
+// entryHeading is the delivered entry-point's H1, read under the frontmatter
+// block that owns file-start on every class-A page (SPEC §4.9).
+func entryHeading(t *testing.T, out string) string {
+	t.Helper()
+	entry, err := os.ReadFile(filepath.Join(out, "entry-point.md"))
+	if err != nil {
+		t.Fatalf("read the entry point: %v", err)
+	}
+	loc, body, ok := distill.ParseFrontmatter(entry)
+	if !ok || loc != "entry-point.md" {
+		t.Fatalf("the entry point declares Location %q (block found: %t)", loc, ok)
+	}
+	return distill.FirstLine(body)
 }
 
 // The annex, end to end through the verb: the declared prefix is exempt from

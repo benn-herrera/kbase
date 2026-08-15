@@ -14,9 +14,9 @@ import (
 // what makes §0.3's drift class unrepresentable rather than checked: there is
 // no second place a title, a scope line or a path is computed (I-1).
 //
-// The three elements shared with the leaf kind — the up-link, the relative
-// path and the provenance footer — are internal/distill's, called from here
-// [MAD1: F-9].
+// The four elements shared with the leaf kind — the frontmatter block, the
+// up-link, the relative path and the provenance footer — are
+// internal/distill's, called from here [MAD1: F-9].
 const (
 	// derivationsHeading opens an index's down-link list. It is mandatory on
 	// every index (§9 check 9): an index without one is a routing node that
@@ -32,10 +32,22 @@ const (
 	usingHeading = "## Using this knowledge base"
 	annexHeading = "## Annex lookup"
 
+	// noCrawlInvariant leads the contract and is also a bullet of the CLAUDE.md
+	// fixture, so it is its own constant: the duplication between those two is
+	// deliberate (a session's read-AGENTS.md hop is probabilistic), and a
+	// duplicated STRING would drift.
+	//
+	// It carries no reason. A directive with a rationale attached is a
+	// conditional to a small model — it evaluates whether the reason applies
+	// and then decides — and an invariant that can be evaluated away is not one.
+	noCrawlInvariant = "INVARIANT: Answers come exclusively from the text of one or more leaves. " +
+		"Intermediate nodes are for navigation only."
+
 	// contractText is SPEC §3's statement, verbatim, and it is a constant
 	// because §4.3's entry-point and §8.1's AGENTS.md fixture both render it —
 	// one string, two render sites, no second place to drift.
-	contractText = "**Summaries route; leaves answer.** An index page tells you where to go; " +
+	contractText = noCrawlInvariant + "\n\n" +
+		"**Summaries route; leaves answer.** An index page tells you where to go; " +
 		"a page at the bottom of the tree is where the answer is. Answer from leaf text, " +
 		"never from an index summary — the summaries are navigation, and they are not the source."
 
@@ -124,7 +136,8 @@ func (r *Renderer) Node(n treeplan.Node) ([]byte, error) {
 //
 // The framing and conclusions blocks are the model's, and their ABSENCE is
 // legal (O-1): with no summary artifact for this node, a mechanically
-// renderable index is up-link, H1 and the down-link list. Everything else on
+// renderable index is frontmatter, up-link, H1 and the down-link list.
+// Everything else on
 // the page comes from the tree plan, which is why a worthless summary costs a
 // reader tokens and cannot misroute them (I-4).
 func (r *Renderer) index(n treeplan.Node) ([]byte, error) {
@@ -132,12 +145,13 @@ func (r *Renderer) index(n treeplan.Node) ([]byte, error) {
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("assemble: %s is a section with no entries under it", n.Path)
 	}
-	parent, ok := r.titles[n.Parent]
-	if !ok {
+	if _, ok := r.titles[n.Parent]; !ok {
 		return nil, fmt.Errorf("assemble: %s names parent %q, which the tree plan does not hold", n.Path, n.Parent)
 	}
 	var b strings.Builder
-	b.WriteString(distill.UpLink(parent, distill.RelPath(n.Path, n.Parent)))
+	b.WriteString(distill.Frontmatter(n.Path))
+	b.WriteString("\n\n")
+	b.WriteString(distill.UpLink(n.Path, n.Parent))
 	b.WriteString("\n\n# ")
 	b.WriteString(n.Title)
 	b.WriteString("\n\n")
@@ -191,7 +205,11 @@ func (r *Renderer) entryPoint(n treeplan.Node) ([]byte, error) {
 		return nil, fmt.Errorf("assemble: the entry-point has no domains")
 	}
 	var b strings.Builder
-	b.WriteString("# ")
+	// The entry-point carries no up-link and still opens with its Location
+	// block: the frontmatter is a property of a class-A page, not of having a
+	// parent.
+	b.WriteString(distill.Frontmatter(n.Path))
+	b.WriteString("\n\n# ")
 	b.WriteString(n.Title)
 	b.WriteString("\n\n")
 	// The entry-point's conclusions block is OPTIONAL (O-11): a small,

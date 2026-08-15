@@ -30,12 +30,12 @@ just cover      # aggregate whole-suite coverage → cover.out
 just test-integration        # omnibus: every hermetic integration test
 just test-integration-survey-rojo  # pinned Rojo corpus: summary values + determinism
 just test-integration-build-mechanical-rojo  # `kbase build` over that corpus under
-                                  # the offline [dev] fixture; the nine verify gates
+                                  # the offline [dev] fixture; the ten verify gates
 just test-integration-build-live-rojo  # the same build with the model in the loop;
                                   # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
 just test-integration-survey-omlx  # pinned oMLX docs corpus: summary values + determinism
-just test-integration-build-mechanical-omlx  # offline KB build over it, nine gates
+just test-integration-build-mechanical-omlx  # offline KB build over it, ten gates
 just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
@@ -66,7 +66,7 @@ write generated or downloaded data into `fixtures/`.
 ```
 cmd/                kbase CLI (cobra): composition root + one file per verb
 internal/assemble/  stages 8+9: index/entry-point rendering, the fixture
-                    manifest, the nine verify gates, delivery
+                    manifest, the ten verify gates, delivery
 internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists

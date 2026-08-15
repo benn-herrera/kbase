@@ -122,7 +122,8 @@ list.
 ### 1.5 `kbase build` — the delivery verb
 
 ```
-kbase build <corpus-dir> --out DIR [--annex PREFIX]... [--keep-temp-work]
+kbase build <corpus-dir> --out DIR [--title TITLE] [--annex PREFIX]...
+                         [--keep-temp-work]
 ```
 
 Builds a complete, verified knowledge base. Requires **both** tiers to be
@@ -132,6 +133,15 @@ summaries, the light tier adjudicates page boundaries.
 
 - `--out` is required; receives the delivered tree under the
   output-directory contract (§3.1).
+- `--title TITLE` is the documentation set's own title as the user states
+  it (`--title "Rojo v7 Documentation"`). The knowledge base is titled
+  `KBase for <TITLE>`, and that is its entry-point heading, the text of
+  every down-link that points at a domain from it, and the start link the
+  shipped fixtures carry. Absent or blank, `TITLE` falls back to the
+  corpus directory's base name. The resolved title is recorded in
+  `run.json` (§3.8) and is an output-affecting input: changing it over an
+  existing `--out` re-derives the tree plan rather than resuming the one
+  built under the old title.
 - `--annex PREFIX` is repeatable. Validation, in order: an empty prefix
   refuses; a prefix that is not a clean, corpus-relative path (no `/`
   prefix, no `.`/`..` segments) refuses; a prefix naming no surveyed
@@ -140,7 +150,7 @@ summaries, the light tier adjudicates page boundaries.
   model is dialed.
 - `--keep-temp-work` keeps `temp-work/` after a run that succeeds (a
   failed or interrupted run always keeps it regardless).
-- Nothing is delivered unless every one of the nine guarantees (§4.8)
+- Nothing is delivered unless every one of the ten guarantees (§4.8)
   holds; a failure refuses the whole delivery and names which guarantee
   failed (and, where applicable, the offending node) in the run record
   (§3.8).
@@ -431,12 +441,12 @@ proceed normally.
 ### 3.8 `run.json` — the run record
 
 **`kbase build`**, written to `<out>/run.json` on every completed attempt
-(delivered or refused): `version`, `corpus` (path), `corpusHash`,
-`buildDate`, `treePlan` (`"model"` or `"mechanical (dev)"`), `annexes`
+(delivered or refused): `version`, `corpus` (path), `title` (the resolved
+doc-set title, §1.5), `corpusHash`, `buildDate`, `treePlan` (`"model"` or `"mechanical (dev)"`), `annexes`
 (omitted if none), `budgets` (§3.3's object), `sourceFiles`,
 `sourceSections`, `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
 `summaries`, `deliveredFiles`, `units`, `unitsProduced`, `unitsReused`,
-`elapsedMs`, and `verify`: exactly nine `{"number", "name", "ok"}` entries,
+`elapsedMs`, and `verify`: exactly ten `{"number", "name", "ok"}` entries,
 one per guarantee in §4.8, always in the same order. A live (model-in-the
 -loop) run additionally carries a `live` object naming: `provider`,
 `baseUrl`, `model` and `tier` (the heavy tier's, which designed the tree
@@ -473,46 +483,59 @@ budget at tree-design time).
 
 In order:
 
-1. The up-link (§4.4), line 1, then a blank line.
-2. A synthesized `# <Title>` heading — **unless** the leaf's own first
+1. The frontmatter block (§4.9), then a blank line.
+2. The up-link (§4.4), then a blank line.
+3. A synthesized `# <Title>` heading — **unless** the leaf's own first
    non-blank line already opens with a Markdown ATX heading (`#…`), in
    which case none is synthesized (a leaf cut at a `##` boundary opens
    with `##` and gains no redundant `#`; navigation elsewhere always uses
    the node's own title regardless).
-3. The verbatim body: byte-identical to the corresponding source span,
+4. The verbatim body: byte-identical to the corresponding source span,
    with only link **destinations** rewritten (§4.5) — visible link text
    is never altered.
-4. A trailing newline, added if the body lacks one.
-5. The provenance footer (§4.6).
+5. A trailing newline, added if the body lacks one.
+6. The provenance footer (§4.6).
 
 ### 4.3 Index and entry-point page layout
 
-**Index page**, in order: up-link (line 1) → blank line → `# <Title>` →
+**Index page**, in order: frontmatter block (§4.9) → up-link → `# <Title>` →
 optional summary block (present iff a summary artifact exists for the
 node: framing text, a rule, `## <conclusionsHeading>`, conclusions text, a
 rule) → `## Derivations and Detail` heading, then one down-link bullet per
 child in tree order (`- [<ChildTitle>](<relative-path>) — <ChildScope>`) →
 provenance footer.
 
-**Entry-point page** (no up-link — it has none), in order: `# <Title>` →
+**Entry-point page** (no up-link — it has none; the frontmatter block is
+first all the same), in order: frontmatter block (§4.9) → `# <Title>` →
 optional summary block (same shape) → `## Domains` heading, one down-link
 bullet per direct child (same bullet grammar) → `## Using this knowledge
-base` heading, with the fixed contract text: *"Summaries route; leaves
-answer. An index page tells you where to go; a page at the bottom of the
-tree is where the answer is. Answer from leaf text, never from an index
-summary — the summaries are navigation, and they are not the source."* —
+base` heading, with the fixed contract text — the invariant, a blank
+line, then the routing statement: *"INVARIANT: Answers come exclusively
+from the text of one or more leaves. Intermediate nodes are for
+navigation only."* / *"Summaries route; leaves answer. An index page
+tells you where to go; a page at the bottom of the tree is where the
+answer is. Answer from leaf text, never from an index summary — the
+summaries are navigation, and they are not the source."* —
 then a fixed pointer to `.agents/` → optional `## Annex lookup` section
 (present iff at least one `--annex` was declared: one bullet per annex,
 `` - `<prefix>` — <convention> ``) → provenance footer.
 
 ### 4.4 Up-links
 
-Exact literal format: `[↑ <Parent Title>](<relative path to parent>)` —
-the glyph is U+2191 (↑), one space on each side inside the brackets. Every
-class-A page (leaf or index) but the entry-point carries **exactly one**
-up-link, and it is the **first line of the file**, nothing before it — a
-validator may check this by splitting on `\n` and requiring the up-link at
-`lines[0]` and nowhere else. The entry-point carries none.
+Exact literal format:
+`[↑ <root-relative path of parent>](<relative path to parent>)` — the
+glyph is U+2191 (↑), one space after it inside the brackets. The label is
+the parent's **root-relative delivered path**, not its title:
+`[↑ getting-started/porting-tools/index.md](../index.md)` at any level,
+`[↑ entry-point.md](../entry-point.md)` at the top.
+
+Label and target are two projections of one tree-plan fact and must name
+the same node: resolving the target against the page's own directory
+yields the label, exactly (guarantee 2 in §4.8).
+
+Every class-A page (leaf or index) but the entry-point carries **exactly
+one** up-link, and it is the **first line under the frontmatter block**,
+nothing but the block before it. The entry-point carries none.
 
 ### 4.5 Link-target rewriting (rebase)
 
@@ -556,9 +579,10 @@ Delivered with every KB, exact set:
 ```
 AGENTS.md
 README.md
+CLAUDE.md
 .agents/docent.md
 .agents/maintainer.md
-.agents/adaptation.md
+.agents/README-ADAPTATION.md
 .agents/routing-eval.json
 ```
 
@@ -566,9 +590,19 @@ README.md
   pointer to the entry point, and a pointer to `.agents/`.
 - `README.md` — short human orientation: what this is, where to start,
   that agents should read `AGENTS.md` first.
+- `CLAUDE.md` — the bootstrap pointer an agent session rooted at the KB
+  picks up on its own: read `AGENTS.md` first, start at the entry point,
+  then three directives — the no-crawl invariant verbatim as the entry
+  point states it, *"Navigate, don't crawl: follow the tree from the
+  entry-point instead of grepping the file set"*, and *"Stop reading when
+  the question is answered"*. The invariant is duplicated here rather
+  than only pointed at: the hop to `AGENTS.md` is probabilistic, and this
+  file is what a session picks up whether or not it takes that hop. No
+  directive carries a rationale.
 - `.agents/docent.md` / `.agents/maintainer.md` — navigate-this-KB and
   extend-this-KB agent definitions (currently shipped as stubs, §6).
-- `.agents/adaptation.md` — states these are copies for adaptation, that
+- `.agents/README-ADAPTATION.md` — a note, not an agent definition:
+  states that these are copies for adaptation, that
   kbase itself never reads them, and recommends using a stronger model to
   write a version suited to its own capabilities.
 - `.agents/routing-eval.json` — schema `kbase.routing-eval/1`:
@@ -579,7 +613,7 @@ Every fixture file carries the same provenance footer (§4.6) as a
 tree-plan node; the three definition fixtures additionally open with a
 fixed stub notice today.
 
-### 4.8 The nine delivery guarantees
+### 4.8 The ten delivery guarantees
 
 Nothing reaches `--out` unless every one of these holds; a single failure
 refuses the **whole** delivery (no partial tree, no warnings-only mode),
@@ -588,8 +622,10 @@ applicable, the offending node.
 
 1. Every file any delivered page links to (excluding destinations already
    recorded as unresolved) exists in the delivered set.
-2. Every class-A page but the entry-point carries exactly one up-link, at
-   line 1; the entry-point carries none.
+2. Every class-A page but the entry-point carries exactly one up-link, as
+   the first line under its frontmatter block, and that up-link's label
+   and target resolve to the same node (§4.4); the entry-point carries
+   none.
 3. The entry-point exists, and every domain it names in `## Domains` was
    itself delivered.
 4. Every class-A page is reachable from at least one other class-A page
@@ -606,6 +642,40 @@ applicable, the offending node.
    (§3.3).
 9. Every page's rendered bytes conform to its kind's exact grammar
    (§4.2/§4.3), and every fixture file matches its own fixed template.
+10. Every class-A page opens with a frontmatter block whose `Location`
+    is exactly the path it was delivered under (§4.9).
+
+### 4.9 Page frontmatter
+
+Every class-A page — leaf, index and entry-point alike — opens with this
+block, at file-start, before the up-link:
+
+```
+---
+Location: <root-relative delivered path>
+---
+```
+
+`Location` is the page's own delivered path, the same string guarantee 5
+enumerates and guarantee 10 compares against. Class-B fixtures carry no
+frontmatter: their names are root-obvious and `.agents/` is exempt by
+design.
+
+kbase writes exactly this one field. Any reader of a delivered page — the
+verify gate today, a later kbase pass over an existing KB — is
+**forgiving**: it validates the fields it knows and ignores the rest, so a
+later version may add a field without invalidating pages an earlier one
+delivered. The block's own shape is not forgiven: a first line that is not
+the `---` fence, or a fence that never closes, is no block at all and
+fails guarantee 10.
+
+H1 headings remain purely subject-matter titles. A page states its address
+in this block and in its up-link label, and nowhere else.
+
+**Leaf edge case, intentional.** A verbatim slice that itself contains the
+SOURCE document's frontmatter renders it as body text: this block owns
+file-start, the envelope wraps the body below it, and body bytes are never
+edited (§4.2 item 4).
 
 ---
 

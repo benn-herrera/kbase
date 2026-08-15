@@ -26,37 +26,85 @@ import (
 // the seam is still only neutral types — section ranges and cut candidates —
 // and no parser node reaches this package.
 
-// rojoDocs is the corpus the justfile pins and fetches
-// (prep-test-integration-rojo). This test SKIPS when it is absent rather than
-// fetching anything: a unit-test run must not reach the network, and the
-// integration recipe is where fetching belongs.
-const rojoDocs = "test_data/transient/rojo.space/docs"
+// rojoDocs and omlxDocs are the corpora the justfile pins and fetches
+// (prep-test-integration-rojo, prep-test-integration-omlx), at the paths those
+// recipes guarantee — oMLX is a monorepo fetched sparse, so its documents are
+// the docs/ subdirectory of the clone, not the clone. Each corpus SKIPS
+// independently when it is absent rather than fetching anything: a unit-test
+// run must not reach the network, and the integration recipe is where fetching
+// belongs.
+const (
+	rojoDocs = "test_data/transient/rojo.space/docs"
+	omlxDocs = "test_data/transient/omlx/docs"
+)
 
-// evidenceDir is where this test leaves its observational evidence, per
-// AGENTS.md's testing rule: the counts below are the result, and a result that
-// exists only in a t.Logf line is a result nobody can check twice. It is under
-// test_data/transient/ because it is test output — generated, gitignored, and
-// rewritten from scratch every run.
-const evidenceDir = "test_data/transient/dissect-rojo"
+// pinnedCorpus is one corpus the property runs over: where its documents live,
+// the recipe that puts them there, and where its evidence lands. The property
+// is written once and swept over this table, so a second corpus is a row here
+// and nothing else.
+type pinnedCorpus struct {
+	name string
+	docs string
+	// prep is the bare recipe name; the skip message names `just <prep>` so a
+	// reader of a skipped run knows which fetch to run.
+	prep string
+	// evidence is where this corpus leaves its observational evidence, per
+	// AGENTS.md's testing rule: the counts below are the result, and a result
+	// that exists only in a t.Logf line is a result nobody can check twice. It
+	// is under test_data/transient/ because it is test output — generated,
+	// gitignored, and rewritten from scratch every run.
+	evidence string
+}
+
+// corpora is the swept corpora. Rojo is a small hand-written docs site; oMLX is
+// an ML runtime's docs/ tree out of a monorepo — different writers, different
+// structural habits, the same claims.
+func corpora() []pinnedCorpus {
+	return []pinnedCorpus{
+		{
+			name:     "rojo",
+			docs:     rojoDocs,
+			prep:     "prep-test-integration-rojo",
+			evidence: "test_data/transient/dissect-rojo",
+		},
+		{
+			name:     "omlx",
+			docs:     omlxDocs,
+			prep:     "prep-test-integration-omlx",
+			evidence: "test_data/transient/dissect-omlx",
+		},
+	}
+}
 
 // corpusBudgets is the swept operating points: the floor, two that bite on
 // real sections, and one over most of them. The property and its evidence read
 // the same list, so a point added to the sweep is a point that appears in both.
 func corpusBudgets() []int { return []int{minTokens, 120, 400, 1500} }
 
-// TestSplitOverRealCorpusSections: for every section of every document in the
+// TestSplitOverRealCorpusSections: for every section of every document in each
 // pinned corpus, at every budget, Split either produces a list that Verify
 // accepts or refuses the span outright. There is no third outcome, and that
 // is the whole claim — a heuristic is allowed to choose badly and is not
 // allowed to emit something the verifier would reject at the seam.
 //
-// It writes what it saw to evidenceDir as it goes. The pass/fail is the
-// claim; the per-budget tally is the measurement, and the measurement is what
-// says whether the property is still finding the shapes it was written for —
-// a sweep that quietly stopped starving anything at the floor is a sweep whose
-// budgets have drifted off the material.
+// One subtest per corpus, named for it, so an integration recipe can pin one
+// (`-run 'TestSplitOverRealCorpusSections/omlx'`) and so an absent corpus skips
+// only its own subtest.
+//
+// It writes what it saw to the corpus's evidence directory as it goes. The
+// pass/fail is the claim; the per-budget tally is the measurement, and the
+// measurement is what says whether the property is still finding the shapes it
+// was written for — a sweep that quietly stopped starving anything at the floor
+// is a sweep whose budgets have drifted off the material.
 func TestSplitOverRealCorpusSections(t *testing.T) {
-	art, corpus := realArtifact(t)
+	for _, c := range corpora() {
+		t.Run(c.name, func(t *testing.T) { splitOverCorpus(t, c) })
+	}
+}
+
+// splitOverCorpus is the property itself, over one corpus.
+func splitOverCorpus(t *testing.T, c pinnedCorpus) {
+	art, corpus := realArtifact(t, c)
 
 	ev := corpusEvidence{Corpus: art.Corpus}
 	tally := map[int]*budgetTally{}
@@ -119,7 +167,7 @@ func TestSplitOverRealCorpusSections(t *testing.T) {
 		t.Logf("budget %d: %d spans, %d split into %d parts (%d multi-part, max %d), %d starved",
 			b.Budget, b.Spans, b.Split, b.Parts, b.MultiPart, b.MaxParts, b.Starved)
 	}
-	writeEvidence(t, evidencePath(t), "stats.json", encodeEvidence(t, ev))
+	writeEvidence(t, evidencePath(t, c), "stats.json", encodeEvidence(t, ev))
 }
 
 // corpusEvidence is the stats file, and its field order is the file's field
@@ -173,11 +221,11 @@ func encodeEvidence(t *testing.T, v any) []byte {
 	return buf.Bytes()
 }
 
-// evidencePath is evidenceDir resolved against the module root, since the test
-// binary runs in the package directory.
-func evidencePath(t *testing.T) string {
+// evidencePath is the corpus's evidence directory resolved against the module
+// root, since the test binary runs in the package directory.
+func evidencePath(t *testing.T, c pinnedCorpus) string {
 	t.Helper()
-	return filepath.Join(moduleRoot(t), filepath.FromSlash(evidenceDir))
+	return filepath.Join(moduleRoot(t), filepath.FromSlash(c.evidence))
 }
 
 // writeEvidence fails the test when the evidence cannot be written. A test
@@ -216,13 +264,13 @@ func spansOf(f survey.File) []survey.Span {
 	return spans
 }
 
-// realArtifact surveys the pinned corpus, or skips.
-func realArtifact(t *testing.T) (survey.Artifact, ingest.Corpus) {
+// realArtifact surveys one pinned corpus, or skips.
+func realArtifact(t *testing.T, c pinnedCorpus) (survey.Artifact, ingest.Corpus) {
 	t.Helper()
 	root := moduleRoot(t)
-	docs := filepath.Join(root, filepath.FromSlash(rojoDocs))
+	docs := filepath.Join(root, filepath.FromSlash(c.docs))
 	if _, err := os.Stat(docs); err != nil {
-		t.Skipf("the pinned corpus is not present (%s); run `just prep-test-integration-rojo`", rojoDocs)
+		t.Skipf("the pinned %s corpus is not present (%s); run `just %s`", c.name, c.docs, c.prep)
 	}
 	corpus, err := ingest.Walk(docs, markdown.Extensions(), log.Discard())
 	if err != nil {

@@ -2,6 +2,8 @@ package treeplan
 
 import (
 	"fmt"
+	"path"
+	"strings"
 
 	"kbase/internal/survey"
 )
@@ -52,10 +54,7 @@ func SourceStructureProposal(art survey.Artifact, title, scope string, annexes [
 		if _, annexed := AnnexedBy(f.Path, annexes); annexed {
 			continue
 		}
-		docTitle := f.Title
-		if docTitle == "" {
-			docTitle = f.Path
-		}
+		doc := docTitle(f)
 		var pages []ProposalNode
 		for _, span := range topLevelSpans(f) {
 			t, s := spanLabels(f, span)
@@ -73,8 +72,8 @@ func SourceStructureProposal(art survey.Artifact, title, scope string, annexes [
 			continue
 		}
 		p.Children = append(p.Children, ProposalNode{
-			Title:    docTitle,
-			Scope:    fileScope(f, docTitle),
+			Title:    doc,
+			Scope:    fileScope(f, doc),
 			Kind:     KindIndex,
 			Children: pages,
 		})
@@ -103,18 +102,55 @@ func topLevelSpans(f survey.File) []survey.Span {
 func spanLabels(f survey.File, r survey.Span) (title, scope string) {
 	for _, s := range f.Sections {
 		if s.Start == r.Start {
-			t := s.Title
-			if t == "" {
-				t = f.Path
-			}
+			t := firstNonEmpty(s.Title, docTitle(f))
 			return t, firstNonEmpty(s.Gist, t)
 		}
 	}
-	name := f.Title
-	if name == "" {
-		name = f.Path
+	return "Introduction to " + docTitle(f), firstNonEmpty(f.Gist, "the opening of "+f.Path)
+}
+
+// docTitle names a document, and NEVER with a path (ruled 2026-08-15).
+//
+// The chain is: what the document calls itself in its metadata block, then its
+// first H1 — already in the survey's heading tree, so this reaches for no new
+// machinery — then the path humanised. A title is a claim about subject
+// matter, and a path-shaped one ("experimental/dflash_mlx_integration.md")
+// claims a file that the knowledge base does not contain: the reader is
+// offered an address to somewhere that does not exist. Humanising is what
+// keeps the last resort a title.
+//
+// It is one function because every title position in this proposal — the
+// domain index, an untitled section, the preamble page — has the same three
+// candidates and the same prohibition.
+func docTitle(f survey.File) string {
+	return firstNonEmpty(f.Title, firstH1(f), humanisePath(f.Path))
+}
+
+// firstH1 is the document's first level-1 heading. Only the top level is
+// scanned: a level-1 heading cannot nest under a heading of any level, so
+// every H1 in a file is one of its top-level sections.
+func firstH1(f survey.File) string {
+	for _, s := range f.Sections {
+		if s.Level == 1 && s.Title != "" {
+			return s.Title
+		}
 	}
-	return "Introduction to " + name, firstNonEmpty(f.Gist, "the opening of "+f.Path)
+	return ""
+}
+
+// humanisePath turns a corpus path into a phrase: the extension is dropped and
+// the separators a path is spelled with — `/` between directories, `_` inside
+// a name — become spaces. What is left reads as a subject, and no longer
+// resolves as an address.
+func humanisePath(p string) string {
+	p = strings.TrimSuffix(p, path.Ext(p))
+	p = strings.Map(func(r rune) rune {
+		if r == '/' || r == '_' {
+			return ' '
+		}
+		return r
+	}, p)
+	return strings.Join(strings.Fields(p), " ")
 }
 
 // fileScope is a document's own one-line scope.

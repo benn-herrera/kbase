@@ -51,7 +51,7 @@ deleted, not archived — git history is the log.
      **Bursts C+D landed 2026-08-13**: the mechanical spine —
      `internal/distill` (stage 5: byte derivation, the rebase map, §4.1's
      page grammar), `internal/assemble` (stages 8+9: index/entry-point
-     grammar, the §8.1 fixture manifest, the nine verify gates,
+     grammar, the §8.1 fixture manifest, the ten verify gates,
      delivery), the `SourceStructureProposal` dev/baseline tree plan, and
      the composing build verb, which puts all of it into a walkable Rojo
      KB with no model in the loop
@@ -152,6 +152,22 @@ deleted, not archived — git history is the log.
   hyphenate) and a miss falls through to rule 2, so being wrong costs a hop of
   precision and never a broken link. Revisit if a corpus shows the fallthrough
   is routing badly.
+- **Definitions-extraction burst (ruled 2026-08-15)**: the shipped agent
+  definitions leave the delivered KB. They are samples for the USER's agent
+  tooling, not KB content — so they become an on-demand verb
+  (working name `kbase write-generic-agents --out <dir>`) with overwrite
+  REFUSAL: if any target file exists, refuse and list every conflict, write
+  nothing; no `--force` — the user deletes what they mean to replace.
+  `routing-eval.json` leaves delivery with them: it is a dev-grade testing
+  artifact (empty until stage 7.4; consumer is the eval harness), and the
+  "user validates adapted agents" story that argued for shipping it needs
+  shipping-grade data — a commitment explicitly not yet made. Its future
+  home is build evidence beside the run record, decided when the eval
+  stage lands. Class-B manifest shrinks to AGENTS.md, README.md, CLAUDE.md;
+  the `.agents/` directory, its check-4 exemption, and the entry-point/
+  AGENTS.md pointer text go with it. Prefer landing BEFORE the batched
+  C–F review / MAD #2 so reviewers judge the lean manifest, not the
+  superseded one.
 - glimmer-30B head-to-head, on the eval harness the embedded-definitions item
   above builds (challenger test post-E2E; a tie counts as a win for the
   incumbent; low-cost-cloud availability check first). It has no harness of
@@ -161,6 +177,19 @@ deleted, not archived — git history is the log.
 - Rojo v7 end-to-end shakedown → creator-docs prose domains. Includes the
   slot-order measurement: validate or reverse the StageRef-before-status swap
   via `cached_tokens` + dev-telemetry prefill timing.
+- **Docset title inference** (queued 2026-08-15). `--title` and the
+  directory-name fallback are the floor, not the answer: most docsets carry
+  something that states the whole set's title — a root README/index H1, a
+  site-config file, a cover page. Design a sourcing chain that reads the
+  corpus's own signals before falling back, with `--title` staying as the
+  override. Rojo is the instructive counterexample: per-section frontmatter
+  `Title` fields but no cover sheet for the set — so the chain must know
+  when it has NO whole-set signal and fall back honestly rather than promote
+  a section title. Ruled 2026-08-15: resolving LATE is fine — after the
+  system holds the full inventory and anatomy of the file set, where the
+  signals are all in hand and the title's render surface is smallest. Note site-config files (mkdocs.yml etc.) are outside the
+  ingested extension set; reading one for a title is a deliberate ingest
+  question, not a free read.
 - Provenance receipt writer; chars-per-token calibration feature.
 - Author AGENTS.md's TBD sections (Testing, Dependency Policy, Logging) as
   their subjects accumulate enough reality to document.

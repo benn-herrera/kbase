@@ -1,6 +1,7 @@
 package distill
 
 import (
+	"path"
 	"strings"
 	"testing"
 
@@ -26,6 +27,75 @@ func TestRelPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := RelPath(tt.from, tt.to); got != tt.want {
 				t.Errorf("RelPath(%q, %q) = %q, want %q", tt.from, tt.to, got, tt.want)
+			}
+		})
+	}
+}
+
+// The up-link's two projections: the label is the parent's root-relative path,
+// the target is the same parent relative to the page, and one call renders
+// both — so the pair a reader resolves is the pair the tree plan holds.
+func TestUpLinkProjections(t *testing.T) {
+	tests := []struct {
+		name         string
+		node, parent string
+		want         string
+	}{
+		{"a leaf under a domain index", "guide/sync.md", "guide/index.md", "[↑ guide/index.md](index.md)"},
+		{"a subtopic index under its domain", "guide/deep/index.md", "guide/index.md", "[↑ guide/index.md](../index.md)"},
+		{"a domain index under the entry-point", "guide/index.md", "entry-point.md", "[↑ entry-point.md](../entry-point.md)"},
+		{"a depth-2 leaf", "guide/deep/sync.md", "guide/deep/index.md", "[↑ guide/deep/index.md](index.md)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpLink(tt.node, tt.parent)
+			if got != tt.want {
+				t.Fatalf("UpLink(%q, %q) = %q, want %q", tt.node, tt.parent, got, tt.want)
+			}
+			label, target, ok := ParseUpLink(got)
+			if !ok {
+				t.Fatalf("ParseUpLink does not read what UpLink wrote: %q", got)
+			}
+			if label != tt.parent {
+				t.Errorf("the label is %q, want the parent's root-relative path %q", label, tt.parent)
+			}
+			if resolved := path.Clean(path.Join(path.Dir(tt.node), target)); resolved != label {
+				t.Errorf("the target %q resolves to %q, which is not the label %q", target, resolved, label)
+			}
+		})
+	}
+	if _, _, ok := ParseUpLink("- [Sync](sync.md) — a down-link"); ok {
+		t.Error("a down-link bullet parsed as an up-link")
+	}
+}
+
+// The frontmatter block, and the ruling that makes its reader forgiving: a
+// field this build does not know is skipped, the block's own shape is not.
+func TestFrontmatterReader(t *testing.T) {
+	tests := []struct {
+		name     string
+		page     string
+		wantLoc  string
+		wantOK   bool
+		wantBody string
+	}{
+		{"what the writer writes", Frontmatter("guide/sync.md") + "\n\nbody\n", "guide/sync.md", true, "body"},
+		{"an unknown field is skipped, not refused",
+			"---\nSchema: kbase.page/2\nLocation: guide/sync.md\nTags: a, b\n---\nbody\n",
+			"guide/sync.md", true, "body"},
+		{"a block with no Location is a block", "---\nSchema: kbase.page/2\n---\nbody\n", "", true, "body"},
+		{"no block at all", "# Title\n\nbody\n", "", false, "# Title"},
+		{"an unterminated block is not a block", "---\nLocation: guide/sync.md\n", "", false, "---"},
+		{"a rule below the first line is not a block", "# Title\n\n---\n\nbody\n", "", false, "# Title"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loc, body, ok := ParseFrontmatter([]byte(tt.page))
+			if ok != tt.wantOK || loc != tt.wantLoc {
+				t.Errorf("ParseFrontmatter = (%q, ok=%t), want (%q, ok=%t)", loc, ok, tt.wantLoc, tt.wantOK)
+			}
+			if got := FirstLine(body); got != tt.wantBody {
+				t.Errorf("the body opens with %q, want %q", got, tt.wantBody)
 			}
 		})
 	}
@@ -86,10 +156,14 @@ func TestLeafTemplate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(leaf(node, "Guide", []byte(tt.body), prov))
+			got := string(leaf(node, []byte(tt.body), prov))
 			lines := strings.Split(got, "\n")
-			if lines[0] != "[↑ Guide](index.md)" {
-				t.Errorf("line 1 is %q, want the up-link", lines[0])
+			loc, body, ok := ParseFrontmatter([]byte(got))
+			if !ok || loc != node.Path {
+				t.Errorf("the page does not open with its Location block (%q, ok=%t):\n%s", loc, ok, got)
+			}
+			if first := FirstLine(body); first != "[↑ guide/index.md](index.md)" {
+				t.Errorf("the first line under the block is %q, want the up-link", first)
 			}
 			headings := 0
 			for _, l := range lines {

@@ -27,20 +27,66 @@ import (
 // still only neutral types — sections, ranges and cut candidates — and no
 // parser node reaches this package.
 
-// rojoDocs is the corpus the justfile pins and fetches
-// (prep-test-integration-rojo). This test SKIPS when it is absent rather than
-// fetching anything: a unit-test run must not reach the network, and the
-// integration recipe is where fetching belongs.
-const rojoDocs = "test_data/transient/rojo.space/docs"
+// rojoDocs and omlxDocs are the corpora the justfile pins and fetches
+// (prep-test-integration-rojo, prep-test-integration-omlx), at the paths those
+// recipes guarantee — oMLX is a monorepo fetched sparse, so its documents are
+// the docs/ subdirectory of the clone, not the clone. Each corpus SKIPS
+// independently when it is absent rather than fetching anything: a unit-test
+// run must not reach the network, and the integration recipe is where fetching
+// belongs.
+const (
+	rojoDocs = "test_data/transient/rojo.space/docs"
+	omlxDocs = "test_data/transient/omlx/docs"
+)
 
-// evidenceDir is where these tests leave their observational evidence, per
-// AGENTS.md's testing rule: a measurement worth taking is worth being able to
-// look at afterwards. It is under test_data/transient/ because it is test
-// output — generated, gitignored, and rewritten from scratch every run.
-const evidenceDir = "test_data/transient/treeplan-rojo"
+// pinnedCorpus is one corpus these properties run over: where its documents
+// live, the recipe that puts them there, what the mechanical proposal calls the
+// knowledge base built from it, and where its evidence lands. The properties
+// are written once and swept over this table, so a second corpus is a row here
+// and nothing else.
+type pinnedCorpus struct {
+	name string
+	docs string
+	// prep is the bare recipe name; the skip message names `just <prep>` so a
+	// reader of a skipped run knows which fetch to run.
+	prep string
+	// title and scope are the entry-point identity SourceStructureProposal
+	// stamps on the mechanical plan — corpus material, not test material.
+	title string
+	scope string
+	// evidence is where this corpus leaves its observational evidence, per
+	// AGENTS.md's testing rule: a measurement worth taking is worth being able
+	// to look at afterwards. It is under test_data/transient/ because it is
+	// test output — generated, gitignored, and rewritten from scratch every run.
+	evidence string
+}
+
+// corpora is the swept corpora. Rojo is a small hand-written docs site; oMLX is
+// an ML runtime's docs/ tree out of a monorepo — different writers, different
+// structural habits, the same claims.
+func corpora() []pinnedCorpus {
+	return []pinnedCorpus{
+		{
+			name:     "rojo",
+			docs:     rojoDocs,
+			prep:     "prep-test-integration-rojo",
+			title:    "Rojo Documentation",
+			scope:    "the pinned Rojo docs corpus",
+			evidence: "test_data/transient/treeplan-rojo",
+		},
+		{
+			name:     "omlx",
+			docs:     omlxDocs,
+			prep:     "prep-test-integration-omlx",
+			title:    "oMLX Documentation",
+			scope:    "the pinned oMLX docs corpus",
+			evidence: "test_data/transient/treeplan-omlx",
+		},
+	}
+}
 
 // TestTreePlanOverRealCorpus composes the mechanical tree plan a descent would
-// produce over the pinned corpus if it grouped by file — one domain per
+// produce over each pinned corpus if it grouped by file — one domain per
 // document, one page per top-level section — and holds it to every composed
 // post-condition at the shipped budgets.
 //
@@ -49,13 +95,23 @@ const evidenceDir = "test_data/transient/treeplan-rojo"
 // every surveyed section is covered, so the tiling check is live; every span
 // is a real one, so the splitter runs over real material; and the fan-out cap
 // bites on whichever documents have more top-level sections than the cap.
+//
+// One subtest per corpus, named for it, so an integration recipe can pin one
+// (`-run 'TestTreePlanOverRealCorpus/omlx'`) and so an absent corpus skips only
+// its own subtest.
 func TestTreePlanOverRealCorpus(t *testing.T) {
-	art, corpus := realArtifact(t)
+	for _, c := range corpora() {
+		t.Run(c.name, func(t *testing.T) { treePlanOverCorpus(t, c) })
+	}
+}
+
+func treePlanOverCorpus(t *testing.T, c pinnedCorpus) {
+	art, corpus := realArtifact(t, c)
 	v, err := NewVerifier(art, corpus, DefaultParams())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
-	plan := planByFile(t, art)
+	plan := planByFile(t, art, c)
 
 	s, err := v.Compose(plan, nil)
 	if err != nil {
@@ -65,10 +121,10 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 		t.Fatalf("the composed tree plan does not re-verify: %v", err)
 	}
 
-	c := countsOf(s)
-	t.Logf("rojo tree plan at the shipped budgets: %d nodes (%d leaves, %d indexes), "+
+	n := countsOf(s)
+	t.Logf("%s tree plan at the shipped budgets: %d nodes (%d leaves, %d indexes), "+
 		"%d groups of which %d split into %d parts; %d source files, %d surveyed sections",
-		c.Nodes, c.Leaves, c.Indexes, c.Groups, c.SplitGroups, c.SplitParts,
+		c.name, n.Nodes, n.Leaves, n.Indexes, n.Groups, n.SplitGroups, n.SplitParts,
 		art.Corpus.Files, art.Corpus.Sections)
 
 	assertWithinCaps(t, s, DefaultBudgets())
@@ -88,7 +144,7 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 }
 
 // TestTreePlanOverRealCorpusUnderStress is the same plan at leaf budgets small
-// enough that the pinned corpus's own sections have to be split.
+// enough that a pinned corpus's own sections have to be split.
 //
 // The shipped budget leaves every Rojo section under one leaf, so the split
 // path never runs over real material there. Here it does, against real cut
@@ -100,9 +156,18 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 // Rejection naming what the model would have to do differently. There is no
 // third outcome — in particular, no defect, which would mean the verifier
 // disagreed with itself over real bytes.
+//
+// The subtests nest corpus over budget, so a recipe pinning
+// `-run 'TestTreePlanOverRealCorpus/omlx'` gets that corpus's whole sweep.
 func TestTreePlanOverRealCorpusUnderStress(t *testing.T) {
-	art, corpus := realArtifact(t)
-	plan := planByFile(t, art)
+	for _, c := range corpora() {
+		t.Run(c.name, func(t *testing.T) { stressOverCorpus(t, c) })
+	}
+}
+
+func stressOverCorpus(t *testing.T, c pinnedCorpus) {
+	art, corpus := realArtifact(t, c)
+	plan := planByFile(t, art, c)
 
 	for _, budget := range stressLeafBudgets() {
 		t.Run(fmt.Sprintf("leafTokens=%d", budget), func(t *testing.T) {
@@ -114,9 +179,9 @@ func TestTreePlanOverRealCorpusUnderStress(t *testing.T) {
 			if err := v.Check(s); err != nil {
 				t.Fatalf("Compose produced a tree plan its own Check rejects: %v", err)
 			}
-			c := out.Counts
+			n := out.Counts
 			t.Logf("leafTokens=%d: %d nodes (%d leaves, %d indexes), %d groups, %d split into %d parts",
-				budget, c.Nodes, c.Leaves, c.Indexes, c.Groups, c.SplitGroups, c.SplitParts)
+				budget, n.Nodes, n.Leaves, n.Indexes, n.Groups, n.SplitGroups, n.SplitParts)
 			assertWithinCaps(t, s, s.Budgets)
 			assertGroupsMatchTheSplitter(t, v, s)
 		})
@@ -189,8 +254,14 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeP
 // depended on another test having run first is an ordering constraint go test
 // does not promise, and the composition is milliseconds.
 func TestTreePlanOverRealCorpusEvidence(t *testing.T) {
-	art, corpus := realArtifact(t)
-	plan := planByFile(t, art)
+	for _, c := range corpora() {
+		t.Run(c.name, func(t *testing.T) { evidenceOverCorpus(t, c) })
+	}
+}
+
+func evidenceOverCorpus(t *testing.T, c pinnedCorpus) {
+	art, corpus := realArtifact(t, c)
+	plan := planByFile(t, art, c)
 
 	v, err := NewVerifier(art, corpus, DefaultParams())
 	if err != nil {
@@ -201,7 +272,7 @@ func TestTreePlanOverRealCorpusEvidence(t *testing.T) {
 		t.Fatalf("Compose over the pinned corpus: %v", err)
 	}
 
-	dir := evidencePath(t)
+	dir := evidencePath(t, c)
 	var buf bytes.Buffer
 	if err := s.WriteJSON(&buf); err != nil {
 		t.Fatalf("WriteJSON: %v", err)
@@ -357,11 +428,11 @@ func encodeEvidence(t *testing.T, v any) []byte {
 	return buf.Bytes()
 }
 
-// evidencePath is evidenceDir resolved against the module root, since the test
-// binary runs in the package directory.
-func evidencePath(t *testing.T) string {
+// evidencePath is the corpus's evidence directory resolved against the module
+// root, since the test binary runs in the package directory.
+func evidencePath(t *testing.T, c pinnedCorpus) string {
 	t.Helper()
-	return filepath.Join(moduleRoot(t), filepath.FromSlash(evidenceDir))
+	return filepath.Join(moduleRoot(t), filepath.FromSlash(c.evidence))
 }
 
 // writeEvidence fails the test when the evidence cannot be written. A test
@@ -379,26 +450,26 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 	t.Logf("evidence: %s (%d bytes)", path, len(data))
 }
 
-// planByFile is the mechanical grouping both corpus tests compose, and it is
+// planByFile is the mechanical grouping every corpus test composes, and it is
 // the shipped dev/baseline helper rather than a test-local copy of it: the
-// property is about the tree `kbase dev-build` actually produces, so it has to
-// be composed from the same proposal that verb composes.
-func planByFile(t *testing.T, art survey.Artifact) TreeProposal {
+// property is about the tree `kbase build` actually produces, so it has to be
+// composed from the same proposal that verb composes.
+func planByFile(t *testing.T, art survey.Artifact, c pinnedCorpus) TreeProposal {
 	t.Helper()
-	plan, err := SourceStructureProposal(art, "Rojo Documentation", "the pinned Rojo docs corpus", nil)
+	plan, err := SourceStructureProposal(art, c.title, c.scope, nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}
 	return plan
 }
 
-// realArtifact surveys the pinned corpus, or skips.
-func realArtifact(t *testing.T) (survey.Artifact, ingest.Corpus) {
+// realArtifact surveys one pinned corpus, or skips.
+func realArtifact(t *testing.T, c pinnedCorpus) (survey.Artifact, ingest.Corpus) {
 	t.Helper()
 	root := moduleRoot(t)
-	docs := filepath.Join(root, filepath.FromSlash(rojoDocs))
+	docs := filepath.Join(root, filepath.FromSlash(c.docs))
 	if _, err := os.Stat(docs); err != nil {
-		t.Skipf("the pinned corpus is not present (%s); run `just prep-test-integration-rojo`", rojoDocs)
+		t.Skipf("the pinned %s corpus is not present (%s); run `just %s`", c.name, c.docs, c.prep)
 	}
 	corpus, err := ingest.Walk(docs, markdown.Extensions(), log.Discard())
 	if err != nil {

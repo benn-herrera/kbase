@@ -28,6 +28,12 @@ const (
 	// ReadmeFixture is the human-facing counterpart, carrying the same
 	// entry-point link.
 	ReadmeFixture = "README.md"
+	// ClaudeFixture is what a coding-agent session rooted at the knowledge base
+	// picks up on its own: where to start, the no-crawl invariant, and the two
+	// navigation habits that make a tree worth having. It is a bootstrap
+	// pointer and stays short — the contract's routing half lives in
+	// AgentsFixture and in the entry-point, and is not restated here.
+	ClaudeFixture = "CLAUDE.md"
 
 	// agentsDir holds the definitions that ship with every KB. Its members are
 	// exempt from file-level reachability: the directory-level pointer the
@@ -37,8 +43,13 @@ const (
 
 	docentFixture     = agentsDir + "docent.md"
 	maintainerFixture = agentsDir + "maintainer.md"
-	adaptationFixture = agentsDir + "adaptation.md"
 	routingEvalArt    = agentsDir + "routing-eval.json"
+
+	// adaptationFixture is a NOTE about the definitions beside it, not one of
+	// them (renamed 2026-08-15). Under its old name — `adaptation.md`, sitting
+	// next to `docent.md` and `maintainer.md` — it read as a third agent
+	// definition, which is a claim about a file that has no such content.
+	adaptationFixture = agentsDir + "README-ADAPTATION.md"
 
 	// stubNotice marks a fixture whose real content is a later burst's. It is
 	// a marked stub rather than a plausible-looking definition, because a
@@ -59,7 +70,8 @@ type Fixture struct {
 // reference to a package-level slice and edit the fixture set out from under
 // the verifier that checks it.
 func Manifest() []string {
-	return []string{AgentsFixture, ReadmeFixture, docentFixture, maintainerFixture, adaptationFixture, routingEvalArt}
+	return []string{AgentsFixture, ReadmeFixture, ClaudeFixture,
+		docentFixture, maintainerFixture, adaptationFixture, routingEvalArt}
 }
 
 // InAgentsDir reports whether a delivered path is inside the shipped
@@ -77,6 +89,7 @@ func (r *Renderer) Fixtures() []Fixture {
 	return []Fixture{
 		{Path: AgentsFixture, Data: r.agentsFixture(entry)},
 		{Path: ReadmeFixture, Data: r.readmeFixture(entry)},
+		{Path: ClaudeFixture, Data: r.claudeFixture(entry)},
 		{Path: docentFixture, Data: r.definitionFixture("Docent",
 			"navigates this knowledge base: reads the entry-point, follows down-links to the leaf that answers, and answers from leaf text.")},
 		{Path: maintainerFixture, Data: r.definitionFixture("Maintainer",
@@ -129,6 +142,36 @@ func (r *Renderer) readmeFixture(entry string) []byte {
 	b.WriteString("](")
 	b.WriteString(AgentsFixture)
 	b.WriteString(") first.\n\n")
+	b.WriteString(r.prov.Footer())
+	b.WriteString("\n")
+	return []byte(b.String())
+}
+
+// claudeFixture is the shape validated against a session rooted at a delivered
+// knowledge base: the pointer to AgentsFixture, the start link — which is also
+// what satisfies check 4's class-B direction — and the three directives.
+//
+// They are here rather than only in AgentsFixture because a session picks this
+// file up on its own and the hop to AGENTS.md is probabilistic: the invariant
+// has to hold for a session that never takes it. The other two are what a
+// session gets wrong before it has read anything — it greps, and it keeps
+// reading after the answer.
+func (r *Renderer) claudeFixture(entry string) []byte {
+	var b strings.Builder
+	b.WriteString(generatedNotice)
+	b.WriteString("\n\n# Working with this knowledge base\n\nRead [")
+	b.WriteString(AgentsFixture)
+	b.WriteString("](")
+	b.WriteString(AgentsFixture)
+	b.WriteString(") first for instructions on how to use this knowledge base, then start at [")
+	b.WriteString(r.titles[entry])
+	b.WriteString("](")
+	b.WriteString(entry)
+	b.WriteString(").\n\n")
+	b.WriteString("- " + noCrawlInvariant + "\n")
+	b.WriteString("- Navigate, don't crawl: follow the tree from the entry-point instead of " +
+		"grepping the file set.\n")
+	b.WriteString("- Stop reading when the question is answered.\n\n")
 	b.WriteString(r.prov.Footer())
 	b.WriteString("\n")
 	return []byte(b.String())
