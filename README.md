@@ -69,9 +69,13 @@ quality, never correctness.
 
 Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)). Landed so
 far: config plumbing (`~/.config/kbase` provider pool + choices), the
-OpenAI-compatible client (blocking + streaming, mock fabric), and the
-`models` / `configure` verbs with gemma-4 tier auto-detection. What's next
-lives in [ROADMAP.md](ROADMAP.md).
+OpenAI-compatible client (blocking + streaming, mock fabric), the `models` /
+`configure` verbs with gemma-4 tier auto-detection, and `kbase build` — the
+whole pipeline end to end, delivering a verified KB with a model-designed tree
+and hierarchical summaries. The prompts behind the model stages are marked
+stubs pending the definitions work, so a build today is evidence about the
+machinery before it is evidence about the prose. What's next lives in
+[ROADMAP.md](ROADMAP.md).
 
 ## Development
 

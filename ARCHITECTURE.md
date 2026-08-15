@@ -44,7 +44,7 @@ or cloud — cloud gemma-4 service is cheap and fast).
 2. **Roblox `creator-docs` prose domains** (`content/en-us/`, CC-BY-4.0, millions of
    tokens) — the real target, decisively past the complexity gate. Start with
    role-relevant domains (`luau`, `scripting`, `projects`, `studio`); **skip
-   `reference/`** (auto-generated API reference — see the annex convention, SPEC.md §3).
+   `reference/`** (auto-generated API reference — see the annex convention, SPEC.md §4.3).
 
 **Non-goals (deliberate, not deferred):**
 
@@ -65,10 +65,8 @@ or cloud — cloud gemma-4 service is cheap and fast).
 These must hold regardless of implementation choices. Violating any invariant is a
 blocking defect.
 
-**Build and Deployment**
-
-1. **Single self-contained binary, embedded prompts.** No external runtime
-   dependencies or shipped data files.
+- **Single self-contained binary, embedded prompts.** No external runtime
+  dependencies or shipped data files.
 
 ---
 
@@ -80,11 +78,11 @@ judgment roles; the human at the edges.**
 - **Cheap simplicity is a core principle, enforced against feature pressure.**
   Config is a provider URL + key. Single model family. No out-of-family machinery in
   the appliance, even for honesty checks — those move to the artifact (see BYOM eval,
-  SPEC.md §5). When a proposed addition breaks this, the addition loses.
+  SPEC.md §4.7). When a proposed addition breaks this, the addition loses.
 
 - **Specified, not autonomous.** A fixed pipeline with a termination condition — not
   an agent free-roaming the corpus. Reproducibility requires same process → same
-  output. Terminology guard (ruled 2026-08-09): in this codebase, "agent" names a
+  output. Terminology guard: in this codebase, "agent" names a
   **Go-side construct** — an ask with an embedded definition, slot-built context,
   and one-shot model calls — never an LLM-driven tool-calling loop. Each pipeline
   step is mechanical where possible; LLM execution is reserved for what cannot
@@ -104,12 +102,10 @@ judgment roles; the human at the edges.**
   loud errors that push oversized units back to the stage that can fix them (the
   tree plan). Silent truncation is how a verbatim-leaf discipline dies unnoticed.
 
-- **Verbatim leaves; summaries route, leaves answer.** Leaves are verbatim slices of
-  **NFC-normalized custody** (ruled 2026-08-13): ingest applies Unicode NFC once, at
-  intake, before any offset exists to invalidate — NFC is *canonical* equivalence, so
-  the rendering is identical and the wording untouched, and provenance records both the
-  upload digest and the custody digest so a transform is never silent. Otherwise leaves
-  are faithful translations of source — no paraphrase, no audience simplification. Summaries exist
+- **Verbatim leaves; summaries route, leaves answer.** Leaves are verbatim slices
+  of NFC-normalized custody — the NFC ruling and its rationale live at §4 row 1.
+  Otherwise leaves are faithful translations of source — no paraphrase, no
+  audience simplification. Summaries exist
   only to route navigation; they are **non-load-bearing for truth**. This is stated
   explicitly in every generated KB's entry-point AGENTS.md: agents must answer from
   leaf text, never from index summaries. Consequence: a bad summary misroutes (costs
@@ -167,15 +163,15 @@ judgment roles; the human at the edges.**
 
 | # | Stage | Actor | Notes |
 |---|---|---|---|
-| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (ruled 2026-08-13, §9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes** (ruled 2026-08-13): `SourceDoc.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `SourceDoc.UploadPath` keeps the spelling as read, exactly as `UploadSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** (ruled 2026-08-12) — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored** (ruled 2026-08-09): its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
+| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (§9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes**: `SourceDoc.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `SourceDoc.UploadPath` keeps the spelling as read, exactly as `UploadSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored**: its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
 | 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists, and the legal cut candidates stage 4 clamps the model to (§5). For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
-| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document tree plan: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. **Landed 2026-08-13 as `internal/taxonomy`**: the container descent, composed as a fold over one serial lane — one call per container of the SOURCE's own tree (the corpus root, each folder, each document), each presenting that container's direct entries as a numbered candidate list, and the answer a partition of those entries into groups carrying a title, a one-line scope and a `page`/`section` flag. Every call but the last contributes; the last composes the proposal through `treeplan.Verifier.Compose`, which is where the level operators, the split expansion, the namer and every post-condition run. No-fallback seam: `AskSpec.Fallback` is nil, and a container that fails twice fails the unit, poisons the artifact and refuses the job. **Sections are not containers** (ruled by the landed coverage check): the tiling gate requires every surveyed section to sit inside ONE group span, so descending into a section would leave its own body on no page — page granularity is a document's top-level sections, and an oversized one is split mechanically (§2.4) rather than descended into. |
-| 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions (ruled 2026-08-09), so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
-| 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. **Landed 2026-08-13 as `internal/distill`**: the byte derivation (span from the tree plan, interior boundaries from the cut list), the rebase map (§4.4 — the one permitted transformation, applied once, here), and the page grammar. Its `Lanes` describes the stage as Produce tasks, one per page, one lane per domain, so the stage has no `AskSpec` and spends nothing. |
-| 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. **Landed 2026-08-13 as `internal/summarize`**: four level-sliced stages, deepest first, because a unit may not name a sibling from its own stage — each level's units declare their upstreams in the previous stage, so a regenerated child invalidates its parent through the ordinary chain and no propagation code exists. The stage list is static (the depth cap is mechanical) and a level with no nodes resolves to zero lanes. The input rule is per child KIND and not per level: leaf children are read as BODIES (the `leaves/*` artifacts), index children as their own capped `framing` + `conclusions`, and a mixed node reads both — the whole bounded by G-2, which the tree plan proved before the stage ran and which the content slot's own budget asserts on every call. The artifact is JSON (`{framing, conclusionsHeading, conclusions}`), never rendered Markdown: stage 8 renders, so a regenerated summary cannot half-rewrite a delivered page. No-fallback seam (O-1), with cascade-failure carrying a failed level upward. |
+| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document tree plan: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. No-fallback seam: a container that fails twice fails the unit, poisons the artifact and refuses the job. **Sections are not containers**: the tiling gate requires every surveyed section to sit inside ONE group span, so descending into a section would leave its own body on no page — page granularity is a document's top-level sections, and an oversized one is split mechanically rather than descended into. Implemented: `internal/taxonomy` — a container descent composed as a fold over one serial lane; call-time input and no-call rules are §12's. |
+| 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions, so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
+| 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. Implemented: `internal/distill` (byte derivation, the rebase map at §4.4, the page grammar); the stage has no `AskSpec` and spends nothing. |
+| 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. No-fallback seam (O-1), with cascade-failure carrying a failed level upward. Implemented: `internal/summarize` — four level-sliced stages, deepest first; input is read per child KIND (leaf bodies vs. capped index framing+conclusions); the artifact is JSON, never rendered Markdown, so a regenerated summary cannot half-rewrite a delivered page. |
 | 7 | **Review** | gemma-4-26B-A4B | Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
-| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. **Landed 2026-08-13 as `internal/assemble`**: the index and entry-point grammar, and the two classes of delivered file — tree-plan nodes, and the closed fixture manifest (`AGENTS.md`, `README.md`, `.agents/*`) that ships with every KB. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. The up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here — one implementation, two call sites. |
-| 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. **Landed 2026-08-13 as `assemble.Verify`**: the nine gates, each scoped to the file class it applies to, run over the assembled tree IN THE STORE before any byte reaches `<out>`. Coverage/tiling is asked of `treeplan.Verifier.Check` rather than restated, and leaf fidelity re-derives every page from the corpus bytes through a fresh distiller. Any failure refuses delivery and names the node; there is no deliver-with-warnings mode. |
+| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. Implemented: `internal/assemble` (index/entry-point grammar, the closed fixture manifest — `AGENTS.md`, `README.md`, `.agents/*`); the up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here. |
+| 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. Any failure refuses delivery and names the node; there is no deliver-with-warnings mode. Implemented: `assemble.Verify` — nine gates, each scoped to the file class it applies to, run over the assembled tree in the store before any byte reaches `<out>`. |
 
 **Format seam.** The survey artifact is the source-format independence
 boundary. Format-specific code lives only in an adapter package
@@ -190,7 +186,7 @@ import-policy test that parses every file in the module
 fails the build, naming the file, the import, and the rule. No adapter
 *interface* exists yet — with one implementation there is nothing to compare
 against, so the abstraction is deferred to a second adapter, where it can be
-derived rather than guessed (ruled 2026-08-09).
+derived rather than guessed.
 
 **LaTeX is a converter, not an adapter** (ruled 2026-08-12). The earlier plan
 was a native `internal/survey/latex` adapter; it is withdrawn. LaTeX support
@@ -241,19 +237,30 @@ artifact's neutral types and the custody bytes, never a parser).
    which is a property test over both synthetic adversarial spans and every
    section of the pinned corpus.
 2. **Model refinement pass** (26B-A4B, `dissect.Refiner`): a serial FOLD — one
-   call per boundary in ONE serial lane, so a worker walks them in order and
-   each window load overwrites the previous (O(1) context, O(n) calls). The
+   call per boundary in ONE serial lane per span, so a worker walks them in
+   order and each window load overwrites the previous (O(1) context, O(n)
+   calls). The
    scan judges each boundary against the cut list **as it stands now**: an
    accepted choice updates the working list, and the next boundary's window,
-   menu and verification all derive from that updated list. The stage's output
+   menu and verification all derive from that updated list. The fold's output
    is therefore ONE artifact — the composed cut list, whole-list-`Verify`d
-   before it is written and carried by the LAST task of the lane; every
+   before it is written and carried by the LAST task of its lane; every
    earlier boundary's call is `pipeline.LaneTask.Contributes` and produces nothing at
-   all, which is what makes the fold's resume stage-granular (§12). Each
+   all, which is what makes the fold's resume stage-granular (§12). The STAGE
+   is `dissect.StagePlan`: one lane per split group, so a job's folds fan out
+   across workers while each stays strictly in order, and one ask spec routing
+   every response back to the fold that owns its unit. It is registered by the
+   composing verb (`cmd/build.go`), which threads the definition's declared
+   effort and retry (`dissect.Effort`/`dissect.Retry`, beside the definition
+   text in `internal/dissect/definition.go`) to both the folds and the stage;
+   a fold built with a declaration the stage does not ask with is refused
+   where the lanes resolve. Each
    boundary's overlap window (`dissect.MoveWindow`, from
    `dissect.MoveWindows`) renders into the Content slot and its numbered candidate
    menu into call reference buffer, capped at `dissect.menuCap` entries around the
-   incumbent, which is marked `(current)` so confirming the boundary — the most
+   incumbent (`dissect.menuSide` — 3 — candidates on each side, the cut itself
+   marked `(current)`; a short side contributes what it has and lends nothing to
+   the other), so confirming the boundary — the most
    common correct answer at a fallback-backed seam — is a choice the model can
    deliberately make.
    A boundary's question does not exist until its predecessor is adjudicated,
@@ -269,9 +276,8 @@ artifact's neutral types and the custody bytes, never a parser).
    12") and a mis-mapped choice is a legal menu entry that then verifies. A
    visible retry is cheaper than a silently wrong-but-valid cut. Candidates are
    enumerated at survey time by the format adapter and carried in the artifact
-   as `survey.CutCandidate{Offset, Kind}` (ruled 2026-08-10, schema
-   `kbase.survey/2`), so refinement's whole input is reproducible from stamped
-   artifacts. Authority is clamped twice: to the overlap window ∩ the menu, and
+   as `survey.CutCandidate{Offset, Kind}` (schema `kbase.survey/2`), so
+   refinement's whole input is reproducible from stamped artifacts. Authority is clamped twice: to the overlap window ∩ the menu, and
    to the enumerated set — bisecting a heading is unrepresentable, not merely
    detectable. The composed cut list is stamped with the stage's **parameter
    digest** (span + budget + declared effort + the mechanical cut list): the
@@ -281,9 +287,10 @@ artifact's neutral types and the custody bytes, never a parser).
    MECHANICAL list, which the fold never touches — it identifies the questions
    the stage asked, and the working list is the answers. The effort is in it
    because §3 claims the provenance tuple REPRODUCES the artifact, and a list
-   adjudicated with thinking on is a different answer to a different asking;
-   nothing observes that today (`dev-refine` runs `ModeFresh`), which is the
-   reason to close it before something does. Optional per-boundary confidence
+   adjudicated with thinking on is a different answer to a different asking.
+   The stage refuses a fold built with a declaration it does not itself ask
+   with (`dissect.StagePlan`), so the digest can never describe an asking the
+   calls did not make. Optional per-boundary confidence
    emission; low-confidence boundaries escalate (31B look or human).
    The fold's single-owner discipline is asserted in two halves, because it has
    two seams: `Refiner.claim` refuses a second goroutine, and an ORDINAL
@@ -508,7 +515,7 @@ prevention is holding against a real prefix cache.
   calibration call checks/refines the ratio; thereafter the constant is refined
   from the `usage` token counts providers return on every real pipeline call —
   free ground truth as a byproduct. Calibration source is stamped into the
-  provenance receipt (SPEC.md §7).
+  provenance receipt (SPEC.md §5).
 
 ---
 
@@ -520,9 +527,9 @@ prevention is holding against a real prefix cache.
 | Per-call target | 60–80K tokens | quality/cost operating point; nobody runs near ceiling |
 | Boundary overlap | 20% of each neighbor, capped at 1K tokens/side | `dissect.overlapFraction`/`overlapCapTokens`; the window the model sees AND the clamp bound. Exact % still TBD at calibration |
 | Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
-| Boundary menu cap | 7 entries | `dissect.menuCap`: `dissect.menuSide` (3) candidates before the mechanical cut, the cut itself marked `(current)`, 3 after; a short side contributes what it has and lends nothing to the other. 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12) |
-| Retry policy | 1 retry, then mechanical fallback + log | monotone safety |
-| Effort declaration | per definition; boundary refinement, taxonomy design and summaries: thinking **off** | `model.RequestEffort`, positional at the registration site (`cmd.devRefineEffort` → `dissect.NewRefiner`) and on `model.DefaultRequest`; `pipeline.AskSpec.validate` is the gate that refuses an undeclared one (§12). Both `chat_template_kwargs` keys are always sent, false included (§12). EVERY `Request` this appliance builds is a definition's ask — the catalogue probe goes through `Client.ListModels`, which builds no `Request` — so there is no second class of call and no constant naming one. It joins the stage's parameter digest (§5). Refinement's value is measured, not assumed: the 2026-08-12 A/B produced a byte-identical cut list for 4 completion tokens against 20,924 (ROADMAP). `taxonomy.Effort` and `summarize.Effort` declare **off** as a JUDGMENT rather than a measurement — the taxonomy ask has the same shape refinement's did (a partition under a stated post-condition, with a verifier that rejects and re-asks), and both definitions are stubs, so a measurement taken today would measure the stub. Each value sits on its own line so the tuning burst's A/B moves it in one place |
+| Boundary menu cap | 7 entries | `dissect.menuCap`; 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12). Mechanism: §5 |
+| Retry policy | per definition; defaults 2 attempts / 12-word note, then mechanical fallback + log | `pipeline.RetryPolicy`, declared with `pipeline.DeclareRetry` beside the effort at the registration site; the runner reads it and decides none of it. Full story: §12 |
+| Effort declaration | per definition, two values (first attempt / retry). Boundary refinement **off/off**; taxonomy design and summaries **off/on** | `model.RequestEffort`, positional at the registration site; gated by `pipeline.AskSpec.validate`. Full story: §12 |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
 | Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
@@ -536,20 +543,41 @@ prevention is holding against a real prefix cache.
 | Index depth cap | 4 levels | `treeplan.defaultDepthCap`; entry-point, domain, subtopic, sub-subtopic, leaves at level five. Mechanical rather than stylistic: stage 6 declares one static stage per level, so an uncapped depth would make the stage list depend on an artifact that does not exist at job setup |
 | Fan-out cap | 12 children (provisional) | `treeplan.defaultFanOutCap`; a group of one is legal. Breaches are repaired by index interposition, not truncated |
 | Taxonomy candidate cap | 120 entries (provisional) | `treeplan.defaultCandidateCap`; one container call's candidate list. A container with more direct children is mechanically pre-batched, so a breach reaching the verifier is our arithmetic and not a runtime condition |
-| Slug cap | 8 words, 64 bytes | `treeplan.slugWordCap`/`slugByteCap`; the generated name grammar. A slug keeps the title's own bytes — math symbols, accents and CJK survive — filtered only by `treeplan.slugHostile` (path separators, the Windows-illegal set, `#`, `%`, `.`, parentheses) plus whitespace, invisible and dash runs collapsed to one hyphen; ASCII letters lowercase, no Unicode case mapping. The byte cut lands on a word boundary and never inside a rune. Stage 9 still compares delivered paths to tree plan paths byte-for-byte; that is safe because the NFC pre-pass gave every title one spelling before the namer saw it (ruled 2026-08-13) |
-| NFC pre-pass | Unicode NFC, at ingest — **content bytes and path ids alike** | `ingest.New`, via `golang.org/x/text/unicode/norm` — the sanctioned dependency this row exists for. Determinism does not rest on the module version: the normalization tables are frozen by the Unicode normalization stability policy, so the same bytes normalize the same way forever. Provenance keeps `SourceDoc.UploadSHA256` (bytes as read) beside `SourceDoc.SHA256` (custody) and `SourceDoc.UploadPath` (path as read) beside `SourceDoc.Path` (the NFC id); equal pairs mean nothing was transformed. `ingest.NormalizePath` is the one implementation of the id pre-pass — `New` applies it to every unit, and a caller holding a path that did NOT come out of custody bytes (a percent-decoded link destination is the live case) applies it before comparing against an id. The survey artifact carries custody identity only (`File.Path`, `File.SHA256`); the upload spellings stay on the unit |
+| Slug cap | 8 words, 64 bytes | `treeplan.slugWordCap`/`slugByteCap`; a slug keeps the title's own bytes (math symbols, accents, CJK survive), filtered only by `treeplan.slugHostile` (path separators, the Windows-illegal set, `#`, `%`, `.`, parentheses, whitespace/dash runs collapsed to one hyphen, ASCII-only lowercasing). Byte cut lands on a word boundary. Safe under the NFC pre-pass (§4 row 1) |
+| NFC pre-pass | Unicode NFC, at ingest — **content bytes and path ids alike** | `ingest.New`/`ingest.NormalizePath`, via `golang.org/x/text/unicode/norm` (the sanctioned dependency this row exists for; policy: AGENTS.md). Full story: §4 row 1 |
 | Wire retries | 3 attempts, 500ms base doubling | 429 retried, other 4xx not; ctx cancel never (`pipeline.wireAttempts`/`wireBackoffBase`) |
-| Model attempts | 2 | initial + one informed retry (`pipeline.modelAttempts`) |
-| Retry-note bound | 12 words + 4-word prefix | the retry's failure-reason note (`pipeline.retryNoteWords`) |
+| Model attempts | 2 (default) | initial + one informed retry (`pipeline.defaultModelAttempts`). A DEFAULT, not the policy: the count is `RetryPolicy.Attempts`, per definition, and every definition ships this value today |
+| Retry-note bound | 12 words + 4-word prefix (default) | the retry's failure-reason note (`pipeline.defaultRetryNoteWords`); per definition as `RetryPolicy.NoteWords`, same reading as the row above |
 | Worker pool default | 4 | serial-lane workers per stage (`pipeline.DefaultWorkers`) |
 | Job lock filename | `job.lock` | `pipeline.LockFileName`; O_EXCL, refuse on contention, never auto-broken; lives inside `temp-work/` with everything else transient |
 | Artifact stamp | `<artifact>.stamp.json`, schema 1 | `pipeline.StampSuffix` sidecar; schema mismatch ⇒ Invalid |
 | Temporary-work directory | `<out>/temp-work/` | `pipeline.TempWorkDirName`; the store's root, kbase-created, swept and torn down only inside it (§12) |
-| File/directory creation modes | 0666 / 0777 | `pipeline.CreateFileMode`/`CreateDirMode` — exported, because `cmd` writes beside the store and a second declaration there would be a second source. Umask-respecting, ruled 2026-08-14: kbase is a documentation tool, not a keystore, so every file and directory it CREATES — store artifacts and stamps, `temp-work/`, the delivered KB tree, run records, the job lock, log files, `config.toml` (which declares the same numbers locally, being below `pipeline` in the import graph) — asks for the permissive mode and lets the user's umask decide. Passed to `OpenFile`/`MkdirAll`/`WriteFile` only, never `Chmod`, which ignores the umask; `os.CreateTemp` is likewise unusable for an atomic write, since it hard-codes 0600 (`pipeline.createTemp`, `config.createTemp`). The provider key-file WARNING is untouched: those are the USER's files, kbase never creates them, and the others-readable check stays |
+| File/directory creation modes | 0666 / 0777 | `pipeline.CreateFileMode`/`CreateDirMode`, exported (also used below `pipeline` in the import graph, e.g. `config`). Umask-respecting: kbase is a documentation tool, not a keystore, so everything it creates asks for the permissive mode and lets the user's umask decide — passed to `OpenFile`/`MkdirAll`/`WriteFile` only, never `Chmod` (which ignores umask). The provider key-file permission warning is separate and untouched: those are the user's own files |
 | Max corpus bytes | 256 MB (provisional) | in-memory ingest ceiling (`ingest.maxCorpusBytes`); loud refusal, no override flag |
 | CRITICAL section cap | 100 words total (provisional) | whole slot-8 trailer (`prompt.criticalWordCap`); the budget the two reserved shares below are cut from, never itself enforced |
 | — authored `## CRITICAL` share | 60 words (derived) | `prompt.authoredCriticalCap` = cap − criteria share; enforced by the dev-time definition test and repeated by the builder for user-adapted copies |
 | — injected criteria share | 40 words (provisional) | `prompt.maxCriteriaWords`; the builder's per-call acceptance criteria. Reserving it is what makes a dev-time pass guarantee a runtime pass (§7) |
+
+### 9.1 `[dev]` switches
+
+Switches that serve kbase's own development live in `config.toml`'s `[dev]`
+table and **never** on a verb. A verb's flag set is what we deliver, and
+`kbase build` is the delivered article: a development switch in it is a
+promise to a user that we did not mean to make, and an integration test that
+drives one is not testing what we ship.
+
+That placement is a concession to pragmatism, not a free pass. Each switch
+must name the **upstream cause** that makes it necessary — a property of the
+design that leaves no other way to get at the behaviour — in the `config.toml`
+template comment and here. A switch that cannot name one is a flag looking for
+a home, and the answer is no.
+
+| Switch | Upstream cause | Code |
+|---|---|---|
+| `telemetry` | inference timing is a provider extension, off the normal path and useless in a user's output; it is a second measurement channel for prompt-shape questions (§7) | `config.DevConfig.Telemetry`; consumed in `pipeline.runner` at **info**, so `--log-level info` is needed to see it |
+| `keep_temp_work` | the asymmetric teardown rule (§12) deletes the scratch tree of a run that SUCCEEDED, which is exactly the run whose intermediates someone occasionally wants | `config.DevConfig.KeepTempWork`; also a verb flag (`--keep-temp-work`), which is the user's legitimate need for the same thing — the flag turns it on and cannot turn it off |
+| `build_date` | provenance receipts are DATED BY DESIGN (SPEC §7), so two otherwise identical runs either side of midnight UTC deliver different bytes — and byte-determinism cannot be tested against a clock. Dropping the date would throw away a fact the page is meant to carry | `config.DevConfig.BuildDate`, `cmd.resolveBuildDate`; a malformed pin refuses rather than landing in every footer |
+| `tree_plan = "mechanical"` | taxonomy design is a RULED no-fallback seam (§12, O-1), so the pipeline has no mechanical mode of its own and a hermetic end-to-end run of the delivered binary has no entrance. This is that entrance: `treeplan.SourceStructureProposal` instead of the model stage, and no provider dialed at all — so no summaries either | `config.TreePlanMechanical`, `config.DevConfig.MechanicalTreePlan`; recorded in `run.json` as `"treePlan": "mechanical (dev)"`, because a tree nobody designed must say so |
 
 ---
 
@@ -585,7 +613,7 @@ disappoint. Default remains pure gemma-4.
 
 ---
 
-## 12. Execution and resume (orchestration design, ruled 2026-08-09)
+## 12. Execution and resume (orchestration design)
 
 The orchestration layer (`internal/pipeline`) runs the fixed pipeline. "Agent"
 here is the §3 Go-side construct: an ask = embedded definition + tier +
@@ -672,9 +700,21 @@ resolution**.
   stage's lane, and a rejected attempt leaves the stage state untouched so
   the informed retry re-asks the same question; `MechanicalFallback` runs at most once
   per unit and only after that unit's attempts are exhausted.
-- The single informed retry always carries the mechanical failure reason —
-  a blind identical resend hopes temperature fixes it, which is not design
-  (ruled).
+- The informed retry always carries the mechanical failure reason — a blind
+  identical resend hopes temperature fixes it, which is not design (ruled).
+  How many attempts there are, how much of the reason the note carries, and
+  **how hard the retry asks** are the definition's (`pipeline.RetryPolicy`):
+  the runner reads them and decides none of them, for the
+  same reason it has never decided the effort. Escalating on the RETRY rather
+  than the first attempt is the shape — the first pass is what the definition
+  thinks the question costs, and the retry is the only attempt carrying new
+  information, so reasoning there is reasoning over a stated fact rather than
+  over the question cold. The retry logs what it asked at and whether that was
+  an escalation.
+- A call whose answer would be discarded is **not made**. A builder reports the
+  call unneeded (`pipeline.InputBuilder`) and the worker makes none: no prompt,
+  no tokens, no verification, and therefore no failure of any kind. See the
+  call-time-inputs block below for the rule and its one restriction.
 - Seam resolution: **fallback-backed seams** (model improves an already-valid
   mechanical fallback: cut refinement, review) fall back to the fallback,
   logged, marked as fallen back. **No-fallback seams** (taxonomy,
@@ -702,23 +742,34 @@ ask, declared where the definition is registered and threaded from there to
 the request. Not to the seam, and not to the stage. Today each seam happens
 to pose exactly one ask, so "per definition" and "per seam" would name the
 same values — which is precisely why the attachment is fixed by construction
-now (`model.RequestEffort` is positional on both `dissect.NewRefiner` and
-`model.DefaultRequest`) rather than left to a terminology that a second ask at
-one seam would silently break. Both `chat_template_kwargs` keys are always
+now (`model.RequestEffort` is positional on `dissect.NewRefiner` and
+`model.DefaultRequest`, and required on `dissect.CutJob`, `taxonomy.Design`
+and `summarize.Job`) rather than left to a terminology that a second ask at
+one seam would silently break. Each definition's own declaration lives beside
+its text — `dissect.Effort`/`Retry`, `taxonomy.Effort`/`Retry`,
+`summarize.Effort`/`Retry` — and the composing verb threads it to the stage it
+registers. Both `chat_template_kwargs` keys are always
 sent, false included: an omitted key leaves the served chat template's default
 deciding, which is not a declaration.
 
+The **retry policy** moved to the definition on the same argument (ruled
+2026-08-14). One size fitted every ask only for as long as every ask retried
+the same way, and escalation breaks that: "ask cheaply, and reason about it only
+once the cheap pass has produced something the verifier can name as wrong" is a
+statement about one exact ask. So `pipeline.RetryPolicy` — the retry-attempt
+effort, the attempt count, the note's word budget — is declared beside the
+effort, is required on `AskSpec` under the same gate, and joins the stage's
+parameter digest. Two declared efforts per ask, then, and which one goes on the
+wire is which attempt is being made.
+
 The DECLARED BIT is gated in exactly one place: `AskSpec.validate`, which refuses
-an ask whose effort was never declared before any agent exists (ruled
-2026-08-12). Positional parameters make the value *stated*, not *declared* —
+an ask whose effort was never declared before any agent exists. Positional
+parameters make the value *stated*, not *declared* —
 `model.RequestEffort{}` passed directly compiles and reads as a deliberate "no
 thinking" — and the AskSpec is the one hop every production request passes
 through, so a second runtime check in `DefaultRequest` would guard a path that
-cannot ship. There is also no second CLASS of call to declare for: every
-`Request` this appliance builds is a definition's ask, and the catalogue probe
-goes through `Client.ListModels`, which builds no `Request` at all. A "utility
-effort" constant existed for that class and had no production caller; it is
-deleted, to be reintroduced with its first real one.
+cannot ship. Every `Request` this appliance builds is a definition's ask; the
+catalogue probe (`Client.ListModels`) builds none.
 
 ### Chain-stamped artifacts and resume
 
@@ -776,7 +827,25 @@ its own earlier answers. Stage 4's fold is that shape (§5), and a serial domain
 lane already guarantees the ordering the deferral needs, so the extension is
 the deferral and nothing else.
 
-**Two task modes: a call, or a producer** (ruled 2026-08-12). Four stages of
+A builder may also report that the task needs **no call at all**. A stage
+that decides its own questions can decide that one of them
+stopped being a question, and stage 3 is the case: its container calls are
+enumerated from the source tree before the first of them runs, and a container
+whose parent's answer put its material on a page is absorbed, so its answer
+would be thrown away (§3.2). *A call whose answer is discarded must not be able
+to fail the build*, and the cheapest guarantee of that is that it does not
+exist — no prompt, no tokens, no response to verify, no transport to exhaust.
+The skip is counted (`JobResult.Skipped`) rather than silent: "nine questions
+enumerated, six asked" is a fact about the run. It is legal only on a
+`Contributes` task and refused otherwise (`SkippedArtifactError`): a task that
+owes an artifact and makes no call leaves the stage a unit short that nothing
+wrote and nothing reported, indistinguishable on the next scan from an
+interruption. Stage 3 therefore still spends ONE call on an absorbed container
+in the worst case — the last, whose call is what writes the composed plan — and
+that answer is dropped before anything parses it, so it cannot be rejected
+either.
+
+**Two task modes: a call, or a producer.** Four stages of
 the pipeline infer nothing — ingest/survey, distillation, assembly, verify —
 and running them outside the coordinator would forfeit resume, stamps, the
 sweep and the single worklist for exactly the stages that produce the

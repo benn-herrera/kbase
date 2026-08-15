@@ -9,12 +9,11 @@ ROADMAP.md; ephemeral per-burst plans live in `TEMP_*.md` files.
 
 ## Project Overview
 kbase is a **standalone application/appliance** that converts a human-targeted
-documentation corpus — a Markdown doc set; LaTeX and PDF arrive later as
-markdown via external conversion (a separate tex→md converter module and a
-PDF preprocessing slot — never native ingest) — into an **agent-friendly
-knowledge base**: a navigable Markdown tree
-(entry-point → domain index → subtopic index → leaf) with verbatim leaves, progressive
-hierarchical summaries, and mechanically generated bidirectional navigation links.
+documentation corpus (Markdown; other formats arrive as Markdown via external
+conversion — see ARCHITECTURE.md §4) into an **agent-friendly knowledge
+base**: a navigable Markdown tree (entry-point → domain index → subtopic
+index → leaf) with verbatim leaves, progressive hierarchical summaries, and
+mechanically generated bidirectional navigation links.
 
 ---
 
@@ -30,11 +29,14 @@ just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
 just cover      # aggregate whole-suite coverage → cover.out
 just test-integration        # omnibus: every hermetic integration test
 just test-integration-survey-rojo  # pinned Rojo corpus: summary values + determinism
-just test-integration-build-mechanical-rojo  # build a whole KB from that corpus,
-                                  # offline, and assert the nine verify gates
+just test-integration-build-mechanical-rojo  # `kbase build` over that corpus under
+                                  # the offline [dev] fixture; the nine verify gates
 just test-integration-build-live-rojo  # the same build with the model in the loop;
                                   # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
+just test-integration-survey-omlx  # pinned oMLX docs corpus: summary values + determinism
+just test-integration-build-mechanical-omlx  # offline KB build over it, nine gates
+just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
 just clean      # remove the host build (bin/kbase)
@@ -48,12 +50,9 @@ just update-dependencies                # upgrade the WHOLE module graph
 toolchain setup needed) and runs `checkpoint` first — a cross-build is what
 users receive, so it ships only from a tree that passes the full gate.
 
-**No built binaries live in the repo.** `bin/` and `dist/` are local build
-products, gitignored entirely. The distribution artifact is the versioned
-tarball `just dist` stages, published as an artifact on a GitHub releases
-entry — publishing is the user's act. Agents may run `just dist` to verify
-the cross-build still succeeds; never commit build outputs or publish
-releases.
+**No built binaries live in the repo.** `bin/` and `dist/` are gitignored
+build products; distribution is the `just dist` tarball attached to a GitHub
+release by the user. Never commit build outputs or publish releases.
 
 **Test data layout.** `test_data/fixtures/` holds version-controlled test
 data we author, own, and maintain. `test_data/transient/` (gitignored) holds
@@ -66,17 +65,16 @@ write generated or downloaded data into `fixtures/`.
 
 ```
 cmd/                kbase CLI (cobra): composition root + one file per verb
-internal/assemble/  stages 8+9: the index and entry-point grammar (§4.2/§4.3),
-                    the closed class-B fixture manifest shipped with every KB,
-                    and the nine verify gates, each scoped to a file class
+internal/assemble/  stages 8+9: index/entry-point rendering, the fixture
+                    manifest, the nine verify gates, delivery
 internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists
                     (no I/O); precision-first matching
-internal/distill/   stage 5: a page's bytes (span from the tree plan, interior
-                    boundaries from the cut list), the §4.4 rebase map, §4.1's
-                    page grammar, and the up-link/relative-path/provenance
-                    renderers stage 8 shares
+internal/dissect/   stage 4: mechanical split, the boundary-refinement fold,
+                    cut-list verification, leaf slicing
+internal/distill/   stage 5: page bytes from tree plan + cut lists, the link
+                    rebase map, the page grammar and shared renderers
 internal/ingest/    corpus walk + immutable source custody (§4 stage 1);
                     format-neutral (document extensions are a parameter);
                     per-file sha256 + corpus content hash
@@ -86,9 +84,8 @@ internal/model/     OpenAI-compatible client: blocking + streaming (SSE),
                     ListModels, ConsultDrained (stream-and-drain), mock fabric
 internal/prompt/    per-call slot-stack context builder (§7): render, budgets,
                     CRITICAL/REMINDER trailer, per-slot churn hashes
-internal/summarize/ stage 6: the four level-sliced summary stages (deepest
-                    first), the per-child-kind input rule, the JSON summary
-                    artifact and its §6.4 verifier; a no-fallback seam
+internal/summarize/ stage 6: level-sliced summary stages, the JSON summary
+                    artifact and its verifier; a no-fallback seam
 internal/survey/    the survey artifact (§4 stage 2) and NOTHING format-specific:
                     heading tree with byte offsets, section token sizes, link
                     graph, gists; corpus roll-up, tiling + custody checks,
@@ -97,15 +94,11 @@ internal/survey/markdown/
                     the goldmark adapter — the only package that may import
                     goldmark or yaml; produces survey.Artifact and owns the
                     Markdown extension set
-internal/taxonomy/  stage 3: the container descent that designs the tree —
-                    the mechanical question set enumerated from the survey, the
-                    grouping answer's JSON transport, and the fold that composes
-                    treeplan.json; a no-fallback seam
+internal/taxonomy/  stage 3: the container descent that designs the tree
+                    plan from the survey; a no-fallback seam
 internal/tokens/    single chars-per-token estimator (§8)
-internal/treeplan/  the tree plan artifact (§4 stage 3 output, kbase.treeplan/1):
-                    planned KB tree + split groups + annexes, namer/slugger, the
-                    mechanical verifier (partition/caps/G-1/G-2, design-time
-                    split expansion, restructuring operators), deterministic JSON
+internal/treeplan/  the tree plan artifact (kbase.treeplan/1): planned KB
+                    tree + split groups + annexes, namer, mechanical verifier
 internal/version/   single-source version identity
 ```
 
@@ -148,67 +141,49 @@ Non-trivial work bursts follow a standard shape:
 2. Execute out of the plan file — dispatched agents read it; status checkboxes
    update as work packages land.
 3. Discard the file once the work is landed and reviewed. `TEMP_*.md` is
-   gitignored; these files are never committed.
-
-Why repo-root and not agent memory (`~/.claude/projects/<project>/memory/`):
-plans there are invisible to the human and accumulate forever. A root-level
-TEMP file is human-inspectable while live and dies when done. The durable
-task queue is ROADMAP.md; TEMP plans are per-burst execution detail only.
+   gitignored; these files are never committed. The durable task queue is
+   ROADMAP.md; TEMP plans are per-burst execution detail only.
 
 ## Testing
 
-**No important verification is a one-off** (ruled 2026-08-13). When we go
-to the trouble of devising a way to verify something works, that way is
-preserved so it can run repeatedly — regression protection first, coverage
-extension second. Concretely:
+**No verification is a one-off.** Every verification is a repeatable
+invocation — a unit test, an integration recipe, or a dev verb — never an
+ad-hoc command sequence that lives only in a conversation.
 
-- Every verification lands as a repeatable invocation: a unit test, an
-  integration recipe (`test-integration-*`), or a dev verb — never an
-  ad-hoc command sequence that lives only in a conversation.
-- Integration recipes are named `test-integration-<process>-<corpus>`
-  (ruled 2026-08-14): the process first, the input corpus LAST, because
-  a corpus is served by several processes and more corpora are coming.
-  The corpus fetch is shared: `prep-test-integration-<corpus>`. A recipe
-  that needs a live provider or the network is excluded from the omnibus
-  `test-integration`, which stays hermetic, and says so in its `[doc]`.
-- Observational evidence (counts, measurements, composed artifacts, A/B
-  numbers) is emitted to an inspectable location — `test_data/transient/
-  <name>/` for test-produced artifacts, an explicit `--out` for verbs —
-  not left in ephemeral agent reports or terminal scrollback.
-- Unit tests live beside their packages and must pass hermetically (no
-  network, no corpus). Corpus-driven tests skip when the pinned corpus is
-  absent and are wired into `test-integration-survey-rojo`, where the corpus is
-  guaranteed present — a corpus property that only runs "sometimes" is
-  coverage that silently isn't.
+**Integration tests invoke the app binary.** An integration test runs
+`./bin/kbase` directly — the system end-to-end as delivered. Behavior
+switches (keep-temp-work, config dirs) are flags in the recipe's
+invocation. In-process calls to verb functions are unit tests of verb
+logic, never integration tests.
 
-**Results are part of the test** (ruled 2026-08-13). Results that cannot
-be examined are not results — they are phantasms leading to delusions of
-progress and hallucinations of adequacy. Concretely:
+**Results are part of the test.** Results that cannot be examined are not
+results.
 
-- Every **integration test** preserves its log output under
-  `test_data/transient/<test-name>/`. Where the relevant information is
-  in the log, that is sufficient; where gathered stats ARE the results,
-  those stats are dumped to files under the same location.
-- The **artifacts** of integration test runs are preserved under
-  `test_data/transient/` — nothing is ever written to an ephemeral
-  location and tossed. The temp-work keep switch is ALWAYS on for
-  integration tests, with one deliberate exception: the test that proves
-  correct behavior in the switch's absence (guarding against logic that
-  silently depends on it).
-- **Unit tests** run under `go test`, which already logs expected-vs-
-  actual and pass/fail to stdout/stderr; preserving that log under
-  `test_data/transient/unit_tests/<test_name>_log.txt` is sufficient.
+- Integration recipes: `test-integration-<process>-<corpus>`; shared
+  corpus fetch `prep-test-integration-<corpus>`; anything needing network
+  or a live provider is excluded from the hermetic omnibus
+  `test-integration` and says so in its `[doc]`.
+- Every integration test preserves its full log, its stats, and its run
+  artifacts under `test_data/transient/<test-name>/` — nothing is written
+  to an ephemeral location and tossed. The temp-work keep switch is on,
+  with one deliberate no-keep exception test.
+- Unit tests pass hermetically (no network, no corpus) beside their
+  packages; their `go test` log is preserved under
+  `test_data/transient/unit_tests/`. Corpus-driven property tests skip
+  when the corpus is absent and are wired into an integration recipe
+  where it is guaranteed present.
+- Observational evidence (counts, measurements, A/B numbers) is emitted
+  to an inspectable location, never left in agent reports or scrollback.
 
 ---
 
 ## Dependency Policy
 
-TBD. One ruling stands: `golang.org/x/text/unicode/norm` is sanctioned
-(2026-08-13) for the NFC pre-pass at ingest (ARCHITECTURE.md §4 stage 1, §9).
-It is the Go project's own module, it brings no transitive dependency, and the
-tables it applies are frozen by the Unicode normalization stability policy.
-Add a module with `just add-dependency <module>@<version>` and only after the
-import exists — `go mod tidy` drops a dependency nothing imports.
+Stdlib-first; a new module requires a ruling. Sanctioned:
+`golang.org/x/text/unicode/norm` (NFC pre-pass; no transitive deps; tables
+frozen by Unicode stability policy). Add with
+`just add-dependency <module>@<version>`, only after the import exists —
+`go mod tidy` drops a dependency nothing imports.
 
 ---
 
