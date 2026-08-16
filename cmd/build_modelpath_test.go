@@ -16,14 +16,16 @@ import (
 	"kbase/internal/treeplan"
 )
 
-// The verb's LIVE shape, driven by a mock model through the same composition
-// the binary runs: the taxonomy descent designs the tree, the level stages
-// write the summaries, and stage 8 renders their conclusions into the section
-// pages.
+// The verb's model-in-loop path, driven by a scripted mock through the same
+// composition the binary runs: the taxonomy descent designs the tree, the
+// level stages write the summaries, and stage 8 renders their conclusions
+// into the section pages.
 //
-// It is hermetic — the model is a scripted mock behind providerOptions'
-// NewClient seam — and it is the only place the two new stages meet the
-// mechanical spine before a real provider does.
+// Nothing here is live: the "model" is a canned response script behind
+// providerOptions' NewClient seam, so these are hermetic unit tests of the
+// live-mode composition — the only place the model stages meet the
+// mechanical spine before a real provider does. The real-provider
+// counterparts are the test-integration-build-live-* recipes.
 
 // liveCorpus is shaped so every container call presents exactly TWO entries:
 // two documents at the root, two top-level sections in each. That is what lets

@@ -11,11 +11,14 @@ Reserve that language for moments of significant insight, intelligence, capabili
   - If the user has an open question, this must be addressed before proceeding with a plan.
   - Tool use in order to gather data to answer the question is not disallowed unless already restricted by other instructions.
 
-## Hold Your Horses
-- Act only on explicit imperatives ("do it", "write X", "go ahead") or stated decisions ("we'll use X", "no shim", "let's go with B").
-- Everything else — proposals, design tweaks, questions, observations — is an invitation to *discuss*: respond with assessment, options, or pushback; change no code or documents.
+## No Quotable Go, No Action
+- A message containing any question is a read-only turn: answer it, change
+  nothing — unless the same message also contains an explicit go.
+- Before any file change or agent dispatch: identify the user's exact
+  authorizing words in the current message. Your own conclusions,
+  conditionals ("if we X..."), and constraints on an open choice are not
+  authorization. No quotable go — no action.
 - A one-off instruction authorizes one act, not a standing rule.
-- Genuinely unclear which? Ask.
 
 ## Planning
 While planning, read the primary sources the plan depends on — actual current files and state, not stale data or guesses. Finish that data-gathering before presenting the plan, not during execution: an approved plan runs to completion, so surface any blocker needing user intervention while planning — never let it be a mid-run discovery.
