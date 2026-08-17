@@ -618,7 +618,7 @@ test-integration-build-refusal:
 # The body, split out so the wrapper above can tee ONE stream — same reason as
 # _test-integration-survey-rojo.
 #
-# Three builds into the SAME --out, in order: (1) a normal --keep-temp-work
+# Five builds into the SAME --out, in order: (1) a normal --keep-temp-work
 # build, which must succeed and leaves temp-work/run.json behind: exactly the
 # "finished" state checkOutIsClear's rerun clause detects. (2) an identical
 # rerun with nothing touched: must refuse, both because the directory holds
@@ -630,7 +630,14 @@ test-integration-build-refusal:
 # present, run.json absent" — the one state checkOutIsClear licenses an
 # overwrite for — and the same build must now succeed and re-deliver the
 # identical tree (reusing the temp-work store rather than recomputing it,
-# which is the resume path's own point, not just this recipe's).
+# which is the resume path's own point, not just this recipe's). (4) the same
+# interrupted-job state again, but rebuilt with --fresh: must succeed AND
+# report "0 reused" (proving the store was actually discarded, not silently
+# resumed) AND re-deliver the identical tree — --fresh changes how the work is
+# done, never what gets delivered. (5) --fresh into the FINISHED directory
+# left by (4): still refuses, identically to (2) — [MAD2: B-7 x B-12] --fresh
+# discards kbase's own scratch tree, never the populated-out refusal, and this
+# recipe is that composition's one proof.
 [private]
 _test-integration-build-refusal: build prep-test-integration-rojo
     @kb="{{BUILD_REFUSAL_OUT_DIR}}/kb"; \
@@ -665,10 +672,32 @@ _test-integration-build-refusal: build prep-test-integration-rojo
     diff -rq -x temp-work "$snapshot" "$kb" || \
       { echo "integration(build-refusal): the resumed build re-delivered a different tree than the original"; exit 1; }; \
     echo "integration(build-refusal): interrupted-job resume ok — temp-work present/run.json absent rebuilt and re-delivered the same tree"; \
+    find "$kb" -mindepth 1 -maxdepth 1 -not -name temp-work -exec rm -rf {} +; \
+    rm -f "$kb/temp-work/run.json"; \
+    fresh_out="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work --fresh)"; \
+    fresh_status=$?; \
+    [[ "$fresh_status" == 0 ]] || \
+      { echo "integration(build-refusal): the --fresh rebuild over interrupted-job remains failed (exit $fresh_status)"; exit 1; }; \
+    echo "$fresh_out" | grep -qE 'units: [0-9]+ produced, 0 reused, 0 failed' || \
+      { echo "integration(build-refusal): --fresh rebuild did not report 0 reused — the store was not discarded:"; echo "$fresh_out"; exit 1; }; \
+    diff -rq -x temp-work "$snapshot" "$kb" || \
+      { echo "integration(build-refusal): the --fresh rebuild re-delivered a different tree than the original"; exit 1; }; \
+    echo "integration(build-refusal): --fresh rebuild ok — 0 reused (store discarded), tree matches the resume output"; \
+    freshrefuse_err="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work --fresh 2>&1)"; \
+    freshrefuse_status=$?; \
+    [[ "$freshrefuse_status" == 1 ]] || \
+      { echo "integration(build-refusal): --fresh into the finished directory exited $freshrefuse_status, want 1"; exit 1; }; \
+    echo "$freshrefuse_err" | grep -qF "refusing to deliver into a directory that is not empty" || \
+      { echo "integration(build-refusal): --fresh refusal is missing the not-empty marker:"; echo "$freshrefuse_err"; exit 1; }; \
+    echo "$freshrefuse_err" | grep -qF "this is a rerun, not the resume of an interrupted one" || \
+      { echo "integration(build-refusal): --fresh refusal is missing the rerun-diagnosis marker:"; echo "$freshrefuse_err"; exit 1; }; \
+    diff -rq -x temp-work "$snapshot" "$kb" || \
+      { echo "integration(build-refusal): the refused --fresh attempt changed the delivered tree"; exit 1; }; \
+    echo "integration(build-refusal): --fresh does not override the populated-out refusal ok — exit 1, both markers present, tree byte-unchanged"; \
     rm -rf "$snapshot"; \
-    echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, and interrupted-job resume all correct"; \
+    echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, interrupted-job resume, --fresh rebuild, and --fresh-vs-refusal all correct"; \
     {{just_executable()}} _write-evidence "{{BUILD_REFUSAL_OUT_DIR}}" "test-integration-build-refusal" \
-      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds"
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains again\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # discards the store, 0 reused, rebuilds and re-delivers\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # --fresh into the finished directory still refuses, exit 1"
 
 # The omnibus composes the HERMETIC per-corpus recipes, plus
 # test-integration-write-agents (hermetic but corpus-free) and

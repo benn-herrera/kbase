@@ -279,7 +279,11 @@ func (s *ArtifactStore) verify(rel string, want []Input) (Verdict, string, error
 	// write that would "fix" it cannot succeed. That is layout, not
 	// staleness.
 	if info, err := os.Stat(abs); err == nil && info.IsDir() {
-		return VerdictInvalid, "", IncoherentStoreError{Path: rel, Reason: "a directory sits where an artifact belongs"}
+		return VerdictInvalid, "", IncoherentStoreError{
+			Path:   rel,
+			Reason: "a directory sits where an artifact belongs",
+			Remedy: remedyFresh,
+		}
 	}
 
 	data, dataErr := os.ReadFile(abs)
@@ -305,6 +309,7 @@ func (s *ArtifactStore) verify(rel string, want []Input) (Verdict, string, error
 		return VerdictInvalid, "", IncoherentStoreError{
 			Path:   rel,
 			Reason: fmt.Sprintf("its stamp claims to belong to %q", stamp.Path),
+			Remedy: remedyFresh,
 		}
 	}
 	if stamp.Schema != stampSchema {
@@ -571,6 +576,51 @@ func (s *ArtifactStore) sweep(chain StageChain) error {
 	return nil
 }
 
+// discard empties the job directory of everything a previous run left, keeping
+// only the lock this run holds. It is what ModeFresh does before it scans, and
+// it is a deletion rather than an "ignore what you read" because those are not
+// the same run: the wreckage a resume refuses over — a directory sitting where
+// an artifact belongs, a stamp from a rearranged tree — survives a rebuild that
+// merely overwrote the paths its chain names, and the write onto that directory
+// would then fail three stages in. Removing it is what makes `--fresh` the
+// remedy IncoherentStoreError names (§12).
+//
+// It stands where the sweep stands, on the same fact and behind the same
+// tripwire: the root is the temp-work directory kbase itself created under the
+// output directory, so this cannot reach an operator's files. Unlike the sweep
+// it removes directories too, and unlike the sweep its failures are returned —
+// a fresh run that could not clear its job directory is not a fresh run, and
+// finishing it would deliver the appearance of one.
+//
+// A kill mid-discard needs no handling: what is left is a partially emptied
+// job directory, which is a state every mode already reads correctly (the
+// survivors verdict Valid or Invalid, and another --fresh discards them again).
+func (s *ArtifactStore) discard() error {
+	if filepath.Base(s.root) != TempWorkDirName {
+		return fmt.Errorf("pipeline: refusing to discard %s: a run's artifacts live in the %s directory "+
+			"kbase creates under the output directory, and this is not one", s.root, TempWorkDirName)
+	}
+	entries, err := os.ReadDir(s.root)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("pipeline: discard %s: %w", s.root, err)
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.Name() == LockFileName {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.root, e.Name())); err != nil {
+			return fmt.Errorf("pipeline: discard %s: %w", s.root, err)
+		}
+		removed++
+	}
+	s.lg.Info("pipeline discarded the job directory", "removed", removed)
+	return nil
+}
+
 // BadPathError reports a store-relative path that is not one: empty,
 // absolute, escaping the job directory, or colliding with the stamp
 // namespace. It is a defect in the chain description, not a user error.
@@ -585,14 +635,33 @@ func (e BadPathError) Error() string {
 
 // IncoherentStoreError refuses a resume outright: the job directory
 // contradicts the chain being run, in a way no amount of redoing units
-// resolves. The message names the remedy, because the remedy is always
-// available — resume is an optimization and --fresh is always sufficient.
+// resolves.
+//
+// The message names the remedy, and the remedy is a field because the cases
+// do not share one. Where the contradiction IS the job directory's contents,
+// `--fresh` discards them (see discard) and is always sufficient — resume is
+// an optimization. Where it is between the store and the chain DESCRIPTION —
+// a unit consuming an artifact no stage of this run produces and no stamp
+// covers — an empty job directory holds that artifact no more than a full one
+// does, and offering `--fresh` there would send an operator to rerun a job
+// that will refuse again in the same place.
 type IncoherentStoreError struct {
 	Path   string
 	Reason string
+	Remedy string
 }
 
+const (
+	// remedyFresh cures wreckage IN the job directory, which is what --fresh
+	// discards.
+	remedyFresh = "rerun with --fresh to discard the job directory and rebuild from scratch"
+
+	// remedyUnproduced is the honest non-remedy for a store that contradicts
+	// the chain description rather than merely holding stale bytes.
+	remedyUnproduced = "--fresh does not reach this one: no stage of this run produces that artifact, " +
+		"so an empty job directory would not hold it either"
+)
+
 func (e IncoherentStoreError) Error() string {
-	return fmt.Sprintf("pipeline: cannot resume: %s — %s; rerun with --fresh to rebuild from scratch",
-		e.Path, e.Reason)
+	return fmt.Sprintf("pipeline: cannot resume: %s — %s; %s", e.Path, e.Reason, e.Remedy)
 }

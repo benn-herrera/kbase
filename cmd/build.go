@@ -130,6 +130,12 @@ const (
 	// one run, over whatever `[dev] keep_temp_work` says.
 	keepTempWorkFlag = "keep-temp-work"
 
+	// freshFlag discards the prior run's temp-work instead of resuming from
+	// it. It has no configuration counterpart on purpose: "ignore what is on
+	// disk" is a decision about one invocation, and a settings file that made
+	// it standing would spend a corpus's worth of tokens every run.
+	freshFlag = "fresh"
+
 	// buildTimeout bounds the WHOLE live job rather than one call: tens of
 	// heavy-tier calls — one per container of the descent, one per section of
 	// the tree — plus the transport policy's own retries underneath each of
@@ -171,6 +177,16 @@ type buildOptions struct {
 	// KeepTempWork keeps `<out>/temp-work/` after a run that succeeded. A
 	// failed or interrupted run keeps it whatever this says.
 	KeepTempWork bool
+
+	// Fresh discards everything a prior run left in `<out>/temp-work/` and
+	// rebuilds every unit (--fresh). What it overrides is the STORE's prior
+	// state, and only that: a `--out` that already holds a delivered
+	// knowledge base refuses exactly as it does without the flag
+	// (checkOutIsClear). Deleting a corpus's delivered knowledge base is the
+	// operator's to do, and a flag that quietly did it would be the
+	// destroy-what-is-there mode this verb refuses to have; what --fresh
+	// removes is kbase's own scratch tree.
+	Fresh bool
 
 	// BuildDate stamps the provenance receipt on every delivered page. It is
 	// an option rather than a clock read inside the renderer so that the
@@ -360,7 +376,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 	}
 	coord := pipeline.NewCoordinator(store, runner, pipeline.DefaultWorkers, lg)
 	start := time.Now()
-	res, err := coord.Run(runCtx, jobPlan, pipeline.ModeResume)
+	res, err := coord.Run(runCtx, jobPlan, resumeMode(opts.Fresh))
 	elapsed := time.Since(start)
 	// Every return from here down keeps temp-work: a failed or interrupted run
 	// leaves its intermediates for a resume and for a human.
@@ -980,6 +996,16 @@ func (j *buildJob) verifyProducer() pipeline.Producer {
 	}
 }
 
+// resumeMode is the whole of what --fresh selects, in the vocabulary the
+// pipeline owns (ARCHITECTURE.md §12): resume reuses every unit the store can
+// prove, fresh discards the store and rebuilds all of them.
+func resumeMode(fresh bool) pipeline.Mode {
+	if fresh {
+		return pipeline.ModeFresh
+	}
+	return pipeline.ModeResume
+}
+
 // checkOutIsClear is the delivery precondition (SPEC §3.1, §1.5): `--out`
 // receives the delivered tree and only the delivered tree, so a directory that
 // already holds something is refused BEFORE the corpus is read — every path it
@@ -996,6 +1022,14 @@ func (j *buildJob) verifyProducer() pipeline.Producer {
 // (interruptedJob). A killed run can leave a half-copied delivery behind — that
 // residue is its own to overwrite, and refusing it would make the resume §5
 // guarantees impossible to reach.
+//
+// `--fresh` does not enter here, and the omission is the design: it overrides
+// the STORE's prior state, not the delivered tree's. A flag that let a rerun
+// through this check would be the in-place update this appliance does not have,
+// with the old tree's unnamed files surviving underneath the new one — and it
+// would make kbase delete a knowledge base on a user's say-so about a directory
+// they may have named by mistake. So a finished `--out` refuses in both modes,
+// and the remedy stays the operator's `rm -r`.
 func checkOutIsClear(out string) error {
 	entries, err := os.ReadDir(out)
 	switch {
@@ -1515,6 +1549,7 @@ var (
 	buildFlagOut     string
 	buildFlagTitle   string
 	buildFlagKeep    bool
+	buildFlagFresh   bool
 	buildFlagAnnexes []string
 )
 
@@ -1551,6 +1586,13 @@ or interrupted run keeps it; --keep-temp-work (or [dev] keep_temp_work) keeps
 it after a successful one too — and a successful run without either keeps no
 run record, the record being a development record rather than something the
 knowledge base's readers use.
+
+--fresh discards that temp-work instead of resuming from it: every stage runs
+again from the corpus, at full token cost, and nothing a prior run left behind
+is read or trusted. It is the answer to a job directory a resume refuses over.
+What it does not do is override the refusal above — a --out already holding a
+delivered knowledge base refuses with --fresh exactly as it does without it,
+because that tree is yours to delete and not this program's.
 
 --title is the original doc set's title as you would state it ("Rojo v7
 Documentation"); the knowledge base is named "KBase for <title>" and that name
@@ -1595,6 +1637,7 @@ material out of scope can hide its own failures.`,
 			// `rm -r` away, while the reason to keep is a run whose evidence
 			// someone wants and cannot get back.
 			KeepTempWork: buildFlagKeep || opts.Config.Dev.KeepTempWork,
+			Fresh:        buildFlagFresh,
 			BuildDate:    opts.Config.Dev.BuildDate,
 			Stdout:       cmd.OutOrStdout(),
 			Stderr:       cmd.ErrOrStderr(),
@@ -1615,5 +1658,8 @@ func init() {
 	buildCmd.Flags().BoolVar(&buildFlagKeep, keepTempWorkFlag, false,
 		"keep <out>/"+pipeline.TempWorkDirName+"/, and with it "+buildRecordName+
 			", after a run that succeeded (a failed run always keeps it)")
+	buildCmd.Flags().BoolVar(&buildFlagFresh, freshFlag, false,
+		"discard whatever a prior run left in <out>/"+pipeline.TempWorkDirName+
+			"/ and rebuild every stage (a --out that already holds a knowledge base still refuses)")
 	rootCmd.AddCommand(buildCmd)
 }

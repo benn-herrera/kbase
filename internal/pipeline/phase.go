@@ -76,6 +76,12 @@ const (
 	// derived once from the outputs on disk, not re-derived mid-run
 	// against a store the run itself is mutating.
 	OpResumeScan
+	// OpDiscardStore empties the job directory of everything a previous run
+	// left — ModeFresh's whole mechanism. It is gated to job setup for the
+	// same reason OpResumeScan is, read from the other side: the prior state
+	// is decided once, before the run has written anything, and a discard
+	// anywhere later would delete artifacts this run had already proven.
+	OpDiscardStore
 	// OpRebuildStageContext constructs a fresh StageContext. Types cannot
 	// catch this one — building a new immutable context with different
 	// bytes is perfectly legal Go and a churn bug everywhere but stage
@@ -104,6 +110,7 @@ const (
 var opNames = map[Op]string{
 	OpBuildJobFrame:       "build-job-frame",
 	OpResumeScan:          "resume-scan",
+	OpDiscardStore:        "discard-store",
 	OpRebuildStageContext: "rebuild-stage-context",
 	OpBuildCall:           "build-call",
 	OpAdvanceUnit:         "advance-unit",
@@ -145,7 +152,7 @@ var phaseOpTable = [...]phaseRule{
 		phase:    PhaseJobSetup,
 		name:     "job-setup",
 		frontier: prompt.SlotTotal,
-		ops:      []Op{OpBuildJobFrame, OpResumeScan},
+		ops:      []Op{OpBuildJobFrame, OpResumeScan, OpDiscardStore},
 		crash:    crashpoint.Register(phaseCrashpointPrefix + "job-setup"),
 	},
 	{

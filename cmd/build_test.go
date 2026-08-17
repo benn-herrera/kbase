@@ -444,6 +444,33 @@ func TestBuildRefusesAPopulatedOut(t *testing.T) {
 		}
 	})
 
+	// --fresh is about the store, not the delivery [MAD2: B-12]. It discards
+	// what a prior run left in temp-work; it does not license deleting a
+	// delivered knowledge base, so a finished --out refuses with the flag
+	// exactly as it does without it — and refuses BEFORE the job directory is
+	// opened, which is why the run record is still there afterwards.
+	t.Run("--fresh does not override it", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "kb")
+		build(t, root, out, true)
+
+		var stdout, stderr bytes.Buffer
+		_, err := runBuild(context.Background(), buildOptions{
+			Root: root, Out: out, BuildDate: pinnedBuildDate, Fresh: true,
+			Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+		})
+		if err == nil {
+			t.Fatal("--fresh delivered a second time into a populated --out")
+		}
+		for _, want := range []string{"nothing was written", "rerun, not the resume"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+		}
+		if _, err := os.Stat(recordPath(out)); err != nil {
+			t.Errorf("the refused --fresh run discarded the finished run's temp-work: %v", err)
+		}
+	})
+
 	// Not only a knowledge base: --out receives the delivered tree and nothing
 	// else, so anything already living there refuses.
 	t.Run("an unrelated file", func(t *testing.T) {
@@ -485,6 +512,56 @@ func TestBuildResumesAnInterruptedJob(t *testing.T) {
 	}
 	if _, err := os.Stat(recordPath(out)); err != nil {
 		t.Errorf("the resumed run wrote no run record: %v", err)
+	}
+}
+
+// What --fresh overrides: the store's prior state [MAD2: B-12]. Both runs below
+// are the same interrupted-job shape — the one shape a second run over one
+// --out legitimately takes (§3.1) — so the flag is the only difference between
+// them, and the unit counts say what it bought: the resume proves every
+// artifact the first run left and spends nothing, the fresh run discards them
+// and rebuilds the pipeline from the corpus.
+func TestBuildFreshRebuildsInsteadOfResuming(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	rerun := func(fresh bool) buildResult {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		res, err := runBuild(context.Background(), buildOptions{
+			Root: root, Out: out, BuildDate: pinnedBuildDate, KeepTempWork: true, Fresh: fresh,
+			Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+		})
+		if err != nil {
+			t.Fatalf("runBuild(fresh=%t): %v\nstderr:\n%s", fresh, err, stderr.String())
+		}
+		return res
+	}
+	build(t, root, out, true)
+
+	interrupt(t, out)
+	resumed := rerun(false)
+	if resumed.Job.Mode != pipeline.ModeResume {
+		t.Errorf("the default run ran in %s mode", resumed.Job.Mode)
+	}
+	if resumed.Job.Reused != resumed.Job.Units || resumed.Job.Produced != 0 {
+		t.Errorf("the resumed run reused %d of %d units and produced %d, want all and none",
+			resumed.Job.Reused, resumed.Job.Units, resumed.Job.Produced)
+	}
+
+	interrupt(t, out)
+	fresh := rerun(true)
+	if fresh.Job.Mode != pipeline.ModeFresh {
+		t.Errorf("--fresh ran in %s mode", fresh.Job.Mode)
+	}
+	if fresh.Job.Reused != 0 || fresh.Job.Produced != fresh.Job.Units {
+		t.Errorf("--fresh reused %d units and produced %d of %d, want none reused and all produced",
+			fresh.Job.Reused, fresh.Job.Produced, fresh.Job.Units)
+	}
+	if !fresh.Report.Passed() {
+		t.Error("the fresh run did not pass its gates")
+	}
+	if len(fresh.Delivered) != len(resumed.Delivered) {
+		t.Errorf("--fresh delivered %d files, the resume %d", len(fresh.Delivered), len(resumed.Delivered))
 	}
 }
 

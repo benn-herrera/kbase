@@ -437,6 +437,19 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 	if err != nil {
 		return JobResult{}, err
 	}
+	// ModeFresh's mechanism, and the one moment it is safe: under the lock,
+	// after the frame is built, before the scan reads anything and before any
+	// worker has written. A fresh run that only ignored what it read would
+	// leave behind exactly the states a resume refuses over — see
+	// ArtifactStore.discard.
+	if mode == ModeFresh {
+		if err = guard(PhaseJobSetup, OpDiscardStore); err != nil {
+			return JobResult{}, err
+		}
+		if err = c.store.discard(); err != nil {
+			return JobResult{}, err
+		}
+	}
 	if err = guard(PhaseJobSetup, OpResumeScan); err != nil {
 		return JobResult{}, err
 	}

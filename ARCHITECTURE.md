@@ -828,14 +828,25 @@ boundary is simply never described — it is downstream of the frontier by
 definition, which is exactly what makes lazy description safe. Within the first incomplete stage, units are individually verdicted
 `Valid | Absent | Invalid` — reuse requires affirmative proof; ANY doubt
 (unparseable stamp, hash mismatch, version skew) is redone, priced in
-tokens; structural incoherence refuses the whole resume with `--fresh`
-guidance. This is the kb_tools drift-gate discipline applied to the
-pipeline's own execution.
+tokens; structural incoherence refuses the whole resume and names the remedy
+for its case — `--fresh` where the contradiction is the job directory's own
+contents (a stamp from a rearranged tree, a directory where an artifact
+belongs), and no remedy at all where the store contradicts the chain
+DESCRIPTION (a unit consuming an artifact no stage produces and no stamp
+covers), since an empty job directory would not hold that artifact either.
+This is the kb_tools drift-gate discipline applied to the pipeline's own
+execution.
 
-Resume is an **optimization, never load-bearing**: `--fresh` ignores all
-prior outputs unconditionally and is always sufficient. And at no tier does
-any path emit unverified material — assembly-time verification re-checks
-everything regardless of provenance (two independent nets).
+Resume is an **optimization, never load-bearing**: `kbase build --fresh`
+ignores all prior outputs unconditionally and is always sufficient over
+anything a previous run left behind. The mechanism is a DISCARD, not a scan
+that declines to read: the job directory's prior contents are deleted under
+the lock, before the scan, which is what makes the sentence true of the
+wreckage a rebuild would not otherwise touch. It overrides the store's prior
+state and nothing else — a `--out` that already holds a delivered knowledge
+base refuses in both modes (SPEC.md §3.1). And at no tier does any path emit
+unverified material — assembly-time verification re-checks everything
+regardless of provenance (two independent nets).
 
 **Call-time task inputs.** A task's prompt input may be a value or a builder
 (`pipeline.InputBuilder`); a builder runs when the worker REACHES the unit.

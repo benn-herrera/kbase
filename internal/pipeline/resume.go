@@ -68,10 +68,13 @@ type Mode string
 const (
 	// ModeResume inspects the store and reuses what it can prove.
 	ModeResume Mode = "resume"
-	// ModeFresh ignores the store entirely and rebuilds everything. It is
-	// the --fresh flag, and the reason resume is allowed to be strict: any
-	// doubt can be redone, and the user always has a button that skips the
-	// question.
+	// ModeFresh ignores the store entirely and rebuilds everything. The job
+	// directory's prior contents are DISCARDED before the scan rather than
+	// merely left unread (Coordinator.Run, ArtifactStore.discard), which is
+	// what makes "unconditionally" true of wreckage a rebuild would not
+	// otherwise touch. It is the --fresh flag, and the reason resume is
+	// allowed to be strict: any doubt can be redone, and the user always has
+	// a button that skips the question.
 	ModeFresh Mode = "fresh"
 )
 
@@ -129,7 +132,8 @@ func (r ResumeScanResult) Complete() bool { return r.ResumeStage >= r.Stages }
 //
 // Errors are refusals, never verdicts: a chain description defect
 // (BadPathError) or a store that contradicts the chain (IncoherentStoreError,
-// whose message names --fresh). ModeFresh reads no verdicts at all, but it
+// whose message names the remedy — --fresh wherever the contradiction is the
+// job directory's own contents). ModeFresh reads no verdicts at all, but it
 // still describes its first stage — a description is what a run needs to
 // start, in either mode.
 //
@@ -251,6 +255,7 @@ func (s *ArtifactStore) resolveInputs(u OwedArtifact) ([]Input, error) {
 			return nil, IncoherentStoreError{
 				Path:   up,
 				Reason: fmt.Sprintf("its stamp claims to belong to %q", stamp.Path),
+				Remedy: remedyFresh,
 			}
 		}
 		inputs = append(inputs, Input{Name: upstreamInputPrefix + up, Hash: stamp.Output})
@@ -331,6 +336,7 @@ func (s *ArtifactStore) validateStage(units []OwedArtifact, seen, produced map[s
 						Path: up,
 						Reason: fmt.Sprintf("unit %q consumes it, no earlier stage produces it, "+
 							"and the store holds no stamp for it", u.Path),
+						Remedy: remedyUnproduced,
 					}
 				}
 			}

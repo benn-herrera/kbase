@@ -123,7 +123,7 @@ list.
 
 ```
 kbase build <corpus-dir> --out DIR [--title TITLE] [--annex PREFIX]...
-                         [--keep-temp-work]
+                         [--keep-temp-work] [--fresh]
 ```
 
 Builds a complete, verified knowledge base. Requires **both** tiers to be
@@ -143,6 +143,8 @@ summaries, the light tier adjudicates page boundaries.
   delivers a whole knowledge base or nothing, and the remedy is to delete
   the directory or name an empty one. The **one** exception is the resume of
   an interrupted build (§3.1), which owns the residue it left behind.
+  `--fresh` is **not** an exception: it decides what happens to `temp-work/`,
+  never whether a delivered tree may be overwritten.
 - `--title TITLE` is the documentation set's own title as the user states
   it (`--title "Rojo v7 Documentation"`). The knowledge base is titled
   `KBase for <TITLE>`, and that name renders in three places: the
@@ -163,6 +165,15 @@ summaries, the light tier adjudicates page boundaries.
 - `--keep-temp-work` keeps `temp-work/` after a run that succeeds (a
   failed or interrupted run always keeps it regardless), and with it the
   run record (§3.8), which lives at the temp-work root.
+- **`--fresh` rebuilds every stage.** Whatever a prior run left in
+  `temp-work/` is discarded — deleted, not merely left unread, `job.lock`
+  excepted — before the resume scan runs, so no artifact is reused, no
+  stamp is trusted, and the run costs a full corpus's tokens. It is the
+  remedy the resume refusals name (§3.6): a job directory that
+  contradicts itself is cleared rather than argued with. Two things it does
+  **not** do: it does not override the populated-`--out` refusal above, and
+  it does not break a leftover `job.lock` (§3.7) — both modes refuse that
+  until a human deletes the file.
 - Nothing is delivered unless every one of the ten guarantees (§4.8)
   holds; a failure refuses the whole delivery and names which guarantee
   failed (and, where applicable, the offending node) in the run record
@@ -362,8 +373,9 @@ whose half-copied delivery is its own to overwrite; a `temp-work/` that
 holds a run record belongs to a build that finished, and a second run over
 it is a rerun and refuses like any other. Rebuilding a corpus into a
 directory that already holds its knowledge base therefore means deleting
-that directory first. Updating a delivered knowledge base in place is not a
-feature of this appliance.
+that directory first — `--fresh` (§1.5) rebuilds the pipeline, not the
+delivery decision, and refuses here exactly as a plain rerun does. Updating
+a delivered knowledge base in place is not a feature of this appliance.
 
 No file kbase writes has a lifecycle of its own: there are exactly two
 kinds, delivered (permanent, classified) and temp-work (scratch, one
@@ -550,6 +562,12 @@ currently writes; its `version` matches the running app's version exactly;
 input's hash still matches. Any single mismatch — including app-version
 skew — means the artifact is redone, never trusted.
 
+Two states are **refusals rather than redos**, because redoing the unit
+cannot fix them: a stamp whose `path` names a different artifact, and a
+directory sitting where an artifact belongs. Either refuses the run before
+any stage executes and names `--fresh` (§1.5), which discards the job
+directory and rebuilds it.
+
 ### 3.7 The job lock — `temp-work/job.lock`
 
 Acquired exclusively at job start (create-if-absent; no read-then-write
@@ -562,8 +580,10 @@ immediately, naming the lock's contents and the file to delete.
 file is left behind and is **never broken automatically** — there is no
 pid-liveness check and no age timeout, since neither is meaningful across
 hosts or containers. The sole remedy is a human deleting
-`temp-work/job.lock`; after that, both a resumed run and a full rebuild
-proceed normally.
+`temp-work/job.lock`; after that, both a resumed run and a `--fresh`
+rebuild proceed normally. `--fresh` does not break the lock either: it
+discards the job directory's artifacts, and the lock is the one file it
+leaves alone.
 
 ### 3.8 `run.json` — the run record
 
@@ -966,8 +986,11 @@ edited (§4.2 item 4).
   anything else is redone. A run that fails or is interrupted, including a
   hard kill, always leaves `temp-work/` in place for the next attempt to
   read; a run that completes successfully removes it (unless kept, §3.1).
-  There is currently no flag to force a full rebuild short of deleting
-  `temp-work/` (or `--out` itself) by hand — see "Needs ruling".
+  `--fresh` (§1.5) is the switch that skips the question: the prior
+  `temp-work/` is discarded and every stage runs again. It is always
+  sufficient over what a previous run left in the job directory, and it is
+  never a licence to overwrite a delivered tree — the populated-`--out`
+  refusal (§3.1) applies to both modes alike.
 - **The job lock and hard-kill recovery.** See §3.7; the sole remedy after
   an unclean kill is deleting `temp-work/job.lock`.
 - **Provenance.** Every delivered page names, in its footer (§4.6), the
@@ -1009,19 +1032,12 @@ are not yet true of the current binary:
 Behaviors observed in the current binary that look like implementation
 accident rather than deliberate contract — flagged rather than enshrined:
 
-1. **`--fresh` is referenced but does not exist.** Internal error messages
-   (job-lock contention, stamp mismatches) tell the user to "rerun with
-   `--fresh`", but no verb registers such a flag; `kbase build` always
-   resumes automatically from an existing `temp-work/`, and the only way
-   to force a full rebuild is to delete `temp-work/` (or `--out` itself)
-   by hand. Either the flag should be added, or the error text should
-   name the actual remedy.
-2. **`configure`'s targeted rewrite does not preserve original comment
+1. **`configure`'s targeted rewrite does not preserve original comment
    alignment.** A rewritten line's trailing comment is kept but
    re-attached at a fixed gap, not its original column. Whether §2.5's
    byte-preservation contract is meant to guarantee column-exact comment
    alignment, or only comment *content* preservation, is undecided.
-3. **`[dev]` switches are documentation-only guardrails, not enforced
+2. **`[dev]` switches are documentation-only guardrails, not enforced
    isolation.** Nothing stops a user from pointing a real, live
    `--config-dir` at `[dev] tree_plan = "mechanical"`, or otherwise using
    any `[dev]` switch outside a development context. Whether that is

@@ -180,7 +180,8 @@ func TestVerifyDoubtIsInvalid(t *testing.T) {
 }
 
 // TestVerifyRefusesIncoherentStore covers the cases redoing a unit cannot
-// fix, which are refusals rather than verdicts and must name --fresh.
+// fix, which are refusals rather than verdicts. Both are wreckage IN the job
+// directory, so both name --fresh, which discards it.
 func TestVerifyRefusesIncoherentStore(t *testing.T) {
 	t.Run("stamp belonging to another artifact", func(t *testing.T) {
 		s, _ := newArtifactStore(t)
@@ -188,7 +189,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 		restamp(t, s, "a.md", func(st *Stamp) { st.Path = "somewhere/else.md" })
 
 		_, _, err := s.verify("a.md", nil)
-		assertIncoherent(t, err)
+		assertIncoherent(t, err, remedyFresh)
 	})
 
 	t.Run("a directory where an artifact belongs", func(t *testing.T) {
@@ -197,7 +198,7 @@ func TestVerifyRefusesIncoherentStore(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _, err := s.verify("a.md", nil)
-		assertIncoherent(t, err)
+		assertIncoherent(t, err, remedyFresh)
 	})
 }
 
@@ -380,14 +381,19 @@ func crashedAt(t *testing.T, point string, fn func()) (crashed bool) {
 	return false
 }
 
-func assertIncoherent(t *testing.T, err error) {
+// assertIncoherent requires an IncoherentStoreError carrying the remedy for
+// its own case. The remedy is the caller's to state because there is not one:
+// --fresh discards the job directory, so it cures every incoherence that IS
+// the job directory's contents and cures nothing when the store contradicts
+// the chain description instead.
+func assertIncoherent(t *testing.T, err error, remedy string) {
 	t.Helper()
 	var inc IncoherentStoreError
 	if !errors.As(err, &inc) {
 		t.Fatalf("err = %v, want an IncoherentStoreError", err)
 	}
-	if !strings.Contains(err.Error(), "--fresh") {
-		t.Errorf("refusal %q does not name --fresh", err)
+	if !strings.Contains(err.Error(), remedy) {
+		t.Errorf("refusal %q does not carry its remedy %q", err, remedy)
 	}
 }
 

@@ -228,7 +228,7 @@ func TestScanRefusesIncoherentStore(t *testing.T) {
 	restamp(t, s, relSurvey, func(st *Stamp) { st.Path = "elsewhere.json" })
 
 	_, err := s.ResumeScan(chain, ModeResume)
-	assertIncoherent(t, err)
+	assertIncoherent(t, err, remedyFresh)
 }
 
 // TestScanRefusesBadChains: a chain description defect refuses the run rather
@@ -311,10 +311,14 @@ func TestChainMayConsumeAProvenArtifactItDoesNotProduce(t *testing.T) {
 		)}}
 	}
 
-	t.Run("unproven is a refusal naming --fresh", func(t *testing.T) {
+	// The one incoherence --fresh does not cure, and the refusal says so: an
+	// empty job directory holds no stamp for that artifact either.
+	t.Run("unproven is a refusal --fresh cannot cure", func(t *testing.T) {
 		s, _ := newArtifactStore(t)
-		_, err := s.ResumeScan(chain(), ModeResume)
-		assertIncoherent(t, err)
+		for _, mode := range []Mode{ModeResume, ModeFresh} {
+			_, err := s.ResumeScan(chain(), mode)
+			assertIncoherent(t, err, remedyUnproduced)
+		}
 	})
 
 	t.Run("stamped is legal, and its hash enters the unit", func(t *testing.T) {
