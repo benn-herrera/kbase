@@ -133,7 +133,7 @@ judgment roles; the human at the edges.**
 
 - **Immutable embedded prompts; write-modified-copy only.** The primary system
   agent definitions live in the compiled binary as a code resource.
-  `kbase write-generic-agents --out <dir>` dumps copies to local storage for
+  `kbase write-agents --out <dir>` dumps copies to local storage for
   adaptation, and refuses rather than overwrite one. The app's own definitions
   cannot be modified — the appliance version fully determines pipeline behavior.
 
@@ -147,7 +147,7 @@ judgment roles; the human at the edges.**
   contract: any agent that picks up the artifact finds its operating manual inside.
   The agent DEFINITIONS are not in there (ruled 2026-08-15) — they are samples for
   the user's own tooling rather than KB content, so they are written on demand by
-  `kbase write-generic-agents` and the contract carries a one-sentence pointer to it.
+  `kbase write-agents` and the contract carries a one-sentence pointer to it.
   A definition inside the tree would be a file the user adapts and the next build
   overwrites.
 

@@ -166,10 +166,10 @@ summaries, the light tier adjudicates page boundaries.
   Under `[dev] tree_plan = "mechanical"` this stage stays mechanical too,
   which is what makes that switch "no model call anywhere".
 
-### 1.6 `kbase write-generic-agents`
+### 1.6 `kbase write-agents`
 
 ```
-kbase write-generic-agents --out DIR
+kbase write-agents --out DIR
 ```
 
 Writes the generic agent definitions — `docent.md`, `maintainer.md` and
@@ -557,7 +557,7 @@ navigation only."* / *"Summaries route; leaves answer. An index page
 tells you where to go; a page at the bottom of the tree is where the
 answer is. Answer from leaf text, never from an index summary — the
 summaries are navigation, and they are not the source."* —
-then a fixed one-sentence pointer naming `kbase write-generic-agents`
+then a fixed one-sentence pointer naming `kbase write-agents`
 (§1.6) as where agent definitions come from → optional `## Annex lookup` section
 (present iff at least one `--annex` was declared: one bullet per annex,
 `` - `<prefix>` — <convention> ``) → provenance footer.
@@ -626,7 +626,7 @@ CLAUDE.md
 
 - `AGENTS.md` — states the summaries-route/leaves-answer contract, a
   pointer to the entry point, and the one-sentence pointer to
-  `kbase write-generic-agents` (§1.6) as where agent definitions come
+  `kbase write-agents` (§1.6) as where agent definitions come
   from. The definitions themselves are the user's agent tooling and are
   not KB content, so they are obtained on demand rather than shipped
   inside the artifact.
@@ -767,7 +767,7 @@ are not yet true of the current binary:
 
 - **Embedded agent/prompt definitions.** The pipeline runs real model
   calls today, but every prompt definition — taxonomy design, summaries,
-  boundary refinement, and the two definitions `kbase write-generic-agents`
+  boundary refinement, and the two definitions `kbase write-agents`
   writes (§1.6) — is a marked stub; tuned, evaled definitions have not
   landed. A build today is evidence about the machinery, not about
   tree-design or summary quality.

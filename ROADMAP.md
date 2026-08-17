@@ -155,7 +155,7 @@ deleted, not archived — git history is the log.
 - **Definitions-extraction burst (ruled 2026-08-15)**: the shipped agent
   definitions leave the delivered KB. They are samples for the USER's agent
   tooling, not KB content — so they become an on-demand verb
-  (working name `kbase write-generic-agents --out <dir>`) with overwrite
+  (`kbase write-agents --out <dir>`, name ruled 2026-08-16) with overwrite
   REFUSAL: if any target file exists, refuse and list every conflict, write
   nothing; no `--force` — the user deletes what they mean to replace.
   ~~`routing-eval.json` leaves delivery with them~~ pulled forward, landing

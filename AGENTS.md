@@ -39,7 +39,7 @@ just test-integration-build-mechanical-omlx  # offline KB build over it, ten gat
 just test-integration-build-live-omlx  # the same build with the model in the loop;
                                   # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
-just test-integration-write-generic-agents  # write-generic-agents: fresh write,
+just test-integration-write-agents  # write-agents: fresh write,
                                   # full + partial overwrite refusal; joins the omnibus
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift

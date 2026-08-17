@@ -6,8 +6,8 @@ import (
 	"kbase/internal/version"
 )
 
-// The generic agent-definition samples: what `kbase write-generic-agents`
-// writes to a directory the user names.
+// The generic agent-definition samples: what `kbase write-agents` writes to a
+// directory the user names.
 //
 // They are NOT delivered files. They are not in the manifest, no gate reads
 // them, and kbase never rewrites one — the verb refuses an existing file

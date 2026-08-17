@@ -15,10 +15,10 @@ import (
 	"kbase/internal/version"
 )
 
-// These are UNIT tests of the verb's logic: they call runWriteGenericAgents in
+// These are UNIT tests of the verb's logic: they call runWriteAgents in
 // process, with no binary and no network. The test that drives the same verb
-// through the front door is the `just test-integration-write-generic-agents`
-// recipe, which runs ./bin/kbase and nothing else.
+// through the front door is the `just test-integration-write-agents` recipe,
+// which runs ./bin/kbase and nothing else.
 
 // guardBytes stands in for a file the user wrote and does not want back. Its
 // survival is what "writes nothing" means on a refused run.
@@ -36,12 +36,12 @@ func sampleNames(t *testing.T) []string {
 	return names
 }
 
-func TestWriteGenericAgentsWritesEveryDefinition(t *testing.T) {
+func TestWriteAgentsWritesEveryDefinition(t *testing.T) {
 	// A path two levels below anything that exists: --out is created if
 	// missing, parents included.
 	out := filepath.Join(t.TempDir(), "tooling", "agents")
 	var stderr bytes.Buffer
-	if err := runWriteGenericAgents(writeGenericAgentsOptions{Out: out, Stderr: &stderr}); err != nil {
+	if err := runWriteAgents(writeAgentsOptions{Out: out, Stderr: &stderr}); err != nil {
 		t.Fatalf("writing into a fresh directory: %v", err)
 	}
 	names := sampleNames(t)
@@ -73,7 +73,7 @@ func TestWriteGenericAgentsWritesEveryDefinition(t *testing.T) {
 // The refusal is all-or-nothing: one existing target refuses the whole
 // command, every conflict is named rather than only the first, and no target
 // that was absent gets written.
-func TestWriteGenericAgentsRefusesExistingFiles(t *testing.T) {
+func TestWriteAgentsRefusesExistingFiles(t *testing.T) {
 	names := sampleNames(t)
 	tests := []struct {
 		name     string
@@ -92,7 +92,7 @@ func TestWriteGenericAgentsRefusesExistingFiles(t *testing.T) {
 				}
 			}
 			var stderr bytes.Buffer
-			err := runWriteGenericAgents(writeGenericAgentsOptions{Out: out, Stderr: &stderr})
+			err := runWriteAgents(writeAgentsOptions{Out: out, Stderr: &stderr})
 			if err == nil {
 				t.Fatal("the verb wrote over files that were already there")
 			}
@@ -123,12 +123,12 @@ func TestWriteGenericAgentsRefusesExistingFiles(t *testing.T) {
 	}
 }
 
-func TestWriteGenericAgentsRefusesNonDirectoryOut(t *testing.T) {
+func TestWriteAgentsRefusesNonDirectoryOut(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(out, []byte(guardBytes), pipeline.CreateFileMode); err != nil {
 		t.Fatalf("seeding %s: %v", out, err)
 	}
-	err := runWriteGenericAgents(writeGenericAgentsOptions{Out: out, Stderr: &bytes.Buffer{}})
+	err := runWriteAgents(writeAgentsOptions{Out: out, Stderr: &bytes.Buffer{}})
 	if err == nil {
 		t.Fatal("--out naming a regular file was accepted")
 	}
@@ -141,8 +141,8 @@ func TestWriteGenericAgentsRefusesNonDirectoryOut(t *testing.T) {
 	}
 }
 
-func TestWriteGenericAgentsRequiresOut(t *testing.T) {
-	err := runWriteGenericAgents(writeGenericAgentsOptions{Stderr: &bytes.Buffer{}})
+func TestWriteAgentsRequiresOut(t *testing.T) {
+	err := runWriteAgents(writeAgentsOptions{Stderr: &bytes.Buffer{}})
 	if err == nil {
 		t.Fatal("the verb ran with no --out; it has no default target")
 	}

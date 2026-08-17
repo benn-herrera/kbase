@@ -61,7 +61,7 @@ const (
 	// are obtained on demand rather than shipped inside the artifact.
 	definitionsPointer = "Agent definitions for working with a kbase knowledge base — a docent " +
 		"that navigates one, a maintainer that extends one — are written to a directory you " +
-		"name by `kbase write-generic-agents`."
+		"name by `kbase write-agents`."
 
 	// generatedNotice marks a class-B fixture as machine-written. A file a
 	// human might reasonably edit has to say that kbase rewrote it, because

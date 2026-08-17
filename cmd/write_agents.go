@@ -15,16 +15,15 @@ import (
 	"kbase/internal/pipeline"
 )
 
-// writeGenericAgentsVerb names this verb in every message it emits.
-const writeGenericAgentsVerb = "write-generic-agents"
+// writeAgentsVerb names this verb in every message it emits.
+const writeAgentsVerb = "write-agents"
 
-// writeGenericAgentsOptions is the resolved input of the write-generic-agents
-// verb.
+// writeAgentsOptions is the resolved input of the write-agents verb.
 //
 // It carries no providerOptions and no configuration directory: the samples
 // are a function of the app version alone (assemble.GenericAgents), so this
 // verb dials nothing and reads nothing.
-type writeGenericAgentsOptions struct {
+type writeAgentsOptions struct {
 	// Out is the directory the samples are written into. It is required and
 	// is created if missing.
 	Out string
@@ -33,7 +32,7 @@ type writeGenericAgentsOptions struct {
 	Stderr io.Writer
 }
 
-// runWriteGenericAgents writes the generic agent-definition samples into Out.
+// runWriteAgents writes the generic agent-definition samples into Out.
 //
 // The write is all-or-nothing. Every target is checked for an existing file
 // BEFORE any byte is written or any directory created, and a single conflict
@@ -41,21 +40,21 @@ type writeGenericAgentsOptions struct {
 // files and refused the third would leave the user reconciling a directory by
 // hand. There is no --force: kbase will not help destroy data, and deleting
 // the file you mean to replace is one command away.
-func runWriteGenericAgents(opts writeGenericAgentsOptions) error {
+func runWriteAgents(opts writeAgentsOptions) error {
 	if opts.Stderr == nil {
-		return fmt.Errorf("%s: Stderr is required", writeGenericAgentsVerb)
+		return fmt.Errorf("%s: Stderr is required", writeAgentsVerb)
 	}
 	out := strings.TrimSpace(opts.Out)
 	if out == "" {
 		return fmt.Errorf("%s: --out is required; this verb writes files and has no default target",
-			writeGenericAgentsVerb)
+			writeAgentsVerb)
 	}
 	if fi, err := os.Stat(out); err == nil {
 		if !fi.IsDir() {
-			return fmt.Errorf("%s: --out %s exists and is not a directory", writeGenericAgentsVerb, out)
+			return fmt.Errorf("%s: --out %s exists and is not a directory", writeAgentsVerb, out)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%s: --out %s: %w", writeGenericAgentsVerb, out, err)
+		return fmt.Errorf("%s: --out %s: %w", writeAgentsVerb, out, err)
 	}
 
 	samples := assemble.GenericAgents()
@@ -66,17 +65,17 @@ func runWriteGenericAgents(opts writeGenericAgentsOptions) error {
 		case err == nil:
 			conflicts = append(conflicts, path)
 		case !errors.Is(err, fs.ErrNotExist):
-			return fmt.Errorf("%s: %s: %w", writeGenericAgentsVerb, path, err)
+			return fmt.Errorf("%s: %s: %w", writeAgentsVerb, path, err)
 		}
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("%s: refusing to overwrite what is already there:\n%s\n"+
 			"nothing was written; there is no --force — delete what you mean to replace and rerun",
-			writeGenericAgentsVerb, indentedList(conflicts))
+			writeAgentsVerb, indentedList(conflicts))
 	}
 
 	if err := os.MkdirAll(out, pipeline.CreateDirMode); err != nil {
-		return fmt.Errorf("%s: create %s: %w", writeGenericAgentsVerb, out, err)
+		return fmt.Errorf("%s: create %s: %w", writeAgentsVerb, out, err)
 	}
 	for _, s := range samples {
 		if err := writeNewFile(filepath.Join(out, s.Path), s.Data); err != nil {
@@ -94,24 +93,24 @@ func runWriteGenericAgents(opts writeGenericAgentsOptions) error {
 func writeNewFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, pipeline.CreateFileMode)
 	if err != nil {
-		return fmt.Errorf("%s: create %s: %w", writeGenericAgentsVerb, path, err)
+		return fmt.Errorf("%s: create %s: %w", writeAgentsVerb, path, err)
 	}
 	if _, err := f.Write(data); err != nil {
 		// The close error is dropped deliberately: the write failure is the
 		// one that explains what went wrong.
 		f.Close()
-		return fmt.Errorf("%s: write %s: %w", writeGenericAgentsVerb, path, err)
+		return fmt.Errorf("%s: write %s: %w", writeAgentsVerb, path, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("%s: close %s: %w", writeGenericAgentsVerb, path, err)
+		return fmt.Errorf("%s: close %s: %w", writeAgentsVerb, path, err)
 	}
 	return nil
 }
 
-var writeGenericAgentsFlagOut string
+var writeAgentsFlagOut string
 
-var writeGenericAgentsCmd = &cobra.Command{
-	Use:   writeGenericAgentsVerb,
+var writeAgentsCmd = &cobra.Command{
+	Use:   writeAgentsVerb,
 	Short: "write the generic agent definitions to a directory for adaptation",
 	Long: `Write the generic agent definitions — docent.md, maintainer.md and
 README-ADAPTATION.md — into a directory you name.
@@ -131,15 +130,15 @@ writing nothing at all, and exiting 1. There is no --force and there will not
 be one — delete what you mean to replace.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runWriteGenericAgents(writeGenericAgentsOptions{
-			Out:    writeGenericAgentsFlagOut,
+		return runWriteAgents(writeAgentsOptions{
+			Out:    writeAgentsFlagOut,
 			Stderr: cmd.ErrOrStderr(),
 		})
 	},
 }
 
 func init() {
-	writeGenericAgentsCmd.Flags().StringVar(&writeGenericAgentsFlagOut, "out", "",
+	writeAgentsCmd.Flags().StringVar(&writeAgentsFlagOut, "out", "",
 		"directory the definitions are written to (required; created if missing)")
-	rootCmd.AddCommand(writeGenericAgentsCmd)
+	rootCmd.AddCommand(writeAgentsCmd)
 }

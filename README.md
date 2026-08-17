@@ -19,7 +19,7 @@ Markdown tree — entry point → domain index → subtopic index → leaf — w
 - **Self-description.** Every generated KB ships an entry-point contract — any
   agent that picks up the artifact finds its operating manual inside. The docent
   and maintainer agent definitions are yours rather than the KB's:
-  `kbase write-generic-agents --out <dir>` writes adaptable copies wherever you
+  `kbase write-agents --out <dir>` writes adaptable copies wherever you
   keep your agent tooling.
 - **Provenance.** Each KB records app version, resolved model IDs, and source
   identity (commit/hash); the artifact is reproducible from that tuple.
