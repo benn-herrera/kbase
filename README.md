@@ -16,10 +16,11 @@ Markdown tree — entry point → domain index → subtopic index → leaf — w
   deterministically from the KB tree plan — dead links are impossible by
   construction. Cross-references come only from the source's own links; no
   inferred "related topics."
-- **Self-description.** Every generated KB ships a `.agents/` directory with
-  docent and maintainer agent definitions, a routing eval, and an entry-point
-  contract — any agent that picks up the artifact finds its operating manual
-  inside.
+- **Self-description.** Every generated KB ships an entry-point contract — any
+  agent that picks up the artifact finds its operating manual inside. The docent
+  and maintainer agent definitions are yours rather than the KB's:
+  `kbase write-generic-agents --out <dir>` writes adaptable copies wherever you
+  keep your agent tooling.
 - **Provenance.** Each KB records app version, resolved model IDs, and source
   identity (commit/hash); the artifact is reproducible from that tuple.
 

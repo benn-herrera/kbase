@@ -51,12 +51,17 @@ const (
 		"a page at the bottom of the tree is where the answer is. Answer from leaf text, " +
 		"never from an index summary — the summaries are navigation, and they are not the source."
 
-	// agentsPointer names the shipped `.agents/` directory and what is in it.
-	// Same rule as contractText: one string, rendered by the entry-point and
-	// by AGENTS.md.
-	agentsPointer = "The `.agents/` directory beside this file holds the definitions that ship " +
-		"with every kbase knowledge base: a docent for navigating it, a maintainer for " +
-		"extending it, and an adaptation note."
+	// definitionsPointer names the command that writes the agent-definition
+	// samples. Same rule as contractText: one string, rendered by the
+	// entry-point and by AGENTS.md.
+	//
+	// It names the command and stops: the verb's own --help states its flag
+	// and its refusal behavior, and a second copy of that here would drift.
+	// The definitions are the user's agent tooling, not KB content, so they
+	// are obtained on demand rather than shipped inside the artifact.
+	definitionsPointer = "Agent definitions for working with a kbase knowledge base — a docent " +
+		"that navigates one, a maintainer that extends one — are written to a directory you " +
+		"name by `kbase write-generic-agents`."
 
 	// generatedNotice marks a class-B fixture as machine-written. A file a
 	// human might reasonably edit has to say that kbase rewrote it, because
@@ -197,7 +202,7 @@ func (r *Renderer) summary(b *strings.Builder, n treeplan.Node) {
 }
 
 // entryPoint renders §4.3's grammar, including the three blocks [MAD1: F-5]
-// made template elements: the contract text, the `.agents/` pointer, and the
+// made template elements: the contract text, the definitions pointer, and the
 // annex lookup when there is one.
 func (r *Renderer) entryPoint(n treeplan.Node) ([]byte, error) {
 	kids := r.children[n.Path]
@@ -225,7 +230,7 @@ func (r *Renderer) entryPoint(n treeplan.Node) ([]byte, error) {
 	b.WriteString("\n\n")
 	b.WriteString(contractText)
 	b.WriteString("\n\n")
-	b.WriteString(agentsPointer)
+	b.WriteString(definitionsPointer)
 	b.WriteString("\n")
 	if len(r.plan.Annexes) > 0 {
 		b.WriteString("\n")

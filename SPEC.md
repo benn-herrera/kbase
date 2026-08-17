@@ -30,7 +30,7 @@ else `$KBASE_CONFIG_DIR`, else `~/.config/kbase`.
 **Exit codes.** Success is `0`. Every failure — a bad flag, an unknown
 command, a config load failure, a missing required flag, a refused
 `--annex`, a locked job directory, a failed catalogue request, a refused
-delivery — is `1`; kbase uses no other exit code. An error is printed once,
+delivery, a refused overwrite — is `1`; kbase uses no other exit code. An error is printed once,
 to stderr, as `error: <message>`. A bare invocation (no verb) prints help
 to stdout and exits `0`.
 
@@ -165,6 +165,33 @@ summaries, the light tier adjudicates page boundaries.
   outcome, recorded as `boundariesAdjudicated: 0` rather than as an absence.
   Under `[dev] tree_plan = "mechanical"` this stage stays mechanical too,
   which is what makes that switch "no model call anywhere".
+
+### 1.6 `kbase write-generic-agents`
+
+```
+kbase write-generic-agents --out DIR
+```
+
+Writes the generic agent definitions — `docent.md`, `maintainer.md` and
+`README-ADAPTATION.md` — into `DIR`, flat, no subdirectory. Offline: no
+provider, no configuration directory, no corpus. The three files are a
+function of the app version alone.
+
+- They are samples for the user's own agent tooling, not knowledge-base
+  content: they are not delivered by `kbase build` (§4.7), kbase never
+  reads them back, and no gate ever inspects them. Each carries a
+  written-by-`kbase <version>` notice and a `<!-- kbase <version> -->`
+  footer — no corpus hash, no build date, because no corpus was read.
+  The two definitions are marked stubs today (§6).
+- `--out` is required; there is no default target. `DIR` is created if
+  missing (parents included). A `--out` that exists and is not a directory
+  refuses.
+- **Overwrite refusal, all-or-nothing.** If any target file already
+  exists, the command refuses, names **every** conflict, writes nothing at
+  all — including the files that had no conflict — and exits `1`. There is
+  no `--force`: the user deletes what they mean to replace.
+- A successful run writes a one-line summary to stderr naming the count
+  and the directory.
 
 ---
 
@@ -530,7 +557,8 @@ navigation only."* / *"Summaries route; leaves answer. An index page
 tells you where to go; a page at the bottom of the tree is where the
 answer is. Answer from leaf text, never from an index summary — the
 summaries are navigation, and they are not the source."* —
-then a fixed pointer to `.agents/` → optional `## Annex lookup` section
+then a fixed one-sentence pointer naming `kbase write-generic-agents`
+(§1.6) as where agent definitions come from → optional `## Annex lookup` section
 (present iff at least one `--annex` was declared: one bullet per annex,
 `` - `<prefix>` — <convention> ``) → provenance footer.
 
@@ -594,13 +622,14 @@ Delivered with every KB, exact set:
 AGENTS.md
 README.md
 CLAUDE.md
-.agents/docent.md
-.agents/maintainer.md
-.agents/README-ADAPTATION.md
 ```
 
 - `AGENTS.md` — states the summaries-route/leaves-answer contract, a
-  pointer to the entry point, and a pointer to `.agents/`.
+  pointer to the entry point, and the one-sentence pointer to
+  `kbase write-generic-agents` (§1.6) as where agent definitions come
+  from. The definitions themselves are the user's agent tooling and are
+  not KB content, so they are obtained on demand rather than shipped
+  inside the artifact.
 - `README.md` — short human orientation: what this is, where to start,
   that agents should read `AGENTS.md` first.
 - `CLAUDE.md` — the bootstrap pointer an agent session rooted at the KB
@@ -612,16 +641,10 @@ CLAUDE.md
   than only pointed at: the hop to `AGENTS.md` is probabilistic, and this
   file is what a session picks up whether or not it takes that hop. No
   directive carries a rationale.
-- `.agents/docent.md` / `.agents/maintainer.md` — navigate-this-KB and
-  extend-this-KB agent definitions (currently shipped as stubs, §6).
-- `.agents/README-ADAPTATION.md` — a note, not an agent definition:
-  states that these are copies for adaptation, that
-  kbase itself never reads them, and recommends using a stronger model to
-  write a version suited to its own capabilities.
 
 Every fixture file carries the same provenance footer (§4.6) as a
-tree-plan node; the three definition fixtures additionally open with a
-fixed stub notice today.
+tree-plan node, and every one of them links to the entry point — which is
+what guarantee 4 checks of class B, with no member exempt.
 
 ### 4.8 The ten delivery guarantees
 
@@ -668,8 +691,8 @@ Location: <root-relative delivered path>
 
 `Location` is the page's own delivered path, the same string guarantee 5
 enumerates and guarantee 10 compares against. Class-B fixtures carry no
-frontmatter: their names are root-obvious and `.agents/` is exempt by
-design.
+frontmatter: each one sits at the tree root, where its name is the whole
+address.
 
 kbase writes exactly this one field. Any reader of a delivered page — the
 verify gate today, a later kbase pass over an existing KB — is
@@ -742,15 +765,12 @@ edited (§4.2 item 4).
 Behaviors described elsewhere in this document or in ARCHITECTURE.md that
 are not yet true of the current binary:
 
-- **Prompt/definition dump command.** The escape-hatch design calls for a
-  CLI command that writes local, adaptable copies of the embedded agent
-  definitions. No such command exists today (`kbase --help` lists only
-  `build`, `configure`, `models`, `survey`). **PLANNED.**
 - **Embedded agent/prompt definitions.** The pipeline runs real model
   calls today, but every prompt definition — taxonomy design, summaries,
-  boundary refinement, and the three `.agents/*.md` fixtures — is a marked
-  stub; tuned, evaled definitions have not landed. A build today is
-  evidence about the machinery, not about tree-design or summary quality.
+  boundary refinement, and the two definitions `kbase write-generic-agents`
+  writes (§1.6) — is a marked stub; tuned, evaled definitions have not
+  landed. A build today is evidence about the machinery, not about
+  tree-design or summary quality.
 - **Routing-eval question generation.** No routing-eval question set is
   produced or delivered. The empty `.agents/routing-eval.json` placeholder
   a KB used to ship was removed (ruled 2026-08-15): it had no producer and

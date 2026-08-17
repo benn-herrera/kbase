@@ -279,10 +279,9 @@ func (v Verification) checkEntryPoint() error {
 // checkReachable is check 4, stated per class.
 //
 // Class A: every file is linked from at least one other class-A file. Class B
-// inverts — fixtures are landing sites, not destinations — so each root member
-// links TO the entry-point, and `.agents/` members are covered by the
-// directory-level pointer the entry-point and AGENTS.md both carry. That
-// pointer discharges reachability for `.agents/*` and for nothing else.
+// inverts — fixtures are landing sites, not destinations — so every fixture
+// links TO the entry-point. There is no exemption: the manifest holds three
+// root files and each one carries that link.
 func (v Verification) checkReachable(classA, classB []string) error {
 	linked := map[string]bool{}
 	for _, p := range classA {
@@ -302,9 +301,6 @@ func (v Verification) checkReachable(classA, classB []string) error {
 	}
 	entry := v.Renderer.EntryPointPath()
 	for _, p := range classB {
-		if InAgentsDir(p) {
-			continue
-		}
 		if !bytes.Contains(v.Files[p], []byte("("+entry+")")) {
 			return fmt.Errorf("the fixture %s does not link to %s", p, entry)
 		}
@@ -447,9 +443,10 @@ func (v Verification) checkCaps() error {
 }
 
 // checkGrammar is check 9: each class-A node kind matches §4's section order —
-// including the entry-point's mandatory contract, `.agents/` and annex blocks
-// [MAD1: F-5] and the provenance footer on all three kinds [MAD1: F-12] — and
-// each class-B file matches its own fixture template rather than §4.
+// including the entry-point's mandatory contract, definitions-pointer and
+// annex blocks [MAD1: F-5] and the provenance footer on all three kinds
+// [MAD1: F-12] — and each class-B file matches its own fixture template rather
+// than §4.
 func (v Verification) checkGrammar(classA, classB []string) error {
 	byPath := map[string]treeplan.Node{}
 	for _, n := range v.Plan.Nodes {
@@ -490,7 +487,7 @@ func (v Verification) checkGrammar(classA, classB []string) error {
 
 // checkLocation is check 10: every class-A page opens with a frontmatter block
 // declaring its own delivered path (SPEC §4.9). Class B carries none — a
-// fixture's name is root-obvious and `.agents/` is exempt by design.
+// fixture sits at the tree root and its name is the whole address.
 //
 // It is a free integrity tripwire rather than a restatement of the render: the
 // path compared against is the key the page was DELIVERED under, so a page
@@ -545,7 +542,7 @@ func tilesSpan(span survey.Span, cuts []survey.Span) error {
 
 // entryPointGrammar checks §4.3's mandatory blocks and their fixed order.
 func entryPointGrammar(text string, annexed bool) error {
-	want := []string{"# ", "\n" + domainsHeading + "\n", "\n" + usingHeading + "\n", contractText, agentsPointer}
+	want := []string{"# ", "\n" + domainsHeading + "\n", "\n" + usingHeading + "\n", contractText, definitionsPointer}
 	if annexed {
 		want = append(want, "\n"+annexHeading+"\n")
 	}

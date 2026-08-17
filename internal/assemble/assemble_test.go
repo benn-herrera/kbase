@@ -322,7 +322,7 @@ func TestEntryPointGrammar(t *testing.T) {
 	sc := newScene(t)
 	entry := sc.files[sc.renderer.EntryPointPath()]
 	text := string(entry)
-	for _, want := range []string{domainsHeading, usingHeading, contractText, agentsPointer} {
+	for _, want := range []string{domainsHeading, usingHeading, contractText, definitionsPointer} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the entry-point is missing a mandatory block:\n%s", want)
 		}

@@ -29,6 +29,7 @@ BUILD_LIVE_ROJO_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-liv
 SURVEY_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-survey-omlx"
 BUILD_MECHANICAL_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-mechanical-omlx"
 BUILD_LIVE_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-omlx"
+WRITE_GENERIC_AGENTS_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-write-generic-agents"
 
 # The configuration the live build dials: the checked-in fixture pool, whose
 # provider entry names a key FILE the built binary reads for itself. No recipe
@@ -143,6 +144,7 @@ _write-evidence out_dir recipe invocation:
       [[ -d "{{out_dir}}/kb" ]]                    && echo "- kb/: delivered knowledge base tree"; \
       [[ -d "{{out_dir}}/kb/temp-work" ]]           && echo "- kb/temp-work/: kept pipeline intermediates (--keep-temp-work)"; \
       [[ -f "{{out_dir}}/kb/temp-work/run.json" ]]  && echo "- kb/temp-work/run.json: run record (stats, ten verify gates)"; \
+      [[ -d "{{out_dir}}/out" ]]                    && echo "- out/: write-generic-agents output (left as the partial-conflict proof left it: docent.md deleted, the other two present)"; \
       true; \
     } > "{{out_dir}}/EVIDENCE.md"
 
@@ -241,8 +243,8 @@ test-integration-build-mechanical-rojo:
 # the tree-plan struct to recompute them from. That is not a loss: gate 5
 # ("the delivered set is the tree plan's nodes plus the fixture manifest") and
 # gate 3 ("the entry-point exists and its domains exist") already prove the
-# relations the old in-process test derived by hand, and 34 nodes + 6 fixture
-# manifest entries = 40 delivered is the same arithmetic, just pre-computed
+# relations the old in-process test derived by hand, and 34 nodes + 3 fixture
+# manifest entries = 37 delivered is the same arithmetic, just pre-computed
 # into a literal the way test-integration-survey-rojo pins tokens/sections.
 # Bumping the corpus pin or a budget/manifest constant re-derives these with
 # `./bin/kbase build ... --keep-temp-work` and updates them here.
@@ -267,10 +269,10 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 40'; do \
+    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 37'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-rojo): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb-rerun"; \
@@ -338,7 +340,7 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-live-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-live-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-live-rojo): $want was not delivered"; exit 1; }; \
     done; \
     grep -q '"lightModel": "..*"' "$rec" || \
@@ -457,10 +459,10 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 18'; do \
+    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 15'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-omlx): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-omlx): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb-rerun"; \
@@ -523,7 +525,7 @@ _test-integration-build-live-omlx: build prep-test-integration-omlx
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-live-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-live-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in entry-point.md AGENTS.md README.md .agents/docent.md; do \
+    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-live-omlx): $want was not delivered"; exit 1; }; \
     done; \
     grep -q '"lightModel": "..*"' "$rec" || \
@@ -538,14 +540,67 @@ _test-integration-build-live-omlx: build prep-test-integration-omlx
     {{just_executable()}} _write-evidence "{{BUILD_LIVE_OMLX_OUT_DIR}}" "test-integration-build-live-omlx" \
       "./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_OMLX_OUT_DIR}}/kb --keep-temp-work"
 
-# The omnibus composes the HERMETIC per-corpus recipes and writes no log of its
-# own: each of them already preserves its full output under its own name, and a
-# second copy of the same bytes under a second name is a file that can go
-# stale against the one anybody reads. test-integration-build-live-rojo and
-# test-integration-build-live-omlx are excluded on purpose — see their doc
+# Drives `kbase write-generic-agents` directly rather than through a build:
+# the verb dials nothing and reads nothing (see write_generic_agents.go), so
+# it needs no corpus and no config-dir fixture — hermetic in the strongest
+# sense, which is why it joins the omnibus below despite not being a
+# <process>-<corpus> recipe.
+#
+# Three claims, in order, over the SAME target directory: a fresh write
+# succeeds with all three files present and non-empty; an identical second
+# run refuses (exit 1) and names all three conflicts, having written nothing
+# new; and deleting one file and rerunning still refuses — proving the
+# all-or-nothing contract holds even when only one of three files conflicts,
+# not just when all three do. That last case is the one a partial, per-file
+# overwrite policy would pass and this one must not.
+[doc("hermetic: kbase write-generic-agents fresh write, full-conflict refusal, partial-conflict refusal; joins the omnibus")]
+test-integration-write-generic-agents:
+    @mkdir -p "{{WRITE_GENERIC_AGENTS_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-write-generic-agents 2>&1 | tee "{{WRITE_GENERIC_AGENTS_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-survey-rojo.
+[private]
+_test-integration-write-generic-agents: build
+    @out="{{WRITE_GENERIC_AGENTS_OUT_DIR}}/out"; \
+    rm -rf "$out"; \
+    ./{{BIN_DIR}}/kbase write-generic-agents --out "$out" || \
+      { echo "integration(write-generic-agents): fresh write into an empty directory failed"; exit 1; }; \
+    for f in docent.md maintainer.md README-ADAPTATION.md; do \
+      [[ -s "$out/$f" ]] || \
+        { echo "integration(write-generic-agents): $f missing or empty after the fresh write"; exit 1; }; \
+    done; \
+    echo "integration(write-generic-agents): fresh write ok — three files present and non-empty"; \
+    full_err="$(./{{BIN_DIR}}/kbase write-generic-agents --out "$out" 2>&1)"; \
+    full_status=$?; \
+    [[ "$full_status" == 1 ]] || \
+      { echo "integration(write-generic-agents): second run over the same directory exited $full_status, want 1"; exit 1; }; \
+    for f in "$out/docent.md" "$out/maintainer.md" "$out/README-ADAPTATION.md"; do \
+      echo "$full_err" | grep -qF "$f" || \
+        { echo "integration(write-generic-agents): full-conflict refusal did not name $f:"; echo "$full_err"; exit 1; }; \
+    done; \
+    echo "integration(write-generic-agents): full-conflict refusal ok — exit 1, all three conflicts named"; \
+    rm -f "$out/docent.md"; \
+    partial_err="$(./{{BIN_DIR}}/kbase write-generic-agents --out "$out" 2>&1)"; \
+    partial_status=$?; \
+    [[ "$partial_status" == 1 ]] || \
+      { echo "integration(write-generic-agents): partial-conflict run exited $partial_status, want 1"; exit 1; }; \
+    [[ ! -e "$out/docent.md" ]] || \
+      { echo "integration(write-generic-agents): partial-conflict refusal wrote docent.md — all-or-nothing contract broken"; exit 1; }; \
+    echo "integration(write-generic-agents): partial-conflict refusal ok — exit 1, nothing written back"; \
+    echo "integration(write-generic-agents) ok: fresh write, full-conflict refusal, and partial-conflict refusal all correct"; \
+    {{just_executable()}} _write-evidence "{{WRITE_GENERIC_AGENTS_OUT_DIR}}" "test-integration-write-generic-agents" \
+      "./{{BIN_DIR}}/kbase write-generic-agents --out {{WRITE_GENERIC_AGENTS_OUT_DIR}}/out\n./{{BIN_DIR}}/kbase write-generic-agents --out {{WRITE_GENERIC_AGENTS_OUT_DIR}}/out  # rerun: full-conflict refusal\nrm {{WRITE_GENERIC_AGENTS_OUT_DIR}}/out/docent.md && ./{{BIN_DIR}}/kbase write-generic-agents --out {{WRITE_GENERIC_AGENTS_OUT_DIR}}/out  # partial-conflict refusal"
+
+# The omnibus composes the HERMETIC per-corpus recipes, plus
+# test-integration-write-generic-agents (hermetic but corpus-free), and writes
+# no log of its own: each of them already preserves its full output under its
+# own name, and a second copy of the same bytes under a second name is a file
+# that can go stale against the one anybody reads. test-integration-build-live-rojo
+# and test-integration-build-live-omlx are excluded on purpose — see their doc
 # strings.
 [doc("run every hermetic integration test (the live ones are excluded; run those by name)")]
-test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo test-integration-survey-omlx test-integration-build-mechanical-omlx
+test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo test-integration-survey-omlx test-integration-build-mechanical-omlx test-integration-write-generic-agents
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

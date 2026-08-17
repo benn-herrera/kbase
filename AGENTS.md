@@ -39,6 +39,8 @@ just test-integration-build-mechanical-omlx  # offline KB build over it, ten gat
 just test-integration-build-live-omlx  # the same build with the model in the loop;
                                   # LIVE (provider + network), excluded from the omnibus
 just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
+just test-integration-write-generic-agents  # write-generic-agents: fresh write,
+                                  # full + partial overwrite refusal; joins the omnibus
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
 just clean      # remove the host build (bin/kbase)
@@ -68,7 +70,9 @@ write generated or downloaded data into `fixtures/`.
 ```
 cmd/                kbase CLI (cobra): composition root + one file per verb
 internal/assemble/  stages 8+9: index/entry-point rendering, the fixture
-                    manifest, the ten verify gates, delivery
+                    manifest, the ten verify gates, delivery; also the generic
+                    agent-definition samples, which are not delivered but do
+                    render the same contract statement
 internal/config/    ~/.config/kbase resolution; providers.toml pool loader;
                     config.toml choices (provider, [models] heavy/light tiers)
 internal/detect/    pure gemma-4 family/tier classifier over model-id lists

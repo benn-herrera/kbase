@@ -132,9 +132,10 @@ judgment roles; the human at the edges.**
   live in.
 
 - **Immutable embedded prompts; write-modified-copy only.** The primary system
-  agent definitions live in the compiled binary as a code resource. A CLI option dumps
-  copies to local storage for adaptation. The app's own definitions cannot be
-  modified — the appliance version fully determines pipeline behavior.
+  agent definitions live in the compiled binary as a code resource.
+  `kbase write-generic-agents --out <dir>` dumps copies to local storage for
+  adaptation, and refuses rather than overwrite one. The app's own definitions
+  cannot be modified — the appliance version fully determines pipeline behavior.
 
 - **Provenance and reproducibility as artifact properties.** A KB's provenance stamp
   is `app version + resolved model IDs + source identity (commit/hash)`. That tuple
@@ -142,10 +143,13 @@ judgment roles; the human at the edges.**
   byte-reproducible (source hash + verified cut list); derived state is regenerable
   and drift-gated.
 
-- **Artifact self-description.** Each generated KB ships a `.agents/` directory:
-  docent (navigate me) and maintainer (repair me) definitions, the adaptation-guidance
-  note, and the entry-point AGENTS.md contract. Any agent that picks up the
-  artifact finds its own operating manual inside.
+- **Artifact self-description.** Each generated KB ships the entry-point AGENTS.md
+  contract: any agent that picks up the artifact finds its operating manual inside.
+  The agent DEFINITIONS are not in there (ruled 2026-08-15) — they are samples for
+  the user's own tooling rather than KB content, so they are written on demand by
+  `kbase write-generic-agents` and the contract carries a one-sentence pointer to it.
+  A definition inside the tree would be a file the user adapts and the next build
+  overwrites.
 
 - **BYOM consumption.** The KB is *created* with gemma-4 but consumed by whatever
   model the user brings. This is safe because the KB is **content, not prompts** —
@@ -170,7 +174,7 @@ judgment roles; the human at the edges.**
 | 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. Implemented: `internal/distill` (byte derivation, the rebase map at §4.4, the page grammar); the stage has no `AskSpec` and spends nothing. |
 | 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. No-fallback seam (O-1), with cascade-failure carrying a failed level upward. Implemented: `internal/summarize` — four level-sliced stages, deepest first; input is read per child KIND (leaf bodies vs. capped index framing+conclusions); the artifact is JSON, never rendered Markdown, so a regenerated summary cannot half-rewrite a delivered page. |
 | 7 | **Review** | gemma-4-26B-A4B | Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
-| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. Implemented: `internal/assemble` (index/entry-point grammar, the closed fixture manifest — `AGENTS.md`, `README.md`, `CLAUDE.md`, `.agents/*`); the up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here. |
+| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. Implemented: `internal/assemble` (index/entry-point grammar, the closed fixture manifest — `AGENTS.md`, `README.md`, `CLAUDE.md`); the up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here. |
 | 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. Any failure refuses delivery and names the node; there is no deliver-with-warnings mode. Implemented: `assemble.Verify` — ten gates, each scoped to the file class it applies to, run over the assembled tree in the store before any byte reaches `<out>`. |
 
 **Format seam.** The survey artifact is the source-format independence

@@ -22,7 +22,7 @@ import (
 // of it is a stage-9 refusal, not a warning.
 const (
 	// AgentsFixture is the thin contract fixture: SPEC §3's statement, the
-	// annex conventions, the `.agents/` pointer, and a link to the
+	// annex conventions, the definitions pointer, and a link to the
 	// entry-point — which is what satisfies check 4's class-B direction.
 	AgentsFixture = "AGENTS.md"
 	// ReadmeFixture is the human-facing counterpart, carrying the same
@@ -34,30 +34,11 @@ const (
 	// pointer and stays short — the contract's routing half lives in
 	// AgentsFixture and in the entry-point, and is not restated here.
 	ClaudeFixture = "CLAUDE.md"
-
-	// agentsDir holds the definitions that ship with every KB. Its members are
-	// exempt from file-level reachability: the directory-level pointer the
-	// entry-point and AGENTS.md both carry discharges it, and it discharges it
-	// for nothing else (§9 check 4).
-	agentsDir = ".agents/"
-
-	docentFixture     = agentsDir + "docent.md"
-	maintainerFixture = agentsDir + "maintainer.md"
-
-	// adaptationFixture is a NOTE about the definitions beside it, not one of
-	// them (renamed 2026-08-15). Under its old name — `adaptation.md`, sitting
-	// next to `docent.md` and `maintainer.md` — it read as a third agent
-	// definition, which is a claim about a file that has no such content.
-	adaptationFixture = agentsDir + "README-ADAPTATION.md"
-
-	// stubNotice marks a fixture whose real content is a later burst's. It is
-	// a marked stub rather than a plausible-looking definition, because a
-	// definition that reads like the finished one is how a stub ships.
-	stubNotice = "**This is a stub.** kbase writes the finished definition here when the " +
-		"definition burst lands; until then this file records what will be in it."
 )
 
-// Fixture is one class-B file: its delivered path and its bytes.
+// Fixture is one rendered file: its path and its bytes. Manifest and Fixtures
+// use it for the delivered class-B set; GenericAgents uses it for the samples,
+// which are written on demand and never delivered.
 type Fixture struct {
 	Path string
 	Data []byte
@@ -69,31 +50,21 @@ type Fixture struct {
 // reference to a package-level slice and edit the fixture set out from under
 // the verifier that checks it.
 func Manifest() []string {
-	return []string{AgentsFixture, ReadmeFixture, ClaudeFixture,
-		docentFixture, maintainerFixture, adaptationFixture}
+	return []string{AgentsFixture, ReadmeFixture, ClaudeFixture}
 }
-
-// InAgentsDir reports whether a delivered path is inside the shipped
-// definitions directory — check 4's one exemption, asked in one place.
-func InAgentsDir(path string) bool { return strings.HasPrefix(path, agentsDir) }
 
 // Fixtures renders every class-B file for one tree plan.
 //
 // They are rendered from embedded templates plus tree-plan-derived values, and
 // the two mandatory shared elements — the contract statement and the
-// `.agents/` pointer — come from the same constants §4.3's entry-point renders
-// (§8.1).
+// definitions pointer — come from the same constants §4.3's entry-point
+// renders (§8.1).
 func (r *Renderer) Fixtures() []Fixture {
 	entry := entryPointPath(r.plan)
 	return []Fixture{
 		{Path: AgentsFixture, Data: r.agentsFixture(entry)},
 		{Path: ReadmeFixture, Data: r.readmeFixture(entry)},
 		{Path: ClaudeFixture, Data: r.claudeFixture(entry)},
-		{Path: docentFixture, Data: r.definitionFixture("Docent",
-			"navigates this knowledge base: reads the entry-point, follows down-links to the leaf that answers, and answers from leaf text.")},
-		{Path: maintainerFixture, Data: r.definitionFixture("Maintainer",
-			"extends this knowledge base in place: adds leaves, keeps up-links and down-links true, and re-runs the verify gates.")},
-		{Path: adaptationFixture, Data: r.adaptationFixture()},
 	}
 }
 
@@ -107,7 +78,7 @@ func (r *Renderer) agentsFixture(entry string) []byte {
 	b.WriteString("](")
 	b.WriteString(entry)
 	b.WriteString(").\n\n")
-	b.WriteString(agentsPointer)
+	b.WriteString(definitionsPointer)
 	b.WriteString("\n")
 	if len(r.plan.Annexes) > 0 {
 		b.WriteString("\n")
@@ -170,38 +141,6 @@ func (r *Renderer) claudeFixture(entry string) []byte {
 	b.WriteString("- Navigate, don't crawl: follow the tree from the entry-point instead of " +
 		"grepping the file set.\n")
 	b.WriteString("- Stop reading when the question is answered.\n\n")
-	b.WriteString(r.prov.Footer())
-	b.WriteString("\n")
-	return []byte(b.String())
-}
-
-func (r *Renderer) definitionFixture(name, role string) []byte {
-	var b strings.Builder
-	b.WriteString(generatedNotice)
-	b.WriteString("\n\n# ")
-	b.WriteString(name)
-	b.WriteString("\n\n")
-	b.WriteString(stubNotice)
-	b.WriteString("\n\nRole: an agent that ")
-	b.WriteString(role)
-	b.WriteString("\n\n")
-	b.WriteString(contractText)
-	b.WriteString("\n\n")
-	b.WriteString(r.prov.Footer())
-	b.WriteString("\n")
-	return []byte(b.String())
-}
-
-func (r *Renderer) adaptationFixture() []byte {
-	var b strings.Builder
-	b.WriteString(generatedNotice)
-	b.WriteString("\n\n# Adapting these definitions\n\n")
-	b.WriteString("These are copies for adaptation. kbase does not read them: the definitions it " +
-		"operates with are embedded in the binary and fixed by its version, so editing a file here " +
-		"changes nothing about how this knowledge base was built.\n\n" +
-		"Adapt them for the model you bring. A stronger model than the one that wrote this base " +
-		"will do better with a definition written for its own capabilities — having it rewrite " +
-		"these is the recommended first step.\n\n")
 	b.WriteString(r.prov.Footer())
 	b.WriteString("\n")
 	return []byte(b.String())
