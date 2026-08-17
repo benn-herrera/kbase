@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/distill"
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/treeplan"
@@ -31,22 +34,29 @@ import (
 // two documents at the root, two top-level sections in each. That is what lets
 // one scripted answer be a legal answer to every container without the test
 // knowing the descent's internals.
+// Every section is written over the content floor (dissect.MinTokens): a
+// section under it is merged into its neighbour when the tree plan is composed,
+// and this corpus's whole point is that each document presents two of them.
 const (
 	liveDocOne = `# Alpha
 
-The alpha section of document one.
+The alpha section of document one, with enough material in it to be a page of
+its own rather than a fragment the tree plan folds into the section next door.
 
 # Beta
 
-The beta section of document one.
+The beta section of document one, with enough material in it to be a page of
+its own rather than a fragment the tree plan folds into the section next door.
 `
 	liveDocTwo = `# Gamma
 
-The gamma section of document two.
+The gamma section of document two, with enough material in it to be a page of
+its own rather than a fragment the tree plan folds into the section next door.
 
 # Delta
 
-The delta section of document two.
+The delta section of document two, with enough material in it to be a page of
+its own rather than a fragment the tree plan folds into the section next door.
 `
 )
 
@@ -227,13 +237,26 @@ const splitPara = "The reconciler walks the project file and the live tree toget
 // splitDoc is a document whose first top-level section runs well past the leaf
 // budget, followed by a small one — so the group covering it is sized into
 // several parts and the boundaries between them are stage 4's work.
+//
+// The long section carries subsections of its own, one every few paragraphs.
+// They change nothing about the tree — page granularity is a document's
+// TOP-level sections (ARCHITECTURE §4 row 3), and these nest inside one — but
+// they are what a delivered part's descriptor is drawn from, so a corpus
+// without them could not show two sibling bullets being told apart [MAD2: B-4].
 func splitDoc(first, second string, paras int) string {
 	var sb strings.Builder
 	sb.WriteString("# " + first + "\n\n")
-	for range paras {
+	for i := range paras {
+		if i%10 == 0 {
+			fmt.Fprintf(&sb, "## %s stage %d\n\n", first, i/10+1)
+		}
 		sb.WriteString(splitPara + "\n\n")
 	}
-	sb.WriteString("# " + second + "\n\nThe " + second + " section, which is short.\n")
+	// Short, but over the content floor: a section under it is merged into the
+	// oversized one above and the document stops having two sections at all.
+	sb.WriteString("# " + second + "\n\nThe " + second + " section, which is short — one paragraph " +
+		"of material, which is all it takes to be a page rather than a fragment folded into " +
+		"the long section above it.\n")
 	return sb.String()
 }
 
@@ -339,8 +362,9 @@ func (f *stageFake) seen(kind string) (string, int) {
 }
 
 // buildSplit runs a live build over the split corpus with the given boundary
-// answer and returns the result and the run record.
-func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string) {
+// answer and returns the result, the run record, the console output and the
+// directory the tree was delivered into.
+func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string, string) {
 	t.Helper()
 	root := writeSplitCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
@@ -417,7 +441,7 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string) {
 		t.Fatalf("the corpus produced %d split groups and %d boundaries; the stage under test needs several of each",
 			rec.SplitGroups, rec.Live.BoundariesAdjudicated)
 	}
-	return res, rec, stdout.String()
+	return res, rec, stdout.String(), out
 }
 
 // TestBuildLiveRefinesCuts: the model's choice is what the delivered pages are
@@ -429,7 +453,7 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string) {
 // verified against the working list, and composed, rather than one that fell
 // through to the fallback and looked the same from outside.
 func TestBuildLiveRefinesCuts(t *testing.T) {
-	res, rec, stdout := buildSplit(t, "1")
+	res, rec, stdout, _ := buildSplit(t, "1")
 
 	if rec.Live.BoundariesFellBack != 0 || rec.Live.BoundaryRejections != 0 {
 		t.Errorf("live = %+v, want every boundary adjudicated cleanly:\n%s", rec.Live, stdout)
@@ -462,6 +486,104 @@ func TestBuildLiveRefinesCuts(t *testing.T) {
 	}
 }
 
+// TestBuildDeliversSplitPartNavigation: a reader who lands on one part of a
+// split document can walk the series and can choose between its bullets.
+//
+// Everything asserted here is MECHANICAL — the edges are a projection of
+// groups[].parts and the descriptors are read off the cut list — but it is
+// asserted over a tree whose boundaries the model chose, because that is the
+// state the delivered artifact is actually in [MAD2: B-4, B-8]. Where the
+// boundaries fell is the model's; that the pages point at each other is not.
+func TestBuildDeliversSplitPartNavigation(t *testing.T) {
+	res, _, _, out := buildSplit(t, "1")
+
+	// The parts of each split group, in part order, and the index above them.
+	families := map[string][]treeplan.Node{}
+	for _, n := range res.Plan.Nodes {
+		if n.Kind != treeplan.KindLeaf {
+			continue
+		}
+		if g, ok := res.Plan.SplitGroup(n.SplitGroup); ok && g.Parts > 1 {
+			families[g.ID] = append(families[g.ID], n)
+		}
+	}
+	if len(families) < 2 {
+		t.Fatalf("the corpus produced %d split families; this test needs the corpus's two", len(families))
+	}
+
+	read := func(p string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(p)))
+		if err != nil {
+			t.Fatalf("read the delivered page %s: %v", p, err)
+		}
+		return string(data)
+	}
+
+	// One family of three or more is what puts a middle part — the only one
+	// carrying both edges — under test at all.
+	longest := 0
+	for _, parts := range families {
+		longest = max(longest, len(parts))
+	}
+	if longest < 3 {
+		t.Fatalf("the largest split family has %d parts; the first/middle/last asymmetry needs three", longest)
+	}
+
+	for _, parts := range families {
+		for i, n := range parts {
+			page := read(n.Path)
+			_, body, ok := distill.ParseFrontmatter([]byte(page))
+			if !ok {
+				t.Fatalf("%s does not open with its frontmatter block:\n%s", n.Path, page)
+			}
+			var want []string
+			want = append(want, distill.UpLink(n.Path, n.Parent))
+			if i > 0 {
+				want = append(want, distill.PrevLink(n.Path, parts[i-1].Path))
+			}
+			if i < len(parts)-1 {
+				want = append(want, distill.NextLink(n.Path, parts[i+1].Path))
+			}
+			var got []string
+			for _, l := range distill.NavBlock(body) {
+				got = append(got, "["+l.Marker+" "+l.Label+"]("+l.Target+")")
+			}
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("%s opens with:\n%s\nwant:\n%s", n.Path, strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+			// Every part states the identity it was routed by, whatever the
+			// slice happens to open with [MAD2: B-8].
+			if h := "\n# " + n.Title + "\n"; !strings.Contains(page, h) {
+				t.Errorf("%s carries no %q:\n%s", n.Path, strings.TrimSpace(h), page)
+			}
+		}
+
+		// The index's bullets are choosable: one line per part, each carrying
+		// its own post-cut descriptor, and no two of them identical.
+		index := read(parts[0].Parent)
+		seen := map[string]bool{}
+		for _, n := range parts {
+			bullet := ""
+			for _, l := range strings.Split(index, "\n") {
+				if strings.HasPrefix(l, "- [") && strings.Contains(l, "]("+path.Base(n.Path)+")") {
+					bullet = l
+				}
+			}
+			if bullet == "" {
+				t.Fatalf("%s lists no bullet for %s:\n%s", parts[0].Parent, n.Path, index)
+			}
+			if !strings.Contains(bullet, "(this part: ") {
+				t.Errorf("the bullet for %s carries no descriptor: %q", n.Path, bullet)
+			}
+			if seen[bullet] {
+				t.Errorf("two parts share the bullet %q — the index hands the reader a coin", bullet)
+			}
+			seen[bullet] = true
+		}
+	}
+}
+
 // TestBuildLiveFallsBackOnRefusedBoundaries: refinement is a fallback-backed
 // seam, so a model that never answers the question costs quality and never the
 // delivery.
@@ -472,7 +594,7 @@ func TestBuildLiveRefinesCuts(t *testing.T) {
 // delivered — which is the whole claim ARCHITECTURE §3's monotone-safety rule
 // makes about this seam.
 func TestBuildLiveFallsBackOnRefusedBoundaries(t *testing.T) {
-	_, rec, stdout := buildSplit(t, "I would put the boundary a little later")
+	_, rec, stdout, _ := buildSplit(t, "I would put the boundary a little later")
 
 	if rec.Live.BoundariesFellBack != rec.Live.BoundariesAdjudicated {
 		t.Errorf("%d of %d boundaries fell back; an answer that is not a menu number cannot be taken:\n%s",
@@ -544,7 +666,7 @@ func TestBuildWithoutConfigDirMakesNoCall(t *testing.T) {
 	root := writeLiveCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
 	// Kept, because the run record this test reads lives at the temp-work root.
-	res, stdout := build(t, root, out, true)
+	res, stdout, _ := build(t, root, out, true)
 	if !res.Report.Passed() || !res.Job.DeliveryReady() {
 		t.Fatalf("the mechanical build did not deliver:\n%s", stdout)
 	}

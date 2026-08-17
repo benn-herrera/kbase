@@ -15,7 +15,7 @@ import (
 // A sample is a function of the app version and nothing else.
 //
 // They live in this package because they render `contractText`, which §4.3's
-// entry-point and §8.1's AGENTS.md fixture also render: one string, N render
+// entry-point and §4.7's AGENTS.md fixture also render: one string, N render
 // sites, no second place for the contract statement to drift.
 const (
 	docentSample     = "docent.md"

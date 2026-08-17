@@ -63,7 +63,7 @@ func TestSplitAlwaysPassesVerify(t *testing.T) {
 			{survey.CutParagraph, words("a", 8)},
 		},
 	}
-	budgets := []int{minTokens, 100, 250, 500, 1000, 100_000}
+	budgets := []int{MinTokens, 100, 250, 500, 1000, 100_000}
 
 	for name, blocks := range shapes {
 		for _, budget := range budgets {
@@ -205,8 +205,8 @@ func TestSplitPreMergesFragments(t *testing.T) {
 		t.Fatalf("cuts = %+v, want two sections: the fragment merged into the one before it", cuts)
 	}
 	for i, c := range cuts {
-		if n := p.estimate(src[c.Start:c.End]); n < minTokens {
-			t.Errorf("section %d is %d tokens, under the %d-token minimum", i, n, minTokens)
+		if n := p.estimate(src[c.Start:c.End]); n < MinTokens {
+			t.Errorf("section %d is %d tokens, under the %d-token minimum", i, n, MinTokens)
 		}
 	}
 	if last := cuts[len(cuts)-1]; last.End != span.End {

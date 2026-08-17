@@ -19,7 +19,7 @@ import (
 // internal/distill's, called from here [MAD1: F-9].
 const (
 	// derivationsHeading opens an index's down-link list. It is mandatory on
-	// every index (§9 check 9): an index without one is a routing node that
+	// every index (§4.8 guarantee 9): an index without one is a routing node that
 	// routes nowhere.
 	derivationsHeading = "## Derivations and Detail"
 
@@ -44,7 +44,7 @@ const (
 		"Intermediate nodes are for navigation only."
 
 	// contractText is SPEC §3's statement, verbatim, and it is a constant
-	// because §4.3's entry-point and §8.1's AGENTS.md fixture both render it —
+	// because §4.3's entry-point and §4.7's AGENTS.md fixture both render it —
 	// one string, two render sites, no second place to drift.
 	contractText = noCrawlInvariant + "\n\n" +
 		"**Summaries route; leaves answer.** An index page tells you where to go; " +
@@ -73,6 +73,15 @@ const (
 	// no summary artifact for a node, an index is up-link, H1 and its
 	// down-links, and that is a valid page rather than a degraded one (O-1).
 	blockRule = "---"
+
+	// partLead opens a split part's down-link descriptor. The bullet's scope
+	// is the whole group's, written once at stage 3 and identical on every
+	// part's bullet; this clause is the part's own, derived after the cuts were
+	// decided, and it is what makes two sibling bullets choosable rather than a
+	// coin flip [MAD2: B-4]. It is parenthesised and self-labelling because a
+	// second em-dash segment would be indistinguishable from a scope line that
+	// contains one.
+	partLead = "this part: "
 )
 
 // Renderer renders the node kinds stage 8 owns — index and entry-point — and
@@ -92,6 +101,12 @@ type Renderer struct {
 	// conclusions block, which is the whole tree's state before stage 6 runs
 	// and a legal shape after it (O-1).
 	summaries map[string]summarize.Summary
+
+	// descriptors is stage 5's post-cut description of each part of a split
+	// group (distill.Distiller.Descriptors), keyed by node path. It is
+	// mechanical, so an index is still a pure function of artifacts this
+	// renderer is handed — which is what keeps check 5's re-render meaningful.
+	descriptors map[string]string
 }
 
 // NewRenderer returns a renderer over one job's tree plan and whatever
@@ -101,7 +116,10 @@ type Renderer struct {
 // with its framing and conclusions absent. It is the SAME code path stage 6
 // fills in, not a temporary one — which is what made the mechanical spine
 // worth assembling before this stage existed.
-func NewRenderer(plan treeplan.TreePlan, prov distill.Provenance, summaries map[string]summarize.Summary) (*Renderer, error) {
+//
+// descriptors may be nil too, and is on any tree with no split group in it.
+func NewRenderer(plan treeplan.TreePlan, prov distill.Provenance,
+	summaries map[string]summarize.Summary, descriptors map[string]string) (*Renderer, error) {
 	if plan.Schema != treeplan.SchemaVersion {
 		return nil, fmt.Errorf("assemble: tree plan declares schema %q, this build reads %q",
 			plan.Schema, treeplan.SchemaVersion)
@@ -110,11 +128,12 @@ func NewRenderer(plan treeplan.TreePlan, prov distill.Provenance, summaries map[
 		return nil, err
 	}
 	r := &Renderer{
-		plan:      plan,
-		prov:      prov,
-		children:  map[string][]treeplan.Node{},
-		titles:    make(map[string]string, len(plan.Nodes)),
-		summaries: summaries,
+		plan:        plan,
+		prov:        prov,
+		children:    map[string][]treeplan.Node{},
+		titles:      make(map[string]string, len(plan.Nodes)),
+		summaries:   summaries,
+		descriptors: descriptors,
 	}
 	for _, n := range plan.Nodes {
 		r.titles[n.Path] = n.Title
@@ -247,13 +266,18 @@ func (r *Renderer) entryPoint(n treeplan.Node) ([]byte, error) {
 }
 
 // downLinks writes the children list: title and scope straight from the tree
-// plan, paths computed (§2.2).
+// plan, paths computed (§2.2), and — on a child that is one part of a split
+// group — the part's own post-cut descriptor after them.
 func (r *Renderer) downLinks(b *strings.Builder, parent treeplan.Node, kids []treeplan.Node) {
 	for _, c := range kids {
-		fmt.Fprintf(b, "- [%s](%s) — %s\n", c.Title, distill.RelPath(parent.Path, c.Path), c.Scope)
+		fmt.Fprintf(b, "- [%s](%s) — %s", c.Title, distill.RelPath(parent.Path, c.Path), c.Scope)
+		if d := r.descriptors[c.Path]; d != "" {
+			fmt.Fprintf(b, " (%s%s)", partLead, d)
+		}
+		b.WriteString("\n")
 	}
 }
 
 // Children is one node's children in tree-plan order — the same order the
-// down-link list renders in, which is what §9 check 5 compares against.
+// down-link list renders in, which is what §4.8 guarantee 5 compares against.
 func (r *Renderer) Children(path string) []treeplan.Node { return r.children[path] }

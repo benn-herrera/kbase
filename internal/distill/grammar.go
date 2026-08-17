@@ -13,13 +13,13 @@ import (
 //
 //   - Frontmatter — the Location block at the start of every class-A file.
 //   - RelPath — the relative target of every link kbase emits.
-//   - UpLink — the first line after the block, on every class-A file except
-//     the entry-point.
-//   - Provenance.Footer — the last line of every node kind (SPEC §7, F-12).
+//   - The navigation block — the up-link, on every class-A file except the
+//     entry-point, and the continuation edges of a split part beneath it.
+//   - Provenance.Footer — the last line of every node kind (SPEC §4.6, F-12).
 //
-// Their readers live here too — ParseFrontmatter and ParseUpLink — because a
-// grammar with its writer in one package and its parser in another is two
-// grammars that happen to agree today. Stage 9 asks these.
+// Their readers live here too — ParseFrontmatter, ParseNavLink and NavBlock —
+// because a grammar with its writer in one package and its parser in another
+// is two grammars that happen to agree today. Stage 9 asks these.
 //
 // Stage 5 renders whole leaves here and stage 8 (internal/assemble) imports
 // them for the index and entry-point kinds. The dependency runs
@@ -27,14 +27,27 @@ import (
 // runs, and it is what keeps "one implementation, two call sites" a fact about
 // the code rather than a note in a design document.
 const (
-	// upArrow is the up-link's marker, U+2191, from the exemplar's own link
+	// UpMarker is the up-link's marker, U+2191, from the exemplar's own link
 	// grammar (kb-root/CONVENTIONS.md:12-19).
-	upArrow = "↑"
+	UpMarker = "↑"
+
+	// PrevMarker and NextMarker are the continuation edges of a split group:
+	// U+2190 and U+2192, the same one-glyph-then-space grammar the up-link
+	// uses, because a part's siblings are a projection of the tree plan
+	// exactly as its parent is [MAD2: B-4]. They are mechanical tree
+	// navigation, not an inferred "related topic" edge — the thing
+	// ARCHITECTURE §3 forbids — and the leaf envelope emits them with no model
+	// involvement.
+	PrevMarker = "←"
+	NextMarker = "→"
 
 	// UpLinkPrefix opens an up-link line. It is exported because stage 9
-	// counts and locates up-links with it, and a second spelling of the
-	// opening bracket in the verifier would be a second grammar.
-	UpLinkPrefix = "[" + upArrow + " "
+	// counts up-links with it, and a second spelling of the opening bracket in
+	// the verifier would be a second grammar.
+	UpLinkPrefix = navPrefix + UpMarker + " "
+
+	// navPrefix opens every navigation link, whatever its direction.
+	navPrefix = "["
 
 	// footerOpen and footerClose bracket the provenance receipt. It is an HTML
 	// comment because it is metadata a reader should not have to read and a
@@ -56,25 +69,31 @@ const (
 	// atx is the Markdown heading marker the leaf template de-duplicates
 	// against (§4.1).
 	atx = "#"
+
+	// headingSpan joins the first and last heading of a split part's
+	// descriptor. The glyph is NextMarker's in its ordinary "through" sense:
+	// one arrow vocabulary on a page, read the same way in a bullet as in the
+	// navigation block.
+	headingSpan = " " + NextMarker + " "
 )
 
-// Provenance is the receipt every delivered page carries (SPEC §7): the
+// Provenance is the receipt every delivered page carries (SPEC §4.6): the
 // identity of the bytes it was built from, when it was built, and the app
 // version — which implies the embedded prompt set.
 //
 // BuildDate is a job parameter rather than a call to time.Now inside the
-// renderer, and that is load-bearing. §8.1 requires the rendered tree to be a
-// pure function of its inputs, and §9 check 7 re-derives every leaf and
+// renderer, and that is load-bearing. §5 requires the rendered tree to be a
+// pure function of its inputs, and §4.8 guarantee 7 re-derives every leaf and
 // compares bytes; a clock read inside the template would break both the moment
 // a run crossed midnight. Making the date an input keeps the render pure, and
 // putting it in the stage's parameter digest keeps a build on a new day from
 // resuming onto pages stamped with an older one.
 type Provenance struct {
-	// CorpusHash is survey.Totals.ContentHash — the source identity SPEC §7
+	// CorpusHash is survey.Totals.ContentHash — the source identity SPEC §4.6
 	// asks for, and the same string the tree plan carries.
 	CorpusHash string
 	// BuildDate is the UTC calendar date, YYYY-MM-DD. A date rather than a
-	// timestamp: staleness is what SPEC §7 displays, and an hour is not a
+	// timestamp: staleness is what SPEC §4.6 displays, and an hour is not a
 	// staleness signal for a documentation corpus.
 	BuildDate string
 }
@@ -168,26 +187,105 @@ func FirstLine(lines []string) string {
 // The label carries the global address rather than the parent's title because
 // the title is already one hop away and the raw target is already visible: the
 // slot is spent on what a reader cannot otherwise see without `../` arithmetic.
-func UpLink(nodePath, parentPath string) string {
-	return UpLinkPrefix + parentPath + "](" + RelPath(nodePath, parentPath) + ")"
+func UpLink(nodePath, parentPath string) string { return navLink(UpMarker, nodePath, parentPath) }
+
+// PrevLink and NextLink render a split part's continuation edges: the sibling
+// part, in the same two projections and by the same rule as the up-link, so a
+// reader who lands mid-series can walk it in either direction without
+// re-ascending to the index [MAD2: B-4].
+func PrevLink(nodePath, siblingPath string) string {
+	return navLink(PrevMarker, nodePath, siblingPath)
 }
 
-// ParseUpLink splits an up-link line back into its two projections. It is the
-// reader half of UpLink, here so that the two cannot drift.
-func ParseUpLink(line string) (label, target string, ok bool) {
-	rest, found := strings.CutPrefix(line, UpLinkPrefix)
-	if !found {
-		return "", "", false
+func NextLink(nodePath, siblingPath string) string {
+	return navLink(NextMarker, nodePath, siblingPath)
+}
+
+// navLink is the one renderer behind all three: marker, the destination's
+// root-relative path as the label, the destination relative to the emitting
+// page as the target.
+func navLink(marker, nodePath, toPath string) string {
+	return navPrefix + marker + " " + toPath + "](" + RelPath(nodePath, toPath) + ")"
+}
+
+// UpLinkCount is how many up-links a delivered page carries: lines opening
+// with the up-link prefix, OUTSIDE fenced code blocks.
+//
+// The fence skip is what keeps the count a statement about page grammar rather
+// than about page bytes. A leaf body is verbatim source (I-3) and §4.2 item 4
+// forbids editing it, so a documentation corpus that shows an up-link inside a
+// code fence — a KB documenting a KB, the plainest dogfood case there is —
+// would otherwise refuse its own delivery at guarantee 2 with no remedy
+// available to anyone [MAD2: B-11]. It walks fences through the same
+// implementation Destinations does, because "this line is inside a fence" has
+// to mean one thing.
+func UpLinkCount(page []byte) int {
+	n := 0
+	unfenced(string(page), func(_ int, line string) {
+		if strings.HasPrefix(line, UpLinkPrefix) {
+			n++
+		}
+	})
+	return n
+}
+
+// NavLink is one navigation edge read back off a delivered page: which
+// direction it points, and the two projections of the node it names.
+type NavLink struct {
+	Marker string
+	Label  string
+	Target string
+}
+
+// ParseNavLink splits a navigation line back into its parts. It is the reader
+// half of navLink — all three directions through one parser, here so that the
+// writer and the reader cannot drift.
+func ParseNavLink(line string) (NavLink, bool) {
+	for _, m := range []string{UpMarker, PrevMarker, NextMarker} {
+		rest, found := strings.CutPrefix(line, navPrefix+m+" ")
+		if !found {
+			continue
+		}
+		label, rest, found := strings.Cut(rest, "](")
+		if !found {
+			return NavLink{}, false
+		}
+		target, found := strings.CutSuffix(rest, ")")
+		if !found {
+			return NavLink{}, false
+		}
+		return NavLink{Marker: m, Label: label, Target: target}, true
 	}
-	label, rest, found = strings.Cut(rest, "](")
-	if !found {
-		return "", "", false
+	return NavLink{}, false
+}
+
+// NavBlock is the navigation block a class-A page opens its body with: the
+// run of navigation lines that begins at the first line under the frontmatter
+// block and ends at the first line that is not one.
+//
+// It is POSITIONAL, and that is the point. A leaf body is verbatim source
+// (I-3) and may legitimately contain a navigation-shaped line of its own — a
+// docs site with its own prev/next furniture is the ordinary case, not an
+// exotic one — so a check that read the whole page would refuse deliveries
+// nobody can repair, which is the class of defect the fenced up-link was
+// [MAD2: B-11]. The envelope puts every link it emits above the body and a
+// blank line below them, so the run stops before the first source byte.
+func NavBlock(body []string) []NavLink {
+	var out []NavLink
+	for _, l := range body {
+		if strings.TrimSpace(l) == "" {
+			if len(out) > 0 {
+				return out
+			}
+			continue
+		}
+		link, ok := ParseNavLink(l)
+		if !ok {
+			return out
+		}
+		out = append(out, link)
 	}
-	target, found = strings.CutSuffix(rest, ")")
-	if !found {
-		return "", "", false
-	}
-	return label, target, true
+	return out
 }
 
 // RelPath is the link target from one node to another: a pure function of two
@@ -216,31 +314,44 @@ func RelPath(from, to string) string {
 	return strings.Join(out, "/")
 }
 
-// leaf renders the whole §4.1 file: frontmatter, up-link, H1, verbatim body,
-// footer.
+// leaf renders the whole §4.1 file: frontmatter, the navigation block, H1,
+// verbatim body, footer.
 //
-// The block owns file-start, above the up-link. A verbatim slice that carries
-// the SOURCE document's own frontmatter therefore renders it as body text,
-// which is intentional and stated in SPEC §4.9: the envelope wraps the body,
-// and the body is never edited.
+// The block owns file-start, above the navigation. A verbatim slice that
+// carries the SOURCE document's own frontmatter therefore renders it as body
+// text, which is intentional and stated in SPEC §4.9: the envelope wraps the
+// body, and the body is never edited.
 //
-// The heading de-duplication is §4.1's provisional, implemented as stated: a
-// slice that already opens with its own ATX heading keeps it and gets no
-// synthesised H1, because a span starting at a survey.Section starts at the
-// heading line itself and the alternative double-titles every leaf. The
-// consequence, stated so it is a decision rather than a surprise: a leaf cut
-// from a level-2 section opens at `##` and carries no H1 at all. The node's
-// title still identifies it everywhere navigation happens — the parent's
-// down-link, the child's up-link, the tree plan — because none of those read a
-// heading (I-1).
-func leaf(n treeplan.Node, body []byte, p Provenance) []byte {
+// prev and next are the sibling parts of this leaf's own split group, empty
+// where there is none — the first part has no previous and the last no next.
+// They render immediately under the up-link and above the body: all mechanical
+// navigation in one block, where a reader lands, and every line the gates read
+// as grammar sitting above the first verbatim byte (NavBlock).
+//
+// The heading de-duplication is §4.1's provisional, NARROWED to its own stated
+// reason [MAD2: B-8]: a synthesised H1 is suppressed only when the slice
+// already opens with a heading whose text IS the node's title, so a page
+// cannot be delivered stating an identity it was not routed by — or stating
+// none at all, which is what a part ≥2 opening at some interior `##` used to
+// do. A leaf whose opening heading says something else keeps that heading and
+// gains the title above it; the redundancy is the cheap side of the trade.
+func leaf(n treeplan.Node, prev, next string, body []byte, p Provenance) []byte {
 	var b strings.Builder
 	b.Grow(len(body) + 256)
 	b.WriteString(Frontmatter(n.Path))
 	b.WriteString("\n\n")
 	b.WriteString(UpLink(n.Path, n.Parent))
-	b.WriteString("\n\n")
-	if !opensWithHeading(body) {
+	b.WriteString("\n")
+	if prev != "" {
+		b.WriteString(PrevLink(n.Path, prev))
+		b.WriteString("\n")
+	}
+	if next != "" {
+		b.WriteString(NextLink(n.Path, next))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	if !opensWithTitle(body, n.Title) {
 		b.WriteString("# ")
 		b.WriteString(n.Title)
 		b.WriteString("\n\n")
@@ -255,21 +366,46 @@ func leaf(n treeplan.Node, body []byte, p Provenance) []byte {
 	return []byte(b.String())
 }
 
-// opensWithHeading reports whether a slice's first non-empty line is an ATX
-// heading. Setext headings (an underline of `=` or `-`) are deliberately not
-// detected: recognising one means reading the NEXT line to classify this one,
-// and a leaf that gets one redundant H1 above its own setext title is a
-// cosmetic defect where a mis-detected `---` frontmatter fence would be a
-// structural one.
-func opensWithHeading(body []byte) bool {
+// opensWithTitle reports whether a slice's first non-empty line is an ATX
+// heading whose own text is the node's title — the predicate §4.2 item 3's
+// reason states, rather than the wider "any heading" it used to be.
+//
+// Setext headings (an underline of `=` or `-`) are deliberately not detected:
+// recognising one means reading the NEXT line to classify this one, and a leaf
+// that gets one redundant H1 above its own setext title is a cosmetic defect
+// where a mis-detected `---` frontmatter fence would be a structural one.
+func opensWithTitle(body []byte, title string) bool {
 	for _, line := range strings.Split(string(body), "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" {
 			continue
 		}
-		return strings.HasPrefix(t, atx)
+		text, ok := headingText(t)
+		return ok && text == title
 	}
 	return false
+}
+
+// headingText is an ATX heading's own text: the marker run, one space, the
+// text, and an optional closing run of markers that is not part of it. A line
+// whose markers are not followed by a space is not a heading (`#tag`), and
+// neither is a run of more than six.
+func headingText(line string) (string, bool) {
+	marks := len(line) - len(strings.TrimLeft(line, atx))
+	if marks == 0 || marks > 6 {
+		return "", false
+	}
+	rest := line[marks:]
+	if rest != "" && !strings.HasPrefix(rest, " ") && !strings.HasPrefix(rest, "\t") {
+		return "", false
+	}
+	t := strings.TrimSpace(rest)
+	// A closing sequence is a whole space-separated run of markers, so `# C#`
+	// keeps its `#` and `## Title ##` does not.
+	if i := strings.LastIndex(t, " "); i >= 0 && strings.Trim(t[i+1:], atx) == "" {
+		t = strings.TrimSpace(t[:i])
+	}
+	return t, true
 }
 
 func endsWithNewline(b []byte) bool { return len(b) > 0 && b[len(b)-1] == '\n' }

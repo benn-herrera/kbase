@@ -13,15 +13,12 @@ import (
 
 // The rebase fixture is a two-document corpus with a hand-authored link graph.
 //
-// It is hand-authored rather than driven through the Markdown adapter for two
-// reasons, and the second is the one that matters. The first is the format
-// seam: this package is downstream of the survey artifact and its tests should
-// be too. The second is that the PINNED corpus resolves zero internal links —
-// Rojo's own docs use site-root-relative destinations that do not match its
-// file layout, so every cross-document link there is `LinkUnresolved` and the
-// rebase map lands nothing. A corpus test over Rojo therefore proves the
-// inventory path and nothing about the rewriting path; this fixture proves the
-// rewriting path, and the two together are the coverage.
+// It is hand-authored rather than driven through the Markdown adapter because
+// of the format seam: this package is downstream of the survey artifact and
+// its tests should be too. The pinned corpora are surveyed where the surveying
+// is done (internal/survey/markdown's corpus test pins their link census); what
+// this fixture owns is the REWRITING path, over a link graph shaped to reach
+// every landing rule rather than whatever two real corpora happened to write.
 type fixture struct {
 	plan   treeplan.TreePlan
 	art    survey.Artifact
@@ -31,13 +28,27 @@ type fixture struct {
 }
 
 const (
-	introPreamble = "Read [the sync page](sync.md), its [details](sync.md#details), " +
-		"[the missing one](gone.md) and [the web](https://example.com).\n\n"
-	introSection = "# Getting Started\n\nStart here.\n"
+	// filler carries each span over the content floor the tree plan enforces
+	// (dissect.MinTokens): a span under it is merged into its neighbour, and
+	// this fixture needs five distinct pages to have any landing rules to
+	// test. It holds no brackets and no parentheses, so it adds no link.
+	filler = "\nThis paragraph is here to carry the span it sits in over the minimum " +
+		"amount of material a delivered page may hold, so that the fixture keeps the " +
+		"shape its assertions are about: five spans, five pages, and a file that the " +
+		"tree plan splits across more than one of them.\n"
 
-	syncPreamble = "How syncing works.\n\n"
-	syncBody     = "# Sync\n\nThe body.\n\n"
-	syncDetails  = "# Details\n\nThe detail.\n"
+	introPreamble = "Read [the sync page](sync.md), its [details](sync.md#details), " +
+		"[the missing one](gone.md) and [the web](https://example.com).\n" + filler + "\n"
+	introSection = "# Getting Started\n\nStart here.\n" + filler
+
+	// sync.md carries the same-file anchors: one from its preamble, which the
+	// split moves onto another page, and one from inside the section the
+	// anchor names, which does not move. Both are the SAME destination text,
+	// so the two renderings of it are the whole of what rule 1 has to get
+	// right on a split file.
+	syncPreamble = "How syncing works: [the details](#details), [sync itself](#sync).\n" + filler + "\n"
+	syncBody     = "# Sync\n\nThe body.\n" + filler + "\n"
+	syncDetails  = "# Details\n\nThe detail, and [this section](#details) again.\n" + filler
 )
 
 func newFixture(t *testing.T) fixture {
@@ -73,6 +84,10 @@ func newFixture(t *testing.T) fixture {
 			Sections: []survey.Section{
 				{Level: 1, Title: "Sync", Start: len(syncPreamble), End: len(syncPreamble) + len(syncBody)},
 				{Level: 1, Title: "Details", Start: len(syncPreamble) + len(syncBody), End: len(sync)},
+			},
+			Links: []survey.Link{
+				{Kind: survey.LinkAnchor, Target: "#details", Fragment: "details"},
+				{Kind: survey.LinkAnchor, Target: "#sync", Fragment: "sync"},
 			},
 		},
 	}
@@ -136,7 +151,7 @@ func (f fixture) domainOf(t *testing.T, file string) treeplan.Node {
 	return treeplan.Node{}
 }
 
-// The three landing rules of §4.4, over one rendered page.
+// The three landing rules of §4.5, over one rendered page.
 func TestRebaseLandings(t *testing.T) {
 	f := newFixture(t)
 	d := f.distiller(t)
@@ -179,7 +194,7 @@ func TestRebaseLandings(t *testing.T) {
 		t.Errorf("the external link was touched:\n%s", text)
 	}
 
-	// Visible text is never rewritten — only targets (§4.4).
+	// Visible text is never rewritten — only targets (§4.5).
 	for _, s := range []string{"[the sync page]", "[the details]", "[the missing one]", "[the web]"} {
 		if strings.Contains(introPreamble, s) && !strings.Contains(text, s) {
 			t.Errorf("the visible text %q did not survive the rebase:\n%s", s, text)
@@ -225,6 +240,112 @@ func mustRanges(t *testing.T, plan treeplan.TreePlan) map[string][]hostRange {
 		t.Fatalf("leafRanges: %v", err)
 	}
 	return r
+}
+
+// Rule 1 over a BARE fragment, which is the case a split strands: the anchor
+// names a heading in the file it is written in, and the cut may have put that
+// heading on another page.
+//
+// One destination, two pages, two correct renderings — which is why the map is
+// a function of (source file, destination) read per emitting leaf and not a
+// text substitution: the page hosting the heading keeps the source's own bare
+// fragment, and every other page gets a path to it.
+func TestRebaseSameFileFragments(t *testing.T) {
+	f := newFixture(t)
+	d := f.distiller(t)
+
+	preamble := f.nodeAt(t, "guide/sync.md", 0)
+	details := f.nodeAt(t, "guide/sync.md", len(syncPreamble)+len(syncBody))
+	body := f.nodeAt(t, "guide/sync.md", len(syncPreamble))
+	if preamble.Path == details.Path {
+		t.Fatalf("the fixture must split sync.md; the preamble and Details share %s", preamble.Path)
+	}
+
+	from, err := d.Render(preamble)
+	if err != nil {
+		t.Fatalf("Render %s: %v", preamble.Path, err)
+	}
+	for _, want := range []string{
+		"(" + RelPath(preamble.Path, details.Path) + "#details)",
+		"(" + RelPath(preamble.Path, body.Path) + "#sync)",
+	} {
+		if !strings.Contains(string(from.Data), want) {
+			t.Errorf("the moved anchor did not land; want %q in:\n%s", want, from.Data)
+		}
+	}
+	if len(from.Unresolved) != 0 {
+		t.Errorf("Unresolved = %q; a same-file anchor that landed is not left behind", from.Unresolved)
+	}
+
+	on, err := d.Render(details)
+	if err != nil {
+		t.Fatalf("Render %s: %v", details.Path, err)
+	}
+	if !strings.Contains(string(on.Data), "(#details)") {
+		t.Errorf("an anchor landing on its own page must keep the source's bare fragment:\n%s", on.Data)
+	}
+}
+
+// B-10's class: a site generator disambiguates repeated headings with `-N`,
+// and the map has to read that suffix as an occurrence ordinal — while a
+// heading whose own title ends in a number keeps its exact slug.
+func TestSectionStartSuffixedDuplicates(t *testing.T) {
+	anchors := map[string][]int{
+		"install": {10, 200, 300},
+		"step-2":  {400},
+	}
+	for _, tc := range []struct {
+		name     string
+		fragment string
+		want     int
+		found    bool
+	}{
+		{"bare slug names the first occurrence", "install", 10, true},
+		{"-1 names the second", "install-1", 200, true},
+		{"-2 names the third", "install-2", 300, true},
+		{"past the last occurrence does not land", "install-3", 0, false},
+		{"an exact slug wins over reading its tail as an ordinal", "step-2", 400, true},
+		{"a leading zero is not the generator's suffix", "install-01", 0, false},
+		{"a non-numeric tail is part of the slug", "install-next", 0, false},
+		{"nothing of that name at all", "gone", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := sectionStart(anchors, tc.fragment)
+			if ok != tc.found || got != tc.want {
+				t.Errorf("sectionStart(%q) = %d, %v; want %d, %v", tc.fragment, got, ok, tc.want, tc.found)
+			}
+		})
+	}
+}
+
+// sectionIndex records every occurrence of a repeated heading, in document
+// order — the input the ordinal above is read against.
+func TestSectionIndexKeepsEveryOccurrence(t *testing.T) {
+	art := survey.Artifact{Files: []survey.File{{
+		Path: "dup.md",
+		Sections: []survey.Section{
+			{Level: 1, Title: "Install", Start: 0, End: 50, Children: []survey.Section{
+				{Level: 2, Title: "Install", Start: 20, End: 50},
+			}},
+			{Level: 1, Title: "Install", Start: 50, End: 90},
+		},
+	}}}
+	got := sectionIndex(art)["dup.md"]["install"]
+	if want := []int{0, 20, 50}; !equalInts(got, want) {
+		t.Errorf("occurrences = %v, want %v in document order", got, want)
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAnchorSlug(t *testing.T) {

@@ -68,8 +68,8 @@ type scene struct {
 func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *scene {
 	t.Helper()
 	art, corpus := buildCorpus(t,
-		docSpec{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 40}, {"Beta", 40}}},
-		docSpec{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 40}, {"Delta", 40}}},
+		docSpec{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 90}, {"Beta", 90}}},
+		docSpec{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 90}, {"Delta", 90}}},
 	)
 	params := treeplan.Params{Budgets: testBudgets()}
 	v, err := treeplan.NewVerifier(art, corpus, params)
@@ -176,6 +176,10 @@ func answer(framing, heading, conclusions string) model.Response {
 
 // --- the synthetic corpus, the same shape every package here builds.
 
+// secSpec is one section. Its word count is over the content floor
+// (dissect.MinTokens, ~256 bytes): a section under it is merged into its
+// neighbour when the tree plan is composed, which would quietly halve the pages
+// these level stages are meant to summarise.
 type secSpec struct {
 	title string
 	words int

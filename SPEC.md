@@ -133,11 +133,23 @@ summaries, the light tier adjudicates page boundaries.
 
 - `--out` is required; receives the delivered tree, and only the delivered
   tree, under the output-directory contract (§3.1).
+- **A populated `--out` refuses, all-or-nothing.** If `--out` holds anything
+  at all other than `temp-work/`, the command refuses before the corpus is
+  read, names **every** entry it found, writes nothing — not even the
+  directory, if it did not already exist — and exits `1`. The refusal states
+  which of the two reasons applies: no `temp-work/` is present, or the
+  `temp-work/` present holds a run record and therefore belongs to a build
+  that finished. There is no `--force` and no in-place update: kbase
+  delivers a whole knowledge base or nothing, and the remedy is to delete
+  the directory or name an empty one. The **one** exception is the resume of
+  an interrupted build (§3.1), which owns the residue it left behind.
 - `--title TITLE` is the documentation set's own title as the user states
   it (`--title "Rojo v7 Documentation"`). The knowledge base is titled
-  `KBase for <TITLE>`, and that is its entry-point heading, the text of
-  every down-link that points at a domain from it, and the start link the
-  shipped fixtures carry. Absent or blank, `TITLE` falls back to the
+  `KBase for <TITLE>`, and that name renders in three places: the
+  entry-point's own H1, the heading of the shipped `README.md`, and the
+  label of the start link each shipped fixture carries (§4.7). The
+  entry-point's down-link bullets carry each domain's own title, not this
+  one. Absent or blank, `TITLE` falls back to the
   corpus directory's base name. The resolved title is recorded in
   `run.json` (§3.8) and is an output-affecting input: changing it over an
   existing `--out` re-derives the tree plan rather than resuming the one
@@ -155,6 +167,14 @@ summaries, the light tier adjudicates page boundaries.
   holds; a failure refuses the whole delivery and names which guarantee
   failed (and, where applicable, the offending node) in the run record
   (§3.8).
+- **The exempted destinations are announced.** A corpus destination that
+  names no document the corpus holds is delivered exactly as written and
+  exempted from guarantee 1 (§4.5 rule 3). When there is at least one, the
+  run writes exactly one line to stderr carrying the whole link census —
+  `links: internal=N unresolved=N external=N anchor=N; N destination(s)
+  name no document in the corpus and are delivered verbatim, exempt from
+  guarantee 1`. A run with none writes no such line. The census is in the
+  run record either way (§3.8).
 - **Page boundaries.** A group the tree plan sized into more than one page
   has its interior boundaries adjudicated by the light tier, one call per
   boundary, against the mechanical splitter's proposal (§3.4). It is a
@@ -310,11 +330,25 @@ bytes in place.
 `--out` receives **only** delivered artifacts, and the delivered set is
 exactly the classified one guarantee 5 (§4.8) enumerates: tree-plan nodes
 and the fixture manifest, nothing else. Nothing already present in `--out`
-is ever touched, so pointing a run at a populated directory is safe. Every
+is ever touched, and the way that is made true is a refusal rather than a
+promise: a `--out` holding anything but `temp-work/` is refused at job
+setup, with every entry named and nothing written (§1.5). Every
 other thing a run produces — stage artifacts, their stamps, the job lock,
 the run record (§3.8), the residue of an interrupted write — lives under
 `<out>/temp-work/`, a directory kbase creates and the only thing it ever
 deletes inside `--out`.
+
+**Rerun versus resume.** The refusal has exactly one exception, and it is
+decided by `temp-work/` rather than by anything about the delivered files:
+`temp-work/` survives precisely the runs that did not finish, and the run
+record inside it (§3.8) is written only once a delivery has completed. So
+`temp-work/` present with **no** run record in it is an interrupted build,
+whose half-copied delivery is its own to overwrite; a `temp-work/` that
+holds a run record belongs to a build that finished, and a second run over
+it is a rerun and refuses like any other. Rebuilding a corpus into a
+directory that already holds its knowledge base therefore means deleting
+that directory first. Updating a delivered knowledge base in place is not a
+feature of this appliance.
 
 No file kbase writes has a lifecycle of its own: there are exactly two
 kinds, delivered (permanent, classified) and temp-work (scratch, one
@@ -355,7 +389,7 @@ Each `files[]` entry:
 | `preamble` | byte span of headingless content before the first heading, when present |
 | `sections` | the heading tree: each node has `level` (1–6; a headingless preamble is level 0 and lives in `preamble`, not here), `title`, `start`/`end` (byte span; `start` is the heading line's first byte), `tokens` (covers the whole subtree), `gist`, `children` |
 | `cuts` | the legal cut-candidate list: `{"offset": N, "kind": "heading"\|"fence"\|"paragraph"}` |
-| `links` | one entry per distinct destination: `{"kind": "internal"\|"unresolved"\|"external"\|"anchor", "target": "as written", "path": "resolved doc (internal only)", "fragment": "...", "image": true (omitted if false)}` |
+| `links` | one entry per distinct destination: `{"kind": "internal"\|"unresolved"\|"external"\|"anchor", "target": "as written", "path": "resolved doc (internal only)", "fragment": "...", "image": true (omitted if false)}`. Which document a destination names is decided by §4.5's resolution rules |
 
 **Cut-candidate guarantees** (load-bearing — a validator may rely on all
 four): offsets are strictly ascending; every offset is interior (never a
@@ -365,6 +399,19 @@ outer open/close edges, never an interior offset.
 
 **Tiling guarantee:** `metadata` + `preamble` + `sections` exactly
 partition a file's byte length, in that order, with no gap or overlap.
+
+**The `metadata` span is not delivered.** The coverage universe — what
+guarantee 6 (§4.8) requires a delivered page or a declared annex to account
+for — is `preamble` + `sections`, and those are the only spans a tree plan's
+groups are ever built from. A detected front-matter block's bytes therefore
+reach no page of the knowledge base. This is a deliberate carve-out in the
+verbatim-custody story, not a silent drop: front matter is a site
+generator's configuration rather than the document's prose, its labels are
+already lifted into `title`/`description`/`tags` above, and a knowledge base
+that does not distil it has dropped no chapter. Bytes that are NOT detected
+as front matter are ordinary content — they fall into `preamble` under the
+tiling guarantee, are covered like any other span, and are delivered
+verbatim (§4.9's leaf edge case).
 
 **Determinism:** identical corpus bytes (after NFC normalization) always
 produce byte-identical artifact JSON — no field is encoded as a map, and
@@ -401,6 +448,24 @@ list.
 `parts == 1` means the span is never split. **The interior cut points of a
 multi-part group are not recorded here** — only in that group's cut list
 (§3.4).
+
+**Content floor** (observable — determines how many pages exist): every
+group's span holds at least the minimum section size (ARCHITECTURE.md §9,
+64 tokens) unless it covers its file whole (see the exemption below), and so
+therefore does every page cut from it. A span below the
+floor is merged into the group immediately before it in the same file — or
+immediately after it, where it is that file's first — and the merged-away
+group names no page: one page holds both spans, keeping the surviving
+group's title and scope. A merge happens only between spans that TOUCH, so
+no page is delivered bytes no group planned. **A span covering its file's
+whole coverable content (§3.2) is exempt from the floor** and stands as its
+own page at any size: the floor's target is a page manufactured out of part
+of a larger document, and an author's whole tiny document behind its own
+title is not that but an honest page — so a corpus of documents each smaller
+than one page builds, delivering each as a page. `kbase build` refuses,
+naming every offending span, when one under the floor is neither exempt nor
+has such a neighbour. Coverage (§4.8 guarantee 6) is unaffected:
+the merged span covers exactly the sections its two halves covered.
 
 `annexes[]` — `{"prefix", "convention"}`, one per declared `--annex`;
 `convention` is the lookup description kbase derives from the survey and
@@ -477,14 +542,30 @@ proceed normally.
 ### 3.8 `run.json` — the run record
 
 **`kbase build`**, written to `<out>/temp-work/run.json` — the temp-work
-root, which mirrors the delivered tree's root — on every completed attempt
-(delivered or refused). It is a development record, so it lives in the dev
-mirror rather than in the delivered tree, and it is therefore subject to
-§3.1's teardown: a successful run without `--keep-temp-work` keeps no run
-record. Contents: `version`, `corpus` (path), `title` (the resolved
+root, which mirrors the delivered tree's root — once the run has delivered
+its tree. That moment is load-bearing beyond the record's own contents: the
+record's presence is what tells a later run that this `temp-work/` belongs to
+a build that finished rather than to an interrupted one, which is the
+rerun-versus-resume predicate of §3.1. It is a development record, so it
+lives in the dev mirror rather than in the delivered tree, and it is
+therefore subject to §3.1's teardown: a successful run without
+`--keep-temp-work` keeps no run record. Contents: `version`, `corpus`
+(path), `title` (the resolved
 doc-set title, §1.5), `corpusHash`, `buildDate`, `treePlan` (`"model"` or `"mechanical (dev)"`), `annexes`
 (omitted if none), `budgets` (§3.3's object), `sourceFiles`,
-`sourceSections`, `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
+`sourceSections`, `sourceExcluded` and `exclusions` (the corpus denominator:
+how many paths the corpus root held that the ingest walk did not take, and
+one `{"path", "reason"}` entry per path — `reason` being the class, e.g.
+`extension not in the document set` for a corpus's `.mdx` files, and the
+list omitted when there are none. Without it `sourceFiles` counts only what
+kbase chose to look at, and a whole format class the walk ignores leaves no
+trace; the same skips are logged at `info`. Disclosure is this record and
+nothing else: the delivered tree is the documentation set's, not a report on
+the walk), `links` (the corpus link census — the same
+`{"internal", "unresolved", "external", "anchor"}` object §3.2 rolls up,
+recorded because `unresolved` is the size of the set guarantee 1 exempts
+and `internal` is the resolution rate that would otherwise be invisible),
+`nodes`, `pages`, `sections`, `groups`, `splitGroups`,
 `summaries`, `deliveredFiles`, `units`, `unitsProduced`, `unitsReused`,
 `elapsedMs`, and `verify`: exactly ten `{"number", "name", "ok"}` entries,
 one per guarantee in §4.8, always in the same order. A live (model-in-the
@@ -525,12 +606,20 @@ budget at tree-design time).
 In order:
 
 1. The frontmatter block (§4.9), then a blank line.
-2. The up-link (§4.4), then a blank line.
+2. The navigation block (§4.4): the up-link, then — on a leaf that is one
+   part of a split group — the continuation link to the part before it and
+   the continuation link to the part after it, one per line with no blank
+   line between them, then a blank line. The first part carries no previous
+   and the last carries no next; a leaf that is not split carries the
+   up-link alone.
 3. A synthesized `# <Title>` heading — **unless** the leaf's own first
-   non-blank line already opens with a Markdown ATX heading (`#…`), in
-   which case none is synthesized (a leaf cut at a `##` boundary opens
-   with `##` and gains no redundant `#`; navigation elsewhere always uses
-   the node's own title regardless).
+   non-blank line is a Markdown ATX heading whose **text is the node's
+   title**, in which case none is synthesized (a leaf cut at a `## <Title>`
+   boundary gains no redundant `#`). A heading saying anything else keeps
+   its place in the verbatim body and the title is synthesized above it:
+   a page must state the identity it was routed by, and the part `k` of a
+   split group — whose title carries `(k/n)` — has no other way to state
+   one.
 4. The verbatim body: byte-identical to the corresponding source span,
    with only link **destinations** rewritten (§4.5) — visible link text
    is never altered.
@@ -545,6 +634,17 @@ node: framing text, a rule, `## <conclusionsHeading>`, conclusions text, a
 rule) → `## Derivations and Detail` heading, then one down-link bullet per
 child in tree order (`- [<ChildTitle>](<relative-path>) — <ChildScope>`) →
 provenance footer.
+
+**Down-link bullet, split-part form.** A child that is one part of a split
+group carries a further clause: `- [<ChildTitle>](<relative-path>) —
+<ChildScope> (this part: <descriptor>)`. Every part of one group shares
+one `<ChildScope>` — the group's scope is authored before the cut
+positions exist (§3.3, §3.4) — so the descriptor is what tells two sibling
+bullets apart. It is mechanical and derived after the cut: the title of
+the first source heading the part delivers, then ` → ` and the title of
+the last, where the part delivers more than one. A part whose cut fell in
+open prose delivers no heading, carries no descriptor, and renders the
+plain bullet.
 
 **Entry-point page** (no up-link — it has none; the frontmatter block is
 first all the same), in order: frontmatter block (§4.9) → `# <Title>` →
@@ -562,12 +662,19 @@ then a fixed one-sentence pointer naming `kbase write-agents`
 (present iff at least one `--annex` was declared: one bullet per annex,
 `` - `<prefix>` — <convention> ``) → provenance footer.
 
-### 4.4 Up-links
+### 4.4 The navigation block: up-links and continuation links
 
-Exact literal format:
-`[↑ <root-relative path of parent>](<relative path to parent>)` — the
-glyph is U+2191 (↑), one space after it inside the brackets. The label is
-the parent's **root-relative delivered path**, not its title:
+Exact literal format, one grammar with three markers:
+
+```
+[↑ <root-relative path of parent>](<relative path to parent>)
+[← <root-relative path of the previous part>](<relative path to it>)
+[→ <root-relative path of the next part>](<relative path to it>)
+```
+
+The glyphs are U+2191 (↑), U+2190 (←) and U+2192 (→), one space after the
+glyph inside the brackets. Every label is the destination's
+**root-relative delivered path**, not its title:
 `[↑ getting-started/porting-tools/index.md](../index.md)` at any level,
 `[↑ entry-point.md](../entry-point.md)` at the top.
 
@@ -579,27 +686,100 @@ Every class-A page (leaf or index) but the entry-point carries **exactly
 one** up-link, and it is the **first line under the frontmatter block**,
 nothing but the block before it. The entry-point carries none.
 
-### 4.5 Link-target rewriting (rebase)
+**Continuation links** appear on leaves only, and only on a leaf that is
+one part of a split group: `←` names part `k-1` and `→` names part `k+1`
+of the same group, so the first part carries only `→`, the last only `←`,
+and every part between them both. They are a projection of the tree plan's
+`groups[].parts` (§3.3) exactly as the up-link is a projection of the
+parent edge — mechanical navigation, never an inferred relation between
+documents.
+
+The block is **positional**: it is the run of navigation lines that begins
+at the first line under the frontmatter block and ends at the first line
+that is not one. A leaf body is verbatim source and may contain a
+navigation-shaped line of its own; below the block, such a line is content
+and no guarantee reads it as page grammar.
+
+### 4.5 Link resolution and target rewriting (rebase)
+
+#### Resolution — which document a destination names
+
+Classification of a destination written in a source document, in order;
+the first branch that applies decides:
+
+- A destination carrying a scheme or a host (`https://…`, `//host/…`,
+  `mailto:…`) is **external**.
+- A destination that is only a fragment (`#anchor`) is an **anchor**: it
+  names a heading in the document it is written in.
+- Otherwise the path part is resolved against the corpus, and the
+  destination is **internal** (naming the resolved document) or
+  **unresolved**.
+
+Resolving the path part is attempted in **two address spaces**, in this
+order, and the first attempt that names a document in the corpus wins:
+
+1. **File space** — the destination joined against the linking file's own
+   directory. A rooted destination (`/guide/setup.md`) is joined against
+   the corpus root instead, and is resolved once: rooted means the same
+   thing in both spaces.
+2. **URL space** — the destination joined against the linking file's path
+   with its extension dropped. A documentation-site generator serves
+   `project-format.md` at `project-format/`, so a destination written
+   inside that page is relative to that directory: `../properties` from
+   `project-format.md` names the sibling document `properties`, not a
+   path above the corpus root.
+
+Each attempt applies, in decreasing confidence: the exact corpus path; the
+path with the Markdown extension appended, when the destination carries no
+extension (`[scope](scope)`, where the site generator supplies the rest);
+and an ASCII case fold of either, since the corpus walk accepts `.MD` and
+resolution has to agree. A fold that several documents answer to is
+**ambiguous** — that attempt resolves nothing and the run warns, naming
+the destination, rather than guessing.
+
+An attempt whose result leaves the corpus root is discarded, and only that
+attempt: a `../` that escapes the root in file space is exactly the
+spelling that lands inside it in URL space. A destination is unresolved
+only when every attempt has failed.
+
+Percent-encoded destinations are decoded before resolution; comparison is
+byte equality against the corpus's own NFC ids, which are the only paths
+ever returned. No target is invented: a document the corpus does not hold
+stays unresolved.
+
+#### Rewriting — where a resolved destination lands
 
 Only link **destinations** are ever rewritten; visible link text is always
 byte-identical to the source. Three rules, in order:
 
 1. A link whose destination names a source heading's fragment lands on
    the leaf page hosting that heading's start offset, fragment preserved.
-   If no leaf holds it (the section became a container, not a leaf), it
-   falls through to rule 2 while keeping the fragment.
+   This covers a bare `#anchor` too: it names a heading in its own
+   document, which is exactly the reference a page split moves to another
+   leaf. If no leaf holds the heading (the section became a container, not
+   a leaf), it falls through to rule 2 while keeping the fragment.
 2. A link to a whole source file lands on that file's own leaf if it has
    exactly one, otherwise on the lowest index page whose subtree covers
    every node drawn from that file.
 3. A link to a file no delivered node was drawn from is left exactly as
    written in the leaf body, and its destination is recorded as
    unresolved — guarantee 1 in §4.8 exempts these rather than treating
-   them as broken.
+   them as broken. The exemption is announced (§1.5) and counted (§3.8).
+
+A landing on the emitting page itself is written as a bare `#fragment`
+rather than as a path naming that page: the heading is on this page, so
+the source's own spelling is already the shortest destination that means
+it. Every other landing is a path relative to the emitting page.
 
 Fragment-to-heading matching is best-effort (a generic slug of the heading
 text: lowercase, letters/digits kept, everything else collapsed to one
 hyphen); a miss costs a hop of precision (falls through to rule 2) and
-never produces a dead link.
+never produces a dead link. When a document repeats a heading title, a
+site generator disambiguates the later ones with `-1`, `-2`, … suffixes,
+and a fragment carrying such a suffix names the (N+1)th heading of that
+name. The bare slug always wins first: a heading whose own title ends in a
+number (`Step 2` → `step-2`) is matched exactly rather than read as an
+ordinal.
 
 ### 4.6 Provenance footer
 
@@ -656,13 +836,21 @@ applicable, the offending node.
 1. Every file any delivered page links to (excluding destinations already
    recorded as unresolved) exists in the delivered set.
 2. Every class-A page but the entry-point carries exactly one up-link, as
-   the first line under its frontmatter block, and that up-link's label
-   and target resolve to the same node (§4.4); the entry-point carries
-   none.
+   the first line under its frontmatter block, and every link in the
+   navigation block that line opens — the up-link and a split part's
+   continuation links — is labelled with the node its target resolves to
+   (§4.4); the entry-point carries none of them. Up-link lines inside
+   fenced code blocks are not counted, and navigation-shaped lines below
+   the block are not read: a leaf body is verbatim source (§4.2 item 4),
+   so a corpus that documents this grammar carries such lines as content
+   and they are content.
 3. The entry-point exists, and every domain it names in `## Domains` was
    itself delivered.
-4. Every class-A page is reachable from at least one other class-A page
-   (excluding self-links); every fixture file links to the entry-point.
+4. Every class-A page is reachable from `entry-point.md` by following
+   delivered links — a traversal, not an inbound-link count, so a group of
+   pages that link only to each other fails it; a page's own links are read
+   only once it has been reached, so no page is made reachable by a
+   self-link. Every fixture file links to the entry-point.
 5. The delivered file set is exactly the tree plan's nodes plus the fixed
    fixture manifest — no stray files, none missing.
 6. Coverage: every section the survey found is accounted for by exactly
@@ -681,7 +869,7 @@ applicable, the offending node.
 ### 4.9 Page frontmatter
 
 Every class-A page — leaf, index and entry-point alike — opens with this
-block, at file-start, before the up-link:
+block, at file-start, above the navigation block (§4.4):
 
 ```
 ---
@@ -703,7 +891,8 @@ the `---` fence, or a fence that never closes, is no block at all and
 fails guarantee 10.
 
 H1 headings remain purely subject-matter titles. A page states its address
-in this block and in its up-link label, and nowhere else.
+in this block, and the addresses of its neighbours in its navigation-block
+labels (§4.4); nowhere else.
 
 **Leaf edge case, intentional.** A verbatim slice that itself contains the
 SOURCE document's frontmatter renders it as body text: this block owns
@@ -743,7 +932,9 @@ edited (§4.2 item 4).
   file kbase never itself creates.
 - **Resume and interruption.** `kbase build` always attempts to resume
   from whatever a prior run of the same `--out` left in
-  `temp-work/`: an artifact is reused only when it and its stamp
+  `temp-work/` — where it runs at all, a rerun over a `--out` that still
+  holds a delivered tree having been refused first (§3.1):
+  an artifact is reused only when it and its stamp
   affirmatively prove they are still valid for the current inputs (§3.6);
   anything else is redone. A run that fails or is interrupted, including a
   hard kill, always leaves `temp-work/` in place for the next attempt to
@@ -803,12 +994,7 @@ accident rather than deliberate contract — flagged rather than enshrined:
    re-attached at a fixed gap, not its original column. Whether §2.5's
    byte-preservation contract is meant to guarantee column-exact comment
    alignment, or only comment *content* preservation, is undecided.
-3. **No disambiguation for duplicate headings in fragment rewriting.**
-   When a source document repeats a heading title, §4.5 rule 1 resolves to
-   whichever occurrence it reaches first, with no suffix-based
-   disambiguation. This degrades gracefully (falls through to a
-   whole-file link, never a dead link) but is not a stated guarantee.
-4. **`[dev]` switches are documentation-only guardrails, not enforced
+3. **`[dev]` switches are documentation-only guardrails, not enforced
    isolation.** Nothing stops a user from pointing a real, live
    `--config-dir` at `[dev] tree_plan = "mechanical"`, or otherwise using
    any `[dev]` switch outside a development context. Whether that is

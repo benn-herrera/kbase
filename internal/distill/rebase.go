@@ -2,6 +2,7 @@ package distill
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -9,7 +10,7 @@ import (
 	"kbase/internal/treeplan"
 )
 
-// The rebase map (§4.4): the one transformation a leaf body is permitted
+// The rebase map (§4.5): the one transformation a leaf body is permitted
 // (I-3).
 //
 // It is a FUNCTION, keyed by (source file, fragment), with the three-rule
@@ -17,11 +18,14 @@ import (
 //
 //  1. a fragment naming a source section lands on the leaf hosting that
 //     section's start offset — or, when no leaf holds it, on the index that
-//     owns it;
+//     owns it. A BARE `#fragment` names a section of the file it is written
+//     in and is the same rule with the file supplied: on a split file it is
+//     the case rule 1 exists for, since the heading it names is exactly what
+//     the cut may have moved to another page;
 //  2. a whole-file link lands on that file's only leaf, or else on the lowest
 //     index whose subtree holds every node drawn from the file;
 //  3. a file no node was drawn from does not land: the link stays verbatim and
-//     is inventoried, and §9 check 1 exempts it rather than failing on a
+//     is inventoried, and §4.8 guarantee 1 exempts it rather than failing on a
 //     defect in someone else's corpus.
 //
 // Targets only. Visible text is byte-identical to source, and no prose is ever
@@ -29,7 +33,7 @@ import (
 // exemplar's linking rule and leaves the semantic half alone.
 //
 // It is a pure function of (tree plan, cut lists, survey link graph), which is
-// exactly the triple §9 check 7 re-derives from — which is why the rebase is
+// exactly the triple §4.8 guarantee 7 re-derives from — which is why the rebase is
 // provable rather than merely applied.
 
 // landing is where one source reference lands in the KB.
@@ -64,7 +68,17 @@ func newRebaseMap(plan treeplan.TreePlan, art survey.Artifact, cuts map[string][
 	m := &rebaseMap{byFile: map[string]map[string]landing{}}
 	for _, f := range art.Files {
 		for _, l := range f.Links {
-			if l.Kind != survey.LinkInternal {
+			switch l.Kind {
+			case survey.LinkInternal:
+			case survey.LinkAnchor:
+				// A bare `#fragment` names a heading in the file it is written
+				// in, which is a source heading like any other: rule 1 covers
+				// it, and the only thing the survey leaves for this map to
+				// supply is which file "this file" is. Excluding the kind is
+				// what stranded intra-document navigation at the split event
+				// rule 1 exists to survive.
+				l.Path = f.Path
+			default:
 				continue
 			}
 			land, ok := resolve(l, hosts, whole, sections)
@@ -80,13 +94,13 @@ func newRebaseMap(plan treeplan.TreePlan, art survey.Artifact, cuts map[string][
 	return m, nil
 }
 
-// resolve applies §4.4's three rules to one surveyed link.
+// resolve applies §4.5's three rules to one surveyed link.
 func resolve(l survey.Link, hosts map[string][]hostRange, whole map[string]string,
-	sections map[string]map[string]int) (landing, bool) {
+	sections map[string]map[string][]int) (landing, bool) {
 
 	if l.Fragment != "" {
-		if offsets, ok := sections[l.Path]; ok {
-			if start, ok := offsets[anchorSlug(l.Fragment)]; ok {
+		if anchors, ok := sections[l.Path]; ok {
+			if start, ok := sectionStart(anchors, l.Fragment); ok {
 				if node, ok := hostOf(hosts[l.Path], start); ok {
 					return landing{node: node, fragment: l.Fragment}, true
 				}
@@ -111,6 +125,15 @@ func (m *rebaseMap) rewrite(sourceFile, leafPath, dest string) (string, bool) {
 	land, ok := m.byFile[sourceFile][dest]
 	if !ok {
 		return "", false
+	}
+	// A landing on the emitting page itself is written as a bare fragment. The
+	// heading is on this page — the body is verbatim — so naming the page's own
+	// file would turn a working on-page anchor into a self-link, and the
+	// shortest destination that means the same thing is the one the source
+	// already had. With no fragment there is nothing on-page to point at, so
+	// the ordinary relative path stands.
+	if land.node == leafPath && land.fragment != "" {
+		return "#" + land.fragment, true
 	}
 	out := RelPath(leafPath, land.node)
 	if land.fragment != "" {
@@ -142,6 +165,12 @@ func (m *rebaseMap) apply(sourceFile, leafPath string, body []byte) ([]byte, []s
 			}
 			continue
 		}
+		if next == text {
+			// The landing is the destination the source already wrote — an
+			// on-page anchor that stayed on its page. It resolved, so it is not
+			// left behind; there is simply nothing to rewrite.
+			continue
+		}
 		out = append(out, body[prev:d.Start]...)
 		out = append(out, next...)
 		prev = d.End
@@ -154,9 +183,11 @@ func (m *rebaseMap) apply(sourceFile, leafPath string, body []byte) ([]byte, []s
 	return append(out, body[prev:]...), left
 }
 
-// IsExternal reports whether a destination points off the corpus — a scheme, a
-// protocol-relative host, or a bare fragment. Those are nobody's problem here:
-// §9 check 1 is about files the KB delivers.
+// IsExternal reports whether a destination names no file the KB delivers — a
+// scheme, a protocol-relative host, or a bare fragment. §4.8 guarantee 1 is about
+// files the KB delivers, and a bare fragment names the page it sits on: it is
+// rebased like any other reference (rule 1 above), and what it lands on is a
+// page the check already reached by its own path.
 func IsExternal(dest string) bool {
 	d := strings.TrimSpace(dest)
 	if d == "" || strings.HasPrefix(d, "#") || strings.HasPrefix(d, "//") {
@@ -286,21 +317,22 @@ func commonPrefix(a, b []string) []string {
 	return a[:i]
 }
 
-// sectionIndex maps each file's heading anchors to the section's start offset.
-func sectionIndex(art survey.Artifact) map[string]map[string]int {
-	out := make(map[string]map[string]int, len(art.Files))
+// sectionIndex maps each file's heading anchors to the start offset of EVERY
+// section that produces that anchor, in document order.
+//
+// Every occurrence rather than the first, because the first is only half the
+// convention: a site generator that meets a repeated heading emits the bare
+// anchor for the first and `-1`, `-2`, … for the ones after it, and a map
+// holding one offset per slug can answer the bare form and nothing else.
+func sectionIndex(art survey.Artifact) map[string]map[string][]int {
+	out := make(map[string]map[string][]int, len(art.Files))
 	for _, f := range art.Files {
-		anchors := map[string]int{}
+		anchors := map[string][]int{}
 		var rec func([]survey.Section)
 		rec = func(secs []survey.Section) {
 			for _, s := range secs {
 				if a := anchorSlug(s.Title); a != "" {
-					// First writer wins: duplicate headings in one document
-					// get `-1`, `-2` suffixes from a site generator, and the
-					// bare anchor names the first.
-					if _, dup := anchors[a]; !dup {
-						anchors[a] = s.Start
-					}
+					anchors[a] = append(anchors[a], s.Start)
 				}
 				rec(s.Children)
 			}
@@ -309,6 +341,47 @@ func sectionIndex(art survey.Artifact) map[string]map[string]int {
 		out[f.Path] = anchors
 	}
 	return out
+}
+
+// sectionStart is the offset of the section one fragment names.
+//
+// The bare slug is tried first and always wins: a document with a heading
+// literally called "Step 2" produces the slug `step-2`, and reading that as
+// "the third `step`" would misroute a link that names a heading exactly.
+// Only when nothing answers the slug itself is the `-N` suffix read as the
+// generator's disambiguator for the (N+1)th heading of that name.
+func sectionStart(anchors map[string][]int, fragment string) (int, bool) {
+	slug := anchorSlug(fragment)
+	if starts, ok := anchors[slug]; ok {
+		return starts[0], true
+	}
+	base, n, ok := splitAnchorSuffix(slug)
+	if !ok {
+		return 0, false
+	}
+	if starts, ok := anchors[base]; ok && n < len(starts) {
+		return starts[n], true
+	}
+	return 0, false
+}
+
+// splitAnchorSuffix reads a slug as `<base>-<n>` with n a positive decimal
+// ordinal. It is the inverse of the generator's disambiguator and nothing
+// wider: no leading zero, no empty base.
+func splitAnchorSuffix(slug string) (string, int, bool) {
+	i := strings.LastIndexByte(slug, '-')
+	if i <= 0 || i == len(slug)-1 {
+		return "", 0, false
+	}
+	digits := slug[i+1:]
+	if digits[0] == '0' {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 1 {
+		return "", 0, false
+	}
+	return slug[:i], n, true
 }
 
 // anchorSlug is the heading→anchor convention a Markdown site generator

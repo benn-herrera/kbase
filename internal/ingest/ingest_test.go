@@ -70,11 +70,25 @@ func TestWalkSelection(t *testing.T) {
 		t.Error("Has must answer for ingested paths only")
 	}
 
-	// Every skip is silent in the corpus and visible in the log — the
-	// "why is that file not in my knowledge base" channel.
-	for _, skipped := range []string{".hidden", ".dotfile.md", "guide/.draft.md", "notes.txt"} {
-		if !lg.Has(t, "debug", "path", skipped) {
-			t.Errorf("no debug record for skipped entry %q", skipped)
+	// Every skip is recorded twice: on the corpus, as the denominator a run
+	// record discloses (SPEC §3.8), and on the log at INFO, which is the
+	// "why is that file not in my knowledge base" channel [MAD2: B-3]. The list
+	// is in walk order, and each entry carries the class of its reason.
+	wantExcluded := []Exclusion{
+		{Path: ".dotfile.md", Reason: ExcludedDotPrefixed},
+		{Path: ".hidden", Reason: ExcludedDotPrefixed},
+		{Path: "guide/.draft.md", Reason: ExcludedDotPrefixed},
+		{Path: "notes.txt", Reason: ExcludedNotADocument},
+	}
+	if !slices.Equal(c.Excluded, wantExcluded) {
+		t.Errorf("exclusions: got %v, want %v", c.Excluded, wantExcluded)
+	}
+	for _, e := range wantExcluded {
+		if !lg.Has(t, "info", "path", e.Path) {
+			t.Errorf("no info record for excluded entry %q", e.Path)
+		}
+		if !lg.Has(t, "info", "reason", e.Reason) {
+			t.Errorf("the log does not carry the reason class for %q", e.Path)
 		}
 	}
 }
@@ -501,8 +515,12 @@ func TestWalkSymlinks(t *testing.T) {
 		if got, want := paths(c), []string{"index.md"}; !slices.Equal(got, want) {
 			t.Errorf("docs: got %v, want %v", got, want)
 		}
-		if !lg.Has(t, "debug", "path", "logo.png") {
-			t.Error("a skipped broken link must leave a debug record naming it")
+		if !lg.Has(t, "info", "path", "logo.png") {
+			t.Error("a skipped broken link must leave an info record naming it")
+		}
+		want := []Exclusion{{Path: "logo.png", Reason: ExcludedBrokenSymlink}}
+		if !slices.Equal(c.Excluded, want) {
+			t.Errorf("exclusions: got %v, want %v", c.Excluded, want)
 		}
 	})
 }

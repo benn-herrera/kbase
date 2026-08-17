@@ -16,7 +16,7 @@ import (
 	"kbase/internal/treeplan"
 )
 
-// Stage 9 (§9): the ten gates, run over the assembled tree IN THE STORE,
+// Stage 9 (§4.8): the ten gates, run over the assembled tree IN THE STORE,
 // before any byte reaches <out> (I-5).
 //
 // Every check names the file class it applies to [MAD1: F-3]. Without that
@@ -137,9 +137,9 @@ func Verify(v Verification) (Report, error) {
 
 	rep.Checks = []CheckResult{
 		result(1, "every referenced file exists", v.checkLinksResolve(classA, classB)),
-		result(2, "one up-link under the frontmatter block, label and target agreeing, on every class-A node but the entry-point", v.checkUpLinks(classA)),
+		result(2, "one up-link under the frontmatter block, and every navigation link in it labelled with the node it points at, on every class-A node but the entry-point", v.checkNavLinks(classA)),
 		result(3, "the entry-point exists and its domains exist", v.checkEntryPoint()),
-		result(4, "no unreachable documents, per class", v.checkReachable(classA, classB)),
+		result(4, "every page is reachable from the entry-point, and every fixture links to it", v.checkReachable(classA, classB)),
 		result(5, "the delivered set is the tree plan's nodes plus the fixture manifest", v.checkConformance(classA, classB, stray)),
 		result(6, "coverage and tiling: every surveyed section is on exactly one page or in an annex", v.checkCoverage()),
 		result(7, "leaf fidelity: every page re-derives byte-for-byte from source", v.checkLeafFidelity(classA)),
@@ -195,7 +195,7 @@ func classify(plan treeplan.TreePlan, files map[string][]byte) (classA, classB, 
 // A destination is exempt when it points off the corpus (a scheme, a bare
 // fragment) or when stage 5 inventoried it as unresolvable: a source link
 // whose target is LinkUnresolved or sits in an annex stays verbatim, and
-// failing here would be failing on a defect in someone else's corpus (§4.4).
+// failing here would be failing on a defect in someone else's corpus (§4.5 rule 3).
 func (v Verification) checkLinksResolve(classA, classB []string) error {
 	for _, p := range append(slices.Clone(classA), classB...) {
 		exempt := map[string]bool{}
@@ -219,41 +219,51 @@ func (v Verification) checkLinksResolve(classA, classB []string) error {
 	return nil
 }
 
-// checkUpLinks is check 2: every class-A document except the entry-point has
+// checkNavLinks is check 2: every class-A document except the entry-point has
 // exactly one up-link, it is the first line under the frontmatter block, and
-// its label and its target name the SAME node. Class B carries none, by
-// grammar.
+// every link in the navigation block it opens — the up-link and a split part's
+// continuation edges — is labelled with the node its target resolves to. Class
+// B carries none, by grammar.
 //
 // The agreement half is the point of the label carrying a root-relative path
 // (ruled 2026-08-15): two projections of one tree-plan fact, checked against
 // each other over the delivered bytes. The renderer cannot disagree with
 // itself — a copy, a rebase or a hand edit can, and this is where that shows.
-func (v Verification) checkUpLinks(classA []string) error {
+// Continuation edges are the same two projections of the same artifact
+// [MAD2: B-4], so they are checked by this loop rather than by a second one
+// that would have to be kept in agreement with it.
+//
+// The count is the grammar's own (distill.UpLinkCount) and the block is
+// distill.NavBlock, which stops at the first line that is not navigation:
+// both are scoped so that a navigation-shaped line inside a leaf's verbatim
+// source is content, not page grammar, since a check broader than the
+// contract it enforces refuses deliveries nobody can repair [MAD2: B-11].
+func (v Verification) checkNavLinks(classA []string) error {
 	entry := v.Renderer.EntryPointPath()
 	for _, p := range classA {
 		_, body, _ := distill.ParseFrontmatter(v.Files[p])
-		n := 0
-		for _, l := range strings.Split(string(v.Files[p]), "\n") {
-			if strings.HasPrefix(l, distill.UpLinkPrefix) {
-				n++
-			}
-		}
+		block := distill.NavBlock(body)
+		n := distill.UpLinkCount(v.Files[p])
 		if p == entry {
 			if n != 0 {
 				return fmt.Errorf("the entry-point %s carries an up-link", p)
+			}
+			if len(block) != 0 {
+				return fmt.Errorf("the entry-point %s opens with a navigation link", p)
 			}
 			continue
 		}
 		if n != 1 {
 			return fmt.Errorf("%s carries %d up-links; a class-A node has exactly one", p, n)
 		}
-		label, target, ok := distill.ParseUpLink(distill.FirstLine(body))
-		if !ok {
+		if len(block) == 0 || block[0].Marker != distill.UpMarker {
 			return fmt.Errorf("%s does not open with its up-link", p)
 		}
-		if got := path.Clean(path.Join(path.Dir(p), target)); got != label {
-			return fmt.Errorf("%s: the up-link is labelled %q and points at %q, which is %s; "+
-				"the label and the target must name one node", p, label, target, got)
+		for _, l := range block {
+			if got := path.Clean(path.Join(path.Dir(p), l.Target)); got != l.Label {
+				return fmt.Errorf("%s: the %s link is labelled %q and points at %q, which is %s; "+
+					"the label and the target must name one node", p, l.Marker, l.Label, l.Target, got)
+			}
 		}
 	}
 	return nil
@@ -278,28 +288,56 @@ func (v Verification) checkEntryPoint() error {
 
 // checkReachable is check 4, stated per class.
 //
-// Class A: every file is linked from at least one other class-A file. Class B
-// inverts — fixtures are landing sites, not destinations — so every fixture
-// links TO the entry-point. There is no exemption: the manifest holds three
-// root files and each one carries that link.
+// Class A: every page is REACHABLE from the entry-point by following delivered
+// links — a traversal, not an in-degree count [MAD2: B-9]. The distinction is
+// the whole guarantee: the artifact's own CLAUDE.md tells every consumer to
+// "follow the tree from the entry-point instead of grepping the file set", so a
+// page no descent from the entry-point reaches does not exist for the reader
+// however many pages link to it. A severed island whose members link to each
+// other passes an in-degree test and fails this one.
+//
+// Self-links are excluded by construction rather than by a test: a page's own
+// links are only read once the traversal has already reached it, so no page can
+// make itself reachable.
+//
+// It is strictly stronger than the in-degree check it replaces. Reachability
+// from the entry-point implies an inbound edge from another page for every page
+// but the entry-point itself, and the entry-point's own inbound edges are the
+// class-B half below — every fixture links to it, with no member exempt.
+//
+// Class B inverts — fixtures are landing sites, not destinations — so every
+// fixture links TO the entry-point.
 func (v Verification) checkReachable(classA, classB []string) error {
-	linked := map[string]bool{}
+	entry := v.Renderer.EntryPointPath()
+	inClassA := make(map[string]bool, len(classA))
 	for _, p := range classA {
+		inClassA[p] = true
+	}
+
+	reached := map[string]bool{entry: true}
+	for frontier := []string{entry}; len(frontier) > 0; {
+		p := frontier[len(frontier)-1]
+		frontier = frontier[:len(frontier)-1]
 		body := v.Files[p]
 		for _, d := range distill.Destinations(body) {
 			text := d.Text(body)
 			if distill.IsExternal(text) {
 				continue
 			}
-			linked[path.Clean(path.Join(path.Dir(p), strings.SplitN(text, "#", 2)[0]))] = true
+			target := path.Clean(path.Join(path.Dir(p), strings.SplitN(text, "#", 2)[0]))
+			if !inClassA[target] || reached[target] {
+				continue
+			}
+			reached[target] = true
+			frontier = append(frontier, target)
 		}
 	}
 	for _, p := range classA {
-		if !linked[p] {
-			return fmt.Errorf("%s is linked from no other page", p)
+		if !reached[p] {
+			return fmt.Errorf("%s is reachable from no descent of %s", p, entry)
 		}
 	}
-	entry := v.Renderer.EntryPointPath()
+
 	for _, p := range classB {
 		if !bytes.Contains(v.Files[p], []byte("("+entry+")")) {
 			return fmt.Errorf("the fixture %s does not link to %s", p, entry)

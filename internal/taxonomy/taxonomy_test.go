@@ -223,7 +223,7 @@ func TestDescentRefusesASecondRun(t *testing.T) {
 func TestPageGroupOfSeveralEntriesBecomesSeveralPages(t *testing.T) {
 	lg := &logtest.Capture{}
 	docs := []docSpec{{path: "one.md", title: "Only Document", secs: []secSpec{
-		{"Alpha", 40}, {"Beta", 40}, {"Gamma", 40}}}}
+		{"Alpha", 90}, {"Beta", 90}, {"Gamma", 90}}}}
 	d := designerFor(t, lg, testBudgets(), docs...)
 	allOnePage := func(a *ask) answer {
 		members := make([]int, 0, len(a.cands))
@@ -291,9 +291,9 @@ func absorbedByTheRoot(a *ask) answer {
 func TestAnAbsorbedContainerSpendsNoCall(t *testing.T) {
 	lg := &logtest.Capture{}
 	docs := []docSpec{
-		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 40}, {"Beta", 40}}},
-		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 40}, {"Delta", 40}}},
-		{path: "three.md", title: "Document Three", secs: []secSpec{{"Epsilon", 40}, {"Zeta", 40}}},
+		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 90}, {"Beta", 90}}},
+		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 90}, {"Delta", 90}}},
+		{path: "three.md", title: "Document Three", secs: []secSpec{{"Epsilon", 90}, {"Zeta", 90}}},
 	}
 	d := designerFor(t, lg, testBudgets(), docs...)
 	if d.Calls() != 4 {
@@ -350,8 +350,8 @@ func TestAnAbsorbedContainerSpendsNoCall(t *testing.T) {
 func TestAnAbsorbedContainerCannotFailTheLane(t *testing.T) {
 	lg := &logtest.Capture{}
 	docs := []docSpec{
-		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 40}, {"Beta", 40}}},
-		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 40}, {"Delta", 40}}},
+		{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 90}, {"Beta", 90}}},
+		{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 90}, {"Delta", 90}}},
 	}
 	d := designerFor(t, lg, testBudgets(), docs...)
 	// The root answers; every call after it gets prose, which is the rejection

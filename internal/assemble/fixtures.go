@@ -7,14 +7,14 @@ import (
 	"kbase/internal/treeplan"
 )
 
-// §8.1's class B: the shipped fixtures.
+// §4.7's class B: the shipped fixtures.
 //
 // A delivered tree holds two classes of file and they have two acceptance
 // rules [MAD1: F-3]. Class A is the tree-plan nodes — one file per node, one
 // node per file, all of §4's grammar. Class B is THIS list, closed and
 // enumerated: it carries no up-link, is reachable by no down-link, and is
 // checked against these templates rather than against §4. The exemplar's own
-// README behaves exactly this way; the design imported §9's checks without
+// README behaves exactly this way; the design imported §4.8's guarantees without
 // importing the exemption, which made checks 2, 4 and 5 fail on every green
 // run.
 //
@@ -58,7 +58,7 @@ func Manifest() []string {
 // They are rendered from embedded templates plus tree-plan-derived values, and
 // the two mandatory shared elements — the contract statement and the
 // definitions pointer — come from the same constants §4.3's entry-point
-// renders (§8.1).
+// renders (§4.7).
 func (r *Renderer) Fixtures() []Fixture {
 	entry := entryPointPath(r.plan)
 	return []Fixture{
@@ -156,5 +156,5 @@ func entryPointPath(plan treeplan.TreePlan) string {
 	return ""
 }
 
-// EntryPointPath exposes it for the composing verb's report and for §9 check 3.
+// EntryPointPath exposes it for the composing verb's report and for §4.8 guarantee 3.
 func (r *Renderer) EntryPointPath() string { return entryPointPath(r.plan) }

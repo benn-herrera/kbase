@@ -1,5 +1,5 @@
 // Package version is the single source of the appliance's version identity.
-// The provenance receipt (SPEC.md §7) derives from it: app version implies
+// The provenance receipt (SPEC.md §4.6) derives from it: app version implies
 // the embedded prompt set.
 package version
 

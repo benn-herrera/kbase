@@ -10,10 +10,12 @@ import (
 	"testing"
 
 	"kbase/internal/assemble"
+	"kbase/internal/dissect"
 	"kbase/internal/distill"
 	"kbase/internal/ingest"
 	"kbase/internal/log"
 	"kbase/internal/pipeline"
+	"kbase/internal/survey"
 	"kbase/internal/survey/markdown"
 	"kbase/internal/tokens"
 	"kbase/internal/treeplan"
@@ -22,13 +24,13 @@ import (
 // The hermetic end-to-end: a corpus this test writes, built by the same
 // function the verb calls, verified by the same ten gates.
 //
-// It is a synthetic corpus rather than the pinned one for a reason worth
-// stating: Rojo's docs resolve ZERO internal links (their destinations are
-// site-root-relative and do not match the file layout), so a build over them
-// exercises the rebase map's inventory path and never its rewriting path. This
-// corpus links document to document and section to section, so the delivered
-// tree here has rebased targets in it — and the gates get to prove they
-// resolve.
+// It is a synthetic corpus rather than a pinned one because a unit test may
+// not depend on a fetched corpus being present: this one links document to
+// document, section to section, within a page, and at one destination that
+// names nothing, so every landing rule and the rule-3 exemption are exercised
+// without leaving the temp directory. The pinned corpora prove the same
+// pipeline through the front door, in the `just test-integration-build-*`
+// recipes.
 // These are UNIT tests of the verb's logic: they call runBuild in process,
 // with no binary and no network. The integration tests that prove the same
 // pipeline through the front door are the `just test-integration-build-*`
@@ -36,28 +38,55 @@ import (
 const (
 	pinnedBuildDate = "2026-08-13"
 
+	// Each document is written over the content floor a tree plan enforces
+	// (dissect.MinTokens): a whole document under it has no adjacent material
+	// of its own to merge into, and composition refuses rather than deliver a
+	// page holding nothing.
 	corpusIntro = `# Introduction
 
 Welcome. Read [the sync page](sync.md) and the [details of syncing](sync.md#details).
 
+This paragraph is here so the document carries more material than the minimum a
+delivered page may hold, which is what keeps this fixture about link landings
+rather than about the content floor.
+
 ## Getting Started
 
 Install it, then read on. See also [the missing page](gone.md).
+
+Installation is out of scope for a fixture, so this paragraph stands in for the
+steps a real corpus would spell out here, and carries the section along with it.
 `
 
 	corpusSync = `# Sync
 
 How syncing works.
 
+Syncing is the subject of this document, and this paragraph is the material that
+makes it long enough to be a page of its own rather than a fragment merged into
+whatever sits beside it.
+
 ## Overview
 
 The overview, with a [jump](#details) inside the page.
 
+An overview would normally describe the moving parts and how they fit together;
+here it exists to give the section a body worth reading.
+
 ## Details
 
 The details.
+
+The details would normally be the longest part of a page like this one, and this
+paragraph stands in for them so the section is not a stub.
 `
 )
+
+// corpusHelp is the corpus's non-document: an `.mdx` file, which is the class
+// the walk ignores by policy (ARCHITECTURE §4 row 1) and the one B-3 was filed
+// over. It is here so every build in this file has something to exclude, and the
+// run record has a denominator to state.
+const corpusHelp = "# Help\n\nBuild-time content the source bytes do not hold.\n"
 
 func writeCorpus(t *testing.T) string {
 	t.Helper()
@@ -65,7 +94,9 @@ func writeCorpus(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("create the corpus directory: %v", err)
 	}
-	for name, body := range map[string]string{"intro.md": corpusIntro, "sync.md": corpusSync} {
+	for name, body := range map[string]string{
+		"intro.md": corpusIntro, "sync.md": corpusSync, "help.mdx": corpusHelp,
+	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
@@ -77,7 +108,11 @@ func writeCorpus(t *testing.T) string {
 // constant because the run record lives at the temp-work root: a test that
 // reads the record has to keep the scratch tree, and a test that asserts the
 // teardown must not.
-func build(t *testing.T, root, out string, keepTempWork bool) (buildResult, string) {
+//
+// Both streams come back: the report is on stdout and the verb's user-facing
+// warnings are on stderr, so a test that could only read one of them could not
+// assert what a successful-but-noteworthy run told the operator.
+func build(t *testing.T, root, out string, keepTempWork bool) (buildResult, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{
@@ -92,7 +127,7 @@ func build(t *testing.T, root, out string, keepTempWork bool) (buildResult, stri
 	if err != nil {
 		t.Fatalf("runBuild: %v\nstderr:\n%s", err, stderr.String())
 	}
-	return res, stdout.String()
+	return res, stdout.String(), stderr.String()
 }
 
 // recordPath is the run record's home: the temp-work root, which mirrors the
@@ -105,7 +140,7 @@ func recordPath(out string) string {
 func TestBuildDeliversAVerifiedTree(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, stdout := build(t, root, out, false)
+	res, stdout, _ := build(t, root, out, false)
 
 	if !res.Report.Passed() {
 		t.Fatalf("the gates did not pass:\n%s", stdout)
@@ -119,7 +154,7 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 	}
 
 	// Every delivered path is on disk, and the delivered set is exactly the
-	// tree plan's nodes plus the fixture manifest (§8.1).
+	// tree plan's nodes plus the fixture manifest (§4.7).
 	if want := len(res.Plan.Nodes) + len(assemble.Manifest()); len(res.Delivered) != want {
 		t.Errorf("delivered %d files, want %d nodes plus fixtures", len(res.Delivered), want)
 	}
@@ -152,7 +187,7 @@ func TestBuildDeliversAVerifiedTree(t *testing.T) {
 func TestBuildPagesReDeriveFromSource(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, _ := build(t, root, out, false)
+	res, _, _ := build(t, root, out, false)
 
 	corpus, err := ingest.Walk(root, markdown.Extensions(), log.Discard())
 	if err != nil {
@@ -192,7 +227,7 @@ func TestBuildPagesReDeriveFromSource(t *testing.T) {
 func TestBuildRebasesResolvedLinksOnly(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	res, _ := build(t, root, out, false)
+	res, _, _ := build(t, root, out, false)
 
 	delivered := map[string]bool{}
 	for _, p := range res.Delivered {
@@ -230,17 +265,17 @@ func TestBuildRebasesResolvedLinksOnly(t *testing.T) {
 		t.Error("no page carries a rebased link; the rewriting path was never exercised")
 	}
 	if verbatim == 0 {
-		t.Error("the unresolvable link was not left verbatim; §4.4 rule 3 was never exercised")
+		t.Error("the unresolvable link was not left verbatim; §4.5 rule 3 was never exercised")
 	}
 }
 
-// Same inputs, byte-identical tree (§8.1). The build date is an input, which
+// Same inputs, byte-identical tree (§5). The build date is an input, which
 // is exactly why it is a flag and not a clock read inside the renderer.
 func TestBuildIsDeterministic(t *testing.T) {
 	root := writeCorpus(t)
 	base := t.TempDir()
-	first, _ := build(t, root, filepath.Join(base, "a"), false)
-	second, _ := build(t, root, filepath.Join(base, "b"), false)
+	first, _, _ := build(t, root, filepath.Join(base, "a"), false)
+	second, _, _ := build(t, root, filepath.Join(base, "b"), false)
 
 	if len(first.Delivered) != len(second.Delivered) {
 		t.Fatalf("the two runs delivered %d and %d files", len(first.Delivered), len(second.Delivered))
@@ -317,7 +352,7 @@ func TestBuildRunRecord(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "kb")
 	// Kept, because the record lives in temp-work: reading it is exactly the
 	// case the keep switch exists for.
-	res, _ := build(t, root, out, true)
+	res, _, _ := build(t, root, out, true)
 
 	data, err := os.ReadFile(recordPath(out))
 	if err != nil {
@@ -347,6 +382,144 @@ func TestBuildRunRecord(t *testing.T) {
 	if rec.Budgets.LeafTokens != treeplan.DefaultBudgets().LeafTokens {
 		t.Errorf("the record was built at a leaf budget of %d, want the shipped %d",
 			rec.Budgets.LeafTokens, treeplan.DefaultBudgets().LeafTokens)
+	}
+	// The link census (§3.8): the measurement guarantee 1's exemption is taken
+	// against. This corpus resolves two cross-references, cannot resolve
+	// `gone.md`, and jumps within a page once — so a record that carried no
+	// census would differ from a record that carried an honest one.
+	if want := (survey.LinkTotals{Internal: 2, Unresolved: 1, Anchor: 1}); rec.Links != want {
+		t.Errorf("link census = %+v, want %+v", rec.Links, want)
+	}
+	// The corpus denominator (§3.8): this corpus holds three files and kbase
+	// ingested two, and the record is the only place that difference is
+	// visible [MAD2: B-3].
+	if want := (ingest.Exclusion{Path: "help.mdx", Reason: ingest.ExcludedNotADocument}); rec.Excluded != 1 ||
+		len(rec.Exclusions) != 1 || rec.Exclusions[0] != want {
+		t.Errorf("the record excludes %d paths %+v, want 1: %+v", rec.Excluded, rec.Exclusions, want)
+	}
+	if rec.Files+rec.Excluded != 3 {
+		t.Errorf("%d ingested + %d excluded = %d, and the corpus root holds 3 files",
+			rec.Files, rec.Excluded, rec.Files+rec.Excluded)
+	}
+}
+
+// The delivery precondition (§1.5, §3.1): a `--out` that already holds files is
+// refused before anything is read, with every path named and nothing written.
+// Rerunning a build over a delivered knowledge base is the standing case, and it
+// is now a refusal rather than a silent overwrite of whatever the new plan does
+// not happen to name [MAD2: B-7].
+func TestBuildRefusesAPopulatedOut(t *testing.T) {
+	root := writeCorpus(t)
+
+	// Kept, so the refused rerun sees the shape the integration recipes leave:
+	// a delivered tree beside the temp-work of the run that delivered it. That
+	// temp-work is the one thing that could be mistaken for resume material, and
+	// the run record in it is what tells the two apart.
+	t.Run("a delivered knowledge base", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "kb")
+		build(t, root, out, true)
+		entry := filepath.Join(out, "entry-point.md")
+		before, err := os.ReadFile(entry)
+		if err != nil {
+			t.Fatalf("read the first run's entry point: %v", err)
+		}
+
+		var stdout, stderr bytes.Buffer
+		_, err = runBuild(context.Background(), buildOptions{
+			Root: root, Out: out, BuildDate: pinnedBuildDate,
+			Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+		})
+		if err == nil {
+			t.Fatal("the verb delivered a second time into a populated --out")
+		}
+		for _, want := range []string{"entry-point.md", "AGENTS.md", "nothing was written",
+			"rerun, not the resume"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+		}
+		after, err := os.ReadFile(entry)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Errorf("the refused run touched the delivered tree (err %v)", err)
+		}
+	})
+
+	// Not only a knowledge base: --out receives the delivered tree and nothing
+	// else, so anything already living there refuses.
+	t.Run("an unrelated file", func(t *testing.T) {
+		out := t.TempDir()
+		if err := os.WriteFile(filepath.Join(out, "notes.md"), []byte("mine\n"), 0o600); err != nil {
+			t.Fatalf("write the unrelated file: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		_, err := runBuild(context.Background(), buildOptions{
+			Root: root, Out: out, BuildDate: pinnedBuildDate,
+			Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+		})
+		if err == nil {
+			t.Fatal("the verb delivered into a directory holding someone else's file")
+		}
+		for _, want := range []string{"notes.md", "no " + pipeline.TempWorkDirName + "/ here"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+		}
+	})
+}
+
+// The exception the refusal above is written around: an interrupted build owns
+// the residue it left in --out, so the next run of the same --out finishes it.
+//
+// interrupt reproduces the state a kill leaves — a temp-work tree with no run
+// record, the record being written only once a delivery completes — which is
+// exactly the state the resume predicate reads.
+func TestBuildResumesAnInterruptedJob(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	build(t, root, out, true)
+	interrupt(t, out)
+
+	res, _, _ := build(t, root, out, true)
+	if !res.Report.Passed() {
+		t.Fatal("the resumed run did not pass its gates")
+	}
+	if _, err := os.Stat(recordPath(out)); err != nil {
+		t.Errorf("the resumed run wrote no run record: %v", err)
+	}
+}
+
+// interrupt makes <out> look like the residue of a build that never finished:
+// the run record goes, the temp-work tree and the delivered files stay.
+func interrupt(t *testing.T, out string) {
+	t.Helper()
+	if err := os.Remove(recordPath(out)); err != nil {
+		t.Fatalf("remove the run record: %v", err)
+	}
+}
+
+// The exemption is measured, never silent.
+//
+// §4.5 rule 3 tells the build to deliver an unresolvable destination exactly
+// as the source wrote it, and guarantee 1 to let it through — both correct,
+// since the defect is in someone else's corpus. What neither may do is leave
+// the operator unable to tell a KB whose cross-references work from one whose
+// cross-references are dead: hence one line, on the warning channel, carrying
+// the whole census rather than only the bad half.
+func TestBuildReportsTheExemptedDestinations(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	_, stdout, stderr := build(t, root, out, false)
+
+	for _, want := range []string{"internal=2 unresolved=1", "exempt from guarantee 1"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not say %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Count(stderr, "\nlinks:")+strings.Count(stderr, "links:") != 1 {
+		t.Errorf("the exemption gets ONE line; stderr:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "unresolved=") {
+		t.Errorf("the warning belongs on the warning channel, not in the report:\n%s", stdout)
 	}
 }
 
@@ -399,6 +572,11 @@ func TestBuildNamesTheKnowledgeBase(t *testing.T) {
 // the tree plan, and a tree plan is reused when its inputs are unchanged — so
 // the title has to be one of those inputs or a resume would prove a stale
 // artifact fresh and deliver the old name out of it.
+//
+// The two runs are an interrupted build and its resume, because that is the only
+// shape a second run over one --out legitimately takes (§3.1) [MAD2: B-7] — and
+// it is the shape that carries the risk: the artifacts of the run under the old
+// title are all there to be wrongly proven fresh.
 func TestBuildRetitlesAResumedRun(t *testing.T) {
 	root := writeCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
@@ -416,6 +594,7 @@ func TestBuildRetitlesAResumedRun(t *testing.T) {
 		}
 	}
 	run("The First Manual")
+	interrupt(t, out)
 	run("The Second Manual")
 
 	want := "# " + kbTitlePrefix + "The Second Manual"
@@ -437,6 +616,53 @@ func entryHeading(t *testing.T, out string) string {
 		t.Fatalf("the entry point declares Location %q (block found: %t)", loc, ok)
 	}
 	return distill.FirstLine(body)
+}
+
+// The content floor applies to SPLITS, not to documents (ruled 2026-08-17): a
+// corpus whose whole document holds less than one page of material delivers that
+// document as a page, rather than refusing for want of a legal merge. The
+// floor's target is a page manufactured out of part of a larger document; an
+// author's whole tiny document behind its own title is an honest page [MAD2:
+// B-6 follow-on].
+func TestBuildDeliversAWholeTinyDocument(t *testing.T) {
+	// ~120 bytes: about 30 tokens at the shipped estimator, under half the
+	// 64-token floor.
+	const tiny = "# Notes\n\nA short note, and the whole of what this document has to " +
+		"say about anything at all.\n"
+	root := filepath.Join(t.TempDir(), "corpus")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create the corpus directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte(tiny), 0o600); err != nil {
+		t.Fatalf("write the document: %v", err)
+	}
+	if got := (tokens.Estimator{}).Estimate(tiny); got >= dissect.MinTokens {
+		t.Fatalf("the fixture is %d tokens, at or over the %d-token floor: it no longer tests the exemption",
+			got, dissect.MinTokens)
+	}
+
+	out := filepath.Join(t.TempDir(), "kb")
+	res, _, _ := build(t, root, out, false)
+	if !res.Report.Passed() {
+		t.Fatal("the gates did not pass over a corpus of one tiny document")
+	}
+	pages := 0
+	for _, n := range res.Plan.Nodes {
+		if n.Kind != treeplan.KindLeaf {
+			continue
+		}
+		pages++
+		body, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(n.Path)))
+		if err != nil {
+			t.Fatalf("read %s: %v", n.Path, err)
+		}
+		if !strings.Contains(string(body), "A short note") {
+			t.Errorf("%s does not carry the document's material:\n%s", n.Path, body)
+		}
+	}
+	if pages != 1 {
+		t.Errorf("the tree holds %d pages, want the one the document is", pages)
+	}
 }
 
 // The annex, end to end through the verb: the declared prefix is exempt from

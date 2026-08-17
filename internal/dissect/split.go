@@ -86,7 +86,7 @@ func pick(src []byte, cands []survey.CutCandidate, from, to int, p Params) (int,
 			// Candidates are sorted, so everything after this one is larger.
 			break
 		}
-		if p.underMinimum(src, survey.Span{Start: from, End: c.Offset}) {
+		if p.UnderMinimum(src, survey.Span{Start: from, End: c.Offset}) {
 			continue
 		}
 		rank := c.Kind.Rank()
@@ -110,7 +110,7 @@ func premerge(src []byte, cuts []survey.Span, p Params) []survey.Span {
 	for len(cuts) > 1 {
 		i := -1
 		for j, c := range cuts {
-			if p.underMinimum(src, c) {
+			if p.UnderMinimum(src, c) {
 				i = j
 				break
 			}

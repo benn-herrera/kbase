@@ -79,7 +79,7 @@ func corpora() []pinnedCorpus {
 // corpusBudgets is the swept operating points: the floor, two that bite on
 // real sections, and one over most of them. The property and its evidence read
 // the same list, so a point added to the sweep is a point that appears in both.
-func corpusBudgets() []int { return []int{minTokens, 120, 400, 1500} }
+func corpusBudgets() []int { return []int{MinTokens, 120, 400, 1500} }
 
 // TestSplitOverRealCorpusSections: for every section of every document in each
 // pinned corpus, at every budget, Split either produces a list that Verify

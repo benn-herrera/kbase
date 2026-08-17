@@ -15,7 +15,7 @@ func composeFixture(t *testing.T) (*Verifier, TreePlan) {
 	v, art := verifierFor(t, testParams(),
 		docSpec{path: "big.md", title: "Big", secs: []secSpec{
 			{title: "Long", paras: 8, words: 60},
-			{title: "Short", paras: 1, words: 20},
+			{title: "Short", paras: 1, words: 70},
 		}},
 		oneSectionDoc("ref/api.md", "API"))
 	plan := TreeProposal{Title: "The Corpus", Scope: "everything under one roof", Children: []ProposalNode{

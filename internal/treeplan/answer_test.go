@@ -12,7 +12,7 @@ func group(title string, kind Kind, members ...int) AnswerGroup {
 }
 
 func TestCheckAnswer(t *testing.T) {
-	v, _ := verifierFor(t, testParams(), docSpec{path: "a.md", title: "A", secs: []secSpec{{title: "One", paras: 1, words: 40}}})
+	v, _ := verifierFor(t, testParams(), docSpec{path: "a.md", title: "A", secs: []secSpec{{title: "One", paras: 1, words: 70}}})
 
 	for _, tc := range []struct {
 		name       string

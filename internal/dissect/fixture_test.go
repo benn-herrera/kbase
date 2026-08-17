@@ -62,7 +62,7 @@ func words(tag string, n int) string {
 func params(budget int) Params { return Params{BudgetTokens: budget} }
 
 // tokensOf is the estimate the package itself uses, for tests that need to
-// size a block against minTokens or a budget.
+// size a block against MinTokens or a budget.
 func tokensOf(s string) int { return params(0).estimate([]byte(s)) }
 
 // wholeSpan is the span covering a whole document.

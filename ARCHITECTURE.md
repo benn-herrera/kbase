@@ -6,6 +6,13 @@ This document is the authoritative design reference and the single source of
 truth for design mechanisms and tuning constants. Externally observable
 behaviors and contracts live in [SPEC.md](SPEC.md).
 
+**Status vocabulary.** Mechanisms here are stated as designed, and a design
+this binary already runs is stated in the present tense. A mechanism the
+current binary does NOT implement is marked **PLANNED** where it is
+described — once, at its own home — so a reader building a picture of the
+machine from this document builds the machine that exists. SPEC.md §6 is the
+running list of them.
+
 ---
 
 ## 1. Overview
@@ -167,14 +174,14 @@ judgment roles; the human at the edges.**
 
 | # | Stage | Actor | Notes |
 |---|---|---|---|
-| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (§9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes**: `SourceDoc.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `SourceDoc.UploadPath` keeps the spelling as read, exactly as `UploadSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored**: its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. |
-| 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists, and the legal cut candidates stage 4 clamps the model to (§5). For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). |
-| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document tree plan: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. No-fallback seam: a container that fails twice fails the unit, poisons the artifact and refuses the job. **Sections are not containers**: the tiling gate requires every surveyed section to sit inside ONE group span, so descending into a section would leave its own body on no page — page granularity is a document's top-level sections, and an oversized one is split mechanically rather than descended into. Implemented: `internal/taxonomy` — a container descent composed as a fold over one serial lane; call-time input and no-call rules are §12's. |
+| 1 | **Ingest** | deterministic | Markdown corpora, walked and taken into immutable byte custody, through a **Unicode NFC pre-pass** (§9): custody bytes are NFC bytes, so every offset, slice, hash, title, slug and comparison downstream works on one spelling of every character instead of the two Unicode allows. It is the only transform custody permits, it happens before any offset exists, and it is recorded — the unit carries the upload digest beside the custody one, and invalid UTF-8 is passed through untouched. The pass covers **ids as well as bytes**: `SourceDoc.Path` is the NFC spelling of the path, so a document has one identity however the filesystem spelled its name, and every comparison downstream is NFC-against-NFC byte equality with no re-normalization at any use site to remember or forget. The rationale is the split between the two jobs a path does: *following a reference* needs one spelling on both sides, while *naming the file a human has to open* needs the disk's own — so `SourceDoc.UploadPath` keeps the spelling as read, exactly as `UploadSHA256` keeps the bytes as read. Ids are normalized before the sort, because path order is the corpus's canonical order and the thing ordered has to be the id. **Formats that are not Markdown are converted before kbase sees them, never inside it** — LaTeX is a separate `tex→md` converter module (see below), and PDF is a *preprocessing-adapter slot* (docling/marker-class external tools), never a native capability: PDF extraction is a tar pit, fenced off. MDX is **ignored**: its content is build-time-produced, not in the source bytes, so it breaks source-hash provenance; revisit as strip-and-scan only if a corpus that matters shows real cost. **Every path the walk does not take is recorded** — `ingest.Exclusion`, one entry per skip with the class of its reason, logged at `info` and carried into the run record (SPEC §3.8) — because the ignored format class above, the dot-directories and the broken links are otherwise indistinguishable from documents that were never there, which makes "nothing was silently dropped" a claim about what the walk chose to look at [MAD2: B-3]. Disclosure is the run record only (ruled 2026-08-17): the denominator is what an operator needs, and the delivered tree is the documentation set's rather than a report on the walk. |
+| 2 | **Survey** | deterministic (mostly) | Per-file structural inventory: heading tree, section token sizes, link graph, first-paragraph gists, and the legal cut candidates stage 4 clamps the model to (§5). For Markdown this is nearly all mechanical. Produces the compact artifact the taxonomy stage consumes. If the survey itself would overflow, roll up per-domain surveys first (survey-of-surveys). **Link resolution reads two address spaces** (SPEC §4.5): the destination against the linking file's directory, and — a documentation site serves `page.md` at `page/` — against that page's own URL directory. A doc corpus is written in one of the two and kbase would otherwise read it in the other, which is not a spelling nicety: source cross-references are the design's ONLY lateral-navigation channel (§3), so a resolver whose address space is wrong for the corpus class delivers a knowledge base with none. Escaping the corpus root disqualifies one attempt, never the destination. The resolution outcome is counted in the corpus roll-up and carried into the run record, because "this corpus has no cross-references" and "this build resolved none of them" are the same artifact without it. |
+| 3 | **Taxonomy design** | gemma-4-31B | Consumes the survey, never raw source. Serial (needs whole-corpus view). Emits the document tree plan: hierarchy, leaf assignments, acceptance criteria. Must guarantee no leaf's source span exceeds the per-call budget (sizes are in the survey) — oversized sections are split at design time, not discovered mid-distillation. No-fallback seam: a container that fails twice fails the unit, poisons the artifact and refuses the job. **Sections are not containers**: the tiling gate requires every surveyed section to sit inside ONE group span, so descending into a section would leave its own body on no page — page granularity is a document's top-level sections, and an oversized one is split mechanically rather than descended into. **A section too SMALL is the same question at the other end**, and it is answered the same way: composition merges a span under the §9 minimum into the adjacent group of its own file (`treeplan.Verifier.floor`, the operator between dissolution and split expansion) rather than naming a page over it, and refuses — naming every one — where such a span has no adjacent span to merge into. Coverage is exactly-once, so the bytes must sit on SOME page and only the stage that assigns spans can decide that a page should not exist; the alternative is a routing surface promising an overview and delivering one byte [MAD2: B-6]. **The floor applies to SPLITS, not to documents** (ruled 2026-08-17): a span covering its file's whole coverable content is exempt and stands as its own leaf at any size (`treeplan.Verifier.wholeFile`, asked inside `underFloor` so the operator and the re-check read one predicate). The floor's target is a page manufactured out of part of a larger document; an author's whole tiny document behind its own title is an honest page, not a promising-scope-empty-room — and the alternative was a corpus of small whole documents that could not be built at all. Merging several tiny FILES into one page is a separate feature, deliberately not implemented: it would have to title a page after no document. The floor is stated over group spans and carries to every part of a split group, because the splitter pre-merges below-minimum sections. Implemented: `internal/taxonomy` — a container descent composed as a fold over one serial lane; call-time input and no-call rules are §12's. |
 | 4 | **Dissection** | mechanical + 26B-A4B + mechanical | See "boundary refinement" (§5). The model never emits raw offsets: it chooses among adapter-enumerated legal cut positions, so structurally invalid cuts are unrepresentable. Output: verified cut list → deterministic dissector slices the immutable source by byte offsets. |
-| 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. Implemented: `internal/distill` (byte derivation, the rebase map at §4.4, the page grammar); the stage has no `AskSpec` and spends nothing. |
+| 5 | **Distillation** | mechanical | **Leaves are mechanical, in every format** (ruled 2026-08-09, widened 2026-08-12): the leaf body is the verified byte slice plus mechanically generated wrapping — the model never writes leaf text, so leaf-fidelity deviation is impossible rather than checked. The "26B-A4B translation for non-Markdown formats" variant is **dead**: conversion happens outside kbase and is deterministic (row 1), so there is no format at which a model writes a leaf. The historical "~90% of tokens" estimate applied to that translation and goes with it. Implemented: `internal/distill` (byte derivation, the rebase map at SPEC §4.5, the page grammar, and the post-cut per-part descriptor stage 8 renders into a split family's index bullets — the cut positions do not exist when stage 3 writes the group's one shared scope, so the distinguishing half of that bullet can only be derived here [MAD2: B-4]); the stage has no `AskSpec` and spends nothing. |
 | 6 | **Hierarchical summaries** | gemma-4-31B, bottom-up | Each index level consumes its children's *summaries*, never bodies — bounded by fan-out × summary cap, both controlled by the taxonomy. Summaries are the navigation surface; quality binds hardest here, hence the heavy tier. No-fallback seam (O-1), with cascade-failure carrying a failed level upward. Implemented: `internal/summarize` — four level-sliced stages, deepest first; input is read per child KIND (leaf bodies vs. capped index framing+conclusions); the artifact is JSON, never rendered Markdown, so a regenerated summary cannot half-rewrite a delivered page. |
-| 7 | **Review** | gemma-4-26B-A4B | Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
-| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children) emitted from the tree plan by template. Dead links impossible by construction; the link checker demotes to regression tripwire. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. Implemented: `internal/assemble` (index/entry-point grammar, the closed fixture manifest — `AGENTS.md`, `README.md`, `CLAUDE.md`); the up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here. |
+| 7 | **Review** | gemma-4-26B-A4B | **PLANNED** — no review stage runs in `kbase build` today (§6). Structured rubric, not "is this good?" (see §6). Output is **flags for regeneration** (by the 31B), never edits — a weaker model's fingerprints stay off the best text. |
+| 8 | **Link generation** | deterministic | Bidirectional tree-nav links (up-links, index children, and the continuation edges between the parts of one split group) emitted from the tree plan by template — a part's siblings are a projection of `groups[].parts` exactly as its parent is a projection of the parent edge, which is why they are mechanical navigation and not the inferred cross-reference §3 forbids [MAD2: B-4]. Dead NAV links are impossible by construction — they are projections of the tree plan — and the link checker demotes to a regression tripwire for them. A source cross-reference is a different claim: it is resolved (row 2) and rebased at stage 5 onto the node that now holds its target, and what remains — a destination naming a document the corpus does not hold — is delivered verbatim, exempted by guarantee 1, and COUNTED (SPEC §4.5 rule 3, §3.8). The exemption is what keeps someone else's broken corpus from refusing a delivery; the count is what keeps it from being invisible. Pages are COPIED from the stage-5 artifact byte-for-byte; rebasing already happened. Implemented: `internal/assemble` (index/entry-point grammar, the closed fixture manifest — `AGENTS.md`, `README.md`, `CLAUDE.md`); the up-link, relative-path and provenance-footer renderers are `internal/distill`'s, called from here. |
 | 9 | **Refresh / verify gates** | deterministic (kb_tools lineage) | Derived-state regeneration + integrity gates; idempotent; drift-gated. Any failure refuses delivery and names the node; there is no deliver-with-warnings mode. Implemented: `assemble.Verify` — ten gates, each scoped to the file class it applies to, run over the assembled tree in the store before any byte reaches `<out>`. |
 
 **Format seam.** The survey artifact is the source-format independence
@@ -295,7 +302,9 @@ artifact's neutral types and the custody bytes, never a parser).
    The stage refuses a fold built with a declaration it does not itself ask
    with (`dissect.StagePlan`), so the digest can never describe an asking the
    calls did not make. Optional per-boundary confidence
-   emission; low-confidence boundaries escalate (31B look or human).
+   emission, with low-confidence boundaries escalating (31B look or human),
+   is **PLANNED**: the answer must BE a menu number (`parseChoice`, above),
+   so a boundary carries no confidence today and nothing escalates.
    The fold's single-owner discipline is asserted in two halves, because it has
    two seams: `Refiner.claim` refuses a second goroutine, and an ORDINAL
    (`Refiner.next`) refuses a boundary out of turn — which is what covers the
@@ -362,6 +371,11 @@ artifact's neutral types and the custody bytes, never a parser).
 ---
 
 ## 6. Summary review (stage 7 detail)
+
+**PLANNED.** Neither the review pass nor the flag-driven regeneration it
+feeds is part of `kbase build` today: the stage chain the verb composes runs
+straight from stage 6 to stage 8, and a delivered summary is never reviewed.
+The design below stands as written.
 
 - Two failure directions, treated by different methods:
   - *Hallucination direction* (summary claims X, children don't support it): tractable
@@ -515,11 +529,13 @@ prevention is holding against a real prefix cache.
   independent of estimator error — an undercount surfaces as one loud re-split, an
   efficiency blip. Exact counting buys nothing the margins can distinguish from
   perfect.
-- Calibration: if a tokenize endpoint is detected at configure time, one
-  calibration call checks/refines the ratio; thereafter the constant is refined
-  from the `usage` token counts providers return on every real pipeline call —
-  free ground truth as a byproduct. Calibration source is stamped into the
-  provenance receipt (SPEC.md §5).
+- Calibration is **PLANNED**: today the estimator is the fixed provisional
+  constant of §9 and nothing refines it. As designed — if a tokenize endpoint
+  is detected at configure time, one calibration call checks/refines the
+  ratio; thereafter the constant is refined from the `usage` token counts
+  providers return on every real pipeline call, free ground truth as a
+  byproduct — and the calibration source is stamped into the provenance
+  receipt (SPEC.md §4.6).
 
 ---
 
@@ -530,7 +546,7 @@ prevention is holding against a real prefix cache.
 | Context ceiling | ~180K tokens | reliable zone of gemma-4's ~250K window |
 | Per-call target | 60–80K tokens | quality/cost operating point; nobody runs near ceiling |
 | Boundary overlap | 20% of each neighbor, capped at 1K tokens/side | `dissect.overlapFraction`/`overlapCapTokens`; the window the model sees AND the clamp bound. Exact % still TBD at calibration |
-| Min section size | 64 tokens | `dissect.minTokens`; pre-merged mechanically before refinement. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
+| Min section size | 64 tokens | `dissect.MinTokens`; pre-merged mechanically before refinement, and the same floor a delivered page must clear — §4 row 3's content floor reads this constant and `dissect.Params.UnderMinimum`, so the two seams cannot disagree about what is too small. "> overlap into a minimum section" holds by construction, since the overlap is a fraction under 100%. TBD at calibration |
 | Boundary menu cap | 7 entries | `dissect.menuCap`; 7±2 is the honest ceiling for a choice a small tier reasons over, and the cap is what makes this seam's prompt bounded by construction (§12). Mechanism: §5 |
 | Retry policy | per definition; defaults 2 attempts / 12-word note, then mechanical fallback + log | `pipeline.RetryPolicy`, declared with `pipeline.DeclareRetry` beside the effort at the registration site; the runner reads it and decides none of it. Full story: §12 |
 | Effort declaration | per definition, two values (first attempt / retry). Boundary refinement **off/off**; taxonomy design and summaries **off/on** | `model.RequestEffort`, positional at the registration site; gated by `pipeline.AskSpec.validate`. Full story: §12 |
@@ -580,7 +596,7 @@ a home, and the answer is no.
 |---|---|---|
 | `telemetry` | inference timing is a provider extension, off the normal path and useless in a user's output; it is a second measurement channel for prompt-shape questions (§7) | `config.DevConfig.Telemetry`; consumed in `pipeline.runner` at **info**, so `--log-level info` is needed to see it |
 | `keep_temp_work` | the asymmetric teardown rule (§12) deletes the scratch tree of a run that SUCCEEDED, which is exactly the run whose intermediates someone occasionally wants | `config.DevConfig.KeepTempWork`; also a verb flag (`--keep-temp-work`), which is the user's legitimate need for the same thing — the flag turns it on and cannot turn it off |
-| `build_date` | provenance receipts are DATED BY DESIGN (SPEC §7), so two otherwise identical runs either side of midnight UTC deliver different bytes — and byte-determinism cannot be tested against a clock. Dropping the date would throw away a fact the page is meant to carry | `config.DevConfig.BuildDate`, `cmd.resolveBuildDate`; a malformed pin refuses rather than landing in every footer |
+| `build_date` | provenance receipts are DATED BY DESIGN (SPEC §4.6), so two otherwise identical runs either side of midnight UTC deliver different bytes — and byte-determinism cannot be tested against a clock. Dropping the date would throw away a fact the page is meant to carry | `config.DevConfig.BuildDate`, `cmd.resolveBuildDate`; a malformed pin refuses rather than landing in every footer |
 | `tree_plan = "mechanical"` | taxonomy design is a RULED no-fallback seam (§12, O-1), so the pipeline has no mechanical mode of its own and a hermetic end-to-end run of the delivered binary has no entrance. This is that entrance: `treeplan.SourceStructureProposal` instead of the model stage, and no provider dialed at all — so no summaries either | `config.TreePlanMechanical`, `config.DevConfig.MechanicalTreePlan`; recorded in `run.json` as `"treePlan": "mechanical (dev)"`, because a tree nobody designed must say so |
 
 ---
@@ -589,8 +605,8 @@ a home, and the answer is no.
 
 | Tier | Stages | Why |
 |---|---|---|
-| gemma-4-31B (dense) | taxonomy design; hierarchical summaries; regeneration on review flags; low-confidence boundary escalation | serial, judgment-heavy, small token share; navigation-surface quality binds here |
-| gemma-4-26B-A4B (MoE) | cut-list refinement; distillation volume; review | parallel, translation/checklist-shaped, ~90% of tokens |
+| gemma-4-31B (dense) | taxonomy design; hierarchical summaries; regeneration on review flags (**PLANNED**, §6); low-confidence boundary escalation (**PLANNED**, §5) | serial, judgment-heavy, small token share; navigation-surface quality binds here |
+| gemma-4-26B-A4B (MoE) | cut-list refinement; review (**PLANNED**, §6) | parallel, checklist-shaped |
 
 Per-stage model config is supported from day one (it's just API refs) — keeps a
 "borrow a frontier model for taxonomy only" escape hatch open if 31B hierarchies
@@ -982,6 +998,22 @@ write that needs it, so one store-relative path names the scratch copy and its
 delivered counterpart. Delivery is a copy of the store's own bytes out to the
 mirrored path — the delivered file and the one the stamp proves are the same
 bytes.
+
+**Delivery refuses a populated `--out`** (ruled 2026-08-17). The copy above
+overwrites whatever it lands on and sweeps nothing, so a rerun into a delivered
+tree would leave the previous plan's pages standing beside the new plan's — a
+knowledge base whose gates all passed over a tree nobody delivered. The fix is
+a refusal at job setup rather than a delivery-time reconciliation: `--out`
+holding anything but `temp-work/` refuses, names every entry, writes nothing
+(`cmd.checkOutIsClear`, the `write-agents` refusal one directory up), and the
+remedy is deleting the directory. Iterative update of a delivered knowledge
+base is not a feature of this appliance [MAD2: B-7]. The exception is the run
+`--out` is already in the middle of, and the predicate is structural rather
+than heuristic (`cmd.interruptedJob`): `temp-work/` survives exactly the runs
+that did not finish, and `run.json` inside it is written only once a delivery
+completed — so temp-work-without-a-record IS an interrupted build, whose
+half-copied delivery is its own to overwrite, while temp-work with one is a
+finished build and a second run over it a rerun.
 
 That rooting is what makes the sweep safe, structurally rather than by check:
 it can only delete inside a directory kbase itself created one level below

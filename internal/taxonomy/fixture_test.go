@@ -50,6 +50,10 @@ var testRetry = pipeline.DeclareRetry(pipeline.RetryPolicy{
 	Effort: model.DeclareEffort(model.RequestEffort{Thinking: false}),
 })
 
+// secSpec is one section of a synthetic document. Its word count is over the
+// content floor (dissect.MinTokens, ~256 bytes) on purpose: a section under it
+// is merged into its neighbour by the tree plan's floor operator, so a fixture
+// below the floor tests the floor rather than whatever it was written for.
 type secSpec struct {
 	title string
 	words int
@@ -156,11 +160,11 @@ func testBudgets() treeplan.Budgets {
 func fixtureDocs() []docSpec {
 	return []docSpec{
 		{path: "guide/one.md", title: "Document One", secs: []secSpec{
-			{"Alpha", 40}, {"Beta", 40}, {"Gamma", 40}}},
+			{"Alpha", 90}, {"Beta", 90}, {"Gamma", 90}}},
 		{path: "guide/two.md", title: "Document Two", secs: []secSpec{
-			{"Delta", 40}, {"Epsilon", 40}}},
+			{"Delta", 90}, {"Epsilon", 90}}},
 		{path: "intro.md", title: "Introduction", secs: []secSpec{
-			{"Purpose", 40}, {"Audience", 40}}},
+			{"Purpose", 90}, {"Audience", 90}}},
 	}
 }
 

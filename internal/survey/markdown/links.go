@@ -82,11 +82,24 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 	return l
 }
 
-// resolveTarget maps a link path to a corpus document id. A rooted path is
-// resolved against the corpus root, anything else against the linking file's
-// directory.
+// resolveTarget maps a link path to a corpus document id.
 //
-// Two retries follow the exact lookup, in decreasing confidence:
+// A rooted path names the corpus root and is resolved once. A relative one is
+// tried in TWO address spaces, in decreasing confidence, because a doc corpus
+// is written against one of them and kbase reads it in the other:
+//
+//   - File space. The destination is joined against the linking file's own
+//     directory — what the path means to anything reading the corpus as
+//     files, and the spelling a corpus that never rendered uses.
+//   - URL space. A doc-site generator serves `page.md` at `page/`, so a
+//     destination in a page's own source is written relative to that
+//     directory: `../properties` in `project-format.md` names the SIBLING
+//     `properties`, not a file above the corpus root. The linking file
+//     stripped of its extension is that directory, and joining against it is
+//     the same arithmetic the site does.
+//
+// Both spaces run the same lookup, so extension inference and the case fold
+// apply to each: neither space is a second resolver.
 //
 //   - Extensionless. Doc sites routinely link a sibling by name alone
 //     (`[scope](scope)`) and leave the extension to the site generator.
@@ -95,6 +108,11 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 //     link into a Windows-authored file inflates the unresolved count. A fold
 //     that several documents answer to is ambiguous: it is reported as
 //     unresolved and warned about, never guessed at.
+//
+// Escaping the corpus root disqualifies one ATTEMPT, never the destination:
+// a `../` that leaves the root in file space is exactly the spelling that
+// lands inside it in URL space, and refusing before the second attempt is
+// what made every cross-file reference on a doc-site corpus unresolved.
 //
 // Every comparison here is byte equality (or the case fold) against the
 // corpus's ids, with no normalization of its own. It can be, because both
@@ -105,16 +123,34 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 // The id returned is always the corpus's own byte-exact path. No target is
 // invented: anything the corpus does not hold stays unresolved.
 func resolveTarget(p, from string, corpus ingest.Corpus, lg log.Logger) (string, bool) {
-	var target string
 	if strings.HasPrefix(p, "/") {
-		target = path.Clean(strings.TrimPrefix(p, "/"))
-	} else {
-		target = path.Join(path.Dir(from), p)
+		return lookup(path.Clean(strings.TrimPrefix(p, "/")), p, from, "rooted", corpus, lg)
 	}
+	if id, ok := lookup(path.Join(path.Dir(from), p), p, from, "file space", corpus, lg); ok {
+		return id, true
+	}
+	return lookup(path.Join(pageDir(from), p), p, from, "URL space", corpus, lg)
+}
+
+// pageDir is the directory a rendered doc site serves one source file from:
+// the file's own path with its extension dropped. It is the base a
+// destination written inside that page resolves against in URL space.
+func pageDir(from string) string {
+	return strings.TrimSuffix(from, path.Ext(from))
+}
+
+// lookup answers ONE resolution attempt: the exact id, then the extension the
+// site generator would have added, then the case fold of either. space names
+// the address space for the debug record, so a reader of the log can see which
+// convention a corpus's links are written in.
+func lookup(target, p, from, space string, corpus ingest.Corpus, lg log.Logger) (string, bool) {
 	if target == ".." || strings.HasPrefix(target, "../") {
-		return "", false // escapes the corpus root
+		return "", false // this attempt escapes the corpus root
 	}
 	if corpus.Has(target) {
+		if space != "file space" {
+			lg.Debug("survey resolved a link", "from", from, "target", p, "path", target, "space", space)
+		}
 		return target, true
 	}
 
@@ -122,7 +158,8 @@ func resolveTarget(p, from string, corpus ingest.Corpus, lg log.Logger) (string,
 	if path.Ext(target) == "" {
 		withExt := target + Ext
 		if corpus.Has(withExt) {
-			lg.Debug("survey resolved an extensionless link", "from", from, "target", p, "path", withExt)
+			lg.Debug("survey resolved an extensionless link",
+				"from", from, "target", p, "path", withExt, "space", space)
 			return withExt, true
 		}
 		candidates = append(candidates, withExt)
@@ -132,10 +169,11 @@ func resolveTarget(p, from string, corpus ingest.Corpus, lg log.Logger) (string,
 		switch {
 		case ambiguous:
 			lg.Warn("survey link folds to several documents; leaving it unresolved",
-				"from", from, "target", p, "folded", c)
+				"from", from, "target", p, "folded", c, "space", space)
 			return "", false
 		case id != "":
-			lg.Debug("survey resolved a link by case fold", "from", from, "target", p, "path", id)
+			lg.Debug("survey resolved a link by case fold",
+				"from", from, "target", p, "path", id, "space", space)
 			return id, true
 		}
 	}

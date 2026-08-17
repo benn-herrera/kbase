@@ -93,6 +93,33 @@ func (d SourceDoc) BytesNormalized() bool { return d.UploadSHA256 != d.SHA256 }
 // path. See BytesNormalized.
 func (d SourceDoc) PathNormalized() bool { return d.UploadPath != d.Path }
 
+// Exclusion is one path the walk found under the corpus root and did NOT take
+// into custody, with the class of reason it was left out.
+//
+// It exists because "the knowledge base covers every document" is otherwise a
+// statement about what the walk chose to look at: a corpus's `.mdx` files, its
+// dot-directories and its broken links are excluded by policy (see Walk), and
+// an exclusion nobody records is indistinguishable from a document that was
+// never there [MAD2: B-3]. The list is the corpus DENOMINATOR, and the run
+// record carries it (SPEC §3.8).
+type Exclusion struct {
+	// Path is the corpus-relative, slash-separated path as the walk found it —
+	// the on-disk spelling, before any normalization: an excluded path names a
+	// file a human goes and looks at, not one anything downstream resolves.
+	Path string `json:"path"`
+
+	// Reason is the class, one of the Excluded* constants. A class rather than
+	// a sentence, because the list is read as a table.
+	Reason string `json:"reason"`
+}
+
+// The exclusion classes: one per skip Walk makes, and there are no others.
+const (
+	ExcludedDotPrefixed   = "dot-prefixed name"
+	ExcludedNotADocument  = "extension not in the document set"
+	ExcludedBrokenSymlink = "broken symlink, not named like a document"
+)
+
 // Corpus is an ingested document set: every document, in path order, plus the
 // identity of the set as a whole.
 //
@@ -113,6 +140,12 @@ type Corpus struct {
 	// lookup rather than a scan per link. Unexported and never marshalled:
 	// map iteration order would be a determinism hazard in an artifact.
 	index map[string]int
+
+	// Excluded is every path Walk found under the corpus root and did not
+	// ingest, in walk order. It is the walk's finding rather than a property of
+	// the document set, which is why New leaves it empty: an in-memory corpus
+	// had no walk to exclude anything.
+	Excluded []Exclusion
 
 	// folded maps a case-folded path to every document that folds to it. It
 	// exists because the walk matches extensions case-insensitively — it
@@ -320,8 +353,11 @@ const maxCorpusBytes = 256 << 20 // 256 MB
 //     pipeline it is a mistyped path, not an empty job. So does one over
 //     maxCorpusBytes.
 //
-// Every skip is a debug record on lg, because "why is that file not in my
-// knowledge base" is the question the policies above generate.
+// Every skip is recorded twice, and both records are the same call: an INFO
+// line on lg, because "why is that file not in my knowledge base" is the
+// question the policies above generate, and an Exclusion on the returned
+// Corpus, because a log line is gone the moment the terminal scrolls while the
+// run record outlives the run (SPEC §3.8) [MAD2: B-3].
 func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 	if len(exts) == 0 {
 		return Corpus{}, fmt.Errorf("ingest: no document extensions given; " +
@@ -336,7 +372,14 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 	}
 
 	var docs []SourceDoc
+	var excluded []Exclusion
 	var total int64
+	// One call per skip, so the logged reason and the recorded one cannot
+	// drift: they are the same string, written to the two places a reader looks.
+	exclude := func(rel, reason string, kv ...any) {
+		excluded = append(excluded, Exclusion{Path: rel, Reason: reason})
+		lg.Info("ingest excluded a path", append([]any{"path", rel, "reason", reason}, kv...)...)
+	}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("ingest: walk %s: %w", p, err)
@@ -351,7 +394,7 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
-			lg.Debug("ingest skipping dot-prefixed entry", "path", rel, "dir", d.IsDir())
+			exclude(rel, ExcludedDotPrefixed, "dir", d.IsDir())
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -367,7 +410,7 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 			target, err := os.Stat(p)
 			switch {
 			case err != nil && !document:
-				lg.Debug("ingest skipping broken non-document symlink", "path", rel, "reason", err)
+				exclude(rel, ExcludedBrokenSymlink, "error", err)
 				return nil
 			case err != nil:
 				return fmt.Errorf("ingest: %s: %w", rel, err)
@@ -378,7 +421,7 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 			regular = target.Mode().IsRegular()
 		}
 		if !document {
-			lg.Debug("ingest skipping non-document file", "path", rel)
+			exclude(rel, ExcludedNotADocument)
 			return nil
 		}
 		if !regular {
@@ -412,7 +455,12 @@ func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
 	if len(docs) == 0 {
 		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", strings.Join(exts, ", "), root)
 	}
-	return New(docs)
+	c, err := New(docs)
+	if err != nil {
+		return Corpus{}, err
+	}
+	c.Excluded = excluded
+	return c, nil
 }
 
 // relPath renders p as the corpus-wide id: relative to root, slash-separated

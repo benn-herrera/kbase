@@ -4,17 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 
 	"kbase/internal/dissect"
 	"kbase/internal/survey"
 )
 
-// The three level-structure operators (§2.7). The descent's answer vocabulary
-// groups SIBLINGS; it cannot add or remove a tree LEVEL, and three reachable
-// inputs need exactly that. All three are repaired here — mechanically, with
-// no model call and no new model-facing answer field. The grouping semantics
-// the model supplied are preserved; only the level structure is rewritten.
+// The three level-structure operators (§2.7), plus the content floor. The
+// descent's answer vocabulary groups SIBLINGS; it cannot add or remove a tree
+// LEVEL, and three reachable inputs need exactly that. All three are repaired
+// here — mechanically, with no model call and no new model-facing answer field.
+// The grouping semantics the model supplied are preserved; only the level
+// structure is rewritten.
 //
 // # Order and termination
 //
@@ -22,7 +24,14 @@ import (
 // order and not a loop:
 //
 //	collapse until depth ≤ cap → dissolve cap-level multi-file groups →
-//	split expansion → interpose to satisfy G-2/fan-out → re-check both caps
+//	merge sub-floor spans → split expansion →
+//	interpose to satisfy G-2/fan-out → re-check both caps
+//
+// The floor sits after dissolution because it reads one span per leaf, and
+// before expansion because it changes which bytes a group holds — and
+// therefore how many parts the splitter makes of it. It runs before
+// interposition for the same reason collapse does: it changes fan-out, and
+// interposition is what fan-out is measured for.
 //
 // Collapse strictly decreases depth and interposition strictly increases it,
 // so an interposition that re-breaches the depth cap is NOT re-collapsed: it
@@ -205,6 +214,212 @@ func (v *Verifier) fileLabel(file string) string {
 	}
 	base := path.Base(file)
 	return normalizeLabel(strings.TrimSuffix(base, path.Ext(base)))
+}
+
+// floor is the content floor (ARCHITECTURE §4 row 3): a leaf span holding less
+// material than dissect's §9 minimum is MERGED into an adjacent group of the
+// same file rather than becoming a page of its own.
+//
+// The floor is dissect.MinTokens and not a number of this package's own. The
+// stage below already refuses to leave a section that small standing — a
+// fragment nobody would have cut on purpose — and a page nobody would have
+// routed to on purpose is the same judgement one seam earlier. A tree plan is
+// where it can be repaired: coverage is exactly-once, so the bytes have to sit
+// on SOME page, and the only mechanism that can decide the page should not
+// exist is the one that assigns the spans.
+//
+// # What a legal merge is
+//
+// The neighbour is the span immediately before this one in the FILE's own byte
+// order — anywhere in the tree, not merely under the same parent — and only
+// when the two touch. Two conditions, and both are load-bearing:
+//
+//   - Immediate. Merging across an intervening span would swallow a third
+//     leaf's bytes, and each source byte belongs to one leaf.
+//   - Touching. Merging over a gap would deliver bytes no group planned, and
+//     would silently close a coverage hole that §3.3's tiling check exists to
+//     refuse. A merge may only re-home material, never adopt some.
+//
+// A fragment with no touching predecessor — a file's first span, or one after
+// a gap — merges FORWARD into its successor instead, which is
+// dissect.premerge's rule at the seam below it and for the same reason. The
+// absorbed node is the small one either way, so the surviving
+// page keeps the title and scope of the material that dominates it — which is
+// what makes the empty "Introduction to <file>" preamble page disappear rather
+// than grow a body under a name nobody meant.
+//
+// Merging cascades: a neighbour that is still under the floor after absorbing a
+// fragment is itself a fragment, and is folded on the next pass.
+//
+// # The sole-span exemption
+//
+// The floor applies to SPLITS, not to documents (ruled 2026-08-17): a span that
+// covers everything its file holds is exempt and stands as its own leaf at any
+// size. The floor's target is a page manufactured out of part of a larger
+// document — a fragment nobody would have cut on purpose — and an author's
+// whole tiny document behind its own title is not that: it is an honest page,
+// and the routing surface promises exactly what it delivers. So the exemption
+// lives in underFloor, where both this operator and Check's re-ask read it.
+//
+// Merging several tiny FILES into one leaf is a different feature (it would
+// have to name the merged page something no document is called) and is not
+// implemented.
+//
+// # When there is no legal merge
+//
+// A span under the floor, not covering its whole file, and with no touching
+// neighbour in that file is a fragment no regrouping reaches — the spans of a
+// file are what the survey found — so this is a DefectError and not a
+// Rejection: retrying re-asks a question that was never asked wrong. It names
+// every such span at once, because an operator fixing a corpus wants the list
+// and not the first entry ten times.
+func (v *Verifier) floor(root *buildNode) error {
+	byFile := map[string][]*buildNode{}
+	walk(root, 1, func(n *buildNode, _ int) {
+		if n.kind == KindLeaf && len(n.sources) == 1 {
+			byFile[n.sources[0].File] = append(byFile[n.sources[0].File], n)
+		}
+	})
+
+	dead := map[*buildNode]bool{}
+	var stranded []Span
+	// The survey's own file order, so the refusal reads the same way on every
+	// run without a sort of ours.
+	for _, f := range v.art.Files {
+		leaves := byFile[f.Path]
+		if len(leaves) == 0 {
+			continue
+		}
+		sort.Slice(leaves, func(i, j int) bool {
+			return leaves[i].sources[0].Start < leaves[j].sources[0].Start
+		})
+		stranded = append(stranded, v.mergeFragments(leaves, dead)...)
+	}
+	if len(stranded) > 0 {
+		return underFloorDefect(stranded)
+	}
+	prune(root, dead)
+	return nil
+}
+
+// mergeFragments folds one file's sub-floor leaves into their neighbours,
+// marking each absorbed node dead, and returns the spans it could not place.
+//
+// Termination: every iteration removes one entry from the working list, either
+// by merging it away or by stranding it.
+func (v *Verifier) mergeFragments(leaves []*buildNode, dead map[*buildNode]bool) []Span {
+	var stranded []Span
+	for {
+		i := -1
+		for j, n := range leaves {
+			if v.underFloor(n.sources[0]) {
+				i = j
+				break
+			}
+		}
+		if i < 0 {
+			return stranded
+		}
+		span := leaves[i].sources[0]
+		switch {
+		case i > 0 && leaves[i-1].sources[0].End == span.Start:
+			leaves[i-1].sources[0].End = span.End
+			dead[leaves[i]] = true
+		case i+1 < len(leaves) && leaves[i+1].sources[0].Start == span.End:
+			leaves[i+1].sources[0].Start = span.Start
+			dead[leaves[i]] = true
+		default:
+			stranded = append(stranded, span)
+		}
+		leaves = append(leaves[:i], leaves[i+1:]...)
+	}
+}
+
+// underFloor reports whether a span holds less material than a delivered page
+// may carry, through dissect's own predicate and constant: the tree-plan seam
+// and the cut-list seam ask one question, spelled once.
+//
+// A span this verifier cannot measure — a file it holds no bytes for, a range
+// outside them — is not under the floor. Those are defects with their own
+// names (checkSources, split), and answering "too small" here would report the
+// wrong one.
+//
+// Neither is a span that covers its whole file: that is the sole-span
+// exemption, and it is asked here so that the operator, Check's re-ask and
+// anything later reading the floor read one predicate (see floor).
+func (v *Verifier) underFloor(span Span) bool {
+	src, ok := v.bytes(span.File)
+	if !ok || span.Start < 0 || span.End <= span.Start || span.End > len(src) {
+		return false
+	}
+	if v.wholeFile(span) {
+		return false
+	}
+	return dissect.Params{Est: v.p.Est}.UnderMinimum(src, survey.Span{Start: span.Start, End: span.End})
+}
+
+// wholeFile reports whether span covers everything the survey says its file
+// holds to be covered — the coverage universe, `preamble` + `sections`, which
+// excludes a front-matter block (SPEC §3.2).
+//
+// Coverage is exactly-once, so a span that covers that universe is necessarily
+// its file's SOLE span, which is why the exemption can be asked of one span
+// without consulting the others.
+func (v *Verifier) wholeFile(span Span) bool {
+	f, ok := v.file(span.File)
+	if !ok {
+		return false
+	}
+	secs := sectionsOf(f)
+	if len(secs) == 0 {
+		return false
+	}
+	lo, hi := secs[0].Start, secs[0].End
+	for _, s := range secs {
+		lo = min(lo, s.Start)
+		hi = max(hi, s.End)
+	}
+	return span.Start == lo && span.End == hi
+}
+
+// underFloorDefect is the floor's loud refusal: every span it could not place,
+// named, in one message.
+func underFloorDefect(spans []Span) error {
+	named := make([]string, 0, len(spans))
+	for _, s := range spans {
+		named = append(named, fmt.Sprintf("%s [%d,%d)", s.File, s.Start, s.End))
+	}
+	return DefectError{Reason: fmt.Sprintf(
+		"the corpus holds material no page can carry: %s — each is under the %d-token minimum, "+
+			"with no adjacent material in the same file to merge it into; a span covering its whole "+
+			"file is exempt from the floor, so each of these is a fragment whose file has material "+
+			"the plan left on no page",
+		strings.Join(named, ", "), dissect.MinTokens)}
+}
+
+// prune drops the leaves the floor absorbed, and any index left holding
+// nothing by their departure.
+//
+// An index whose every child was absorbed into a page under some other parent
+// routes nowhere, and Check refuses one ("a section holds nothing"). Removing
+// it is the same repair collapse and dissolution make: the tree keeps only what
+// the artifact can represent. The root is never removed — an entry-point with
+// no children is a corpus with no material, and Check is where that is said.
+func prune(n *buildNode, dead map[*buildNode]bool) {
+	out := make([]*buildNode, 0, len(n.children))
+	for _, c := range n.children {
+		if dead[c] {
+			continue
+		}
+		if c.kind != KindLeaf {
+			prune(c, dead)
+			if len(c.children) == 0 {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	n.children = out
 }
 
 // expand is §2.4: every leaf span is run through dissect.Split at the leaf

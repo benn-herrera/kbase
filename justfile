@@ -30,6 +30,7 @@ SURVEY_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-survey-omlx"
 BUILD_MECHANICAL_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-mechanical-omlx"
 BUILD_LIVE_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-omlx"
 WRITE_AGENTS_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-write-agents"
+BUILD_REFUSAL_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-refusal"
 
 # The configuration the live build dials: the checked-in fixture pool, whose
 # provider entry names a key FILE the built binary reads for itself. No recipe
@@ -191,6 +192,7 @@ test-integration-survey-rojo:
 _test-integration-survey-rojo: build prep-test-integration-rojo
     go test -v -run 'TestSplitOverRealCorpusSections/rojo' -count=1 ./internal/dissect
     go test -v -run 'TestTreePlanOverRealCorpus/rojo' -count=1 ./internal/treeplan
+    go test -v -run 'TestLinkResolutionOverRealCorpus/rojo' -count=1 ./internal/survey/markdown
     @a="{{SURVEY_ROJO_OUT_DIR}}/survey.json"; \
     b="{{SURVEY_ROJO_OUT_DIR}}/survey-rerun.json"; \
     s="{{SURVEY_ROJO_OUT_DIR}}/summary.txt"; \
@@ -202,7 +204,7 @@ _test-integration-survey-rojo: build prep-test-integration-rojo
       { echo "integration(survey-rojo): survey run failed"; exit 1; }; \
     summary="$(cat "$s")"; \
     echo "$summary"; \
-    for want in "files=8 " "tokens=10553 " "sections=83 " "unresolved=5 "; do \
+    for want in "files=8 " "tokens=10553 " "sections=83 " "internal=4 " "unresolved=1 "; do \
       echo "$summary" | grep -qF "$want" || \
         { echo "integration(survey-rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
@@ -243,8 +245,8 @@ test-integration-build-mechanical-rojo:
 # the tree-plan struct to recompute them from. That is not a loss: gate 5
 # ("the delivered set is the tree plan's nodes plus the fixture manifest") and
 # gate 3 ("the entry-point exists and its domains exist") already prove the
-# relations the old in-process test derived by hand, and 34 nodes + 3 fixture
-# manifest entries = 37 delivered is the same arithmetic, just pre-computed
+# relations the old in-process test derived by hand, and 25 nodes + 3 fixture
+# manifest entries = 28 delivered is the same arithmetic, just pre-computed
 # into a literal the way test-integration-survey-rojo pins tokens/sections.
 # Bumping the corpus pin or a budget/manifest constant re-derives these with
 # `./bin/kbase build ... --keep-temp-work` and updates them here.
@@ -269,7 +271,7 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 34' '"pages": 25' '"sections": 9' '"groups": 25' '"splitGroups": 0' '"deliveredFiles": 37'; do \
+    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 25' '"pages": 16' '"sections": 9' '"groups": 16' '"splitGroups": 0' '"deliveredFiles": 28'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
     for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
@@ -409,6 +411,7 @@ test-integration-survey-omlx:
 _test-integration-survey-omlx: build prep-test-integration-omlx
     go test -v -run 'TestSplitOverRealCorpusSections/omlx' -count=1 ./internal/dissect
     go test -v -run 'TestTreePlanOverRealCorpus/omlx' -count=1 ./internal/treeplan
+    go test -v -run 'TestLinkResolutionOverRealCorpus/omlx' -count=1 ./internal/survey/markdown
     @a="{{SURVEY_OMLX_OUT_DIR}}/survey.json"; \
     b="{{SURVEY_OMLX_OUT_DIR}}/survey-rerun.json"; \
     s="{{SURVEY_OMLX_OUT_DIR}}/summary.txt"; \
@@ -592,15 +595,91 @@ _test-integration-write-agents: build
     {{just_executable()}} _write-evidence "{{WRITE_AGENTS_OUT_DIR}}" "test-integration-write-agents" \
       "./{{BIN_DIR}}/kbase write-agents --out {{WRITE_AGENTS_OUT_DIR}}/out\n./{{BIN_DIR}}/kbase write-agents --out {{WRITE_AGENTS_OUT_DIR}}/out  # rerun: full-conflict refusal\nrm {{WRITE_AGENTS_OUT_DIR}}/out/docent.md && ./{{BIN_DIR}}/kbase write-agents --out {{WRITE_AGENTS_OUT_DIR}}/out  # partial-conflict refusal"
 
+# `kbase build`'s delivery precondition [MAD2: B-7]: an --out that already
+# holds something refuses (exit 1, every entry named, nothing written) UNLESS
+# the directory is an interrupted job's own remains — temp-work/ present, its
+# run.json absent (checkOutIsClear / interruptedJob in cmd/build.go). Proven
+# here rather than only in Go unit tests because AGENTS.md's "results are part
+# of the test" applies to a refusal exactly as it does to a success: the front
+# door is `kbase build`, invoked twice into the same directory, not an
+# in-process call to the check function.
+#
+# Uses the mechanical config fixture over the Rojo corpus — same offline pair
+# test-integration-build-mechanical-rojo uses — so this recipe needs no
+# provider and joins the omnibus. It is corpus-bound (unlike
+# test-integration-write-agents) but does not duplicate that recipe's ten-gate
+# assertions: this one is about the precondition at job setup, before the
+# corpus is even read.
+[doc("hermetic: kbase build into a populated --out refuses (full-conflict) or resumes (interrupted-job remains); joins the omnibus")]
+test-integration-build-refusal:
+    @mkdir -p "{{BUILD_REFUSAL_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-build-refusal 2>&1 | tee "{{BUILD_REFUSAL_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-survey-rojo.
+#
+# Three builds into the SAME --out, in order: (1) a normal --keep-temp-work
+# build, which must succeed and leaves temp-work/run.json behind: exactly the
+# "finished" state checkOutIsClear's rerun clause detects. (2) an identical
+# rerun with nothing touched: must refuse, both because the directory holds
+# files and because interruptedJob reads run.json and calls this a rerun — the
+# refusal message is asserted for both clauses' wording, and the delivered
+# tree is diffed against a snapshot taken right after (1) to prove the refused
+# attempt wrote nothing. (3) the interrupted-job clause itself: the delivered
+# files are removed and run.json is deleted, leaving exactly "temp-work/
+# present, run.json absent" — the one state checkOutIsClear licenses an
+# overwrite for — and the same build must now succeed and re-deliver the
+# identical tree (reusing the temp-work store rather than recomputing it,
+# which is the resume path's own point, not just this recipe's).
+[private]
+_test-integration-build-refusal: build prep-test-integration-rojo
+    @kb="{{BUILD_REFUSAL_OUT_DIR}}/kb"; \
+    snapshot="{{BUILD_REFUSAL_OUT_DIR}}/kb-snapshot"; \
+    rm -rf "$kb" "$snapshot"; \
+    ./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" \
+      --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
+      --out "$kb" \
+      --keep-temp-work || \
+      { echo "integration(build-refusal): the first build into an empty directory failed"; exit 1; }; \
+    [[ -f "$kb/temp-work/run.json" ]] || \
+      { echo "integration(build-refusal): no run.json after the first build; see $kb/temp-work"; exit 1; }; \
+    cp -R "$kb" "$snapshot"; \
+    rerun_err="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work 2>&1)"; \
+    rerun_status=$?; \
+    [[ "$rerun_status" == 1 ]] || \
+      { echo "integration(build-refusal): rerun into the finished directory exited $rerun_status, want 1"; exit 1; }; \
+    echo "$rerun_err" | grep -qF "refusing to deliver into a directory that is not empty" || \
+      { echo "integration(build-refusal): refusal is missing the not-empty marker:"; echo "$rerun_err"; exit 1; }; \
+    echo "$rerun_err" | grep -qF "this is a rerun, not the resume of an interrupted one" || \
+      { echo "integration(build-refusal): refusal is missing the rerun-diagnosis marker:"; echo "$rerun_err"; exit 1; }; \
+    diff -rq -x temp-work "$snapshot" "$kb" || \
+      { echo "integration(build-refusal): the refused rerun changed the delivered tree"; exit 1; }; \
+    echo "integration(build-refusal): full-conflict refusal ok — exit 1, both markers present, tree byte-unchanged"; \
+    find "$kb" -mindepth 1 -maxdepth 1 -not -name temp-work -exec rm -rf {} +; \
+    rm -f "$kb/temp-work/run.json"; \
+    ./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" \
+      --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
+      --out "$kb" \
+      --keep-temp-work || \
+      { echo "integration(build-refusal): the interrupted-job rerun (temp-work present, run.json absent) failed"; exit 1; }; \
+    diff -rq -x temp-work "$snapshot" "$kb" || \
+      { echo "integration(build-refusal): the resumed build re-delivered a different tree than the original"; exit 1; }; \
+    echo "integration(build-refusal): interrupted-job resume ok — temp-work present/run.json absent rebuilt and re-delivered the same tree"; \
+    rm -rf "$snapshot"; \
+    echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, and interrupted-job resume all correct"; \
+    {{just_executable()}} _write-evidence "{{BUILD_REFUSAL_OUT_DIR}}" "test-integration-build-refusal" \
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds"
+
 # The omnibus composes the HERMETIC per-corpus recipes, plus
-# test-integration-write-agents (hermetic but corpus-free), and writes
-# no log of its own: each of them already preserves its full output under its
-# own name, and a second copy of the same bytes under a second name is a file
-# that can go stale against the one anybody reads. test-integration-build-live-rojo
-# and test-integration-build-live-omlx are excluded on purpose — see their doc
+# test-integration-write-agents (hermetic but corpus-free) and
+# test-integration-build-refusal (hermetic, Rojo-bound), and writes no log of
+# its own: each of them already preserves its full output under its own name,
+# and a second copy of the same bytes under a second name is a file that can
+# go stale against the one anybody reads. test-integration-build-live-rojo and
+# test-integration-build-live-omlx are excluded on purpose — see their doc
 # strings.
 [doc("run every hermetic integration test (the live ones are excluded; run those by name)")]
-test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo test-integration-survey-omlx test-integration-build-mechanical-omlx test-integration-write-agents
+test-integration: test-integration-survey-rojo test-integration-build-mechanical-rojo test-integration-survey-omlx test-integration-build-mechanical-omlx test-integration-write-agents test-integration-build-refusal
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

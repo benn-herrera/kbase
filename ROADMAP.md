@@ -51,7 +51,7 @@ deleted, not archived — git history is the log.
      **Bursts C+D landed 2026-08-13**: the mechanical spine —
      `internal/distill` (stage 5: byte derivation, the rebase map, §4.1's
      page grammar), `internal/assemble` (stages 8+9: index/entry-point
-     grammar, the §8.1 fixture manifest, the ten verify gates,
+     grammar, the §4.7 fixture manifest, the ten verify gates,
      delivery), the `SourceStructureProposal` dev/baseline tree plan, and
      the composing build verb, which puts all of it into a walkable Rojo
      KB with no model in the loop
@@ -133,7 +133,7 @@ deleted, not archived — git history is the log.
     what is shown, not what may be chosen.
 - Hierarchical summaries and review stages (distillation, link generation and
   the verify gates landed with bursts C+D).
-- **Link byte offsets on `survey.Link`** (finding, bursts C+D). §4.4 asks
+- **Link byte offsets on `survey.Link`** (finding, bursts C+D). §4.5 asks
   stage 5 to rewrite link targets inside a page's bytes; the survey artifact
   carries each destination as written, its resolution and its fragment, but no
   offsets, and it collapses repeats of one target to a single entry. So
@@ -144,7 +144,7 @@ deleted, not archived — git history is the log.
   change, after which that file is deleted and `Destinations` becomes a read of
   the artifact. Not taken unilaterally in C+D because a schema bump is a shape
   decision.
-- **The anchor grammar the rebase map guesses** (finding, bursts C+D). §4.4
+- **The anchor grammar the rebase map guesses** (finding, bursts C+D). §4.5
   rule 1 lands a `#fragment` on the page hosting the section it names, and
   matching a fragment to a section needs the heading→anchor convention of
   whatever renders the source site — which no artifact states and kbase cannot

@@ -108,8 +108,8 @@ func (v *Verifier) CheckAnnexes(annexes []Annex) error { return checkAnnexes(ann
 // The sequence is §2.7's fixed order with §2.4's expansion in it, and the
 // composed post-conditions of §3.3 at the end:
 //
-//	shape → source custody → chain collapse → dissolution → split expansion →
-//	index interposition → cap re-check → naming → Check
+//	shape → source custody → chain collapse → dissolution → content floor →
+//	split expansion → index interposition → cap re-check → naming → Check
 //
 // Naming is last because it is the only step that cannot be undone: a path is
 // what every later stage calls a node, so it is assigned once, over a tree no
@@ -134,6 +134,9 @@ func (v *Verifier) Compose(p TreeProposal, annexes []Annex) (TreePlan, error) {
 
 	collapse(root, v.p.Budgets.DepthCap)
 	v.dissolve(root)
+	if err := v.floor(root); err != nil {
+		return TreePlan{}, err
+	}
 	groups, err := v.expand(root)
 	if err != nil {
 		return TreePlan{}, err

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,7 +109,7 @@ const (
 	corpusInput = "corpus"
 	paramsInput = "params"
 
-	// buildDateLayout is the provenance receipt's date format (SPEC §7).
+	// buildDateLayout is the provenance receipt's date format (SPEC §4.6).
 	buildDateLayout = "2006-01-02"
 
 	// kbTitlePrefix opens the knowledge base's own title. A KB is named for the
@@ -173,7 +174,7 @@ type buildOptions struct {
 
 	// BuildDate stamps the provenance receipt on every delivered page. It is
 	// an option rather than a clock read inside the renderer so that the
-	// rendered tree stays a pure function of its inputs (§8.1) and stage 9's
+	// rendered tree stays a pure function of its inputs (§5) and stage 9's
 	// leaf re-derivation compares equal bytes; empty means today, UTC.
 	BuildDate string
 
@@ -220,6 +221,11 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 	}
 	buildDate, err := resolveBuildDate(opts.BuildDate)
 	if err != nil {
+		return buildResult{}, err
+	}
+	// The delivery precondition, refused before the corpus is read and before
+	// the output directory is so much as created (§3.1) [MAD2: B-7].
+	if err := checkOutIsClear(out); err != nil {
 		return buildResult{}, err
 	}
 	if err := os.MkdirAll(out, pipeline.CreateDirMode); err != nil {
@@ -397,6 +403,9 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		Budgets:     plan.Budgets,
 		Files:       art.Corpus.Files,
 		Sections:    art.Corpus.Sections,
+		Excluded:    len(corpus.Excluded),
+		Exclusions:  corpus.Excluded,
+		Links:       art.Corpus.Links,
 		Nodes:       len(plan.Nodes),
 		Leaves:      report.Leaves,
 		Indexes:     report.Indexes,
@@ -846,7 +855,7 @@ func (j *buildJob) leavesStage() *pipeline.StagePlan {
 }
 
 // assembleStage is stage 8: §4's grammar over the tree plan for the index and
-// entry-point kinds, a byte-for-byte copy for the leaves, and §8.1's fixture
+// entry-point kinds, a byte-for-byte copy for the leaves, and §4.7's fixture
 // manifest.
 //
 // Leaves are COPIED. Rebasing happened once, at stage 5, and this stage does
@@ -857,11 +866,11 @@ func (j *buildJob) assembleStage() *pipeline.StagePlan {
 		Name:   stageAssemble,
 		Encode: encodeBytes,
 		Lanes: func() ([]pipeline.SerialLane, error) {
-			plan, err := j.readTreePlan()
+			plan, cuts, err := j.readPlanAndCuts()
 			if err != nil {
 				return nil, err
 			}
-			r, err := j.renderer(plan)
+			r, err := j.renderer(plan, cuts)
 			if err != nil {
 				return nil, err
 			}
@@ -875,13 +884,15 @@ func (j *buildJob) assembleStage() *pipeline.StagePlan {
 					})
 					continue
 				}
-				// A section's page is the tree plan and its summary, so it
-				// declares both: a regenerated summary invalidates the page it
-				// is rendered into, for free.
+				// A section's page is the tree plan, its summary and the cut
+				// lists of any split family it lists, so it declares all
+				// three: a regenerated summary or a re-adjudicated boundary
+				// invalidates the page it is rendered into, for free.
 				up := []string{treePlanUnit}
 				if j.live {
 					up = append(up, j.summarizer.Unit(n.Path))
 				}
+				up = append(up, splitChildCuts(plan, n.Path)...)
 				tasks = append(tasks, pipeline.LaneTask{
 					Owed:    j.owed(treeDir+"/"+n.Path, up...),
 					Section: stageAssemble,
@@ -935,7 +946,7 @@ func (j *buildJob) verifyProducer() pipeline.Producer {
 		if err != nil {
 			return nil, err
 		}
-		r, err := j.renderer(plan)
+		r, err := j.renderer(plan, cuts)
 		if err != nil {
 			return nil, err
 		}
@@ -967,6 +978,85 @@ func (j *buildJob) verifyProducer() pipeline.Producer {
 			Verifier: j.verifier, Cuts: cuts, Est: j.est,
 		})
 	}
+}
+
+// checkOutIsClear is the delivery precondition (SPEC §3.1, §1.5): `--out`
+// receives the delivered tree and only the delivered tree, so a directory that
+// already holds something is refused BEFORE the corpus is read — every path it
+// holds named, nothing written, exit 1 [MAD2: B-7].
+//
+// It is the write-agents refusal one directory up, and for the same reason: the
+// delivered set is decided by a tree plan that does not exist yet, so the only
+// honest all-or-nothing check available at job setup is over the directory
+// rather than over the file list. Iterative update of a delivered knowledge
+// base is not a feature of this appliance, so there is nothing this refusal
+// costs a user that a `rm -r` does not restore.
+//
+// The one exception is the run this `--out` is already in the middle of
+// (interruptedJob). A killed run can leave a half-copied delivery behind — that
+// residue is its own to overwrite, and refusing it would make the resume §5
+// guarantees impossible to reach.
+func checkOutIsClear(out string) error {
+	entries, err := os.ReadDir(out)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%s: --out %s: %w", buildVerb, out, err)
+	}
+	present := make([]string, 0, len(entries))
+	for _, e := range entries {
+		// The transient half is kbase's own and is not "already there": it is
+		// either this job's resume material or a kept run's evidence, and the
+		// store's own sweep and teardown are what govern it.
+		if e.Name() == pipeline.TempWorkDirName {
+			continue
+		}
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		present = append(present, name)
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	resuming, why := interruptedJob(out)
+	if resuming {
+		return nil
+	}
+	return fmt.Errorf("%s: refusing to deliver into a directory that is not empty; it holds:\n%s\n"+
+		"nothing was written; %s — kbase delivers a whole knowledge base or nothing and never "+
+		"updates one in place, so delete %s (or name an empty --out) and build again",
+		buildVerb, indentedList(present), why, out)
+}
+
+// interruptedJob reports whether `<out>` is the middle of a build this run may
+// legitimately finish, and — when it is not — the clause the refusal quotes.
+//
+// The predicate is the temp-work tree's, never the delivered files': temp-work
+// survives exactly the runs that did NOT finish (a successful run tears it
+// down, §3.1), and the run record inside it is written only once a delivery has
+// completed (§3.8). So "temp-work/ present and no run record in it" is
+// precisely "an interrupted build left this here" — which is the state §5's
+// resume reads, and the only state whose delivered residue belongs to this run.
+//
+// A `--keep-temp-work` run that SUCCEEDED leaves both, and that is a rerun and
+// not a resume: it refuses like any other. Only a definitive absence counts as
+// resume state, so a temp-work tree kbase cannot read refuses rather than
+// licensing an overwrite.
+func interruptedJob(out string) (bool, string) {
+	work := filepath.Join(out, pipeline.TempWorkDirName)
+	if _, err := os.Stat(work); err != nil {
+		return false, fmt.Sprintf("there is no %s/ here, so no interrupted build owns them",
+			pipeline.TempWorkDirName)
+	}
+	if _, err := os.Stat(filepath.Join(work, buildRecordName)); errors.Is(err, os.ErrNotExist) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("the %s/ here holds %s, so the build that wrote these finished — "+
+		"this is a rerun, not the resume of an interrupted one",
+		pipeline.TempWorkDirName, buildRecordName)
 }
 
 // deliver copies the proven bytes out of the store into <out> proper — the
@@ -1001,6 +1091,17 @@ func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 	t := j.art.Corpus
 	fmt.Fprintf(w, "corpus: %s (%d files, %d sections, %d tokens, sha256 %s)\n",
 		j.opts.Root, t.Files, t.Sections, t.Tokens, t.ContentHash)
+	if n := t.Links.Unresolved; n > 0 {
+		// The one line the exemption gets. Guarantee 1 does not fail on these
+		// — a destination naming a document this corpus does not hold is a
+		// defect in the corpus, and refusing delivery over it would make an
+		// unbuildable KB out of someone else's typo (§4.5 rule 3). What it may
+		// not be is silent: the pages ship carrying the destination exactly as
+		// written, and the operator is the only one who can go and look.
+		fmt.Fprintf(j.opts.Stderr,
+			"links: %s; %d destination(s) name no document in the corpus and are delivered verbatim, exempt from guarantee 1\n",
+			linkCensus(t.Links), n)
+	}
 	fmt.Fprintf(w, "budget: %d tokens per page\n", plan.Budgets.LeafTokens)
 	fmt.Fprintf(w, "tree plan: %d nodes (%d pages, %d sections), %d groups, %d split\n",
 		len(plan.Nodes), rep.Leaves, rep.Indexes, len(plan.Groups), splitGroupCount(plan))
@@ -1035,12 +1136,24 @@ func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 // re-render — because check 5 compares the delivered bytes against a fresh
 // render, and a renderer holding different summaries would be comparing two
 // different pages and calling the difference a defect.
-func (j *buildJob) renderer(plan treeplan.TreePlan) (*assemble.Renderer, error) {
+func (j *buildJob) renderer(plan treeplan.TreePlan, cuts map[string][]survey.Span) (*assemble.Renderer, error) {
 	summaries, err := summarize.All(j.store, summariesDir, plan)
 	if err != nil {
 		return nil, err
 	}
-	return assemble.NewRenderer(plan, j.prov, summaries)
+	// The per-part descriptors an index's bullets carry are stage 5's, derived
+	// from the same (tree plan, cut list, survey) triple the pages are: a
+	// distiller is how this verb asks for them, here as at stage 9, so the
+	// rendered index and its re-derivation read one implementation.
+	d, err := distill.New(plan, j.art, j.corpus, cuts, j.prov)
+	if err != nil {
+		return nil, err
+	}
+	descriptors, err := d.Descriptors()
+	if err != nil {
+		return nil, err
+	}
+	return assemble.NewRenderer(plan, j.prov, summaries, descriptors)
 }
 
 // summaryCount is how many sections a summary was written for — the live
@@ -1103,7 +1216,7 @@ func (j *buildJob) readReport() (assemble.Report, error) {
 }
 
 // deliveredPaths is the whole delivered set — class A then class B — in a
-// stable order (§8.1).
+// stable order (§4.7).
 func deliveredPaths(plan treeplan.TreePlan) []string {
 	out := make([]string, 0, len(plan.Nodes)+len(assemble.Manifest()))
 	for _, n := range plan.Nodes {
@@ -1115,6 +1228,28 @@ func deliveredPaths(plan treeplan.TreePlan) []string {
 }
 
 func cutListPath(group string) string { return cutsDir + "/" + group + "/" + cutListName }
+
+// splitChildCuts is the cut lists one index reads through its own down-links:
+// a bullet naming a part of a split group carries that part's post-cut
+// descriptor, which stage 4 decided. A page that renders a value declares the
+// artifact the value came from, or a re-adjudicated boundary would leave a
+// stale bullet behind on a resumed run.
+func splitChildCuts(plan treeplan.TreePlan, parent string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range plan.Nodes {
+		if n.Kind != treeplan.KindLeaf || n.Parent != parent {
+			continue
+		}
+		g, ok := plan.SplitGroup(n.SplitGroup)
+		if !ok || g.Parts == 1 || seen[g.ID] {
+			continue
+		}
+		seen[g.ID] = true
+		out = append(out, cutListPath(g.ID))
+	}
+	return out
+}
 
 func splitGroupCount(plan treeplan.TreePlan) int {
 	n := 0
@@ -1210,9 +1345,33 @@ type buildRun struct {
 	// annex nothing, which is not what a run without the flag made.
 	Annexes []string `json:"annexes,omitempty"`
 
-	Budgets     treeplan.Budgets       `json:"budgets"`
-	Files       int                    `json:"sourceFiles"`
-	Sections    int                    `json:"sourceSections"`
+	Budgets  treeplan.Budgets `json:"budgets"`
+	Files    int              `json:"sourceFiles"`
+	Sections int              `json:"sourceSections"`
+
+	// Excluded and Exclusions are the corpus DENOMINATOR: what the corpus root
+	// held that the ingest walk did not take, and why (ingest.Exclusion's reason
+	// classes). Without them `sourceFiles` is a count of what kbase chose to
+	// look at, and a format class the walk ignores — a corpus's `.mdx` files
+	// are the live case — leaves no trace anywhere [MAD2: B-3]. Disclosure is
+	// this record and nothing else (ruled 2026-08-17): the knowledge base is
+	// the documentation set's, not a report on the walk. The total is stated
+	// beside the list because the denominator is the load-bearing half; the
+	// list is omitted when a corpus root holds nothing but documents.
+	Excluded   int                `json:"sourceExcluded"`
+	Exclusions []ingest.Exclusion `json:"exclusions,omitempty"`
+
+	// Links is the corpus's link census (§3.2's roll-up), recorded because it
+	// is the measurement guarantee 1's exemption is taken against. A
+	// destination the survey could not resolve is delivered verbatim and
+	// exempted from that gate (§4.5 rule 3) — which is right, since the defect
+	// is in someone else's corpus, and is only defensible while somebody can
+	// see how often it happened. `internal` is the other half of the same
+	// reading: a corpus with a working link graph that resolved none of it is
+	// a resolver failure, and without this line it looks exactly like a corpus
+	// with no cross-references.
+	Links survey.LinkTotals `json:"links"`
+
 	Nodes       int                    `json:"nodes"`
 	Leaves      int                    `json:"pages"`
 	Indexes     int                    `json:"sections"`
@@ -1379,7 +1538,12 @@ Configuration is resolved the way every verb resolves it (--config-dir, else
 $KBASE_CONFIG_DIR, else ~/.config/kbase); an unconfigured tier refuses before
 the corpus is read, so a misconfigured run costs nothing.
 
---out is required and receives the knowledge base and nothing else. Everything
+--out is required and receives the knowledge base and nothing else — so a --out
+that already holds files refuses before the corpus is read, naming every one and
+writing nothing: kbase delivers a whole knowledge base or nothing and never
+updates one in place, so rebuilding means deleting the old tree first. A build
+that was interrupted is the one exception; the next run of the same --out
+finishes it. Everything
 else the run produces lives under <out>/temp-work/, which kbase creates and, on
 a successful run, removes: every intermediate, and the run record naming the
 corpus and its hash, the budgets, the counts and each gate's verdict. A failed

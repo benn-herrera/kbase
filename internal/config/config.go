@@ -73,7 +73,7 @@ type DevConfig struct {
 	// BuildDate pins the date every delivered page's provenance receipt is
 	// stamped with, as YYYY-MM-DD. Empty means today, UTC.
 	//
-	// Upstream cause: the receipt is DATED BY DESIGN (SPEC §7), so two
+	// Upstream cause: the receipt is DATED BY DESIGN (SPEC §4.6), so two
 	// otherwise identical runs that straddle midnight deliver different
 	// bytes. Byte-determinism is a property worth testing and a clock
 	// cannot be tested against, so the date has to be pinnable from

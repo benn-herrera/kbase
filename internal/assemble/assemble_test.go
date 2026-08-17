@@ -1,6 +1,7 @@
 package assemble
 
 import (
+	"path"
 	"strings"
 	"testing"
 
@@ -20,11 +21,25 @@ import (
 // this package is downstream of the survey artifact and its tests are too (the
 // format seam, ARCHITECTURE §4). Every check below then mutates one thing
 // about that tree and names the gate that must catch it.
+
+// Every span here is written over the content floor the tree plan enforces
+// (dissect.MinTokens): a preamble under it is merged into the section below it
+// rather than becoming a page, and this fixture needs both of each document's
+// spans to be pages of their own.
 const (
-	oneBody = "The first document.\n\n# First\n\nFirst body.\n"
-	twoBody = "The second document.\n\n# Second\n\nSecond body.\n"
-	oneHead = len("The first document.\n\n")
-	twoHead = len("The second document.\n\n")
+	filler = "\nThis paragraph carries the span it sits in over the minimum amount of " +
+		"material a delivered page may hold, so the fixture keeps its shape: two " +
+		"documents, a preamble and a section each, four pages under two indexes.\n"
+
+	onePreamble = "The first document.\n" + filler + "\n"
+	oneSection  = "# First\n\nFirst body.\n" + filler
+	twoPreamble = "The second document.\n" + filler + "\n"
+	twoSection  = "# Second\n\nSecond body.\n" + filler
+
+	oneBody = onePreamble + oneSection
+	twoBody = twoPreamble + twoSection
+	oneHead = len(onePreamble)
+	twoHead = len(twoPreamble)
 )
 
 type scene struct {
@@ -67,13 +82,17 @@ func newScene(t *testing.T) scene {
 		t.Fatalf("Compose: %v", err)
 	}
 	prov := distill.Provenance{CorpusHash: art.Corpus.ContentHash, BuildDate: "2026-08-13"}
-	r, err := NewRenderer(plan, prov, nil)
-	if err != nil {
-		t.Fatalf("NewRenderer: %v", err)
-	}
 	d, err := distill.New(plan, art, corpus, nil, prov)
 	if err != nil {
 		t.Fatalf("distill.New: %v", err)
+	}
+	descriptors, err := d.Descriptors()
+	if err != nil {
+		t.Fatalf("Descriptors: %v", err)
+	}
+	r, err := NewRenderer(plan, prov, nil, descriptors)
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
 	}
 
 	sc := scene{plan: plan, renderer: r, verifier: v, est: est,
@@ -135,7 +154,7 @@ func TestVerifyGreen(t *testing.T) {
 		t.Fatal("Passed() is false on a run with no error")
 	}
 	if len(rep.Checks) != 10 {
-		t.Fatalf("the report holds %d checks, want the ten of §9", len(rep.Checks))
+		t.Fatalf("the report holds %d checks, want the ten of §4.8", len(rep.Checks))
 	}
 	for i, c := range rep.Checks {
 		if c.Number != i+1 {
@@ -198,10 +217,50 @@ func TestVerifyGates(t *testing.T) {
 			v.Leaves = withData(sc.leaves, p, v.Files[p])
 		},
 	}, {
+		// A continuation edge is the same pair of projections as the up-link
+		// [MAD2: B-4], so the same gate reads it: a part pointed at one sibling
+		// and labelled with another is the defect a copy or a hand edit makes.
+		name:  "a continuation link whose label and target name different nodes",
+		check: 2,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			p := anyLeaf(t, sc)
+			node := nodeAt(t, sc, p)
+			up := distill.UpLink(p, node.Parent)
+			v.Files[p] = []byte(strings.Replace(string(v.Files[p]),
+				up+"\n", up+"\n[→ elsewhere/other.md](index.md)\n", 1))
+			v.Leaves = withData(sc.leaves, p, v.Files[p])
+		},
+	}, {
 		name:  "the entry-point was not delivered",
 		check: 3,
 		break_: func(t *testing.T, sc scene, v *Verification) {
 			delete(v.Files, sc.renderer.EntryPointPath())
+		},
+	}, {
+		// The case in-degree could not see [MAD2: B-9]: every member of the
+		// island is linked from another class-A page, and no descent from the
+		// entry-point arrives at any of them.
+		name:  "a severed island the entry-point no longer names",
+		check: 4,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			entry := sc.renderer.EntryPointPath()
+			island, rest := anyIndex(t, sc), otherIndex(t, sc)
+			v.Files[entry] = []byte(strings.Replace(string(v.Files[entry]),
+				"("+distill.RelPath(entry, island)+")", "("+distill.RelPath(entry, rest)+")", 1))
+		},
+	}, {
+		// The exclusion guarantee 4 states in words: a page whose only inbound
+		// edge is its own link to itself is reachable from nothing.
+		name:  "a page whose only inbound link is its own",
+		check: 4,
+		break_: func(t *testing.T, sc scene, v *Verification) {
+			p := anyLeaf(t, sc)
+			parent := nodeAt(t, sc, p).Parent
+			v.Files[parent] = []byte(strings.Replace(string(v.Files[parent]),
+				"("+distill.RelPath(parent, p)+")", "("+distill.RelPath(parent, parent)+")", 1))
+			v.Files[p] = []byte(strings.Replace(string(v.Files[p]),
+				"\n\n", "\n\nsee [this very page]("+path.Base(p)+")\n\n", 1))
+			v.Leaves = withData(sc.leaves, p, v.Files[p])
 		},
 	}, {
 		name:  "a fixture that does not link to the entry-point",
@@ -308,7 +367,7 @@ func TestVerifyCatchesTitleDrift(t *testing.T) {
 		}
 	}
 	v.Plan = plan
-	r, err := NewRenderer(plan, distill.Provenance{CorpusHash: plan.CorpusHash, BuildDate: "2026-08-13"}, nil)
+	r, err := NewRenderer(plan, distill.Provenance{CorpusHash: plan.CorpusHash, BuildDate: "2026-08-13"}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -362,6 +421,71 @@ func TestIndexRendersEmptySummariesLegally(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("the down-link list is missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// The gate reads the navigation BLOCK, not the page: a leaf's verbatim body
+// may carry its source site's own prev/next furniture, and a check broader
+// than the contract it enforces would refuse a delivery nobody can repair
+// [MAD2: B-11].
+func TestVerifyLeavesNavShapedSourceLinesAlone(t *testing.T) {
+	sc := newScene(t)
+	v := sc.verification()
+	p := anyLeaf(t, sc)
+	// Below the page's own heading, and pointing at a file the tree really
+	// delivers so that guarantee 1 has no quarrel with it: the label is prose,
+	// which is exactly what the up-link agreement rule forbids of page grammar.
+	marker := "# " + nodeAt(t, sc, p).Title + "\n"
+	text := string(v.Files[p])
+	if !strings.Contains(text, marker) {
+		t.Fatalf("%s carries no heading to insert below:\n%s", p, text)
+	}
+	v.Files[p] = []byte(strings.Replace(text, marker, marker+"\n[← Back to the guide](index.md)\n", 1))
+	v.Leaves = withData(sc.leaves, p, v.Files[p])
+
+	if _, err := Verify(v); err != nil {
+		t.Fatalf("a source line shaped like a continuation link refused the delivery: %v", err)
+	}
+}
+
+// A split part's bullet carries the group's shared scope AND its own post-cut
+// descriptor, which is what makes two sibling bullets choosable [MAD2: B-4].
+func TestIndexBulletsCarryPartDescriptors(t *testing.T) {
+	sc := newScene(t)
+	p := anyIndex(t, sc)
+	kids := sc.renderer.Children(p)
+	if len(kids) == 0 {
+		t.Fatalf("%s holds no children to render a bullet for", p)
+	}
+	child := kids[0]
+	bullet := "- [" + child.Title + "](" + distill.RelPath(p, child.Path) + ") — " + child.Scope
+
+	render := func(descriptors map[string]string) string {
+		t.Helper()
+		prov := distill.Provenance{CorpusHash: sc.plan.CorpusHash, BuildDate: "2026-08-13"}
+		r, err := NewRenderer(sc.plan, prov, nil, descriptors)
+		if err != nil {
+			t.Fatalf("NewRenderer: %v", err)
+		}
+		page, err := r.Node(nodeAt(t, sc, p))
+		if err != nil {
+			t.Fatalf("Node %s: %v", p, err)
+		}
+		return string(page)
+	}
+
+	described := render(map[string]string{child.Path: "First Movement → Second Movement"})
+	if want := bullet + " (this part: First Movement → Second Movement)\n"; !strings.Contains(described, want) {
+		t.Errorf("the down-link list is missing %q:\n%s", want, described)
+	}
+	// The shared scope survives beside it: the descriptor is added to the
+	// bullet grammar, not substituted for the group's own scope line.
+	if !strings.Contains(described, child.Scope) {
+		t.Errorf("the part's bullet lost the group's scope:\n%s", described)
+	}
+	plain := render(nil)
+	if want := bullet + "\n"; !strings.Contains(plain, want) {
+		t.Errorf("a child with no descriptor did not render its plain bullet %q:\n%s", want, plain)
 	}
 }
 
@@ -421,6 +545,20 @@ func anyIndex(t *testing.T, sc scene) string {
 		}
 	}
 	t.Fatal("the fixture has no sections")
+	return ""
+}
+
+// otherIndex is the second section — the one a severed island's entry-point
+// link is diverted to, so the entry-point still names something delivered.
+func otherIndex(t *testing.T, sc scene) string {
+	t.Helper()
+	first := anyIndex(t, sc)
+	for _, n := range sc.plan.Nodes {
+		if n.Kind == treeplan.KindIndex && n.Path != first {
+			return n.Path
+		}
+	}
+	t.Fatal("the fixture has only one section")
 	return ""
 }
 

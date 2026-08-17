@@ -7,7 +7,7 @@ import "strings"
 // # Why this exists here and not behind the format seam
 //
 // ARCHITECTURE §4's format seam says stages downstream of the survey consume
-// artifact fields and byte offsets, never a parser. §4.4 then asks stage 5 to
+// artifact fields and byte offsets, never a parser. §4.5 then asks stage 5 to
 // rewrite link TARGETS inside a leaf's bytes — and `survey.Link` carries the
 // destination as written, the resolved document and the fragment, but NO byte
 // offsets, and it collapses repeats of one target to a single entry. So the
@@ -53,26 +53,40 @@ func (d Destination) Text(src []byte) string { return string(src[d.Start:d.End])
 // Destinations returns every link destination in src, in order.
 func Destinations(src []byte) []Destination {
 	var out []Destination
-	s := string(src)
+	unfenced(string(src), func(at int, line string) {
+		if d, ok := refDefinition(line); ok {
+			out = append(out, Destination{Start: at + d.Start, End: at + d.End})
+			return
+		}
+		for _, d := range inlineDestinations(line) {
+			out = append(out, Destination{Start: at + d.Start, End: at + d.End})
+		}
+	})
+	return out
+}
+
+// unfenced calls fn with every line of s that sits OUTSIDE a fenced code
+// block, and the offset that line starts at.
+//
+// It is the fence walk itself, factored out because two questions are asked of
+// delivered bytes and both mean "outside a fence": which destinations a page
+// links to, and how many up-links it carries (UpLinkCount). A second walk
+// would be a second answer to "is this line source content or page grammar",
+// which is the disagreement that let a fenced `[↑ ` line in a verbatim leaf
+// refuse a whole delivery [MAD2: B-11].
+func unfenced(s string, fn func(at int, line string)) {
 	fenced := false
 	for _, ln := range lines(s) {
 		line := s[ln.Start:ln.End]
-		if fence := fenceMarker(line); fence != "" {
+		if fenceMarker(line) != "" {
 			fenced = !fenced
 			continue
 		}
 		if fenced {
 			continue
 		}
-		if d, ok := refDefinition(line); ok {
-			out = append(out, Destination{Start: ln.Start + d.Start, End: ln.Start + d.End})
-			continue
-		}
-		for _, d := range inlineDestinations(line) {
-			out = append(out, Destination{Start: ln.Start + d.Start, End: ln.Start + d.End})
-		}
+		fn(ln.Start, line)
 	}
-	return out
 }
 
 // lines splits src into line ranges, newline excluded.

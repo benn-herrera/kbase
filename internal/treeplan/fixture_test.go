@@ -25,6 +25,17 @@ import (
 // not tile fails as loudly here as an adapter's would in production. The tests
 // are then arguing about tree structure and never about whether the material
 // under it is well-formed.
+//
+// # Sections are sized over the content floor
+//
+// Every section here is written large enough to clear dissect.MinTokens (64
+// tokens, ~256 bytes), because a span under it is not a page: Compose merges it
+// into its neighbour. (A document entirely under the floor is the one
+// exemption — its sole span stands as a leaf at any size, ruled 2026-08-17 —
+// and the test that asserts it says so.) A fixture below the floor therefore
+// tests the floor and nothing else, whatever its author meant it to test — the
+// floor is an appliance constant and does not scale down with testBudgets the
+// way the leaf budget does.
 
 // secSpec is one section of a synthetic document.
 type secSpec struct {

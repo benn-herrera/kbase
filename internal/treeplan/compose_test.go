@@ -8,21 +8,213 @@ import (
 	"testing"
 
 	"kbase/internal/dissect"
+	"kbase/internal/survey"
 )
 
-// smallDoc is three cheap sections in one file.
+// smallDoc is three cheap sections in one file. Cheap, but each one over the
+// content floor — see fixture_test.go.
 func smallDoc(path, title string) docSpec {
 	return docSpec{path: path, title: title, secs: []secSpec{
-		{title: "One", paras: 2, words: 20},
-		{title: "Two", paras: 2, words: 20},
-		{title: "Three", paras: 2, words: 20},
+		{title: "One", paras: 2, words: 35},
+		{title: "Two", paras: 2, words: 35},
+		{title: "Three", paras: 2, words: 35},
 	}}
 }
 
 // oneSectionDoc is a whole file that is one small section, for the tests that
 // are about tree shape and not about spans.
 func oneSectionDoc(path, title string) docSpec {
-	return docSpec{path: path, title: title, secs: []secSpec{{title: "Body", paras: 1, words: 20}}}
+	return docSpec{path: path, title: title, secs: []secSpec{{title: "Body", paras: 1, words: 70}}}
+}
+
+// fragmentDoc is a document whose first section is under the content floor:
+// the preamble-sized opener the Rojo corpus delivers as a page holding one
+// byte [MAD2: B-6].
+func fragmentDoc(path, title string) docSpec {
+	return docSpec{path: path, title: title, secs: []secSpec{
+		{title: "Opener", paras: 1, words: 4},
+		{title: "Body", paras: 2, words: 35},
+		{title: "Tail", paras: 2, words: 35},
+	}}
+}
+
+// §4 row 3, the content floor: a span under the minimum is merged into the
+// adjacent group of the same file rather than becoming a page, and the page
+// that survives is the one holding the material.
+func TestComposeMergesASubFloorSpanIntoItsNeighbour(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// tiny is the index of the sub-floor section, and keeps is the section
+		// whose page must survive holding it.
+		tiny, keeps int
+	}{
+		{name: "a leading fragment merges forward", tiny: 0, keeps: 1},
+		{name: "an interior fragment merges backward", tiny: 2, keeps: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := docSpec{path: "guide.md", title: "Guide", secs: []secSpec{
+				{title: "One", paras: 2, words: 35},
+				{title: "Two", paras: 2, words: 35},
+				{title: "Three", paras: 2, words: 35},
+			}}
+			doc.secs[tc.tiny] = secSpec{title: doc.secs[tc.tiny].title, paras: 1, words: 4}
+			v, art := verifierFor(t, testParams(), doc)
+
+			var leaves []ProposalNode
+			for i, sec := range doc.secs {
+				leaves = append(leaves, leafFor(art, "guide.md", i, "Page "+sec.title))
+			}
+			plan := TreeProposal{Title: "Corpus", Scope: "all",
+				Children: []ProposalNode{indexNode("Domain", leaves...)}}
+
+			s, err := v.Compose(plan, nil)
+			if err != nil {
+				t.Fatalf("Compose: %v", err)
+			}
+			if n := leafCount(s); n != 2 {
+				t.Fatalf("leaves = %d, want 2: the fragment is absorbed, not delivered", n)
+			}
+			// The absorbed page is gone and the neighbour's is the survivor.
+			gone := "domain/page-" + strings.ToLower(doc.secs[tc.tiny].title) + ".md"
+			if _, ok := s.Node(gone); ok {
+				t.Errorf("%s was delivered; the sub-floor span must not name a page", gone)
+			}
+			host, ok := s.Node("domain/page-" + strings.ToLower(doc.secs[tc.keeps].title) + ".md")
+			if !ok {
+				t.Fatalf("the absorbing page is missing; paths are %q", paths(s))
+			}
+			g, ok := s.SplitGroup(host.SplitGroup)
+			if !ok {
+				t.Fatalf("%s names group %q, which the artifact does not hold", host.Path, host.SplitGroup)
+			}
+			// It holds both sections' bytes, contiguously.
+			f := fileOf(art, "guide.md")
+			lo := min(f.Sections[tc.tiny].Start, f.Sections[tc.keeps].Start)
+			hi := max(f.Sections[tc.tiny].End, f.Sections[tc.keeps].End)
+			if g.Source.Start != lo || g.Source.End != hi {
+				t.Errorf("the surviving group spans [%d,%d), want the two sections' [%d,%d)",
+					g.Source.Start, g.Source.End, lo, hi)
+			}
+			assertGroupsMatchTheSplitter(t, v, s)
+		})
+	}
+}
+
+// The floor cascades: a neighbour still under the minimum after absorbing a
+// fragment is itself a fragment, and the fold continues until nothing is left
+// under it.
+func TestComposeMergesRepeatedlyUntilNothingIsUnderTheFloor(t *testing.T) {
+	doc := docSpec{path: "guide.md", title: "Guide", secs: []secSpec{
+		{title: "One", paras: 1, words: 4},
+		{title: "Two", paras: 1, words: 4},
+		{title: "Three", paras: 1, words: 4},
+		{title: "Four", paras: 2, words: 35},
+	}}
+	v, art := verifierFor(t, testParams(), doc)
+	var leaves []ProposalNode
+	for i, sec := range doc.secs {
+		leaves = append(leaves, leafFor(art, "guide.md", i, "Page "+sec.title))
+	}
+	plan := TreeProposal{Title: "Corpus", Scope: "all",
+		Children: []ProposalNode{indexNode("Domain", leaves...)}}
+
+	s, err := v.Compose(plan, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if n := leafCount(s); n != 1 {
+		t.Fatalf("leaves = %d, want 1; three fragments and their host are one page", n)
+	}
+	if len(s.Groups) != 1 {
+		t.Fatalf("groups = %d, want 1", len(s.Groups))
+	}
+	if got, want := s.Groups[0].Source, (Span{File: "guide.md", Start: 0, End: fileOf(art, "guide.md").Bytes}); got != want {
+		t.Errorf("the surviving group spans %+v, want the whole file %+v", got, want)
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// The floor applies to splits, not to documents (ruled 2026-08-17): a span that
+// covers everything its file holds stands as its own leaf whatever its size,
+// because the floor's target is a page manufactured out of part of a larger
+// document and a whole tiny document behind its own title is not that.
+//
+// This is the case that used to refuse — a corpus of whole documents under the
+// floor was unbuildable, since no document has an adjacent span of another file
+// to merge into.
+func TestComposeKeepsAFileWholeSoleSpanAsALeaf(t *testing.T) {
+	// ~30 tokens: a third of the floor, so nothing here passes by clearing it.
+	stub := func(path, title string) docSpec {
+		return docSpec{path: path, title: title, secs: []secSpec{{title: "All", paras: 1, words: 22}}}
+	}
+	v, art := verifierFor(t, testParams(), stub("a.md", "A"), stub("b.md", "B"), smallDoc("guide.md", "Guide"))
+	for _, f := range []string{"a.md", "b.md"} {
+		span := Span{File: f, Start: 0, End: fileOf(art, f).Bytes}
+		src, _ := v.bytes(f)
+		if !(dissect.Params{Est: v.p.Est}).UnderMinimum(src,
+			survey.Span{Start: span.Start, End: span.End}) {
+			t.Fatalf("%s is over the %d-token floor; this fixture no longer tests the exemption",
+				f, dissect.MinTokens)
+		}
+	}
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
+		wholeFileLeaf(art, "a.md", "Page A"),
+		wholeFileLeaf(art, "b.md", "Page B"),
+		leafFor(art, "guide.md", 0, "One"),
+		leafFor(art, "guide.md", 1, "Two"),
+		leafFor(art, "guide.md", 2, "Three"),
+	}}
+
+	s, err := v.Compose(plan, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if n := leafCount(s); n != 5 {
+		t.Fatalf("leaves = %d, want 5: two tiny documents and three sections of a third", n)
+	}
+	// Each tiny document owns a page, and that page holds the whole file.
+	for _, f := range []string{"a.md", "b.md"} {
+		want := Span{File: f, Start: 0, End: fileOf(art, f).Bytes}
+		found := false
+		for _, g := range s.Groups {
+			if g.Source == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no group spans the whole of %s; groups are %+v", f, s.Groups)
+		}
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// A span with a neighbour it does not TOUCH is not mergeable: closing the gap
+// would deliver bytes no group planned, and would paper over the coverage hole
+// §3.3's tiling check exists to refuse.
+func TestComposeWillNotMergeAcrossAGap(t *testing.T) {
+	doc := docSpec{path: "guide.md", title: "Guide", secs: []secSpec{
+		{title: "One", paras: 1, words: 4},
+		{title: "Two", paras: 2, words: 35},
+		{title: "Three", paras: 2, words: 35},
+	}}
+	v, art := verifierFor(t, testParams(), doc)
+	f := fileOf(art, "guide.md")
+	// The fragment, and a page that starts one byte after it ends.
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
+		{Title: "Fragment", Scope: "s", Kind: KindLeaf,
+			Sources: []Span{{File: "guide.md", Start: 0, End: f.Sections[0].End}}},
+		{Title: "Rest", Scope: "s", Kind: KindLeaf,
+			Sources: []Span{{File: "guide.md", Start: f.Sections[1].Start + 1, End: f.Bytes}}},
+	}}
+
+	_, err := v.Compose(plan, nil)
+	var defect DefectError
+	if !errors.As(err, &defect) {
+		t.Fatalf("want the floor's refusal over a gap, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "no adjacent material") {
+		t.Fatalf("the refusal is not the floor's: %v", err)
+	}
 }
 
 func TestComposeMechanicalTree(t *testing.T) {
@@ -488,6 +680,12 @@ func TestNewVerifierRefusesMismatchedInputs(t *testing.T) {
 // assertGroupsMatchTheSplitter is §3.5's acceptance criterion read directly:
 // re-running the mechanical splitter over a group's span at its budget yields
 // exactly the part count the tree plan claims.
+//
+// It also reads the content floor where it is finally DELIVERED — on the
+// parts, one per page — rather than on the group span Check states it over.
+// The two agree because the splitter pre-merges below-minimum sections, so a
+// span over the floor cannot yield a part under it; this is that implication
+// exercised over real bytes instead of argued in a comment [MAD2: B-6].
 func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s TreePlan) {
 	t.Helper()
 	for _, g := range s.Groups {
@@ -497,6 +695,12 @@ func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s TreePlan) {
 		}
 		if len(cuts) != g.Parts {
 			t.Errorf("group %s claims %d parts, the splitter makes %d", g.ID, g.Parts, len(cuts))
+		}
+		for k, c := range cuts {
+			if v.underFloor(Span{File: g.Source.File, Start: c.Start, End: c.End}) {
+				t.Errorf("group %s part %d of %d is under the content floor; no delivered page may be",
+					g.ID, k+1, len(cuts))
+			}
 		}
 	}
 }

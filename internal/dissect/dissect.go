@@ -56,14 +56,20 @@ const (
 	// neighbours are.
 	overlapCapTokens = 1000
 
-	// minTokens is the smallest section refinement may produce or keep.
+	// MinTokens is the smallest section refinement may produce or keep.
 	// Below-minimum fragments are pre-merged before the model sees anything,
 	// so it only ever adjudicates real boundaries (§5 step 1).
 	//
 	// It holds "min > overlap into a minimum-sized section" by construction:
 	// the overlap is a FRACTION under 100%, so a minimum section's own
 	// contribution to a window is always smaller than the section.
-	minTokens = 64
+	//
+	// It is exported because the SAME floor binds one seam upstream: the tree
+	// plan merges a below-minimum span into an adjacent group rather than
+	// naming a page over it (ARCHITECTURE §4 row 3), and a page too small to
+	// be worth a hop and a section too small to be worth a cut are one
+	// number, not two that happen to agree.
+	MinTokens = 64
 )
 
 // Params is what a cut list for one span was derived under: the estimator
@@ -96,14 +102,18 @@ type Params struct {
 // package already holds.
 func (p Params) estimate(b []byte) int { return p.Est.EstimateBytes(b) }
 
-// underMinimum reports whether a section is below the minimum size.
+// UnderMinimum reports whether a section is below the minimum size.
 //
 // One spelling, because this is the predicate the proposer and the verifier
 // must never disagree about: premerge folds a section away when it is true and
 // Verify rejects a list when it is true, and two copies of it would drift on
 // exactly the day the difference decided whether a cut list was legal.
-func (p Params) underMinimum(src []byte, r survey.Span) bool {
-	return p.estimate(src[r.Start:r.End]) < minTokens
+//
+// It is exported for the same reason MinTokens is: the tree-plan seam asks
+// this question of a group's span before any cut list exists, and asking it
+// with its own arithmetic would be that second copy.
+func (p Params) UnderMinimum(src []byte, r survey.Span) bool {
+	return p.estimate(src[r.Start:r.End]) < MinTokens
 }
 
 // SliceLeaves returns one byte slice per section of a VERIFIED cut list, in

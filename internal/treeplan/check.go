@@ -164,6 +164,12 @@ func checkCaps(s TreePlan, levels map[string]int) error {
 //
 // It is also the only statement the artifact can make about parts, because the
 // artifact deliberately holds no interior boundary (I-1, F-2).
+//
+// The content floor is asked here too, of the same spans: a group carries at
+// least dissect.MinTokens of material. Compose's floor operator guarantees it
+// by merging, so this is what makes "produced by Compose" and "passes Check"
+// one predicate over the floor as well — and what stage 9 re-asks of an
+// artifact it did not build.
 func (v *Verifier) checkGroups(s TreePlan) (map[string]survey.Span, error) {
 	byID := make(map[string]SplitGroup, len(s.Groups))
 	for _, g := range s.Groups {
@@ -191,6 +197,14 @@ func (v *Verifier) checkGroups(s TreePlan) (map[string]survey.Span, error) {
 			return nil, DefectError{Subject: g.ID, Reason: fmt.Sprintf(
 				"claims %d parts and the splitter makes %d of the same span at the same budget",
 				g.Parts, len(got))}
+		}
+		// The content floor, stated over the group's span (the floor operator
+		// merges spans, so the span is what it repairs). It carries to every
+		// PART of the group for free: the splitter pre-merges below-minimum
+		// sections, so a span at or over the floor cannot yield a part under
+		// it, and refinement holds the same minimum over the moved boundaries.
+		if v.underFloor(g.Source) {
+			return nil, underFloorDefect([]Span{g.Source})
 		}
 		cuts[g.ID] = got
 	}

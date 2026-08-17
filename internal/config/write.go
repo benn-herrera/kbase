@@ -73,8 +73,8 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 
 [` + tableModels + `]
-# ` + TierHeavy + `: taxonomy design, hierarchical summaries, regeneration.
-# ` + TierLight + `: dissection, distillation, review.
+# ` + TierHeavy + `: taxonomy design, hierarchical summaries.
+# ` + TierLight + `: page-boundary adjudication.
 %s
 %s
 

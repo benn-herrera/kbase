@@ -95,9 +95,9 @@ func Verify(src []byte, span survey.Span, cands []survey.CutCandidate, cuts []su
 	// rather than a bad cut.
 	if len(cuts) > 1 {
 		for _, c := range cuts {
-			if p.underMinimum(src, c) {
+			if p.UnderMinimum(src, c) {
 				return RejectionError{Offset: c.Start, Reason: fmt.Sprintf(
-					"a section is under the %d-token minimum", minTokens)}
+					"a section is under the %d-token minimum", MinTokens)}
 			}
 		}
 	}

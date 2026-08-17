@@ -100,9 +100,17 @@ func runSurvey(opts surveyOptions) error {
 	t := artifact.Corpus
 	fmt.Fprintf(summary, "survey ok: files=%d bytes=%d tokens=%d sections=%d top-level=%d\n",
 		t.Files, t.Bytes, t.Tokens, t.Sections, topLevel)
-	fmt.Fprintf(summary, "links: internal=%d unresolved=%d external=%d anchor=%d\n",
-		t.Links.Internal, t.Links.Unresolved, t.Links.External, t.Links.Anchor)
+	fmt.Fprintf(summary, "links: %s\n", linkCensus(t.Links))
 	return nil
+}
+
+// linkCensus renders §3.2's link roll-up. One rendering, because `build`
+// reports the same four numbers when it warns about the destinations
+// guarantee 1 exempts (§4.5 rule 3), and a reader who has read one summary
+// should not have to learn a second order to read the other.
+func linkCensus(t survey.LinkTotals) string {
+	return fmt.Sprintf("internal=%d unresolved=%d external=%d anchor=%d",
+		t.Internal, t.Unresolved, t.External, t.Anchor)
 }
 
 // writeArtifact writes the survey JSON to path, or to stdout for "-".

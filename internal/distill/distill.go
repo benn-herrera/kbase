@@ -7,7 +7,7 @@
 // slice from the two artifacts that own it — the tree plan says which BYTES a
 // group holds, the cut list says where the interior boundaries of a split
 // group fall [MAD1: F-2] — applies the one permitted transformation
-// (link-target rebasing, §4.4), wraps the result in §4.1's grammar, and stops.
+// (link-target rebasing, §4.5), wraps the result in §4.1's grammar, and stops.
 // There is no AskSpec, no seam to classify and no token to spend, which is a
 // property a caller can assert rather than trust: a stage built from Lanes
 // below is all Produce tasks.
@@ -54,6 +54,29 @@ type Distiller struct {
 
 	rebase *rebaseMap
 	titles map[string]string
+	// parts is which leaf is part k of a split group — the continuation edges
+	// read as a lookup rather than re-derived from a name, because the part
+	// naming grammar is the tree plan's and nothing here may spell it twice
+	// (I-1).
+	parts map[partKey]string
+	// headings is every source heading of every file, in document order, which
+	// is what a part's post-cut descriptor is drawn from (Descriptors).
+	headings map[string][]heading
+}
+
+// partKey names one part of one split group.
+type partKey struct {
+	group string
+	part  int
+}
+
+// heading is one source heading: where it starts, and the text the survey read
+// off it. The survey is the only place a heading is ever parsed (the format
+// seam, ARCHITECTURE §4), so a descriptor drawn from these carries plain text
+// and never a fragment of Markdown syntax.
+type heading struct {
+	start int
+	title string
 }
 
 // New returns a distiller over one job's artifacts.
@@ -83,10 +106,37 @@ func New(plan treeplan.TreePlan, art survey.Artifact, corpus ingest.Corpus,
 		return nil, err
 	}
 	titles := make(map[string]string, len(plan.Nodes))
+	parts := map[partKey]string{}
 	for _, n := range plan.Nodes {
 		titles[n.Path] = n.Title
+		if n.Kind == treeplan.KindLeaf {
+			parts[partKey{group: n.SplitGroup, part: n.Part}] = n.Path
+		}
 	}
-	return &Distiller{plan: plan, corpus: corpus, cuts: cuts, prov: prov, rebase: rb, titles: titles}, nil
+	return &Distiller{plan: plan, corpus: corpus, cuts: cuts, prov: prov, rebase: rb,
+		titles: titles, parts: parts, headings: sourceHeadings(art)}, nil
+}
+
+// sourceHeadings flattens the survey's heading tree per file into document
+// order: a section's own heading, then the headings under it, which is the
+// order their bytes appear in.
+func sourceHeadings(art survey.Artifact) map[string][]heading {
+	out := make(map[string][]heading, len(art.Files))
+	for _, f := range art.Files {
+		var hs []heading
+		var walk func([]survey.Section)
+		walk = func(secs []survey.Section) {
+			for _, s := range secs {
+				if s.Title != "" {
+					hs = append(hs, heading{start: s.Start, title: s.Title})
+				}
+				walk(s.Children)
+			}
+		}
+		walk(f.Sections)
+		out[f.Path] = hs
+	}
+	return out
 }
 
 // Leaf is one rendered leaf file and what the rebase left alone.
@@ -100,7 +150,7 @@ type Leaf struct {
 	// Unresolved are the corpus-relative destinations in this leaf that the
 	// rebase map does not land — a target that is `LinkUnresolved` in the
 	// survey, one inside an annex, or one whose file no node was drawn from
-	// (§4.4 rule 3). They stay verbatim in Data, and §9 check 1 exempts them:
+	// (§4.5 rule 3). They stay verbatim in Data, and §4.8 guarantee 1 exempts them:
 	// a defect in someone else's corpus is inventoried, not repaired and not
 	// fatal.
 	Unresolved []string
@@ -136,7 +186,73 @@ func (d *Distiller) Render(n treeplan.Node) (Leaf, error) {
 	// one.
 	body := dissect.SliceLeaves(doc.Bytes, []survey.Span{span})[0]
 	rebased, left := d.rebase.apply(g.Source.File, n.Path, body)
-	return Leaf{Node: n.Path, Data: leaf(n, rebased, d.prov), Unresolved: left}, nil
+	prev, next := d.siblings(n)
+	return Leaf{Node: n.Path, Data: leaf(n, prev, next, rebased, d.prov), Unresolved: left}, nil
+}
+
+// siblings is the part before and the part after this one in its own split
+// group — empty where there is none, which is the first part's previous, the
+// last part's next, and both of an unsplit leaf.
+func (d *Distiller) siblings(n treeplan.Node) (prev, next string) {
+	return d.parts[partKey{group: n.SplitGroup, part: n.Part - 1}],
+		d.parts[partKey{group: n.SplitGroup, part: n.Part + 1}]
+}
+
+// Descriptors is what each part of a split group actually turns out to hold,
+// keyed by node path: the title of the first source heading the part delivers,
+// and of the last where it delivers more than one.
+//
+// A split group's parts share ONE scope, authored at stage 3 against the whole
+// span — the boundaries were not chosen yet, so no per-part description could
+// have been written there [MAD2: B-4]. This is the post-cut half: mechanical,
+// no model, and derived from the same (tree plan, cut list, survey) triple the
+// pages themselves are, which is what lets stage 8 render it into the index and
+// stage 9 re-derive the same string rather than trust the one it is checking.
+//
+// Only split groups appear. An unsplit leaf's bullet is already the only one
+// naming its material, and a part that delivers no heading at all — a cut that
+// fell in open prose — contributes nothing rather than a fabricated label.
+func (d *Distiller) Descriptors() (map[string]string, error) {
+	out := map[string]string{}
+	for _, n := range d.Leaves() {
+		g, ok := d.plan.SplitGroup(n.SplitGroup)
+		if !ok {
+			return nil, fmt.Errorf("distill: %s names group %q, which the tree plan does not hold", n.Path, n.SplitGroup)
+		}
+		if g.Parts == 1 {
+			continue
+		}
+		span, err := partSpan(g, n.Part, d.cuts[g.ID])
+		if err != nil {
+			return nil, err
+		}
+		if desc := describePart(d.headings[g.Source.File], span); desc != "" {
+			out[n.Path] = desc
+		}
+	}
+	return out, nil
+}
+
+// describePart names one part by the headings inside its own byte range.
+//
+// A heading whose line STARTS inside the range is delivered on that page —
+// the body is the range verbatim — so the membership test is the range test,
+// with no second notion of where a section belongs.
+func describePart(hs []heading, span survey.Span) string {
+	var first, last string
+	for _, h := range hs {
+		if h.start < span.Start || h.start >= span.End {
+			continue
+		}
+		if first == "" {
+			first = h.title
+		}
+		last = h.title
+	}
+	if first == "" || first == last {
+		return first
+	}
+	return first + headingSpan + last
 }
 
 // Leaves is every leaf node of the plan, in tree-plan order.

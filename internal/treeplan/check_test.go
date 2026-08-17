@@ -57,8 +57,18 @@ func TestCheckCatchesTampering(t *testing.T) {
 	}, {
 		name: "a span shrunk so material falls out of the tree",
 		mutate: func(s *TreePlan) {
-			s.Groups[len(s.Groups)-1].Source.End = s.Groups[len(s.Groups)-1].Source.Start + 8
+			// Shrunk by a tail, not down to a stub: a span under the content
+			// floor is refused by the group checks before coverage is ever
+			// asked, and what this tampering is about is coverage.
+			s.Groups[len(s.Groups)-1].Source.End -= 40
 		},
+	}, {
+		name: "a span shrunk under the content floor",
+		mutate: func(s *TreePlan) {
+			g := &s.Groups[len(s.Groups)-1]
+			g.Source.End = g.Source.Start + 8
+		},
+		wantDefect: true,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, s := composeFixture(t)

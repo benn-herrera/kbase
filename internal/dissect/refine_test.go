@@ -1091,8 +1091,8 @@ func TestFoldRefusesTheSecondMoveIntoSpentSlack(t *testing.T) {
 	left := []survey.Span{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[3].Offset}, cuts[2]}
 	right := []survey.Span{cuts[0], {Start: cands[0].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
 	both := []survey.Span{{Start: 0, End: cands[1].Offset}, {Start: cands[1].Offset, End: cands[2].Offset}, {Start: cands[2].Offset, End: span.End}}
-	if got := tokensIn(src, cuts[1]); got < minTokens {
-		t.Fatalf("the middle section is %d tokens; the fixture must start over the %d-token floor", got, minTokens)
+	if got := tokensIn(src, cuts[1]); got < MinTokens {
+		t.Fatalf("the middle section is %d tokens; the fixture must start over the %d-token floor", got, MinTokens)
 	}
 	for _, one := range []struct {
 		name string
