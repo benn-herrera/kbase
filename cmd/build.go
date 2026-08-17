@@ -37,7 +37,7 @@ import (
 //
 // Stages 3 and 6 are model work against the configured provider: the
 // container-descent fold designs the tree (internal/taxonomy, heavy tier,
-// no-fallback seam) and the four level stages write the summaries
+// no-fallback seam) and the level stages write the summaries
 // (internal/summarize, heavy tier, no-fallback seam). Configuration is
 // therefore required in the ordinary path — an unconfigured tier refuses
 // before the job directory is opened rather than failing halfway through it.

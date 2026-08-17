@@ -1,8 +1,8 @@
 // Package summarize is pipeline stage 6 (ARCHITECTURE.md §4 row 6;
-// TEMP_DESIGN_V020_RESHAPE §6): the hierarchical summaries, bottom-up, as four
-// level-sliced stages.
+// TEMP_DESIGN_V020_RESHAPE §6): the hierarchical summaries, bottom-up, as
+// level-sliced stages — two per level (see below).
 //
-// # Why four stages and not one
+// # Why level-sliced stages and not one
 //
 // ARCHITECTURE §12 forbids a unit naming a sibling from its own stage — a
 // stage's units run concurrently, so "earlier in the same stage" is not an
@@ -14,15 +14,38 @@
 // because the depth cap is mechanical (I-9); a level with no nodes resolves to
 // zero lanes and the coordinator skips it.
 //
-// # What a call reads: per child KIND, not per level
+// # What a call reads: summary-class material, and the leaf-group card
 //
-// "An index whose children are leaves" is a property of a NODE, not of a level
-// (F-10). So for any index at any level: leaf children are read as BODIES (the
-// leaves/* artifacts — where conclusions actually come from), index children as
-// their own `framing` + `conclusions` capped at the summary cap, and a mixed
-// index reads both. The whole input is bounded by G-2, which the tree plan
-// proved before this stage ran (treeplan's digest check) — so an over-budget
-// call here is our arithmetic being wrong, not a runtime condition (I-6).
+// Sibling leaves are ALWAYS summarised as a group, in isolation: one call over
+// the direct leaves of one node, which is exactly the call an index whose
+// children are all leaves already makes. Where the node holds nothing else that
+// call's answer IS the node's summary and is delivered as one. Where the node
+// ALSO holds index children, the group's answer is written as an ephemeral CARD
+// — a store artifact, never a delivered page — and the node's own call then
+// reads only summary-class material: the card, plus each index child's framing
+// and conclusions, which its own verifier already held to the summary cap. So
+// summary(node) = blend(group(direct leaves), summaries(index children)), and no
+// leaf body is ever weighed against a capped summary inside one call. The
+// alternative was what shipped until now: a heavy root-level page outweighing
+// three whole domains ~2:1 in the entry-point's own call, which is a function of
+// corpus layout rather than of anything a definition could say [MAD2: B-5].
+//
+// Three consequences are ruled and lived with rather than repaired. INSIDE the
+// group call a copious leaf outweighs a terse sibling — size is signal there,
+// and the pages are the same kind of thing. A node with one direct leaf makes a
+// group of ONE. And parity at the parent is per SHELF rather than per page: one
+// card speaks for N pages beside one summary per index child.
+//
+// A mixed node's card is its own second call, so it cannot be its sibling: §12
+// forbids a unit naming an upstream from its own stage, whose units run
+// concurrently. Each level therefore declares TWO stages — the level's cards,
+// then the level's summaries — and a level with no mixed node resolves the first
+// to zero lanes exactly as an empty level resolves both.
+//
+// The whole input of either call is bounded by G-2, which the tree plan proved
+// before this stage ran (treeplan's digest check, which bounds the two calls
+// separately and the node by the larger) — so an over-budget call here is our
+// arithmetic being wrong, not a runtime condition (I-6).
 //
 // # A no-fallback seam
 //
@@ -64,6 +87,25 @@ const (
 	// the KB level the stage summarises, so the stage list reads in the order
 	// it runs — deepest first.
 	levelStageSuffix = ".L"
+
+	// leavesName is the one word the leaf-group card and the stage that writes
+	// it are both named after: `summaries.L4.leaves` owes
+	// `summaries/main/index.md.leaves.json`. Named once, so a card and the stage
+	// that owes it are one thing in the store, in the log and in a failure.
+	//
+	// The card sits BESIDE the node's summary rather than at it, which is what
+	// keeps it out of the delivered tree by construction: Read and All look for
+	// `<node path>.json` and can never find `<node path>.leaves.json`, so no
+	// render path has one to reach for.
+	leavesName = ".leaves"
+	cardSuffix = leavesName + unitSuffix
+
+	// cardTitle is the heading the card is presented under in a mixed node's own
+	// call. It names a SHELF and not a page, because that is what the card is:
+	// one voice for every page directly under this node (the per-shelf parity
+	// this scheme owns). The pages' own titles and scopes are in the routing
+	// context beside it, where they always were.
+	cardTitle = "The pages of this section"
 )
 
 // ArtifactReader is the one thing this stage needs from the store: the bytes
@@ -103,7 +145,7 @@ type Job struct {
 	Retry pipeline.RetryPolicy
 }
 
-// Summarizer describes and verifies the four level stages of one job.
+// Summarizer describes and verifies the level stages of one job.
 //
 // One is built per job and shared by every worker of every level: the ask is
 // stage-constant (pipeline.AskSpec) and so is everything here. The only mutable
@@ -115,9 +157,14 @@ type Summarizer struct {
 	def prompt.Definition
 	lg  log.Logger
 
-	mu    sync.Mutex
-	plan  *treeplan.TreePlan
+	mu   sync.Mutex
+	plan *treeplan.TreePlan
+	// units is every node's summary call, by artifact path; cards is the
+	// leaf-group call of every MIXED node, by the path of the card it writes.
+	// Two tables rather than one, because the path is what says which of a
+	// node's two calls a response is answering.
 	units map[string]*unit
+	cards map[string]*unit
 	paths []string
 	// latched holds a per-unit refusal the input builder had no way to return
 	// (pipeline.InputBuilder yields no error), raised by verify as a defect on
@@ -134,6 +181,63 @@ type unit struct {
 	kids   []treeplan.Node
 	level  int
 	domain string
+}
+
+// leaves and sections are the node's direct children of one kind, in tree-plan
+// order: the pages the group call is over, and the subsections whose summaries
+// the node's own call reads.
+func (u *unit) leaves() []treeplan.Node { return u.ofKind(true) }
+
+func (u *unit) sections() []treeplan.Node { return u.ofKind(false) }
+
+func (u *unit) ofKind(leaf bool) []treeplan.Node {
+	var out []treeplan.Node
+	for _, c := range u.kids {
+		if (c.Kind == treeplan.KindLeaf) == leaf {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// mixed reports whether this node holds children of BOTH kinds — the one case
+// that costs two calls, because it is the only one where a group of leaves would
+// otherwise share a call with a subsection's summary.
+func (u *unit) mixed() bool { return len(u.leaves()) > 0 && len(u.sections()) > 0 }
+
+// call is one model call of this stage: the node it is about, and whether it is
+// the node's leaf-group call rather than its summary.
+//
+// A node has one call or two, and the difference between them is entirely in
+// what they read — same definition, same tier, same declared effort and retry.
+type call struct {
+	u    *unit
+	card bool
+}
+
+// kids are the children this call is ABOUT: its routing context and its status
+// counts. A group call is about the node's direct pages ALONE — in isolation,
+// which is what makes it the same call a leaves-only container already makes —
+// and a summary call is about all of them.
+func (c call) kids() []treeplan.Node {
+	if c.card {
+		return c.u.leaves()
+	}
+	return c.u.kids
+}
+
+// entry is one thing a call reads: the heading it is presented under, the store
+// artifact it comes from, and whether that artifact is a page.
+//
+// The entry list is also the UPSTREAM list — what a call reads and the chain
+// edge it stands on are the same set, derived once (see entries), so a call
+// cannot come to read something it did not declare.
+type entry struct {
+	title string
+	path  string
+	// page says how the artifact is read: a leaf page contributes its body,
+	// anything else its framing and conclusions.
+	page bool
 }
 
 // New returns the summarizer for one job.
@@ -162,11 +266,23 @@ func (s *Summarizer) Unit(nodePath string) string {
 	return s.job.SummariesDir + "/" + nodePath + unitSuffix
 }
 
+// Card is the store path of one node's leaf-group card. Only a MIXED node has
+// one: everywhere else the group call's answer is the node's own summary and is
+// written at Unit.
+func (s *Summarizer) Card(nodePath string) string {
+	return s.job.SummariesDir + "/" + nodePath + cardSuffix
+}
+
 // StagePlans describes the level stages, deepest first.
 //
-// There is one stage per index level the depth cap allows, always — a level
-// with no nodes resolves to zero lanes and the coordinator skips it, which is
-// what lets the stage list be static while the tree is not.
+// There are TWO stages per index level the depth cap allows, always: the level's
+// leaf-group cards, then the level's summaries. A level with no nodes resolves
+// both to zero lanes and a level with no mixed node resolves the first one to
+// zero, which is what lets the stage list be static while the tree is not.
+//
+// The order is the whole reason the card is a stage of its own: a mixed node's
+// summary call reads the card, and a unit may not name an upstream from its own
+// stage (§12) because a stage's units run concurrently.
 //
 // owed builds each unit's description from its path and the artifacts it read;
 // the stage appends its own parameter digest, because the artifact means
@@ -174,12 +290,17 @@ func (s *Summarizer) Unit(nodePath string) string {
 func (s *Summarizer) StagePlans(prefix string, owed func(unit string, upstreams []string) pipeline.OwedArtifact) []*pipeline.StagePlan {
 	var out []*pipeline.StagePlan
 	for level := s.job.Params.Budgets.DepthCap; level >= 1; level-- {
-		out = append(out, s.levelStage(fmt.Sprintf("%s%s%d", prefix, levelStageSuffix, level), level, owed))
+		name := fmt.Sprintf("%s%s%d", prefix, levelStageSuffix, level)
+		out = append(out,
+			s.levelStage(name+leavesName, level, true, owed),
+			s.levelStage(name, level, false, owed))
 	}
 	return out
 }
 
-func (s *Summarizer) levelStage(name string, level int, owed func(string, []string) pipeline.OwedArtifact) *pipeline.StagePlan {
+// levelStage is one stage of one level: the same ask either way, over the calls
+// cards selects (see calls).
+func (s *Summarizer) levelStage(name string, level int, cards bool, owed func(string, []string) pipeline.OwedArtifact) *pipeline.StagePlan {
 	return &pipeline.StagePlan{
 		Name: name,
 		Ask: pipeline.AskSpec{
@@ -205,13 +326,13 @@ func (s *Summarizer) levelStage(name string, level int, owed func(string, []stri
 				PerSlot: map[prompt.Slot]int{prompt.SlotContent: s.job.Params.Budgets.SummaryInputTokens},
 			},
 		},
-		Lanes: func() ([]pipeline.SerialLane, error) { return s.lanes(name, level, owed) },
+		Lanes: func() ([]pipeline.SerialLane, error) { return s.lanes(name, level, cards, owed) },
 	}
 }
 
-// lanes describes one level's work: one unit per index node at that level, in
+// lanes describes one stage's work: one task per call of the level, in
 // per-domain serial lanes so the level fans out across workers.
-func (s *Summarizer) lanes(stage string, level int, owed func(string, []string) pipeline.OwedArtifact) ([]pipeline.SerialLane, error) {
+func (s *Summarizer) lanes(stage string, level int, cards bool, owed func(string, []string) pipeline.OwedArtifact) ([]pipeline.SerialLane, error) {
 	if _, err := s.resolve(); err != nil {
 		return nil, err
 	}
@@ -219,16 +340,16 @@ func (s *Summarizer) lanes(stage string, level int, owed func(string, []string) 
 		order []string
 		tasks = map[string][]pipeline.LaneTask{}
 	)
-	for _, u := range s.level(level) {
-		if _, seen := tasks[u.domain]; !seen {
-			order = append(order, u.domain)
+	for _, c := range s.calls(level, cards) {
+		if _, seen := tasks[c.u.domain]; !seen {
+			order = append(order, c.u.domain)
 		}
-		unitPath := s.Unit(u.node.Path)
-		o := owed(unitPath, s.upstreams(u))
+		unitPath := s.path(c)
+		o := owed(unitPath, s.upstreams(c))
 		o.Inputs = slices.Concat(o.Inputs, []pipeline.Input{{Name: paramsInput, Hash: s.digest()}})
-		tasks[u.domain] = append(tasks[u.domain], pipeline.LaneTask{
+		tasks[c.u.domain] = append(tasks[c.u.domain], pipeline.LaneTask{
 			Owed:       o,
-			Section:    u.domain,
+			Section:    c.u.domain,
 			SectionRef: s.sectionRef(level),
 			Input:      func() (prompt.CallInput, bool) { return s.callInput(unitPath) },
 		})
@@ -244,24 +365,71 @@ func (s *Summarizer) lanes(stage string, level int, owed func(string, []string) 
 	return lanes, nil
 }
 
-// upstreams is the chain edge this unit stands on: the artifact of every child
-// it reads. A leaf child is its page; an index child is its own summary, which
-// the previous level's stage wrote.
-func (s *Summarizer) upstreams(u *unit) []string {
-	out := make([]string, 0, len(u.kids))
-	for _, c := range u.kids {
-		if c.Kind == treeplan.KindLeaf {
-			out = append(out, s.job.LeavesDir+"/"+c.Path)
+// calls is one stage's calls, in tree-plan order: every node at the level for a
+// summary stage, and only the MIXED ones for a leaf-group stage — everywhere
+// else the group call and the summary call are one call, written at Unit.
+func (s *Summarizer) calls(level int, cards bool) []call {
+	var out []call
+	for _, u := range s.level(level) {
+		if cards && !u.mixed() {
 			continue
 		}
-		out = append(out, s.Unit(c.Path))
+		out = append(out, call{u: u, card: cards})
+	}
+	return out
+}
+
+// path is the artifact one call owes.
+func (s *Summarizer) path(c call) string {
+	if c.card {
+		return s.Card(c.u.node.Path)
+	}
+	return s.Unit(c.u.node.Path)
+}
+
+// entries is what one call reads, in the order it is presented.
+//
+// A group call reads the pages, and so does a leaves-only node's summary call:
+// they are the same call, which is the point (§4 row 6). A mixed node's summary
+// call reads the card in the pages' place, first, because the pages directly
+// under a node are its own material and its subsections are what sits below
+// them. An index child is read as its own capped framing and conclusions
+// wherever it appears.
+func (s *Summarizer) entries(c call) []entry {
+	var out []entry
+	if c.card || !c.u.mixed() {
+		for _, k := range c.u.leaves() {
+			out = append(out, entry{title: k.Title, path: s.job.LeavesDir + "/" + k.Path, page: true})
+		}
+	}
+	if c.card {
+		return out
+	}
+	if c.u.mixed() {
+		out = append(out, entry{title: cardTitle, path: s.Card(c.u.node.Path)})
+	}
+	for _, k := range c.u.sections() {
+		out = append(out, entry{title: k.Title, path: s.Unit(k.Path)})
+	}
+	return out
+}
+
+// upstreams is the chain edge one call stands on: the artifact of everything it
+// reads, which is exactly its entry list. A leaf page for a group call, and for
+// a mixed node's summary call the card plus each index child's summary — never a
+// page, which is what makes the input summary-class throughout.
+func (s *Summarizer) upstreams(c call) []string {
+	es := s.entries(c)
+	out := make([]string, 0, len(es))
+	for _, e := range es {
+		out = append(out, e.path)
 	}
 	return out
 }
 
 // resolve reads the tree plan once and derives every unit from it.
 //
-// It is memoised because four level stages ask for it and every one of them
+// It is memoised because every level stage asks for it and every one of them
 // must see the same tree: the plan is an upstream artifact, and a second read
 // after something changed it would describe a level of a tree the level below
 // was not summarising.
@@ -283,6 +451,7 @@ func (s *Summarizer) resolve() (treeplan.TreePlan, error) {
 	levels := map[string]int{}
 	domains := map[string]string{}
 	units := map[string]*unit{}
+	cards := map[string]*unit{}
 	paths := make([]string, 0, len(plan.Nodes))
 	byPath := map[string]*unit{}
 	for _, n := range plan.Nodes {
@@ -309,7 +478,16 @@ func (s *Summarizer) resolve() (treeplan.TreePlan, error) {
 		byPath[n.Path] = u
 		units[s.Unit(n.Path)] = u
 	}
-	s.plan, s.units, s.paths = &plan, units, paths
+	// The card table is filled after the walk, not inside it: whether a node is
+	// mixed is a fact about its children, and a node's children are not all known
+	// until every node has been seen (the plan lists a parent before its
+	// children, so the last of them can be the last node).
+	for _, u := range units {
+		if u.mixed() {
+			cards[s.Card(u.node.Path)] = u
+		}
+	}
+	s.plan, s.units, s.cards, s.paths = &plan, units, cards, paths
 	return plan, nil
 }
 
@@ -326,11 +504,18 @@ func (s *Summarizer) level(level int) []*unit {
 	return out
 }
 
-func (s *Summarizer) unitOf(path string) (*unit, bool) {
+// callOf is which of the stage's calls an artifact path names. The path is the
+// whole of the routing: a node's summary sits at Unit and its card at Card, so
+// one lookup says both which node a response is about and which of its two calls
+// answered.
+func (s *Summarizer) callOf(path string) (call, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	u, ok := s.units[path]
-	return u, ok
+	if u, ok := s.units[path]; ok {
+		return call{u: u}, true
+	}
+	u, ok := s.cards[path]
+	return call{u: u, card: true}, ok
 }
 
 // digest is the stage's parameter digest: what outside the store determined
@@ -359,29 +544,37 @@ func (s *Summarizer) sectionRef(level int) string {
 			"already been written: what you are given is what a reader finds there.", level)
 }
 
-// callInput assembles one summary's call: the children's own material in the
-// content buffer, their titles and scope lines beside it as the routing
+// callInput assembles one call: the material in the content buffer, and the
+// titles and scope lines of what the call is about beside it as the routing
 // context (§6.3).
+//
+// One builder for both of a node's calls, because they are one call shape: the
+// entry list says what is read and the child list says what the call is about,
+// and for every node but a mixed one those are the same children.
 //
 // Every call of this stage is needed (pipeline.InputBuilder). A summary's
 // question is settled by the tree plan before the level's lanes are resolved,
 // so there is nothing this stage can learn between describing a unit and
 // reaching it that would make its call pointless.
 func (s *Summarizer) callInput(unitPath string) (prompt.CallInput, bool) {
-	u, ok := s.unitOf(unitPath)
+	c, ok := s.callOf(unitPath)
 	if !ok {
 		return s.refuse(unitPath, fmt.Errorf("summarize: %s is not a summary of this job", unitPath))
 	}
-	var content, routing strings.Builder
-	pages, sections := 0, 0
-	for _, c := range u.kids {
-		fmt.Fprintf(&routing, "- %s — %s\n", c.Title, c.Scope)
-		material, err := s.material(c)
+	u := c.u
+	var content strings.Builder
+	for _, e := range s.entries(c) {
+		material, err := s.material(e)
 		if err != nil {
 			return s.refuse(unitPath, err)
 		}
-		fmt.Fprintf(&content, "## %s\n\n%s\n\n", c.Title, material)
-		if c.Kind == treeplan.KindLeaf {
+		fmt.Fprintf(&content, "## %s\n\n%s\n\n", e.title, material)
+	}
+	var routing strings.Builder
+	pages, sections := 0, 0
+	for _, k := range c.kids() {
+		fmt.Fprintf(&routing, "- %s — %s\n", k.Title, k.Scope)
+		if k.Kind == treeplan.KindLeaf {
 			pages++
 			continue
 		}
@@ -409,24 +602,22 @@ func (s *Summarizer) callInput(unitPath string) (prompt.CallInput, bool) {
 	}, true
 }
 
-// material is what one child contributes to its parent's call (F-10).
+// material is what one entry contributes to the call that reads it.
 //
-// A leaf child contributes its BODY — the page artifact stage 5 proved, read
-// back rather than re-sliced, because conclusions come from bodies and a leaf
-// that has been proven once should never be derived twice. An index child
-// contributes its own framing and conclusions, which its verifier already held
-// to the summary cap. The two together are what G-2 bounds.
-func (s *Summarizer) material(c treeplan.Node) (string, error) {
-	if c.Kind == treeplan.KindLeaf {
-		body, err := s.job.Store.Get(s.job.LeavesDir + "/" + c.Path)
-		if err != nil {
-			return "", fmt.Errorf("summarize: reading the page %s: %w", c.Path, err)
-		}
-		return strings.TrimSpace(string(body)), nil
-	}
-	data, err := s.job.Store.Get(s.Unit(c.Path))
+// A page contributes its BODY — the artifact stage 5 proved, read back rather
+// than re-sliced, because conclusions come from bodies and a leaf that has been
+// proven once should never be derived twice. Everything else is a summary and
+// contributes its framing and conclusions, which its own verifier already held
+// to the summary cap — an index child's summary and a leaf-group card alike,
+// rendered by one reader because the parent is meant to weigh them as one kind
+// of thing.
+func (s *Summarizer) material(e entry) (string, error) {
+	data, err := s.job.Store.Get(e.path)
 	if err != nil {
-		return "", fmt.Errorf("summarize: reading the summary of %s: %w", c.Path, err)
+		return "", fmt.Errorf("summarize: reading %s: %w", e.path, err)
+	}
+	if e.page {
+		return strings.TrimSpace(string(data)), nil
 	}
 	sum, err := ReadJSON(bytes.NewReader(data))
 	if err != nil {
@@ -445,8 +636,12 @@ func (s *Summarizer) material(c treeplan.Node) (string, error) {
 // Every check is deterministic and cheap, and none of them is about quality:
 // semantic judgement is stage 7's job by design, and a heavy-tier judgement is
 // not re-litigated by a deterministic checker.
+// Both of a node's calls are held to the same post-conditions, the summary cap
+// included: the cap is what the level above pays for one shelf, so a card that
+// is not a summary-sized thing would break the parent's arithmetic exactly as an
+// over-long summary would.
 func (s *Summarizer) verify(artifactPath, response string) (any, error) {
-	u, ok := s.unitOf(artifactPath)
+	c, ok := s.callOf(artifactPath)
 	if !ok {
 		return nil, s.defect(fmt.Errorf("summarize: %s is not a summary of this job", artifactPath))
 	}
@@ -457,12 +652,12 @@ func (s *Summarizer) verify(artifactPath, response string) (any, error) {
 	if err != nil {
 		return nil, s.reject(artifactPath, err)
 	}
-	if err := s.check(u, sum); err != nil {
+	if err := s.check(c.u, sum); err != nil {
 		return nil, s.reject(artifactPath, err)
 	}
 	sum.Unit, sum.Schema = artifactPath, SchemaVersion
 	s.lg.Info("summary written", "stage", "summaries", "unit", artifactPath,
-		"level", u.level, "entries", len(u.kids),
+		"level", c.u.level, "entries", len(c.kids()), "card", c.card,
 		"framing_tokens", s.job.Params.Est.Estimate(sum.Framing),
 		"conclusions_tokens", s.job.Params.Est.Estimate(sum.Conclusions))
 	return sum, nil

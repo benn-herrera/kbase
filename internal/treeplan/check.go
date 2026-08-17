@@ -252,32 +252,32 @@ func (v *Verifier) checkGroups(s TreePlan) (map[string]survey.Span, error) {
 	return ranges, nil
 }
 
-// checkDigest is G-2 over the composed tree: for every index, the sum of what
-// one summary call would read — leaf children as bodies, index children at
-// summaryTokens each (§6.3, per child KIND at any level) — is within
-// summaryInputTokens.
+// checkDigest is G-2 over the composed tree: for every index, the largest input
+// any stage-6 call over its children reads (shelves.calls — the leaves as one
+// group, the sections as capped summaries) is within summaryInputTokens.
 //
 // This is the guarantee that makes stage 6's per-call input bounded before
 // stage 6 exists, which is exactly what §11.7 asks for: provable from the
 // tree plan without running the stage.
 func (v *Verifier) checkDigest(s TreePlan, parts map[string]survey.Span) error {
-	sums := map[string]int{}
+	sums := map[string]shelves{}
 	for _, n := range s.Nodes {
 		if n.Parent == "" {
 			continue
 		}
+		sh := sums[n.Parent]
 		if n.Kind == KindLeaf {
-			r := parts[n.Path]
-			sums[n.Parent] += v.tokensOf(groupFile(s, n.SplitGroup), r)
-			continue
+			sh.addPage(v.tokensOf(groupFile(s, n.SplitGroup), parts[n.Path]))
+		} else {
+			sh.addSection(s.Budgets.SummaryTokens)
 		}
-		sums[n.Parent] += s.Budgets.SummaryTokens
+		sums[n.Parent] = sh
 	}
 	for _, n := range s.Nodes {
 		if n.Kind == KindLeaf {
 			continue
 		}
-		if sums[n.Path] > s.Budgets.SummaryInputTokens {
+		if sums[n.Path].calls(s.Budgets.SummaryTokens) > s.Budgets.SummaryInputTokens {
 			return RejectionError{Subject: n.Path,
 				Reason: "too much material to digest under one heading"}
 		}

@@ -585,38 +585,87 @@ func (v *Verifier) breaches(n *buildNode) bool {
 	return len(n.children) > v.p.Budgets.FanOutCap || v.digestSum(n) > v.p.Budgets.SummaryInputTokens
 }
 
-// digestSum is G-2's left-hand side: what one summary call over this index
-// would read. The rule is per child KIND, not per tree level (§6.3): a leaf
-// child is read as a body, an index child as its own capped summary, and a
-// mixed index reads both.
+// shelves is what one index's children cost stage 6, accumulated by kind: the
+// pages' own bodies on one side, one summary cap per index child on the other.
+// It is the accumulator both G-2 sites fill — the operator here, from the working
+// tree, and the post-condition in check.go, from the composed artifact — so the
+// rule below has one statement and two feeders.
+type shelves struct {
+	// pages is the direct leaves' bodies, summed; leaves says whether there was
+	// one at all, which a zero-token page would otherwise hide.
+	pages  int
+	leaves bool
+	// sections is one summary cap per index child.
+	sections int
+}
+
+func (sh *shelves) addPage(tokens int) {
+	sh.pages += tokens
+	sh.leaves = true
+}
+
+func (sh *shelves) addSection(summaryCap int) { sh.sections += summaryCap }
+
+// calls is G-2's left-hand side: the largest input any stage-6 call over these
+// children reads.
+//
+// There are up to TWO calls (§4 row 6). A node's direct leaves are always
+// summarised as a group in isolation, so their bodies are one call's whole input.
+// Where the node holds index children too, that group's card — capped like any
+// other summary — is what the node's own call reads in the pages' place, beside
+// one capped summary per index child. So the two calls are bounded separately and
+// the node is bounded by the larger of them: a page body never shares a call with
+// a subsection's summary, which is what the per-shelf cost below encodes.
+//
+// Where there are no index children the group call IS the node's summary call,
+// and its bodies are the whole cost.
+func (sh shelves) calls(summaryCap int) int {
+	if sh.sections == 0 {
+		return sh.pages
+	}
+	own := sh.sections
+	if sh.leaves {
+		own += summaryCap
+	}
+	return max(sh.pages, own)
+}
+
+// digestSum is G-2's left-hand side for one working node.
 func (v *Verifier) digestSum(n *buildNode) int {
-	sum := 0
+	var sh shelves
 	for _, c := range n.children {
-		sum += v.digest(c)
+		v.digest(&sh, c)
 	}
-	return sum
+	return sh.calls(v.p.Budgets.SummaryTokens)
 }
 
-func (v *Verifier) digest(n *buildNode) int {
+func (v *Verifier) digest(sh *shelves, n *buildNode) {
 	if n.kind == KindLeaf {
-		return n.tokens
+		sh.addPage(n.tokens)
+		return
 	}
-	return v.p.Budgets.SummaryTokens
+	sh.addSection(v.p.Budgets.SummaryTokens)
 }
 
-// batch is the greedy order-preserving partition interposition uses.
+// batch is the greedy order-preserving partition interposition uses. The cost it
+// accumulates is the same shelves arithmetic digestSum states — each batch
+// becomes one index node, so the bound a batch is closed against is the bound
+// that node will be checked against.
 func (v *Verifier) batch(children []*buildNode) [][]*buildNode {
 	var out [][]*buildNode
 	var cur []*buildNode
-	cost := 0
+	var sh shelves
 	for _, c := range children {
-		d := v.digest(c)
-		if len(cur) > 0 && (len(cur)+1 > v.p.Budgets.FanOutCap || cost+d > v.p.Budgets.SummaryInputTokens) {
+		next := sh
+		v.digest(&next, c)
+		if len(cur) > 0 && (len(cur)+1 > v.p.Budgets.FanOutCap ||
+			next.calls(v.p.Budgets.SummaryTokens) > v.p.Budgets.SummaryInputTokens) {
 			out = append(out, cur)
-			cur, cost = nil, 0
+			cur, next = nil, shelves{}
+			v.digest(&next, c)
 		}
 		cur = append(cur, c)
-		cost += d
+		sh = next
 	}
 	if len(cur) > 0 {
 		out = append(out, cur)

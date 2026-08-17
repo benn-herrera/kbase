@@ -518,6 +518,38 @@ func TestComposeInterposesOverTheSummaryInputBudget(t *testing.T) {
 	assertWithinCaps(t, s, p.Budgets)
 }
 
+// G-2's cost rule, stated over the accumulator both its sites fill: a node's
+// direct leaves are one call and its own summary is another, so the node costs
+// the LARGER of the two rather than the sum of everything under it.
+//
+// The fourth case is the one the old per-child sum got wrong in the other
+// direction: where the pages are light, the shelf still costs a full summary cap
+// at the parent, because what the parent reads is the card and not the bodies.
+func TestSummaryCallCostIsPerShelf(t *testing.T) {
+	const summaryCap = 400
+	for _, tc := range []struct {
+		name string
+		sh   shelves
+		want int
+	}{
+		{"no children at all", shelves{}, 0},
+		{"leaves only: the group call IS the summary call", shelves{pages: 1000, leaves: true}, 1000},
+		{"sections only", shelves{sections: 2 * summaryCap}, 2 * summaryCap},
+		{"mixed, light pages: the shelf costs the cap, not the bodies",
+			shelves{pages: 10, leaves: true, sections: 2 * summaryCap}, 3 * summaryCap},
+		{"mixed, heavy pages: the group call is the larger of the two",
+			shelves{pages: 5000, leaves: true, sections: 2 * summaryCap}, 5000},
+		{"a zero-token page is still a shelf",
+			shelves{leaves: true, sections: summaryCap}, 2 * summaryCap},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sh.calls(summaryCap); got != tc.want {
+				t.Errorf("calls = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // §3.3 check 6: a chapter left out of the tree is caught even though every
 // path, parent and cap is fine.
 func TestComposeRefusesUncoveredMaterial(t *testing.T) {

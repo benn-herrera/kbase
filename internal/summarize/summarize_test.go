@@ -48,10 +48,11 @@ func TestLevelStagesSummariseEverySection(t *testing.T) {
 	}
 }
 
-// TestSummaryReadsPerChildKind is F-10: a leaf child is read as a BODY, an
-// index child as its own framing and conclusions. It is a property of the NODE
-// and not of the level, which is why the two are asserted on two calls of one
-// run.
+// TestSummaryReadsPerChildKind: a leaf child is read as a BODY and an index
+// child as its own framing and conclusions. It is a property of the NODE and not
+// of the level, which is why the two are asserted on two calls of one run —
+// here over a tree whose every node holds children of ONE kind, which is the
+// case that costs one call (the mixed case is the test below).
 func TestSummaryReadsPerChildKind(t *testing.T) {
 	lg := &logtest.Capture{}
 	sc := newScene(t, lg, pageBody)
@@ -80,7 +81,7 @@ func TestSummaryReadsPerChildKind(t *testing.T) {
 		t.Errorf("a section over pages did not read their bodies:\n%s", first)
 	}
 	// The last call is the entry-point: it reads its children's SUMMARIES and
-	// not their pages (ARCHITECTURE §4 row 6, read per child kind).
+	// not their pages (ARCHITECTURE §4 row 6).
 	last := calls[len(calls)-1].Request.Messages[0].Content
 	if !strings.Contains(last, "framing-a") || !strings.Contains(last, "conclusion-a") {
 		t.Errorf("the entry-point did not read its children's summaries:\n%s", last)
@@ -91,6 +92,110 @@ func TestSummaryReadsPerChildKind(t *testing.T) {
 	// Routing context is the tree plan's scope lines, beside the material.
 	if !strings.Contains(last, "What a reader finds under this section:") {
 		t.Errorf("the call carried no routing context:\n%s", last)
+	}
+}
+
+// TestMixedContainerBlendsTheLeafGroupCard is the B-5 scheme: a node holding
+// both pages and sections costs TWO calls — its pages summarised as a group in
+// isolation, then its own call over that group's CARD and its sections'
+// summaries. No page body appears in the second call, so a copious root-level
+// page can no longer outweigh whole domains at the entry point.
+func TestMixedContainerBlendsTheLeafGroupCard(t *testing.T) {
+	lg := &logtest.Capture{}
+	sc := newMixedScene(t, lg, pageBody)
+	// One response per call, so every call's material is traceable to the call
+	// that produced it. One worker, so the order is the stage order: the two
+	// domains, then the entry-point's card, then the entry-point.
+	responses := make([]model.Response, 0, 4)
+	for i := range 4 {
+		responses = append(responses, answer(
+			"framing-"+string(rune('a'+i)), "Heading "+string(rune('A'+i)),
+			"conclusion-"+string(rune('a'+i))))
+	}
+	client := model.NewScriptedMockPerConsult(responses)
+	client.RecordCalls = true
+
+	res, err := sc.run(t, client, lg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Three section nodes and one card: the card is a unit of its own, which is
+	// what makes it resumable and what keeps it out of its reader's stage.
+	if res.Produced != 4 || len(res.Failures) != 0 || !res.DeliveryReady() {
+		t.Fatalf("result = %+v, want three summaries and one card", res)
+	}
+	calls := client.Calls()
+	if len(calls) != 4 {
+		t.Fatalf("%d calls, want one per section plus the entry-point's card", len(calls))
+	}
+
+	group := calls[2].Request.Messages[0].Content
+	own := calls[3].Request.Messages[0].Content
+	// The group call is the leaves-only call shape: the pages directly under the
+	// entry-point, in full, and nothing else.
+	if !strings.Contains(group, "The page body of Epsilon") {
+		t.Errorf("the leaf-group call did not read the page under the entry-point:\n%s", group)
+	}
+	if strings.Contains(group, "framing-a") {
+		t.Errorf("the leaf-group call read a section summary; it is over the pages alone:\n%s", group)
+	}
+	// The entry-point's own call is summary-class throughout: the card in the
+	// pages' place, and one summary per domain.
+	if !strings.Contains(own, cardTitle) || !strings.Contains(own, "framing-c") {
+		t.Errorf("the entry-point's call did not read the leaf-group card:\n%s", own)
+	}
+	if !strings.Contains(own, "framing-a") || !strings.Contains(own, "framing-b") {
+		t.Errorf("the entry-point's call did not read its domains' summaries:\n%s", own)
+	}
+	if strings.Contains(own, "The page body of") {
+		t.Errorf("the entry-point's call read a raw page body:\n%s", own)
+	}
+	// The pages keep their own routing lines: what is bounded is the material,
+	// not the reader's knowledge of what sits under it.
+	if !strings.Contains(own, "- Epsilon — ") {
+		t.Errorf("the entry-point's call lost the page's routing line:\n%s", own)
+	}
+
+	// The card is an INPUT and never a delivered page's summary block: the
+	// entry-point's own artifact is the blended answer, not the card.
+	if got := sc.summaryIn(t, "entry-point.md").Framing; got != "framing-d" {
+		t.Errorf("the entry-point's summary is %q, want the blended answer", got)
+	}
+	cardPath := sc.sum.Card("entry-point.md")
+	if _, err := sc.store.Get(cardPath); err != nil {
+		t.Fatalf("the leaf-group card was not written: %v", err)
+	}
+
+	// And it resumes: a second run over the same store proves every unit from
+	// its own stamp, the card included, and asks nothing. A client with an empty
+	// script fails any call it is given, so "asks nothing" is asserted rather
+	// than inferred from a count.
+	sc.writePages(t)
+	again, err := sc.run(t, model.NewScriptedMockPerConsult(nil), lg)
+	if err != nil {
+		t.Fatalf("the resumed run: %v", err)
+	}
+	if again.Reused != 4 || again.Produced != 0 {
+		t.Errorf("the resumed run = %+v, want four units reused and nothing re-asked", again)
+	}
+}
+
+// TestLeavesOnlyContainerCostsOneCall is the other half of the ruling: the group
+// call and the summary call are the SAME call wherever a node holds no section,
+// so today's behaviour is unchanged and no card exists to be read or swept.
+func TestLeavesOnlyContainerCostsOneCall(t *testing.T) {
+	lg := &logtest.Capture{}
+	sc := newScene(t, lg, pageBody)
+	client := model.NewScriptedMock([]model.Response{
+		answer("What this section holds.", "What it settles", "Alpha is configured in the manifest."),
+	}, nil)
+	if _, err := sc.run(t, client, lg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, n := range sc.indexNodes() {
+		if _, err := sc.store.Get(sc.sum.Card(n.Path)); err == nil {
+			t.Errorf("%s holds children of one kind and still wrote a leaf-group card", n.Path)
+		}
 	}
 }
 

@@ -9,9 +9,14 @@ import (
 //
 // TODO(embedded-definitions): the real gemma-4-tuned definition, its
 // `## CRITICAL` section and its eval belong to the embedded-definitions burst
-// (ROADMAP). What is being exercised here is the seam — the per-child-kind
-// input, the caps, the verifier, the level chain — and none of that depends on
+// (ROADMAP). What is being exercised here is the seam — the leaf-group call and
+// its card, the caps, the verifier, the level chain — and none of that depends on
 // the wording.
+//
+// ONE definition serves both of a node's calls (summarize.go): the group of
+// pages and the section above it are the same question asked of different
+// material, so the body below says what it is given without naming which call
+// gave it. A card-specific instruction would be a second definition to keep true.
 //
 // What is NOT provisional is the discipline the body states, which is §4.5
 // read as constraints rather than as advice: conclusions first, no imported
@@ -22,8 +27,8 @@ import (
 // to choose and why an empty conclusions block is a legal answer.
 const (
 	stubDefinition = "# Section summary\n\n" +
-		"You are given everything under one section of a knowledge base: the pages it holds, in\n" +
-		"full, and the summaries of the sections it holds. Write that section's own summary.\n\n" +
+		"You are given what sits under one section of a knowledge base — its pages in full, or\n" +
+		"summaries of what it holds. Write that section's own summary.\n\n" +
 		"- Conclusions first: what this material establishes, decides or instructs.\n" +
 		"- Every concept and every framing comes from the material. If you are reaching for a word\n" +
 		"  the source does not use, stop.\n" +

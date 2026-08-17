@@ -175,6 +175,21 @@ summaries, the light tier adjudicates page boundaries.
   name no document in the corpus and are delivered verbatim, exempt from
   guarantee 1`. A run with none writes no such line. The census is in the
   run record either way (§3.8).
+- **Section summaries.** Every index and the entry-point gets one summary
+  (§3.5), written by the heavy tier bottom-up. **Sibling pages are always
+  summarised as a group**: one call over the pages directly under a node,
+  never one page at a time. Where a node holds nothing but pages, that call's
+  answer is its summary. Where it holds pages **and** subsections, the group's
+  answer is written as a **leaf-group card** — a temp-work artifact, never
+  delivered (§3.5) — and the node's own summary call reads the card plus each
+  subsection's summary, so no page body reaches it. The observable count:
+  **one call per index or entry-point node, plus one per node that holds both
+  pages and subsections**; `run.json`'s `summaries` counts nodes, not calls,
+  so a card is never counted as a summary. Three consequences are deliberate:
+  inside the group call a page with more material weighs more than a terse
+  sibling; a node with exactly one direct page makes a group of one; and the
+  parent weighs one card against one subsection summary — parity is per
+  shelf, not per page.
 - **Page boundaries.** A group the tree plan sized into more than one page
   has its interior boundaries adjudicated by the light tier, one call per
   boundary, against the mechanical splitter's proposal (§3.4). It is a
@@ -501,10 +516,21 @@ error, not an empty file. It is a stage artifact and is not delivered.
 {"schema": "kbase.summary/1", "framing": "...", "conclusionsHeading": "...", "conclusions": "..."}
 ```
 
-One per index/entry-point node, once the summary stage has run for it.
-Never rendered Markdown itself — the delivered page's summary block
-(§4.3) is rendered from this artifact at delivery time, so a regenerated
-summary can never half-rewrite an already-delivered page.
+One per index/entry-point node, once the summary stage has run for it, at
+`temp-work/summaries/<node path>.json`. Never rendered Markdown itself —
+the delivered page's summary block (§4.3) is rendered from this artifact
+at delivery time, so a regenerated summary can never half-rewrite an
+already-delivered page.
+
+**The leaf-group card** is the same schema at
+`temp-work/summaries/<node path>.leaves.json`, and exists only for a node
+holding both pages and subsections (§1.5): it is the group summary of that
+node's direct pages, and it is an INPUT to that node's own summary call —
+never a page's summary block, and never delivered. The two names differ so
+that no render path can reach a card: the delivered summary block is read
+from `<node path>.json` and nothing else. A card is a stage artifact like
+any other, stamped (§3.6) and therefore resumable, and it is subject to
+§3.1's teardown with the rest of `temp-work/`.
 
 ### 3.6 Stamps — `<artifact-name>.stamp.json`
 
@@ -584,7 +610,8 @@ group and are all zero when no group split.
 Mirrors the delivered tree's own relative paths one level down
 (`<out>/temp-work/<relative-path>`), plus stage-named siblings for
 artifacts that are never themselves delivered: a survey directory, a tree
--plan directory, a per-domain leaves area, a pre-delivery render of the
+-plan directory, a per-domain leaves area, a summaries area (node summaries
+and leaf-group cards alike, §3.5), a pre-delivery render of the
 tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`
 and `run.json` (§3.8) at the root. Every file in it carries a
 `.stamp.json` sidecar (§3.6) except `job.lock` and `run.json`, which are

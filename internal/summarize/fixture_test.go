@@ -60,6 +60,7 @@ type scene struct {
 	store *pipeline.ArtifactStore
 	sum   *Summarizer
 	dir   string
+	body  func(treeplan.Node) string
 }
 
 // newScene builds the tree plan from the source's own structure — two
@@ -67,10 +68,46 @@ type scene struct {
 // and writes every page artifact the summaries will read.
 func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *scene {
 	t.Helper()
-	art, corpus := buildCorpus(t,
+	return newSceneOf(t, lg, body, nil,
 		docSpec{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 90}, {"Beta", 90}}},
 		docSpec{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 90}, {"Delta", 90}}},
 	)
+}
+
+// newMixedScene is the shape MAD2 B-5 was filed on: two domains beside a page of
+// the entry-point's OWN, which is the only shape that costs a leaf-group card.
+//
+// The third document's sole page is promoted to the entry-point, which is exactly
+// what a descent answering `page` for a whole document leaves behind. It is
+// derived from the mechanical proposal rather than written out, so the spans stay
+// the survey's own and the composed plan is one the verifier accepts.
+func newMixedScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *scene {
+	t.Helper()
+	return newSceneOf(t, lg, body, promoteSolePages,
+		docSpec{path: "one.md", title: "Document One", secs: []secSpec{{"Alpha", 90}, {"Beta", 90}}},
+		docSpec{path: "two.md", title: "Document Two", secs: []secSpec{{"Gamma", 90}, {"Delta", 90}}},
+		docSpec{path: "three.md", title: "Document Three", secs: []secSpec{{"Epsilon", 90}}},
+	)
+}
+
+// promoteSolePages replaces every one-page document's index with the page
+// itself, so that page becomes a child of the entry-point.
+func promoteSolePages(p treeplan.TreeProposal) treeplan.TreeProposal {
+	for i, c := range p.Children {
+		if len(c.Children) == 1 {
+			p.Children[i] = c.Children[0]
+		}
+	}
+	return p
+}
+
+// newSceneOf is the harness proper: the corpus, the composed plan (through
+// shape, where a test needs a tree the source's own structure does not produce),
+// the store with every page artifact in it, and the summarizer over all three.
+func newSceneOf(t *testing.T, lg log.Logger, body func(treeplan.Node) string,
+	shape func(treeplan.TreeProposal) treeplan.TreeProposal, docs ...docSpec) *scene {
+	t.Helper()
+	art, corpus := buildCorpus(t, docs...)
 	params := treeplan.Params{Budgets: testBudgets()}
 	v, err := treeplan.NewVerifier(art, corpus, params)
 	if err != nil {
@@ -79,6 +116,9 @@ func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *sce
 	proposal, err := treeplan.SourceStructureProposal(art, "Fixture knowledge base", "the fixture corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
+	}
+	if shape != nil {
+		proposal = shape(proposal)
 	}
 	plan, err := v.Compose(proposal, nil)
 	if err != nil {
@@ -91,15 +131,6 @@ func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *sce
 		t.Fatalf("OpenTempWork: %v", err)
 	}
 	store := work.ArtifactStore()
-	for _, n := range plan.Nodes {
-		if n.Kind != treeplan.KindLeaf {
-			continue
-		}
-		if err := store.Put(leavesDir+"/"+n.Path, []byte(body(n)), nil); err != nil {
-			t.Fatalf("write the page %s: %v", n.Path, err)
-		}
-	}
-
 	s, err := New(Job{
 		TreePlan:     func() (treeplan.TreePlan, error) { return plan, nil },
 		Store:        store,
@@ -112,7 +143,28 @@ func newScene(t *testing.T, lg log.Logger, body func(treeplan.Node) string) *sce
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return &scene{plan: plan, store: store, sum: s, dir: dir}
+	sc := &scene{plan: plan, store: store, sum: s, dir: dir, body: body}
+	sc.writePages(t)
+	return sc
+}
+
+// writePages puts every page artifact the summaries read.
+//
+// A test that runs the stages TWICE calls it again between the two, because a
+// run that described its whole chain sweeps the job directory — and this
+// fixture's chain is the summary stages alone, so the pages are described by no
+// stage in it and the sweep is right to take them. In the verb's own chain stage
+// 5 owes them and they stay.
+func (sc *scene) writePages(t *testing.T) {
+	t.Helper()
+	for _, n := range sc.plan.Nodes {
+		if n.Kind != treeplan.KindLeaf {
+			continue
+		}
+		if err := sc.store.Put(leavesDir+"/"+n.Path, []byte(sc.body(n)), nil); err != nil {
+			t.Fatalf("write the page %s: %v", n.Path, err)
+		}
+	}
 }
 
 // pageBody is the default page artifact: enough text to be recognisable in a

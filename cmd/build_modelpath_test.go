@@ -214,6 +214,178 @@ func TestBuildLiveWritesTaxonomyAndSummaries(t *testing.T) {
 	}
 }
 
+// liveDocThree is the third document of the mixed corpus: one section, so the
+// descent enumerates it as a plain candidate the root's answer can place on a
+// page of its own. Its body is the string the assertions below hunt for — a raw
+// page body is either in a prompt or it is not.
+const liveDocThree = `# Epsilon
+
+The epsilon section of document three, which the root's answer places on a page of
+its own rather than under a section of the knowledge base — so the entry-point
+holds a page beside a section, which is the shape the leaf-group card exists for.
+`
+
+// writeMixedCorpus writes a corpus the descent can shape into a MIXED
+// entry-point: two multi-section documents to become sections, and one
+// single-section document to become a page of the root's own.
+//
+// The names are ordinal-prefixed because the root's candidate list is the
+// corpus's PATH order, and the scripted answer below names its members by
+// number: `3` has to be the single-section document rather than whichever
+// filename happens to sort third.
+func writeMixedCorpus(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "corpus")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create the corpus directory: %v", err)
+	}
+	for name, body := range map[string]string{
+		"1-one.md": liveDocOne, "2-two.md": liveDocTwo, "3-three.md": liveDocThree,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
+// TestBuildLiveSummarisesSiblingLeavesAsAGroup is the B-5 scheme through the
+// verb's own composition: a node holding both pages and sections costs two
+// summary calls, and the second one reads no page body.
+//
+// The assertions are on the prompts the mock RECEIVED, because that is where a
+// stage's input composition is observable: the artifacts record what came back,
+// and every scripted answer here is the same. What the delivered tree shows is
+// only that a summary arrived.
+func TestBuildLiveSummarisesSiblingLeavesAsAGroup(t *testing.T) {
+	root := writeMixedCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	// The root's answer: document three on a page of its own, the other two under
+	// one section. Every other container gets one section over everything it
+	// holds.
+	rootGroups, err := json.Marshal(map[string]any{"groups": []map[string]any{
+		{"title": "Document Three", "scope": "what a reader finds in document three",
+			"kind": "page", "members": []int{3}},
+		{"title": "The Corpus", "scope": "what a reader finds in the corpus",
+			"kind": "section", "members": []int{1, 2}},
+	}})
+	if err != nil {
+		t.Fatalf("encode the root grouping answer: %v", err)
+	}
+	group, err := json.Marshal(map[string]any{"groups": []map[string]any{{
+		"title": "A Section", "scope": "what a reader finds here",
+		"kind": "section", "members": []int{1, 2},
+	}}})
+	if err != nil {
+		t.Fatalf("encode the grouping answer: %v", err)
+	}
+	summary, err := json.Marshal(map[string]string{
+		"framing":            "This section holds the material below it.",
+		"conclusionsHeading": "What it settles",
+		"conclusions":        "The material is documented here.",
+	})
+	if err != nil {
+		t.Fatalf("encode the summary answer: %v", err)
+	}
+	client := newStageFake(string(group), "1", string(summary))
+	client.root = string(rootGroups)
+
+	var stdout, stderr bytes.Buffer
+	res, err := runBuild(context.Background(), buildOptions{
+		Root: root,
+		Out:  out,
+		Live: &providerOptions{
+			Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
+			Config: config.Config{
+				Provider: "solo",
+				Models:   config.ModelMap{Heavy: "gemma-4-31b", Light: "gemma-4-26b-a4b"},
+			},
+			NewClient: func(model.Endpoint) model.Client { return client },
+			Stderr:    &stderr,
+		},
+		BuildDate:    pinnedBuildDate,
+		KeepTempWork: true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Logger:       log.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("runBuild: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	if !res.Report.Passed() || !res.Job.DeliveryReady() {
+		t.Fatalf("the live build did not deliver:\n%s", stdout.String())
+	}
+
+	// The tree is the shape the scheme is about, or the rest of this test proves
+	// nothing: the entry-point holds a page AND a section.
+	var entry string
+	for _, n := range res.Plan.Nodes {
+		if n.Kind == treeplan.KindEntryPoint {
+			entry = n.Path
+		}
+	}
+	var pages, sections int
+	for _, n := range res.Plan.Nodes {
+		if n.Parent != entry {
+			continue
+		}
+		if n.Kind == treeplan.KindLeaf {
+			pages++
+			continue
+		}
+		sections++
+	}
+	if pages != 1 || sections != 1 {
+		t.Fatalf("the entry-point holds %d pages and %d sections; this test needs one of each", pages, sections)
+	}
+
+	// Of the entry-point's TWO summary calls, one reads its page and one reads
+	// only summary-class material — the leaf-group card and its section's summary.
+	// Nothing reads both, which is the whole of the ruling.
+	const (
+		wholeKB   = "This is the whole knowledge base"
+		pageBytes = "The epsilon section of document three"
+	)
+	var groupCalls, blendCalls int
+	for _, p := range client.seenPrompts(stageSummaries) {
+		if !strings.Contains(p, wholeKB) {
+			continue
+		}
+		if strings.Contains(p, pageBytes) {
+			groupCalls++
+			continue
+		}
+		blendCalls++
+		if !strings.Contains(p, "This section holds the material below it.") {
+			t.Errorf("the entry-point's blended call read no summary at all:\n%s", p)
+		}
+	}
+	if groupCalls != 1 || blendCalls != 1 {
+		t.Errorf("the entry-point made %d group calls and %d blended calls, want one of each",
+			groupCalls, blendCalls)
+	}
+
+	// The call count, stated: one per section node plus one card per mixed node.
+	// Four sections here — the entry-point, The Corpus, and one per document —
+	// and one card.
+	if _, calls := client.seen(stageSummaries); calls != 5 {
+		t.Errorf("%d summary calls, want four sections plus the entry-point's card", calls)
+	}
+	// And the card is not a section's summary: the run record counts what the
+	// delivered tree renders, which the card never reaches.
+	data, err := os.ReadFile(recordPath(out))
+	if err != nil {
+		t.Fatalf("read the run record: %v", err)
+	}
+	var rec buildRun
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("decode the run record: %v", err)
+	}
+	if rec.Summaries != 4 {
+		t.Errorf("%d summaries recorded, want one per section node and none for the card", rec.Summaries)
+	}
+}
+
 // The refined cuts stage, end to end.
 //
 // Rojo has no split group at the shipped budget and neither does the corpus
@@ -295,18 +467,27 @@ type stageFake struct {
 	boundary string
 	summary  string
 
+	// root, when set, answers the CORPUS ROOT's container call where grouping
+	// answers every other container. It exists for the one shape a single
+	// grouping answer cannot produce: a root that holds a page of its own beside
+	// a section, which is the mixed container the leaf-group card is for.
+	root string
+
 	mu sync.Mutex
 	// models is the model id each kind of call went out under — the proof
 	// that refinement resolved the LIGHT tier while the other two resolved
 	// the heavy one.
 	models map[string]string
 	counts map[string]int
+	// prompts is every prompt of each kind, as it went out. A stage's input
+	// composition is only observable here: the artifacts record what came back.
+	prompts map[string][]string
 }
 
 func newStageFake(grouping, boundary, summary string) *stageFake {
 	return &stageFake{
 		grouping: grouping, boundary: boundary, summary: summary,
-		models: map[string]string{}, counts: map[string]int{},
+		models: map[string]string{}, counts: map[string]int{}, prompts: map[string][]string{},
 	}
 }
 
@@ -324,6 +505,8 @@ func (f *stageFake) answer(req model.Request) (string, string) {
 		return stageCuts, f.boundary
 	case strings.Contains(prompt, "Write that section's own summary"):
 		return stageSummaries, f.summary
+	case f.root != "" && strings.Contains(prompt, "This folder is called"):
+		return stageTreePlan, f.root
 	default:
 		return stageTreePlan, f.grouping
 	}
@@ -334,9 +517,14 @@ func (f *stageFake) Consult(ctx context.Context, req model.Request) (model.Respo
 		return model.Response{}, err
 	}
 	kind, content := f.answer(req)
+	var sb strings.Builder
+	for _, m := range req.Messages {
+		sb.WriteString(m.Content)
+	}
 	f.mu.Lock()
 	f.models[kind] = req.Model
 	f.counts[kind]++
+	f.prompts[kind] = append(f.prompts[kind], sb.String())
 	f.mu.Unlock()
 	return model.Response{Content: content, FinishReason: "stop"}, nil
 }
@@ -359,6 +547,12 @@ func (f *stageFake) seen(kind string) (string, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.models[kind], f.counts[kind]
+}
+
+func (f *stageFake) seenPrompts(kind string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.prompts[kind]...)
 }
 
 // buildSplit runs a live build over the split corpus with the given boundary
