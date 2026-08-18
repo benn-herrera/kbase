@@ -169,6 +169,24 @@ deleted, not archived — git history is the log.
   AGENTS.md pointer text go with it. Prefer landing BEFORE the batched
   C–F review / MAD #2 so reviewers judge the lean manifest, not the
   superseded one.
+- **ModernCorp rebuild-and-compare (ruled 2026-08-17)**: convert the
+  exemplar's LaTeX source (../ModernCorp, entry ModernCorp.tex) to
+  Markdown via an external tool as a ONE-OFF bridge (pandoc-class;
+  consistent with the parked converter module's "dev-time differential
+  oracle" role — the shipped tex→md module stays parked), build a KB from
+  the converted tree with kbase, and compare against the exemplar
+  (mad-reference snapshot) — which was built by the nondeterministic
+  agent-set prototype, so the comparison is appliance vs agent-swarm:
+  the win condition is comparable quality WITHOUT the run-to-run
+  variance ("eliminate the box-of-chocolates factor"), plus the gates,
+  provenance and run record the agent set never had. Ground truth for
+  conversion loss: what the agent-built KB preserved from the same
+  LaTeX. Path details to figure out when
+  taken: conversion recipe (prep-recipe shape, tool-guarded), macro
+  coverage losses measured not assumed, corpus root + entry doc,
+  comparison methodology (MAD-style vs walk-notes). Prerequisite:
+  descent (a LaTeX tome is the deep-nesting shape). Natural slot: beside
+  or after the temporal.io shakedown.
 - glimmer-30B head-to-head, on the eval harness the embedded-definitions item
   above builds (challenger test post-E2E; a tie counts as a win for the
   incumbent; low-cost-cloud availability check first). It has no harness of

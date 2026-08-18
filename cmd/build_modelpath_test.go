@@ -386,6 +386,189 @@ func TestBuildLiveSummarisesSiblingLeavesAsAGroup(t *testing.T) {
 	}
 }
 
+// descendDoc is the shape rule R-C descends into: a top-level section over the
+// leaf budget that carries subsections of its own, plus a small second section
+// so the document container has more than one entry to group.
+//
+// The sizes are what make it the rule's own case rather than an approximation:
+// the `# Alpha` subtree runs past the 4000-token leaf budget while each of its
+// two subsections stays comfortably under it, so Alpha descends and nothing
+// below it does. Its lead-in prose is over the content floor as well, so the
+// body page survives as a page instead of merging forward into its first
+// subsection — which is the page this fixture is here to see delivered.
+func descendDoc() string {
+	var sb strings.Builder
+	para := func(n int) {
+		for range n {
+			sb.WriteString(splitPara + "\n\n")
+		}
+	}
+	sb.WriteString("# Alpha\n\n")
+	para(4)
+	sb.WriteString("## Alpha One\n\n")
+	para(16)
+	sb.WriteString("## Alpha Two\n\n")
+	para(16)
+	sb.WriteString("# Beta\n\nThe Beta section, which is short — one paragraph of material, " +
+		"which is all it takes to be a page rather than a fragment folded into the section above it.\n")
+	return sb.String()
+}
+
+// TestBuildLiveDescendsIntoAnOversizedSection is section descent through the
+// verb's whole composition: the taxonomy stage asks about a SECTION container,
+// its subsections become pages of their own, and the mechanical splitter is
+// never reached.
+//
+// It is the end-to-end counterpart of treeplan's Skeleton unit table. What that
+// one proves is which sections the rule calls containers; what this one proves
+// is that the shipped stage-3 seam asks about them — the candidate list, the
+// answer, the fold, the composed artifact and the delivered tree, over a
+// corpus whose only oversized section has the author's own headings inside it.
+//
+// The claim it makes against the status quo ante is the one the design opened
+// with: this corpus used to deliver `# Alpha` as a mechanically halved page
+// pair with no title of its own. It now delivers a subtopic index over three
+// pages the author named.
+func TestBuildLiveDescendsIntoAnOversizedSection(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "corpus")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create the corpus directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "one.md"), []byte(descendDoc()), 0o600); err != nil {
+		t.Fatalf("write the corpus document: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "kb")
+
+	// The document's own call: two entries, the descended section and the small
+	// one, under one heading. Alpha carries entries of its own, so its groups
+	// attach below this node when its turn comes.
+	docGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
+		"title": "The Document", "scope": "what a reader finds in the document",
+		"kind": "section", "members": []int{1, 2},
+	}}})
+	if err != nil {
+		t.Fatalf("encode the document grouping answer: %v", err)
+	}
+	// Alpha's own call: three entries — its body and its two subsections, in
+	// that order — grouped under a subtopic index. This is the question that
+	// did not exist before descent.
+	sectionGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
+		"title": "Alpha Sections", "scope": "what a reader finds under Alpha",
+		"kind": "section", "members": []int{1, 2, 3},
+	}}})
+	if err != nil {
+		t.Fatalf("encode the section grouping answer: %v", err)
+	}
+	summary, err := json.Marshal(map[string]string{
+		"framing":            "This section holds the material below it.",
+		"conclusionsHeading": "What it settles",
+		"conclusions":        "The material is documented here.",
+	})
+	if err != nil {
+		t.Fatalf("encode the summary answer: %v", err)
+	}
+	client := newStageFake(string(docGroup), "1", string(summary))
+	client.section = string(sectionGroup)
+
+	var stdout, stderr bytes.Buffer
+	res, err := runBuild(context.Background(), buildOptions{
+		Root: dir,
+		Out:  out,
+		Live: &providerOptions{
+			Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
+			Config: config.Config{
+				Provider: "solo",
+				Models:   config.ModelMap{Heavy: "gemma-4-31b", Light: "gemma-4-26b-a4b"},
+			},
+			NewClient: func(model.Endpoint) model.Client { return client },
+			Stderr:    &stderr,
+		},
+		BuildDate:    pinnedBuildDate,
+		KeepTempWork: true,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Logger:       log.Discard(),
+	})
+	if err != nil {
+		t.Fatalf("runBuild: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	if !res.Report.Passed() || !res.Job.DeliveryReady() {
+		t.Fatalf("the descended build did not deliver:\n%s", stdout.String())
+	}
+
+	// Nothing was cut mechanically. The oversized section was going to be split
+	// either way; descent is that split made semantic, so the splitter has
+	// nothing left to do here (R-1/R-C).
+	for _, g := range res.Plan.Groups {
+		if g.Parts > 1 {
+			t.Errorf("group %s split into %d parts; the author's own headings were the cut", g.ID, g.Parts)
+		}
+	}
+
+	// The three pages Alpha's own call created: its body under the preamble
+	// naming convention (R-2), and one per subsection.
+	byTitle := map[string]treeplan.Node{}
+	for _, n := range res.Plan.Nodes {
+		byTitle[n.Title] = n
+	}
+	for _, want := range []string{"Introduction to Alpha", "Alpha One", "Alpha Two"} {
+		n, ok := byTitle[want]
+		if !ok {
+			t.Fatalf("the tree plan holds no node titled %q; the descent did not reach Alpha's entries", want)
+		}
+		if n.Kind != treeplan.KindLeaf {
+			t.Errorf("%q is a %s, want a page", want, n.Kind)
+		}
+	}
+
+	// The body page carries the container's OWN heading line, which is the
+	// deliberate carve-out the body span was defined around: no byte of the
+	// source reaches no page.
+	body, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(byTitle["Introduction to Alpha"].Path)))
+	if err != nil {
+		t.Fatalf("read the body page: %v", err)
+	}
+	if !strings.Contains(string(body), "\n# Alpha\n") {
+		t.Errorf("the body page does not carry its container's heading line:\n%s", body)
+	}
+	one, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(byTitle["Alpha One"].Path)))
+	if err != nil {
+		t.Fatalf("read the subsection page: %v", err)
+	}
+	if !strings.Contains(string(one), "\n## Alpha One\n") {
+		t.Errorf("the subsection page does not open on its own subsection:\n%s", one)
+	}
+
+	// The subtopic level, which is what ARCHITECTURE §1's "entry-point → domain
+	// index → subtopic index → leaf" claims and what this corpus could not have
+	// before: Alpha's pages sit under an index whose own parent is an index.
+	parent := byTitle["Alpha One"].Parent
+	node, ok := res.Plan.Node(parent)
+	if !ok || node.Kind != treeplan.KindIndex {
+		t.Fatalf("%q's parent %q is not an index", "Alpha One", parent)
+	}
+	if grand, ok := res.Plan.Node(node.Parent); !ok || grand.Kind != treeplan.KindIndex {
+		t.Fatalf("%q sits directly under the entry-point; the descent added no subtopic level", parent)
+	}
+
+	// And the depth it reached is stated where nothing else states it: no gate
+	// adjudicates depth (R-3), so the run record is the measurement.
+	data, err := os.ReadFile(recordPath(out))
+	if err != nil {
+		t.Fatalf("read the run record: %v", err)
+	}
+	var rec buildRun
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("decode the run record: %v", err)
+	}
+	if rec.MaxDepth != 4 {
+		t.Errorf("maxDepth = %d, want 4: entry-point, the document's section, Alpha's, and its pages", rec.MaxDepth)
+	}
+	if rec.Live == nil || rec.Live.TaxonomyCalls != 2 {
+		t.Errorf("live = %+v, want two container calls — the document's and Alpha's", rec.Live)
+	}
+}
+
 // The refined cuts stage, end to end.
 //
 // Rojo has no split group at the shipped budget and neither does the corpus
@@ -407,14 +590,19 @@ const splitPara = "The reconciler walks the project file and the live tree toget
 	"because a half-applied tree is harder to diagnose than one that never moved at all. "
 
 // splitDoc is a document whose first top-level section runs well past the leaf
-// budget, followed by a small one — so the group covering it is sized into
-// several parts and the boundaries between them are stage 4's work.
+// budget, followed by a small one — so a page covering that section whole is
+// sized into several parts and the boundaries between them are stage 4's work.
 //
-// The long section carries subsections of its own, one every few paragraphs.
-// They change nothing about the tree — page granularity is a document's
-// TOP-level sections (ARCHITECTURE §4 row 3), and these nest inside one — but
-// they are what a delivered part's descriptor is drawn from, so a corpus
-// without them could not show two sibling bullets being told apart [MAD2: B-4].
+// The long section carries subsections of its own, one every few paragraphs,
+// and under section descent they are what makes this fixture work at all.
+// Descent would turn that section into a container and its subsections into
+// pages — the split that has to happen anyway, made semantic — so the scripted
+// answers below deliberately put the WHOLE container on one page instead
+// (buildSplit). That is a legal answer and its consequence is ruled: the model
+// never rules on size, so an over-budget page from any answer is split
+// mechanically, uniformly (R-5, ruled 2026-08-17). The subsections are then
+// also what a delivered part's descriptor is drawn from, so a corpus without
+// them could not show two sibling bullets being told apart [MAD2: B-4].
 func splitDoc(first, second string, paras int) string {
 	var sb strings.Builder
 	sb.WriteString("# " + first + "\n\n")
@@ -473,6 +661,14 @@ type stageFake struct {
 	// a section, which is the mixed container the leaf-group card is for.
 	root string
 
+	// section, when set, answers a SECTION container's call — a section the
+	// source's own headings descend into (treeplan.Skeleton), whose entries are
+	// its body and its subsections. It is a separate slot for the same reason
+	// root is: a document's call and its descended section's call present
+	// different numbers of entries, and one canned partition cannot be a legal
+	// answer to both.
+	section string
+
 	mu sync.Mutex
 	// models is the model id each kind of call went out under — the proof
 	// that refinement resolved the LIGHT tier while the other two resolved
@@ -507,6 +703,8 @@ func (f *stageFake) answer(req model.Request) (string, string) {
 		return stageSummaries, f.summary
 	case f.root != "" && strings.Contains(prompt, "This folder is called"):
 		return stageTreePlan, f.root
+	case f.section != "" && strings.Contains(prompt, "This section is called"):
+		return stageTreePlan, f.section
 	default:
 		return stageTreePlan, f.grouping
 	}
@@ -562,9 +760,26 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string, s
 	t.Helper()
 	root := writeSplitCorpus(t)
 	out := filepath.Join(t.TempDir(), "kb")
-	group, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "A Section", "scope": "what a reader finds here",
+	// The corpus root's answer: one section over the two documents, so each
+	// document's own call has a node to attach its groups to.
+	rootGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
+		"title": "The Documents", "scope": "what a reader finds in the documents",
 		"kind": "section", "members": []int{1, 2},
+	}}})
+	if err != nil {
+		t.Fatalf("encode the root grouping answer: %v", err)
+	}
+	// Each DOCUMENT's answer: both of its entries on pages. The first entry is
+	// an oversized section the source's own headings descend into, so this is
+	// the answer that hands the splitter a real span to cut — one page over the
+	// whole container, mechanically split because it is over budget (R-5), and
+	// the container's own call is then never made. A `section` answer here
+	// would descend instead and there would be no boundary in the job at all,
+	// which is the point of the ruling: the split path is what happens to an
+	// over-budget page, whoever named it.
+	group, err := json.Marshal(map[string]any{"groups": []map[string]any{{
+		"title": "The Material", "scope": "what a reader finds here",
+		"kind": "page", "members": []int{1, 2},
 	}}})
 	if err != nil {
 		t.Fatalf("encode the grouping answer: %v", err)
@@ -578,6 +793,7 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string, s
 		t.Fatalf("encode the summary answer: %v", err)
 	}
 	client := newStageFake(string(group), boundary, string(summary))
+	client.root = string(rootGroup)
 
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{

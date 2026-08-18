@@ -102,7 +102,8 @@ func classifyLink(r rawLink, from string, corpus ingest.Corpus, lg log.Logger) s
 // apply to each: neither space is a second resolver.
 //
 //   - Extensionless. Doc sites routinely link a sibling by name alone
-//     (`[scope](scope)`) and leave the extension to the site generator.
+//     (`[scope](scope)`) and leave the extension to the site generator. Each
+//     extension the adapter reads is tried, in Extensions' order.
 //   - Case-folded. The walk accepts `.MD` because casing conveys nothing
 //     about a document (Ext), so resolution has to agree — otherwise every
 //     link into a Windows-authored file inflates the unresolved count. A fold
@@ -156,13 +157,18 @@ func lookup(target, p, from, space string, corpus ingest.Corpus, lg log.Logger) 
 
 	candidates := []string{target}
 	if path.Ext(target) == "" {
-		withExt := target + Ext
-		if corpus.Has(withExt) {
-			lg.Debug("survey resolved an extensionless link",
-				"from", from, "target", p, "path", withExt, "space", space)
-			return withExt, true
+		// Every extension the adapter calls a document, in Extensions' own
+		// order: the site generator appends one of them, and which one is the
+		// corpus's business rather than this resolver's.
+		for _, ext := range Extensions() {
+			withExt := target + ext
+			if corpus.Has(withExt) {
+				lg.Debug("survey resolved an extensionless link",
+					"from", from, "target", p, "path", withExt, "space", space)
+				return withExt, true
+			}
+			candidates = append(candidates, withExt)
 		}
-		candidates = append(candidates, withExt)
 	}
 	for _, c := range candidates {
 		id, ambiguous := corpus.FoldedPath(c)

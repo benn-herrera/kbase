@@ -158,7 +158,7 @@ func Verify(v Verification) (Report, error) {
 		result(5, "the delivered set is the tree plan's nodes plus the fixture manifest", v.checkConformance(classA, classB, stray)),
 		result(6, "coverage and tiling: every surveyed section is on exactly one page or in an annex", v.checkCoverage()),
 		result(7, "leaf fidelity: every page re-derives byte-for-byte from source", v.checkLeafFidelity(classA)),
-		result(8, "structural caps: depth, fan-out, entry-point ceiling", v.checkCaps()),
+		result(8, "structural caps: fan-out, entry-point ceiling", v.checkCaps()),
 		result(9, "grammar conformance, per node kind and per fixture template", v.checkGrammar(classA, classB)),
 		result(10, "every class-A page declares its own delivered path in its frontmatter", v.checkLocation(classA)),
 	}
@@ -485,25 +485,22 @@ func (v Verification) checkLeafFidelity(classA []string) error {
 	return nil
 }
 
-// checkCaps is check 8: depth ≤ the index-level cap, fan-out ≤ its cap, and
-// the entry-point within its token ceiling. Class A only.
+// checkCaps is check 8: fan-out ≤ its cap, and the entry-point within its
+// token ceiling. Class A only.
 //
-// The first two are computed from the tree plan and the third from the
-// RENDERED bytes, which is the whole reason the ceiling is enforced here and
-// not at stage 3: stage 3 has no page to measure.
+// The first is computed from the tree plan and the second from the RENDERED
+// bytes, which is the whole reason the ceiling is enforced here and not at
+// stage 3: stage 3 has no page to measure.
+//
+// There is no depth condition (R-3, ruled 2026-08-17). Tree depth follows the
+// nesting the source graph requires — a gate that refused a deep tree would
+// refuse the corpus for being deep, and the depth a build produced is reported
+// in the run record rather than adjudicated here.
 func (v Verification) checkCaps() error {
-	level := map[string]int{}
 	fanOut := map[string]int{}
 	for _, n := range v.Plan.Nodes {
-		if n.Parent == "" {
-			level[n.Path] = 1
-			continue
-		}
-		level[n.Path] = level[n.Parent] + 1
-		fanOut[n.Parent]++
-		if n.Kind != treeplan.KindLeaf && level[n.Path] > v.Plan.Budgets.DepthCap {
-			return fmt.Errorf("%s sits at index level %d, past the cap of %d",
-				n.Path, level[n.Path], v.Plan.Budgets.DepthCap)
+		if n.Parent != "" {
+			fanOut[n.Parent]++
 		}
 	}
 	for _, n := range v.Plan.Nodes {

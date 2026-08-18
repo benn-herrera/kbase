@@ -97,8 +97,9 @@ func (d SourceDoc) PathNormalized() bool { return d.UploadPath != d.Path }
 // into custody, with the class of reason it was left out.
 //
 // It exists because "the knowledge base covers every document" is otherwise a
-// statement about what the walk chose to look at: a corpus's `.mdx` files, its
-// dot-directories and its broken links are excluded by policy (see Walk), and
+// statement about what the walk chose to look at: a corpus's non-document
+// formats, its dot-directories and its broken links are excluded by policy
+// (see Walk), and
 // an exclusion nobody records is indistinguishable from a document that was
 // never there [MAD2: B-3]. The list is the corpus DENOMINATOR, and the run
 // record carries it (SPEC §3.8).

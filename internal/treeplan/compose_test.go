@@ -443,6 +443,111 @@ func TestComposeSplitsAnOversizedSpan(t *testing.T) {
 	assertGroupsMatchTheSplitter(t, v, s)
 }
 
+// R-5, ruled 2026-08-17: the model never rules on size. A leaf that is over
+// budget is split by the existing splitter wherever it sits — including a
+// container's own body page, three levels down — and the split, continuation
+// and descriptor machinery applies to it unchanged.
+func TestComposeSplitsAnOverBudgetLeafInsideAContainer(t *testing.T) {
+	doc := docSpec{path: "one.md", title: "One", secs: []secSpec{
+		// The body is over the leaf budget on its own; the subsections are not.
+		{title: "Cluster", paras: 6, words: 60, subs: []secSpec{
+			{title: "Workers", paras: 2, words: 50}}},
+	}}
+	v, art := verifierFor(t, testParams(), doc)
+	p, err := SourceStructureProposal(art, testBudgets(), "Corpus", "all", nil)
+	if err != nil {
+		t.Fatalf("SourceStructureProposal: %v", err)
+	}
+
+	s, err := v.Compose(p, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	// The body span, and it is the one that split.
+	f := fileOf(art, "one.md")
+	body := Span{File: "one.md", Start: f.Sections[0].Start, End: f.Sections[0].Children[0].Start}
+	var g SplitGroup
+	for _, cand := range s.Groups {
+		if cand.Source == body {
+			g = cand
+		}
+	}
+	if g.Parts < 2 {
+		t.Fatalf("the container's body group is %+v; the fixture writes it over budget", g)
+	}
+	// Its parts are ordinary sibling pages under the container, named by the
+	// landed continuation grammar — nothing about depth changes any of it.
+	for k := 1; k <= g.Parts; k++ {
+		n, ok := s.Node(fmt.Sprintf("one/cluster/introduction-to-cluster-%d.md", k))
+		if !ok {
+			t.Fatalf("part %d of the body is on no page; paths are %q", k, paths(s))
+		}
+		if want := fmt.Sprintf("Introduction to Cluster (%d/%d)", k, g.Parts); n.Title != want {
+			t.Errorf("part %d title = %q, want %q", k, n.Title, want)
+		}
+		if n.SplitGroup != g.ID || n.Part != k {
+			t.Errorf("%s names group %q part %d, want %q part %d", n.Path, n.SplitGroup, n.Part, g.ID, k)
+		}
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// The content floor composed with descent [design §5.2, R-4]: a container's own
+// body is under the floor, and its touching neighbours are its first child
+// (same parent) and the previous top-level section's page (a different parent).
+// It merges FORWARD into its own subtree — byte order is reading order, and a
+// body opens the material that follows it.
+//
+// Merging backward is the silently-wrong page this rule exists to prevent: the
+// container's heading line and lead-in prose glued onto the end of a page about
+// something else, under an index that never promised it.
+func TestComposeMergesAContainerBodyForwardIntoItsOwnSubtree(t *testing.T) {
+	doc := docSpec{path: "one.md", title: "One", secs: []secSpec{
+		{title: "Aside", paras: 2, words: 45},
+		// A four-word body under a container that descends on its subtree.
+		{title: "Cluster", paras: 1, words: 4, subs: []secSpec{
+			{title: "Workers", paras: 2, words: 50}, {title: "Scheduler", paras: 2, words: 50}}},
+	}}
+	lg := &logtest.Capture{}
+	art, corpus := buildCorpus(t, doc)
+	v, err := NewVerifier(art, corpus, testParams(), lg)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	p, err := SourceStructureProposal(art, testBudgets(), "Corpus", "all", nil)
+	if err != nil {
+		t.Fatalf("SourceStructureProposal: %v", err)
+	}
+
+	s, err := v.Compose(p, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if _, ok := s.Node("one/cluster/introduction-to-cluster.md"); ok {
+		t.Errorf("the sub-floor body was delivered as a page of its own")
+	}
+	f := fileOf(art, "one.md")
+	cluster, workers := f.Sections[1], f.Sections[1].Children[0]
+	// Forward, into the first child: the body's bytes open Workers' page.
+	host := groupOf(t, s, "one/cluster/workers.md")
+	if want := (Span{File: "one.md", Start: cluster.Start, End: workers.End}); host.Source != want {
+		t.Errorf("the host spans %+v, want the body's bytes and its own %+v", host.Source, want)
+	}
+	// And NOT backward: the page under the other parent is untouched.
+	if got, want := groupOf(t, s, "one/aside.md").Source,
+		(Span{File: "one.md", Start: f.Sections[0].Start, End: f.Sections[0].End}); got != want {
+		t.Errorf("the previous section's page spans %+v, want its own %+v", got, want)
+	}
+	if s.CrossParentMerges != 0 {
+		t.Errorf("crossParentMerges = %d; a body merging into its own subtree crosses nothing",
+			s.CrossParentMerges)
+	}
+	if n := lg.Count("warn", "file", "one.md"); n != 0 {
+		t.Errorf("%d cross-parent warnings for a merge that stayed under one parent", n)
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
 // §2.4 step 4: a span the splitter cannot cut is a rejection carrying the
 // retry note, not a truncation and not a defect.
 func TestComposeRefusesAnUncuttableSpan(t *testing.T) {
@@ -475,13 +580,19 @@ func TestComposeRefusesAnUncuttableSpan(t *testing.T) {
 	}
 }
 
-// §2.7 operator 1: a chain of single-child index levels compresses until the
-// tree is inside the depth cap, and every leaf survives it.
-func TestComposeCollapsesASingleChildChain(t *testing.T) {
+// R-3, ruled 2026-08-17: there is no depth cap and no collapse operator. A
+// deeply nested plan is composed as it stands — every level the source asked
+// for survives, and the paths nest with it.
+//
+// This is the test that used to assert the opposite. The cap's whole cost was
+// that the repair took the DEEPEST index level first, which is precisely the
+// level a descended section creates: the machinery would have silently undone
+// the feature on any corpus that needed it.
+func TestComposeKeepsEveryLevelTheSourceAsksFor(t *testing.T) {
 	v, art := verifierFor(t, testParams(), oneSectionDoc("d.md", "D"))
 	leaf := wholeFileLeaf(art, "d.md", "The Page")
 	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
-		indexNode("L2", indexNode("L3", indexNode("L4", indexNode("L5", leaf)))),
+		indexNode("L2", indexNode("L3", indexNode("L4", indexNode("L5", indexNode("L6", leaf))))),
 	}}
 
 	s, err := v.Compose(plan, nil)
@@ -492,24 +603,33 @@ func TestComposeCollapsesASingleChildChain(t *testing.T) {
 	if n := leafCount(s); n != 1 {
 		t.Fatalf("leaves = %d, want the one the plan had", n)
 	}
-	// The outermost container's title survives; the innermost's children
-	// re-parent to it.
-	if _, ok := s.Node("l2/index.md"); !ok {
-		t.Fatalf("the outermost container did not survive: %q", paths(s))
+	want := []string{
+		"entry-point.md",
+		"l2/index.md",
+		"l2/l3/index.md",
+		"l2/l3/l4/index.md",
+		"l2/l3/l4/l5/index.md",
+		"l2/l3/l4/l5/l6/index.md",
+		"l2/l3/l4/l5/l6/the-page.md",
+	}
+	if got := paths(s); !slices.Equal(got, want) {
+		t.Fatalf("paths = %q, want the whole chain %q", got, want)
+	}
+	if got := maxLevel(s); got != len(want) {
+		t.Errorf("deepest level = %d, want %d; depth is measured, not capped", got, len(want))
 	}
 }
 
-// §2.7 operator 1, second clause: where no single-child chain is left,
-// contiguous ancestors merge deepest-boundary-first until the cap is met.
-func TestComposeMergesAncestorsWhenChainsAreNotEnough(t *testing.T) {
+// The same claim where a chain is not the shape: every index holds one index
+// and one leaf, so the old repair's second clause (merge contiguous ancestors)
+// would have fired. Nothing fires now, and every page keeps its own address.
+func TestComposeKeepsDeepMixedLevels(t *testing.T) {
 	docs := []docSpec{}
 	for i := 1; i <= 5; i++ {
 		docs = append(docs, oneSectionDoc(fmt.Sprintf("d%d.md", i), fmt.Sprintf("D%d", i)))
 	}
 	v, art := verifierFor(t, testParams(), docs...)
 
-	// Every index holds one index and one leaf, so nothing is a single-child
-	// chain and the merge path is the only way down to the cap.
 	node := indexNode("L6", wholeFileLeaf(art, "d5.md", "Page Five"))
 	for i, title := range []string{"L5", "L4", "L3", "L2"} {
 		node = indexNode(title, node, wholeFileLeaf(art, fmt.Sprintf("d%d.md", 4-i), fmt.Sprintf("Page %d", 4-i)))
@@ -522,7 +642,10 @@ func TestComposeMergesAncestorsWhenChainsAreNotEnough(t *testing.T) {
 	}
 	assertWithinCaps(t, s, testBudgets())
 	if n := leafCount(s); n != 5 {
-		t.Fatalf("leaves = %d, want 5; collapse must never lose a page", n)
+		t.Fatalf("leaves = %d, want 5; composition moves pages, never drops them", n)
+	}
+	if _, ok := s.Node("l2/l3/l4/l5/l6/page-five.md"); !ok {
+		t.Fatalf("the deepest page is not at its own address; paths are %q", paths(s))
 	}
 }
 
@@ -595,9 +718,10 @@ func TestComposeInterposesOverTheFanOutCap(t *testing.T) {
 	}
 }
 
-// §2.7's stated refusal: an interposition that re-breaches the depth cap is
-// not re-collapsed. It says so, once, with a retry note.
-func TestComposeRefusesAnInterpositionThatNeedsAFifthLevel(t *testing.T) {
+// Interposition at depth: an index deep in the tree that breaches the fan-out
+// cap is repaired where it stands, and the level the repair adds is simply
+// taken. Under the old cap this composition was a refusal.
+func TestComposeInterposesDeepInTheTree(t *testing.T) {
 	docs := []docSpec{}
 	for i := 1; i <= 6; i++ {
 		docs = append(docs, oneSectionDoc(fmt.Sprintf("d%d.md", i), fmt.Sprintf("D%d", i)))
@@ -607,20 +731,21 @@ func TestComposeRefusesAnInterpositionThatNeedsAFifthLevel(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		leaves = append(leaves, wholeFileLeaf(art, fmt.Sprintf("d%d.md", i), fmt.Sprintf("Page %d", i)))
 	}
-	// The breaching index already sits at the deepest permitted level.
 	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
 		indexNode("L2", indexNode("L3", indexNode("L4", leaves...))),
 	}}
 
-	_, err := v.Compose(plan, nil)
-	if err == nil {
-		t.Fatal("a tree needing a fifth index level composed cleanly")
+	s, err := v.Compose(plan, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
 	}
-	r, ok := AsRejection(err)
-	if !ok {
-		t.Fatalf("want a rejection the model can answer, got %T: %v", err, err)
+	assertWithinCaps(t, s, testBudgets())
+	if n := leafCount(s); n != 6 {
+		t.Fatalf("leaves = %d, want 6; interposition moves pages, never drops them", n)
 	}
-	assertNoteIsPromptable(t, r)
+	if _, ok := s.Node("l2/l3/l4/l4-1-2/index.md"); !ok {
+		t.Fatalf("no interposed index below the deep container; paths are %q", paths(s))
+	}
 }
 
 // G-2: an index whose children cost more than one summary call can read is
@@ -874,14 +999,13 @@ func assertGroupsMatchTheSplitter(t *testing.T, v *Verifier, s TreePlan) {
 // assertWithinCaps checks the structural caps over the artifact the way a
 // consumer would: from the parent chain, not from anything the verifier
 // remembers.
+//
+// Depth is not among them (R-3): it is measured — see maxLevel — and never
+// capped.
 func assertWithinCaps(t *testing.T, s TreePlan, b Budgets) {
 	t.Helper()
-	levels := levelsOf(s)
 	fanOut := map[string]int{}
 	for _, n := range s.Nodes {
-		if n.Kind != KindLeaf && levels[n.Path] > b.DepthCap {
-			t.Errorf("%s is an index at level %d, over the %d-level cap", n.Path, levels[n.Path], b.DepthCap)
-		}
 		if n.Parent != "" {
 			fanOut[n.Parent]++
 		}

@@ -82,11 +82,16 @@ paragraph stands in for them so the section is not a stub.
 `
 )
 
-// corpusHelp is the corpus's non-document: an `.mdx` file, which is the class
-// the walk ignores by policy (ARCHITECTURE §4 row 1) and the one B-3 was filed
-// over. It is here so every build in this file has something to exclude, and the
-// run record has a denominator to state.
-const corpusHelp = "# Help\n\nBuild-time content the source bytes do not hold.\n"
+// corpusHelp is the corpus's non-document: a reStructuredText file, which is
+// the class the walk ignores by policy — a format that arrives as Markdown
+// through an external converter or not at all (ARCHITECTURE §4 row 1), and the
+// class B-3 was filed over. It is here so every build in this file has
+// something to exclude, and the run record has a denominator to state.
+//
+// It used to be an `.mdx` file. MDX is a DOCUMENT now (ruled 2026-08-18,
+// markdown.Extensions), so a fixture using it to stand for the ignored class
+// would have been testing the exclusion machinery against nothing.
+const corpusHelp = "Help\n====\n\nA documentation format kbase does not read.\n"
 
 func writeCorpus(t *testing.T) string {
 	t.Helper()
@@ -95,7 +100,7 @@ func writeCorpus(t *testing.T) string {
 		t.Fatalf("create the corpus directory: %v", err)
 	}
 	for name, body := range map[string]string{
-		"intro.md": corpusIntro, "sync.md": corpusSync, "help.mdx": corpusHelp,
+		"intro.md": corpusIntro, "sync.md": corpusSync, "help.rst": corpusHelp,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -393,7 +398,7 @@ func TestBuildRunRecord(t *testing.T) {
 	// The corpus denominator (§3.8): this corpus holds three files and kbase
 	// ingested two, and the record is the only place that difference is
 	// visible [MAD2: B-3].
-	if want := (ingest.Exclusion{Path: "help.mdx", Reason: ingest.ExcludedNotADocument}); rec.Excluded != 1 ||
+	if want := (ingest.Exclusion{Path: "help.rst", Reason: ingest.ExcludedNotADocument}); rec.Excluded != 1 ||
 		len(rec.Exclusions) != 1 || rec.Exclusions[0] != want {
 		t.Errorf("the record excludes %d paths %+v, want 1: %+v", rec.Excluded, rec.Exclusions, want)
 	}

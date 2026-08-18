@@ -391,16 +391,36 @@ func TestLinkResolutionAddressSpaces(t *testing.T) {
 		target: "../../outside.md",
 		want:   survey.Link{Kind: survey.LinkUnresolved},
 	}, {
-		// A destination carrying an extension gets none appended, so an `.mdx`
-		// page — a document ingest never took custody of, since the adapter's
-		// extension set is `.md` alone — stays unresolved rather than being
-		// swapped onto the `.md` file sitting right beside it. Inventing that
-		// target would hand stage 8 an edge the corpus never had.
+		// A destination carrying an extension gets none appended, and no
+		// extension is exchanged for another: a destination naming
+		// `advanced.mdx` against a corpus holding only `advanced.md` stays
+		// unresolved. `.mdx` is a document extension now (Extensions), which is
+		// exactly why this still has to hold — the two spellings name two
+		// documents, and swapping one for the other would hand stage 8 an edge
+		// the corpus never had.
 		name:   "an .mdx destination is not swapped onto a .md document",
 		docs:   []string{"advanced.md"},
 		from:   "index.md",
 		target: "advanced.mdx",
 		want:   survey.Link{Kind: survey.LinkUnresolved},
+	}, {
+		// The other half of the same rule: an EXTENSIONLESS destination is what
+		// a site generator completes, so it is tried against every extension
+		// the adapter reads — an `.mdx` sibling answers it exactly as a `.md`
+		// one does.
+		name:   "an extensionless destination resolves to an .mdx document",
+		docs:   []string{"advanced.mdx"},
+		from:   "index.md",
+		target: "advanced",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "advanced.mdx"},
+	}, {
+		// And the order is the corpus's own site generator's: where both
+		// spellings exist, the extensionless destination names the primary one.
+		name:   "the primary extension wins an extensionless destination",
+		docs:   []string{"advanced.md", "advanced.mdx"},
+		from:   "index.md",
+		target: "advanced",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "advanced.md"},
 	}, {
 		// A fragment is recorded whatever the path part turned out to be: the
 		// rebase stage needs it to place an exempted destination (§4.5 rule 3).

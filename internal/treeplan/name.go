@@ -227,8 +227,8 @@ func newNamer() *namer {
 // the returned base is free AND every `{base}-{k}` is free, so the family's
 // members cannot collide with a sibling either.
 //
-// origin is the slug of a container this node was re-parented out of by §2.7's
-// chain collapse, or empty. On a collision it is tried as a prefix before the
+// origin is the slug of a container this node came out of — dissolution's
+// group, interposition's index — or empty. On a collision it is tried as a prefix before the
 // ordinal fallback — that is the design's stated disambiguation, and it
 // produces a name a reader can trace back to where the node came from. The
 // ordinal fallback is what covers the rest, including two nodes with the same

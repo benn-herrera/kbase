@@ -52,9 +52,9 @@ type buildNode struct {
 	sources  []Span
 	children []*buildNode
 
-	// origin is the slug of a container this node was re-parented out of by
-	// chain collapse. The namer tries it as a prefix when a slug collides,
-	// which is §2.7's stated disambiguation.
+	// origin is the slug of a container this node was re-parented out of by an
+	// operator. The namer tries it as a prefix when a slug collides, which is
+	// §2.7's stated disambiguation.
 	origin string
 
 	// The split-expansion fields (§2.4), set on leaves by expand.
@@ -137,17 +137,6 @@ func walk(n *buildNode, level int, fn func(*buildNode, int)) {
 	for _, c := range n.children {
 		walk(c, level+1, fn)
 	}
-}
-
-// maxIndexLevel is the deepest level an index-kind node sits at.
-func maxIndexLevel(root *buildNode) int {
-	max := 0
-	walk(root, 1, func(n *buildNode, level int) {
-		if n.kind != KindLeaf && level > max {
-			max = level
-		}
-	})
-	return max
 }
 
 // checkSources refuses source material the corpus does not have, or that a

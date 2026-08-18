@@ -89,7 +89,11 @@ func TestReadJSONRefusesWhatThisBuildCannotRead(t *testing.T) {
 		{"another schema", `{"schema":"kbase.treeplan/99","corpusHash":"x","budgets":{},"nodes":[],"groups":[]}`},
 		{"no schema", `{"corpusHash":"x","budgets":{},"nodes":[],"groups":[]}`},
 		{"a field this build has never heard of",
-			`{"schema":"kbase.treeplan/1","corpusHash":"x","budgets":{},"nodes":[],"groups":[],"related":[]}`},
+			`{"schema":"` + SchemaVersion + `","corpusHash":"x","budgets":{},"nodes":[],"groups":[],"related":[]}`},
+		// The retired one, which is why the schema bumped: a /1 artifact
+		// carries `budgets.depthCap` and this build has never heard of it.
+		{"a budget this build has retired",
+			`{"schema":"` + SchemaVersion + `","corpusHash":"x","budgets":{"depthCap":4},"nodes":[],"groups":[]}`},
 		{"not json", `nodes: []`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

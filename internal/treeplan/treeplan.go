@@ -49,7 +49,15 @@ import (
 // SchemaVersion identifies the artifact shape. Consumers (stages 4, 5, 6, 8
 // and 9) check it rather than guessing from the fields present, and a shape
 // change bumps it.
-const SchemaVersion = "kbase.treeplan/1"
+//
+// Bumped to /2 when the depth cap retired (R-3, ruled 2026-08-17): `budgets`
+// no longer carries `depthCap`. Section descent itself did NOT owe a bump —
+// it changes which spans a tree plan holds, and a /1 artifact still satisfies
+// every post-condition Check states — but removing a field does: ReadJSON
+// refuses unknown fields, so a /1 artifact and this build disagree about the
+// object's shape, and the version is what says so in those words instead of
+// as a decoder complaint about a field name.
+const SchemaVersion = "kbase.treeplan/2"
 
 // Kind is what a node is. The set is closed: three shapes, and the grammar of
 // each is fixed (§4).
@@ -194,6 +202,32 @@ func ReadJSON(r io.Reader) (TreePlan, error) {
 			s.Schema, SchemaVersion)
 	}
 	return s, nil
+}
+
+// MaxDepth is how deep this tree goes: the level of its deepest node, with the
+// entry-point at 1.
+//
+// It is DERIVED rather than a field, because it is a fact about the parent
+// edges that are already here and a stored copy could disagree with them. It
+// is the one statement of tree depth in the appliance: stage 6 sizes its static
+// level chain against it and the run record reports it (SPEC §3.8), and nothing
+// caps it — depth follows the nesting the source graph requires (R-3, ruled
+// 2026-08-17).
+//
+// Nodes are depth-first with parents before children (checkTree), so one pass
+// in artifact order sees every parent before the child that reads it.
+func (s TreePlan) MaxDepth() int {
+	level := make(map[string]int, len(s.Nodes))
+	deepest := 0
+	for _, n := range s.Nodes {
+		if n.Parent == "" {
+			level[n.Path] = 1
+		} else {
+			level[n.Path] = level[n.Parent] + 1
+		}
+		deepest = max(deepest, level[n.Path])
+	}
+	return deepest
 }
 
 // Node returns the node at path.

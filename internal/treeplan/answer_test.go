@@ -76,13 +76,16 @@ func TestCheckAnswer(t *testing.T) {
 		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", "annex", 0)}},
 		candidates: 1, depth: 2, wantIn: "neither a page nor a section",
 	}, {
-		name:       "a section asked for below the last level",
+		// R-3: there is no last level. A section asked for deep in the tree is
+		// an ordinary answer, because depth follows the source's own nesting
+		// and nothing caps it.
+		name:       "a section deep in the tree is fine",
 		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindIndex, 0)}},
-		candidates: 1, depth: 5, wantIn: "no level left",
+		candidates: 1, depth: 9, wantOK: true,
 	}, {
-		name:       "a page at the last level is fine",
+		name:       "a page deep in the tree is fine",
 		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},
-		candidates: 1, depth: 5, wantOK: true,
+		candidates: 1, depth: 9, wantOK: true,
 	}, {
 		name:       "a candidate list past the cap is our defect",
 		answer:     GroupingAnswer{Groups: []AnswerGroup{group("Setup", KindLeaf, 0)}},

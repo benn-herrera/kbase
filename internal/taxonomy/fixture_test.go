@@ -148,7 +148,6 @@ func testBudgets() treeplan.Budgets {
 		SummaryInputTokens: 4000,
 		SummaryTokens:      50,
 		EntryPointTokens:   300,
-		DepthCap:           4,
 		FanOutCap:          6,
 		CandidateCap:       10,
 	}

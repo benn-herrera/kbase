@@ -3,11 +3,13 @@ package summarize
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"kbase/internal/log"
 	"kbase/internal/log/logtest"
 	"kbase/internal/model"
 	"kbase/internal/pipeline"
@@ -36,9 +38,9 @@ func TestLevelStagesSummariseEverySection(t *testing.T) {
 	if res.FallbackCount != 0 {
 		t.Errorf("a no-fallback seam reported %d fallbacks", res.FallbackCount)
 	}
-	// The static stage list is four levels deep; this tree is two, so two
-	// stages resolved to zero lanes and the coordinator skipped them. The unit
-	// count is what proves they cost nothing.
+	// The static stage list runs to the level ceiling; this tree is two levels
+	// deep, so every stage above it resolved to zero lanes and the coordinator
+	// skipped them. The unit count is what proves they cost nothing.
 	if res.Units != want {
 		t.Errorf("%d units over %d stages, want one per section", res.Units, res.Stages)
 	}
@@ -46,6 +48,125 @@ func TestLevelStagesSummariseEverySection(t *testing.T) {
 		s := sc.summaryIn(t, n.Path)
 		if s.Schema != SchemaVersion || s.Framing == "" {
 			t.Errorf("%s carries %+v, want a schema and a framing", n.Path, s)
+		}
+	}
+}
+
+// deepPlan is a hand-built tree plan `levels` deep: the entry-point, a chain of
+// indexes below it, and one page at the bottom.
+//
+// It is written out rather than composed because the shape it needs — a tree
+// deeper than a synthetic corpus's headings produce — is precisely what no
+// fixture corpus here makes, and what the level chain has to be sized against.
+// Only the parent edges and the kinds matter: these tests resolve lanes, which
+// reads nothing but the tree.
+func deepPlan(levels int) treeplan.TreePlan {
+	s := treeplan.TreePlan{Schema: treeplan.SchemaVersion, Budgets: testBudgets()}
+	s.Nodes = append(s.Nodes, treeplan.Node{Path: "entry-point.md", Kind: treeplan.KindEntryPoint, Title: "Root"})
+	dir, parent := "", "entry-point.md"
+	for level := 2; level < levels; level++ {
+		dir = fmt.Sprintf("%sl%d/", dir, level)
+		path := dir + "index.md"
+		s.Nodes = append(s.Nodes, treeplan.Node{
+			Path: path, Kind: treeplan.KindIndex, Parent: parent, Title: fmt.Sprintf("Level %d", level)})
+		parent = path
+	}
+	s.Groups = []treeplan.SplitGroup{{ID: "g1", Source: treeplan.Span{File: "one.md", End: 1}, Budget: 400, Parts: 1}}
+	s.Nodes = append(s.Nodes, treeplan.Node{
+		Path: dir + "page.md", Kind: treeplan.KindLeaf, Parent: parent, Title: "The Page", SplitGroup: "g1", Part: 1})
+	return s
+}
+
+// summarizerOver is a Summarizer over a tree nobody built a corpus for. The
+// store is the scene's, and nothing in these tests reads it: lane resolution is
+// a function of the tree plan alone.
+func summarizerOver(t *testing.T, plan treeplan.TreePlan) *Summarizer {
+	t.Helper()
+	work, err := pipeline.OpenTempWork(t.TempDir(), log.Discard())
+	if err != nil {
+		t.Fatalf("OpenTempWork: %v", err)
+	}
+	s, err := New(Job{
+		TreePlan:     func() (treeplan.TreePlan, error) { return plan, nil },
+		Store:        work.ArtifactStore(),
+		LeavesDir:    leavesDir,
+		SummariesDir: summariesDir,
+		Params:       treeplan.Params{Budgets: testBudgets()},
+		Effort:       testEffort,
+		Retry:        testRetry,
+	}, log.Discard())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+// TestLevelStagesReachEveryLevelOfTheTree is the depth-cap retirement, stated
+// where it bites (R-3, ruled 2026-08-17).
+//
+// The chain used to run to the index depth cap of four. Nothing caps a tree's
+// depth any more — section descent makes a five- or six-level tree an ordinary
+// outcome over one deeply nested document — and a chain sized by the old
+// constant would have written no summary for any node below level 4, silently:
+// the level's stage simply would not exist, so there would be no unit to fail
+// and no failure to report. Every index of a tree past the old cap owes exactly
+// one summary here.
+func TestLevelStagesReachEveryLevelOfTheTree(t *testing.T) {
+	const levels = 7
+	s := summarizerOver(t, deepPlan(levels))
+
+	owed := map[string]bool{}
+	for _, stage := range s.StagePlans(stageName, func(unit string, upstreams []string) pipeline.OwedArtifact {
+		return pipeline.OwedArtifact{Path: unit, Upstreams: upstreams}
+	}) {
+		lanes, err := stage.Lanes()
+		if err != nil {
+			t.Fatalf("resolve %s: %v", stage.Name, err)
+		}
+		for _, lane := range lanes {
+			for _, task := range lane.Tasks {
+				if owed[task.Owed.Path] {
+					t.Errorf("%s is owed by two stages", task.Owed.Path)
+				}
+				owed[task.Owed.Path] = true
+			}
+		}
+	}
+	// The entry-point plus one index per level between it and the page: every
+	// one of them, including the three the old cap put out of reach.
+	for _, n := range deepPlan(levels).Nodes {
+		if n.Kind == treeplan.KindLeaf {
+			continue
+		}
+		if !owed[s.Unit(n.Path)] {
+			t.Errorf("no stage owes the summary of %s", n.Path)
+		}
+	}
+	if len(owed) != levels-1 {
+		t.Errorf("%d summaries owed over a %d-level tree, want %d", len(owed), levels, levels-1)
+	}
+}
+
+// TestLevelStagesRefuseATreePastTheCeiling: the ceiling is generous and static,
+// so the one thing it must never do is truncate.
+//
+// A tree deeper than the declared chain has levels no stage covers, and the
+// indexes above them would then blend over children whose summaries were never
+// written — an absence, not a failure. Refusing where the plan is read is what
+// keeps the ceiling a stage-list size rather than a silent cap on the tree.
+func TestLevelStagesRefuseATreePastTheCeiling(t *testing.T) {
+	s := summarizerOver(t, deepPlan(levelCeiling+1))
+
+	stages := s.StagePlans(stageName, func(unit string, upstreams []string) pipeline.OwedArtifact {
+		return pipeline.OwedArtifact{Path: unit, Upstreams: upstreams}
+	})
+	_, err := stages[0].Lanes()
+	if err == nil {
+		t.Fatal("a tree deeper than the level chain resolved lanes; its deepest sections would have no summary")
+	}
+	for _, want := range []string{fmt.Sprint(levelCeiling + 1), fmt.Sprint(levelCeiling)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to name %s", err, want)
 		}
 	}
 }

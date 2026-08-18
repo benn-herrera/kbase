@@ -38,16 +38,32 @@ import (
 // way the leaf budget does.
 
 // secSpec is one section of a synthetic document.
+//
+// subs are its child sections, written one heading level deeper. They are what
+// makes a document DESCENDABLE: rule R-C needs a section that is both over the
+// leaf budget and has children, and a fixture with no nesting can only ever
+// exercise the split path.
 type secSpec struct {
 	title string
 	paras int
 	words int
+	subs  []secSpec
 }
 
 // docSpec is one synthetic document.
+//
+// pre is the headingless opening, in words: the preamble the survey records
+// separately from the heading tree, and the span whose naming convention a
+// container's body page reuses (R-2).
+//
+// meta writes a front-matter block. It is out-of-band: the survey records it
+// as a range and NOT as a section, so it sits outside the coverage universe and
+// no page may draw on it.
 type docSpec struct {
 	path  string
 	title string
+	meta  bool
+	pre   int
 	secs  []secSpec
 }
 
@@ -85,43 +101,79 @@ func buildCorpus(t *testing.T, docs ...docSpec) (survey.Artifact, ingest.Corpus)
 
 func buildDoc(d docSpec) (ingest.SourceDoc, survey.File) {
 	var sb strings.Builder
-	var sections []survey.Section
 	var cands []survey.CutCandidate
 	est := tokens.Estimator{}
 
-	for i, s := range d.secs {
-		start := sb.Len()
-		if i > 0 {
-			cands = append(cands, survey.CutCandidate{Offset: start, Kind: survey.CutHeading})
-		}
-		fmt.Fprintf(&sb, "# %s\n\n", s.title)
-		for p := range s.paras {
-			if p > 0 {
-				cands = append(cands, survey.CutCandidate{Offset: sb.Len(), Kind: survey.CutParagraph})
-			}
-			sb.WriteString(filler(fmt.Sprintf("%s%d", strings.ToLower(s.title[:1]), p), s.words))
-			sb.WriteString("\n\n")
-		}
-		body := sb.String()[start:sb.Len()]
-		sections = append(sections, survey.Section{
-			Level:  1,
-			Title:  s.title,
-			Start:  start,
-			End:    sb.Len(),
-			Tokens: est.Estimate(body),
-			Gist:   "gist of " + s.title,
-		})
+	var metadata *survey.Span
+	if d.meta {
+		fmt.Fprintf(&sb, "---\ntitle: %s\n---\n\n", d.title)
+		metadata = &survey.Span{Start: 0, End: sb.Len()}
 	}
 
+	var preamble *survey.Section
+	if d.pre > 0 {
+		start := sb.Len()
+		sb.WriteString(filler("pre", d.pre))
+		sb.WriteString("\n\n")
+		preamble = &survey.Section{
+			Level: 0, Start: start, End: sb.Len(),
+			Tokens: est.Estimate(sb.String()[start:sb.Len()]),
+			Gist:   "gist of the opening",
+		}
+	}
+
+	sections := writeSections(&sb, &cands, d.secs, 1, est)
 	src := []byte(sb.String())
 	return ingest.SourceDoc{Path: d.path, Bytes: src}, survey.File{
 		Path:     d.path,
 		Bytes:    len(src),
 		Tokens:   est.EstimateBytes(src),
 		Title:    d.title,
+		Metadata: metadata,
+		Preamble: preamble,
 		Sections: sections,
 		Cuts:     cands,
 	}
+}
+
+// writeSections writes one level of sections and recurses into their children,
+// returning the heading tree with the offsets it just wrote.
+//
+// A section's range runs from its own heading line to the end of its last
+// child, which is survey.Section's contract and what makes the ranges tile —
+// survey.Assemble refuses the fixture otherwise. Its token count covers the
+// whole subtree, for the same reason: that is the number rule R-C is stated in.
+func writeSections(sb *strings.Builder, cands *[]survey.CutCandidate, specs []secSpec,
+	level int, est tokens.Estimator) []survey.Section {
+
+	out := make([]survey.Section, 0, len(specs))
+	for _, s := range specs {
+		start := sb.Len()
+		if start > 0 {
+			// Offset zero is not a cut position: a cut there would produce an
+			// empty first part.
+			*cands = append(*cands, survey.CutCandidate{Offset: start, Kind: survey.CutHeading})
+		}
+		fmt.Fprintf(sb, "%s %s\n\n", strings.Repeat("#", level), s.title)
+		for p := range s.paras {
+			if p > 0 {
+				*cands = append(*cands, survey.CutCandidate{Offset: sb.Len(), Kind: survey.CutParagraph})
+			}
+			sb.WriteString(filler(fmt.Sprintf("%s%d", strings.ToLower(s.title[:1]), p), s.words))
+			sb.WriteString("\n\n")
+		}
+		kids := writeSections(sb, cands, s.subs, level+1, est)
+		out = append(out, survey.Section{
+			Level:    level,
+			Title:    s.title,
+			Start:    start,
+			End:      sb.Len(),
+			Tokens:   est.Estimate(sb.String()[start:sb.Len()]),
+			Gist:     "gist of " + s.title,
+			Children: kids,
+		})
+	}
+	return out
 }
 
 // filler is n space-separated words, tagged so a failure message says which
@@ -143,7 +195,6 @@ func testBudgets() Budgets {
 		SummaryInputTokens: 2000,
 		SummaryTokens:      50,
 		EntryPointTokens:   300,
-		DepthCap:           4,
 		FanOutCap:          4,
 		CandidateCap:       10,
 	}

@@ -47,18 +47,16 @@ type AnswerGroup struct {
 // level the answer's groups will sit at — the container's level plus one, with
 // the entry-point at level 1.
 //
-// The checks are the four that are decidable from one call: partition,
-// fan-out, titles, and asking for an index level that does not exist. The
-// remaining post-conditions (G-1, G-2, coverage, path uniqueness) need the
-// whole tree and are Compose's, where §2.7's operators have run and the depth
-// picture is final.
+// The checks are the three that are decidable from one call: partition,
+// fan-out, and titles. The remaining post-conditions (G-1, G-2, coverage, path
+// uniqueness) need the whole tree and are Compose's, where §2.7's operators
+// have run.
 //
-// The depth check here is narrower than Compose's. A model flagging a group
-// `index` at the depth cap is asking for a fifth index level, which it was
-// told the tree does not have, and it can answer that again differently. The
-// same material arriving as source STRUCTURE — a directory chain deeper than
-// the cap — is not the model's doing and is repaired mechanically by chain
-// collapse and dissolution instead.
+// depth is not checked against a cap, because there is none (R-3, ruled
+// 2026-08-17): a tree is as deep as the source's own nesting makes it, and a
+// group flagged `index` at any level is an ordinary answer. What remains is the
+// seam's own contract — a call must place its groups BELOW the entry-point —
+// which is our arithmetic and therefore a defect when it is wrong.
 func (v *Verifier) CheckAnswer(a GroupingAnswer, candidates, depth int) error {
 	if candidates <= 0 {
 		return DefectError{Reason: fmt.Sprintf(
@@ -126,12 +124,7 @@ func (v *Verifier) CheckAnswer(a GroupingAnswer, candidates, depth int) error {
 			return RejectionError{Subject: subject, Reason: "a group has no one-line scope"}
 		}
 		switch g.Kind {
-		case KindLeaf:
-		case KindIndex:
-			if depth > v.p.Budgets.DepthCap {
-				return RejectionError{Subject: subject,
-					Reason: "no level left below this one; these must be pages, not sections"}
-			}
+		case KindLeaf, KindIndex:
 		default:
 			return RejectionError{Subject: subject, Reason: "a group is neither a page nor a section"}
 		}

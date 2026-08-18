@@ -47,7 +47,6 @@ func testBudgets() treeplan.Budgets {
 		SummaryInputTokens: 4000,
 		SummaryTokens:      50,
 		EntryPointTokens:   300,
-		DepthCap:           4,
 		FanOutCap:          6,
 		CandidateCap:       10,
 	}
@@ -113,7 +112,7 @@ func newSceneOf(t *testing.T, lg log.Logger, body func(treeplan.Node) string,
 	if err != nil {
 		t.Fatalf("treeplan.NewVerifier: %v", err)
 	}
-	proposal, err := treeplan.SourceStructureProposal(art, "Fixture knowledge base", "the fixture corpus", nil)
+	proposal, err := treeplan.SourceStructureProposal(art, params.Budgets, "Fixture knowledge base", "the fixture corpus", nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}

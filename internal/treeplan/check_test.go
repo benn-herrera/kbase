@@ -2,6 +2,7 @@ package treeplan
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,121 @@ func TestCheckCatchesTampering(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Coverage is boundary-set tiling: for every file the group spans exactly tile
+// the material the survey found, and every endpoint is a section start the
+// survey drew.
+//
+// The mutations are over a DESCENDED tree — a container covered by its subtree
+// rather than by one span, which the old containment predicate could not
+// express — so these prove the gate is strictly stronger where it was widened,
+// and not merely wider.
+func TestCheckRefusesATilingThatIsNotOne(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mutate     func(*testing.T, *TreePlan)
+		wantDefect bool
+		wantIn     string
+	}{{
+		name: "a gap between two pages",
+		mutate: func(t *testing.T, s *TreePlan) {
+			// The boundary moves on one side only: the bytes between the two
+			// pages are on neither of them.
+			s.Groups[0].Source.End -= 40
+		},
+		wantIn: "on no page",
+	}, {
+		name: "material left off the front of a file",
+		mutate: func(t *testing.T, s *TreePlan) {
+			s.Groups[0].Source.Start += 40
+		},
+		wantIn: "on no page",
+	}, {
+		name: "material left off the end of a file",
+		mutate: func(t *testing.T, s *TreePlan) {
+			s.Groups[len(s.Groups)-1].Source.End -= 40
+		},
+		wantIn: "on no page",
+	}, {
+		name: "two pages over the same bytes",
+		mutate: func(t *testing.T, s *TreePlan) {
+			s.Groups[0].Source.End += 40
+		},
+		wantDefect: true,
+		wantIn:     "overlap",
+	}, {
+		// The one only the boundary set catches on this shape: the spans still
+		// tile the file with no gap and no overlap, but the boundary between
+		// two of them is a byte nobody's heading is at.
+		name: "a page that begins inside a section",
+		mutate: func(t *testing.T, s *TreePlan) {
+			s.Groups[0].Source.End += 40
+			s.Groups[1].Source.Start += 40
+		},
+		wantIn: "inside a section",
+	}, {
+		// The front-matter block is surveyed as an out-of-band range, not as a
+		// section: it is outside the coverage universe, so a page drawing on it
+		// is drawing on material nothing planned.
+		name: "a page reaching into the front matter",
+		mutate: func(t *testing.T, s *TreePlan) {
+			s.Groups[0].Source.Start = 0
+		},
+		wantDefect: true,
+		wantIn:     "outside the material",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, s := descendedFixture(t)
+			if err := v.Check(s); err != nil {
+				t.Fatalf("the untampered fixture does not verify: %v", err)
+			}
+			tc.mutate(t, &s)
+			err := v.Check(s)
+			if err == nil {
+				t.Fatal("the tampered artifact verified")
+			}
+			var defect DefectError
+			if got := errors.As(err, &defect); got != tc.wantDefect {
+				t.Fatalf("defect = %v, want %v (err: %v)", got, tc.wantDefect, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Fatalf("refusal %q does not name %q", err, tc.wantIn)
+			}
+			if !tc.wantDefect {
+				r, ok := AsRejection(err)
+				if !ok {
+					t.Fatalf("want a rejection, got %T: %v", err, err)
+				}
+				assertNoteIsPromptable(t, r)
+			}
+		})
+	}
+}
+
+// descendedFixture is one document whose sections tile it through a container:
+// a page, then a container's body and its two subsections. Its groups are in
+// file byte order, which is what the mutations above index into.
+func descendedFixture(t *testing.T) (*Verifier, TreePlan) {
+	t.Helper()
+	doc := docSpec{path: "one.md", title: "One", meta: true, secs: []secSpec{
+		{title: "Aside", paras: 2, words: 45},
+		{title: "Cluster", paras: 2, words: 45, subs: []secSpec{
+			{title: "Workers", paras: 2, words: 50}, {title: "Scheduler", paras: 2, words: 50}}},
+	}}
+	v, art := verifierFor(t, testParams(), doc)
+	p, err := SourceStructureProposal(art, testBudgets(), "Corpus", "all", nil)
+	if err != nil {
+		t.Fatalf("SourceStructureProposal: %v", err)
+	}
+	s, err := v.Compose(p, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if len(s.Groups) != 4 {
+		t.Fatalf("groups = %d, want four: a page, a body and two subsections", len(s.Groups))
+	}
+	return v, s
 }
 
 // The composed tree plan's own budgets travel with it, so a consumer that reads

@@ -116,8 +116,8 @@ func TestNamerDisambiguates(t *testing.T) {
 	}
 }
 
-// §2.7: a node re-parented by chain collapse carries the slug of the container
-// it came out of, and the namer tries it as a prefix before falling back to an
+// §2.7: a node re-parented by an operator carries the slug of the container it
+// came out of, and the namer tries it as a prefix before falling back to an
 // ordinal — so the disambiguated name says where the node came from.
 func TestNamerPrefersTheOriginPrefix(t *testing.T) {
 	nm := newNamer()

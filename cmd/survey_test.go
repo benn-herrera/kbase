@@ -147,7 +147,7 @@ func TestRunSurveyFailures(t *testing.T) {
 	}{
 		{"no corpus given", surveyOptions{}, "corpus directory is required"},
 		{"corpus does not exist", surveyOptions{Root: filepath.Join(root, "nope")}, "corpus root"},
-		{"corpus holds no markdown", surveyOptions{Root: t.TempDir()}, "no .md files"},
+		{"corpus holds no markdown", surveyOptions{Root: t.TempDir()}, "no .md, .mdx files"},
 		{"artifact path unwritable", surveyOptions{Root: root, JSONPath: filepath.Join(root, "no", "such", "dir", "a.json")}, "create"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

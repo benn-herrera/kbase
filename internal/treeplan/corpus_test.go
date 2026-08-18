@@ -59,11 +59,23 @@ type pinnedCorpus struct {
 	// to look at afterwards. It is under test_data/transient/ because it is
 	// test output — generated, gitignored, and rewritten from scratch every run.
 	evidence string
+	// want is the shape the mechanical plan has over this corpus at the shipped
+	// budgets: the expected truth, pinned so that a change to the descent rule,
+	// the floor or the splitter has to be stated here rather than noticed later.
+	// The two corpora pin different claims — see corpora().
+	want counts
 }
 
 // corpora is the swept corpora. Rojo is a small hand-written docs site; oMLX is
 // an ML runtime's docs/ tree out of a monorepo — different writers, different
 // structural habits, the same claims.
+//
+// Their pins say opposite things on purpose. Rojo writes several `#` sections
+// per file, all of them under the leaf budget, so rule R-C never fires and its
+// shape is exactly what it was before section descent existed: the pin is the
+// no-regression claim. oMLX writes one `#` per file with everything under it,
+// which is the shape that delivered `ls docs/` with summaries attached: its pin
+// is the descended truth.
 func corpora() []pinnedCorpus {
 	return []pinnedCorpus{
 		{
@@ -73,6 +85,14 @@ func corpora() []pinnedCorpus {
 			title:    "Rojo Documentation",
 			scope:    "the pinned Rojo docs corpus",
 			evidence: "test_data/transient/treeplan-rojo",
+			// The MDX admission (ruled 2026-08-18) moved these, and descent did
+			// not: Rojo's three `.mdx` documents entered the corpus, so it went
+			// from 8 documents to 11 and gained 6 pages and 3 domain indexes —
+			// one index and its own pages per new document. Depth is unchanged
+			// at 3, which is the no-regression claim: not one of Rojo's
+			// sections is over the leaf budget, so rule R-C still never fires.
+			want: counts{Nodes: 34, Leaves: 22, Indexes: 11, Groups: 22,
+				SplitGroups: 0, SplitParts: 0, MaxDepth: 3},
 		},
 		{
 			name:     "omlx",
@@ -81,20 +101,28 @@ func corpora() []pinnedCorpus {
 			title:    "oMLX Documentation",
 			scope:    "the pinned oMLX docs corpus",
 			evidence: "test_data/transient/treeplan-omlx",
+			// The descended truth, and what it replaced: 12 nodes, 6 leaves and
+			// one mechanically halved page at depth 3. Three claims are in
+			// these numbers — no group splits any more (the author's headings
+			// are the cut), the corpus delivers 3.7× the pages, and the tree
+			// has a subtopic level for the first time.
+			want: counts{Nodes: 31, Leaves: 22, Indexes: 8, Groups: 22,
+				SplitGroups: 0, SplitParts: 0, MaxDepth: 5},
 		},
 	}
 }
 
 // TestTreePlanOverRealCorpus composes the mechanical tree plan a descent would
 // produce over each pinned corpus if it grouped by file — one domain per
-// document, one page per top-level section — and holds it to every composed
-// post-condition at the shipped budgets.
+// document, and under it that document's skeleton — and holds it to every
+// composed post-condition at the shipped budgets.
 //
 // Grouping by file is not a claim about what the taxonomy stage will do. It is
-// the plan that exercises the most machinery with no model in the loop:
-// every surveyed section is covered, so the tiling check is live; every span
-// is a real one, so the splitter runs over real material; and the fan-out cap
-// bites on whichever documents have more top-level sections than the cap.
+// the plan that exercises the most machinery with no model in the loop: every
+// surveyed section is covered, so the tiling check is live; every span is a
+// real one, so the splitter runs over real material; the descent rule fires on
+// whichever documents have a section over the leaf budget; and the fan-out cap
+// bites on whichever containers have more entries than the cap.
 //
 // One subtest per corpus, named for it, so an integration recipe can pin one
 // (`-run 'TestTreePlanOverRealCorpus/omlx'`) and so an absent corpus skips only
@@ -123,9 +151,17 @@ func treePlanOverCorpus(t *testing.T, c pinnedCorpus) {
 
 	n := countsOf(s)
 	t.Logf("%s tree plan at the shipped budgets: %d nodes (%d leaves, %d indexes), "+
-		"%d groups of which %d split into %d parts; %d source files, %d surveyed sections",
-		c.name, n.Nodes, n.Leaves, n.Indexes, n.Groups, n.SplitGroups, n.SplitParts,
+		"%d groups of which %d split into %d parts, %d levels deep; "+
+		"%d source files, %d surveyed sections",
+		c.name, n.Nodes, n.Leaves, n.Indexes, n.Groups, n.SplitGroups, n.SplitParts, n.MaxDepth,
 		art.Corpus.Files, art.Corpus.Sections)
+
+	// The pinned shape. A change here is a change in what the appliance
+	// delivers over a corpus nobody wrote for it, which is exactly the kind
+	// that has to be stated rather than absorbed.
+	if n != c.want {
+		t.Errorf("shape = %+v\nwant  %+v", n, c.want)
+	}
 
 	assertWithinCaps(t, s, DefaultBudgets())
 	assertGroupsMatchTheSplitter(t, v, s)
@@ -167,11 +203,10 @@ func TestTreePlanOverRealCorpusUnderStress(t *testing.T) {
 
 func stressOverCorpus(t *testing.T, c pinnedCorpus) {
 	art, corpus := realArtifact(t, c)
-	plan := planByFile(t, art, c)
 
 	for _, budget := range stressLeafBudgets() {
 		t.Run(fmt.Sprintf("leafTokens=%d", budget), func(t *testing.T) {
-			v, s, out := sweepAt(t, art, corpus, plan, budget)
+			v, s, out := sweepAt(t, art, corpus, c, budget)
 			if out.Rejection != nil {
 				t.Logf("refused at leafTokens=%d: %s", budget, out.Rejection.Detail)
 				return
@@ -202,7 +237,13 @@ func stressLeafBudgets() []int { return []int{64, 200, 800, 2000} }
 //
 // It is the single place both corpus sweeps ask that question: the stress
 // property asserts over what it returns, the evidence emission records it.
-func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeProposal, leafTokens int) (*Verifier, TreePlan, sweepOutcome) {
+//
+// The proposal is rebuilt at each operating point rather than composed once and
+// re-verified: the leaf budget is what rule R-C descends on, so a plan enumerated
+// at one budget is not the plan this corpus would produce at another. Sweeping
+// the budget sweeps the skeleton with it, which is the honest shape of the
+// question — and the shape the pipeline itself has.
+func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, c pinnedCorpus, leafTokens int) (*Verifier, TreePlan, sweepOutcome) {
 	t.Helper()
 	p := DefaultParams()
 	p.Budgets.LeafTokens = leafTokens
@@ -211,6 +252,10 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeP
 		t.Fatalf("NewVerifier at leafTokens=%d: %v", leafTokens, err)
 	}
 
+	plan, err := SourceStructureProposal(art, p.Budgets, c.title, c.scope, nil)
+	if err != nil {
+		t.Fatalf("SourceStructureProposal at leafTokens=%d: %v", leafTokens, err)
+	}
 	s, err := v.Compose(plan, nil)
 	if err == nil {
 		c := countsOf(s)
@@ -286,7 +331,7 @@ func evidenceOverCorpus(t *testing.T, c pinnedCorpus) {
 		Domains: domainsOf(s),
 	}
 	for _, budget := range stressLeafBudgets() {
-		_, _, out := sweepAt(t, art, corpus, plan, budget)
+		_, _, out := sweepAt(t, art, corpus, c, budget)
 		ev.Sweep = append(ev.Sweep, out)
 	}
 	writeEvidence(t, dir, "stats.json", encodeEvidence(t, ev))
@@ -315,6 +360,10 @@ type counts struct {
 	// SplitParts and very different trees.
 	SplitGroups int `json:"splitGroups"`
 	SplitParts  int `json:"splitParts"`
+	// MaxDepth is the deepest level in the tree, the entry-point at 1. Nothing
+	// caps it (R-3, ruled 2026-08-17) — it is measured and reported, which is
+	// what this field is: the report.
+	MaxDepth int `json:"maxDepth"`
 }
 
 // domainFanOut is one domain index's share of the tree: what the fan-out cap
@@ -361,10 +410,11 @@ type starvedSpan struct {
 // be a second definition of "leaf".
 func countsOf(s TreePlan) counts {
 	c := counts{
-		Nodes:   len(s.Nodes),
-		Leaves:  leafCount(s),
-		Indexes: indexCount(s),
-		Groups:  len(s.Groups),
+		Nodes:    len(s.Nodes),
+		Leaves:   leafCount(s),
+		Indexes:  indexCount(s),
+		Groups:   len(s.Groups),
+		MaxDepth: maxLevel(s),
 	}
 	for _, g := range s.Groups {
 		if g.Parts > 1 {
@@ -456,7 +506,7 @@ func writeEvidence(t *testing.T, dir, name string, data []byte) {
 // composed from the same proposal that verb composes.
 func planByFile(t *testing.T, art survey.Artifact, c pinnedCorpus) TreeProposal {
 	t.Helper()
-	plan, err := SourceStructureProposal(art, c.title, c.scope, nil)
+	plan, err := SourceStructureProposal(art, DefaultBudgets(), c.title, c.scope, nil)
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}

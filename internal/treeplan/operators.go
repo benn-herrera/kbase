@@ -11,151 +11,35 @@ import (
 	"kbase/internal/survey"
 )
 
-// The three level-structure operators (§2.7), plus the content floor. The
+// The two level-structure operators (§2.7), plus the content floor. The
 // descent's answer vocabulary groups SIBLINGS; it cannot add or remove a tree
-// LEVEL, and three reachable inputs need exactly that. All three are repaired
-// here — mechanically, with no model call and no new model-facing answer field.
-// The grouping semantics the model supplied are preserved; only the level
-// structure is rewritten.
+// LEVEL, and the reachable inputs that need exactly that are repaired here —
+// mechanically, with no model call and no new model-facing answer field. The
+// grouping semantics the model supplied are preserved; only the level structure
+// is rewritten.
 //
 // # Order and termination
 //
-// The operators trade against the same depth budget, so they run in one fixed
-// order and not a loop:
+// The operators run in one fixed order and not a loop:
 //
-//	collapse until depth ≤ cap → dissolve cap-level multi-file groups →
-//	merge sub-floor spans → split expansion →
-//	interpose to satisfy G-2/fan-out → re-check both caps
+//	dissolve multi-file groups → merge sub-floor spans → split expansion →
+//	interpose to satisfy G-2/fan-out → re-check fan-out and G-2
 //
 // The floor sits after dissolution because it reads one span per leaf, and
 // before expansion because it changes which bytes a group holds — and
 // therefore how many parts the splitter makes of it. It runs before
-// interposition for the same reason collapse does: it changes fan-out, and
-// interposition is what fan-out is measured for.
+// interposition because it changes fan-out, and interposition is what fan-out
+// is measured for.
 //
-// Collapse strictly decreases depth and interposition strictly increases it,
-// so an interposition that re-breaches the depth cap is NOT re-collapsed: it
-// is a rejection carrying the retry note, the model is asked once to
-// regroup flatter, and a second failure fails the unit loudly (I-7). That is
-// the one shape kbase genuinely cannot host, and it says so rather than
-// looping.
+// There is no collapse operator, and no depth cap for one to serve (R-3, ruled
+// 2026-08-17). Tree depth follows the nesting the source graph requires: the
+// deepest index level is exactly the level a descended section creates, so an
+// operator whose job was to delete it would silently undo the structure the
+// source asked for. Depth is measured and reported, never capped.
 //
 // Split expansion sits between dissolution and interposition because it is
 // what makes G-2 answerable: an oversized span becomes n sibling leaves, which
 // is n entries in the parent's fan-out and n token counts in its digest sum.
-
-// collapse removes index levels until the tree is within the depth cap.
-//
-// It prefers a single-child chain — an index whose only child is another index
-// — because compressing one costs nothing: the level carried no grouping
-// decision, only nesting. The outermost container's title and scope survive
-// and the innermost's children re-parent to it. Where that is not enough,
-// contiguous ancestors are merged the same way, deepest boundary first.
-//
-// It never merges two source files into one leaf: only index nodes are
-// removed, and a leaf keeps its own span, its own title and its own identity
-// wherever it lands.
-//
-// It runs only while the tree is over the cap. An index with one index child
-// that fits is a shape the model chose, and collapsing it unasked would also
-// collapse the exemplar's single-child subtopic directories, which are a
-// budget artifact and correct (§0.4).
-//
-// Termination: every iteration removes exactly one index node from the tree,
-// so the loop cannot run more times than the tree has index nodes, and a tree
-// with one index node is at depth 1.
-func collapse(root *buildNode, depthCap int) {
-	for {
-		deepest := maxIndexLevel(root)
-		if deepest <= depthCap {
-			return
-		}
-		if n := pickChain(root, deepest); n != nil {
-			absorb(n)
-			continue
-		}
-		if n, parent := pickMerge(root, deepest); n != nil {
-			mergeInto(n, parent)
-			continue
-		}
-		return // unreachable: over the cap means some index node has a parent
-	}
-}
-
-// pickChain finds the deepest index node whose only child is an index node and
-// whose subtree reaches the deepest level — so absorbing it makes progress
-// against the cap rather than flattening some unrelated branch.
-func pickChain(root *buildNode, deepest int) *buildNode {
-	var best *buildNode
-	bestLevel := 0
-	walkParent(root, 1, nil, func(n *buildNode, level int, _ *buildNode) {
-		if n.kind == KindLeaf || len(n.children) != 1 || n.children[0].kind == KindLeaf {
-			return
-		}
-		if subtreeIndexLevel(n, level) != deepest || level <= bestLevel {
-			return
-		}
-		best, bestLevel = n, level
-	})
-	return best
-}
-
-// pickMerge finds the deepest index node with an index parent: the one whose
-// children re-parent upward when no single-child chain is left to compress.
-func pickMerge(root *buildNode, deepest int) (*buildNode, *buildNode) {
-	var best, bestParent *buildNode
-	walkParent(root, 1, nil, func(n *buildNode, level int, parent *buildNode) {
-		if n.kind == KindLeaf || parent == nil || level != deepest || best != nil {
-			return
-		}
-		best, bestParent = n, parent
-	})
-	return best, bestParent
-}
-
-// absorb compresses one link of a single-child chain: n takes over its only
-// child's children, and the child disappears.
-func absorb(n *buildNode) {
-	child := n.children[0]
-	n.children = child.children
-	reparent(n.children, child.title)
-}
-
-// mergeInto removes n and re-parents its children to parent, which keeps its
-// own title and scope.
-func mergeInto(n, parent *buildNode) {
-	out := make([]*buildNode, 0, len(parent.children)+len(n.children)-1)
-	for _, c := range parent.children {
-		if c == n {
-			out = append(out, n.children...)
-			continue
-		}
-		out = append(out, c)
-	}
-	parent.children = out
-	reparent(n.children, n.title)
-}
-
-// reparent records which container a set of nodes came out of, so the namer
-// can disambiguate a colliding slug by prefixing it (§2.7).
-func reparent(nodes []*buildNode, origin string) {
-	slug := Slug(origin)
-	for _, c := range nodes {
-		c.origin = slug
-	}
-}
-
-// subtreeIndexLevel is the deepest level an index node sits at within n's
-// subtree, with n itself at level.
-func subtreeIndexLevel(n *buildNode, level int) int {
-	max := 0
-	walk(n, level, func(c *buildNode, l int) {
-		if c.kind != KindLeaf && l > max {
-			max = l
-		}
-	})
-	return max
-}
 
 // walkParent is walk with the parent carried alongside.
 func walkParent(n *buildNode, level int, parent *buildNode, fn func(*buildNode, int, *buildNode)) {
@@ -165,17 +49,15 @@ func walkParent(n *buildNode, level int, parent *buildNode, fn func(*buildNode, 
 	}
 }
 
-// dissolve is §2.7's third operator: a group holding more than one source span
-// cannot be one leaf, because SplitGroup.Source is a single span in a single file.
-// Its spans become sibling leaves in its place.
+// dissolve is the multi-file operator: a group holding more than one source
+// span cannot be one leaf, because SplitGroup.Source is a single span in a
+// single file. Its spans become sibling leaves in its place.
 //
-// The design names this at the deepest permitted index level, where the pincer
-// bites — a group with ≥2 source files can be neither a leaf (multi-file) nor
-// an index (no level left). It is applied at every level here because the
-// impossibility is the same one everywhere: the artifact cannot represent the
-// node either way, and dissolving in place is the repair that changes the
-// least. Below the cap it never fires on a well-formed descent, since a
-// container with several files is enumerated as a container.
+// It is applied at every level, because the impossibility is the same one
+// everywhere: the artifact cannot represent the node either way, and dissolving
+// in place is the repair that changes the least. It never fires on a
+// well-formed descent, since a container with several files is enumerated as a
+// container.
 //
 // Each resulting leaf is named after its source file — the survey's title for
 // it, or its base name — and keeps the dissolved group's scope line. Where two
@@ -444,11 +326,7 @@ func (v *Verifier) wholeFile(span Span) bool {
 	if len(secs) == 0 {
 		return false
 	}
-	lo, hi := secs[0].Start, secs[0].End
-	for _, s := range secs {
-		lo = min(lo, s.Start)
-		hi = max(hi, s.End)
-	}
+	lo, hi := coverageUniverse(secs)
 	return span.Start == lo && span.End == hi
 }
 
@@ -472,8 +350,8 @@ func underFloorDefect(spans []Span) error {
 //
 // An index whose every child was absorbed into a page under some other parent
 // routes nowhere, and Check refuses one ("a section holds nothing"). Removing
-// it is the same repair collapse and dissolution make: the tree keeps only what
-// the artifact can represent. The root is never removed — an entry-point with
+// it is the same repair dissolution makes: the tree keeps only what the
+// artifact can represent. The root is never removed — an entry-point with
 // no children is a corpus with no material, and Check is where that is said.
 func prune(n *buildNode, dead map[*buildNode]bool) {
 	out := make([]*buildNode, 0, len(n.children))
@@ -743,15 +621,15 @@ func (v *Verifier) batch(children []*buildNode) [][]*buildNode {
 	return out
 }
 
-// recheck is the last line of §2.7's fixed order: both caps, once, after every
-// operator has run. A breach here is a rejection and not another rewrite —
-// interposition strictly increases depth and collapse strictly decreases it,
-// so repairing this one would re-open the one it just closed.
+// recheck is the last line of §2.7's fixed order: the fan-out cap and G-2,
+// once, after every operator has run. A breach here is a rejection and not
+// another rewrite — the operator that would repair it is the one that caused
+// it.
+//
+// Depth is not re-checked, because nothing caps it (R-3): interposition adds
+// levels freely, and the levels it adds are the price of a fan-out the source
+// itself presented.
 func (v *Verifier) recheck(root *buildNode) error {
-	if got := maxIndexLevel(root); got > v.p.Budgets.DepthCap {
-		return RejectionError{Subject: fmt.Sprintf("%d index levels", got),
-			Reason: "this needs one more level than the tree has; group flatter"}
-	}
 	var err error
 	walk(root, 1, func(n *buildNode, _ int) {
 		if err != nil || n.kind == KindLeaf {

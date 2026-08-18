@@ -100,7 +100,9 @@ kbase survey <corpus-dir> [--json PATH|-]
 ```
 
 Deterministic, offline corpus inventory — no provider, no configuration
-directory. Walks `corpus-dir` for `.md` files, takes them into byte custody
+directory. Walks `corpus-dir` for `.md` and `.mdx` files — MDX is read
+as-is, its JSX and `import` lines surviving as inert text
+(ARCHITECTURE.md §4 stage 1) — takes them into byte custody
 (NFC-normalized; §3.2), and computes per-file heading trees with byte
 offsets, section token estimates, the intra-corpus link graph,
 first-paragraph gists, front-matter extraction, and the legal cut-candidate
@@ -199,6 +201,15 @@ summaries, the light tier adjudicates page boundaries.
   is the wider of the two — it also takes destinations inside an annex and
   destinations into a file no delivered node was drawn from. Both are in
   the run record either way, as `links` and `exemptedDestinations` (§3.8).
+- **Page granularity follows the source's own headings.** A page is one
+  section of one document — and where a section is too big to be one page
+  and has subsections of its own, it becomes a section index over them
+  instead, recursively (the rule and the body-page convention are §3.3's).
+  So the knowledge base is as deep as the documentation set's own nesting
+  makes it: nothing caps, truncates or repairs depth, and `run.json`
+  records the depth a build reached (§3.8). A section too big to be one
+  page with **no** subsections is still split mechanically, and so is any
+  page over the budget however it came to be one.
 - **Section summaries.** Every index and the entry-point gets one summary
   (§3.5), written by the heavy tier bottom-up. **Sibling pages are always
   summarised as a group**: one call over the pages directly under a node,
@@ -487,14 +498,14 @@ produce byte-identical artifact JSON — no field is encoded as a map, and
 array order is fixed (corpus-walk order for files, document order for
 sections, target order for links).
 
-### 3.3 The tree plan artifact — schema `kbase.treeplan/1`
+### 3.3 The tree plan artifact — schema `kbase.treeplan/2`
 
 ```json
 {
-  "schema": "kbase.treeplan/1",
+  "schema": "kbase.treeplan/2",
   "corpusHash": "...",
   "budgets": {"leafTokens":N,"summaryInputTokens":N,"summaryTokens":N,
-              "entryPointTokens":N,"depthCap":N,"fanOutCap":N,"candidateCap":N},
+              "entryPointTokens":N,"fanOutCap":N,"candidateCap":N},
   "nodes": [ {"...": "..."} ],
   "groups": [ {"...": "..."} ],
   "annexes": [ {"...": "..."} ],
@@ -504,7 +515,43 @@ sections, target order for links).
 
 `budgets` are the shipped, calibrated constants (ARCHITECTURE.md §9) — not
 an invocation's to choose. `annexes` is omitted when no `--annex` was
-declared.
+declared. The `/1` shape carried a `depthCap`; **there is no depth budget**
+(see the tree grammar below), and retiring the field is what bumped the
+schema.
+
+**Tree grammar — what a page's material may be** (observable — determines
+how many pages exist and what each one holds). A delivered page is one span
+of one document, and a document's spans are its own heading structure read
+under one rule:
+
+- A document's material is its preamble (the bytes before its first
+  heading, if any) and its top-level sections.
+- **A section becomes a section INDEX** — an index over its own body and
+  its child sections — exactly when its subtree exceeds `leafTokens` **and**
+  it has child sections. Otherwise it is one page. The rule applies
+  recursively, so a descended child that is itself over the budget descends
+  in turn.
+- A container's **body** is the bytes from its own heading line up to its
+  first child heading, and it is a page like any other, titled
+  `"Introduction to <container title>"` — the same convention a file's
+  preamble page already carries. The body page therefore **carries the
+  container's own heading line**: no source byte reaches no page.
+- A section over `leafTokens` with **no** child sections is split
+  mechanically instead (`groups[].parts > 1`), which is also what happens
+  to any page that is over the budget however it came to be one.
+
+**There is no depth cap.** Tree depth follows the nesting the source
+requires; nothing refuses, truncates or repairs a deep tree, and no
+guarantee in §4.8 adjudicates depth. The depth a build reached is reported
+as `maxDepth` in the run record (§3.8).
+
+**Coverage is a tiling, stated over boundaries.** For every non-annexed
+file, the group spans exactly tile the coverage universe (§3.2) — no gap,
+no overlap, nothing outside it — and every span's start and end is a
+position at which the survey found a section starting (or the universe's own
+edge). A page may therefore be one section, one container's body, a run of
+sibling subsections, or a container's whole subtree; it may never begin or
+end inside a section.
 
 `nodes[]` — depth-first, every parent listed before its children:
 `{"path", "kind": "entry-point"|"index"|"leaf", "parent", "title", "scope",
@@ -680,7 +727,8 @@ doc-set title, §1.5), `corpusHash`, `buildDate`, `treePlan` (`"model"` or `"mec
 `sourceSections`, `sourceExcluded` and `exclusions` (the corpus denominator:
 how many paths the corpus root held that the ingest walk did not take, and
 one `{"path", "reason"}` entry per path — `reason` being the class, e.g.
-`extension not in the document set` for a corpus's `.mdx` files, and the
+`extension not in the document set` for a corpus's non-Markdown
+documentation formats, and the
 list omitted when there are none. Without it `sourceFiles` counts only what
 kbase chose to look at, and a whole format class the walk ignores leaves no
 trace; the same skips are logged at `info`. Disclosure is this record and
@@ -689,6 +737,10 @@ the walk), `links` (the corpus link census — the same
 `{"internal", "unresolved", "external", "anchor"}` object §3.2 rolls up,
 recorded because `internal` is the resolution rate that would otherwise be
 invisible), `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
+`maxDepth` (how deep the delivered tree went, the entry-point at 1 — the
+only statement of it anywhere, because nothing caps or gates depth (§3.3),
+and the number that says whether a documentation set's own structure came
+through as structure),
 `crossParentMerges` (§3.3: how many content-floor merges re-homed a
 sub-floor span under an index other than the one its own page sat under —
 each also logged at `warn`, and nothing else can see them),
@@ -914,8 +966,9 @@ order, and the first attempt that names a document in the corpus wins:
    path above the corpus root.
 
 Each attempt applies, in decreasing confidence: the exact corpus path; the
-path with the Markdown extension appended, when the destination carries no
-extension (`[scope](scope)`, where the site generator supplies the rest);
+path with each document extension appended in turn — `.md`, then `.mdx` —
+when the destination carries no extension (`[scope](scope)`, where the site
+generator supplies the rest);
 and a full Unicode case fold of either, since the corpus walk accepts `.MD`
 and resolution has to agree. The fold is Unicode-wide rather than ASCII-only
 because custody ids are NFC (§4 stage 1 of ARCHITECTURE.md): one spelling of
@@ -1045,14 +1098,18 @@ applicable, the offending node.
    self-link. Every fixture file links to the entry-point.
 5. The delivered file set is exactly the tree plan's nodes plus the fixed
    fixture manifest — no stray files, none missing.
-6. Coverage: every section the survey found is accounted for by exactly
-   one delivered page or by a declared annex — nothing silently dropped,
-   nothing double-covered.
+6. Coverage: every section the survey found lies within the material of
+   exactly one delivered page, or is exactly partitioned by delivered
+   pages, or is inside a declared annex — nothing silently dropped,
+   nothing double-covered. The second case is what a section index is:
+   a container's material is on its subtree's pages rather than on one
+   of them (§3.3).
 7. Leaf fidelity: every leaf's delivered bytes are byte-identical to a
    fresh re-derivation from the immutable source corpus.
-8. Structural caps hold: index depth, any node's fan-out, and the
-   entry-point's own rendered size are within the calibrated budgets
-   (§3.3).
+8. Structural caps hold: any node's fan-out and the entry-point's own
+   rendered size are within the calibrated budgets (§3.3). Depth is not
+   among them — a tree is as deep as its source requires (§3.3), so a
+   gate refusing a deep tree would be refusing the corpus for its shape.
 9. Every page's rendered bytes conform to its kind's exact grammar
    (§4.2/§4.3), and every fixture file matches its own fixed template.
 10. Every class-A page opens with a frontmatter block whose `Location`

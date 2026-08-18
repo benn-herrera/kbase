@@ -34,13 +34,6 @@ const (
 	// at stage 9, where the rendered bytes exist to measure.
 	defaultEntryPointTokens = 3000
 
-	// defaultDepthCap is I-9: four index levels (entry-point, domain,
-	// subtopic, sub-subtopic), leaves at level five. It is mechanical rather
-	// than stylistic because stage 6 declares one static stage per level, and
-	// an uncapped depth would make the stage list depend on an artifact that
-	// does not exist at job setup.
-	defaultDepthCap = 4
-
 	// defaultFanOutCap bounds one index's children. A group of one is legal —
 	// the exemplar's single-child subtopic directories are a budget artifact,
 	// not a defect (§0.4).
@@ -54,7 +47,12 @@ const (
 )
 
 // Budgets is what a tree was verified against: the three token budgets the
-// design's guarantees are stated in, plus the three structural caps.
+// design's guarantees are stated in, plus the structural caps.
+//
+// There is NO depth budget (R-3, ruled 2026-08-17). Depth follows the nesting
+// the source graph requires, so there is no number a tree could be verified
+// against and none for the artifact to carry — retiring the field is what
+// bumped this artifact to kbase.treeplan/2.
 //
 // It is plain data on the marshal path — the estimator that turns bytes into
 // those numbers lives on Params, not here, because an estimator is a runtime
@@ -65,7 +63,6 @@ type Budgets struct {
 	SummaryInputTokens int `json:"summaryInputTokens"`
 	SummaryTokens      int `json:"summaryTokens"`
 	EntryPointTokens   int `json:"entryPointTokens"`
-	DepthCap           int `json:"depthCap"`
 	FanOutCap          int `json:"fanOutCap"`
 	CandidateCap       int `json:"candidateCap"`
 }
@@ -77,7 +74,6 @@ func DefaultBudgets() Budgets {
 		SummaryInputTokens: defaultSummaryInputTokens,
 		SummaryTokens:      defaultSummaryTokens,
 		EntryPointTokens:   defaultEntryPointTokens,
-		DepthCap:           defaultDepthCap,
 		FanOutCap:          defaultFanOutCap,
 		CandidateCap:       defaultCandidateCap,
 	}
@@ -106,7 +102,6 @@ func (b Budgets) Validate() error {
 		{"summaryInputTokens", b.SummaryInputTokens},
 		{"summaryTokens", b.SummaryTokens},
 		{"entryPointTokens", b.EntryPointTokens},
-		{"depthCap", b.DepthCap},
 		{"fanOutCap", b.FanOutCap},
 		{"candidateCap", b.CandidateCap},
 	} {

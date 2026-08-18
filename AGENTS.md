@@ -103,7 +103,7 @@ internal/survey/markdown/
 internal/taxonomy/  stage 3: the container descent that designs the tree
                     plan from the survey; a no-fallback seam
 internal/tokens/    single chars-per-token estimator (§8)
-internal/treeplan/  the tree plan artifact (kbase.treeplan/1): planned KB
+internal/treeplan/  the tree plan artifact (kbase.treeplan/2): planned KB
                     tree + split groups + annexes, namer, mechanical verifier
 internal/version/   single-source version identity
 ```

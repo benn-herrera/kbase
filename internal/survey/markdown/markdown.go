@@ -31,23 +31,45 @@ import (
 	"kbase/internal/tokens"
 )
 
-// Ext is the only extension this adapter reads. Matching is case-insensitive
-// (`.MD` off a Windows-authored tree is the same document); `.markdown` and
-// friends are deliberately not accepted — a corpus that mixes extensions
-// should say so, and a silent near-miss is worse than a loud absence.
-//
-// Link resolution needs the same constant: a corpus link written without an
-// extension names a document only if this is the extension that document
-// carries.
+// Ext is this adapter's PRIMARY extension: what a document is called when
+// nothing says otherwise, and the one a site generator would have appended.
+// Matching is case-insensitive (`.MD` off a Windows-authored tree is the same
+// document); `.markdown` and friends are deliberately not accepted — a corpus
+// that mixes extensions should say so, and a silent near-miss is worse than a
+// loud absence.
 const Ext = ".md"
+
+// ExtX is MDX, admitted and read AS-IS (ruled 2026-08-18).
+//
+// MDX is Markdown with JSX components and `import`/`export` statements in it.
+// It was ignored on the ground that its content is build-time-produced and so
+// breaks source-hash provenance; the ruling narrows that to what is true — the
+// DYNAMIC half is what kbase cannot see, and deliberately ignores. The prose
+// is in the source bytes, it is ordinary Markdown, and a corpus that writes a
+// third of its pages this way (Rojo does) otherwise delivers a knowledge base
+// with a third of its material missing and only the run record's exclusion
+// list to say so.
+//
+// Nothing is stripped. A JSX tag and an `import` line parse as CommonMark
+// already — a paragraph, or an HTML block — so they survive into a leaf as
+// inert text, which is verbatim custody doing exactly what it promises. A
+// strip pass would be a second transform over custody bytes and is deferred
+// until a corpus shows it costs something real.
+const ExtX = ".mdx"
 
 // Extensions is the document-extension set to walk a Markdown corpus with
 // (ingest.Walk takes it as a parameter, because which extensions are
 // documents is format knowledge and ingest has none).
 //
+// Link resolution reads the same set: a corpus link written without an
+// extension names a document only if the document carries one of these, and it
+// is tried in this order — the primary first, so a corpus holding both
+// `page.md` and `page.mdx` resolves `page` the way its own site generator
+// would.
+//
 // It is a function returning a fresh slice rather than a package-level var so
 // that no caller can quietly redefine what this adapter considers a document.
-func Extensions() []string { return []string{Ext} }
+func Extensions() []string { return []string{Ext, ExtX} }
 
 // Survey inventories every document in the corpus.
 //

@@ -17,7 +17,7 @@ import (
 // The order is chosen so a failure is diagnostic rather than merely true:
 // identity, then tree shape, then the caps, then the leaf/group accounting,
 // then the budget guarantees, then coverage. A tree whose parent edges are
-// wrong produces a nonsense depth number, so depth is not asked first.
+// wrong makes nonsense of every count taken over it, so shape is asked first.
 //
 // Failures divide the same way everything else here does. A rejection is
 // something the model's grouping could have caused; a defect is something only
@@ -40,11 +40,10 @@ func (v *Verifier) Check(s TreePlan) error {
 		return err
 	}
 
-	levels, err := checkTree(s)
-	if err != nil {
+	if err := checkTree(s); err != nil {
 		return err
 	}
-	if err := checkCaps(s, levels); err != nil {
+	if err := checkCaps(s); err != nil {
 		return err
 	}
 	parts, err := v.checkGroups(s)
@@ -59,49 +58,49 @@ func (v *Verifier) Check(s TreePlan) error {
 
 // checkTree proves the node list is a tree: one entry-point, unique paths,
 // every parent present and already seen, and every path in its parent's own
-// directory under the name grammar. It returns each node's level.
-func checkTree(s TreePlan) (map[string]int, error) {
+// directory under the name grammar.
+//
+// It reads no depth: a tree is as deep as the source made it (R-3).
+func checkTree(s TreePlan) error {
 	if len(s.Nodes) == 0 {
-		return nil, DefectError{Reason: "the artifact holds no nodes"}
+		return DefectError{Reason: "the artifact holds no nodes"}
 	}
 	if s.Nodes[0].Kind != KindEntryPoint || s.Nodes[0].Path != entryPointPath || s.Nodes[0].Parent != "" {
-		return nil, DefectError{Subject: s.Nodes[0].Path,
+		return DefectError{Subject: s.Nodes[0].Path,
 			Reason: "the first node is not the parentless entry-point; nodes run depth-first, parents first"}
 	}
 
-	levels := map[string]int{entryPointPath: 1}
 	kinds := map[string]Kind{entryPointPath: KindEntryPoint}
 	for i, n := range s.Nodes {
 		if i == 0 {
 			continue
 		}
-		if _, dup := levels[n.Path]; dup {
-			return nil, DefectError{Subject: n.Path, Reason: "two nodes share a path"}
+		if _, dup := kinds[n.Path]; dup {
+			return DefectError{Subject: n.Path, Reason: "two nodes share a path"}
 		}
 		if n.Kind == KindEntryPoint {
-			return nil, DefectError{Subject: n.Path, Reason: "a second entry-point"}
+			return DefectError{Subject: n.Path, Reason: "a second entry-point"}
 		}
 		if n.Kind != KindIndex && n.Kind != KindLeaf {
-			return nil, DefectError{Subject: n.Path, Reason: fmt.Sprintf("unknown node kind %q", n.Kind)}
+			return DefectError{Subject: n.Path, Reason: fmt.Sprintf("unknown node kind %q", n.Kind)}
 		}
-		pl, ok := levels[n.Parent]
+		parent, ok := kinds[n.Parent]
 		if !ok {
-			return nil, DefectError{Subject: n.Path, Reason: fmt.Sprintf(
+			return DefectError{Subject: n.Path, Reason: fmt.Sprintf(
 				"names parent %q, which is not a node already listed", n.Parent)}
 		}
-		if kinds[n.Parent] == KindLeaf {
-			return nil, DefectError{Subject: n.Path, Reason: "its parent is a page, which holds no children"}
+		if parent == KindLeaf {
+			return DefectError{Subject: n.Path, Reason: "its parent is a page, which holds no children"}
 		}
 		if err := checkPathGrammar(n); err != nil {
-			return nil, err
+			return err
 		}
 		if normalizeLabel(n.Title) == "" {
-			return nil, RejectionError{Subject: n.Path, Reason: "a node has no title"}
+			return RejectionError{Subject: n.Path, Reason: "a node has no title"}
 		}
-		levels[n.Path] = pl + 1
 		kinds[n.Path] = n.Kind
 	}
-	return levels, nil
+	return nil
 }
 
 // checkPathGrammar proves a node's path is the one the namer would have given
@@ -127,15 +126,16 @@ func checkPathGrammar(n Node) error {
 	return nil
 }
 
-// checkCaps is §3.3's depth and fan-out conditions over the composed tree,
-// after every §2.7 operator has run.
-func checkCaps(s TreePlan, levels map[string]int) error {
+// checkCaps is §3.3's fan-out conditions over the composed tree, after every
+// §2.7 operator has run.
+//
+// There is no depth condition (R-3, ruled 2026-08-17). Tree depth follows the
+// nesting the source graph requires; it is measured and reported, never capped
+// and never repaired, because a repair that removes the deepest index level
+// removes exactly the level a descended section just created.
+func checkCaps(s TreePlan) error {
 	fanOut := map[string]int{}
 	for _, n := range s.Nodes {
-		if n.Kind != KindLeaf && levels[n.Path] > s.Budgets.DepthCap {
-			return RejectionError{Subject: n.Path,
-				Reason: "a section sits below the last level the tree has"}
-		}
 		if n.Parent != "" {
 			fanOut[n.Parent]++
 		}
@@ -294,16 +294,37 @@ func groupFile(s TreePlan, id string) string {
 	return g.Source.File
 }
 
-// checkCoverage is §3.3's tiling condition: group spans are disjoint, and
-// unioned with the declared annexes they cover every surveyed section.
+// checkCoverage is §3.3's tiling condition: for every non-annexed file the
+// group spans exactly TILE the material the survey found, and every span
+// endpoint is a boundary the survey drew.
 //
 // A chapter silently missing from the KB is caught here even when every link
 // resolves — which is the failure this check exists for, and the reason the
 // survey's own tiling property is inherited rather than re-derived.
 //
-// Coverage is stated over SECTIONS and not over bytes: a file's metadata block
-// is surveyed as an out-of-band range rather than as a section, and a KB that
-// does not distil YAML front matter has not dropped a chapter.
+// Coverage is stated over the boundary set and not over containment. The old
+// predicate asked, of every surveyed section at every depth, "does ONE group
+// span contain it" — which was an outright prohibition on descent: a container
+// whose children became sibling pages is contained by no single span. The
+// boundary set asks instead that the spans leave no gap, take no byte outside
+// the material, and start and end only where the survey says a section starts.
+//
+// The two agree wherever the old one was right. Every tiling containment
+// accepted this one accepts, and everything containment refused for the right
+// reason it still refuses: a page cutting into the middle of a section has an
+// endpoint that is no section start, and the section straddling it is exactly
+// what made containment fail. What changes is the reason it refused DESCENT —
+// a container covered by its own subtree — which was never a defect in the
+// tree, and that gaps, which containment caught only by side-effect, are now
+// named directly.
+//
+// It holds no descent rule and knows nothing of Skeleton, which is the point:
+// the rule is stated once, where it is decided, and the gate accepts any tiling
+// the source's own structure can produce.
+//
+// Coverage is stated over the surveyed SECTIONS and not over bytes: a file's
+// metadata block is surveyed as an out-of-band range rather than as a section,
+// and a KB that does not distil YAML front matter has not dropped a chapter.
 func (v *Verifier) checkCoverage(s TreePlan) error {
 	byFile := spansByFile(s.Groups)
 
@@ -324,37 +345,94 @@ func (v *Verifier) checkCoverage(s TreePlan) error {
 		if _, annexed := AnnexedBy(f.Path, s.Annexes); annexed {
 			continue
 		}
-		spans := byFile[f.Path]
-		prev := 0
-		for i, r := range spans {
-			if r.Start < 0 || r.End <= r.Start || r.End > f.Bytes {
-				return DefectError{Subject: f.Path, Reason: fmt.Sprintf(
-					"span [%d,%d) is not a range of the %d-byte file", r.Start, r.End, f.Bytes)}
-			}
-			if i > 0 && r.Start < prev {
-				return DefectError{Subject: f.Path, Reason: fmt.Sprintf(
-					"two group spans overlap at %d; each source byte belongs to one leaf", r.Start)}
-			}
-			prev = r.End
-		}
-		for _, sec := range sectionsOf(f) {
-			if !covered(spans, sec) {
-				return RejectionError{Subject: fmt.Sprintf("%s [%d,%d)", f.Path, sec.Start, sec.End),
-					Reason: "some source material is on no page and in no annex"}
-			}
+		if err := checkTiling(f, byFile[f.Path]); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// covered reports whether a section falls inside one span. The spans are
-// disjoint by the time this is asked, so "inside one" and "inside exactly one"
-// are the same question.
-func covered(spans []survey.Span, sec survey.Span) bool {
-	for _, s := range spans {
-		if sec.Start >= s.Start && sec.End <= s.End {
-			return true
+// checkTiling is the boundary-set condition over one file's group spans, which
+// arrive sorted by start (spansByFile).
+//
+// The three claims, in the order a failure is most usefully reported: every
+// span lies inside the coverage universe, the spans tile it with no gap and no
+// overlap, and every endpoint is a member of the boundary set.
+func checkTiling(f survey.File, spans []survey.Span) error {
+	secs := sectionsOf(f)
+	if len(secs) == 0 {
+		// A document the survey found no material in. It has nothing to cover,
+		// and a group drawing on it is drawing on bytes nothing described.
+		if len(spans) > 0 {
+			return DefectError{Subject: f.Path,
+				Reason: "a group draws on a file the survey found no material in"}
+		}
+		return nil
+	}
+	lo, hi := coverageUniverse(secs)
+	if len(spans) == 0 {
+		return RejectionError{Subject: fmt.Sprintf("%s [%d,%d)", f.Path, lo, hi),
+			Reason: "some source material is on no page and in no annex"}
+	}
+
+	bounds := make(map[int]bool, len(secs)+1)
+	bounds[lo], bounds[hi] = true, true
+	for _, sec := range secs {
+		bounds[sec.Start] = true
+	}
+
+	// The tiling first, whole: what is on no page is the claim guarantee 6 is
+	// about, and a boundary in the wrong place is a diagnosis of second
+	// interest to someone whose chapter went missing.
+	prev := lo
+	for _, r := range spans {
+		if r.Start < 0 || r.End <= r.Start || r.End > f.Bytes {
+			return DefectError{Subject: f.Path, Reason: fmt.Sprintf(
+				"span [%d,%d) is not a range of the %d-byte file", r.Start, r.End, f.Bytes)}
+		}
+		if r.Start < lo || r.End > hi {
+			return DefectError{Subject: f.Path, Reason: fmt.Sprintf(
+				"span [%d,%d) reaches outside the material the survey describes, [%d,%d)",
+				r.Start, r.End, lo, hi)}
+		}
+		if r.Start < prev {
+			return DefectError{Subject: f.Path, Reason: fmt.Sprintf(
+				"two group spans overlap at %d; each source byte belongs to one leaf", r.Start)}
+		}
+		if r.Start > prev {
+			return RejectionError{Subject: fmt.Sprintf("%s [%d,%d)", f.Path, prev, r.Start),
+				Reason: "some source material is on no page and in no annex"}
+		}
+		prev = r.End
+	}
+	if prev != hi {
+		return RejectionError{Subject: fmt.Sprintf("%s [%d,%d)", f.Path, prev, hi),
+			Reason: "some source material is on no page and in no annex"}
+	}
+
+	// Then the boundary set: the spans tile, and every edge they tile along is
+	// an edge the survey drew. This is what forbids a page cutting into the
+	// middle of a section — the whole of what the old containment predicate
+	// forbade — while permitting a container's body, a run of sibling
+	// subsections, or the container's whole subtree on one page.
+	for _, r := range spans {
+		if !bounds[r.Start] || !bounds[r.End] {
+			return RejectionError{Subject: fmt.Sprintf("%s [%d,%d)", f.Path, r.Start, r.End),
+				Reason: "a page begins or ends inside a section, not at one"}
 		}
 	}
-	return false
+	return nil
+}
+
+// coverageUniverse is the half-open range a file's pages must tile: from the
+// first byte of its material to the last. It is derived from the surveyed
+// sections rather than from the file size, which is what keeps an out-of-band
+// metadata block out of the tree without a rule of its own.
+func coverageUniverse(secs []survey.Span) (lo, hi int) {
+	lo, hi = secs[0].Start, secs[0].End
+	for _, s := range secs {
+		lo = min(lo, s.Start)
+		hi = max(hi, s.End)
+	}
+	return lo, hi
 }

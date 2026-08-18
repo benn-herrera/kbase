@@ -459,6 +459,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		Indexes:              report.Indexes,
 		Groups:               len(plan.Groups),
 		SplitGroups:          splitGroupCount(plan),
+		MaxDepth:             plan.MaxDepth(),
 		CrossParentMerges:    plan.CrossParentMerges,
 		ExemptedDestinations: report.ExemptedDestinations,
 		Summaries:            summaries,
@@ -692,7 +693,7 @@ func (j *buildJob) treePlanStage() *pipeline.StagePlan {
 			Section: stageTreePlan,
 			Produce: func() (any, error) {
 				proposal, err := treeplan.SourceStructureProposal(
-					j.art, corpusTitle(j.title), corpusScope(j.title), j.annexes)
+					j.art, j.params.Budgets, corpusTitle(j.title), corpusScope(j.title), j.annexes)
 				if err != nil {
 					return nil, err
 				}
@@ -1737,8 +1738,9 @@ type buildRun struct {
 	// Excluded and Exclusions are the corpus DENOMINATOR: what the corpus root
 	// held that the ingest walk did not take, and why (ingest.Exclusion's reason
 	// classes). Without them `sourceFiles` is a count of what kbase chose to
-	// look at, and a format class the walk ignores — a corpus's `.mdx` files
-	// are the live case — leaves no trace anywhere [MAD2: B-3]. Disclosure is
+	// look at, and a format class the walk ignores — a documentation format
+	// that arrives as Markdown or not at all (ARCHITECTURE §4 row 1) is the
+	// live case — leaves no trace anywhere [MAD2: B-3]. Disclosure is
 	// this record and nothing else (ruled 2026-08-17): the knowledge base is
 	// the documentation set's, not a report on the walk. The total is stated
 	// beside the list because the denominator is the load-bearing half; the
@@ -1762,6 +1764,16 @@ type buildRun struct {
 	Indexes     int `json:"sections"`
 	Groups      int `json:"groups"`
 	SplitGroups int `json:"splitGroups"`
+
+	// MaxDepth is how deep the delivered tree went, the entry-point at 1
+	// (treeplan.TreePlan.MaxDepth). Nothing caps it — depth follows the
+	// nesting the source graph requires (R-3, ruled 2026-08-17) — so this is
+	// the only place it is ever stated. It is here for exactly that reason: a
+	// quantity no gate adjudicates and no operator repairs is one an operator
+	// can otherwise learn only by walking the delivered directories, and
+	// whether a corpus's own structure came through as structure is the
+	// question section descent exists to answer.
+	MaxDepth int `json:"maxDepth"`
 
 	// CrossParentMerges is how many content-floor merges re-homed a sub-floor
 	// span under an index other than the one its own page sat under

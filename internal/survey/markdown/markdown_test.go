@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -431,13 +432,19 @@ func surveyOne(t *testing.T, path, body string) survey.File {
 
 // TestExtensions: the adapter owns what counts as a Markdown document, and
 // hands ingest a set it cannot rewrite.
+//
+// The ORDER is part of the contract, not a listing convenience: link
+// resolution appends these to an extensionless destination in this order, so
+// the primary extension is what a corpus holding both spellings of one name
+// resolves to.
 func TestExtensions(t *testing.T) {
+	want := []string{Ext, ExtX}
 	got := Extensions()
-	if len(got) != 1 || got[0] != Ext {
-		t.Fatalf("Extensions() = %v, want [%s]", got, Ext)
+	if !slices.Equal(got, want) {
+		t.Fatalf("Extensions() = %v, want %v", got, want)
 	}
 	got[0] = ".tex"
-	if again := Extensions(); again[0] != Ext {
+	if again := Extensions(); !slices.Equal(again, want) {
 		t.Errorf("Extensions() returned a shared slice: a caller's edit changed it to %v", again)
 	}
 }

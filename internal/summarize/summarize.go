@@ -11,8 +11,12 @@
 // declare their upstreams in the PREVIOUS stage, which is a legal chain edge
 // with real stamps, so a regenerated child invalidates its parent for free and
 // no invalidation propagation code exists. The levels are statically declared
-// because the depth cap is mechanical (I-9); a level with no nodes resolves to
-// zero lanes and the coordinator skips it.
+// because the stage list is fixed at job setup and the tree they are over is
+// written by stage 3 of the same job: the chain runs to a generous ceiling
+// (levelCeiling) rather than to the tree's own depth, which nothing caps
+// (R-3). A level with no nodes resolves to zero lanes and the coordinator
+// skips it, so the ceiling costs empty stages and nothing else — and a tree
+// past it refuses rather than losing its deepest summaries (resolve).
 //
 // # What a call reads: summary-class material, and the leaf-group card
 //
@@ -100,6 +104,26 @@ const (
 	leavesName = ".leaves"
 	cardSuffix = leavesName + unitSuffix
 
+	// levelCeiling is how many KB levels this stage declares stages for
+	// (ARCHITECTURE.md §9). It is NOT a cap on the tree: depth follows the
+	// nesting the source graph requires (R-3, ruled 2026-08-17), and nothing
+	// refuses a deep corpus.
+	//
+	// It exists because the stage LIST is fixed at job setup and the tree plan
+	// is written by stage 3, in the same job: at the moment the chain is
+	// described there is no artifact to count levels off. A level with no nodes
+	// resolves to zero lanes, so declaring more levels than a corpus has costs
+	// two empty stages each and nothing else — which is what makes a generous
+	// ceiling the cheap side of the trade.
+	//
+	// Sixteen is generous against the deepest shape anything can present: the
+	// entry-point, six levels of heading nesting (Markdown's own limit, and
+	// headings are the descent's witness of the source graph), and the folder
+	// and grouping levels a model may interpose above them. A tree that
+	// somehow exceeds it does not lose its deepest summaries quietly —
+	// resolve refuses the job and names the number.
+	levelCeiling = 16
+
 	// cardTitle is the heading the card is presented under in a mixed node's own
 	// call. It names a SHELF and not a page, because that is what the card is:
 	// one voice for every page directly under this node (the per-shelf parity
@@ -133,7 +157,7 @@ type Job struct {
 	SummariesDir string
 
 	// Params is the operating point: the estimator the caps are measured with
-	// and the budgets they are (SummaryTokens, SummaryInputTokens, DepthCap).
+	// and the budgets they are (SummaryTokens, SummaryInputTokens).
 	Params treeplan.Params
 
 	// Effort is the definition's declared ask, threaded to the wire.
@@ -289,10 +313,18 @@ func (s *Summarizer) Cards() int {
 
 // StagePlans describes the level stages, deepest first.
 //
-// There are TWO stages per index level the depth cap allows, always: the level's
-// leaf-group cards, then the level's summaries. A level with no nodes resolves
-// both to zero lanes and a level with no mixed node resolves the first one to
-// zero, which is what lets the stage list be static while the tree is not.
+// There are TWO stages per level, always: the level's leaf-group cards, then
+// the level's summaries. A level with no nodes resolves both to zero lanes and
+// a level with no mixed node resolves the first one to zero, which is what lets
+// the stage list be static while the tree is not.
+//
+// The chain runs to levelCeiling and no longer reads a depth budget: there is
+// none (R-3, ruled 2026-08-17), and a chain sized by the old cap of four
+// stopped at level 4 — so a corpus whose descent reached level 5 would have had
+// its deepest summaries silently never written, and every index above them
+// blended over children that had none. The ceiling is generous and the tree's
+// own depth is checked against it where the plan is read (resolve), so a corpus
+// past it refuses loudly instead.
 //
 // The order is the whole reason the card is a stage of its own: a mixed node's
 // summary call reads the card, and a unit may not name an upstream from its own
@@ -303,7 +335,7 @@ func (s *Summarizer) Cards() int {
 // nothing without it and the caller cannot derive it.
 func (s *Summarizer) StagePlans(prefix string, owed func(unit string, upstreams []string) pipeline.OwedArtifact) []*pipeline.StagePlan {
 	var out []*pipeline.StagePlan
-	for level := s.job.Params.Budgets.DepthCap; level >= 1; level-- {
+	for level := levelCeiling; level >= 1; level-- {
 		name := fmt.Sprintf("%s%s%d", prefix, levelStageSuffix, level)
 		out = append(out,
 			s.levelStage(name+leavesName, level, true, owed),
@@ -461,6 +493,18 @@ func (s *Summarizer) resolve() (treeplan.TreePlan, error) {
 		return treeplan.TreePlan{}, fmt.Errorf("summarize: tree plan declares schema %q, this build reads %q",
 			plan.Schema, treeplan.SchemaVersion)
 	}
+	// The static stage chain against the tree it turned out to be over. Nothing
+	// caps a tree's depth, but this stage can only summarise the levels it
+	// declared stages for, and a level with no stage is a level whose summaries
+	// are never written — which the tree above it would then blend over as an
+	// absence rather than a failure. Refusing here is what keeps a ceiling from
+	// becoming a silent truncation.
+	if depth := plan.MaxDepth(); depth > levelCeiling {
+		return treeplan.TreePlan{}, fmt.Errorf(
+			"summarize: the tree plan is %d levels deep and this build declares summary stages for %d; "+
+				"raise the level ceiling (ARCHITECTURE.md §9) rather than delivering a tree whose deepest sections have no summary",
+			depth, levelCeiling)
+	}
 
 	levels := map[string]int{}
 	domains := map[string]string{}
@@ -544,9 +588,9 @@ func (s *Summarizer) digest() string {
 	b := s.job.Params.Budgets
 	r := s.job.Retry
 	return pipeline.HashBytes([]byte(fmt.Sprintf(
-		"summaryTokens %d\nsummaryInputTokens %d\ndepthCap %d\nthinking %t\n"+
+		"summaryTokens %d\nsummaryInputTokens %d\nthinking %t\n"+
 			"retryThinking %t\nattempts %d\nretryNoteWords %d\n",
-		b.SummaryTokens, b.SummaryInputTokens, b.DepthCap, s.job.Effort.Thinking,
+		b.SummaryTokens, b.SummaryInputTokens, s.job.Effort.Thinking,
 		r.Effort.Thinking, r.Attempts, r.NoteWords)))
 }
 

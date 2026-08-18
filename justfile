@@ -204,7 +204,7 @@ _test-integration-survey-rojo: build prep-test-integration-rojo
       { echo "integration(survey-rojo): survey run failed"; exit 1; }; \
     summary="$(cat "$s")"; \
     echo "$summary"; \
-    for want in "files=8 " "tokens=10553 " "sections=83 " "internal=4 " "unresolved=1 "; do \
+    for want in "files=11 " "tokens=12855 " "sections=93 " "internal=6 " "unresolved=9 "; do \
       echo "$summary" | grep -qF "$want" || \
         { echo "integration(survey-rojo): expected '$want' in summary:"; echo "$summary"; exit 1; }; \
     done; \
@@ -245,8 +245,8 @@ test-integration-build-mechanical-rojo:
 # the tree-plan struct to recompute them from. That is not a loss: gate 5
 # ("the delivered set is the tree plan's nodes plus the fixture manifest") and
 # gate 3 ("the entry-point exists and its domains exist") already prove the
-# relations the old in-process test derived by hand, and 25 nodes + 3 fixture
-# manifest entries = 28 delivered is the same arithmetic, just pre-computed
+# relations the old in-process test derived by hand, and 34 nodes + 3 fixture
+# manifest entries = 37 delivered is the same arithmetic, just pre-computed
 # into a literal the way test-integration-survey-rojo pins tokens/sections.
 # Bumping the corpus pin or a budget/manifest constant re-derives these with
 # `./bin/kbase build ... --keep-temp-work` and updates them here.
@@ -271,7 +271,7 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 8' '"sourceSections": 83' '"nodes": 25' '"pages": 16' '"sections": 9' '"groups": 16' '"splitGroups": 0' '"deliveredFiles": 28'; do \
+    for want in '"sourceFiles": 11' '"sourceSections": 93' '"nodes": 34' '"pages": 22' '"sections": 12' '"groups": 22' '"splitGroups": 0' '"deliveredFiles": 37'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
     for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
@@ -462,7 +462,7 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-mechanical-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-mechanical-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 12' '"pages": 6' '"sections": 6' '"groups": 5' '"splitGroups": 1' '"deliveredFiles": 15'; do \
+    for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 31' '"pages": 22' '"sections": 9' '"groups": 22' '"splitGroups": 0' '"deliveredFiles": 34'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-omlx): expected $want in $rec"; exit 1; }; \
     done; \
     for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
@@ -647,9 +647,11 @@ test-integration-build-refusal:
 # kbase's own scratch tree, never the populated-out refusal, and this recipe
 # is that composition's one proof. (7) the changed-plan clause: run.json is
 # deleted and the build repeats with --annex getting-started added, so the new
-# plan no longer delivers porting-an-existing-game/ — sweepPriorDelivery must
-# remove exactly the prior delivery's orphaned paths (a before/after file-list
-# comm proves nothing else moved) and the annex must land. Then the
+# plan no longer delivers the three domains that territory held —
+# porting-an-existing-game/, creating-a-new-game/, and installation/ —
+# sweepPriorDelivery must remove exactly the prior delivery's orphaned paths
+# (a before/after file-list comm proves nothing else moved) and the annex
+# must land. Then the
 # postcondition's own restraint is proven the other way: run.json is deleted
 # once more, a foreign notes.md is planted beside the delivered tree, and the
 # rebuild must refuse on checkOutHoldsExactly's "no delivered path names"
@@ -747,20 +749,22 @@ _test-integration-build-refusal: build prep-test-integration-rojo
       --keep-temp-work \
       --annex getting-started || \
       { echo "integration(build-refusal): the changed-plan rerun (--annex getting-started added) failed"; exit 1; }; \
-    [[ ! -e "$kb/porting-an-existing-game" ]] || \
-      { echo "integration(build-refusal): porting-an-existing-game/ survived the getting-started annex"; exit 1; }; \
+    for gone in porting-an-existing-game creating-a-new-game installation; do \
+      [[ ! -e "$kb/$gone" ]] || \
+        { echo "integration(build-refusal): $gone/ survived the getting-started annex"; exit 1; }; \
+    done; \
     find "$kb" -path "$kb/temp-work" -prune -o -type f -print | sed "s|^$kb/||" | sort > "$after_list"; \
     new_paths="$(comm -13 "$before_list" "$after_list")"; \
     [[ -z "$new_paths" ]] || \
       { echo "integration(build-refusal): the changed-plan rerun added paths outside the expected set:"; echo "$new_paths"; exit 1; }; \
     vanished="$(comm -23 "$before_list" "$after_list")"; \
-    stray_vanished="$(printf '%s\n' "$vanished" | grep -v '^porting-an-existing-game/' || true)"; \
+    stray_vanished="$(printf '%s\n' "$vanished" | grep -vE '^(porting-an-existing-game|creating-a-new-game|installation)/' || true)"; \
     [[ -z "$stray_vanished" ]] || \
-      { echo "integration(build-refusal): the changed-plan sweep removed paths beyond porting-an-existing-game/'s orphaned set:"; echo "$stray_vanished"; exit 1; }; \
+      { echo "integration(build-refusal): the changed-plan sweep removed paths beyond the three orphaned domains' set:"; echo "$stray_vanished"; exit 1; }; \
     [[ -n "$vanished" ]] || \
       { echo "integration(build-refusal): the changed-plan sweep reported no vanished paths at all"; exit 1; }; \
     rm -f "$before_list" "$after_list"; \
-    echo "integration(build-refusal): changed-plan sweep ok — porting-an-existing-game/ gone entirely, only its orphaned paths vanished, nothing new appeared"; \
+    echo "integration(build-refusal): changed-plan sweep ok — porting-an-existing-game/, creating-a-new-game/, and installation/ gone entirely, only their orphaned paths vanished, nothing new appeared"; \
     rm -f "$kb/temp-work/run.json"; \
     notes="$kb/notes.md"; \
     notes_content="a user file the sweep must never touch"; \
@@ -779,7 +783,7 @@ _test-integration-build-refusal: build prep-test-integration-rojo
     echo "integration(build-refusal): changed-plan sweep restraint ok — a stray notes.md triggers the postcondition refusal by name, exit 1, content untouched"; \
     echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, interrupted-job resume, kill-window completion (re-armed), --fresh rebuild, --fresh-vs-refusal, changed-plan sweep, and postcondition restraint all correct"; \
     {{just_executable()}} _write-evidence "{{BUILD_REFUSAL_OUT_DIR}}" "test-integration-build-refusal" \
-      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate the kill-window: delivered files and delivery.json survive\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # kill-window completion: restores run.json, recopies nothing, exit 0\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun after completion: refusal re-armed, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains again\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # discards the store, 0 reused, rebuilds and re-delivers\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # --fresh into the finished directory still refuses, exit 1\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains ahead of a changed plan\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # changed-plan sweep: porting-an-existing-game/ removed, annex lands, exit 0\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json && touch {{BUILD_REFUSAL_OUT_DIR}}/kb/notes.md  # plant a foreign file ahead of a resumed delivery\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # postcondition restraint: refuses on notes.md by name, exit 1, content untouched"
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate the kill-window: delivered files and delivery.json survive\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # kill-window completion: restores run.json, recopies nothing, exit 0\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun after completion: refusal re-armed, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains again\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # discards the store, 0 reused, rebuilds and re-delivers\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # --fresh into the finished directory still refuses, exit 1\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains ahead of a changed plan\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # changed-plan sweep: porting-an-existing-game/, creating-a-new-game/, installation/ removed, annex lands, exit 0\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json && touch {{BUILD_REFUSAL_OUT_DIR}}/kb/notes.md  # plant a foreign file ahead of a resumed delivery\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # postcondition restraint: refuses on notes.md by name, exit 1, content untouched"
 
 # The omnibus composes the HERMETIC per-corpus recipes, plus
 # test-integration-write-agents (hermetic but corpus-free) and

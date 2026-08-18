@@ -8,8 +8,8 @@ import (
 )
 
 // Rejection is a verifier failure a MODEL could be responsible for: a
-// partition that dropped a candidate, a group count past the fan-out cap, an
-// index asked for at the depth cap, a span too large to be one leaf.
+// partition that dropped a candidate, a group count past the fan-out cap, a
+// page that begins inside a section, a span too large to be one leaf.
 //
 // The stage-3 seam retries once with Note attached and then fails the unit —
 // taxonomy is a no-fallback seam, so there is no mechanical fallback to fall

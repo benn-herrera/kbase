@@ -71,7 +71,7 @@ func corpora() []pinnedCorpus {
 			name:  "rojo",
 			docs:  rojoDocs,
 			prep:  "prep-test-integration-rojo",
-			links: survey.LinkTotals{Internal: 4, Unresolved: 1, External: 31, Anchor: 50},
+			links: survey.LinkTotals{Internal: 6, Unresolved: 9, External: 39, Anchor: 50},
 			resolved: map[string]string{
 				// URL space: `project-format.md` serves at `project-format/`,
 				// so `../properties` names the sibling document. In file space
@@ -81,6 +81,12 @@ func corpora() []pinnedCorpus {
 				"project-format.md -> ../properties#bool":                    "properties.md",
 				"project-format.md -> ../properties#property-type-support":   "properties.md",
 				"properties.md -> ../project-format#instance-property-value": "project-format.md",
+				// Both halves of the MDX admission (ruled 2026-08-18), and both
+				// are exact-path lookups: a destination naming an `.mdx`
+				// document resolves now because the corpus HOLDS one, from a
+				// `.md` page and from an `.mdx` page alike.
+				"intro.md -> getting-started/installation.mdx":     "getting-started/installation.mdx",
+				"getting-started/new-game.mdx -> installation.mdx": "getting-started/installation.mdx",
 			},
 			evidence: "test_data/transient/links-rojo",
 		},
@@ -104,10 +110,17 @@ func corpora() []pinnedCorpus {
 // every internal edge in it.
 //
 // The two unresolved sets it leaves behind are as load-bearing as the resolved
-// ones and are recorded in the evidence: Rojo's remaining miss is an `.mdx`
-// document ingest never took custody of, and oMLX's two are a file above the
-// corpus root and a Python script. None of the three is a resolver failure,
-// and a run that "fixed" them would be inventing targets.
+// ones and are recorded in the evidence: Rojo's nine are rooted `/img/...`
+// destinations into a site's static asset tree, which is not part of the
+// documentation corpus at all, and oMLX's two are a file above the corpus root
+// and a Python script. None of the eleven is a resolver failure, and a run that
+// "fixed" them would be inventing targets.
+//
+// Rojo's census moved with the MDX admission (ruled 2026-08-18) and the shape
+// of the move is the reading: its three `.mdx` documents entered the corpus, so
+// the destinations naming them resolve — and the image destinations they carry
+// join the unresolved set, which they always were, in files nothing was
+// counting.
 //
 // One subtest per corpus, named for it, so an integration recipe can pin one
 // (`-run 'TestLinkResolutionOverRealCorpus/rojo'`) and so an absent corpus

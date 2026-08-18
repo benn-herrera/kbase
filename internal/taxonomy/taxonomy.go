@@ -202,7 +202,7 @@ func New(d Design, lg log.Logger) (*Designer, error) {
 		return nil, fmt.Errorf("taxonomy: parsing the taxonomy definition: %w", err)
 	}
 
-	root := enumerate(d.Survey, d.Title, d.Annexes)
+	root := enumerate(d.Survey, d.Title, d.Params.Budgets, d.Annexes)
 	list := asks(root, d.Params.Budgets.CandidateCap)
 	if len(list) == 0 {
 		// One document with one section, or a corpus that is entirely
@@ -327,8 +327,8 @@ func (t *Designer) digest() string {
 		r.Effort.Thinking, r.Attempts, r.NoteWords)
 	fmt.Fprintf(&sb, "leafTokens %d\nsummaryInputTokens %d\nsummaryTokens %d\nentryPointTokens %d\n",
 		b.LeafTokens, b.SummaryInputTokens, b.SummaryTokens, b.EntryPointTokens)
-	fmt.Fprintf(&sb, "depthCap %d\nfanOutCap %d\ncandidateCap %d\ncalls %d\n",
-		b.DepthCap, b.FanOutCap, b.CandidateCap, len(t.asks))
+	fmt.Fprintf(&sb, "fanOutCap %d\ncandidateCap %d\ncalls %d\n",
+		b.FanOutCap, b.CandidateCap, len(t.asks))
 	for _, a := range t.in.Annexes {
 		fmt.Fprintf(&sb, "annex %s\n", a.Prefix)
 	}
@@ -342,12 +342,16 @@ func (t *Designer) digest() string {
 // moves neither — the question set is fixed before the first call — so slot 4
 // is stage-constant under the fold. That is not decoration: the churn tripwire
 // aborts the worker if this text changes between calls of one lane.
+//
+// It states no depth, because there is none to state (R-3, ruled 2026-08-17):
+// the knowledge base is as deep as the material's own nesting makes it, and a
+// sentence claiming a ceiling would be steering the model against a rule
+// nothing enforces.
 func (t *Designer) sectionRef() string {
 	return fmt.Sprintf("This corpus holds %d documents and %d sections. "+
-		"The knowledge base has at most %d section levels below its entry point, "+
-		"and at most %d entries under any one heading.",
+		"The knowledge base has at most %d entries under any one heading.",
 		t.in.Survey.Corpus.Files, t.in.Survey.Corpus.Sections,
-		t.in.Params.Budgets.DepthCap-1, t.in.Params.Budgets.FanOutCap)
+		t.in.Params.Budgets.FanOutCap)
 }
 
 // callInput is one container's per-call half of the prompt, built when the
