@@ -137,9 +137,11 @@ summaries, the light tier adjudicates page boundaries.
   at all other than `temp-work/`, the command refuses before the corpus is
   read, names **every** entry it found, writes nothing — not even the
   directory, if it did not already exist — and exits `1`. The refusal states
-  which of the two reasons applies: no `temp-work/` is present, or the
+  which of the three reasons applies: no `temp-work/` is present, the
   `temp-work/` present holds a run record and therefore belongs to a build
-  that finished. There is no `--force` and no in-place update: kbase
+  that finished, or the `temp-work/` present holds no job frame at all and
+  so belongs to no kbase build (§3.1). There is no `--force` and no
+  in-place update: kbase
   delivers a whole knowledge base or nothing, and the remedy is to delete
   the directory or name an empty one. The **one** exception is the resume of
   an interrupted build (§3.1), which owns the residue it left behind.
@@ -168,7 +170,11 @@ summaries, the light tier adjudicates page boundaries.
 - **`--fresh` rebuilds every stage.** Whatever a prior run left in
   `temp-work/` is discarded — deleted, not merely left unread, `job.lock`
   excepted — before the resume scan runs, so no artifact is reused, no
-  stamp is trusted, and the run costs a full corpus's tokens. It is the
+  stamp is trusted, and the run costs a full corpus's tokens. The scan that
+  follows is the same one a resume runs and reports what it found, so the
+  run's `units: N produced, 0 reused` line is a **measurement** of the
+  discard: the zero is there because the job directory was empty, not
+  because the mode declines to look. It is the
   remedy the resume refusals name (§3.6): a job directory that
   contradicts itself is cleared rather than argued with. Two things it does
   **not** do: it does not override the populated-`--out` refusal above, and
@@ -179,13 +185,20 @@ summaries, the light tier adjudicates page boundaries.
   failed (and, where applicable, the offending node) in the run record
   (§3.8).
 - **The exempted destinations are announced.** A corpus destination that
-  names no document the corpus holds is delivered exactly as written and
-  exempted from guarantee 1 (§4.5 rule 3). When there is at least one, the
-  run writes exactly one line to stderr carrying the whole link census —
+  names no document the delivered tree holds is delivered exactly as
+  written and exempted from guarantee 1 (§4.5 rule 3). When at least one
+  delivered page carries such a destination, the run writes exactly one
+  line to stderr carrying the whole link census —
   `links: internal=N unresolved=N external=N anchor=N; N destination(s)
   name no document in the corpus and are delivered verbatim, exempt from
-  guarantee 1`. A run with none writes no such line. The census is in the
-  run record either way (§3.8).
+  guarantee 1`. A run whose delivered pages carry none writes no such line.
+  **The two numbers on that line are different measurements.** The census
+  is the survey's classification of the corpus's own link graph, over the
+  source; the count after it is the size of the exemption set guarantee
+  1 actually applies, in distinct destinations over the delivered tree, and
+  is the wider of the two — it also takes destinations inside an annex and
+  destinations into a file no delivered node was drawn from. Both are in
+  the run record either way, as `links` and `exemptedDestinations` (§3.8).
 - **Section summaries.** Every index and the entry-point gets one summary
   (§3.5), written by the heavy tier bottom-up. **Sibling pages are always
   summarised as a group**: one call over the pages directly under a node,
@@ -368,10 +381,39 @@ deletes inside `--out`.
 decided by `temp-work/` rather than by anything about the delivered files:
 `temp-work/` survives precisely the runs that did not finish, and the run
 record inside it (§3.8) is written only once a delivery has completed. So
-`temp-work/` present with **no** run record in it is an interrupted build,
-whose half-copied delivery is its own to overwrite; a `temp-work/` that
-holds a run record belongs to a build that finished, and a second run over
-it is a rerun and refuses like any other. Rebuilding a corpus into a
+`temp-work/` holding a **job frame** and **no** run record is an interrupted
+build, whose half-copied delivery is its own to overwrite; a `temp-work/`
+that holds a run record belongs to a build that finished, and a second run
+over it is a rerun and refuses like any other. A job frame is any one of the
+three things a kbase run leaves in that directory: the job lock (§3.7), the
+delivery manifest (§3.10), or a `.stamp.json` sidecar (§3.6). A `temp-work/`
+holding none of them is refused like any other populated `--out` — an empty
+directory of that name is not evidence of an interrupted build, and reading
+it as one would make `mkdir <out>/temp-work` a way to license overwriting a
+delivered knowledge base.
+
+**What the resumed run does with the residue.** The interrupted attempt
+wrote a delivery manifest (§3.10) before it copied its first file, and the
+resuming run reads it to decide between three states, in this order:
+
+- **Finished but unrecorded.** The manifest names exactly the set this run
+  computed, and every one of those files under `--out` is byte-identical to
+  the artifact this run proved. Then the delivery happened and only the
+  record write was lost: the run writes the record and completes, copying
+  nothing and overwriting nothing.
+- **Interrupted.** Anything else. The run first removes **exactly** the
+  paths the manifest names — the prior attempt's own testimony about what it
+  wrote — and then delivers. That is what keeps a resume whose plan has
+  since changed (a new `--title`, a different `--annex` set, a moved corpus)
+  from leaving the old plan's pages standing beside the new plan's. No other
+  file under `--out` is ever removed: a file kbase did not write is on no
+  list kbase ever made.
+- **Neither, afterwards.** When delivery is done, `--out` minus
+  `temp-work/` must equal the delivered set exactly. A file that is there
+  and is neither delivered nor manifest-listed refuses the run rather than
+  being deleted or reported as part of a knowledge base it is not part of.
+
+Rebuilding a corpus into a
 directory that already holds its knowledge base therefore means deleting
 that directory first — `--fresh` (§1.5) rebuilds the pipeline, not the
 delivery decision, and refuses here exactly as a plain rerun does. Updating
@@ -455,7 +497,8 @@ sections, target order for links).
               "entryPointTokens":N,"depthCap":N,"fanOutCap":N,"candidateCap":N},
   "nodes": [ {"...": "..."} ],
   "groups": [ {"...": "..."} ],
-  "annexes": [ {"...": "..."} ]
+  "annexes": [ {"...": "..."} ],
+  "crossParentMerges": N
 }
 ```
 
@@ -494,6 +537,21 @@ naming every offending span, when one under the floor is neither exempt nor
 has such a neighbour. Coverage (§4.8 guarantee 6) is unaffected:
 the merged span covers exactly the sections its two halves covered.
 
+**Which neighbour, and what it costs.** File byte order does not respect
+the tree: one document's adjacent sections may legally sit under two
+different section indexes. So a touching neighbour **under the same parent
+index** is preferred over a touching neighbour under a different one, in
+either direction, ahead of the before-then-after order above. Where the only
+touching neighbours sit under another parent the merge is taken anyway —
+refusing would make an ordinary corpus unbuildable — and each such merge is
+logged at `warn` and counted in `crossParentMerges`, in this artifact and in
+`run.json` (§3.8). It is counted because nothing else can see it: the merged
+page routes correctly, coverage is whole, and the only observable is that a
+page sits under a heading whose scope line did not promise it. A **section
+index whose every child was absorbed under some other parent is removed**,
+with its scope line, since it now routes nowhere; the entry-point is never
+removed.
+
 `annexes[]` — `{"prefix", "convention"}`, one per declared `--annex`;
 `convention` is the lookup description kbase derives from the survey and
 writes into the entry point (§4.3).
@@ -511,6 +569,18 @@ a word boundary, never inside a multi-byte character); an empty result
 becomes `node`. Within one directory a colliding slug gets an ordinal
 suffix (`name`, `name-2`, `name-3`, …) rather than overwriting; `index`
 and `entry-point` are reserved and unclaimable by a slug.
+
+**`(k/n)` is shared, deliberately.** An index holding more pages than one
+summary call can read is partitioned into `n` ordered batches, each under a
+synthetic index titled `"<Title> (k/n)"` — the same notation a split leaf's
+parts carry. The notation means the same thing in both places (*this is
+part `k` of `n` of what one title named*), and the two are told apart by
+everything else about the page rather than by a second suffix: a split part
+is a **leaf**, carries `←`/`→` continuation links (§4.4), and is named in
+its parent's bullet with a `(this part: …)` clause (§4.3); an interposed
+index is an **index**, at `<slug>/index.md`, carrying a down-link list and
+no continuation link. Giving interposition a suffix of its own would change
+delivered paths to restate what the page's own kind already says.
 
 ### 3.4 The composed cut list
 
@@ -533,6 +603,14 @@ One per index/entry-point node, once the summary stage has run for it, at
 the delivered page's summary block (§4.3) is rendered from this artifact
 at delivery time, so a regenerated summary can never half-rewrite an
 already-delivered page.
+
+**Absent is legal; unreadable is not.** A node with no summary artifact
+renders without its summary block, which is what a `[dev] tree_plan =
+"mechanical"` build delivers throughout. An artifact that is present and
+cannot be read is a different event and refuses the run: the render and
+guarantee 5's re-render read this artifact through one reader, so treating
+a read failure as an absence would make them agree with each other about a
+page neither of them could see.
 
 **The leaf-group card** is the same schema at
 `temp-work/summaries/<node path>.leaves.json`, and exists only for a node
@@ -609,19 +687,42 @@ trace; the same skips are logged at `info`. Disclosure is this record and
 nothing else: the delivered tree is the documentation set's, not a report on
 the walk), `links` (the corpus link census — the same
 `{"internal", "unresolved", "external", "anchor"}` object §3.2 rolls up,
-recorded because `unresolved` is the size of the set guarantee 1 exempts
-and `internal` is the resolution rate that would otherwise be invisible),
-`nodes`, `pages`, `sections`, `groups`, `splitGroups`,
-`summaries`, `deliveredFiles`, `units`, `unitsProduced`, `unitsReused`,
+recorded because `internal` is the resolution rate that would otherwise be
+invisible), `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
+`crossParentMerges` (§3.3: how many content-floor merges re-homed a
+sub-floor span under an index other than the one its own page sat under —
+each also logged at `warn`, and nothing else can see them),
+`exemptedDestinations`, `summaries`, `deliveredFiles`, `units`,
+`unitsProduced`, `unitsReused`,
 `elapsedMs`, and `verify`: exactly ten `{"number", "name", "ok"}` entries,
-one per guarantee in §4.8, always in the same order. A live (model-in-the
+one per guarantee in §4.8, always in the same order.
+
+**Two link numbers, and what each one is.** `links.unresolved` is a
+**survey** measurement: how many of the corpus's outbound destinations
+named no document the corpus holds, counted once per distinct destination
+per source file and summed over the corpus (§3.2).
+`exemptedDestinations` is **guarantee 1's own exemption set**: how
+many DISTINCT destinations the delivered pages carry that stage 5 could not
+land, counted over the assembled tree and taken from the same lists the
+gate skips (§4.8). It is the wider idea and is not a restatement of the
+first — a destination inside an annex, or into a file no delivered node was
+drawn from (§4.5 rule 3), is exempt and was never unresolved — and it is
+the number §1.5's stderr line states, because that sentence is a claim
+about guarantee 1. The pair read together: an `exemptedDestinations` rising
+against a flat `links.unresolved` says the survey's parse and stage 5's
+scanner are reading the same bytes differently.
+
+A live (model-in-the
 -loop) run additionally carries a `live` object naming: `provider`,
 `baseUrl`, `model` and `tier` (the heavy tier's, which designed the tree
 and wrote the summaries), `lightModel` (which adjudicated the page
 boundaries), `thinking` and `retryThinking` (the heavy definitions'
 declared efforts), `taxonomyCalls`, `callsSkipped`,
 `boundariesAdjudicated`, `boundariesMoved`, `boundariesFellBack`,
-`boundaryRejections`, `promptTokens`, `cachedTokens`, `completionTokens`,
+`boundaryRejections`, `leafGroupCards` (one per node holding both pages and
+subsections — the extra calls the grouping scheme of §1.5 costs, up to one
+heavy call each; zero where every node holds children of one kind),
+`promptTokens`, `cachedTokens`, `completionTokens`,
 `reasoningTokens`. The four boundary counts are summed over every split
 group and are all zero when no group split.
 
@@ -632,10 +733,28 @@ Mirrors the delivered tree's own relative paths one level down
 artifacts that are never themselves delivered: a survey directory, a tree
 -plan directory, a per-domain leaves area, a summaries area (node summaries
 and leaf-group cards alike, §3.5), a pre-delivery render of the
-tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`
-and `run.json` (§3.8) at the root. Every file in it carries a
-`.stamp.json` sidecar (§3.6) except `job.lock` and `run.json`, which are
-not stage artifacts.
+tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`,
+`run.json` (§3.8) and `delivery.json` (§3.10) at the root. Every file in it
+carries a `.stamp.json` sidecar (§3.6) except those three, which are not
+stage artifacts.
+
+### 3.10 `delivery.json` — the delivery manifest
+
+**`kbase build`**, written to `<out>/temp-work/delivery.json` — the
+temp-work root, beside the run record — **before the first delivered byte**
+of the run that writes it. Contents: `schema` (`1`) and `paths`, the exact
+set of tree-relative paths this run is delivering, sorted, which is the
+classified set of §4.8's guarantee 5 and nothing else.
+
+Its consumer is the NEXT run over the same `--out`, and only that: it is the
+list §3.1's resumed run reads to tell a finished delivery from an
+interrupted one, and the only authority kbase has for removing a file it did
+not just write. Two properties follow from where it sits and when it is
+written. It is temp-work, so §3.1's teardown takes it — a successful run
+without `--keep-temp-work` keeps neither it nor the run record — and a
+`--fresh` run discards it with the rest of the job directory, having read it
+first. And it is written before the copy rather than after, so a run killed
+mid-delivery leaves the whole list rather than the part it managed.
 
 ---
 
@@ -692,6 +811,20 @@ the first source heading the part delivers, then ` → ` and the title of
 the last, where the part delivers more than one. A part whose cut fell in
 open prose delivers no heading, carries no descriptor, and renders the
 plain bullet.
+
+Two properties the descriptor is required to have, because it is the only
+place a page kbase composes quotes CORPUS text:
+
+- **Distinct among siblings.** Where two parts of one group would carry the
+  same descriptor — a source repeating its headings across a cut boundary —
+  each of the tied parts carries `k of n` instead. Parts whose headings
+  already tell them apart keep them.
+- **Inert.** Markdown's inline syntax is escaped in the quoted heading
+  text, so a heading carrying link, emphasis, code-span or raw-HTML
+  punctuation renders as the words the author wrote and cannot put a link
+  destination, or any other live construct, on the index page. Control
+  characters become spaces. A leaf body is exempt from this and always
+  will be: its bytes are verbatim source (§4.2 item 4).
 
 **Entry-point page** (no up-link — it has none; the frontmatter block is
 first all the same), in order: frontmatter block (§4.9) → `# <Title>` →
@@ -754,6 +887,10 @@ and no guarantee reads it as page grammar.
 Classification of a destination written in a source document, in order;
 the first branch that applies decides:
 
+- A destination that will not parse as a URL at all is **unresolved**. It
+  names nothing this corpus holds and it is not a reachable external
+  reference either, so it is recorded as the corpus's own defect rather
+  than classified away into a kind that claims more than is known.
 - A destination carrying a scheme or a host (`https://…`, `//host/…`,
   `mailto:…`) is **external**.
 - A destination that is only a fragment (`#anchor`) is an **anchor**: it
@@ -779,8 +916,12 @@ order, and the first attempt that names a document in the corpus wins:
 Each attempt applies, in decreasing confidence: the exact corpus path; the
 path with the Markdown extension appended, when the destination carries no
 extension (`[scope](scope)`, where the site generator supplies the rest);
-and an ASCII case fold of either, since the corpus walk accepts `.MD` and
-resolution has to agree. A fold that several documents answer to is
+and a full Unicode case fold of either, since the corpus walk accepts `.MD`
+and resolution has to agree. The fold is Unicode-wide rather than ASCII-only
+because custody ids are NFC (§4 stage 1 of ARCHITECTURE.md): one spelling of
+every character on both sides of the comparison is the whole point, and a fold
+that stopped at `A`–`Z` would answer a Turkish or Greek path differently from
+the way it was ingested. A fold that several documents answer to is
 **ambiguous** — that attempt resolves nothing and the run warns, naming
 the destination, rather than guessing.
 
@@ -886,11 +1027,15 @@ applicable, the offending node.
    the first line under its frontmatter block, and every link in the
    navigation block that line opens — the up-link and a split part's
    continuation links — is labelled with the node its target resolves to
-   (§4.4); the entry-point carries none of them. Up-link lines inside
-   fenced code blocks are not counted, and navigation-shaped lines below
-   the block are not read: a leaf body is verbatim source (§4.2 item 4),
-   so a corpus that documents this grammar carries such lines as content
-   and they are content.
+   (§4.4); the entry-point carries none of them. The count is taken from
+   that block and from nowhere else, so a navigation-shaped line below the
+   block is not read — fenced or unfenced, up-link or continuation link. A
+   leaf body is verbatim source (§4.2 item 4), so a corpus that documents
+   this grammar carries such lines as content and they are content, and a
+   check wider than the contract it enforces would refuse a delivery
+   nobody can repair. Nothing is lost by the narrowing: the block itself is
+   checked entire, and a page that grew a second up-link below it fails
+   guarantee 5's re-render or guarantee 7's leaf fidelity.
 3. The entry-point exists, and every domain it names in `## Domains` was
    itself delivered.
 4. Every class-A page is reachable from `entry-point.md` by following

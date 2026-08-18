@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"strings"
 
@@ -165,13 +166,22 @@ func headingDepth(field string) error {
 // It is the ONE reader of this artifact family: the level above uses it for
 // its children's material and internal/assemble uses it for the conclusions
 // block, so what the two render is the same value read the same way.
+//
+// ABSENCE is legal and UNREADABILITY is not [ARCH F6]. A node with no summary
+// is the O-1 grammar's ordinary case — the no-model build delivers one, and so
+// does a level with no stage — but a summary that exists and cannot be read is
+// a different event, and folding the two together meant no gate could see a
+// systematically missing summary: the render and gate 5's re-render both go
+// through here, so they agreed with each other about nothing being there. The
+// prefix now holds two artifact families distinguished only by suffix (§3.5),
+// which is exactly where that silence would cost the most.
 func Read(store ArtifactReader, summariesDir, nodePath string) (Summary, bool, error) {
 	data, err := store.Get(summariesDir + "/" + nodePath + unitSuffix)
-	if err != nil {
-		// A node with no summary is a legal state, not a failure: the O-1
-		// grammar renders an index with no conclusions block, which is what
-		// the no-model build delivers and what a level with no stage produces.
+	if errors.Is(err, fs.ErrNotExist) {
 		return Summary{}, false, nil
+	}
+	if err != nil {
+		return Summary{}, false, err
 	}
 	s, err := ReadJSON(strings.NewReader(string(data)))
 	if err != nil {

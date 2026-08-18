@@ -3,6 +3,8 @@ package summarize
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -196,6 +198,88 @@ func TestLeavesOnlyContainerCostsOneCall(t *testing.T) {
 		if _, err := sc.store.Get(sc.sum.Card(n.Path)); err == nil {
 			t.Errorf("%s holds children of one kind and still wrote a leaf-group card", n.Path)
 		}
+	}
+}
+
+// TestMixedContainerCardFailureCascades is the stage-6 rework's headline
+// invariant, asked directly [GO M-4]: a mixed node's summary is downstream of
+// its OWN card, so a card that never verifies cascades into it.
+//
+// The existing cascade test runs over a non-mixed tree, so it exercises the
+// pre-existing section→parent edge and never card→node. This one fails the card
+// and asserts the node above it was never attempted.
+func TestMixedContainerCardFailureCascades(t *testing.T) {
+	lg := &logtest.Capture{}
+	sc := newMixedScene(t, lg, pageBody)
+	// The stage order is the two domains, then the entry-point's card, then the
+	// entry-point. The domains verify; the card never does, on either attempt.
+	bad := model.Response{Content: "I could not summarise those pages.", FinishReason: "stop"}
+	client := model.NewScriptedMockPerConsult([]model.Response{
+		answer("framing-a", "Heading A", "conclusion-a"),
+		answer("framing-b", "Heading B", "conclusion-b"),
+		bad, bad,
+	})
+	client.RecordCalls = true
+
+	res, err := sc.run(t, client, lg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.DeliveryReady() {
+		t.Fatal("a run whose leaf-group card never verified was reported emit-ready")
+	}
+	var cascaded, verification []string
+	for _, f := range res.Failures {
+		switch f.Kind {
+		case pipeline.FailureCascade:
+			cascaded = append(cascaded, f.Path)
+		case pipeline.FailureVerification:
+			verification = append(verification, f.Path)
+		}
+	}
+	card := sc.sum.Card("entry-point.md")
+	if len(verification) != 1 || verification[0] != card {
+		t.Fatalf("verification failures = %q, want the entry-point's card %q", verification, card)
+	}
+	unit := sc.sum.Unit("entry-point.md")
+	if len(cascaded) != 1 || cascaded[0] != unit {
+		t.Fatalf("cascade failures = %q, want the node whose card failed (%q)", cascaded, unit)
+	}
+	// Cascade-failure spends nothing: two domains, two attempts at the card,
+	// and no call at all for the node above it.
+	if got := len(client.Calls()); got != 4 {
+		t.Errorf("%d calls, want the two domains and two attempts at the card", got)
+	}
+	if _, err := sc.store.Get(unit); err == nil {
+		t.Error("the mixed node's summary was written over a card that never verified")
+	}
+}
+
+// Absence and unreadability are different events [ARCH F6]. A node with no
+// summary is legal — the O-1 grammar renders an index without a conclusions
+// block — but a summary that exists and cannot be read is a failure, and
+// answering "there is none" for it made a systematically missing summary
+// invisible to every gate, since the render and the re-render both read it
+// here.
+func TestReadDistinguishesAbsenceFromUnreadable(t *testing.T) {
+	lg := &logtest.Capture{}
+	sc := newScene(t, lg, pageBody)
+
+	s, ok, err := Read(sc.store, summariesDir, "entry-point.md")
+	if err != nil || ok || s.Framing != "" {
+		t.Fatalf("an absent summary read as (%+v, %t, %v), want the legal empty state", s, ok, err)
+	}
+
+	// A directory where the artifact goes: it exists, and it is not a summary.
+	blocked := filepath.Join(sc.dir, pipeline.TempWorkDirName, summariesDir, "entry-point.md"+unitSuffix)
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatalf("plant an unreadable artifact: %v", err)
+	}
+	if _, _, err := Read(sc.store, summariesDir, "entry-point.md"); err == nil {
+		t.Error("an unreadable summary read as an absent one")
+	}
+	if _, err := All(sc.store, summariesDir, sc.plan); err == nil {
+		t.Error("All read an unreadable summary as an absent one")
 	}
 }
 

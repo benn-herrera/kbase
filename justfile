@@ -618,7 +618,7 @@ test-integration-build-refusal:
 # The body, split out so the wrapper above can tee ONE stream — same reason as
 # _test-integration-survey-rojo.
 #
-# Five builds into the SAME --out, in order: (1) a normal --keep-temp-work
+# Seven builds into the SAME --out, in order: (1) a normal --keep-temp-work
 # build, which must succeed and leaves temp-work/run.json behind: exactly the
 # "finished" state checkOutIsClear's rerun clause detects. (2) an identical
 # rerun with nothing touched: must refuse, both because the directory holds
@@ -630,14 +630,31 @@ test-integration-build-refusal:
 # present, run.json absent" — the one state checkOutIsClear licenses an
 # overwrite for — and the same build must now succeed and re-deliver the
 # identical tree (reusing the temp-work store rather than recomputing it,
-# which is the resume path's own point, not just this recipe's). (4) the same
-# interrupted-job state again, but rebuilt with --fresh: must succeed AND
-# report "0 reused" (proving the store was actually discarded, not silently
-# resumed) AND re-deliver the identical tree — --fresh changes how the work is
-# done, never what gets delivered. (5) --fresh into the FINISHED directory
-# left by (4): still refuses, identically to (2) — [MAD2: B-7 x B-12] --fresh
-# discards kbase's own scratch tree, never the populated-out refusal, and this
-# recipe is that composition's one proof.
+# which is the resume path's own point, not just this recipe's). (4) the
+# kill-window clause: only run.json is deleted this time, so the delivered
+# files AND temp-work/delivery.json both survive — the one state
+# deliveryFinished reads as "already complete, only the run record was lost".
+# The rebuild must succeed, restore run.json, and touch nothing outside
+# temp-work (a marker file plus `find -newer` proves no delivered byte was
+# recopied) — and a further rerun must refuse again with the rerun-diagnosis
+# marker, proving the refusal is re-armed once the record is back. (5) the
+# same interrupted-job state again (delivered files removed, run.json
+# deleted), but rebuilt with --fresh: must succeed AND report "0 reused"
+# (proving the store was actually discarded, not silently resumed) AND
+# re-deliver the identical tree — --fresh changes how the work is done, never
+# what gets delivered. (6) --fresh into the FINISHED directory left by (5):
+# still refuses, identically to (2) — [MAD2: B-7 x B-12] --fresh discards
+# kbase's own scratch tree, never the populated-out refusal, and this recipe
+# is that composition's one proof. (7) the changed-plan clause: run.json is
+# deleted and the build repeats with --annex getting-started added, so the new
+# plan no longer delivers porting-an-existing-game/ — sweepPriorDelivery must
+# remove exactly the prior delivery's orphaned paths (a before/after file-list
+# comm proves nothing else moved) and the annex must land. Then the
+# postcondition's own restraint is proven the other way: run.json is deleted
+# once more, a foreign notes.md is planted beside the delivered tree, and the
+# rebuild must refuse on checkOutHoldsExactly's "no delivered path names"
+# clause, naming notes.md, without touching its content — the file this
+# appliance never wrote is a file it never removes either.
 [private]
 _test-integration-build-refusal: build prep-test-integration-rojo
     @kb="{{BUILD_REFUSAL_OUT_DIR}}/kb"; \
@@ -672,6 +689,31 @@ _test-integration-build-refusal: build prep-test-integration-rojo
     diff -rq -x temp-work "$snapshot" "$kb" || \
       { echo "integration(build-refusal): the resumed build re-delivered a different tree than the original"; exit 1; }; \
     echo "integration(build-refusal): interrupted-job resume ok — temp-work present/run.json absent rebuilt and re-delivered the same tree"; \
+    rm -f "$kb/temp-work/run.json"; \
+    marker="{{BUILD_REFUSAL_OUT_DIR}}/marker"; \
+    touch "$marker"; \
+    sleep 1; \
+    ./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" \
+      --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
+      --out "$kb" \
+      --keep-temp-work || \
+      { echo "integration(build-refusal): the kill-window rerun (run.json alone lost) failed"; exit 1; }; \
+    [[ -f "$kb/temp-work/run.json" ]] || \
+      { echo "integration(build-refusal): the kill-window rerun did not restore run.json"; exit 1; }; \
+    recopied="$(find "$kb" -path "$kb/temp-work" -prune -o -newer "$marker" -print)"; \
+    [[ -z "$recopied" ]] || \
+      { echo "integration(build-refusal): the kill-window rerun touched files outside temp-work, so it recopied a delivery that was already complete:"; echo "$recopied"; exit 1; }; \
+    rm -f "$marker"; \
+    diff -rq -x temp-work "$snapshot" "$kb" || \
+      { echo "integration(build-refusal): the kill-window rerun re-delivered a different tree than the original"; exit 1; }; \
+    echo "integration(build-refusal): kill-window completion ok — run.json restored, nothing outside temp-work recopied, tree byte-unchanged"; \
+    rearm_err="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work 2>&1)"; \
+    rearm_status=$?; \
+    [[ "$rearm_status" == 1 ]] || \
+      { echo "integration(build-refusal): the rerun after kill-window completion exited $rearm_status, want 1"; exit 1; }; \
+    echo "$rearm_err" | grep -qF "this is a rerun, not the resume of an interrupted one" || \
+      { echo "integration(build-refusal): the rerun after kill-window completion is missing the rerun-diagnosis marker:"; echo "$rearm_err"; exit 1; }; \
+    echo "integration(build-refusal): kill-window completion re-arms the refusal ok — the further rerun exits 1 with the rerun marker"; \
     find "$kb" -mindepth 1 -maxdepth 1 -not -name temp-work -exec rm -rf {} +; \
     rm -f "$kb/temp-work/run.json"; \
     fresh_out="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work --fresh)"; \
@@ -695,9 +737,49 @@ _test-integration-build-refusal: build prep-test-integration-rojo
       { echo "integration(build-refusal): the refused --fresh attempt changed the delivered tree"; exit 1; }; \
     echo "integration(build-refusal): --fresh does not override the populated-out refusal ok — exit 1, both markers present, tree byte-unchanged"; \
     rm -rf "$snapshot"; \
-    echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, interrupted-job resume, --fresh rebuild, and --fresh-vs-refusal all correct"; \
+    before_list="{{BUILD_REFUSAL_OUT_DIR}}/before-annex.txt"; \
+    after_list="{{BUILD_REFUSAL_OUT_DIR}}/after-annex.txt"; \
+    rm -f "$kb/temp-work/run.json"; \
+    find "$kb" -path "$kb/temp-work" -prune -o -type f -print | sed "s|^$kb/||" | sort > "$before_list"; \
+    ./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" \
+      --config-dir "{{MECHANICAL_CONFIG_DIR}}" \
+      --out "$kb" \
+      --keep-temp-work \
+      --annex getting-started || \
+      { echo "integration(build-refusal): the changed-plan rerun (--annex getting-started added) failed"; exit 1; }; \
+    [[ ! -e "$kb/porting-an-existing-game" ]] || \
+      { echo "integration(build-refusal): porting-an-existing-game/ survived the getting-started annex"; exit 1; }; \
+    find "$kb" -path "$kb/temp-work" -prune -o -type f -print | sed "s|^$kb/||" | sort > "$after_list"; \
+    new_paths="$(comm -13 "$before_list" "$after_list")"; \
+    [[ -z "$new_paths" ]] || \
+      { echo "integration(build-refusal): the changed-plan rerun added paths outside the expected set:"; echo "$new_paths"; exit 1; }; \
+    vanished="$(comm -23 "$before_list" "$after_list")"; \
+    stray_vanished="$(printf '%s\n' "$vanished" | grep -v '^porting-an-existing-game/' || true)"; \
+    [[ -z "$stray_vanished" ]] || \
+      { echo "integration(build-refusal): the changed-plan sweep removed paths beyond porting-an-existing-game/'s orphaned set:"; echo "$stray_vanished"; exit 1; }; \
+    [[ -n "$vanished" ]] || \
+      { echo "integration(build-refusal): the changed-plan sweep reported no vanished paths at all"; exit 1; }; \
+    rm -f "$before_list" "$after_list"; \
+    echo "integration(build-refusal): changed-plan sweep ok — porting-an-existing-game/ gone entirely, only its orphaned paths vanished, nothing new appeared"; \
+    rm -f "$kb/temp-work/run.json"; \
+    notes="$kb/notes.md"; \
+    notes_content="a user file the sweep must never touch"; \
+    printf '%s\n' "$notes_content" > "$notes"; \
+    restraint_err="$(./{{BIN_DIR}}/kbase build "{{ROJO_DOCS_DIR}}/docs" --config-dir "{{MECHANICAL_CONFIG_DIR}}" --out "$kb" --keep-temp-work --annex getting-started 2>&1)"; \
+    restraint_status=$?; \
+    [[ "$restraint_status" == 1 ]] || \
+      { echo "integration(build-refusal): the rerun with a stray notes.md exited $restraint_status, want 1"; exit 1; }; \
+    echo "$restraint_err" | grep -qF "no delivered path names" || \
+      { echo "integration(build-refusal): the stray-file postcondition refusal is missing the 'no delivered path names' marker:"; echo "$restraint_err"; exit 1; }; \
+    echo "$restraint_err" | grep -qF "notes.md" || \
+      { echo "integration(build-refusal): the stray-file postcondition refusal does not name notes.md:"; echo "$restraint_err"; exit 1; }; \
+    [[ "$(cat "$notes")" == "$notes_content" ]] || \
+      { echo "integration(build-refusal): notes.md's content changed even though the postcondition refused delivery"; exit 1; }; \
+    rm -f "$notes"; \
+    echo "integration(build-refusal): changed-plan sweep restraint ok — a stray notes.md triggers the postcondition refusal by name, exit 1, content untouched"; \
+    echo "integration(build-refusal) ok: full-conflict refusal, both message clauses, unchanged tree, interrupted-job resume, kill-window completion (re-armed), --fresh rebuild, --fresh-vs-refusal, changed-plan sweep, and postcondition restraint all correct"; \
     {{just_executable()}} _write-evidence "{{BUILD_REFUSAL_OUT_DIR}}" "test-integration-build-refusal" \
-      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains again\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # discards the store, 0 reused, rebuilds and re-delivers\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # --fresh into the finished directory still refuses, exit 1"
+      "./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun: full-conflict refusal, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # resumes and succeeds\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate the kill-window: delivered files and delivery.json survive\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # kill-window completion: restores run.json, recopies nothing, exit 0\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work  # rerun after completion: refusal re-armed, exit 1\nrm -rf {{BUILD_REFUSAL_OUT_DIR}}/kb/* (except temp-work) && rm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains again\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # discards the store, 0 reused, rebuilds and re-delivers\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --fresh  # --fresh into the finished directory still refuses, exit 1\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json  # simulate interrupted-job remains ahead of a changed plan\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # changed-plan sweep: porting-an-existing-game/ removed, annex lands, exit 0\nrm {{BUILD_REFUSAL_OUT_DIR}}/kb/temp-work/run.json && touch {{BUILD_REFUSAL_OUT_DIR}}/kb/notes.md  # plant a foreign file ahead of a resumed delivery\n./{{BIN_DIR}}/kbase build {{ROJO_DOCS_DIR}}/docs --config-dir {{MECHANICAL_CONFIG_DIR}} --out {{BUILD_REFUSAL_OUT_DIR}}/kb --keep-temp-work --annex getting-started  # postcondition restraint: refuses on notes.md by name, exit 1, content untouched"
 
 # The omnibus composes the HERMETIC per-corpus recipes, plus
 # test-integration-write-agents (hermetic but corpus-free) and

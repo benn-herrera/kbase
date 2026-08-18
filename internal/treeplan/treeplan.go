@@ -85,6 +85,14 @@ type TreePlan struct {
 	Nodes   []Node       `json:"nodes"`
 	Groups  []SplitGroup `json:"groups"`
 	Annexes []Annex      `json:"annexes,omitempty"`
+	// CrossParentMerges is how many content-floor merges re-homed a sub-floor
+	// span under an index other than the one its own page sat under
+	// (Verifier.floor). It travels with the artifact because nothing else can
+	// recover it: composition is where the event happens, a resumed run reuses
+	// this artifact rather than re-composing, and no gate can see the repair
+	// afterwards. Omitted when there were none — the ordinary case, and an
+	// explicit zero would read as a measurement where it is an absence.
+	CrossParentMerges int `json:"crossParentMerges,omitempty"`
 }
 
 // Node is one delivered file.

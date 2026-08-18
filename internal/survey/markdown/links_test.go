@@ -232,6 +232,203 @@ func TestArtifactSpellingDeterminism(t *testing.T) {
 	}
 }
 
+// resolveOne surveys a synthetic corpus built for one resolution case — the
+// documents the case needs plus a linking document holding exactly one
+// reference — and returns the link the survey recorded. Everything the table
+// below decides is visible in that one link, and building the corpus per case
+// is what lets each row state its own two-address-space geometry: which
+// directory the linking page sits in, and which documents exist above and
+// beside it. Nothing here touches the filesystem or the network.
+func resolveOne(t *testing.T, docs []string, from, target string) survey.Link {
+	t.Helper()
+	files := map[string]string{from: "# From\n\n[l](" + target + ")\n"}
+	for _, d := range docs {
+		files[d] = "# Doc\n\nBody.\n"
+	}
+	_, art := surveyFixtures(t, files)
+	links := fileOf(t, art, from).Links
+	if len(links) != 1 {
+		t.Fatalf("links = %+v, want the one reference", links)
+	}
+	return links[0]
+}
+
+// TestLinkResolutionAddressSpaces is the hermetic statement of §4.5's
+// resolution rules: two address spaces tried in order, each running the same
+// lookup, an escape disqualifying one ATTEMPT rather than the destination.
+//
+// It exists because the pinned-corpus census next door is the only other place
+// URL space is exercised, and that census SKIPS when the corpus is absent —
+// so deleting the second attempt left `just test` green while every cross-file
+// reference on a doc-site corpus went dead. The row that catches exactly that
+// deletion is "URL space: a page is served as a directory"; the URL-space rows
+// under it fail with it, and the file-space rows do not, which is the other
+// half of the claim (URL space is a fallback, never an override).
+func TestLinkResolutionAddressSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// docs is the corpus besides the linking document.
+		docs   []string
+		from   string
+		target string
+		// want is compared whole; Target is filled in from the row.
+		want survey.Link
+	}{{
+		// File space: the destination joined against the linking file's own
+		// directory. This is what the path means to anything reading the
+		// corpus as files, and the spelling a corpus that never rendered uses.
+		name:   "file space: a sibling named exactly",
+		docs:   []string{"guide/setup.md"},
+		from:   "guide/links.md",
+		target: "./setup.md",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "guide/setup.md"},
+	}, {
+		name:   "file space: a document one directory up",
+		docs:   []string{"nested.md"},
+		from:   "guide/links.md",
+		target: "../nested.md",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "nested.md"},
+	}, {
+		// The site generator supplies the extension, so resolution has to.
+		name:   "file space: the extension left to the site generator",
+		docs:   []string{"guide/setup.md"},
+		from:   "guide/links.md",
+		target: "setup",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "guide/setup.md"},
+	}, {
+		name:   "rooted: joined against the corpus root, not the linking file",
+		docs:   []string{"flat.md"},
+		from:   "guide/links.md",
+		target: "/flat.md",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "flat.md"},
+	}, {
+		// Rooted means the same thing in both spaces, so it is resolved ONCE.
+		// The document here is exactly what a second, URL-space attempt would
+		// have joined its way to (`project-format` + `/properties`), and a
+		// rooted destination must not reach it: the root said root.
+		name:   "rooted: resolved once, never re-joined in URL space",
+		docs:   []string{"project-format/properties.md"},
+		from:   "project-format.md",
+		target: "/properties",
+		want:   survey.Link{Kind: survey.LinkUnresolved},
+	}, {
+		name:   "rooted: a destination that climbs above the root",
+		docs:   []string{"flat.md"},
+		from:   "guide/links.md",
+		target: "/../outside.md",
+		want:   survey.Link{Kind: survey.LinkUnresolved},
+	}, {
+		// THE URL-SPACE CASE (MAD #2's B-1). A doc-site generator serves
+		// `project-format.md` at `project-format/`, so a destination written
+		// inside that page is relative to that directory: `../properties`
+		// names the SIBLING document. In file space it climbs above the root
+		// and is discarded — which is precisely why the escape may not
+		// disqualify the destination, only the attempt. Delete the URL-space
+		// attempt and this row is the first to fail.
+		name:   "URL space: a page is served as a directory",
+		docs:   []string{"properties.md"},
+		from:   "project-format.md",
+		target: "../properties",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "properties.md"},
+	}, {
+		name:   "URL space: a fragment rides along",
+		docs:   []string{"properties.md"},
+		from:   "project-format.md",
+		target: "../properties#bool",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "properties.md", Fragment: "bool"},
+	}, {
+		// Extensionless is a convention of doc sites, not a requirement of the
+		// second space: a fully spelled destination resolves there too.
+		name:   "URL space: the extension spelled out",
+		docs:   []string{"properties.md"},
+		from:   "project-format.md",
+		target: "../properties.md",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "properties.md"},
+	}, {
+		// Neither space is a second resolver: the case fold applies to each,
+		// and the id returned is the corpus's own byte-exact spelling.
+		name:   "URL space: the case fold applies here too",
+		docs:   []string{"Properties.MD"},
+		from:   "project-format.md",
+		target: "../PROPERTIES",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "Properties.MD"},
+	}, {
+		// So does the Unicode spelling agreement: the corpus was ingested
+		// under a decomposed name, the link is written composed, and both
+		// sides are NFC by the time the second attempt compares them.
+		name:   "URL space: a decomposed id reached by a composed destination",
+		docs:   []string{"caf" + "e" + combiningAcute + ".md"},
+		from:   "project-format.md",
+		target: "../caf" + eAcute,
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "caf" + eAcute + ".md"},
+	}, {
+		// And the percent decode: the destination is decoded before either
+		// attempt, so the escape an editor wrote is not a second spelling the
+		// second space has to know about.
+		name:   "URL space: a percent-encoded destination",
+		docs:   []string{"properties guide.md"},
+		from:   "project-format.md",
+		target: "../properties%20guide",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "properties guide.md"},
+	}, {
+		// Order matters, and the corpus here can answer in both spaces:
+		// `../properties` from `guide/project-format.md` is `properties.md`
+		// in file space and `guide/properties.md` in URL space. The first
+		// attempt that names a document wins, so URL space may not re-point an
+		// edge file space already answered.
+		name:   "file space wins when both spaces name a document",
+		docs:   []string{"properties.md", "guide/properties.md"},
+		from:   "guide/project-format.md",
+		target: "../properties",
+		want:   survey.Link{Kind: survey.LinkInternal, Path: "properties.md"},
+	}, {
+		// The refusal that survives both attempts. Two levels up from a root
+		// document leaves the corpus in file space AND in URL space, and a
+		// destination is unresolved only when every attempt has failed.
+		name:   "a destination that escapes the root in both spaces",
+		docs:   []string{"flat.md"},
+		from:   "index.md",
+		target: "../../outside.md",
+		want:   survey.Link{Kind: survey.LinkUnresolved},
+	}, {
+		// A destination carrying an extension gets none appended, so an `.mdx`
+		// page — a document ingest never took custody of, since the adapter's
+		// extension set is `.md` alone — stays unresolved rather than being
+		// swapped onto the `.md` file sitting right beside it. Inventing that
+		// target would hand stage 8 an edge the corpus never had.
+		name:   "an .mdx destination is not swapped onto a .md document",
+		docs:   []string{"advanced.md"},
+		from:   "index.md",
+		target: "advanced.mdx",
+		want:   survey.Link{Kind: survey.LinkUnresolved},
+	}, {
+		// A fragment is recorded whatever the path part turned out to be: the
+		// rebase stage needs it to place an exempted destination (§4.5 rule 3).
+		name:   "a fragment on an unresolved destination is still recorded",
+		docs:   []string{"flat.md"},
+		from:   "index.md",
+		target: "./gone.md#top",
+		want:   survey.Link{Kind: survey.LinkUnresolved, Fragment: "top"},
+	}, {
+		// Fragment-only: the anchor branch decides before any resolution runs,
+		// so neither address space ever sees it.
+		name:   "a fragment-only destination never reaches the resolver",
+		docs:   []string{"flat.md"},
+		from:   "index.md",
+		target: "#local",
+		want:   survey.Link{Kind: survey.LinkAnchor, Fragment: "local"},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveOne(t, tc.docs, tc.from, tc.target)
+			want := tc.want
+			want.Target = tc.target
+			if got != want {
+				t.Errorf("link = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 // TestLinkKindsExercised guards the corpus roll-up tested in internal/survey:
 // that test sums hand-built files, so the fixture corpus is where every link
 // kind has to actually occur.

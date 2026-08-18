@@ -273,6 +273,20 @@ func (s *Summarizer) Card(nodePath string) string {
 	return s.job.SummariesDir + "/" + nodePath + cardSuffix
 }
 
+// Cards is how many leaf-group cards this tree costs: one per mixed node, and
+// the whole price of the B-5 scheme (ARCHITECTURE §4 row 6). It is the run
+// record's `leafGroupCards`, on the same argument that put `taxonomyCalls`
+// there — a scheme whose cost is up to one heavy call per mixed node should
+// not leave a live run unable to say how many it paid [ARCH F8].
+//
+// Zero before the plan resolves and the enumerated count after, exactly like
+// taxonomy's: the caller reads it once the run is over.
+func (s *Summarizer) Cards() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.cards)
+}
+
 // StagePlans describes the level stages, deepest first.
 //
 // There are TWO stages per index level the depth cap allows, always: the level's

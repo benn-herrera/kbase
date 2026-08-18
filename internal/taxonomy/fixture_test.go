@@ -173,7 +173,7 @@ func designerFor(t *testing.T, lg log.Logger, budgets treeplan.Budgets, docs ...
 	t.Helper()
 	art, corpus := buildCorpus(t, docs...)
 	params := treeplan.Params{Budgets: budgets}
-	v, err := treeplan.NewVerifier(art, corpus, params)
+	v, err := treeplan.NewVerifier(art, corpus, params, log.Discard())
 	if err != nil {
 		t.Fatalf("treeplan.NewVerifier: %v", err)
 	}

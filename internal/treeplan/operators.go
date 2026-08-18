@@ -231,8 +231,8 @@ func (v *Verifier) fileLabel(file string) string {
 // # What a legal merge is
 //
 // The neighbour is the span immediately before this one in the FILE's own byte
-// order — anywhere in the tree, not merely under the same parent — and only
-// when the two touch. Two conditions, and both are load-bearing:
+// order, and only when the two touch. Two conditions, and both are
+// load-bearing:
 //
 //   - Immediate. Merging across an intervening span would swallow a third
 //     leaf's bytes, and each source byte belongs to one leaf.
@@ -247,6 +247,24 @@ func (v *Verifier) fileLabel(file string) string {
 // page keeps the title and scope of the material that dominates it — which is
 // what makes the empty "Introduction to <file>" preamble page disappear rather
 // than grow a body under a name nobody meant.
+//
+// # The parent boundary
+//
+// A touching neighbour UNDER THE SAME PARENT is preferred over a touching
+// neighbour under a different one, in both directions, and that preference
+// beats the backward-first order above [ARCH F2]. The merge is keyed on file
+// byte order, and file byte order does not respect the tree: where the descent
+// placed two adjacent top-level sections of one file under different subtopic
+// indexes — legal and unremarkable — an unscoped merge re-homes a fragment
+// under an index that never promised it, and can empty the index it left.
+//
+// A cross-parent merge is still TAKEN where it is the only legal one, because
+// refusing would make a buildable corpus unbuildable over a defect the corpus
+// does not have. It is logged at warn and counted into
+// TreePlan.CrossParentMerges (SPEC §3.3, §3.8) so the effect is measured rather
+// than invisible: no gate observes it — coverage is per-file and per-section,
+// and gate 5 compares the delivered set against the plan that already contains
+// the repair.
 //
 // Merging cascades: a neighbour that is still under the floor after absorbing a
 // fragment is itself a fragment, and is folded on the next pass.
@@ -273,9 +291,11 @@ func (v *Verifier) fileLabel(file string) string {
 // Rejection: retrying re-asks a question that was never asked wrong. It names
 // every such span at once, because an operator fixing a corpus wants the list
 // and not the first entry ten times.
-func (v *Verifier) floor(root *buildNode) error {
+func (v *Verifier) floor(root *buildNode) (int, error) {
 	byFile := map[string][]*buildNode{}
-	walk(root, 1, func(n *buildNode, _ int) {
+	parent := map[*buildNode]*buildNode{}
+	walkParent(root, 1, nil, func(n *buildNode, _ int, p *buildNode) {
+		parent[n] = p
 		if n.kind == KindLeaf && len(n.sources) == 1 {
 			byFile[n.sources[0].File] = append(byFile[n.sources[0].File], n)
 		}
@@ -283,6 +303,7 @@ func (v *Verifier) floor(root *buildNode) error {
 
 	dead := map[*buildNode]bool{}
 	var stranded []Span
+	crossed := 0
 	// The survey's own file order, so the refusal reads the same way on every
 	// run without a sort of ours.
 	for _, f := range v.art.Files {
@@ -293,22 +314,32 @@ func (v *Verifier) floor(root *buildNode) error {
 		sort.Slice(leaves, func(i, j int) bool {
 			return leaves[i].sources[0].Start < leaves[j].sources[0].Start
 		})
-		stranded = append(stranded, v.mergeFragments(leaves, dead)...)
+		s, n := v.mergeFragments(leaves, parent, dead)
+		stranded = append(stranded, s...)
+		crossed += n
 	}
 	if len(stranded) > 0 {
-		return underFloorDefect(stranded)
+		return 0, underFloorDefect(stranded)
 	}
 	prune(root, dead)
-	return nil
+	return crossed, nil
 }
 
 // mergeFragments folds one file's sub-floor leaves into their neighbours,
-// marking each absorbed node dead, and returns the spans it could not place.
+// marking each absorbed node dead. It returns the spans it could not place and
+// how many of the merges it made crossed a parent index boundary.
+//
+// The candidate order is the whole of the parent-boundary rule (see floor): a
+// touching neighbour under the same parent in either direction, and only then a
+// touching neighbour under a different one.
 //
 // Termination: every iteration removes one entry from the working list, either
 // by merging it away or by stranding it.
-func (v *Verifier) mergeFragments(leaves []*buildNode, dead map[*buildNode]bool) []Span {
+func (v *Verifier) mergeFragments(leaves []*buildNode, parent map[*buildNode]*buildNode,
+	dead map[*buildNode]bool) ([]Span, int) {
+
 	var stranded []Span
+	crossed := 0
 	for {
 		i := -1
 		for j, n := range leaves {
@@ -318,21 +349,60 @@ func (v *Verifier) mergeFragments(leaves []*buildNode, dead map[*buildNode]bool)
 			}
 		}
 		if i < 0 {
-			return stranded
+			return stranded, crossed
 		}
-		span := leaves[i].sources[0]
+		frag := leaves[i]
+		span := frag.sources[0]
+		back, fwd := -1, -1
+		if i > 0 && leaves[i-1].sources[0].End == span.Start {
+			back = i - 1
+		}
+		if i+1 < len(leaves) && leaves[i+1].sources[0].Start == span.End {
+			fwd = i + 1
+		}
+		host := -1
+		for _, c := range []int{back, fwd} {
+			if c >= 0 && parent[leaves[c]] == parent[frag] {
+				host = c
+				break
+			}
+		}
+		if host < 0 {
+			for _, c := range []int{back, fwd} {
+				if c >= 0 {
+					host = c
+					break
+				}
+			}
+			if host >= 0 {
+				crossed++
+				v.lg.Warn("content floor: a sub-floor span merged across a parent index boundary",
+					"file", span.File, "start", span.Start, "end", span.End,
+					"page", frag.title, "from", parentTitle(parent[frag]),
+					"into", leaves[host].title, "under", parentTitle(parent[leaves[host]]))
+			}
+		}
 		switch {
-		case i > 0 && leaves[i-1].sources[0].End == span.Start:
-			leaves[i-1].sources[0].End = span.End
-			dead[leaves[i]] = true
-		case i+1 < len(leaves) && leaves[i+1].sources[0].Start == span.End:
-			leaves[i+1].sources[0].Start = span.Start
-			dead[leaves[i]] = true
-		default:
+		case host < 0:
 			stranded = append(stranded, span)
+		case host < i:
+			leaves[host].sources[0].End = span.End
+			dead[frag] = true
+		default:
+			leaves[host].sources[0].Start = span.Start
+			dead[frag] = true
 		}
 		leaves = append(leaves[:i], leaves[i+1:]...)
 	}
+}
+
+// parentTitle names a node's parent for the warn above, and says so when there
+// is none rather than logging an empty string.
+func parentTitle(n *buildNode) string {
+	if n == nil {
+		return "(the entry-point)"
+	}
+	return n.title
 }
 
 // underFloor reports whether a span holds less material than a delivered page

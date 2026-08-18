@@ -100,7 +100,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}
 	params := treeplan.DefaultParams()
-	v, err := treeplan.NewVerifier(art, corpus, params)
+	v, err := treeplan.NewVerifier(art, corpus, params, log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

@@ -574,6 +574,283 @@ func interrupt(t *testing.T, out string) {
 	}
 }
 
+// tryBuild runs the verb over a corpus for the cases where the error IS the
+// result. Everything but the corpus, the output directory and the title is the
+// same as build's.
+func tryBuild(t *testing.T, root, out, title string) error {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	_, err := runBuild(context.Background(), buildOptions{
+		Root: root, Out: out, Title: title, BuildDate: pinnedBuildDate, KeepTempWork: true,
+		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
+	})
+	return err
+}
+
+// priorManifest is the delivery manifest the last run of this --out left at the
+// temp-work root — read through the same function the next run reads it with.
+func priorManifest(t *testing.T, out string) *deliveryManifest {
+	t.Helper()
+	m, err := readDeliveryManifest(filepath.Join(out, pipeline.TempWorkDirName))
+	if err != nil {
+		t.Fatalf("read %s: %v", deliveryManifestName, err)
+	}
+	if m == nil {
+		t.Fatalf("a delivered run left no %s at the temp-work root", deliveryManifestName)
+	}
+	return m
+}
+
+// plantPriorPage fabricates a page a PREVIOUS plan delivered: the file under
+// <out>, and the manifest entry claiming it — which is what a run whose plan
+// has since changed leaves behind, and the only thing that licenses deleting a
+// file kbase did not just write.
+func plantPriorPage(t *testing.T, out, rel string) {
+	t.Helper()
+	dst := filepath.Join(out, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, []byte("# A page of the plan before this one\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	m := priorManifest(t, out)
+	if err := writeDeliveryManifest(filepath.Join(out, pipeline.TempWorkDirName),
+		append(m.Paths, rel)); err != nil {
+		t.Fatalf("rewrite %s: %v", deliveryManifestName, err)
+	}
+}
+
+// plantUserFile writes a file kbase never delivered and never claimed.
+func plantUserFile(t *testing.T, out, rel string) string {
+	t.Helper()
+	const body = "notes of my own\n"
+	dst := filepath.Join(out, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	return body
+}
+
+// The kill window between the last delivered byte and the run record [GO H-2].
+//
+// The record is what tells a later run that this --out belongs to a build that
+// finished (§3.1), and it is written after the delivery — so a kill in between,
+// or any error from the reads that sit there, leaves a COMPLETE knowledge base
+// that reads as an interrupted job forever after. Every subsequent build would
+// then silently overwrite it, the populated---out refusal never firing again.
+//
+// What closes it is the delivery manifest: this run finds the previous one's
+// list, verifies every path on it byte for byte against the artifact it just
+// proved, and concludes the delivery happened. It writes the record and stops
+// — no copy, and afterwards the refusal is armed again.
+func TestBuildCompletesADeliveryWhoseRecordWasLost(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	first, _, _ := build(t, root, out, true)
+
+	// The manifest is temp-work, like the record beside it: named in §3.9's
+	// inventory, never delivered.
+	if len(priorManifest(t, out).Paths) != len(first.Delivered) {
+		t.Errorf("the manifest names %d paths, the run delivered %d",
+			len(priorManifest(t, out).Paths), len(first.Delivered))
+	}
+	if _, err := os.Stat(filepath.Join(out, deliveryManifestName)); !os.IsNotExist(err) {
+		t.Errorf("%s was delivered; it is temp-work, not a knowledge base file", deliveryManifestName)
+	}
+
+	entry := filepath.Join(out, "entry-point.md")
+	before, err := os.Stat(entry)
+	if err != nil {
+		t.Fatalf("stat the delivered entry point: %v", err)
+	}
+	interrupt(t, out)
+
+	res, _, _ := build(t, root, out, true)
+	if len(res.Delivered) != len(first.Delivered) {
+		t.Errorf("the completing run reports %d delivered files, the first run delivered %d",
+			len(res.Delivered), len(first.Delivered))
+	}
+	after, err := os.Stat(entry)
+	if err != nil {
+		t.Fatalf("stat the entry point after the completing run: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("%s was rewritten; the delivery was already complete and there was nothing to copy", entry)
+	}
+	if _, err := os.Stat(recordPath(out)); err != nil {
+		t.Errorf("the completing run wrote no run record, so the window is still open: %v", err)
+	}
+
+	// The consequence that made this a defect rather than an inefficiency: the
+	// refusal has to be armed again afterwards.
+	err = tryBuild(t, root, out, "")
+	if err == nil {
+		t.Fatal("a third run delivered into the finished directory; the B-7 refusal never came back")
+	}
+	if !strings.Contains(err.Error(), "rerun, not the resume") {
+		t.Errorf("the refusal does not diagnose a finished build: %v", err)
+	}
+}
+
+// The surgical sweep [ARCH F-1]: a resumed run whose plan changed delivers only
+// what the new plan names, so the old plan's pages would otherwise stand in the
+// delivered tree beside the new ones — all ten gates green over a tree nobody
+// delivered.
+//
+// What may be deleted is decided by the previous run's own manifest and by
+// nothing else. That is the whole safety argument, and the second case is its
+// proof: a file kbase never wrote is not on any list kbase ever made.
+func TestBuildSweepsOnlyThePriorDeliverysOwnPaths(t *testing.T) {
+	const orphan = "gone-domain/old-page.md"
+
+	t.Run("the prior plan's page goes", func(t *testing.T) {
+		root := writeCorpus(t)
+		out := filepath.Join(t.TempDir(), "kb")
+		build(t, root, out, true)
+		plantPriorPage(t, out, orphan)
+		interrupt(t, out)
+
+		// A changed title is a changed plan: it is stamped into the parameter
+		// digest, so the tree plan and everything under it are re-derived.
+		if err := tryBuild(t, root, out, "The Second Manual"); err != nil {
+			t.Fatalf("the resumed run refused: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(orphan))); !os.IsNotExist(err) {
+			t.Errorf("%s survived a resume under a plan that does not name it (err %v)", orphan, err)
+		}
+		// The directory it was alone in went with it, and the delivered tree
+		// stands — the postcondition inside the run already proved the second
+		// half, and this states it where a reader can see it.
+		if _, err := os.Stat(filepath.Join(out, "gone-domain")); !os.IsNotExist(err) {
+			t.Errorf("the swept page left its directory behind (err %v)", err)
+		}
+		if head := entryHeading(t, out); head != "# "+kbTitlePrefix+"The Second Manual" {
+			t.Errorf("the resumed run delivered %q", head)
+		}
+	})
+
+	t.Run("a file kbase never delivered stays", func(t *testing.T) {
+		root := writeCorpus(t)
+		out := filepath.Join(t.TempDir(), "kb")
+		build(t, root, out, true)
+		plantPriorPage(t, out, orphan)
+		body := plantUserFile(t, out, "notes.md")
+		interrupt(t, out)
+
+		// The run refuses: a delivered tree holding a file no plan names is
+		// exactly what the postcondition exists to catch. What it must NOT do
+		// is make the tree match by deleting someone else's file.
+		if err := tryBuild(t, root, out, "The Second Manual"); err == nil {
+			t.Fatal("the run delivered a tree holding a file no plan names")
+		}
+		got, err := os.ReadFile(filepath.Join(out, "notes.md"))
+		if err != nil || string(got) != body {
+			t.Errorf("the sweep took a file kbase never delivered (%q, err %v)", got, err)
+		}
+		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(orphan))); !os.IsNotExist(err) {
+			t.Errorf("the sweep spared the prior plan's own page (err %v)", err)
+		}
+	})
+}
+
+// Delivery's postcondition: <out> minus temp-work IS the delivered set (§3.1).
+//
+// The ten guarantees run store-side, before a byte moves, and cannot see <out>
+// at all — so the delivery step proves its own work. This plants the stray
+// AFTER everything else was delivered correctly, which is also the path where
+// the check is easiest to skip: the delivery is already complete, nothing is
+// copied, and the run's only remaining job is the record.
+func TestBuildDeliveryProvesWhatItDelivered(t *testing.T) {
+	root := writeCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb")
+	build(t, root, out, true)
+
+	entry := filepath.Join(out, "entry-point.md")
+	before, err := os.Stat(entry)
+	if err != nil {
+		t.Fatalf("stat the delivered entry point: %v", err)
+	}
+	plantUserFile(t, out, "stray.md")
+	interrupt(t, out)
+
+	err = tryBuild(t, root, out, "")
+	if err == nil {
+		t.Fatal("the run reported a delivered tree that holds a file it did not deliver")
+	}
+	for _, want := range []string{"stray.md", "no delivered path names"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	after, err := os.Stat(entry)
+	if err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("the run rewrote the delivered tree before refusing (err %v)", err)
+	}
+}
+
+// `mkdir <out>/temp-work` was a one-command disarming of the populated---out
+// refusal [GO H-3]: the exception is for an interrupted build, and an empty
+// directory anyone can create was enough to claim to be one.
+//
+// The predicate now asks whether the residue is a job frame this binary would
+// have written — a lock, a delivery manifest, or a stamped artifact. The
+// resumes that must keep working are pinned next door
+// (TestBuildResumesAnInterruptedJob, TestBuildCompletesADeliveryWhoseRecordWasLost).
+func TestBuildRefusesTempWorkThatIsNoJobFrame(t *testing.T) {
+	root := writeCorpus(t)
+	tests := []struct {
+		name    string
+		forge   func(t *testing.T, work string)
+		wantErr bool
+	}{
+		{name: "an empty temp-work", forge: func(*testing.T, string) {}, wantErr: true},
+		{
+			name: "temp-work holding something kbase did not write",
+			forge: func(t *testing.T, work string) {
+				if err := os.WriteFile(filepath.Join(work, "scratch.txt"), []byte("mine\n"), 0o600); err != nil {
+					t.Fatalf("write the file: %v", err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "temp-work holding a stamped artifact",
+			forge: func(t *testing.T, work string) {
+				if err := os.WriteFile(filepath.Join(work, "survey.json"+pipeline.StampSuffix),
+					[]byte("{}\n"), 0o600); err != nil {
+					t.Fatalf("write the stamp: %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := t.TempDir()
+			body := plantUserFile(t, out, "notes.md")
+			work := filepath.Join(out, pipeline.TempWorkDirName)
+			if err := os.Mkdir(work, 0o700); err != nil {
+				t.Fatalf("forge the temp-work directory: %v", err)
+			}
+			tt.forge(t, work)
+
+			err := tryBuild(t, root, out, "")
+			if err == nil {
+				t.Fatal("the verb delivered over a directory holding someone else's file")
+			}
+			if got := strings.Contains(err.Error(), "no job frame"); got != tt.wantErr {
+				t.Errorf("refusal names a missing job frame = %t, want %t: %v", got, tt.wantErr, err)
+			}
+			if got, rerr := os.ReadFile(filepath.Join(out, "notes.md")); rerr != nil || string(got) != body {
+				t.Errorf("the refused run touched the operator's file (%q, err %v)", got, rerr)
+			}
+		})
+	}
+}
+
 // The exemption is measured, never silent.
 //
 // §4.5 rule 3 tells the build to deliver an unresolvable destination exactly

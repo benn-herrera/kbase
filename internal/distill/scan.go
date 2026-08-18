@@ -68,12 +68,14 @@ func Destinations(src []byte) []Destination {
 // unfenced calls fn with every line of s that sits OUTSIDE a fenced code
 // block, and the offset that line starts at.
 //
-// It is the fence walk itself, factored out because two questions are asked of
-// delivered bytes and both mean "outside a fence": which destinations a page
-// links to, and how many up-links it carries (UpLinkCount). A second walk
-// would be a second answer to "is this line source content or page grammar",
-// which is the disagreement that let a fenced `[↑ ` line in a verbatim leaf
-// refuse a whole delivery [MAD2: B-11].
+// It is the fence walk itself, factored out so that "is this line inside a
+// fence" has one implementation: a destination-shaped run of bytes inside a
+// fence is source content a leaf must reproduce verbatim (I-3), not a link
+// anybody can follow, and a second walk would be a second answer to that
+// question. Page GRAMMAR is not asked here at all — the navigation block is
+// positional and stops before the first source byte (distill.NavBlock), which
+// is the scoping that keeps a `[↑ ` line in a verbatim leaf from refusing a
+// whole delivery [MAD2: B-11].
 func unfenced(s string, fn func(at int, line string)) {
 	fenced := false
 	for _, ln := range lines(s) {

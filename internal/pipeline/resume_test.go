@@ -198,23 +198,24 @@ func TestScanStopsAtAnUnstampedArtifact(t *testing.T) {
 	}
 }
 
-// TestScanFreshIgnoresTheStore: a complete, provable store still rebuilds
-// from the first stage. Resume is an optimization; --fresh is the button that
-// never has to be argued with.
-func TestScanFreshIgnoresTheStore(t *testing.T) {
+// TestScanFreshReadsTheStoreItWasPointedAt: what makes --fresh rebuild
+// everything is the DISCARD its caller ran first (Coordinator.Run), not a scan
+// that declines to look. So a fresh scan over a store nobody emptied reports
+// exactly what is there — the measurement that makes a run's "0 reused" mean
+// the directory was empty.
+//
+// This test is deliberately the un-discarded half: the discarded half, where
+// the same walk reports nothing reused, is TestFreshsReusedCountMeasuresTheDiscard
+// in fresh_test.go, and the two together are what fails when the discard goes.
+func TestScanFreshReadsTheStoreItWasPointedAt(t *testing.T) {
 	s, lg := newArtifactStore(t)
 	chain := testChain()
 	build(t, s, chain, relSurvey, relTreePlan, relLeafA, relLeafB)
 
 	res := scan(t, s, chain, ModeFresh)
-	if res.ResumeStage != 0 || res.StageName != "survey" {
-		t.Fatalf("resume at stage %d (%q), want the first stage", res.ResumeStage, res.StageName)
-	}
-	if res.Reused != 0 || res.Redo != 1 {
-		t.Errorf("reused %d redo %d, want 0 and 1", res.Reused, res.Redo)
-	}
-	if res.Verdicts[0].Verdict != VerdictAbsent {
-		t.Errorf("verdict %s, want %s", res.Verdicts[0].Verdict, VerdictAbsent)
+	if !res.Complete() || res.Reused != 4 || res.Redo != 0 {
+		t.Errorf("a fresh scan over a store nobody discarded reported %d reused and %d to redo, "+
+			"want the four units that are sitting there: %+v", res.Reused, res.Redo, res)
 	}
 	if !lg.Has(t, "info", "mode", ModeFresh) {
 		t.Error("a fresh run did not say so in the log")

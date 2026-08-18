@@ -107,7 +107,7 @@ func TestTreePlanOverRealCorpus(t *testing.T) {
 
 func treePlanOverCorpus(t *testing.T, c pinnedCorpus) {
 	art, corpus := realArtifact(t, c)
-	v, err := NewVerifier(art, corpus, DefaultParams())
+	v, err := NewVerifier(art, corpus, DefaultParams(), log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -206,7 +206,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, plan TreeP
 	t.Helper()
 	p := DefaultParams()
 	p.Budgets.LeafTokens = leafTokens
-	v, err := NewVerifier(art, corpus, p)
+	v, err := NewVerifier(art, corpus, p, log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier at leafTokens=%d: %v", leafTokens, err)
 	}
@@ -263,7 +263,7 @@ func evidenceOverCorpus(t *testing.T, c pinnedCorpus) {
 	art, corpus := realArtifact(t, c)
 	plan := planByFile(t, art, c)
 
-	v, err := NewVerifier(art, corpus, DefaultParams())
+	v, err := NewVerifier(art, corpus, DefaultParams(), log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

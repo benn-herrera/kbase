@@ -117,23 +117,37 @@ func TestNavBlockStopsAtTheBody(t *testing.T) {
 	}
 }
 
-// The up-link COUNT is page grammar, so it stops at a fence: a leaf's body is
-// verbatim source and a corpus that documents this grammar — a KB of a KB —
-// shows an up-link inside a code fence. Counting that one would refuse the
-// whole delivery at guarantee 2 with no remedy, since §4.2 forbids editing a
-// leaf body [MAD2: B-11].
-func TestUpLinkCountSkipsFences(t *testing.T) {
-	page := "---\nLocation: guide/sync.md\n---\n\n" +
+// The up-link COUNT guarantee 2 takes is the block's, so a body carrying
+// up-link lines of its own — fenced or not — contributes none of them. A leaf's
+// body is verbatim source and a corpus that documents this grammar (a KB of a
+// KB) shows up-link lines both ways; counting either would refuse the whole
+// delivery with no remedy, since §4.2 forbids editing a leaf body
+// [MAD2: B-11, ARCH F3].
+func TestNavBlockCountsOnlyItsOwnUpLink(t *testing.T) {
+	page := Frontmatter("guide/sync.md") + "\n\n" +
 		UpLink("guide/sync.md", "guide/index.md") + "\n\n" +
 		"# Sync\n\nEvery page opens with its up-link:\n\n" +
-		"```\n" + UpLink("a/b.md", "a/index.md") + "\n" + UpLink("c/d.md", "c/index.md") + "\n```\n\n" +
-		"~~~markdown\n" + UpLink("e/f.md", "e/index.md") + "\n~~~\n"
+		UpLink("a/b.md", "a/index.md") + "\n\n" +
+		"```\n" + UpLink("c/d.md", "c/index.md") + "\n```\n"
 
-	if got := UpLinkCount([]byte(page)); got != 1 {
-		t.Fatalf("UpLinkCount = %d, want 1: three of the four up-link lines are fenced source", got)
+	_, body, ok := ParseFrontmatter([]byte(page))
+	if !ok {
+		t.Fatal("the fixture page does not open with a frontmatter block")
 	}
-	if got := UpLinkCount([]byte("no links here\n")); got != 0 {
-		t.Errorf("UpLinkCount = %d over a page with none", got)
+	var ups []NavLink
+	for _, l := range NavBlock(body) {
+		if l.Marker == UpMarker {
+			ups = append(ups, l)
+		}
+	}
+	if len(ups) != 1 {
+		t.Fatalf("the block holds %d up-links, want the one above the body: %+v", len(ups), ups)
+	}
+	if ups[0].Label != "guide/index.md" {
+		t.Errorf("the block's up-link names %q, want the page's own parent", ups[0].Label)
+	}
+	if got := NavBlock([]string{"", "# Sync", "", UpLink("a/b.md", "a/index.md")}); len(got) != 0 {
+		t.Errorf("NavBlock read %d links off a page whose body opens with a heading", len(got))
 	}
 }
 
@@ -358,8 +372,14 @@ func TestLeafContinuationLinks(t *testing.T) {
 			}
 			// One up-link, whatever the continuation edges are: guarantee 2's
 			// count is about the up-link and nothing else.
-			if c := UpLinkCount(page); c != 1 {
-				t.Errorf("the page carries %d up-links, want exactly one", c)
+			c := 0
+			for _, l := range NavBlock(body) {
+				if l.Marker == UpMarker {
+					c++
+				}
+			}
+			if c != 1 {
+				t.Errorf("the navigation block holds %d up-links, want exactly one", c)
 			}
 		})
 	}

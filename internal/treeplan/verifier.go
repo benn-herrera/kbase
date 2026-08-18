@@ -7,6 +7,7 @@ import (
 
 	"kbase/internal/dissect"
 	"kbase/internal/ingest"
+	"kbase/internal/log"
 	"kbase/internal/survey"
 )
 
@@ -24,6 +25,7 @@ type Verifier struct {
 	art    survey.Artifact
 	corpus ingest.Corpus
 	p      Params
+	lg     log.Logger
 
 	// files indexes art.Files by path. It is a lookup table built once, never
 	// marshalled and never iterated — the artifact's own ordering is the one
@@ -38,7 +40,12 @@ type Verifier struct {
 // bytes; a survey taken over a different state of the corpus would produce
 // offsets that index the wrong material, and every check below would pass over
 // it.
-func NewVerifier(art survey.Artifact, corpus ingest.Corpus, p Params) (*Verifier, error) {
+//
+// lg is here because composition has one event a run must be able to see
+// afterwards and no artifact field can carry on its own: a content-floor merge
+// that crossed a parent index boundary (see floor). A caller with nothing to
+// hand it passes log.Discard().
+func NewVerifier(art survey.Artifact, corpus ingest.Corpus, p Params, lg log.Logger) (*Verifier, error) {
 	if err := p.Budgets.Validate(); err != nil {
 		return nil, err
 	}
@@ -50,7 +57,10 @@ func NewVerifier(art survey.Artifact, corpus ingest.Corpus, p Params) (*Verifier
 		return nil, fmt.Errorf("treeplan: the survey describes corpus %s and custody holds %s",
 			art.Corpus.ContentHash, corpus.ContentHash)
 	}
-	v := &Verifier{art: art, corpus: corpus, p: p, files: make(map[string]int, len(art.Files))}
+	if lg == nil {
+		return nil, fmt.Errorf("treeplan: a verifier needs a logger; pass log.Discard() to silence it")
+	}
+	v := &Verifier{art: art, corpus: corpus, p: p, lg: lg, files: make(map[string]int, len(art.Files))}
 	for i, f := range art.Files {
 		v.files[f.Path] = i
 	}
@@ -134,7 +144,8 @@ func (v *Verifier) Compose(p TreeProposal, annexes []Annex) (TreePlan, error) {
 
 	collapse(root, v.p.Budgets.DepthCap)
 	v.dissolve(root)
-	if err := v.floor(root); err != nil {
+	crossed, err := v.floor(root)
+	if err != nil {
 		return TreePlan{}, err
 	}
 	groups, err := v.expand(root)
@@ -149,11 +160,12 @@ func (v *Verifier) Compose(p TreeProposal, annexes []Annex) (TreePlan, error) {
 	}
 
 	s := TreePlan{
-		Schema:     SchemaVersion,
-		CorpusHash: v.art.Corpus.ContentHash,
-		Budgets:    v.p.Budgets,
-		Nodes:      v.name(root),
-		Groups:     groups,
+		Schema:            SchemaVersion,
+		CorpusHash:        v.art.Corpus.ContentHash,
+		Budgets:           v.p.Budgets,
+		Nodes:             v.name(root),
+		Groups:            groups,
+		CrossParentMerges: crossed,
 	}
 	if len(annexes) > 0 {
 		s.Annexes = make([]Annex, 0, len(annexes))

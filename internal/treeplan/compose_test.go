@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"kbase/internal/dissect"
+	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 	"kbase/internal/survey"
 )
 
@@ -186,6 +188,138 @@ func TestComposeKeepsAFileWholeSoleSpanAsALeaf(t *testing.T) {
 		}
 	}
 	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// splitParentDoc is one file whose three sections the tests below hand to two
+// DIFFERENT parent indexes — legal and unremarkable, and the shape the floor's
+// parent boundary is about [ARCH F2]. The middle section is the fragment.
+func splitParentDoc() docSpec {
+	return docSpec{path: "guide.md", title: "Guide", secs: []secSpec{
+		{title: "One", paras: 2, words: 35},
+		{title: "Two", paras: 1, words: 4},
+		{title: "Three", paras: 2, words: 35},
+	}}
+}
+
+// The parent boundary, preference half: a touching neighbour under the SAME
+// parent wins over a touching neighbour under a different one, even where the
+// cross-parent one is the backward neighbour the unscoped rule took first.
+//
+// Byte adjacency is equal on both sides here — the file's sections tile — so
+// the only thing choosing between them is the parent, which is the whole point:
+// merging backward would re-home the fragment under an index that never
+// promised it.
+func TestComposePrefersASameParentNeighbourOverACrossParentOne(t *testing.T) {
+	doc := splitParentDoc()
+	lg := &logtest.Capture{}
+	art, corpus := buildCorpus(t, doc)
+	v, err := NewVerifier(art, corpus, testParams(), lg)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	// One under A; the fragment and Three under B. Backward is cross-parent,
+	// forward is same-parent.
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
+		indexNode("Domain A", leafFor(art, "guide.md", 0, "Page One")),
+		indexNode("Domain B",
+			leafFor(art, "guide.md", 1, "Page Two"),
+			leafFor(art, "guide.md", 2, "Page Three")),
+	}}
+
+	s, err := v.Compose(plan, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if n := leafCount(s); n != 2 {
+		t.Fatalf("leaves = %d, want 2: the fragment is absorbed, not delivered; paths are %q", n, paths(s))
+	}
+	if _, ok := s.Node("domain-b/page-two.md"); ok {
+		t.Errorf("the sub-floor span was delivered as a page of its own")
+	}
+	f := fileOf(art, "guide.md")
+	// The fragment went FORWARD, into its own parent's page.
+	host := groupOf(t, s, "domain-b/page-three.md")
+	if want := (Span{File: "guide.md", Start: f.Sections[1].Start, End: f.Sections[2].End}); host.Source != want {
+		t.Errorf("the same-parent host spans %+v, want the fragment's bytes and its own %+v", host.Source, want)
+	}
+	// And the cross-parent neighbour was left exactly as planned, which is what
+	// the backward-first rule would have broken.
+	across := groupOf(t, s, "domain-a/page-one.md")
+	if want := (Span{File: "guide.md", Start: f.Sections[0].Start, End: f.Sections[0].End}); across.Source != want {
+		t.Errorf("the page under the other parent spans %+v, want its own section %+v", across.Source, want)
+	}
+	if s.CrossParentMerges != 0 {
+		t.Errorf("crossParentMerges = %d over a merge that stayed under one parent", s.CrossParentMerges)
+	}
+	if n := lg.Count("warn", "file", "guide.md"); n != 0 {
+		t.Errorf("%d cross-parent warnings for a merge that crossed nothing", n)
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// The parent boundary, fallback half: where the ONLY touching neighbours sit
+// under another parent the merge is taken anyway — refusing would make a
+// buildable corpus unbuildable — and it is warned and counted, because no gate
+// can see it afterwards. The index the fragment was the sole child of is then
+// pruned, which is the other half of the same event.
+func TestComposeMergesAcrossParentsAsALastResortAndCountsIt(t *testing.T) {
+	doc := splitParentDoc()
+	lg := &logtest.Capture{}
+	art, corpus := buildCorpus(t, doc)
+	v, err := NewVerifier(art, corpus, testParams(), lg)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	// The fragment is alone under B; both its touching neighbours are under A.
+	plan := TreeProposal{Title: "Corpus", Scope: "all", Children: []ProposalNode{
+		indexNode("Domain A",
+			leafFor(art, "guide.md", 0, "Page One"),
+			leafFor(art, "guide.md", 2, "Page Three")),
+		indexNode("Domain B", leafFor(art, "guide.md", 1, "Page Two")),
+	}}
+
+	s, err := v.Compose(plan, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if s.CrossParentMerges != 1 {
+		t.Errorf("crossParentMerges = %d, want the one merge that crossed a parent", s.CrossParentMerges)
+	}
+	if !lg.Has(t, "warn", "file", "guide.md") {
+		t.Errorf("the cross-parent merge was not warned; records are %+v", lg.Snapshot())
+	}
+	// The backward neighbour absorbed it, as the unscoped order always did:
+	// with no same-parent candidate the direction rule decides again.
+	f := fileOf(art, "guide.md")
+	host := groupOf(t, s, "domain-a/page-one.md")
+	if want := (Span{File: "guide.md", Start: f.Sections[0].Start, End: f.Sections[1].End}); host.Source != want {
+		t.Errorf("the host spans %+v, want the fragment's bytes and its own %+v", host.Source, want)
+	}
+	// The prune: an index whose every child was absorbed under some other
+	// parent routes nowhere and is removed, with its scope line.
+	for _, p := range paths(s) {
+		if strings.HasPrefix(p, "domain-b/") {
+			t.Errorf("%s survived; the index the fragment was the sole child of holds nothing", p)
+		}
+	}
+	if n := leafCount(s); n != 2 {
+		t.Fatalf("leaves = %d, want 2; paths are %q", n, paths(s))
+	}
+	assertGroupsMatchTheSplitter(t, v, s)
+}
+
+// groupOf is the split group one delivered node draws from.
+func groupOf(t *testing.T, s TreePlan, nodePath string) SplitGroup {
+	t.Helper()
+	n, ok := s.Node(nodePath)
+	if !ok {
+		t.Fatalf("%s was not delivered; paths are %q", nodePath, paths(s))
+	}
+	g, ok := s.SplitGroup(n.SplitGroup)
+	if !ok {
+		t.Fatalf("%s names group %q, which the artifact does not hold", nodePath, n.SplitGroup)
+	}
+	return g
 }
 
 // A span with a neighbour it does not TOUCH is not mergeable: closing the gap
@@ -696,15 +830,15 @@ func TestNewVerifierRefusesMismatchedInputs(t *testing.T) {
 	art, corpus := buildCorpus(t, smallDoc("guide.md", "Guide"))
 	other, _ := buildCorpus(t, smallDoc("elsewhere.md", "Elsewhere"))
 
-	if _, err := NewVerifier(other, corpus, testParams()); err == nil {
+	if _, err := NewVerifier(other, corpus, testParams(), log.Discard()); err == nil {
 		t.Error("a survey of a different corpus was accepted")
 	}
-	if _, err := NewVerifier(art, corpus, Params{}); err == nil {
+	if _, err := NewVerifier(art, corpus, Params{}, log.Discard()); err == nil {
 		t.Error("a zero budget set was accepted; every cap would then pass")
 	}
 	bad := testParams()
 	bad.Budgets.LeafTokens = bad.Budgets.SummaryInputTokens + 1
-	if _, err := NewVerifier(art, corpus, bad); err == nil {
+	if _, err := NewVerifier(art, corpus, bad, log.Discard()); err == nil {
 		t.Error("a leaf budget no summary call could read was accepted")
 	}
 }

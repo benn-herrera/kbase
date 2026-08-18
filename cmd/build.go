@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -75,6 +77,26 @@ const (
 	// --keep-temp-work keeps no record, because §12's teardown takes it with
 	// the rest of temp-work.
 	buildRecordName = "run.json"
+
+	// deliveryManifestName is the run's own testimony about the delivery it is
+	// making: the exact set of paths it is about to write under `--out`,
+	// written at the temp-work root BEFORE the first delivered byte.
+	//
+	// It is a temp-work file like any other (§12's two path classes): the
+	// store's own teardown and keep rules govern it, and it is never
+	// delivered. What it buys is that a later run can tell the three states of
+	// an interrupted delivery apart without guessing — finished but unrecorded,
+	// half-copied, or copied under a plan this run no longer computes — and
+	// that the only files it may delete inside `--out` are ones a previous
+	// kbase run named in writing.
+	deliveryManifestName = "delivery.json"
+
+	// deliveryManifestSchema is that file's format version, read back and
+	// checked for the reason the stamp sidecar carries one (pipeline.Stamp): a
+	// development tree keeps one app version across many edits, and an older
+	// shape would decode into the current struct with zeroed fields — here, an
+	// empty path list, which reads as "the previous run delivered nothing".
+	deliveryManifestSchema = 1
 
 	// The store layout — §10's plan table, which is the composing verb's to
 	// declare. Every stage below writes at one of these prefixes and every
@@ -270,7 +292,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 	// invalidate a guarantee the pipeline states elsewhere.
 	params := treeplan.DefaultParams()
 	params.Est = est
-	verifier, err := treeplan.NewVerifier(art, corpus, params)
+	verifier, err := treeplan.NewVerifier(art, corpus, params, lg)
 	if err != nil {
 		return buildResult{}, err
 	}
@@ -341,8 +363,18 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		return buildResult{}, err
 	}
 	store := work.ArtifactStore()
+	// The previous attempt's delivery manifest, read HERE — before the
+	// coordinator runs, because `--fresh` discards the job directory and this
+	// is the one thing in it the delivery below still needs. Reading it early
+	// costs nothing and makes the two modes deliver identically: whatever a
+	// prior run wrote into `--out`, this run knows the list.
+	prior, err := readDeliveryManifest(work.Root())
+	if err != nil {
+		return buildResult{}, err
+	}
 	job := &buildJob{
-		opts: opts, out: out, corpus: corpus, art: art, params: params,
+		opts: opts, out: out, work: work.Root(), prior: prior,
+		corpus: corpus, art: art, params: params,
 		verifier: verifier, prov: prov, est: est, store: store, lg: lg,
 		annexes: annexes, title: title, live: opts.Live != nil,
 		inputs: []pipeline.Input{
@@ -409,31 +441,33 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		return buildResult{}, err
 	}
 	record := buildRun{
-		Version:     version.Current,
-		Corpus:      root,
-		Title:       title,
-		CorpusHash:  art.Corpus.ContentHash,
-		BuildDate:   buildDate,
-		TreePlan:    treePlanSource(job.live),
-		Annexes:     annexPrefixList(annexes),
-		Budgets:     plan.Budgets,
-		Files:       art.Corpus.Files,
-		Sections:    art.Corpus.Sections,
-		Excluded:    len(corpus.Excluded),
-		Exclusions:  corpus.Excluded,
-		Links:       art.Corpus.Links,
-		Nodes:       len(plan.Nodes),
-		Leaves:      report.Leaves,
-		Indexes:     report.Indexes,
-		Groups:      len(plan.Groups),
-		SplitGroups: splitGroupCount(plan),
-		Summaries:   summaries,
-		Delivered:   len(delivered),
-		Units:       res.Units,
-		Produced:    res.Produced,
-		Reused:      res.Reused,
-		ElapsedMS:   elapsed.Milliseconds(),
-		Verify:      report.Checks,
+		Version:              version.Current,
+		Corpus:               root,
+		Title:                title,
+		CorpusHash:           art.Corpus.ContentHash,
+		BuildDate:            buildDate,
+		TreePlan:             treePlanSource(job.live),
+		Annexes:              annexPrefixList(annexes),
+		Budgets:              plan.Budgets,
+		Files:                art.Corpus.Files,
+		Sections:             art.Corpus.Sections,
+		Excluded:             len(corpus.Excluded),
+		Exclusions:           corpus.Excluded,
+		Links:                art.Corpus.Links,
+		Nodes:                len(plan.Nodes),
+		Leaves:               report.Leaves,
+		Indexes:              report.Indexes,
+		Groups:               len(plan.Groups),
+		SplitGroups:          splitGroupCount(plan),
+		CrossParentMerges:    plan.CrossParentMerges,
+		ExemptedDestinations: report.ExemptedDestinations,
+		Summaries:            summaries,
+		Delivered:            len(delivered),
+		Units:                res.Units,
+		Produced:             res.Produced,
+		Reused:               res.Reused,
+		ElapsedMS:            elapsed.Milliseconds(),
+		Verify:               report.Checks,
 	}
 	if job.live {
 		// Only a live run has a model, a tier and a token bill; a mechanical
@@ -446,6 +480,7 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 		live.BoundariesMoved = job.refined.Moved
 		live.BoundariesFellBack = job.refined.Fallbacks
 		live.BoundaryRejections = job.refined.Rejections
+		live.LeafGroupCards = job.summarizer.Cards()
 		live.CallsSkipped = res.Skipped
 		live.PromptTokens = res.Usage.PromptTokens
 		live.CachedTokens = res.Usage.CachedPromptTokens
@@ -479,8 +514,19 @@ func runBuild(ctx context.Context, opts buildOptions) (buildResult, error) {
 // value, so a stage description is a method rather than a closure over a dozen
 // locals.
 type buildJob struct {
-	opts     buildOptions
-	out      string
+	opts buildOptions
+	out  string
+
+	// work is the temp-work root: where the run record and the delivery
+	// manifest live, both of them beside the store rather than inside `--out`.
+	work string
+
+	// prior is the delivery manifest a previous attempt at this `--out` left
+	// behind, or nil where there is none. It is the ONLY authority for
+	// deleting anything under `--out`: a path this run did not deliver is
+	// removed exactly when a previous kbase run wrote it down as its own.
+	prior *deliveryManifest
+
 	corpus   ingest.Corpus
 	art      survey.Artifact
 	params   treeplan.Params
@@ -1071,48 +1117,346 @@ func checkOutIsClear(out string) error {
 // The predicate is the temp-work tree's, never the delivered files': temp-work
 // survives exactly the runs that did NOT finish (a successful run tears it
 // down, §3.1), and the run record inside it is written only once a delivery has
-// completed (§3.8). So "temp-work/ present and no run record in it" is
-// precisely "an interrupted build left this here" — which is the state §5's
+// completed (§3.8). So "a job frame kbase wrote, and no run record beside it"
+// is precisely "an interrupted build left this here" — which is the state §5's
 // resume reads, and the only state whose delivered residue belongs to this run.
 //
 // A `--keep-temp-work` run that SUCCEEDED leaves both, and that is a rerun and
 // not a resume: it refuses like any other. Only a definitive absence counts as
 // resume state, so a temp-work tree kbase cannot read refuses rather than
 // licensing an overwrite.
+//
+// The FRAME half is why the directory's mere existence is not the predicate.
+// `mkdir <out>/temp-work` would otherwise be a one-command disarming of the
+// refusal — an empty directory anyone can create, licensing an overwrite of a
+// delivered knowledge base [GO H-3]. So the residue has to look like a job this
+// binary left: a lock, a delivery manifest, or a stamped artifact.
 func interruptedJob(out string) (bool, string) {
 	work := filepath.Join(out, pipeline.TempWorkDirName)
 	if _, err := os.Stat(work); err != nil {
 		return false, fmt.Sprintf("there is no %s/ here, so no interrupted build owns them",
 			pipeline.TempWorkDirName)
 	}
-	if _, err := os.Stat(filepath.Join(work, buildRecordName)); errors.Is(err, os.ErrNotExist) {
-		return true, ""
+	if _, err := os.Stat(filepath.Join(work, buildRecordName)); !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Sprintf("the %s/ here holds %s, so the build that wrote these finished — "+
+			"this is a rerun, not the resume of an interrupted one",
+			pipeline.TempWorkDirName, buildRecordName)
 	}
-	return false, fmt.Sprintf("the %s/ here holds %s, so the build that wrote these finished — "+
-		"this is a rerun, not the resume of an interrupted one",
-		pipeline.TempWorkDirName, buildRecordName)
+	if !jobFrame(work) {
+		return false, fmt.Sprintf("the %s/ here holds no job frame — no %s, no %s and no %s sidecar — "+
+			"so no interrupted kbase build left it and it licenses nothing",
+			pipeline.TempWorkDirName, pipeline.LockFileName, deliveryManifestName, pipeline.StampSuffix)
+	}
+	return true, ""
+}
+
+// jobFrame reports whether a temp-work directory holds something a kbase run
+// put there. Any ONE of the three is enough, and each is the residue of a
+// different moment: the lock a hard kill left, the manifest a delivery wrote
+// before its first byte, or the stamp sidecar every produced artifact carries.
+// A run that died before writing any of them delivered nothing either, so its
+// `--out` is empty and this predicate is never consulted.
+//
+// A walk that cannot be completed answers false, which refuses. The frame is a
+// licence to overwrite a delivered tree, and an unreadable directory is not
+// evidence for granting one.
+func jobFrame(work string) bool {
+	for _, name := range []string{pipeline.LockFileName, deliveryManifestName} {
+		if _, err := os.Stat(filepath.Join(work, name)); err == nil {
+			return true
+		}
+	}
+	stamped := false
+	_ = filepath.WalkDir(work, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), pipeline.StampSuffix) {
+			stamped = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return stamped
 }
 
 // deliver copies the proven bytes out of the store into <out> proper — the
 // mirror hierarchy read in the delivering direction, with the `tree/` prefix
 // dropped because that prefix is the store's own namespace and not part of the
 // knowledge base's shape.
+//
+// Around that copy stand the three things a delivery into a directory a
+// previous attempt already wrote into has to get right, all of them turning on
+// one artifact — the manifest that attempt left (deliveryManifest):
+//
+//   - It may already be DONE. A kill between the last copied byte and the run
+//     record leaves a complete knowledge base that no later run can tell from
+//     an interrupted one, and every one of those runs would then overwrite a
+//     real KB (deliveryFinished, [GO H-2]).
+//   - The prior attempt's plan may not be this one's. Then its pages are
+//     orphans no plan names, and they are swept — exactly them, because the
+//     manifest is the only list of files kbase has ever claimed as its own
+//     under `--out` (sweepPriorDelivery, [ARCH F-1]).
+//   - Either way the result is checked rather than assumed: after the copy,
+//     `<out>` minus temp-work must BE the delivered set (checkOutHoldsExactly).
+//
+// The manifest is written before the first byte is copied, which is what makes
+// the run that dies mid-copy legible to the next one.
 func (j *buildJob) deliver(plan treeplan.TreePlan) ([]string, error) {
 	paths := deliveredPaths(plan)
-	for _, p := range paths {
-		data, err := j.store.Get(treeDir + "/" + p)
-		if err != nil {
+	finished, err := j.deliveryFinished(paths)
+	if err != nil {
+		return nil, err
+	}
+	if !finished {
+		if err := j.sweepPriorDelivery(); err != nil {
 			return nil, err
 		}
-		dst := filepath.Join(j.out, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(dst), pipeline.CreateDirMode); err != nil {
-			return nil, fmt.Errorf("%s: create %s: %w", buildVerb, filepath.Dir(dst), err)
-		}
-		if err := os.WriteFile(dst, data, pipeline.CreateFileMode); err != nil {
-			return nil, fmt.Errorf("%s: write %s: %w", buildVerb, dst, err)
+	}
+	// Rewritten even on the finished path: it is the next run's evidence, and
+	// a `--fresh` discard took the copy this run read at job setup along with
+	// the rest of the store.
+	if err := writeDeliveryManifest(j.work, paths); err != nil {
+		return nil, err
+	}
+	if !finished {
+		for _, p := range paths {
+			data, err := j.store.Get(treeDir + "/" + p)
+			if err != nil {
+				return nil, err
+			}
+			dst := filepath.Join(j.out, filepath.FromSlash(p))
+			if err := os.MkdirAll(filepath.Dir(dst), pipeline.CreateDirMode); err != nil {
+				return nil, fmt.Errorf("%s: create %s: %w", buildVerb, filepath.Dir(dst), err)
+			}
+			if err := os.WriteFile(dst, data, pipeline.CreateFileMode); err != nil {
+				return nil, fmt.Errorf("%s: write %s: %w", buildVerb, dst, err)
+			}
 		}
 	}
+	if err := j.checkOutHoldsExactly(paths); err != nil {
+		return nil, err
+	}
 	return paths, nil
+}
+
+// deliveryFinished reports whether the delivery this run is about to make has
+// already been made — the kill window between the last copied byte and the run
+// record (§3.1), whose residue is otherwise indistinguishable from a half-copied
+// one [GO H-2].
+//
+// The proof is bytes, not bookkeeping: the prior attempt's manifest must name
+// exactly the set this run computed, and every one of those files under `<out>`
+// must equal the store artifact this run proved. A partial match is an
+// interrupted delivery and gets the ordinary copy — there is no threshold at
+// which "most of it is there" means finished.
+func (j *buildJob) deliveryFinished(paths []string) (bool, error) {
+	if j.prior == nil || !slices.Equal(j.prior.Paths, paths) {
+		return false, nil
+	}
+	for _, p := range paths {
+		want, err := j.store.Get(treeDir + "/" + p)
+		if err != nil {
+			return false, err
+		}
+		got, err := os.ReadFile(filepath.Join(j.out, filepath.FromSlash(p)))
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return false, nil
+		case err != nil:
+			return false, fmt.Errorf("%s: read the delivered %s: %w", buildVerb, p, err)
+		}
+		if !bytes.Equal(got, want) {
+			return false, nil
+		}
+	}
+	j.lg.Info("the delivery in this output directory is already complete; only the run record was lost",
+		"files", len(paths))
+	return true, nil
+}
+
+// sweepPriorDelivery removes the files a previous attempt at this `--out`
+// delivered, and nothing else, before this run delivers its own.
+//
+// The list is the previous attempt's manifest — its own testimony — and that is
+// the whole safety argument [ARCH F-1]. A resumed run whose plan changed (a new
+// `--title`, a different `--annex` set, a moved corpus) names different pages,
+// and `deliver` writes only what the new plan names: without this, the old
+// plan's pages stand in the delivered tree beside the new plan's, which is the
+// "gates all passed over a tree nobody delivered" state the populated-`--out`
+// refusal exists to prevent. A user's own file can never be on that list,
+// because kbase wrote the list.
+//
+// Directories emptied by the removal go too — a directory that held nothing but
+// the prior plan's pages is that plan's residue as much as the pages were. One
+// that holds anything else survives, because os.Remove refuses it.
+func (j *buildJob) sweepPriorDelivery() error {
+	if j.prior == nil {
+		return nil
+	}
+	removed := 0
+	for _, p := range j.prior.Paths {
+		abs := filepath.Join(j.out, filepath.FromSlash(p))
+		if err := os.Remove(abs); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("%s: remove the previous delivery's %s: %w", buildVerb, p, err)
+		}
+		removed++
+		pruneEmptyDirs(filepath.Dir(abs), j.out)
+	}
+	if removed > 0 {
+		j.lg.Info("removed the previous delivery's files before delivering this plan",
+			"removed", removed, "manifest", len(j.prior.Paths))
+	}
+	return nil
+}
+
+// pruneEmptyDirs removes dir and its ancestors up to — never including — root,
+// stopping at the first one that will not go. os.Remove refuses a non-empty
+// directory, so "will not go" is "holds something this sweep did not put there".
+func pruneEmptyDirs(dir, root string) {
+	for dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		if os.Remove(dir) != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+// checkOutHoldsExactly is delivery's postcondition: `<out>` minus temp-work is
+// the delivered set, file for file.
+//
+// It is the delivery step proving its own work, and it belongs here rather than
+// among the ten guarantees — those run store-side, before a byte moves (§4.8),
+// and by construction cannot see `<out>` at all. What this catches is
+// everything the store cannot: a page a sweep failed to remove, a file dropped
+// into the output directory while the build ran, a prior plan's orphan no
+// manifest accounted for. The delivery is refused rather than reported: a
+// knowledge base with a page no plan names is exactly the artifact §3.1's
+// refusal exists to keep off disk, and it is not made acceptable by arriving
+// last.
+func (j *buildJob) checkOutHoldsExactly(paths []string) error {
+	missing := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		missing[p] = true
+	}
+	var stray []string
+	work := filepath.Join(j.out, pipeline.TempWorkDirName)
+	err := filepath.WalkDir(j.out, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path == work {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(j.out, path)
+		if err != nil {
+			return err
+		}
+		p := filepath.ToSlash(rel)
+		if missing[p] {
+			delete(missing, p)
+			return nil
+		}
+		stray = append(stray, p)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("%s: reading %s back after delivering it: %w", buildVerb, j.out, err)
+	}
+	if len(stray) == 0 && len(missing) == 0 {
+		return nil
+	}
+	absent := make([]string, 0, len(missing))
+	for p := range missing {
+		absent = append(absent, p)
+	}
+	sort.Strings(absent)
+	sort.Strings(stray)
+	msg := fmt.Sprintf("%s: %s does not hold the tree this run delivered", buildVerb, j.out)
+	if len(stray) > 0 {
+		msg += fmt.Sprintf("; %d file(s) are there that no delivered path names:\n%s",
+			len(stray), indentedList(stray))
+	}
+	if len(absent) > 0 {
+		msg += fmt.Sprintf("; %d delivered file(s) are not there:\n%s", len(absent), indentedList(absent))
+	}
+	return errors.New(msg + "\ndelete " + j.out + " and build again")
+}
+
+// deliveryManifest is one run's statement of the delivery it made: the exact
+// paths it wrote under `--out`, tree-relative and sorted, written at the
+// temp-work root before the first of them was copied.
+//
+// It is temp-work and nothing else (§12's two path classes) — the same teardown
+// and keep rules as the run record beside it, and never delivered. Nothing
+// reads it back except the NEXT run over the same `--out`, which is the whole
+// point: a delivery that was interrupted cannot say what it had got to, and a
+// directory listing cannot tell a page this plan no longer names from a file
+// the operator put there.
+type deliveryManifest struct {
+	Schema int      `json:"schema"`
+	Paths  []string `json:"paths"`
+}
+
+// readDeliveryManifest reads the manifest a previous attempt at this job
+// directory left, or (nil, nil) when there is none.
+//
+// Every path in it is checked before this process will act on it: it is the one
+// file kbase reads back off disk and then uses to DELETE things, so a path that
+// is not a plain relative path inside the delivered tree refuses the run. A
+// manifest that cannot be read at all refuses too, and names the remedy — the
+// alternative is a run that silently forgets what the previous one delivered
+// and leaves its pages standing in the tree.
+func readDeliveryManifest(dir string) (*deliveryManifest, error) {
+	path := filepath.Join(dir, deliveryManifestName)
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("%s: read %s: %w", buildVerb, path, err)
+	}
+	var m deliveryManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("%s: %s is unreadable (%w); it is how this run learns what the "+
+			"previous one delivered, so delete the output directory and build again", buildVerb, path, err)
+	}
+	if m.Schema != deliveryManifestSchema {
+		return nil, fmt.Errorf("%s: %s carries schema %d and this build writes %d; "+
+			"delete the output directory and build again", buildVerb, path, m.Schema, deliveryManifestSchema)
+	}
+	for _, p := range m.Paths {
+		local := filepath.FromSlash(p)
+		first, _, _ := strings.Cut(p, "/")
+		if p == "" || !filepath.IsLocal(local) || local != filepath.Clean(local) ||
+			first == pipeline.TempWorkDirName {
+			return nil, fmt.Errorf("%s: %s names %q, which is not a path in the delivered tree; "+
+				"delete the output directory and build again", buildVerb, path, p)
+		}
+	}
+	slices.Sort(m.Paths)
+	return &m, nil
+}
+
+// writeDeliveryManifest states what this run is about to deliver. It is called
+// before the first byte is copied, so a run killed mid-copy leaves the next one
+// the full list rather than the prefix it managed.
+func writeDeliveryManifest(dir string, paths []string) error {
+	data, err := json.MarshalIndent(deliveryManifest{Schema: deliveryManifestSchema, Paths: paths}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("%s: encode %s: %w", buildVerb, deliveryManifestName, err)
+	}
+	path := filepath.Join(dir, deliveryManifestName)
+	if err := os.WriteFile(path, append(data, '\n'), pipeline.CreateFileMode); err != nil {
+		return fmt.Errorf("%s: write %s: %w", buildVerb, path, err)
+	}
+	return nil
 }
 
 // report prints the human summary. recordPath is empty when the run record did
@@ -1125,13 +1469,20 @@ func (j *buildJob) report(plan treeplan.TreePlan, rep assemble.Report,
 	t := j.art.Corpus
 	fmt.Fprintf(w, "corpus: %s (%d files, %d sections, %d tokens, sha256 %s)\n",
 		j.opts.Root, t.Files, t.Sections, t.Tokens, t.ContentHash)
-	if n := t.Links.Unresolved; n > 0 {
+	if n := rep.ExemptedDestinations; n > 0 {
 		// The one line the exemption gets. Guarantee 1 does not fail on these
 		// — a destination naming a document this corpus does not hold is a
 		// defect in the corpus, and refusing delivery over it would make an
 		// unbuildable KB out of someone else's typo (§4.5 rule 3). What it may
 		// not be is silent: the pages ship carrying the destination exactly as
 		// written, and the operator is the only one who can go and look.
+		//
+		// The COUNT is the gate's own exemption set (assemble.Report), not the
+		// survey census beside it [ARCH F4]: the sentence claims something
+		// about guarantee 1, so the number in it has to be guarantee 1's. The
+		// census is on the same line because the two together are the reading —
+		// an exemption count rising against a flat census is stage 5's scanner
+		// and the survey's parse disagreeing about the same bytes.
 		fmt.Fprintf(j.opts.Stderr,
 			"links: %s; %d destination(s) name no document in the corpus and are delivered verbatim, exempt from guarantee 1\n",
 			linkCensus(t.Links), n)
@@ -1406,18 +1757,42 @@ type buildRun struct {
 	// with no cross-references.
 	Links survey.LinkTotals `json:"links"`
 
-	Nodes       int                    `json:"nodes"`
-	Leaves      int                    `json:"pages"`
-	Indexes     int                    `json:"sections"`
-	Groups      int                    `json:"groups"`
-	SplitGroups int                    `json:"splitGroups"`
-	Summaries   int                    `json:"summaries"`
-	Delivered   int                    `json:"deliveredFiles"`
-	Units       int                    `json:"units"`
-	Produced    int                    `json:"unitsProduced"`
-	Reused      int                    `json:"unitsReused"`
-	ElapsedMS   int64                  `json:"elapsedMs"`
-	Verify      []assemble.CheckResult `json:"verify"`
+	Nodes       int `json:"nodes"`
+	Leaves      int `json:"pages"`
+	Indexes     int `json:"sections"`
+	Groups      int `json:"groups"`
+	SplitGroups int `json:"splitGroups"`
+
+	// CrossParentMerges is how many content-floor merges re-homed a sub-floor
+	// span under an index other than the one its own page sat under
+	// (SPEC §3.3). It is here because no gate can see the repair: coverage is
+	// asked per file and per section, and guarantee 5 compares the delivered
+	// set against the plan that already holds it. A non-zero value says the
+	// descent split one document's adjacent sections across two indexes and
+	// the floor had to pick one — the routing surface is still whole, and an
+	// operator reading a page under a heading that did not promise it has the
+	// number that explains why. Each one is logged at warn as it happens.
+	CrossParentMerges int `json:"crossParentMerges"`
+
+	// ExemptedDestinations is guarantee 1's REAL exemption set: the distinct
+	// destinations stage 5 could not land, counted over every delivered page
+	// (assemble.Report). It is a different number from `links.unresolved`
+	// above, which is the survey's classification of the corpus's own link
+	// graph [ARCH F4]. The exemption is the wider of the two ideas — it also
+	// takes destinations inside an annex, destinations into a file no node was
+	// drawn from (§4.5 rule 3), and anything stage 5's scanner sees that the
+	// survey's parse did not — so recording only the census left the set the
+	// gate actually exempts unmeasured. The pair is also the tripwire for the
+	// two scanners diverging: a rising exemption count against a flat census.
+	ExemptedDestinations int `json:"exemptedDestinations"`
+
+	Summaries int                    `json:"summaries"`
+	Delivered int                    `json:"deliveredFiles"`
+	Units     int                    `json:"units"`
+	Produced  int                    `json:"unitsProduced"`
+	Reused    int                    `json:"unitsReused"`
+	ElapsedMS int64                  `json:"elapsedMs"`
+	Verify    []assemble.CheckResult `json:"verify"`
 
 	// Live is present exactly when a model was in the loop. Absent rather than
 	// zeroed: a mechanical run reporting `"promptTokens": 0` reads as "it cost
@@ -1454,6 +1829,15 @@ type buildLive struct {
 	// container, §3.2), so the two together are what the run actually asked.
 	TaxonomyCalls int `json:"taxonomyCalls"`
 	CallsSkipped  int `json:"callsSkipped"`
+
+	// LeafGroupCards is how many leaf-group cards stage 6 enumerated — one per
+	// node holding both pages and subsections, which is the whole extra price
+	// of the B-5 scheme (up to one heavy call each). Same argument as
+	// TaxonomyCalls: a scheme this record does not price is a scheme a live run
+	// cannot account for [ARCH F8]. Zero is the honest reading for a corpus
+	// whose every node holds children of one kind — no card was owed, not a
+	// stage that failed to run.
+	LeafGroupCards int `json:"leafGroupCards"`
 
 	// What stage 4's fold did, summed over every split group. Zero across the
 	// board is the CORRECT reading of a corpus whose groups all fit one page:

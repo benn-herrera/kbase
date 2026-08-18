@@ -109,7 +109,7 @@ func newSceneOf(t *testing.T, lg log.Logger, body func(treeplan.Node) string,
 	t.Helper()
 	art, corpus := buildCorpus(t, docs...)
 	params := treeplan.Params{Budgets: testBudgets()}
-	v, err := treeplan.NewVerifier(art, corpus, params)
+	v, err := treeplan.NewVerifier(art, corpus, params, log.Discard())
 	if err != nil {
 		t.Fatalf("treeplan.NewVerifier: %v", err)
 	}

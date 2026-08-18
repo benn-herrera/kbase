@@ -70,14 +70,28 @@ type CheckResult struct {
 
 // Report is stage 9's artifact.
 type Report struct {
-	Schema     string        `json:"schema"`
-	CorpusHash string        `json:"corpusHash"`
-	Files      int           `json:"files"`
-	ClassA     int           `json:"classA"`
-	ClassB     int           `json:"classB"`
-	Leaves     int           `json:"leaves"`
-	Indexes    int           `json:"indexes"`
-	Checks     []CheckResult `json:"checks"`
+	Schema     string `json:"schema"`
+	CorpusHash string `json:"corpusHash"`
+	Files      int    `json:"files"`
+	ClassA     int    `json:"classA"`
+	ClassB     int    `json:"classB"`
+	Leaves     int    `json:"leaves"`
+	Indexes    int    `json:"indexes"`
+	// ExemptedDestinations is how many DISTINCT destinations guarantee 1
+	// exempts across the whole delivered tree — the set check 1 skips, counted
+	// where the set is: every leaf's Unresolved list, which is what the rebase
+	// map did not land [ARCH F4].
+	//
+	// It is not the survey's `links.unresolved` census and does not replace it.
+	// That number classifies the corpus's own link graph; this one is the
+	// exemption itself, which is strictly the wider idea — a destination inside
+	// an annex, or into a file no node was drawn from (§4.5 rule 3), is exempt
+	// and was never unresolved. Recording only the census measured the wrong
+	// seam: B-1's "the exemption is MEASURED, never silent" needs the number
+	// the gate uses. Distinct rather than total occurrences, because a broken
+	// destination repeated on forty pages is one thing to go and fix.
+	ExemptedDestinations int           `json:"exemptedDestinations"`
+	Checks               []CheckResult `json:"checks"`
 }
 
 // Passed reports whether every gate passed.
@@ -134,6 +148,7 @@ func Verify(v Verification) (Report, error) {
 	}
 	classA, classB, stray := classify(v.Plan, v.Files)
 	rep.ClassA, rep.ClassB = len(classA), len(classB)
+	rep.ExemptedDestinations = exemptedDestinations(v.Leaves)
 
 	rep.Checks = []CheckResult{
 		result(1, "every referenced file exists", v.checkLinksResolve(classA, classB)),
@@ -153,6 +168,22 @@ func Verify(v Verification) (Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+// exemptedDestinations counts the distinct destinations guarantee 1 lets
+// through, over the same per-leaf lists checkLinksResolve reads.
+//
+// One counter here rather than a second walk in the composing verb: the gate
+// and the number that measures it read one set, so a leaf whose exemption the
+// gate honours cannot be missing from the count.
+func exemptedDestinations(leaves map[string]distill.Leaf) int {
+	seen := map[string]bool{}
+	for _, l := range leaves {
+		for _, u := range l.Unresolved {
+			seen[u] = true
+		}
+	}
+	return len(seen)
 }
 
 func result(n int, name string, err error) CheckResult {
@@ -233,17 +264,26 @@ func (v Verification) checkLinksResolve(classA, classB []string) error {
 // [MAD2: B-4], so they are checked by this loop rather than by a second one
 // that would have to be kept in agreement with it.
 //
-// The count is the grammar's own (distill.UpLinkCount) and the block is
-// distill.NavBlock, which stops at the first line that is not navigation:
-// both are scoped so that a navigation-shaped line inside a leaf's verbatim
-// source is content, not page grammar, since a check broader than the
-// contract it enforces refuses deliveries nobody can repair [MAD2: B-11].
+// The COUNT is taken from that same block and from nowhere else [MAD2: B-11,
+// ARCH F3]. A whole-page count is a second predicate with a wider scope inside
+// one gate, and the width is the defect: a leaf body is verbatim source (§4.2
+// item 4), so a corpus documenting this grammar carries an unfenced `[↑ …](…)`
+// line as CONTENT, and counting it refused the whole delivery with no remedy
+// anyone could apply. Nothing is weakened by dropping it — the block itself is
+// still checked entirely, and a page that grew a second up-link below the block
+// fails gate 5's byte-for-byte re-render if it is an index and gate 7's leaf
+// fidelity if it is a leaf.
 func (v Verification) checkNavLinks(classA []string) error {
 	entry := v.Renderer.EntryPointPath()
 	for _, p := range classA {
 		_, body, _ := distill.ParseFrontmatter(v.Files[p])
 		block := distill.NavBlock(body)
-		n := distill.UpLinkCount(v.Files[p])
+		n := 0
+		for _, l := range block {
+			if l.Marker == distill.UpMarker {
+				n++
+			}
+		}
 		if p == entry {
 			if n != 0 {
 				return fmt.Errorf("the entry-point %s carries an up-link", p)
@@ -254,7 +294,7 @@ func (v Verification) checkNavLinks(classA []string) error {
 			continue
 		}
 		if n != 1 {
-			return fmt.Errorf("%s carries %d up-links; a class-A node has exactly one", p, n)
+			return fmt.Errorf("%s carries %d up-links in its navigation block; a class-A node has exactly one", p, n)
 		}
 		if len(block) == 0 || block[0].Marker != distill.UpMarker {
 			return fmt.Errorf("%s does not open with its up-link", p)

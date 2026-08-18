@@ -2,6 +2,7 @@ package assemble
 
 import (
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func newScene(t *testing.T) scene {
 	if err != nil {
 		t.Fatalf("SourceStructureProposal: %v", err)
 	}
-	v, err := treeplan.NewVerifier(art, corpus, treeplan.DefaultParams())
+	v, err := treeplan.NewVerifier(art, corpus, treeplan.DefaultParams(), log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -448,6 +449,40 @@ func TestVerifyLeavesNavShapedSourceLinesAlone(t *testing.T) {
 	}
 }
 
+// The same statement at the one marker the old whole-page count could see: an
+// UNFENCED up-link line in a leaf's verbatim body [ARCH F3, GO H-1].
+//
+// This is the dogfood case — a corpus documenting this very grammar in prose
+// rather than in a fence — and it used to refuse the whole delivery at
+// guarantee 2 with no remedy, since §4.2 item 4 forbids editing a leaf body.
+// The gate now counts up-links in the positional block alone, so the body's
+// line is content. Deleting the `l.Marker == distill.UpMarker` count in
+// checkNavLinks and restoring distill.UpLinkCount fails this test.
+func TestVerifyLeavesAnUnfencedUpLinkInABodyAlone(t *testing.T) {
+	sc := newScene(t)
+	v := sc.verification()
+	p := anyLeaf(t, sc)
+	// Below the page's own heading, unfenced, and naming a file the tree really
+	// delivers so that guarantee 1 has no quarrel with it either.
+	marker := "# " + nodeAt(t, sc, p).Title + "\n"
+	text := string(v.Files[p])
+	if !strings.Contains(text, marker) {
+		t.Fatalf("%s carries no heading to insert below:\n%s", p, text)
+	}
+	body := distill.UpLinkPrefix + "index.md](index.md)"
+	v.Files[p] = []byte(strings.Replace(text, marker, marker+"\n"+body+"\n", 1))
+	v.Leaves = withData(sc.leaves, p, v.Files[p])
+	// The fixture has to be the thing the finding is about: an up-link-shaped
+	// line, outside any fence, below the block.
+	if !strings.Contains(string(v.Files[p]), "\n"+body+"\n") {
+		t.Fatalf("the fixture does not carry the unfenced body line:\n%s", v.Files[p])
+	}
+
+	if _, err := Verify(v); err != nil {
+		t.Fatalf("an unfenced up-link line in a verbatim body refused the delivery: %v", err)
+	}
+}
+
 // A split part's bullet carries the group's shared scope AND its own post-cut
 // descriptor, which is what makes two sibling bullets choosable [MAD2: B-4].
 func TestIndexBulletsCarryPartDescriptors(t *testing.T) {
@@ -489,6 +524,58 @@ func TestIndexBulletsCarryPartDescriptors(t *testing.T) {
 	}
 }
 
+// The report counts guarantee 1's OWN exemption set — the destinations the
+// gate skips — and counts each distinct destination once however many pages
+// carry it [ARCH F4]. It is not the survey's link census, which classifies the
+// corpus's link graph and is a different number for good reasons.
+func TestVerifyCountsTheExemptionSetItHonours(t *testing.T) {
+	sc := newScene(t)
+	v := sc.verification()
+	if rep, err := Verify(v); err != nil || rep.ExemptedDestinations != 0 {
+		t.Fatalf("a tree with nothing exempt reports %d exemptions (err %v)", rep.ExemptedDestinations, err)
+	}
+
+	// Both pages carry the same broken destination and one carries a second:
+	// three exempted OCCURRENCES over two distinct destinations. Guarantee 1
+	// must let all three through and the report must say "two".
+	leaves := allLeaves(t, sc)
+	if len(leaves) < 2 {
+		t.Fatalf("the fixture has %d pages; this case needs two", len(leaves))
+	}
+	v = sc.verification()
+	planted := map[string][]string{
+		leaves[0]: {"../nowhere.md"},
+		leaves[1]: {"../nowhere.md", "../elsewhere.md"},
+	}
+	next := cloneLeaves(sc.leaves)
+	for p, dests := range planted {
+		l := next[p]
+		// Below the page's own heading, so the navigation block is untouched
+		// and gate 2 has no separate quarrel with the fixture.
+		marker := "# " + nodeAt(t, sc, p).Title + "\n"
+		if !strings.Contains(string(v.Files[p]), marker) {
+			t.Fatalf("%s carries no heading to insert below:\n%s", p, v.Files[p])
+		}
+		for _, dest := range dests {
+			v.Files[p] = []byte(strings.Replace(string(v.Files[p]),
+				marker, marker+"\nsee ["+dest+"]("+dest+")\n", 1))
+			l.Unresolved = append(slices.Clone(l.Unresolved), dest)
+		}
+		l.Data = v.Files[p]
+		next[p] = l
+	}
+	v.Leaves = next
+
+	rep, err := Verify(v)
+	if err != nil {
+		t.Fatalf("the exempted destinations refused the delivery: %v", err)
+	}
+	if rep.ExemptedDestinations != 2 {
+		t.Errorf("exemptedDestinations = %d, want 2 distinct destinations over three pages",
+			rep.ExemptedDestinations)
+	}
+}
+
 func TestFixtureManifestIsClosed(t *testing.T) {
 	sc := newScene(t)
 	got := map[string]bool{}
@@ -522,6 +609,26 @@ func anyLeaf(t *testing.T, sc scene) string {
 	}
 	t.Fatal("the fixture has no pages")
 	return ""
+}
+
+// allLeaves is every page of the fixture, in tree-plan order.
+func allLeaves(t *testing.T, sc scene) []string {
+	t.Helper()
+	var out []string
+	for _, n := range sc.plan.Nodes {
+		if n.Kind == treeplan.KindLeaf {
+			out = append(out, n.Path)
+		}
+	}
+	return out
+}
+
+func cloneLeaves(in map[string]distill.Leaf) map[string]distill.Leaf {
+	out := make(map[string]distill.Leaf, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // nodeAt is one delivered path's tree-plan node, for a mutation that has to

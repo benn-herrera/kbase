@@ -103,6 +103,47 @@ func TestFreshEscapesAStoreAResumeRefuses(t *testing.T) {
 	}
 }
 
+// TestFreshsReusedCountMeasuresTheDiscard is the mutation this pins: delete
+// `c.store.discard()` from Coordinator.Run and this test fails.
+//
+// It fails because both halves below are asserted against the SAME store. The
+// scan half proves the walk reads what is in front of it — nine provable units
+// are nine reused — so the run half's zero is a statement about the directory
+// and not about the mode. Delete the discard and the run half sees exactly
+// what the scan half saw: nine reused, nothing produced, and a run that spent
+// no tokens while claiming to have rebuilt from the corpus.
+//
+// The counter is what `test-integration-build-refusal` asserts through the
+// front door (`units: N produced, 0 reused`), which is why it has to be a
+// measurement: a count that cannot be non-zero proves nothing about the run
+// that reports it [GO M-1].
+func TestFreshsReusedCountMeasuresTheDiscard(t *testing.T) {
+	dir := t.TempDir()
+	runToCompletion(t, dir, ModeResume)
+
+	// The store as the discard finds it: every unit provable. A fresh scan
+	// pointed at it, with nothing removed, counts all of them.
+	scanned, err := synthStore(t, dir, log.Discard()).ResumeScan(synthPlan(t).StageChain(), ModeFresh)
+	if err != nil {
+		t.Fatalf("ResumeScan(fresh) over the undiscarded store: %v", err)
+	}
+	if scanned.Reused != synthUnits {
+		t.Fatalf("a fresh scan over an undiscarded store reused %d of %d units; the count is not a "+
+			"measurement, so the run's zero below would prove nothing", scanned.Reused, synthUnits)
+	}
+
+	// The same store through the real path, where the discard runs first.
+	client, res := runToCompletion(t, dir, ModeFresh)
+	if res.Reused != 0 || res.Produced != synthUnits {
+		t.Errorf("--fresh reused %d and produced %d of %d units: the job directory was not discarded",
+			res.Reused, res.Produced, synthUnits)
+	}
+	if client.callCount() != synthCalls {
+		t.Errorf("--fresh made %d calls, want %d — a run that reused nothing asks everything again",
+			client.callCount(), synthCalls)
+	}
+}
+
 // TestDiscardRefusesARootThatIsNotOurs: the discard deletes a directory tree
 // whole, and what makes that safe is the same fact the sweep stands on — the
 // root is the temp-work directory kbase created under the output directory.

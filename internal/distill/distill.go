@@ -212,8 +212,21 @@ func (d *Distiller) siblings(n treeplan.Node) (prev, next string) {
 // Only split groups appear. An unsplit leaf's bullet is already the only one
 // naming its material, and a part that delivers no heading at all — a cut that
 // fell in open prose — contributes nothing rather than a fabricated label.
+//
+// # Distinctness
+//
+// Two parts of one group whose first-and-last headings coincide — a source
+// repeating `## Notes` / `## Examples` across a cut boundary — would render
+// bullets that differ in nothing but the path, and telling two sibling bullets
+// apart is the descriptor's whole job (SPEC §4.3). Where that happens, every
+// part sharing the descriptor falls back to its ORDINAL instead, which is
+// distinct by construction. Parts whose headings already distinguish them keep
+// them: the fallback is per collision, not per group.
 func (d *Distiller) Descriptors() (map[string]string, error) {
 	out := map[string]string{}
+	// byGroup holds each group's described parts in part order, so the
+	// collision check below is over siblings and nothing else.
+	byGroup := map[string][]treeplan.Node{}
 	for _, n := range d.Leaves() {
 		g, ok := d.plan.SplitGroup(n.SplitGroup)
 		if !ok {
@@ -228,16 +241,44 @@ func (d *Distiller) Descriptors() (map[string]string, error) {
 		}
 		if desc := describePart(d.headings[g.Source.File], span); desc != "" {
 			out[n.Path] = desc
+			byGroup[g.ID] = append(byGroup[g.ID], n)
+		}
+	}
+	for id, parts := range byGroup {
+		g, ok := d.plan.SplitGroup(id)
+		if !ok {
+			return nil, fmt.Errorf("distill: group %q left the tree plan mid-derivation", id)
+		}
+		seen := map[string]int{}
+		for _, n := range parts {
+			seen[out[n.Path]]++
+		}
+		for _, n := range parts {
+			if seen[out[n.Path]] > 1 {
+				out[n.Path] = partOrdinal(n.Part, g.Parts)
+			}
 		}
 	}
 	return out, nil
 }
+
+// partOrdinal is the descriptor a part falls back to when its headings do not
+// tell it apart from a sibling's: which part of how many, in the same
+// vocabulary the title's `(k/n)` already uses.
+func partOrdinal(k, n int) string { return fmt.Sprintf("%d of %d", k, n) }
 
 // describePart names one part by the headings inside its own byte range.
 //
 // A heading whose line STARTS inside the range is delivered on that page —
 // the body is the range verbatim — so the membership test is the range test,
 // with no second notion of where a section belongs.
+//
+// The titles are NEUTRALIZED on the way out (see neutralize). This is the
+// first channel putting arbitrary corpus bytes onto a class-A index page, and
+// an index page is not verbatim source: it is rendered, and a heading like
+// "`](x)` form" would otherwise land a live link destination in a bullet that
+// the tree does not deliver, failing guarantee 1 on a well-formed corpus with
+// no repair available [GO M-7].
 func describePart(hs []heading, span survey.Span) string {
 	var first, last string
 	for _, h := range hs {
@@ -250,9 +291,9 @@ func describePart(hs []heading, span survey.Span) string {
 		last = h.title
 	}
 	if first == "" || first == last {
-		return first
+		return neutralize(first)
 	}
-	return first + headingSpan + last
+	return neutralize(first) + headingSpan + neutralize(last)
 }
 
 // Leaves is every leaf node of the plan, in tree-plan order.

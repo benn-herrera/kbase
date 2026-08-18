@@ -203,6 +203,93 @@ func TestDescriptorsSkipAHeadinglessPart(t *testing.T) {
 	}
 }
 
+// Distinctness is the property the descriptors EXIST for (SPEC §4.3): every
+// part of one group shares one scope, so two bullets whose descriptors also
+// coincide differ in nothing but the path. A source that repeats its heading
+// titles across a cut boundary produces exactly that, and the tied parts fall
+// back to their ordinals [GO M-6].
+//
+// The fallback is per collision: part 1's headings already tell it apart, so
+// it keeps them.
+func TestDescriptorsFallBackToOrdinalsWhenHeadingsTie(t *testing.T) {
+	sc := newSplitScene(t)
+	at := func(prefix string) int { return strings.Index(longDoc, prefix) }
+	// One heading title repeated across both later cuts — `## Notes` twice, the
+	// shape a manual with a per-chapter notes section has.
+	sc.dist.headings["guide/long.md"] = []heading{
+		{start: 0, title: "Long Document"},
+		{start: at(longFirst), title: "Notes"},
+		{start: at(longSecond), title: "Notes"},
+		{start: at(longThird), title: "Notes"},
+	}
+
+	got, err := sc.dist.Descriptors()
+	if err != nil {
+		t.Fatalf("Descriptors: %v", err)
+	}
+	want := map[string]string{
+		"long/long-document-1.md": "Long Document → Notes",
+		"long/long-document-2.md": "2 of 3",
+		"long/long-document-3.md": "3 of 3",
+	}
+	for path, w := range want {
+		if got[path] != w {
+			t.Errorf("%s is described as %q, want %q", path, got[path], w)
+		}
+	}
+	seen := map[string]bool{}
+	for path, d := range got {
+		if seen[d] {
+			t.Errorf("%s repeats the descriptor %q a sibling already carries", path, d)
+		}
+		seen[d] = true
+	}
+}
+
+// The descriptor is the first channel putting arbitrary CORPUS bytes onto a
+// page kbase composes, and an index page is not verbatim source. A heading
+// carrying link syntax must arrive as text, or the bullet gains a destination
+// the tree does not deliver and guarantee 1 refuses a delivery nobody can
+// repair [GO M-7].
+func TestDescriptorsNeutralizeCorpusMarkup(t *testing.T) {
+	sc := newSplitScene(t)
+	at := func(prefix string) int { return strings.Index(longDoc, prefix) }
+	// What plainText yields for a heading written ``## `](x)` form`` — the code
+	// span's text, verbatim, brackets and all.
+	sc.dist.headings["guide/long.md"] = []heading{
+		{start: at(longSecond), title: "](x) form"},
+		{start: at(longThird), title: "*emphatic* <b>"},
+	}
+
+	got, err := sc.dist.Descriptors()
+	if err != nil {
+		t.Fatalf("Descriptors: %v", err)
+	}
+	for path, want := range map[string]string{
+		"long/long-document-2.md": `\]\(x\) form`,
+		"long/long-document-3.md": `\*emphatic\* \<b\>`,
+	} {
+		if got[path] != want {
+			t.Errorf("%s is described as %q, want %q", path, got[path], want)
+		}
+	}
+
+	// The property, stated where it bites: a down-link bullet carrying the
+	// descriptor has exactly ONE destination — its own link to the part.
+	for path, d := range got {
+		bullet := []byte("- [A part](" + path + ") — the shared scope (this part: " + d + ")\n")
+		ds := Destinations(bullet)
+		if len(ds) != 1 || ds[0].Text(bullet) != path {
+			var found []string
+			for _, x := range ds {
+				found = append(found, x.Text(bullet))
+			}
+			t.Errorf("the bullet for %s carries destinations %q, want only its own link:\n%s",
+				path, found, bullet)
+		}
+	}
+}
+
 func (s splitScene) node(t *testing.T, part int) treeplan.Node {
 	t.Helper()
 	for _, n := range s.plan.Nodes {

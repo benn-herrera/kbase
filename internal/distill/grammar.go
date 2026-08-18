@@ -41,9 +41,11 @@ const (
 	PrevMarker = "←"
 	NextMarker = "→"
 
-	// UpLinkPrefix opens an up-link line. It is exported because stage 9
-	// counts up-links with it, and a second spelling of the opening bracket in
-	// the verifier would be a second grammar.
+	// UpLinkPrefix opens an up-link line. It is exported so that a reader
+	// outside this package can recognise one without respelling the opening
+	// bracket, which would be a second grammar. Guarantee 2 does NOT count with
+	// it: the up-link count is taken from NavBlock, positionally, and this
+	// prefix names a line's shape rather than its place (see NavBlock).
 	UpLinkPrefix = navPrefix + UpMarker + " "
 
 	// navPrefix opens every navigation link, whatever its direction.
@@ -75,7 +77,48 @@ const (
 	// one arrow vocabulary on a page, read the same way in a bullet as in the
 	// navigation block.
 	headingSpan = " " + NextMarker + " "
+
+	// markdownActive are the characters that mean something to a Markdown
+	// reader INSIDE a line: the link brackets, the emphasis pair, the code
+	// span, raw HTML's angle brackets, and the backslash that escapes them all.
+	// Block-level characters are absent on purpose — a `#` or a `|` in the
+	// middle of a bullet is text, and escaping it would be noise in the
+	// delivered bytes for no gain.
+	markdownActive = "\\`*_[]()<>"
 )
+
+// neutralize renders one run of CORPUS bytes as inert text on a page kbase
+// composes.
+//
+// A leaf body is verbatim source and is exempt from this by contract (§4.2
+// item 4): its bytes are the document's own and the reader wants them. An
+// index page is the opposite — kbase writes every byte of it — so corpus text
+// quoted onto one has to arrive as text. Without this, a heading like
+// "`](x)` form" copied into a down-link bullet gives the page a live link
+// destination the tree does not deliver, and guarantee 1 refuses a delivery
+// nobody can repair [GO M-7].
+//
+// It ESCAPES rather than strips: the label keeps the words the author wrote,
+// and a backslash-escaped `]` is exactly what Destinations skips (scan.go's
+// escaped), so the neutralization the renderer performs and the one the gate
+// observes are the same fact. Control characters become spaces, since a
+// newline would split a bullet in two and no escape prevents that.
+func neutralize(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			b.WriteByte(' ')
+		case strings.ContainsRune(markdownActive, r):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // Provenance is the receipt every delivered page carries (SPEC §4.6): the
 // identity of the bytes it was built from, when it was built, and the app
@@ -206,27 +249,6 @@ func NextLink(nodePath, siblingPath string) string {
 // page as the target.
 func navLink(marker, nodePath, toPath string) string {
 	return navPrefix + marker + " " + toPath + "](" + RelPath(nodePath, toPath) + ")"
-}
-
-// UpLinkCount is how many up-links a delivered page carries: lines opening
-// with the up-link prefix, OUTSIDE fenced code blocks.
-//
-// The fence skip is what keeps the count a statement about page grammar rather
-// than about page bytes. A leaf body is verbatim source (I-3) and §4.2 item 4
-// forbids editing it, so a documentation corpus that shows an up-link inside a
-// code fence — a KB documenting a KB, the plainest dogfood case there is —
-// would otherwise refuse its own delivery at guarantee 2 with no remedy
-// available to anyone [MAD2: B-11]. It walks fences through the same
-// implementation Destinations does, because "this line is inside a fence" has
-// to mean one thing.
-func UpLinkCount(page []byte) int {
-	n := 0
-	unfenced(string(page), func(_ int, line string) {
-		if strings.HasPrefix(line, UpLinkPrefix) {
-			n++
-		}
-	})
-	return n
 }
 
 // NavLink is one navigation edge read back off a delivered page: which

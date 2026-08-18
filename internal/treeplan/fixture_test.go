@@ -155,7 +155,7 @@ func testParams() Params { return Params{Budgets: testBudgets()} }
 func verifierFor(t *testing.T, p Params, docs ...docSpec) (*Verifier, survey.Artifact) {
 	t.Helper()
 	art, corpus := buildCorpus(t, docs...)
-	v, err := NewVerifier(art, corpus, p)
+	v, err := NewVerifier(art, corpus, p, log.Discard())
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

@@ -75,6 +75,13 @@ const (
 	// otherwise touch. It is the --fresh flag, and the reason resume is
 	// allowed to be strict: any doubt can be redone, and the user always has
 	// a button that skips the question.
+	//
+	// The discard is the whole mechanism, and the scan is how the run MEASURES
+	// it: a fresh scan reads verdicts exactly as a resume does, so over the
+	// emptied directory every unit is Absent and the run's reused count is
+	// zero because nothing was there — not because the mode declined to look.
+	// A scan that read no verdicts would report zero either way, which makes
+	// "0 reused" evidence of nothing (it was the tautology GO M-1 named).
 	ModeFresh Mode = "fresh"
 )
 
@@ -133,9 +140,12 @@ func (r ResumeScanResult) Complete() bool { return r.ResumeStage >= r.Stages }
 // Errors are refusals, never verdicts: a chain description defect
 // (BadPathError) or a store that contradicts the chain (IncoherentStoreError,
 // whose message names the remedy — --fresh wherever the contradiction is the
-// job directory's own contents). ModeFresh reads no verdicts at all, but it
-// still describes its first stage — a description is what a run needs to
-// start, in either mode.
+// job directory's own contents).
+//
+// Both modes walk identically. ModeFresh differs only in what it is pointed
+// at: its caller discarded the job directory first (see ModeFresh), so the
+// same walk finds nothing to prove and every count it reports is a reading of
+// that directory rather than a property of the mode.
 //
 // A stage past the boundary is never described: it is downstream of the
 // frontier by definition, its inputs are about to change, and under the
@@ -152,24 +162,6 @@ func (s *ArtifactStore) ResumeScan(chain StageChain, mode Mode) (ResumeScanResul
 	}
 
 	res := ResumeScanResult{Mode: mode, Stages: len(chain), ResumeStage: len(chain)}
-	if mode == ModeFresh {
-		units, err := s.resolveStage(chain, 0)
-		if err != nil {
-			return ResumeScanResult{}, err
-		}
-		res.ResumeStage = 0
-		res.StageName = chain[0].Name
-		for _, u := range units {
-			res.Verdicts = append(res.Verdicts, OwedArtifactVerdict{
-				Path: u.Path, Verdict: VerdictAbsent, Reason: "fresh run: prior outputs ignored",
-			})
-		}
-		res.Redo = len(res.Verdicts)
-		s.lg.Info("resume disabled, rebuilding from the first stage",
-			"mode", string(mode), "stages", len(chain), "stage", res.StageName, "redo", res.Redo)
-		return res, nil
-	}
-
 	for i, stage := range chain {
 		units, err := s.resolveStage(chain, i)
 		if err != nil {
