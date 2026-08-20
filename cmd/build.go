@@ -1088,8 +1088,8 @@ func checkOutIsClear(out string) error {
 	present := make([]string, 0, len(entries))
 	for _, e := range entries {
 		// The transient half is kbase's own and is not "already there": it is
-		// either this job's resume material or a kept run's evidence, and the
-		// store's own sweep and teardown are what govern it.
+		// either this job's resume material or a kept run's evidence, and
+		// teardown is what governs it.
 		if e.Name() == pipeline.TempWorkDirName {
 			continue
 		}
@@ -1868,10 +1868,10 @@ type buildLive struct {
 	ReasoningTokens  int `json:"reasoningTokens"`
 }
 
-// writeBuildRecord writes the record into the temp-work root. The moment
-// matters: it is after the coordinator returned, and therefore after the store
-// swept the job directory. The record is not a chain unit, so a sweep that ran
-// after this write would delete it as unaccounted-for.
+// writeBuildRecord writes the record into the temp-work root, after the
+// coordinator returned. It is not a chain unit and needs to be no one's:
+// nothing removes a file from inside a live job directory, so an
+// unaccounted-for file there simply stays (ARCHITECTURE.md §12).
 func writeBuildRecord(dir string, rec buildRun) (string, error) {
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {

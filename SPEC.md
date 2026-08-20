@@ -790,6 +790,23 @@ tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`,
 carries a `.stamp.json` sidecar (§3.6) except those three, which are not
 stage artifacts.
 
+A run that had a response rejected also leaves `<unit>.rejected-<n>.txt`
+beside the unit: the raw bytes of the response that failed that unit's
+mechanical check on model attempt `n`, kept so a failure can be read rather
+than inferred. It is not a stage artifact and carries no sidecar. It is
+written whatever the unit's outcome — a unit whose retry recovered leaves one
+too, since a run reporting a recovered rejection is a run someone may want to
+read the rejection of.
+
+Nothing is removed from inside `temp-work/` while a job is alive: it
+accumulates for the job's whole lifetime, including across resumes, and a
+file no plan of any attempt still names simply stays. Such a file is inert —
+it carries no place in the chain, so no resume scan inspects it and no
+delivery draws from it (delivery copies exactly what the current plan names,
+§3.1). The directory is removed only as a whole: by teardown after a
+successful run without `--keep-temp-work` (§3.1), or by `--fresh`, which
+discards the job directory before rebuilding (§1.5).
+
 ### 3.10 `delivery.json` — the delivery manifest
 
 **`kbase build`**, written to `<out>/temp-work/delivery.json` — the

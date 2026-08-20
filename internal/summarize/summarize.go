@@ -654,7 +654,13 @@ func (s *Summarizer) callInput(unitPath string) (prompt.CallInput, bool) {
 		Content:     strings.TrimSpace(content.String()),
 		CallRef:     "What a reader finds under this section:\n" + routing.String(),
 		AcceptanceCriteria: []string{
-			"- answer with the JSON object and nothing else",
+			// The labels are named LITERALLY here, not described. This line is
+			// slot 8 — the recency position, and the one part of the prompt an
+			// escalated retry is still reading after reasoning: a criterion
+			// that says "the three labelled blocks" leaves the model to
+			// remember what they were, and a summary written as bare prose is
+			// the failure that costs the unit.
+			"- write " + labelFraming + " " + labelHeading + " " + labelConclusions + " blocks",
 			"- no links, no file names of this knowledge base",
 		},
 	}, true

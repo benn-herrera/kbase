@@ -18,7 +18,7 @@ const (
 		"You are given the end of one section, the start of the next, and a numbered list of the\n" +
 		"positions the boundary between them may be moved to.\n\n" +
 		"## CRITICAL\n\n" +
-		"GroupingAnswer with one number from the list and nothing else.\n"
+		"Answer with one number from the list and nothing else.\n"
 
 	stubTaskDef = "Task: choose the position in the numbered list that best separates the two sections."
 )

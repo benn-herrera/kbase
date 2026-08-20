@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"kbase/internal/log"
@@ -212,6 +213,95 @@ func TestCoordinatorGracefulDegradation(t *testing.T) {
 	}
 	if _, err := synthStore(t, dir, log.Discard()).readStamp("survey/b.json"); err == nil {
 		t.Error("a failed essential unit left an artifact behind")
+	}
+}
+
+// TestARejectedResponseIsPreservedBesideItsUnit: a verifier's reason says what
+// RULE a response broke; the response itself says HOW it broke it, and that is
+// what a post-mortem needs. Every mechanically rejected response is kept beside
+// the unit it answered, one file per attempt, and the record of the rejection
+// names the file.
+//
+// The unit here FAILS — both attempts rejected, no fallback — and the job runs
+// its chain to the end regardless, which is the ordinary shape of a refused
+// delivery: the run is broken, its temp-work is kept, and the evidence is
+// what anybody keeping it wanted.
+//
+// Unstamped, deliberately: a stamp claims a derived artifact a later run could
+// reuse, which is the opposite of what this is.
+func TestARejectedResponseIsPreservedBesideItsUnit(t *testing.T) {
+	dir := t.TempDir()
+	const malformed = "I would answer, but not like that"
+	client := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		if strings.Contains(req.Messages[0].Content, "survey/b.json") {
+			return model.Response{Content: malformed, FinishReason: "stop"}, nil
+		}
+		return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+	}}
+	lg := &logtest.Capture{}
+
+	res, err := runSynth(t, dir, client, 1, lg, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.DeliveryReady() {
+		t.Fatal("a job with an essential failure must refuse emission")
+	}
+
+	store := synthStore(t, dir, log.Discard())
+	for attempt := 1; attempt <= synthRetry.Attempts; attempt++ {
+		at := rejectedPath("survey/b.json", attempt)
+		data, err := store.Get(at)
+		if err != nil {
+			t.Fatalf("attempt %d left no evidence at %s: %v", attempt, at, err)
+		}
+		if string(data) != malformed {
+			t.Errorf("%s holds %q, want the response as it arrived", at, data)
+		}
+		if _, err := store.readStamp(at); err == nil {
+			t.Errorf("%s was stamped; evidence is not a derived artifact", at)
+		}
+	}
+	if !lg.Has(t, "warn", "response", rejectedPath("survey/b.json", 1)) {
+		t.Error("the rejection record does not name where the response was kept")
+	}
+}
+
+// TestRejectedEvidenceOfARecoveredUnitIsKeptToo is the other half, and it is
+// the same half: the outcome of the unit decides nothing about the file.
+//
+// A rejection whose informed retry then SUCCEEDED still happened, and a run
+// whose numbers say "one rejection, recovered" is a run someone will want to
+// read the rejection of. Evidence has no lifecycle of its own to give it a
+// different answer here (§12, two path classes) — it is temp-work, so it goes
+// when the tree does and not before.
+func TestRejectedEvidenceOfARecoveredUnitIsKeptToo(t *testing.T) {
+	dir := t.TempDir()
+	var once sync.Once
+	client := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		bad := false
+		if strings.Contains(req.Messages[0].Content, "survey/b.json") {
+			once.Do(func() { bad = true })
+		}
+		if bad {
+			return model.Response{Content: "not data at all", FinishReason: "stop"}, nil
+		}
+		return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+	}}
+
+	lg := &logtest.Capture{}
+	res, err := runSynth(t, dir, client, 1, lg, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.DeliveryReady() {
+		t.Fatalf("result = %+v, want the informed retry to have recovered the run", res)
+	}
+	if !lg.Has(t, "warn", "response", rejectedPath("survey/b.json", 1)) {
+		t.Fatal("no response was rejected in this run, so there is no evidence to find")
+	}
+	if _, err := synthStore(t, dir, log.Discard()).Get(rejectedPath("survey/b.json", 1)); err != nil {
+		t.Errorf("a completed run dropped the evidence of a rejection it recovered from: %v", err)
 	}
 }
 

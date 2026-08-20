@@ -153,6 +153,23 @@ type call struct {
 	// is none. A non-zero Frontier with a nil Prev is refused by the
 	// tripwire rather than passed.
 	Prev map[prompt.Slot][32]byte
+
+	// PreserveRejected keeps the raw bytes of a response that failed
+	// mechanical verification and returns where it kept them, for the record
+	// that reports the rejection. It is the caller's because the runner has no
+	// store — the worker does, and it is the half of this seam that knows where
+	// a unit lives.
+	//
+	// Why the bytes are kept at all: a verifier's rejection reason says what
+	// RULE the response broke, and a post-mortem needs what the response
+	// actually WAS. The 2026-08-18 shakedown could name a rejection class and
+	// not one instance of it, which is the difference between "the answers
+	// were malformed" and knowing how.
+	//
+	// Optional. A caller with nowhere to put them supplies nothing and the
+	// rejection is reported without a location, which is what every test that
+	// counts attempts wants.
+	PreserveRejected func(attempt int, response string) string
 }
 
 // CallResult is what one unit's call produced.
@@ -294,8 +311,14 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 			return CallResult{}, WorkerAbortError{Stage: c.Stage, ArtifactPath: c.ArtifactPath, Err: verr}
 		}
 		lastErr, kind = verr, FailureVerification
-		r.lg.Warn("response failed mechanical verification", "stage", c.Stage, "unit", c.ArtifactPath,
-			"attempt", attempt, "prompt", hash, "outcome", "rejected", "reason", verr)
+		rec := []any{"stage", c.Stage, "unit", c.ArtifactPath,
+			"attempt", attempt, "prompt", hash, "outcome", "rejected", "reason", verr}
+		if c.PreserveRejected != nil {
+			if at := c.PreserveRejected(attempt, resp.Content); at != "" {
+				rec = append(rec, "response", at)
+			}
+		}
+		r.lg.Warn("response failed mechanical verification", rec...)
 		in = withRetryNote(c.Input, verr, retry.NoteWords)
 	}
 	return r.resolveSeam(c, res, kind, lastErr)

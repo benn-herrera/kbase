@@ -79,15 +79,16 @@ func TestDescentComposesATreePlan(t *testing.T) {
 	}
 }
 
-// TestDescentRetriesMalformedJSON: a response that is not the object is a
-// REJECTION, retried once with the reason. Prose where data was asked for is
-// the most likely failure of this seam, and it must cost one visible retry
-// rather than the job.
-func TestDescentRetriesMalformedJSON(t *testing.T) {
+// TestDescentRetriesAnAnswerWithNoGroupLines: a response holding no group line
+// at all is a REJECTION, retried once with the reason. It is the one
+// whole-response failure the line grammar leaves — the model answered something
+// other than the question — and it must cost one visible retry rather than the
+// job.
+func TestDescentRetriesAnAnswerWithNoGroupLines(t *testing.T) {
 	lg := &logtest.Capture{}
 	d := designerFor(t, lg, testBudgets(), fixtureDocs()...)
 	responses := script(d, perCandidate)
-	// The first container answers with prose, then with the object.
+	// The first container answers with prose, then with the lines.
 	queue := append([]model.Response{{Content: "I would group these by topic.", FinishReason: "stop"}}, responses...)
 	client := model.NewScriptedMockPerConsult(queue)
 	client.RecordCalls = true
@@ -102,8 +103,8 @@ func TestDescentRetriesMalformedJSON(t *testing.T) {
 	if got := len(planIn(t, dir).Nodes); got == 0 {
 		t.Fatal("the composed artifact holds no nodes")
 	}
-	if !lg.Has(t, "info", "reason", "answer with the JSON object described and nothing else") {
-		t.Error("the malformed answer was not recorded as a rejection")
+	if !lg.Has(t, "info", "reason", "answer one group line per group") {
+		t.Error("the answer with no group lines was not recorded as a rejection")
 	}
 	// The retry carried the mechanical reason: a blind resend would be hoping
 	// temperature fixes it.
@@ -124,7 +125,7 @@ func TestDescentRejectsAPartitionViolation(t *testing.T) {
 		return answer{Groups: out.Groups[:1]}
 	}
 	// The first container drops an entry; every container then answers well.
-	queue := append([]model.Response{{Content: mustJSON(dropped(d.asks[0])), FinishReason: "stop"}},
+	queue := append([]model.Response{{Content: lines(dropped(d.asks[0])), FinishReason: "stop"}},
 		script(d, perCandidate)...)
 	client := model.NewScriptedMockPerConsult(queue)
 	client.RecordCalls = true
@@ -357,7 +358,7 @@ func TestAnAbsorbedContainerCannotFailTheLane(t *testing.T) {
 	// The root answers; every call after it gets prose, which is the rejection
 	// that killed the first live run.
 	queue := []model.Response{
-		{Content: mustJSON(absorbedByTheRoot(d.asks[0])), FinishReason: "stop"},
+		{Content: lines(absorbedByTheRoot(d.asks[0])), FinishReason: "stop"},
 		{Content: "I would group these by topic.", FinishReason: "stop"},
 		{Content: "I would group these by topic.", FinishReason: "stop"},
 	}

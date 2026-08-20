@@ -18,6 +18,9 @@ Reserve that language for moments of significant insight, intelligence, capabili
   authorizing words in the current message. Your own conclusions,
   conditionals ("if we X..."), and constraints on an open choice are not
   authorization. No quotable go — no action.
+- Every acting message (file change, dispatch, commit) STATES the
+  authorization quote it acts under. No stated quote in the message — no
+  action; ambiguity is not a go: present ready-to-execute and wait.
 - A one-off instruction authorizes one act, not a standing rule.
 
 ## Planning

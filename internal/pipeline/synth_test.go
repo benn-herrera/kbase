@@ -510,11 +510,14 @@ func synthStore(t *testing.T, dir string, lg log.Logger) *ArtifactStore {
 // thing two runs must agree on byte for byte. Paths are relative to the store
 // root, so they read as the chain's own unit paths.
 //
-// Two kinds of file are excluded, and for the same reason: they are not the
-// job's output. The lockfile is process bookkeeping, and a temp file is the
-// residue a killed write leaves behind (with a random name, so it could not
-// compare equal anyway). A resumed run is required to produce the same
-// ARTIFACTS as an uninterrupted one, not the same litter.
+// Three kinds of file are excluded, and for the same reason: they are not the
+// job's output. The lockfile is process bookkeeping; a temp file is the residue
+// a killed write leaves behind (with a random name, so it could not compare
+// equal anyway); and a rejected response is forensic evidence of an answer that
+// was thrown away, which is by definition not something a run produced. A
+// resumed run is required to produce the same ARTIFACTS as an uninterrupted
+// one, not the same litter — and the tests that are about the evidence read it
+// by name (TestARejectedResponseIsPreservedBesideItsUnit), never through here.
 func storeState(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	root := storeRoot(dir)
@@ -531,7 +534,8 @@ func storeState(t *testing.T, dir string) map[string]string {
 			return relErr
 		}
 		name := d.Name()
-		if name == LockFileName || strings.Contains(name, tempSuffix) {
+		if name == LockFileName || strings.Contains(name, tempSuffix) ||
+			strings.Contains(name, rejectedMarker) {
 			return nil
 		}
 		data, readErr := os.ReadFile(path)

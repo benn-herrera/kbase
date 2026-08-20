@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,36 @@ func writeLiveCorpus(t *testing.T) string {
 	return dir
 }
 
+// The two answer grammars, written the way a model writes them: one `group`
+// line per group, and three labelled text blocks.
+//
+// They are spelled out here rather than derived from the parsers' own constants
+// on purpose. This is the end-to-end test of the model path, so what it must
+// send is what a model sends — a fixture built from the reader's constants would
+// agree with the reader by construction, which is the one thing this test is
+// not allowed to assume.
+type scriptedGroup struct {
+	title, scope, kind string
+	members            []int
+}
+
+func groupingAnswer(groups ...scriptedGroup) string {
+	var b strings.Builder
+	for _, g := range groups {
+		nums := make([]string, 0, len(g.members))
+		for _, m := range g.members {
+			nums = append(nums, strconv.Itoa(m))
+		}
+		fmt.Fprintf(&b, "group :: %s :: %s :: %s :: %s\n",
+			g.title, g.scope, g.kind, strings.Join(nums, ", "))
+	}
+	return b.String()
+}
+
+func summaryAnswer(framing, heading, conclusions string) string {
+	return "FRAMING:\n" + framing + "\n\nHEADING:\n" + heading + "\n\nCONCLUSIONS:\n" + conclusions + "\n"
+}
+
 // liveScript is the scripted conversation: three container answers, then a
 // summary for every section node. The taxonomy calls are one serial lane and
 // come first, in order; the summaries follow, and are identical because their
@@ -81,23 +112,13 @@ func writeLiveCorpus(t *testing.T) string {
 func liveScript(t *testing.T) []model.Response {
 	t.Helper()
 	group := func(title string) string {
-		data, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-			"title": title, "scope": "what a reader finds in " + title,
-			"kind": "section", "members": []int{1, 2},
-		}}})
-		if err != nil {
-			t.Fatalf("encode the grouping answer: %v", err)
-		}
-		return string(data)
+		return groupingAnswer(scriptedGroup{
+			title: title, scope: "what a reader finds in " + title,
+			kind: "section", members: []int{1, 2},
+		})
 	}
-	summary, err := json.Marshal(map[string]string{
-		"framing":            "This section holds the material below it.",
-		"conclusionsHeading": "What it settles",
-		"conclusions":        "Alpha and Beta are documented here.",
-	})
-	if err != nil {
-		t.Fatalf("encode the summary answer: %v", err)
-	}
+	summary := summaryAnswer("This section holds the material below it.",
+		"What it settles", "Alpha and Beta are documented here.")
 
 	out := []model.Response{
 		{Content: group("The Corpus"), FinishReason: "stop"},
@@ -107,7 +128,7 @@ func liveScript(t *testing.T) []model.Response {
 	// Four section nodes get a summary: the entry-point, the domain the root's
 	// group created, and the two the documents' groups created.
 	for range 4 {
-		out = append(out, model.Response{Content: string(summary), FinishReason: "stop"})
+		out = append(out, model.Response{Content: summary, FinishReason: "stop"})
 	}
 	return out
 }
@@ -263,32 +284,20 @@ func TestBuildLiveSummarisesSiblingLeavesAsAGroup(t *testing.T) {
 	// The root's answer: document three on a page of its own, the other two under
 	// one section. Every other container gets one section over everything it
 	// holds.
-	rootGroups, err := json.Marshal(map[string]any{"groups": []map[string]any{
-		{"title": "Document Three", "scope": "what a reader finds in document three",
-			"kind": "page", "members": []int{3}},
-		{"title": "The Corpus", "scope": "what a reader finds in the corpus",
-			"kind": "section", "members": []int{1, 2}},
-	}})
-	if err != nil {
-		t.Fatalf("encode the root grouping answer: %v", err)
-	}
-	group, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "A Section", "scope": "what a reader finds here",
-		"kind": "section", "members": []int{1, 2},
-	}}})
-	if err != nil {
-		t.Fatalf("encode the grouping answer: %v", err)
-	}
-	summary, err := json.Marshal(map[string]string{
-		"framing":            "This section holds the material below it.",
-		"conclusionsHeading": "What it settles",
-		"conclusions":        "The material is documented here.",
+	rootGroups := groupingAnswer(
+		scriptedGroup{title: "Document Three", scope: "what a reader finds in document three",
+			kind: "page", members: []int{3}},
+		scriptedGroup{title: "The Corpus", scope: "what a reader finds in the corpus",
+			kind: "section", members: []int{1, 2}},
+	)
+	group := groupingAnswer(scriptedGroup{
+		title: "A Section", scope: "what a reader finds here",
+		kind: "section", members: []int{1, 2},
 	})
-	if err != nil {
-		t.Fatalf("encode the summary answer: %v", err)
-	}
-	client := newStageFake(string(group), "1", string(summary))
-	client.root = string(rootGroups)
+	summary := summaryAnswer("This section holds the material below it.",
+		"What it settles", "The material is documented here.")
+	client := newStageFake(group, "1", summary)
+	client.root = rootGroups
 
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{
@@ -442,33 +451,21 @@ func TestBuildLiveDescendsIntoAnOversizedSection(t *testing.T) {
 	// The document's own call: two entries, the descended section and the small
 	// one, under one heading. Alpha carries entries of its own, so its groups
 	// attach below this node when its turn comes.
-	docGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "The Document", "scope": "what a reader finds in the document",
-		"kind": "section", "members": []int{1, 2},
-	}}})
-	if err != nil {
-		t.Fatalf("encode the document grouping answer: %v", err)
-	}
+	docGroup := groupingAnswer(scriptedGroup{
+		title: "The Document", scope: "what a reader finds in the document",
+		kind: "section", members: []int{1, 2},
+	})
 	// Alpha's own call: three entries — its body and its two subsections, in
 	// that order — grouped under a subtopic index. This is the question that
 	// did not exist before descent.
-	sectionGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "Alpha Sections", "scope": "what a reader finds under Alpha",
-		"kind": "section", "members": []int{1, 2, 3},
-	}}})
-	if err != nil {
-		t.Fatalf("encode the section grouping answer: %v", err)
-	}
-	summary, err := json.Marshal(map[string]string{
-		"framing":            "This section holds the material below it.",
-		"conclusionsHeading": "What it settles",
-		"conclusions":        "The material is documented here.",
+	sectionGroup := groupingAnswer(scriptedGroup{
+		title: "Alpha Sections", scope: "what a reader finds under Alpha",
+		kind: "section", members: []int{1, 2, 3},
 	})
-	if err != nil {
-		t.Fatalf("encode the summary answer: %v", err)
-	}
-	client := newStageFake(string(docGroup), "1", string(summary))
-	client.section = string(sectionGroup)
+	summary := summaryAnswer("This section holds the material below it.",
+		"What it settles", "The material is documented here.")
+	client := newStageFake(docGroup, "1", summary)
+	client.section = sectionGroup
 
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{
@@ -762,13 +759,10 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string, s
 	out := filepath.Join(t.TempDir(), "kb")
 	// The corpus root's answer: one section over the two documents, so each
 	// document's own call has a node to attach its groups to.
-	rootGroup, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "The Documents", "scope": "what a reader finds in the documents",
-		"kind": "section", "members": []int{1, 2},
-	}}})
-	if err != nil {
-		t.Fatalf("encode the root grouping answer: %v", err)
-	}
+	rootGroup := groupingAnswer(scriptedGroup{
+		title: "The Documents", scope: "what a reader finds in the documents",
+		kind: "section", members: []int{1, 2},
+	})
 	// Each DOCUMENT's answer: both of its entries on pages. The first entry is
 	// an oversized section the source's own headings descend into, so this is
 	// the answer that hands the splitter a real span to cut — one page over the
@@ -777,23 +771,14 @@ func buildSplit(t *testing.T, boundary string) (buildResult, buildRun, string, s
 	// would descend instead and there would be no boundary in the job at all,
 	// which is the point of the ruling: the split path is what happens to an
 	// over-budget page, whoever named it.
-	group, err := json.Marshal(map[string]any{"groups": []map[string]any{{
-		"title": "The Material", "scope": "what a reader finds here",
-		"kind": "page", "members": []int{1, 2},
-	}}})
-	if err != nil {
-		t.Fatalf("encode the grouping answer: %v", err)
-	}
-	summary, err := json.Marshal(map[string]string{
-		"framing":            "This section holds the material below it.",
-		"conclusionsHeading": "What it settles",
-		"conclusions":        "The reconciler is documented here.",
+	group := groupingAnswer(scriptedGroup{
+		title: "The Material", scope: "what a reader finds here",
+		kind: "page", members: []int{1, 2},
 	})
-	if err != nil {
-		t.Fatalf("encode the summary answer: %v", err)
-	}
-	client := newStageFake(string(group), boundary, string(summary))
-	client.root = string(rootGroup)
+	summary := summaryAnswer("This section holds the material below it.",
+		"What it settles", "The reconciler is documented here.")
+	client := newStageFake(group, boundary, summary)
+	client.root = rootGroup
 
 	var stdout, stderr bytes.Buffer
 	res, err := runBuild(context.Background(), buildOptions{

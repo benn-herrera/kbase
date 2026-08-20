@@ -14,8 +14,9 @@ import (
 // of that depends on the wording. Keeping a stub visible and marked is honest;
 // inventing tuned text nobody evaluated would look like the real thing.
 //
-// The one part of it that is NOT provisional is the schema: it is the contract
-// parseAnswer reads, so the two move together or neither does.
+// The one part of it that is NOT provisional is the answer format: the grammar
+// below is answerGrammar and answerExample rendered, which is the same
+// declaration parseAnswer reads, so the two move together or neither does.
 const (
 	stubDefinition = "# Taxonomy design\n\n" +
 		"You are shown one container of a documentation corpus — the corpus itself, a folder, or a\n" +
@@ -23,15 +24,22 @@ const (
 		"sections and pages of a knowledge base.\n\n" +
 		"A group is a `page` when its entries belong together as one page of text a reader reads.\n" +
 		"A group is a `section` when its entries need a heading of their own with more below it.\n\n" +
-		"Answer with one JSON object:\n\n" +
-		"    {\"groups\": [{\"title\": \"…\", \"scope\": \"…\", \"kind\": \"page\", \"members\": [1, 2]}]}\n\n" +
-		"- `title` — what the group is called, in the corpus's own words.\n" +
-		"- `scope` — one line saying what a reader finds there.\n" +
-		"- `kind` — `page` or `section`.\n" +
-		"- `members` — the numbers of the entries in this group.\n\n" +
+		"The numbered list is already settled: the entries, their order and their numbers are fixed\n" +
+		"and are not yours to change. What is open is which entries go together, and the title,\n" +
+		"the scope and the kind of each group you make.\n\n" +
+		"Write one line per group, in this form:\n\n" +
+		"    " + answerGrammar + "\n\n" +
+		"So one line reads:\n\n" +
+		"    " + answerExample + "\n\n" +
+		"- `<title>` — what the group is called, in the corpus's own words.\n" +
+		"- `<scope>` — one line saying what a reader finds there.\n" +
+		"- `page` or `section` — one of those two words.\n" +
+		"- `<entry numbers>` — the numbers of the entries in this group, separated by commas.\n\n" +
+		"Nothing else you write is read: a line that does not begin with `" + groupKeyword + " " + fieldSep +
+		"` is ignored, so\nthere is no wrapper to get right and nothing to close.\n\n" +
 		"## CRITICAL\n\n" +
 		"Every numbered entry belongs to exactly one group: no entry twice, none left out.\n" +
-		"Answer with the JSON object and nothing else.\n"
+		"Write the values; the punctuation of the line is fixed.\n"
 
 	stubTaskDef = "Task: group the numbered entries of one container into the sections and pages of a knowledge base."
 )

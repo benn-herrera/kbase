@@ -88,8 +88,7 @@ func ConstInput(in prompt.CallInput) InputBuilder {
 // Producer derives a unit's artifact in process, with no model involved. It is
 // the deterministic half of the pipeline (ARCHITECTURE.md §4: ingest, survey,
 // distillation, assembly, verify) expressed as a task, so those stages get the
-// resume, the stamps, the sweep accounting and the one worklist that the model
-// stages already have.
+// resume, the stamps and the one worklist that the model stages already have.
 //
 // It runs where the runner would have run, and everything around it is the
 // same: the unit is described identically, its input set is resolved and hashed
@@ -518,14 +517,6 @@ func (c *Coordinator) Run(ctx context.Context, plan Plan, mode Mode) (res JobRes
 		res.Stages++
 	}
 
-	// Only a run that described its whole chain knows what belongs in the
-	// job directory; see ArtifactStore.sweep for why that is the one safe moment.
-	if err == nil && res.Stages == len(chain) {
-		if serr := c.store.sweep(chain); serr != nil {
-			err = serr
-		}
-	}
-
 	slices.SortFunc(res.Failures, func(a, b OwedArtifactFailure) int { return strings.Compare(a.Path, b.Path) })
 	c.lg.Info("job finished",
 		"mode", string(mode), "stages", res.Stages, "units", res.Units,
@@ -839,6 +830,9 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	res, err := w.runner.Run(ctx, call{
 		Stage: w.stage, ArtifactPath: task.Owed.Path, BoundAsk: w.boundAsk,
 		Input: in, Frontier: frontier, Prev: w.prev,
+		PreserveRejected: func(attempt int, response string) string {
+			return w.preserveRejected(task.Owed.Path, attempt, response)
+		},
 	})
 	// A call was attempted, so the traversal restarts from whatever phase
 	// the worker is standing in — w.phase rather than the literal, so a
@@ -867,6 +861,23 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	}
 
 	return w.write(domain, task, res.Artifact, inputs, res)
+}
+
+// preserveRejected writes the raw bytes of a rejected response beside the unit
+// and returns where, for the runner's own rejection record.
+//
+// Failing to write evidence is not a failure of the call: the unit still has a
+// retry to make and a seam to resolve, and losing a build over a forensic copy
+// would be the tail wagging the dog. It is logged and the rejection is reported
+// without a location.
+func (w *worker) preserveRejected(unit string, attempt int, response string) string {
+	at := rejectedPath(unit, attempt)
+	if err := w.store.putEvidence(at, []byte(response)); err != nil {
+		w.lg.Warn("the rejected response could not be preserved",
+			"stage", w.stage, "unit", unit, "attempt", attempt, "error", err)
+		return ""
+	}
+	return at
 }
 
 // skip completes a task whose builder said its call was not wanted. Nothing

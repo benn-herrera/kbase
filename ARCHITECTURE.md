@@ -100,6 +100,42 @@ judgment roles; the human at the edges.**
   tile the document; summary-review flags; a taxonomy tree plan). Deterministic code
   validates and executes.
 
+- **The model supplies VALUES; the machine owns SYNTAX** (ruled 2026-08-18). An ask
+  spoonfeeds its subject fully resolved — the numbered candidate list, the page's own
+  context — states exactly which values are open for change, and takes the answer in a
+  line or block grammar the machine wrote: one line per group, three labelled text
+  blocks. **No ask asks a model to construct a document.** Asking for JSON delegated
+  the syntax as well as the judgement, and the two fail differently: the 833-container
+  shakedown's ~4% rejection rate was document-construction failure — a brace, a comma,
+  a fence — from a model whose grouping was fine, and each one cost an escalated retry.
+  The reader is the ruled Postel pairing, **forgiving of noise and strict on
+  substance**: a line that is not in the grammar is not read at all, so a fence, a
+  preamble and a closing remark cost nothing; a line that IS in the grammar is held to
+  it exactly; and the semantic verifiers (partition, budgets, content rules) remain the
+  real net, each rule stated once, in the verifier that owns it. The format is declared
+  ONCE per ask — beside the parser that reads it, rendered into the definition the ask
+  carries — so the sentence the model is shown and the sentence the machine enforces
+  cannot drift (`taxonomy.answerGrammar`, `summarize.labelFraming` and its two
+  siblings). The boundary ask has always been value-only ("answer with one number") and
+  is the pattern's proof: near-perfect live compliance, no construction failures.
+  Machine-to-machine encodings are untouched by this — the artifacts kbase writes for
+  itself stay JSON.
+
+- **The provider contract is OpenAI-compatible base plus DE FACTO UNIVERSAL
+  extensions**, and nothing else (ruled 2026-08-18). An extension qualifies when it is
+  present AND consistently honored across the hosts a user may bring (vLLM, llama.cpp,
+  Ollama, the cloud hosts); one that is widely present but unevenly honored is worse
+  than absent, because it works in testing and degrades silently in the field. The
+  cheap-simplicity principle above is why: every provider-specific path is a second
+  code path and a second failure mode for the same appliance. **Schema-constrained
+  decoding (`response_format`/structured outputs) fails that bar today** — divergent
+  dialects, uneven `maxItems`/nesting enforcement — so it is not used on any core path,
+  and the answer-format ruling above is not a workaround for its absence but the design
+  that makes it unnecessary. If one dialect ever wins, it may be layered as an OPTIONAL
+  tightening derived from that same declared answer format — never as a second
+  declaration of it, and never as the thing correctness depends on. The `/tokenize`
+  endpoint is the same judgement already made once, at §8.
+
 - **Monotone safety: mechanical fallbacks are always valid.** Every model-refined
   artifact has a deterministic fallback that was already acceptable (heuristic cuts,
   un-reviewed summaries flagged as such). Model failure degrades *quality*, never
@@ -720,6 +756,19 @@ resolution**.
   stage's lane, and a rejected attempt leaves the stage state untouched so
   the informed retry re-asks the same question; `MechanicalFallback` runs at most once
   per unit and only after that unit's attempts are exhausted.
+- **A rejected response is kept as evidence.** The raw bytes of every response
+  that failed mechanical verification are written beside the unit they
+  answered, one file per attempt
+  (`<unit>.rejected-<attempt>.txt`, `pipeline.rejectedPath`), and the rejection
+  record names the file. The verifier's reason says which RULE the response
+  broke; only the response says how, and the 2026-08-18 shakedown could name a
+  rejection class without a single instance of it. It is ordinary temp-work
+  and gets no lifecycle of its own (two path classes): unstamped, so no scan
+  verdicts it and no resume reuses it, and removed only when the temp-work
+  tree it sits in goes. The unit's eventual outcome decides nothing about the
+  file — a recovered retry leaves its rejection behind exactly as a failed
+  unit does, because a run reporting "one rejection, recovered" is a run
+  someone will want to read the rejection of.
 - The informed retry always carries the mechanical failure reason — a blind
   identical resend hopes temperature fixes it, which is not design (ruled).
   How many attempts there are, how much of the reason the note carries, and
@@ -882,14 +931,13 @@ either.
 
 **Two task modes: a call, or a producer.** Four stages of
 the pipeline infer nothing — ingest/survey, distillation, assembly, verify —
-and running them outside the coordinator would forfeit resume, stamps, the
-sweep and the single worklist for exactly the stages that produce the
-deliverable. So a task either asks a model (`LaneTask.Input`) or derives its
+and running them outside the coordinator would forfeit resume, stamps and the
+single worklist for exactly the stages that produce the deliverable. So a task either asks a model (`LaneTask.Input`) or derives its
 artifact in process (`LaneTask.Produce`), exactly one of the two, and the worker
 calls the producer where it would have called the runner. Everything else is
 identical: the unit description, the input set resolved and hashed BEFORE the
-derivation runs, the encoder, the atomic write, the stamp, the resume scan, the
-sweep, and the failure inventory — a producer's failure is an inventoried unit
+derivation runs, the encoder, the atomic write, the stamp, the resume scan,
+and the failure inventory — a producer's failure is an inventoried unit
 failure with no fallback and no retry, since the same inputs derive the same
 failure. A producer touches no prompt machinery, so a mechanical stage declares
 no AskSpec at all and carries its own encoder instead. The modes do not MIX within
@@ -1077,29 +1125,42 @@ Then:
   deleted, since deleting what kbase did not write is the one thing the sweep's
   safety argument forbids.
 
-That rooting is what makes the sweep safe, structurally rather than by check:
-it can only delete inside a directory kbase itself created one level below
-whatever the operator named, so `--out notes` cannot reach `notes/`. (`sweep`
-additionally refuses a root not named `temp-work` — one string comparison, a
-tripwire behind the structure.)
+**Temp-work is removed only as a whole** (the sweep was deleted 2026-08-19,
+ruled). There are exactly two removals, and both take the entire tree:
+teardown after a successful delivery, and `--fresh`, which discards the job
+directory before it scans (`pipeline.ArtifactStore.discard`). Nothing is
+removed from INSIDE a live job directory. A job's temp-work therefore
+accumulates over its whole lifetime, resumes included: a killed write's temp
+residue stays, and so does an artifact a superseded plan named and the
+current one does not.
+
+That is safe because such a file is INERT, which is the same fact the stamp
+discipline already turns on. A resume scan inspects only the paths the chain
+names, so nothing verdicts it; nothing reuses it; and delivery copies exactly
+what the current plan names rather than walking the tree, so nothing ships
+it. The alternative — an end-of-run sweep of everything the chain did not
+account for — bought the removal of files nobody was ever going to read,
+and paid for it in a lifecycle rule with an exception in it (the evidence of
+a failed unit had to be spared). The no-keep path deletes the tree anyway,
+and the keep path is precisely where completeness is wanted: the orphans of
+an abandoned plan are themselves forensics.
+
+Rooting is what makes both removals safe, structurally rather than by check:
+each can only delete inside a directory kbase itself created one level below
+whatever the operator named, so `--out notes` cannot reach `notes/`.
+(`discard` additionally refuses a root not named `temp-work` — one string
+comparison, a tripwire behind the structure.)
 
 Teardown is asymmetric and that is one rule rather than a cleanup step with an
 exception: a run that SUCCEEDED and delivered removes the tree; a failed or
-interrupted run keeps it, resume-compatible, which is the same "litter around a
-broken job is evidence" reading the sweep already takes. A keep switch overrides
-the deletion for the run that succeeded and should not have: `[dev]
-keep_temp_work` in config.toml, and a CLI flag (`--keep-temp-work`) that turns
-it on for one run. The flag only ever turns keeping ON — the sole reason to
-insist on deletion is disk, whose remedy is one `rm -r`, while the reason to
-keep is evidence that cannot be recovered once it is gone.
-
-**Sweep.** A completed run removes every file under the store root the chain
-does not account for — a killed write's temp residue, and artifacts of a
-prior run whose plan named different paths (internally consistent, so no
-verdict would ever catch them). It runs at the END of a run that described
-its whole chain, which under lazy description is the only moment the
-accounted-for set is complete: a job-setup sweep would delete the later
-stages' reusable artifacts before their stages had resolved.
+interrupted run keeps it, resume-compatible. "Litter around a broken job is
+evidence" is uniformly true — there is no point at which anything sifts it. A
+keep switch overrides the deletion for the run that succeeded and should not
+have: `[dev] keep_temp_work` in config.toml, and a CLI flag
+(`--keep-temp-work`) that turns it on for one run. The flag only ever turns
+keeping ON — the sole reason to insist on deletion is disk, whose remedy is
+one `rm -r`, while the reason to keep is evidence that cannot be recovered
+once it is gone.
 
 Crashpoint hooks at phase transitions and store writes; the resume test
 harness kills at every registered point and asserts byte-identical final

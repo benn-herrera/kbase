@@ -3,19 +3,17 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"kbase/internal/log"
 )
 
-// The sweep deletes recursively, so what stops it reaching an operator's files
-// is the whole of this file's subject: it is rooted in a directory kbase made,
-// one level below whatever `--out` named.
+// Everything a run writes lands one level below whatever `--out` named, in a
+// directory kbase made, and that rooting is the whole of this file's subject.
 
 // TestNothingOutsideTempWorkIsTouched is the case that made this structural
 // (ARCHITECTURE.md §12): an output directory the operator already keeps files
-// in, pointed at by a run that completes and therefore sweeps.
+// in, pointed at by a run that goes all the way through.
 //
 // The foreign file is not a stray — it is the shape of `--out notes` against a
 // notes directory, or `--out .`, which are the two an operator reaches for
@@ -34,14 +32,10 @@ func TestNothingOutsideTempWorkIsTouched(t *testing.T) {
 		t.Fatalf("write the operator's nested file: %v", err)
 	}
 
-	client, res := runToCompletion(t, out, ModeResume)
+	client, _ := runToCompletion(t, out, ModeResume)
 	if client.callCount() != synthCalls {
 		t.Fatalf("%d calls, want a complete run of %d", client.callCount(), synthCalls)
 	}
-	if res.ResumeScan.Stages != res.Stages {
-		t.Fatalf("the run did not describe its whole chain, so it never swept: %+v", res)
-	}
-
 	for _, rel := range []string{foreign, filepath.Join("notes", "deeper.md")} {
 		got, err := os.ReadFile(filepath.Join(out, rel))
 		if err != nil {
@@ -68,20 +62,6 @@ func TestNothingOutsideTempWorkIsTouched(t *testing.T) {
 	if len(storeState(t, out)) != 2*synthUnits {
 		t.Errorf("the store holds %d files, want an artifact and a stamp per unit under %s",
 			len(storeState(t, out)), TempWorkDirName)
-	}
-}
-
-// TestSweepRefusesARootItDidNotMake is the tripwire behind the structure: one
-// string comparison against the day a store is rooted somewhere kbase did not
-// create for this purpose.
-func TestSweepRefusesARootItDidNotMake(t *testing.T) {
-	dir := t.TempDir()
-	err := NewArtifactStore(dir, log.Discard()).sweep(synthPlan(t).StageChain())
-	if err == nil {
-		t.Fatal("a sweep over a root that is not a temp-work directory must be refused")
-	}
-	if !strings.Contains(err.Error(), TempWorkDirName) {
-		t.Errorf("err = %v, want it to name what a sweepable root is", err)
 	}
 }
 

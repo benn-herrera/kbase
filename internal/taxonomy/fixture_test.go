@@ -1,8 +1,8 @@
 package taxonomy
 
 import (
-	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -240,6 +240,39 @@ func planIn(t *testing.T, dir string) treeplan.TreePlan {
 	return plan
 }
 
+// answer and answerGroup are how these tests DESCRIBE an answer. They are not a
+// wire shape and there is no decoder for them: the wire is lines (answer.go),
+// and lines below is the only thing that turns one of these into a response.
+// Keeping the description structured is what lets a test say "drop a group"
+// without spelling punctuation the parser owns.
+type answer struct {
+	Groups []answerGroup
+}
+
+type answerGroup struct {
+	Title   string
+	Scope   string
+	Kind    string
+	Members []int
+}
+
+// lines renders an answer in the line grammar the model is asked for, built
+// from the parser's own separators so a fixture cannot describe a line the
+// grammar does not have.
+func lines(a answer) string {
+	var b strings.Builder
+	for _, g := range a.Groups {
+		nums := make([]string, 0, len(g.Members))
+		for _, m := range g.Members {
+			nums = append(nums, strconv.Itoa(m))
+		}
+		fmt.Fprintf(&b, "%s %s %s %s %s %s %s %s %s\n",
+			groupKeyword, fieldSep, g.Title, fieldSep, g.Scope, fieldSep, g.Kind,
+			fieldSep, strings.Join(nums, memberSep+" "))
+	}
+	return b.String()
+}
+
 // perCandidate is the reference answer: one group per entry, a `section` where
 // the entry holds entries of its own and a `page` where it does not. It is what
 // a model that agreed with the source's own organisation would say.
@@ -265,17 +298,9 @@ func perCandidate(a *ask) answer {
 func script(d *Designer, answerFor func(*ask) answer) []model.Response {
 	out := make([]model.Response, 0, len(d.asks))
 	for _, a := range d.asks {
-		out = append(out, model.Response{Content: mustJSON(answerFor(a)), FinishReason: "stop"})
+		out = append(out, model.Response{Content: lines(answerFor(a)), FinishReason: "stop"})
 	}
 	return out
-}
-
-func mustJSON(a answer) string {
-	data, err := json.Marshal(a)
-	if err != nil {
-		panic(err)
-	}
-	return string(data)
 }
 
 // indexPaths is every section node of a plan, in artifact order.

@@ -386,15 +386,20 @@ func TestResumeAcrossADerivedStageBoundary(t *testing.T) {
 	}
 }
 
-// TestSweepClearsWhatTheChainDoesNotAccountFor: the resume scan only inspects
-// paths the chain names, so a killed write's temp file and a previous plan's
-// orphaned artifacts are invisible to it and accumulate in a directory that is
-// (or becomes) the emitted tree. A completed run removes them.
+// TestWhatTheChainDoesNotAccountForPersistsInertly: an artifact a previous
+// plan named and this one does not is an ORPHAN — invisible to the resume
+// scan, which only inspects paths the chain names. Nothing removes it, and
+// nothing has to: being unaccounted-for is what makes it harmless, and a
+// job's temp-work accumulates within its lifetime (§3.9). The two removals
+// are teardown and `--fresh`, and both take the whole tree.
 //
-// The orphan carries a perfectly valid stamp of its own, which is the point:
-// it is not incoherent and no verdict would ever catch it. Only "the chain
-// does not account for this" does.
-func TestSweepClearsWhatTheChainDoesNotAccountFor(t *testing.T) {
+// The orphan carries a perfectly valid stamp of its own, which is what makes
+// inertness the claim worth arming: nothing about it is incoherent, so if the
+// run DID read the tree rather than its chain, this is the file it would read.
+// Three assertions say it does not — the orphan survives, the run's own
+// accounting is identical to a run that never saw it, and every artifact the
+// chain does name is byte-identical to an uninterrupted run's.
+func TestWhatTheChainDoesNotAccountForPersistsInertly(t *testing.T) {
 	dir := t.TempDir()
 
 	// A kill before a rename leaves the temp-file residue behind.
@@ -403,34 +408,65 @@ func TestSweepClearsWhatTheChainDoesNotAccountFor(t *testing.T) {
 
 	// And a previous plan's artifact, stamped and internally consistent.
 	const orphan = "leaves/from-an-older-taxonomy.md"
+	const orphanBody = "a previous plan's leaf\n"
 	store := synthStore(t, dir, log.Discard())
-	if err := store.Put(orphan, []byte("a previous plan's leaf\n"), []Input{corpusInput}); err != nil {
+	if err := store.Put(orphan, []byte(orphanBody), []Input{corpusInput}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if _, res := runToCompletion(t, dir, ModeResume); !res.DeliveryReady() {
+	_, res := runToCompletion(t, dir, ModeResume)
+	if !res.DeliveryReady() {
 		t.Fatalf("the completing run is not emit-ready: %+v", res)
 	}
 
-	for path := range storeState(t, dir) {
-		if path == orphan || path == orphan+StampSuffix {
-			t.Errorf("%s survived the sweep", path)
-		}
+	// It persists, bytes and stamp both.
+	state := storeState(t, dir)
+	if got := state[orphan]; got != orphanBody {
+		t.Errorf("the orphan reads %q, want it untouched (%q)", got, orphanBody)
 	}
-	entries, err := os.ReadDir(filepath.Join(storeRoot(dir), "survey"))
+	if _, ok := state[orphan+StampSuffix]; !ok {
+		t.Error("the orphan's stamp was removed from under it")
+	}
+	// So does the killed write's temp residue, which is the same rule read on
+	// the other kind of litter: it is not the run's output, so nothing hunts
+	// it down either.
+	if !hasTempResidue(t, filepath.Join(storeRoot(dir), "survey")) {
+		t.Error("the killed write's temp residue was removed; litter around a broken write is evidence too")
+	}
+
+	// And it is inert: the run that walked over it counted exactly the units
+	// its chain names, so nothing scanned it, reused it or owed it.
+	uninterrupted := t.TempDir()
+	_, clean := runToCompletion(t, uninterrupted, ModeResume)
+	if res.Units != clean.Units || res.Reused != clean.Reused || res.Produced != clean.Produced {
+		t.Errorf("units/reused/produced = %d/%d/%d beside the orphan, want %d/%d/%d — the run read the tree, not its chain",
+			res.Units, res.Reused, res.Produced, clean.Units, clean.Reused, clean.Produced)
+	}
+
+	// And what the chain DOES account for is byte-identical to a run that
+	// never had an orphan or a killed write near it. Comparing in this
+	// direction is the whole point: the orphan and the temp residue are extra
+	// entries on the got side, and extra entries are exactly what this test
+	// now expects.
+	delete(state, orphan)
+	delete(state, orphan+StampSuffix)
+	assertSameState(t, storeState(t, uninterrupted), state, "beside an orphan")
+}
+
+// hasTempResidue reports whether dir holds the temporary file a killed write
+// leaves behind.
+func hasTempResidue(t *testing.T, dir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read the job dir: %v", err)
+		t.Fatalf("read %s: %v", dir, err)
 	}
 	for _, e := range entries {
 		if strings.Contains(e.Name(), tempSuffix) {
-			t.Errorf("temp-file residue %s survived the sweep", e.Name())
+			return true
 		}
 	}
-
-	// And what the chain does account for is untouched.
-	uninterrupted := t.TempDir()
-	runToCompletion(t, uninterrupted, ModeResume)
-	assertSameState(t, storeState(t, uninterrupted), storeState(t, dir), "after a sweep")
+	return false
 }
 
 // TestAHardKillsLockfileRefusesEveryModeUntilRemoved pins the one piece of

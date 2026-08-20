@@ -31,6 +31,7 @@ BUILD_MECHANICAL_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-bui
 BUILD_LIVE_OMLX_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-omlx"
 WRITE_AGENTS_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-write-agents"
 BUILD_REFUSAL_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-refusal"
+BUILD_LIVE_TEMPORAL_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-temporal"
 
 # The configuration the live build dials: the checked-in fixture pool, whose
 # provider entry names a key FILE the built binary reads for itself. No recipe
@@ -58,14 +59,26 @@ ROJO_DOCS_DIR := TEST_DATA_TRANSIENT_DIR / "rojo.space"
 # Pinned integration corpus: the oMLX docs at the commit the survey
 # expectations below were validated against. Same bumping rule as Rojo's.
 #
-# Unlike rojo.space — a small dedicated docs site, cloned whole — jundot/omlx
-# is a monorepo whose docs/ is one subdirectory of an ML runtime, so a full
-# shallow clone is 176M for the 73K we survey. prep fetches it sparse
-# (docs/ only) and partial (blobs on demand), which is 31M. The corpus is
-# therefore {{OMLX_DOCS_DIR}}/docs, not {{OMLX_DOCS_DIR}}.
+# jundot/omlx is a monorepo; docs/ is one subdirectory of an ML runtime. prep
+# clones the WHOLE repo shallow, same pattern as Rojo's: simplicity over the
+# ~150M of one-time transient disk a sparse fetch would have saved (ruled
+# 2026-08-18). The corpus is {{OMLX_DOCS_DIR}}/docs, not {{OMLX_DOCS_DIR}}.
 OMLX_DOCS_REPO := "https://github.com/jundot/omlx"
 OMLX_DOCS_COMMIT := "aef5a0cf5a1c119ea55bd82f3476fc677230af99"
 OMLX_DOCS_DIR := TEST_DATA_TRANSIENT_DIR / "omlx"
+
+# Pinned integration corpus: the MVP shakedown corpus, temporal.io's
+# documentation — hundreds of real docs, the first big-corpus live run.
+# Ruled by Benn (2026-08-18): pin the shallow clone to this commit, closing
+# the gap the prior no-pin comment here left. Same bumping rule as Rojo's.
+#
+# The repo holds far more than docs/ (a whole documentation site's source),
+# but prep-test-integration-temporal clones it WHOLE and shallow, same
+# pattern as Rojo's: simplicity over sparse machinery (ruled 2026-08-18) —
+# the build only ever reads {{TEMPORAL_DOCS_DIR}}/docs.
+TEMPORAL_DOCS_REPO := "https://github.com/temporalio/documentation.git"
+TEMPORAL_DOCS_COMMIT := "133948056cc38ab06db42a685388bd96792b5e8a"
+TEMPORAL_DOCS_DIR := TEST_DATA_TRANSIENT_DIR / "temporal-io-documentation"
 
 # dist-only build trim: -trimpath drops local filesystem paths from the
 # binary; -s -w strips symbol table + DWARF (panic traces keep function
@@ -366,22 +379,19 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
 # where the model (not the corpus) decides how many split groups and
 # boundaries there are.
 #
-# The fetch is sparse + partial rather than the plain shallow clone Rojo's
-# prep does — see the pin block for why. `sparse-checkout set docs` in cone
-# mode also keeps the repository's top-level files; they are harmless, since
+# The fetch is the plain shallow clone Rojo's prep does — see the pin block
+# for why (ruled 2026-08-18: simplicity over sparse machinery). The
+# repository's own top-level files come along; they are harmless, since
 # ingest reads only the .md under the root it is given, and that root is
 # {{OMLX_DOCS_DIR}}/docs.
-[doc("fetch the pinned oMLX docs corpus, sparse + partial (no-op when present)")]
+[doc("fetch the pinned oMLX docs corpus (no-op when present)")]
 prep-test-integration-omlx:
     @if [[ -f "{{OMLX_DOCS_DIR}}/.git/HEAD" ]]; then \
       echo "omlx docs present: {{OMLX_DOCS_DIR}}"; \
     else \
       mkdir -p "{{OMLX_DOCS_DIR}}" && \
       git -C "{{OMLX_DOCS_DIR}}" init -q && \
-      git -C "{{OMLX_DOCS_DIR}}" remote add origin "{{OMLX_DOCS_REPO}}" && \
-      git -C "{{OMLX_DOCS_DIR}}" sparse-checkout init --cone && \
-      git -C "{{OMLX_DOCS_DIR}}" sparse-checkout set docs && \
-      git -C "{{OMLX_DOCS_DIR}}" fetch -q --depth 1 --filter=blob:none origin "{{OMLX_DOCS_COMMIT}}" && \
+      git -C "{{OMLX_DOCS_DIR}}" fetch -q --depth 1 "{{OMLX_DOCS_REPO}}" "{{OMLX_DOCS_COMMIT}}" && \
       git -C "{{OMLX_DOCS_DIR}}" checkout -q FETCH_HEAD && \
       echo "omlx docs cloned at {{OMLX_DOCS_COMMIT}}"; \
     fi
@@ -542,6 +552,98 @@ _test-integration-build-live-omlx: build prep-test-integration-omlx
     echo "integration(build-live-omlx) ok: ten gates green, tree delivered, temp work kept"; \
     {{just_executable()}} _write-evidence "{{BUILD_LIVE_OMLX_OUT_DIR}}" "test-integration-build-live-omlx" \
       "./{{BIN_DIR}}/kbase build {{OMLX_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_OMLX_OUT_DIR}}/kb --keep-temp-work"
+
+# Same no-op-when-present shape as Rojo's and oMLX's own preps: presence of
+# .git/HEAD is the whole check. It does NOT re-verify a present checkout sits
+# at {{TEMPORAL_DOCS_COMMIT}}, and does not touch it either way. That is the
+# established precedent, not a gap specific to this corpus: a
+# present-but-unpinned or present-but-mismatched checkout is trusted and left
+# alone here exactly as it would be for Rojo or oMLX — re-validating a corpus
+# already on disk is what bumping the pin (and clearing the directory) is
+# for, not what prep does on every run.
+#
+# The fetch is the plain shallow clone Rojo's (and now oMLX's) prep does —
+# ruled 2026-08-18: simplicity over sparse machinery. The repo holds far more
+# than docs/ (a whole documentation site's source) but the build only ever
+# reads {{TEMPORAL_DOCS_DIR}}/docs, so the rest is harmless, unread bulk.
+[doc("fetch the pinned temporal.io docs corpus (no-op when present)")]
+prep-test-integration-temporal:
+    @if [[ -f "{{TEMPORAL_DOCS_DIR}}/.git/HEAD" ]]; then \
+      echo "temporal docs present: {{TEMPORAL_DOCS_DIR}}"; \
+    else \
+      mkdir -p "{{TEMPORAL_DOCS_DIR}}" && \
+      git -C "{{TEMPORAL_DOCS_DIR}}" init -q && \
+      git -C "{{TEMPORAL_DOCS_DIR}}" fetch -q --depth 1 "{{TEMPORAL_DOCS_REPO}}" "{{TEMPORAL_DOCS_COMMIT}}" && \
+      git -C "{{TEMPORAL_DOCS_DIR}}" checkout -q FETCH_HEAD && \
+      echo "temporal docs cloned at {{TEMPORAL_DOCS_COMMIT}}"; \
+    fi
+
+# The MVP shakedown: temporal.io's documentation, hundreds of real docs —
+# the first live run over a corpus this suite did not pick for its shape.
+# Unlike the Rojo/oMLX live pair, this is first contact: no gate count, tree
+# shape, or call count has been observed yet, so nothing beyond "it ran and
+# the ten gates passed" is asserted. Everything else the run measured is
+# ECHOED from run.json into the preserved log instead — first-run evidence,
+# not a pin — the same restraint test-integration-build-live-omlx already
+# takes with its own adjudication stats, extended here to the whole record
+# because this corpus has no history to pin against yet. Once repeated runs
+# show a number stable, it graduates into a pin the way the mechanical
+# recipes' own did.
+#
+# prep-test-integration-temporal is a dependency, same as the other live
+# recipes depend on their own preps — but the corpus-absent check in the body
+# below is KEPT as a fallback message, not removed as redundant: prep can be
+# skipped (`just _test-integration-build-live-temporal` direct, bypassing the
+# dependency chain a stale build tool might take) or itself refuse without
+# this recipe ever finding out, and a build that walked into a missing corpus
+# with no message of its own would fail on kbase's own generic error instead
+# of naming the path this recipe expects.
+#
+# No timeout is imposed here or asked of the shell: hundreds of documents
+# through stages 3/4/6 with a model in the loop is the longest run in this
+# suite, and buildTimeout (cmd/build.go) already bounds the job itself.
+#
+# NOT composed into `test-integration`, for the same reason the other live
+# recipes are not: hermetic and offline is what that omnibus means, and this
+# needs a reachable provider, a key file, and a long stretch of model time.
+[doc("LIVE (excluded from test-integration: needs a provider + network): the MVP shakedown — build a KB from the temporal.io docs with the model in the loop; assert only that it ran and the ten gates passed")]
+test-integration-build-live-temporal:
+    @mkdir -p "{{BUILD_LIVE_TEMPORAL_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-build-live-temporal 2>&1 | tee "{{BUILD_LIVE_TEMPORAL_OUT_DIR}}/log.txt"
+
+# The body, split out so the wrapper above can tee ONE stream — same reason as
+# _test-integration-survey-rojo.
+[private]
+_test-integration-build-live-temporal: build prep-test-integration-temporal
+    @corpus="{{TEMPORAL_DOCS_DIR}}/docs"; \
+    [[ -d "$corpus" ]] || \
+      { echo "integration(build-live-temporal): corpus not found at $corpus — this recipe does not fetch it; fetch the temporal.io docs there first"; exit 1; }; \
+    kb="{{BUILD_LIVE_TEMPORAL_OUT_DIR}}/kb"; \
+    rm -rf "$kb"; \
+    ./{{BIN_DIR}}/kbase build "$corpus" \
+      --config-dir "{{LIVE_CONFIG_DIR}}" \
+      --out "$kb" \
+      --title "Temporal Documentation" \
+      --keep-temp-work || \
+      { echo "integration(build-live-temporal): the live build failed"; exit 1; }; \
+    rec="$kb/temp-work/run.json"; \
+    [[ -f "$rec" ]] || { echo "integration(build-live-temporal): no run record at $rec"; exit 1; }; \
+    green="$(grep -c '"ok": true' "$rec" || true)"; \
+    red="$(grep -c '"ok": false' "$rec" || true)"; \
+    [[ "$red" == 0 ]] || { echo "integration(build-live-temporal): $red of the ten gates refused; see $rec"; exit 1; }; \
+    [[ "$green" == 10 ]] || { echo "integration(build-live-temporal): $green gates reported, want ten; see $rec"; exit 1; }; \
+    echo "integration(build-live-temporal): ten gates green"; \
+    echo "integration(build-live-temporal): first-run evidence from $rec (echoed, not pinned):"; \
+    grep -E '"sourceFiles"|"sourceExcluded"|"nodes"|"pages"|"splitGroups"|"maxDepth"|"elapsedMs"' "$rec" | sed 's/^/  /'; \
+    grep -A4 '"links"' "$rec" | sed 's/^/  /'; \
+    grep -E '"taxonomyCalls"|"leafGroupCards"|"boundariesAdjudicated"' "$rec" | sed 's/^/  /'; \
+    echo "integration(build-live-temporal): delivered tree at $kb"; \
+    find "$kb" -name '*.md' -not -path '*/temp-work/*' | wc -l | xargs echo "  markdown pages:"; \
+    echo "  tree to depth 2:"; \
+    find "$kb" -maxdepth 2 -not -path '*/temp-work*' | sort | sed "s|$kb|  .|"; \
+    echo "integration(build-live-temporal) ok: ten gates green, tree delivered, temp work kept"; \
+    {{just_executable()}} _write-evidence "{{BUILD_LIVE_TEMPORAL_OUT_DIR}}" "test-integration-build-live-temporal" \
+      "./{{BIN_DIR}}/kbase build {{TEMPORAL_DOCS_DIR}}/docs --config-dir {{LIVE_CONFIG_DIR}} --out {{BUILD_LIVE_TEMPORAL_OUT_DIR}}/kb --title \"Temporal Documentation\" --keep-temp-work"
 
 # Drives `kbase write-agents` directly rather than through a build:
 # the verb dials nothing and reads nothing (see write_agents.go), so

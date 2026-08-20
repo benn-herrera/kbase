@@ -1,7 +1,6 @@
 package summarize
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -292,8 +291,9 @@ func TestMixedContainerBlendsTheLeafGroupCard(t *testing.T) {
 	// And it resumes: a second run over the same store proves every unit from
 	// its own stamp, the card included, and asks nothing. A client with an empty
 	// script fails any call it is given, so "asks nothing" is asserted rather
-	// than inferred from a count.
-	sc.writePages(t)
+	// than inferred from a count. The pages are not rewritten between the two
+	// runs — nothing removed them, so proving the units from disk is what the
+	// second run is doing.
 	again, err := sc.run(t, model.NewScriptedMockPerConsult(nil), lg)
 	if err != nil {
 		t.Fatalf("the resumed run: %v", err)
@@ -512,8 +512,10 @@ func TestVerifierPostConditions(t *testing.T) {
 	}{
 		{"accepted", mustSummary("What this holds.", "What it settles", "It settles this."), ""},
 		{"empty conclusions are legal", mustSummary("Only navigation lives here.", "", ""), ""},
-		{"fenced object", "```json\n" + mustSummary("Fenced.", "", "") + "\n```", ""},
-		{"prose", "I would summarise it as follows.", "JSON object"},
+		{"fenced answer", "```\n" + mustSummary("Fenced.", "", "") + "\n```", ""},
+		{"prose preamble", "Here is the summary:\n\n" + mustSummary("Wrapped.", "", ""), ""},
+		{"a label given twice", mustSummary("First.", "", "") + "\n" + labelFraming + "\nSecond.", "given twice"},
+		{"prose", "I would summarise it as follows.", "answer in the " + labelFraming},
 		{"no framing", mustSummary("", "What it settles", "It settles this."), "say in a line or two"},
 		{"over the summary cap", mustSummary(strings.Repeat("long ", 400), "", ""), "too long"},
 		{"conclusions without a heading", mustSummary("Framing.", "", "It settles this."), "need a heading"},
@@ -564,12 +566,13 @@ func TestSummaryQuotingASourcePathIsLegal(t *testing.T) {
 	}
 }
 
+// mustSummary renders a summary answer in the labelled-block grammar, from the
+// labels the parser itself reads — a fixture cannot describe an answer the
+// grammar does not have.
 func mustSummary(framing, heading, conclusions string) string {
-	data, err := json.Marshal(Summary{Framing: framing, ConclusionsHeading: heading, Conclusions: conclusions})
-	if err != nil {
-		panic(err)
-	}
-	return string(data)
+	return labelFraming + "\n" + framing + "\n\n" +
+		labelHeading + "\n" + heading + "\n\n" +
+		labelConclusions + "\n" + conclusions + "\n"
 }
 
 // errorsAs is errors.As with the test's own name, so the assertion above reads

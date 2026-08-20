@@ -1,14 +1,12 @@
 package summarize
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"strings"
 
-	"kbase/internal/text"
 	"kbase/internal/treeplan"
 )
 
@@ -31,24 +29,103 @@ const (
 	headingCap = 10
 )
 
+// The answer grammar: three labelled blocks of free text, in a fixed order,
+// with no terminator. The labels are the ONE statement of the format — the
+// definition renders them (stubDefinition), the acceptance criteria name them,
+// and parseSummary reads them — so the format the model is shown and the format
+// the machine enforces cannot drift apart.
+//
+// The three values this ask returns are prose. Asking for them inside a JSON
+// object made the model the author of a document as well as of the summary, and
+// those are two different failure modes: an unescaped quote in a sentence that
+// legitimately quotes source material is a document-construction failure, not a
+// summary that is wrong. The artifact kbase writes for itself stays JSON
+// (summary.go) — machine-to-machine encoding is not this seam.
+const (
+	labelFraming     = "FRAMING:"
+	labelHeading     = "HEADING:"
+	labelConclusions = "CONCLUSIONS:"
+)
+
 // parseSummary reads a response into the artifact's three fields.
 //
-// Unknown fields are tolerated and missing ones are not, for the same reason
-// the taxonomy answer tolerates them: the post-condition is about the prose,
-// and a model that added a field has still written the summary.
+// Forgiving of noise, strict on substance. Anything before the first label is
+// ignored, a fence line is ignored wherever it appears, and a block runs to the
+// next label or to the end of the response — so a preamble sentence, a fenced
+// answer or a closing remark costs nothing. What is refused is genuinely
+// ambiguous: a label given twice (two values for one field) and a response with
+// no label at all (an answer to some other question). Everything ELSE about the
+// values is check's, unchanged, and it stays the real net — an empty framing, an
+// over-long summary, a link, a heading that is a sentence.
+//
+// The ORDER is fixed in the declaration and tolerated in the reading: the
+// labels are what makes each value unambiguous, so a permuted answer is a
+// correct answer written oddly, and rejecting it would cost a retry to learn
+// nothing.
 func parseSummary(response string) (Summary, error) {
-	obj, ok := text.JSONObject(response)
-	if !ok {
-		return Summary{}, errors.New("answer with the JSON object described and nothing else")
+	blocks := map[string]*strings.Builder{
+		labelFraming:     {},
+		labelHeading:     {},
+		labelConclusions: {},
 	}
-	var s Summary
-	if err := json.Unmarshal([]byte(obj), &s); err != nil {
-		return Summary{}, errors.New("the answer is not the JSON object described")
+	seen := make(map[string]bool, len(blocks))
+	var cur *strings.Builder
+	for _, line := range strings.Split(response, "\n") {
+		if label, rest, ok := blockLabel(line); ok {
+			if seen[label] {
+				return Summary{}, errors.New(label + " given twice; one block each")
+			}
+			seen[label] = true
+			cur = blocks[label]
+			cur.WriteString(rest)
+			continue
+		}
+		if cur == nil || fenceLine(line) {
+			continue
+		}
+		cur.WriteString("\n" + line)
 	}
-	s.Framing = strings.TrimSpace(s.Framing)
-	s.ConclusionsHeading = strings.TrimSpace(s.ConclusionsHeading)
-	s.Conclusions = strings.TrimSpace(s.Conclusions)
-	return s, nil
+	if cur == nil {
+		return Summary{}, errors.New("answer in the " + labelFraming + " " + labelHeading +
+			" and " + labelConclusions + " blocks")
+	}
+	return Summary{
+		Framing:            strings.TrimSpace(blocks[labelFraming].String()),
+		ConclusionsHeading: strings.TrimSpace(blocks[labelHeading].String()),
+		Conclusions:        strings.TrimSpace(blocks[labelConclusions].String()),
+	}, nil
+}
+
+// blockLabel reports whether a line opens a block, and returns the label it
+// opens with whatever the model wrote after it on the same line.
+//
+// A label is matched through the decoration a model wraps it in — a bullet, a
+// bold run, a heading marker — because none of that changes which value the
+// block holds, and case-insensitively for the same reason. What follows the
+// label on the line is the block's first line: a model that writes
+// "FRAMING: this section holds…" has answered.
+func blockLabel(line string) (label, rest string, ok bool) {
+	trimmed := trimMarkup(line)
+	for _, l := range []string{labelFraming, labelHeading, labelConclusions} {
+		if len(trimmed) >= len(l) && strings.EqualFold(trimmed[:len(l)], l) {
+			return l, trimMarkup(trimmed[len(l):]), true
+		}
+	}
+	return "", "", false
+}
+
+// trimMarkup strips the decoration around a label — list bullets, emphasis,
+// code spans, heading markers — leaving the label itself. It touches label
+// matching only: a line of a block's own text is that block's text, verbatim.
+func trimMarkup(s string) string { return strings.Trim(s, " \t\r-*`#>_") }
+
+// fenceLine reports a line that is nothing but a code fence. It is the one
+// piece of a wrapper that would otherwise land INSIDE a value rather than
+// before the first label, and a fence in a delivered summary is a defect no
+// content rule below would catch.
+func fenceLine(line string) bool {
+	t := strings.TrimSpace(line)
+	return len(t) >= 3 && (strings.Trim(t, "`") == "" || strings.Trim(t, "~") == "")
 }
 
 // check holds one summary to §6.4.

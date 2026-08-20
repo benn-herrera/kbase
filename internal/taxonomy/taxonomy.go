@@ -420,7 +420,7 @@ func (t *Designer) callInput(i int) (prompt.CallInput, bool) {
 		Content:     content.String(),
 		AcceptanceCriteria: []string{
 			"- every numbered entry belongs to exactly one group",
-			"- answer with the JSON object and nothing else",
+			"- one " + groupKeyword + " line per group; nothing else is read",
 		},
 	}, true
 }

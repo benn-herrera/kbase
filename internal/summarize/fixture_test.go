@@ -1,7 +1,6 @@
 package summarize
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -149,11 +148,11 @@ func newSceneOf(t *testing.T, lg log.Logger, body func(treeplan.Node) string,
 
 // writePages puts every page artifact the summaries read.
 //
-// A test that runs the stages TWICE calls it again between the two, because a
-// run that described its whole chain sweeps the job directory — and this
-// fixture's chain is the summary stages alone, so the pages are described by no
-// stage in it and the sweep is right to take them. In the verb's own chain stage
-// 5 owes them and they stay.
+// This fixture's chain is the summary stages alone, so the pages are described
+// by no stage in it — unaccounted-for, and therefore untouched by anything a
+// run does. A test that runs the stages twice writes them once (in the verb's
+// own chain stage 5 owes them, which is a different way of reaching the same
+// place).
 func (sc *scene) writePages(t *testing.T) {
 	t.Helper()
 	for _, n := range sc.plan.Nodes {
@@ -216,13 +215,10 @@ func (sc *scene) indexNodes() []treeplan.Node {
 	return out
 }
 
-// answer renders one scripted summary response.
+// answer renders one scripted summary response, in the labelled-block grammar
+// the ask asks for.
 func answer(framing, heading, conclusions string) model.Response {
-	data, err := json.Marshal(Summary{Framing: framing, ConclusionsHeading: heading, Conclusions: conclusions})
-	if err != nil {
-		panic(err)
-	}
-	return model.Response{Content: string(data), FinishReason: "stop"}
+	return model.Response{Content: mustSummary(framing, heading, conclusions), FinishReason: "stop"}
 }
 
 // --- the synthetic corpus, the same shape every package here builds.

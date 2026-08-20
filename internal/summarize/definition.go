@@ -39,14 +39,22 @@ const (
 		"  is required.\n" +
 		"- If the material only points elsewhere, say so and leave the conclusions empty. An\n" +
 		"  invented conclusion is worse than a missing one.\n\n" +
-		"Answer with one JSON object:\n\n" +
-		"    {\"framing\": \"…\", \"conclusionsHeading\": \"…\", \"conclusions\": \"…\"}\n\n" +
-		"- `framing` — one to three sentences saying what this section holds.\n" +
-		"- `conclusionsHeading` — your own plain title for the block below, no markup.\n" +
-		"- `conclusions` — the conclusions themselves, or an empty string.\n\n" +
+		"Everything around your words is already settled — the section's own title, the list of\n" +
+		"what sits under it, and where all of it goes. What is open is three pieces of text.\n" +
+		"Write them under these labels, in this order, each one plain text on the lines below\n" +
+		"its label:\n\n" +
+		"    " + labelFraming + "\n" +
+		"    one to three sentences saying what this section holds\n\n" +
+		"    " + labelHeading + "\n" +
+		"    your own plain title for the block below, no markup\n\n" +
+		"    " + labelConclusions + "\n" +
+		"    the conclusions themselves, or nothing at all\n\n" +
+		"There is nothing to close and nothing to escape: a block runs to the next label, and\n" +
+		"the last one runs to the end of what you write.\n\n" +
 		"## CRITICAL\n\n" +
 		"No links and no file names: the navigation is added mechanically after you.\n" +
-		"Answer with the JSON object and nothing else.\n"
+		"Write the three labels — " + labelFraming + " " + labelHeading + " " + labelConclusions +
+		" — with your text under each.\n"
 
 	stubTaskDef = "Task: write the framing and the conclusions of one section of a knowledge base."
 )

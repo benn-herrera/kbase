@@ -229,6 +229,44 @@ func (s *ArtifactStore) Put(rel string, data []byte, inputs []Input) error {
 	return nil
 }
 
+// rejectedPath names the forensic copy of a model response that failed
+// mechanical verification: `treeplan/treeplan.json.rejected-1.txt` beside the
+// unit it was an answer to, one per model attempt.
+//
+// Beside the unit rather than in a directory of its own, for the same reason
+// the stamp sidecar sits beside its artifact: the unit is what the bytes are
+// about, and a second tree would be a second layout to keep in step with the
+// first. `.txt` because that is what it is — a raw response, whatever the ask's
+// answer format was.
+func rejectedPath(unit string, attempt int) string {
+	return fmt.Sprintf("%s%s%d.txt", unit, rejectedMarker, attempt)
+}
+
+// rejectedMarker is what makes a name a rejected response's, whatever unit and
+// attempt it belongs to.
+const rejectedMarker = ".rejected-"
+
+// putEvidence writes forensic bytes at rel, through the same atomic write every
+// artifact takes and with NO stamp.
+//
+// The missing stamp is the point. A stamp claims the bytes are a derived
+// artifact a later run could reuse, and a rejected response is the exact
+// opposite of that. Being unaccounted-for by the chain IS the whole of its
+// lifecycle: no scan verdicts it, no resume reuses it, and it lives and dies
+// with the temp-work tree it sits in — teardown takes it when a successful
+// run's tree goes, `--fresh` takes it when the store is discarded. No third
+// path class (§12), no lifecycle of its own.
+func (s *ArtifactStore) putEvidence(rel string, data []byte) error {
+	abs, err := s.resolve(rel)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(abs, data, ""); err != nil {
+		return fmt.Errorf("pipeline: write %s: %w", rel, err)
+	}
+	return nil
+}
+
 // Get returns the bytes of the artifact at rel — Put's counterpart, through
 // the same path validation, so a chain description that could not have
 // written a path cannot read one either.
@@ -499,83 +537,6 @@ func createTemp(dir, prefix string) (*os.File, error) {
 	return nil, fmt.Errorf("no unused %s* name in %s", prefix, dir)
 }
 
-// sweep removes every file under the job directory that the chain does not
-// account for: the temp-file residue a killed write left behind, and the
-// artifacts of a previous run whose plan named different paths. Neither is
-// visible to the resume scan, which only inspects paths the chain names, so
-// without this they accumulate in the tree the emit step draws from.
-//
-// WHERE it runs is what makes deleting safe, and it is structural rather than
-// a check: the store's root is the `temp-work` directory kbase itself created
-// under the output directory (TempWork), so the sweep cannot reach an
-// operator's files because it is not standing anywhere near them. The
-// tripwire below is a cheap second reading of the same fact — one string
-// comparison against the day someone hands this a root that was never ours.
-//
-// WHEN it runs is the whole design. Under the dynamic chain a stage's units
-// are not described until the stage is reached (see resolveStage), so a sweep
-// at job setup would know only the first stage's paths and would delete a
-// prior run's stage-4 and stage-5 artifacts — the exact artifacts the resume
-// exists to reuse — before their stages ever resolved. So sweeping happens at
-// the END of a run that described every stage of its chain, which is the one
-// moment the accounted-for set is both complete and final. A run that stopped
-// early sweeps nothing, which is also the right answer twice over: its later
-// stages are still unresolved, and the litter around a broken job is
-// evidence.
-//
-// Removal failures are logged and not returned: a file that will not delete
-// is untidiness, and failing a completed job over it would turn a successful
-// run into an error.
-func (s *ArtifactStore) sweep(chain StageChain) error {
-	if filepath.Base(s.root) != TempWorkDirName {
-		return fmt.Errorf("pipeline: refusing to sweep %s: a run's artifacts live in the %s directory "+
-			"kbase creates under the output directory, and this is not one", s.root, TempWorkDirName)
-	}
-	keep := map[string]bool{LockFileName: true}
-	for i := range chain {
-		units, err := chain[i].Units()
-		if err != nil {
-			return fmt.Errorf("pipeline: stage %s: its units could not be described: %w", chain[i].Name, err)
-		}
-		for _, u := range units {
-			local, err := validatePath(u.Path)
-			if err != nil {
-				return err
-			}
-			keep[local] = true
-			keep[local+StampSuffix] = true
-		}
-	}
-
-	removed := 0
-	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(s.root, path)
-		if err != nil {
-			return err
-		}
-		if keep[rel] {
-			return nil
-		}
-		if rmErr := os.Remove(path); rmErr != nil {
-			s.lg.Warn("pipeline could not sweep an unaccounted file", "path", rel, "error", rmErr)
-			return nil
-		}
-		removed++
-		s.lg.Debug("pipeline swept an unaccounted file", "path", rel)
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("pipeline: sweep %s: %w", s.root, err)
-	}
-	if removed > 0 {
-		s.lg.Info("pipeline swept the job directory", "removed", removed)
-	}
-	return nil
-}
-
 // discard empties the job directory of everything a previous run left, keeping
 // only the lock this run holds. It is what ModeFresh does before it scans, and
 // it is a deletion rather than an "ignore what you read" because those are not
@@ -585,10 +546,12 @@ func (s *ArtifactStore) sweep(chain StageChain) error {
 // would then fail three stages in. Removing it is what makes `--fresh` the
 // remedy IncoherentStoreError names (§12).
 //
-// It stands where the sweep stands, on the same fact and behind the same
-// tripwire: the root is the temp-work directory kbase itself created under the
-// output directory, so this cannot reach an operator's files. Unlike the sweep
-// it removes directories too, and unlike the sweep its failures are returned —
+// What makes deleting safe is structural rather than a check: the root is the
+// temp-work directory kbase itself created under the output directory
+// (TempWork), so this cannot reach an operator's files because it is not
+// standing anywhere near them. The tripwire below is a cheap second reading of
+// the same fact — one string comparison against the day someone hands this a
+// root that was never ours. Its failures are returned, unlike the teardown's:
 // a fresh run that could not clear its job directory is not a fresh run, and
 // finishing it would deliver the appearance of one.
 //

@@ -145,10 +145,10 @@ func TestFreshsReusedCountMeasuresTheDiscard(t *testing.T) {
 }
 
 // TestDiscardRefusesARootThatIsNotOurs: the discard deletes a directory tree
-// whole, and what makes that safe is the same fact the sweep stands on — the
-// root is the temp-work directory kbase created under the output directory.
-// The tripwire is one string comparison against the day someone hands this a
-// root that was never ours.
+// whole, and what makes that safe is structural — the root is the temp-work
+// directory kbase created under the output directory. The tripwire is one
+// string comparison against the day someone hands this a root that was never
+// ours, and it is the only guard between `--fresh` and an operator's files.
 func TestDiscardRefusesARootThatIsNotOurs(t *testing.T) {
 	dir := t.TempDir()
 	keep := filepath.Join(dir, "notes.md")

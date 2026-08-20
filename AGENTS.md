@@ -38,9 +38,12 @@ just test-integration-survey-omlx  # pinned oMLX docs corpus: summary values + d
 just test-integration-build-mechanical-omlx  # offline KB build over it, ten gates
 just test-integration-build-live-omlx  # the same build with the model in the loop;
                                   # LIVE (provider + network), excluded from the omnibus
-just prep-test-integration-omlx  # sparse+partial fetch of that corpus (no-op if present)
+just prep-test-integration-omlx  # fetch that corpus into test_data/transient/ (no-op if present)
 just test-integration-write-agents  # write-agents: fresh write,
                                   # full + partial overwrite refusal; joins the omnibus
+just test-integration-build-live-temporal  # MVP shakedown corpus, model in the loop;
+                                  # LIVE (provider + network), excluded from the omnibus
+just prep-test-integration-temporal  # fetch that corpus into test_data/transient/ (no-op if present)
 just fmt        # gofmt -w over the Go source roots
 just fmt-check  # read-only counterpart of fmt; fails on formatting drift
 just clean      # remove the host build (bin/kbase)
