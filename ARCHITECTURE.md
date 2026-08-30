@@ -587,14 +587,15 @@ prevention is holding against a real prefix cache.
 | Retry policy | per definition; defaults 2 attempts / 12-word note, then mechanical fallback + log | `pipeline.RetryPolicy`, declared with `pipeline.DeclareRetry` beside the effort at the registration site; the runner reads it and decides none of it. Full story: §12 |
 | Effort declaration | per definition, two values (first attempt / retry). Boundary refinement **off/off**; taxonomy design and summaries **off/on** | `model.RequestEffort`, positional at the registration site; gated by `pipeline.AskSpec.validate`. Full story: §12 |
 | Chars-per-token | 4.0 (provisional) | gemma-4-specific constant (`tokens.DefaultCharsPerToken`); heuristic counter (§8), calibrated then usage-refined |
-| Response token cap | 16K (provisional) | per-call MaxTokens default (`model.DefaultMaxTokens`); revisit at calibration |
+| Response token cap | 16K (provisional) | the completion window an effort that states none gets (`model.DefaultMaxTokens`); the window is a field of `model.RequestEffort`, so a definition that needs a different one declares it beside its thinking flag; revisit at calibration |
+| Thinking response cap | 32K (provisional) | the completion window an attempt that asks with THINKING ON declares (`model.ThinkingMaxTokens`), taken today by the two escalating retries (`summarize.Retry`, `taxonomy.Retry`). Reasoning is spent out of the ANSWER's window — `MaxTokens` bounds completion tokens and reasoning is a share of them — so an escalation on the default budget asks the model to work harder in strictly less room, and a generation cut off mid-reasoning returns an empty or one-byte answer (2026-08-18, `TEMP_INVESTIGATION_EMPTYRETRY`). Twice the row above, from the one measurement on record: the 2026-08-12 boundary A/B spent 20,924 completion tokens reasoning about an ask whose answer is a bare number, already over the default before any answer. It stays a CAP — SD-4's 36-minute escalated retry is the runaway it bounds |
 | Stream idle timeout | 2 min | max gap between stream reads, SSE keepalives count (`model.streamIdleTimeout`) |
 | Response-header timeout | 2 min | handshake guard on the transport (`model.responseHeaderTimeout`) |
 | Error-body echo cap | 8 KB | non-2xx response echo bound (`model.errorBodyLimit`) |
 | Gist word cap | 40 words | survey routing hints and titles (`survey.WordCap`, post-seam export); word-capped, never mid-word |
 | Leaf token budget | 4000 (provisional) | `treeplan.defaultLeafTokens`; guarantee G-1 — the span budget the stage-3 verifier splits toward, and what bounds stage 4's and stage 5's per-call input. Carried in the artifact (`TreePlan.budgets`), so a consumer reads the number the tree was verified against and never this constant |
 | Summary input budget | 60K tokens (provisional) | `treeplan.defaultSummaryInputTokens`; guarantee G-2 — the whole input one stage-6 call may read. A node has up to TWO calls (§4 row 6), so the bound is stated over each and the node costs the larger: its direct leaves' bodies summed (the group call), against one summary cap per index child plus one more for the leaf-group card where the node has direct leaves (its own call). Provable from the tree plan before stage 6 runs; `treeplan.shelves` is the accumulator, filled by the interposition operator and by the composed-artifact post-condition |
-| Summary cap | 400 tokens (provisional) | `treeplan.defaultSummaryTokens`; what one SHELF costs its parent — an index child's own summary, or the one card standing for every page directly under the node — and the cap stage 6's verifier holds both to |
+| Summary cap | 400 tokens (provisional) | `treeplan.defaultSummaryTokens`; what one SHELF costs its parent — an index child's own summary, or the one card standing for every page directly under the node — and the cap stage 6's verifier holds both to, over the framing and the conclusions SUMMED. The number is the verifier's alone: the ask states a SHAPE calibrated to fit inside it (a framing of one to three sentences, at most four conclusions of a sentence or two — `summarize.stubDefinition`), never a token count, so the model is bounded without being handed a number to echo back (ruled 2026-08-21) |
 | Entry-point ceiling | 3000 tokens (provisional) | `treeplan.defaultEntryPointTokens`; enforced by refusal at stage 9, where the rendered bytes exist to measure |
 | Summary level ceiling | 16 levels | `summarize.levelCeiling`; how many KB levels stage 6 declares stages for. **Not a cap on the tree** (R-3, ruled 2026-08-17): there is no depth budget, nothing refuses a deep corpus, and the tree plan carries no `depthCap` — the tree is as deep as the nesting the source GRAPH requires, and a heading tree is one witness of that graph rather than the definition of it, so a flat single file with an internal link-list index can legitimately be six levels. This number exists only because the stage LIST is fixed at job setup while the tree plan is written by stage 3 in the same job: there is no artifact to count levels off when the chain is described. A level with no nodes resolves to zero lanes, so declaring more levels than a corpus has costs two empty stages each and nothing else, which is what makes a generous ceiling the cheap side of the trade. It is generous against the deepest thing anything can present — the entry-point, Markdown's own six heading levels, and the folder and grouping levels a model may interpose above them — and a tree past it REFUSES rather than losing its deepest summaries silently (`Summarizer.resolve`). The depth a build reached is measured and reported in the run record (`maxDepth`, `treeplan.TreePlan.MaxDepth`), never adjudicated |
 | Fan-out cap | 12 children (provisional) | `treeplan.defaultFanOutCap`; a group of one is legal. Breaches are repaired by index interposition, not truncated |
@@ -756,13 +757,29 @@ resolution**.
   stage's lane, and a rejected attempt leaves the stage state untouched so
   the informed retry re-asks the same question; `MechanicalFallback` runs at most once
   per unit and only after that unit's attempts are exhausted.
-- **A rejected response is kept as evidence.** The raw bytes of every response
-  that failed mechanical verification are written beside the unit they
-  answered, one file per attempt
-  (`<unit>.rejected-<attempt>.txt`, `pipeline.rejectedPath`), and the rejection
-  record names the file. The verifier's reason says which RULE the response
-  broke; only the response says how, and the 2026-08-18 shakedown could name a
-  rejection class without a single instance of it. It is ordinary temp-work
+- **A truncated response is not a rejection.** A `finish_reason` of `length`
+  (`model.FinishLength`, `model.Response.Truncated`) says the answer is
+  INCOMPLETE, not wrong. The runner reads it before the verifier and classifies
+  it as `pipeline.FailureTruncation`: the response is never verified, the
+  attempt carries no retry note, and nothing counts it as a model-compliance
+  rejection. Holding an incomplete answer to a content post-condition reports
+  whichever rule the missing bytes broke and feeds that back as a correction to
+  a model that never finished — which is how a completion-budget defect read as
+  model flakiness for a day (2026-08-18). The remedy is the retry's own declared
+  window (§9, thinking response cap), not a better prompt.
+- **A failed attempt is kept as evidence.** The raw bytes of every response
+  that produced no artifact — rejected by the verifier or truncated at the cap
+  — are written beside the unit they answered, one file per attempt
+  (`<unit>.rejected-<attempt>.txt`, `pipeline.rejectedPath`), with a sidecar
+  (`<unit>.rejected-<attempt>.json`, `pipeline.rejectedRecordPath`) carrying the
+  attempt's outcome, finish reason and response length; the log record names the
+  file. The verifier's reason says which RULE the response broke; only the
+  response says how, and the 2026-08-18 shakedown could name a rejection class
+  without a single instance of it. The sidecar exists because the bytes cannot
+  describe themselves: a one-byte `\n` on disk is a model that answered with a
+  newline and a generation truncated mid-reasoning at once, and only the finish
+  reason separates them — while the `.txt` must stay the response exactly as it
+  arrived, so the facts cannot go in its head. It is ordinary temp-work
   and gets no lifecycle of its own (two path classes): unstamped, so no scan
   verdicts it and no resume reuses it, and removed only when the temp-work
   tree it sits in goes. The unit's eventual outcome decides nothing about the
@@ -772,8 +789,9 @@ resolution**.
 - The informed retry always carries the mechanical failure reason — a blind
   identical resend hopes temperature fixes it, which is not design (ruled).
   How many attempts there are, how much of the reason the note carries, and
-  **how hard the retry asks** are the definition's (`pipeline.RetryPolicy`):
-  the runner reads them and decides none of them, for the
+  **how hard the retry asks — and in how much room** are the definition's
+  (`pipeline.RetryPolicy`, whose `Effort` carries both the thinking flag and the
+  completion window): the runner reads them and decides none of them, for the
   same reason it has never decided the effort. Escalating on the RETRY rather
   than the first attempt is the shape — the first pass is what the definition
   thinks the question costs, and the retry is the only attempt carrying new
