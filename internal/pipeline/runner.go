@@ -154,11 +154,10 @@ type call struct {
 	// tripwire rather than passed.
 	Prev map[prompt.Slot][32]byte
 
-	// PreserveRejected keeps the raw bytes of a response that failed
-	// mechanical verification and returns where it kept them, for the record
-	// that reports the rejection. It is the caller's because the runner has no
-	// store — the worker does, and it is the half of this seam that knows where
-	// a unit lives.
+	// PreserveRejected keeps what one attempt produced and returns where it
+	// kept the bytes, for the record that reports the failure. It is the
+	// caller's because the runner has no store — the worker does, and it is the
+	// half of this seam that knows where a unit lives.
 	//
 	// Why the bytes are kept at all: a verifier's rejection reason says what
 	// RULE the response broke, and a post-mortem needs what the response
@@ -167,10 +166,50 @@ type call struct {
 	// were malformed" and knowing how.
 	//
 	// Optional. A caller with nowhere to put them supplies nothing and the
-	// rejection is reported without a location, which is what every test that
+	// failure is reported without a location, which is what every test that
 	// counts attempts wants.
-	PreserveRejected func(attempt int, response string) string
+	PreserveRejected func(AttemptEvidence) string
 }
+
+// AttemptEvidence is one attempt that produced no artifact, as the forensics
+// see it: the response, and the facts about it the bytes cannot carry.
+//
+// A one-byte response is the case that argues for the second half. `\n` on
+// disk is a model that answered with a newline and a generation truncated
+// mid-reasoning at the same time, and only the finish reason tells them apart
+// — which is the confusion the 2026-08-18 event cost a day to. A struct rather
+// than four parameters because this is a record, and the next fact worth
+// keeping should be a field rather than a signature change at every caller.
+type AttemptEvidence struct {
+	// Attempt is the model attempt this was, 1-based.
+	Attempt int
+
+	// Outcome is why the attempt produced nothing: OutcomeRejected or
+	// OutcomeTruncated.
+	Outcome string
+
+	// FinishReason is the provider's own word for how the generation ended,
+	// empty when it reported none.
+	FinishReason string
+
+	// Response is the raw content as it arrived — never reasoning, which is
+	// not accumulated anywhere in this appliance (model.Chunk).
+	Response string
+}
+
+// The outcomes an attempt can have short of an artifact. They are the log
+// records' `outcome` values as well as the evidence sidecar's, so a reader
+// grepping a run's log and a reader reading its temp-work see one vocabulary.
+const (
+	// OutcomeRejected is a response that failed the ask's mechanical
+	// post-condition: the model answered, and the answer was wrong.
+	OutcomeRejected = "rejected"
+
+	// OutcomeTruncated is a response the provider cut off at the completion
+	// cap. The model did not answer wrongly; it did not finish answering, and
+	// the remedy is a window rather than a note.
+	OutcomeTruncated = "truncated"
+)
 
 // CallResult is what one unit's call produced.
 type CallResult struct {
@@ -209,10 +248,14 @@ type CallResult struct {
 //     retried, never fallen back.
 //   - Context cancellation returns the context's error. It is not network
 //     weather and not a model failure; the job is stopping.
-//   - Transport exhaustion and verification exhaustion both mean "no verified
-//     artifact", so both land in seam resolution: a fallback-backed seam keeps its
-//     fallback and is marked as fallen back, a no-fallback seam returns OwedArtifactFailure
-//     and produces nothing.
+//   - A TRUNCATED attempt (model.FinishLength) is not a rejection. The answer
+//     is incomplete rather than wrong, so it is never verified, never carries a
+//     retry note, and lands as FailureTruncation; the retry's own declared
+//     completion window is the remedy (model.ThinkingMaxTokens).
+//   - Transport exhaustion, verification exhaustion and truncation exhaustion all
+//     mean "no verified artifact", so all land in seam resolution: a fallback-backed
+//     seam keeps its fallback and is marked as fallen back, a no-fallback seam
+//     returns OwedArtifactFailure and produces nothing.
 //
 // How many attempts there are, how hard each one asks and how much of the
 // rejection reason the retry carries are the DEFINITION's (AskSpec.Retry). The
@@ -295,6 +338,24 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 		res.Usage = addUsage(res.Usage, resp.Usage)
 		r.account(c, resp.Usage)
 
+		// Truncation is read BEFORE the verifier, because an incomplete answer
+		// is not a wrong one and the verifier has no way to tell the two apart:
+		// it would name whichever rule the missing bytes broke and the next
+		// attempt would carry that as its retry note, correcting a model that
+		// never got to finish. The remedy is the completion window
+		// (model.ThinkingMaxTokens), which the retry's declared effort already
+		// carries — so this attempt ends here, uncounted as a rejection and
+		// carrying no note.
+		if resp.Truncated() {
+			lastErr, kind = truncationError(resp), FailureTruncation
+			r.lg.Warn("the response was truncated at the completion cap",
+				r.attemptLogRecord(c, hash, AttemptEvidence{
+					Attempt: attempt, Outcome: OutcomeTruncated,
+					FinishReason: resp.FinishReason, Response: resp.Content,
+				})...)
+			continue
+		}
+
 		artifact, verr := c.BoundAsk.ask.Verify(c.ArtifactPath, resp.Content)
 		if verr == nil {
 			r.lg.Debug("call verified", "stage", c.Stage, "unit", c.ArtifactPath,
@@ -311,17 +372,44 @@ func (r *CallRunner) Run(ctx context.Context, c call) (CallResult, error) {
 			return CallResult{}, WorkerAbortError{Stage: c.Stage, ArtifactPath: c.ArtifactPath, Err: verr}
 		}
 		lastErr, kind = verr, FailureVerification
-		rec := []any{"stage", c.Stage, "unit", c.ArtifactPath,
-			"attempt", attempt, "prompt", hash, "outcome", "rejected", "reason", verr}
-		if c.PreserveRejected != nil {
-			if at := c.PreserveRejected(attempt, resp.Content); at != "" {
-				rec = append(rec, "response", at)
-			}
-		}
-		r.lg.Warn("response failed mechanical verification", rec...)
+		rec := r.attemptLogRecord(c, hash, AttemptEvidence{
+			Attempt: attempt, Outcome: OutcomeRejected,
+			FinishReason: resp.FinishReason, Response: resp.Content,
+		})
+		r.lg.Warn("response failed mechanical verification", append(rec, "reason", verr)...)
 		in = withRetryNote(c.Input, verr, retry.NoteWords)
 	}
 	return r.resolveSeam(c, res, kind, lastErr)
+}
+
+// attemptLogRecord assembles the log record for an attempt that produced no
+// artifact, preserving its evidence on the way.
+//
+// ONE assembler for both outcomes, because the post-mortem asks the same three
+// questions of a rejection and a truncation — what came back, how much of it,
+// and how the generation ended — and it was the third that told a budget defect
+// from a model defect on 2026-08-18. The finish reason and the byte count are
+// recorded even when there is nowhere to keep the bytes, since a caller with no
+// store is exactly the caller who has only the log.
+func (r *CallRunner) attemptLogRecord(c call, hash string, ev AttemptEvidence) []any {
+	rec := []any{"stage", c.Stage, "unit", c.ArtifactPath,
+		"attempt", ev.Attempt, "prompt", hash, "outcome", ev.Outcome,
+		"finish_reason", ev.FinishReason, "response_bytes", len(ev.Response)}
+	if c.PreserveRejected != nil {
+		if at := c.PreserveRejected(ev); at != "" {
+			rec = append(rec, "response", at)
+		}
+	}
+	return rec
+}
+
+// truncationError states what a truncated attempt failed as, in the terms the
+// inventory and the log then repeat: the provider's own finish reason and how
+// much answer arrived before the cap. It names no rule, because no rule was
+// broken — the generation did not finish.
+func truncationError(resp model.Response) error {
+	return fmt.Errorf("the answer was cut off at the completion cap (finish_reason %q, %d bytes of content)",
+		resp.FinishReason, len(resp.Content))
 }
 
 // assertFrozen is the frozen-prompt assertion: the per-worker churn tripwire
@@ -512,6 +600,14 @@ const (
 	FailureVerification FailureKind = "verification"
 	// FailureTransport is a no-fallback seam whose call never completed.
 	FailureTransport FailureKind = "transport"
+	// FailureTruncation is a unit whose every attempt was cut off at the
+	// completion cap (model.FinishLength). It is separate from
+	// FailureVerification because the remedies are opposite: a rejection says
+	// the ask or the model is wrong and is answered with a better prompt, a
+	// truncation says the WINDOW is wrong and is answered with a bigger one
+	// (model.ThinkingMaxTokens). Folding them together is what made a budget
+	// defect read as model flakiness on 2026-08-18.
+	FailureTruncation FailureKind = "truncation"
 	// FailureBudget is a build refusal — refuse-and-split (§3). The unit is
 	// too big for one call and belongs back at the stage that sizes units.
 	FailureBudget FailureKind = "budget"

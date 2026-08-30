@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -261,9 +262,110 @@ func TestARejectedResponseIsPreservedBesideItsUnit(t *testing.T) {
 		if _, err := store.readStamp(at); err == nil {
 			t.Errorf("%s was stamped; evidence is not a derived artifact", at)
 		}
+
+		// The sidecar: what the bytes cannot say about themselves. The event
+		// this exists for is a one-byte response, where the file on disk is a
+		// model that answered with a newline and a generation truncated at the
+		// cap at once — and only the finish reason separates them.
+		side := rejectedRecordPath("survey/b.json", attempt)
+		blob, err := store.Get(side)
+		if err != nil {
+			t.Fatalf("attempt %d left no record at %s: %v", attempt, side, err)
+		}
+		var rec attemptRecord
+		if err := json.Unmarshal(blob, &rec); err != nil {
+			t.Fatalf("decode %s: %v", side, err)
+		}
+		want := attemptRecord{
+			Attempt: attempt, Outcome: OutcomeRejected,
+			FinishReason: "stop", ResponseBytes: len(malformed),
+		}
+		if rec != want {
+			t.Errorf("%s holds %+v, want %+v", side, rec, want)
+		}
+		if _, err := store.readStamp(side); err == nil {
+			t.Errorf("%s was stamped; evidence is not a derived artifact", side)
+		}
 	}
 	if !lg.Has(t, "warn", "response", rejectedPath("survey/b.json", 1)) {
 		t.Error("the rejection record does not name where the response was kept")
+	}
+}
+
+// TestATruncatedAttemptIsNotARejection holds the classification at the runner:
+// a response the provider cut off at the completion cap
+// (model.FinishLength) is INCOMPLETE, not wrong.
+//
+// Verifying it instead would name whichever rule the missing bytes broke, feed
+// that back as a correction to a model that never finished speaking, and file
+// the unit under the one failure class whose remedy — a better prompt — is not
+// the remedy. The remedy is a window (model.ThinkingMaxTokens), and the record
+// has to say so: this is the diagnostic blindness that made a completion-budget
+// defect read as model flakiness for a day (2026-08-18).
+func TestATruncatedAttemptIsNotARejection(t *testing.T) {
+	dir := t.TempDir()
+	const cutOff = "FRAM"
+	var turns []string
+	var mu sync.Mutex
+	client := &stubClient{respond: func(_ int, req model.Request) (model.Response, error) {
+		if strings.Contains(req.Messages[0].Content, "survey/b.json") {
+			mu.Lock()
+			turns = append(turns, req.Messages[0].Content)
+			mu.Unlock()
+			return model.Response{Content: cutOff, FinishReason: model.FinishLength}, nil
+		}
+		return model.Response{Content: synthAccept + " fine", FinishReason: "stop"}, nil
+	}}
+	lg := &logtest.Capture{}
+
+	res, err := runSynth(t, dir, client, 1, lg, ModeResume)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	byPath := map[string]OwedArtifactFailure{}
+	for _, f := range res.Failures {
+		byPath[f.Path] = f
+	}
+	if f := byPath["survey/b.json"]; f.Kind != FailureTruncation {
+		t.Errorf("survey/b.json failed as %q, want %q — the answer never arrived, so nothing about it was wrong",
+			f.Kind, FailureTruncation)
+	}
+	if lg.Has(t, "warn", "outcome", OutcomeRejected) {
+		t.Error("a truncated attempt was recorded as a rejection")
+	}
+	if !lg.Has(t, "warn", "outcome", OutcomeTruncated) {
+		t.Error("nothing recorded the truncation; the finish reason is the only field that could have")
+	}
+
+	// No retry note. There is no mechanical fact about the ANSWER to carry.
+	if len(turns) != synthRetry.Attempts {
+		t.Fatalf("survey/b.json was asked %d times, want its declared %d", len(turns), synthRetry.Attempts)
+	}
+	for i, turn := range turns {
+		if strings.Contains(turn, retryNotePrefix) {
+			t.Errorf("attempt %d carries a rejection note after a truncation; the remedy is the window, "+
+				"not a correction", i+1)
+		}
+	}
+
+	// The forensics say which it was, on disk, without the log.
+	store := synthStore(t, dir, log.Discard())
+	for attempt := 1; attempt <= synthRetry.Attempts; attempt++ {
+		blob, err := store.Get(rejectedRecordPath("survey/b.json", attempt))
+		if err != nil {
+			t.Fatalf("attempt %d left no record: %v", attempt, err)
+		}
+		var rec attemptRecord
+		if err := json.Unmarshal(blob, &rec); err != nil {
+			t.Fatalf("decode the attempt %d record: %v", attempt, err)
+		}
+		want := attemptRecord{
+			Attempt: attempt, Outcome: OutcomeTruncated,
+			FinishReason: model.FinishLength, ResponseBytes: len(cutOff),
+		}
+		if rec != want {
+			t.Errorf("the attempt %d record is %+v, want %+v", attempt, rec, want)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -830,8 +831,8 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	res, err := w.runner.Run(ctx, call{
 		Stage: w.stage, ArtifactPath: task.Owed.Path, BoundAsk: w.boundAsk,
 		Input: in, Frontier: frontier, Prev: w.prev,
-		PreserveRejected: func(attempt int, response string) string {
-			return w.preserveRejected(task.Owed.Path, attempt, response)
+		PreserveRejected: func(ev AttemptEvidence) string {
+			return w.preserveRejected(task.Owed.Path, ev)
 		},
 	})
 	// A call was attempted, so the traversal restarts from whatever phase
@@ -863,21 +864,56 @@ func (w *worker) unit(ctx context.Context, domain string, task LaneTask) (unitRe
 	return w.write(domain, task, res.Artifact, inputs, res)
 }
 
-// preserveRejected writes the raw bytes of a rejected response beside the unit
-// and returns where, for the runner's own rejection record.
+// preserveRejected writes a failed attempt's evidence beside the unit — the
+// raw response, and the sidecar record of how it ended — and returns where the
+// bytes went, for the runner's own log record.
 //
 // Failing to write evidence is not a failure of the call: the unit still has a
 // retry to make and a seam to resolve, and losing a build over a forensic copy
-// would be the tail wagging the dog. It is logged and the rejection is reported
+// would be the tail wagging the dog. It is logged and the failure is reported
 // without a location.
-func (w *worker) preserveRejected(unit string, attempt int, response string) string {
-	at := rejectedPath(unit, attempt)
-	if err := w.store.putEvidence(at, []byte(response)); err != nil {
-		w.lg.Warn("the rejected response could not be preserved",
-			"stage", w.stage, "unit", unit, "attempt", attempt, "error", err)
+//
+// The sidecar is best-effort in the same way and independently: bytes without
+// their record are still the response, so a record that could not be written
+// costs the diagnosis its finish reason and nothing else.
+func (w *worker) preserveRejected(unit string, ev AttemptEvidence) string {
+	at := rejectedPath(unit, ev.Attempt)
+	if err := w.store.putEvidence(at, []byte(ev.Response)); err != nil {
+		w.lg.Warn("the failed attempt's response could not be preserved",
+			"stage", w.stage, "unit", unit, "attempt", ev.Attempt, "error", err)
 		return ""
 	}
+	if err := w.preserveAttemptRecord(unit, ev); err != nil {
+		w.lg.Warn("the failed attempt's record could not be preserved",
+			"stage", w.stage, "unit", unit, "attempt", ev.Attempt, "error", err)
+	}
 	return at
+}
+
+// attemptRecord is the evidence sidecar's encoding: an AttemptEvidence with the
+// response's LENGTH in place of the response, which is sitting beside it.
+//
+// The field names are the log record's, spelled the way this appliance spells
+// JSON for itself, so the answer to "what happened on attempt 2" reads the same
+// whether it is found in a run's log or in its temp-work.
+type attemptRecord struct {
+	Attempt       int    `json:"attempt"`
+	Outcome       string `json:"outcome"`
+	FinishReason  string `json:"finishReason"`
+	ResponseBytes int    `json:"responseBytes"`
+}
+
+func (w *worker) preserveAttemptRecord(unit string, ev AttemptEvidence) error {
+	blob, err := json.MarshalIndent(attemptRecord{
+		Attempt:       ev.Attempt,
+		Outcome:       ev.Outcome,
+		FinishReason:  ev.FinishReason,
+		ResponseBytes: len(ev.Response),
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return w.store.putEvidence(rejectedRecordPath(unit, ev.Attempt), append(blob, '\n'))
 }
 
 // skip completes a task whose builder said its call was not wanted. Nothing

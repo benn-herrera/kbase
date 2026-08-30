@@ -75,6 +75,16 @@ var Effort = model.DeclareEffort(model.RequestEffort{Thinking: false})
 // retry costs reasoning tokens only on the calls that already failed, and what
 // it buys is a container that would otherwise fail the unit, poison the lane
 // and take the whole job's tree plan with it (this is a no-fallback seam).
+//
+// It states its own completion window with the escalation, and for the same
+// reason the summary definition does: thinking is spent out of the ANSWER's
+// window, so an escalation that inherits the first attempt's budget asks for
+// reasoning and takes away the room to report it (model.ThinkingMaxTokens).
+// Nothing about that defect was particular to summaries — it was in every
+// definition that escalates.
 var Retry = pipeline.DeclareRetry(pipeline.RetryPolicy{
-	Effort: model.DeclareEffort(model.RequestEffort{Thinking: true}),
+	Effort: model.DeclareEffort(model.RequestEffort{
+		Thinking:  true,
+		MaxTokens: model.ThinkingMaxTokens,
+	}),
 })

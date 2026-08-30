@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 	"kbase/internal/model"
+	"kbase/internal/pipeline"
+	"kbase/internal/tokens"
 	"kbase/internal/treeplan"
 )
 
@@ -18,23 +22,26 @@ import (
 // a newline. This test renders BOTH attempts of the entry-point's summary ask
 // exactly as a live run does — real definition, real Effort and Retry
 // declarations, the real coordinator and the real CallRunner — and pins the
-// three facts a hostile read of those bytes turns up:
+// three facts the fixes for it turn on:
 //
-//  1. the cap the "too long" verifier enforces (Budgets.SummaryTokens) is never
-//     stated to the model, in either attempt;
+//  1. the cap the "too long" verifier enforces (Budgets.SummaryTokens) is still
+//     stated to the model in NEITHER attempt, and the ask bounds its conclusions
+//     block all the same — as a shape, the way it bounds its framing (ruled
+//     2026-08-21). TestTheConclusionsShapeFitsTheSummaryCap holds that shape to
+//     the cap it was calibrated against;
 //  2. the escalated retry differs from the first attempt in the trailer alone —
 //     the machine note is appended to the acceptance criteria and nothing else
 //     in the prompt moves;
-//  3. on the wire the escalation flips the two thinking kwargs and changes
-//     NOTHING ELSE: MaxTokens is the same DefaultMaxTokens on the attempt that
-//     is asked to reason as on the attempt that is not.
+//  3. on the wire the escalation moves the two thinking kwargs AND the
+//     completion window: the attempt asked to reason gets ThinkingMaxTokens
+//     where the first attempt got DefaultMaxTokens.
 //
-// Fact 3 is the one that costs an artifact. MaxTokens bounds reasoning and
-// completion TOGETHER on an OpenAI-compatible endpoint, and Final() accumulates
-// the content channel alone (model.httpStreamReader) — so an escalated retry
-// that spends the window reasoning returns a truncated stream whose Content is
-// empty. Nothing downstream reads FinishReason, so that truncation arrives at
-// the verifier dressed as a badly-formed answer.
+// Fact 3 is the one that cost an artifact, and it is the pin worth keeping.
+// MaxTokens bounds reasoning and completion TOGETHER on an OpenAI-compatible
+// endpoint, and Final() accumulates the content channel alone
+// (model.httpStreamReader) — so an escalated retry that inherits the first
+// attempt's window spends it reasoning and returns a truncated stream whose
+// Content is empty. An inherited window here is that event again.
 //
 // The rendered bytes and the two wire records land under
 // test_data/transient/summarize-escalation-render/ so the reading is
@@ -131,17 +138,23 @@ func TestEscalatedRetryRenderAndWire(t *testing.T) {
 
 	writeEvidence(t, firstTurn, retryTurn, first.Request, retry.Request)
 
-	// (a) The ask never states the cap its verifier enforces. The model is told
-	// the framing is "one to three sentences" and told nothing at all about the
-	// conclusions' length, while check() rejects on the SUM of the two against
-	// Budgets.SummaryTokens. Neither attempt carries the number, so the retry
-	// note "too long" is the first and only news the model gets of a budget —
-	// and it still never learns what the budget IS.
+	// (a) The ask bounds both of the blocks its verifier measures, and it
+	// bounds them in SHAPE rather than in tokens. check() rejects on the SUM of
+	// framing and conclusions against Budgets.SummaryTokens; the model is told
+	// how many sentences and how many conclusions, and is told no number it
+	// could echo back as an answer. Both halves are load-bearing, so both are
+	// pinned: the number must be absent from every attempt, and the bound must
+	// be present in every attempt.
 	cap := strconv.Itoa(treeplan.DefaultBudgets().SummaryTokens)
 	for name, turn := range map[string]string{"attempt 1": firstTurn, "attempt 2": retryTurn} {
 		if strings.Contains(turn, cap) {
-			t.Errorf("%s states the summary cap %s; this test pins that it does not — if the ask now "+
-				"declares its own budget, the finding it was written for is fixed and the test should say so", name, cap)
+			t.Errorf("%s states the summary cap %s; the ruling is that the verifier owns the number and the "+
+				"ask owns the shape, and check()'s messages stay number-free for the same reason", name, cap)
+		}
+		for _, bound := range []string{framingBound, conclusionsBound} {
+			if !strings.Contains(turn, bound) {
+				t.Errorf("%s does not bound its blocks: want the guidance %q on the wire", name, bound)
+			}
 		}
 	}
 
@@ -164,23 +177,175 @@ func TestEscalatedRetryRenderAndWire(t *testing.T) {
 		}
 	}
 
-	// (c) The escalation on the wire. This is the finding: the ONLY fields that
-	// move are the two thinking kwargs. The completion window does not.
+	// (c) The escalation on the wire. The thinking kwargs move AND the window
+	// moves with them: an escalation that reasons out of the answer's own
+	// budget is the 2026-08-18 one-byte retry, so the two must never come apart
+	// again.
 	if thinking(t, first.Request) {
 		t.Error("attempt 1 asked with thinking on; the summary definition declares Thinking: false")
 	}
 	if !thinking(t, retry.Request) {
 		t.Error("the escalated retry asked with thinking off; the Retry declaration escalates")
 	}
-	if first.Request.MaxTokens != retry.Request.MaxTokens {
-		t.Errorf("MaxTokens moved between attempts (%d → %d); this test pins that it does NOT — the escalated "+
-			"retry buys reasoning out of the same window the answer must come from",
-			first.Request.MaxTokens, retry.Request.MaxTokens)
+	if first.Request.MaxTokens != model.DefaultMaxTokens {
+		t.Errorf("attempt 1's MaxTokens is %d, want the default window %d",
+			first.Request.MaxTokens, model.DefaultMaxTokens)
 	}
-	if retry.Request.MaxTokens != model.DefaultMaxTokens {
-		t.Errorf("the escalated retry's MaxTokens is %d, want DefaultMaxTokens %d",
-			retry.Request.MaxTokens, model.DefaultMaxTokens)
+	if retry.Request.MaxTokens != model.ThinkingMaxTokens {
+		t.Errorf("the escalated retry's MaxTokens is %d, want ThinkingMaxTokens %d — reasoning is spent out of "+
+			"the answer's window, so the attempt asked to reason is the attempt that needs a bigger one",
+			retry.Request.MaxTokens, model.ThinkingMaxTokens)
 	}
+	if retry.Request.MaxTokens <= first.Request.MaxTokens {
+		t.Errorf("the escalated retry asks harder in %d tokens where the first attempt had %d; an escalation "+
+			"that does not widen the window makes the harder ask the smaller one",
+			retry.Request.MaxTokens, first.Request.MaxTokens)
+	}
+}
+
+// The shape the ask states for the two blocks its verifier measures. They are
+// the definition's own words (stubDefinition) because both ends of the
+// calibration have to move together: the prompt states the shape, this test
+// computes the worst answer that shape permits, and TestTheConclusionsShapeFitsTheSummaryCap
+// holds that answer to the cap. A reworded bound is a recalibration, and it
+// fails here until the numbers below say the same thing the prompt does.
+const (
+	framingBound     = "one to three sentences"
+	conclusionsBound = "at most four and each a sentence or two"
+
+	framingSentences   = 3
+	conclusionsCap     = 4
+	sentencesPerPoint  = 2
+	wordsPerSentence   = 24 // a long sentence; the shape must survive a verbose model
+	averageWordLetters = 5
+)
+
+// TestTheConclusionsShapeFitsTheSummaryCap is WP3's substance: the ask now
+// bounds its conclusions, and the whole point of the bound is that an answer
+// obeying it is an answer check() accepts.
+//
+// The ruling forbids the prompt from stating the cap, which means the ask and
+// the verifier agree by CALIBRATION rather than by saying the same number. A
+// calibration nobody checks drifts the first time either side is edited — the
+// cap is provisional (§9) and the definition is a stub — so the agreement is
+// held here, on the worst answer the stated shape permits.
+func TestTheConclusionsShapeFitsTheSummaryCap(t *testing.T) {
+	sentence := strings.TrimSpace(strings.Repeat(strings.Repeat("w", averageWordLetters)+" ", wordsPerSentence)) + "."
+	sentences := func(n int) string { return strings.TrimSpace(strings.Repeat(sentence+" ", n)) }
+
+	budgets := treeplan.DefaultBudgets()
+	est := tokens.Estimator{}
+	worst := Summary{
+		Framing:            sentences(framingSentences),
+		ConclusionsHeading: "What it establishes",
+		Conclusions:        strings.Join(slices.Repeat([]string{sentences(sentencesPerPoint)}, conclusionsCap), "\n\n"),
+	}
+	got := est.Estimate(worst.Framing + "\n\n" + worst.Conclusions)
+	if got > budgets.SummaryTokens {
+		t.Errorf("the worst answer the ask's shape permits estimates at %d tokens, over the %d the verifier "+
+			"allows: %d framing sentences plus %d conclusions of %d, at %d words each. The ask would be "+
+			"engineering its own rejection again — tighten the shape in stubDefinition and here together",
+			got, budgets.SummaryTokens, framingSentences, conclusionsCap, sentencesPerPoint, wordsPerSentence)
+	}
+
+	// The other half: the cap is still what binds. An answer that ignores the
+	// shape must still be rejected, or the calibration above would be passing
+	// because nothing measures anything.
+	loose := worst
+	loose.Conclusions = strings.Join(slices.Repeat([]string{sentences(sentencesPerPoint)}, conclusionsCap*3), "\n\n")
+	if got := est.Estimate(loose.Framing + "\n\n" + loose.Conclusions); got <= budgets.SummaryTokens {
+		t.Errorf("three times the permitted conclusions still estimates at %d tokens, inside the %d cap; the "+
+			"shape is not calibrated to anything", got, budgets.SummaryTokens)
+	}
+}
+
+// TestAOneByteAnswerIsATruncationNotABadSummary is the classification at the
+// seam the 2026-08-18 event happened at. The response IS that artifact: one
+// byte, a newline, finish_reason "length".
+//
+// Put through this ask's verifier it reads as "answer in the FRAMING: HEADING:
+// and CONCLUSIONS: blocks" — a compliance rejection the model never earned,
+// against a summary it never finished writing. The class and the record are the
+// pipeline's, and TestATruncatedAttemptIsNotARejection over there holds them;
+// what is held here is that the summary seam gets the same answer with its own
+// definition, its own verifier and its own retry in the loop.
+func TestAOneByteAnswerIsATruncationNotABadSummary(t *testing.T) {
+	const oneByte = "\n"
+	truncated := model.Response{Content: oneByte, FinishReason: model.FinishLength}
+	good := answer("This section collects the fixture documents.", "What it establishes", "Nothing in particular.")
+
+	t.Run("the retry recovers it and the record names it", func(t *testing.T) {
+		lg := &logtest.Capture{}
+		sc := newScene(t, lg, pageBody)
+		// Every unit is truncated on its first attempt and answers on its
+		// second, so every unit consumes exactly two consults and the
+		// alternation holds however many units the fixture's tree has. The
+		// assertions are then about the CLASS of the event rather than about
+		// which unit happened to draw it.
+		client := model.NewScriptedMockPerConsult(alternating(sc, truncated, good))
+		client.RecordCalls = true
+
+		res, err := sc.run(t, client, lg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(res.Failures) != 0 {
+			t.Fatalf("failures = %+v; a truncated attempt whose retry answered is a recovered unit", res.Failures)
+		}
+		if !lg.Has(t, "warn", "outcome", pipeline.OutcomeTruncated) {
+			t.Error("no record calls the event a truncation; the finish reason is the one field that could")
+		}
+		if lg.Has(t, "warn", "outcome", pipeline.OutcomeRejected) {
+			t.Error("a truncated summary was recorded as a rejection; the model did not answer wrongly, it did not finish")
+		}
+
+		// The retry carries no note: there is no mechanical fact about the
+		// ANSWER to feed back, and a note would correct a model that never
+		// finished speaking.
+		for _, c := range client.Calls() {
+			if strings.Contains(c.Request.Messages[0].Content, "previous attempt rejected") {
+				t.Error("the retry after a truncation carries a rejection note; the remedy is the window, not a correction")
+			}
+		}
+	})
+
+	t.Run("exhausting the attempts fails the unit as a truncation", func(t *testing.T) {
+		lg := &logtest.Capture{}
+		sc := newScene(t, lg, pageBody)
+		client := model.NewScriptedMockPerConsult(alternating(sc, truncated, truncated))
+
+		res, err := sc.run(t, client, lg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(res.Failures) == 0 {
+			t.Fatal("every attempt was truncated and no unit failed")
+		}
+		for _, f := range res.Failures {
+			if f.Kind == pipeline.FailureUpstream || f.Kind == pipeline.FailureCascade {
+				continue // the levels above, which never got their inputs
+			}
+			if f.Kind != pipeline.FailureTruncation {
+				t.Errorf("%s failed as %q, want %q: a unit that never received a complete answer is not a unit "+
+					"whose answers were wrong, and the two take opposite remedies",
+					f.Path, f.Kind, pipeline.FailureTruncation)
+			}
+		}
+	})
+}
+
+// alternating scripts first, second, first, second… for as many consults as
+// sc's tree could possibly make: two calls per index node (§4 row 6) and two
+// model attempts each, plus slack. The mock walks the queue one entry per
+// consult, so a pair per unit is what puts each unit's first attempt on `first`
+// — and a queue longer than the run needs costs nothing, since the entries past
+// the end are never served.
+func alternating(sc *scene, first, second model.Response) []model.Response {
+	out := make([]model.Response, 0, 4*len(sc.indexNodes())+4)
+	for range 2*len(sc.indexNodes()) + 2 {
+		out = append(out, first, second)
+	}
+	return out
 }
 
 // thinking reads the effort a request actually put on the wire — both spellings,

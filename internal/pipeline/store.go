@@ -229,9 +229,9 @@ func (s *ArtifactStore) Put(rel string, data []byte, inputs []Input) error {
 	return nil
 }
 
-// rejectedPath names the forensic copy of a model response that failed
-// mechanical verification: `treeplan/treeplan.json.rejected-1.txt` beside the
-// unit it was an answer to, one per model attempt.
+// rejectedPath names the forensic copy of a model response that produced no
+// artifact: `treeplan/treeplan.json.rejected-1.txt` beside the unit it was an
+// answer to, one per model attempt.
 //
 // Beside the unit rather than in a directory of its own, for the same reason
 // the stamp sidecar sits beside its artifact: the unit is what the bytes are
@@ -242,8 +242,21 @@ func rejectedPath(unit string, attempt int) string {
 	return fmt.Sprintf("%s%s%d.txt", unit, rejectedMarker, attempt)
 }
 
-// rejectedMarker is what makes a name a rejected response's, whatever unit and
-// attempt it belongs to.
+// rejectedRecordPath names the sidecar beside those bytes: the facts about the
+// attempt that the bytes cannot carry about themselves (AttemptEvidence).
+//
+// A separate file rather than a header in the `.txt`, because the value of that
+// file is being the response EXACTLY as it arrived, and a preamble would make
+// every reader strip something before believing it. The case that argues for
+// the sidecar existing at all is the one-byte response: `\n` on disk is a model
+// that answered with a newline and a generation truncated mid-reasoning at
+// once, and only the finish reason separates them.
+func rejectedRecordPath(unit string, attempt int) string {
+	return fmt.Sprintf("%s%s%d.json", unit, rejectedMarker, attempt)
+}
+
+// rejectedMarker is what makes a name a failed attempt's evidence, whatever
+// unit and attempt it belongs to and whichever of the two files it is.
 const rejectedMarker = ".rejected-"
 
 // putEvidence writes forensic bytes at rel, through the same atomic write every
