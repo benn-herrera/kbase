@@ -1,4 +1,5 @@
-# Kbase Architecture Design
+# ARCHITECTURE – KBase: Math and Science Living Knowledge Base Builder
+
 
 A single-purpose AI appliance application for the dissection of standard documentation into an AI-friendly knowledge base markdown graph.
 

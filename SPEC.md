@@ -1,4 +1,4 @@
-# Kbase SPEC
+# SPEC – KBase: Math and Science Living Knowledge Base Builder
 
 The contract: what any compliant implementation of kbase must do to be
 judged compliant, from a clean-room reimplementation's point of view.

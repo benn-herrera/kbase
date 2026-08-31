@@ -1,4 +1,4 @@
-# kbase
+# README – KBase: Math and Science Living Knowledge Base Builder
 
 **Turn a human-targeted documentation corpus into an agent-friendly knowledge
 base.**

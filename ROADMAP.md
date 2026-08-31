@@ -1,4 +1,4 @@
-# ROADMAP — living task queue
+# ROADMAP – KBase: Math and Science Living Knowledge Base Builder
 
 Ordered intentions, not commitments. This file churns freely; design truth
 lives in ARCHITECTURE.md / SPEC.md, per-burst execution detail in `TEMP_*.md`

@@ -1,4 +1,4 @@
-# AGENTS.md — kbase
+# AGENTS – KBase: Math and Science Living Knowledge Base Builder
 
 Guidance for agents (automated or human) working on this codebase.
 **Read ARCHITECTURE.md first.** It is the authoritative design reference and
@@ -19,39 +19,11 @@ mechanically generated bidirectional navigation links.
 
 ## Build and Run
 
-```sh
-just            # list recipes
-just build      # host-platform build → bin/kbase
-just test       # unit tests (VERBOSE=1 for per-test output)
-just test-race  # unit tests under the race detector
-just edit-gate  # cheap gate, run after every change: fmt-check + go vet
-just checkpoint # full gate, run at checkpoints: edit-gate + test-race + build
-just cover      # aggregate whole-suite coverage → cover.out
-just test-integration        # omnibus: every hermetic integration test
-just test-integration-survey-rojo  # pinned Rojo corpus: summary values + determinism
-just test-integration-build-mechanical-rojo  # `kbase build` over that corpus under
-                                  # the offline [dev] fixture; the ten verify gates
-just test-integration-build-live-rojo  # the same build with the model in the loop;
-                                  # LIVE (provider + network), excluded from the omnibus
-just prep-test-integration-rojo  # fetch that corpus into test_data/transient/ (no-op if present)
-just test-integration-survey-omlx  # pinned oMLX docs corpus: summary values + determinism
-just test-integration-build-mechanical-omlx  # offline KB build over it, ten gates
-just test-integration-build-live-omlx  # the same build with the model in the loop;
-                                  # LIVE (provider + network), excluded from the omnibus
-just prep-test-integration-omlx  # fetch that corpus into test_data/transient/ (no-op if present)
-just test-integration-write-agents  # write-agents: fresh write,
-                                  # full + partial overwrite refusal; joins the omnibus
-just test-integration-build-live-temporal  # MVP shakedown corpus, model in the loop;
-                                  # LIVE (provider + network), excluded from the omnibus
-just prep-test-integration-temporal  # fetch that corpus into test_data/transient/ (no-op if present)
-just fmt        # gofmt -w over the Go source roots
-just fmt-check  # read-only counterpart of fmt; fails on formatting drift
-just clean      # remove the host build (bin/kbase)
-just nuke       # remove every build output (bin/, dist/)
-just dist       # checkpoint, then cross-builds → bin/ + a staged distro tarball
-just add-dependency <module>@<version>  # pin ONE vetted module
-just update-dependencies                # upgrade the WHOLE module graph
-```
+Run `just` (the default recipe) for the up-to-date recipe list with
+docstrings — that output, not this file, is the reference for available
+actions. Key habits: `just edit-gate` after every change, `just checkpoint`
+at checkpoints, and anything LIVE (provider + network) is excluded from the
+hermetic `just test-integration` omnibus and says so in its docstring.
 
 `just dist` cross-compiles every target from one host (pure Go, no extra
 toolchain setup needed) and runs `checkpoint` first — a cross-build is what
@@ -224,16 +196,16 @@ frozen by Unicode stability policy). Add with
 
 ## Logging
 
-`internal/log` is the only logging seam: a four-method `Logger` interface
-(`Debug`/`Info`/`Warn`/`Error`, each taking alternating key/value pairs) with
-`log/slog` behind it.
+Project-specific bindings only (the general logging doctrine lives in the
+coder agent definitions):
 
-- It is built **once**, in the composition root (`cmd/main.go`), from the
-  persistent `--log-level` (debug|info|warn|error, default warn) and
-  `--log-file` flags. `--log-file` tees; it never redirects.
-- It is **threaded, not global**: a component that logs takes a `log.Logger`
-  parameter, so its logging is visible in its constructor signature. There is
-  no package-level logger and no setter; `log.Discard()` covers a caller with
+- `internal/log` is the **only** logging seam (four-method `Logger`:
+  `Debug`/`Info`/`Warn`/`Error`, alternating key/value pairs). Built **once**,
+  in the composition root (`cmd/main.go`), from the persistent `--log-level`
+  (default warn) and `--log-file` flags. `--log-file` tees; it never redirects.
+- **Threaded, not global**: a component that logs takes a `log.Logger`
+  parameter, so its logging is visible in its constructor signature. No
+  package-level logger, no setter; `log.Discard()` covers a caller with
   nothing to hand it.
 - Never call `slog` directly, and never use `fmt.Fprintf(os.Stderr, ...)` for
   a diagnostic. Verb *output* — a summary line, a user-facing warning — is a
