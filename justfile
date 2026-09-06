@@ -18,7 +18,7 @@ TEST_DATA_FIXTURES_DIR := TEST_DATA_DIR / "fixtures"
 # test output, generated test data, cloud-sourced test data
 TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
 
-# Per-test output roots. AGENTS.md's "results are part of the test" rule:
+# Per-test output roots. CONVENTIONS.md's "results are part of the test" rule:
 # every test run leaves its log — and, where the gathered stats ARE the
 # result, its stats and artifacts — somewhere they can be read afterwards.
 # One directory per test name, all under the gitignored transient tree.
@@ -129,7 +129,7 @@ edit-gate: fmt-check
 # Every integration recipe that preserves output under
 # test_data/transient/<test-name>/ overwrites an EVIDENCE.md there: which
 # recipe produced the directory, its exact invocation, and one line per
-# artifact kind actually present. "Results are part of the test" (AGENTS.md)
+# artifact kind actually present. "Results are part of the test" (CONVENTIONS.md)
 # extends to the directory itself — a folder of logs that does not say what
 # produced it is not evidence.
 #
@@ -245,7 +245,7 @@ test-integration-build-mechanical-rojo:
 # The body, split out so the wrapper above can tee ONE stream — same reason as
 # _test-integration-survey-rojo.
 #
-# Front-door per AGENTS.md's "integration tests invoke the app binary" ruling:
+# Front-door per CONVENTIONS.md's "integration tests invoke the app binary" ruling:
 # the binary is the thing under test, invoked exactly as a user would, with
 # every behavior (--out, --config-dir, --keep-temp-work) a flag in this
 # invocation rather than a Go test's struct literal. `build` is the delivered
@@ -287,7 +287,7 @@ _test-integration-build-mechanical-rojo: build prep-test-integration-rojo
     for want in '"sourceFiles": 11' '"sourceSections": 93' '"nodes": 34' '"pages": 22' '"sections": 12' '"groups": 22' '"splitGroups": 0' '"deliveredFiles": 37'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-rojo): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
+    for want in entry-point.md CONVENTIONS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-rojo): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_ROJO_OUT_DIR}}/kb-rerun"; \
@@ -355,7 +355,7 @@ _test-integration-build-live-rojo: build prep-test-integration-rojo
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-live-rojo): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-live-rojo): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
+    for want in entry-point.md CONVENTIONS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-live-rojo): $want was not delivered"; exit 1; }; \
     done; \
     grep -q '"lightModel": "..*"' "$rec" || \
@@ -475,7 +475,7 @@ _test-integration-build-mechanical-omlx: build prep-test-integration-omlx
     for want in '"sourceFiles": 5' '"sourceSections": 110' '"nodes": 31' '"pages": 22' '"sections": 9' '"groups": 22' '"splitGroups": 0' '"deliveredFiles": 34'; do \
       grep -qF "$want" "$rec" || { echo "integration(build-mechanical-omlx): expected $want in $rec"; exit 1; }; \
     done; \
-    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
+    for want in entry-point.md CONVENTIONS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-mechanical-omlx): $want was not delivered"; exit 1; }; \
     done; \
     kb2="{{BUILD_MECHANICAL_OMLX_OUT_DIR}}/kb-rerun"; \
@@ -538,7 +538,7 @@ _test-integration-build-live-omlx: build prep-test-integration-omlx
     red="$(grep -c '"ok": false' "$rec" || true)"; \
     [[ "$red" == 0 ]] || { echo "integration(build-live-omlx): $red of the ten gates refused; see $rec"; exit 1; }; \
     [[ "$green" == 10 ]] || { echo "integration(build-live-omlx): $green gates reported, want ten; see $rec"; exit 1; }; \
-    for want in entry-point.md AGENTS.md README.md CLAUDE.md; do \
+    for want in entry-point.md CONVENTIONS.md README.md CLAUDE.md; do \
       [[ -f "$kb/$want" ]] || { echo "integration(build-live-omlx): $want was not delivered"; exit 1; }; \
     done; \
     grep -q '"lightModel": "..*"' "$rec" || \
@@ -701,7 +701,7 @@ _test-integration-write-agents: build
 # holds something refuses (exit 1, every entry named, nothing written) UNLESS
 # the directory is an interrupted job's own remains — temp-work/ present, its
 # run.json absent (checkOutIsClear / interruptedJob in cmd/build.go). Proven
-# here rather than only in Go unit tests because AGENTS.md's "results are part
+# here rather than only in Go unit tests because CONVENTIONS.md's "results are part
 # of the test" applies to a refusal exactly as it does to a success: the front
 # door is `kbase build`, invoked twice into the same directory, not an
 # in-process call to the check function.
@@ -924,7 +924,7 @@ dist: checkpoint
     rm -rf "$stage" && mkdir -p "$stage" && \
     cp {{BIN_DIR}}/kbase-* "$stage/" && \
     cp USER_README.md "$stage/README.md" && \
-    cp USER_AGENTS.md "$stage/AGENTS.md" && \
+    cp USER_CONVENTIONS.md "$stage/CONVENTIONS.md" && \
     cp LICENSE "$stage/" && \
     tar -czf "{{DIST_DIR}}/kbase-dist-$ver.tar.gz" -C {{DIST_DIR}} "kbase-$ver" && \
     echo "dist: {{DIST_DIR}}/kbase-dist-$ver.tar.gz"
@@ -973,7 +973,7 @@ fmt-check:
 #
 #   just add-dependency example.com/mod/v2@v2.1.2
 #
-# The AGENTS.md vetting checklist (release date, importers, deprecation
+# The CONVENTIONS.md vetting checklist (release date, importers, deprecation
 # status, transitive dep count, license) is a PRECONDITION of running this,
 # not something it can check.
 [doc("pin ONE vetted module: just add-dependency <module>@<version>")]

@@ -55,7 +55,7 @@ type pinnedCorpus struct {
 	// says which, which is the half a count cannot state.
 	resolved map[string]string
 	// evidence is where this corpus leaves its observational evidence, per
-	// AGENTS.md's testing rule: a measurement worth taking is worth being able
+	// CONVENTIONS.md's testing rule: a measurement worth taking is worth being able
 	// to look at afterwards. It is under test_data/transient/ because it is
 	// test output — generated, gitignored, and rewritten from scratch every run.
 	evidence string

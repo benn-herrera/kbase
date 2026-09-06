@@ -365,7 +365,7 @@ func thinking(t *testing.T, req model.Request) bool {
 
 // writeEvidence lands the rendered turns and the two wire records where they can
 // be read: a measurement worth taking is worth being able to look at afterwards
-// (AGENTS.md). The messages are omitted from the wire records because they are
+// (CONVENTIONS.md). The messages are omitted from the wire records because they are
 // the turns, written beside them in full.
 func writeEvidence(t *testing.T, firstTurn, retryTurn string, first, retry model.Request) {
 	t.Helper()

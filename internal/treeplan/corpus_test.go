@@ -55,7 +55,7 @@ type pinnedCorpus struct {
 	title string
 	scope string
 	// evidence is where this corpus leaves its observational evidence, per
-	// AGENTS.md's testing rule: a measurement worth taking is worth being able
+	// CONVENTIONS.md's testing rule: a measurement worth taking is worth being able
 	// to look at afterwards. It is under test_data/transient/ because it is
 	// test output — generated, gitignored, and rewritten from scratch every run.
 	evidence string
@@ -289,7 +289,7 @@ func sweepAt(t *testing.T, art survey.Artifact, corpus ingest.Corpus, c pinnedCo
 // TestTreePlanOverRealCorpusEvidence writes down what the two properties above
 // measured.
 //
-// The properties assert; this records. AGENTS.md's rule is that results which
+// The properties assert; this records. CONVENTIONS.md's rule is that results which
 // cannot be examined are not results, and the numbers in those tests' t.Logf
 // lines are exactly the kind that get quoted once in a report and are never
 // checkable again. Here the composed tree and the sweep land on disk under

@@ -1,4 +1,4 @@
-# SPEC – KBase: Math and Science Living Knowledge Base Builder
+# SPEC – KBase
 
 The contract: what any compliant implementation of kbase must do to be
 judged compliant, from a clean-room reimplementation's point of view.
@@ -1057,26 +1057,26 @@ app version that produced the KB.
 Delivered with every KB, exact set:
 
 ```
-AGENTS.md
+CONVENTIONS.md
 README.md
 CLAUDE.md
 ```
 
-- `AGENTS.md` — states the summaries-route/leaves-answer contract, a
+- `CONVENTIONS.md` — states the summaries-route/leaves-answer contract, a
   pointer to the entry point, and the one-sentence pointer to
   `kbase write-agents` (§1.6) as where agent definitions come
   from. The definitions themselves are the user's agent tooling and are
   not KB content, so they are obtained on demand rather than shipped
   inside the artifact.
 - `README.md` — short human orientation: what this is, where to start,
-  that agents should read `AGENTS.md` first.
+  that agents should read `CONVENTIONS.md` first.
 - `CLAUDE.md` — the bootstrap pointer an agent session rooted at the KB
-  picks up on its own: read `AGENTS.md` first, start at the entry point,
+  picks up on its own: read `CONVENTIONS.md` first, start at the entry point,
   then three directives — the no-crawl invariant verbatim as the entry
   point states it, *"Navigate, don't crawl: follow the tree from the
   entry-point instead of grepping the file set"*, and *"Stop reading when
   the question is answered"*. The invariant is duplicated here rather
-  than only pointed at: the hop to `AGENTS.md` is probabilistic, and this
+  than only pointed at: the hop to `CONVENTIONS.md` is probabilistic, and this
   file is what a session picks up whether or not it takes that hop. No
   directive carries a rationale.
 

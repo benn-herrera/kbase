@@ -1,8 +1,8 @@
-# ROADMAP – KBase: Math and Science Living Knowledge Base Builder
+# ROADMAP – KBase
 
 Ordered intentions, not commitments. This file churns freely; design truth
 lives in ARCHITECTURE.md / SPEC.md, per-burst execution detail in `TEMP_*.md`
-plans (gitignored, disposed after landing — see AGENTS.md "Plan & Execute
+plans (gitignored, disposed after landing — see CONVENTIONS.md "Plan & Execute
 Process"). Finished items are
 deleted, not archived — git history is the log.
 
@@ -164,9 +164,9 @@ deleted, not archived — git history is the log.
   "user validates adapted agents" story that argued for shipping it needs
   shipping-grade data — a commitment explicitly not yet made. Its future
   home is build evidence beside the run record, decided when the eval
-  stage lands. Class-B manifest shrinks to AGENTS.md, README.md, CLAUDE.md;
+  stage lands. Class-B manifest shrinks to CONVENTIONS.md, README.md, CLAUDE.md;
   the `.agents/` directory, its check-4 exemption, and the entry-point/
-  AGENTS.md pointer text go with it. Prefer landing BEFORE the batched
+  CONVENTIONS.md pointer text go with it. Prefer landing BEFORE the batched
   C–F review / MAD #2 so reviewers judge the lean manifest, not the
   superseded one.
 - **ModernCorp rebuild-and-compare (ruled 2026-08-17)**: convert the
@@ -210,7 +210,7 @@ deleted, not archived — git history is the log.
   ingested extension set; reading one for a title is a deliberate ingest
   question, not a free read.
 - Provenance receipt writer; chars-per-token calibration feature.
-- Author AGENTS.md's TBD sections (Testing, Dependency Policy, Logging) as
+- Author CONVENTIONS.md's TBD sections (Testing, Dependency Policy, Logging) as
   their subjects accumulate enough reality to document.
 
 ## Parked

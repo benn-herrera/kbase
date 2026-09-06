@@ -24,7 +24,7 @@ const (
 	// AgentsFixture is the thin contract fixture: SPEC §3's statement, the
 	// annex conventions, the definitions pointer, and a link to the
 	// entry-point — which is what satisfies check 4's class-B direction.
-	AgentsFixture = "AGENTS.md"
+	AgentsFixture = "CONVENTIONS.md"
 	// ReadmeFixture is the human-facing counterpart, carrying the same
 	// entry-point link.
 	ReadmeFixture = "README.md"
@@ -121,7 +121,7 @@ func (r *Renderer) readmeFixture(entry string) []byte {
 // what satisfies check 4's class-B direction — and the three directives.
 //
 // They are here rather than only in AgentsFixture because a session picks this
-// file up on its own and the hop to AGENTS.md is probabilistic: the invariant
+// file up on its own and the hop to CONVENTIONS.md is probabilistic: the invariant
 // has to hold for a session that never takes it. The other two are what a
 // session gets wrong before it has read anything — it greps, and it keeps
 // reading after the answer.

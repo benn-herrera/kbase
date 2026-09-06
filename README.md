@@ -1,4 +1,4 @@
-# README – KBase: Math and Science Living Knowledge Base Builder
+# README – KBase
 
 **Turn a human-targeted documentation corpus into an agent-friendly knowledge
 base.**
@@ -94,14 +94,14 @@ just cover      # aggregate test coverage
 ```
 
 This file is the **developer** README. [USER_README.md](USER_README.md) and
-[USER_AGENTS.md](USER_AGENTS.md) are the user-facing pair — `just dist` ships
-them as `README.md` (humans) and `AGENTS.md` (AI agents) inside the distro
+[USER_CONVENTIONS.md](USER_CONVENTIONS.md) are the user-facing pair — `just dist` ships
+them as `README.md` (humans) and `CONVENTIONS.md` (AI agents) inside the distro
 tarball. No built binaries are committed to the repo: distribution is the
 dist tarball attached to a GitHub releases entry.
 
 Design reference: [ARCHITECTURE.md](ARCHITECTURE.md). Implementation
 specifics and constants: [SPEC.md](SPEC.md). Working contract for agents and
-contributors: [AGENTS.md](AGENTS.md).
+contributors: [CONVENTIONS.md](CONVENTIONS.md).
 
 ## License
 

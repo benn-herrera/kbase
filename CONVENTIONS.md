@@ -1,4 +1,4 @@
-# AGENTS – KBase: Math and Science Living Knowledge Base Builder
+# CONVENTIONS – KBase
 
 Guidance for agents (automated or human) working on this codebase.
 **Read ARCHITECTURE.md first.** It is the authoritative design reference and

@@ -34,7 +34,7 @@ const (
 
 	// noCrawlInvariant leads the contract and is also a bullet of the CLAUDE.md
 	// fixture, so it is its own constant: the duplication between those two is
-	// deliberate (a session's read-AGENTS.md hop is probabilistic), and a
+	// deliberate (a session's read-CONVENTIONS.md hop is probabilistic), and a
 	// duplicated STRING would drift.
 	//
 	// It carries no reason. A directive with a rationale attached is a
@@ -44,7 +44,7 @@ const (
 		"Intermediate nodes are for navigation only."
 
 	// contractText is SPEC §3's statement, verbatim, and it is a constant
-	// because §4.3's entry-point and §4.7's AGENTS.md fixture both render it —
+	// because §4.3's entry-point and §4.7's CONVENTIONS.md fixture both render it —
 	// one string, two render sites, no second place to drift.
 	contractText = noCrawlInvariant + "\n\n" +
 		"**Summaries route; leaves answer.** An index page tells you where to go; " +
@@ -53,7 +53,7 @@ const (
 
 	// definitionsPointer names the command that writes the agent-definition
 	// samples. Same rule as contractText: one string, rendered by the
-	// entry-point and by AGENTS.md.
+	// entry-point and by CONVENTIONS.md.
 	//
 	// It names the command and stops: the verb's own --help states its flag
 	// and its refusal behavior, and a second copy of that here would drift.

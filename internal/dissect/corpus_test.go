@@ -49,7 +49,7 @@ type pinnedCorpus struct {
 	// reader of a skipped run knows which fetch to run.
 	prep string
 	// evidence is where this corpus leaves its observational evidence, per
-	// AGENTS.md's testing rule: the counts below are the result, and a result
+	// CONVENTIONS.md's testing rule: the counts below are the result, and a result
 	// that exists only in a t.Logf line is a result nobody can check twice. It
 	// is under test_data/transient/ because it is test output — generated,
 	// gitignored, and rewritten from scratch every run.

@@ -437,7 +437,7 @@ func TestBuildRefusesAPopulatedOut(t *testing.T) {
 		if err == nil {
 			t.Fatal("the verb delivered a second time into a populated --out")
 		}
-		for _, want := range []string{"entry-point.md", "AGENTS.md", "nothing was written",
+		for _, want := range []string{"entry-point.md", "CONVENTIONS.md", "nothing was written",
 			"rerun, not the resume"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the refusal does not say %q: %v", want, err)
