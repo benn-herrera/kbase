@@ -116,6 +116,13 @@ test-race:
 edit-gate: fmt-check
     go vet ./...
 
+AGENTS_REPO := "https://github.com/ave-veritas-et-enodatio/adjagent.git"
+AGENTS_DIR := ".claude-temp/adjagent"
+agents:
+	@mkdir -p .claude-temp
+	@[[ -d "{{AGENTS_DIR}}" ]] && git -C "{{AGENTS_DIR}}" pull || git -C .claude-temp clone "{{AGENTS_REPO}}"
+	just --justfile "{{AGENTS_DIR}}/justfile" install "$(pwd)"
+
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
 # processes and more corpora are coming. Each is paired with a
