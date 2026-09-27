@@ -1,0 +1,5 @@
+provider = "reaper"
+
+[models]
+heavy = "gemma-4-31B-it"
+light = "gemma-4-26B-A4B-it"

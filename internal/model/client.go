@@ -101,30 +101,128 @@ type Request struct {
 	ChatTemplateKwargs map[string]any
 }
 
-// DefaultMaxTokens is the response token cap DefaultRequest installs.
+// DefaultMaxTokens is the completion cap an effort that states none gets.
 // Provisional: the per-call budget is a calibration constant
 // (ARCHITECTURE.md §9) and this value will be revisited there.
 const DefaultMaxTokens = 16384
 
+// ThinkingMaxTokens is the completion cap for an attempt that asks with
+// THINKING ON (ARCHITECTURE.md §9).
+//
+// It exists because reasoning is spent out of the ANSWER's window: MaxTokens
+// bounds completion tokens and ReasoningTokens is a share of them (see Usage),
+// so an attempt that reasons under DefaultMaxTokens has strictly less room to
+// answer than the attempt that did not — the escalation makes the ask harder
+// and the budget smaller at the same time. A generation cut off while still in
+// the reasoning channel returns a well-formed response whose Content is empty
+// or one byte (Final accumulates content alone), which is the 2026-08-18
+// one-byte escalated retry exactly.
+//
+// The value is twice DefaultMaxTokens, and the arithmetic is the one
+// measurement this appliance owns: the 2026-08-12 boundary A/B spent 20,924
+// completion tokens reasoning about an ask whose answer is a bare number —
+// already over DefaultMaxTokens before a single byte of answer. Doubling clears
+// that measured cost with margin and still leaves ~11.8K for an answer that is
+// capped far lower at every seam that escalates. It remains a CAP: SD-4's
+// 36-minute escalated retry is the runaway this row bounds, not a budget to
+// grow until nothing complains.
+const ThinkingMaxTokens = 32768
+
+// FinishLength is the finish_reason an OpenAI-compatible provider reports when
+// a generation hit its completion cap instead of finishing. It is the one
+// finish reason that says the response is INCOMPLETE rather than wrong.
+const FinishLength = "length"
+
+// RequestEffort is how hard the model is asked to work on ONE exact ask.
+//
+// It is per-DEFINITION: the value belongs to the question, not to the stage
+// that asks it and not to the seam it crosses (ARCHITECTURE.md §12). A
+// definition states its effort where it is registered, and every
+// request-construction path takes one POSITIONALLY, so a call site cannot
+// inherit an effort nobody stated.
+//
+// Temperature belongs here next, joining as a field the way MaxTokens did, so
+// no call site that already states an effort has to change to accommodate it.
+type RequestEffort struct {
+	// Thinking asks the model to reason before answering. It is wired in
+	// BOTH directions (see DefaultRequest) — false is SENT as false, never
+	// omitted — because an omitted key leaves the chat template's own
+	// default in charge, which is the silent inheritance this type exists
+	// to prevent.
+	Thinking bool
+
+	// MaxTokens is the completion window this ask gets. It belongs to the
+	// effort and not to the call site because it is the same dimension
+	// Thinking is: how hard the model is asked to work is inseparable from how
+	// much room it is given to do it in, and the provider spends both out of
+	// one budget (ThinkingMaxTokens says why that matters).
+	//
+	// Zero is not a request for no tokens: DeclareEffort fills it with
+	// DefaultMaxTokens, exactly as pipeline.DeclareRetry fills its two counts,
+	// so a definition with nothing to say about its window says nothing and
+	// gets the shipped default.
+	MaxTokens int
+
+	// declared separates a stated effort from a zero value. An effort makes
+	// one hop through a struct field on its way to the runner
+	// (pipeline.AskSpec), and a field is the one hop a positional parameter
+	// cannot make mandatory; this mark is what lets that hop be checked
+	// (pipeline.AskSpec.validate) rather than assumed. It is unexported so
+	// DeclareEffort is the only way to obtain a declared value.
+	declared bool
+}
+
+// DeclareEffort marks e as STATED by its caller and fills the completion
+// window a definition left at zero with the shipped default. It is the only
+// constructor: a bare composite literal is an undeclared value, and the
+// pipeline refuses an ask spec carrying one.
+//
+// It takes the whole value rather than one parameter per dial so that adding
+// Temperature is a new field at the call sites that want it and nothing at all
+// at the ones that do not.
+//
+// Defaulting the window while requiring Thinking is the same honest split
+// pipeline.DeclareRetry makes: an unstated window reads as "today's budget",
+// which is a real statement, while an unstated Thinking would read as "no
+// thinking", which is the silent inheritance this type exists to prevent.
+func DeclareEffort(e RequestEffort) RequestEffort {
+	if e.MaxTokens == 0 {
+		e.MaxTokens = DefaultMaxTokens
+	}
+	e.declared = true
+	return e
+}
+
+// Declared reports whether this effort was stated rather than left zero.
+func (e RequestEffort) Declared() bool { return e.declared }
+
 // DefaultRequest returns a Request prefilled with the appliance defaults.
-// The caller fills in Model and Messages; everything else is preset:
+// The caller fills in Model, Messages and the ask's declared RequestEffort;
+// everything else is preset:
 //
 //   - Temperature: 0 (deterministic — reproducibility is a design property,
 //     not a tuning preference)
-//   - MaxTokens:   DefaultMaxTokens
-//   - ChatTemplateKwargs: {"thinking": true, "enable_thinking": true}
-//     — both keys are sent so models recognizing either get thinking
-//     on (the actual key varies by model; sending both is harmless
-//     to those that recognize neither).
-func DefaultRequest(model string, messages []Message) Request {
+//   - MaxTokens:   the effort's own window (DefaultMaxTokens unless the
+//     definition declared otherwise), because the attempt asked to reason is
+//     the attempt that needs room to reason AND answer
+//   - ChatTemplateKwargs: {"thinking": E, "enable_thinking": E} for the
+//     effort's Thinking value. Both keys are sent because the one a model
+//     recognizes varies by model, and sending both is harmless to a model
+//     that recognizes neither. Both are sent when E is FALSE as well: the
+//     alternative is omitting the field and hoping the served template
+//     defaults the way this ask wants, which is not a declaration.
+//
+// It is the only Request constructor, and RequestEffort is positional in it, so
+// every call that goes on the wire states how hard it is asking.
+func DefaultRequest(model string, messages []Message, effort RequestEffort) Request {
 	return Request{
 		Model:       model,
 		Messages:    messages,
 		Temperature: 0,
-		MaxTokens:   DefaultMaxTokens,
+		MaxTokens:   effort.MaxTokens,
 		ChatTemplateKwargs: map[string]any{
-			"thinking":        true,
-			"enable_thinking": true,
+			"thinking":        effort.Thinking,
+			"enable_thinking": effort.Thinking,
 		},
 	}
 }
@@ -142,6 +240,17 @@ type Response struct {
 	Usage        Usage
 	FinishReason string
 }
+
+// Truncated reports a response the provider cut off at the completion cap.
+//
+// It is the predicate rather than the string because of what a caller must do
+// with it: a truncated response is INCOMPLETE, not wrong, and holding an
+// incomplete answer to a content post-condition reports a rejection the model
+// never earned. Reasoning makes this the common case rather than the exotic one
+// — reasoning is spent from the same window (ThinkingMaxTokens) and Final
+// accumulates the content channel alone, so a generation cut off mid-reasoning
+// arrives as a well-formed response with an empty or one-byte Content.
+func (r Response) Truncated() bool { return r.FinishReason == FinishLength }
 
 // Chunk is one delta in a streamed chat-completion response. Most chunks
 // carry a non-empty Content; the final chunk(s) typically carry empty
@@ -273,27 +382,23 @@ func (u Usage) IsZero() bool { return u == Usage{} }
 // must treat it as absence, not as a fault.
 func (u Usage) HasTelemetry() bool { return u.Telemetry != InferenceTelemetry{} }
 
-// TelemetryLogDetail renders the telemetry as one greppable `key=value`
-// line. Durations are rendered in MILLISECONDS (the wire's fractional
-// seconds are unreadable at a glance next to other millisecond gauges);
-// rates are tokens/second. The token counts and the prompt-cache hit ride
-// along because a timing is only interpretable beside the work it measured.
+// StatusError is a non-2xx HTTP response from the provider: the status code
+// and the response body, with any Authorization material scrubbed.
 //
-// Callers must gate on HasTelemetry: this renders an all-zero line for an
-// absent block, and an all-zero line every call is noise that trains the
-// reader to skip the record.
-func (u Usage) TelemetryLogDetail() string {
-	t := u.Telemetry
-	return fmt.Sprintf("ttft_ms=%.1f prefill_ms=%.1f gen_ms=%.1f total_ms=%.1f "+
-		"prefill_tps=%.1f gen_tps=%.1f prompt_tokens=%d completion_tokens=%d cached_tokens=%d",
-		durationMillis(t.TimeToFirstToken), durationMillis(t.PrefillDuration),
-		durationMillis(t.GenerationDuration), durationMillis(t.TotalDuration),
-		t.PrefillTokensPerSecond, t.GenerationTokensPerSecond,
-		u.PromptTokens, u.CompletionTokens, u.CachedPromptTokens)
+// It is a typed error rather than a formatted string because the status is
+// the thing callers act on — a 429 means "later" and is worth retrying, a 400
+// means the request itself is wrong and will be just as wrong three times.
+// Match with errors.As over a value target, as elsewhere in this codebase.
+//
+// Both the blocking and the streaming path return it, because both go through
+// the one request helper: a caller's 429-awareness therefore holds on the
+// streaming transport the long pipeline calls actually use.
+type StatusError struct {
+	Code int
+	Body string
 }
 
-// durationMillis renders a Duration as fractional milliseconds.
-func durationMillis(d time.Duration) float64 { return float64(d.Microseconds()) / 1000.0 }
+func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }
 
 // ErrMockExhausted is returned by a scripted MockClient when its response
 // queue has been drained. Tests check for this with errors.Is.

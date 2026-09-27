@@ -3,21 +3,22 @@ package survey
 import "fmt"
 
 // verifyTiling checks that a file's inventory covers its source exactly once:
-// front matter, then the preamble, then the heading tree in document order,
-// with no gap, no overlap, and nothing past the end.
+// the metadata block, then the preamble, then the heading tree in document
+// order, with no gap, no overlap, and nothing past the end.
 //
 // This is the survey's half of the tiling discipline the dissector enforces
-// again at stage 4 (ARCHITECTURE.md §5). It runs on every file, in
+// again at stage 4 (ARCHITECTURE.md §5). Assemble runs it on every file, in
 // production as well as in tests, because it is a handful of integer
 // comparisons and because the failure it catches — a heading whose offset was
 // computed against the wrong buffer, say — is otherwise invisible until a
 // leaf is quietly missing a paragraph several stages later. A violation is a
-// defect in this package, so it fails the run rather than being logged.
+// defect in the adapter that produced the file, so it fails the run rather
+// than being logged.
 func verifyTiling(f File, size int) error {
 	cursor := 0
-	if r := f.FrontMatter; r != nil {
+	if r := f.Metadata; r != nil {
 		if r.Start != 0 || r.End < r.Start {
-			return fmt.Errorf("front matter range [%d,%d) must start the file", r.Start, r.End)
+			return fmt.Errorf("metadata range [%d,%d) must start the file", r.Start, r.End)
 		}
 		cursor = r.End
 	}

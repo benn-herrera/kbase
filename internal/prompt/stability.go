@@ -15,7 +15,7 @@ package prompt
 // It is pure and cheap — a few array comparisons per call — so it runs
 // always, in production, not behind a debug flag. This is the runtime form of
 // the prefix-stability property the builder's tests assert; the frontier comes
-// from the orchestrator's phase matrix, which is the single source both
+// from the orchestrator's phase-op table, which is the single source both
 // consult.
 //
 // First call in a phase: pass SlotTotal (the zero frontier) — there is no

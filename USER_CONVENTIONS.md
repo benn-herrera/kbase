@@ -1,4 +1,4 @@
-# AGENTS.md — operating kbase
+# CONVENTIONS — KBase
 
 Instructions for AI agents using the kbase CLI. The adjacent README.md is the
 human-facing guide; this file is the operating contract.

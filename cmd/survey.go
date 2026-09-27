@@ -10,7 +10,9 @@ import (
 
 	"kbase/internal/ingest"
 	"kbase/internal/log"
+	"kbase/internal/pipeline"
 	"kbase/internal/survey"
+	"kbase/internal/survey/markdown"
 	"kbase/internal/tokens"
 )
 
@@ -67,11 +69,16 @@ func runSurvey(opts surveyOptions) error {
 		lg = log.Discard()
 	}
 
-	corpus, err := ingest.WalkMarkdown(root, lg)
+	// The composition root is where a source format is chosen: the neutral
+	// walk is told which extensions the adapter calls documents, and the
+	// adapter turns those bytes into the neutral artifact. One format exists,
+	// so this is one pair of calls — a registry or a format switch buys
+	// nothing until there is a second adapter to select between.
+	corpus, err := ingest.Walk(root, markdown.Extensions(), lg)
 	if err != nil {
 		return err
 	}
-	artifact, err := survey.Survey(corpus, tokens.Estimator{}, lg)
+	artifact, err := markdown.Survey(corpus, tokens.Estimator{}, lg)
 	if err != nil {
 		return err
 	}
@@ -93,23 +100,30 @@ func runSurvey(opts surveyOptions) error {
 	t := artifact.Corpus
 	fmt.Fprintf(summary, "survey ok: files=%d bytes=%d tokens=%d sections=%d top-level=%d\n",
 		t.Files, t.Bytes, t.Tokens, t.Sections, topLevel)
-	fmt.Fprintf(summary, "links: internal=%d unresolved=%d external=%d anchor=%d\n",
-		t.Links.Internal, t.Links.Unresolved, t.Links.External, t.Links.Anchor)
+	fmt.Fprintf(summary, "links: %s\n", linkCensus(t.Links))
 	return nil
 }
 
-// artifactFileMode is the mode a newly created artifact file is given. The
-// artifact carries gists and titles lifted out of the user's corpus — actual
-// content, not just metadata about it — so it is owner-only for the same
-// reason the log file and the provider key files are.
-const artifactFileMode = 0o600
+// linkCensus renders §3.2's link roll-up. One rendering, because `build`
+// reports the same four numbers when it warns about the destinations
+// guarantee 1 exempts (§4.5 rule 3), and a reader who has read one summary
+// should not have to learn a second order to read the other.
+func linkCensus(t survey.LinkTotals) string {
+	return fmt.Sprintf("internal=%d unresolved=%d external=%d anchor=%d",
+		t.Internal, t.Unresolved, t.External, t.Anchor)
+}
 
 // writeArtifact writes the survey JSON to path, or to stdout for "-".
+//
+// The mode is pipeline.CreateFileMode rather than a local copy of the same
+// number: the artifact is created the way every other kbase output is —
+// permissive request, user's umask decides — and §9's constants table names
+// one place for that fact.
 func writeArtifact(artifact survey.Artifact, path string, stdout io.Writer) error {
 	if path == jsonToStdout {
 		return artifact.WriteJSON(stdout)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, artifactFileMode)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, pipeline.CreateFileMode)
 	if err != nil {
 		return fmt.Errorf("survey: create %s: %w", path, err)
 	}

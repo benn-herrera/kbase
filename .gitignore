@@ -11,17 +11,22 @@ dist/
 # manual local test fixtures
 test_data/transient/
 
+mad-*/
+
 # tarballs that may be copied around the tree by a messy developer
 *.tgz
 
 TEMP_*.md
+.DS_Store
 
-**/.claude/agents/
-**/.claude/agents
-**/.claude/commands/
-**/.claude/commands
+.claude/agents/
+.claude/commands/
+.claude/adjagent/
 .claude/settings.local.json
-# agent set working file
-.claude/session-state.md
-# agent set might create a temp worktree
+
+# agent set work areas
+mad-design/
+mad-review/
+guest-session/
+.claude-temp/
 .claude/worktrees/

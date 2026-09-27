@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"kbase/internal/pipeline"
 	"kbase/internal/survey"
 )
 
@@ -76,6 +78,7 @@ func TestRunSurveySummary(t *testing.T) {
 // TestRunSurveyJSONFile: --json writes the artifact where it was told to, and
 // the summary still goes to stdout.
 func TestRunSurveyJSONFile(t *testing.T) {
+	mask := setTestUmask(t)
 	root := surveyFixtureDir(t, surveyCorpus)
 	out := filepath.Join(t.TempDir(), "survey.json")
 
@@ -87,14 +90,15 @@ func TestRunSurveyJSONFile(t *testing.T) {
 		t.Errorf("stdout %q should still carry the summary", stdout)
 	}
 
-	// The artifact carries gists and titles lifted out of the user's corpus,
-	// so it is owner-only for the same reason the log file is.
+	// The artifact is created the way every kbase output is: permissive mode
+	// asked for, the user's umask deciding (ruled 2026-08-14).
 	info, err := os.Stat(out)
 	if err != nil {
 		t.Fatalf("stat artifact: %v", err)
 	}
-	if got := info.Mode().Perm(); got != artifactFileMode {
-		t.Errorf("artifact mode = %o, want %o", got, artifactFileMode)
+	want := os.FileMode(pipeline.CreateFileMode) &^ mask
+	if runtime.GOOS != "windows" && info.Mode().Perm() != want {
+		t.Errorf("artifact mode = %v, want %v", info.Mode().Perm(), want)
 	}
 
 	raw, err := os.ReadFile(out)
@@ -143,7 +147,7 @@ func TestRunSurveyFailures(t *testing.T) {
 	}{
 		{"no corpus given", surveyOptions{}, "corpus directory is required"},
 		{"corpus does not exist", surveyOptions{Root: filepath.Join(root, "nope")}, "corpus root"},
-		{"corpus holds no markdown", surveyOptions{Root: t.TempDir()}, "no .md files"},
+		{"corpus holds no markdown", surveyOptions{Root: t.TempDir()}, "no .md, .mdx files"},
 		{"artifact path unwritable", surveyOptions{Root: root, JSONPath: filepath.Join(root, "no", "such", "dir", "a.json")}, "create"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

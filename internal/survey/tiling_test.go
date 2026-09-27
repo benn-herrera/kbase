@@ -23,11 +23,11 @@ func TestVerifyTilingRejects(t *testing.T) {
 		file: whole,
 		size: size,
 	}, {
-		name: "front matter then preamble then sections",
+		name: "metadata block then preamble then sections",
 		file: File{
-			FrontMatter: &Range{Start: 0, End: 10},
-			Preamble:    &Section{Start: 10, End: 20},
-			Sections:    []Section{{Level: 1, Start: 20, End: size}},
+			Metadata: &Span{Start: 0, End: 10},
+			Preamble: &Section{Start: 10, End: 20},
+			Sections: []Section{{Level: 1, Start: 20, End: size}},
 		},
 		size: size,
 	}, {
@@ -60,13 +60,13 @@ func TestVerifyTilingRejects(t *testing.T) {
 		size: size,
 		want: "cover 40 bytes, file is 100",
 	}, {
-		name: "preamble does not follow the front matter",
-		file: File{FrontMatter: &Range{Start: 0, End: 10}, Preamble: &Section{Start: 12, End: size}},
+		name: "preamble does not follow the metadata block",
+		file: File{Metadata: &Span{Start: 0, End: 10}, Preamble: &Section{Start: 12, End: size}},
 		size: size,
 		want: "preamble starts at 12",
 	}, {
-		name: "front matter not at the start of the file",
-		file: File{FrontMatter: &Range{Start: 5, End: 10}, Preamble: &Section{Start: 10, End: size}},
+		name: "metadata block not at the start of the file",
+		file: File{Metadata: &Span{Start: 5, End: 10}, Preamble: &Section{Start: 10, End: size}},
 		size: size,
 		want: "must start the file",
 	}, {

@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,20 +17,25 @@ import (
 )
 
 const (
-	// configDirPerm is the mode UpdateConfig creates a missing config
-	// directory with. config.toml holds choices, never credentials — the
-	// secrets live in the files providers.toml points at — so the
-	// directory is ordinary user data, not a keystore.
-	configDirPerm = 0o755
+	// configDirPerm is the mode UpdateConfig ASKS FOR when it creates a
+	// missing config directory: the ordinary permissive creation mode, left
+	// to the user's umask to narrow. config.toml holds choices, never
+	// credentials — the secrets live in the files providers.toml points at —
+	// so the directory is ordinary user data, not a keystore (ruled
+	// 2026-08-14). Same number as pipeline.CreateDirMode, declared here
+	// because this package is below it.
+	configDirPerm = 0o777
 
-	// configFilePerm is the mode of the written config.toml. It is a file
-	// the user is expected to open and hand-edit.
-	configFilePerm = 0o644
+	// configFilePerm is the mode the written config.toml is created with —
+	// same rule, and the same number as pipeline.CreateFileMode. It is a
+	// file the user is expected to open and hand-edit.
+	configFilePerm = 0o666
 
-	// configTempPattern names the temporary file UpdateConfig writes
-	// before renaming it into place. It sits in the destination directory
-	// so the rename is within one filesystem, and therefore atomic.
-	configTempPattern = ConfigFileName + ".tmp*"
+	// configTempPrefix starts the name of the temporary file UpdateConfig
+	// writes before renaming it into place. It sits in the destination
+	// directory so the rename is within one filesystem, and therefore
+	// atomic.
+	configTempPrefix = ConfigFileName + ".tmp"
 
 	// keyProvider is the top-level key holding the provider choice; it
 	// mirrors Config's `toml` tag. The [models] table's keys are the tier
@@ -39,6 +46,14 @@ const (
 	// tableModels is the table holding the tier→model-id map; it mirrors
 	// Config's `toml` tag for Models.
 	tableModels = "models"
+
+	// keyBuildDate and keyTreePlan are the two [dev] switches the template
+	// below documents, mirroring DevConfig's `toml` tags the way keyProvider
+	// mirrors Config's (struct tags cannot reference constants). The line
+	// editor never rewrites them — `kbase configure` touches the provider
+	// and the tiers and nothing else.
+	keyBuildDate = "build_date"
+	keyTreePlan  = "tree_plan"
 
 	// commentGap separates a rewritten assignment from the trailing
 	// comment carried over from the line it replaced. The original spacing
@@ -58,10 +73,34 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 
 [` + tableModels + `]
-# ` + TierHeavy + `: taxonomy design, hierarchical summaries, regeneration.
-# ` + TierLight + `: dissection, distillation, review.
+# ` + TierHeavy + `: taxonomy design, hierarchical summaries.
+# ` + TierLight + `: page-boundary adjudication.
 %s
 %s
+
+# [dev] switches diagnose kbase itself. The table is absent by default and
+# every switch is off when it is. They live here rather than on the verbs
+# because a verb's flags are the user's surface; each one below names the
+# upstream cause that makes it necessary.
+#
+# [dev]
+# telemetry = true   # per-call inference timing, WHERE THE PROVIDER SENDS IT.
+#                    # It is recorded at info level, and the default log level
+#                    # is warn — so this switch shows nothing on its own; run
+#                    # with --log-level info to see it.
+# keep_temp_work = true  # keep <out>/temp-work/ after a run that SUCCEEDED.
+#                        # A failed or interrupted run keeps it either way.
+# ` + keyBuildDate + ` = "2026-01-01"  # pin the date stamped into every page's
+#                          # provenance receipt (default: today, UTC).
+#                          # CAUSE: the receipt is dated by design, so two runs
+#                          # either side of midnight deliver different bytes and
+#                          # byte-determinism becomes untestable.
+# ` + keyTreePlan + ` = "` + TreePlanMechanical + `"  # take the tree plan from the source's own file
+#                          # structure and dial no provider at all — no model
+#                          # call anywhere, so no summary prose either.
+#                          # CAUSE: taxonomy design is a no-fallback model seam,
+#                          # so a hermetic end-to-end run has no other way in.
+#                          # The run records that it took it.
 `
 
 // UpdateConfig sets the provider choice and the [models] tiers in the
@@ -74,8 +113,8 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // It is an editor, not a serializer. config.toml is a primary user-editable
 // file, so an existing one is updated line by line: the lines carrying the
 // keys above are rewritten and every other byte — comments, blank-line
-// grouping, key spelling and spacing, keys and tables Config does not model
-// — passes through untouched. A rewritten line's own trailing comment
+// grouping, key spelling and spacing, keys and tables Config does not model —
+// passes through untouched. A rewritten line's own trailing comment
 // survives too: those three lines are the ones a user is likeliest to have
 // annotated. Only its spacing is normalized (see commentGap).
 //
@@ -251,7 +290,7 @@ func installConfig(path, content string) error {
 	// The temp file sits beside the RESOLVED target, so the rename stays
 	// within one filesystem even when the link crosses one.
 	tmpDir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(tmpDir, configTempPattern)
+	tmp, err := createTemp(tmpDir, configTempPrefix)
 	if err != nil {
 		return fmt.Errorf("config: create temp file in %s: %w", tmpDir, err)
 	}
@@ -274,16 +313,37 @@ func installConfig(path, content string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
-	// CreateTemp opens at 0600; config.toml is meant to be readable and
-	// hand-editable, so the mode is set before the file becomes visible
-	// under its real name.
-	if err := os.Chmod(tmp.Name(), configFilePerm); err != nil {
-		return fmt.Errorf("config: chmod %s: %w", path, err)
-	}
+	// No chmod before the rename: the temp file was already created at
+	// configFilePerm (see createTemp), which is the mode config.toml is
+	// meant to have.
 	if err := os.Rename(tmp.Name(), target); err != nil {
 		return fmt.Errorf("config: install %s: %w", path, err)
 	}
 	return nil
+}
+
+// createTemp creates a new file in dir whose name starts with prefix, opened
+// for writing, at configFilePerm.
+//
+// It exists because os.CreateTemp hard-codes 0600 and the fix is not a chmod:
+// chmod does not consult the umask, so chmodding to 0666 would install a
+// world-writable config.toml. The mode has to be asked for at CREATE time,
+// and asking means naming the file ourselves. O_EXCL plus a random suffix is
+// what os.CreateTemp does for the same reason — two `kbase configure`
+// processes must never open the same name.
+//
+// pipeline.writeAtomic carries the twin of this function. They cannot be one
+// declaration: pipeline imports config, so the dependency only runs that way.
+func createTemp(dir, prefix string) (*os.File, error) {
+	for range 1000 {
+		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36))
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, configFilePerm)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return f, err
+	}
+	return nil, fmt.Errorf("no unused %s* name in %s", prefix, dir)
 }
 
 // assign renders one `key = "value"` line. Go's quoting and TOML's basic

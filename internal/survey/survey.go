@@ -1,9 +1,17 @@
 // Package survey is pipeline stage 2 (ARCHITECTURE.md §4): the per-file
 // structural inventory the taxonomy stage consumes instead of raw source.
 //
-// It is entirely mechanical — heading tree, section token sizes, link graph,
-// first-paragraph gists — and produces a compact artifact with two properties
-// the rest of the pipeline leans on:
+// This package holds the artifact and no format knowledge, ever. It is the
+// source-format independence boundary: a format adapter (internal/survey/markdown
+// today, LaTeX later) does the parsing and hands back the neutral types
+// declared here, and everything downstream reads those fields and the byte
+// offsets in them — never a parser node. The rule is mechanical rather than
+// aspirational: importpolicy_test.go fails the build if a parser library
+// reaches any package but its adapter.
+//
+// The inventory is entirely mechanical — heading tree, section token sizes,
+// link graph, first-paragraph gists — and the artifact has two properties the
+// rest of the pipeline leans on:
 //
 //   - Every structural fact is a byte offset into the ingested source
 //     (ARCHITECTURE.md §5). The survey copies no content except gists, which
@@ -13,10 +21,11 @@
 //     path, no timestamps, no absolute paths — provenance is the corpus
 //     content hash, not where the machine happened to keep the files.
 //
-// Section ranges tile each file exactly: front matter, preamble, and the
-// heading tree together cover every byte, once. Survey verifies this before
-// returning, because the dissector (stage 4) inherits the property, and a
-// gap introduced here would surface as silently missing source in a leaf.
+// Section ranges tile each file exactly: the metadata block, the preamble,
+// and the heading tree together cover every byte, once. Assemble verifies
+// that before it returns an artifact, because the dissector (stage 4)
+// inherits the property, and a gap an adapter introduced would surface as
+// silently missing source in a leaf.
 package survey
 
 import (
@@ -24,17 +33,16 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/yuin/goldmark"
-
 	"kbase/internal/ingest"
 	"kbase/internal/log"
-	"kbase/internal/tokens"
 )
 
 // SchemaVersion identifies the artifact shape. Consumers (the taxonomy
 // stage, a later survey-of-surveys rollup) check it rather than guessing
 // from the fields present, and a shape change bumps it.
-const SchemaVersion = "kbase.survey/1"
+//
+// /2 added File.Cuts: the legal cut candidates stage 4 clamps the model to.
+const SchemaVersion = "kbase.survey/2"
 
 // Artifact is a whole-corpus survey: the totals a planner needs up front,
 // then one entry per file in path order.
@@ -68,34 +76,57 @@ type LinkTotals struct {
 
 // File is one document's inventory.
 //
-// FrontMatter, Preamble, and Sections partition the file's bytes in that
-// order. Preamble is the content before the first heading — for a file with
-// no headings at all it is the whole document, which is why it is a Section
+// Metadata, Preamble, and Sections partition the file's bytes in that order.
+// Metadata is the format's out-of-band block — YAML front matter in Markdown,
+// preamble metadata in LaTeX later — recorded as a byte range rather than as
+// content, because the artifact describes the source and never restates it.
+// Preamble is the content before the first heading; for a file with no
+// headings at all it is the whole document, which is why it is a Section
 // rather than a bare range: it carries the same token count and gist a
 // heading section does, and the taxonomy stage treats it the same way.
 //
-// Title, Description and Tags are the front-matter labels, absent when the
-// file has no front matter or the block does not carry them. They are the
+// Title, Description and Tags are the metadata block's labels, absent when
+// the file has no such block or the block does not carry them. They are the
 // only fields here that are neither an offset nor derived from the body: in
-// the Docusaurus/Hugo shape the block exists for, they are what the document
-// calls itself, and stage 3 has no other way to learn it.
+// the document conventions the block exists for, they are what the document
+// calls itself, and stage 3 has no other way to learn it. Like every string
+// the artifact copies, they are capped — see WordCap.
+//
+// Cuts is orthogonal to the tiling above: the sections say how the document
+// is ORGANISED, the candidates say where it may legally be CUT (§5). A
+// section boundary is always a candidate, and most candidates are not section
+// boundaries.
+//
+// Path and SHA256 are both CUSTODY identity: the NFC id ingest derived and
+// the digest of the NFC bytes. Their upload counterparts — the path as the
+// filesystem spelled it, the digest of the bytes as read — are deliberately
+// not here. The artifact is what later stages compute over, and every one of
+// them (link graph, tree plan, the stage-9 path check) compares ids to ids;
+// carrying a second spelling would be offering a second thing to key on. The
+// spelling a human has to be told to go and open lives on the ingest.SourceDoc,
+// which the pipeline still holds when it writes a receipt.
 type File struct {
-	Path        string    `json:"path"`
-	SHA256      string    `json:"sha256"`
-	Bytes       int       `json:"bytes"`
-	Tokens      int       `json:"tokens"`
-	Title       string    `json:"title,omitempty"`
-	Description string    `json:"description,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Gist        string    `json:"gist,omitempty"`
-	FrontMatter *Range    `json:"frontMatter,omitempty"`
-	Preamble    *Section  `json:"preamble,omitempty"`
-	Sections    []Section `json:"sections,omitempty"`
-	Links       []Link    `json:"links,omitempty"`
+	Path        string         `json:"path"`
+	SHA256      string         `json:"sha256"`
+	Bytes       int            `json:"bytes"`
+	Tokens      int            `json:"tokens"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Gist        string         `json:"gist,omitempty"`
+	Metadata    *Span          `json:"metadata,omitempty"`
+	Preamble    *Section       `json:"preamble,omitempty"`
+	Sections    []Section      `json:"sections,omitempty"`
+	Cuts        []CutCandidate `json:"cuts,omitempty"`
+	Links       []Link         `json:"links,omitempty"`
 }
 
-// Range is a half-open byte range [Start, End) into a file's source bytes.
-type Range struct {
+// Span is a half-open byte range [Start, End) into a file's source bytes. It
+// carries no file identity: the file is whatever survey.File it hangs off, or
+// whatever source bytes a caller passes alongside it. The tree plan's Span is
+// the file-carrying one (treeplan.Span adds File), which is why the two are
+// not interchangeable and neither is defined in terms of the other.
+type Span struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
@@ -155,33 +186,52 @@ type Link struct {
 	Image bool `json:"image,omitempty"`
 }
 
-// Survey inventories every document in the corpus.
+// Assemble turns a format adapter's per-file inventories into the corpus
+// artifact: it checks each file against the source under custody, verifies
+// the file tiles that source and that its cut candidates are legal positions
+// in it, and totals what the files report.
 //
-// It fails rather than degrades: a file whose sections do not tile is a defect
-// in this package, and returning a plausible-looking artifact would push the
-// consequences into a stage that cannot see the cause.
+// files must hold one entry per corpus unit, in the corpus's own path order.
+// That is not bookkeeping pedantry. The artifact's reproducibility IS the
+// corpus's ordering, and a dropped or duplicated document is the "knowledge
+// base silently missing a chapter" failure the pipeline refuses everywhere
+// else — so the cross-check against custody happens here, once, where no
+// adapter can forget it.
 //
-// lg carries the decisions the artifact records only the outcome of — which
-// blocks were read as front matter, which links resolved by fold — plus one
-// warning for the corpus's unresolved-link total, which is the number stage 8
-// eventually has to answer for.
-func Survey(corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (Artifact, error) {
-	// One parser for the whole corpus. goldmark's parser holds no
-	// per-document state (each Parse builds its own context), so this is a
-	// setup cost paid once rather than per file.
-	p := goldmark.DefaultParser()
+// It fails rather than degrades: a file whose sections do not tile is a
+// defect in the adapter that produced it, and returning a plausible-looking
+// artifact would push the consequences into a stage that cannot see the
+// cause.
+//
+// lg takes one warning for the corpus's unresolved-link total, which is the
+// number stage 8 eventually has to answer for.
+func Assemble(corpus ingest.Corpus, files []File, lg log.Logger) (Artifact, error) {
+	if len(files) != len(corpus.Docs) {
+		return Artifact{}, fmt.Errorf("survey: inventory holds %d files, the corpus holds %d documents",
+			len(files), len(corpus.Docs))
+	}
 
 	art := Artifact{
 		Schema: SchemaVersion,
-		Corpus: Totals{ContentHash: corpus.ContentHash, Files: len(corpus.Units)},
-		Files:  make([]File, 0, len(corpus.Units)),
+		Corpus: Totals{ContentHash: corpus.ContentHash, Files: len(files)},
+		Files:  files,
 	}
-	for _, u := range corpus.Units {
-		f, err := surveyFile(p, u, corpus, est, lg)
-		if err != nil {
-			return Artifact{}, err
+	for i, f := range files {
+		u := corpus.Docs[i]
+		if f.Path != u.Path {
+			return Artifact{}, fmt.Errorf("survey: inventory %d is %q, the corpus holds %q there "+
+				"(one file per document, in corpus order)", i, f.Path, u.Path)
 		}
-		art.Files = append(art.Files, f)
+		if f.Bytes != len(u.Bytes) {
+			return Artifact{}, fmt.Errorf("survey: %s: inventory reports %d bytes, custody holds %d",
+				f.Path, f.Bytes, len(u.Bytes))
+		}
+		if err := verifyTiling(f, len(u.Bytes)); err != nil {
+			return Artifact{}, fmt.Errorf("survey: %s: %w", f.Path, err)
+		}
+		if err := verifyCuts(f.Cuts, u.Bytes); err != nil {
+			return Artifact{}, fmt.Errorf("survey: %s: %w", f.Path, err)
+		}
 
 		art.Corpus.Bytes += f.Bytes
 		art.Corpus.Tokens += f.Tokens
@@ -210,7 +260,7 @@ func Survey(corpus ingest.Corpus, est tokens.Estimator, lg log.Logger) (Artifact
 
 // WriteJSON writes the artifact as indented JSON with a trailing newline.
 //
-// HTML escaping is off: gists and titles come from Markdown and legitimately
+// HTML escaping is off: gists and titles come from documents and legitimately
 // contain `<` and `&`, and escaping them makes the artifact harder to read
 // without making it any more valid. Determinism is unaffected either way —
 // struct field order is fixed, and nothing here marshals a map.

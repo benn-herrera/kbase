@@ -2,12 +2,24 @@
 // (ARCHITECTURE.md §4, stage 1): it walks a documentation corpus and takes
 // custody of the source bytes every later stage refers to.
 //
-// Custody is the whole point. The bytes a Unit carries are the canonical
+// It holds no format knowledge: which extensions are documents is a
+// parameter (Walk), supplied by the caller's format adapter. Custody is
+// byte-level and format-blind, so the same walk serves a Markdown corpus and
+// a LaTeX one.
+//
+// Custody is the whole point. The bytes a SourceDoc carries are the canonical
 // source: the survey records byte offsets into them, the dissector slices
-// them by verified offsets (§5), and nothing in between rewrites, re-encodes,
-// or normalizes them. A stage that wants a transformed view derives an
-// overlay; it never replaces the custody bytes, because the moment two
-// versions of a document exist the offset discipline stops meaning anything.
+// them by verified offsets (§5), and nothing in between rewrites or
+// re-encodes them. A stage that wants a transformed view derives an overlay;
+// it never replaces the custody bytes, because the moment two versions of a
+// document exist the offset discipline stops meaning anything.
+//
+// There is exactly ONE transform, and it happens before custody begins: the
+// Unicode NFC pre-pass in New (ruled 2026-08-13). Custody bytes are NFC
+// bytes, so every offset, slice, hash, title, slug and comparison downstream
+// works on one spelling of every character instead of two. The same pass
+// covers the id: a SourceDoc's Path is its NFC spelling, so a document has one
+// identity however the filesystem spelled its name. See New.
 //
 // Everything here is offline and deterministic: the same tree produces the
 // same Corpus, hash included.
@@ -22,39 +34,94 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"kbase/internal/log"
 )
 
-// MarkdownExt is the only extension this adapter ingests. Matching is
-// case-insensitive (`.MD` off a Windows-authored tree is the same document);
-// `.markdown` and friends are deliberately not accepted — a corpus that mixes
-// extensions should say so, and a silent near-miss is worse than a loud
-// absence.
-//
-// It is exported because link resolution needs the same constant: a corpus
-// link written without an extension names a document only if this is the
-// extension that document carries.
-const MarkdownExt = ".md"
-
-// Unit is one source document under custody: its corpus-wide identity, its
+// SourceDoc is one source document under custody: its corpus-wide identity, its
 // exact bytes, and their digest.
-type Unit struct {
-	// Path is the slash-separated path relative to the corpus root. It is
-	// the corpus-wide id — link resolution, the survey artifact, and the
-	// taxonomy all name documents this way, so the id is stable across the
-	// operating systems a corpus is checked out on.
+type SourceDoc struct {
+	// Path is the slash-separated path relative to the corpus root, in
+	// Unicode NFC. It is the corpus-wide id — link resolution, the survey
+	// artifact, and the taxonomy all name documents this way, so the id is
+	// stable across the operating systems a corpus is checked out on, and
+	// across the two spellings Unicode allows for the same name. New derives
+	// it from the path the caller supplied.
 	Path string
 
-	// Bytes is the file exactly as it was read. Callers read it and index
-	// into it; nobody writes to it.
+	// UploadPath is the path as it was GIVEN — the on-disk spelling the walk
+	// found the file under, before the NFC pre-pass. It is UPLOAD identity in
+	// the same sense UploadSHA256 is: the id resolves references, this names
+	// the file a human has to go and open. Filled in by New. It equals Path
+	// for an already-NFC name, which is the overwhelmingly common case. See
+	// PathNormalized.
+	UploadPath string
+
+	// Bytes is the document under custody: the file as it was read, put
+	// through the NFC pre-pass by New. Callers read it and index into it;
+	// nobody writes to it.
 	Bytes []byte
 
-	// SHA256 is the hex digest of Bytes, filled in by New.
+	// SHA256 is the hex digest of Bytes — CUSTODY identity, the hash every
+	// downstream artifact quotes. Filled in by New.
 	SHA256 string
+
+	// UploadSHA256 is the hex digest of the bytes as they were READ, before
+	// the NFC pre-pass — UPLOAD identity, the hash that ties a document back to
+	// the file on disk. Filled in by New. It equals SHA256 for an already-NFC
+	// file, which is the overwhelmingly common case; the two differ exactly
+	// when normalization changed something, and that difference IS the
+	// record that it did. See Normalized.
+	UploadSHA256 string
 }
 
-// Corpus is an ingested document set: every unit, in path order, plus the
+// BytesNormalized reports whether the NFC pre-pass changed this document's
+// bytes; PathNormalized, whether it changed the document's path. They are
+// separate questions — a corpus can hold an NFD filename over already-NFC
+// content, and the reverse — so there is no single "was this document
+// normalized" answer to give.
+//
+// Both are derived rather than stored: a flag beside the two hashes (or the
+// two paths) could disagree with them, and provenance that can contradict
+// itself is worse than no provenance.
+func (d SourceDoc) BytesNormalized() bool { return d.UploadSHA256 != d.SHA256 }
+
+// PathNormalized reports whether the NFC pre-pass changed this document's
+// path. See BytesNormalized.
+func (d SourceDoc) PathNormalized() bool { return d.UploadPath != d.Path }
+
+// Exclusion is one path the walk found under the corpus root and did NOT take
+// into custody, with the class of reason it was left out.
+//
+// It exists because "the knowledge base covers every document" is otherwise a
+// statement about what the walk chose to look at: a corpus's non-document
+// formats, its dot-directories and its broken links are excluded by policy
+// (see Walk), and
+// an exclusion nobody records is indistinguishable from a document that was
+// never there [MAD2: B-3]. The list is the corpus DENOMINATOR, and the run
+// record carries it (SPEC §3.8).
+type Exclusion struct {
+	// Path is the corpus-relative, slash-separated path as the walk found it —
+	// the on-disk spelling, before any normalization: an excluded path names a
+	// file a human goes and looks at, not one anything downstream resolves.
+	Path string `json:"path"`
+
+	// Reason is the class, one of the Excluded* constants. A class rather than
+	// a sentence, because the list is read as a table.
+	Reason string `json:"reason"`
+}
+
+// The exclusion classes: one per skip Walk makes, and there are no others.
+const (
+	ExcludedDotPrefixed   = "dot-prefixed name"
+	ExcludedNotADocument  = "extension not in the document set"
+	ExcludedBrokenSymlink = "broken symlink, not named like a document"
+)
+
+// Corpus is an ingested document set: every document, in path order, plus the
 // identity of the set as a whole.
 //
 // The directory the corpus was read from is deliberately not carried. An
@@ -62,24 +129,30 @@ type Unit struct {
 // same corpus produce different bytes on two checkouts — and nothing
 // downstream needs it, because every id here is already relative.
 type Corpus struct {
-	// Units are the source documents, sorted by Path.
-	Units []Unit
+	// Docs are the source documents, sorted by Path.
+	Docs []SourceDoc
 
 	// ContentHash is the corpus-level source identity used by the
 	// provenance stamp (ARCHITECTURE.md §3) when the corpus is not a git
 	// checkout. See New for how it is derived.
 	ContentHash string
 
-	// index maps Path to a position in Units, so link resolution is a map
+	// index maps Path to a position in Docs, so link resolution is a map
 	// lookup rather than a scan per link. Unexported and never marshalled:
 	// map iteration order would be a determinism hazard in an artifact.
 	index map[string]int
 
-	// folded maps a case-folded path to every unit that folds to it. It
-	// exists because this adapter accepts `.MD` (see MarkdownExt) while a
-	// link to that document is routinely written `.md`; without the fold,
-	// accepting the file and resolving links to it disagree. It is a lookup
-	// aid only — the id itself stays byte-exact.
+	// Excluded is every path Walk found under the corpus root and did not
+	// ingest, in walk order. It is the walk's finding rather than a property of
+	// the document set, which is why New leaves it empty: an in-memory corpus
+	// had no walk to exclude anything.
+	Excluded []Exclusion
+
+	// folded maps a case-folded path to every document that folds to it. It
+	// exists because the walk matches extensions case-insensitively — it
+	// accepts `.MD` — while a link to that document is routinely written
+	// `.md`; without the fold, accepting the file and resolving links to it
+	// disagree. It is a lookup aid only — the id itself stays byte-exact.
 	folded map[string][]int
 }
 
@@ -102,7 +175,7 @@ func (c Corpus) FoldedPath(path string) (id string, ambiguous bool) {
 	case 0:
 		return "", false
 	case 1:
-		return c.Units[is[0]].Path, false
+		return c.Docs[is[0]].Path, false
 	default:
 		return "", true
 	}
@@ -113,28 +186,65 @@ func (c Corpus) FoldedPath(path string) (id string, ambiguous bool) {
 // `.MD` or a hand-typed `Setup.md`, not a Unicode special-casing rule.
 func foldPath(path string) string { return strings.ToLower(path) }
 
-// Unit returns the unit at the given slash-separated relative path.
-func (c Corpus) Unit(path string) (Unit, bool) {
+// Doc returns the source document at the given slash-separated relative path.
+func (c Corpus) Doc(path string) (SourceDoc, bool) {
 	i, ok := c.index[path]
 	if !ok {
-		return Unit{}, false
+		return SourceDoc{}, false
 	}
-	return c.Units[i], true
+	return c.Docs[i], true
 }
 
-// New assembles a Corpus from units that already have Path and Bytes set: it
-// sorts them by path, digests each one, and derives the corpus content hash.
-// It is the only constructor, so hashing has exactly one implementation, and
-// it is the seam tests build in-memory corpora through.
+// New assembles a Corpus from docs that already have Path and Bytes set: it
+// sorts them by path, runs the NFC pre-pass, digests each one, and derives
+// the corpus content hash. It is the only constructor, so normalization and
+// hashing have exactly one implementation each, and it is the seam tests
+// build in-memory corpora through.
 //
-// ContentHash is the sha256 of the "<path>\x00<per-file hex digest>\n" lines
-// in path order. Deriving it from the per-file digests rather than from the
-// concatenated bytes means it changes when a file is renamed or removed, not
-// only when content changes — a rename reorganizes a knowledge base even
+// The NFC pre-pass is the one transform custody permits (ruled 2026-08-13).
+// Unicode spells many characters two ways — `é` is one code point or `e` plus
+// a combining acute, and the two render identically — and which one a corpus
+// carries is decided by the authoring editor and the filesystem it was
+// checked out on, not by the author. Two spellings of the same document mean
+// two hashes, two titles, two slugs, and comparisons that fail for a
+// difference nobody can see. NFC picks one, before any offset exists to be
+// invalidated. It is canonical equivalence and not a rewrite of the text: the
+// rendering is identical and the wording untouched — the bytes move, the
+// document does not.
+//
+// The pre-pass covers the id as well as the bytes. A filesystem decides how
+// it spells a filename with no more author involvement than an editor deciding
+// how it spells the text — macOS hands back a decomposed name where Linux
+// hands back whatever was written — so a document referenced as `caf<e-acute>.md`
+// must reach a file stored as `cafe<combining acute>.md` and vice versa.
+// Normalizing the id makes every comparison downstream NFC-against-NFC byte
+// equality, with no re-normalization at any use site to remember or forget.
+//
+// Provenance keeps both spellings of each: UploadSHA256 over the bytes as
+// read and UploadPath as the path was given, beside the custody SHA256 and
+// the NFC Path. Equal pairs mean the file was already NFC and nothing was
+// transformed; different ones are the record that something was. Invalid
+// UTF-8 is never touched, in a path or in content — normalizing it would be a
+// guess about an encoding this package cannot verify.
+//
+// ContentHash is the sha256 of the "<path>\x00<per-file CUSTODY digest>\n"
+// lines in path order. Deriving it from the per-file digests rather than from
+// the concatenated bytes means it changes when a file is renamed or removed,
+// not only when content changes — a rename reorganizes a knowledge base even
 // though no byte of any document moved.
-func New(units []Unit) (Corpus, error) {
-	sorted := slices.Clone(units)
-	slices.SortFunc(sorted, func(a, b Unit) int { return strings.Compare(a.Path, b.Path) })
+func New(docs []SourceDoc) (Corpus, error) {
+	sorted := slices.Clone(docs)
+	// Ids are normalized BEFORE the sort, not alongside the digests below.
+	// Path order IS the corpus's canonical order, and the thing ordered has
+	// to be the id: sorting the source spellings would let two docs whose
+	// names differ only by Unicode spelling come out in an order their ids do
+	// not agree with, and the corpus content hash reads that order.
+	for i := range sorted {
+		u := &sorted[i]
+		u.UploadPath = u.Path
+		u.Path = NormalizePath(u.Path)
+	}
+	slices.SortFunc(sorted, func(a, b SourceDoc) int { return strings.Compare(a.Path, b.Path) })
 
 	index := make(map[string]int, len(sorted))
 	folded := make(map[string][]int, len(sorted))
@@ -142,29 +252,66 @@ func New(units []Unit) (Corpus, error) {
 	for i := range sorted {
 		u := &sorted[i]
 		if u.Path == "" {
-			return Corpus{}, fmt.Errorf("ingest: unit %d has no path", i)
+			return Corpus{}, fmt.Errorf("ingest: document %d has no path", i)
 		}
-		if _, dup := index[u.Path]; dup {
+		if j, dup := index[u.Path]; dup {
+			// Two docs can now collide on an id they never shared a spelling
+			// of. NFD and NFC names render identically, so naming the id twice
+			// would explain nothing — %+q escapes the code points, which is
+			// the only form in which the two are told apart on a terminal.
+			if prev := sorted[j].UploadPath; prev != u.UploadPath {
+				return Corpus{}, fmt.Errorf("ingest: %+q and %+q are one document path in two "+
+					"Unicode spellings; the corpus can hold only one", prev, u.UploadPath)
+			}
 			return Corpus{}, fmt.Errorf("ingest: duplicate source path %q", u.Path)
 		}
 		index[u.Path] = i
-		// Every unit is recorded under its fold key, collisions included:
+		// Every document is recorded under its fold key, collisions included:
 		// dropping one would make the corpus quietly answer for a document
 		// it holds two of. See FoldedPath.
 		key := foldPath(u.Path)
 		folded[key] = append(folded[key], i)
 
-		sum := sha256.Sum256(u.Bytes)
-		u.SHA256 = hex.EncodeToString(sum[:])
+		u.UploadSHA256 = digest(u.Bytes)
+		if utf8.Valid(u.Bytes) && !norm.NFC.IsNormal(u.Bytes) {
+			u.Bytes = norm.NFC.Bytes(u.Bytes)
+			u.SHA256 = digest(u.Bytes)
+		} else {
+			u.SHA256 = u.UploadSHA256
+		}
 		fmt.Fprintf(corpusDigest, "%s\x00%s\n", u.Path, u.SHA256)
 	}
 
 	return Corpus{
-		Units:       sorted,
+		Docs:        sorted,
 		ContentHash: hex.EncodeToString(corpusDigest.Sum(nil)),
 		index:       index,
 		folded:      folded,
 	}, nil
+}
+
+// NormalizePath is the NFC pre-pass applied to an id, and the one place a
+// path is normalized in this pipeline. New calls it on every document; a caller
+// that has obtained a path from OUTSIDE custody bytes — a percent-decoded
+// link destination is the live case — calls it to bring that path onto the
+// same footing before comparing it against an id. Anything already read out
+// of custody is NFC and needs no second pass.
+//
+// Invalid UTF-8 passes through for the reason content does: a filesystem may
+// hand back a name that is raw bytes, and normalizing those would be a guess
+// about an encoding this package cannot verify. Such a name stays byte-exact
+// and still works as an id — it just answers only to itself.
+func NormalizePath(p string) string {
+	if !utf8.ValidString(p) || norm.NFC.IsNormalString(p) {
+		return p
+	}
+	return norm.NFC.String(p)
+}
+
+// digest is the one spelling of "sha256 of these bytes, hex" in this package.
+func digest(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // maxCorpusBytes bounds what one ingest reads into memory. The largest
@@ -176,7 +323,13 @@ func New(units []Unit) (Corpus, error) {
 // asked for one, and a limit with an escape hatch is a limit nobody reads.
 const maxCorpusBytes = 256 << 20 // 256 MB
 
-// WalkMarkdown ingests every Markdown document under root.
+// Walk ingests every document under root whose name carries one of exts.
+//
+// exts is the format adapter's document-extension set (markdown.Extensions()
+// today). It is a parameter rather than a constant because "which files are
+// documents" is the one piece of format knowledge a walk needs, and this
+// package is not where format knowledge lives. Matching is case-insensitive:
+// `.MD` off a Windows-authored tree is the same document.
 //
 // It reads the whole corpus into memory. That is the right trade for a batch
 // appliance whose largest target is tens of megabytes of prose, and it is
@@ -197,13 +350,20 @@ const maxCorpusBytes = 256 << 20 // 256 MB
 //     knowledge base silently missing a chapter is the failure mode this
 //     rule exists to prevent. A broken symlink NOT named like a document
 //     (`logo.png -> gone`) cannot hide a chapter, so it is a skip.
-//   - A corpus with no Markdown at all fails: at this point in the pipeline
-//     it is a mistyped path, not an empty job. So does one over
+//   - A corpus with no matching document at all fails: at this point in the
+//     pipeline it is a mistyped path, not an empty job. So does one over
 //     maxCorpusBytes.
 //
-// Every skip is a debug record on lg, because "why is that file not in my
-// knowledge base" is the question the policies above generate.
-func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
+// Every skip is recorded twice, and both records are the same call: an INFO
+// line on lg, because "why is that file not in my knowledge base" is the
+// question the policies above generate, and an Exclusion on the returned
+// Corpus, because a log line is gone the moment the terminal scrolls while the
+// run record outlives the run (SPEC §3.8) [MAD2: B-3].
+func Walk(root string, exts []string, lg log.Logger) (Corpus, error) {
+	if len(exts) == 0 {
+		return Corpus{}, fmt.Errorf("ingest: no document extensions given; " +
+			"the caller's format adapter must name at least one")
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return Corpus{}, fmt.Errorf("ingest: corpus root: %w", err)
@@ -212,8 +372,15 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 		return Corpus{}, fmt.Errorf("ingest: corpus root %s is not a directory", root)
 	}
 
-	var units []Unit
+	var docs []SourceDoc
+	var excluded []Exclusion
 	var total int64
+	// One call per skip, so the logged reason and the recorded one cannot
+	// drift: they are the same string, written to the two places a reader looks.
+	exclude := func(rel, reason string, kv ...any) {
+		excluded = append(excluded, Exclusion{Path: rel, Reason: reason})
+		lg.Info("ingest excluded a path", append([]any{"path", rel, "reason", reason}, kv...)...)
+	}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("ingest: walk %s: %w", p, err)
@@ -228,7 +395,7 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
-			lg.Debug("ingest skipping dot-prefixed entry", "path", rel, "dir", d.IsDir())
+			exclude(rel, ExcludedDotPrefixed, "dir", d.IsDir())
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -238,13 +405,13 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 			return nil
 		}
 
-		markdown := isMarkdown(name)
+		document := hasExt(name, exts)
 		regular := d.Type().IsRegular()
 		if d.Type()&fs.ModeSymlink != 0 {
 			target, err := os.Stat(p)
 			switch {
-			case err != nil && !markdown:
-				lg.Debug("ingest skipping broken non-document symlink", "path", rel, "reason", err)
+			case err != nil && !document:
+				exclude(rel, ExcludedBrokenSymlink, "error", err)
 				return nil
 			case err != nil:
 				return fmt.Errorf("ingest: %s: %w", rel, err)
@@ -254,8 +421,8 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 			}
 			regular = target.Mode().IsRegular()
 		}
-		if !markdown {
-			lg.Debug("ingest skipping non-Markdown file", "path", rel)
+		if !document {
+			exclude(rel, ExcludedNotADocument)
 			return nil
 		}
 		if !regular {
@@ -276,16 +443,25 @@ func WalkMarkdown(root string, lg log.Logger) (Corpus, error) {
 				"(reached at %s); there is no override — a tree this large is a mistyped root "+
 				"far more often than a document set", root, maxCorpusBytes, rel)
 		}
-		units = append(units, Unit{Path: rel, Bytes: b})
+		// rel is the on-disk spelling, which is what the read above needed and
+		// what New keeps as UploadPath. The NFC id is derived from it there,
+		// after every file has been read: nothing in the walk may depend on
+		// the id, because the id is not what opens a file.
+		docs = append(docs, SourceDoc{Path: rel, Bytes: b})
 		return nil
 	})
 	if err != nil {
 		return Corpus{}, err
 	}
-	if len(units) == 0 {
-		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", MarkdownExt, root)
+	if len(docs) == 0 {
+		return Corpus{}, fmt.Errorf("ingest: no %s files under %s", strings.Join(exts, ", "), root)
 	}
-	return New(units)
+	c, err := New(docs)
+	if err != nil {
+		return Corpus{}, err
+	}
+	c.Excluded = excluded
+	return c, nil
 }
 
 // relPath renders p as the corpus-wide id: relative to root, slash-separated
@@ -298,8 +474,9 @@ func relPath(root, p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// isMarkdown reports whether a file name carries the Markdown extension,
+// hasExt reports whether a file name carries one of the document extensions,
 // case-insensitively.
-func isMarkdown(name string) bool {
-	return strings.EqualFold(filepath.Ext(name), MarkdownExt)
+func hasExt(name string, exts []string) bool {
+	got := filepath.Ext(name)
+	return slices.ContainsFunc(exts, func(e string) bool { return strings.EqualFold(got, e) })
 }

@@ -1,10 +1,11 @@
-# kbase
+# README – KBase
 
 **Turn a human-targeted documentation corpus into an agent-friendly knowledge
 base.**
 
 kbase is a standalone batch appliance: point it at a Markdown doc set (LaTeX
-later; PDF only via external preprocessing tools), and it produces a navigable
+later via a separate tex→md converter module; PDF only via external
+preprocessing tools), and it produces a navigable
 Markdown tree — entry point → domain index → subtopic index → leaf — with:
 
 - **Verbatim leaves.** Leaf pages are faithful translations of the source, not
@@ -12,13 +13,14 @@ Markdown tree — entry point → domain index → subtopic index → leaf — w
   contract states it plainly: *summaries route, leaves answer*.
 - **Progressive hierarchical summaries** for navigation, built bottom-up.
 - **Mechanically generated links.** Bidirectional tree navigation is emitted
-  deterministically from the KB skeleton — dead links are impossible by
+  deterministically from the KB tree plan — dead links are impossible by
   construction. Cross-references come only from the source's own links; no
   inferred "related topics."
-- **Self-description.** Every generated KB ships a `.agents/` directory with
-  docent and maintainer agent definitions, a routing eval, and an entry-point
-  contract — any agent that picks up the artifact finds its operating manual
-  inside.
+- **Self-description.** Every generated KB ships an entry-point contract — any
+  agent that picks up the artifact finds its operating manual inside. The docent
+  and maintainer agent definitions are yours rather than the KB's:
+  `kbase write-agents --out <dir>` writes adaptable copies wherever you
+  keep your agent tooling.
 - **Provenance.** Each KB records app version, resolved model IDs, and source
   identity (commit/hash); the artifact is reproducible from that tuple.
 
@@ -40,7 +42,7 @@ A fixed multi-stage pipeline, deterministic wherever possible:
 
 1. **Ingest + survey** (deterministic) — structural inventory: heading trees,
    section sizes, link graph.
-2. **Taxonomy design** (model) — the KB skeleton, designed from the survey,
+2. **Taxonomy design** (model) — the KB tree plan, designed from the survey,
    never from raw source.
 3. **Dissection** (mechanical cuts, model-refined, mechanically verified) —
    the source is sliced by verified byte offsets, never retyped.
@@ -68,9 +70,13 @@ quality, never correctness.
 
 Early. The design is settled ([ARCHITECTURE.md](ARCHITECTURE.md)). Landed so
 far: config plumbing (`~/.config/kbase` provider pool + choices), the
-OpenAI-compatible client (blocking + streaming, mock fabric), and the
-`models` / `configure` verbs with gemma-4 tier auto-detection. What's next
-lives in [ROADMAP.md](ROADMAP.md).
+OpenAI-compatible client (blocking + streaming, mock fabric), the `models` /
+`configure` verbs with gemma-4 tier auto-detection, and `kbase build` — the
+whole pipeline end to end, delivering a verified KB with a model-designed tree
+and hierarchical summaries. The prompts behind the model stages are marked
+stubs pending the definitions work, so a build today is evidence about the
+machinery before it is evidence about the prose. What's next lives in
+[ROADMAP.md](ROADMAP.md).
 
 ## Development
 
@@ -88,14 +94,14 @@ just cover      # aggregate test coverage
 ```
 
 This file is the **developer** README. [USER_README.md](USER_README.md) and
-[USER_AGENTS.md](USER_AGENTS.md) are the user-facing pair — `just dist` ships
-them as `README.md` (humans) and `AGENTS.md` (AI agents) inside the distro
+[USER_CONVENTIONS.md](USER_CONVENTIONS.md) are the user-facing pair — `just dist` ships
+them as `README.md` (humans) and `CONVENTIONS.md` (AI agents) inside the distro
 tarball. No built binaries are committed to the repo: distribution is the
 dist tarball attached to a GitHub releases entry.
 
 Design reference: [ARCHITECTURE.md](ARCHITECTURE.md). Implementation
 specifics and constants: [SPEC.md](SPEC.md). Working contract for agents and
-contributors: [AGENTS.md](AGENTS.md).
+contributors: [CONVENTIONS.md](CONVENTIONS.md).
 
 ## License
 

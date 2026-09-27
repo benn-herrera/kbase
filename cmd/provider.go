@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -105,6 +106,24 @@ func (o providerOptions) dial(ctx context.Context) (name string, client model.Cl
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	return name, newClient(model.Endpoint{Name: name, BaseURL: p.BaseURL, APIKey: p.APIKey}), callCtx, cancel, nil
+}
+
+// safeBaseURL is a provider's base URL with any userinfo removed.
+//
+// `https://user:pass@host/v1` is a legal providers.toml value, and run.json is
+// by design an artifact an operator shares as evidence — a credential in it
+// would travel with the run report. The API key never appears there (it lives
+// on the Endpoint and goes on the wire), so this closes the one remaining way
+// a secret could reach the record or the console. An unparseable value is
+// passed through: this process already dialed it, and nothing here could
+// establish which part of a non-URL is a credential.
+func safeBaseURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 // catalogueIDs fetches the provider's catalogue and returns the model ids in

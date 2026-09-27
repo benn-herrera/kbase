@@ -1,4 +1,4 @@
-# kbase
+# README – KBase
 
 **Turn a human-targeted documentation corpus into an agent-friendly knowledge
 base.**

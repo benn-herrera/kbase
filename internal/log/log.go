@@ -64,10 +64,14 @@ const (
 // detail is opt-in.
 const DefaultLevel = LevelWarn
 
-// logFileMode is the mode a newly created log file is given. Logs carry
-// diagnostics about a user's corpus and provider set, so they are owner-only
-// for the same reason the provider key files are.
-const logFileMode = 0o600
+// logFileMode is the mode New ASKS FOR when it creates the log file: the
+// ordinary permissive creation mode, masked by the user's umask. A log is a
+// transcript the user asked for by name and will hand to someone else when
+// something went wrong; kbase is a documentation tool, not a keystore (ruled
+// 2026-08-14), and it never writes key material here (see config's providers
+// loader, which keeps key bytes out of every record). Same number as
+// pipeline.CreateFileMode, declared here because this package is below it.
+const logFileMode = 0o666
 
 // ParseLevel converts a --log-level value to a Level. Surrounding space is
 // tolerated and case is not significant; empty selects DefaultLevel.
@@ -116,7 +120,8 @@ type Options struct {
 	Console io.Writer
 
 	// FilePath, when non-empty, tees every record to that file as well as
-	// to Console. The file is appended to, created 0600 if absent. There
+	// to Console. The file is appended to, created if absent (at the user's
+	// umask — see logFileMode). There
 	// is no rotation and no size cap: a run is bounded, and a transcript
 	// the user asked for by name is one they can delete.
 	FilePath string

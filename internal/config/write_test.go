@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -85,15 +86,32 @@ func TestUpdateConfigFreshTemplate(t *testing.T) {
 
 // TestUpdateConfigCreatesDir: a fresh install has no config directory at
 // all, so the first write must make one rather than fail on the parent.
+// It also pins the ruling of 2026-08-14: the file and the directory are
+// created permissively and the user's umask narrows them. config.toml is a
+// hand-editing surface, not a credential — the secrets live in the files
+// providers.toml points at — so kbase does not second-guess the umask. The
+// mask is set to a distinctive value first, so a hard-coded mode of any
+// vintage fails here.
 func TestUpdateConfigCreatesDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	mask := setTestUmask(t)
 	path := ConfigPath(filepath.Join(t.TempDir(), "nested", "kbase"))
 	update(t, path)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat written config: %v", err)
 	}
-	if info.Mode().Perm() != configFilePerm {
-		t.Errorf("mode = %v, want %v", info.Mode().Perm(), os.FileMode(configFilePerm))
+	if want := os.FileMode(configFilePerm) &^ mask; info.Mode().Perm() != want {
+		t.Errorf("mode = %v, want %v", info.Mode().Perm(), want)
+	}
+	dir, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("stat config dir: %v", err)
+	}
+	if want := os.FileMode(configDirPerm) &^ mask; dir.Mode().Perm() != want {
+		t.Errorf("dir mode = %v, want %v", dir.Mode().Perm(), want)
 	}
 }
 
@@ -131,8 +149,11 @@ notes = "an entire table kbase does not model"
 func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, annotated)
 	update(t, path)
-	assertValues(t, path)
 
+	// Not read back through LoadConfig: this fixture carries keys Config
+	// does not model, and a strict load refuses those on purpose. The
+	// line-by-line comparison below covers the written values exactly.
+	//
 	// The rewritten lines, keyed by their line number in the fixture.
 	rewritten := map[int]string{
 		3:  `provider = "` + newProvider + `"` + commentGap + `# which providers.toml entry to use`,
@@ -188,7 +209,9 @@ func TestUpdateConfigInsertsMissingKeys(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeFile(t, t.TempDir(), ConfigFileName, tt.src)
 			update(t, path)
-			assertValues(t, path)
+			// The whole-file comparison is the assertion: some of these
+			// sources carry tables Config does not model, which a strict
+			// LoadConfig refuses by design.
 			if got := readBack(t, path); got != tt.want {
 				t.Errorf("file =\n%s\nwant\n%s", got, tt.want)
 			}

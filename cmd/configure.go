@@ -207,11 +207,12 @@ func ambiguousTierError(tier, provider string, candidates []string) error {
 		tier, provider, len(candidates), indentedList(candidates), tier)
 }
 
-// indentedList renders ids one per indented line, sorted ascending — the
-// same stable ordering `kbase models` prints, so the two verbs' output can
-// be read against each other.
-func indentedList(ids []string) string {
-	sorted := slices.Clone(ids)
+// indentedList renders values one per indented line, sorted ascending — the
+// same stable ordering `kbase models` prints, so a failure listing and that
+// verb's output can be read against each other. Every verb that lists things
+// under a message uses it, so they all list them the same way.
+func indentedList(values []string) string {
+	sorted := slices.Clone(values)
 	slices.Sort(sorted)
 	return listIndent + strings.Join(sorted, "\n"+listIndent)
 }

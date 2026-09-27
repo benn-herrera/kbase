@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -39,9 +40,20 @@ type Config struct {
 	Dev DevConfig `toml:"dev"`
 }
 
+// TreePlanMechanical is the only value [dev] tree_plan accepts. It names
+// where the tree plan comes from rather than what it looks like, because
+// that is the whole of the difference: the same verifier composes and
+// checks both.
+const TreePlanMechanical = "mechanical"
+
 // DevConfig is the [dev] table: switches for diagnosing kbase itself.
-// Nothing here changes what the pipeline produces — a run with the whole
-// table on emits the same knowledge base as a run without it.
+//
+// They are here rather than on the verbs as a deliberate concession to
+// pragmatism (ruled 2026-08-14): `kbase build` is the delivered article and
+// its flag set is the user's, so a switch that exists to serve kbase's own
+// development does not get to sit in it. Each switch below states the
+// upstream cause that makes it necessary — a switch that cannot name one is
+// a flag looking for a home.
 type DevConfig struct {
 	// Telemetry enables local inference-timing diagnostics: the per-call
 	// timing a provider reports alongside a response, which is a second
@@ -49,6 +61,56 @@ type DevConfig struct {
 	// questions. Off by default, and consumed by the logging facility —
 	// the numbers land in the log, never in the user's output.
 	Telemetry bool `toml:"telemetry"`
+
+	// KeepTempWork keeps a SUCCESSFUL run's `<out>/temp-work/` tree instead
+	// of deleting it (ARCHITECTURE.md §12). A failed or interrupted run keeps
+	// it unconditionally, so this switch only ever answers "the run succeeded
+	// and I still want to see what it did". Off by default: the intermediates
+	// of a run that delivered are, by then, a copy of what it delivered plus
+	// the proof machinery that got it there.
+	KeepTempWork bool `toml:"keep_temp_work"`
+
+	// BuildDate pins the date every delivered page's provenance receipt is
+	// stamped with, as YYYY-MM-DD. Empty means today, UTC.
+	//
+	// Upstream cause: the receipt is DATED BY DESIGN (SPEC §4.6), so two
+	// otherwise identical runs that straddle midnight deliver different
+	// bytes. Byte-determinism is a property worth testing and a clock
+	// cannot be tested against, so the date has to be pinnable from
+	// somewhere; the only alternative — dropping the date — throws away a
+	// fact the page is meant to carry.
+	BuildDate string `toml:"build_date"`
+
+	// TreePlan selects where stage 3's tree plan comes from. Empty is the
+	// delivered behaviour: the taxonomy model designs it. TreePlanMechanical
+	// takes the source's own file structure instead and dials no provider at
+	// all — so a run under it makes no model call ANYWHERE, summaries
+	// included, and its section pages carry no summary prose.
+	//
+	// Upstream cause: taxonomy design is a ruled no-fallback seam
+	// (ARCHITECTURE §12), so the pipeline has no mechanical mode of its own
+	// to fall into and a hermetic front-door test has nowhere to enter. This
+	// is that entrance, and a run that takes it says so in run.json rather
+	// than passing itself off as a build with a model in the loop.
+	TreePlan string `toml:"tree_plan"`
+}
+
+// MechanicalTreePlan reports whether [dev] tree_plan selects the mechanical
+// tree plan.
+//
+// An unrecognized value is a refusal rather than a fallback to either shape:
+// the two differ in whether a provider is dialed at all, so guessing which
+// one a typo meant is a guess about whether the corpus leaves the machine.
+func (d DevConfig) MechanicalTreePlan() (bool, error) {
+	switch v := strings.TrimSpace(d.TreePlan); v {
+	case "":
+		return false, nil
+	case TreePlanMechanical:
+		return true, nil
+	default:
+		return false, fmt.Errorf("config: [dev] tree_plan is %q; the only value is %q — omit the key for the designed tree plan",
+			v, TreePlanMechanical)
+	}
 }
 
 // ModelMap is the [models] table: the tier→model-id resolution, written by
@@ -84,6 +146,9 @@ func (c Config) ModelFor(tier string) (string, bool) {
 // No key material is resolved here: config.toml holds CHOICES, and every
 // credential lives on its providers.toml pool entry, resolved by
 // LoadProviders.
+//
+// The decode is strict: a key or table Config does not model refuses the
+// load, naming the file and every offending key (see rejectUnknownKeys).
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,8 +158,12 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
 	var cfg Config
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
+	md, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	if err := rejectUnknownKeys(path, md); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	return cfg, nil
 }
