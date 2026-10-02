@@ -227,6 +227,14 @@ version, enforced against the JSON's `pandoc-api-version`; and loud refusal for
 a document pandoc cannot parse at all (5 of ~55 in upstream's sampling), naming
 the paper and the reader's error.
 
+**Owed too: theorem and equation numbers that match the typeset document.**
+Readers cite results by printed number, and upstream's hand-named-claim
+harvest (*follows directly from Lemma 4.6*, no `\ref`) joins on it. Upstream
+records that pandoc's own counter can disagree with the author's — the
+author's *Proposition 1.3* rendered as *Proposition 17* where numbering runs
+within sections — and such a mention then joins nothing. Wherever kbase takes
+numbers from, they must agree with the typeset PDF's.
+
 **The pre-passes are the part that can accrete, so three rules hold them.**
 Each pre-pass names the reader-level hole it fills, and the list of them lives
 in one place. Anything the reader drops that no pre-pass covers is counted and
@@ -291,8 +299,15 @@ references, citations, block kinds, display names, numbers and proof-to-subject
 bindings as explicit records with positions into the Markdown. The join
 becomes data — a missing record is a schema failure, not the silent edgeless
 graph upstream's own SPEC warns of — and the Markdown stays plain text. It is
-the survey artifact's existing pattern: a JSON sidecar with offsets beside the
+the survey artifact's existing pattern: a sidecar with offsets beside the
 bytes it describes.
+
+A reference record carries **the word the page shows before it** and **the
+referencing macro's own type**. Upstream filters dependency candidates on that
+word (*Section 3*, *Fig. 2* name nothing a premise can hold) and recovers it
+from rendered Markdown; in pandoc's JSON it is the text node immediately
+before the reference, and the macro type tells a `\ref` — the author wrote
+the noun — from a `\cref`, whose noun is generated at typesetting.
 
 **The KB is an analysis and development format, not a presentation format**
 (owner, 2026-10-01). So the walk that writes the Markdown *translates*; it does
@@ -302,6 +317,54 @@ not render. Three classes:
   lists, footnotes, quotations, accents, dashes and quotes.
 - **Carry intact** — mathematics, byte-exact. A hard requirement.
 - **Drop** — the frills: spacing, sizing, fonts, colour, page layout.
+
+---
+
+## kbase as personant's KB toolset (owner, 2026-10-01)
+
+**kbase owns KB building and every mechanical maintenance function kb_tools
+has** — refresh, verify, the write API's ops, queries, the claim-graph render.
+Each is a kbase subcommand, and personant's harness integrates them as builtin
+tools the model calls directly, with no freehanded file editing. That is what
+maintains a KB kbase delivered, and it moves kbase from a run-to-completion
+appliance to a long-lived toolset; ARCHITECTURE.md §1's framing changes with
+it.
+
+**`claim-graph.svg` is one more automatically maintained file** (owner,
+2026-10-01): kbase renders it, it is derived from the KB's index alone and
+authored by nobody, and refresh mints it while verify checks it fresh —
+byte-deterministic, so a stale or hand-edited sheet is a freshness failure
+like any other derived file.
+
+**The communication format is personant's CONVENTIONS.md "Serialization
+format" rule**: JSONL for flat records one per line, YAML for nested or
+document-shaped output, TOML for flat hand-edited configuration, and JSON
+resisted. **Tool results are YAML on stdout.** Consequences:
+
+- stdout carries exactly one YAML document and nothing else; every
+  human-facing line, progress note and log record goes to stderr.
+- A refusal is a result too — a YAML document naming the outcome, the reason
+  and every offending item, with a nonzero exit — so a model calling the tool
+  reads why rather than an empty stdout.
+- Key order is fixed and strings are quoted on emit, so the same call yields
+  byte-identical output.
+- kbase's single failure exit code likely gives way to distinguishable
+  outcomes (kb_tools' write API separates written / refused / retry
+  unchanged); personant's tool layer decides what it needs.
+- ARCHITECTURE.md §3's "machine-to-machine encodings stay JSON" is superseded:
+  the metadata chunk's records become JSONL, and the artifact set moves off
+  JSON. **`gopkg.in/yaml.v3` is a general kbase dependency** (owner,
+  2026-10-01) — already approved in personant; the import-policy test that
+  confines `yaml` to the Markdown adapter loosens with it.
+- **New KBs build out in YAML; existing kb_tools KBs are read through legacy
+  JSON detection** (owner, 2026-10-01). JSON sits nearly inside YAML 1.2, so
+  one decoder may read both, and the transcode is lossless while kbase's YAML
+  stays inside JSON's data model (no anchors, tags, non-string keys or
+  timestamps), which emitting from typed structs guarantees. Flat record
+  files — upstream's `.index/*.jsonl` — are JSONL under the shared convention
+  already and need no migration; establish what in a delivered kb_tools KB is
+  actually JSON before designing the detection.
+- Model-facing answer grammars are untouched by any of this.
 
 ---
 
@@ -329,10 +392,11 @@ upstream before acting on any of them.
    delimited blocks beside the JSON. ARCHITECTURE.md §3 here rules JSON out of
    every model answer (*the model supplies VALUES; the machine owns SYNTAX*).
    The answer grammar of each imported ask needs reconciling at its seam.
-5. **What maintains a KB kbase delivers is unstated.** Upstream's claim graph
-   ships `.index/`, registers and a claim-graph sheet, and grading happens
-   afterwards through its Python write API in the consumer's harness. Nothing
-   yet says what plays that role for a KB the appliance delivered.
+5. **What maintains a KB kbase delivers** — answered: kbase itself, through
+   its subcommands as personant's builtin tools (the section above). Upstream's
+   claim graph ships `.index/`, registers and a claim-graph sheet, and grading
+   happens afterwards through its Python write API; each of those ops becomes a
+   kbase subcommand.
 
 ---
 
