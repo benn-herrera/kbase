@@ -9,6 +9,10 @@ house doc taxonomy and is deleted.
 
 ## Bottom line
 
+**The build target is exactly what kb_tools builds** (owner, 2026-10-02). None
+of kbase's own KB design carries over — no summaries, no page splitting, no
+kbase page grammar — because none of it ever worked.
+
 **kbase's tree-design approach inverts.** The pipeline blueprint in
 `../adjagent/kb_tools` derives the document skeleton mechanically and asks
 inference only to *refine an existing structure*. kbase stage 3 does the
@@ -322,6 +326,11 @@ not render. Three classes:
 
 ## kbase as personant's KB toolset (owner, 2026-10-01)
 
+**kbase + personant integration is the shape of the future.** A prior decision
+in either project that prevents it is removed rather than designed around —
+personant's current refusal of mutating tools, its 30s tool cap and its 8 KB
+result cap included.
+
 **kbase owns KB building and every mechanical maintenance function kb_tools
 has** — refresh, verify, the write API's ops, queries, the claim-graph render.
 Each is a kbase subcommand, and personant's harness integrates them as builtin
@@ -356,14 +365,13 @@ resisted. **Tool results are YAML on stdout.** Consequences:
   JSON. **`gopkg.in/yaml.v3` is a general kbase dependency** (owner,
   2026-10-01) — already approved in personant; the import-policy test that
   confines `yaml` to the Markdown adapter loosens with it.
-- **New KBs build out in YAML; existing kb_tools KBs are read through legacy
-  JSON detection** (owner, 2026-10-01). JSON sits nearly inside YAML 1.2, so
-  one decoder may read both, and the transcode is lossless while kbase's YAML
-  stays inside JSON's data model (no anchors, tags, non-string keys or
-  timestamps), which emitting from typed structs guarantees. Flat record
-  files — upstream's `.index/*.jsonl` — are JSONL under the shared convention
-  already and need no migration; establish what in a delivered kb_tools KB is
-  actually JSON before designing the detection.
+- **The KB metadata layer stays format-compatible with kb_tools** (owner,
+  2026-10-02; supersedes the 2026-10-01 "new KBs build out in YAML"). kb_tools'
+  maintenance tools work, and comparing kbase's behaviour byte-for-byte against
+  working examples is critical, so frontmatter, registers and `.index/*.jsonl`
+  keep their current formats. JSON vs YAML is a parser choice made at load
+  time over identical schemas. Breaking changes to the Markdown formats come
+  after kbase is a proven system, not before.
 - Model-facing answer grammars are untouched by any of this.
 
 ---
@@ -376,14 +384,15 @@ upstream before acting on any of them.
 1. **Upstream has no summary stage.** Its document-tree contract makes an index
    a heading plus a child list and nothing else, consistent with THESIS.md's
    silence on summaries. kbase's stage 6 — summaries, leaf-group cards, the
-   entry-point summary block — has no upstream counterpart. Whether kbase keeps
-   summaries, and so what an index page carries, is a decision owed.
+   entry-point summary block — has no upstream counterpart. Resolved
+   2026-10-02: kbase builds what kb_tools builds, so no summaries.
 2. **Upstream has no page-size budget and no splitting.** A leaf is a whole
    section however large; a paper with almost no sectioning collapsing to one
    leaf is an open hole on upstream's roadmap, with no reader for a finer
    boundary set. kbase's stage 4 — enumerated cut candidates, the light-tier
-   adjudication fold, `(k/n)` parts — is a working answer to exactly that gap,
-   so on this point ideas may flow upstream.
+   adjudication fold, `(k/n)` parts — is an answer to exactly that gap, so on
+   this point ideas may flow upstream. kbase itself builds what kb_tools builds
+   (2026-10-02), so it does not split either.
 3. **Upstream's claim-graph stages read the rendered Markdown.** They find
    blocks, anchors and labels by parsing pandoc's output conventions. The
    metadata chunk above replaces that; the claim-graph stages read records
