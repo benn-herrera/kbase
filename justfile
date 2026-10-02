@@ -80,6 +80,39 @@ TEMPORAL_DOCS_REPO := "https://github.com/temporalio/documentation.git"
 TEMPORAL_DOCS_COMMIT := "133948056cc38ab06db42a685388bd96792b5e8a"
 TEMPORAL_DOCS_DIR := TEST_DATA_TRANSIENT_DIR / "temporal-io-documentation"
 
+# Pinned integration corpus: the arXiv survey sample, taken from adjagent's
+# kb-testing/justfile — papers sampled by construction across categories whose
+# LaTeX differs in kind. Ids are VERSIONED: an e-print version is append-only,
+# so each id is its own pin and the list reproduces the corpus while
+# redistributing none of it.
+#
+# One variable per category: the grouping is the sample's structure, and a
+# category can be fetched alone (`just prep-test-integration-arxiv "$ids"`).
+#
+# Upstream selection bias: upstream dropped every drawn paper that pandoc could
+# not parse (2609.10029v1, 2609.10235v1, 2609.10392v1, 2609.10474v1) and one it
+# parsed while silently dropping included files (2609.09821v1), so this sample
+# is pandoc-clean by construction and says nothing about where pandoc itself
+# fails.
+ARXIV_CS_GR := "2609.09828v1 2609.09834v1 2609.10363v1 2609.10385v1"
+ARXIV_CS_LG := "2609.10505v1 2609.10514v1 2609.10525v1 2609.10529v1 2609.10534v1"
+ARXIV_ECON_TH := "2609.09693v1 2609.09888v1 2609.10074v1 2609.10499v1"
+ARXIV_EESS_AS := "2609.10351v1 2609.10366v1 2609.10394v1 2609.10466v1"
+ARXIV_MATH_DG := "2609.10318v1 2609.10323v1 2609.10442v1 2609.10523v1 2609.10527v1 2609.00183v1"
+ARXIV_MATH_ST := "2609.09855v1 2609.10038v1 2609.10291v1 2609.10428v1 2609.10467v1"
+ARXIV_MATH_AG := "2609.10401v1 2609.10420v1 2609.10454v1 2609.10481v1 2609.10488v1 2609.00268v1 2609.00269v1"
+ARXIV_MATH_NT := "2609.10423v1 2609.10446v1 2609.10483v1 2609.10526v1"
+ARXIV_MATH_AP := "2609.10427v1 2609.10478v1 2609.10480v1 2609.10517v1 2609.00108v1 2609.00209v1"
+ARXIV_MATH_PR := "2609.10450v1 2609.10528v1 2609.10530v1"
+ARXIV_PHYSICS_OPTICS := "2609.10111v1 2609.10252v1"
+ARXIV_IDS := ARXIV_CS_GR + " " + ARXIV_CS_LG + " " + ARXIV_ECON_TH + " " + ARXIV_EESS_AS + " " + ARXIV_MATH_DG + " " + ARXIV_MATH_ST + " " + ARXIV_MATH_AG + " " + ARXIV_MATH_NT + " " + ARXIV_MATH_AP + " " + ARXIV_MATH_PR + " " + ARXIV_PHYSICS_OPTICS
+# The e-prints as downloaded, and one unpacked source tree per id beside them.
+ARXIV_TGZ_DIR := TEST_DATA_TRANSIENT_DIR / "arxiv-tgz"
+ARXIV_DIR := TEST_DATA_TRANSIENT_DIR / "arxiv"
+# arXiv's published courtesy interval for automated access, paid only on a
+# download that actually happens.
+ARXIV_DELAY := "3"
+
 # dist-only build trim: -trimpath drops local filesystem paths from the
 # binary; -s -w strips symbol table + DWARF (panic traces keep function
 # names). Local `just build` stays fat for debugging.
@@ -584,6 +617,50 @@ prep-test-integration-temporal:
       git -C "{{TEMPORAL_DOCS_DIR}}" checkout -q FETCH_HEAD && \
       echo "temporal docs cloned at {{TEMPORAL_DOCS_COMMIT}}"; \
     fi
+
+# Fetch and unpack happen in one recipe because the corpus a test reads is the
+# unpacked tree. Both steps land atomically (a .part file, a .unpack dir, then
+# a rename), so an interrupted run leaves nothing a later run mistakes for done.
+# An e-print is usually a tarball but may be a single gzipped .tex — a one-file
+# submission has nothing to tar — and that lands as paper.tex.
+[doc("fetch and unpack the pinned arXiv sample, one source tree per id under test_data/transient/arxiv/ (no-op per id when present); pass ids= to take a subset")]
+prep-test-integration-arxiv ids=ARXIV_IDS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{ARXIV_TGZ_DIR}}" "{{ARXIV_DIR}}"
+    fetched=0; unpacked=0; present=0
+    for id in {{ids}}; do
+        # A pre-2007 id carries a `/` (math/0211159v1); `_` keeps one paper to
+        # one file and one directory.
+        name="$(printf '%s' "${id}" | tr '/' '_')"
+        tgz="{{ARXIV_TGZ_DIR}}/${name}.tar.gz"
+        dir="{{ARXIV_DIR}}/${name}"
+        if [[ -d "${dir}" ]]; then
+            present=$((present + 1))
+            continue
+        fi
+        if [[ ! -s "${tgz}" ]]; then
+            printf 'fetching %s\n' "${id}"
+            curl -fsSL -o "${tgz}.part" "https://arxiv.org/e-print/${id}" || {
+                rm -f "${tgz}.part"
+                printf 'error: %s could not be fetched\n' "${id}" >&2
+                exit 1
+            }
+            mv "${tgz}.part" "${tgz}"
+            fetched=$((fetched + 1))
+            sleep "{{ARXIV_DELAY}}"
+        fi
+        rm -rf "${dir}.unpack"
+        mkdir -p "${dir}.unpack"
+        if ! tar xzf "${tgz}" -C "${dir}.unpack" 2>/dev/null; then
+            rm -rf "${dir}.unpack"
+            mkdir -p "${dir}.unpack"
+            gunzip -c "${tgz}" > "${dir}.unpack/paper.tex"
+        fi
+        mv "${dir}.unpack" "${dir}"
+        unpacked=$((unpacked + 1))
+    done
+    printf 'arxiv: %s fetched, %s unpacked, %s already present → %s\n' "${fetched}" "${unpacked}" "${present}" "{{ARXIV_DIR}}"
 
 # The MVP shakedown: temporal.io's documentation, hundreds of real docs —
 # the first live run over a corpus this suite did not pick for its shape.

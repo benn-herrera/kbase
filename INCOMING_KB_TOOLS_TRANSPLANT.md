@@ -1,33 +1,45 @@
 # Incoming: the kb_tools pipeline transplant
 
-**Status:** context capture from working discussion 2026-09-12. Nothing here
-is scheduled and nothing here overrides SPEC.md or ARCHITECTURE.md yet. The
-upstream it describes (`../adjagent/kb_tools`) is still in active
-development; exact specs are imported when the owner says so, not before.
-When that import happens, this document disperses into ARCHITECTURE.md /
-SPEC.md per the house doc taxonomy and is deleted.
+**Status:** context capture from working discussions 2026-09-12 and
+2026-10-01. Nothing here overrides SPEC.md or ARCHITECTURE.md yet. When the
+port lands, this document disperses into ARCHITECTURE.md / SPEC.md per the
+house doc taxonomy and is deleted.
 
 ---
 
 ## Bottom line
 
-**kbase's tree-design approach is expected to invert.** The pipeline blueprint
-being developed in `../adjagent/kb_tools` derives the document skeleton
-mechanically and asks inference only to *refine an existing structure*. kbase
-stage 3 does the opposite — the heavy tier designs the tree from the survey, at
-a declared no-fallback seam.
+**kbase's tree-design approach inverts.** The pipeline blueprint in
+`../adjagent/kb_tools` derives the document skeleton mechanically and asks
+inference only to *refine an existing structure*. kbase stage 3 does the
+opposite — the heavy tier designs the tree from the survey, at a declared
+no-fallback seam.
 
-**Three consequences for work done before the import:**
+**Where upstream stands (owner, 2026-10-01).** The mechanical pipeline is
+essentially settled. The *location* of every inference pass is settled; the
+prompts and their arrangement are still under development. Builds with
+inference enabled run against local inference alone, and every inference
+stage is a constrained, narrow ask with no tool use and no file reads — so
+nothing in the design is beyond this repo's existing call runner.
 
-1. **Do not build further repair machinery around stage 3.** The accumulated
+**Consequences for the port:**
+
+1. **Port the mechanical pipeline first.** It is the settled part and most of
+   the volume, and under upstream's `--no-inference` it delivers a real KB —
+   so kbase reaches a complete, checkable deliverable before any model is
+   involved.
+2. **Build each inference seam as plumbing; import its prompt as text.** The
+   seam — call runner, verifier, retry — is kbase's and is built where the
+   pass sits. The prompt is developed and proven upstream and arrives later;
+   while it is still moving there, a change costs a text swap, not a redesign.
+   Tuning prompts here instead would give a bad run two candidate causes with
+   nothing to separate them.
+3. **Build no further repair machinery around stage 3.** The accumulated
    rulings there — content floor, merge-direction preference, cross-parent
    merge accounting, index pruning on absorption, candidate cap, mechanical
    pre-batching, absorbed-container call skipping, interposition — are patches
    around *the model proposed a tree*. More of them is more to unwind.
-2. **Do not tune prompt definitions in this repo.** They are developed and
-   proven upstream (see "Where the parts come from"). Tuning them here means a
-   bad run has two candidate causes with nothing to separate them.
-3. **The harness is the part that stays.** Orchestration, resume, delivery and
+4. **The harness is the part that stays.** Orchestration, resume, delivery and
    verification machinery in this repo is solid and is not what the transplant
    replaces.
 
@@ -54,14 +66,16 @@ uninformative "still wrong."
 
 ---
 
-## Scope: LaTeX first, and why the old breadth was part of the failure
+## Scope: LaTeX only, and why the old breadth was part of the failure
 
 **One of the problems kbase was solving at once was too many input sources**
 (owner, 2026-09-12). Predicting the common overlap of different document types
 for a problem space not yet explored is unwise, and this project did not escape
-that unscathed. **The focus is LaTeX.** Software is malleable: if another input
-type is added later, the generalization gets found then, from two real cases
-rather than from one and a guess.
+that unscathed. **LaTeX is the only input on the design table for the
+foreseeable future** (owner, 2026-10-01) — not a first focus with others
+queued behind it. Software is malleable: if another input type is ever added,
+the generalization gets found then, from two real cases rather than from one
+and a guess.
 
 That generality splits in two, and the halves should not share a fate.
 
@@ -128,8 +142,9 @@ From `kb_tools/SPEC.md`, The Driver's Contract:
   build's, every rigor value written as the `*pending*` literal, grading a
   later pass over work that already exists.
 
-The a-fortiori argument for kbase: if the *claim graph* drafts mechanically, a
-tech-doc tree certainly does.
+Both halves transfer. THESIS.md is shared with kb_tools (owner, 2026-10-01):
+the navigation hierarchy *and* the argument hierarchy are drafted
+mechanically, and inference refines each.
 
 **The tell is `--no-inference`.** It is not this project's `[dev] tree_plan =
 "mechanical"`. kbase's switch is a dev escape hatch — a tree nobody designed
@@ -178,22 +193,51 @@ a rationale; it has one.
 
 **Known divergences to expect at the seam.**
 
-- **Claim graph.** kb_tools' second half is the `clm`/`exp`/`sup` metadata
-  spine. ARCHITECTURE.md §1 rules it out here by name as a non-goal. The
-  blueprint's *shape* transfers; the claim-graph payload does not.
+- **Claim graph — in scope, reversing ARCHITECTURE.md §1.** §1 rules it out
+  by name as a non-goal ("No claim graph. This is tech-doc dissection, not
+  paper/proof dissection."). THESIS.md makes the argument hierarchy half of
+  the thesis, so that non-goal is withdrawn and the claim graph transfers with
+  the rest of the blueprint.
 - **LaTeX.** kb_tools deleted its vendored reader and now shells out to
   **pandoc**, one parse per volume root, cutting documents from a single
   whole-volume rendering so theorem numbering and citations resolve once. It
   takes that as an enumerated exception to stdlib-only, with a named
-  `PandocMissingError`. kbase does not take that exception — see the standing
-  constraint below.
+  `PandocMissingError`. kbase takes pandoc too, but reads only its JSON — see
+  the 2026-10-01 decision below.
 
-### Standing constraint: pandoc is a last resort, and the two-step is what to collapse
+### Decided 2026-10-01: pandoc's JSON reader, our Go on both sides of it
 
-**The pandoc shortcut is not taken in kbase other than as an utter last
-resort** (owner, 2026-09-12). ARCHITECTURE.md §2 is the first reason — a
-shelled system binary is not a self-contained appliance — but it is not the
-only one.
+**pandoc is the LaTeX reader** (owner, 2026-10-01), arrived at by elimination:
+building a parser — even a partial one — was ruled out because LaTeX's long
+tail never ends; WASM engines, a Perl converter and other stacks were ruled
+out as complexity outside our control; and pandoc is the reader with evidence
+behind it, characterized failure modes and all, in kb_tools.
+
+**The shape is a hybrid with no hook layer.** Go source pre-passes before the
+parse fill the reader-level holes kb_tools documented (`\newtheorem` display
+names, `\newenvironment` declarations, unloadable includes checked before
+parsing, drawing environments). pandoc runs LaTeX→JSON only — no filters, no
+citeproc, no Markdown writer. Go walks the JSON and writes both the Markdown
+and the metadata chunk. kb_tools' Lua filter exists to steer pandoc's
+Markdown writer; with no writer in the path it has nothing to do.
+
+**Owed before it is built:** whether a pinned pandoc ships in the dist tarball
+or is required on the host (GPL obligations attach to shipping it); the pinned
+version, enforced against the JSON's `pandoc-api-version`; and loud refusal for
+a document pandoc cannot parse at all (5 of ~55 in upstream's sampling), naming
+the paper and the reader's error.
+
+**The pre-passes are the part that can accrete, so three rules hold them.**
+Each pre-pass names the reader-level hole it fills, and the list of them lives
+in one place. Anything the reader drops that no pre-pass covers is counted and
+reported, never absorbed silently. And a list that keeps growing is the signal
+to reconsider the reader, not to add another pre-pass — the unmonitored,
+locally-reasonable accretion that made LaTeX itself what it is is the failure
+these rules exist to prevent.
+
+The rest of this section is the reasoning from 2026-09-12, when pandoc was a
+last resort. Its argument against the Markdown intermediate and its smuggled
+markings still holds — reading the JSON is how this decision honours it.
 
 **The preferred outcome is one processor, not two.** kb_tools' path is LaTeX →
 Markdown → KB, and that intermediate Markdown has to carry LaTeX semantics
@@ -236,6 +280,62 @@ become checks.
 
 ---
 
+## The handoff from the mechanical phase to inference
+
+**Markdown plus a metadata chunk, never Markdown alone** (owner, 2026-10-01).
+Upstream passes the rendered Markdown tree as the *sole* artifact from its
+mechanical phase to its inference phase, and gets structure across by
+smuggling it into that Markdown. kbase states what the inference phase needs
+instead: the Markdown, plus a metadata chunk carrying blocks, labels,
+references, citations, block kinds, display names, numbers and proof-to-subject
+bindings as explicit records with positions into the Markdown. The join
+becomes data — a missing record is a schema failure, not the silent edgeless
+graph upstream's own SPEC warns of — and the Markdown stays plain text. It is
+the survey artifact's existing pattern: a JSON sidecar with offsets beside the
+bytes it describes.
+
+**The KB is an analysis and development format, not a presentation format**
+(owner, 2026-10-01). So the walk that writes the Markdown *translates*; it does
+not render. Three classes:
+
+- **Translate** — text treatments that carry meaning: emphasis, bold, code,
+  lists, footnotes, quotations, accents, dashes and quotes.
+- **Carry intact** — mathematics, byte-exact. A hard requirement.
+- **Drop** — the frills: spacing, sizing, fonts, colour, page layout.
+
+---
+
+## Upstream findings to reconcile at the port (read 2026-10-01)
+
+From kb_tools' contract docs as they stood on 2026-10-01; recheck against
+upstream before acting on any of them.
+
+1. **Upstream has no summary stage.** Its document-tree contract makes an index
+   a heading plus a child list and nothing else, consistent with THESIS.md's
+   silence on summaries. kbase's stage 6 — summaries, leaf-group cards, the
+   entry-point summary block — has no upstream counterpart. Whether kbase keeps
+   summaries, and so what an index page carries, is a decision owed.
+2. **Upstream has no page-size budget and no splitting.** A leaf is a whole
+   section however large; a paper with almost no sectioning collapsing to one
+   leaf is an open hole on upstream's roadmap, with no reader for a finer
+   boundary set. kbase's stage 4 — enumerated cut candidates, the light-tier
+   adjudication fold, `(k/n)` parts — is a working answer to exactly that gap,
+   so on this point ideas may flow upstream.
+3. **Upstream's claim-graph stages read the rendered Markdown.** They find
+   blocks, anchors and labels by parsing pandoc's output conventions. The
+   metadata chunk above replaces that; the claim-graph stages read records
+   instead, which changes the shape of their port.
+4. **Upstream's model answers are JSON envelopes**, with composed text in raw
+   delimited blocks beside the JSON. ARCHITECTURE.md §3 here rules JSON out of
+   every model answer (*the model supplies VALUES; the machine owns SYNTAX*).
+   The answer grammar of each imported ask needs reconciling at its seam.
+5. **What maintains a KB kbase delivers is unstated.** Upstream's claim graph
+   ships `.index/`, registers and a claim-graph sheet, and grading happens
+   afterwards through its Python write API in the consumer's harness. Nothing
+   yet says what plays that role for a KB the appliance delivered.
+
+---
+
 ## What is actually solid in this repo
 
 Harness machinery, and it is the expensive-to-rebuild part:
@@ -260,28 +360,24 @@ project's own self-assessment.
 
 ## Risk to watch first
 
-**The skeleton derivation is the likeliest place filing turns into recasting.**
-kb_tools derives its skeleton from LaTeX's declared, closed sectioning
-vocabulary, where a `\section` is unambiguous and authored to a convention.
-Here it must come from ATX headings written to no standard across hundreds of
-files, with a folder hierarchy carrying real structure beside them.
-
-The analogous risk is already named upstream as `kb_tools/ROADMAP.md` item 5
-(*the badly structured paper — a finer boundary set, not a different
-mechanism*) and item 4 (*generality corpus*: every design decision was taken
-against a single document, so a clean run over it measures that document, not
-the process). kbase carries the same exposure — its design was taken against
-Rojo and `creator-docs`.
+**Input variety is the likeliest place filing turns into recasting.** Under
+the LaTeX focus the skeleton comes from LaTeX's declared sectioning, as it does
+upstream, so the risk is not the corpus class but the spread within it — what
+THESIS.md calls *why the ideal does not hold*: under-marked arguments,
+sparse or absent sectioning, `\input`-chained volumes. Upstream's own design
+was taken largely against one multi-volume corpus, and a clean run over it
+measures that corpus rather than the process; kbase inherits that exposure
+along with the blueprint.
 
 Stopping rule: if filing starts turning into recasting, the difference is
 corpus-class rather than tolerance, and that is a design question to raise
 rather than an implementation to push through.
 
-Worth knowing which direction ideas flow on one point: item 5 proposes
-widening the enumerated boundary set to paragraph breaks, and mechanical
-`(forced-split I/N)` titling for oversize sections. **kbase already ships
+Worth knowing which direction ideas flow on one point: upstream's roadmap (as
+of 2026-09-12) proposed widening the enumerated boundary set to paragraph
+breaks, and mechanical `(forced-split I/N)` titling for oversize sections. **kbase already ships
 both** — `heading | fence | paragraph` cut candidates, and `<slug>-<k>.md`
-titled `(k/n)` — and already realizes item 5's closing hope that inference
+titled `(k/n)` — and already realizes that item's closing hope that inference
 becomes the exception path rather than the stage: a corpus whose groups all fit
 one page makes zero light-tier calls.
 
@@ -290,15 +386,19 @@ one page makes zero light-tier calls.
 ## Until the import
 
 - Leave stage 3 alone.
-- Leave the prompt definitions as the marked stubs SPEC.md §6 declares them.
+- Leave the prompt definitions as the marked stubs SPEC.md §6 declares them
+  until each is imported from upstream.
 - Harness work, delivery/resume work and gate work are unaffected and
   proceed normally.
-- Any LaTeX work honours the standing constraint above: no pandoc, and the
-  goal is one processor rather than a converter feeding a Markdown front door.
-- Two stale spots in ARCHITECTURE.md, both worth correcting whenever those
-  sections are next touched, import or no import:
+- Any LaTeX work follows the 2026-10-01 decision above: pandoc's JSON reader
+  with Go pre-passes and a Go walk, never pandoc's Markdown writer.
+- Stale spots in ARCHITECTURE.md, each worth correcting whenever its section
+  is next touched, import or no import:
   - **§11** describes kb_tools as a "stdlib-only Python deterministic spine —
     refresh, verify, link checking." It is a complete build pipeline now.
   - **§1** states the project's first target use and both validation targets
-    as Markdown tech-doc sets (Rojo, Roblox `creator-docs`). See "Scope:
-    LaTeX first," above.
+    as Markdown tech-doc sets (Rojo, Roblox `creator-docs`), and rules out the
+    claim graph as a non-goal. See "Scope: LaTeX only" above, and THESIS.md.
+  - **§4** rules LaTeX a separate `tex→md` converter module feeding the
+    Markdown front door, with pandoc a dev-time oracle only; ROADMAP.md parks
+    that module. The 2026-10-01 reader decision above supersedes both.
