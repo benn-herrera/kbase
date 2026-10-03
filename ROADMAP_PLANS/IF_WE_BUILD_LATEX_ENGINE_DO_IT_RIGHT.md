@@ -157,6 +157,21 @@ not a failure.
 - **The tree is lossless; consumers project it.** It keeps everything that
   affects the page; a consumer drops what it does not need.
 
+### The oracle harness is a deliverable
+The differential-trace suite, the round-trip harness, the non-degeneracy
+gates and the corpus definition ship as a published, runnable harness that
+judges **any** implementation, not only this library's internal tests. With
+the library as the reference implementation, it is what lets a port to
+another language be verified against the same gates rather than trusted.
+
+**It reports divergences, not raw traces.** A full `\tracingall` log from an
+expl3-heavy load can run to millions of tokens, far beyond what any agent
+should read. The harness reports the first point where the implementation's
+trace and the reference engine's disagree, a bounded window of context around
+it, and the register and state values that differ — so debugging a divergence
+means reading one compact report. Raw traces stay on disk for a human or a
+targeted follow-up.
+
 ### Non-degeneracy gates
 Storing the raw token stream as one opaque node would pass every round trip
 with no semantic content. So:
@@ -300,6 +315,8 @@ fitting it into kbase is kbase work under kbase's own plan.
   paper inside the round-trip share.
 - api_gen extractable: its own tests pass standalone, and it contains nothing
   specific to this library.
+- The oracle harness runs standalone against an implementation it is pointed
+  at, with no dependency on the library's own build.
 - **Every requirement stated in this document has a test that names it** —
   including the consumer-supplied macro library and its search order, no
   run-time network access, the stale-`.bbl` diagnostic, the bounded `.aux`
