@@ -1,7 +1,9 @@
 # ACTIVE PLAN – port the kb_tools KB toolchain into kbase
 
-**Status:** awaiting owner approval. Step 1 (contract documents) and Step 2
-(the slice) are planned for execution. §8 onward is a skeleton: it is **not
+**Status:** approved. **Step 1 done** (contract documents committed; recorded
+inputs: adjagent `88ad25fdcccafdf608e09b8c360155c4b2c44eee`, pandoc 3.12,
+`pandoc-api-version` 1.23.1.2). **Next: owner review of the Step 1 commit**,
+then Step 2 (the slice), after owner launch chores 1–2 (§4). §8 onward is a skeleton: it is **not
 executed** and is re-planned when the slice reports. Once Step 1 lands, the
 contract documents govern on any disagreement with this plan, and this plan
 is corrected.
@@ -101,8 +103,11 @@ hierarchical summaries, no page-size splitting, no kbase page grammar.
 A placeholder: an SVG with "NYI" and, beneath, a digest of the index it was
 generated from (`index sha256:` plus the first 12 hex digits of the SHA-256 of
 the `.index/*.jsonl` files concatenated in sorted path order). Deterministic;
-kbase's verify checks it fresh. kbase's refresh writes it only where no sheet
-exists or the existing one is kbase's own. It lives in its own rendering
+kbase's verify checks it fresh. A sheet is **kbase's own** when it is that
+placeholder (it carries the "NYI" text). kbase's refresh writes the
+placeholder only where no sheet exists or the existing one is kbase's own;
+kbase's verify freshness-checks only its own sheet and leaves a kb_tools-drawn
+sheet unchecked, since it cannot recompose that render. It lives in its own rendering
 module (index in, SVG out), called by refresh and verify through the seam the
 real graphing algorithm will occupy, so landing the algorithm later replaces
 the module's body and nothing else.
@@ -114,7 +119,8 @@ the module's body and nothing else.
 - kbase is personant's peer: personant's rules govern personant. Personant's
   current mutating-tool refusal, 30s tool cap, 8 KB result cap and
   background-watch mode are personant-side work.
-- **Tool results:** one YAML document on stdout and nothing else; stderr for
+- **Tool results — every subcommand, `models` and `configure` included:** one
+  YAML document on stdout and nothing else; stderr for
   humans; fixed key order; strings quoted on emit; a refusal enumerates every
   offending item. Personant's CONVENTIONS "Serialization format" rule governs
   file formats (JSONL for flat records, YAML for documents, TOML for flat
@@ -173,15 +179,18 @@ the module's body and nothing else.
 - **Git holds the recoverable record.** Each stage boundary is a commit in the
   user's repository with a structured message, ported from kb_tools' ledger
   (subject `kb-build: <stage-id> | <display name>`), carrying `kb-root/` and
-  the tracked build records (the node-pass record, the charter). Resume
-  position is read from the commit trail; a user may reset to a stage commit
-  and resume from there.
-- **The state store holds process metadata only:** run lock and pid,
-  `progress.jsonl`, per-call evidence, and a per-unit answer cache keyed by
-  input hash (recycled from `internal/pipeline`'s store and stamps). The cache
-  is never authoritative for position.
+  the tracked build records at kb_tools' paths at the repository root —
+  `kb-build-charter.md` and the node-pass record `kb-build-node-pass.yaml`
+  (kb_tools' `kb-build-node-pass.json`, in YAML). Resume position is read from
+  the commit trail; a user may reset to a stage commit and resume from there.
+- **The state store holds what does not belong in the repository:** run lock
+  and pid, `progress.jsonl`, per-call evidence, the docgraph records (§2), and
+  a per-unit answer cache keyed by input hash (recycled from
+  `internal/pipeline`'s store and stamps). Nothing in it is authoritative for
+  position.
 - The store lives **outside the worktree**, at
-  `$XDG_STATE_HOME/kbase/<hash of kb-root path>/`, overridable with
+  `$XDG_STATE_HOME/kbase/<key>/`, where `<key>` is the first 16 hex digits of
+  the SHA-256 of the absolute, symlink-resolved `kb-root/` path; overridable with
   `--state-dir`: it holds paid-for inference and must survive `git clean`.
 - Commits are scoped by pathspec to kbase-owned paths; a build refuses only if
   those paths are dirty.
@@ -262,27 +271,37 @@ and "pending slice" — no invented detail.
 1. **What kbase is:** LaTeX volume roots in → KB out → maintenance subcommands
    over a living KB; consumers are a person at a shell and personant's model.
 2. **Given interfaces**, with observed versions: pandoc (version range: lower
-   bound the recorded version, upper bound the next major `pandoc-api-version`;
+   bound the recorded version, upper bound (exclusive) the next major
+   `pandoc-api-version`, major meaning its first two components under
+   Haskell's versioning policy (1.23.x → below 1.24);
    only the owner widens it); git; kb_tools' KB contract cited by
    section at the pinned commit — "The Document-Tree Contract", "What a KB Is",
    "Claim-Graph Nodes and Edges", "Derived Metadata, Defined", "The Claim-Graph
    Sheet", "Citation Grammar", "Project Scoping", "The Write API's Contract".
 3. **Compatibility contract:** §2's compatibility section, including the
    byte-equality table and the sheet exception.
-4. **Named divergences** (the whole list): values transport (YAML/JSON, not a
+4. **Named divergences** — the whole list of differences from kb_tools in KB
+   contents, maintenance-op behaviour and the tool interface (build
+   orchestration differences are §8.2's "Not ported" list): values transport (YAML/JSON, not a
    TOML file); exit codes (§3); the dead-link gate checks `kb-root/` only
    (kb_tools checks the whole repository); build-state location (§3);
    `claim-graph.svg` is a placeholder (§2); the stamped KB documents
    (`AGENTS.md`, `CONVENTIONS.md`, `README.md`) give the maintenance commands
    for both toolchains — kbase's subcommands and kb_tools' `kb_util` ops — where
-   kb_tools' give only its own.
+   kb_tools' give only its own; tool results are YAML documents (§2) where
+   kb_tools prints `[kb-write] STATUS` report lines; the tracked node-pass
+   record is YAML; until the owner rules on the overview stage's input (§2),
+   the README's overview passage comes from mechanically assembled input.
 5. **Build behaviour:** `kbase build <volume-root> [--bibliography FILE]...
    [--charter FILE] [--no-inference] [--through <stage>] [--state-dir DIR]`.
    Fresh vs resume is derived from the `kb-build:` commit trail, never
    configured; the KB is written only at `<git root>/kb-root/`; a populated
    `kb-root/` with no `kb-build:` commit trail is refused; `--no-inference`
-   is first-class and states the stages it dropped (kb_tools SPEC, "The
-   Driver's Contract"); build state never in `kb-root/`; determinism: the same
+   is first-class: it drops the rows that spend inference, still walks and
+   records every stage, and states the rows it dropped — following kb_tools'
+   classification (ARCHITECTURE "The Driver", `--no-inference` and
+   `spends_inference`); build state never in
+   `kb-root/`; determinism: the same
    inputs and pandoc version give byte-identical `kb-root/` and records.
    **Refusals:** unparseable source (names paper
    and reader error); unloadable include (names each file and the line that
@@ -291,13 +310,18 @@ and "pending slice" — no invented detail.
    **Degradation, not refusal:** an unreadable bibliography — the build
    continues without it and reports the file. Monitoring per §3.
 6. **Maintenance subcommands:** one subsection each, named after kb_tools'
-   `kb_util` write ops and `kb_cmd` queries verbatim, plus `refresh`,
-   `verify`, `status` and `cancel`, citing kb_tools semantics, plus
-   idempotence and writes-leave-nothing-stale (§2).
+   `kb_util` write ops and `kb_cmd` queries verbatim (queries cite
+   `kb_cmd/cli.py` as well as ARCHITECTURE "Query Surface"), plus `refresh`,
+   `verify`, `render-claim-graph`, `status` and `cancel`, citing kb_tools
+   semantics, plus idempotence and writes-leave-nothing-stale (§2).
 7. **Tool-result contract:** §2. The key set per subcommand beyond `outcome` is
-   **Needs ruling**, designed by AR in the tail.
+   **Needs ruling**, designed by AR in the tail. `--help` and `--version` are
+   human-facing and outside the contract.
 8. **Values input:** §2.
-9. **Configuration:** retained from `git show HEAD:SPEC.md` §2.
+9. **Configuration:** retained from `git show HEAD:SPEC.md` §2 except the
+   `[dev]` table, which belonged to the retired pipeline and is removed
+   (`--no-inference` replaces its mechanical tree plan; kb_tools' KB carries
+   no build-date footer). An old `[dev]` key now fails strict load.
 10. **Status markers / Needs ruling:** each item this plan leaves open (the
     writer route until Slice-1; per-subcommand result keys; the overview
     stage's input), one line each.
@@ -320,8 +344,9 @@ and "pending slice" — no invented detail.
 - Package map: §8.1's packages and dependency rules are decided, as is I1's
   pandoc and git monopoly; each package's internals are "pending slice".
 - **Pending slice:** each §6 hypothesis with its test.
-- Constants table: only constants this plan names (exit codes, the sheet
-  digest form, the state-store path).
+- Constants table: only constants this plan names and SPEC does not already
+  state — the state-store key form; exit codes and the sheet digest form are
+  cited from SPEC, not repeated.
 
 ### CONVENTIONS.md
 - Keep: Build and Run, Plan & Execute Process, Coordinator Policy, Testing,
@@ -332,7 +357,9 @@ and "pending slice" — no invented detail.
   goldmark removed.
 - Add house rules: only `internal/latex/pandoc` execs pandoc and only
   `internal/ledger` execs git, enforced by recycling
-  `internal/survey/importpolicy_test.go`'s AST-scan pattern; the pre-pass
+  `internal/survey/importpolicy_test.go`'s AST-scan pattern; file formats
+  follow personant's CONVENTIONS "Serialization format" rule (JSONL for flat
+  records, YAML for documents, TOML for flat configuration); the pre-pass
   registry rule (§2); never enumerate accepted values of a field kbase does
   not fill; never spell the node-kind list; no prose copy of an op's
   vocabulary; frontmatter writers carry forward attributes they do not own; no
@@ -348,7 +375,8 @@ and "pending slice" — no invented detail.
 ### ROADMAP.md
 Now: this plan. After §8.4 item 1: display names from `\input`-ed preambles;
 typeset-number fidelity; the `-latex_macros` reading. After kbase is proven:
-records-native leaves with a Go writer; kb_tools' opt-in document audit.
+records-native leaves with a Go writer; kb_tools' opt-in document audit; the
+real claim-graph sheet algorithm, landing in the rendering module.
 
 **Step 1 done:** every outcome in §2–§3 and every invariant in §7 is stated
 in the contract documents; every §6 hypothesis appears in ARCHITECTURE
@@ -612,7 +640,12 @@ TOML for kb_tools by the harness.
    and budgets behave; no stage exits on a model's opinion. The runner gains a
    small exported entry point carrying a system prompt (`CallRunner.Run`
    takes an unexported call today).
-8. **prompt import:** I7; parse and compliance rates measured with kb-testing's
+8. **prompt import:** I7. Seat definitions are imported in the form adjagent
+   renders for the gemma-4 family at the recorded commit; templates and
+   fragments as stored. Provenance (adjagent-relative path and commit) lives
+   in one manifest beside the embedded files in `internal/asks`, never inside
+   an imported file. A recipe re-renders and re-reads them at the recorded
+   commit and diffs, checking byte identity. Parse and compliance rates measured with kb-testing's
    `replay-claimgraph-asks` and `compare-claimgraph-asks` recipes against the
    local endpoint. README: every count slot equals the value computed from
    `.index/` and the tree; the prose slot carries the seat's answer verbatim;
