@@ -1,8 +1,8 @@
 # ROADMAP – KBase
 
 Ordered intentions, not commitments. This file churns freely; design truth
-lives in ARCHITECTURE.md / SPEC.md, per-burst execution detail in `TEMP_*.md`
-plans (gitignored, disposed after landing — see CONVENTIONS.md "Plan & Execute
+lives in ARCHITECTURE.md / SPEC.md, the plan under way in `ACTIVE_PLAN.md`, and
+partly-planned work in `ROADMAP_PLANS/` (see CONVENTIONS.md "Plan & Execute
 Process"). Finished items are
 deleted, not archived — git history is the log.
 

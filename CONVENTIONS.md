@@ -3,7 +3,8 @@
 Guidance for agents (automated or human) working on this codebase.
 **Read ARCHITECTURE.md first.** It is the authoritative design reference and
 supersedes any inference you draw from code alone. The live task queue is
-ROADMAP.md; ephemeral per-burst plans live in `TEMP_*.md` files.
+ROADMAP.md; the plan under way is `ACTIVE_PLAN.md`, and partly-planned work
+waits in `ROADMAP_PLANS/` (see "Plan & Execute Process").
 
 ---
 
@@ -114,16 +115,22 @@ here — ARCHITECTURE.md is the single source. Working habits they impose:
 
 ## Plan & Execute Process
 
-Non-trivial work bursts follow a standard shape:
+Plans are tracked: progress and intent are worth more than a tidy tree, and a
+plan in an ignored file is one power-cycle from gone.
 
-1. Write the plan to `TEMP_PLAN_<SCREAMING_SNAKE_TOPIC>.md` at the repo root
-   (e.g. `TEMP_PLAN_CONTEXT_MANAGEMENT.md`), including decisions confirmed at
-   kickoff, work-package boundaries, and sequencing status.
-2. Execute out of the plan file — dispatched agents read it; status checkboxes
-   update as work packages land.
-3. Discard the file once the work is landed and reviewed. `TEMP_*.md` is
-   gitignored; these files are never committed. The durable task queue is
-   ROADMAP.md; TEMP plans are per-burst execution detail only.
+- **`ACTIVE_PLAN.md`** at the repo root is the one plan under way: decisions
+  confirmed at kickoff, work-package boundaries, sequencing and status.
+  Dispatched agents execute out of it; status updates as work packages land.
+  It carries outcomes, their consequences and the principles still steering
+  open choices — not decision history, which lives in commits. When the work
+  lands, its outcomes move into the contract documents and the file is
+  replaced by the next plan.
+- **`ROADMAP_PLANS/`** holds partly-planned work that is not under way: a plan
+  with enough design done that someone could pick it up, usually behind a
+  ROADMAP.md item. A plan leaves when it becomes the active plan, is finished,
+  or is abandoned. A plan there cites only tracked paths.
+- Working drafts and half-formed notes are scratch (`.claude-temp/`), not
+  plans.
 
 ## Coordinator Policy
 
