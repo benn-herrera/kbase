@@ -34,7 +34,7 @@ semantic layer, the round-trip oracle and its gates).
 | Part | Reference |
 |---|---|
 | Engine behaviour | `tex.web`, the e-TeX and XeTeX change files |
-| Engine correctness | Knuth's trip test (`trip.tex`), e-TeX's `etrip` |
+| Engine correctness | Differential traces against the reference engines; Knuth's `trip.tex` and e-TeX's `etrip` serve only as further round-trip inputs |
 | Semantic hook points | The LaTeX kernel's hook system (`\AddToHook`, environment and command hooks) |
 | Semantic schema | Adopted by literature search (see "The semantic capture schema") |
 | Shaping | HarfBuzz (pure-Rust port rustybuzz; to verify) |
@@ -50,12 +50,9 @@ semantic layer, the round-trip oracle and its gates).
   `\csname`, `\futurelet`, `\afterassignment`, conditionals); registers and
   grouping; box and glue arithmetic with real font metrics; `\write`/`\read`
   streams for the two-pass `.aux` file; alignments.
-- **Open (owner): the typesetting stages.** The trip test and `etrip` exercise
-  the paragraph builder, page builder and output routines, which the engine
-  does not otherwise need. Either the scope includes everything the trip tests
-  exercise, or the trip-test gate covers only the in-scope stages' parts of
-  the trip logs (the architect defines that subset; the owner approves it
-  before it becomes immutable).
+- **No typesetting.** The library is not a renderer: the paragraph builder,
+  page builder and output stage are out of scope, beyond the stubs measuring
+  packages need. Rendering is the reference engines' job, in the oracle.
 - **Format dumping** (the equivalent of `.fmt`) exists from the start: loading
   `latex.ltx` plus expl3 through an interpreter on every run is slow.
 - **pdflatex-declared papers:** the architect measures, before planning, what
@@ -135,13 +132,18 @@ characters are read), so it is not a separable preprocessing pass. The split:
 
 | Component | What it is | Oracle |
 |---|---|---|
-| **Engine:** tokenizing, expansion, assignments, registers, conditionals, grouping, file I/O | One evaluation engine, emitting **execution events** (internal: expansions, assignments, primitive actions) | The trip test and `etrip`; differential traces against reference `xetex` (`\tracingall`, register values, `.log`, `.aux`, `.toc`) over a primitive test suite, which gates the XeTeX primitives the trip tests do not reach |
+| **Engine:** tokenizing, expansion, assignments, registers, conditionals, grouping, file I/O | One evaluation engine, emitting **execution events** (internal: expansions, assignments, primitive actions) | Differential traces against reference `xetex` (`\tracingall`, register values, `.log`, `.aux`, `.toc`) over a primitive test suite and the corpus |
 | **Semantic layer:** execution events → **semantic events** (the public stream) and the node table; node table → regenerated source | A static transformer running alongside the engine during the parse; it reads only what execution events carry, never TeX source directly | Round-trip typesetting identity plus the non-degeneracy gates |
 
 ### Round trip
 The semantic tree is complete when regenerating source from it and
 typesetting that source yields **byte-identical typeset output** to
-typesetting the original.
+typesetting the original. Any difference in typeset output is a hard failure;
+a semantic alteration always is one. The regenerated *source* may differ
+wherever the difference has no effect on the output: whitespace that typesets
+the same, or equivalent constructs that normalize to one internal
+representation and are regenerated in one canonical form. That is expected,
+not a failure.
 
 - The reference engine typesets both sides, using the compiler the paper
   declares in arXiv's `00README.json` (present for some papers only; to
@@ -163,7 +165,7 @@ with no semantic content. So:
   **structural constructs**.
 - Opaque raw-token nodes are a counted, budgeted fallback, with a budget of
   zero for structural constructs.
-- The oracle comparisons and the trip tests are immutable gates; the mechanism
+- The oracle comparisons are immutable gates; the mechanism
   that keeps an agent from loosening one is the architect's to design. Only
   the owner amends a gate or a recorded threshold.
 
@@ -278,8 +280,7 @@ fitting it into kbase is kbase work under kbase's own plan.
 
 ## Done for v1
 
-- The engine passes the trip test and `etrip`, and the differential-trace
-  suite against reference `xetex`.
+- The engine passes the differential-trace suite against reference `xetex`.
 - Round-trip identity holds, with zero structural fallbacks, on a share of the
   papers the pinned reference installation typesets without error as their
   declared compiler; the architect measures that set first and sets the share

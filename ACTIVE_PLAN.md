@@ -348,8 +348,7 @@ and "pending slice" — no invented detail.
 ### ROADMAP.md
 Now: this plan. After §8.4 item 1: display names from `\input`-ed preambles;
 typeset-number fidelity; the `-latex_macros` reading. After kbase is proven:
-records-native leaves with a Go writer; kb_tools' opt-in document audit. Later
-still: `ROADMAP_PLANS/IF_WE_BUILD_LATEX_ENGINE_DO_IT_RIGHT.md`.
+records-native leaves with a Go writer; kb_tools' opt-in document audit.
 
 **Step 1 done:** every outcome in §2–§3 and every invariant in §7 is stated
 in the contract documents; every §6 hypothesis appears in ARCHITECTURE
