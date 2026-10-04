@@ -73,12 +73,8 @@ type ModelInfo struct {
 	OwnedBy string // free-form ownership string; "" if absent
 }
 
-// Request is one chat-completions invocation.
-//
-// Sampling parameters are always wired on the wire — a zero value for
-// Temperature or MaxTokens is a real value, not a "use server default"
-// sentinel. Use DefaultRequest to construct a Request with the appliance
-// defaults pre-filled; only override what you explicitly need.
+// Request is one chat-completions invocation. No completion cap is sent: the
+// server's own applies.
 type Request struct {
 	Model    string
 	Messages []Message
@@ -88,11 +84,6 @@ type Request struct {
 	// default" sentinel.
 	Temperature float64
 
-	// MaxTokens is the response token cap, always wired on the wire. 0
-	// is a real value (no tokens) — not a "use server default" sentinel.
-	// Production callers should construct Requests via DefaultRequest.
-	MaxTokens int
-
 	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
 	// chat-template-level kwargs through to the underlying tokenizer.
 	// Most commonly used for thinking-mode toggles on locally served
@@ -101,131 +92,10 @@ type Request struct {
 	ChatTemplateKwargs map[string]any
 }
 
-// DefaultMaxTokens is the completion cap an effort that states none gets.
-// Provisional: the per-call budget is a calibration constant
-// (ARCHITECTURE.md §9) and this value will be revisited there.
-const DefaultMaxTokens = 16384
-
-// ThinkingMaxTokens is the completion cap for an attempt that asks with
-// THINKING ON (ARCHITECTURE.md §9).
-//
-// It exists because reasoning is spent out of the ANSWER's window: MaxTokens
-// bounds completion tokens and ReasoningTokens is a share of them (see Usage),
-// so an attempt that reasons under DefaultMaxTokens has strictly less room to
-// answer than the attempt that did not — the escalation makes the ask harder
-// and the budget smaller at the same time. A generation cut off while still in
-// the reasoning channel returns a well-formed response whose Content is empty
-// or one byte (Final accumulates content alone), which is the 2026-08-18
-// one-byte escalated retry exactly.
-//
-// The value is twice DefaultMaxTokens, and the arithmetic is the one
-// measurement this appliance owns: the 2026-08-12 boundary A/B spent 20,924
-// completion tokens reasoning about an ask whose answer is a bare number —
-// already over DefaultMaxTokens before a single byte of answer. Doubling clears
-// that measured cost with margin and still leaves ~11.8K for an answer that is
-// capped far lower at every seam that escalates. It remains a CAP: SD-4's
-// 36-minute escalated retry is the runaway this row bounds, not a budget to
-// grow until nothing complains.
-const ThinkingMaxTokens = 32768
-
 // FinishLength is the finish_reason an OpenAI-compatible provider reports when
 // a generation hit its completion cap instead of finishing. It is the one
 // finish reason that says the response is INCOMPLETE rather than wrong.
 const FinishLength = "length"
-
-// RequestEffort is how hard the model is asked to work on ONE exact ask.
-//
-// It is per-DEFINITION: the value belongs to the question, not to the stage
-// that asks it and not to the seam it crosses (ARCHITECTURE.md §12). A
-// definition states its effort where it is registered, and every
-// request-construction path takes one POSITIONALLY, so a call site cannot
-// inherit an effort nobody stated.
-//
-// Temperature belongs here next, joining as a field the way MaxTokens did, so
-// no call site that already states an effort has to change to accommodate it.
-type RequestEffort struct {
-	// Thinking asks the model to reason before answering. It is wired in
-	// BOTH directions (see DefaultRequest) — false is SENT as false, never
-	// omitted — because an omitted key leaves the chat template's own
-	// default in charge, which is the silent inheritance this type exists
-	// to prevent.
-	Thinking bool
-
-	// MaxTokens is the completion window this ask gets. It belongs to the
-	// effort and not to the call site because it is the same dimension
-	// Thinking is: how hard the model is asked to work is inseparable from how
-	// much room it is given to do it in, and the provider spends both out of
-	// one budget (ThinkingMaxTokens says why that matters).
-	//
-	// Zero is not a request for no tokens: DeclareEffort fills it with
-	// DefaultMaxTokens, exactly as pipeline.DeclareRetry fills its two counts,
-	// so a definition with nothing to say about its window says nothing and
-	// gets the shipped default.
-	MaxTokens int
-
-	// declared separates a stated effort from a zero value. An effort makes
-	// one hop through a struct field on its way to the runner
-	// (pipeline.AskSpec), and a field is the one hop a positional parameter
-	// cannot make mandatory; this mark is what lets that hop be checked
-	// (pipeline.AskSpec.validate) rather than assumed. It is unexported so
-	// DeclareEffort is the only way to obtain a declared value.
-	declared bool
-}
-
-// DeclareEffort marks e as STATED by its caller and fills the completion
-// window a definition left at zero with the shipped default. It is the only
-// constructor: a bare composite literal is an undeclared value, and the
-// pipeline refuses an ask spec carrying one.
-//
-// It takes the whole value rather than one parameter per dial so that adding
-// Temperature is a new field at the call sites that want it and nothing at all
-// at the ones that do not.
-//
-// Defaulting the window while requiring Thinking is the same honest split
-// pipeline.DeclareRetry makes: an unstated window reads as "today's budget",
-// which is a real statement, while an unstated Thinking would read as "no
-// thinking", which is the silent inheritance this type exists to prevent.
-func DeclareEffort(e RequestEffort) RequestEffort {
-	if e.MaxTokens == 0 {
-		e.MaxTokens = DefaultMaxTokens
-	}
-	e.declared = true
-	return e
-}
-
-// Declared reports whether this effort was stated rather than left zero.
-func (e RequestEffort) Declared() bool { return e.declared }
-
-// DefaultRequest returns a Request prefilled with the appliance defaults.
-// The caller fills in Model, Messages and the ask's declared RequestEffort;
-// everything else is preset:
-//
-//   - Temperature: 0 (deterministic — reproducibility is a design property,
-//     not a tuning preference)
-//   - MaxTokens:   the effort's own window (DefaultMaxTokens unless the
-//     definition declared otherwise), because the attempt asked to reason is
-//     the attempt that needs room to reason AND answer
-//   - ChatTemplateKwargs: {"thinking": E, "enable_thinking": E} for the
-//     effort's Thinking value. Both keys are sent because the one a model
-//     recognizes varies by model, and sending both is harmless to a model
-//     that recognizes neither. Both are sent when E is FALSE as well: the
-//     alternative is omitting the field and hoping the served template
-//     defaults the way this ask wants, which is not a declaration.
-//
-// It is the only Request constructor, and RequestEffort is positional in it, so
-// every call that goes on the wire states how hard it is asking.
-func DefaultRequest(model string, messages []Message, effort RequestEffort) Request {
-	return Request{
-		Model:       model,
-		Messages:    messages,
-		Temperature: 0,
-		MaxTokens:   effort.MaxTokens,
-		ChatTemplateKwargs: map[string]any{
-			"thinking":        effort.Thinking,
-			"enable_thinking": effort.Thinking,
-		},
-	}
-}
 
 // Message is one turn in the chat history. Role is one of "system",
 // "user", or "assistant".
@@ -239,6 +109,14 @@ type Response struct {
 	Content      string
 	Usage        Usage
 	FinishReason string
+
+	// StreamDone is whether a streamed response reached the provider's
+	// closing `[DONE]`: a stream whose body ended short of it did not
+	// complete, whatever content arrived first. False on a blocking Consult.
+	StreamDone bool
+	// UsageReported is whether a streamed response carried a usage block at
+	// all, which an all-zero Usage cannot say.
+	UsageReported bool
 }
 
 // Truncated reports a response the provider cut off at the completion cap.
@@ -269,6 +147,9 @@ type Chunk struct {
 	Reasoning    string
 	FinishReason string
 	Usage        Usage
+
+	// hasUsage is whether the payload carried a usage block, zero or not.
+	hasUsage bool
 }
 
 // StreamReader iterates the chunks of a streamed response.

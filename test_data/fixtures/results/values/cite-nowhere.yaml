@@ -1,0 +1,5 @@
+entry:
+- citing-document: a.md
+  cited-document: nowhere.md
+  anchor: a
+  excerpt: words

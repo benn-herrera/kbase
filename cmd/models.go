@@ -4,52 +4,49 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	toolresult "kbase/internal/result"
 )
 
 // modelsOptions is the resolved input of the models verb: the shared
-// provider-reaching options plus the stream the catalogue itself goes to.
+// provider-reaching options plus the stream its result document goes to.
 type modelsOptions struct {
 	providerOptions
 
-	Stdout io.Writer // model ids, one per line, sorted ascending
+	Stdout io.Writer
 }
 
 // runModels selects a provider from the loaded pool, fetches its model
-// catalogue, and writes the ids to Stdout sorted ascending, one per line.
-// Warnings and a one-line summary go to Stderr, keeping stdout a clean list
-// a pipeline can consume.
-func runModels(ctx context.Context, opts modelsOptions) error {
+// catalogue, writes the result document — the ids sorted ascending — and
+// returns the exit code its outcome maps to. Warnings and a one-line summary
+// go to Stderr.
+func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "models"); err != nil {
-		return err
+		return 0, err
 	}
+	outcome, fields := listModels(ctx, opts)
+	return emitResult("models", opts.Stdout, outcome, fields)
+}
 
+func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
 	name, client, ctx, release, err := opts.dial(ctx)
 	if err != nil {
-		return err
+		return refusedOrFailed(nil, err)
 	}
 	defer release()
-
+	fields := []toolresult.Field{{Key: "provider", Value: name}}
 	start := time.Now()
 	ids, err := catalogueIDs(ctx, client)
-	elapsed := time.Since(start)
 	if err != nil {
-		return err
+		return failed(fields, err)
 	}
-
 	slices.Sort(ids)
-	for _, id := range ids {
-		if _, err := fmt.Fprintln(opts.Stdout, id); err != nil {
-			return fmt.Errorf("models: write stdout: %w", err)
-		}
-	}
-	fmt.Fprintf(opts.Stderr, "models ok: %s count=%d elapsed=%s\n",
-		name, len(ids), elapsed.Round(time.Millisecond))
-	return nil
+	fmt.Fprintf(opts.Stderr, "models ok: %s count=%d elapsed=%s\n", name, len(ids), time.Since(start).Round(time.Millisecond))
+	return toolresult.Done, append(fields, toolresult.Field{Key: "models", Value: nonNil(ids)})
 }
 
 var (
@@ -60,12 +57,12 @@ var (
 var modelsCmd = &cobra.Command{
 	Use:   "models",
 	Short: "list the models a configured provider exposes",
-	Long: `Query a provider's /models endpoint and print one model identifier per
-line, sorted ascending, to stdout.
+	Long: `Query a provider's /models endpoint and write its model identifiers,
+sorted ascending, as one YAML document on stdout.
 
 The provider is --provider, else the provider named in config.toml, else
 the sole entry in providers.toml — with several entries declared and none
-chosen, the command lists them and fails rather than picking one. Pool
+chosen, the command refuses, listing them, rather than picking one. Pool
 entries that failed to load are reported as warnings, and a summary line
 (provider, count, elapsed) is written to stderr.`,
 	Args: cobra.NoArgs,
@@ -76,10 +73,17 @@ entries that failed to load are reported as warnings, and a summary line
 		}
 		opts.Provider = modelsFlagProvider
 		opts.Timeout = modelsFlagTimeout
-		return runModels(cmd.Context(), modelsOptions{
+		code, err := runModels(cmd.Context(), modelsOptions{
 			providerOptions: opts,
-			Stdout:          os.Stdout,
+			Stdout:          cmd.OutOrStdout(),
 		})
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return exitCode(code)
+		}
+		return nil
 	},
 }
 

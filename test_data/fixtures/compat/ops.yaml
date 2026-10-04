@@ -1,0 +1,70 @@
+# The op script both toolchains apply to one KB. See README.md beside this
+# file for the placeholders and how the script is rendered and run.
+steps:
+  - name: premise
+    op: insert-claim-entry
+    create: true
+    values:
+      entry:
+        - register: "{register}"
+          title: Compatibility Probe Premise
+          rigor: 0.9
+          rationale: Written by the compatibility op script as the result the probe rests on.
+  - name: probe
+    op: insert-claim-entry
+    create: true
+    values:
+      entry:
+        - register: "{register}"
+          title: Compatibility Probe Result
+          rigor: 0.5
+          rationale: Written by the compatibility op script to exercise the write API on both toolchains.
+          depends-on:
+            - id: "{minted:premise}"
+              context: the result the probe extends
+          strengthen-by:
+            - Replace the probe with a claim the corpus states.
+  - op: set-rigor
+    values:
+      entry:
+        - id: "{minted:probe}"
+          rigor: 0.75
+  - op: insert-work-entry
+    create: true
+    values:
+      entry:
+        - register: "{register}"
+          key: CompatProbe2026
+          title: Compatibility Probe (2026)
+          strength: "*pending*"
+          rationale: A work the probe rests on; no bibliography answers its key.
+  - op: add-depends-on
+    values:
+      entry:
+        - id: "{minted:probe}"
+          depends-on:
+            - id: work-CompatProbe2026
+              applicability: "*pending*"
+          references:
+            - id: "{minted:premise}"
+  - op: set-applicability
+    values:
+      entry:
+        - id: "{minted:probe}"
+          work: work-CompatProbe2026
+          applicability: 0.5
+  - op: set-frontmatter
+    values:
+      entry:
+        - document: "{leaf}"
+          kind: leaf
+          claims: ["{leaf-claims}", "{minted:premise}", "{minted:probe}"]
+  - op: mark-claim-in-leaf
+    values:
+      entry:
+        - document: "{leaf}"
+          id: "{minted:premise}"
+          locator: "{locator}"
+        - document: "{leaf}"
+          id: "{minted:probe}"
+          locator: "{locator}"

@@ -35,7 +35,7 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "go"}}, testEffort))
+	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -351,11 +351,10 @@ func TestHTTPClientListModelsErrorScrubs(t *testing.T) {
 	}
 }
 
-// TestHTTPClientWiresSamplingDefaults: verify that DefaultRequest's values
-// (Temperature: 0, MaxTokens: DefaultMaxTokens, chat_template_kwargs with
-// thinking keys) round-trip onto the wire — `temperature: 0` must be
-// PRESENT in the body, not omitted as it would be with `omitempty`.
-func TestHTTPClientWiresSamplingDefaults(t *testing.T) {
+// TestHTTPClientWiresTheChatShape: the request Chat makes reaches the wire as
+// kb_tools' call shape — `temperature: 0` PRESENT, not omitted as it would be
+// with `omitempty`; thinking disabled; no completion cap.
+func TestHTTPClientWiresTheChatShape(t *testing.T) {
 	var rawBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawBody, _ = io.ReadAll(r.Body)
@@ -364,111 +363,34 @@ func TestHTTPClientWiresSamplingDefaults(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, DeclareEffort(RequestEffort{Thinking: true}))
-	if _, err := c.Consult(context.Background(), req); err != nil {
+	if _, err := c.Consult(context.Background(), chatRequest("test-model")); err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
 
-	// Decode raw to assert presence (a map[string]any decode would lose the
-	// "0 vs absent" distinction we care about; check the raw bytes too).
 	var asMap map[string]any
 	if err := json.Unmarshal(rawBody, &asMap); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if v, ok := asMap["temperature"]; !ok {
-		t.Errorf("temperature missing from body: %s", rawBody)
-	} else if v != 0.0 {
-		t.Errorf("temperature: got %v, want 0", v)
-	}
-	if v, ok := asMap["max_tokens"]; !ok {
-		t.Errorf("max_tokens missing from body: %s", rawBody)
-	} else if v != float64(DefaultMaxTokens) {
-		t.Errorf("max_tokens: got %v, want %d", v, DefaultMaxTokens)
-	}
-	// Raw-bytes check that omitempty hasn't dropped temperature: 0.
 	if !strings.Contains(string(rawBody), `"temperature":0`) {
 		t.Errorf("expected literal `\"temperature\":0` in body: %s", rawBody)
 	}
-	// chat_template_kwargs presence + thinking keys.
+	if _, ok := asMap["max_tokens"]; ok {
+		t.Errorf("max_tokens sent; kb_tools sends none: %s", rawBody)
+	}
 	ctk, ok := asMap["chat_template_kwargs"].(map[string]any)
-	if !ok {
-		t.Fatalf("chat_template_kwargs missing or wrong type: %v", asMap["chat_template_kwargs"])
+	if !ok || ctk["enable_thinking"] != false {
+		t.Errorf("chat_template_kwargs = %v, want enable_thinking false", asMap["chat_template_kwargs"])
 	}
-	if ctk["thinking"] != true {
-		t.Errorf("chat_template_kwargs.thinking: got %v, want true", ctk["thinking"])
-	}
-	if ctk["enable_thinking"] != true {
-		t.Errorf("chat_template_kwargs.enable_thinking: got %v, want true", ctk["enable_thinking"])
-	}
-	// stream is false (or absent) for blocking Consult.
 	if v, ok := asMap["stream"]; ok && v != false {
 		t.Errorf("stream: got %v, want absent or false", v)
 	}
 }
 
-// TestHTTPClientWiresDeclaredEffort: the declared effort reaches BOTH
-// chat_template_kwargs keys, in both directions.
-//
-// The `false` row is the one that matters. Omitting the keys would leave the
-// served chat template's own default deciding, which is indistinguishable on
-// the wire from a request that never had an opinion — and an effort nobody can
-// read back off the wire is not a declaration.
-func TestHTTPClientWiresDeclaredEffort(t *testing.T) {
-	for _, thinking := range []bool{true, false} {
-		t.Run(fmt.Sprintf("thinking=%t", thinking), func(t *testing.T) {
-			var rawBody []byte
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				rawBody, _ = io.ReadAll(r.Body)
-				_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
-			}))
-			defer srv.Close()
-
-			c := NewHTTPClient(newTestEndpoint(srv.URL))
-			req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}},
-				DeclareEffort(RequestEffort{Thinking: thinking}))
-			if _, err := c.Consult(context.Background(), req); err != nil {
-				t.Fatalf("Consult: %v", err)
-			}
-
-			var asMap map[string]any
-			if err := json.Unmarshal(rawBody, &asMap); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
-			ctk, ok := asMap["chat_template_kwargs"].(map[string]any)
-			if !ok {
-				t.Fatalf("chat_template_kwargs missing or wrong type: %s", rawBody)
-			}
-			for _, key := range []string{"thinking", "enable_thinking"} {
-				if got, ok := ctk[key]; !ok || got != thinking {
-					t.Errorf("chat_template_kwargs.%s: got %v (present %t), want %t", key, got, ok, thinking)
-				}
-			}
-		})
-	}
+// chatRequest is the request Chat makes, with one user turn.
+func chatRequest(modelID string) Request {
+	return Request{Model: modelID, Messages: []Message{{Role: "user", Content: "hi"}},
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false}}
 }
-
-// TestEffortDeclaration: a bare RequestEffort literal is NOT a declaration, and
-// DeclareEffort is what makes one. The distinction is what lets the pipeline
-// refuse an ask that never stated an effort instead of reading a forgotten
-// field as a deliberate "no thinking".
-func TestEffortDeclaration(t *testing.T) {
-	if (RequestEffort{Thinking: true}).Declared() {
-		t.Error("a composite literal must not count as a declared effort")
-	}
-	for _, want := range []bool{true, false} {
-		got := DeclareEffort(RequestEffort{Thinking: want})
-		if !got.Declared() || got.Thinking != want {
-			t.Errorf("DeclareEffort(RequestEffort{Thinking: %t}) = %+v, want declared with that value", want, got)
-		}
-	}
-}
-
-// testEffort is the effort the transport-level tests declare for the requests
-// they build. It is a fixture and nothing more: this package has no opinion
-// about how hard anything is worth asking, and a package-level "utility"
-// effort here would be an API with a test-only population — the declaration
-// belongs at the site that registers a definition (ARCHITECTURE.md §9, §12).
-var testEffort = DeclareEffort(RequestEffort{Thinking: false})
 
 // TestHTTPClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
 // not emit a `chat_template_kwargs: null` or `: {}` field on the wire —
@@ -482,7 +404,7 @@ func TestHTTPClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	// Build directly (not via DefaultRequest) so ChatTemplateKwargs stays nil.
+	// Built bare so ChatTemplateKwargs stays nil.
 	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
 	if _, err := c.Consult(context.Background(), req); err != nil {
 		t.Fatalf("Consult: %v", err)
@@ -521,7 +443,7 @@ data: [DONE]
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	req := DefaultRequest("test-model", []Message{{Role: "user", Content: "hi"}}, testEffort)
+	req := chatRequest("test-model")
 	sr, err := c.ConsultStream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
@@ -578,7 +500,7 @@ func TestHTTPClientStreamErrorWraps(t *testing.T) {
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	_, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
+	_, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
 	}
@@ -611,7 +533,7 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 	defer srv.Close()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
+	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -651,7 +573,7 @@ func TestHTTPClientStreamCtxCancellation(t *testing.T) {
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
-	sr, err := c.ConsultStream(ctx, DefaultRequest("m", []Message{{Role: "user", Content: "x"}}, testEffort))
+	sr, err := c.ConsultStream(ctx, chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}

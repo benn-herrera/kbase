@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/detect"
+	toolresult "kbase/internal/result"
 )
 
 const (
@@ -23,9 +25,6 @@ const (
 	// failure a manual assignment would resolve. Auto-detection declining
 	// to guess is only helpful if the way past it is on screen.
 	modelMapSyntax = "--model-map " + config.TierHeavy + "=<id>" + modelMapPairSep + config.TierLight + "=<id>"
-
-	// listIndent prefixes each id in a multi-line failure listing.
-	listIndent = "  "
 )
 
 // configureTiers is the order tiers are resolved, reported, and written
@@ -48,47 +47,54 @@ type configureOptions struct {
 
 	// ConfigPath is the config.toml the resolved choices are written to.
 	ConfigPath string
+
+	Stdout io.Writer
 }
 
 // runConfigure resolves a provider, discovers its model catalogue, assigns
-// a gemma-4 model to each pipeline tier, and writes the result to
-// config.toml.
+// a gemma-4 model to each pipeline tier, writes the result to config.toml,
+// writes its result document and returns the exit code the outcome maps to.
 //
 // A tier is assigned from --model-map when given, otherwise by
 // auto-detection — and only when detection finds exactly one candidate for
-// it. Zero candidates or several is a failure that lists what the provider
-// offered and exits without writing anything: config.toml is what every
-// later stage draws its models from, so a guessed entry there is a wrong
-// answer that never announces itself (SPEC.md §1).
-func runConfigure(ctx context.Context, opts configureOptions) error {
-	if opts.Stderr == nil {
-		return fmt.Errorf("configure: Stderr is required")
+// it. Zero candidates or several is refused, listing what the provider
+// offered, with nothing written: config.toml is what every later stage draws
+// its models from, so a guessed entry there is a wrong answer that never
+// announces itself.
+func runConfigure(ctx context.Context, opts configureOptions) (int, error) {
+	if err := requireStreams(opts.Stdout, opts.Stderr, "configure"); err != nil {
+		return 0, err
 	}
 	if opts.ConfigPath == "" {
-		return fmt.Errorf("configure: ConfigPath is required")
+		return 0, fmt.Errorf("configure: ConfigPath is required")
 	}
+	outcome, fields := configure(ctx, opts)
+	return emitResult("configure", opts.Stdout, outcome, fields)
+}
 
+func configure(ctx context.Context, opts configureOptions) (string, []toolresult.Field) {
 	// Flag syntax is checked before anything is dialed: a typo in
 	// --model-map should not cost a network round trip to discover.
 	manual, err := parseModelMap(opts.ModelMap)
 	if err != nil {
-		return err
+		return refusedOrFailed(nil, err)
 	}
 
 	name, client, ctx, release, err := opts.dial(ctx)
 	if err != nil {
-		return err
+		return refusedOrFailed(nil, err)
 	}
 	defer release()
+	fields := []toolresult.Field{{Key: "provider", Value: name}}
 
 	ids, err := catalogueIDs(ctx, client)
 	if err != nil {
-		return err
+		return failed(fields, err)
 	}
 
 	// A manually assigned id the provider does not list is a warning, not
 	// a failure: catalogues rotate, and a user pinning a model the listing
-	// omits may know something the listing does not (SPEC.md §1).
+	// omits may know something the listing does not.
 	for _, tier := range configureTiers {
 		if id, given := manual[tier]; given && !slices.Contains(ids, id) {
 			fmt.Fprintf(opts.Stderr,
@@ -99,6 +105,7 @@ func runConfigure(ctx context.Context, opts configureOptions) error {
 
 	res := detect.Classify(ids)
 	resolved := make(map[string]string, len(configureTiers))
+	var undetected []toolresult.Item
 	for _, tier := range configureTiers {
 		if id, given := manual[tier]; given {
 			resolved[tier] = id
@@ -109,10 +116,13 @@ func runConfigure(ctx context.Context, opts configureOptions) error {
 		case 1:
 			resolved[tier] = candidates[0]
 		case 0:
-			return noCandidateError(tier, name, res, ids)
+			undetected = append(undetected, noCandidateItem(tier, name, res, ids))
 		default:
-			return ambiguousTierError(tier, name, candidates)
+			undetected = append(undetected, ambiguousTierItem(tier, name, candidates))
 		}
+	}
+	if undetected != nil {
+		return refused(fields, undetected...)
 	}
 
 	cfg := config.Config{
@@ -122,15 +132,21 @@ func runConfigure(ctx context.Context, opts configureOptions) error {
 			Light: resolved[config.TierLight],
 		},
 	}
-	if err := config.UpdateConfig(opts.ConfigPath, cfg); err != nil {
-		return err
+	fields = append(fields, toolresult.Field{Key: "models", Value: toolresult.Record{
+		{Key: config.TierHeavy, Value: cfg.Models.Heavy}, {Key: config.TierLight, Value: cfg.Models.Light}}})
+	wrote, err := config.UpdateConfig(opts.ConfigPath, cfg)
+	if err != nil {
+		return failed(append(fields, toolresult.Field{Key: "written", Value: []string{}}), err)
+	}
+	if !wrote {
+		return toolresult.Unchanged, append(fields, toolresult.Field{Key: "written", Value: []string{}})
 	}
 	fmt.Fprintf(opts.Stderr, "configured: provider=%s %s=%s %s=%s (wrote %s)\n",
 		name,
 		config.TierHeavy, cfg.Models.Heavy,
 		config.TierLight, cfg.Models.Light,
 		opts.ConfigPath)
-	return nil
+	return toolresult.Done, append(fields, toolresult.Field{Key: "written", Value: []string{opts.ConfigPath}})
 }
 
 // parseModelMap turns the raw --model-map values into a tier→id map.
@@ -150,14 +166,15 @@ func parseModelMap(values []string) (map[string]string, error) {
 			tier := strings.ToLower(strings.TrimSpace(rawTier))
 			id := strings.TrimSpace(rawID)
 			if !split || tier == "" || id == "" {
-				return nil, fmt.Errorf("configure: malformed --model-map entry %q — expected %s", entry, modelMapSyntax)
+				return nil, modelMapError(fmt.Sprintf("malformed --model-map entry %q — expected %s", entry, modelMapSyntax))
 			}
 			if !slices.Contains(configureTiers, tier) {
-				return nil, fmt.Errorf("configure: unknown tier %q in --model-map (tiers: %s)",
-					tier, strings.Join(configureTiers, ", "))
+				err := modelMapError(fmt.Sprintf("unknown tier %q in --model-map (tiers: %s)", tier, strings.Join(configureTiers, ", ")))
+				err.item.Allowed = configureTiers
+				return nil, err
 			}
 			if prev, dup := out[tier]; dup && prev != id {
-				return nil, fmt.Errorf("configure: --model-map assigns the %s tier twice (%q and %q)", tier, prev, id)
+				return nil, modelMapError(fmt.Sprintf("--model-map assigns the %s tier twice (%q and %q)", tier, prev, id))
 			}
 			out[tier] = id
 		}
@@ -179,42 +196,47 @@ func tierCandidates(res detect.Result, tier string) []string {
 	}
 }
 
-// noCandidateError reports a tier auto-detection could not fill, and lists
-// what the provider actually offered — first any gemma-4 models whose tier
-// went unrecognized (the likeliest thing the user meant), then the whole
-// catalogue. Listing is the entire point: "no gemma-4 detected" without
-// the candidates leaves the user with nothing to type next.
-func noCandidateError(tier, provider string, res detect.Result, ids []string) error {
-	var b strings.Builder
-	fmt.Fprintf(&b, "configure: no gemma-4 %s-tier model detected at provider %q", tier, provider)
-	if len(res.UnclassifiedFamily) > 0 {
-		fmt.Fprintf(&b, "\ngemma-4 models with no recognized tier:\n%s", indentedList(res.UnclassifiedFamily))
-	}
-	if len(ids) > 0 {
-		fmt.Fprintf(&b, "\nmodels offered by %q:\n%s", provider, indentedList(ids))
-	} else {
-		fmt.Fprintf(&b, "\nprovider %q offered no models at all", provider)
-	}
-	fmt.Fprintf(&b, "\nassign the tiers explicitly and rerun: %s", modelMapSyntax)
-	return fmt.Errorf("%s", b.String())
+// modelMapError is a --model-map value refused as usage.
+func modelMapError(detail string) itemError {
+	return itemError{toolresult.Item{Check: checkUsage, Key: "--model-map", Detail: detail}}
 }
 
-// ambiguousTierError reports a tier with several detected candidates. The
-// appliance does not break the tie — picking one would be the silent
-// best-guess SPEC.md §1 rules out — so it names them and asks.
-func ambiguousTierError(tier, provider string, candidates []string) error {
-	return fmt.Errorf("configure: %s tier is ambiguous at provider %q — %d gemma-4 candidates:\n%s\nassign one explicitly and rerun: --model-map %s=<id>",
-		tier, provider, len(candidates), indentedList(candidates), tier)
+// tierKey is a tier as config.toml's [models] table spells its key.
+func tierKey(tier string) string { return "models." + tier }
+
+// noCandidateItem refuses a tier auto-detection could not fill, listing what
+// the provider offered as the ids to choose from: the gemma-4 models whose
+// tier went unrecognized where there are any — the likeliest thing the user
+// meant — else the whole catalogue.
+func noCandidateItem(tier, provider string, res detect.Result, ids []string) toolresult.Item {
+	offered := res.UnclassifiedFamily
+	if len(offered) == 0 {
+		offered = ids
+	}
+	detail := fmt.Sprintf("no gemma-4 %s-tier model detected at provider %q", tier, provider)
+	if len(ids) == 0 {
+		detail += "; it offered no models at all"
+	}
+	return toolresult.Item{Check: checkDetect, Key: tierKey(tier), Allowed: sortedCopy(offered),
+		Remedy: "kbase configure --model-map " + tier + "=<id>", Detail: detail}
 }
 
-// indentedList renders values one per indented line, sorted ascending — the
-// same stable ordering `kbase models` prints, so a failure listing and that
-// verb's output can be read against each other. Every verb that lists things
-// under a message uses it, so they all list them the same way.
-func indentedList(values []string) string {
-	sorted := slices.Clone(values)
+// ambiguousTierItem refuses a tier with several detected candidates. kbase
+// does not break the tie — picking one would be a silent best guess — so it
+// names them and asks.
+func ambiguousTierItem(tier, provider string, candidates []string) toolresult.Item {
+	return toolresult.Item{Check: checkDetect, Key: tierKey(tier), Allowed: sortedCopy(candidates),
+		Remedy: "kbase configure --model-map " + tier + "=<id>",
+		Detail: fmt.Sprintf("the %s tier is ambiguous at provider %q: %d gemma-4 candidates", tier, provider, len(candidates))}
+}
+
+// checkDetect names a tier detection could not settle.
+const checkDetect = "detect"
+
+func sortedCopy(values []string) []string {
+	sorted := append([]string{}, values...)
 	slices.Sort(sorted)
-	return listIndent + strings.Join(sorted, "\n"+listIndent)
+	return sorted
 }
 
 var (
@@ -226,19 +248,24 @@ var (
 var configureCmd = &cobra.Command{
 	Use:   "configure",
 	Short: "detect the provider's gemma-4 models and write config.toml",
-	Long: `Query a provider's model catalogue, assign a gemma-4 model to each
-pipeline tier, and write the result to config.toml.
+	Long: `Query a provider's model catalogue, assign a model id to each tier —
+heavy and light — and write them, with the provider, to config.toml.
 
 The provider is resolved exactly as for ` + "`kbase models`" + `: --provider, else the
 provider named in config.toml, else the sole entry in providers.toml.
 
-Tiers are filled from --model-map where given and by auto-detection
-otherwise — and only where detection finds exactly one gemma-4 candidate
-for the tier. If a tier has none, or several, the command lists what the
-provider offered and exits without writing anything: a guessed model
-mapping is a wrong answer that never announces itself. A model named in
---model-map but missing from the catalogue is a warning, not a failure —
-provider catalogues rotate.`,
+Tiers are filled from --model-map where given and by detecting the
+provider's gemma-4 models otherwise — and only where detection finds
+exactly one candidate for the tier. A tier with none, or several, is
+refused, naming models.heavy or models.light and listing the ids to choose
+from, and nothing is written: a guessed model mapping is a wrong answer
+that never announces itself. A model named in --model-map but missing from
+the catalogue is a warning, not a failure — provider catalogues rotate.
+
+config.toml is edited in place: only provider and the [models] heavy and
+light keys are rewritten, every other byte is kept, and a file already
+holding the values is left alone (outcome unchanged). Its result is one
+YAML document on stdout.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir, opts, err := loadVerbContext()
@@ -247,11 +274,19 @@ provider catalogues rotate.`,
 		}
 		opts.Provider = configureFlagProvider
 		opts.Timeout = configureFlagTimeout
-		return runConfigure(cmd.Context(), configureOptions{
+		code, err := runConfigure(cmd.Context(), configureOptions{
 			providerOptions: opts,
 			ModelMap:        configureFlagModelMap,
 			ConfigPath:      config.ConfigPath(dir),
+			Stdout:          cmd.OutOrStdout(),
 		})
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return exitCode(code)
+		}
+		return nil
 	},
 }
 

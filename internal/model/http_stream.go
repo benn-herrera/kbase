@@ -70,9 +70,12 @@ type httpStreamReader struct {
 
 	// content is the accumulator for the final Response. Each chunk's
 	// Content is appended in order.
-	content      strings.Builder
-	finishReason string
-	usage        Usage
+	content       strings.Builder
+	finishReason  string
+	usage         Usage
+	usageReported bool
+	// sawDone is set when the provider's closing [DONE] arrived.
+	sawDone bool
 
 	closeErr error
 }
@@ -151,6 +154,7 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 			continue
 		}
 		if bytes.Equal(payload, []byte("[DONE]")) {
+			r.sawDone = true
 			r.finish()
 			return Chunk{}, io.EOF
 		}
@@ -175,6 +179,7 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 		if !chunk.Usage.IsZero() {
 			r.usage = chunk.Usage
 		}
+		r.usageReported = r.usageReported || chunk.hasUsage
 		// Reasoning is deliberately NOT accumulated — see Final().
 		return chunk, nil
 	}
@@ -217,9 +222,11 @@ func (r *httpStreamReader) terminalErr(err error) error {
 // it chooses to keep.
 func (r *httpStreamReader) Final() Response {
 	return Response{
-		Content:      r.content.String(),
-		FinishReason: r.finishReason,
-		Usage:        r.usage,
+		Content:       r.content.String(),
+		FinishReason:  r.finishReason,
+		Usage:         r.usage,
+		StreamDone:    r.sawDone,
+		UsageReported: r.usageReported,
 	}
 }
 
@@ -284,6 +291,7 @@ func parseSSEChunk(payload []byte) (Chunk, error) {
 	}
 	if w.Usage != nil {
 		out.Usage = w.Usage.usage()
+		out.hasUsage = true
 	}
 	return out, nil
 }

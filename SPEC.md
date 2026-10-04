@@ -1,276 +1,429 @@
-# SPEC – KBase
+# SPEC – kbase
 
-The contract: what any compliant implementation of kbase must do to be
-judged compliant, from a clean-room reimplementation's point of view.
-[ARCHITECTURE.md](ARCHITECTURE.md) is the design reference — the *how* and
-*why*, and the single source for tuning constants this document cites but
-does not restate. Internal types, package paths, and other implementation
-detail are deliberately absent below; where the current binary's behavior
-looks arbitrary rather than contractual, it is flagged in "Needs ruling"
-at the end rather than enshrined.
+The contract: what any compliant implementation of kbase must do. Consumer-facing
+outcomes only. [ARCHITECTURE.md](ARCHITECTURE.md) states how this implementation meets
+it; [THESIS.md](THESIS.md) states why the build has its shape.
+
+Every statement here is decided; where a point was once left open, its ruling is written
+in place.
 
 ---
 
-## 1. CLI contract
+## 1. What kbase is
 
-### 1.1 Global flags and process contract
+kbase is a Go binary that builds and maintains a knowledge base (KB) from LaTeX. Volume
+roots go in, a KB comes out, and a set of maintenance subcommands then operates on the
+living KB.
 
-Every verb accepts:
+- A **volume root** is the top `.tex` file of a paper: the file `00README.json`'s
+  `toplevel` entry names, else the sole file containing `\documentclass`.
+- A **KB** is a `kb-root/` directory beside a repository's `.git`: the Markdown
+  document tree, its metadata layer, and `.index/`.
+- The **metadata layer** is what kb_tools' write API renders into a KB: the frontmatter
+  comment block, registers, Tier-2 markers, `.index/*.jsonl`.
+- The **load-bearing forms** are the Markdown shapes KB readers key on: the up-link line
+  (kb_tools `UPLINK_MARKER`), the cross-reference anchor form, the `` ``` math `` fence,
+  the citation span, and the labelled blockquote (kb_tools SPEC, "The Document-Tree
+  Contract", points 3, 7, 9, 10, 12).
 
-- `--config-dir DIR` — configuration directory.
-- `--log-level debug|info|warn|error` (default `warn`).
-- `--log-file PATH` — tees diagnostics to a file; console output is never
-  redirected away.
-- `-h`/`--help`, and `-v`/`--version` on the root command only (prints
-  exactly the version string and a trailing newline, nothing else).
-
-**Configuration-directory precedence** (every verb): `--config-dir` flag,
-else `$KBASE_CONFIG_DIR`, else `~/.config/kbase`.
-
-**Exit codes.** Success is `0`. Every failure — a bad flag, an unknown
-command, a config load failure, a missing required flag, a refused
-`--annex`, a locked job directory, a failed catalogue request, a refused
-delivery, a refused overwrite — is `1`; kbase uses no other exit code. An error is printed once,
-to stderr, as `error: <message>`. A bare invocation (no verb) prints help
-to stdout and exits `0`.
-
-### 1.2 `kbase models`
-
-```
-kbase models [--provider NAME] [--timeout DURATION]
-```
-
-Lists the selected provider's model catalogue: one identifier per line,
-sorted ascending, to stdout. No corpus, no `--out`.
-
-- Provider selection: `--provider`, else `config.toml`'s `provider`, else
-  the sole entry in `providers.toml`. Zero usable providers refuses,
-  naming `providers.toml`. Two or more entries with none selected refuses,
-  listing every pool entry name.
-- A pool entry that failed to load is reported to stderr as a warning and
-  does not abort the command as long as another entry is usable.
-- `--timeout` (default `30s`) bounds the catalogue request.
-- A one-line summary (provider, model count, elapsed time) is written to
-  stderr.
-
-### 1.3 `kbase configure`
-
-```
-kbase configure [--provider NAME] [--model-map heavy=ID,light=ID] [--timeout DURATION]
-```
-
-Assigns a model id to each pipeline tier (`heavy`, `light`) and writes the
-result into `config.toml`. Provider selection is identical to §1.2.
-
-**Auto-detection, exact and testable.** Normalize a catalogue id by
-dropping everything through its last `/`, lowercasing the remainder, then
-splitting it into tokens on `/`, `:`, `_`, `-`, `.`, and space (the family
-check alone treats `.` as non-splitting, so a dotted version stays one
-token). An id is a gemma-4-family member if and only if its tokens contain
-`gemma` immediately followed by exactly `4` as two tokens, or the fused
-token `gemma4`, or the whole token `gemma.4` — no other spelling counts,
-and the version token must be exactly `4` (so a `gemma-4.1-*` successor
-id is excluded, not silently absorbed). A non-family id never enters
-either tier's candidate set. Within a family id: a whole token `a4b` or a
-whole token `26b` puts it in the **light**-tier candidate set (both name
-the same mixture-of-experts variant); a whole token `31b` with neither of
-those puts it in the **heavy**-tier candidate set; a family id with none
-of these tokens is reported separately as unclassified, in neither set.
-
-- A tier fills automatically only when its candidate set holds **exactly
-  one** id.
-- Zero candidates: refuses, listing any unclassified gemma-4 ids first (if
-  any), then the provider's full catalogue (or that it offered none), then
-  the `--model-map` syntax.
-- Two or more candidates: refuses, listing every candidate and the count,
-  then the `--model-map` syntax.
-- `--model-map tier=id` entries always win over auto-detection for that
-  tier. A mapped id absent from the live catalogue is a warning, not a
-  failure. A malformed entry, an unknown tier name, or the same tier named
-  twice in one `--model-map` refuses before any network call.
-- On success: `config.toml` is updated by the targeted, byte-preserving
-  update described in §2.5, and a one-line confirmation (provider, heavy
-  id, light id, file written) goes to stderr.
-- On any failure, `config.toml` is left completely unwritten.
-
-### 1.4 `kbase survey`
-
-```
-kbase survey <corpus-dir> [--json PATH|-]
-```
-
-Deterministic, offline corpus inventory — no provider, no configuration
-directory. Walks `corpus-dir` for `.md` and `.mdx` files — MDX is read
-as-is, its JSX and `import` lines surviving as inert text
-(ARCHITECTURE.md §4 stage 1) — takes them into byte custody
-(NFC-normalized; §3.2), and computes per-file heading trees with byte
-offsets, section token estimates, the intra-corpus link graph,
-first-paragraph gists, front-matter extraction, and the legal cut-candidate
-list.
-
-- No `--json`: prints a human summary to stdout in the shape `survey ok:
-  files=N bytes=N tokens=N sections=N top-level=N` followed by `links:
-  internal=N unresolved=N external=N anchor=N`, and exits.
-- `--json PATH`: additionally writes the full artifact (schema
-  `kbase.survey/2`, §3.2) to `PATH`; the human summary still goes to
-  stdout.
-- `--json -`: the artifact goes to stdout instead, and the human summary
-  moves to stderr.
-- Same corpus bytes always produce a byte-identical artifact — no clock,
-  network, or environment dependence anywhere in this verb.
-- Refuses if `corpus-dir` does not exist or is unreadable, or if the
-  `--json` path cannot be created.
-
-### 1.5 `kbase build` — the delivery verb
-
-```
-kbase build <corpus-dir> --out DIR [--title TITLE] [--annex PREFIX]...
-                         [--keep-temp-work] [--fresh]
-```
-
-Builds a complete, verified knowledge base. Requires **both** tiers to be
-configured (§2.2) and refuses before the corpus is read if either is not,
-naming the missing one: the heavy tier designs the tree and writes the
-summaries, the light tier adjudicates page boundaries.
-
-- `--out` is required; receives the delivered tree, and only the delivered
-  tree, under the output-directory contract (§3.1).
-- **A populated `--out` refuses, all-or-nothing.** If `--out` holds anything
-  at all other than `temp-work/`, the command refuses before the corpus is
-  read, names **every** entry it found, writes nothing — not even the
-  directory, if it did not already exist — and exits `1`. The refusal states
-  which of the three reasons applies: no `temp-work/` is present, the
-  `temp-work/` present holds a run record and therefore belongs to a build
-  that finished, or the `temp-work/` present holds no job frame at all and
-  so belongs to no kbase build (§3.1). There is no `--force` and no
-  in-place update: kbase
-  delivers a whole knowledge base or nothing, and the remedy is to delete
-  the directory or name an empty one. The **one** exception is the resume of
-  an interrupted build (§3.1), which owns the residue it left behind.
-  `--fresh` is **not** an exception: it decides what happens to `temp-work/`,
-  never whether a delivered tree may be overwritten.
-- `--title TITLE` is the documentation set's own title as the user states
-  it (`--title "Rojo v7 Documentation"`). The knowledge base is titled
-  `KBase for <TITLE>`, and that name renders in three places: the
-  entry-point's own H1, the heading of the shipped `README.md`, and the
-  label of the start link each shipped fixture carries (§4.7). The
-  entry-point's down-link bullets carry each domain's own title, not this
-  one. Absent or blank, `TITLE` falls back to the
-  corpus directory's base name. The resolved title is recorded in
-  `run.json` (§3.8) and is an output-affecting input: changing it over an
-  existing `--out` re-derives the tree plan rather than resuming the one
-  built under the old title.
-- `--annex PREFIX` is repeatable. Validation, in order: an empty prefix
-  refuses; a prefix that is not a clean, corpus-relative path (no `/`
-  prefix, no `.`/`..` segments) refuses; a prefix naming no surveyed
-  document refuses; two declared prefixes that are equal or nested refuse
-  (declare the outer one only). All annex validation happens before any
-  model is dialed.
-- `--keep-temp-work` keeps `temp-work/` after a run that succeeds (a
-  failed or interrupted run always keeps it regardless), and with it the
-  run record (§3.8), which lives at the temp-work root.
-- **`--fresh` rebuilds every stage.** Whatever a prior run left in
-  `temp-work/` is discarded — deleted, not merely left unread, `job.lock`
-  excepted — before the resume scan runs, so no artifact is reused, no
-  stamp is trusted, and the run costs a full corpus's tokens. The scan that
-  follows is the same one a resume runs and reports what it found, so the
-  run's `units: N produced, 0 reused` line is a **measurement** of the
-  discard: the zero is there because the job directory was empty, not
-  because the mode declines to look. It is the
-  remedy the resume refusals name (§3.6): a job directory that
-  contradicts itself is cleared rather than argued with. Two things it does
-  **not** do: it does not override the populated-`--out` refusal above, and
-  it does not break a leftover `job.lock` (§3.7) — both modes refuse that
-  until a human deletes the file.
-- Nothing is delivered unless every one of the ten guarantees (§4.8)
-  holds; a failure refuses the whole delivery and names which guarantee
-  failed (and, where applicable, the offending node) in the run record
-  (§3.8).
-- **The exempted destinations are announced.** A corpus destination that
-  names no document the delivered tree holds is delivered exactly as
-  written and exempted from guarantee 1 (§4.5 rule 3). When at least one
-  delivered page carries such a destination, the run writes exactly one
-  line to stderr carrying the whole link census —
-  `links: internal=N unresolved=N external=N anchor=N; N destination(s)
-  name no document in the corpus and are delivered verbatim, exempt from
-  guarantee 1`. A run whose delivered pages carry none writes no such line.
-  **The two numbers on that line are different measurements.** The census
-  is the survey's classification of the corpus's own link graph, over the
-  source; the count after it is the size of the exemption set guarantee
-  1 actually applies, in distinct destinations over the delivered tree, and
-  is the wider of the two — it also takes destinations inside an annex and
-  destinations into a file no delivered node was drawn from. Both are in
-  the run record either way, as `links` and `exemptedDestinations` (§3.8).
-- **Page granularity follows the source's own headings.** A page is one
-  section of one document — and where a section is too big to be one page
-  and has subsections of its own, it becomes a section index over them
-  instead, recursively (the rule and the body-page convention are §3.3's).
-  So the knowledge base is as deep as the documentation set's own nesting
-  makes it: nothing caps, truncates or repairs depth, and `run.json`
-  records the depth a build reached (§3.8). A section too big to be one
-  page with **no** subsections is still split mechanically, and so is any
-  page over the budget however it came to be one.
-- **Section summaries.** Every index and the entry-point gets one summary
-  (§3.5), written by the heavy tier bottom-up. **Sibling pages are always
-  summarised as a group**: one call over the pages directly under a node,
-  never one page at a time. Where a node holds nothing but pages, that call's
-  answer is its summary. Where it holds pages **and** subsections, the group's
-  answer is written as a **leaf-group card** — a temp-work artifact, never
-  delivered (§3.5) — and the node's own summary call reads the card plus each
-  subsection's summary, so no page body reaches it. The observable count:
-  **one call per index or entry-point node, plus one per node that holds both
-  pages and subsections**; `run.json`'s `summaries` counts nodes, not calls,
-  so a card is never counted as a summary. Three consequences are deliberate:
-  inside the group call a page with more material weighs more than a terse
-  sibling; a node with exactly one direct page makes a group of one; and the
-  parent weighs one card against one subsection summary — parity is per
-  shelf, not per page.
-- **Page boundaries.** A group the tree plan sized into more than one page
-  has its interior boundaries adjudicated by the light tier, one call per
-  boundary, against the mechanical splitter's proposal (§3.4). It is a
-  refinement seam: a boundary whose answers do not verify keeps the
-  mechanical cut, the run record counts it as fallen back, and the
-  delivery is unaffected. A corpus whose groups all fit one page has no
-  boundary to adjudicate and makes **zero** light-tier calls — the correct
-  outcome, recorded as `boundariesAdjudicated: 0` rather than as an absence.
-  Under `[dev] tree_plan = "mechanical"` this stage stays mechanical too,
-  which is what makes that switch "no model call anywhere".
-
-### 1.6 `kbase write-agents`
-
-```
-kbase write-agents --out DIR
-```
-
-Writes the generic agent definitions — `docent.md`, `maintainer.md` and
-`README-ADAPTATION.md` — into `DIR`, flat, no subdirectory. Offline: no
-provider, no configuration directory, no corpus. The three files are a
-function of the app version alone.
-
-- They are samples for the user's own agent tooling, not knowledge-base
-  content: they are not delivered by `kbase build` (§4.7), kbase never
-  reads them back, and no gate ever inspects them. Each carries a
-  written-by-`kbase <version>` notice and a `<!-- kbase <version> -->`
-  footer — no corpus hash, no build date, because no corpus was read.
-  The two definitions are marked stubs today (§6).
-- `--out` is required; there is no default target. `DIR` is created if
-  missing (parents included). A `--out` that exists and is not a directory
-  refuses.
-- **Overwrite refusal, all-or-nothing.** If any target file already
-  exists, the command refuses, names **every** conflict, writes nothing at
-  all — including the files that had no conflict — and exits `1`. There is
-  no `--force`: the user deletes what they mean to replace.
-- A successful run writes a one-line summary to stderr naming the count
-  and the directory.
+kbase builds exactly what kb_tools builds. Input is LaTeX only; no other input format is
+in scope. Two consumers use the binary: a person at a shell, and personant (a sibling Go
+project) whose model calls kbase subcommands as builtin tools. kbase is personant's
+peer; personant's rules govern personant.
 
 ---
 
-## 2. Configuration files
+## 2. Given interfaces
 
-Both files below live in the resolved configuration directory (§1.1), are
-TOML, and are read under the strict-load contract (§2.3).
+| Interface | Observed version | Contract |
+|---|---|---|
+| kb_tools (reference implementation) | adjagent `main` at `e29bc3d97453c039995962994983f3330f428d7a`, the clone at `.claude/adjagent/` from which this repository's agent set is installed | Every kb_tools citation in this repository's documents names this commit and is read from `.claude/adjagent/kb_tools/`. Sections cited below are kb_tools' SPEC unless noted. |
+| pandoc | 3.12 (`pandoc-api-version` 1.23.1.2) | Required on the host, not shipped. |
+| git | 2.56.0 | Required on the host. The recoverable record of a build (§6). |
 
-### 2.1 `providers.toml` — the endpoint pool
+**pandoc.** The accepted range's lower bound is 3.12. Its upper bound is the next major
+`pandoc-api-version`, exclusive, where major means the first two components under
+Haskell's versioning policy: 1.23.x is accepted, 1.24 is not. Only the owner widens the range. The
+range and the `pandoc-api-version` are enforced at preflight; a missing pandoc is
+refused with an error naming pandoc's install page. kbase runs pandoc LaTeX to JSON with
+no filters, and with `--citeproc` exactly when a bibliography is offered, as kb_tools
+does.
+
+**kb_tools' KB contract**, cited by section at the pinned commit:
+
+- "What a KB Is"
+- "The Document-Tree Contract"
+- "Claim-Graph Nodes and Edges"
+- "Derived Metadata, Defined"
+- "The Claim-Graph Sheet"
+- "Citation Grammar"
+- "Project Scoping"
+- "The Write API's Contract"
+
+kbase restates none of them. A KB kbase produces satisfies them except where §4 names a
+divergence.
+
+---
+
+## 3. Compatibility contract
+
+- A KB kbase builds is navigable by kb_tools and the kb-docent agent (Claude Code or
+  opencode) and maintainable by kb-maintainer.
+- A KB kb_tools builds is fully queryable and modifiable by kbase.
+- kb_tools' build-pipeline intermediates are out of scope.
+- Exact: the metadata layer, the load-bearing forms, and the KB's placement (`kb-root/`
+  beside `.git`; the docent starts at `kb-root/entry-point.md` and descends through
+  `index.md` files).
+- Free and untested: presentation — wrap width, bullet characters and the like.
+- Byte equality is asserted only where a named reader needs it:
+
+| Byte-equal | Reader that needs it |
+|---|---|
+| Metadata rendering (register entries, frontmatter, markers, derived-field placeholders) | kb_tools' parser; refresh's placeholder recognition; `kb_write`'s locate/splice |
+| `.index/*.jsonl` and derived fields | Each toolchain's freshness gate (dry-run refresh diffed against disk) |
+| `kb-root/CLAUDE.md` exactly `@AGENTS.md` | kb_tools' `kb_index_lib.unmigrated_agents_file` (refresh and verify exit 2 otherwise) |
+| The `` ``` math `` fence opener | kb_tools' fence scanner |
+| The up-link line | `UPLINK_MARKER` |
+
+**Acceptance bar.** Each toolchain's own checks run green over the other's output, with
+one named exception: kb_tools' sheet freshness check on a kbase-written placeholder
+(below) is red until kb_tools' refresh runs.
+
+**Formats.** A new KB keeps kb_tools' metadata formats. JSON versus YAML is a load-time
+parser choice over identical schemas. Breaking format changes wait until kbase is proven.
+
+**Theorem numbering** is whatever pandoc prints, as in kb_tools.
+
+### `claim-graph.svg`
+
+A placeholder: an SVG showing "NYI" and, beneath it, a digest of the index it was
+generated from: `index sha256:` followed by the first 12 hex digits of the SHA-256 of
+the `.index/*.jsonl` files concatenated in sorted path order. The output is
+deterministic. A sheet is kbase's own when it is that placeholder (it carries the "NYI"
+text). `kbase refresh` writes it only where no sheet exists or the existing one is
+kbase's own; `kbase verify` freshness-checks only kbase's own sheet and leaves a
+kb_tools-drawn sheet unchecked. No other command's behaviour depends on the sheet's
+contents (ARCHITECTURE §6).
+
+---
+
+## 4. Named divergences
+
+A named divergence is a difference from kb_tools that this list names. This is the whole
+list of differences in KB contents, maintenance-op behaviour and the tool interface; any
+unlisted difference there is a defect. Build-orchestration differences are the "Not
+ported" list in ARCHITECTURE §4.
+
+| Divergence | kbase | kb_tools |
+|---|---|---|
+| Values transport | YAML (JSON accepted) on stdin or `--values` (§8) | A TOML file |
+| Exit codes | The table in §7 | kb_tools' own codes (e.g. write ops: 7 refused, 8 retry) |
+| Dead-link gate scope | `kb-root/` only | The whole repository |
+| Build-state location | Outside the worktree (§6) | kb_tools' own run directory |
+| `claim-graph.svg` | The placeholder in §3 | The drawn sheet |
+| Stamped KB documents (`AGENTS.md`, `CONVENTIONS.md`, `README.md`) | Give the maintenance commands for both toolchains: kbase's subcommands and kb_tools' `kb_util` ops | Give kb_tools' only |
+| Tool results | YAML documents (§7) | `[kb-write] STATUS` report lines |
+| Build records (node-pass, classification) | YAML: `kb-build-node-pass.yaml`, `kb-build-classification.yaml` | JSON: `kb-build-node-pass.json`, `kb-build-classification.json` |
+| Inference endpoint | kbase's provider configuration (§9) | The environment: `API_BASE_URL`, `MODEL`, `API_KEY_FILE`, `ALLOW_HTTP` (kb_tools SPEC, "The Driver's Contract") |
+| Re-issued insert | Adopts the existing entry of the same register and title, reports `unchanged` and names any field whose value differs; a work whose key is already keyed likewise `unchanged` (§8, idempotence) | A claim or support insert mints a second entry under the same title; a work re-insert is refused (7) |
+| Query paging | A list query returns at most `--limit` results (default in ARCHITECTURE §12; `0` means all) from `--offset`, reporting `count` and `truncated` (§7) | Every result, always |
+
+---
+
+## 5. Build behaviour
+
+```
+kbase build <volume-root> [--bibliography FILE]... [--charter FILE] [--no-inference]
+            [--through <stage>] [--state-dir DIR]
+```
+
+**Output and placement.** The KB is written only at `<git root>/kb-root/`. Build state
+is never written into `kb-root/`.
+
+**Fresh versus resume** is derived from the `kb-build:` commit trail (§6), never
+configured. A build against a populated `kb-root/` with no `kb-build:` commit trail is
+refused. `build` refuses outside a git worktree, naming `git init`. It refuses if the
+kbase-owned paths it commits are dirty and the dirt is not an interrupted stage's own
+uncommitted work (§6), and only then.
+
+**Determinism.** The same inputs and pandoc version give a byte-identical document graph:
+the tree `document-graph` writes and the records. The claim-graph stages mint fresh node
+ids on every build — unique within the KB, now and going forward, as kb_tools' are — so
+a build is reproducible modulo ids from `claims-declared` on, and no consumer may read
+anything into an id's value.
+
+**`--no-inference`** is first-class. It drops the rows that spend inference, still walks
+and records every stage, and states the rows it dropped. The run is a real KB built
+without those rows, not a stopped walk. Which rows drop follows kb_tools' classification
+(kb_tools ARCHITECTURE, "The Driver": `--no-inference` "drops rows and bounds nothing",
+`spends_inference`; SPEC, "The Driver's Contract").
+
+**`--through <stage>`** bounds the run at the named stage. A bounded run is not a failed
+one: outcome `bounded`, exit 0 (§7).
+
+**Inference preflight.** A build with a stage left to walk that calls a model refuses
+(§7, `refused`) before the first stage it walks when no provider is configured (§9), naming
+the configuration it lacks. A build spending no inference needs none. Every model call a
+build makes is one tool-less chat request answered from its prompt alone, as kb_tools
+(SPEC, "The Driver's Contract").
+
+**Refusals** (outcome `refused`):
+
+- Unparseable source: names the paper and the reader error.
+- Unloadable include: names each file and the line that named it.
+- An unclassified metadata key: a key the rendering's metadata block carries that is
+  outside kb_tools' content and apparatus lists (`kb_docgraph/outline.py`). A key pandoc's
+  writer drops — an empty entry — reaches no block and is not refused, as in kb_tools.
+
+**Bibliographies.** With no `--bibliography`, the build passes every `.bib` in the volume
+root's directory, in sorted path order, as kb_tools' driver does; `--bibliography` given
+replaces that set. **Degradation, not refusal.** An unreadable bibliography: the build
+continues without it and reports the file.
+
+**Under `--no-inference`** no `README.md` is written: the overview call is the dropped
+row, and the README is assembled around its passage, as in kb_tools.
+
+**Monitoring.** `build` runs in the foreground; personant backgrounds it. `kbase status`
+and `kbase cancel` (§6) observe and stop it.
+
+**What a build produces** is kb_tools' output, as listed in the cited sections of §2:
+Markdown leaves; the index, up-link and cross-reference structure; load-bearing forms;
+claim-graph registers and nodes; the derived index. The build's stages and what each
+does are in ARCHITECTURE, "Stage table"; how each computes its product is ARCHITECTURE's.
+
+**Records and inference.** The reader and placement facts the claim graph needs travel
+as records in the build state store, not in `kb-root/` (ARCHITECTURE, "Records"). Each
+inference pass uses kb_tools' templates and fragments unchanged, one closed-set decision
+per call (ARCHITECTURE, "Inference seams"); no stage exits on a model's opinion.
+
+---
+
+## 6. Build state, ledger and monitoring
+
+**Git holds the recoverable record.** Each stage boundary is a commit in the user's
+repository, with subject `kb-build: <stage-id> | <display name>` and a structured body.
+A commit carries `kb-root/` and the tracked build records, at kb_tools' paths at the
+repository root: `kb-build-charter.md`, the node-pass record `kb-build-node-pass.yaml`
+and the classification record `kb-build-classification.yaml` (kb_tools'
+`kb-build-node-pass.json` and `kb-build-classification.json`, in YAML; §4). Resume
+position is read from the commit trail. A user may reset to a stage
+commit and resume from there. Per-leaf work inside an inference stage stays uncommitted
+until the stage boundary; a resume over an interrupted stage restores the kbase-owned
+paths to the last stage commit and re-runs the stage. Commits are scoped by pathspec to
+kbase-owned paths.
+
+**The state store holds what does not belong in the repository** — run lock and pid,
+`progress.jsonl`, per-call evidence, the docgraph records (§5), and a per-unit answer
+cache keyed by input hash. Nothing in it is authoritative for position. The store lives at
+`$XDG_STATE_HOME/kbase/<key>/`, where `<key>` is the first 16 hex digits of the SHA-256 of
+the absolute, symlink-resolved `kb-root/` path, overridable with `--state-dir`; it holds
+paid-for inference and survives `git clean`.
+
+**Maintenance operations never require git.**
+
+### `kbase status`
+
+Returns a YAML document with: state (`none`, `running`, `cancelled`, `failed`,
+`bounded`, `finished`); pid; timestamps; each stage recorded or not, with its commit; the
+current stage's units done and total; recent refusals and fallbacks; the
+`--no-inference` flag; and the resume command. Progress is persisted to a file so a late
+or reconnecting monitor catches up.
+
+### `kbase cancel`
+
+Signals the lock holder. The in-flight call is abandoned with nothing written for it;
+the event is logged, the lock is released, and the build process exits `cancelled`.
+Cancel costs only the in-flight unit; the build is resumable.
+
+---
+
+## 7. Tool-result contract and exit codes
+
+**Tool results.** Every subcommand, `models` and `configure` included, writes one YAML document to
+stdout and nothing else. stderr is for humans. Keys are in fixed order; strings are
+quoted on emit; a refusal enumerates every offending item. The `outcome` key is the
+contract. `--help` and `--version` are human-facing and outside it.
+
+**Shared vocabulary.** Every result document is one YAML mapping, with keys in this order:
+
+1. `outcome`.
+2. `kb-root`: the absolute path. Present on every subcommand that resolves a KB, which is
+   all of them except `models` and `configure`.
+3. The subcommand's own keys, in the order its table gives.
+4. Exactly one of these, chosen by `outcome`: `refusals` for `refused` and `retry`;
+   `failures` for `failed`; `cancelled` (a mapping of `stage` and `unit`) for `cancelled`.
+
+Keys are kebab-case. The one exception is query data under `results`, which keeps
+`kb_cmd --json`'s names verbatim. The same fact always uses the same key: `written`
+(files this call wrote; kb-root-relative inside `kb-root/`, absolute outside it; `[]` when
+nothing was written), `ids` (node ids, in entry order), `count` (a total before any
+limit), `resume` (a shell command that continues the work), `state-dir` (the state
+store's absolute path).
+
+**Item.** Every refusal, failure and verify finding is one mapping with these keys in this
+order, a key omitted when it does not apply; `detail` is always present, with at least one
+of `check`, `path` or `key`:
+
+| Key | Holds |
+|---|---|
+| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `pandoc`, `unknown-id` |
+| `path` | The file the item is about |
+| `entry` | 1-based index into the values' `entry` list |
+| `key` | The values key, flag or positional argument, spelled as `--help` spells it |
+| `line`, `column` | 1-based position in the values document or in `path` |
+| `allowed` | The closed set the value must come from |
+| `remedy` | The kbase command that clears the item, where one exists (e.g. `kbase refresh`) |
+| `detail` | One sentence |
+
+A refusal lists every offending item. A usage error is one item with `check: usage`. A
+provider-selection refusal names `key: --provider` and lists every entry name as
+`allowed`; a tier `configure` cannot detect names `key: models.heavy` (or `models.light`)
+and lists the detected candidates as `allowed`.
+
+**Per-subcommand keys**, following `kb-root`:
+
+| Subcommand | Keys |
+|---|---|
+| `build` | `state-dir`; `through`; `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store)); `resume` (absent on `done`/`unchanged`) |
+| `status` | `state-dir`; `state`; `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `resume` |
+| `cancel` | `state-dir`; `pid`; `resume` |
+| `refresh` | `written` |
+| `verify` | none; its findings are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
+| every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew, as kb_tools' `minted`); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (as kb_tools' `written`); `refreshed` (paths; null under `--no-refresh`) |
+| `render-citation` | `citations` (one per entry, in entry order) |
+| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `solidity-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the `kb_cmd --json` list, sliced) |
+| `show`, `stats` | `results` (the `kb_cmd --json` mapping) |
+| `render-claim-graph` | `written`; `sheet` (`placeholder` or `drawn`; a drawn sheet is never written) |
+| `models` | `provider`; `models` (ids, sorted ascending) |
+| `configure` | `provider`; `models` (`heavy`, `light`, as `config.toml`'s `[models]` spells them); `written` (`config.toml`'s path, or `[]` with outcome `unchanged`) |
+
+**Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0`
+means all) and `--offset N`; where `truncated` is true the caller re-issues the query with
+`--offset` set to `offset + len(results)`. `stats`' ranked sections stay at kb_tools' 10.
+No other subcommand's result grows with the KB; `build`'s per-stage detail goes to the
+`report` file, not stdout.
+
+**Exit codes** derive from `outcome`:
+
+| Outcome | Exit | Meaning |
+|---|---|---|
+| `done`, `unchanged`, `bounded` | 0 | Success, including a `--through`-bounded run |
+| `refused` (including verify findings and usage errors) | 1 | Wrong input or KB state; nothing written past the last checkpoint |
+| `retry` | 2 | Concurrent writer or live lock; re-issue identically later |
+| `failed` | 3 | Defect in the tool, its input or the environment; re-issuing will not fix it |
+| `cancelled` | 4 | Stopped on request; resumable |
+
+---
+
+## 8. Maintenance subcommands
+
+Every subcommand below is a builtin tool personant can call. kb_tools' semantics govern
+each, cited from the sections named; kbase's differences are only those in §4 and the
+rules in this section.
+
+**Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary
+is closed. It is kb_tools' `kb_write` `values.OP_FIELDS`, and kbase keeps no prose copy of
+it. A refusal names the key, its position, and the allowed set. A prose value containing
+U+0008 or U+000C is refused.
+
+**Idempotence.** Every mutating op is idempotent under re-issue: the same values issued
+twice leave `kb-root/` byte-identical to issuing them once, and the second call reports
+`unchanged`. An insert adopts an existing entry of the same register and title (an
+insert's values name no host; the host is assigned later through `set-frontmatter` and
+the marker); a work is adopted by its key.
+
+**Writes leave nothing stale.** A mutating op ends with a refresh unless `--no-refresh`
+is given.
+
+**Batches** are all-or-nothing, as in kb_tools SPEC, "The Write API's Contract".
+
+### Write ops
+
+Each is named after kb_tools' `kb_util` op and follows "The Write API's Contract".
+Their result keys are §7's.
+
+### `insert-claim-entry`
+### `insert-support-entry`
+### `insert-experiment-entry`
+### `insert-work-entry`
+### `set-work-strength`
+### `set-applicability`
+### `set-rigor`
+### `set-rationale`
+### `add-depends-on`
+### `set-frontmatter`
+### `mark-claim-in-leaf`
+### `set-on-point-fraction`
+
+The register-creating inserts take `--create` where kb_tools' op takes it.
+
+### `render-citation`
+
+Reads the cited document and writes nothing; returns the sanctioned authority-citation
+string (kb_tools SPEC, "The Write API's Contract"; "Citation Grammar").
+
+### Queries
+
+Each is named after a kb_tools `kb_cmd` query and has its semantics (kb_tools
+ARCHITECTURE, "Query Surface"; `kb_cmd/cli.py`). Over a kb_tools-built KB, each returns what `kb_cmd
+--json` returns, as data.
+
+### `deps`
+### `gated-on`
+### `cited-by`
+### `find`
+### `referenced-by`
+### `solidity-below`
+### `subtree`
+### `show`
+### `weak-points`
+### `stats`
+
+### `render-claim-graph`
+
+Renders the claim-graph sheet from the index (§3); kb_tools semantics: "The Claim-Graph
+Sheet". Result keys: §7.
+
+### `refresh`
+
+Derives the metadata layer's derived fields and `.index/*.jsonl` and writes
+`claim-graph.svg` (§3), per kb_tools SPEC, "Derived Metadata, Defined". Result keys: §7.
+
+### `verify`
+
+Checks the KB's freshness, links and citations under the same contract. Findings are
+outcome `refused`. The dead-link gate scope is `kb-root/` (§4). `verify` checks the
+placeholder sheet fresh (§3). Result keys: §7.
+
+### `status`, `cancel`
+
+See §6.
+
+---
+
+## 9. Configuration
+
+Two TOML files in the resolved configuration directory, read under the strict-load
+contract (§9.3).
+
+**Global flags.** Every subcommand accepts `--config-dir DIR`, `--log-level
+debug|info|warn|error` (default `warn`), `--log-file PATH` (tees diagnostics to a file;
+console output is never redirected away) and `-h`/`--help`; the root command also accepts
+`-v`/`--version`, which prints exactly the version string and a newline. The directory is
+`--config-dir`, else `$KBASE_CONFIG_DIR`, else `~/.config/kbase`.
+
+**Provider commands.** `kbase models [--provider NAME] [--timeout DURATION]` lists the
+selected provider's model identifiers, sorted ascending, in its result document (§7).
+`kbase configure
+[--provider NAME] [--model-map TIER=ID]... [--timeout DURATION]` assigns a model id to
+each tier — a tier not given is detected from the provider's model list, and one it
+cannot detect is refused naming `models.<tier>` with the candidates as `allowed` (§7) —
+and writes `config.toml` under §9.5. Each writes its result under §7. Provider selection for both is
+`--provider`, else `config.toml`'s `provider`, else the sole `providers.toml` entry;
+zero usable providers refuses naming `providers.toml`, and two or more with none
+selected refuses listing every entry name.
+
+### 9.1 `providers.toml` — the endpoint pool
 
 Top-level tables are provider names, an open set the user chooses:
 
@@ -284,14 +437,13 @@ type = "inference"     # optional; the only accepted value, also the default
 api = "openai"         # optional; the only accepted value, also the default
 ```
 
-No other key is recognized inside an entry. An entry that fails validation
-(empty `baseUrl`, or `type`/`api` set to anything but its one accepted
-value) is **dropped** with a warning naming the entry and the reason
-(never key material); the rest of the pool still loads. A key-file read
-failure faults just that entry the same way. An absent `providers.toml` is
-an empty pool, not a load error.
+No other key is recognized inside an entry. An entry that fails validation (empty
+`baseUrl`, or `type`/`api` set to anything but its one accepted value) is **dropped** with
+a warning naming the entry and the reason (never key material); the rest of the pool
+still loads. A key-file read failure faults just that entry the same way. An absent
+`providers.toml` is an empty pool, not a load error.
 
-### 2.2 `config.toml` — the choices
+### 9.2 `config.toml` — the choices
 
 ```toml
 provider = "..."             # active providers.toml entry name
@@ -300,964 +452,50 @@ provider = "..."             # active providers.toml entry name
 heavy = "..."                 # model id for the heavy tier
 light = "..."                  # model id for the light tier
 
-[dev]                          # optional; every switch defaults off/empty
-                                # when the table or the key is absent
-telemetry = true|false          # local inference-timing diagnostics (info log level)
-keep_temp_work = true|false     # keep temp-work/ after a SUCCESSFUL run too
-                                 # (a failed run always keeps it, regardless)
-build_date = "YYYY-MM-DD"       # pins the date in every page's provenance
-                                 # footer (§4.6); default is today, UTC
-tree_plan = "mechanical"        # the only accepted non-empty value: take the
-                                 # tree from the corpus's own file/folder
-                                 # structure and dial no provider for the run
+[asks]
+readerConcurrency = 4          # optional; asks of one group in flight once its first has returned
 ```
 
-A tier left unset resolves to "not configured" — no defaulting, no
-guessing. `kbase build` refuses when either tier is unset, unless
-`tree_plan = "mechanical"` puts it on the offline path, where no tier is
-read because no provider is dialed. A `tree_plan` value other than empty
-or exactly `"mechanical"` refuses at load.
-
-### 2.3 Strict-load contract
-
-Both files are decoded strictly: any key or table not modeled by the
-schemas above fails the **whole file's** load. The message names the file
-path and every offending key by its full dotted path (e.g.
-`models.typo_key`), pluralizing "unknown key"/"unknown keys" when more
-than one — `<path>: unknown key "models.typo_key" — check spelling against
-the documented schema`. A malformed-TOML file fails with a parser-detail
-message naming the file and line. Only key **names** ever appear in either
-message — never values, since `providers.toml` may carry credential
-material. `kbase configure` cannot repair a config file it cannot load:
-every verb loads configuration before doing anything else, so a typo'd key
-is a one-line hand edit, never a silent no-op.
-
-### 2.4 Key-file permission warning
-
-When a `providers.toml` entry sets `apiKeyFile` and the host is not
-Windows, kbase stats the resolved key-file path. If its permission bits
-grant group-read or other-read, it prints a warning naming the path and
-the offending mode and recommending `chmod 600` — the entry stays usable;
-this is advisory only, and it is the **only** file-permission behavior
-kbase applies to a file it did not itself create (contrast §5's
-umask-respecting creation-mode guarantee, which is about files kbase
-writes).
-
-### 2.5 `configure`'s targeted update (byte-preservation contract)
-
-`kbase configure` never re-serializes `config.toml`; it edits the existing
-bytes in place.
-
-- An absent or blank file gets a full commented template, with
-  `provider`/`models.heavy`/`models.light` filled in.
-- Otherwise, **only** the top-level `provider` key and the `[models]`
-  table's `heavy`/`light` keys are ever rewritten. Every other byte —
-  comments, unrelated keys and tables (including the entire `[dev]`
-  table), spacing, key order — is preserved exactly. A rewritten line's
-  own trailing `# comment` is kept, though its column position is not
-  guaranteed to match the original (§ Needs ruling).
-- A missing `provider` key is inserted just after the leading comment
-  block; missing `heavy`/`light` keys are appended inside (or as a new)
-  `[models]` table.
-- Before writing, kbase decodes both the original file and the proposed
-  new one as TOML and refuses the write — untouched — unless the only
-  difference between the two decoded structures is exactly the values it
-  intended to change. Any other divergence (for instance, a misdetected
-  table boundary in a hand-edited file) refuses rather than risks silent
-  corruption.
-- The write is atomic (temp file, same directory, then rename). A
-  `config.toml` that is itself a symlink has its target rewritten; the
-  symlink is left in place.
-- Any failure along this path — refused verification, disk error,
-  unrecognized layout — leaves the file completely unwritten.
-
----
-
-## 3. On-disk artifacts
-
-### 3.1 The output-directory contract
-
-`--out` receives **only** delivered artifacts, and the delivered set is
-exactly the classified one guarantee 5 (§4.8) enumerates: tree-plan nodes
-and the fixture manifest, nothing else. Nothing already present in `--out`
-is ever touched, and the way that is made true is a refusal rather than a
-promise: a `--out` holding anything but `temp-work/` is refused at job
-setup, with every entry named and nothing written (§1.5). Every
-other thing a run produces — stage artifacts, their stamps, the job lock,
-the run record (§3.8), the residue of an interrupted write — lives under
-`<out>/temp-work/`, a directory kbase creates and the only thing it ever
-deletes inside `--out`.
-
-**Rerun versus resume.** The refusal has exactly one exception, and it is
-decided by `temp-work/` rather than by anything about the delivered files:
-`temp-work/` survives precisely the runs that did not finish, and the run
-record inside it (§3.8) is written only once a delivery has completed. So
-`temp-work/` holding a **job frame** and **no** run record is an interrupted
-build, whose half-copied delivery is its own to overwrite; a `temp-work/`
-that holds a run record belongs to a build that finished, and a second run
-over it is a rerun and refuses like any other. A job frame is any one of the
-three things a kbase run leaves in that directory: the job lock (§3.7), the
-delivery manifest (§3.10), or a `.stamp.json` sidecar (§3.6). A `temp-work/`
-holding none of them is refused like any other populated `--out` — an empty
-directory of that name is not evidence of an interrupted build, and reading
-it as one would make `mkdir <out>/temp-work` a way to license overwriting a
-delivered knowledge base.
-
-**What the resumed run does with the residue.** The interrupted attempt
-wrote a delivery manifest (§3.10) before it copied its first file, and the
-resuming run reads it to decide between three states, in this order:
-
-- **Finished but unrecorded.** The manifest names exactly the set this run
-  computed, and every one of those files under `--out` is byte-identical to
-  the artifact this run proved. Then the delivery happened and only the
-  record write was lost: the run writes the record and completes, copying
-  nothing and overwriting nothing.
-- **Interrupted.** Anything else. The run first removes **exactly** the
-  paths the manifest names — the prior attempt's own testimony about what it
-  wrote — and then delivers. That is what keeps a resume whose plan has
-  since changed (a new `--title`, a different `--annex` set, a moved corpus)
-  from leaving the old plan's pages standing beside the new plan's. No other
-  file under `--out` is ever removed: a file kbase did not write is on no
-  list kbase ever made.
-- **Neither, afterwards.** When delivery is done, `--out` minus
-  `temp-work/` must equal the delivered set exactly. A file that is there
-  and is neither delivered nor manifest-listed refuses the run rather than
-  being deleted or reported as part of a knowledge base it is not part of.
-
-Rebuilding a corpus into a
-directory that already holds its knowledge base therefore means deleting
-that directory first — `--fresh` (§1.5) rebuilds the pipeline, not the
-delivery decision, and refuses here exactly as a plain rerun does. Updating
-a delivered knowledge base in place is not a feature of this appliance.
-
-No file kbase writes has a lifecycle of its own: there are exactly two
-kinds, delivered (permanent, classified) and temp-work (scratch, one
-teardown rule). Nothing is written outside `temp-work/` and later deleted,
-and nothing in the delivered tree is exempt from classification.
-
-A run that completes successfully removes `temp-work/`. A run that fails
-or is interrupted (including a hard kill) leaves it in place — the next
-run of the same `--out` reads it to resume (§5). `--keep-temp-work` (or
-`[dev] keep_temp_work = true`) keeps it after a successful run too.
-
-### 3.2 The survey artifact — schema `kbase.survey/2`
-
-```json
-{
-  "schema": "kbase.survey/2",
-  "corpus": {
-    "contentHash": "...", "files": N, "bytes": N, "tokens": N, "sections": N,
-    "links": {"internal": N, "unresolved": N, "external": N, "anchor": N}
-  },
-  "files": [ { "...": "..." } ]
-}
-```
-
-`corpus` is a mechanical roll-up of `files` (every count is the sum of the
-per-file entries); `contentHash` is the corpus's content-identity hash.
-
-Each `files[]` entry:
-
-| Field | Meaning |
-|---|---|
-| `path` | corpus-relative, NFC-normalized, forward-slash separated |
-| `sha256` | hash of the file's NFC-normalized custody bytes |
-| `bytes`, `tokens` | custody byte length; estimated token count (an estimate — never treated as exact anywhere downstream, §5) |
-| `title`, `description`, `tags` | from front matter when present, each word-capped |
-| `gist` | a capped first-paragraph summary |
-| `metadata` | byte span of a detected YAML front-matter block, when present |
-| `preamble` | byte span of headingless content before the first heading, when present |
-| `sections` | the heading tree: each node has `level` (1–6; a headingless preamble is level 0 and lives in `preamble`, not here), `title`, `start`/`end` (byte span; `start` is the heading line's first byte), `tokens` (covers the whole subtree), `gist`, `children` |
-| `cuts` | the legal cut-candidate list: `{"offset": N, "kind": "heading"\|"fence"\|"paragraph"}` |
-| `links` | one entry per distinct destination: `{"kind": "internal"\|"unresolved"\|"external"\|"anchor", "target": "as written", "path": "resolved doc (internal only)", "fragment": "...", "image": true (omitted if false)}`. Which document a destination names is decided by §4.5's resolution rules |
-
-**Cut-candidate guarantees** (load-bearing — a validator may rely on all
-four): offsets are strictly ascending; every offset is interior (never a
-file's first or last byte); at every offset, at least one immediately
-adjacent byte is whitespace; a fenced code block contributes only its
-outer open/close edges, never an interior offset.
-
-**Tiling guarantee:** `metadata` + `preamble` + `sections` exactly
-partition a file's byte length, in that order, with no gap or overlap.
-
-**The `metadata` span is not delivered.** The coverage universe — what
-guarantee 6 (§4.8) requires a delivered page or a declared annex to account
-for — is `preamble` + `sections`, and those are the only spans a tree plan's
-groups are ever built from. A detected front-matter block's bytes therefore
-reach no page of the knowledge base. This is a deliberate carve-out in the
-verbatim-custody story, not a silent drop: front matter is a site
-generator's configuration rather than the document's prose, its labels are
-already lifted into `title`/`description`/`tags` above, and a knowledge base
-that does not distil it has dropped no chapter. Bytes that are NOT detected
-as front matter are ordinary content — they fall into `preamble` under the
-tiling guarantee, are covered like any other span, and are delivered
-verbatim (§4.9's leaf edge case).
-
-**Determinism:** identical corpus bytes (after NFC normalization) always
-produce byte-identical artifact JSON — no field is encoded as a map, and
-array order is fixed (corpus-walk order for files, document order for
-sections, target order for links).
-
-### 3.3 The tree plan artifact — schema `kbase.treeplan/2`
-
-```json
-{
-  "schema": "kbase.treeplan/2",
-  "corpusHash": "...",
-  "budgets": {"leafTokens":N,"summaryInputTokens":N,"summaryTokens":N,
-              "entryPointTokens":N,"fanOutCap":N,"candidateCap":N},
-  "nodes": [ {"...": "..."} ],
-  "groups": [ {"...": "..."} ],
-  "annexes": [ {"...": "..."} ],
-  "crossParentMerges": N
-}
-```
-
-`budgets` are the shipped, calibrated constants (ARCHITECTURE.md §9) — not
-an invocation's to choose. `annexes` is omitted when no `--annex` was
-declared. The `/1` shape carried a `depthCap`; **there is no depth budget**
-(see the tree grammar below), and retiring the field is what bumped the
-schema.
-
-**Tree grammar — what a page's material may be** (observable — determines
-how many pages exist and what each one holds). A delivered page is one span
-of one document, and a document's spans are its own heading structure read
-under one rule:
-
-- A document's material is its preamble (the bytes before its first
-  heading, if any) and its top-level sections.
-- **A section becomes a section INDEX** — an index over its own body and
-  its child sections — exactly when its subtree exceeds `leafTokens` **and**
-  it has child sections. Otherwise it is one page. The rule applies
-  recursively, so a descended child that is itself over the budget descends
-  in turn.
-- A container's **body** is the bytes from its own heading line up to its
-  first child heading, and it is a page like any other, titled
-  `"Introduction to <container title>"` — the same convention a file's
-  preamble page already carries. The body page therefore **carries the
-  container's own heading line**: no source byte reaches no page.
-- A section over `leafTokens` with **no** child sections is split
-  mechanically instead (`groups[].parts > 1`), which is also what happens
-  to any page that is over the budget however it came to be one.
-
-**There is no depth cap.** Tree depth follows the nesting the source
-requires; nothing refuses, truncates or repairs a deep tree, and no
-guarantee in §4.8 adjudicates depth. The depth a build reached is reported
-as `maxDepth` in the run record (§3.8).
-
-**Coverage is a tiling, stated over boundaries.** For every non-annexed
-file, the group spans exactly tile the coverage universe (§3.2) — no gap,
-no overlap, nothing outside it — and every span's start and end is a
-position at which the survey found a section starting (or the universe's own
-edge). A page may therefore be one section, one container's body, a run of
-sibling subsections, or a container's whole subtree; it may never begin or
-end inside a section.
-
-`nodes[]` — depth-first, every parent listed before its children:
-`{"path", "kind": "entry-point"|"index"|"leaf", "parent", "title", "scope",
-"group" (leaf only), "part" (split leaves only)}`. Exactly one
-`entry-point` node exists, has no parent, and its path is `entry-point.md`.
-`scope` is the one-line description rendered in the parent's down-link
-list.
-
-`groups[]` — the source span a leaf (or leaf family, if split) draws from:
-`{"id", "source": {"file","start","end"}, "budget", "parts"}`. `parts >= 1`;
-`parts == 1` means the span is never split. **The interior cut points of a
-multi-part group are not recorded here** — only in that group's cut list
-(§3.4).
-
-**Content floor** (observable — determines how many pages exist): every
-group's span holds at least the minimum section size (ARCHITECTURE.md §9,
-64 tokens) unless it covers its file whole (see the exemption below), and so
-therefore does every page cut from it. A span below the
-floor is merged into the group immediately before it in the same file — or
-immediately after it, where it is that file's first — and the merged-away
-group names no page: one page holds both spans, keeping the surviving
-group's title and scope. A merge happens only between spans that TOUCH, so
-no page is delivered bytes no group planned. **A span covering its file's
-whole coverable content (§3.2) is exempt from the floor** and stands as its
-own page at any size: the floor's target is a page manufactured out of part
-of a larger document, and an author's whole tiny document behind its own
-title is not that but an honest page — so a corpus of documents each smaller
-than one page builds, delivering each as a page. `kbase build` refuses,
-naming every offending span, when one under the floor is neither exempt nor
-has such a neighbour. Coverage (§4.8 guarantee 6) is unaffected:
-the merged span covers exactly the sections its two halves covered.
-
-**Which neighbour, and what it costs.** File byte order does not respect
-the tree: one document's adjacent sections may legally sit under two
-different section indexes. So a touching neighbour **under the same parent
-index** is preferred over a touching neighbour under a different one, in
-either direction, ahead of the before-then-after order above. Where the only
-touching neighbours sit under another parent the merge is taken anyway —
-refusing would make an ordinary corpus unbuildable — and each such merge is
-logged at `warn` and counted in `crossParentMerges`, in this artifact and in
-`run.json` (§3.8). It is counted because nothing else can see it: the merged
-page routes correctly, coverage is whole, and the only observable is that a
-page sits under a heading whose scope line did not promise it. A **section
-index whose every child was absorbed under some other parent is removed**,
-with its scope line, since it now routes nowhere; the entry-point is never
-removed.
-
-`annexes[]` — `{"prefix", "convention"}`, one per declared `--annex`;
-`convention` is the lookup description kbase derives from the survey and
-writes into the entry point (§4.3).
-
-**Naming guarantee** (observable — determines delivered paths):
-`entry-point.md` at the root; an index's children live under `<slug>/`,
-the index itself at `<slug>/index.md`; a leaf is `<slug>.md`; part `k` of
-`n` of a split leaf is `<slug>-<k>.md`, titled `"<Title> (k/n)"`. A slug is
-derived from a node's own title: runs of whitespace, control and invisible
-format characters, dash-class punctuation, and the literal characters
-`/ \ : * ? " < > | # % . ( )` collapse to one hyphen; ASCII `A`–`Z`
-lowercases (no wider Unicode case-folding — other scripts pass through
-unchanged); the result is capped to 8 words, then to 64 bytes (cutting on
-a word boundary, never inside a multi-byte character); an empty result
-becomes `node`. Within one directory a colliding slug gets an ordinal
-suffix (`name`, `name-2`, `name-3`, …) rather than overwriting; `index`
-and `entry-point` are reserved and unclaimable by a slug.
-
-**`(k/n)` is shared, deliberately.** An index holding more pages than one
-summary call can read is partitioned into `n` ordered batches, each under a
-synthetic index titled `"<Title> (k/n)"` — the same notation a split leaf's
-parts carry. The notation means the same thing in both places (*this is
-part `k` of `n` of what one title named*), and the two are told apart by
-everything else about the page rather than by a second suffix: a split part
-is a **leaf**, carries `←`/`→` continuation links (§4.4), and is named in
-its parent's bullet with a `(this part: …)` clause (§4.3); an interposed
-index is an **index**, at `<slug>/index.md`, carrying a down-link list and
-no continuation link. Giving interposition a suffix of its own would change
-delivered paths to restate what the page's own kind already says.
-
-### 3.4 The composed cut list
-
-Plain text, one line per span: `<start> <end>\n` (decimal byte offsets
-into the source file), in document order, tiling the group's bytes exactly.
-One per split group, at `temp-work/cuts/<group>/cutlist.txt`, written by
-whichever shape stage 4 ran in — the refined fold's composed list on a live
-build, the mechanical splitter's output under `[dev] tree_plan =
-"mechanical"`. Never written empty: a fold that composes nothing is an
-error, not an empty file. It is a stage artifact and is not delivered.
-
-### 3.5 The summary artifact — schema `kbase.summary/1`
-
-```json
-{"schema": "kbase.summary/1", "framing": "...", "conclusionsHeading": "...", "conclusions": "..."}
-```
-
-One per index/entry-point node, once the summary stage has run for it, at
-`temp-work/summaries/<node path>.json`. Never rendered Markdown itself —
-the delivered page's summary block (§4.3) is rendered from this artifact
-at delivery time, so a regenerated summary can never half-rewrite an
-already-delivered page.
-
-**Absent is legal; unreadable is not.** A node with no summary artifact
-renders without its summary block, which is what a `[dev] tree_plan =
-"mechanical"` build delivers throughout. An artifact that is present and
-cannot be read is a different event and refuses the run: the render and
-guarantee 5's re-render read this artifact through one reader, so treating
-a read failure as an absence would make them agree with each other about a
-page neither of them could see.
-
-**The leaf-group card** is the same schema at
-`temp-work/summaries/<node path>.leaves.json`, and exists only for a node
-holding both pages and subsections (§1.5): it is the group summary of that
-node's direct pages, and it is an INPUT to that node's own summary call —
-never a page's summary block, and never delivered. The two names differ so
-that no render path can reach a card: the delivered summary block is read
-from `<node path>.json` and nothing else. A card is a stage artifact like
-any other, stamped (§3.6) and therefore resumable, and it is subject to
-§3.1's teardown with the rest of `temp-work/`.
-
-### 3.6 Stamps — `<artifact-name>.stamp.json`
-
-Every stage artifact under `temp-work/` carries a sidecar of this name,
-beside it:
-
-```json
-{"schema": 1, "version": "<app version>", "path": "<store-relative path>",
- "inputs": [{"name": "...", "hash": "..."}], "output": "<sha256 of the artifact bytes>"}
-```
-
-`inputs` is sorted by name. An artifact is reusable on a later resume
-**only** when all of: the artifact and its stamp are both readable and
-parse; the stamp's own `path` matches; its `schema` is the version kbase
-currently writes; its `version` matches the running app's version exactly;
-`output` matches a fresh hash of the artifact bytes; every declared
-input's hash still matches. Any single mismatch — including app-version
-skew — means the artifact is redone, never trusted.
-
-Two states are **refusals rather than redos**, because redoing the unit
-cannot fix them: a stamp whose `path` names a different artifact, and a
-directory sitting where an artifact belongs. Either refuses the run before
-any stage executes and names `--fresh` (§1.5), which discards the job
-directory and rebuilds it.
-
-### 3.7 The job lock — `temp-work/job.lock`
-
-Acquired exclusively at job start (create-if-absent; no read-then-write
-race window) and released on a normal exit. Contents are plain text and
-informational only: `pid`, `host`, `started` (RFC3339), `version`. A
-second `build` pointed at the same `--out` while the lock exists refuses
-immediately, naming the lock's contents and the file to delete.
-
-**After a hard kill** (SIGKILL, power loss, container eviction) the lock
-file is left behind and is **never broken automatically** — there is no
-pid-liveness check and no age timeout, since neither is meaningful across
-hosts or containers. The sole remedy is a human deleting
-`temp-work/job.lock`; after that, both a resumed run and a `--fresh`
-rebuild proceed normally. `--fresh` does not break the lock either: it
-discards the job directory's artifacts, and the lock is the one file it
-leaves alone.
-
-### 3.8 `run.json` — the run record
-
-**`kbase build`**, written to `<out>/temp-work/run.json` — the temp-work
-root, which mirrors the delivered tree's root — once the run has delivered
-its tree. That moment is load-bearing beyond the record's own contents: the
-record's presence is what tells a later run that this `temp-work/` belongs to
-a build that finished rather than to an interrupted one, which is the
-rerun-versus-resume predicate of §3.1. It is a development record, so it
-lives in the dev mirror rather than in the delivered tree, and it is
-therefore subject to §3.1's teardown: a successful run without
-`--keep-temp-work` keeps no run record. Contents: `version`, `corpus`
-(path), `title` (the resolved
-doc-set title, §1.5), `corpusHash`, `buildDate`, `treePlan` (`"model"` or `"mechanical (dev)"`), `annexes`
-(omitted if none), `budgets` (§3.3's object), `sourceFiles`,
-`sourceSections`, `sourceExcluded` and `exclusions` (the corpus denominator:
-how many paths the corpus root held that the ingest walk did not take, and
-one `{"path", "reason"}` entry per path — `reason` being the class, e.g.
-`extension not in the document set` for a corpus's non-Markdown
-documentation formats, and the
-list omitted when there are none. Without it `sourceFiles` counts only what
-kbase chose to look at, and a whole format class the walk ignores leaves no
-trace; the same skips are logged at `info`. Disclosure is this record and
-nothing else: the delivered tree is the documentation set's, not a report on
-the walk), `links` (the corpus link census — the same
-`{"internal", "unresolved", "external", "anchor"}` object §3.2 rolls up,
-recorded because `internal` is the resolution rate that would otherwise be
-invisible), `nodes`, `pages`, `sections`, `groups`, `splitGroups`,
-`maxDepth` (how deep the delivered tree went, the entry-point at 1 — the
-only statement of it anywhere, because nothing caps or gates depth (§3.3),
-and the number that says whether a documentation set's own structure came
-through as structure),
-`crossParentMerges` (§3.3: how many content-floor merges re-homed a
-sub-floor span under an index other than the one its own page sat under —
-each also logged at `warn`, and nothing else can see them),
-`exemptedDestinations`, `summaries`, `deliveredFiles`, `units`,
-`unitsProduced`, `unitsReused`,
-`elapsedMs`, and `verify`: exactly ten `{"number", "name", "ok"}` entries,
-one per guarantee in §4.8, always in the same order.
-
-**Two link numbers, and what each one is.** `links.unresolved` is a
-**survey** measurement: how many of the corpus's outbound destinations
-named no document the corpus holds, counted once per distinct destination
-per source file and summed over the corpus (§3.2).
-`exemptedDestinations` is **guarantee 1's own exemption set**: how
-many DISTINCT destinations the delivered pages carry that stage 5 could not
-land, counted over the assembled tree and taken from the same lists the
-gate skips (§4.8). It is the wider idea and is not a restatement of the
-first — a destination inside an annex, or into a file no delivered node was
-drawn from (§4.5 rule 3), is exempt and was never unresolved — and it is
-the number §1.5's stderr line states, because that sentence is a claim
-about guarantee 1. The pair read together: an `exemptedDestinations` rising
-against a flat `links.unresolved` says the survey's parse and stage 5's
-scanner are reading the same bytes differently.
-
-A live (model-in-the
--loop) run additionally carries a `live` object naming: `provider`,
-`baseUrl`, `model` and `tier` (the heavy tier's, which designed the tree
-and wrote the summaries), `lightModel` (which adjudicated the page
-boundaries), `thinking` and `retryThinking` (the heavy definitions'
-declared efforts), `taxonomyCalls`, `callsSkipped`,
-`boundariesAdjudicated`, `boundariesMoved`, `boundariesFellBack`,
-`boundaryRejections`, `leafGroupCards` (one per node holding both pages and
-subsections — the extra calls the grouping scheme of §1.5 costs, up to one
-heavy call each; zero where every node holds children of one kind),
-`promptTokens`, `cachedTokens`, `completionTokens`,
-`reasoningTokens`. The four boundary counts are summed over every split
-group and are all zero when no group split.
-
-### 3.9 `temp-work/` layout
-
-Mirrors the delivered tree's own relative paths one level down
-(`<out>/temp-work/<relative-path>`), plus stage-named siblings for
-artifacts that are never themselves delivered: a survey directory, a tree
--plan directory, a per-domain leaves area, a summaries area (node summaries
-and leaf-group cards alike, §3.5), a pre-delivery render of the
-tree, a verify-report directory (schema `kbase.verify/1`), and `job.lock`,
-`run.json` (§3.8) and `delivery.json` (§3.10) at the root. Every file in it
-carries a `.stamp.json` sidecar (§3.6) except those three, which are not
-stage artifacts.
-
-A run that had a response rejected also leaves `<unit>.rejected-<n>.txt`
-beside the unit: the raw bytes of the response that failed that unit's
-mechanical check on model attempt `n`, kept so a failure can be read rather
-than inferred. It is not a stage artifact and carries no sidecar. It is
-written whatever the unit's outcome — a unit whose retry recovered leaves one
-too, since a run reporting a recovered rejection is a run someone may want to
-read the rejection of.
-
-Nothing is removed from inside `temp-work/` while a job is alive: it
-accumulates for the job's whole lifetime, including across resumes, and a
-file no plan of any attempt still names simply stays. Such a file is inert —
-it carries no place in the chain, so no resume scan inspects it and no
-delivery draws from it (delivery copies exactly what the current plan names,
-§3.1). The directory is removed only as a whole: by teardown after a
-successful run without `--keep-temp-work` (§3.1), or by `--fresh`, which
-discards the job directory before rebuilding (§1.5).
-
-### 3.10 `delivery.json` — the delivery manifest
-
-**`kbase build`**, written to `<out>/temp-work/delivery.json` — the
-temp-work root, beside the run record — **before the first delivered byte**
-of the run that writes it. Contents: `schema` (`1`) and `paths`, the exact
-set of tree-relative paths this run is delivering, sorted, which is the
-classified set of §4.8's guarantee 5 and nothing else.
-
-Its consumer is the NEXT run over the same `--out`, and only that: it is the
-list §3.1's resumed run reads to tell a finished delivery from an
-interrupted one, and the only authority kbase has for removing a file it did
-not just write. Two properties follow from where it sits and when it is
-written. It is temp-work, so §3.1's teardown takes it — a successful run
-without `--keep-temp-work` keeps neither it nor the run record — and a
-`--fresh` run discards it with the rest of the job directory, having read it
-first. And it is written before the copy rather than after, so a run killed
-mid-delivery leaves the whole list rather than the part it managed.
-
----
-
-## 4. The generated-KB artifact contract
-
-### 4.1 Node kinds
-
-Three kinds, always: **entry-point** (exactly one, at the tree's root),
-**index** (a routing page), **leaf** (a verbatim page — possibly one of
-several parts of one source span, when the span exceeded the leaf token
-budget at tree-design time).
-
-### 4.2 Leaf page layout
-
-In order:
-
-1. The frontmatter block (§4.9), then a blank line.
-2. The navigation block (§4.4): the up-link, then — on a leaf that is one
-   part of a split group — the continuation link to the part before it and
-   the continuation link to the part after it, one per line with no blank
-   line between them, then a blank line. The first part carries no previous
-   and the last carries no next; a leaf that is not split carries the
-   up-link alone.
-3. A synthesized `# <Title>` heading — **unless** the leaf's own first
-   non-blank line is a Markdown ATX heading whose **text is the node's
-   title**, in which case none is synthesized (a leaf cut at a `## <Title>`
-   boundary gains no redundant `#`). A heading saying anything else keeps
-   its place in the verbatim body and the title is synthesized above it:
-   a page must state the identity it was routed by, and the part `k` of a
-   split group — whose title carries `(k/n)` — has no other way to state
-   one.
-4. The verbatim body: byte-identical to the corresponding source span,
-   with only link **destinations** rewritten (§4.5) — visible link text
-   is never altered.
-5. A trailing newline, added if the body lacks one.
-6. The provenance footer (§4.6).
-
-### 4.3 Index and entry-point page layout
-
-**Index page**, in order: frontmatter block (§4.9) → up-link → `# <Title>` →
-optional summary block (present iff a summary artifact exists for the
-node: framing text, a rule, `## <conclusionsHeading>`, conclusions text, a
-rule) → `## Derivations and Detail` heading, then one down-link bullet per
-child in tree order (`- [<ChildTitle>](<relative-path>) — <ChildScope>`) →
-provenance footer.
-
-**Down-link bullet, split-part form.** A child that is one part of a split
-group carries a further clause: `- [<ChildTitle>](<relative-path>) —
-<ChildScope> (this part: <descriptor>)`. Every part of one group shares
-one `<ChildScope>` — the group's scope is authored before the cut
-positions exist (§3.3, §3.4) — so the descriptor is what tells two sibling
-bullets apart. It is mechanical and derived after the cut: the title of
-the first source heading the part delivers, then ` → ` and the title of
-the last, where the part delivers more than one. A part whose cut fell in
-open prose delivers no heading, carries no descriptor, and renders the
-plain bullet.
-
-Two properties the descriptor is required to have, because it is the only
-place a page kbase composes quotes CORPUS text:
-
-- **Distinct among siblings.** Where two parts of one group would carry the
-  same descriptor — a source repeating its headings across a cut boundary —
-  each of the tied parts carries `k of n` instead. Parts whose headings
-  already tell them apart keep them.
-- **Inert.** Markdown's inline syntax is escaped in the quoted heading
-  text, so a heading carrying link, emphasis, code-span or raw-HTML
-  punctuation renders as the words the author wrote and cannot put a link
-  destination, or any other live construct, on the index page. Control
-  characters become spaces. A leaf body is exempt from this and always
-  will be: its bytes are verbatim source (§4.2 item 4).
-
-**Entry-point page** (no up-link — it has none; the frontmatter block is
-first all the same), in order: frontmatter block (§4.9) → `# <Title>` →
-optional summary block (same shape) → `## Domains` heading, one down-link
-bullet per direct child (same bullet grammar) → `## Using this knowledge
-base` heading, with the fixed contract text — the invariant, a blank
-line, then the routing statement: *"INVARIANT: Answers come exclusively
-from the text of one or more leaves. Intermediate nodes are for
-navigation only."* / *"Summaries route; leaves answer. An index page
-tells you where to go; a page at the bottom of the tree is where the
-answer is. Answer from leaf text, never from an index summary — the
-summaries are navigation, and they are not the source."* —
-then a fixed one-sentence pointer naming `kbase write-agents`
-(§1.6) as where agent definitions come from → optional `## Annex lookup` section
-(present iff at least one `--annex` was declared: one bullet per annex,
-`` - `<prefix>` — <convention> ``) → provenance footer.
-
-### 4.4 The navigation block: up-links and continuation links
-
-Exact literal format, one grammar with three markers:
-
-```
-[↑ <root-relative path of parent>](<relative path to parent>)
-[← <root-relative path of the previous part>](<relative path to it>)
-[→ <root-relative path of the next part>](<relative path to it>)
-```
-
-The glyphs are U+2191 (↑), U+2190 (←) and U+2192 (→), one space after the
-glyph inside the brackets. Every label is the destination's
-**root-relative delivered path**, not its title:
-`[↑ getting-started/porting-tools/index.md](../index.md)` at any level,
-`[↑ entry-point.md](../entry-point.md)` at the top.
-
-Label and target are two projections of one tree-plan fact and must name
-the same node: resolving the target against the page's own directory
-yields the label, exactly (guarantee 2 in §4.8).
-
-Every class-A page (leaf or index) but the entry-point carries **exactly
-one** up-link, and it is the **first line under the frontmatter block**,
-nothing but the block before it. The entry-point carries none.
-
-**Continuation links** appear on leaves only, and only on a leaf that is
-one part of a split group: `←` names part `k-1` and `→` names part `k+1`
-of the same group, so the first part carries only `→`, the last only `←`,
-and every part between them both. They are a projection of the tree plan's
-`groups[].parts` (§3.3) exactly as the up-link is a projection of the
-parent edge — mechanical navigation, never an inferred relation between
-documents.
-
-The block is **positional**: it is the run of navigation lines that begins
-at the first line under the frontmatter block and ends at the first line
-that is not one. A leaf body is verbatim source and may contain a
-navigation-shaped line of its own; below the block, such a line is content
-and no guarantee reads it as page grammar.
-
-### 4.5 Link resolution and target rewriting (rebase)
-
-#### Resolution — which document a destination names
-
-Classification of a destination written in a source document, in order;
-the first branch that applies decides:
-
-- A destination that will not parse as a URL at all is **unresolved**. It
-  names nothing this corpus holds and it is not a reachable external
-  reference either, so it is recorded as the corpus's own defect rather
-  than classified away into a kind that claims more than is known.
-- A destination carrying a scheme or a host (`https://…`, `//host/…`,
-  `mailto:…`) is **external**.
-- A destination that is only a fragment (`#anchor`) is an **anchor**: it
-  names a heading in the document it is written in.
-- Otherwise the path part is resolved against the corpus, and the
-  destination is **internal** (naming the resolved document) or
-  **unresolved**.
-
-Resolving the path part is attempted in **two address spaces**, in this
-order, and the first attempt that names a document in the corpus wins:
-
-1. **File space** — the destination joined against the linking file's own
-   directory. A rooted destination (`/guide/setup.md`) is joined against
-   the corpus root instead, and is resolved once: rooted means the same
-   thing in both spaces.
-2. **URL space** — the destination joined against the linking file's path
-   with its extension dropped. A documentation-site generator serves
-   `project-format.md` at `project-format/`, so a destination written
-   inside that page is relative to that directory: `../properties` from
-   `project-format.md` names the sibling document `properties`, not a
-   path above the corpus root.
-
-Each attempt applies, in decreasing confidence: the exact corpus path; the
-path with each document extension appended in turn — `.md`, then `.mdx` —
-when the destination carries no extension (`[scope](scope)`, where the site
-generator supplies the rest);
-and a full Unicode case fold of either, since the corpus walk accepts `.MD`
-and resolution has to agree. The fold is Unicode-wide rather than ASCII-only
-because custody ids are NFC (§4 stage 1 of ARCHITECTURE.md): one spelling of
-every character on both sides of the comparison is the whole point, and a fold
-that stopped at `A`–`Z` would answer a Turkish or Greek path differently from
-the way it was ingested. A fold that several documents answer to is
-**ambiguous** — that attempt resolves nothing and the run warns, naming
-the destination, rather than guessing.
-
-An attempt whose result leaves the corpus root is discarded, and only that
-attempt: a `../` that escapes the root in file space is exactly the
-spelling that lands inside it in URL space. A destination is unresolved
-only when every attempt has failed.
-
-Percent-encoded destinations are decoded before resolution; comparison is
-byte equality against the corpus's own NFC ids, which are the only paths
-ever returned. No target is invented: a document the corpus does not hold
-stays unresolved.
-
-#### Rewriting — where a resolved destination lands
-
-Only link **destinations** are ever rewritten; visible link text is always
-byte-identical to the source. Three rules, in order:
-
-1. A link whose destination names a source heading's fragment lands on
-   the leaf page hosting that heading's start offset, fragment preserved.
-   This covers a bare `#anchor` too: it names a heading in its own
-   document, which is exactly the reference a page split moves to another
-   leaf. If no leaf holds the heading (the section became a container, not
-   a leaf), it falls through to rule 2 while keeping the fragment.
-2. A link to a whole source file lands on that file's own leaf if it has
-   exactly one, otherwise on the lowest index page whose subtree covers
-   every node drawn from that file.
-3. A link to a file no delivered node was drawn from is left exactly as
-   written in the leaf body, and its destination is recorded as
-   unresolved — guarantee 1 in §4.8 exempts these rather than treating
-   them as broken. The exemption is announced (§1.5) and counted (§3.8).
-
-A landing on the emitting page itself is written as a bare `#fragment`
-rather than as a path naming that page: the heading is on this page, so
-the source's own spelling is already the shortest destination that means
-it. Every other landing is a path relative to the emitting page.
-
-Fragment-to-heading matching is best-effort (a generic slug of the heading
-text: lowercase, letters/digits kept, everything else collapsed to one
-hyphen); a miss costs a hop of precision (falls through to rule 2) and
-never produces a dead link. When a document repeats a heading title, a
-site generator disambiguates the later ones with `-1`, `-2`, … suffixes,
-and a fragment carrying such a suffix names the (N+1)th heading of that
-name. The bare slug always wins first: a heading whose own title ends in a
-number (`Step 2` → `step-2`) is matched exactly rather than read as an
-ordinal.
-
-### 4.6 Provenance footer
-
-Exact literal format, the last non-blank line of every delivered class-A
-and class-B page:
-
-```
-<!-- built from corpus sha256:<hash> @ <YYYY-MM-DD>; kbase <version> -->
-```
-
-`<hash>` is the survey's corpus content hash; `<YYYY-MM-DD>` is the build
-date (today, UTC, unless pinned by `[dev] build_date`); `<version>` is the
-app version that produced the KB.
-
-### 4.7 The fixture manifest
-
-Delivered with every KB, exact set:
-
-```
-CONVENTIONS.md
-README.md
-CLAUDE.md
-```
-
-- `CONVENTIONS.md` — states the summaries-route/leaves-answer contract, a
-  pointer to the entry point, and the one-sentence pointer to
-  `kbase write-agents` (§1.6) as where agent definitions come
-  from. The definitions themselves are the user's agent tooling and are
-  not KB content, so they are obtained on demand rather than shipped
-  inside the artifact.
-- `README.md` — short human orientation: what this is, where to start,
-  that agents should read `CONVENTIONS.md` first.
-- `CLAUDE.md` — the bootstrap pointer an agent session rooted at the KB
-  picks up on its own: read `CONVENTIONS.md` first, start at the entry point,
-  then three directives — the no-crawl invariant verbatim as the entry
-  point states it, *"Navigate, don't crawl: follow the tree from the
-  entry-point instead of grepping the file set"*, and *"Stop reading when
-  the question is answered"*. The invariant is duplicated here rather
-  than only pointed at: the hop to `CONVENTIONS.md` is probabilistic, and this
-  file is what a session picks up whether or not it takes that hop. No
-  directive carries a rationale.
-
-Every fixture file carries the same provenance footer (§4.6) as a
-tree-plan node, and every one of them links to the entry point — which is
-what guarantee 4 checks of class B, with no member exempt.
-
-### 4.8 The ten delivery guarantees
-
-Nothing reaches `--out` unless every one of these holds; a single failure
-refuses the **whole** delivery (no partial tree, no warnings-only mode),
-and the run record (§3.8) names which guarantee failed and, where
-applicable, the offending node.
-
-1. Every file any delivered page links to (excluding destinations already
-   recorded as unresolved) exists in the delivered set.
-2. Every class-A page but the entry-point carries exactly one up-link, as
-   the first line under its frontmatter block, and every link in the
-   navigation block that line opens — the up-link and a split part's
-   continuation links — is labelled with the node its target resolves to
-   (§4.4); the entry-point carries none of them. The count is taken from
-   that block and from nowhere else, so a navigation-shaped line below the
-   block is not read — fenced or unfenced, up-link or continuation link. A
-   leaf body is verbatim source (§4.2 item 4), so a corpus that documents
-   this grammar carries such lines as content and they are content, and a
-   check wider than the contract it enforces would refuse a delivery
-   nobody can repair. Nothing is lost by the narrowing: the block itself is
-   checked entire, and a page that grew a second up-link below it fails
-   guarantee 5's re-render or guarantee 7's leaf fidelity.
-3. The entry-point exists, and every domain it names in `## Domains` was
-   itself delivered.
-4. Every class-A page is reachable from `entry-point.md` by following
-   delivered links — a traversal, not an inbound-link count, so a group of
-   pages that link only to each other fails it; a page's own links are read
-   only once it has been reached, so no page is made reachable by a
-   self-link. Every fixture file links to the entry-point.
-5. The delivered file set is exactly the tree plan's nodes plus the fixed
-   fixture manifest — no stray files, none missing.
-6. Coverage: every section the survey found lies within the material of
-   exactly one delivered page, or is exactly partitioned by delivered
-   pages, or is inside a declared annex — nothing silently dropped,
-   nothing double-covered. The second case is what a section index is:
-   a container's material is on its subtree's pages rather than on one
-   of them (§3.3).
-7. Leaf fidelity: every leaf's delivered bytes are byte-identical to a
-   fresh re-derivation from the immutable source corpus.
-8. Structural caps hold: any node's fan-out and the entry-point's own
-   rendered size are within the calibrated budgets (§3.3). Depth is not
-   among them — a tree is as deep as its source requires (§3.3), so a
-   gate refusing a deep tree would be refusing the corpus for its shape.
-9. Every page's rendered bytes conform to its kind's exact grammar
-   (§4.2/§4.3), and every fixture file matches its own fixed template.
-10. Every class-A page opens with a frontmatter block whose `Location`
-    is exactly the path it was delivered under (§4.9).
-
-### 4.9 Page frontmatter
-
-Every class-A page — leaf, index and entry-point alike — opens with this
-block, at file-start, above the navigation block (§4.4):
-
-```
----
-Location: <root-relative delivered path>
----
-```
-
-`Location` is the page's own delivered path, the same string guarantee 5
-enumerates and guarantee 10 compares against. Class-B fixtures carry no
-frontmatter: each one sits at the tree root, where its name is the whole
-address.
-
-kbase writes exactly this one field. Any reader of a delivered page — the
-verify gate today, a later kbase pass over an existing KB — is
-**forgiving**: it validates the fields it knows and ignores the rest, so a
-later version may add a field without invalidating pages an earlier one
-delivered. The block's own shape is not forgiven: a first line that is not
-the `---` fence, or a fence that never closes, is no block at all and
-fails guarantee 10.
-
-H1 headings remain purely subject-matter titles. A page states its address
-in this block, and the addresses of its neighbours in its navigation-block
-labels (§4.4); nowhere else.
-
-**Leaf edge case, intentional.** A verbatim slice that itself contains the
-SOURCE document's frontmatter renders it as body text: this block owns
-file-start, the envelope wraps the body below it, and body bytes are never
-edited (§4.2 item 4).
-
----
-
-## 5. Behavioral guarantees
-
-- **Determinism.** Leaves never involve a model (verbatim body plus
-  mechanical wrapping) and are therefore always byte-deterministic. Given
-  identical corpus bytes and an identical resolved configuration (model
-  IDs, annex declarations, `[dev] build_date`), `kbase build` delivers a
-  byte-identical tree across runs whenever the tree plan is mechanical
-  (`[dev] tree_plan = "mechanical"`). A live, model-in-the-loop run's tree
-  design and summaries additionally depend on the provider reproducing
-  its own output for one prompt across runs — kbase does not control, and
-  does not claim, that.
-- **Fail-loud, no partial delivery.** `kbase build` either delivers a
-  complete, gate-passing tree or delivers nothing new to `--out`.
-  `kbase configure` either writes a complete, valid update to
-  `config.toml` or writes nothing.
-- **Refuse-and-split over truncation.** Any input that would overflow a
-  per-call or per-page budget is refused back to the stage that can
-  resize it, never silently truncated or evicted. Token counts feeding
-  these checks are estimates, with headroom built into every threshold an
-  estimate feeds — an estimation error costs one extra loud refusal,
-  never a wrong answer.
-- **File and directory permissions.** Every file or directory kbase
-  itself creates (the delivered tree, stage artifacts and stamps,
-  `temp-work/`, run records, the job lock, log files, `config.toml`) is
-  created at the maximally-permissive mode (0666 files / 0777
-  directories) and left to the process umask to narrow — never `chmod`'d
-  after the fact, which would ignore the umask. This is unrelated to, and
-  does not affect, the key-file warning in §2.4, which is advisory over a
-  file kbase never itself creates.
-- **Resume and interruption.** `kbase build` always attempts to resume
-  from whatever a prior run of the same `--out` left in
-  `temp-work/` — where it runs at all, a rerun over a `--out` that still
-  holds a delivered tree having been refused first (§3.1):
-  an artifact is reused only when it and its stamp
-  affirmatively prove they are still valid for the current inputs (§3.6);
-  anything else is redone. A run that fails or is interrupted, including a
-  hard kill, always leaves `temp-work/` in place for the next attempt to
-  read; a run that completes successfully removes it (unless kept, §3.1).
-  `--fresh` (§1.5) is the switch that skips the question: the prior
-  `temp-work/` is discarded and every stage runs again. It is always
-  sufficient over what a previous run left in the job directory, and it is
-  never a licence to overwrite a delivered tree — the populated-`--out`
-  refusal (§3.1) applies to both modes alike.
-- **The job lock and hard-kill recovery.** See §3.7; the sole remedy after
-  an unclean kill is deleting `temp-work/job.lock`.
-- **Provenance.** Every delivered page names, in its footer (§4.6), the
-  exact corpus content hash and build date it was produced from, plus the
-  app version. `run.json` additionally names the resolved provider, model
-  and tier for a live run. No token-estimator-calibration source is
-  currently stamped anywhere in a run record (§6).
-
----
-
-## 6. Status markers
-
-Behaviors described elsewhere in this document or in ARCHITECTURE.md that
-are not yet true of the current binary:
-
-- **Embedded agent/prompt definitions.** The pipeline runs real model
-  calls today, but every prompt definition — taxonomy design, summaries,
-  boundary refinement, and the two definitions `kbase write-agents`
-  writes (§1.6) — is a marked stub; tuned, evaled definitions have not
-  landed. A build today is evidence about the machinery, not about
-  tree-design or summary quality.
-- **Routing-eval question generation.** No routing-eval question set is
-  produced or delivered. The empty `.agents/routing-eval.json` placeholder
-  a KB used to ship was removed (ruled 2026-08-15): it had no producer and
-  no consumer, and a dev-grade file has no home in the delivered tree. Its
-  home is decided when the generation stage lands. **PLANNED.**
-- **Chars-per-token calibration.** The token estimator uses a fixed,
-  provisional constant; the configure-time calibration call and the
-  usage-based refinement are not implemented, and no calibration source is
-  stamped anywhere in a run record.
-- **Summary review / regeneration.** The find-the-discrepancy review pass
-  and flag-driven regeneration do not run as part of `kbase build` today;
-  a delivered summary is never reviewed before delivery.
-
----
-
-## Needs ruling
-
-Behaviors observed in the current binary that look like implementation
-accident rather than deliberate contract — flagged rather than enshrined:
-
-1. **`configure`'s targeted rewrite does not preserve original comment
-   alignment.** A rewritten line's trailing comment is kept but
-   re-attached at a fixed gap, not its original column. Whether §2.5's
-   byte-preservation contract is meant to guarantee column-exact comment
-   alignment, or only comment *content* preservation, is undecided.
-2. **`[dev]` switches are documentation-only guardrails, not enforced
-   isolation.** Nothing stops a user from pointing a real, live
-   `--config-dir` at `[dev] tree_plan = "mechanical"`, or otherwise using
-   any `[dev]` switch outside a development context. Whether that is
-   acceptable for v1, or should be gated further, is unruled.
+A tier left unset resolves to "not configured" — no defaulting, no guessing.
+`readerConcurrency` is how many of one group's letter asks a build has in flight once the
+group's first ask has returned (kb_tools reads it from `KB_READER_CONCURRENCY`); absent, it
+is 4. A value under 1 fails the load, naming `asks.readerConcurrency`. There is no `[dev]`
+table; an old `[dev]` key fails strict load (§9.3).
+
+### 9.3 Strict-load contract
+
+Both files are decoded strictly: any key or table not modeled by the schemas above fails
+the **whole file's** load. The message names the file path and every offending key by
+its full dotted path (e.g. `models.typo_key`), pluralizing "unknown key"/"unknown keys"
+when more than one. A malformed-TOML file fails with a parser-detail message naming the
+file and line. Only key **names** ever appear in either message, never values, since
+`providers.toml` may carry credential material. `kbase configure` cannot repair a config
+file it cannot load: every subcommand loads configuration before doing anything else.
+
+### 9.4 Key-file permission warning
+
+When a `providers.toml` entry sets `apiKeyFile` and the host is not Windows, kbase stats
+the resolved key-file path. If its permission bits grant group-read or other-read, it
+prints a warning naming the path and the offending mode and recommending `chmod 600`.
+The entry stays usable. This is the only file-permission behaviour kbase applies to a
+file it did not create.
+
+### 9.5 `configure`'s targeted update (byte-preservation contract)
+
+`kbase configure` never re-serializes `config.toml`; it edits the existing bytes in
+place.
+
+- An absent or blank file gets a full commented template, with `provider`,
+  `models.heavy` and `models.light` filled in.
+- Otherwise **only** the top-level `provider` key and the `[models]` table's
+  `heavy`/`light` keys are rewritten. Every other byte — comments, unrelated keys and
+  tables, spacing, key order — is preserved exactly. A rewritten line's own trailing
+  `# comment` is kept; its column position is not guaranteed.
+- A missing `provider` key is inserted just after the leading comment block; missing
+  `heavy`/`light` keys are appended inside (or as a new) `[models]` table.
+- Before writing, kbase decodes both the original and the proposed file as TOML and
+  refuses the write, leaving the file untouched, unless the only difference between the
+  two decoded structures is exactly the values it intended to change.
+- The write is atomic (temp file in the same directory, then rename). A `config.toml`
+  that is a symlink has its target rewritten; the symlink stays.
+- Any failure along this path leaves the file completely unwritten.

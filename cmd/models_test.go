@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,14 +31,19 @@ func catalogue(ids ...string) []model.ModelInfo {
 	return infos
 }
 
-// result is what one runModels invocation produced: both streams, the
-// endpoints the client factory was asked to build, and the error.
+// result is what one runModels invocation produced: its result document,
+// stdout as written, stderr, the exit code, and the endpoints the client
+// factory was asked to build.
 type result struct {
+	doc       resultDoc
 	stdout    string
 	stderr    string
+	code      int
 	endpoints []model.Endpoint
-	err       error
 }
+
+// ids is the result's model ids.
+func (r result) ids() []string { return anyStrings(r.doc.Values["models"]) }
 
 // run invokes runModels with the given options, substituting a client
 // factory that records its endpoint and serves ids from a MockClient. Any
@@ -53,11 +59,14 @@ func run(t *testing.T, opts modelsOptions, client *model.MockClient) result {
 		seen = append(seen, e)
 		return client
 	}
-	err := runModels(context.Background(), opts)
-	return result{stdout: stdout.String(), stderr: stderr.String(), endpoints: seen, err: err}
+	code, err := runModels(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("runModels: %v", err)
+	}
+	return result{doc: checkDocument(t, "models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code, endpoints: seen}
 }
 
-// TestVerbStreamGuard: the guard both verbs share still names the verb that
+// TestVerbStreamGuard: the guard the verbs share still names the verb that
 // tripped it. A shared helper that reported a generic message would send the
 // reader looking through the wrong command's call sites.
 func TestVerbStreamGuard(t *testing.T) {
@@ -65,10 +74,16 @@ func TestVerbStreamGuard(t *testing.T) {
 		verb string
 		call func() error
 	}{
-		{"models", func() error { return runModels(context.Background(), modelsOptions{}) }},
-		{"survey", func() error { return runSurvey(surveyOptions{Root: t.TempDir()}) }},
+		{"models", func() error {
+			_, err := runModels(context.Background(), modelsOptions{})
+			return err
+		}},
+		{"configure", func() error {
+			_, err := runConfigure(context.Background(), configureOptions{ConfigPath: "config.toml"})
+			return err
+		}},
 		{"build", func() error {
-			_, err := runBuild(context.Background(), buildOptions{Root: t.TempDir()})
+			_, err := runBuild(context.Background(), buildOptions{VolumeRoot: t.TempDir()})
 			return err
 		}},
 	} {
@@ -93,11 +108,11 @@ func TestRunModelsSortedOutput(t *testing.T) {
 		Provider:  "solo",
 	}}, model.NewScriptedMock(nil, catalogue("zeta", "alpha", "mu")))
 
-	if got.err != nil {
-		t.Fatalf("runModels: %v", got.err)
+	if got.code != 0 || got.doc.Values["provider"] != "solo" {
+		t.Fatalf("models: exit %d, %v", got.code, got.doc.Values)
 	}
-	if want := "alpha\nmu\nzeta\n"; got.stdout != want {
-		t.Errorf("stdout: got %q, want %q", got.stdout, want)
+	if want := []string{"alpha", "mu", "zeta"}; !slices.Equal(got.ids(), want) {
+		t.Errorf("models: got %q, want %q", got.ids(), want)
 	}
 	if want := "models ok: solo count=3 elapsed="; !strings.HasPrefix(got.stderr, want) {
 		t.Errorf("stderr: got %q, want prefix %q", got.stderr, want)
@@ -115,18 +130,15 @@ func TestRunModelsSortedOutput(t *testing.T) {
 }
 
 // TestRunModelsEmptyCatalogue: a provider serving nothing is not an error —
-// stdout is empty and the summary reports count=0.
+// the list is empty and the summary reports count=0.
 func TestRunModelsEmptyCatalogue(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
 	}}, model.NewScriptedMock(nil, nil))
 
-	if got.err != nil {
-		t.Fatalf("runModels: %v", got.err)
-	}
-	if got.stdout != "" {
-		t.Errorf("stdout: got %q, want empty", got.stdout)
+	if got.code != 0 || len(got.ids()) != 0 {
+		t.Errorf("models: exit %d, ids %q; want done and none", got.code, got.ids())
 	}
 	if want := "models ok: solo count=0 elapsed="; !strings.HasPrefix(got.stderr, want) {
 		t.Errorf("stderr: got %q, want prefix %q", got.stderr, want)
@@ -143,14 +155,11 @@ func TestRunModelsFaultsAreWarnings(t *testing.T) {
 		Provider:  "good",
 	}}, model.NewScriptedMock(nil, catalogue("m1")))
 
-	if got.err != nil {
-		t.Fatalf("runModels: %v", got.err)
-	}
 	if !strings.Contains(got.stderr, `provider "bad" unavailable: read apiKeyFile:`) {
 		t.Errorf("stderr should warn about the faulted provider; got %q", got.stderr)
 	}
-	if got.stdout != "m1\n" {
-		t.Errorf("stdout: got %q, want %q", got.stdout, "m1\n")
+	if got.code != 0 || !slices.Equal(got.ids(), []string{"m1"}) {
+		t.Errorf("models: exit %d, ids %q; want m1", got.code, got.ids())
 	}
 }
 
@@ -164,17 +173,14 @@ func TestRunModelsWarningFaultKeepsProvider(t *testing.T) {
 		Faults:    []config.ProviderFault{{Name: "solo", Reason: reason, Warning: true}},
 	}}, model.NewScriptedMock(nil, catalogue("m1")))
 
-	if got.err != nil {
-		t.Fatalf("runModels: %v", got.err)
-	}
 	if !strings.Contains(got.stderr, `provider "solo": `+reason) {
 		t.Errorf("stderr should carry the warning; got %q", got.stderr)
 	}
 	if strings.Contains(got.stderr, "unavailable") {
 		t.Errorf("a survived fault must not be reported as unavailable; got %q", got.stderr)
 	}
-	if got.stdout != "m1\n" {
-		t.Errorf("stdout: got %q, want %q", got.stdout, "m1\n")
+	if got.code != 0 || !slices.Equal(got.ids(), []string{"m1"}) {
+		t.Errorf("models: exit %d, ids %q; want m1", got.code, got.ids())
 	}
 }
 
@@ -233,19 +239,20 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := run(t, tt.opts, model.NewScriptedMock(nil, catalogue("m1")))
 			if tt.wantErr != "" {
-				if got.err == nil {
-					t.Fatalf("expected error containing %q, got nil (stderr %q)", tt.wantErr, got.stderr)
+				items := got.doc.items("refusals")
+				if got.code != 1 || len(items) != 1 {
+					t.Fatalf("expected one refusal containing %q, got exit %d, %v (stderr %q)", tt.wantErr, got.code, items, got.stderr)
 				}
-				if !strings.Contains(got.err.Error(), tt.wantErr) {
-					t.Errorf("error: got %v, want substring %q", got.err, tt.wantErr)
+				if detail, _ := items[0]["detail"].(string); !strings.Contains(detail, tt.wantErr) || items[0]["check"] != "provider" {
+					t.Errorf("refusal: got %v, want a provider refusal containing %q", items[0], tt.wantErr)
 				}
 				if len(got.endpoints) != 0 {
 					t.Errorf("no client should be constructed when selection fails; got %d", len(got.endpoints))
 				}
 				return
 			}
-			if got.err != nil {
-				t.Fatalf("runModels: %v", got.err)
+			if got.code != 0 || got.doc.Values["provider"] != tt.wantChosen {
+				t.Fatalf("models: exit %d, %v", got.code, got.doc.Values)
 			}
 			if want := "models ok: " + tt.wantChosen + " "; !strings.Contains(got.stderr, want) {
 				t.Errorf("stderr: got %q, want substring %q", got.stderr, want)
@@ -264,31 +271,31 @@ func TestRunModelsSelectionErrorListsCandidates(t *testing.T) {
 		},
 	}}, model.NewScriptedMock(nil, nil))
 
-	if got.err == nil {
-		t.Fatal("expected a selection error, got nil")
+	items := got.doc.items("refusals")
+	if got.code != 1 || len(items) != 1 {
+		t.Fatalf("expected one selection refusal, got exit %d, %v", got.code, items)
 	}
-	if want := "available: alpha, beta"; !strings.Contains(got.err.Error(), want) {
-		t.Errorf("error: got %v, want substring %q", got.err, want)
+	if items[0]["key"] != "--provider" || !slices.Equal(anyStrings(items[0]["allowed"]), []string{"alpha", "beta"}) {
+		t.Errorf("refusal: got %v, want --provider with every entry allowed", items[0])
 	}
 }
 
-// TestRunModelsListErrorPropagates: a provider-side failure is returned, not
-// swallowed into an empty-but-successful listing.
+// TestRunModelsListErrorPropagates: a provider-side failure is reported
+// failed, not swallowed into an empty-but-successful listing.
 func TestRunModelsListErrorPropagates(t *testing.T) {
-	wantErr := errors.New("http 503: service unavailable")
 	client := model.NewScriptedMock(nil, catalogue("m1"))
-	client.SetError(wantErr)
+	client.SetError(errors.New("http 503: service unavailable"))
 
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
 	}}, client)
 
-	if !errors.Is(got.err, wantErr) {
-		t.Fatalf("error: got %v, want it to wrap %v", got.err, wantErr)
+	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
+		t.Fatalf("list failure: exit %d, failures %v; want it reported failed", got.code, failures)
 	}
-	if got.stdout != "" {
-		t.Errorf("stdout: got %q, want empty on failure", got.stdout)
+	if _, listed := got.doc.Values["models"]; listed {
+		t.Errorf("a failed listing reported models: %v", got.doc.Values)
 	}
 	if strings.Contains(got.stderr, "models ok:") {
 		t.Errorf("stderr must not report success after a list failure; got %q", got.stderr)

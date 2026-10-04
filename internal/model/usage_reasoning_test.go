@@ -15,7 +15,7 @@ import (
 // gated on one), and a BLOCKING request must NOT carry the field — its
 // mere presence is a protocol error with some providers.
 func TestEncodeRequestStreamOptions(t *testing.T) {
-	req := DefaultRequest("m", []Message{{Role: "user", Content: "hi"}}, testEffort)
+	req := chatRequest("m")
 
 	for _, tc := range []struct {
 		name   string

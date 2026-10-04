@@ -1,0 +1,33 @@
+# Where each imported prompt template and fragment came from: its path under
+# prompt-templates/ here, its path in the adjagent repository, and the adjagent
+# commit it was taken at. Each file's bytes are upstream's at that commit,
+# unchanged; asks' provenance test reads them back from that commit and
+# compares.
+files:
+  - file: classify.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/classify.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: overview-passage.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/overview-passage.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: paragraph.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/paragraph.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/classify-options-three.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/classify-options-three.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/classify-options-two.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/classify-options-two.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/letter-correction.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/letter-correction.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/overview-correction.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/overview-correction.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/overview-system.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/overview-system.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a
+  - file: fragments/reader-system.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/fragments/reader-system.tmpl.md
+    commit: e29bc3d97453c039995962994983f3330f428d7a

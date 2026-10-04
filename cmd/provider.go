@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -14,6 +14,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	toolresult "kbase/internal/result"
 )
 
 // defaultListTimeout bounds one catalogue round-trip when --timeout is not
@@ -90,7 +91,7 @@ func (o providerOptions) dial(ctx context.Context) (name string, client model.Cl
 	}
 	p, ok := o.Providers[name]
 	if !ok {
-		return "", nil, nil, nil, unresolvedProviderError(name, o.Faults)
+		return "", nil, nil, nil, unresolvedProviderError(name, o.Providers, o.Faults)
 	}
 
 	newClient := o.NewClient
@@ -106,24 +107,6 @@ func (o providerOptions) dial(ctx context.Context) (name string, client model.Cl
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	return name, newClient(model.Endpoint{Name: name, BaseURL: p.BaseURL, APIKey: p.APIKey}), callCtx, cancel, nil
-}
-
-// safeBaseURL is a provider's base URL with any userinfo removed.
-//
-// `https://user:pass@host/v1` is a legal providers.toml value, and run.json is
-// by design an artifact an operator shares as evidence — a credential in it
-// would travel with the run report. The API key never appears there (it lives
-// on the Endpoint and goes on the wire), so this closes the one remaining way
-// a secret could reach the record or the console. An unparseable value is
-// passed through: this process already dialed it, and nothing here could
-// establish which part of a non-URL is a credential.
-func safeBaseURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return raw
-	}
-	u.User = nil
-	return u.String()
 }
 
 // catalogueIDs fetches the provider's catalogue and returns the model ids in
@@ -167,26 +150,49 @@ func selectProviderName(flag, configured string, providers config.Providers) (st
 		}
 	}
 	if len(providers) == 0 {
-		return "", fmt.Errorf("no usable provider in %s — declare one there",
-			config.ProvidersFileName)
+		return "", itemError{toolresult.Item{Check: checkProvider, Path: config.ProvidersFileName,
+			Detail: fmt.Sprintf("no usable provider in %s — declare one there", config.ProvidersFileName)}}
 	}
-	return "", fmt.Errorf("no provider selected — pass --provider or set `provider` in %s (available: %s)",
-		config.ConfigFileName, strings.Join(providerNames(providers), ", "))
+	names := providerNames(providers)
+	return "", itemError{toolresult.Item{Check: checkProvider, Key: "--provider", Allowed: names,
+		Detail: fmt.Sprintf("no provider selected — pass --provider or set `provider` in %s (available: %s)",
+			config.ConfigFileName, strings.Join(names, ", "))}}
+}
+
+// checkProvider names a refusal of the provider choice.
+const checkProvider = "provider"
+
+// itemError is wrong input to a verb — a provider choice naming no usable
+// pool entry, a malformed flag — as the item its result refuses it with.
+type itemError struct{ item toolresult.Item }
+
+func (e itemError) Error() string { return e.item.Detail }
+
+// refusedOrFailed is a verb stopped on err: refused where err is wrong
+// input, failed otherwise.
+func refusedOrFailed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
+	var wrong itemError
+	if errors.As(err, &wrong) {
+		return refused(fields, wrong.item)
+	}
+	return failed(fields, err)
 }
 
 // unresolvedProviderError explains a name that is not in the pool,
 // distinguishing a provider that FAULTED out of it from one that was never
 // declared. Without the distinction a dropped provider reads exactly like a
 // typo, and the user goes looking for the wrong mistake.
-func unresolvedProviderError(name string, faults []config.ProviderFault) error {
+func unresolvedProviderError(name string, providers config.Providers, faults []config.ProviderFault) error {
+	item := toolresult.Item{Check: checkProvider, Key: "--provider", Allowed: providerNames(providers),
+		Detail: fmt.Sprintf("provider %q not found in %s", name, config.ProvidersFileName)}
 	for _, f := range faults {
 		// A warning fault belongs to a provider that loaded, so it can
 		// never be the reason one is missing from the pool.
 		if f.Name == name && !f.Warning {
-			return fmt.Errorf("provider %q failed to load: %s", name, f.Reason)
+			item.Detail = fmt.Sprintf("provider %q failed to load: %s", name, f.Reason)
 		}
 	}
-	return fmt.Errorf("provider %q not found in %s", name, config.ProvidersFileName)
+	return itemError{item}
 }
 
 // providerNames returns the pool's entry names, sorted — a stable list for

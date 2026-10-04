@@ -31,76 +31,42 @@ light = "`+lightModel+`"
 	}
 }
 
-// TestLoadConfigDevSwitches: [dev] is optional and every switch is off
-// until the file says otherwise. An absent table and an explicit `false`
-// must be the same state — a diagnostic that turns itself on because a
-// user never wrote the table down is a diagnostic nobody asked for.
-func TestLoadConfigDevSwitches(t *testing.T) {
+// TestLoadConfigReaderConcurrency: [asks] readerConcurrency is optional, and
+// a value under 1 is refused naming the key and never the value.
+func TestLoadConfigReaderConcurrency(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
-		want bool
+		want *int
+		ok   bool
 	}{
-		{"absent table", "provider = \"reaper\"\n", false},
-		{"empty table", "[dev]\n", false},
-		{"explicitly off", "[dev]\ntelemetry = false\n", false},
-		{"on", "[dev]\ntelemetry = true\n", true},
+		{"absent", "provider = \"reaper\"\n", nil, true},
+		{"set", "[asks]\nreaderConcurrency = 2\n", new(2), true},
+		{"zero", "[asks]\nreaderConcurrency = 0\n", nil, false},
+		{"negative", "[asks]\nreaderConcurrency = -3\n", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
+			if !tc.ok {
+				if err == nil || !strings.Contains(err.Error(), keyReaderConcurrency) || strings.Contains(err.Error(), "-3") {
+					t.Errorf("LoadConfig = %v, want a refusal naming %s and no value", err, keyReaderConcurrency)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("LoadConfig: %v", err)
 			}
-			if cfg.Dev.Telemetry != tc.want {
-				t.Errorf("Dev.Telemetry = %v, want %v", cfg.Dev.Telemetry, tc.want)
+			if got := cfg.Asks.ReaderConcurrency; (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Errorf("readerConcurrency = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestLoadConfigBuildSwitches: the two `kbase build` switches are declared,
-// so strict decoding accepts them — the point of declaring them is that a
-// config.toml carrying one is not refused as a typo.
-func TestLoadConfigBuildSwitches(t *testing.T) {
-	cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName,
-		"[dev]\nbuild_date = \"2026-01-01\"\ntree_plan = \""+TreePlanMechanical+"\"\n"))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Dev.BuildDate != "2026-01-01" {
-		t.Errorf("Dev.BuildDate = %q, want 2026-01-01", cfg.Dev.BuildDate)
-	}
-	mechanical, err := cfg.Dev.MechanicalTreePlan()
-	if err != nil || !mechanical {
-		t.Errorf("MechanicalTreePlan() = (%v, %v), want (true, nil)", mechanical, err)
-	}
-}
-
-// TestMechanicalTreePlan: the two shapes differ in whether a provider is
-// dialed, so a value that is neither is refused rather than resolved to
-// either one.
-func TestMechanicalTreePlan(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		value   string
-		want    bool
-		wantErr bool
-	}{
-		{"absent", "", false, false},
-		{"mechanical", TreePlanMechanical, true, false},
-		{"padded", "  " + TreePlanMechanical + "  ", true, false},
-		{"misspelled", "mechnical", false, true},
-		{"the other shape spelled out", "model", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := DevConfig{TreePlan: tc.value}.MechanicalTreePlan()
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("MechanicalTreePlan(%q) error = %v, want error: %v", tc.value, err, tc.wantErr)
-			}
-			if got != tc.want {
-				t.Errorf("MechanicalTreePlan(%q) = %v, want %v", tc.value, got, tc.want)
-			}
-		})
+// TestLoadConfigRefusesDev: there is no [dev] table; one fails strict load.
+func TestLoadConfigRefusesDev(t *testing.T) {
+	if _, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, "[dev]\ntelemetry = true\n")); err == nil || !strings.Contains(err.Error(), `"dev.telemetry"`) {
+		t.Errorf("LoadConfig over [dev] = %v, want the key refused", err)
 	}
 }
 
@@ -192,28 +158,6 @@ func TestLoadConfigFixture(t *testing.T) {
 		if _, ok := cfg.ModelFor(tier); !ok {
 			t.Errorf("fixture config.toml leaves the %s tier unmapped", tier)
 		}
-	}
-}
-
-// TestLoadConfigMechanicalFixture: the fixture the hermetic build recipes
-// point `--config-dir` at. It is the only configuration those runs read, so
-// if strict decoding ever stops accepting it, four integration recipes stop
-// with it — and they would say so in shell rather than here.
-func TestLoadConfigMechanicalFixture(t *testing.T) {
-	path := filepath.Join("..", "..", "test_data", "fixtures", "config-mechanical", ConfigFileName)
-	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatalf("the committed mechanical fixture no longer loads: %v", err)
-	}
-	mechanical, err := cfg.Dev.MechanicalTreePlan()
-	if err != nil {
-		t.Fatalf("the fixture's tree_plan: %v", err)
-	}
-	if !mechanical {
-		t.Error("the mechanical fixture does not select the mechanical tree plan")
-	}
-	if cfg.Dev.BuildDate == "" {
-		t.Error("the mechanical fixture pins no build date, so its recipes cannot assert determinism")
 	}
 }
 

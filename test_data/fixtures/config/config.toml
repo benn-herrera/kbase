@@ -1,5 +1,6 @@
 provider = "reaper"
 
 [models]
-heavy = "gemma-4-31B-it"
-light = "gemma-4-26B-A4B-it"
+heavy = "Qwen3.8-FlashNext"
+light = "Qwen3.8-FlashNext"
+#light = "Qwen3.6-35B-A3B"

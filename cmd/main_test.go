@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kbase/internal/pipeline"
+	"kbase/internal/atomicfile"
 )
 
 // executeRoot runs the REAL root command — flag parsing, PersistentPreRunE,
@@ -74,10 +74,9 @@ func TestRootLoggingWiring(t *testing.T) {
 		t.Fatalf("log file: %v", err)
 	}
 	// The log file is created like every other kbase output: permissive
-	// mode asked for, the user's umask deciding (ruled 2026-08-14).
-	// log.logFileMode is unexported and is the same ruled number as the one
-	// §9's table names, which is what this compares against.
-	want := os.FileMode(pipeline.CreateFileMode) &^ mask
+	// mode asked for, the user's umask deciding. log.logFileMode is
+	// unexported and is the same number as atomicfile's.
+	want := os.FileMode(atomicfile.CreateMode) &^ mask
 	if runtime.GOOS != "windows" && info.Mode().Perm() != want {
 		t.Errorf("log file mode: got %v, want %v", info.Mode().Perm(), want)
 	}
@@ -121,6 +120,41 @@ func TestRootLoggingFlagFailures(t *testing.T) {
 			}
 			if processLog.closer != nil {
 				t.Error("a failed logger build must leave no closer behind")
+			}
+		})
+	}
+}
+
+// TestExitStatus: an error no verb wrote a result for — a usage error among
+// them — is refused with its own result document; a verb's own exit code
+// passes through with nothing more written.
+func TestExitStatus(t *testing.T) {
+	_, _, usage := executeRoot(t, "build")
+	for _, tc := range []struct {
+		name     string
+		err      error
+		code     int
+		document bool
+	}{
+		{"success", nil, 0, false},
+		{"a verb's own exit", exitCode(3), 3, false},
+		{"a usage error", usage, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := exitStatus(tc.err, &stdout, &stderr); got != tc.code {
+				t.Errorf("exit = %d, want %d", got, tc.code)
+			}
+			if !tc.document {
+				if stdout.Len() != 0 {
+					t.Errorf("stdout = %q, want nothing", stdout.String())
+				}
+				return
+			}
+			doc := checkDocument(t, "build", stdout.String())
+			items := doc.items("refusals")
+			if doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != "usage" || items[0]["detail"] != tc.err.Error() {
+				t.Errorf("document = %+v, want one usage refusal naming %q", doc.Values, tc.err)
 			}
 		})
 	}

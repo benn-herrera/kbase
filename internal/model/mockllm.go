@@ -295,6 +295,8 @@ func (r *mockStreamReader) Final() Response {
 	if r.idx == len(r.pieces) {
 		out.FinishReason = r.full.FinishReason
 		out.Usage = r.full.Usage
+		out.UsageReported = r.full.UsageReported
+		out.StreamDone = true
 	}
 	return out
 }

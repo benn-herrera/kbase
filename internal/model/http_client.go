@@ -278,16 +278,13 @@ type wireMessage struct {
 	Content string `json:"content,omitempty"`
 }
 
-// wireRequest is the chat-completions request body. Temperature and
-// MaxTokens are always serialized — no `omitempty`. A zero value for these
-// fields is a real value (deterministic decode, zero-token cap
-// respectively), not a "use server default" sentinel. Callers that want
-// sane defaults use DefaultRequest.
+// wireRequest is the chat-completions request body. Temperature is always
+// serialized — no `omitempty`: 0 is deterministic decode, not a "use server
+// default" sentinel.
 type wireRequest struct {
 	Model              string             `json:"model"`
 	Messages           []wireMessage      `json:"messages"`
 	Temperature        float64            `json:"temperature"`
-	MaxTokens          int                `json:"max_tokens"`
 	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"`
 	Stream             bool               `json:"stream,omitempty"`
 	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
@@ -417,7 +414,6 @@ func encodeRequest(req Request, stream bool) ([]byte, error) {
 		Model:              req.Model,
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
 		Temperature:        req.Temperature,
-		MaxTokens:          req.MaxTokens,
 		ChatTemplateKwargs: req.ChatTemplateKwargs,
 		Stream:             stream,
 	}

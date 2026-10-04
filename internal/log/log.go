@@ -70,7 +70,7 @@ const DefaultLevel = LevelWarn
 // something went wrong; kbase is a documentation tool, not a keystore (ruled
 // 2026-08-14), and it never writes key material here (see config's providers
 // loader, which keeps key bytes out of every record). Same number as
-// pipeline.CreateFileMode, declared here because this package is below it.
+// atomicfile.CreateMode, declared here because log imports nothing of kbase.
 const logFileMode = 0o666
 
 // ParseLevel converts a --log-level value to a Level. Surrounding space is

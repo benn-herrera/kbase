@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"kbase/internal/atomicfile"
 )
 
 // newProvider is the provider name every update in this file sets, so a
@@ -17,8 +19,21 @@ const newProvider = "reaper"
 func update(t *testing.T, path string) {
 	t.Helper()
 	cfg := Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
-	if err := UpdateConfig(path, cfg); err != nil {
+	if _, err := UpdateConfig(path, cfg); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
+	}
+}
+
+// TestUpdateConfigLeavesTheSameValues: an update to the values the file
+// already holds writes nothing and says so.
+func TestUpdateConfigLeavesTheSameValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	cfg := Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
+	if wrote, err := UpdateConfig(path, cfg); err != nil || !wrote {
+		t.Fatalf("first update: wrote %t, %v", wrote, err)
+	}
+	if wrote, err := UpdateConfig(path, cfg); err != nil || wrote {
+		t.Errorf("second update: wrote %t, %v; want nothing written", wrote, err)
 	}
 }
 
@@ -103,7 +118,7 @@ func TestUpdateConfigCreatesDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat written config: %v", err)
 	}
-	if want := os.FileMode(configFilePerm) &^ mask; info.Mode().Perm() != want {
+	if want := os.FileMode(atomicfile.CreateMode) &^ mask; info.Mode().Perm() != want {
 		t.Errorf("mode = %v, want %v", info.Mode().Perm(), want)
 	}
 	dir, err := os.Stat(filepath.Dir(path))
@@ -253,7 +268,7 @@ heavy = "old-heavy"
 light = "old-light"
 `
 	path := writeFile(t, t.TempDir(), ConfigFileName, src)
-	err := UpdateConfig(path, Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}})
+	_, err := UpdateConfig(path, Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}})
 	if err == nil {
 		t.Fatal("multiline string shaped like a table: got nil error, want a refusal")
 	}
@@ -271,7 +286,7 @@ light = "old-light"
 func TestUpdateConfigRefusesMalformedFile(t *testing.T) {
 	const src = "[models\nbroken"
 	path := writeFile(t, t.TempDir(), ConfigFileName, src)
-	if err := UpdateConfig(path, Config{Provider: newProvider}); err == nil {
+	if _, err := UpdateConfig(path, Config{Provider: newProvider}); err == nil {
 		t.Fatal("malformed config.toml: got nil error, want a refusal")
 	}
 	if got := readBack(t, path); got != src {
@@ -313,37 +328,37 @@ func TestUpdateConfigFollowsSymlink(t *testing.T) {
 	}
 }
 
-// TestUpdateConfigLeavesDevTableAlone: [dev] is hand-added and hand-owned.
-// `kbase configure` edits the provider and [models] values; a switch the
-// user turned on must not be reverted, reformatted, or moved by a verb
-// that has no opinion about it.
-func TestUpdateConfigLeavesDevTableAlone(t *testing.T) {
+// TestUpdateConfigLeavesAsksTableAlone: [asks] is hand-added and hand-owned.
+// `kbase configure` edits the provider and [models] values; a setting the
+// user chose must not be reverted, reformatted, or moved by a verb that has
+// no opinion about it.
+func TestUpdateConfigLeavesAsksTableAlone(t *testing.T) {
 	const src = `provider = "old"
 
 [models]
 heavy = "old-heavy"
 light = "old-light"
 
-[dev]
-# local inference-timing diagnostics
-telemetry = true
+[asks]
+# one ask at a time on this box
+readerConcurrency = 1
 `
 	path := writeFile(t, t.TempDir(), ConfigFileName, src)
 	update(t, path)
 
-	_, devTable, found := strings.Cut(readBack(t, path), "\n[dev]\n")
+	_, asksTable, found := strings.Cut(readBack(t, path), "\n[asks]\n")
 	if !found {
-		t.Fatalf("the [dev] table did not survive the update:\n%s", readBack(t, path))
+		t.Fatalf("the [asks] table did not survive the update:\n%s", readBack(t, path))
 	}
-	if want := "# local inference-timing diagnostics\ntelemetry = true\n"; devTable != want {
-		t.Errorf("[dev] table = %q, want %q", devTable, want)
+	if want := "# one ask at a time on this box\nreaderConcurrency = 1\n"; asksTable != want {
+		t.Errorf("[asks] table = %q, want %q", asksTable, want)
 	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if !cfg.Dev.Telemetry {
-		t.Error("Dev.Telemetry was turned off by an update that does not own it")
+	if n := cfg.Asks.ReaderConcurrency; n == nil || *n != 1 {
+		t.Errorf("readerConcurrency = %v after an update that does not own it, want 1", n)
 	}
 }
 
@@ -360,7 +375,7 @@ func TestUpdateConfigLeavesPreviousOnFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	if err := UpdateConfig(path, Config{Provider: "new"}); err == nil {
+	if _, err := UpdateConfig(path, Config{Provider: "new"}); err == nil {
 		t.Fatal("UpdateConfig into a read-only directory: got nil error, want failure")
 	}
 	cfg, err := LoadConfig(path)

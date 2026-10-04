@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,12 +21,24 @@ const (
 	moeID   = "gemma4:31b-a4b"
 )
 
-// configureResult is what one runConfigure invocation produced: stderr,
-// the error, and the config directory it was pointed at.
+// configureResult is what one runConfigure invocation produced: its result
+// document, stderr, the exit code, and the config directory it was pointed
+// at.
 type configureResult struct {
+	doc    resultDoc
 	stderr string
 	dir    string
-	err    error
+	code   int
+}
+
+// refusal is the detail of the result's one refusal, "" where it has none.
+func (r configureResult) refusal(t *testing.T) map[string]any {
+	t.Helper()
+	items := r.doc.items("refusals")
+	if r.doc.Outcome != "refused" || r.code != 1 || len(items) != 1 {
+		t.Fatalf("outcome %s, exit %d, refusals %v: want one refusal", r.doc.Outcome, r.code, items)
+	}
+	return items[0]
 }
 
 // config reads back the config.toml the run was supposed to write. The
@@ -51,14 +64,21 @@ func (r configureResult) config(t *testing.T) (config.Config, bool) {
 func runConfig(t *testing.T, opts configureOptions, client *model.MockClient) configureResult {
 	t.Helper()
 	dir := t.TempDir()
-	var stderr bytes.Buffer
-	opts.Stderr = &stderr
+	var stdout, stderr bytes.Buffer
+	opts.Stdout, opts.Stderr = &stdout, &stderr
 	if opts.ConfigPath == "" {
 		opts.ConfigPath = config.ConfigPath(dir)
+	} else {
+		dir = filepath.Dir(opts.ConfigPath)
 	}
-	opts.NewClient = func(model.Endpoint) model.Client { return client }
-	err := runConfigure(context.Background(), opts)
-	return configureResult{stderr: stderr.String(), dir: dir, err: err}
+	if opts.NewClient == nil {
+		opts.NewClient = func(model.Endpoint) model.Client { return client }
+	}
+	code, err := runConfigure(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("runConfigure: %v", err)
+	}
+	return configureResult{doc: checkDocument(t, "configure", stdout.String()), stderr: stderr.String(), dir: dir, code: code}
 }
 
 // soloPool is the single-entry pool every fixture configures against, so
@@ -80,8 +100,8 @@ func TestRunConfigureAutoDetect(t *testing.T) {
 	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", denseID, moeID, "gemma-3-27b-it")))
 
-	if got.err != nil {
-		t.Fatalf("runConfigure: %v", got.err)
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 	cfg, written := got.config(t)
 	if !written {
@@ -90,6 +110,16 @@ func TestRunConfigureAutoDetect(t *testing.T) {
 	want := config.Config{Provider: "solo", Models: config.ModelMap{Heavy: denseID, Light: moeID}}
 	if cfg != want {
 		t.Errorf("config.toml = %+v, want %+v", cfg, want)
+	}
+	models, _ := got.doc.Values["models"].(map[string]any)
+	if got.doc.Values["provider"] != "solo" || models["heavy"] != denseID || models["light"] != moeID ||
+		!slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(got.dir)}) {
+		t.Errorf("result = %v, want the provider, both tiers and config.toml written", got.doc.Values)
+	}
+	again := runConfig(t, configureOptions{providerOptions: providerOptions{Providers: soloPool()}, ConfigPath: config.ConfigPath(got.dir)},
+		model.NewScriptedMock(nil, catalogue(denseID, moeID)))
+	if again.code != 0 || again.doc.Outcome != "unchanged" || len(anyStrings(again.doc.Values["written"])) != 0 {
+		t.Errorf("a second configure to the same values = %s, written %v; want unchanged with nothing written", again.doc.Outcome, again.doc.Values["written"])
 	}
 	for _, want := range []string{"configured:", "provider=solo",
 		config.TierHeavy + "=" + denseID, config.TierLight + "=" + moeID, config.ConfigPath(got.dir)} {
@@ -102,51 +132,56 @@ func TestRunConfigureAutoDetect(t *testing.T) {
 	}
 }
 
+// anyStrings is a decoded YAML list of strings.
+func anyStrings(v any) []string {
+	list, _ := v.([]any)
+	out := []string{}
+	for _, e := range list {
+		s, _ := e.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
 // TestRunConfigureAmbiguous: two dense candidates is the case the
-// appliance must refuse. The error names the tier, lists both, and shows
-// the flag that settles it — and nothing is written.
+// appliance must refuse. The refusal names the tier's key, lists both, and
+// gives the flag that settles it — and nothing is written.
 func TestRunConfigureAmbiguous(t *testing.T) {
 	const otherDense = "gemma-4-31b-instruct"
 	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue(denseID, otherDense, moeID)))
 
-	if got.err == nil {
-		t.Fatal("two dense candidates: got nil error, want an ambiguity failure")
-	}
-	msg := got.err.Error()
-	for _, want := range []string{"heavy tier is ambiguous", denseID, otherDense, "--model-map heavy=<id>"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error: got %v, want substring %q", got.err, want)
-		}
+	item := got.refusal(t)
+	if item["key"] != "models.heavy" || !slices.Equal(anyStrings(item["allowed"]), []string{otherDense, denseID}) ||
+		item["remedy"] != "kbase configure --model-map heavy=<id>" || !strings.Contains(item["detail"].(string), "heavy tier is ambiguous") {
+		t.Errorf("refusal = %v, want models.heavy with both candidates allowed", item)
 	}
 	if _, written := got.config(t); written {
 		t.Error("config.toml written despite an ambiguity failure")
 	}
 }
 
-// TestRunConfigureNoMatch: a provider with no gemma-4 at all fails and
-// lists what it did offer — including family members whose tier went
-// unrecognized, called out separately as the likeliest intended targets.
+// TestRunConfigureNoMatch: a provider with no gemma-4 model of a tier is
+// refused, offering the family members whose tier went unrecognized as the
+// likeliest intended targets, or the whole catalogue where there are none.
 func TestRunConfigureNoMatch(t *testing.T) {
 	const familyNoTier = "gemma-4-9b"
 	got := runConfig(t, soloOpts(),
 		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", familyNoTier, "gemma-3-27b-it")))
 
-	if got.err == nil {
-		t.Fatal("no gemma-4 tier models: got nil error, want a no-match failure")
+	items := got.doc.items("refusals")
+	if got.code != 1 || len(items) != 2 {
+		t.Fatalf("exit %d, refusals %v: want one per undetected tier", got.code, items)
 	}
-	msg := got.err.Error()
-	for _, want := range []string{
-		"no gemma-4 heavy-tier model detected",
-		"gemma-4 models with no recognized tier:",
-		familyNoTier,
-		"text-embedding-3-large",
-		"gemma-3-27b-it",
-		modelMapSyntax,
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error: got %v, want substring %q", got.err, want)
+	for i, tier := range configureTiers {
+		if items[i]["key"] != "models."+tier || !slices.Equal(anyStrings(items[i]["allowed"]), []string{familyNoTier}) ||
+			!strings.Contains(items[i]["detail"].(string), "no gemma-4 "+tier+"-tier model detected") {
+			t.Errorf("refusal %d = %v, want models.%s offering %s", i, items[i], tier, familyNoTier)
 		}
+	}
+	none := runConfig(t, soloOpts(), model.NewScriptedMock(nil, catalogue("text-embedding-3-large", "gemma-3-27b-it")))
+	if items := none.doc.items("refusals"); len(items) != 2 || !slices.Equal(anyStrings(items[0]["allowed"]), []string{"gemma-3-27b-it", "text-embedding-3-large"}) {
+		t.Errorf("refusals = %v, want the whole catalogue offered where no gemma-4 model is", items)
 	}
 	if _, written := got.config(t); written {
 		t.Error("config.toml written despite a no-match failure")
@@ -200,8 +235,8 @@ func TestRunConfigureModelMapOverrides(t *testing.T) {
 			opts.ModelMap = tt.modelMap
 			got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(tt.ids...)))
 
-			if got.err != nil {
-				t.Fatalf("runConfigure: %v", got.err)
+			if got.code != 0 {
+				t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 			}
 			cfg, written := got.config(t)
 			if !written {
@@ -221,16 +256,10 @@ func TestRunConfigureModelMapOverrides(t *testing.T) {
 // has no config directory to write into and must make one.
 func TestRunConfigureCreatesConfigDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "kbase")
-	var stderr bytes.Buffer
 	opts := soloOpts()
 	opts.ConfigPath = config.ConfigPath(dir)
-	opts.Stderr = &stderr
-	opts.NewClient = func(model.Endpoint) model.Client {
-		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
-	}
-	err := runConfigure(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("runConfigure: %v", err)
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(denseID, moeID))); got.code != 0 {
+		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 	if _, err := os.Stat(config.ConfigPath(dir)); err != nil {
 		t.Fatalf("config.toml in a created directory: %v", err)
@@ -248,16 +277,10 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 		t.Fatalf("seed config.toml: %v", err)
 	}
 
-	var stderr bytes.Buffer
 	opts := soloOpts()
 	opts.ConfigPath = path
-	opts.Stderr = &stderr
-	opts.NewClient = func(model.Endpoint) model.Client {
-		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
-	}
-	err := runConfigure(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("runConfigure: %v", err)
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(denseID, moeID))); got.code != 0 {
+		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 
 	body, err := os.ReadFile(path)
@@ -285,8 +308,8 @@ func TestRunConfigureListFailure(t *testing.T) {
 
 	got := runConfig(t, soloOpts(), client)
 
-	if got.err == nil {
-		t.Fatal("list failure: got nil error, want it propagated")
+	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
+		t.Fatalf("list failure: exit %d, failures %v; want it reported failed", got.code, failures)
 	}
 	if _, written := got.config(t); written {
 		t.Error("config.toml written despite a list failure")
@@ -296,25 +319,18 @@ func TestRunConfigureListFailure(t *testing.T) {
 // TestRunConfigureBadModelMapSkipsNetwork: flag syntax is checked before
 // anything is dialed, so a typo costs no round trip.
 func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
-	dir := t.TempDir()
-	var stderr bytes.Buffer
-
 	// The client seam is the network: a factory that fails the test is how
 	// "no round trip" becomes an assertion rather than a claim.
 	opts := soloOpts()
 	opts.ModelMap = []string{"heavy"}
-	opts.ConfigPath = config.ConfigPath(dir)
-	opts.Stderr = &stderr
 	opts.NewClient = func(model.Endpoint) model.Client {
 		t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
 		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
 	}
 
-	err := runConfigure(context.Background(), opts)
-	got := configureResult{stderr: stderr.String(), dir: dir, err: err}
-
-	if got.err == nil {
-		t.Fatal("malformed --model-map: got nil error, want a syntax failure")
+	got := runConfig(t, opts, nil)
+	if item := got.refusal(t); item["key"] != "--model-map" || item["check"] != "usage" {
+		t.Errorf("refusal = %v, want a usage refusal of --model-map", item)
 	}
 	if _, written := got.config(t); written {
 		t.Error("config.toml written despite a malformed --model-map")

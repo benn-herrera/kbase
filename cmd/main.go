@@ -1,5 +1,4 @@
-// Command kbase converts a human-targeted documentation corpus into an
-// agent-friendly knowledge base.
+// Command kbase builds a knowledge base from LaTeX and maintains it.
 //
 // This file is the composition root: it declares the root command, resolves
 // the configuration directory every verb draws on, builds the one logger the
@@ -10,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +19,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/log"
+	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
 
@@ -48,15 +49,21 @@ var processLog = struct {
 
 var rootCmd = &cobra.Command{
 	Use:   "kbase",
-	Short: "turn a documentation corpus into an agent-friendly knowledge base",
-	Long: `kbase is a standalone batch appliance. Point it at a documentation corpus
-and it produces a navigable Markdown knowledge base — entry point, domain
-index, subtopic index, leaf — with verbatim leaves, progressive routing
-summaries, and mechanically generated navigation links. It is not
-interactive and has no default action: each verb runs a fixed pipeline to
-completion and exits.`,
-	// No REPL, and no pipeline that a bare invocation could reasonably
-	// mean — so a bare invocation prints help rather than guessing.
+	Short: "build and maintain a knowledge base from LaTeX",
+	Long: `kbase builds a knowledge base (KB) from LaTeX and maintains it. Volume roots
+go in — the top .tex file of each paper — and a KB comes out at kb-root/
+beside the repository's .git: the Markdown document tree, its metadata layer
+and .index/, as kb_tools builds it. The maintenance subcommands then operate
+on the living KB: refresh and verify, the write API's ops, render-citation,
+the queries and the claim-graph sheet. build runs in the foreground; status
+and cancel observe and stop it. models and configure choose the provider and
+the models a build's inference goes to.
+
+Every subcommand writes one YAML document to stdout, its outcome first, and
+nothing else; stderr is for humans. The exit code follows the outcome: 0 for
+done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.`,
+	// No subcommand a bare invocation could reasonably mean, so it prints
+	// help rather than guessing.
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 
@@ -147,8 +154,30 @@ func main() {
 		}
 	}
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	os.Exit(exitStatus(err, os.Stdout, os.Stderr))
+}
+
+// exitCodes maps a result's outcome to the process exit code.
+var exitCodes = map[string]int{
+	toolresult.Done: 0, toolresult.Unchanged: 0, toolresult.Bounded: 0,
+	toolresult.Refused: 1, toolresult.Retry: 2, toolresult.Failed: 3, toolresult.Cancelled: 4,
+}
+
+// exitStatus is the process exit code for what Execute returned. An error no
+// verb wrote a result document for — a usage error among them — is refused
+// with its own document.
+func exitStatus(err error, stdout, stderr io.Writer) int {
+	if err == nil {
+		return 0
 	}
+	var code exitCode
+	if errors.As(err, &code) {
+		return int(code)
+	}
+	fmt.Fprintf(stderr, "error: %v\n", err)
+	outcome, fields := refused(nil, toolresult.Item{Check: checkUsage, Detail: err.Error()})
+	if eerr := toolresult.Emit(stdout, outcome, fields...); eerr != nil {
+		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)
+	}
+	return exitCodes[outcome]
 }

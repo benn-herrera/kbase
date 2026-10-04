@@ -16,17 +16,20 @@ mad-*/
 # tarballs that may be copied around the tree by a messy developer
 *.tgz
 
-TEMP_*.md
 .DS_Store
 
 .claude/agents/
 .claude/commands/
 .claude/adjagent/
 .claude/settings.local.json
+.claude/worktrees/
+.claude-temp/
+
+.opencode/agents/
+.opencode/commands/
+.opencode-temp/
 
 # agent set work areas
 mad-design/
 mad-review/
 guest-session/
-.claude-temp/
-.claude/worktrees/

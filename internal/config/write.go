@@ -3,9 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"kbase/internal/atomicfile"
 )
 
 const (
@@ -21,21 +21,8 @@ const (
 	// missing config directory: the ordinary permissive creation mode, left
 	// to the user's umask to narrow. config.toml holds choices, never
 	// credentials — the secrets live in the files providers.toml points at —
-	// so the directory is ordinary user data, not a keystore (ruled
-	// 2026-08-14). Same number as pipeline.CreateDirMode, declared here
-	// because this package is below it.
+	// so the directory is ordinary user data, not a keystore.
 	configDirPerm = 0o777
-
-	// configFilePerm is the mode the written config.toml is created with —
-	// same rule, and the same number as pipeline.CreateFileMode. It is a
-	// file the user is expected to open and hand-edit.
-	configFilePerm = 0o666
-
-	// configTempPrefix starts the name of the temporary file UpdateConfig
-	// writes before renaming it into place. It sits in the destination
-	// directory so the rename is within one filesystem, and therefore
-	// atomic.
-	configTempPrefix = ConfigFileName + ".tmp"
 
 	// keyProvider is the top-level key holding the provider choice; it
 	// mirrors Config's `toml` tag. The [models] table's keys are the tier
@@ -46,14 +33,6 @@ const (
 	// tableModels is the table holding the tier→model-id map; it mirrors
 	// Config's `toml` tag for Models.
 	tableModels = "models"
-
-	// keyBuildDate and keyTreePlan are the two [dev] switches the template
-	// below documents, mirroring DevConfig's `toml` tags the way keyProvider
-	// mirrors Config's (struct tags cannot reference constants). The line
-	// editor never rewrites them — `kbase configure` touches the provider
-	// and the tiers and nothing else.
-	keyBuildDate = "build_date"
-	keyTreePlan  = "tree_plan"
 
 	// commentGap separates a rewritten assignment from the trailing
 	// comment carried over from the line it replaced. The original spacing
@@ -73,34 +52,14 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 
 [` + tableModels + `]
-# ` + TierHeavy + `: taxonomy design, hierarchical summaries.
-# ` + TierLight + `: page-boundary adjudication.
+# ` + TierHeavy + `: the overview passage.
+# ` + TierLight + `: the claim graph's letter asks.
 %s
 %s
 
-# [dev] switches diagnose kbase itself. The table is absent by default and
-# every switch is off when it is. They live here rather than on the verbs
-# because a verb's flags are the user's surface; each one below names the
-# upstream cause that makes it necessary.
-#
-# [dev]
-# telemetry = true   # per-call inference timing, WHERE THE PROVIDER SENDS IT.
-#                    # It is recorded at info level, and the default log level
-#                    # is warn — so this switch shows nothing on its own; run
-#                    # with --log-level info to see it.
-# keep_temp_work = true  # keep <out>/temp-work/ after a run that SUCCEEDED.
-#                        # A failed or interrupted run keeps it either way.
-# ` + keyBuildDate + ` = "2026-01-01"  # pin the date stamped into every page's
-#                          # provenance receipt (default: today, UTC).
-#                          # CAUSE: the receipt is dated by design, so two runs
-#                          # either side of midnight deliver different bytes and
-#                          # byte-determinism becomes untestable.
-# ` + keyTreePlan + ` = "` + TreePlanMechanical + `"  # take the tree plan from the source's own file
-#                          # structure and dial no provider at all — no model
-#                          # call anywhere, so no summary prose either.
-#                          # CAUSE: taxonomy design is a no-fallback model seam,
-#                          # so a hermetic end-to-end run has no other way in.
-#                          # The run records that it took it.
+# [asks]
+# readerConcurrency = 4  # asks of one group in flight once its first has
+#                        # returned; a whole number, at least 1.
 `
 
 // UpdateConfig sets the provider choice and the [models] tiers in the
@@ -125,10 +84,13 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // values, nothing is written and the caller gets an error. Silent
 // corruption of a file the user edits by hand is the one outcome not on
 // offer.
-func UpdateConfig(path string, cfg Config) error {
+//
+// It reports whether it wrote: a file already holding the values is left as
+// it stands.
+func UpdateConfig(path string, cfg Config) (bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("config: read %s: %w", path, err)
+		return false, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
 	// An existing-but-empty file is treated as absent: there is nothing to
@@ -138,11 +100,14 @@ func UpdateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(before) != "" {
 		updated = updateLines(before, cfg)
 	}
+	if updated == before {
+		return false, nil
+	}
 
 	if err := verifyUpdate(before, updated, cfg); err != nil {
-		return fmt.Errorf("config: refusing to rewrite %s: %w", path, err)
+		return false, fmt.Errorf("config: refusing to rewrite %s: %w", path, err)
 	}
-	return installConfig(path, updated)
+	return true, installConfig(path, updated)
 }
 
 // freshConfig renders the commented template for a config.toml that does
@@ -277,73 +242,12 @@ func installConfig(path, content string) error {
 	}
 
 	// A config.toml symlinked into a dotfiles repo is a common setup for
-	// exactly this kind of file, and renaming over the link would replace
-	// it with a regular file — leaving the dotfiles copy stale, and the
-	// user's next `git status` there showing nothing. So the write targets
-	// what the link resolves to. A path that does not resolve is its own
-	// target: that is the ordinary case of a file being created.
-	target := path
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		target = resolved
-	}
-
-	// The temp file sits beside the RESOLVED target, so the rename stays
-	// within one filesystem even when the link crosses one.
-	tmpDir := filepath.Dir(target)
-	tmp, err := createTemp(tmpDir, configTempPrefix)
-	if err != nil {
-		return fmt.Errorf("config: create temp file in %s: %w", tmpDir, err)
-	}
-	// Removing the temp file is a no-op once the rename has consumed it,
-	// and the cleanup that matters on every failure path below.
-	defer os.Remove(tmp.Name())
-
-	if _, err := tmp.WriteString(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("config: write %s: %w", path, err)
-	}
-	// The rename is atomic against a concurrent reader with or without
-	// this, but not against a crash: without the flush, the new name can
-	// come back pointing at an empty file. One sync closes the gap between
-	// what the doc comment above claims and what the write does.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("config: write %s: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("config: write %s: %w", path, err)
-	}
-	// No chmod before the rename: the temp file was already created at
-	// configFilePerm (see createTemp), which is the mode config.toml is
-	// meant to have.
-	if err := os.Rename(tmp.Name(), target); err != nil {
-		return fmt.Errorf("config: install %s: %w", path, err)
+	// exactly this kind of file; the write follows the link, so the dotfiles
+	// copy is the one rewritten and the link survives.
+	if err := atomicfile.Write(path, []byte(content), nil); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	return nil
-}
-
-// createTemp creates a new file in dir whose name starts with prefix, opened
-// for writing, at configFilePerm.
-//
-// It exists because os.CreateTemp hard-codes 0600 and the fix is not a chmod:
-// chmod does not consult the umask, so chmodding to 0666 would install a
-// world-writable config.toml. The mode has to be asked for at CREATE time,
-// and asking means naming the file ourselves. O_EXCL plus a random suffix is
-// what os.CreateTemp does for the same reason — two `kbase configure`
-// processes must never open the same name.
-//
-// pipeline.writeAtomic carries the twin of this function. They cannot be one
-// declaration: pipeline imports config, so the dependency only runs that way.
-func createTemp(dir, prefix string) (*os.File, error) {
-	for range 1000 {
-		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36))
-		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, configFilePerm)
-		if errors.Is(err, fs.ErrExist) {
-			continue
-		}
-		return f, err
-	}
-	return nil, fmt.Errorf("no unused %s* name in %s", prefix, dir)
 }
 
 // assign renders one `key = "value"` line. Go's quoting and TOML's basic
