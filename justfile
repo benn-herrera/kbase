@@ -146,7 +146,8 @@ AGENTS_DIR := ".claude" / file_stem(AGENTS_REPO)
 agents:
   @mkdir -p "{{parent_directory(AGENTS_DIR)}}"
   @[[ -d "{{AGENTS_DIR}}" ]] && git -C "{{AGENTS_DIR}}" pull || git -C {{parent_directory(AGENTS_DIR)}} clone "{{AGENTS_REPO}}"
-  just --justfile "{{AGENTS_DIR}}/justfile" install "$(pwd)"
+  just --justfile "{{AGENTS_DIR}}/justfile" install "$(pwd)" --harness=claude
+  just --justfile "{{AGENTS_DIR}}/justfile" install "$(pwd)" --harness=opencode --model-tier-map=all=inherit
 
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
