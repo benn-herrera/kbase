@@ -8,21 +8,23 @@ import logging
 import re
 import sys
 from collections import Counter, deque
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from kb_tools import kb_index_lib
+from kb_tools import kb_index_lib, kb_load, kb_schema
 from kb_tools.kb_claimgraph import graph, inventory, prose, shortlist, tree
 from kb_tools.kb_claimgraph.tree import strip_markers, unquote
 from latex_numbering import volume_argument, walk
 from number_match import NAME_FORMS, NAME_NUMBER_RE, PageBlock, match_numbers, unwalked_blocks
+from statement_match import match_statements
 
 logger = logging.getLogger(__name__)
 
 SCRATCH = Path(__file__).resolve().parents[2] / ".claude-temp"
 THRESHOLD = 0.30
+STATEMENT_THRESHOLD = 0.6
 TOP_K = 5
 
 MARKER_RE = re.compile(r"<!-- claim-quality: (clm-[a-z0-9]+) -->")
@@ -64,8 +66,8 @@ EDGE_HEADER = (
     "evidence_basis",
     "pair_class",
 )
-EXACT_CLASSES = ("number", "label")
-PAIR_CLASSES = ("both exact", "one exact", "both cosine")
+MATCH_CLASSES = ("number", "label", "statement", "cosine")
+PAIR_CLASSES = tuple(f"{a} + {b}" for i, a in enumerate(MATCH_CLASSES) for b in MATCH_CLASSES[i:])
 COLUMN = {name: index for index, name in enumerate(EDGE_HEADER)}
 
 
@@ -100,6 +102,24 @@ def read_tree(kb_root: Path) -> tree.Tree:
     if not documents.documents:
         raise ValueError("no KB document under it")
     return documents
+
+
+def format_refusal(kb_root: Path) -> str | None:
+    """Why the installed kb_tools cannot read ``kb_root`` as it stands, else None.
+
+    Its readers take a KB at an older format for one declaring no claims, so an older stamp is refused here rather
+    than measured as empty.
+    """
+    try:
+        kb_format = kb_load.open_kb(kb_root)
+    except kb_load.FormatRefusal as refusal:
+        return str(refusal)
+    if kb_format.current:
+        return None
+    return (
+        f"the KB's metadata format is {kb_format.version} and the installed kb_tools reads {kb_schema.FORMAT_VERSION}: "
+        "run `kbase refresh` on a copy of its repository and compare the copy; never refresh the fixture itself"
+    )
 
 
 def write_tsv(out: Path, name: str, header: Iterable[str], rows: Iterable[Iterable[str]]) -> None:
@@ -182,11 +202,42 @@ def reference_section(text: str, claim_id: str) -> str:
     return "\n".join(lines[start:end])
 
 
+def marked_statement(document: tree.Document, claim_id: str, *, sites: inventory.Inventory, readable: prose.Readable) -> Span | None:
+    """The statement ``claim_id``'s Tier-2 marker marks in ``document``, else None.
+
+    The labelled block, math fence or prose paragraph holding the marker's line (the outermost, where they nest);
+    else the first of them to open after it, before the next heading or marker — a marker standing on its own line
+    above what it marks. None where the document carries no such marker or nothing follows it.
+    """
+    text = document.text
+    line = next((text.count("\n", 0, offset) for offset, ids in kb_index_lib.tier2_markers(text) if claim_id in ids), None)
+    if line is None:
+        return None
+    lines = text.splitlines()
+    stop = next(
+        (n for n in range(line + 1, len(lines)) if HEADING_RE.match(lines[n]) or kb_index_lib.tier2_markers(lines[n])),
+        len(lines),
+    )
+    extents = sorted(
+        [(block.start, block.end) for block in sites.blocks if block.document == document.path]
+        + [(fence.start, fence.end) for fence in sites.fences if fence.document == document.path]
+        + [(min(paragraph.lines), max(paragraph.lines) + 1) for paragraph in readable.render.paragraphs],
+        key=lambda extent: (extent[0], -extent[1]),
+    )
+    found = next((extent for extent in extents if extent[0] <= line < extent[1]), None)
+    found = found or next((extent for extent in extents if line < extent[0] < stop), None)
+    return None if found is None else Span(document.path, *found)
+
+
 @dataclass(frozen=True)
 class Reference:
     claims: dict[str, Claim]
     edges: list[tuple[str, str]]
     relations: Counter
+    #: Each claim's marked statements, plain text, one per citing page where its marker locates one.
+    statements: dict[str, tuple[str, ...]]
+    #: The claims whose marker stands on some citing page.
+    marked: frozenset[str]
 
 
 def read_reference(kb_root: Path, failures: list[str]) -> Reference:
@@ -194,6 +245,23 @@ def read_reference(kb_root: Path, failures: list[str]) -> Reference:
     if not state.claim_entries:
         raise ValueError("no claim entry in its registers: nothing to compare against")
     documents = read_tree(kb_root)
+    sites = inventory.scan(documents)
+    marked_rows = [row for row in kb_index_lib.build_cites_records(state) if row["tier2_marked"]]
+    readable = {
+        path: prose.readable(documents.documents[path], sites) for path in sorted({row["leaf_path"] for row in marked_rows})
+    }
+    statements: dict[str, list[str]] = {}
+    for row in marked_rows:
+        path, claim_id = row["leaf_path"], row["claim_id"]
+        span = attempt(
+            failures,
+            f"reference {claim_id} statement in {path}",
+            lambda: marked_statement(documents.documents[path], claim_id, sites=sites, readable=readable[path]),
+            None,
+        )
+        if span is not None:
+            body = "\n".join(documents.documents[path].text.splitlines()[span.start : span.end])
+            statements.setdefault(claim_id, []).append(plain_text(body))
     hosts = hosting(documents, failures)
     claims = {}
     for entry in state.claim_entries:
@@ -214,7 +282,13 @@ def read_reference(kb_root: Path, failures: list[str]) -> Reference:
             if edge.relation == "depends" and edge.target_kind == "claim"
         }
     )
-    return Reference(claims=claims, edges=edges, relations=relations)
+    return Reference(
+        claims=claims,
+        edges=edges,
+        relations=relations,
+        statements={claim_id: tuple(texts) for claim_id, texts in statements.items()},
+        marked=frozenset(row["claim_id"] for row in marked_rows),
+    )
 
 
 # --- our KB ----------------------------------------------------------------------------
@@ -442,13 +516,14 @@ def paper_scope(a: set[str], b: set[str], ours: dict[str, Claim]) -> str:
     return "same paper" if papers else "cross paper"
 
 
-def pair_class(source: str, target: str, exact: set[str]) -> str:
-    """How an edge's ends were matched; an end no class matched counts as cosine, the class last tried."""
-    return PAIR_CLASSES[2 - (source in exact) - (target in exact)]
+def pair_class(source: str, target: str, fixed: Mapping[str, str]) -> str:
+    """The classes that matched an edge's two ends, in class order; an end ``fixed`` lacks counts as cosine."""
+    ends = sorted((fixed.get(source, "cosine"), fixed.get(target, "cosine")), key=MATCH_CLASSES.index)
+    return " + ".join(ends)
 
 
-def recall(*, mapped: dict[str, set[str]], exact: set[str], reference: Reference, ours: Ours) -> list[tuple[str, ...]]:
-    """One row per reference edge; ``exact`` holds the reference claims matched by an exact class."""
+def recall(*, mapped: dict[str, set[str]], fixed: Mapping[str, str], reference: Reference, ours: Ours) -> list[tuple[str, ...]]:
+    """One row per reference edge; ``fixed`` holds the class of each reference claim matched by a class before cosine."""
     rows = []
     for source, target in reference.edges:
         a, b = mapped[source], mapped[target]
@@ -476,7 +551,7 @@ def recall(*, mapped: dict[str, set[str]], exact: set[str], reference: Reference
                 document_level(a, b, ours=ours.claims, depends=ours.depends, references=ours.references) if source_miss else "",
                 evidence,
                 "; ".join(marks + titles),
-                pair_class(source, target, exact),
+                pair_class(source, target, fixed),
             )
         )
     return rows
@@ -518,6 +593,12 @@ def main() -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     threshold: float = args.threshold
 
+    for flag, kb_root in (("--reference", args.reference), ("--ours", args.ours)):
+        refusal = format_refusal(kb_root)
+        if refusal is not None:
+            print(f"{flag} {str(kb_root)!r}: {refusal}", file=sys.stderr)
+            return 1
+
     failures: list[str] = []
     try:
         reference = read_reference(args.reference, failures)
@@ -540,11 +621,7 @@ def main() -> int:
         return 2
     walked = {volume: walk(root) for volume, root in zip(volume_dirs, roots)}
     dangling = [edge for edge in reference.edges if edge[0] not in reference.claims or edge[1] not in reference.claims]
-    reference = Reference(
-        claims=reference.claims,
-        edges=[edge for edge in reference.edges if edge not in dangling],
-        relations=reference.relations,
-    )
+    reference = replace(reference, edges=[edge for edge in reference.edges if edge not in dangling])
 
     bags = {("r", key): tokens(c.title + "\n" + c.text) for key, c in reference.claims.items()}
     bags |= {("o", key): tokens(c.title + "\n" + c.text) for key, c in ours.claims.items()}
@@ -564,16 +641,33 @@ def main() -> int:
         walked={volume: numbering.environments for volume, numbering in walked.items()},
     )
     exact = {rid: outcome.node_id for rid, outcome in numbered.items() if outcome.node_id in ours.claims}
-    match_class = {rid: "number" if rid in exact else "cosine" for rid in scored}
+    taken = set(exact.values())
+    by_statement = match_statements(
+        {
+            rid: [frozenset(tokens(text)) for text in texts]
+            for rid, texts in reference.statements.items()
+            if rid in reference.claims and rid not in exact
+        },
+        {
+            oid: frozenset(tokens(_span_text(claim.spans[0], ours.texts)))
+            for oid, claim in ours.claims.items()
+            if claim.spans and oid not in taken
+        },
+        threshold=STATEMENT_THRESHOLD,
+    )
+    matched_at = exact | {rid: oid for rid, (oid, _) in by_statement.matches.items()}
+    fixed = {rid: "number" if rid in exact else "statement" for rid in matched_at}
+    match_class = {rid: fixed.get(rid, "cosine") for rid in scored}
 
     def mapping(at: float) -> dict[str, set[str]]:
-        """Exact matches as they stand; every other reference claim matched by cosine at ``at``."""
+        """Number and statement matches as they stand; every other reference claim matched by cosine at ``at``."""
         return {
-            rid: {exact[rid]} if rid in exact else {oid for oid, score in pairs if score >= at} for rid, pairs in scored.items()
+            rid: {matched_at[rid]} if rid in matched_at else {oid for oid, score in pairs if score >= at}
+            for rid, pairs in scored.items()
         }
 
     mapped = mapping(threshold)
-    edge_rows = recall(mapped=mapped, exact=set(exact), reference=reference, ours=ours)
+    edge_rows = recall(mapped=mapped, fixed=fixed, reference=reference, ours=ours)
     classes, split = tally(edge_rows)
 
     match_rows, candidate_rows = [], []
@@ -629,17 +723,18 @@ def main() -> int:
     )
     top1 = sorted(pairs[0][1] for pairs in scored.values() if pairs)
     missed_rows = [row for row in edge_rows if row[COLUMN["evidence"]]]
+    pair_columns = [pair for pair in PAIR_CLASSES if any(row[COLUMN["pair_class"]] == pair for row in edge_rows)]
 
     def by_pair_class(
         rows: list[tuple[str, ...]], *, heading: str, value: Callable[[tuple[str, ...]], str], values: Iterable[str]
     ) -> list[str]:
-        """A table of each row's ``value`` against the pair class of the row's edge."""
+        """A table of each row's ``value`` against the pair class of the row's edge, over the pair classes edges carry."""
         cells = Counter((value(row), row[COLUMN["pair_class"]]) for row in rows)
         return [
-            f"| {heading} | " + " | ".join(PAIR_CLASSES) + " |",
-            "|" + "---|" * (len(PAIR_CLASSES) + 1),
-            *[f"| {value} | " + " | ".join(str(cells[(value, pair)]) for pair in PAIR_CLASSES) + " |" for value in values],
-            "| total | " + " | ".join(str(sum(1 for row in rows if row[COLUMN["pair_class"]] == pair)) for pair in PAIR_CLASSES) + " |",
+            f"| {heading} | " + " | ".join(pair_columns) + " |",
+            "|" + "---|" * (len(pair_columns) + 1),
+            *[f"| {value} | " + " | ".join(str(cells[(value, pair)]) for pair in pair_columns) + " |" for value in values],
+            "| total | " + " | ".join(str(sum(1 for row in rows if row[COLUMN["pair_class"]] == pair)) for pair in pair_columns) + " |",
         ]
 
     block_count = sum(1 for block in ours.page_blocks if block.volume in walked)
@@ -672,11 +767,41 @@ def main() -> int:
         sum(len(LABEL_SPAN_RE.findall(c.text)) for c in reference.claims.values()),
         sum(len(LABEL_SPAN_RE.findall(c.text)) for c in ours.claims.values()),
     )
+    after_number = [rid for rid in scored if rid not in exact]
+
+    def statement_line(rid: str) -> str:
+        if rid in by_statement.matches:
+            oid, score = by_statement.matches[rid]
+            result = f"-> {oid} at {score:.2f}"
+        elif rid in by_statement.best:
+            best = by_statement.best[rid]
+            result = f"best {best:.2f}, " + ("its node taken at a higher overlap" if best >= STATEMENT_THRESHOLD else "below the threshold")
+        elif rid in reference.marked:
+            result = "marker found, no statement located after it"
+        else:
+            result = "no marker on any citing page"
+        return f"  {rid}  {result}  ({reference.claims[rid].title})"
+
+    statement_section = [
+        f"### statement — token-set overlap (Jaccard) of marked statements at threshold {STATEMENT_THRESHOLD}, one-to-one: "
+        f"matched {len(by_statement.matches)} of the {len(after_number)} reference claims the number class left",
+        "",
+        f"reference claims with a marked statement located: {sum(1 for rid in reference.claims if rid in reference.statements)} "
+        f"of {len(reference.claims)}; of those the number class left: {sum(1 for rid in after_number if rid in reference.statements)}",
+        f"best overlap per reference claim with a statement, sorted: {', '.join(f'{s:.2f}' for s in sorted(by_statement.best.values()))}",
+        "ties (a pair taken while another at the same overlap, sharing an end, was open):",
+        *(
+            [f"  {tie.reference} -> {tie.node} at {tie.overlap:.2f}; passed over {tie.rivals}" for tie in by_statement.ties]
+            or ["  none"]
+        ),
+        "the reference claims the number class left (no statement: falls through to cosine):",
+        *[statement_line(rid) for rid in after_number],
+    ]
 
     sweep = []
     for at in SWEEP:
         at_mapped = mapping(at)
-        at_classes, at_split = tally(recall(mapped=at_mapped, exact=set(exact), reference=reference, ours=ours))
+        at_classes, at_split = tally(recall(mapped=at_mapped, fixed=fixed, reference=reference, ours=ours))
         sweep.append(
             f"| {at:.2f} | {sum(1 for kept in at_mapped.values() if kept)} | "
             + " | ".join(str(at_classes.get(name, 0)) for name in RECALL_CLASSES)
@@ -700,7 +825,8 @@ def main() -> int:
         *([f"  {line}" for line in sorted(failures)] or ["  none"]),
         *[f"  reference edge {s} -> {t}: an end is not a reference claim; not compared" for s, t in dangling],
         "",
-        f"## Claim matching — number, then label, then TF-IDF cosine over title+statement at threshold {threshold}",
+        "## Claim matching — number, then label, then statement overlap, "
+        f"then TF-IDF cosine over title+statement at threshold {threshold}",
         "",
         f"matched: {len(matched)} of {len(reference.claims)}; unmatched {len(reference.claims) - len(matched)}",
         f"matched by class: {dict(sorted(Counter(match_class[rid] for rid in matched).items()))}",
@@ -709,6 +835,8 @@ def main() -> int:
         "",
         f"### label — not attempted: reference claim statements carry {label_spans[0]} label spans (<span id=…>), "
         f"ours {label_spans[1]}; the class needs both sides",
+        "",
+        *statement_section,
         "",
         "### cosine, and the matches as a whole",
         "",
@@ -761,7 +889,7 @@ def main() -> int:
             missed_rows, heading="evidence", value=lambda row: row[COLUMN["evidence"]], values=(PRESENT, NONE_FOUND, UNDETERMINED)
         ),
         "",
-        "## Threshold sensitivity — the cosine class only; exact matches held",
+        "## Threshold sensitivity — the cosine class only; number and statement matches held",
         "",
         "| threshold | matched | " + " | ".join(RECALL_CLASSES) + " | marked |",
         "|" + "---|" * (len(RECALL_CLASSES) + 3),

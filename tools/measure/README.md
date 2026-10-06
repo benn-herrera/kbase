@@ -4,9 +4,9 @@ Two read-only measurements of a built KB against a reference KB of the same corp
 hand-curated one). Python 3.11+, stdlib only; kb_tools is imported from `PYTHONPATH` and its readers
 are used, not reimplemented. Beside them sit the theorem-number walker over a volume's LaTeX and its
 one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
-this directory, and `number_match.py`, the comparison's number class, which imports only the
-walker. The tests of the walker and the number class run with
-`python3 -m unittest discover -s tools/measure`.
+this directory, `number_match.py`, the comparison's number class, which imports only the
+walker, and `statement_match.py`, its statement class, which imports nothing. The tests of the
+walker and both classes run with `python3 -m unittest discover -s tools/measure`.
 
 ```
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/compare_to_pristine.py \
@@ -20,8 +20,9 @@ PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/measure_unmarked_shortl
 In this repository `<dir holding kb_tools/>` is `.claude/agents`, the installed agent set the
 recipes use (`just measure-kb-roots` sets it). Run the shortlist measurement after the comparison,
 on the same `--ours`: it reads the comparison's `edges.tsv`. Both read a KB at the metadata format
-the installed kb_tools reads; a KB at an older format is not refused but reads as one declaring no
-claims, so migrate a copy first (kb_tools' `kb_load.land_migration`).
+the installed kb_tools reads. The comparison refuses any other `kb-format` stamp on either side;
+the shortlist measurement does not, and reads an older KB as one declaring no claims. Migrate a copy
+first (`kbase refresh` on a copy of the repository, never on the fixture itself).
 
 ## Privacy
 
@@ -40,7 +41,8 @@ never results.
   `.claude-temp/` or naming an existing file, and `--volume-root` given a number of times other than
   the number of volumes `--ours`' entry point lists. Nothing is written.
 - **1**: an input cannot be read as a whole. This covers a kb-root holding no KB document, a
-  reference with no claim entry, a tree or graph the kb_tools readers refuse, and an `edges.tsv`
+  kb-root of the comparison with no entry point or whose `kb-format` stamp is not the one the
+  installed kb_tools reads (the message names both versions), a reference with no claim entry, a tree or graph the kb_tools readers refuse, and an `edges.tsv`
   lacking the columns below. Nothing is written.
 
 One bad document or node does not stop either script. The comparison logs it, leaves that claim out
@@ -53,8 +55,8 @@ ties are broken by id, and counts are listed most first, then by name.
 
 ## How a claim of the reference is matched
 
-Three classes are tried in order, and a reference claim takes the first that fires. `number` and
-`label` are the **exact** classes.
+Four classes are tried in order, and a reference claim takes the first that fires. `number`,
+`label` and `statement` match one-to-one; `cosine` may match a claim to several nodes.
 
 1. **`number`**, only with `--volume-root`. A reference title that opens with a result word and a
    number (`Theorem 5.11 — …`, `Conjecture C.5.1: …`) is keyed by the word and the number's numeric
@@ -67,7 +69,17 @@ Three classes are tried in order, and a reference claim takes the first that fir
 2. **`label`** would pair a reference claim and a node carrying the same `\label` identifier. It is
    not implemented. `summary.md` counts the `<span id="…">` spans each side's claim text carries,
    so a reference that carries labels shows it there.
-3. **`cosine`**, for every reference claim the exact classes did not match. Each claim, on both
+3. **`statement`**: a reference claim's marked statement against our node's statement, by
+   token-set overlap (Jaccard over each side's words, read as for `cosine` below) at or above 0.6
+   (`STATEMENT_THRESHOLD`). A reference claim's marked statements are read from each leaf citing
+   it whose Tier-2 marker names it (kb_index_lib's cites rows): the labelled block, math fence or
+   prose paragraph holding the marker's line, else the first of them to open after it before the
+   next heading or marker. Any one of a claim's statements may match. Our node's statement is its
+   first span (below), without its proofs. Nodes the number class took are not offered. Pairs are
+   taken in descending overlap, each only while both ends are free; a pair taken while another at
+   the same overlap and sharing an end was open is listed as a tie. A reference claim with no
+   marker on any citing page has no statement and falls through to `cosine`.
+4. **`cosine`**, for every reference claim no earlier class matched. Each claim, on both
    sides, becomes a bag of words: its title plus its statement, tags and markers removed,
    lower-cased, words of two or more letters, less kb_tools' `shortlist.STOPWORDS`. The bags are
    weighted with `shortlist.idf` and `shortlist.weigh` over one shared vocabulary, then compared by
@@ -94,9 +106,9 @@ applies:
 - `no block node at all for that environment`: the block is there, but the claim graph holds no
   node for it.
 
-- **A reference claim's statement** is read from each leaf whose frontmatter lists it. It runs from
-  the claim's `<!-- claim-quality: … -->` marker to the next heading or marker. Without a marker, it
-  is the leaf's opening section.
+- **A reference claim's text for `cosine`** is read from each leaf whose frontmatter lists it. It
+  runs from the claim's `<!-- claim-quality: … -->` marker to the next heading or marker. Without a
+  marker, it is the leaf's opening section.
 - **A node of ours** is read through `graph.read`. Its spans are its labelled block plus every proof
   of that block, its equation fence, or its prose paragraph (`prose.readable`). Without a paragraph,
   the span is just its marker line.
@@ -114,7 +126,7 @@ whose `class`, `score` and other ours cells are empty.
 | Column | Meaning |
 |---|---|
 | `ref_id`, `ref_title` | the reference claim |
-| `class` | the class that matched it: `number` or `cosine` |
+| `class` | the class that matched it: `number`, `statement` or `cosine` |
 | `score` | the pair's cosine, 3 decimals, whatever the class |
 | `ours_id`, `ours_kind`, `ours_title`, `ours_document` | the node of ours; `ours_kind` is `block`, `equation` or `prose` |
 
@@ -150,7 +162,7 @@ matches and B's matches are the nodes of ours each matched.
 | `document_level` | for `references only` and `nothing`: the verdict loosened on B's side to every node of ours hosted in a document hosting a match of B (`depends`, `depends reversed`, `references`, `references reversed`, `nothing`) |
 | `evidence` | for every **miss** (`references only`, `nothing`, `endpoint unmatched`): `present, unused`, `none found` or `undetermined` (below); empty otherwise |
 | `evidence_basis` | the marks and title hits that decided `present, unused` |
-| `pair_class` | how A and B were matched: `both exact`, `one exact` or `both cosine`; an end no class matched counts as cosine, the class last tried |
+| `pair_class` | the classes that matched A and B, in class order joined by ` + ` (`number + cosine`, `statement + statement`); an end no class matched counts as cosine, the class last tried |
 
 **The mark test.** It reads the text of every span of A's matches and looks for a mark of B there. A
 mark is either of two things:
@@ -186,13 +198,17 @@ The headline figures:
 - for the number class: each volume root and the directory it maps to, the page blocks no walked
   environment accounts for, and every numbered reference claim with its match or its reason;
 - the label spans each side carries;
+- for the statement class: how many reference claims have a marked statement located, the best
+  overlap per such claim, the ties, and each claim the number class left with its match, its best
+  overlap, or why it has no statement;
 - matches per reference claim, and the best cosine per reference claim;
 - the unmatched claims, with their best cosine;
 - matches by reference top-level directory × our top-level directory;
-- recall-class counts, overall and against the pair class;
+- recall-class counts, overall and against the pair class (a column for each pair class some edge
+  carries);
 - the mark split, by scope and at document level;
 - the evidence split, overall, by recall class and against the pair class;
-- a threshold sweep (0.20–0.50) of the cosine class, exact matches held, giving the recall classes
+- a threshold sweep (0.20–0.50) of the cosine class, number and statement matches held, giving the recall classes
   and marked misses at each threshold.
 
 ### Reading the numbers

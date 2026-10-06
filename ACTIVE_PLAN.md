@@ -1,6 +1,6 @@
 # ACTIVE PLAN – the node-matching gap: numbering in the measurement, the matcher, the reading
 
-**Status:** approved; wave N1 next. Succeeds the closed two-tranche plan, whose record is carried
+**Status:** N1, N2 and N2b done; N3, the reading, under way with the owner. Succeeds the closed two-tranche plan, whose record is carried
 below. kbase is the canonical source of the KB toolchain's design; kb_tools adopts its changes, and
 leads only on defect fixes found in use (SPEC §2). The contract documents govern on any
 disagreement with this plan, and this plan is corrected. Owners: PC python-coder, GC go-coder, AR
@@ -55,6 +55,7 @@ carries `\label` identifiers forward on a span.
 |---|---|---|---|
 | **N1 — numbering in the measurement** | `tools/measure/latex_numbering.py`: the walker over a volume root (includes followed), yielding for each theorem-like environment in document order its counter group, its ordinal in the group, the author's number, its label if any; `tools/measure/check_numbering.py`: the one-off oracle (tectonic in scratch, `.aux` read) reporting agreement per labelled environment; README entries for both, the oracle's host requirement stated | PC | Over the public arxiv corpus (`test_data/transient/arxiv/<id>`) and the fixture: every labelled theorem-like environment's walked number equals its `.aux` number, with the papers outside the grammar listed by name and reason; the walker runs with no network, no binary, in under a second per paper |
 | **N2 — the matcher** | `compare_to_pristine.py` matches a reference claim whose title names a result word and number to our block node whose page display line is the k-th of its counter group (pandoc's counter) and whose walked number is that number; then by label; then cosine; `claim-matches.tsv` and `summary.md` carry the match class; the recall and evidence tables split by class | PC | On the fixture, the 12 numbered reference claims match exactly or are listed with the reason; the unmatched set and the recall tables re-read beside the 2026-10-04 run in `.claude-temp/`, numbers only in scratch |
+| **N2b — the statement class** (added under the rolling rule: the fixture's reference numbers predate a restructuring of its sources, so the key that survives the author's surgery is the statement text) | Between `label` and `cosine`: the reference claim's marked statement on its page, read as `_our_claim` reads ours, against our node's first span, by token-set overlap at a bar read off the distribution (0.6, the one gap; the three pairs just under it are true matches and the first wrong pair sits at 0.48), one to one; the comparison refuses a KB at another metadata format instead of reading zero nodes | PC | Done: 17 of the 34 reference claims with a marked statement match by statement; 9 reference claims have no marker on any page and fall to cosine; the 7 unmatched stay unmatched (6 unmarked, 1 wrong best pair); the recall table is re-read with one-to-one matching (run `20261006T143311` beside `20261006T142231`) |
 | **N3 — the reading** | The split of the 71 author edges into floor (no textual evidence) and reducible, by match class; wave 4's parked question — does the unmarked ask say `A` on the author's true pairs — answered over the exactly matched pairs; the framework hinges and the prose granularity characterised | coordinator, with the owner | A verdict note in `.claude-temp/` and the next inference change named with the owner, as a wave of this plan |
 
 ## Rules this plan runs under
@@ -128,3 +129,14 @@ coder chunk (drafted in `../adjagent/proposed-agents-md-edit.md`).
 - A block node's title is the environment's parenthetical name; the page shows pandoc's own
   sequential counter, not the author's number (`internal/claimgraph`, kb_tools' inventory display
   line). Numbered titles wait on polytexnical.
+- The fixture author's reference KB is numbered against the pre-surgery long paper; the
+  repository's short papers number themselves afresh, so the `number` match class fires on one
+  claim there until the author reconciles (the clone's orientation note names the reconciliation
+  as pending). Nine of its 43 claims carry no marker on any page and are matchable only by their
+  register entries.
+- The comparison's tag stripping (`TAG_RE` in `tools/measure/compare_to_pristine.py`) deletes
+  text between `<` and `>` inside an inequality as if it were an HTML tag, lowering overlap and
+  cosine scores on both sides; fixing it changes the October cosine numbers.
+- `measure_unmarked_shortlist.py` still accepts a KB at an older metadata format silently.
+- The measurement tooling's unit tests run by `python3 -m unittest discover -s tools/measure`;
+  no recipe runs them.

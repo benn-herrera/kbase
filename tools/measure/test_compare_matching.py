@@ -1,4 +1,5 @@
-"""The comparison's number class over a synthetic volume: the walked number keys the k-th block of the shared counter."""
+"""The comparison's number class over a synthetic volume: the walked number keys the k-th block of the shared counter;
+and its statement class over synthetic word sets: token-set overlap, one-to-one."""
 
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from number_match import (
     result_key,
     unwalked_blocks,
 )
+from statement_match import match_statements, overlap
 
 ROOT = Path("main.tex")
 SHARED = r"\newtheorem{theorem}{Theorem}[section]\newtheorem{lemma}[theorem]{Lemma}\newtheorem{corollary}[theorem]{Corollary}"
@@ -92,6 +94,43 @@ class UnwalkedBlocksTest(unittest.TestCase):
     def test_a_counter_the_walk_never_reached(self):
         page = PAGE + [PageBlock("vol", "Lemma 4", "n-x"), PageBlock("unwalked", "Lemma 9", "n-y")]
         self.assertEqual(unwalked_blocks(page, WALKED), [PageBlock("vol", "Lemma 4", "n-x")])
+
+
+def words(text: str) -> frozenset[str]:
+    return frozenset(text.split())
+
+
+class OverlapTest(unittest.TestCase):
+    def test_jaccard(self):
+        cases = [("a b c", "a b c", 1.0), ("a b c", "b c d", 0.5), ("a b", "c d", 0.0), ("", "", 0.0), ("a a b", "a", 0.5)]
+        for left, right, expected in cases:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(overlap(words(left), words(right)), expected)
+
+
+class MatchStatementsTest(unittest.TestCase):
+    def test_one_to_one_highest_overlap_first(self):
+        # r1 overlaps n1 at 1.0 and takes it; r2's best is also n1 (4/5), so it takes n2 (4/6).
+        got = match_statements(
+            {"r1": [words("a b c d")], "r2": [words("a b c d e")]},
+            {"n1": words("a b c d"), "n2": words("a b c e f")},
+            threshold=0.6,
+        )
+        self.assertEqual({rid: oid for rid, (oid, _) in got.matches.items()}, {"r1": "n1", "r2": "n2"})
+        self.assertEqual(got.best, {"r1": 1.0, "r2": 0.8})
+
+    def test_any_statement_of_a_claim_may_match(self):
+        got = match_statements({"r": [words("p q"), words("a b c")]}, {"n": words("a b c")}, threshold=0.9)
+        self.assertEqual(got.matches, {"r": ("n", 1.0)})
+
+    def test_below_threshold_is_unmatched_with_its_best(self):
+        got = match_statements({"r": [words("a b c d")], "bare": []}, {"n": words("a b")}, threshold=0.6)
+        self.assertEqual((got.matches, got.best), ({}, {"r": 0.5}))
+
+    def test_tie_is_reported(self):
+        got = match_statements({"r": [words("a b")]}, {"n1": words("a b"), "n2": words("a b")}, threshold=0.5)
+        self.assertEqual(got.matches, {"r": ("n1", 1.0)})
+        self.assertEqual([(tie.reference, tie.node, tie.rivals) for tie in got.ties], [("r", "n1", (("r", "n2"),))])
 
 
 if __name__ == "__main__":
