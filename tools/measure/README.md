@@ -2,7 +2,9 @@
 
 Two read-only measurements of a built KB against a reference KB of the same corpus (the author's
 hand-curated one). Python 3.11+, stdlib only; kb_tools is imported from `PYTHONPATH` and its readers
-are used, not reimplemented.
+are used, not reimplemented. Beside them sit the theorem-number walker over a volume's LaTeX and its
+one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
+this directory. The walker's tests run with `python3 -m unittest discover -s tools/measure`.
 
 ```
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/compare_to_pristine.py \
@@ -214,3 +216,96 @@ and so the pools, may differ from the build's own.
 `forward / either` over the misses measured is shortlist recall at that K, and `asks` is its cost.
 If the misses are reached at K = 5 but the build still misses them, the ask is what bounds recall.
 If they are not reached, the shortlist is.
+
+## latex_numbering.py — the author's theorem numbers
+
+```
+python3 tools/measure/latex_numbering.py --volume <root .tex> --out .claude-temp/<name>/numbering
+```
+
+A counter walker over a volume's LaTeX source. It needs no `PYTHONPATH`, no network and no binary.
+It numbers each theorem-like environment the way the author's declarations do, so a node can be
+keyed by the number the author's reader sees (`Theorem 5.11`) rather than by pandoc's sequential
+counter.
+
+The walker reads the root file and every `\input{…}`/`\include{…}` it reaches, in document order.
+It resolves each path against the including file's directory, then against the root's, and adds
+`.tex` when absent. A file it cannot find is skipped with a note. Comments (`%` to end of line, not
+`\%`) are stripped first. Text TeX never reads is skipped too: an `\iffalse … \fi` with no
+conditional or `\else` inside, a `comment` environment, and the arguments of a macro defined with
+an empty body (`\newcommand{\comment}[1]{}`). An `\iffalse` closed any other way is read as text,
+noted, and leaves every number after it empty. Declarations count wherever they appear;
+environments count only after `\begin{document}`, and reading stops at `\end{document}`.
+
+**The grammar** is amsthm's: `\newtheorem{env}{Name}`, `\newtheorem{env}[shared]{Name}`,
+`\newtheorem{env}{Name}[counter]`, `\newtheorem*{env}{Name}` (unnumbered), `\numberwithin`,
+`\section`/`\subsection`/`\subsubsection`/`\chapter` (starred forms do not count, nor does a level
+deeper than `secnumdepth`), `\appendix` (letters from A, for chapters in `book`, `report` and the
+like, otherwise for sections), and `\setcounter` to an integer. Formats are LaTeX's defaults: a
+counter numbered within another reads `<parent>.<n>`, and a section reads `<chapter>.<n>` in a
+chaptered class. Anything else that touches a counter the walker tracks goes to `notes.txt` and
+leaves the numbers drawn through that counter empty, never wrong. That covers a redefined
+`\the<counter>`, `\addtocounter`, `\stepcounter`, `\refstepcounter`, `\counterwithin`,
+`\newcounter`, `\newaliascnt`, thmtools' `\declaretheorem` and llncs' `\spnewtheorem`, and a shared
+or parent counter it does not track. An environment the source never declares (a class's predefined
+theorem, say) is not seen.
+
+### Outputs
+
+`environments.tsv`: one row per theorem-like environment, in document order.
+
+| Column | Meaning |
+|---|---|
+| `ordinal` | 1-based position among all rows |
+| `env` | the environment name as written |
+| `group` | the counter it draws its number from: its own name, or the shared one; empty when unnumbered |
+| `ordinal_in_group` | 1-based count within that counter, never reset: what pandoc's counter shows on the page; empty when unnumbered |
+| `number` | the author's number (`5.11`, `C.2`, `3`); empty when unnumbered or outside the grammar |
+| `label` | the first `\label{…}` at the environment's own level (one inside a nested list or equation names that, not the environment); empty when none |
+| `file`, `line` | where the `\begin` is, relative to the root's directory |
+
+`notes.txt`: one line per construct outside the grammar, or include not found, as
+`<file>:<line>: <what and its effect>`. It is empty when there is none.
+
+Exit status: **0** when both files are written; **2** when `--volume` is not a file or `--out`
+breaks the privacy rule (nothing is written).
+
+## check_numbering.py — the walker's oracle
+
+```
+python3 tools/measure/check_numbering.py --volume <root .tex> --out .claude-temp/<name>/numbering \
+    [--continue-on-errors]
+```
+
+A one-off development check, run by hand. **It needs `tectonic` on `PATH`**, which on first use
+downloads its TeX bundle over the network. No recipe runs it and nothing the product does depends
+on it; the walker itself never compiles anything.
+
+It copies the volume's directory (less `.git`) into `<out>/build/` and compiles the root there with
+tectonic. It reads the label numbers from the root's `.aux` and every `.aux` it `\@input`s. A
+`\newlabel{<label>}{{<number>}{<page>}…}` line gives `<number>`; hyperref's extra fields are
+ignored, as is a value that is not a braced group. It then walks the same source and compares every
+labelled environment.
+
+tectonic runs XeTeX and stops at the first TeX error, so a paper written for pdflatex often fails on
+a package unrelated to numbering. `--continue-on-errors` passes `-Z continue-on-errors` so the
+compile goes on past such errors. The summary line then says so, because an error that does touch a
+counter would make the `.aux` itself wrong.
+
+`agreement.tsv`: one row per labelled theorem-like environment, in document order: `label`,
+`walked` (the walker's number), `aux` (the compiled number; empty when the label is not in the
+`.aux`) and `agree`, which is one of `yes`, `no`, or `no walked number`. Its last line is a count of
+each, after a `#`. The compile's own output is kept as `<out>/build/tectonic-run.log`, beside
+tectonic's `.log` and `.aux`.
+
+Exit status: **0** when every labelled environment agrees, **1** otherwise. **2** when an argument
+is unusable (also an `--out` inside the volume's directory), tectonic is not on `PATH`, or the
+compile fails or runs past 600 seconds. In that last case the log is still kept under
+`<out>/build/`, and no `agreement.tsv` is left (an earlier run's is removed).
+
+### Privacy
+
+Both scripts follow the rule under "Privacy" above. The volume reaches them only as `--volume`, and
+`--out` must lie under `.claude-temp/`. `environments.tsv` and `agreement.tsv` carry labels and file
+names from the source, and `build/` is a copy of it, so all of it stays in scratch. Each script
+prints only the list of what it wrote.
