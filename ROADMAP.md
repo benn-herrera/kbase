@@ -6,9 +6,9 @@ deleted, not archived.
 
 ## Now
 
-- V4 of `ACTIVE_PLAN.md`, under way at the new kb_tools pin; once its recipes are green, a progress
-  merge to `main`.
-- Then inference R&D: the node-matching gap (`ACTIVE_PLAN.md`, "Successor R&D").
+- The node-matching gap (`ACTIVE_PLAN.md`): the author's result numbers recovered in the
+  measurement, the matcher made exact for named results, recall against the author's graph read
+  for the first time, then the next inference change chosen from that reading.
 
 ## Reader fidelity
 
