@@ -59,6 +59,70 @@ README's MCP section shows the entry for two harnesses (Claude Code's `.mcp.json
 stdio transport. There is no registration automation in this repository, by design; the entry is
 the harness's.
 
+## The runtime agents
+
+The server gives a harness the tools; the agents that know how to use them come from a separate
+repository, [adjagent](https://github.com/benn-herrera/adjagent), which renders a whole agent set
+from templates and installs it into a project. The KB part of that set is six definitions:
+
+- **agents:** `kb-docent` (the read side: navigates a finished KB and answers from it),
+  `kb-maintainer` (the write side: inserts entries, sets fields, runs the refresh/verify loop),
+  `kb-claim-scorer` (grades derivations; writes nothing);
+- **commands:** `kb-start` and `kb-next` (open and continue a reading session: locate the KB, load
+  the docent), `kb-build` (start a build).
+
+**Acquiring them.** Clone adjagent anywhere; it needs Python 3.11 or later. From its root:
+
+```sh
+just install <your project> [--harness=NAME]
+```
+
+That renders every definition and writes `agents/` and `commands/` under the harness's project
+directory (`.claude/` for Claude Code, `.opencode/` for opencode; `--subdir=` overrides). The
+installed tree is an artifact: each file carries a banner naming its template and a body hash, and
+re-running the install overwrites it. Do not hand-edit installed copies for anything you mean to
+keep; change the template and reinstall, or keep your own fork of the templates.
+
+**A harness adjagent does not know yet** is described to it by one file,
+`templates/harness/<name>.toml`: the project and user directories, the name of the agents file,
+the frontmatter keys the harness expects on a definition, and the harness's names for the generic
+tools (read, edit, bash, …). Copy `claude.toml` or `opencode.toml` and change the values; the same
+install command then renders for your harness.
+
+**Modifying them for the server.** As installed, the definitions reach the toolchain through the
+Python reference implementation's command line (`python3 -m kb_tools.kb_cmd …` for queries,
+`kb_tools.kb_util` for write ops, `kb_tools.kb_driver` for builds). With the server registered,
+those passages become tool calls. The places to change, in the templates (the docent and
+maintainer templates, the three command templates, and the shared chunk
+`templates/shared-chunks.toml`):
+
+- **The docent's query block:** "use the query CLI" becomes "use the `kbase` server's query
+  tools", with the bullets re-expressed as calls: `find` with a `query`; `show` on an id; `deps`
+  on an id, or with `inverse: true` for what rests on it; `referenced-by`; `solidity-below` with a
+  `threshold`; `weak-points`; `stats`. Say once how your harness lists the tools (Claude Code
+  prefixes them `mcp__kbase__<tool>`; others differ). Its fallback "if the CLI is unavailable"
+  becomes "if the server is not connected". Add that a claim's strengthen-by items are rework
+  notes returned by `show` under `strengthen_by`, and that `gated-on` finds the claims whose notes
+  mention an id.
+- **The shared "Authored is not typed" chunk:** metadata is composed by the server's write-op
+  tools, each tool's schema being the op's closed set of value keys; the `--help` pointer goes.
+- **`kb-start` and `kb-next`:** the sentence anchoring tool invocations to a `PYTHONPATH` goes;
+  the server is bound to the KB by your registration, so nothing anchors per call. The KB-locating
+  probes stay, since the docent still reads the KB's files.
+- **`kb-build`:** from "print the shell command and stop" to calling the `build` tool with one
+  `volume-root` per source, reporting the refusal or the started build's `state-dir`, `pid` and
+  `resume` line, then `status` on request and `cancel` on the user's word; say before starting that
+  the build's stage boundaries are commits in the user's repository.
+- **`kb-maintainer`:** the write ops it names become the corresponding tools, one entry per call
+  and no `--no-refresh`.
+
+Once the definitions go through the server, the installed `kb_tools/` package under `agents/` is
+unused and can be removed, which also guarantees nothing falls back to it. The exact tool names and
+their schemas are SPEC §11 and the server's own `tools/list`.
+
+**Checking the result** is the in-harness check below: a reading session whose first lookup goes
+through `find`, `show` and `deps`, with no Python invoked and no index file read by hand.
+
 ## What the harness sees
 
 - **Tools.** One per subcommand, named as the subcommand: the write ops (`insert-claim-entry`,
