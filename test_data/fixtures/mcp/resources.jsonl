@@ -1,0 +1,8 @@
+{"jsonrpc":"2.0","id":1,"method":"resources/list"}
+{"jsonrpc":"2.0","id":1,"result":{"resources":[{"uri":"kbase://sheet/claim-graph.svg","name":"claim-graph.svg","mimeType":"image/svg+xml"}]}}
+{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"kbase://sheet/absent.svg"}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32002,"message":"Resource not found: no resource has the URI \"kbase://sheet/absent.svg\""}}
+{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"kbase://sheet/../entry-point.md"}}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32002,"message":"Resource not found: no resource has the URI \"kbase://sheet/../entry-point.md\""}}
+{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{}}
+{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"params.uri must be a resource's URI"}}

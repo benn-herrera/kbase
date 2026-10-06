@@ -83,7 +83,7 @@ func TestVerbStreamGuard(t *testing.T) {
 			return err
 		}},
 		{"build", func() error {
-			_, err := runBuild(context.Background(), buildOptions{VolumeRoot: t.TempDir()})
+			_, err := runBuild(context.Background(), buildOptions{VolumeRoots: []string{t.TempDir()}})
 			return err
 		}},
 	} {

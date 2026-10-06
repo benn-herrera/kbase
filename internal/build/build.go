@@ -17,7 +17,9 @@ import (
 	"kbase/internal/asks"
 	"kbase/internal/asks/call"
 	"kbase/internal/claimgraph"
+	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/model"
@@ -38,6 +40,7 @@ var Stages = []Stage{
 	{"claims-declared", "declared claim graph"},
 	{"claims-discovered", "claim discovery"},
 	{"equations-minted", "equation nodes minted"},
+	{"references-found", "unmarked references found"},
 	{"depends-attributed", "dependency attribution"},
 	{"phase-3a", "validation gate"},
 	{"overview-drafted", "overview drafted"},
@@ -46,18 +49,27 @@ var Stages = []Stage{
 const (
 	stageStart         = "start"
 	stageDocumentGraph = "document-graph"
+	stageSpineSeed     = "spine-seed"
 )
 
 // charterFile is where a build keeps its charter, at the repository root.
 const charterFile = "kb-build-charter.md"
 
-// ownedPaths are the root-relative paths a build commits and restores.
-var ownedPaths = []string{kb.KBDir, charterFile, claimgraph.NodePassFile, claimgraph.ClassificationFile}
+// ownedPaths are the root-relative paths a build commits and restores: the
+// build records under every spelling, so a migration's removal of the old
+// one is committed with the stage that saved it.
+var ownedPaths = append([]string{kb.KBDir, charterFile}, kbload.RecordFiles()...)
 
 // The start boundary's body: the charter it was given, or the absence stated.
 const (
 	charterField = "charter:"
 	noCharter    = "charter: none — this build was given none and runs on its sources"
+)
+
+// Every boundary's body ends with the build's inputs, one line per path.
+const (
+	volumeRootField   = "volume-root:"
+	bibliographyField = "bibliography:"
 )
 
 // The refusal and failure classes a build names in its items.
@@ -75,6 +87,8 @@ const (
 	checkCharter    = "charter"
 	checkInference  = "inference"
 	checkRecords    = "records"
+	checkStateDir   = "state-dir"
+	checkInputs     = "inputs"
 	checkError      = "error"
 )
 
@@ -103,6 +117,7 @@ var rows = []row{
 	{id: "declared.build", stage: "claims-declared", run: claimGraph(mechanical(claimgraph.Declared))},
 	{id: "discover.build", stage: "claims-discovered", spendsOwnInference: true, run: claimGraph(claimgraph.Discovered)},
 	{id: "equations.build", stage: "equations-minted", run: claimGraph(mechanical(claimgraph.Equations))},
+	{id: "unmarked.build", stage: "references-found", spendsOwnInference: true, run: claimGraph(claimgraph.References)},
 	{id: "depends.attribute", stage: "depends-attributed", spendsInferenceInPart: true, run: claimGraph(claimgraph.Depends)},
 	{id: "p3a.gate", stage: "phase-3a", run: validationGate},
 	{id: "p3a.stamp", stage: "phase-3a", run: stampReadiness},
@@ -149,7 +164,8 @@ func stageIDList() []string {
 
 // Options is one build.
 type Options struct {
-	VolumeRoot     string
+	// VolumeRoots are the papers' top .tex files, one volume each.
+	VolumeRoots    []string
 	Bibliographies []string
 	// Charter is a file stating the build's scope, kept at the repository
 	// root as the build's charter when it opens.
@@ -215,11 +231,6 @@ type walk struct {
 	walked   []result.Record
 }
 
-// refusal is wrong input or KB state, every offending item named.
-type refusal []result.Item
-
-func (r refusal) Error() string { return result.Items(r).Error() }
-
 // retry is a live holder of what the build needs.
 type retry []result.Item
 
@@ -253,7 +264,7 @@ type ending struct {
 // ended classifies a walk's error; success is the outcome given.
 func ended(success string, err error) ending {
 	var (
-		r refusal
+		r result.Refusal
 		t retry
 		f failure
 		c cancelled
@@ -305,7 +316,7 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if opts.Through != "" {
 		var ok bool
 		if through, ok = ResolveStage(opts.Through); !ok {
-			return w.result(ended("", refusal{{Check: checkUsage, Key: "--through", Allowed: stageIDList(),
+			return w.result(ended("", result.Refusal{{Check: checkUsage, Key: "--through", Allowed: stageIDList(),
 				Detail: fmt.Sprintf("--through %q names no stage, by id or display name", opts.Through)}}))
 		}
 	}
@@ -313,11 +324,23 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if err := w.open(); err != nil {
 		return w.result(ended("", err))
 	}
+	runLock, err := takeRunLock(w.kbRoot, w.stateDir)
+	if err != nil {
+		return w.result(ended("", err))
+	}
+	defer func() {
+		if err := runLock.ReleaseRemoving(); err != nil {
+			opts.Logger.Error("the run lock was released and its file not removed", "error", err)
+		}
+	}()
 	lock, err := takeLock(w.stateDir, opts.now())
 	if err != nil {
 		return w.result(ended("", err))
 	}
 	defer lock.Release()
+	if err := readyStore(w.stateDir); err != nil {
+		return w.result(ended("", err))
+	}
 	if w.progress, err = openProgress(w.stateDir, opts.now); err != nil {
 		return w.result(ended("", err))
 	}
@@ -325,7 +348,14 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if err := w.progress.emit(event{Event: eventRun, PID: os.Getpid(), NoInference: opts.NoInference, Resume: w.resumeCommand()}); err != nil {
 		return w.result(ended("", err))
 	}
-	outcome, err := w.run(through)
+	var outcome string
+	err = pruneCaptures(w.stateDir)
+	if err == nil {
+		err = awaitWriters(w.kbRoot)
+	}
+	if err == nil {
+		outcome, err = w.run(through)
+	}
 	end := ended(outcome, err)
 	if err := w.progress.emit(end.event()); err != nil {
 		opts.Logger.Error("the progress record lost the build's end", "error", err)
@@ -364,13 +394,16 @@ func (w *walk) open() error {
 	repo, err := ledger.Open(w.opts.WorkDir, ownedPaths, w.opts.Logger)
 	var nw ledger.NotWorktreeError
 	if errors.As(err, &nw) {
-		return refusal{{Check: checkWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
+		return result.Refusal{{Check: checkWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
 	}
 	if err != nil {
 		return err
 	}
 	w.repo, w.kbRoot = repo, filepath.Join(repo.Root, kb.KBDir)
 	if w.stateDir, err = stateDir(w.opts.StateDir, w.kbRoot); err != nil {
+		return err
+	}
+	if _, err := storeVersion(w.stateDir); err != nil {
 		return err
 	}
 	return os.MkdirAll(w.stateDir, 0o777)
@@ -384,6 +417,13 @@ func (w *walk) run(through Stage) (string, error) {
 		return "", err
 	}
 	w.trail = trail
+	if len(trail) > 0 {
+		if was, ok := recordedInputs(trail[0].Body); ok {
+			if items := inputsRefusal(w.repo.Root, was, w.inputs()); len(items) > 0 {
+				return "", items
+			}
+		}
+	}
 	recorded := w.recorded()
 	last := slices.IndexFunc(Stages, func(s Stage) bool { return s.ID == through.ID })
 	var remaining []Stage
@@ -435,15 +475,21 @@ func (w *walk) recorded() map[string]string {
 	return recorded
 }
 
+// namedSetting is a provider error naming the setting the configuration
+// lacks: the variable that would supply it and the file that otherwise does.
+type namedSetting interface{ Named() (key, path string) }
+
 // launch refuses, before any stage is walked, a walk that cannot finish: a
 // volume root that is not a file, or a model call with no provider
 // configured. Where a row left to walk calls a model it readies the asks,
 // their evidence and answers kept under the state store's scratch.
 func (w *walk) launch(remaining []Stage) error {
-	var items refusal
-	if info, err := os.Stat(w.opts.VolumeRoot); err != nil || !info.Mode().IsRegular() {
-		items = append(items, result.Item{Check: checkUsage, Path: w.opts.VolumeRoot, Key: "<volume-root>",
-			Detail: fmt.Sprintf("volume root %s is not a file", w.opts.VolumeRoot)})
+	var items result.Refusal
+	for _, root := range w.opts.VolumeRoots {
+		if info, err := os.Stat(w.absolute(root)); err != nil || !info.Mode().IsRegular() {
+			items = append(items, result.Item{Check: checkUsage, Path: root, Key: "<volume-root>",
+				Detail: fmt.Sprintf("volume root %s is not a file", root)})
+		}
 	}
 	var calling *row
 	for _, s := range remaining {
@@ -461,8 +507,13 @@ func (w *walk) launch(remaining []Stage) error {
 			p, err = w.opts.Provider()
 		}
 		if err != nil {
-			items = append(items, result.Item{Check: checkProvider, Remedy: "kbase configure",
-				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; configure one, or run with --no-inference", calling.id, calling.stage, err)})
+			it := result.Item{Check: checkProvider, Remedy: "kbase configure",
+				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; configure one, or run with --no-inference", calling.id, calling.stage, err)}
+			var lack namedSetting
+			if errors.As(err, &lack) {
+				it.Key, it.Path = lack.Named()
+			}
+			items = append(items, it)
 		} else {
 			caller := call.New(p.Client, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
 			w.letters, w.readerConcurrency = caller.Letters(p.Letters), p.ReaderConcurrency
@@ -491,7 +542,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 	if lock, err := w.repo.IndexLock(); err != nil {
 		return nil, err
 	} else if lock != "" {
-		return nil, refusal{{Check: checkLock, Path: lock,
+		return nil, result.Refusal{{Check: checkLock, Path: lock,
 			Detail: "git's index lock stands, so no boundary can be committed; a git process killed mid-commit leaves it — remove it once no git process is running in this repository"}}
 	}
 	dirty, err := w.repo.Dirty()
@@ -504,7 +555,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 			return nil, err
 		}
 		if !interrupted(events, next.ID) {
-			items := make(refusal, len(dirty))
+			items := make(result.Refusal, len(dirty))
 			for i, p := range dirty {
 				items[i] = result.Item{Check: checkDirtyPaths, Path: p,
 					Detail: "a path this build owns is dirty and no interrupted stage of it accounts for it; commit it, or restore it to the last kb-build: commit"}
@@ -524,8 +575,25 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 		if err := w.ensureRecords(); err != nil {
 			return nil, err
 		}
+		if err := w.loadFormat(recorded); err != nil {
+			return nil, err
+		}
 	}
 	return append([]string{}, dirty...), nil
+}
+
+// loadFormat reads the format of the KB a resume walks on: one newer than
+// this kbase is refused; one older, past the stage that stamps the spine,
+// is saved in the current form before any later stage reads it, the save
+// landing with the next boundary.
+func (w *walk) loadFormat(recorded map[string]string) error {
+	src, err := kbload.Open(w.kbRoot)
+	if err != nil || !src.Migrated() || recorded[stageSpineSeed] == "" {
+		return err
+	}
+	w.opts.Logger.Info("saving the KB in the current metadata format", "from", src.Version(), "to", kb.FormatVersion)
+	_, err = index.Refresh(src, w.opts.Logger)
+	return err
 }
 
 // stage runs one stage's rows and records its boundary: its entry in the
@@ -590,39 +658,147 @@ func (w *walk) rows(s Stage, run []row) ([]result.Record, error) {
 	return ran, nil
 }
 
-// body is a boundary commit's body: the start boundary names its charter,
-// and a stage that dropped rows names them.
+// body is a boundary commit's body: the start boundary names its charter, a
+// stage that dropped rows names them, and every boundary ends with the
+// build's inputs.
 func (w *walk) body(stage string, dropped []string) string {
-	if stage == stageStart {
-		if kb.IsFile(filepath.Join(w.repo.Root, charterFile)) {
-			return charterField + " " + charterFile
+	note := ""
+	switch {
+	case stage == stageStart && kb.IsFile(filepath.Join(w.repo.Root, charterFile)):
+		note = charterField + " " + charterFile
+	case stage == stageStart:
+		note = noCharter
+	case len(dropped) > 0:
+		note = "--no-inference: this build spent no model call, so " + strings.Join(dropped, ", ") + " did not run. " +
+			"Every row of this stage that costs none ran; what the dropped rows would have authored is absent from the KB, " +
+			"and whatever the stage before them wrote about it stands."
+	}
+	in := w.inputs().body()
+	if note == "" {
+		return in
+	}
+	return note + "\n\n" + in
+}
+
+// inputs is what a build is built from: the volume roots and the
+// bibliographies given, each in the order given.
+type inputs struct{ roots, bibliographies []string }
+
+// inputs is this run's, each path repository-relative with forward slashes.
+func (w *walk) inputs() inputs {
+	var in inputs
+	root := kb.ResolvePath(w.repo.Root)
+	for _, p := range w.opts.VolumeRoots {
+		in.roots = append(in.roots, repoRelative(root, w.absolute(p)))
+	}
+	for _, p := range w.opts.Bibliographies {
+		in.bibliographies = append(in.bibliographies, repoRelative(root, w.absolute(p)))
+	}
+	return in
+}
+
+// repoRelative is the absolute path abs relative to the symlink-resolved
+// repository root, abs resolved as far as it exists. A path that does not
+// resolve is compared as given, so launch refuses it only on a fresh build:
+// a resume compares inputs before launch and refuses it as an input the
+// trail does not record.
+func repoRelative(root, abs string) string {
+	abs = kb.ResolvePath(abs)
+	if rel, err := filepath.Rel(root, abs); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(abs)
+}
+
+func (in inputs) body() string {
+	var lines []string
+	for _, p := range in.roots {
+		lines = append(lines, volumeRootField+" "+p)
+	}
+	for _, p := range in.bibliographies {
+		lines = append(lines, bibliographyField+" "+p)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// recordedInputs is the inputs a boundary's body records; ok is false where
+// it records none, as a boundary written before bodies carried them does not.
+func recordedInputs(body string) (in inputs, ok bool) {
+	for _, line := range strings.Split(body, "\n") {
+		if p, found := strings.CutPrefix(line, volumeRootField+" "); found {
+			in.roots = append(in.roots, p)
+		} else if p, found := strings.CutPrefix(line, bibliographyField+" "); found {
+			in.bibliographies = append(in.bibliographies, p)
 		}
-		return noCharter
 	}
-	if len(dropped) == 0 {
-		return ""
+	return in, len(in.roots) > 0
+}
+
+// inputsRefusal is one item per input this run was given otherwise than the
+// trail records it, order included; none where every input matches.
+func inputsRefusal(repoRoot string, recorded, given inputs) result.Refusal {
+	var items result.Refusal
+	for _, c := range []struct {
+		key, noun string
+		was, now  []string
+	}{
+		{"<volume-root>", "volume roots", recorded.roots, given.roots},
+		{"--bibliography", "bibliographies", recorded.bibliographies, given.bibliographies},
+	} {
+		if slices.Equal(c.was, c.now) {
+			continue
+		}
+		change := "the same paths in another order"
+		var parts []string
+		if added := missingFrom(c.was, c.now); len(added) > 0 {
+			parts = append(parts, "added "+strings.Join(added, ", "))
+		}
+		if removed := missingFrom(c.now, c.was); len(removed) > 0 {
+			parts = append(parts, "removed "+strings.Join(removed, ", "))
+		}
+		if len(parts) > 0 {
+			change = strings.Join(parts, "; ")
+		}
+		items = append(items, result.Item{Check: checkInputs, Path: repoRoot, Key: c.key,
+			Remedy: "resume with the inputs the trail records, or start over from a commit before the trail",
+			Detail: fmt.Sprintf("the kb-build: trail records %s [%s] and this run was given [%s]: %s",
+				c.noun, strings.Join(c.was, ", "), strings.Join(c.now, ", "), change)})
 	}
-	return "--no-inference: this build spent no model call, so " + strings.Join(dropped, ", ") + " did not run. " +
-		"Every row of this stage that costs none ran; what the dropped rows would have authored is absent from the KB, " +
-		"and whatever the stage before them wrote about it stands."
+	return items
+}
+
+// missingFrom is every path of paths that set lacks, in paths' order.
+func missingFrom(set, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		if !slices.Contains(set, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// absolute is p as the invocation's working directory resolves it.
+func (w *walk) absolute(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(w.opts.WorkDir, p)
 }
 
 // resumeCommand is the invocation that continues this build: every flag the
 // launch carried but the bound, since resuming past it is what resuming is
 // for.
 func (w *walk) resumeCommand() []string {
-	abs := func(p string) string {
-		if filepath.IsAbs(p) {
-			return p
-		}
-		return filepath.Join(w.opts.WorkDir, p)
+	argv := []string{"kbase", "build"}
+	for _, root := range w.opts.VolumeRoots {
+		argv = append(argv, w.absolute(root))
 	}
-	argv := []string{"kbase", "build", abs(w.opts.VolumeRoot)}
 	for _, b := range w.opts.Bibliographies {
-		argv = append(argv, "--bibliography", abs(b))
+		argv = append(argv, "--bibliography", w.absolute(b))
 	}
 	if w.opts.Charter != "" {
-		argv = append(argv, "--charter", abs(w.opts.Charter))
+		argv = append(argv, "--charter", w.absolute(w.opts.Charter))
 	}
 	if w.opts.NoInference {
 		argv = append(argv, "--no-inference")
@@ -631,7 +807,7 @@ func (w *walk) resumeCommand() []string {
 		argv = append(argv, "--state-dir", w.stateDir)
 	}
 	if w.opts.ConfigDir != "" {
-		argv = append(argv, "--config-dir", abs(w.opts.ConfigDir))
+		argv = append(argv, "--config-dir", w.absolute(w.opts.ConfigDir))
 	}
 	return argv
 }

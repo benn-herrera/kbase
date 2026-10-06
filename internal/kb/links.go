@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"io/fs"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -37,8 +36,7 @@ var (
 	// opening one.
 	InlineMathRE = regexp.MustCompile("\\$`[^`]*`\\$")
 
-	inlineCodeRE = regexp.MustCompile("`[^`\n]*`")
-	fenceLineRE  = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$")
+	fenceLineRE = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$")
 	// BlockquotePrefix is one line's leading blockquote markers: indent, >
 	// and an optional space, once per nesting level.
 	BlockquotePrefix = regexp.MustCompile(`^(?:[ \t]{0,3}>[ \t]?)+`)
@@ -56,24 +54,14 @@ func Lines(text string) []string {
 	return strings.Split(strings.TrimSuffix(strings.ReplaceAll(text, "\r\n", "\n"), "\n"), "\n")
 }
 
-// MarkdownFiles is every .md file under root, sorted, less document
-// templates and anything under a skipped directory.
-func MarkdownFiles(root string) ([]string, error) {
+// MarkdownFiles is every .md file of the KB, absolute and sorted, less
+// document templates and anything under a skipped directory.
+func MarkdownFiles(src *Source) ([]string, error) {
+	root := src.Root()
 	var out []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == root {
-			return nil
-		}
-		if d.IsDir() {
-			if SkipDirs[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") || strings.HasSuffix(d.Name(), documentTemplateSuffix) {
+	err := src.walk(root, func(name string) bool { return SkipDirs[name] }, func(p string) error {
+		name := filepath.Base(p)
+		if !strings.HasSuffix(name, ".md") || strings.HasSuffix(name, documentTemplateSuffix) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -118,30 +106,46 @@ func StripCodeFences(text string) string {
 }
 
 func blankFenced(lines []string) []string {
-	var out []string
+	out := slices.Clone(lines)
+	for _, f := range Fences(lines) {
+		for i := f.Start; i < f.End; i++ {
+			out[i] = ""
+		}
+	}
+	return out
+}
+
+// Fence is one fenced block of a document's lines: Start is its opening
+// line, End one past its last, and Info the opener's info string.
+type Fence struct {
+	Start, End int
+	Info       string
+}
+
+// Fences is every fenced block of lines, in order, by BlankFencedLines'
+// rule; a block left open runs to the last line.
+func Fences(lines []string) []Fence {
+	var out []Fence
 	opener := ""
 	quoted := false
-	for _, raw := range lines {
+	for i, raw := range lines {
 		prefix := BlockquotePrefix.FindString(raw)
-		line := raw[len(prefix):]
-		m := fenceLineRE.FindStringSubmatch(line)
+		m := fenceLineRE.FindStringSubmatch(raw[len(prefix):])
 		if opener == "" {
 			if m != nil {
 				opener, quoted = m[1], prefix != ""
-				out = append(out, "")
-			} else {
-				out = append(out, raw)
+				out = append(out, Fence{Start: i, End: len(lines), Info: m[2]})
 			}
 			continue
 		}
 		if quoted && prefix == "" {
 			opener = ""
-			out = append(out, raw)
+			out[len(out)-1].End = i
 			continue
 		}
-		out = append(out, "")
 		if m != nil && m[1][0] == opener[0] && len(m[1]) >= len(opener) && closerTail.MatchString(m[2]) {
 			opener = ""
+			out[len(out)-1].End = i + 1
 		}
 	}
 	return out
@@ -160,7 +164,52 @@ func StripCodeSplitLines(text string) string {
 }
 
 func blankInlineSpans(text string) string {
-	return inlineCodeRE.ReplaceAllStringFunc(InlineMathRE.ReplaceAllStringFunc(text, spaces), spaces)
+	return blankCodeSpans(InlineMathRE.ReplaceAllStringFunc(text, spaces))
+}
+
+// blankCodeSpans is text with every inline code span blanked, CommonMark's
+// pairing on one line: a maximal run of n backticks opens, and only the next
+// maximal run of exactly n closes; a run of any other length inside is
+// content, and an opener with no closer on its line is literal text. Go's
+// regexp has no backreference to state the pairing as a pattern.
+func blankCodeSpans(text string) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(text); {
+		n := backtickRun(text, i)
+		if n == 0 {
+			i++
+			continue
+		}
+		closer := -1
+		for j := i + n; j < len(text) && text[j] != '\n'; {
+			m := backtickRun(text, j)
+			if m == n {
+				closer = j
+				break
+			}
+			j += max(m, 1)
+		}
+		if closer < 0 {
+			i += n
+			continue
+		}
+		end := closer + n
+		b.WriteString(text[last:i])
+		b.WriteString(spaces(text[i:end]))
+		last, i = end, end
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// backtickRun is the length of the run of backticks starting at s[i].
+func backtickRun(s string, i int) int {
+	n := 0
+	for i+n < len(s) && s[i+n] == '`' {
+		n++
+	}
+	return n
 }
 
 // spaces is s with every character but a newline replaced by a space.
@@ -266,10 +315,12 @@ var urlSchemeRE = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
 
 // TreeLinks is a document's place in the tree as the claim graph reads it
 // (kb_claimgraph's tree.read): the parent its up-link names — the first .md
-// link on line 1, where that line carries UplinkMarker — and its children,
-// every .md link on any other line in the order written, duplicates dropped,
-// each resolved. Links inside code are not links.
+// link on the up-link line, the first line after the frontmatter, where that
+// line carries UplinkMarker — and its children, every .md link on any other
+// line of the body in the order written, duplicates dropped, each resolved.
+// Links inside code are not links.
 func TreeLinks(source, text string) (parent string, hasParent bool, children []string) {
+	text = StripFrontmatter(text)
 	first := ""
 	if lines := SplitLines(text); len(lines) > 0 {
 		first = lines[0]

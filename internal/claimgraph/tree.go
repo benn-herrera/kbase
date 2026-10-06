@@ -134,15 +134,24 @@ func documentKind(p string, hasChildren bool) string {
 
 func (t *Tree) kind(p string) string { return documentKind(p, len(t.Children[p]) > 0) }
 
+// builtTree is the KB this build is writing. The walk's start loaded it and
+// saved it in the current format before any claim-graph stage, so it is read
+// as current, from disk.
+func builtTree(kbRoot string) *kb.Source { return kb.OnDisk(kbRoot) }
+
+// recordsAt is the built KB whose build records stand at repoRoot.
+func recordsAt(repoRoot string) *kb.Source { return builtTree(filepath.Join(repoRoot, kb.KBDir)) }
+
 // readTree reads the tree and both link relations; it asserts nothing.
 func readTree(kbRoot string) (*Tree, error) {
-	paths, err := kb.Documents(kbRoot)
+	src := builtTree(kbRoot)
+	paths, err := kb.Documents(src)
 	if err != nil {
 		return nil, err
 	}
 	t := &Tree{Root: kbRoot, Documents: map[string]Document{}, Children: map[string][]string{}, Parents: map[string]string{}}
 	for _, p := range paths {
-		text, err := kb.ReadText(filepath.Join(kbRoot, filepath.FromSlash(p)))
+		text, err := src.ReadText(src.KBPath(p))
 		if err != nil {
 			return nil, err
 		}

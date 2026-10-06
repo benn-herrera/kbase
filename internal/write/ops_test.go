@@ -21,8 +21,8 @@ func seedKB(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), kb.KBDir)
 	files := map[string]string{
-		kb.EntryPointFile: "# Entry\n\n<!-- kb-frontmatter\nkind: entry-point\n-->\n\n- [Leaf](leaf.md)\n",
-		"leaf.md": "[↑ Entry](entry-point.md)\n\n<!-- kb-frontmatter\nkind: leaf\nclaims: [" + seedClaim + "]\n-->\n\n" +
+		kb.EntryPointFile: "---\nkind: entry-point\nkb-format: \"1.0.0\"\n---\n# Entry\n\n- [Leaf](leaf.md)\n",
+		"leaf.md": "---\nkind: leaf\nclaims: [" + seedClaim + "]\n---\n[↑ Entry](entry-point.md)\n\n" +
 			"# Leaf\n\nThe first result holds here. <!-- claim-quality: " + seedClaim + " -->\n\nA second paragraph names a bound.  \n\n## Bounds\n\nThe bound is tight in the limit.\n",
 		kb.RegisterFile: "# Register\n\n" + renderEntry(registerEntry{NodeID: seedClaim, Title: "Seed Result", ScoreField: "confidence",
 			Score: f64(0.9), Rationale: "Seeded."}) + "\n",

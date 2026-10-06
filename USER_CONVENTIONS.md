@@ -57,14 +57,14 @@ read `kbase <command> --help`.
 ## Building
 
 ```
-kbase build <volume-root> [--bibliography FILE]... [--charter FILE] [--no-inference]
+kbase build <volume-root>... [--bibliography FILE]... [--charter FILE] [--no-inference]
             [--through <stage>] [--state-dir DIR]
 ```
 
 - `<volume-root>` is a paper's top `.tex` file: the one `00README.json`'s `toplevel` names, else the
   sole file containing `\documentclass`. Input is LaTeX only.
-- The KB is written only at `<git root>/kb-root/`. `build` refuses outside a git worktree, against
-  a populated `kb-root/` with no `kb-build:` commit trail, and over dirty paths it owns.
+- The KB is written only at `<git root>/kb-root/`. `build` refuses outside a git worktree, against a
+  populated `kb-root/` with no `kb-build:` commit trail, and over dirty paths it owns.
 - `--no-inference` drops the rows that spend inference, walks every other stage, and still produces
   a real KB, minus its `README.md`. Each entry of the result's `stages` names its `dropped` rows.
 - `--through <stage>` stops after that stage (id or display name) with outcome `bounded`, exit 0.
@@ -81,7 +81,8 @@ kbase build <volume-root> [--bibliography FILE]... [--charter FILE] [--no-infere
 
 - `status` reports `state` (`none`, `running`, `cancelled`, `failed`, `bounded`, `finished`), `pid`,
   `started`/`updated`/`ended`, `stages` with their commits, `current` (`stage`, `units-done`,
-  `units-total`), `recent-refusals` and `recent-fallbacks` (the newest 10 items each), and `resume`.
+  `units-total`), `recent-refusals` and `recent-fallbacks` (the newest 10 items each),
+  `cache-entries` and `cache-bytes` (the answer cache's entry count and size), and `resume`.
 - `cancel` stops the running build; the build exits `cancelled`, losing only the unit in flight.
 - To continue an interrupted, cancelled or bounded build, run the `resume` command exactly as given.
   Position comes from the `kb-build:` commit trail: each stage boundary is a commit, and an
@@ -142,5 +143,5 @@ needs none.
 
 ## kb_tools
 
-The same KB is maintainable by kb_tools; the KB's own `kb-root/CONVENTIONS.md` gives each operation's
-command in both toolchains.
+The same KB is maintainable by kb_tools; the KB's own `kb-root/CONVENTIONS.md` gives each
+operation's command in both toolchains.

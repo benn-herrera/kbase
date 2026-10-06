@@ -1,23 +1,19 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/query"
 )
@@ -31,20 +27,11 @@ func kbase(t *testing.T, dir string, args ...string) (string, int) {
 	stdout, _, err := executeRoot(t, args...)
 	code := exitStatus(err, stdout, &bytes.Buffer{})
 	if sub, _, ferr := rootCmd.Find(args); ferr == nil {
-		resetFlags(sub)
+		if err := resetFlags(sub); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return stdout.String(), code
-}
-
-func resetFlags(cmd *cobra.Command) {
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		if sv, ok := f.Value.(pflag.SliceValue); ok {
-			_ = sv.Replace(nil)
-		} else {
-			_ = f.Value.Set(f.DefValue)
-		}
-		f.Changed = false
-	})
 }
 
 func writeValues(t *testing.T, dir, name, text string) string {
@@ -130,6 +117,13 @@ func TestMaintenanceResultsParse(t *testing.T) {
 // identity and configuration fixed; it skips where pandoc is unusable.
 func buildRepo(t *testing.T) (repo, state string) {
 	t.Helper()
+	return buildRepoWith(t, "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n\\title{A Paper}\n\\begin{document}\n\\maketitle\n"+
+		"\\section{Results}\n\\begin{lemma}\\label{lem:a}\nEvery widget is a gadget.\n\\end{lemma}\n\\end{document}\n")
+}
+
+// buildRepoWith is buildRepo holding paper as paper.tex.
+func buildRepoWith(t *testing.T, paper string) (repo, state string) {
+	t.Helper()
 	if _, err := pandoc.Preflight(context.Background()); err != nil {
 		t.Skipf("pandoc is not usable here: %v", err)
 	}
@@ -147,8 +141,7 @@ func buildRepo(t *testing.T) (repo, state string) {
 		}
 	}
 	writeValues(t, filepath.Join(repo, ".git"), "HEAD", "ref: refs/heads/main\n")
-	writeValues(t, repo, "paper.tex", "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n\\title{A Paper}\n\\begin{document}\n\\maketitle\n"+
-		"\\section{Results}\n\\begin{lemma}\\label{lem:a}\nEvery widget is a gadget.\n\\end{lemma}\n\\end{document}\n")
+	writeValues(t, repo, "paper.tex", paper)
 	return repo, state
 }
 
@@ -214,7 +207,11 @@ func TestDefaultLimitFitsTheToolResultCap(t *testing.T) {
 			cases = append(cases, []string{"deps", id}, []string{"deps", id, "-i"}, []string{"gated-on", id},
 				[]string{"cited-by", id}, []string{"referenced-by", id})
 		}
-		ix, err := query.Load(kbRoot)
+		src, err := kbload.Open(kbRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ix, err := query.Load(src)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -241,25 +238,20 @@ func TestDefaultLimitFitsTheToolResultCap(t *testing.T) {
 	t.Logf("largest default-limit result per list query, in bytes:\n%s", b)
 }
 
-// indexIDs is every node id .index/claims.jsonl records.
+// indexIDs is every node id the claims index records.
 func indexIDs(t *testing.T, kbRoot string) []string {
 	t.Helper()
-	f, err := os.Open(filepath.Join(kbRoot, kb.IndexDir, "claims.jsonl"))
+	src, err := kbload.Open(kbRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	_, rows, problems, err := kb.ReadIndex[kb.NodeRow](src, nil)
+	if err != nil || problems != nil {
+		t.Fatal(kbRoot, err, problems)
+	}
 	var ids []string
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<16), 1<<24)
-	for sc.Scan() {
-		var rec struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			t.Fatal(fmt.Errorf("%s: %w", kbRoot, err))
-		}
-		ids = append(ids, rec.ID)
+	for _, r := range rows {
+		ids = append(ids, r.ID)
 	}
 	return ids
 }

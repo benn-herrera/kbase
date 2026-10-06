@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/asks/call"
+	"kbase/internal/buildrecords"
 	"kbase/internal/claimgraph"
 	"kbase/internal/kb"
 	"kbase/internal/model"
@@ -69,6 +71,10 @@ func (a *answering) ConsultStream(ctx context.Context, req model.Request) (model
 	a.mu.Lock()
 	a.calls++
 	a.mu.Unlock()
+	return a.reply(ctx, req)
+}
+
+func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	reply := model.Response{Content: a.answer(req.Messages[0].Content, req.Messages[1].Content),
 		Usage: model.Usage{PromptTokens: 100, CompletionTokens: 1}, UsageReported: true}
 	return model.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
@@ -84,33 +90,50 @@ func (a *answering) count() int {
 
 // script answers the paper's asks: the result-stating paragraph is a claim,
 // the notation paragraph is unreadable once and then not a claim, the
-// pointing paragraph is unreadable twice; every candidate is supported-by;
-// the overview passage holds a heading once.
+// pointing paragraph is unreadable twice; the prose claim's text points at
+// the shortlisted lemma and nothing else points; every candidate is
+// supported-by; the overview passage holds a heading once.
+//
+// It tells asks apart by the system fragment and the slot values a prompt
+// carries, never by template wording: an ask naming claims by their claim
+// lines is a classify ask where it numbers reference lines and an unmarked
+// ask otherwise, the prose claim's being the only one whose document holds
+// the notation paragraph; a paragraph ask holds its paragraph's text twice,
+// in the document and as the paragraph; a re-ask quotes the reply it could
+// not use.
 func script(system, prompt string) string {
+	const heading = "# Widgets and gadgets"
 	reader, _ := asks.System(asks.ReaderSystem)
 	if system != reader {
-		if strings.Contains(prompt, "could not be used") {
+		if strings.Contains(prompt, heading) {
 			return "A small paper showing that widgets and gadgets coincide."
 		}
-		return "# Overview\nA small paper."
+		return heading + "\nA small paper."
 	}
-	question := prompt[strings.LastIndex(prompt, "## The question"):]
-	reask := strings.Contains(question, "could not be used")
+	asked := func(paragraph string) bool { return strings.Count(prompt, paragraph) == 2 }
 	switch {
-	case strings.Contains(question, "Does the source need the candidate"):
+	case strings.Contains(prompt, "- `clm-") && referenceLine.MatchString(prompt):
 		return "A"
-	case strings.Contains(question, "We show that every widget"):
+	case strings.Contains(prompt, "- `clm-"):
+		if strings.Contains(prompt, "recalls the notation") && strings.Contains(prompt, "Every widget is a gadget, as") {
+			return "A"
+		}
+		return "B"
+	case asked("We show that every widget"):
 		return "A"
-	case strings.Contains(question, "recalls the notation"):
-		if reask {
+	case asked("recalls the notation"):
+		if strings.Contains(prompt, "Probably not.") {
 			return "B"
 		}
 		return "Probably not."
-	case strings.Contains(question, "closes the argument"):
+	case asked("closes the argument"):
 		return "It might."
 	}
 	return "B"
 }
+
+// referenceLine is one numbered passage of a classify ask.
+var referenceLine = regexp.MustCompile(`(?m)^P\d+: `)
 
 func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
@@ -128,7 +151,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 
-	record, ok, err := claimgraph.ReadNodePass(f.repo)
+	record, ok, err := buildrecords.ReadNodePass(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
 	if err != nil || !ok {
 		t.Fatalf("node-pass record: %t, %v", ok, err)
 	}
@@ -156,14 +179,33 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		t.Errorf("the prose claim's paragraph carries no marker:\n%s", files["kb-root/a-small-paper/introduction.md"])
 	}
 
-	classified, _, err := claimgraph.ReadClassification(f.repo)
+	unmarked, _, err := buildrecords.ReadUnmarked(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
+	if err != nil || unmarked.Planned == nil || len(*unmarked.Planned) != 2 || len(unmarked.Pairs) != 2 {
+		t.Fatalf("unmarked record: %+v, %v; want the two pairs no reference reaches planned and asked", unmarked, err)
+	}
+	var yes buildrecords.CandidateEntry
+	for _, p := range unmarked.Pairs {
+		if p.Letter != nil && *p.Letter == asks.LetterPoints {
+			yes = p
+		}
+	}
+	if yes.Source == "" || !strings.Contains(files["kb-root/a-small-paper/introduction.md"], yes.Source) {
+		t.Errorf("unmarked pairs = %+v, want the prose claim's pair answered A", unmarked.Pairs)
+	}
+
+	classified, _, err := buildrecords.ReadClassification(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
 	if err != nil || len(classified.Candidates) == 0 {
 		t.Fatalf("classification record: %+v, %v", classified, err)
 	}
+	found := false
 	for _, c := range classified.Candidates {
 		if c.Letter == nil || *c.Letter != asks.LetterSupportedBy || c.Outcome != claimgraph.ClassifyAnswered {
 			t.Errorf("candidate %s -> %s = %+v, want answered A", c.Source, c.Target, c)
 		}
+		found = found || (c.Source == yes.Source && c.Target == yes.Target)
+	}
+	if !found {
+		t.Errorf("the unmarked yes %s -> %s is no candidate classification asked about", yes.Source, yes.Target)
 	}
 	if demoted := classifyField(t, fields, "demoted"); len(demoted) != 2 {
 		t.Errorf("demoted = %q, want the lemma-theorem ring both ways", demoted)
@@ -187,6 +229,15 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	}
 	if !slices.Contains(leaves, "a-small-paper/introduction.md") {
 		t.Errorf("claims-discovered's units = %q, want one per leaf", leaves)
+	}
+	var groups []string
+	for _, e := range events {
+		if e.Event == eventUnit && e.Stage == "references-found" && e.Unit != "unmarked.build" {
+			groups = append(groups, e.Unit)
+		}
+	}
+	if len(groups) != 2 || !slices.Contains(groups, yes.Source) {
+		t.Errorf("references-found's units = %q, want one per source group asked", groups)
 	}
 	scratch := filepath.Join(f.state, scratchDir)
 	for _, dir := range []string{call.CapturesDir, call.AnswersDir, asks.AskRecordsDir} {
@@ -280,7 +331,8 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 }
 
 // stopsAfter answers its first n requests as answer does and fails every
-// one after, as a provider lost mid-stage.
+// one after, as a provider lost mid-stage. The check and the count are one
+// step, so concurrent asks cannot both take the last answer.
 type stopsAfter struct {
 	answering
 	n int
@@ -289,19 +341,27 @@ type stopsAfter struct {
 func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	s.mu.Lock()
 	over := s.calls >= s.n
+	if !over {
+		s.calls++
+	}
 	s.mu.Unlock()
 	if over {
 		return nil, errors.New("connection refused")
 	}
-	return s.answering.ConsultStream(ctx, req)
+	return s.reply(ctx, req)
 }
 
 // TestInterruptedAskingStageResumesFromTheAnswerCache: a build whose provider
-// is lost inside classification — the node pass's asks answered, the first
-// source's group recorded, the second's never — leaves the stage
+// is lost inside classification — the node pass's and the unmarked asks
+// answered, some source's group recorded and not every one — leaves the stage
 // unrecorded and its writes uncommitted; the resume restores them, asks the
 // provider only what the answer cache does not hold, and lands what the
 // uninterrupted build lands.
+//
+// The node pass and the unmarked asks take 8 answers; classification asks
+// three groups — the prose claim's of 2 candidates, the lemma's and the
+// theorem's of 1 — in ascending id, and ids are minted at random. Ten answers
+// complete the first group in every order and never all three.
 func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	whole := newFixture(t)
 	writeFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
@@ -312,11 +372,11 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	lost := &stopsAfter{answering: answering{answer: script}, n: 7}
+	lost := &stopsAfter{answering: answering{answer: script}, n: 10}
 	if outcome, fields := f.build(t, f.asking(lost)); outcome != result.Failed {
 		t.Fatalf("build losing its provider = %s %v, want failed", outcome, fields)
 	}
-	if got := f.trailStages(t); !slices.Equal(got, stageIDs("equations-minted")) {
+	if got := f.trailStages(t); !slices.Equal(got, stageIDs("references-found")) {
 		t.Fatalf("trail = %q, want dependency attribution unrecorded", got)
 	}
 	answers := filepath.Join(f.state, scratchDir, call.AnswersDir)
@@ -339,15 +399,20 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	sameModuloIDs(t, f.repo, whole.repo)
 }
 
-func TestBibliographiesBesideTheVolumeRoot(t *testing.T) {
+func TestBibliographiesBesideTheVolumeRoots(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"z.bib", "a.bib", ".hidden.bib", "notes.txt"} {
+	for _, name := range []string{"z.bib", "a.bib", ".hidden.bib", "notes.txt", "two/m.bib"} {
 		writeFile(t, filepath.Join(dir, name), "")
 	}
-	w := &walk{opts: Options{VolumeRoot: filepath.Join(dir, "paper.tex")}}
+	w := &walk{opts: Options{VolumeRoots: []string{filepath.Join(dir, "paper.tex")}}}
 	got, err := w.bibliographies()
 	if want := []string{filepath.Join(dir, "a.bib"), filepath.Join(dir, "z.bib")}; err != nil || !slices.Equal(got, want) {
 		t.Errorf("bibliographies = %q, %v; want %q", got, err, want)
+	}
+	w.opts.VolumeRoots = []string{filepath.Join(dir, "two", "other.tex"), filepath.Join(dir, "paper.tex"), filepath.Join(dir, "third.tex")}
+	got, err = w.bibliographies()
+	if want := []string{filepath.Join(dir, "a.bib"), filepath.Join(dir, "two", "m.bib"), filepath.Join(dir, "z.bib")}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("bibliographies over three roots in two directories = %q, %v; want every one beside any root, once, sorted: %q", got, err, want)
 	}
 	w.opts.Bibliographies = []string{"given.bib"}
 	if got, _ := w.bibliographies(); !slices.Equal(got, []string{"given.bib"}) {

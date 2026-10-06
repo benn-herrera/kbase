@@ -3,42 +3,37 @@ package index
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"kbase/internal/kb"
 )
 
 // LinkFindings is the dead-link gate over kb-root/ and the claim-id link
-// check: every node id a document names must be a node .index/claims.jsonl
+// check: every node id a document names must be a node .index/claims.yaml
 // records. A dead link whose target leaves the repository is not a finding,
 // as kb_tools reports such a link without gating on it.
-func LinkFindings(kbRoot string) ([]Finding, error) {
-	root, err := filepath.Abs(kbRoot)
+func LinkFindings(src *kb.Source) ([]Finding, error) {
+	root := src.Root()
+	dead, err := kb.DeadLinksIn(src, src.Repo())
 	if err != nil {
 		return nil, err
 	}
-	dead, err := kb.DeadLinks(root)
-	if err != nil {
-		return nil, err
-	}
-	repo := filepath.Dir(root)
 	var out []Finding
 	for _, d := range dead {
-		if d.Kind == kb.BrokenInter && !kb.Within(repo, d.Resolved) {
+		if d.Kind == kb.BrokenInter {
 			continue
 		}
 		out = append(out, Finding{Check: "dead link", Path: filepath.ToSlash(d.File), Line: d.Line, Detail: d.String()})
 	}
-	known, ok, err := knownNodeIDs(filepath.Join(root, kb.IndexDir, "claims.jsonl"))
+	known, ok, err := knownNodeIDs(src)
 	if err != nil || !ok {
 		return out, err
 	}
-	files, err := kb.MarkdownFiles(root)
+	files, err := kb.MarkdownFiles(src)
 	if err != nil {
 		return nil, err
 	}
 	for _, file := range files {
-		text, err := kb.ReadText(file)
+		text, err := src.ReadText(file)
 		if err != nil {
 			continue
 		}
@@ -57,25 +52,15 @@ func LinkFindings(kbRoot string) ([]Finding, error) {
 	return out, nil
 }
 
-// knownNodeIDs is every string id claims.jsonl records; ok is false where
-// the file is absent, which skips the check.
-func knownNodeIDs(path string) (map[string]bool, bool, error) {
-	if !kb.IsFile(path) {
-		return nil, false, nil
-	}
-	text, err := kb.ReadText(path)
-	if err != nil {
+// knownNodeIDs is every string id the claims index records; ok is false
+// where the file is absent, which skips the check.
+func knownNodeIDs(src *kb.Source) (map[string]bool, bool, error) {
+	recs, _, ok, err := recordLines(src, "claims")
+	if err != nil || !ok {
 		return nil, false, err
 	}
 	ids := map[string]bool{}
-	for _, line := range strings.Split(text, "\n") {
-		if kb.Strip(line) == "" {
-			continue
-		}
-		v, ok := parseJSON(kb.Strip(line))
-		if !ok {
-			continue
-		}
+	for _, v := range recs {
 		if rec, ok := v.(map[string]any); ok {
 			if id, ok := rec["id"].(string); ok {
 				ids[id] = true

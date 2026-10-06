@@ -68,7 +68,10 @@ func (d *document) depth() int {
 // volumeTree is one volume's documents and what placing records against them
 // needs.
 type volumeTree struct {
-	title      string
+	title string
+	// volumeDir is the volume root's directory, which its assets are read
+	// from.
+	volumeDir  string
 	index      *document
 	ordered    []*document
 	references *document
@@ -297,7 +300,7 @@ func buildTree(stem, markdown string, o outline, volumeDir string) (*volumeTree,
 	}
 	index := &document{title: title, segment: strings.Join(head, "\n\n")}
 	stack := []*document{index}
-	t := &volumeTree{title: title, index: index}
+	t := &volumeTree{title: title, volumeDir: volumeDir, index: index}
 	for i, h := range o.headers {
 		hd := found[i]
 		stop := len(lines)
@@ -567,9 +570,22 @@ func render(n *document) string {
 	return strings.Join(parts, "\n\n") + "\n"
 }
 
-// writeTree writes the volume's documents, its copied assets, and the entry
-// point listing it.
-func writeTree(t *volumeTree, kbRoot, volumeDir string) error {
+// writeTrees writes each volume's tree and the entry point listing every
+// volume, in order.
+func writeTrees(trees []*volumeTree, kbRoot string) error {
+	listing := make([]string, len(trees))
+	for i, t := range trees {
+		if err := writeTree(t, kbRoot); err != nil {
+			return err
+		}
+		listing[i] = fmt.Sprintf("- [%s](%s)", t.title, t.index.path)
+	}
+	entry := fmt.Sprintf("# %s\n\n%s\n", entryPointTitle, strings.Join(listing, "\n"))
+	return writeFile(filepath.Join(kbRoot, kb.EntryPointFile), []byte(entry))
+}
+
+// writeTree writes the volume's documents and its copied assets.
+func writeTree(t *volumeTree, kbRoot string) error {
 	for _, n := range t.index.walk() {
 		if err := writeFile(filepath.Join(kbRoot, filepath.FromSlash(n.path)), []byte(render(n))); err != nil {
 			return err
@@ -581,7 +597,7 @@ func writeTree(t *volumeTree, kbRoot, volumeDir string) error {
 	}
 	slices.Sort(sources)
 	for _, s := range sources {
-		data, err := os.ReadFile(filepath.Join(volumeDir, filepath.FromSlash(s)))
+		data, err := os.ReadFile(filepath.Join(t.volumeDir, filepath.FromSlash(s)))
 		if err != nil {
 			return fmt.Errorf("copying asset %s: %w", s, err)
 		}
@@ -590,8 +606,7 @@ func writeTree(t *volumeTree, kbRoot, volumeDir string) error {
 			return err
 		}
 	}
-	entry := fmt.Sprintf("# %s\n\n- [%s](%s)\n", entryPointTitle, t.title, t.index.path)
-	return writeFile(filepath.Join(kbRoot, kb.EntryPointFile), []byte(entry))
+	return nil
 }
 
 func writeFile(p string, data []byte) error {

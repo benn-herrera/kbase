@@ -1,13 +1,11 @@
 package index
 
 import (
-	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,7 +14,6 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/result"
-	"kbase/internal/sheet"
 )
 
 // Finding is one verify failure: the check that found it, the kb-root-relative
@@ -54,24 +51,54 @@ func Items(findings []Finding) []result.Item {
 // frontmatter block.
 const CheckFrontmatterPresence = "frontmatter"
 
-// Verify checks the KB at kbRoot as kb_tools' kb-verify does — the dead-link
-// and unknown-id gate over kb-root/, the metadata gate, the citation gate —
+// Verify is the standard check kb_tools' kb-verify makes of the KB src reads —
+// the dead-link and unknown-id gate over kb-root/, then the metadata gate —
 // and returns every finding. The error is a failure to read the KB, never a
 // finding.
-func Verify(kbRoot string) ([]Finding, error) {
-	links, err := LinkFindings(kbRoot)
+func Verify(src *kb.Source) ([]Finding, error) {
+	links, err := LinkFindings(src)
 	if err != nil {
 		return nil, err
 	}
-	meta, err := MetadataFindings(kbRoot)
+	meta, err := MetadataFindings(src)
 	if err != nil {
 		return nil, err
 	}
-	cites, err := CitationFindings(kbRoot)
+	return slices.Concat(links, meta), nil
+}
+
+// CheckDemoted is the check a verify finding for a demoted edge names.
+const CheckDemoted = kb.RelationDemoted
+
+// DemotedFindings is every demoted edge the KB's registers record, each an
+// item naming its register: structure the KB carries, not a fault.
+func DemotedFindings(src *kb.Source) ([]result.Item, error) {
+	st, err := kb.Discover(src, log.Discard())
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(links, meta, cites), nil
+	items := []result.Item{}
+	for _, e := range st.ClaimEntries {
+		for _, d := range e.Demoted {
+			items = append(items, result.Item{Check: CheckDemoted, Path: e.CanonicalPath,
+				Detail: fmt.Sprintf("%s → %s, origin %s: cut from depends by cycle breaking", d.Source, d.Target, cmp.Or(d.Origin, "none"))})
+		}
+	}
+	return items, nil
+}
+
+// BuildVerify is the build-time check: Verify, then the citation gate, every
+// gate run whatever the earlier found, findings in that order.
+func BuildVerify(src *kb.Source) ([]Finding, error) {
+	standard, err := Verify(src)
+	if err != nil {
+		return nil, err
+	}
+	cites, err := CitationFindings(src)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(standard, cites), nil
 }
 
 var (
@@ -98,23 +125,23 @@ func (d document) items(key string) ([]string, error) {
 
 // MetadataFindings is the metadata gate: coverage, uniqueness, referential
 // integrity, acyclicity, the register census and fan-out, and the freshness
-// of every derived field, of .index/ and of the placeholder sheet. A KB
+// of every derived field and of .index/. A KB
 // state its readers cannot take — malformed node bodies, a claim graph with
 // a cycle, an edge into a node nothing declares — ends the gate with that
 // one finding.
-func MetadataFindings(kbRoot string) ([]Finding, error) {
-	if err := precheck(kbRoot); err != nil {
-		var r Refusal
+func MetadataFindings(src *kb.Source) ([]Finding, error) {
+	if err := precheck(src); err != nil {
+		var r result.Refusal
 		if errors.As(err, &r) {
 			var out []Finding
-			for _, it := range r.Items {
+			for _, it := range r {
 				out = append(out, Finding{Check: checkMetadata, Path: it.Path, Detail: it.Detail})
 			}
 			return out, nil
 		}
 		return nil, err
 	}
-	m := metaCheck{root: kbRoot}
+	m := metaCheck{src: src}
 	findings, err := m.run()
 	var mal kb.MalformedError
 	var cov CoverageError
@@ -124,8 +151,12 @@ func MetadataFindings(kbRoot string) ([]Finding, error) {
 	return findings, err
 }
 
+// CheckIndexFreshness names the finding for an index a refresh would write
+// otherwise.
+const CheckIndexFreshness = "index freshness"
+
 type metaCheck struct {
-	root     string
+	src      *kb.Source
 	findings []Finding
 }
 
@@ -138,12 +169,10 @@ func (m *metaCheck) addAt(check string, fixable bool, rel string, line int, form
 	m.findings = append(m.findings, Finding{Check: check, Path: rel, Line: line, Detail: fmt.Sprintf(format, args...), RefreshFixable: fixable})
 }
 
-func (m *metaCheck) read(rel string) (string, error) {
-	return kb.ReadText(filepath.Join(m.root, filepath.FromSlash(rel)))
-}
+func (m *metaCheck) read(rel string) (string, error) { return m.src.ReadText(m.src.KBPath(rel)) }
 
 func (m *metaCheck) run() ([]Finding, error) {
-	docs, err := kb.Documents(m.root)
+	docs, err := kb.Documents(m.src)
 	if err != nil {
 		return nil, err
 	}
@@ -153,9 +182,13 @@ func (m *metaCheck) run() ([]Finding, error) {
 		if err != nil {
 			return nil, err
 		}
-		files = append(files, document{rel, kb.ParseFrontmatter(text)})
+		fm, err := kb.ParseFrontmatter(text)
+		if err != nil {
+			return m.findings, kb.MalformedError{Msg: rel + ": " + err.Error()}
+		}
+		files = append(files, document{rel, fm})
 	}
-	regs, err := kb.Registers(m.root)
+	regs, err := kb.Registers(m.src)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +207,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 			canonicalSet[mm[1]] = true
 		}
 	}
-	st, err := kb.Discover(m.root, log.Discard())
+	st, err := kb.Discover(m.src, log.Discard())
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +234,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 		}
 		if f.fm.Kind() == kb.DocumentLeaf {
 			has := func(k string) bool { v, ok := f.fm.Get(k); return ok && v.Truthy() }
-			switch claims, noClaim, exp := has("claims"), has("no-claim"), has("exp-id"); {
+			switch claims, noClaim, exp := has("claims"), has("no-claim"), has(kb.ExperimentNodesKey); {
 			case !claims && !noClaim && !exp:
 				m.addAt("tier-1 coverage", false, f.rel, 0, "%s declares none of claims / no-claim / exp-id", f.rel)
 			case claims && noClaim:
@@ -258,30 +291,23 @@ func (m *metaCheck) run() ([]Finding, error) {
 		return nil, err
 	}
 
-	indexDir := filepath.Join(m.root, kb.IndexDir)
-	missing, malformed, err := m.indexWellFormed(indexDir)
-	if err != nil {
+	if err := m.indexWellFormed(); err != nil {
 		return nil, err
 	}
-	if err := m.indexFresh(indexDir, st); err != nil {
+	if err := m.indexFresh(st); err != nil {
 		return m.findings, err
 	}
-	if err := m.referentialIntegrity(indexDir); err != nil {
+	if err := m.referentialIntegrity(); err != nil {
 		return nil, err
 	}
-	if !missing && !malformed {
-		if err := m.sheetFresh(indexDir); err != nil {
-			return nil, err
-		}
-	}
-	if err := m.solidityFresh(st, sol, indexDir); err != nil {
+	if err := m.solidityFresh(st, sol); err != nil {
 		return nil, err
 	}
 	refs := LeafReferences(st)
 	for _, rel := range regs {
 		m.footersFresh(rel, registerText[rel], refs)
 	}
-	walk, err := kb.WalkRegisters(st, m.root)
+	walk, err := kb.WalkRegisters(st, m.src)
 	if err != nil {
 		return nil, err
 	}
@@ -398,41 +424,70 @@ func (m *metaCheck) tier2(f document, claims []string, equations map[string]bool
 	return nil
 }
 
-func (m *metaCheck) indexWellFormed(dir string) (missing, malformed bool, err error) {
-	for _, name := range IndexFiles {
-		p := filepath.Join(dir, name+".jsonl")
-		if _, statErr := os.Stat(p); statErr != nil {
-			m.add("index", true, "%s.jsonl is missing", name)
-			missing = true
+// indexText is the index file name as src reads it, ok false where it does
+// not stand.
+func indexText(src *kb.Source, name string) (string, bool, error) {
+	p := src.KBPath(kb.IndexDir + "/" + kb.IndexFileName(name))
+	if !src.IsFile(p) {
+		return "", false, nil
+	}
+	text, err := src.ReadText(p)
+	return text, err == nil, err
+}
+
+// streamLine is one non-empty line of an index file: its 1-based number, the
+// record after the document marker, and whether the marker opened it.
+type streamLine struct {
+	n      int
+	record string
+	marked bool
+}
+
+func streamLines(text string) []streamLine {
+	var out []streamLine
+	for n, line := range strings.Split(text, "\n") {
+		if line == "" {
 			continue
 		}
-		raw, err := kb.ReadText(p)
+		record, marked := kb.IndexRecordJSON(line)
+		out = append(out, streamLine{n + 1, record, marked})
+	}
+	return out
+}
+
+func (m *metaCheck) indexWellFormed() error {
+	for _, name := range kb.IndexFiles {
+		file := kb.IndexFileName(name)
+		raw, ok, err := indexText(m.src, name)
 		if err != nil {
-			return false, false, err
+			return err
+		}
+		if !ok {
+			m.add("index", true, "%s is missing", file)
+			continue
 		}
 		if raw == "" {
 			continue
 		}
 		if !strings.HasSuffix(raw, "\n") {
-			m.add("index", true, "%s.jsonl: missing final newline", name)
+			m.add("index", true, "%s: missing final newline", file)
 		} else if strings.HasSuffix(raw, "\n\n") {
-			m.add("index", true, "%s.jsonl: multiple trailing newlines", name)
+			m.add("index", true, "%s: multiple trailing newlines", file)
 		}
-		for n, line := range strings.Split(raw, "\n") {
-			if line == "" {
+		for _, line := range streamLines(raw) {
+			if !line.marked {
+				m.add("index", false, "%s:%d: line does not open with the document marker %q", file, line.n, kb.IndexRecordMarker)
 				continue
 			}
-			v, ok := parseJSON(line)
+			v, ok := parseJSON(line.record)
 			if !ok {
-				m.add("index", false, "%s.jsonl:%d: not well-formed JSON", name, n+1)
-				malformed = true
+				m.add("index", false, "%s:%d: not well-formed JSON", file, line.n)
 			} else if _, isObj := v.(map[string]any); !isObj {
-				m.add("index", false, "%s.jsonl:%d: line is not a JSON object", name, n+1)
-				malformed = true
+				m.add("index", false, "%s:%d: line is not a JSON object", file, line.n)
 			}
 		}
 	}
-	return missing, malformed, nil
+	return nil
 }
 
 func parseJSON(line string) (any, bool) {
@@ -443,52 +498,57 @@ func parseJSON(line string) (any, bool) {
 	return v, true
 }
 
-func (m *metaCheck) indexFresh(dir string, st kb.State) error {
+// indexFresh is the index's freshness: on a KB loaded at an older format, the
+// index is stale whatever its bytes — a refresh is what writes the KB in the
+// current form; otherwise each file is stale where its bytes differ from
+// what a refresh writes.
+func (m *metaCheck) indexFresh(st kb.State) error {
+	if m.src.Migrated() {
+		m.addAt(CheckIndexFreshness, true, kb.IndexDir, 0, "the KB's metadata format is %s and kbase writes %s; a refresh rewrites the KB in %s",
+			m.src.Version(), kb.FormatVersion, kb.FormatVersion)
+		return nil
+	}
 	records, err := BuildRecords(st)
 	if err != nil {
 		return err
 	}
-	for _, name := range IndexFiles {
-		p := filepath.Join(dir, name+".jsonl")
-		if _, err := os.Stat(p); err != nil {
-			continue
-		}
-		actual, err := kb.ReadText(p)
+	for _, name := range kb.IndexFiles {
+		file := kb.IndexFileName(name)
+		actual, ok, err := indexText(m.src, name)
 		if err != nil {
 			return err
 		}
+		if !ok {
+			continue
+		}
 		if expected := Serialize(records[name]); actual != expected {
-			lines := 0
-			for _, l := range strings.Split(actual, "\n") {
-				if l != "" {
-					lines++
-				}
+			lines := len(streamLines(actual))
+			if lines == len(records[name]) {
+				m.add(CheckIndexFreshness, true, "%s: %d records, bytes differ from what refresh writes", file, lines)
+			} else {
+				m.add(CheckIndexFreshness, true, "%s: %d expected vs %d actual records", file, len(records[name]), lines)
 			}
-			m.add("index freshness", true, "%s.jsonl: %d expected vs %d actual records", name, len(records[name]), lines)
 		}
 	}
 	return nil
 }
 
-// jsonLines is every line of a JSONL file that parses, with its line number;
-// absent where the file is.
-func jsonLines(path string) ([]any, []int, bool, error) {
-	if _, err := os.Stat(path); err != nil {
-		return nil, nil, false, nil
-	}
-	text, err := kb.ReadText(path)
-	if err != nil {
+// recordLines is every record of an index file that parses, with its line
+// number; ok false where the file does not stand.
+func recordLines(src *kb.Source, name string) ([]any, []int, bool, error) {
+	text, ok, err := indexText(src, name)
+	if err != nil || !ok {
 		return nil, nil, false, err
 	}
 	var vals []any
 	var nums []int
-	for n, line := range strings.Split(text, "\n") {
-		if line == "" {
+	for _, line := range streamLines(text) {
+		if !line.marked {
 			continue
 		}
-		if v, ok := parseJSON(line); ok {
+		if v, ok := parseJSON(line.record); ok {
 			vals = append(vals, v)
-			nums = append(nums, n+1)
+			nums = append(nums, line.n)
 		}
 	}
 	return vals, nums, true, nil
@@ -548,23 +608,16 @@ func inUnit(v any) bool {
 	return ok && 0 <= f && f <= 1
 }
 
-func (m *metaCheck) referentialIntegrity(dir string) error {
-	claimsPath := filepath.Join(dir, "claims.jsonl")
-	if _, err := os.Stat(claimsPath); err != nil {
-		return nil
-	}
-	claimsText, err := kb.ReadText(claimsPath)
-	if err != nil {
+func (m *metaCheck) referentialIntegrity() error {
+	claimsText, ok, err := indexText(m.src, "claims")
+	if err != nil || !ok {
 		return err
 	}
 	nodeType := map[string]string{}
 	var nodeOrder []string
-	for _, line := range strings.Split(claimsText, "\n") {
-		if line == "" {
-			continue
-		}
-		c, ok := parseJSON(line)
-		if !ok {
+	for _, line := range streamLines(claimsText) {
+		c, ok := parseJSON(line.record)
+		if !ok || !line.marked {
 			return nil
 		}
 		rec, ok := c.(map[string]any)
@@ -586,10 +639,10 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 		nodeType[k] = t
 	}
 	violation := func(file string, id any, format string, args ...any) {
-		m.add("referential integrity", false, "%s.jsonl: %v: %s", file, id, fmt.Sprintf(format, args...))
+		m.add("referential integrity", false, "%s: %v: %s", kb.IndexFileName(file), id, fmt.Sprintf(format, args...))
 	}
 	orphans := func(file string, keys ...string) error {
-		recs, nums, ok, err := jsonLines(filepath.Join(dir, file+".jsonl"))
+		recs, nums, ok, err := recordLines(m.src, file)
 		if err != nil || !ok {
 			return err
 		}
@@ -631,7 +684,7 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 		}
 	}
 	typeOf := func(v any) (string, bool) { t, ok := nodeType[jsonKey(v)]; return t, ok }
-	deps, nums, _, err := jsonLines(filepath.Join(dir, "depends-on.jsonl"))
+	deps, nums, _, err := recordLines(m.src, "depends-on")
 	if err != nil {
 		return err
 	}
@@ -670,13 +723,13 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 			}
 		}
 		switch relation {
-		case "supports":
+		case kb.RelationSupports:
 			expect("support", "source", srcOK, src, source)
 			expect("claim", "target", tgtOK, tgt, target)
 			kindIs("claim")
 			nullStrength()
 			fractionOrPending()
-		case "strengthens":
+		case kb.RelationStrengthens:
 			expect("experiment", "source", srcOK, src, source)
 			expect("claim", "target", tgtOK, tgt, target)
 			kindIs("claim")
@@ -685,21 +738,25 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 			} else if !inUnit(strength) {
 				violation("depends-on", source, "line %d, strengthens edge strength %v not in [0, 1]", n, strength)
 			}
-		case "rests-on":
+		case kb.RelationRestsOn:
 			expect("claim", "source", srcOK, src, source)
 			expect("work", "target", tgtOK, tgt, target)
 			kindIs("work")
 			nullStrength()
 			fractionOrPending()
-		case "references":
+		case kb.RelationReferences, kb.RelationDemoted:
 			expect("claim", "source", srcOK, src, source)
 			expect("claim", "target", tgtOK, tgt, target)
 			kindIs("claim")
 			nullStrength()
 			if fraction != nil {
-				violation("depends-on", source, "line %d, references edge has non-null fraction %v", n, fraction)
+				violation("depends-on", source, "line %d, %s edge has non-null fraction %v", n, relation, fraction)
 			}
-		case "depends":
+			if origin, _ := rec["origin"].(string); relation == kb.RelationDemoted && !slices.Contains(kb.Origins, origin) {
+				violation("depends-on", source, "line %d, demoted edge to %v carries origin %v, not one of %v; only the build writes a demoted edge, "+
+					"and its origin says whether the text marked the dependency", n, target, rec["origin"], kb.Origins)
+			}
+		case kb.RelationDepends:
 			if srcOK && src != "claim" && src != "support" {
 				violation("depends-on", source, "line %d, depends edge source resolves to %q, expected claim or support", n, src)
 			}
@@ -729,7 +786,7 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 		}
 	}
 	for _, file := range []string{"cites", "subtree-aggregates"} {
-		recs, nums, _, err := jsonLines(filepath.Join(dir, file+".jsonl"))
+		recs, nums, _, err := recordLines(m.src, file)
 		if err != nil {
 			return err
 		}
@@ -759,7 +816,7 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 			}
 		}
 	}
-	sb, sbNums, _, err := jsonLines(filepath.Join(dir, "supported-by.jsonl"))
+	sb, sbNums, _, err := recordLines(m.src, "supported-by")
 	if err != nil {
 		return err
 	}
@@ -774,31 +831,6 @@ func (m *metaCheck) referentialIntegrity(dir string) error {
 		if t, ok := typeOf(rec["sup_id"]); ok && t != "support" {
 			violation("supported-by", rec["sup_id"], "line %d, sup_id resolves to %q, expected support", sbNums[i], t)
 		}
-	}
-	return nil
-}
-
-// sheetFresh checks the placeholder sheet against the index on disk. A
-// drawn sheet is not this toolchain's to check; an absent one is drift.
-func (m *metaCheck) sheetFresh(indexDir string) error {
-	path := filepath.Join(m.root, kb.ClaimGraphFile)
-	if !kb.IsFile(path) {
-		m.addAt("claim-graph sheet", true, kb.ClaimGraphFile, 0, "no %s on disk", kb.ClaimGraphFile)
-		return nil
-	}
-	current, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if !sheet.IsOwn(current) {
-		return nil
-	}
-	want, err := sheet.Render(indexDir)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(current, want) {
-		m.addAt("claim-graph sheet", true, kb.ClaimGraphFile, 0, "%s is not what %s/ renders: %d bytes on disk, %d rendered", kb.ClaimGraphFile, kb.IndexDir, len(current), len(want))
 	}
 	return nil
 }
@@ -832,7 +864,7 @@ func (m *metaCheck) annotationDrift(owner string, edges []kb.Edge, finals map[st
 	}
 }
 
-func (m *metaCheck) solidityFresh(st kb.State, sol Solidity, indexDir string) error {
+func (m *metaCheck) solidityFresh(st kb.State, sol Solidity) error {
 	finals, supFinals := sol.Finals(), sol.SupFinals()
 	drift := func(id, got, want string) { m.add("solidity freshness", true, "%s: %s, %s", id, got, want) }
 	for _, s := range st.Supports {
@@ -872,20 +904,14 @@ func (m *metaCheck) solidityFresh(st kb.State, sol Solidity, indexDir string) er
 		}
 		m.annotationDrift(e.ID, e.DependsOn, finals)
 	}
-	p := filepath.Join(indexDir, "claims.jsonl")
-	if _, err := os.Stat(p); err != nil {
-		return nil
-	}
-	text, err := kb.ReadText(p)
-	if err != nil {
+	text, ok, err := indexText(m.src, "claims")
+	if err != nil || !ok {
 		return err
 	}
-	for _, line := range strings.Split(text, "\n") {
-		if line == "" {
-			continue
-		}
-		v, ok := parseJSON(line)
-		if !ok {
+	claimsFile := kb.IndexFileName("claims")
+	for _, line := range streamLines(text) {
+		v, ok := parseJSON(line.record)
+		if !ok || !line.marked {
 			break
 		}
 		rec, ok := v.(map[string]any)
@@ -909,9 +935,9 @@ func (m *metaCheck) solidityFresh(st kb.State, sol Solidity, indexDir string) er
 		f, isNum := onDisk.(float64)
 		switch {
 		case computed == nil && onDisk != nil:
-			drift(jsonKey(rec["id"]), fmt.Sprintf("claims.jsonl solidity %v", onDisk), "expected null")
+			drift(jsonKey(rec["id"]), fmt.Sprintf("%s solidity %v", claimsFile, onDisk), "expected null")
 		case computed != nil && (!isNum || !approx(&f, computed)):
-			drift(jsonKey(rec["id"]), fmt.Sprintf("claims.jsonl solidity %v", onDisk), "expected "+FormatSolidity(computed))
+			drift(jsonKey(rec["id"]), fmt.Sprintf("%s solidity %v", claimsFile, onDisk), "expected "+FormatSolidity(computed))
 		}
 	}
 	return nil

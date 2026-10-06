@@ -114,6 +114,20 @@ func MintID(kind string, taken func(id string) bool) string {
 // line only where its name is this.
 const LabelName = `[A-Za-z]+(?: [A-Za-z]+)*`
 
+// labelLineRE is kb_tools' LABEL_LINE_RE: a labelled block's label line, bare
+// or wrapped in the identifier the source's \label became.
+var labelLineRE = PyRE(`^>\s*(?:<span id="[^"]*">)?\*\*(` + LabelName + `)\*\*(?:</span>)?\s*$`)
+
+// LabelLine is the name line carries where it is a labelled block's label
+// line as kb_tools' reader reads one; ok false for any other line.
+func LabelLine(line string) (name string, ok bool) {
+	m := labelLineRE.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
 // The document kinds a frontmatter block's kind: names, by path shape alone:
 // the entry point, a document with children, one without.
 const (
@@ -154,8 +168,46 @@ func EquationLabel(title string) (string, bool) {
 	return m[1], true
 }
 
+// The values a node_type takes.
+const (
+	NodeKindClaim      = "claim"
+	NodeKindSupport    = "support"
+	NodeKindExperiment = "experiment"
+	NodeKindInvariant  = "invariant"
+	NodeKindAxiom      = "axiom"
+	NodeKindWork       = "work"
+)
+
 // NodeKinds is every value a node_type takes, in census order.
-var NodeKinds = []string{"claim", "support", "experiment", "invariant", "axiom", "work"}
+var NodeKinds = []string{NodeKindClaim, NodeKindSupport, NodeKindExperiment, NodeKindInvariant, NodeKindAxiom, NodeKindWork}
 
 // FrameworkKinds are the bedrock kinds: solidity 1.0, no scoring fields.
-var FrameworkKinds = []string{"invariant", "axiom"}
+var FrameworkKinds = []string{NodeKindInvariant, NodeKindAxiom}
+
+// The relations a depends-on index row carries. Depends and rests-on are the
+// premises the solidity walk takes. RelationDemoted is a depends edge the
+// build's cycle breaking cut: a claim entry's "- demoted:" list and its index
+// rows' relation; it stands outside the premise walk as a references edge
+// does. Supports and strengthens are a support's and an experiment's pairs.
+const (
+	RelationDepends     = "depends"
+	RelationRestsOn     = "rests-on"
+	RelationReferences  = "references"
+	RelationDemoted     = "demoted"
+	RelationSupports    = "supports"
+	RelationStrengthens = "strengthens"
+)
+
+// Relations is every relation a depends-on index row carries.
+var Relations = []string{RelationDepends, RelationRestsOn, RelationReferences, RelationDemoted, RelationSupports, RelationStrengthens}
+
+// A demoted edge's origin, in the words the claim-graph sheet names an edge's
+// provenance with: cited where the text marked the dependency, inferred where
+// the build found it unmarked.
+const (
+	OriginCited    = "cited"
+	OriginInferred = "inferred"
+)
+
+// Origins is every origin a demoted edge may carry.
+var Origins = []string{OriginCited, OriginInferred}

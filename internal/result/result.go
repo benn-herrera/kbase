@@ -89,6 +89,12 @@ func (it Items) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// Refusal is wrong input or state carried as an error, every offending item
+// named.
+type Refusal []Item
+
+func (r Refusal) Error() string { return Items(r).Error() }
+
 // Emit writes one result document: outcome, then fields in order.
 func Emit(w io.Writer, outcome string, fields ...Field) error {
 	return Write(w, append([]Field{{"outcome", outcome}}, fields...)...)

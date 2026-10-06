@@ -294,5 +294,5 @@ func init() {
 	registerProviderFlags(configureCmd, &configureFlagProvider, &configureFlagTimeout, "configure")
 	configureCmd.Flags().StringArrayVar(&configureFlagModelMap, "model-map", nil,
 		"explicit tier assignment, e.g. "+config.TierHeavy+"=<id>"+modelMapPairSep+config.TierLight+"=<id> (repeatable; unnamed tiers are auto-detected)")
-	rootCmd.AddCommand(configureCmd)
+	rootCmd.AddCommand(mcpBinding(configureCmd, mcpExcluded))
 }

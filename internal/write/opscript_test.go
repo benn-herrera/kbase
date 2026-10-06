@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/log"
 )
 
@@ -58,18 +60,25 @@ type fixtureChoice struct {
 // which a single-claim leaf's first claim may lack.
 func chooseFixture(t *testing.T, root string) fixtureChoice {
 	t.Helper()
-	st, err := kb.Discover(root, log.Discard())
+	src, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := kb.Discover(src, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, runs := range []bool{false, true} {
 		for _, wantClaims := range []bool{true, false} {
 			for _, leaf := range st.Leaves {
-				text, err := kb.ReadText(filepath.Join(root, filepath.FromSlash(leaf.Path)))
+				text, err := src.ReadText(src.KBPath(leaf.Path))
 				if err != nil {
 					t.Fatal(err)
 				}
-				fm := kb.ParseFrontmatter(text)
+				fm, err := kb.ParseFrontmatter(text)
+				if err != nil {
+					t.Fatal(err)
+				}
 				_, noClaim := fm.Get("no-claim")
 				if len(fm) != 2 || (wantClaims && len(leaf.Claims) < 2) || (!wantClaims && !noClaim) {
 					continue
@@ -301,9 +310,9 @@ var (
 
 // comparable is a file's text with kb_tools' minted ids spelled as kbase's
 // and the order of id lists dropped — a frontmatter list, a JSON array of
-// strings, a .jsonl file's records: the ids are random on each side, so
+// strings, an index file's records: the ids are random on each side, so
 // anything ordered by id is ordered differently.
-func comparable(text string, rename *strings.Replacer, jsonl bool) []string {
+func comparable(text string, rename *strings.Replacer, records bool) []string {
 	sorted := func(list string) string {
 		items := strings.Split(list, ", ")
 		slices.Sort(items)
@@ -311,13 +320,13 @@ func comparable(text string, rename *strings.Replacer, jsonl bool) []string {
 	}
 	lines := strings.Split(rename.Replace(text), "\n")
 	for i, line := range lines {
-		if jsonl {
+		if records {
 			lines[i] = jsonStringsRE.ReplaceAllStringFunc(line, func(m string) string { return "[" + sorted(m[1:len(m)-1]) + "]" })
 		} else if m := idListLineRE.FindStringSubmatch(line); m != nil {
 			lines[i] = m[1] + sorted(m[2]) + m[3]
 		}
 	}
-	if jsonl {
+	if records {
 		slices.Sort(lines)
 	}
 	return lines
@@ -342,8 +351,9 @@ func treeFiles(t *testing.T, root string) map[string]string {
 }
 
 // TestCompareOpScript records every difference between the kb-root kbase's
-// run left and the one kb_tools' run left, the claim-graph sheet tagged as
-// the one named exception, and fails on any other.
+// run left and the one kb_tools' run left, a claim-graph sheet both runs left
+// with other content tagged as the one named exception, and fails on any
+// other: a sheet one run left and the other did not is a difference.
 func TestCompareOpScript(t *testing.T) {
 	if *opscriptKbase == "" {
 		t.Skip("no results named; test-integration-write-arxiv names them")
@@ -374,21 +384,21 @@ func TestCompareOpScript(t *testing.T) {
 	for _, p := range paths {
 		a, inKbase := kbase[p]
 		b, inTools := tools[p]
-		kind := "content"
-		if p == kb.ClaimGraphFile {
-			kind = "sheet"
-		}
 		switch {
 		case !inTools:
-			diffs = append(diffs, difference{p, kind, "only in kbase's result"})
+			diffs = append(diffs, difference{p, "content", "only in kbase's result"})
 		case !inKbase:
-			diffs = append(diffs, difference{p, kind, "only in kb_tools' result"})
+			diffs = append(diffs, difference{p, "content", "only in kb_tools' result"})
 		case a == b:
 		default:
-			jsonl := strings.HasSuffix(p, ".jsonl")
-			left, right := comparable(a, strings.NewReplacer(), jsonl), comparable(b, rename, jsonl)
+			records := path.Base(path.Dir(p)) == kb.IndexDir && path.Ext(p) == kb.IndexFileExt
+			left, right := comparable(a, strings.NewReplacer(), records), comparable(b, rename, records)
 			if slices.Equal(left, right) {
 				continue
+			}
+			kind := "content"
+			if base := path.Base(p); base == kb.ClaimGraphFile || base == kb.ClaimGraphDigestFile {
+				kind = "sheet"
 			}
 			diffs = append(diffs, difference{p, kind, firstDifference(left, right)})
 		}

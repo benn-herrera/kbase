@@ -3,11 +3,9 @@ package main
 import (
 	"errors"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
-	"kbase/internal/index"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
@@ -60,10 +58,17 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 	if usage != nil {
 		return refused(fields, usage...)
 	}
-	ix, err := query.Load(root)
-	var refusal index.Refusal
+	src, refusals, err := openKB(root)
+	if err != nil {
+		return failed(fields, err)
+	}
+	if refusals != nil {
+		return refused(fields, refusals...)
+	}
+	ix, err := query.Load(src)
+	var refusal toolresult.Refusal
 	if errors.As(err, &refusal) {
-		return refused(fields, refusal.Items...)
+		return refused(fields, refusal...)
 	}
 	if err != nil {
 		return failed(fields, err)
@@ -89,7 +94,8 @@ func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, 
 const checkUsage = "usage"
 
 const queryHelp = `
-It reads kb-root/.index/ beside the repository's .git and writes nothing. Its
+It reads kb-root/.index/ beside the repository's .git and writes nothing; a KB
+in an older metadata format is read in the current one. Its
 result is one YAML document on stdout, the answer under "` + query.ResultsKey + `" in
 kb_cmd --json's names.`
 
@@ -109,7 +115,7 @@ func queryCommand(cmd *cobra.Command, list bool, answer queryAnswer) *cobra.Comm
 		cmd.Flags().IntVar(&offset, "offset", 0, "how many results to skip")
 	}
 	cmd.RunE = func(c *cobra.Command, args []string) error {
-		wd, err := os.Getwd()
+		wd, err := invocationDir(c)
 		if err != nil {
 			return err
 		}
@@ -123,5 +129,5 @@ func queryCommand(cmd *cobra.Command, list bool, answer queryAnswer) *cobra.Comm
 		}
 		return nil
 	}
-	return cmd
+	return mcpBinding(readOnly(cmd), mcpBound)
 }

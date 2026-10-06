@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/buildrecords"
 	"kbase/internal/claimgraph"
+	"kbase/internal/config"
 	"kbase/internal/filelock"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
@@ -22,6 +25,7 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/records"
 	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
 func TestResolveStage(t *testing.T) {
@@ -45,8 +49,8 @@ func TestDroppedRowsFollowInference(t *testing.T) {
 			dropped = append(dropped, r.id)
 		}
 	}
-	if strings.Join(dropped, ",") != "discover.build,ov.docs" {
-		t.Errorf("rows dropped under --no-inference = %q, want the two that spend it", dropped)
+	if strings.Join(dropped, ",") != "discover.build,unmarked.build,ov.docs" {
+		t.Errorf("rows dropped under --no-inference = %q, want the three that spend it", dropped)
 	}
 }
 
@@ -173,7 +177,7 @@ func writeFile(t *testing.T, path, text string) {
 }
 
 func (f fixture) options() Options {
-	return Options{VolumeRoot: filepath.Join(f.repo, "paper.tex"), NoInference: true, StateDir: f.state, WorkDir: f.repo}
+	return Options{VolumeRoots: []string{filepath.Join(f.repo, "paper.tex")}, NoInference: true, StateDir: f.state, WorkDir: f.repo}
 }
 
 func (f fixture) build(t *testing.T, opts Options) (string, []result.Field) {
@@ -311,15 +315,23 @@ func TestBuildEndToEnd(t *testing.T) {
 	for _, e := range trail {
 		bodies[e.Stage] = e.Body
 	}
-	if bodies[stageStart] != noCharter {
+	if !strings.HasPrefix(bodies[stageStart], noCharter+"\n\n") {
 		t.Errorf("start body = %q, want the stated absence of a charter", bodies[stageStart])
 	}
-	for _, s := range []string{"claims-discovered", "overview-drafted"} {
+	for _, s := range stageIDs("") {
+		if in, ok := recordedInputs(bodies[s]); !ok || !slices.Equal(in.roots, []string{"paper.tex"}) || in.bibliographies != nil {
+			t.Errorf("%s body = %q, want it to record the one volume root and no bibliography", s, bodies[s])
+		}
+	}
+	for _, s := range []string{"claims-discovered", "references-found", "overview-drafted"} {
 		if !strings.HasPrefix(bodies[s], "--no-inference: ") {
 			t.Errorf("%s body = %q, want the dropped rows named", s, bodies[s])
 		}
 	}
 	files := snapshot(t, f.repo)
+	if want := "\nplanned: null\npairs: []\n"; !strings.HasSuffix(files[buildrecords.UnmarkedFile], want) {
+		t.Errorf("%s = %q, want it as the declared pass wrote it, ending %q", buildrecords.UnmarkedFile, files[buildrecords.UnmarkedFile], want)
+	}
 	if files["kb-root/CLAUDE.md"] != "@AGENTS.md\n" {
 		t.Errorf("CLAUDE.md = %q, want exactly the redirect", files["kb-root/CLAUDE.md"])
 	}
@@ -337,6 +349,12 @@ func TestBuildEndToEnd(t *testing.T) {
 	if outcome, fields := f.build(t, f.options()); outcome != result.Unchanged {
 		t.Errorf("a re-run over a finished build = %s %v, want unchanged", outcome, fields)
 	}
+	opts := f.options()
+	opts.VolumeRoots = append(opts.VolumeRoots, filepath.Join(f.repo, "more.tex"))
+	writeFile(t, opts.VolumeRoots[1], paper)
+	if outcome, fields := f.build(t, opts); outcome != result.Refused || details(fields, "refusals") == nil {
+		t.Errorf("a re-run over a finished build with another volume root = %s %v, want refused", outcome, fields)
+	}
 }
 
 func TestCharterBecomesTheScopePin(t *testing.T) {
@@ -349,7 +367,7 @@ func TestCharterBecomesTheScopePin(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 	trail, _ := f.ledger(t).Trail()
-	if start := trail[len(trail)-1]; start.Body != "charter: kb-build-charter.md" {
+	if start := trail[len(trail)-1]; !strings.HasPrefix(start.Body, "charter: kb-build-charter.md\n\n") {
 		t.Errorf("start body = %q", start.Body)
 	}
 	files := snapshot(t, f.repo)
@@ -415,11 +433,117 @@ func TestLockRefusesASecondBuilder(t *testing.T) {
 	}
 	defer held.Release()
 	outcome, fields := f.build(t, f.options())
-	if items := details(fields, "refusals"); outcome != result.Retry || len(items) != 1 || !strings.Contains(items[0], "holds the run lock") {
+	if items := details(fields, "refusals"); outcome != result.Retry || len(items) != 1 || !strings.Contains(items[0], "holds the state store") {
 		t.Errorf("a second builder = %s %v, want retry naming the holder", outcome, fields)
 	}
 	if events, _ := readProgress(f.state); len(events) != 0 {
 		t.Errorf("the refused builder wrote %d progress events", len(events))
+	}
+}
+
+func TestRunLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
+	f := newFixture(t)
+	other := filepath.Join(filepath.Dir(f.state), "other-state")
+	held, err := takeRunLock(filepath.Join(f.repo, kb.KBDir), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	outcome, fields := f.build(t, f.options())
+	items, _ := field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkLock || items[0].Path != other ||
+		items[0].Remedy != "" || items[0].Detail != "a build is running; its state-dir is "+other {
+		t.Errorf("a second build through another state-dir = %s %v, want refused naming %s", outcome, fields, other)
+	}
+	if events, _ := readProgress(f.state); len(events) != 0 {
+		t.Errorf("the refused build wrote %d progress events", len(events))
+	}
+	if got := f.trailStages(t); len(got) != 0 {
+		t.Errorf("the refused build recorded %q", got)
+	}
+}
+
+// TestRunLockHeldBeforeItsStateDirIsWritten: a run lock taken and not yet
+// holding its state directory is a build starting — a retry for a second
+// build, no refusal for a writer — never a refusal naming an empty path.
+func TestRunLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kbRoot := filepath.Join(repo, kb.KBDir)
+	held, err := filelock.Acquire(runLockPath(kbRoot), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	var r retry
+	if l, err := takeRunLock(kbRoot, t.TempDir()); !errors.As(err, &r) {
+		if l != nil {
+			l.Release()
+		}
+		t.Errorf("a second build against a starting one: %v, want retry", err)
+	}
+	if items, err := RunningBuild(kbRoot); items != nil || err != nil {
+		t.Errorf("a writer against a starting build: %v, %v; want neither refusal nor error", items, err)
+	}
+}
+
+// TestStatusSeesABuildWaitingOutAWriter: a build that finds a writer holding
+// the KB write lock is running to status while it waits, and walks once the
+// writer lets go.
+func TestStatusSeesABuildWaitingOutAWriter(t *testing.T) {
+	f := newFixture(t)
+	release, err := write.LockKB(filepath.Join(f.repo, kb.KBDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := f.options()
+	opts.Through = "start"
+	done := make(chan string, 1)
+	go func() {
+		outcome, _ := f.build(t, opts)
+		done <- outcome
+	}()
+	running := false
+	for deadline := time.Now().Add(write.LockWait / 2); !running && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(f.state, progressFile)); err == nil {
+			running = statusOf(t, f).state == stateRunning
+		}
+	}
+	release()
+	if outcome := <-done; outcome != result.Bounded {
+		t.Errorf("the build once the writer let go = %s, want bounded", outcome)
+	}
+	if !running {
+		t.Error("status never saw the build waiting for the writer as running")
+	}
+}
+
+func TestRunLockPathFollowsAGitFile(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "wt")
+	gitdir := filepath.Join(base, "main", ".git", "worktrees", "wt")
+	for _, tc := range []struct{ name, dotGit, want string }{
+		{"a .git directory", "", filepath.Join(repo, ".git", runLockFile)},
+		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, runLockFile)},
+		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, runLockFile)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.RemoveAll(repo); err != nil {
+				t.Fatal(err)
+			}
+			if tc.dotGit == "" {
+				if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeFile(t, filepath.Join(repo, ".git"), tc.dotGit)
+			}
+			if got := runLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
+				t.Errorf("runLockPath = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -442,6 +566,38 @@ func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
 		t.Errorf("trail after the refusal = %q", got)
+	}
+}
+
+// TestSpineStampsTheFormat: the spine's boundary commits an entry point
+// stamped with the format version; a resume over a KB a newer kbase stamped
+// is refused, naming the format.
+func TestSpineStampsTheFormat(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	entry := filepath.Join(f.repo, kb.KBDir, kb.EntryPointFile)
+	b, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stamp, _, err := kb.FormatStamp(string(b)); err != nil || stamp != kb.FormatVersion {
+		t.Errorf("the spine left the entry point stamped %q (%v), want %s:\n%s", stamp, err, kb.FormatVersion, b)
+	}
+	if dirty, err := f.ledger(t).Dirty(); err != nil || len(dirty) > 0 {
+		t.Errorf("the stamp is not in the spine's boundary: dirty %q, %v", dirty, err)
+	}
+	writeFile(t, entry, strings.Replace(string(b), `"`+kb.FormatVersion+`"`, `"2.0.0"`, 1))
+	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = ""
+	outcome, fields := f.build(t, opts)
+	if items, _ := field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != "kb-format" {
+		t.Errorf("a resume over a KB stamped 2.0.0 = %s %v, want refused naming the format", outcome, fields)
 	}
 }
 
@@ -516,7 +672,10 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 		t.Errorf("trail after the cancel = %q, want every stage before the one in flight", got)
 	}
 	if held, err := filelock.Held(filepath.Join(f.state, lockFile)); err != nil || held {
-		t.Errorf("the run lock is still held after the cancel: %t, %v", held, err)
+		t.Errorf("the holder lock is still held after the cancel: %t, %v", held, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, ".git", runLockFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the repository's run lock stands after the cancel: %v", err)
 	}
 	if s := statusOf(t, f); s.state != stateCancelled || s.current != "claims-declared" || s.done != 0 || s.resume == "" {
 		t.Errorf("status after the cancel = %+v", s)
@@ -601,6 +760,17 @@ func TestLaunchRefusals(t *testing.T) {
 	}
 	f := newFixture(t)
 	opts := f.options()
+	opts.NoInference, opts.Through = false, "claims-discovered"
+	opts.Provider = func() (Provider, error) {
+		return Provider{}, config.LackError{Key: config.EnvAPIBaseURL, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}
+	}
+	if _, fields := f.build(t, opts); func() bool {
+		items, _ := field(fields, "refusals").([]result.Item)
+		return len(items) != 1 || items[0].Key != config.EnvAPIBaseURL || items[0].Path != config.ProvidersFileName
+	}() {
+		t.Errorf("a provider lacking its base URL = %v, want the refusal keyed by the variable and the file", fields)
+	}
+	opts = f.options()
 	opts.Through = "phase-5"
 	if outcome, fields := f.build(t, opts); outcome != result.Refused || !strings.Contains(details(fields, "refusals")[0], "names no stage") {
 		t.Errorf("--through phase-5 = %s %v", outcome, fields)
@@ -629,6 +799,131 @@ func TestStaleIndexLockRefusedByName(t *testing.T) {
 	}
 	if outcome, fields := f.build(t, opts); outcome != result.Done {
 		t.Fatalf("the build once the lock is gone = %s %v", outcome, fields)
+	}
+}
+
+func TestInputsRefusal(t *testing.T) {
+	trail := inputs{roots: []string{"a.tex", "b.tex"}, bibliographies: []string{"x.bib", "y.bib"}}
+	for _, tc := range []struct {
+		name   string
+		given  inputs
+		key    string
+		change string
+	}{
+		{"the same inputs", trail, "", ""},
+		{"a volume root added", inputs{[]string{"a.tex", "b.tex", "c.tex"}, trail.bibliographies}, "<volume-root>", "added c.tex"},
+		{"a volume root removed", inputs{[]string{"b.tex"}, trail.bibliographies}, "<volume-root>", "removed a.tex"},
+		{"the bibliographies reordered", inputs{trail.roots, []string{"y.bib", "x.bib"}}, "--bibliography", "the same paths in another order"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			items := inputsRefusal("/repo", trail, tc.given)
+			if tc.key == "" {
+				if len(items) != 0 {
+					t.Errorf("refusal = %+v, want none", items)
+				}
+				return
+			}
+			if len(items) != 1 || items[0].Check != checkInputs || items[0].Key != tc.key || items[0].Path != "/repo" ||
+				!strings.HasSuffix(items[0].Detail, ": "+tc.change) || items[0].Remedy == "" {
+				t.Errorf("refusal = %+v, want one inputs item keyed %s ending %q", items, tc.key, tc.change)
+			}
+		})
+	}
+	if in, ok := recordedInputs(trail.body()); !ok ||
+		!slices.Equal(in.roots, trail.roots) || !slices.Equal(in.bibliographies, trail.bibliographies) {
+		t.Errorf("recorded inputs read back as %+v (%t), want %+v", in, ok, trail)
+	}
+	for _, body := range []string{"", noCharter, "charter: kb-build-charter.md", "--no-inference: this build spent no model call"} {
+		if _, ok := recordedInputs(body); ok {
+			t.Errorf("a body recording no inputs, %q, reads as recording some", body)
+		}
+	}
+}
+
+// TestInputsSpelledOtherwise: a volume root and a bibliography spelled
+// absolute, relative to the working directory, through a symlinked parent or
+// a symlinked repository root record as one repository-relative form, so a
+// resume spelling them otherwise than the launch raises no inputs refusal.
+func TestInputsSpelledOtherwise(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	writeFile(t, filepath.Join(repo, "papers", "paper.tex"), paper)
+	writeFile(t, filepath.Join(repo, "refs.bib"), "")
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	recorded := inputs{roots: []string{"papers/paper.tex"}, bibliographies: []string{"refs.bib"}}
+	for _, c := range []struct{ name, root, workDir, volumeRoot, bibliography string }{
+		{"absolute", repo, base, filepath.Join(repo, "papers", "paper.tex"), filepath.Join(repo, "refs.bib")},
+		{"relative", repo, filepath.Join(repo, "papers"), "paper.tex", "../refs.bib"},
+		{"through a symlinked parent", repo, base, filepath.Join("link", "papers", "paper.tex"), filepath.Join(link, "refs.bib")},
+		{"from a symlinked working directory", repo, filepath.Join(link, "papers"), "paper.tex", "../refs.bib"},
+		{"the repository root through a symlink", link, repo, "papers/paper.tex", "refs.bib"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := &walk{repo: &ledger.Repo{Root: c.root}, opts: Options{WorkDir: c.workDir,
+				VolumeRoots: []string{c.volumeRoot}, Bibliographies: []string{c.bibliography}}}
+			given := w.inputs()
+			if !slices.Equal(given.roots, recorded.roots) || !slices.Equal(given.bibliographies, recorded.bibliographies) {
+				t.Errorf("inputs = %+v, want %+v", given, recorded)
+			}
+			trail, _ := recordedInputs(recorded.body())
+			if items := inputsRefusal(repo, trail, given); len(items) != 0 {
+				t.Errorf("refusal = %+v, want none", items)
+			}
+		})
+	}
+}
+
+// TestResumeWithOtherInputsRefused: a resume given a volume root the trail
+// does not record is refused before anything is restored or committed; a
+// trail whose newest boundary records no inputs resumes, and its next
+// boundary records them.
+func TestResumeWithOtherInputsRefused(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	stray := filepath.Join(f.repo, kb.KBDir, "stray.md")
+	writeFile(t, stray, "a hand edit\n")
+	before := snapshot(t, f.repo)
+
+	more := filepath.Join(f.repo, "more.tex")
+	writeFile(t, more, paper)
+	opts.Through = ""
+	opts.VolumeRoots = append(opts.VolumeRoots, more)
+	outcome, fields := f.build(t, opts)
+	items, _ := field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "<volume-root>" ||
+		items[0].Path != f.ledger(t).Root || !strings.Contains(items[0].Detail, "added more.tex") {
+		t.Fatalf("a resume with another volume root = %s %+v, want refused naming it", outcome, items)
+	}
+	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
+		t.Errorf("the refusal touched the owned paths")
+	}
+	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
+		t.Errorf("trail after the refusal = %q", got)
+	}
+
+	if err := os.Remove(stray); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = "claims-declared"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("a resume over a trail recording no inputs = %s %v, want it walked", outcome, fields)
+	}
+	trail, err := f.ledger(t).Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in, ok := recordedInputs(trail[0].Body); !ok || !slices.Equal(in.roots, []string{"paper.tex", "more.tex"}) {
+		t.Errorf("the next boundary's body = %q, want it to record both volume roots", trail[0].Body)
 	}
 }
 
@@ -780,7 +1075,13 @@ func TestProgressRecordIsJSONLines(t *testing.T) {
 			units++
 		}
 	}
-	if want := len(rows) - 2; units != want {
+	want := 0
+	for _, r := range rows {
+		if r.applies(true) {
+			want++
+		}
+	}
+	if units != want {
 		t.Errorf("unit events = %d, want one per row run (%d)", units, want)
 	}
 }

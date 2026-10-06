@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/log"
 	"kbase/internal/result"
 )
@@ -18,14 +18,39 @@ import (
 // RenderCitation is the one op that reads instead of writing.
 const RenderCitation = "render-citation"
 
-// opSpec is one write op: its planner, and whether it may create a register.
+// AddBuildEdges is the build's edge write: add-depends-on's lists and the
+// demoted list. Only the build issues it, so it is no subcommand.
+const AddBuildEdges = "add-build-edges"
+
+// ResolveDemoted removes a demoted edge or restores it to depends-on.
+const ResolveDemoted = "resolve-demoted"
+
+// The actions resolve-demoted takes, and what each reports having done.
+const (
+	actionRemove    = "remove"
+	actionRestore   = "restore"
+	resolvedRemove  = "removed"
+	resolvedRestore = "restored"
+)
+
+var resolveActions = []string{actionRemove, actionRestore}
+
+// checkDependencyCycle is the refusal class of a restore that would close a
+// cycle.
+const checkDependencyCycle = "dependency-cycle"
+
+// opSpec is one write op: its planner, whether it may create a register,
+// whether it inserts, and whether only the build issues it.
 type opSpec struct {
-	plan    func(*opContext, []entry) ([]intent, error)
-	creates bool
-	inserts bool
+	plan      func(*opContext, []entry) ([]intent, error)
+	creates   bool
+	inserts   bool
+	buildOnly bool
 }
 
 var writeOps = map[string]opSpec{
+	AddBuildEdges:             {plan: planAddDependsOn, buildOnly: true},
+	ResolveDemoted:            {plan: planResolveDemoted},
 	"insert-claim-entry":      {plan: planInserts("clm"), creates: true, inserts: true},
 	"insert-support-entry":    {plan: planInserts("sup"), creates: true, inserts: true},
 	"insert-experiment-entry": {plan: planExperiments, inserts: true},
@@ -40,11 +65,13 @@ var writeOps = map[string]opSpec{
 	"set-on-point-fraction":   {plan: planSetOnPointFraction},
 }
 
-// Ops is every write op's name, sorted.
+// Ops is every write op a caller may issue, by name, sorted.
 func Ops() []string {
 	names := make([]string, 0, len(writeOps))
-	for name := range writeOps {
-		names = append(names, name)
+	for name, spec := range writeOps {
+		if !spec.buildOnly {
+			names = append(names, name)
+		}
 	}
 	slices.Sort(names)
 	return names
@@ -52,6 +79,26 @@ func Ops() []string {
 
 // CreatesRegister is whether op takes --create.
 func CreatesRegister(op string) bool { return writeOps[op].creates }
+
+// OpField is one key of an op's values entry.
+type OpField struct {
+	Name     string
+	Required bool
+}
+
+// OpVocabulary is a caller-issued op's values-entry keys, in vocabulary
+// order, and whether it takes --create; ok is false for any other name.
+func OpVocabulary(op string) (fields []OpField, create, ok bool) {
+	vocabulary, known := opFields[op]
+	spec := writeOps[op]
+	if !known || spec.buildOnly {
+		return nil, false, false
+	}
+	for _, f := range vocabulary {
+		fields = append(fields, OpField{Name: f.name, Required: f.required})
+	}
+	return fields, spec.creates, true
+}
 
 // Inserts is whether op enters nodes, reporting their ids.
 func Inserts(op string) bool { return writeOps[op].inserts }
@@ -67,7 +114,9 @@ type Options struct {
 
 // Result is what an op did. IDs is an insert's id per entry, minted or
 // adopted; Minted the ones this call drew; Adopted the entries already
-// there. Refreshed is what the trailing refresh wrote, nil where none ran.
+// there. Refreshed is what the trailing refresh wrote, nil where none ran,
+// and Removed what it removed. Resolved is each demoted edge resolve-demoted
+// changed.
 type Result struct {
 	Outcome   string
 	Written   []string
@@ -75,9 +124,17 @@ type Result struct {
 	Minted    []string
 	Adopted   []Adoption
 	Refreshed []string
+	Removed   []string
+	Resolved  []Resolution
 	Citations []string
 	Refusals  []result.Item
 	Failures  []result.Item
+}
+
+// Resolution is one demoted edge resolved: its ends and what was done,
+// removed or restored.
+type Resolution struct {
+	Source, Target, Action string
 }
 
 // Adoption is an insert entry that landed on an entry already there: the
@@ -98,16 +155,12 @@ func failedResult(detail string) Result {
 
 // opRefusal is a refusal composed by an op: the offending identity, why, and
 // the corrective call.
-type opRefusal struct{ name, detail, restore string }
-
-func (e *opRefusal) Error() string { return e.name + ": " + e.detail }
+func opRefusal(name, detail, restore string) error {
+	return result.Refusal{{Key: name, Remedy: remedy(restore), Detail: detail}}
+}
 
 func refusedResult(r result.Item) Result {
 	return Result{Outcome: result.Refused, Refusals: []result.Item{r}}
-}
-
-func (e *opRefusal) refusal() result.Item {
-	return result.Item{Key: e.name, Remedy: remedy(e.restore), Detail: e.detail}
 }
 
 // remedy is a restore instruction without its "restore: " lead.
@@ -122,7 +175,8 @@ type readbackFailed struct {
 
 func (e *readbackFailed) Error() string { return e.subject }
 
-// Run executes one op over the values in opts.
+// Run executes one op over the values in opts. It takes no lock: a caller
+// other than the build, which holds the run lock, holds LockKB across it.
 func Run(op string, opts Options) Result {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()
@@ -130,19 +184,28 @@ func Run(op string, opts Options) Result {
 	if info, err := os.Stat(opts.KBRoot); err != nil || !info.IsDir() {
 		return failedResult(opts.KBRoot + " is not a directory, so no KB can be resolved under it")
 	}
-	root := resolvePath(opts.KBRoot)
+	root := kb.ResolvePath(opts.KBRoot)
 	entries, refusals := parseValues(opts.Values, op)
 	if refusals != nil {
 		return Result{Outcome: result.Refused, Refusals: refusals}
 	}
+	src, err := kbload.Open(root)
+	if err != nil {
+		return errorResult(err)
+	}
 	if op == RenderCitation {
-		return renderCitations(root, entries)
+		return renderCitations(src, entries)
 	}
 	spec, ok := writeOps[op]
 	if !ok {
 		return failedResult("unknown op " + op)
 	}
-	ctx, err := openStore(root)
+	if opts.NoRefresh && src.Migrated() {
+		return refusedResult(result.Item{Check: kbload.CheckFormat, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
+			Detail: fmt.Sprintf("the KB's metadata format is %s and a write lands in %s only through the refresh that rewrites the whole KB, "+
+				"which --no-refresh skips; no save mixes two formats", src.Version(), kb.FormatVersion)})
+	}
+	ctx, err := openStore(src)
 	if err != nil {
 		return errorResult(err)
 	}
@@ -151,7 +214,7 @@ func Run(op string, opts Options) Result {
 	if err != nil {
 		return errorResult(err)
 	}
-	out, err := applyEdits(root, batch(intents))
+	out, err := applyEdits(src, batch(intents))
 	res := Result{IDs: ctx.ids, Minted: ctx.minted, Adopted: ctx.adopted}
 	if err != nil {
 		var ie *interruptedError
@@ -168,10 +231,10 @@ func Run(op string, opts Options) Result {
 			Detail: fmt.Sprintf("%s (%s)", out.detail, out.reason)})
 	case statusRetry:
 		return Result{Outcome: result.Retry, Refusals: []result.Item{{Check: "lock", Key: out.subject,
-			Remedy: "re-run kbase " + op + " with these values unchanged — never re-author values that were already right",
+			Remedy: RetryRemedy(op),
 			Detail: fmt.Sprintf("%s (%s). The values were correct and nothing was written", out.detail, out.reason)}}}
 	}
-	res.Written = out.written
+	res.Written, res.Resolved = out.written, ctx.resolved
 	res.Outcome = result.Unchanged
 	if out.status == statusWritten {
 		res.Outcome = result.Done
@@ -179,33 +242,34 @@ func Run(op string, opts Options) Result {
 	if opts.NoRefresh {
 		return res
 	}
-	refreshed, err := index.Refresh(root, opts.Logger)
+	refreshed, removed, _, err := index.RefreshReporting(src, opts.Logger)
 	slices.Sort(refreshed)
 	res.Refreshed = append([]string{}, slices.Compact(refreshed)...)
+	res.Removed = append([]string{}, removed...)
 	if err != nil {
 		res.Outcome = result.Failed
 		res.Failures = []result.Item{{Check: checkWrite, Detail: "the write landed and the trailing refresh did not: " + err.Error()}}
 		return res
 	}
-	if len(res.Refreshed) > 0 {
+	if len(res.Refreshed) > 0 || len(res.Removed) > 0 {
 		res.Outcome = result.Done
 	}
 	return res
 }
 
 func errorResult(err error) Result {
-	var or *opRefusal
+	var refused result.Refusal
 	var rb *readbackFailed
 	var mf kb.MalformedError
 	switch {
-	case errors.As(err, &or):
-		return refusedResult(or.refusal())
+	case errors.As(err, &refused):
+		return Result{Outcome: result.Refused, Refusals: refused}
 	case errors.As(err, &rb):
 		return refusedResult(result.Item{Key: rb.subject, Remedy: "this is a renderer defect, not a value defect — report it; nothing on disk changed",
 			Detail: "read back from the composed candidate with a different " + strings.Join(rb.mismatched, ", ") +
 				" than the values supplied, so the live file was never written"})
 	case errors.As(err, &mf):
-		return refusedResult(result.Item{Key: "kb-frontmatter", Remedy: "repair the named document's frontmatter, then re-run", Detail: mf.Msg})
+		return refusedResult(result.Item{Key: "frontmatter", Remedy: "repair the named document's frontmatter, then re-run", Detail: mf.Msg})
 	}
 	return failedResult(err.Error())
 }
@@ -213,21 +277,23 @@ func errorResult(err error) Result {
 // opContext is one invocation's view of the authored store. create is the
 // --create acknowledgement, on an op that admits it.
 type opContext struct {
-	root    string
-	create  bool
-	known   map[string]kb.IDRecord
-	ids     []string
-	minted  []string
-	adopted []Adoption
-	titles  map[string]string
-	read    map[string]bool
+	src      *kb.Source
+	root     string
+	create   bool
+	known    map[string]kb.IDRecord
+	ids      []string
+	minted   []string
+	adopted  []Adoption
+	resolved []Resolution
+	titles   map[string]string
+	read     map[string]bool
 }
 
 // openStore reads the authored-id inventory, refusing a KB that keys one id
 // from two register entries: the inventory keeps the first and would report
 // the collision as clean.
-func openStore(root string) (*opContext, error) {
-	known, duplicates, err := kb.AuthoredIDs(root)
+func openStore(src *kb.Source) (*opContext, error) {
+	known, duplicates, err := kb.AuthoredIDs(src)
 	if err != nil {
 		return nil, err
 	}
@@ -238,11 +304,11 @@ func openStore(root string) (*opContext, error) {
 		}
 		slices.Sort(ids)
 		id := ids[0]
-		return nil, &opRefusal{id, fmt.Sprintf("is keyed by %d canonical register entries (%s); every later reading "+
+		return nil, opRefusal(id, fmt.Sprintf("is keyed by %d canonical register entries (%s); every later reading "+
 			"would be taken over the inventory that keeps only the first", len(duplicates[id]), strings.Join(duplicates[id], ", ")),
-			fmt.Sprintf("restore: delete the duplicate '<!-- id: %s -->' entry from all but one register, then re-run this op unchanged", id)}
+			fmt.Sprintf("restore: delete the duplicate '<!-- id: %s -->' entry from all but one register, then re-run this op unchanged", id))
 	}
-	return &opContext{root: root, known: known, titles: map[string]string{}, read: map[string]bool{}}, nil
+	return &opContext{src: src, root: src.Root(), known: known, titles: map[string]string{}, read: map[string]bool{}}, nil
 }
 
 // mint is a fresh id of kind, clear of every authored id and of every id this
@@ -264,7 +330,7 @@ func (c *opContext) titleOf(nodeID string) (string, error) {
 	}
 	if !c.read[rec.RegisterPath] {
 		c.read[rec.RegisterPath] = true
-		text, err := kb.ReadText(filepath.Join(c.root, filepath.FromSlash(rec.RegisterPath)))
+		text, err := c.src.ReadText(c.src.KBPath(rec.RegisterPath))
 		if err != nil {
 			return "", err
 		}
@@ -291,8 +357,8 @@ func containedIn(root, rel, key string) (string, error) {
 	target, err := resolveTarget(root, rel)
 	var se *storeError
 	if errors.As(err, &se) {
-		return "", &opRefusal{key, fmt.Sprintf("%q %s. Paths are relative to kb-root/, not to the repository root", rel, se.detail),
-			"restore: correct " + key + " to a kb-root-relative path inside the KB and re-run"}
+		return "", opRefusal(key, fmt.Sprintf("%q %s. Paths are relative to kb-root/, not to the repository root", rel, se.detail),
+			"restore: correct "+key+" to a kb-root-relative path inside the KB and re-run")
 	}
 	return target, err
 }
@@ -302,14 +368,14 @@ func containedIn(root, rel, key string) (string, error) {
 func (c *opContext) resolve(nodeID, key string, needsRegister bool) (kb.IDRecord, error) {
 	rec, ok := c.known[nodeID]
 	if !ok {
-		return rec, &opRefusal{key + "=" + nodeID, "does not resolve against the authored-id inventory. Every id-valued " +
+		return rec, opRefusal(key+"="+nodeID, "does not resolve against the authored-id inventory. Every id-valued "+
 			"field must name a node that already exists at write time",
-			fmt.Sprintf("restore: create %s's node with the insert op for its kind, or correct %s, then re-run", nodeID, key)}
+			fmt.Sprintf("restore: create %s's node with the insert op for its kind, or correct %s, then re-run", nodeID, key))
 	}
 	if needsRegister && rec.RegisterPath == "" {
-		return rec, &opRefusal{key + "=" + nodeID, "is authored in document frontmatter but has no canonical register " +
+		return rec, opRefusal(key+"="+nodeID, "is authored in document frontmatter but has no canonical register "+
 			"entry, so it is not a node any consumer can read a title, a rigor or a rationale from",
-			fmt.Sprintf("restore: insert %s's register entry, or correct %s, then re-run", nodeID, key)}
+			fmt.Sprintf("restore: insert %s's register entry, or correct %s, then re-run", nodeID, key))
 	}
 	return rec, nil
 }
@@ -330,7 +396,7 @@ func (c *opContext) dependsTargets(values []dependsOnValue) ([]dependsOnTarget, 
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, dependsOnTarget{Target: v.ID, Title: title, Context: v.Context, Applicability: v.Applicability})
+		out = append(out, dependsOnTarget{Target: v.ID, Title: title, Context: v.Context, Applicability: v.Applicability, Origin: v.Origin})
 	}
 	return out, nil
 }
@@ -415,8 +481,8 @@ func batch(intents []intent) []edit {
 func currentEntry(read registerRead, nodeID, register string) (expectedEntry, error) {
 	e, ok := read.record(nodeID)
 	if !ok {
-		return e, &opRefusal{"id=" + nodeID, "has no canonical entry in " + register + " that the production parser returns",
-			"restore: correct id, or repair " + nodeID + "'s entry, then re-run"}
+		return e, opRefusal("id="+nodeID, "has no canonical entry in "+register+" that the production parser returns",
+			"restore: correct id, or repair "+nodeID+"'s entry, then re-run")
 	}
 	return e, nil
 }
@@ -455,7 +521,7 @@ func planInserts(kind string) func(*opContext, []entry) ([]intent, error) {
 			if kind == "clm" {
 				want.StrengthenBy = e.list("strengthen-by")
 			}
-			if adopted, differs := adoptRegisterEntry(target, kind, want); adopted != "" {
+			if adopted, differs := adoptRegisterEntry(c.src, target, kind, want); adopted != "" {
 				c.adopt(e.Index, adopted, differs)
 				continue
 			}
@@ -479,8 +545,8 @@ func planInserts(kind string) func(*opContext, []entry) ([]intent, error) {
 // adoptRegisterEntry is the entry of kind the register already keys under
 // want's title — the first that reads back as want, else the first — and the
 // fields on which it differs from want; "" where no entry carries the title.
-func adoptRegisterEntry(target, kind string, want expectedEntry) (string, []string) {
-	text, err := kb.ReadText(target)
+func adoptRegisterEntry(src *kb.Source, target, kind string, want expectedEntry) (string, []string) {
+	text, err := src.ReadText(target)
 	if err != nil {
 		return "", nil
 	}
@@ -534,21 +600,18 @@ func planExperiments(c *opContext, entries []entry) ([]intent, error) {
 			}
 		}
 		status := e.str("status")
-		if adopted := adoptExperiment(target, rel, status, strengthens); adopted != "" {
+		if adopted := adoptExperiment(c.src, target, rel, status, strengthens); adopted != "" {
 			c.adopt(e.Index, adopted, nil)
 			continue
 		}
 		expID := c.mint("exp")
 		c.ids = append(c.ids, expID)
 		decl := experimentDecl{ExpID: expID, Status: status, Strengthens: strengthens}
-		block := kb.SplitLines(renderFrontmatterBlock(frontmatterValues{Kind: kb.DocumentLeaf, ExperimentNodes: []experimentDecl{decl}}))
-		var added []string
-		for _, line := range block[1 : len(block)-1] {
-			if !strings.HasPrefix(line, "kind:") {
-				added = append(added, line)
-			}
+		lines, err := renderExperimentNodes([]experimentDecl{decl})
+		if err != nil {
+			return nil, err
 		}
-		intents = append(intents, intent{path: rel, target: target, splice: appendToBlock(added),
+		intents = append(intents, intent{path: rel, target: target, splice: appendDeclaration(kb.ExperimentNodesKey, lines),
 			prove: experimentProver(decl, rel), subject: rel + ":" + expID})
 	}
 	return intents, nil
@@ -556,8 +619,8 @@ func planExperiments(c *opContext, entries []entry) ([]intent, error) {
 
 // adoptExperiment is an experiment the document already hosts with this
 // status and these strengthens pairs, or "".
-func adoptExperiment(target, rel, status string, strengthens []pair) string {
-	text, err := kb.ReadText(target)
+func adoptExperiment(src *kb.Source, target, rel, status string, strengthens []pair) string {
+	text, err := src.ReadText(target)
 	if err != nil {
 		return ""
 	}
@@ -613,12 +676,12 @@ func planWorkInserts(c *opContext, entries []entry) ([]intent, error) {
 		nodeID := kb.WorkPrefix + "-" + key
 		want := expectedEntry{NodeID: nodeID, Title: e.str("title"), Rigor: e.score("strength"), Rationale: e.str("rationale")}
 		if created[nodeID] {
-			return nil, &opRefusal{"key=" + key, fmt.Sprintf("is named twice in this batch (%s). A work's id is derived from its "+
+			return nil, opRefusal("key="+key, fmt.Sprintf("is named twice in this batch (%s). A work's id is derived from its "+
 				"citation key, so a second entry would be a second node for one work", nodeID),
-				"restore: drop one of the two entries, then re-run"}
+				"restore: drop one of the two entries, then re-run")
 		}
 		if held, ok := c.known[nodeID]; ok && held.RegisterPath != "" {
-			text, err := kb.ReadText(filepath.Join(c.root, filepath.FromSlash(held.RegisterPath)))
+			text, err := c.src.ReadText(c.src.KBPath(held.RegisterPath))
 			if err != nil {
 				return nil, err
 			}
@@ -708,9 +771,9 @@ func planSetApplicability(c *opContext, entries []entry) ([]intent, error) {
 					}
 				}
 				if !matched {
-					return nil, &opRefusal{"work=" + workID, "is not a dependency of " + nodeID + ", so there is no bullet " +
+					return nil, opRefusal("work="+workID, "is not a dependency of "+nodeID+", so there is no bullet "+
 						"carrying an applicability to rewrite. This op re-scores a pairing; it does not create one",
-						"restore: add the edge with add-depends-on, or correct work, then re-run"}
+						"restore: add the edge with add-depends-on, or correct work, then re-run")
 				}
 				return []expectedEntry{cur}, nil
 			}})
@@ -781,15 +844,27 @@ func readerTarget(nodeID string, t dependsOnTarget) string {
 
 var (
 	bulletRenderers = map[string]func(dependsOnTarget) string{
-		"depends-on": renderDependsOnBullet,
-		"references": renderReferencesBullet,
+		"depends-on":       renderDependsOnBullet,
+		"references":       renderReferencesBullet,
+		kb.RelationDemoted: renderDemotedBullet,
 	}
 	// sectionAnchors are the lines a missing section is placed above, the
-	// first present winning, so the reader's field order survives either
-	// order of writing.
+	// first present winning, so the reader's field order survives any order
+	// of writing.
 	sectionAnchors = map[string][]string{
-		"depends-on": {"- references:", "- solidity:"},
-		"references": {"- solidity:"},
+		"depends-on":       {"- references:", "- " + kb.RelationDemoted + ":", "- solidity:"},
+		"references":       {"- " + kb.RelationDemoted + ":", "- solidity:"},
+		kb.RelationDemoted: {"- solidity:"},
+	}
+	// edgeSections is each list an entry's edges are added to, in field
+	// order, with the edges of the entry's record it holds.
+	edgeSections = []struct {
+		name string
+		held func(*expectedEntry) *[]expectedEdge
+	}{
+		{"depends-on", func(e *expectedEntry) *[]expectedEdge { return &e.DependsOn }},
+		{"references", func(e *expectedEntry) *[]expectedEdge { return &e.References }},
+		{kb.RelationDemoted, func(e *expectedEntry) *[]expectedEdge { return &e.Demoted }},
 	}
 )
 
@@ -848,36 +923,30 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 		if err != nil {
 			return nil, err
 		}
-		depends, err := c.dependsTargets(e.dependsOn("depends-on"))
-		if err != nil {
-			return nil, err
-		}
-		referenced, err := c.dependsTargets(e.dependsOn("references"))
-		if err != nil {
-			return nil, err
-		}
-		if len(depends) == 0 && len(referenced) == 0 {
-			return nil, &opRefusal{nodeID, "this op adds an entry's outgoing edges and neither list names one",
-				"restore: supply a depends-on list, a references list, or both, then re-run"}
-		}
-		if len(referenced) > 0 && !isClaimID(nodeID) {
-			return nil, &opRefusal{nodeID, "carries a references list, and a reference is one claim of this corpus naming another",
-				"restore: drop the references list, or name a claim entry as the id, then re-run"}
-		}
-		var sections []string
-		additions := map[string]*edgeAddition{}
-		for _, s := range []struct {
-			name    string
-			targets []dependsOnTarget
-		}{{"depends-on", depends}, {"references", referenced}} {
-			if len(s.targets) > 0 {
-				sections = append(sections, s.name)
-				additions[s.name] = &edgeAddition{nodeID: nodeID, requested: s.targets, added: s.targets}
+		var sections []int
+		additions := map[int]*edgeAddition{}
+		for i, s := range edgeSections {
+			targets, err := c.dependsTargets(e.dependsOn(s.name))
+			if err != nil {
+				return nil, err
 			}
+			if len(targets) == 0 {
+				continue
+			}
+			if s.name != "depends-on" && !isClaimID(nodeID) {
+				return nil, opRefusal(nodeID, "carries a "+s.name+" list, and a reference is one claim of this corpus naming another",
+					"restore: drop the "+s.name+" list, or name a claim entry as the id, then re-run")
+			}
+			sections = append(sections, i)
+			additions[i] = &edgeAddition{nodeID: nodeID, requested: targets, added: targets}
+		}
+		if len(sections) == 0 {
+			return nil, opRefusal(nodeID, "this op adds an entry's outgoing edges and neither list names one",
+				"restore: supply a depends-on list, a references list, or both, then re-run")
 		}
 		var splices []func(string) (string, error)
-		for _, s := range sections {
-			splices = append(splices, addBullets(additions[s], s))
+		for _, i := range sections {
+			splices = append(splices, addBullets(additions[i], edgeSections[i].name))
 		}
 		intents = append(intents, intent{path: rec.RegisterPath, target: register,
 			splice: func(document string) (string, error) {
@@ -894,25 +963,16 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 				if err != nil {
 					return nil, err
 				}
-				for _, s := range sections {
-					a := additions[s]
-					held := cur.DependsOn
-					if s == "references" {
-						held = cur.References
-					}
+				for _, i := range sections {
+					a := additions[i]
+					held := edgeSections[i].held(&cur)
 					present := map[string]bool{}
-					for _, edge := range held {
+					for _, edge := range *held {
 						present[edge.Target] = true
 					}
 					a.narrow(present)
-					var added []expectedEdge
 					for _, t := range a.added {
-						added = append(added, expectedEdge{Target: t.Target, Context: t.Context, Applicability: t.Applicability})
-					}
-					if s == "references" {
-						cur.References = append(cur.References, added...)
-					} else {
-						cur.DependsOn = append(cur.DependsOn, added...)
+						*held = append(*held, expectedEdge{Target: t.Target, Context: t.Context, Applicability: t.Applicability, Origin: t.Origin})
 					}
 				}
 				return []expectedEntry{cur}, nil
@@ -921,12 +981,175 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 	return intents, nil
 }
 
+// demotedResolution is one entry's changes to its demoted list: the targets
+// whose demoted bullet goes, and of them the ones gaining a depends-on bullet.
+type demotedResolution struct {
+	register, target string
+	drop             map[string]bool
+	restore          []dependsOnTarget
+}
+
+// planResolveDemoted removes each named demoted edge, or rewrites it as a
+// depends-on bullet where that closes no cycle of the authored premise graph,
+// the batch's earlier restores included. A pair already as asked — no
+// demoted edge to remove, or a depends edge and no demoted one to restore —
+// is left as it stands.
+func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
+	st, err := kb.Discover(c.src, log.Discard())
+	if err != nil {
+		return nil, err
+	}
+	graph := index.AuthoredDependsGraph(st)
+	claims := map[string]kb.ClaimEntry{}
+	for _, e := range st.ClaimEntries {
+		claims[e.ID] = e
+	}
+	var order []string
+	byNode := map[string]*demotedResolution{}
+	named := map[[2]string]int{}
+	for _, e := range entries {
+		nodeID, target, action := e.str("id"), e.str("target"), e.str("action")
+		pair := [2]string{nodeID, target}
+		if first, ok := named[pair]; ok {
+			return nil, result.Refusal{{Entry: e.Index, Key: "target", Remedy: "drop one of the two entries, then re-run",
+				Detail: fmt.Sprintf("names %s → %s, which entry %d already names; a pair takes one action per batch", nodeID, target, first)}}
+		}
+		named[pair] = e.Index
+		rec, err := c.resolve(nodeID, "id", true)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := c.resolve(target, "target", true); err != nil {
+			return nil, err
+		}
+		cur := claims[nodeID]
+		demoted := slices.IndexFunc(cur.Demoted, func(d kb.Edge) bool { return d.Target == target })
+		depends := slices.ContainsFunc(cur.DependsOn, func(d kb.Edge) bool { return d.Relation == kb.RelationDepends && d.Target == target })
+		r := byNode[nodeID]
+		if demoted < 0 {
+			if action == actionRemove || depends {
+				continue
+			}
+			return nil, opRefusal("target="+target, fmt.Sprintf("%s carries no demoted edge to %s, so there is nothing to restore; "+
+				"only the build writes a demoted edge", nodeID, target), "restore: add the edge with kbase add-depends-on, or correct target, then re-run")
+		}
+		if r == nil {
+			register, err := c.contained(rec.RegisterPath, "id")
+			if err != nil {
+				return nil, err
+			}
+			r = &demotedResolution{register: rec.RegisterPath, target: register, drop: map[string]bool{}}
+			byNode[nodeID] = r
+			order = append(order, nodeID)
+		}
+		r.drop[target] = true
+		done := resolvedRemove
+		if action == actionRestore {
+			if path := graph.Path(target, nodeID); path != nil {
+				return nil, result.Refusal{{Check: checkDependencyCycle, Entry: e.Index, Key: "target",
+					Remedy: "kbase resolve-demoted with action remove for this pair, or remove a depends edge on the named path first",
+					Detail: fmt.Sprintf("restoring %s → %s as a depends edge would close the cycle %s", nodeID, target,
+						strings.Join(append(path, target), " → "))}}
+			}
+			graph.Add(nodeID, target)
+			done = resolvedRestore
+			if !depends {
+				d := cur.Demoted[demoted]
+				t := dependsOnTarget{Target: target}
+				if d.Context != nil {
+					t.Context = *d.Context
+				}
+				if t.Title, err = c.titleOf(target); err != nil {
+					return nil, err
+				}
+				r.restore = append(r.restore, t)
+			}
+		}
+		c.resolved = append(c.resolved, Resolution{Source: nodeID, Target: target, Action: done})
+	}
+	var intents []intent
+	for _, nodeID := range order {
+		r := byNode[nodeID]
+		splices := []func(string) (string, error){dropDemoted(nodeID, r.drop)}
+		if len(r.restore) > 0 {
+			splices = append(splices, addBullets(&edgeAddition{nodeID: nodeID, requested: r.restore, added: r.restore}, "depends-on"))
+		}
+		intents = append(intents, intent{path: r.register, target: r.target,
+			splice: func(document string) (string, error) {
+				for _, sp := range splices {
+					var err error
+					if document, err = sp(document); err != nil {
+						return "", err
+					}
+				}
+				return document, nil
+			},
+			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+				cur, err := currentEntry(read, nodeID, r.register)
+				if err != nil {
+					return nil, err
+				}
+				cur.Demoted = slices.DeleteFunc(cur.Demoted, func(d expectedEdge) bool { return r.drop[d.Target] })
+				for _, t := range r.restore {
+					cur.DependsOn = append(cur.DependsOn, expectedEdge{Target: t.Target, Context: t.Context})
+				}
+				return []expectedEntry{cur}, nil
+			}})
+	}
+	return intents, nil
+}
+
+// dropDemoted deletes the demoted bullets of nodeID's entry whose target is
+// in targets, each with its continuation lines, and the list's header where
+// no bullet is left.
+func dropDemoted(nodeID string, targets map[string]bool) func(string) (string, error) {
+	header := "- " + kb.RelationDemoted + ":"
+	breakRE := foldBreakFor(nodeID)
+	return func(document string) (string, error) {
+		loc, err := locate(document, nodeID)
+		if err != nil {
+			return "", err
+		}
+		lines := kb.SplitLines(document)
+		limit := min(loc.QualityEnd, len(lines))
+		head := slices.IndexFunc(lines[loc.QualityStart:limit], func(l string) bool { return strings.HasPrefix(kb.Strip(l), header) })
+		if head < 0 {
+			return "", spliceFailed("%s has no %s list", nodeID, header)
+		}
+		head += loc.QualityStart
+		end := head + 1
+		for end < limit && !breakRE.MatchString(kb.Strip(lines[end])) && kb.Strip(lines[end]) != "---" {
+			end++
+		}
+		for end > head+1 && kb.Strip(lines[end-1]) == "" {
+			end--
+		}
+		var kept []string
+		bullets, dropping := 0, false
+		for _, l := range lines[head+1 : end] {
+			if l != kb.LStrip(l) && strings.HasPrefix(kb.LStrip(l), "- ") {
+				dropping = slices.ContainsFunc(kb.ClaimIDs(kb.BulletHead(kb.Strip(kb.TrimBulletLead(l)))), func(id string) bool { return targets[id] })
+				if !dropping {
+					bullets++
+				}
+			}
+			if !dropping {
+				kept = append(kept, l)
+			}
+		}
+		if bullets == 0 {
+			return spliceLines(document, head, end, nil), nil
+		}
+		return spliceLines(document, head+1, end, kept), nil
+	}
+}
+
 // knownFrontmatterKeys is every key a frontmatter block this API composes
 // may carry; derivedFrontmatterFields are refresh's roll-ups, carried over
 // verbatim at refresh's own anchors.
 var (
-	knownFrontmatterKeys = []string{"kind", "path-stable", "claims", "no-claim", "experiments", "exp-id", "status",
-		"strengthens", "sup-id", "supports"}
+	knownFrontmatterKeys = []string{"kind", "path-stable", "claims", "no-claim", "experiments", kb.ExperimentNodesKey,
+		kb.SupportNodesKey, kb.FormatKey}
 	derivedFrontmatterFields = [][2]string{{"subtree-claims", "kind:"}, {"subtree-experiments", "subtree-claims:"}}
 )
 
@@ -983,24 +1206,29 @@ func planSetFrontmatter(c *opContext, entries []entry) ([]intent, error) {
 			intended.NoClaim = &s
 		}
 		intents = append(intents, intent{path: rel, target: target,
-			splice: replaceBlock(renderFrontmatterBlock(intended), rel, redeclared),
+			splice: replaceBlock(intended, rel, redeclared),
 			prove:  frontmatterProver(intended, rel), subject: rel})
 	}
 	return intents, nil
 }
 
-// replaceBlock replaces a document's whole frontmatter block, or places a
-// first one, carrying refresh's roll-ups over. What the replace would lose
-// is read off the document the splice receives.
-func replaceBlock(block, rel string, redeclared []string) func(string) (string, error) {
+// replaceBlock replaces a document's whole frontmatter with intended's, or
+// opens the document with a first one, carrying refresh's roll-ups and the
+// format stamp over. What the replace would lose is read off the document
+// the splice receives.
+func replaceBlock(intended frontmatterValues, rel string, redeclared []string) func(string) (string, error) {
 	return func(document string) (string, error) {
 		existing, err := existingFrontmatter(document, rel, redeclared)
 		if err != nil {
 			return "", err
 		}
+		block, err := renderFrontmatterBlock(intended)
+		if err != nil {
+			return "", err
+		}
 		var candidate string
-		if m := kb.FrontmatterRE.FindStringIndex(document); m == nil {
-			candidate = insertBlock(document, block)
+		if m := kb.FindFrontmatter(document); m == nil {
+			candidate = block + "\n" + document
 		} else {
 			candidate = document[:m[0]] + block + document[m[1]:]
 		}
@@ -1015,40 +1243,21 @@ func replaceBlock(block, rel string, redeclared []string) func(string) (string, 
 			}
 			candidate = kb.ReplaceOrInsertFrontmatterField(candidate, d[0], ids, d[1])
 		}
+		if stamp := existing.Str(kb.FormatKey); stamp != "" {
+			return kb.StampFormat(candidate, stamp)
+		}
 		return candidate, nil
 	}
-}
-
-// insertBlock places a first frontmatter block below the up-link line, else
-// at the top, adding a separating blank line only where there is none.
-func insertBlock(document, block string) string {
-	lines := kb.SplitLines(document)
-	at := 0
-	for i, line := range lines {
-		if kb.Strip(line) == "" {
-			continue
-		}
-		at = i
-		if strings.HasPrefix(kb.LStrip(line), "[") {
-			at = i + 1
-		}
-		break
-	}
-	added := kb.SplitLines(block)
-	if at > 0 && kb.Strip(lines[at-1]) != "" {
-		added = append([]string{""}, added...)
-	}
-	if at < len(lines) && kb.Strip(lines[at]) != "" {
-		added = append(added, "")
-	}
-	return spliceLines(document, at, at, added)
 }
 
 // existingFrontmatter is the document's current fields, refusing a replace
 // that would drop a key this API cannot render or a hosted node declaration
 // the values do not restate.
 func existingFrontmatter(text, rel string, redeclared []string) (kb.Frontmatter, error) {
-	fields := kb.ParseFrontmatter(text)
+	fields, err := kb.ParseFrontmatter(text)
+	if err != nil {
+		return nil, kb.MalformedError{Msg: rel + ": " + err.Error()}
+	}
 	if fields == nil {
 		return nil, nil
 	}
@@ -1060,20 +1269,19 @@ func existingFrontmatter(text, rel string, redeclared []string) (kb.Frontmatter,
 	}
 	slices.Sort(unknown)
 	if len(unknown) > 0 {
-		return nil, &opRefusal{rel, fmt.Sprintf("carries frontmatter key(s) %v that this API cannot render, so replacing the block would drop them", unknown),
-			fmt.Sprintf("restore: remove %q from the block by hand, or leave this document's frontmatter alone, then re-run", unknown[0])}
+		return nil, opRefusal(rel, fmt.Sprintf("carries frontmatter key(s) %v that this API cannot render, so replacing the block would drop them", unknown),
+			fmt.Sprintf("restore: remove %q from the block by hand, or leave this document's frontmatter alone, then re-run", unknown[0]))
 	}
-	m := kb.FindFrontmatter(text, 0)
 	var dropped []string
-	for _, id := range kb.DeclaredNodeIDs(text[m[2]:m[3]]) {
+	for _, id := range kb.DeclaredNodeIDs(fields) {
 		if !slices.Contains(redeclared, id) && !slices.Contains(dropped, id) {
 			dropped = append(dropped, id)
 		}
 	}
 	slices.Sort(dropped)
 	if len(dropped) > 0 {
-		return nil, &opRefusal{rel, fmt.Sprintf("declares hosted node(s) %v that these values do not restate, and replacing the block would destroy the declaration rather than edit it", dropped),
-			fmt.Sprintf("restore: restate %s's block in the values, or leave this document's frontmatter alone, then re-run", dropped[0])}
+		return nil, opRefusal(rel, fmt.Sprintf("declares hosted node(s) %v that these values do not restate, and replacing the block would destroy the declaration rather than edit it", dropped),
+			fmt.Sprintf("restore: restate %s's block in the values, or leave this document's frontmatter alone, then re-run", dropped[0]))
 	}
 	return fields, nil
 }
@@ -1141,7 +1349,10 @@ func FrontmatterValues(text, document string) (map[string]any, error) {
 // observedFrontmatter is the candidate's block as the production readers
 // return it.
 func observedFrontmatter(text, rel string) (*frontmatterValues, error) {
-	fields := kb.ParseFrontmatter(text)
+	fields, err := kb.ParseFrontmatter(text)
+	if err != nil {
+		return nil, kb.MalformedError{Msg: rel + ": " + err.Error()}
+	}
 	if fields == nil {
 		return nil, nil
 	}
@@ -1158,7 +1369,6 @@ func observedFrontmatter(text, rel string) (*frontmatterValues, error) {
 			*f.into = &s
 		}
 	}
-	var err error
 	if v.Claims, err = fields.ListOrEmpty("claims"); err != nil {
 		return nil, err
 	}
@@ -1203,7 +1413,7 @@ func frontmatterProver(intended frontmatterValues, rel string) func(string) ([]s
 			return nil, err
 		}
 		if got == nil {
-			return []string{"kb-frontmatter"}, nil
+			return []string{"frontmatter"}, nil
 		}
 		want := intended
 		if want.PathStable != nil {
@@ -1239,16 +1449,20 @@ func frontmatterProver(intended frontmatterValues, rel string) func(string) ([]s
 	}
 }
 
-// appendToBlock appends declaration lines inside the existing frontmatter
-// block; the delimiters come back from wrapFrontmatter.
-func appendToBlock(added []string) func(string) (string, error) {
+// appendDeclaration appends one node declaration to the list under key in
+// the document's frontmatter, rendered is that list's key and the one entry;
+// a document without the list gains it at the end of its frontmatter.
+func appendDeclaration(key string, rendered []string) func(string) (string, error) {
 	return func(document string) (string, error) {
-		m := kb.FrontmatterRE.FindStringSubmatchIndex(document)
-		if m == nil {
-			return "", spliceFailed("the document has no kb-frontmatter block to declare a node in")
+		if kb.FindFrontmatter(document) == nil {
+			return "", spliceFailed("the document has no frontmatter to declare a node in")
 		}
-		lines := append(kb.SplitLines(document[m[2]:m[3]]), added...)
-		return document[:m[0]] + wrapFrontmatter(strings.Join(lines, "\n")) + document[m[1]:], nil
+		if _, _, end, ok := kb.FrontmatterKeySpan(document, key); ok {
+			return kb.EditFrontmatterLines(document, func(lines []string) []string {
+				return slices.Concat(lines[:end], rendered[1:], lines[end:])
+			}), nil
+		}
+		return kb.SetFrontmatterKey(document, key, rendered, ""), nil
 	}
 }
 
@@ -1263,9 +1477,9 @@ func planMarkClaim(c *opContext, entries []entry) ([]intent, error) {
 		if _, err := c.resolve(nodeID, "id", true); err != nil {
 			return nil, err
 		}
-		if !kb.IsFile(target) {
-			return nil, &opRefusal{rel, "does not exist. A marker is placed beside the prose it anchors, and this API never composes a document body",
-				"restore: correct document, or author the document first, then re-run"}
+		if !c.src.IsFile(target) {
+			return nil, opRefusal(rel, "does not exist. A marker is placed beside the prose it anchors, and this API never composes a document body",
+				"restore: correct document, or author the document first, then re-run")
 		}
 		intents = append(intents, intent{path: rel, target: target,
 			splice: insertMarker(renderTier2Marker(nodeID), e.str("locator"), nodeID, rel),
@@ -1279,14 +1493,18 @@ func planMarkClaim(c *opContext, entries []entry) ([]intent, error) {
 // whitespace. A line already carrying the marker is left as it is.
 func insertMarker(marker, locator, nodeID, rel string) func(string) (string, error) {
 	return func(document string) (string, error) {
-		claims, err := kb.ParseFrontmatter(document).ListOrEmpty("claims")
+		fm, err := kb.ParseFrontmatter(document)
+		if err != nil {
+			return "", kb.MalformedError{Msg: rel + ": " + err.Error()}
+		}
+		claims, err := fm.ListOrEmpty("claims")
 		if err != nil {
 			return "", kb.MalformedError{Msg: rel + ": claims: " + err.Error()}
 		}
 		if !slices.Contains(claims, nodeID) {
-			return "", &opRefusal{"id=" + nodeID, "is not in " + rel + "'s own claims: list, so the reader would harvest the " +
+			return "", opRefusal("id="+nodeID, "is not in "+rel+"'s own claims: list, so the reader would harvest the "+
 				"marker and drop it — markers are intersected with the document's claim membership",
-				"restore: add " + nodeID + " to " + rel + "'s claims: with set-frontmatter, then re-run"}
+				"restore: add "+nodeID+" to "+rel+"'s claims: with set-frontmatter, then re-run")
 		}
 		at, err := locateExcerpt(document, locator)
 		if err != nil {
@@ -1332,7 +1550,7 @@ func planSetOnPointFraction(c *opContext, entries []entry) ([]intent, error) {
 				return nil, err
 			}
 			intents = append(intents, intent{path: rec.HostingLeaf, target: target,
-				splice: replaceSupportsPair(supID, claimID, line),
+				splice: replaceSupportsPair(supID, claimID, fraction),
 				prove:  fractionProver(supID, claimID, fraction, rec.HostingLeaf), subject: rec.HostingLeaf + ":" + supID})
 			continue
 		}
@@ -1349,11 +1567,11 @@ func planSetOnPointFraction(c *opContext, entries []entry) ([]intent, error) {
 				}
 				at := slices.IndexFunc(cur.Supports, func(p pair) bool { return p.ID == claimID })
 				if at < 0 {
-					return nil, &opRefusal{"id=" + supID, "authors no supports pair for " + claimID + " in either home — it is " +
-						"declared in no document's frontmatter, and its register entry stages no such pair. This op re-scores " +
+					return nil, opRefusal("id="+supID, "authors no supports pair for "+claimID+" in either home — it is "+
+						"declared in no document's frontmatter, and its register entry stages no such pair. This op re-scores "+
 						"an edge that exists; it does not create one",
-						"restore: author the pair — with insert-support-entry's supports value if " + supID + " is being created, " +
-							"or with set-frontmatter once its hosting document exists — then re-run"}
+						"restore: author the pair — with insert-support-entry's supports value if "+supID+" is being created, "+
+							"or with set-frontmatter once its hosting document exists — then re-run")
 				}
 				cur.Supports = slices.Clone(cur.Supports)
 				cur.Supports[at] = pair{ID: claimID, Score: fraction}
@@ -1363,31 +1581,41 @@ func planSetOnPointFraction(c *opContext, entries []entry) ([]intent, error) {
 	return intents, nil
 }
 
-// replaceSupportsPair rewrites one supports pair line inside its own sup-id
-// block of the document's frontmatter.
-func replaceSupportsPair(supID, claimID, line string) func(string) (string, error) {
-	pairRE := kb.PyRE(`^(\s*-?\s*)` + regexp.QuoteMeta(claimID) + `\s*:`)
+// replaceSupportsPair rewrites one supports pair line inside its own entry
+// of the document's support-nodes list; every other line is kept.
+func replaceSupportsPair(supID, claimID string, fraction *float64) func(string) (string, error) {
+	pairRE := kb.PyRE(`^(\s*-\s*)` + regexp.QuoteMeta(claimID) + `\s*:`)
 	return func(document string) (string, error) {
-		m := kb.FrontmatterRE.FindStringSubmatchIndex(document)
-		if m == nil {
-			return "", spliceFailed("the document has no kb-frontmatter block")
-		}
-		block := kb.SplitLines(document[m[2]:m[3]])
-		start := slices.IndexFunc(block, func(l string) bool { return kb.Strip(l) == "sup-id: "+supID })
-		if start < 0 {
+		lines, start, end, ok := kb.FrontmatterKeySpan(document, kb.SupportNodesKey)
+		if !ok {
 			return "", spliceFailed("%s is not declared in this document's frontmatter", supID)
 		}
-		end := len(block)
-		for i := start + 1; i < len(block); i++ {
-			if strings.HasPrefix(kb.Strip(block[i]), "sup-id:") {
-				end = i
+		entry := slices.IndexFunc(lines[start:end], func(l string) bool {
+			return strings.TrimPrefix(kb.Strip(l), "- ") == kb.SupIDKey+": "+supID
+		})
+		if entry < 0 {
+			return "", spliceFailed("%s is not declared in this document's frontmatter", supID)
+		}
+		entry += start
+		itemIndent := lines[entry][:len(lines[entry])-len(kb.LStrip(lines[entry]))]
+		next := end
+		for i := entry + 1; i < end; i++ {
+			if strings.HasPrefix(lines[i], itemIndent+"- ") {
+				next = i
 				break
 			}
 		}
-		for i := start + 1; i < end; i++ {
-			if pairRE.MatchString(block[i]) {
-				block[i] = line
-				return document[:m[0]] + wrapFrontmatter(strings.Join(block, "\n")) + document[m[1]:], nil
+		pairLine, err := kb.RenderFrontmatterField(claimID, scoreNode(fraction))
+		if err != nil {
+			return "", err
+		}
+		for i := entry + 1; i < next; i++ {
+			if m := pairRE.FindStringSubmatch(lines[i]); m != nil {
+				replaced := m[1] + pairLine[0]
+				return kb.EditFrontmatterLines(document, func(body []string) []string {
+					body[i] = replaced
+					return body
+				}), nil
 			}
 		}
 		return "", spliceFailed("%s declares no supports pair for %s", supID, claimID)

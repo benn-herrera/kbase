@@ -11,34 +11,11 @@ import (
 	"kbase/internal/kb"
 )
 
-// IndexFiles is the derived index's file inventory, in emission order; each
-// is .index/<name>.jsonl.
-var IndexFiles = []string{"claims", "depends-on", "strengthen-by", "supported-by", "cites", "subtree-aggregates"}
+// record is one index record, its keys in written order.
+type record = []kb.IndexField
 
-// field is one key of a record; records keep their keys in the order built.
-type field struct {
-	key string
-	val any
-}
-
-type record []field
-
-// Records is every index file's records, by short name.
+// Records is every index file's records, by name.
 type Records map[string][]record
-
-func optional(v *float64) any {
-	if v == nil {
-		return nil
-	}
-	return *v
-}
-
-func optionalString(s *string) any {
-	if s == nil {
-		return nil
-	}
-	return *s
-}
 
 func fractionValue(f kb.Fraction) any {
 	switch {
@@ -50,76 +27,78 @@ func fractionValue(f kb.Fraction) any {
 	return f.Value
 }
 
-// sortRecords is a stable sort by the key the record yields.
-func sortRecords(recs []record, key func(record) []string) {
-	slices.SortStableFunc(recs, func(a, b record) int { return slices.Compare(key(a), key(b)) })
+// fieldsOf is each row's record.
+func fieldsOf[T interface{ IndexFields() []kb.IndexField }](rows []T) []record {
+	out := make([]record, len(rows))
+	for i, r := range rows {
+		out[i] = r.IndexFields()
+	}
+	return out
 }
 
-func str(r record, i int) string {
-	s, _ := r[i].val.(string)
-	return s
-}
-
-func buildClaims(st kb.State, sol Solidity) []record {
+func buildClaims(st kb.State, sol Solidity) []kb.NodeRow {
 	cites := map[string]int{}
 	for _, leaf := range st.Leaves {
 		for _, c := range leaf.Claims {
 			cites[c]++
 		}
 	}
-	var out []record
+	var out []kb.NodeRow
 	for _, e := range st.ClaimEntries {
 		r := sol.Results[e.ID]
 		depends := 0
 		for _, d := range e.DependsOn {
-			if d.Relation == "depends" {
+			if d.Relation == kb.RelationDepends {
 				depends++
 			}
 		}
-		out = append(out, record{
-			{"node_type", "claim"}, {"id", e.ID}, {"title", e.Title},
-			{"canonical_path", e.CanonicalPath}, {"canonical_anchor", e.CanonicalAnchor},
-			{"confidence", optional(e.Confidence)}, {"derivation_solidity", optional(r.Derivation)},
-			{"experimental_solidity", optional(r.Experimental)}, {"solidity", optional(r.Final)},
-			{"build_status", optionalString(BuildStatusPhrase(r.Final))}, {"build_band", BuildBand(r.Final)},
-			{"rationale", e.Rationale}, {"depends_on_count", depends},
-			{"strengthen_by_count", len(e.StrengthenBy)}, {"citation_count", cites[e.ID]},
-		})
+		out = append(out, kb.NodeRow{NodeType: "claim", ID: e.ID, Title: e.Title,
+			CanonicalPath: e.CanonicalPath, CanonicalAnchor: e.CanonicalAnchor,
+			Confidence: e.Confidence, DerivationSolidity: r.Derivation,
+			ExperimentalSolidity: r.Experimental, Solidity: r.Final,
+			BuildStatus: BuildStatusPhrase(r.Final), BuildBand: BuildBand(r.Final),
+			Rationale: e.Rationale, DependsOnCount: depends,
+			StrengthenByCount: len(e.StrengthenBy), CitationCount: cites[e.ID]})
 	}
 	for _, x := range st.Experiments {
-		out = append(out, record{{"node_type", "experiment"}, {"id", x.ID}, {"title", x.Title},
-			{"canonical_path", x.CanonicalPath}, {"canonical_anchor", x.CanonicalAnchor}, {"status", x.Status}})
+		out = append(out, kb.NodeRow{NodeType: "experiment", ID: x.ID, Title: x.Title,
+			CanonicalPath: x.CanonicalPath, CanonicalAnchor: x.CanonicalAnchor, Status: x.Status})
 	}
 	for _, s := range st.Supports {
-		out = append(out, record{{"node_type", "support"}, {"id", s.ID}, {"title", s.Title},
-			{"canonical_path", s.CanonicalPath}, {"canonical_anchor", s.CanonicalAnchor},
-			{"quality", optional(s.Quality)}, {"solidity", optional(sol.SupSolidity[s.ID])}})
+		out = append(out, kb.NodeRow{NodeType: "support", ID: s.ID, Title: s.Title,
+			CanonicalPath: s.CanonicalPath, CanonicalAnchor: s.CanonicalAnchor,
+			Quality: s.Quality, Solidity: sol.SupSolidity[s.ID]})
 	}
 	for _, n := range st.FrameworkNodes {
-		out = append(out, record{{"node_type", n.NodeType}, {"id", n.ID}, {"title", n.Title},
-			{"canonical_path", n.CanonicalPath}, {"canonical_anchor", n.CanonicalAnchor}})
+		out = append(out, kb.NodeRow{NodeType: n.NodeType, ID: n.ID, Title: n.Title,
+			CanonicalPath: n.CanonicalPath, CanonicalAnchor: n.CanonicalAnchor})
 	}
 	for _, w := range st.Works {
-		out = append(out, record{{"node_type", "work"}, {"id", w.ID}, {"title", w.Title},
-			{"canonical_path", w.CanonicalPath}, {"canonical_anchor", w.CanonicalAnchor}, {"strength", optional(w.Strength)}})
+		out = append(out, kb.NodeRow{NodeType: "work", ID: w.ID, Title: w.Title,
+			CanonicalPath: w.CanonicalPath, CanonicalAnchor: w.CanonicalAnchor, Strength: w.Strength})
 	}
-	sortRecords(out, func(r record) []string { return []string{str(r, 0), str(r, 1)} })
+	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
+		return cmp.Or(strings.Compare(a.NodeType, b.NodeType), strings.Compare(a.ID, b.ID))
+	})
 	return out
 }
 
-func edgeRecord(source, target, relation, targetKind string, recorded, strength *float64, context *string, fraction kb.Fraction) record {
-	return record{{"source", source}, {"target", target}, {"relation", relation}, {"target_kind", targetKind},
-		{"target_solidity_recorded", optional(recorded)}, {"strength", optional(strength)},
-		{"context", optionalString(context)}, {"fraction", fractionValue(fraction)}}
+func edgeRow(source, target, relation, targetKind string, recorded, strength *float64, context *string, fraction kb.Fraction) kb.EdgeRow {
+	return kb.EdgeRow{Source: source, Target: target, Relation: relation, TargetKind: targetKind,
+		TargetSolidityRecorded: recorded, Strength: strength, Context: context, Fraction: fractionValue(fraction)}
 }
 
-func buildDependsOn(st kb.State) []record {
-	var out []record
+func buildDependsOn(st kb.State) []kb.EdgeRow {
+	var out []kb.EdgeRow
 	emit := func(e kb.Edge) {
-		out = append(out, edgeRecord(e.Source, e.Target, e.Relation, e.TargetKind, e.TargetSolidityRecorded, e.Strength, e.Context, e.Fraction))
+		r := edgeRow(e.Source, e.Target, e.Relation, e.TargetKind, e.TargetSolidityRecorded, e.Strength, e.Context, e.Fraction)
+		if e.Origin != "" {
+			r.Origin = &e.Origin
+		}
+		out = append(out, r)
 	}
 	for _, e := range st.ClaimEntries {
-		for _, d := range slices.Concat(e.DependsOn, e.References) {
+		for _, d := range slices.Concat(e.DependsOn, e.References, e.Demoted) {
 			emit(d)
 		}
 	}
@@ -128,51 +107,62 @@ func buildDependsOn(st kb.State) []record {
 			emit(d)
 		}
 		for _, p := range s.Supports {
-			out = append(out, edgeRecord(s.ID, p.ClaimID, "supports", "claim", nil, nil, nil, p.Fraction))
+			out = append(out, edgeRow(s.ID, p.ClaimID, kb.RelationSupports, "claim", nil, nil, nil, p.Fraction))
 		}
 	}
 	for _, x := range st.Experiments {
 		for _, p := range x.Strengthens {
-			out = append(out, edgeRecord(x.ID, p.ClaimID, "strengthens", "claim", nil, ptr(p.Strength), nil, kb.Fraction{}))
+			out = append(out, edgeRow(x.ID, p.ClaimID, kb.RelationStrengthens, "claim", nil, ptr(p.Strength), nil, kb.Fraction{}))
 		}
 	}
-	sortRecords(out, func(r record) []string { return []string{str(r, 0), str(r, 1), str(r, 6)} })
-	return out
-}
-
-func buildStrengthenBy(st kb.State) []record {
-	var out []record
-	for _, e := range st.ClaimEntries {
-		for _, sb := range e.StrengthenBy {
-			out = append(out, record{{"claim_id", sb.ClaimID}, {"item_idx", sb.ItemIdx}, {"text", sb.Text}, {"mentioned_ids", sb.MentionedIDs}})
+	context := func(r kb.EdgeRow) string {
+		if r.Context == nil {
+			return ""
 		}
+		return *r.Context
 	}
-	slices.SortStableFunc(out, func(a, b record) int {
-		return cmp.Or(strings.Compare(str(a, 0), str(b, 0)), cmp.Compare(a[1].val.(int), b[1].val.(int)))
+	slices.SortStableFunc(out, func(a, b kb.EdgeRow) int {
+		return cmp.Or(strings.Compare(a.Source, b.Source), strings.Compare(a.Target, b.Target), strings.Compare(context(a), context(b)))
 	})
 	return out
 }
 
-func buildSupportedBy(st kb.State, sol Solidity) []record {
-	var out []record
-	for _, s := range st.Supports {
-		for _, p := range s.Supports {
-			out = append(out, record{{"claim_id", p.ClaimID}, {"sup_id", s.ID}, {"fraction", fractionValue(p.Fraction)},
-				{"sup_solidity", optional(sol.SupSolidity[s.ID])}})
+func buildStrengthenBy(st kb.State) []kb.StrengthenByRow {
+	var out []kb.StrengthenByRow
+	for _, e := range st.ClaimEntries {
+		for _, sb := range e.StrengthenBy {
+			out = append(out, kb.StrengthenByRow{ClaimID: sb.ClaimID, ItemIdx: sb.ItemIdx, Text: sb.Text, MentionedIDs: sb.MentionedIDs})
 		}
 	}
-	sortRecords(out, func(r record) []string { return []string{str(r, 0), str(r, 1)} })
+	slices.SortStableFunc(out, func(a, b kb.StrengthenByRow) int {
+		return cmp.Or(strings.Compare(a.ClaimID, b.ClaimID), cmp.Compare(a.ItemIdx, b.ItemIdx))
+	})
 	return out
 }
 
-func buildCites(st kb.State) []record {
-	var out []record
-	for _, leaf := range st.Leaves {
-		for _, c := range leaf.Claims {
-			out = append(out, record{{"claim_id", c}, {"leaf_path", leaf.Path}, {"leaf_kind", leaf.Kind}, {"tier2_marked", leaf.Tier2Marked[c]}})
+func buildSupportedBy(st kb.State, sol Solidity) []kb.SupportedByRow {
+	var out []kb.SupportedByRow
+	for _, s := range st.Supports {
+		for _, p := range s.Supports {
+			out = append(out, kb.SupportedByRow{ClaimID: p.ClaimID, SupID: s.ID, Fraction: fractionValue(p.Fraction), SupSolidity: sol.SupSolidity[s.ID]})
 		}
 	}
-	sortRecords(out, func(r record) []string { return []string{str(r, 0), str(r, 1)} })
+	slices.SortStableFunc(out, func(a, b kb.SupportedByRow) int {
+		return cmp.Or(strings.Compare(a.ClaimID, b.ClaimID), strings.Compare(a.SupID, b.SupID))
+	})
+	return out
+}
+
+func buildCites(st kb.State) []kb.CiteRow {
+	var out []kb.CiteRow
+	for _, leaf := range st.Leaves {
+		for _, c := range leaf.Claims {
+			out = append(out, kb.CiteRow{ClaimID: c, LeafPath: leaf.Path, LeafKind: leaf.Kind, Tier2Marked: leaf.Tier2Marked[c]})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b kb.CiteRow) int {
+		return cmp.Or(strings.Compare(a.ClaimID, b.ClaimID), strings.Compare(a.LeafPath, b.LeafPath))
+	})
 	return out
 }
 
@@ -218,14 +208,14 @@ func SubtreeAggregates(st kb.State) map[string]Aggregate {
 	return out
 }
 
-func buildSubtreeAggregates(st kb.State) []record {
+func buildSubtreeAggregates(st kb.State) []kb.AggregateRow {
 	agg := SubtreeAggregates(st)
-	var out []record
+	var out []kb.AggregateRow
 	for _, idx := range st.Indexes {
 		a := agg[idx.Path]
-		out = append(out, record{{"node_path", idx.Path}, {"node_kind", idx.Kind}, {"subtree_claims", a.Claims}, {"subtree_experiments", a.Experiments}})
+		out = append(out, kb.AggregateRow{NodePath: idx.Path, NodeKind: idx.Kind, SubtreeClaims: a.Claims, SubtreeExperiments: a.Experiments})
 	}
-	sortRecords(out, func(r record) []string { return []string{str(r, 0)} })
+	slices.SortStableFunc(out, func(a, b kb.AggregateRow) int { return strings.Compare(a.NodePath, b.NodePath) })
 	return out
 }
 
@@ -235,24 +225,24 @@ type CoverageError struct{ Msg string }
 
 func (e CoverageError) Error() string { return e.Msg }
 
-func checkCoverage(claims, dependsOn []record) error {
+func checkCoverage(claims []kb.NodeRow, dependsOn []kb.EdgeRow) error {
 	frameworkPresent, workPresent := map[string]bool{}, map[string]bool{}
 	for _, r := range claims {
-		switch kind := str(r, 0); {
-		case slices.Contains(kb.FrameworkKinds, kind):
-			frameworkPresent[str(r, 1)] = true
-		case kind == "work":
-			workPresent[str(r, 1)] = true
+		switch {
+		case slices.Contains(kb.FrameworkKinds, r.NodeType):
+			frameworkPresent[r.ID] = true
+		case r.NodeType == "work":
+			workPresent[r.ID] = true
 		}
 	}
 	framework := map[string]bool{}
 	works := map[string]bool{}
 	for _, e := range dependsOn {
-		switch kind, target := str(e, 3), str(e, 1); {
-		case slices.Contains(kb.FrameworkKinds, kind) && !frameworkPresent[target]:
-			framework[target] = true
-		case kind == "work" && !workPresent[target]:
-			works[target] = true
+		switch {
+		case slices.Contains(kb.FrameworkKinds, e.TargetKind) && !frameworkPresent[e.Target]:
+			framework[e.Target] = true
+		case e.TargetKind == "work" && !workPresent[e.Target]:
+			works[e.Target] = true
 		}
 	}
 	if len(framework) > 0 {
@@ -280,30 +270,53 @@ func BuildRecords(st kb.State) (Records, error) {
 		return nil, err
 	}
 	return Records{
-		"claims": claims, "depends-on": dependsOn, "strengthen-by": buildStrengthenBy(st),
-		"supported-by": buildSupportedBy(st, sol), "cites": buildCites(st), "subtree-aggregates": buildSubtreeAggregates(st),
+		kb.IndexClaims: fieldsOf(claims), kb.IndexDependsOn: fieldsOf(dependsOn), kb.IndexStrengthenBy: fieldsOf(buildStrengthenBy(st)),
+		kb.IndexSupportedBy: fieldsOf(buildSupportedBy(st, sol)), kb.IndexCites: fieldsOf(buildCites(st)),
+		kb.IndexSubtreeAggregates: fieldsOf(buildSubtreeAggregates(st)),
 	}, nil
 }
 
-// Serialize is a file's JSONL text: one object per line, ", " and ": "
-// separators, keys in built order, non-ASCII written raw, one trailing
-// newline, and "" for no records.
+// Serialize is a file's text as a YAML stream: per record one line, the
+// document marker and the record as a JSON object — ", " and ": " separators,
+// keys in built order, non-ASCII written raw but for streamUnsafe — and ""
+// for no records.
 func Serialize(recs []record) string {
 	var b strings.Builder
 	for _, r := range recs {
-		b.WriteByte('{')
+		var rec strings.Builder
+		rec.WriteByte('{')
 		for i, f := range r {
 			if i > 0 {
-				b.WriteString(", ")
+				rec.WriteString(", ")
 			}
-			writeJSONString(&b, f.key)
-			b.WriteString(": ")
-			writeJSONValue(&b, f.val)
+			writeJSONString(&rec, f.Key)
+			rec.WriteString(": ")
+			writeJSONValue(&rec, f.Value)
 		}
-		b.WriteString("}\n")
+		rec.WriteByte('}')
+		b.WriteString(kb.IndexRecordMarker)
+		b.WriteString(streamUnsafe.Replace(rec.String()))
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
+
+// streamUnsafe escapes what a record's JSON carries raw but a reader of the
+// stream takes as a line break or refuses as unprintable: U+2028 and U+2029,
+// DEL and the C1 controls, NEL among them, the byte-order mark, and the
+// noncharacters U+FFFE and U+FFFF. Every one can stand only inside a string,
+// where the escape reads back as the character.
+var streamUnsafe = func() *strings.Replacer {
+	var pairs []string
+	escape := func(r rune) { pairs = append(pairs, string(r), fmt.Sprintf(`\u%04x`, r)) }
+	for r := rune(0x7f); r <= 0x9f; r++ {
+		escape(r)
+	}
+	for _, r := range []rune{0x2028, 0x2029, 0xfeff, 0xfffe, 0xffff} {
+		escape(r)
+	}
+	return strings.NewReplacer(pairs...)
+}()
 
 func writeJSONValue(b *strings.Builder, v any) {
 	switch x := v.(type) {

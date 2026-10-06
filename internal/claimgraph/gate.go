@@ -8,16 +8,17 @@ import (
 	"kbase/internal/result"
 )
 
-// gate is kb_claimgraph stage G: refresh, then verify. Green or stop, on what
-// each found; there is no fix loop.
+// gate is kb_claimgraph stage G: refresh, then the build-time check. Green or
+// stop, on what each found; there is no fix loop.
 func gate(kbRoot string, lg log.Logger) []Finding {
-	written, err := index.Refresh(kbRoot, lg)
+	src := builtTree(kbRoot)
+	written, err := index.Refresh(src, lg)
 	if err != nil {
 		return []Finding{{StatusFail, "refresh", recordOf(field("detail", err.Error()))}}
 	}
 	slices.Sort(written)
 	findings := []Finding{pass("refresh", field("written", slices.Compact(written)))}
-	found, err := index.Verify(kbRoot)
+	found, err := index.BuildVerify(src)
 	if err != nil {
 		return append(findings, Finding{StatusFail, "verify", recordOf(field("detail", err.Error()))})
 	}

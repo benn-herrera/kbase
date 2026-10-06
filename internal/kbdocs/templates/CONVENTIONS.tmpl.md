@@ -12,7 +12,7 @@ indexes, subtopic indexes, leaves. The **claim graph** is a graph over results, 
 {node-kinds}, registered in `claim-quality.md` files — the framework kinds in `invariants.md`
 instead (below) — and materialized under `.index/`. Its `depends` and `supports` edges close no
 cycle: solidity is undefined on one, and verify fails it. `references` edges carry no solidity and
-may cycle. A leaf is a container — its position label says where it sits in the hierarchy and
+may cycle; so may `demoted` edges, the `depends` edges the build's cycle breaking cut. A leaf is a container — its position label says where it sits in the hierarchy and
 nothing about what it hosts.
 
 Corpus invariants — notation and cross-cutting definitions — belong in `invariants.md`, which is
@@ -60,12 +60,18 @@ on `PATH`, which must be 3.11 or later, standard library only. The toolchains' p
 in their source repositories and are not installed into a consuming project, so no document under
 this project root holds them.
 
+Where the harness has MCP, the `kbase` MCP server (`kbase mcp --kb-root <path>`) offers kbase's
+subcommands as tools, one to one, under the same names and returning the same documents, so what
+this file says of a subcommand holds for its tool; a write op's values are its tool's arguments,
+one entry per call. A document whose exit code is not 0, a refusal among them, arrives as a tool
+error carrying the same items and remedy, and the tool list implies no order of work.
+
 ## Authored versus derived
 
 Authored: leaf content, leaf frontmatter, register entry text, dependency membership, and local
 rigor (`confidence` on a claim, `quality` on a support). Derived and regenerated: solidity, build
 status, the parenthetical solidity annotations, subtree aggregates, the `Leaf references:` line in
-each register entry, `claim-graph.svg`, and everything under `.index/`. **A hand-edited derived
+each register entry, the `claim-graph.svg` and `claim-graph-digest.svg` sheets, and everything under `.index/`. **A hand-edited derived
 field is a verifier failure**, not a shortcut — the value is overwritten and the drift is reported.
 
 Authored does not mean typed. Everything authored except leaf prose is metadata, and metadata is
@@ -80,13 +86,17 @@ have made anyway is what answers the question.
 Refresh regenerates derived state; verify is the read-only gate. Refresh before verify, always, and
 leave the gate green. Run kb_tools' refresh and verify through this project's runner targets rather than invoking its modules
 directly. A failure marked refresh-fixable means run refresh; anything else is a real defect in what
-was authored, and re-running will not clear it.
+was authored, and re-running will not clear it. kbase's verify also lists every `demoted` edge under
+`findings`, which are not failures; kbase's `resolve-demoted` removes one or restores it to
+`depends`, refusing a restore that would close a cycle.
 
-`claim-graph.svg` is the one file the two toolchains render differently. kbase's refresh writes a
-placeholder sheet stamped with a digest of `.index/`; kb_tools' refresh draws the graph. kb_tools'
-verify reports the placeholder stale until kb_tools' refresh has drawn it, and kbase leaves a drawn
-sheet as it stands. kbase's link check covers `kb-root/` only; kb_tools' covers the whole
-repository. Every other verify finding is the same finding on both sides.
+`claim-graph.svg` and `claim-graph-digest.svg` beside this file and `<volume>/claim-graph.svg` in
+each volume are the derived files no verifier reads; the digest and the volume sheets exist only where
+the KB holds two or more volumes with claims. Refresh redraws them on every run, so a hand
+edit to one is not reported — the next refresh overwrites it. kbase draws them through Graphviz
+`dot`; without `dot` on `PATH` it draws nothing, leaves existing sheets as they stand, and writes a
+placeholder `claim-graph.svg` only where none exists. Both toolchains' link checks cover `kb-root/` only, and every verify failure is the
+same failure on both sides.
 
 ## Where things may be written
 

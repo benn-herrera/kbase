@@ -3,7 +3,6 @@ package docgraph
 import (
 	"fmt"
 	"maps"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -23,10 +22,15 @@ func validateBuild(kbRoot string) ([]Finding, error) {
 	return reachability(documents), nil
 }
 
+// writtenTree is the tree this stage has just written, read back from disk:
+// it carries no stamp yet, so there is no format to load it at.
+func writtenTree(kbRoot string) *kb.Source { return kb.OnDisk(kbRoot) }
+
 // treeDocuments is every document under kbRoot leaf discovery reads, by its
 // kb-root-relative path.
 func treeDocuments(kbRoot string) (map[string]string, error) {
-	files, err := kb.MarkdownFiles(kbRoot)
+	src := writtenTree(kbRoot)
+	files, err := kb.MarkdownFiles(src)
 	if err != nil {
 		return nil, err
 	}
@@ -35,11 +39,11 @@ func treeDocuments(kbRoot string) (map[string]string, error) {
 		if kb.ExcludeNames[filepath.Base(f)] {
 			continue
 		}
-		rel, err := filepath.Rel(kbRoot, f)
+		rel, err := filepath.Rel(src.Root(), f)
 		if err != nil {
 			return nil, err
 		}
-		text, err := os.ReadFile(f)
+		text, err := src.ReadFile(f)
 		if err != nil {
 			return nil, err
 		}

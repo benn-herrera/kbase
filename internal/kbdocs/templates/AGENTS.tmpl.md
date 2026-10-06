@@ -9,7 +9,9 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
   context the answer never needed.
 - **To change anything in it** — dispatch `kb-maintainer`. It calls a toolchain's metadata write
   ops (`CONVENTIONS.md` gives kbase's and kb_tools'), wires the claim graph, and runs the
-  refresh-then-verify loop that has to end green.
+  refresh-then-verify loop that has to end green. Where the harness has the `kbase` MCP server,
+  its tools are kbase's subcommands one to one — same names, same result documents — so what
+  this tree's documents say of a subcommand holds for its tool.
 - **Do not edit files here directly.** Every structured field was written by a tool from supplied
   values, and much of what looks editable is derived and regenerated. An edit made outside the
   maintainer is either overwritten or caught as drift.

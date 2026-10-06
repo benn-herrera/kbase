@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"kbase/internal/atomicfile"
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/log"
 )
@@ -79,10 +80,11 @@ type outcome struct {
 }
 
 // expectedEdge is one intended edge; applicability is a work target's
-// (nil is pending, and every other target's).
+// (nil is pending, and every other target's), origin a demoted target's.
 type expectedEdge struct {
 	Target, Context string
 	Applicability   *float64
+	Origin          string
 }
 
 // expectedEntry is one record the written register must read back as. Rigor
@@ -93,12 +95,13 @@ type expectedEntry struct {
 	Rationale     string
 	DependsOn     []expectedEdge
 	References    []expectedEdge
+	Demoted       []expectedEdge
 	StrengthenBy  []string
 	Supports      []pair
 }
 
 func edgeOf(e kb.Edge) expectedEdge {
-	out := expectedEdge{Target: e.Target}
+	out := expectedEdge{Target: e.Target, Origin: e.Origin}
 	if e.Context != nil {
 		out.Context = *e.Context
 	}
@@ -360,7 +363,7 @@ func resolveTarget(root, rel string) (string, error) {
 		return "", &storeError{reason: reasonPathOutsideRoot, subject: strings.ReplaceAll(rel, "\x00", `\x00`),
 			detail: "contains a NUL byte, which no path can hold"}
 	}
-	target := resolvePath(filepath.Join(root, filepath.FromSlash(rel)))
+	target := kb.ResolvePath(filepath.Join(root, filepath.FromSlash(rel)))
 	if target == root {
 		return "", &storeError{reason: reasonPathOutsideRoot, subject: rel,
 			detail: fmt.Sprintf("resolves to the kb root %s itself, and a target must be a file inside it", root)}
@@ -372,27 +375,10 @@ func resolveTarget(root, rel string) (string, error) {
 	return target, nil
 }
 
-// resolvePath resolves every symlink of p's longest existing prefix and
-// keeps the rest as written, as Python's non-strict resolve does.
-func resolvePath(p string) string {
-	p = filepath.Clean(p)
-	var rest []string
-	for cur := p; ; {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(append([]string{resolved}, rest...)...)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = append([]string{filepath.Base(cur)}, rest...)
-		cur = parent
-	}
-}
-
-// readExact is a file's exact text, refused when it is not UTF-8.
-func readExact(path, subject string) (string, error) {
-	data, err := os.ReadFile(path)
+// readExact is a file's exact text as the KB reads it, refused when it is
+// not UTF-8.
+func readExact(src *kb.Source, path, subject string) (string, error) {
+	data, err := src.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -402,14 +388,27 @@ func readExact(path, subject string) (string, error) {
 	return string(data), nil
 }
 
-// stillMatches is whether the live file still holds baseline; a nil
-// baseline means it must still be absent.
-func stillMatches(path string, baseline *string) bool {
-	data, err := os.ReadFile(path)
+// onDisk is the live file's bytes, nil where it does not exist.
+func onDisk(src *kb.Source, path string) (*string, error) {
+	data, err := src.DiskFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return baseline == nil
+		return nil, nil
 	}
-	return err == nil && baseline != nil && string(data) == *baseline
+	if err != nil {
+		return nil, err
+	}
+	s := string(data)
+	return &s, nil
+}
+
+// stillMatches is whether the live file still holds what it held when it
+// was read; a nil disk means it must still be absent.
+func stillMatches(src *kb.Source, path string, disk *string) bool {
+	now, err := onDisk(src, path)
+	if err != nil {
+		return false
+	}
+	return (now == nil) == (disk == nil) && (now == nil || *now == *disk)
 }
 
 type composed struct {
@@ -417,11 +416,12 @@ type composed struct {
 	target    string
 	subject   string
 	baseline  *string
+	disk      *string
 	before    census
 	candidate string
 }
 
-func compose(e edit, root string, claimed map[string]bool) (composed, error) {
+func compose(e edit, src *kb.Source, root string, claimed map[string]bool) (composed, error) {
 	target, err := resolveTarget(root, e.path)
 	if err != nil {
 		return composed{}, err
@@ -434,19 +434,20 @@ func compose(e edit, root string, claimed map[string]bool) (composed, error) {
 	}
 	claimed[subject] = true
 	c := composed{edit: e, target: target, subject: subject}
+	disk, err := onDisk(src, target)
+	if err != nil {
+		return composed{}, err
+	}
+	c.disk = disk
 	info, statErr := os.Stat(target)
 	switch {
 	case statErr == nil && info.Mode().IsRegular():
-		text, err := readExact(target, subject)
+		text, err := readExact(src, target, subject)
 		if err != nil {
 			return composed{}, err
 		}
 		c.before = takeCensus(text)
-		again, err := readExact(target, subject)
-		if err != nil {
-			return composed{}, err
-		}
-		if again != text {
+		if !stillMatches(src, target, disk) {
 			return composed{}, &storeError{reason: reasonContended, subject: subject, contended: true,
 				detail: "changed while it was being read, so its census describes no single version of it"}
 		}
@@ -536,7 +537,7 @@ func (r registerRead) record(nodeID string) (expectedEntry, bool) {
 	}
 	c, ok := r.claims[nodeID]
 	e := expectedEntry{NodeID: nodeID, Title: c.Title, Rigor: c.Confidence, Rationale: c.Rationale,
-		DependsOn: edgesOf(c.DependsOn), References: edgesOf(c.References)}
+		DependsOn: edgesOf(c.DependsOn), References: edgesOf(c.References), Demoted: edgesOf(c.Demoted)}
 	for _, item := range c.StrengthenBy {
 		e.StrengthenBy = append(e.StrengthenBy, item.Text)
 	}
@@ -557,11 +558,11 @@ func normalized(e expectedEntry) expectedEntry {
 			if m := axiomExpectRE.FindStringSubmatch(target); m != nil {
 				target = "axiom-" + m[1]
 			}
-			res = append(res, expectedEdge{Target: target, Context: collapse(edge.Context), Applicability: edge.Applicability})
+			res = append(res, expectedEdge{Target: target, Context: collapse(edge.Context), Applicability: edge.Applicability, Origin: edge.Origin})
 		}
 		return res
 	}
-	out.DependsOn, out.References = norm(e.DependsOn), norm(e.References)
+	out.DependsOn, out.References, out.Demoted = norm(e.DependsOn), norm(e.References), norm(e.Demoted)
 	out.StrengthenBy = nil
 	for _, s := range e.StrengthenBy {
 		out.StrengthenBy = append(out.StrengthenBy, collapse(s))
@@ -573,7 +574,7 @@ func scoreEqual(a, b *float64) bool { return (a == nil) == (b == nil) && (a == n
 
 func edgesEqual(a, b []expectedEdge) bool {
 	return slices.EqualFunc(a, b, func(x, y expectedEdge) bool {
-		return x.Target == y.Target && x.Context == y.Context && scoreEqual(x.Applicability, y.Applicability)
+		return x.Target == y.Target && x.Context == y.Context && scoreEqual(x.Applicability, y.Applicability) && x.Origin == y.Origin
 	})
 }
 
@@ -595,6 +596,7 @@ func mismatchedFields(want, got expectedEntry) []string {
 		{"rationale", w.Rationale == got.Rationale},
 		{"depends-on", edgesEqual(w.DependsOn, got.DependsOn)},
 		{"references", edgesEqual(w.References, got.References)},
+		{kb.RelationDemoted, edgesEqual(w.Demoted, got.Demoted)},
 		{"strengthen-by", slices.Equal(w.StrengthenBy, got.StrengthenBy)},
 		{"supports", pairsEqual(w.Supports, got.Supports)},
 	} {
@@ -605,41 +607,23 @@ func mismatchedFields(want, got expectedEntry) []string {
 	return out
 }
 
-// applyEdits runs a batch all-or-nothing. Every edit is composed unlocked —
-// read, census, splice — then, with every target's directory held, proven,
-// checked against a fresh read of the live file, and replaced. An edit whose
-// candidate is its baseline is proven and not written.
-func applyEdits(kbRoot string, edits []edit) (outcome, error) {
+// applyEdits runs a batch all-or-nothing. Every edit is composed — read,
+// census, splice — then proven, checked against a fresh read of the live
+// file, and replaced. An edit whose candidate is its baseline is proven and
+// not written.
+func applyEdits(src *kb.Source, edits []edit) (outcome, error) {
 	if len(edits) == 0 {
 		return outcome{status: statusUnchanged}, nil
 	}
-	root := resolvePath(kbRoot)
+	root := kb.ResolvePath(src.Root())
 	claimed := map[string]bool{}
 	var all []composed
 	for _, e := range edits {
-		c, err := compose(e, root, claimed)
+		c, err := compose(e, src, root, claimed)
 		if err != nil {
 			return storeOutcome(err)
 		}
 		all = append(all, c)
-	}
-	dirs := map[string]string{}
-	for _, c := range all {
-		if _, ok := dirs[filepath.Dir(c.target)]; !ok {
-			dirs[filepath.Dir(c.target)] = c.subject
-		}
-	}
-	order := make([]string, 0, len(dirs))
-	for d := range dirs {
-		order = append(order, d)
-	}
-	slices.Sort(order)
-	for _, d := range order {
-		unlock, err := lockDir(d, dirs[d])
-		if err != nil {
-			return storeOutcome(err)
-		}
-		defer unlock()
 	}
 	for _, c := range all {
 		if err := atomicfile.Sweep(c.target); err != nil {
@@ -652,17 +636,22 @@ func applyEdits(kbRoot string, edits []edit) (outcome, error) {
 		}
 	}
 	for _, c := range all {
-		if !stillMatches(c.target, c.baseline) {
+		if !stillMatches(src, c.target, c.disk) {
 			return storeOutcome(&storeError{reason: reasonContended, subject: c.subject, contended: true,
 				detail: "changed between the read and the replace; a concurrent writer intervened"})
 		}
 	}
+	entryPoint := src.KBPath(kb.EntryPointFile)
 	var written []string
 	for _, c := range all {
 		if c.baseline != nil && *c.baseline == c.candidate {
 			continue
 		}
-		if err := atomicfile.Write(c.target, []byte(c.candidate), nil); err != nil {
+		// A migrated KB's entry point carries the stamp, so it lands only
+		// with the save that rewrites the whole KB, last.
+		if src.Migrated() && c.target == kb.ResolvePath(entryPoint) {
+			src.Put(c.target, []byte(c.candidate))
+		} else if err := index.WriteKBFile(src, c.target, []byte(c.candidate)); err != nil {
 			return outcome{}, &interruptedError{written: written, failed: c.subject, cause: err}
 		}
 		written = append(written, c.subject)

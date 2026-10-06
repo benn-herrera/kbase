@@ -1,33 +1,45 @@
-# Where each imported prompt template and fragment came from: its path under
-# prompt-templates/ here, its path in the adjagent repository, and the adjagent
-# commit it was taken at. Each file's bytes are upstream's at that commit,
-# unchanged; asks' provenance test reads them back from that commit and
-# compares.
+# One entry per embedded prompt template and fragment: its path under
+# prompt-templates/, the adjagent path and commit it came from, and its
+# authorship — `imported` where its bytes are that file's at that commit,
+# `kbase-authored` where it was derived from that file and its bytes differ.
 files:
   - file: classify.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/classify.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: overview-passage.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/overview-passage.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: paragraph.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/paragraph.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
+  - file: unmarked.tmpl.md
+    upstream: kb_tools/kb_driver/prompt-templates/unmarked.tmpl.md
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: kbase-authored
   - file: fragments/classify-options-three.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/classify-options-three.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: fragments/classify-options-two.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/classify-options-two.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: fragments/letter-correction.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/letter-correction.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: fragments/overview-correction.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/overview-correction.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: fragments/overview-system.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/overview-system.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported
   - file: fragments/reader-system.tmpl.md
     upstream: kb_tools/kb_driver/prompt-templates/fragments/reader-system.tmpl.md
-    commit: e29bc3d97453c039995962994983f3330f428d7a
+    commit: d70d7bc9b30f8914ad1c0920ac655b765cd46733
+    authorship: imported

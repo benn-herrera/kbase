@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/write"
 )
@@ -94,7 +95,7 @@ const (
 	standingUnjudged
 )
 
-func (r *leafReading) standing(a Anchor, entry LeafEntry) standing {
+func (r *leafReading) standing(a Anchor, entry buildrecords.LeafEntry) standing {
 	p, ok := r.render.paragraphAt(a.Line)
 	if !ok {
 		return standingOutside
@@ -249,7 +250,7 @@ type paragraphAnswer struct {
 // judge is one leaf's verdicts and claims from its answers. A paragraph with
 // no letter, and a yes whose slice the write path cannot place exactly once,
 // are recorded defaulted with their cause.
-func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []ParagraphVerdict) {
+func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []buildrecords.ParagraphVerdict) {
 	taken := map[string]bool{}
 	for _, b := range r.claimBlocks {
 		if b.Title != "" {
@@ -259,9 +260,9 @@ func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []Paragrap
 	answers = slices.Clone(answers)
 	slices.SortStableFunc(answers, func(x, y paragraphAnswer) int { return x.asked.paragraph.start - y.asked.paragraph.start })
 	var claims []proseClaim
-	var verdicts []ParagraphVerdict
-	defaulted := func(line int, cause string) ParagraphVerdict {
-		return ParagraphVerdict{Line: line, Verdict: JudgementDefaulted, Cause: &cause}
+	var verdicts []buildrecords.ParagraphVerdict
+	defaulted := func(line int, cause string) buildrecords.ParagraphVerdict {
+		return buildrecords.ParagraphVerdict{Line: line, Verdict: JudgementDefaulted, Cause: &cause}
 	}
 	for _, a := range answers {
 		line := a.asked.paragraph.start
@@ -270,7 +271,7 @@ func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []Paragrap
 			verdicts = append(verdicts, defaulted(line, CauseNoLetter))
 			continue
 		case !*a.statesResult:
-			verdicts = append(verdicts, ParagraphVerdict{Line: line, Verdict: JudgementNotAClaim})
+			verdicts = append(verdicts, buildrecords.ParagraphVerdict{Line: line, Verdict: JudgementNotAClaim})
 			continue
 		}
 		title := derivedTitle(a.asked, r.fences, taken)
@@ -282,7 +283,7 @@ func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []Paragrap
 			continue
 		}
 		claims = append(claims, proseClaim{title, excerpt, lines[0]})
-		verdicts = append(verdicts, ParagraphVerdict{Line: line, Verdict: JudgementClaim})
+		verdicts = append(verdicts, buildrecords.ParagraphVerdict{Line: line, Verdict: JudgementClaim})
 	}
 	return claims, verdicts
 }

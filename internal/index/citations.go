@@ -32,12 +32,17 @@ var (
 	fieldBulletRE    = kb.PyRE(`^-\s+[a-z][a-z-]*:`)
 	fieldContRE      = kb.PyRE(`^\s+\S`)
 	noEdgeRE         = kb.PyRE(`^\s*-\s+no-edge:\s*(\S.*)$`)
-	// citationFrontmatterRE is the block as the citation gate bounds it: the
-	// opener word-bounded, the body up to the first closer.
-	citationFrontmatterRE = kb.PyRE(`(?s)<!--\s*kb-frontmatter(?:-->|[^\p{L}\p{N}_].*?-->)`)
-	leafKindRE            = kb.PyRE(`(?m)^kind:\s*(\S+)`)
-	schemeRE              = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
+	leafKindRE       = kb.PyRE(`(?m)^kind:\s*(\S+)`)
+	schemeRE         = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
 )
+
+// frontmatterSpans is the document's frontmatter block as one span, or none.
+func frontmatterSpans(text string) [][]int {
+	if m := kb.FindFrontmatter(text); m != nil {
+		return [][]int{m[:2]}
+	}
+	return nil
+}
 
 // blankSpans replaces every character but newlines in each span with a space.
 func blankSpans(text string, spans [][]int) string {
@@ -62,18 +67,17 @@ func blankRunes(s string) string {
 // whole; code is blanked either way.
 func inScopeText(text string) string {
 	text = kb.StripCodeSplitLines(text)
-	fm := citationFrontmatterRE.FindStringIndex(text)
+	fm := frontmatterSpans(text)
 	kind := ""
 	if fm != nil {
-		if m := leafKindRE.FindStringSubmatch(text[fm[0]:fm[1]]); m != nil {
+		if m := leafKindRE.FindStringSubmatch(text[fm[0][0]:fm[0][1]]); m != nil {
 			kind = m[1]
 		}
 	}
 	if kind != kb.DocumentLeaf {
 		return text
 	}
-	keep := tier2MarkerRE.FindAllStringIndex(text, -1)
-	keep = append([][]int{fm}, keep...)
+	keep := append(fm, tier2MarkerRE.FindAllStringIndex(text, -1)...)
 	var b strings.Builder
 	for i, r := range text {
 		if r == '\n' || slices.ContainsFunc(keep, func(s []int) bool { return s[0] <= i && i < s[1] }) {
@@ -89,7 +93,8 @@ func inScopeText(text string) string {
 // frontmatter, markers, citation links, register field bullets and, in the
 // framework source, each INVARIANT section's own body.
 func proseOnly(text string, declarations bool) string {
-	for _, re := range []*regexp.Regexp{citationFrontmatterRE, tier2MarkerRE, citationLinkRE} {
+	text = blankSpans(text, frontmatterSpans(text))
+	for _, re := range []*regexp.Regexp{tier2MarkerRE, citationLinkRE} {
 		text = blankSpans(text, re.FindAllStringIndex(text, -1))
 	}
 	lines := strings.Split(text, "\n")
@@ -148,26 +153,8 @@ func channelFindings(rel, text string, framework bool) []Finding {
 
 var nodeIDPattern = regexp.MustCompile(kb.IDBody())
 
-// resolveLenient is the absolute path p names with every symlink in its
-// existing prefix resolved, as a non-strict resolve has it.
-func resolveLenient(p string) string {
-	p = filepath.Clean(p)
-	var tail []string
-	for {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return filepath.Join(append([]string{r}, tail...)...)
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return filepath.Join(append([]string{p}, tail...)...)
-		}
-		tail = append([]string{filepath.Base(p)}, tail...)
-		p = parent
-	}
-}
-
-func citationLinkFindings(rel, text, kbRoot, source string) ([]Finding, error) {
-	root := resolveLenient(kbRoot)
+func citationLinkFindings(src *kb.Source, rel, text, source string) ([]Finding, error) {
+	root := kb.ResolvePath(src.Root())
 	var out []Finding
 	for n, line := range strings.Split(text, "\n") {
 		for _, m := range citationLinkRE.FindAllStringSubmatch(line, -1) {
@@ -180,12 +167,12 @@ func citationLinkFindings(rel, text, kbRoot, source string) ([]Finding, error) {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(filepath.Dir(source), p)
 			}
-			resolved := resolveLenient(p)
+			resolved := kb.ResolvePath(p)
 			if !kb.Within(root, resolved) {
 				out = append(out, citation(checkDurable, rel, n+1, "citation target %q resolves outside %s/; cite a durable KB path", target, kb.KBDir))
 				continue
 			}
-			if !kb.IsFile(resolved) {
+			if !src.IsFile(resolved) {
 				out = append(out, citation(checkReferent, rel, n+1, "citation target %q does not resolve to a file", target))
 				continue
 			}
@@ -212,7 +199,7 @@ func citationLinkFindings(rel, text, kbRoot, source string) ([]Finding, error) {
 				out = append(out, citation(checkExcerpt, rel, n+1, "citation of %q carries a quoted excerpt but no #anchor", target))
 				continue
 			}
-			cited, err := kb.ReadText(resolved)
+			cited, err := src.ReadText(resolved)
 			if err != nil {
 				return nil, err
 			}
@@ -270,33 +257,21 @@ func foreignEdgeFindings(rel, text string, domains map[string]string, edges map[
 	return out
 }
 
-// indexMaps is the node domains and the (source, target) edges the index on
-// disk records.
-func indexMaps(indexDir string) (map[string]string, map[[2]string]bool, error) {
+// indexMaps is the node domains and the (source, target) edges the index
+// records.
+func indexMaps(src *kb.Source) (map[string]string, map[[2]string]bool, error) {
 	domains := map[string]string{}
 	edges := map[[2]string]bool{}
 	read := func(name string, each func(map[string]any)) error {
-		p := filepath.Join(indexDir, name)
-		if !kb.IsFile(p) {
-			return nil
-		}
-		text, err := kb.ReadText(p)
-		if err != nil {
-			return err
-		}
-		for _, raw := range kb.SplitLines(text) {
-			if kb.Strip(raw) == "" {
-				continue
-			}
-			if v, ok := parseJSON(raw); ok {
-				if rec, ok := v.(map[string]any); ok {
-					each(rec)
-				}
+		recs, _, _, err := recordLines(src, name)
+		for _, v := range recs {
+			if rec, ok := v.(map[string]any); ok {
+				each(rec)
 			}
 		}
-		return nil
+		return err
 	}
-	err := read("claims.jsonl", func(rec map[string]any) {
+	err := read("claims", func(rec map[string]any) {
 		id, okID := rec["id"].(string)
 		p, okPath := rec["canonical_path"].(string)
 		if okID && okPath {
@@ -306,7 +281,7 @@ func indexMaps(indexDir string) (map[string]string, map[[2]string]bool, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	err = read("depends-on.jsonl", func(rec map[string]any) {
+	err = read("depends-on", func(rec map[string]any) {
 		s, okS := rec["source"].(string)
 		t, okT := rec["target"].(string)
 		if okS && okT {
@@ -317,33 +292,31 @@ func indexMaps(indexDir string) (map[string]string, map[[2]string]bool, error) {
 }
 
 // CitationFindings is the citation-grammar gate over every authored document
-// under kbRoot: ids and invariant names only in sanctioned channels, every
+// of the KB: ids and invariant names only in sanctioned channels, every
 // citation link resolving inside kb-root to a file, every quoted excerpt
 // short and present at its anchor, and every foreign-domain id in a register
 // entry backed by a depends-on edge. Leaf bodies are out of scope.
-func CitationFindings(kbRoot string) ([]Finding, error) {
-	root, err := filepath.Abs(kbRoot)
-	if err != nil {
-		return nil, err
-	}
-	framework := kb.FrameworkSource(root)
+func CitationFindings(src *kb.Source) ([]Finding, error) {
+	root := src.Root()
+	framework := kb.FrameworkSource(src)
 	var frameworkInfo fs.FileInfo
 	if framework != "" {
+		var err error
 		if frameworkInfo, err = os.Stat(framework); err != nil {
 			return nil, err
 		}
 	}
-	domains, edges, err := indexMaps(filepath.Join(root, kb.IndexDir))
+	domains, edges, err := indexMaps(src)
 	if err != nil {
 		return nil, err
 	}
-	files, err := kb.MarkdownFiles(root)
+	files, err := kb.MarkdownFiles(src)
 	if err != nil {
 		return nil, err
 	}
 	var out []Finding
 	for _, file := range files {
-		raw, err := kb.ReadText(file)
+		raw, err := src.ReadText(file)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +335,7 @@ func CitationFindings(kbRoot string) ([]Finding, error) {
 			isFramework = err == nil && os.SameFile(info, frameworkInfo)
 		}
 		out = append(out, channelFindings(rel, text, isFramework)...)
-		links, err := citationLinkFindings(rel, text, root, file)
+		links, err := citationLinkFindings(src, rel, text, file)
 		if err != nil {
 			return nil, err
 		}

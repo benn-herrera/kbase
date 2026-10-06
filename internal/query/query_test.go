@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
-	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -47,10 +47,11 @@ func writeIndex(t *testing.T, kbRoot string, files map[string][]map[string]any) 
 			if err != nil {
 				t.Fatal(err)
 			}
+			b.WriteString(kb.IndexRecordMarker)
 			b.Write(line)
 			b.WriteByte('\n')
 		}
-		if err := os.WriteFile(filepath.Join(dir, name+".jsonl"), []byte(b.String()), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, kb.IndexFileName(name)), []byte(b.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,14 +61,14 @@ func load(t *testing.T, files map[string][]map[string]any) *Index {
 	t.Helper()
 	root := t.TempDir()
 	writeIndex(t, root, files)
-	ix, err := Load(root)
+	ix, err := Load(kb.OnDisk(root))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return ix
 }
 
-func ids(nodes []Node) []string {
+func ids(nodes []kb.NodeRow) []string {
 	var out []string
 	for _, n := range nodes {
 		out = append(out, n.ID)
@@ -112,7 +113,7 @@ func writeFile(t *testing.T, path, text string) {
 }
 
 func leaf(front, body string) string {
-	return "[↑ Up](../index.md)\n\n<!-- kb-frontmatter\nkind: leaf\n" + front + "\n-->\n\n# Leaf\n\n" + body + "\n"
+	return "---\nkind: leaf\n" + front + "\n---\n[↑ Up](../index.md)\n\n# Leaf\n\n" + body + "\n"
 }
 
 func TestReferencedBy(t *testing.T) {
@@ -125,8 +126,8 @@ func TestReferencedBy(t *testing.T) {
 	writeFile(t, filepath.Join(root, "main/citing.md"), leaf(`no-claim: "links"`, "See [the origin](origin.md#sec) for it."))
 	writeFile(t, filepath.Join(root, "other/deep.md"), leaf(`no-claim: "links"`, "Back [up](../main/origin.md)."))
 	writeFile(t, filepath.Join(root, "main/coded.md"), leaf(`no-claim: "code"`, "Only `[x](origin.md)` in code."))
-	writeFile(t, filepath.Join(root, "main/index.md"), "<!-- kb-frontmatter\nkind: index\n-->\n\n# Index\n\n[origin](origin.md)\n")
-	ix, err := Load(root)
+	writeFile(t, filepath.Join(root, "main/index.md"), "---\nkind: index\n---\n\n# Index\n\n[origin](origin.md)\n")
+	ix, err := Load(kb.OnDisk(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +175,36 @@ func TestSolidityBelowAndWeakPoints(t *testing.T) {
 	}
 }
 
+func TestDependentsOf(t *testing.T) {
+	ix := load(t, map[string][]map[string]any{"depends-on": {
+		edge("clm-dep", "clm-aaaaaa", kb.RelationDepends, nil),
+		edge("clm-rest", "clm-aaaaaa", kb.RelationRestsOn, 0.5),
+		edge("clm-dep", "clm-aaaaaa", kb.RelationDepends, nil),
+		edge("clm-ref", "clm-aaaaaa", kb.RelationReferences, nil),
+		edge("clm-cut", "clm-aaaaaa", kb.RelationDemoted, nil),
+		edge("exp-aaaaaa", "clm-aaaaaa", kb.RelationStrengthens, nil),
+		edge("sup-aaaaaa", "clm-aaaaaa", kb.RelationSupports, nil),
+		edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationReferences, nil),
+		edge("clm-aaaaaa", "clm-cccccc", kb.RelationDemoted, nil),
+	}})
+	for _, tc := range []struct {
+		id   string
+		want []string
+	}{
+		{"clm-aaaaaa", []string{"clm-dep", "clm-rest"}},
+		{"exp-aaaaaa", []string{"clm-aaaaaa"}},
+		{"sup-aaaaaa", []string{"clm-aaaaaa"}},
+		{"clm-bbbbbb", []string{}},
+		{"clm-cccccc", []string{}},
+		{"clm-ref", []string{}},
+		{"clm-cut", []string{}},
+	} {
+		if got := ix.DependentsOf(tc.id); !slices.Equal(got, tc.want) {
+			t.Errorf("DependentsOf(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 func TestDepsApplicability(t *testing.T) {
 	ix := load(t, map[string][]map[string]any{
 		"claims": {claim("clm-aaaaaa", "A", nil, "unknown")},
@@ -189,6 +220,60 @@ func TestDepsApplicability(t *testing.T) {
 	}
 	if want := []string{"sup-aaaaaa=<nil>", "work-B=0.5", "work-Z=*pending*"}; !slices.Equal(got, want) {
 		t.Errorf("deps = %v, want %v", got, want)
+	}
+}
+
+func TestDepsContext(t *testing.T) {
+	withContext := edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationDepends, nil)
+	withContext["context"] = "used in step 2"
+	ix := load(t, map[string][]map[string]any{"depends-on": {withContext, edge("clm-aaaaaa", "clm-cccccc", kb.RelationDepends, nil)}})
+	want := []result.Record{
+		{{Key: "relation", Value: kb.RelationDepends}, {Key: "target", Value: "clm-bbbbbb"}, {Key: "applicability", Value: nil}, {Key: "context", Value: "used in step 2"}},
+		{{Key: "relation", Value: kb.RelationDepends}, {Key: "target", Value: "clm-cccccc"}, {Key: "applicability", Value: nil}, {Key: "context", Value: nil}},
+	}
+	if got := DepsPayload(ix, "clm-aaaaaa", false); !reflect.DeepEqual(got, want) {
+		t.Errorf("deps = %v, want %v", got, want)
+	}
+}
+
+func TestShowStrengthenBy(t *testing.T) {
+	ix := load(t, map[string][]map[string]any{
+		"claims": {claim("clm-aaaaaa", "A", nil, "unknown"), claim("clm-bbbbbb", "B", nil, "unknown"),
+			{"node_type": "work", "id": "work-A", "title": "W", "canonical_path": "p", "canonical_anchor": "w", "strength": 0.5}},
+		"strengthen-by": {
+			{"claim_id": "clm-aaaaaa", "item_idx": 1, "text": "Bound the remainder.", "mentioned_ids": []string{}},
+			{"claim_id": "clm-bbbbbb", "item_idx": 0, "text": "Other claim's item.", "mentioned_ids": []string{}},
+			{"claim_id": "clm-aaaaaa", "item_idx": 0, "text": "Prove clm-bbbbbb first.", "mentioned_ids": []string{"clm-bbbbbb", "work-A"}},
+		},
+	})
+	field := func(rec result.Record, key string) (any, int) {
+		for i, f := range rec {
+			if f.Key == key {
+				return f.Value, i
+			}
+		}
+		return nil, -1
+	}
+	rec, _ := ShowPayload(ix, "clm-aaaaaa")
+	items, at := field(rec, "strengthen_by")
+	if _, count := field(rec, "strengthen_by_count"); at != count+1 {
+		t.Errorf("strengthen_by at %d, want right after strengthen_by_count at %d", at, count)
+	}
+	want := []result.Record{
+		{{Key: "item_idx", Value: 0}, {Key: "text", Value: "Prove clm-bbbbbb first."}, {Key: "mentioned_ids", Value: []string{"clm-bbbbbb", "work-A"}}},
+		{{Key: "item_idx", Value: 1}, {Key: "text", Value: "Bound the remainder."}, {Key: "mentioned_ids", Value: []string{}}},
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Errorf("show strengthen_by = %v, want %v", items, want)
+	}
+	work, _ := ShowPayload(ix, "work-A")
+	if _, at := field(work, "strengthen_by"); at != -1 {
+		t.Errorf("work record carries strengthen_by: %v", work)
+	}
+	for _, c := range SolidityBelowPayload(load(t, map[string][]map[string]any{"claims": {claim("clm-aaaaaa", "A", f(0.1), "do-not-build")}}), 1) {
+		if _, at := field(c, "strengthen_by"); at != -1 {
+			t.Errorf("solidity-below record carries strengthen_by: %v", c)
+		}
 	}
 }
 
@@ -251,19 +336,35 @@ func TestStatsCensusPartitionsClaims(t *testing.T) {
 	}
 }
 
+func TestStatsCountsDemotedEdges(t *testing.T) {
+	ix := load(t, map[string][]map[string]any{"depends-on": {
+		edge("clm-aaaaaa", "clm-bbbbbb", "depends", nil),
+		edge("clm-bbbbbb", "clm-aaaaaa", kb.RelationDemoted, nil),
+		edge("clm-aaaaaa", "clm-cccccc", "references", nil),
+		edge("clm-cccccc", "clm-aaaaaa", kb.RelationDemoted, nil),
+	}})
+	counts := map[string]any{}
+	for _, field := range StatsPayload(ix) {
+		counts[field.Key] = field.Value
+	}
+	if counts["depends_on_edges"] != 4 || counts["demoted_edges"] != 2 {
+		t.Errorf("depends_on_edges %v, demoted_edges %v; want 4 and 2", counts["depends_on_edges"], counts["demoted_edges"])
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Load(root); !isRefusal(err, len(requiredFiles)) {
+	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, len(requiredFiles)) {
 		t.Errorf("empty kb-root: %v, want a refusal naming all %d files", err, len(requiredFiles))
 	}
 	writeIndex(t, root, map[string][]map[string]any{"claims": {{"node_type": "gadget", "id": "x"}}})
-	writeFile(t, filepath.Join(root, kb.IndexDir, "cites.jsonl"), "[1]\n\nnot json\n")
-	if _, err := Load(root); !isRefusal(err, 3) {
-		t.Errorf("bad lines: %v, want a refusal naming 3", err)
+	writeFile(t, filepath.Join(root, kb.IndexDir, kb.IndexFileName("cites")), "--- [1]\n\n{\"claim_id\": \"unmarked\"}\n--- not json\n")
+	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, 4) {
+		t.Errorf("bad lines: %v, want a refusal naming 4", err)
 	}
 }
 
 func isRefusal(err error, items int) bool {
-	var r index.Refusal
-	return errors.As(err, &r) && len(r.Items) == items
+	var r result.Refusal
+	return errors.As(err, &r) && len(r) == items
 }

@@ -1,6 +1,8 @@
 package kb
 
 import (
+	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -82,7 +84,8 @@ func TestSplitLines(t *testing.T) {
 
 func TestSlugify(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"Solidity — the dep gate", "solidity--the-dep-gate"},
+		{"Solidity — the dep gate", "solidity-the-dep-gate"},
+		{"Rule : applied", "rule-applied"},
 		{"INVARIANT-S2: Axiom numbering", "invariant-s2-axiom-numbering"},
 		{"  Ünïcode Wörds_ok ", "ünïcode-wörds_ok"},
 		{"(Parenthesised) Title!", "parenthesised-title"},
@@ -130,18 +133,91 @@ func TestFrontmatterListShapes(t *testing.T) {
 		"kind: leaf\nclaims: [clm-aaaaaa, clm-bbbbbb]",
 		"kind: leaf\nclaims: [clm-aaaaaa,\n         clm-bbbbbb]",
 		"kind: leaf\nclaims:\n  - clm-aaaaaa\n  - clm-bbbbbb",
+		"kind: leaf\nclaims:\n- clm-aaaaaa\n- not an id\n- clm-bbbbbb",
 	} {
-		fm := ParseFrontmatter("<!-- kb-frontmatter\n" + body + "\n-->\n# T\n")
+		fm, err := ParseFrontmatter("---\n" + body + "\n---\n# T\n")
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
 		claims, err := fm.ListOrEmpty("claims")
 		if err != nil || !slices.Equal(claims, []string{"clm-aaaaaa", "clm-bbbbbb"}) {
 			t.Errorf("claims of %q = %q, %v", body, claims, err)
 		}
 	}
-	if fm := ParseFrontmatter("no block here"); fm != nil {
-		t.Errorf("a document with no block parsed to %v", fm)
+	// A fenced block whose first non-blank line opens no kebab-case key is a
+	// thematic break opening prose, and the document has no frontmatter.
+	for _, text := range []string{"no frontmatter here", "--- a rule, not a fence\n", "---\nunclosed: true\n",
+		"---\nSome notes: with: colons\n---\n", "---\nPlain prose.\n---\n", "---\n- a list\n---\n", "---\n\nkey with space: x\n---\n"} {
+		if fm, err := ParseFrontmatter(text); fm != nil || err != nil {
+			t.Errorf("%q parsed to %v, %v; want none", text, fm, err)
+		}
 	}
-	if fm := ParseFrontmatter("<!-- kb-frontmatter\n\n-->"); fm == nil || len(fm) != 0 {
-		t.Errorf("an empty block parsed to %#v, want empty and present", fm)
+	leaf := "---\nSome notes: with: colons\n---\n# T\n"
+	if end := FrontmatterEnd(leaf); end != 0 {
+		t.Errorf("a prose block's frontmatter ends at %d, want 0", end)
+	}
+	for name, read := range map[string]func(string, string) error{
+		"ParseLeaf":           func(text, rel string) error { _, err := ParseLeaf(text, rel); return err },
+		"ParseExperimentLeaf": func(text, rel string) error { _, err := ParseExperimentLeaf(text, rel); return err },
+		"ParseSupportLeaf":    func(text, rel string) error { _, err := ParseSupportLeaf(text, rel); return err },
+	} {
+		if err := read(leaf, "v/l.md"); err != nil {
+			t.Errorf("%s of a leaf opening with a prose block: %v", name, err)
+		}
+	}
+	if fm, err := ParseFrontmatter("---\n---\n# T\n"); fm == nil || len(fm) != 0 || err != nil {
+		t.Errorf("an empty frontmatter parsed to %#v, %v; want empty and present", fm, err)
+	}
+	// A block opening with a key is frontmatter, and one no reader can take
+	// is malformed, never prose.
+	for _, text := range []string{"---\nkey: [unclosed\n---\n", "---\nkind: leaf\n- stray\n---\n", "---\nk: 1\nk: 2\n---\n", "---\nk:\n  nested: 1\n---\n"} {
+		var mal MalformedError
+		if _, err := ParseFrontmatter(text); !errors.As(err, &mal) {
+			t.Errorf("%q: err = %v, want a MalformedError", text, err)
+		}
+	}
+}
+
+// TestNodeDeclarations: a leaf's experiment and support lists read into
+// nodes, their pairs in list order, a pair whose score reads as no number
+// skipped, and an entry without its id refused.
+func TestNodeDeclarations(t *testing.T) {
+	leaf := "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-cccccc\n    status: run\n    strengthens:\n      - clm-aaaaaa: 0.8\n      - clm-bbbbbb: 1e-05\n" +
+		"      - clm-dddddd: \"*pending*\"\n  - exp-id: exp-eeeeee\n    status: pending\n" +
+		"support-nodes:\n  - sup-id: sup-ffffff\n    supports:\n      - clm-aaaaaa: \"*pending*\"\n      - clm-bbbbbb: 0.5\n---\n[↑ V](index.md)\n\n# The leaf\n"
+	exps, err := ParseExperimentLeaf(leaf, "v/l.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantExps := []ExperimentNode{
+		{ID: "exp-cccccc", Title: "The leaf", CanonicalPath: "v/l.md", CanonicalAnchor: "the-leaf", Status: "run",
+			Strengthens: []StrengthensPair{{"clm-aaaaaa", 0.8}, {"clm-bbbbbb", 1e-05}}},
+		{ID: "exp-eeeeee", Title: "The leaf", CanonicalPath: "v/l.md", CanonicalAnchor: "the-leaf", Status: "pending"},
+	}
+	if !reflect.DeepEqual(exps, wantExps) {
+		t.Errorf("experiments = %+v, want %+v", exps, wantExps)
+	}
+	sups, err := ParseSupportLeaf(leaf, "v/l.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSups := []SupportPair{{"clm-aaaaaa", Fraction{Set: true, Pending: true}}, {"clm-bbbbbb", Fraction{Set: true, Value: 0.5}}}
+	if len(sups) != 1 || sups[0].ID != "sup-ffffff" || !reflect.DeepEqual(sups[0].Supports, wantSups) {
+		t.Errorf("supports = %+v, want sup-ffffff with %+v", sups, wantSups)
+	}
+	fm, err := ParseFrontmatter(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := DeclaredNodeIDs(fm); !slices.Equal(got, []string{"exp-cccccc", "exp-eeeeee", "sup-ffffff"}) {
+		t.Errorf("DeclaredNodeIDs = %q", got)
+	}
+	var mal MalformedError
+	if _, err := ParseExperimentLeaf("---\nkind: leaf\nexperiment-nodes:\n  - status: run\n---\n", "x.md"); !errors.As(err, &mal) {
+		t.Errorf("an entry with no exp-id: err = %v, want a MalformedError", err)
+	}
+	if _, err := ParseExperimentLeaf("---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-cccccc\n---\n", "x.md"); !errors.As(err, &mal) {
+		t.Errorf("an experiment with no status: err = %v, want a MalformedError", err)
 	}
 }
 
@@ -151,26 +227,36 @@ func TestReplaceOrInsertFrontmatterField(t *testing.T) {
 		ids                            []string
 	}{
 		{"replaces a wrapped list whole",
-			"<!-- kb-frontmatter\nkind: index\nsubtree-claims: [clm-aaaaaa,\n  clm-bbbbbb]\nx: 1\n-->\nbody",
+			"---\nkind: index\nsubtree-claims: [clm-aaaaaa,\n  clm-bbbbbb]\nx: 1\n---\nbody",
 			"subtree-claims", "kind:",
-			"<!-- kb-frontmatter\nkind: index\nsubtree-claims: [clm-cccccc]\nx: 1\n-->\nbody",
+			"---\nkind: index\nsubtree-claims: [clm-cccccc]\nx: 1\n---\nbody",
 			[]string{"clm-cccccc"}},
-		{"inserts after the anchor that ended the block",
-			"<!-- kb-frontmatter\nkind: index\nsubtree-claims: []\n-->\n",
+		{"replaces a block list whole",
+			"---\nkind: index\nsubtree-claims:\n  - clm-aaaaaa\n- clm-bbbbbb\nkb-format: \"1.0.0\"\n---\n",
+			"subtree-claims", "kind:",
+			"---\nkind: index\nsubtree-claims: []\nkb-format: \"1.0.0\"\n---\n",
+			[]string{}},
+		{"inserts after the anchor that ended the frontmatter",
+			"---\nkind: index\nsubtree-claims: []\n---\n",
 			"subtree-experiments", "subtree-claims:",
-			"<!-- kb-frontmatter\nkind: index\nsubtree-claims: []\nsubtree-experiments: []\n-->\n",
+			"---\nkind: index\nsubtree-claims: []\nsubtree-experiments: []\n---\n",
 			[]string{}},
-		{"keeps the indent of the line it replaces",
-			"<!-- kb-frontmatter\n  kind: index\n  subtree-claims: [x]\n  -->",
+		{"inserts at the top where the anchor is absent",
+			"---\nx: 1\n---\n",
 			"subtree-claims", "kind:",
-			"<!-- kb-frontmatter\n  kind: index\n  subtree-claims: [clm-aaaaaa]\n  -->",
+			"---\nsubtree-claims: [clm-aaaaaa]\nx: 1\n---\n",
 			[]string{"clm-aaaaaa"}},
-		{"takes the body's own terminator, as kb_tools' splice does",
-			"<!-- kb-frontmatter\r\nkind: index\r\n-->\r\n",
+		{"takes the body's own terminator",
+			"---\r\nkind: index\r\n---\r\n",
 			"subtree-claims", "kind:",
-			"<!-- kb-frontmatter\r\nkind: index\rsubtree-claims: []\r\n-->\r\n",
+			"---\r\nkind: index\r\nsubtree-claims: []\r\n---\r\n",
 			[]string{}},
-		{"leaves a blockless document alone", "# no block", "subtree-claims", "kind:", "# no block", nil},
+		{"fills an empty frontmatter",
+			"---\n---\nbody\n",
+			"subtree-claims", "kind:",
+			"---\nsubtree-claims: []\n---\nbody\n",
+			[]string{}},
+		{"leaves a document without frontmatter alone", "# no frontmatter", "subtree-claims", "kind:", "# no frontmatter", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ReplaceOrInsertFrontmatterField(tc.doc, tc.field, tc.ids, tc.anchor); got != tc.want {
@@ -271,6 +357,36 @@ func TestParseClaimEntries(t *testing.T) {
 	works := ParseWorkEntries(register, "claim-quality.md")
 	if len(works) != 1 || works[0].Key != "smith2020" || *works[0].Strength != 0.7 || works[0].Rationale != "sound." {
 		t.Errorf("works = %+v", works)
+	}
+}
+
+// TestParseDemoted reads a demoted list beside a references list: each
+// bullet its target, context and origin, a bullet with no annotation no
+// origin, an unknown target dropped, and the fields around it unfolded.
+func TestParseDemoted(t *testing.T) {
+	text := "## A\n<!-- id: clm-aaaaaa -->\n\n### Quality\n- confidence: 0.5\n- references:\n  - clm-bbbbbb — B\n" +
+		"- demoted:\n  - clm-bbbbbb — B (with a paren) (origin cited) [ctx]\n  - clm-cccccc — C\n  - clm-zzzzzz — Z (origin inferred)\n" +
+		"- solidity: *pending*\n- rationale: Shown.\n"
+	known := map[string]bool{"clm-aaaaaa": true, "clm-bbbbbb": true, "clm-cccccc": true}
+	entries := ParseClaimEntries(text, "claim-quality.md", known, log.Discard())
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries", len(entries))
+	}
+	e := entries[0]
+	var got []string
+	for _, d := range e.Demoted {
+		ctx := ""
+		if d.Context != nil {
+			ctx = *d.Context
+		}
+		got = append(got, d.Relation+" "+d.Target+" "+d.Origin+" ["+ctx+"]")
+	}
+	want := []string{"demoted clm-bbbbbb cited [ctx]", "demoted clm-cccccc  []"}
+	if !slices.Equal(got, want) {
+		t.Errorf("demoted = %q, want %q", got, want)
+	}
+	if len(e.References) != 1 || e.References[0].Target != "clm-bbbbbb" || e.Rationale != "Shown." {
+		t.Errorf("references %+v, rationale %q", e.References, e.Rationale)
 	}
 }
 

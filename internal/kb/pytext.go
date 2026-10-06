@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -24,19 +23,6 @@ var pyEscapes = strings.NewReplacer(`\s`, "["+PyWhitespace+"]", `\S`, "[^"+PyWhi
 // none of them inside a bracket expression. \d stays ASCII.
 func PyRE(pattern string) *regexp.Regexp {
 	return regexp.MustCompile(pyEscapes.Replace(pattern))
-}
-
-// ReadText is a file's text as Python's text-mode read returns it: UTF-8,
-// with \r\n and \r translated to \n.
-func ReadText(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	if !utf8.Valid(data) {
-		return "", fmt.Errorf("%s: not UTF-8", path)
-	}
-	return TranslateNewlines(string(data)), nil
 }
 
 // TranslateNewlines is text as Python's text-mode read returns it: \r\n and
@@ -183,17 +169,23 @@ func containsBounded(s, token string) bool {
 	return false
 }
 
-// Slugify is the GitHub-style heading anchor kb_tools computes: lowercased,
-// everything but word characters, whitespace and hyphens dropped, then each
-// whitespace character hyphenated on its own.
+// Slugify is the heading anchor kb_tools computes: lowercased, everything but
+// word characters, whitespace and hyphens dropped, then each whitespace run
+// one hyphen. The collapse is not GitHub's anchor: "A — B" anchors at "a-b",
+// the form every KB's stored canonical_anchor carries.
 func Slugify(text string) string {
 	var b strings.Builder
+	inSpace := false
 	for _, r := range strings.ToLower(Strip(text)) {
 		switch {
 		case IsSpace(r):
-			b.WriteByte('-')
+			if !inSpace {
+				b.WriteByte('-')
+			}
+			inSpace = true
 		case isWord(r) || r == '-':
 			b.WriteRune(r)
+			inSpace = false
 		}
 	}
 	return strings.Trim(b.String(), "-")

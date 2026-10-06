@@ -19,19 +19,25 @@ const (
 	LetterSupportedBy = "A"
 	LetterInSupportOf = "B"
 	LetterMention     = "C"
+
+	LetterPoints       = "A"
+	LetterDoesNotPoint = "B"
 )
 
 var letterConstants = map[string]string{
-	"letter-claim":         LetterClaim,
-	"letter-not-a-claim":   LetterNotClaim,
-	"letter-supported-by":  LetterSupportedBy,
-	"letter-in-support-of": LetterInSupportOf,
-	"letter-mention":       LetterMention,
+	"letter-claim":          LetterClaim,
+	"letter-not-a-claim":    LetterNotClaim,
+	"letter-supported-by":   LetterSupportedBy,
+	"letter-in-support-of":  LetterInSupportOf,
+	"letter-mention":        LetterMention,
+	"letter-points":         LetterPoints,
+	"letter-does-not-point": LetterDoesNotPoint,
 }
 
 const (
 	paragraphTemplate = "paragraph.tmpl.md"
 	classifyTemplate  = "classify.tmpl.md"
+	unmarkedTemplate  = "unmarked.tmpl.md"
 	overviewTemplate  = "overview-passage.tmpl.md"
 )
 
@@ -164,6 +170,33 @@ func classifyAsks(load func(string) (string, error), source Claim, statement str
 			slots["candidate-passages"] = strings.Join(named, ", ")
 			alternatives["classify-options"] = options
 			return render(load, classifyTemplate, slots, letterConstants, alternatives)
+		}}
+	}
+	return out
+}
+
+// UnmarkedItem is one shortlisted target, and its statement.
+type UnmarkedItem struct {
+	Target    Claim
+	Statement string
+}
+
+// UnmarkedAsks is one source claim's unmarked asks — does the source's own
+// text point at the target's result — the source shown with its statement
+// and the kb-root-relative document stating it as its labelled render, each
+// item named by its target's id and offered both letters.
+func UnmarkedAsks(document, body string, source Claim, statement string, items []UnmarkedItem) []LetterItem {
+	out := make([]LetterItem, len(items))
+	for i, it := range items {
+		out[i] = LetterItem{Item: it.Target.ID, Offered: []string{LetterPoints, LetterDoesNotPoint}, Compose: func(returned *string) (string, error) {
+			slots, alternatives := correction(returned)
+			slots["document"] = document
+			slots["body"] = strings.TrimRight(body, "\n")
+			slots["claim-line"] = source.line()
+			slots["claim-text"] = strings.TrimRight(statement, "\n")
+			slots["candidate-line"] = it.Target.line()
+			slots["candidate-text"] = strings.TrimRight(it.Statement, "\n")
+			return render(load, unmarkedTemplate, slots, letterConstants, alternatives)
 		}}
 	}
 	return out

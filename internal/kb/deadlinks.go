@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-// Kinds of dead link: a target inside the scanned root, or one that escapes it.
+// Kinds of dead link: a target inside the repository, or one that escapes it.
 const (
 	BrokenIntra = "broken intra"
 	BrokenInter = "broken inter"
@@ -35,24 +35,34 @@ func (d DeadLink) String() string {
 // schemeRE is a destination naming no file: a URL, or a scheme-relative one.
 var schemeRE = regexp.MustCompile(`(?i)^(?:[a-z][a-z0-9+.\-]*:)?//|^(?:https?|mailto):`)
 
-// DeadLinks is every link in every Markdown file under root whose target is
+// DeadLinks is every link in every Markdown file of the KB whose target is
 // not on disk, spelled as written: a filesystem that folds case does not
 // rescue a link a case-sensitive one would not. External URLs, home-directory
 // paths, bare anchors and .tex targets are not file links here. Links inside
-// code and maths spans and fenced blocks are not links.
-func DeadLinks(root string) ([]DeadLink, error) {
-	root, err := filepath.Abs(root)
+// code and maths spans and fenced blocks are not links. kb-root is its own
+// repository: a target escaping it is broken inter.
+func DeadLinks(src *Source) ([]DeadLink, error) {
+	return DeadLinksIn(src, src.Root())
+}
+
+// DeadLinksIn is DeadLinks over the KB's files, each target judged against
+// repo, a directory at or above kb-root: broken intra where it lies under
+// repo, broken inter only where it escapes it, and spelled as written below
+// repo.
+func DeadLinksIn(src *Source, repo string) ([]DeadLink, error) {
+	root := src.Root()
+	repo, err := filepath.Abs(repo)
 	if err != nil {
 		return nil, err
 	}
-	files, err := MarkdownFiles(root)
+	files, err := MarkdownFiles(src)
 	if err != nil {
 		return nil, err
 	}
 	listings := map[string]map[string]bool{}
 	var dead []DeadLink
 	for _, file := range files {
-		text, err := os.ReadFile(file)
+		text, err := src.ReadFile(file)
 		if err != nil {
 			return nil, err
 		}
@@ -73,7 +83,7 @@ func DeadLinks(root string) ([]DeadLink, error) {
 				if !filepath.IsAbs(resolved) {
 					resolved = filepath.Join(filepath.Dir(file), resolved)
 				}
-				found, err := existsAsSpelled(resolved, root, listings)
+				found, err := existsAsSpelled(resolved, repo, listings)
 				if err != nil {
 					return nil, err
 				}
@@ -81,7 +91,7 @@ func DeadLinks(root string) ([]DeadLink, error) {
 					continue
 				}
 				kind := BrokenIntra
-				if !Within(root, resolved) {
+				if !Within(repo, resolved) {
 					kind = BrokenInter
 				}
 				dead = append(dead, DeadLink{File: filepath.ToSlash(rel), Line: n + 1, Kind: kind, Target: raw, Resolved: resolved})

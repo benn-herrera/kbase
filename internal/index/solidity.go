@@ -1,5 +1,5 @@
 // Package index derives the metadata layer's derived fields and the
-// .index/*.jsonl files from a KB's authored metadata, and checks a KB's
+// .index/*.yaml files from a KB's authored metadata, and checks a KB's
 // freshness, links and citations against them.
 package index
 
@@ -162,7 +162,7 @@ func RenderMinTrace(base, minDep *float64) string {
 func MinDependencySolidity(edges []kb.Edge, finals map[string]float64) *float64 {
 	var deps []float64
 	for _, e := range edges {
-		if e.Relation != "depends" {
+		if e.Relation != kb.RelationDepends {
 			continue
 		}
 		if e.TargetKind == "claim" {
@@ -207,7 +207,7 @@ func dependencyOrder(entries map[string]kb.ClaimEntry, sups map[string]kb.Suppor
 	}
 	for id, e := range entries {
 		for _, edge := range e.DependsOn {
-			if edge.Relation == "depends" && edge.TargetKind == "claim" {
+			if edge.Relation == kb.RelationDepends && edge.TargetKind == "claim" {
 				addEdge(edge.Target, id)
 			}
 		}
@@ -217,7 +217,7 @@ func dependencyOrder(entries map[string]kb.ClaimEntry, sups map[string]kb.Suppor
 	}
 	for id, s := range sups {
 		for _, edge := range s.DependsOn {
-			if edge.Relation == "depends" && edge.TargetKind == "claim" {
+			if edge.Relation == kb.RelationDepends && edge.TargetKind == "claim" {
 				addEdge(edge.Target, id)
 			}
 		}
@@ -358,7 +358,7 @@ func ComputeSolidity(st kb.State) (Solidity, error) {
 		edges:
 			for _, edge := range entry.DependsOn {
 				switch {
-				case edge.Relation == "rests-on":
+				case edge.Relation == kb.RelationRestsOn:
 					f := edge.Fraction
 					if f.Set && !f.Pending && f.Value == 0 {
 						continue
@@ -373,7 +373,7 @@ func ComputeSolidity(st kb.State) (Solidity, error) {
 						break edges
 					}
 					deps = append(deps, *strength)
-				case edge.Relation != "depends":
+				case edge.Relation != kb.RelationDepends:
 				case edge.TargetKind == "claim":
 					f := final[edge.Target]
 					if f == nil {
@@ -409,7 +409,7 @@ func supSolidity(s kb.SupportNode, final map[string]*float64) *float64 {
 	}
 	var deps []float64
 	for _, e := range s.DependsOn {
-		if e.Relation != "depends" {
+		if e.Relation != kb.RelationDepends {
 			continue
 		}
 		if e.TargetKind == "claim" {

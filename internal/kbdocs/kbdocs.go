@@ -68,23 +68,19 @@ func fill(name string, values map[string]string) (string, error) {
 	return slotRE.ReplaceAllStringFunc(text, func(s string) string { return values[s[1:len(s)-1]] }), nil
 }
 
-// Refusal is a kb-root/ the stamp will not write into, its reason stated.
-type Refusal struct{ Item result.Item }
-
-func (r Refusal) Error() string { return r.Item.Detail }
-
-// Stamp writes the readiness documents into kbRoot, each only where none
-// stands, and CLAUDE.md as the redirect to AGENTS.md likewise; scopePin is
-// what AGENTS.md says the KB distills. It returns one report line per
-// document. A CLAUDE.md that is not the redirect refuses it before anything
-// is written.
-func Stamp(kbRoot, projectName, scopePin string) ([]string, error) {
-	msg, err := kb.UnmigratedAgentsFile(kbRoot)
+// Stamp writes the readiness documents into the KB's kb-root, each only
+// where none stands, and CLAUDE.md as the redirect to AGENTS.md likewise;
+// scopePin is what AGENTS.md says the KB distills. It returns one report line
+// per document. A CLAUDE.md that is not the redirect is a result.Refusal,
+// before anything is written.
+func Stamp(src *kb.Source, projectName, scopePin string) ([]string, error) {
+	kbRoot := src.Root()
+	msg, err := kb.UnmigratedAgentsFile(src)
 	if err != nil {
 		return nil, err
 	}
 	if msg != "" {
-		return nil, Refusal{result.Item{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
+		return nil, result.Refusal{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
 	}
 	kinds := make([]string, len(kb.NodeKinds))
 	for i, k := range kb.NodeKinds {

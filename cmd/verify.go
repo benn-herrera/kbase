@@ -22,24 +22,44 @@ func verify(opts maintenanceOptions) (string, []toolresult.Field) {
 		return refused(nil, refusals...)
 	}
 	fields := []toolresult.Field{{Key: "kb-root", Value: root}}
-	findings, err := index.Verify(root)
+	src, refusals, err := openKB(root)
 	if err != nil {
 		return failed(fields, err)
 	}
-	if len(findings) == 0 {
+	if refusals != nil {
+		return refused(fields, refusals...)
+	}
+	faults, err := index.Verify(src)
+	if err != nil {
+		return failed(fields, err)
+	}
+	findings, err := index.DemotedFindings(src)
+	switch {
+	case err != nil && len(faults) == 0:
+		return failed(fields, err)
+	case err != nil:
+		// The faults already name what keeps the registers from being read.
+		findings = []toolresult.Item{}
+	}
+	fields = append(fields, toolresult.Field{Key: "findings", Value: findings})
+	if len(faults) == 0 {
 		return toolresult.Done, fields
 	}
-	return refused(fields, index.Items(findings)...)
+	return refused(fields, index.Items(faults)...)
 }
 
 func init() {
-	rootCmd.AddCommand(maintenanceCommand("verify",
-		"check the KB's freshness, links and citations",
-		`verify checks the KB at kb-root/ beside the repository's .git as kb_tools'
-kb-verify does: the dead-link and unknown-id gate over kb-root/, the metadata
-gate (coverage, uniqueness, integrity, acyclicity, and freshness of every
-derived field, .index/ and the placeholder claim-graph.svg — a drawn sheet is
-left unchecked), and the citation gate. It writes nothing. Findings are
-outcome refused, each one an item under refusals; one a refresh clears names
-"kbase refresh" as its remedy. Its result is one YAML document on stdout.`, runVerify))
+	rootCmd.AddCommand(readOnly(maintenanceCommand("verify",
+		"check the KB's freshness and links",
+		`verify checks the KB's freshness and links at kb-root/ beside the
+repository's .git as kb_tools' kb-verify does: the dead-link and unknown-id
+gate over kb-root/, then the metadata gate (coverage, uniqueness, integrity,
+acyclicity, and freshness of every derived field and of .index/). The
+citation grammar is checked by the build, not here. It writes nothing.
+Faults are outcome refused, each one an item under refusals; one a refresh
+clears names "kbase refresh" as its remedy; on a KB in an older metadata
+format the index is stale, and a refresh rewrites the KB in the current one.
+Every demoted edge — one the build's cycle breaking cut from depends-on — is
+listed under findings, which are not faults. Its result is one YAML document
+on stdout.`, runVerify)))
 }

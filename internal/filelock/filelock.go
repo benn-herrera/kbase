@@ -21,26 +21,46 @@ type Lock struct{ f *os.File }
 // Acquire takes the exclusive lock on path — an existing directory, or a lock
 // file it creates — waiting up to wait for another holder to let go.
 func Acquire(path string, wait time.Duration) (*Lock, error) {
-	f, err := open(path)
-	if err != nil {
-		return nil, err
-	}
 	deadline := time.Now().Add(wait)
 	for {
-		held, err := tryExclusive(f)
+		f, err := open(path)
 		if err != nil {
-			f.Close()
 			return nil, err
 		}
-		if !held {
-			return &Lock{f}, nil
+		held, err := tryExclusive(f)
+		if err == nil && !held {
+			var current bool
+			if current, err = stillAt(f, path); err == nil && current {
+				return &Lock{f}, nil
+			}
+			unlock(f)
+		}
+		f.Close()
+		if err != nil {
+			return nil, err
 		}
 		if time.Now().After(deadline) {
-			f.Close()
 			return nil, ErrHeld
 		}
 		time.Sleep(poll)
 	}
+}
+
+// stillAt is whether path still names f: a holder's ReleaseRemoving unlinks
+// the file a waiter may have opened, and a lock on it locks nothing.
+func stillAt(f *os.File, path string) (bool, error) {
+	at, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	held, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(at, held), nil
 }
 
 // Held is whether another holder has path's lock. A path that does not exist
@@ -73,6 +93,15 @@ func (l *Lock) Write(data []byte) error {
 func (l *Lock) Release() {
 	unlock(l.f)
 	l.f.Close()
+}
+
+// ReleaseRemoving removes the lock file, then lets the lock go, so the file
+// stands only while held. The lock is let go whether or not the removal
+// succeeded.
+func (l *Lock) ReleaseRemoving() error {
+	err := os.Remove(l.f.Name())
+	l.Release()
+	return err
 }
 
 func open(path string) (*os.File, error) {

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/kb"
 )
 
 // kbtoolsTests is kb_tools' test tree in the adjagent clone; corpus-driven
@@ -62,23 +64,23 @@ var goldenShapes = map[string]func() string{
 			NoEdge:    "the foreign-domain reference is illustrative, not load-bearing"})
 	},
 	"frontmatter-path-stable": func() string {
-		return renderFrontmatterBlock(frontmatterValues{Kind: "leaf", PathStable: str("regime conservation — stable reference label"), Claims: []string{"clm-aa1111"}})
+		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", PathStable: str("regime conservation — stable reference label"), Claims: []string{"clm-aa1111"}}))
 	},
 	"frontmatter-claims": func() string {
-		return renderFrontmatterBlock(frontmatterValues{Kind: "leaf", Claims: []string{"clm-aa1111", "clm-bb2222", "clm-cc3333"}, Experiments: []string{"exp-ff6666"}})
+		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", Claims: []string{"clm-aa1111", "clm-bb2222", "clm-cc3333"}, Experiments: []string{"exp-ff6666"}}))
 	},
 	"frontmatter-no-claim": func() string {
-		return renderFrontmatterBlock(frontmatterValues{Kind: "leaf", NoClaim: str("navigation-only leaf — carries no claim-quality entries")})
+		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", NoClaim: str("navigation-only leaf — carries no claim-quality entries")}))
 	},
 	"frontmatter-hosts": func() string {
-		return renderFrontmatterBlock(frontmatterValues{
+		return rendered(renderFrontmatterBlock(frontmatterValues{
 			Kind: "leaf", NoClaim: str("hosts an experiment and two support nodes only"),
 			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Strengthens: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
 			SupportNodes: []supportDecl{
 				{SupID: "sup-hh8888", Supports: []pair{{ID: "clm-bb2222", Score: f64(1.0)}}},
 				{SupID: "sup-ii9999", Supports: []pair{{ID: "clm-bb2222"}, {ID: "clm-cc3333", Score: f64(0.5)}}},
 			},
-		})
+		}))
 	},
 	"markers": func() string {
 		return strings.Join([]string{renderIDMarker("clm-aa1111"), renderIDMarker("sup-ee5555"), renderTier2Marker("clm-aa1111")}, "\n")
@@ -102,6 +104,46 @@ var goldenShapes = map[string]func() string{
 	"citation": func() string {
 		return renderCitation("the weakest link in the dependency cone", "part3/claim-quality.md", "regime-conservation-laws")
 	},
+}
+
+// rendered is a renderer's text, or its error in place of it.
+func rendered(s string, err error) string {
+	if err != nil {
+		return "render error: " + err.Error()
+	}
+	return s
+}
+
+// TestFrontmatterRenderedAsTheGoldens: each 1.0.0 golden document, its
+// frontmatter read by the production reader and written back by
+// set-frontmatter's splice, is byte-identical to the golden — the writer and
+// the migration write one frontmatter.
+func TestFrontmatterRenderedAsTheGoldens(t *testing.T) {
+	const dir = "../migrate/testdata/1.0.0/kb-root"
+	for _, rel := range []string{"a.md", "b/c.md", "entry-point.md"} {
+		t.Run(rel, func(t *testing.T) {
+			golden, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(golden)
+			intended, err := observedFrontmatter(text, rel)
+			if err != nil || intended == nil {
+				t.Fatalf("observedFrontmatter = %v, %v", intended, err)
+			}
+			fm, err := kb.ParseFrontmatter(text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := replaceBlock(*intended, rel, kb.DeclaredNodeIDs(fm))(text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != text {
+				t.Errorf("written back as\n%s\nthe golden is\n%s", got, text)
+			}
+		})
+	}
 }
 
 // TestRenderGoldens byte-compares every rendered shape against kb_tools'
@@ -134,8 +176,8 @@ func TestRenderGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := goldenShapes[name]() + "\n"; got != string(golden) {
-				t.Errorf("render differs from kb_tools' golden\n--- golden\n%s--- kbase\n%s", golden, got)
+			if want, got := string(golden), goldenShapes[name]()+"\n"; got != want {
+				t.Errorf("render differs from kb_tools' golden\n--- golden\n%s--- kbase\n%s", want, got)
 			}
 		})
 	}

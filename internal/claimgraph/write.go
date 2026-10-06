@@ -2,7 +2,7 @@ package claimgraph
 
 import (
 	"encoding/json"
-	"path/filepath"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -62,11 +62,12 @@ func refusalText(res write.Result) string {
 // claimEntries is every claim entry of the register at kbRoot/register; none
 // where there is no such register.
 func claimEntries(kbRoot, register string) ([]kb.ClaimEntry, error) {
-	p := filepath.Join(kbRoot, filepath.FromSlash(register))
-	if !kb.IsFile(p) {
+	src := builtTree(kbRoot)
+	p := src.KBPath(register)
+	if !src.IsFile(p) {
 		return nil, nil
 	}
-	text, err := kb.ReadText(p)
+	text, err := src.ReadText(p)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	for _, r := range p.restsOn {
 		edges = append(edges, pair{minted[r.entry], r.workID})
 	}
-	f, err = w.writeEdges("pass-3-rests-on", edges, nil)
+	f, err = w.writeEdges("pass-3-rests-on", edges, nil, nil)
 	if err != nil {
 		return findings, err
 	}
@@ -183,23 +184,31 @@ func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 	return pass("pass-1b-insert-work-entry", field("works", len(works)), field("named", named), field("key-only", len(works)-named)), nil
 }
 
-// writeEdges lands every edge in one add-depends-on batch, one entry per
-// source carrying both its dependencies and its references, so a refusal
+// writeEdges lands every edge in one batch of the build's edge write, one
+// entry per source carrying its dependencies, its references and its
+// references cut from depends as demoted with their origin, so a refusal
 // cannot land half of one claim's edges. A work target's applicability is
 // left for the op to render pending.
-func (w writer) writeEdges(name string, edges, references []pair) (Finding, error) {
+func (w writer) writeEdges(name string, edges, references []pair, cut map[pair]string) (Finding, error) {
 	if len(edges) == 0 && len(references) == 0 {
 		return fact(name, field("dependency-edges", 0), field("dependency-sources", 0), field("references", 0), field("reference-sources", 0)), nil
 	}
 	depends := map[string][]map[string]any{}
 	refs := map[string][]map[string]any{}
+	demoted := map[string][]map[string]any{}
+	referring := map[string]bool{}
 	var sources []string
 	for _, e := range edges {
 		depends[e.source] = append(depends[e.source], map[string]any{"id": e.target})
 		sources = append(sources, e.source)
 	}
 	for _, r := range references {
-		refs[r.source] = append(refs[r.source], map[string]any{"id": r.target})
+		if origin, ok := cut[r]; ok {
+			demoted[r.source] = append(demoted[r.source], map[string]any{"id": r.target, "origin": origin})
+		} else {
+			refs[r.source] = append(refs[r.source], map[string]any{"id": r.target})
+		}
+		referring[r.source] = true
 		sources = append(sources, r.source)
 	}
 	slices.Sort(sources)
@@ -213,12 +222,15 @@ func (w writer) writeEdges(name string, edges, references []pair) (Finding, erro
 		if r, ok := refs[s]; ok {
 			vs[i]["references"] = r
 		}
+		if d, ok := demoted[s]; ok {
+			vs[i][kb.RelationDemoted] = d
+		}
 	}
-	if _, err := w.run(name, "add-depends-on", vs, false); err != nil {
+	if _, err := w.run(name, write.AddBuildEdges, vs, false); err != nil {
 		return Finding{}, err
 	}
 	return pass(name, field("dependency-edges", len(edges)), field("dependency-sources", len(depends)),
-		field("references", len(references)), field("reference-sources", len(refs))), nil
+		field("references", len(references)), field("reference-sources", len(referring))), nil
 }
 
 // newClaim is one claim a leaf gains after the declared pass. Locator is what
@@ -235,11 +247,15 @@ type newClaim struct {
 // a block claim where the leaf's claims other than equations number two or
 // more — blocks maps each block claim's id to its display line.
 func (w writer) landLeaf(document, kind string, claims []newClaim, blocks map[string]string, elsewhere map[string]bool) ([]string, error) {
-	text, err := kb.ReadText(filepath.Join(w.kbRoot, filepath.FromSlash(document)))
+	src := builtTree(w.kbRoot)
+	text, err := src.ReadText(src.KBPath(document))
 	if err != nil {
 		return nil, err
 	}
-	fm := kb.ParseFrontmatter(text)
+	fm, err := kb.ParseFrontmatter(text)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", document, err)
+	}
 	existing, err := fm.ListOrEmpty("claims")
 	if err != nil {
 		return nil, err
@@ -302,7 +318,7 @@ func (w writer) landLeaf(document, kind string, claims []newClaim, blocks map[st
 		if _, err := w.run(stem, "set-frontmatter", values{e}, false); err != nil {
 			return nil, err
 		}
-		if text, err = kb.ReadText(filepath.Join(w.kbRoot, filepath.FromSlash(document))); err != nil {
+		if text, err = src.ReadText(src.KBPath(document)); err != nil {
 			return nil, err
 		}
 	}

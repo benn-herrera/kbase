@@ -10,32 +10,40 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"kbase/internal/asks/call"
 	"kbase/internal/atomicfile"
 	"kbase/internal/filelock"
 	"kbase/internal/kb"
 	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
-// The state store holds what a build keeps outside the repository: the run
-// lock and its holder, the progress record, the document graph's records, and
+// The state store holds what a build keeps outside the repository: the
+// holder's lock and record, the progress record, the document graph's records, and
 // scratch — per-call evidence, the answer cache, and the tree a resume
 // regenerates missing records from. Nothing in it is authoritative for
 // position; the commit trail is.
 const (
 	lockFile     = "lock"
 	progressFile = "progress.jsonl"
-	reportsDir   = "reports"
-	scratchDir   = "scratch"
+	// ReportsDir holds each stage's report, and the output a build started
+	// in its own process leaves.
+	ReportsDir = "reports"
+	// CapturePrefix begins the name of each file under ReportsDir that
+	// captures the output of a build started in its own process.
+	CapturePrefix = "build-"
+	scratchDir    = "scratch"
 	// regenerateDir, under scratch, is where a resume rebuilds the document
 	// graph to regenerate missing records; it is removed once read.
 	regenerateDir = "regenerate"
 	// stateKeyHexDigits is the key's length: the first 16 hex digits of the
 	// SHA-256 of the resolved kb-root/ path.
 	stateKeyHexDigits = 16
-	// lockWait bounds the wait for the run lock, so a monitor probing it
-	// does not turn a starting build away.
+	// lockWait bounds the wait for the run lock and the holder lock, so a
+	// monitor probing one does not turn a starting build away.
 	lockWait = 2 * time.Second
 )
 
@@ -64,14 +72,14 @@ func stateDir(override, kbRoot string) (string, error) {
 		return "", err
 	}
 	if kb.Within(kbRoot, dir) {
-		return "", refusal{{Check: checkUsage, Path: dir, Key: "--state-dir",
+		return "", result.Refusal{{Check: checkUsage, Path: dir, Key: "--state-dir",
 			Detail: fmt.Sprintf("the state directory %s is inside %s; build state is never written there", dir, kbRoot)}}
 	}
 	return dir, nil
 }
 
 // reportPath is where a stage's report lands in the store at dir.
-func reportPath(dir, stage string) string { return filepath.Join(dir, reportsDir, stage+".yaml") }
+func reportPath(dir, stage string) string { return filepath.Join(dir, ReportsDir, stage+".yaml") }
 
 // writeReport writes a stage's report: each row's record and what was dropped.
 func writeReport(path string, report result.Record) error {
@@ -86,26 +94,20 @@ func writeReport(path string, report result.Record) error {
 }
 
 // stateKey names the store of the kb-root/ at kbRoot, whether or not it
-// exists yet.
+// exists yet; its directory must.
 func stateKey(kbRoot string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(kbRoot)
-	if errors.Is(err, os.ErrNotExist) {
-		var parent string
-		if parent, err = filepath.EvalSymlinks(filepath.Dir(kbRoot)); err == nil {
-			resolved = filepath.Join(parent, filepath.Base(kbRoot))
-		}
-	}
+	abs, err := filepath.Abs(kbRoot)
 	if err != nil {
 		return "", err
 	}
-	if resolved, err = filepath.Abs(resolved); err != nil {
+	if _, err := os.Stat(filepath.Dir(abs)); err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(resolved))
+	sum := sha256.Sum256([]byte(kb.ResolvePath(abs)))
 	return hex.EncodeToString(sum[:])[:stateKeyHexDigits], nil
 }
 
-// holder is what the run lock says about the build holding it.
+// holder is what the holder lock says about the build holding it.
 type holder struct {
 	PID     int    `json:"pid"`
 	Started string `json:"started"`
@@ -120,8 +122,97 @@ func readHolder(dir string) (holder, error) {
 	return h, json.Unmarshal(b, &h)
 }
 
-// takeLock is the run lock, its holder record written; a live holder is a
-// retry naming it.
+// runLockFile is the run lock in the repository's git directory, so two
+// builds over one KB exclude each other whatever their state directories and
+// the working tree gains no file. It records the holder's state directory;
+// the state store's lock still carries the pid and start time status and
+// cancel read.
+const runLockFile = "kbase-build.lock"
+
+// runLockPath is the run lock of the KB at kbRoot. A .git file is followed to
+// the worktree's own git directory, read rather than asked of git, since a
+// maintenance verb that checks the lock never requires git.
+func runLockPath(kbRoot string) string {
+	repo := filepath.Dir(kbRoot)
+	dir := filepath.Join(repo, ".git")
+	if text, err := os.ReadFile(dir); err == nil {
+		if target, ok := strings.CutPrefix(strings.TrimSpace(string(text)), "gitdir:"); ok {
+			dir = strings.TrimSpace(target)
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(repo, dir)
+			}
+		}
+	}
+	return filepath.Join(dir, runLockFile)
+}
+
+// takeRunLock is the repository's run lock, recording stateDir; a live
+// holder is refused, naming its state directory.
+func takeRunLock(kbRoot, stateDir string) (*filelock.Lock, error) {
+	path := runLockPath(kbRoot)
+	l, err := filelock.Acquire(path, lockWait)
+	if errors.Is(err, filelock.ErrHeld) {
+		items, err := runningRefusal(path)
+		if err != nil {
+			return nil, err
+		}
+		if items == nil {
+			return nil, retry{{Check: checkLock, Path: path, Detail: "another build held the run lock through the wait and is starting or has just released it"}}
+		}
+		return nil, result.Refusal(items)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := l.Write([]byte(stateDir)); err != nil {
+		return nil, errors.Join(err, l.ReleaseRemoving())
+	}
+	return l, nil
+}
+
+// RunningBuild is the refusal a verb that writes the KB at kbRoot meets
+// while a build holds the run lock — the build writes kb-root/ without the
+// write lock; nil where no build does.
+func RunningBuild(kbRoot string) ([]result.Item, error) {
+	path := runLockPath(kbRoot)
+	held, err := filelock.Held(path)
+	if err != nil || !held {
+		return nil, err
+	}
+	return runningRefusal(path)
+}
+
+// runningRefusal is the refusal naming the run lock's holder; nil where the
+// holder has removed the lock on its way out, or has taken it and not yet
+// written its state directory. A holder that has not written it has not yet
+// waited out the KB's writers, so a writer may go ahead.
+func runningRefusal(path string) ([]result.Item, error) {
+	dir, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) || err == nil && len(dir) == 0 {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []result.Item{{Check: checkLock, Path: string(dir), Detail: "a build is running; its state-dir is " + string(dir)}}, nil
+}
+
+// awaitWriters waits out a write op or refresh already holding the KB's
+// write lock; one that takes it later finds the run lock and refuses.
+func awaitWriters(kbRoot string) error {
+	release, err := write.LockKB(kbRoot)
+	if errors.Is(err, filelock.ErrHeld) {
+		return retry{{Check: checkLock, Path: filepath.Dir(kbRoot), Detail: "a write op or refresh holds the KB's write lock"}}
+	}
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
+// takeLock is the state store's lock, its holder record written; a live
+// holder is a retry naming it.
 func takeLock(dir string, now time.Time) (*filelock.Lock, error) {
 	l, err := filelock.Acquire(filepath.Join(dir, lockFile), lockWait)
 	if errors.Is(err, filelock.ErrHeld) {
@@ -129,7 +220,7 @@ func takeLock(dir string, now time.Time) (*filelock.Lock, error) {
 		if h, err := readHolder(dir); err == nil && h.PID != 0 {
 			who = fmt.Sprintf("another build (pid %d, started %s)", h.PID, h.Started)
 		}
-		return nil, retry{{Check: checkLock, Path: filepath.Join(dir, lockFile), Detail: who + " holds the run lock"}}
+		return nil, retry{{Check: checkLock, Path: filepath.Join(dir, lockFile), Detail: who + " holds the state store"}}
 	}
 	if err != nil {
 		return nil, err
@@ -284,4 +375,84 @@ func interrupted(events []event, stage string) bool {
 		return entered == stage && !recorded
 	}
 	return false
+}
+
+// keptBuilds is how many of the latest builds that ended having walked keep
+// their captures in the store.
+const keptBuilds = 5
+
+// pruneCaptures removes, from the store at dir, every capture — a started
+// build's output under ReportsDir and a call's under scratch — last written
+// before the start of the keptBuilds-th latest build that ended neither
+// refused nor told to retry. A build killed before its end is not counted.
+// The answer cache and the stage reports are kept.
+func pruneCaptures(dir string) error {
+	events, err := readProgress(dir)
+	if err != nil {
+		return err
+	}
+	var starts []string
+	for _, inv := range invocations(events) {
+		if o := inv.end().Outcome; o != "" && o != result.Refused && o != result.Retry {
+			starts = append(starts, inv[0].Time)
+		}
+	}
+	if len(starts) < keptBuilds {
+		return nil
+	}
+	cutoff, err := time.Parse(time.RFC3339, starts[len(starts)-keptBuilds])
+	if err != nil {
+		return err
+	}
+	for _, d := range []struct{ dir, prefix string }{
+		{filepath.Join(dir, ReportsDir), CapturePrefix},
+		{filepath.Join(dir, scratchDir, call.CapturesDir), ""},
+	} {
+		entries, err := os.ReadDir(d.dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), d.prefix) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				return err
+			}
+			if info.ModTime().Before(cutoff) {
+				if err := os.Remove(filepath.Join(d.dir, e.Name())); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// answerCache is how many answers the store at dir caches and the bytes they
+// hold.
+func answerCache(dir string) (entries, size int, err error) {
+	list, err := os.ReadDir(filepath.Join(dir, scratchDir, call.AnswersDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, e := range list {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return 0, 0, err
+		}
+		entries++
+		size += int(info.Size())
+	}
+	return entries, size, nil
 }

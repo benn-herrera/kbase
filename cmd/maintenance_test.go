@@ -44,11 +44,15 @@ func TestRefreshAndVerifyVerbs(t *testing.T) {
 	repo := maintenanceRepo(t)
 	sub := filepath.Join(repo, "kb-root")
 
-	if code, out := runMaintenance(t, runVerify, repo); code != 1 || !strings.Contains(out, `outcome: "refused"`) || !strings.Contains(out, "claims.jsonl is missing") {
+	if code, out := runMaintenance(t, runVerify, repo); code != 1 || !strings.Contains(out, `outcome: "refused"`) || !strings.Contains(out, "claims.yaml is missing") ||
+		!strings.Contains(out, "metadata format is 0.9.0") {
 		t.Errorf("verify before refresh: exit %d\n%s", code, out)
 	}
-	if code, out := runMaintenance(t, runRefresh, sub); code != 0 || !strings.Contains(out, `outcome: "done"`) || !strings.Contains(out, `- ".index/claims.jsonl"`) {
+	if code, out := runMaintenance(t, runRefresh, sub); code != 0 || !strings.Contains(out, `outcome: "done"`) || !strings.Contains(out, `- ".index/claims.yaml"`) {
 		t.Errorf("first refresh: exit %d\n%s", code, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(sub, "entry-point.md")); !strings.HasPrefix(string(b), "---\nkind: entry-point\n") || !strings.Contains(string(b), "kb-format: \"1.0.0\"\n---\n") {
+		t.Errorf("the first refresh left the entry point unstamped:\n%s", b)
 	}
 	if code, out := runMaintenance(t, runRefresh, repo); code != 0 || !strings.Contains(out, `outcome: "unchanged"`) {
 		t.Errorf("second refresh: exit %d\n%s", code, out)

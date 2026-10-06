@@ -15,9 +15,10 @@ import (
 
 type provenance struct {
 	Files []struct {
-		File     string `yaml:"file"`
-		Upstream string `yaml:"upstream"`
-		Commit   string `yaml:"commit"`
+		File       string `yaml:"file"`
+		Upstream   string `yaml:"upstream"`
+		Commit     string `yaml:"commit"`
+		Authorship string `yaml:"authorship"`
 	} `yaml:"files"`
 }
 
@@ -37,12 +38,15 @@ func readProvenance(t *testing.T) provenance {
 }
 
 // TestProvenanceCoversTheShelf: the manifest names every embedded file once,
-// and nothing else.
+// and nothing else, each with an authorship of imported or kbase-authored.
 func TestProvenanceCoversTheShelf(t *testing.T) {
 	var listed []string
 	for _, f := range readProvenance(t).Files {
 		if f.File == "" || f.Upstream == "" || len(f.Commit) != 40 {
 			t.Errorf("an entry lacks its file, upstream path or full commit: %+v", f)
+		}
+		if f.Authorship != "imported" && f.Authorship != "kbase-authored" {
+			t.Errorf("%s: authorship %q, want imported or kbase-authored", f.File, f.Authorship)
 		}
 		listed = append(listed, f.File)
 	}
@@ -56,10 +60,11 @@ func TestProvenanceCoversTheShelf(t *testing.T) {
 	}
 }
 
-// TestShelfIsUpstreamAtTheRecordedCommit reads each file back from the
-// adjagent clone at the commit its entry records and requires the embedded
-// bytes equal to it. It skips where the clone is absent.
-func TestShelfIsUpstreamAtTheRecordedCommit(t *testing.T) {
+// TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt reads each entry's
+// upstream file from the adjagent clone at the commit it records: it must
+// exist, and an imported file's embedded bytes must equal it. It skips where
+// the clone is absent.
+func TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt(t *testing.T) {
 	clone := filepath.Join("..", "..", ".claude", "adjagent")
 	if _, err := os.Stat(filepath.Join(clone, ".git")); err != nil {
 		t.Skipf("no adjagent clone at %s: %v", clone, err)
@@ -76,6 +81,9 @@ func TestShelfIsUpstreamAtTheRecordedCommit(t *testing.T) {
 		}
 		if len(upstream) != 1 {
 			t.Errorf("%s at %s names %d files, want one", f.Upstream, f.Commit, len(upstream))
+			continue
+		}
+		if f.Authorship != "imported" {
 			continue
 		}
 		var want []byte

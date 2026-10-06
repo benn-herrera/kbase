@@ -15,7 +15,7 @@ const RegisterFile = "claim-quality.md"
 
 // QualityFieldKeys is every "- <key>:" line a claim entry's Quality section
 // may carry; each folding field runs until the next of them.
-var QualityFieldKeys = []string{"confidence", "solidity", "rationale", "depends-on", "references", "strengthen-by"}
+var QualityFieldKeys = []string{"confidence", "solidity", "rationale", "depends-on", "references", RelationDemoted, "strengthen-by"}
 
 func fieldBreak(excluding string) *regexp.Regexp {
 	var keys []string
@@ -51,6 +51,7 @@ var (
 	bulletLeadRE  = PyRE(`^\s*-\s*`)
 	bracketRE     = PyRE(`\[([^\[\]]*)\]\s*$`)
 	solidityInRE  = PyRE(`solidity\s+(-?\d+(?:\.\d+)?)`)
+	originRE      = PyRE(`\(origin\s+([^()]*)\)`)
 	// ApplicabilityRE is a work-target bullet's "applicability <value>"; group
 	// 1 is the value.
 	ApplicabilityRE = PyRE(`applicability\s+(-?\d+(?:\.\d+)?|\*pending\*)`)
@@ -61,6 +62,7 @@ var (
 	breakAfterRationale    = fieldBreak("rationale")
 	breakAfterDependsOn    = fieldBreak("depends-on")
 	breakAfterReferences   = fieldBreak("references")
+	breakAfterDemoted      = fieldBreak(RelationDemoted)
 	breakAfterStrengthenBy = fieldBreak("strengthen-by")
 	supportRationaleBreak  = PyRE(`^- (quality|solidity|rationale|depends-on|supports):`)
 	supportDependsOnBreak  = PyRE(`^- (quality|solidity|rationale|supports):`)
@@ -74,12 +76,14 @@ type Fraction struct {
 }
 
 // Edge is one forward claim-graph edge as its source's entry records it.
+// Origin is a demoted edge's, as its bullet spells it; "" where it has none.
 type Edge struct {
 	Source, Target, Relation, TargetKind string
 	TargetSolidityRecorded               *float64
 	Strength                             *float64
 	Context                              *string
 	Fraction                             Fraction
+	Origin                               string
 }
 
 // StrengthenByItem is one strengthen-by bullet of a claim's Quality section.
@@ -99,6 +103,7 @@ type ClaimEntry struct {
 	DependsOn                                 []Edge
 	StrengthenBy                              []StrengthenByItem
 	References                                []Edge
+	Demoted                                   []Edge
 	SolidityTrace                             string
 }
 
@@ -356,9 +361,23 @@ func (r bulletReader) references(line, source string) []Edge {
 	context := bulletContext(stripped)
 	var out []Edge
 	for _, cid := range r.claimTargets(BulletHead(stripped), source, stripped) {
-		out = append(out, Edge{Source: source, Target: cid, Relation: "references", TargetKind: "claim", Context: context})
+		out = append(out, Edge{Source: source, Target: cid, Relation: RelationReferences, TargetKind: "claim", Context: context})
 	}
 	return out
+}
+
+// demoted reads a demoted bullet as a references bullet carrying the origin
+// its "(origin …)" annotation names, the last where several stand.
+func (r bulletReader) demoted(line, source string) []Edge {
+	edges := r.references(line, source)
+	origin := ""
+	if m := originRE.FindAllStringSubmatch(line, -1); m != nil {
+		origin = Strip(m[len(m)-1][1])
+	}
+	for i := range edges {
+		edges[i].Relation, edges[i].Origin = RelationDemoted, origin
+	}
+	return edges
 }
 
 func (r bulletReader) dependsOn(line, source string) []Edge {
@@ -380,15 +399,15 @@ func (r bulletReader) dependsOn(line, source string) []Edge {
 	}
 	var edges []Edge
 	for _, cid := range r.claimTargets(head, source, stripped) {
-		edges = append(edges, Edge{Source: source, Target: cid, Relation: "depends", TargetKind: "claim",
+		edges = append(edges, Edge{Source: source, Target: cid, Relation: RelationDepends, TargetKind: "claim",
 			TargetSolidityRecorded: targetSolidity, Context: bracketContext})
 	}
 	for _, label := range findAllBounded(invariantRE, head) {
-		edges = append(edges, Edge{Source: source, Target: label, Relation: "depends", TargetKind: "invariant", Context: parenContext})
+		edges = append(edges, Edge{Source: source, Target: label, Relation: RelationDepends, TargetKind: "invariant", Context: parenContext})
 	}
 	for _, axiom := range findAllBounded(axiomRE, head) {
 		edges = append(edges, Edge{Source: source, Target: "axiom-" + strings.TrimPrefix(axiom, "Axiom "),
-			Relation: "depends", TargetKind: "axiom", Context: parenContext})
+			Relation: RelationDepends, TargetKind: "axiom", Context: parenContext})
 	}
 	var fraction Fraction
 	if m := ApplicabilityRE.FindStringSubmatch(stripped); m != nil {
@@ -400,7 +419,7 @@ func (r bulletReader) dependsOn(line, source string) []Edge {
 		}
 	}
 	for _, work := range workTokens(head) {
-		edges = append(edges, Edge{Source: source, Target: work, Relation: "rests-on", TargetKind: "work",
+		edges = append(edges, Edge{Source: source, Target: work, Relation: RelationRestsOn, TargetKind: "work",
 			Context: bracketContext, Fraction: fraction})
 	}
 	return edges
@@ -554,6 +573,12 @@ func ParseClaimEntries(text, rel string, known map[string]bool, lg log.Logger) [
 					bullets, i = collectSubBullets(qlines, i+1, breakAfterReferences, true)
 					for _, b := range bullets {
 						entry.References = append(entry.References, r.references(b, e.NodeID)...)
+					}
+				case strings.HasPrefix(s, "- "+RelationDemoted+":"):
+					var bullets []string
+					bullets, i = collectSubBullets(qlines, i+1, breakAfterDemoted, true)
+					for _, b := range bullets {
+						entry.Demoted = append(entry.Demoted, r.demoted(b, e.NodeID)...)
 					}
 				case strings.HasPrefix(s, "- strengthen-by:"):
 					i++

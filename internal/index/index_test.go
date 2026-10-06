@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"kbase/internal/kb"
+	"kbase/internal/migrate"
 )
 
 func TestRoundHalfUp2(t *testing.T) {
@@ -115,14 +116,46 @@ func TestComputeSolidityRefusesACycleAmongUnscoredClaims(t *testing.T) {
 	}
 }
 
+// escaped is the JSON escape of the code point hex names.
+func escaped(hex string) string { return `\` + "u" + hex }
+
 func TestSerialize(t *testing.T) {
-	recs := []record{{{"s", "a\"b\\c\n\t\x01é"}, {"n", nil}, {"f", 0.5}, {"i", 3}, {"b", true}, {"l", []string{"x", "y"}}, {"e", []string{}}}}
-	want := `{"s": "a\"b\\c\n\t\u0001é", "n": null, "f": 0.5, "i": 3, "b": true, "l": ["x", "y"], "e": []}` + "\n"
+	recs := []record{{{Key: "s", Value: "a\"b\\c\n\t\x01é"}, {Key: "n"}, {Key: "f", Value: 0.5}, {Key: "i", Value: 3}, {Key: "b", Value: true},
+		{Key: "l", Value: []string{"x", "y"}}, {Key: "e", Value: []string{}}},
+		{{Key: "breaks", Value: "ls" + string(rune(0x2028)) + "ps" + string(rune(0x2029)) + "nel\u0085del\u007fbom" + string(rune(0xfeff)) +
+			"fffe" + string(rune(0xfffe)) + "ffff" + string(rune(0xffff))}}}
+	want := `--- {"s": "a\"b\\c\n\t\u0001é", "n": null, "f": 0.5, "i": 3, "b": true, "l": ["x", "y"], "e": []}` + "\n" +
+		`--- {"breaks": "ls` + escaped("2028") + "ps" + escaped("2029") + "nel" + escaped("0085") + "del" + escaped("007f") + "bom" +
+		escaped("feff") + "fffe" + escaped("fffe") + "ffff" + escaped("ffff") + `"}` + "\n"
 	if got := Serialize(recs); got != want {
 		t.Errorf("Serialize =\n%s\nwant\n%s", got, want)
 	}
 	if got := Serialize(nil); got != "" {
 		t.Errorf("Serialize(nil) = %q", got)
+	}
+}
+
+// TestSerializeAsTheMigrationWrites: an index the 0.9.0 → 1.0.0 migration
+// converts reads back byte for byte as refresh writes it, so a migrated KB's
+// index is the writer's own.
+func TestSerializeAsTheMigrationWrites(t *testing.T) {
+	recs := []record{
+		{{Key: "node_type", Value: "claim"}, {Key: "id", Value: "clm-aaaaaa"}, {Key: "title", Value: "A — \"quoted\" <b> & ü x"},
+			{Key: "confidence", Value: 0.5}, {Key: "solidity"}, {Key: "n", Value: 2}},
+		{{Key: "claim_id", Value: "clm-aaaaaa"}, {Key: "mentioned_ids", Value: []string{"exp-bbbbbb"}}, {Key: "tier2_marked", Value: false}, {Key: "text", Value: "tab\tff\fbs\bc1\u0085"}},
+	}
+	stream := Serialize(recs)
+	var jsonl strings.Builder
+	for _, line := range strings.SplitAfter(stream, "\n") {
+		record, _ := strings.CutPrefix(line, kb.IndexRecordMarker)
+		jsonl.WriteString(record)
+	}
+	out, _, err := migrate.Chain(kb.UnstampedFormatVersion, kb.FormatVersion, migrate.Files{"kb-root/.index/claims.jsonl": []byte(jsonl.String())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out["kb-root/.index/claims.yaml"]); got != stream {
+		t.Errorf("the migration writes\n%s\nrefresh writes\n%s", got, stream)
 	}
 }
 
@@ -161,7 +194,7 @@ func writeKB(t *testing.T, files map[string]string) string {
 	return root
 }
 
-const fmKind = "<!-- kb-frontmatter\nkind: %s\n-->\n\n"
+const fmKind = "---\nkind: %s\n---\n\n"
 
 func withKind(kind, body string) string { return strings.Replace(fmKind, "%s", kind, 1) + body }
 
@@ -169,7 +202,7 @@ func withKind(kind, body string) string { return strings.Replace(fmKind, "%s", k
 func TestCitationFindings(t *testing.T) {
 	target := "# Target\n\n## The Section\n\nThe load-bearing clause lives here, stated plainly.\n"
 	register := "## Entry\n<!-- id: clm-aa1111 -->\n\nRationale prose naming clm-bb2222 from the other domain.\n"
-	nodes := `{"id": "clm-aa1111", "canonical_path": "alpha/one.md"}` + "\n" + `{"id": "clm-bb2222", "canonical_path": "beta/two.md"}` + "\n"
+	nodes := `--- {"id": "clm-aa1111", "canonical_path": "alpha/one.md"}` + "\n" + `--- {"id": "clm-bb2222", "canonical_path": "beta/two.md"}` + "\n"
 	long := strings.Repeat("x", excerptMaxChars+1)
 	bound := strings.Repeat("y", excerptMaxChars)
 	for _, tc := range []struct {
@@ -239,21 +272,21 @@ func TestCitationFindings(t *testing.T) {
 		}, []string{checkDurable}},
 		{"external link", map[string]string{"index.md": withKind("index", "See [the spec](https://example.invalid/spec).\n")}, nil},
 		{"foreign-domain reference without an edge", map[string]string{
-			"alpha/claim-quality.md": register, ".index/claims.jsonl": nodes, ".index/depends-on.jsonl": "",
+			"alpha/claim-quality.md": register, ".index/claims.yaml": nodes, ".index/depends-on.yaml": "",
 		}, []string{checkChannel, checkEdge}},
 		{"foreign-domain reference with an edge", map[string]string{
-			"alpha/claim-quality.md": register, ".index/claims.jsonl": nodes,
-			".index/depends-on.jsonl": `{"source": "clm-aa1111", "target": "clm-bb2222"}` + "\n",
+			"alpha/claim-quality.md": register, ".index/claims.yaml": nodes,
+			".index/depends-on.yaml": `--- {"source": "clm-aa1111", "target": "clm-bb2222"}` + "\n",
 		}, []string{checkChannel}},
 		{"no-edge exemption", map[string]string{
-			"alpha/claim-quality.md":  "## Entry\n<!-- id: clm-aa1111 -->\n\n- no-edge: cited as contrast\n\nRationale prose naming clm-bb2222 from the other domain.\n",
-			".index/claims.jsonl":     nodes,
-			".index/depends-on.jsonl": "",
+			"alpha/claim-quality.md": "## Entry\n<!-- id: clm-aa1111 -->\n\n- no-edge: cited as contrast\n\nRationale prose naming clm-bb2222 from the other domain.\n",
+			".index/claims.yaml":     nodes,
+			".index/depends-on.yaml": "",
 		}, []string{checkChannel}},
 		{".index out of scope", map[string]string{".index/SCHEMA.md": "# Schema\n\n1. Invariant 1: the index is derived.\n"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			findings, err := CitationFindings(writeKB(t, tc.files))
+			findings, err := CitationFindings(kb.OnDisk(writeKB(t, tc.files)))
 			if err != nil {
 				t.Fatal(err)
 			}

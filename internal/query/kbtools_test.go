@@ -14,6 +14,9 @@ import (
 	"testing"
 
 	"go.yaml.in/yaml/v3"
+
+	"kbase/internal/kb"
+	"kbase/internal/kbload"
 )
 
 // The query comparison against kb_tools' kb_cmd. test-integration-query-arxiv
@@ -28,6 +31,16 @@ var (
 	queryDirs       = flag.String("query.dirs", "", "space-separated case directories, each holding run outputs")
 	queryComparison = flag.String("query.comparison", "", "where the comparison is written")
 )
+
+// loadOpened is the index of the KB at kbRoot as the loader opens it, in
+// whichever format it stands.
+func loadOpened(kbRoot string) (*Index, error) {
+	src, err := kbload.Open(kbRoot)
+	if err != nil {
+		return nil, err
+	}
+	return Load(src)
+}
 
 // comparedQueries is every query the comparison must see answered non-empty.
 var comparedQueries = []string{"deps", "gated-on", "cited-by", "find", "referenced-by", "solidity-below", "subtree", "show", "weak-points", "stats"}
@@ -75,7 +88,7 @@ func TestStageQueryCases(t *testing.T) {
 	if *queryKBRoot == "" || *queryCases == "" {
 		t.Skip("staged by test-integration-query-arxiv")
 	}
-	ix, err := Load(*queryKBRoot)
+	ix, err := loadOpened(*queryKBRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +115,7 @@ func TestStageQueryScores(t *testing.T) {
 	if *queryKBRoot == "" || *queryValues == "" {
 		t.Skip("staged by test-integration-query-arxiv")
 	}
-	ix, err := Load(*queryKBRoot)
+	ix, err := loadOpened(*queryKBRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,12 +141,12 @@ func TestStageQueryScores(t *testing.T) {
 			break
 		}
 	}
-	var target *Node
+	var target *kb.NodeRow
 	for _, c := range ix.claims() {
-		gates := slices.ContainsFunc(ix.edges, func(e Edge) bool {
-			return e.Source == c.ID && (e.Relation == "depends" || e.Relation == restsOn)
+		gates := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool {
+			return e.Source == c.ID && (e.Relation == kb.RelationDepends || e.Relation == kb.RelationRestsOn)
 		})
-		held := slices.ContainsFunc(ix.edges, func(e Edge) bool { return e.Target == c.ID && e.Source != c.ID })
+		held := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool { return e.Target == c.ID && e.Source != c.ID })
 		if held && !gates {
 			target = &c
 			break

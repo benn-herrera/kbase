@@ -456,6 +456,37 @@ func place(drafts []draft, t *volumeTree, headers int) []records.Record {
 	return out
 }
 
+// joinRecords is every volume's records in the order one tree is read:
+// documents by path, a document's records in its volume's order, Order and
+// Within renumbered over the whole.
+func joinRecords(volumes [][]records.Record) []records.Record {
+	type at struct{ volume, order int }
+	type tagged struct {
+		records.Record
+		volume int
+	}
+	var all []tagged
+	for v, recs := range volumes {
+		for _, r := range recs {
+			all = append(all, tagged{r, v})
+		}
+	}
+	slices.SortStableFunc(all, func(a, b tagged) int { return strings.Compare(a.Document, b.Document) })
+	renumbered := map[at]int{}
+	for i, t := range all {
+		renumbered[at{t.volume, t.Order}] = i + 1
+	}
+	out := make([]records.Record, len(all))
+	for i, t := range all {
+		out[i] = t.Record
+		out[i].Order = i + 1
+		if t.Within != 0 {
+			out[i].Within = renumbered[at{t.volume, t.Within}]
+		}
+	}
+	return out
+}
+
 // WriteRecords writes the report's records and pre-pass census into the
 // state directory.
 func WriteRecords(stateDir string, r Report) error {

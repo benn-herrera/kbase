@@ -17,34 +17,38 @@ import (
 // order: the contract a model reading a result relies on.
 var documentedKeys = map[string][]string{
 	"build":              {"state-dir", "through", "no-inference", "resumed", "restored", "stages", "resume"},
-	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "resume"},
+	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
 	"cancel":             {"state-dir", "pid", "resume"},
-	"refresh":            {"written"},
-	"verify":             {},
-	"write-op":           {"ids", "minted", "adopted", "written", "refreshed"},
+	"refresh":            {"written", "removed"},
+	"verify":             {"findings"},
+	"write-op":           {"ids", "minted", "adopted", "written", "refreshed", "removed"},
+	"resolve-demoted":    {"ids", "minted", "adopted", "written", "refreshed", "removed", "resolved"},
 	"render-citation":    {"citations"},
 	"list-query":         {"count", "offset", "truncated", "results"},
 	"mapping-query":      {"results"},
-	"render-claim-graph": {"written", "sheet"},
+	"render-claim-graph": {"written", "removed", "sheet", "dot"},
 	"models":             {"provider", "models"},
 	"configure":          {"provider", "models", "written"},
 }
 
 // documentedSubKeys is the keys of each mapping a result nests, in order.
 var documentedSubKeys = map[string][]string{
-	"build.stages":     {"stage", "commit", "dropped", "report"},
-	"status.stages":    {"stage", "commit"},
-	"status.current":   {"stage", "units-done", "units-total"},
-	"write-op.adopted": {"entry", "id", "differs"},
-	"configure.models": {"heavy", "light"},
-	"cancelled":        {"stage", "unit"},
-	"item":             {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
+	"build.stages":             {"stage", "commit", "dropped", "report"},
+	"status.stages":            {"stage", "commit"},
+	"status.current":           {"stage", "units-done", "units-total"},
+	"write-op.adopted":         {"entry", "id", "differs"},
+	"resolve-demoted.resolved": {"source", "target", "action"},
+	"configure.models":         {"heavy", "light"},
+	"cancelled":                {"stage", "unit"},
+	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
 
 // keysFor is the documented-keys entry a subcommand's result is read
 // against.
 func keysFor(verb string) string {
 	switch {
+	case verb == write.ResolveDemoted:
+		return verb
 	case slices.Contains(write.Ops(), verb):
 		return "write-op"
 	case verb == "show" || verb == "stats":
@@ -182,11 +186,11 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 			}
 		}
 	}
-	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks"} {
+	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks", "findings"} {
 		nested(key, "item")
 	}
 	nested(toolresult.CancelledKey, "cancelled")
-	for _, sub := range []string{"stages", "current", "adopted", "models"} {
+	for _, sub := range []string{"stages", "current", "adopted", "resolved", "models"} {
 		if _, ok := documentedSubKeys[entry+"."+sub]; ok {
 			nested(sub, entry+"."+sub)
 		}

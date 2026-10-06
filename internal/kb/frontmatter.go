@@ -3,51 +3,141 @@ package kb
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"go.yaml.in/yaml/v3"
 )
 
-var (
-	// FrontmatterRE is the kb-frontmatter block; group 1 is its body. The
-	// closer may be indented.
-	FrontmatterRE   = PyRE(`(?s)<!--\s*kb-frontmatter\s*\n(.*?)\n[ \t]*-->`)
-	fmBulletRE      = PyRE(`^\s*-\s+(.*)$`)
-	anyClaimOrExpRE = PyRE(IDBody("clm", "exp"))
-
-	// leafDeclarationREs are the frontmatter keys that originate a node in
-	// the container carrying them; each may repeat.
-	leafDeclarationREs = []*regexp.Regexp{
-		PyRE(`(?m)^\s*-?\s*exp-id:\s*(` + IDBody("exp") + `)\s*$`),
-		PyRE(`(?m)^\s*-?\s*sup-id:\s*(` + IDBody("sup") + `)\s*$`),
-	}
+// The frontmatter keys a node declaration list is read under, and the keys of
+// its entries.
+const (
+	ExperimentNodesKey = "experiment-nodes"
+	SupportNodesKey    = "support-nodes"
+	ExpIDKey           = "exp-id"
+	StatusKey          = "status"
+	StrengthensKey     = "strengthens"
+	SupIDKey           = "sup-id"
+	SupportsKey        = "supports"
 )
 
-// DeclaredNodeIDs is every exp- and sup- id a frontmatter block body
-// declares, experiments first, each kind in block order.
-func DeclaredNodeIDs(body string) []string {
-	var out []string
-	for _, re := range leafDeclarationREs {
-		for _, m := range re.FindAllStringSubmatch(body, -1) {
-			out = append(out, m[1])
-		}
+const fence = "---"
+
+var anyClaimOrExpRE = PyRE(IDBody("clm", "exp"))
+
+// fenceAt is whether a line at offset i of text is exactly the frontmatter
+// fence, and the offset just past its line break (len(text) where it ends the
+// text without one).
+func fenceAt(text string, i int) (next int, ok bool) {
+	if !strings.HasPrefix(text[i:], fence) {
+		return 0, false
 	}
-	return out
+	switch rest := text[i+len(fence):]; {
+	case rest == "":
+		return len(text), true
+	case strings.HasPrefix(rest, "\n"):
+		return i + len(fence) + 1, true
+	case strings.HasPrefix(rest, "\r\n"):
+		return i + len(fence) + 2, true
+	}
+	return 0, false
 }
 
-// Value is one typed frontmatter value: an id list, a string or a boolean.
+// FindFrontmatter locates a document's YAML frontmatter, which opens the
+// document with a "---" line and ends at the next "---" line, either fence
+// line ending in \n or \r\n: text[m[0]:m[1]] is the block from the opening
+// fence through the closing one, its line break excluded, and
+// text[m[2]:m[3]] the YAML between them, the break before the closer
+// excluded. It is nil where text does not open with a fence line, never
+// closes it, or fences a block whose first non-blank line opens no
+// kebab-case key: a Markdown thematic break opening prose.
+func FindFrontmatter(text string) []int {
+	m := fencedBlock(text)
+	if m == nil || !opensWithKey(text[m[2]:m[3]]) {
+		return nil
+	}
+	return m
+}
+
+// frontmatterKeyLineRE is a line opening a frontmatter key, every one of
+// which is kebab-case.
+var frontmatterKeyLineRE = regexp.MustCompile(`^[a-z][a-z0-9-]*:`)
+
+// opensWithKey is whether body's first non-blank line opens a key; a body
+// with none is an empty frontmatter.
+func opensWithKey(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return frontmatterKeyLineRE.MatchString(line)
+		}
+	}
+	return true
+}
+
+// fencedBlock is the offsets of text's opening fence line through the next
+// fence line, as FindFrontmatter gives them, whatever lies between.
+func fencedBlock(text string) []int {
+	bodyStart, ok := fenceAt(text, 0)
+	if !ok || bodyStart == len(text) && !strings.HasSuffix(text, "\n") {
+		return nil
+	}
+	for i := bodyStart; i < len(text); {
+		if _, ok := fenceAt(text, i); ok {
+			bodyEnd := bodyStart
+			if i > bodyStart {
+				bodyEnd = i - 1
+				if bodyEnd > bodyStart && text[bodyEnd-1] == '\r' {
+					bodyEnd--
+				}
+			}
+			return []int{0, i + len(fence), bodyStart, bodyEnd}
+		}
+		j := strings.IndexByte(text[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+	}
+	return nil
+}
+
+// FrontmatterEnd is the offset of the first line after the frontmatter's
+// closing fence, 0 where text opens with none: where the document's body,
+// up-link line first, begins.
+func FrontmatterEnd(text string) int {
+	m := FindFrontmatter(text)
+	if m == nil {
+		return 0
+	}
+	if next, ok := fenceAt(text, m[1]-len(fence)); ok {
+		return next
+	}
+	return m[1]
+}
+
+// StripFrontmatter is text with its frontmatter, and the closing fence's line
+// break, removed.
+func StripFrontmatter(text string) string { return text[FrontmatterEnd(text):] }
+
+// Value is one typed frontmatter value: an id list, a string, a boolean, or
+// a list of mappings.
 type Value struct {
 	List   []string
 	Str    string
 	Bool   bool
 	IsList bool
 	IsBool bool
+	// Entries is a list value's mapping items: a node declaration list's
+	// nodes, or a node's score pairs, one key each.
+	Entries []Frontmatter
 }
 
 // Truthy is the value's Python truthiness.
 func (v Value) Truthy() bool {
 	switch {
 	case v.IsList:
-		return len(v.List) > 0
+		return len(v.List) > 0 || len(v.Entries) > 0
 	case v.IsBool:
 		return v.Bool
 	}
@@ -80,13 +170,16 @@ func (f Frontmatter) Get(key string) (Value, bool) {
 	return v, ok
 }
 
-// Kind is the block's kind: field where it is a string, else "".
-func (f Frontmatter) Kind() string {
-	if v, ok := f["kind"]; ok && !v.IsList && !v.IsBool {
+// Str is the field's value where it is a string, else "".
+func (f Frontmatter) Str(key string) string {
+	if v, ok := f[key]; ok && !v.IsList && !v.IsBool {
 		return v.Str
 	}
 	return ""
 }
+
+// Kind is the block's kind: field where it is a string, else "".
+func (f Frontmatter) Kind() string { return f.Str("kind") }
 
 // ListOrEmpty is `fm.get(key, []) or ()` iterated.
 func (f Frontmatter) ListOrEmpty(key string) ([]string, error) {
@@ -97,116 +190,115 @@ func (f Frontmatter) ListOrEmpty(key string) ([]string, error) {
 	return v.Items()
 }
 
-// FindFrontmatter is the byte offsets of the first block at or after pos:
-// the whole match, then its body; nil where there is none.
-func FindFrontmatter(text string, pos int) []int {
-	m := FrontmatterRE.FindStringSubmatchIndex(text[pos:])
+// ParseFrontmatter is the document's frontmatter fields, or nil where it has
+// none. YAML that does not read as a mapping is a MalformedError.
+func ParseFrontmatter(text string) (Frontmatter, error) {
+	m := FindFrontmatter(text)
 	if m == nil {
-		return nil
+		return nil, nil
 	}
-	for i := range m {
-		m[i] += pos
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(text[m[2]:m[3]]), &doc); err != nil {
+		return nil, malformed("frontmatter: %v", err)
 	}
-	return m
+	if len(doc.Content) == 0 {
+		return Frontmatter{}, nil
+	}
+	root := doc.Content[0]
+	if root.Kind == yaml.ScalarNode && root.ShortTag() == "!!null" {
+		return Frontmatter{}, nil
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil, malformed("frontmatter: line %d: not a mapping of keys to values", root.Line)
+	}
+	return mappingFields(root)
 }
 
-// StripFrontmatter is text with every block removed.
-func StripFrontmatter(text string) string {
-	var b strings.Builder
-	pos := 0
-	for {
-		m := FindFrontmatter(text, pos)
-		if m == nil {
-			break
+func mappingFields(n *yaml.Node) (Frontmatter, error) {
+	out := Frontmatter{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key, val := n.Content[i], n.Content[i+1]
+		if key.Kind != yaml.ScalarNode {
+			return nil, malformed("frontmatter: line %d: a key that is not a string", key.Line)
 		}
-		b.WriteString(text[pos:m[0]])
-		pos = m[1]
+		if _, repeated := out[key.Value]; repeated {
+			return nil, malformed("frontmatter: line %d: key %q repeats", key.Line, key.Value)
+		}
+		v, err := fieldValue(val)
+		if err != nil {
+			return nil, err
+		}
+		out[key.Value] = v
 	}
-	b.WriteString(text[pos:])
-	return b.String()
+	return out, nil
 }
 
-// ParseFrontmatter is the first block's fields, or nil where there is none.
-func ParseFrontmatter(text string) Frontmatter {
-	m := FindFrontmatter(text, 0)
-	if m == nil {
-		return nil
+func fieldValue(n *yaml.Node) (Value, error) {
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
 	}
-	return frontmatterFields(text[m[2]:m[3]])
+	switch n.Kind {
+	case yaml.ScalarNode:
+		switch n.ShortTag() {
+		case "!!null":
+			return Value{}, nil
+		case "!!bool":
+			b, err := strconv.ParseBool(strings.ToLower(n.Value))
+			if err != nil {
+				return Value{}, malformed("frontmatter: line %d: %q is not a boolean", n.Line, n.Value)
+			}
+			return Value{IsBool: true, Bool: b}, nil
+		}
+		return Value{Str: n.Value}, nil
+	case yaml.SequenceNode:
+		v := Value{IsList: true}
+		for _, item := range n.Content {
+			if item.Kind == yaml.AliasNode {
+				item = item.Alias
+			}
+			switch item.Kind {
+			case yaml.ScalarNode:
+				v.List = append(v.List, findAllBounded(anyClaimOrExpRE, item.Value)...)
+			case yaml.MappingNode:
+				f, err := mappingFields(item)
+				if err != nil {
+					return Value{}, err
+				}
+				v.Entries = append(v.Entries, f)
+			default:
+				return Value{}, malformed("frontmatter: line %d: a list item that is neither a value nor a mapping", item.Line)
+			}
+		}
+		return v, nil
+	}
+	return Value{}, malformed("frontmatter: line %d: a value that is a mapping; only a list holds mappings", n.Line)
 }
 
-// frontmatterFields types every field of a block body. A value may span
-// several lines, wrapped ([a,\n b]) or as a YAML-block list; both join into
-// one id list.
-func frontmatterFields(body string) Frontmatter {
-	fields := Frontmatter{}
-	lines := SplitLines(body)
-	for i := 0; i < len(lines); {
-		line := RStrip(lines[i])
-		if line == "" || !strings.Contains(line, ":") {
-			i++
-			continue
+// DeclaredNodeIDs is every well-formed exp- and sup- id a document's
+// frontmatter declares, experiments first, each kind in list order.
+func DeclaredNodeIDs(fm Frontmatter) []string {
+	var out []string
+	for _, d := range []struct {
+		list, key string
+		full      func(string) bool
+	}{{ExperimentNodesKey, ExpIDKey, expIDFullRE.MatchString}, {SupportNodesKey, SupIDKey, supIDFullRE.MatchString}} {
+		for _, node := range fm[d.list].Entries {
+			if id := node.Str(d.key); d.full(id) {
+				out = append(out, id)
+			}
 		}
-		end := FrontmatterFieldEnd(lines, i)
-		key, _, _ := strings.Cut(line, ":")
-		fields[Strip(key)] = frontmatterValue(joinFrontmatterValue(lines, i, end))
-		i = end
 	}
-	return fields
+	return out
 }
 
-func frontmatterValue(value string) Value {
-	switch {
-	case strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]"):
-		return Value{IsList: true, List: findAllBounded(anyClaimOrExpRE, value)}
-	case strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`):
-		if len(value) < 2 {
-			return Value{}
-		}
-		return Value{Str: value[1 : len(value)-1]}
-	case value == "true" || value == "false":
-		return Value{IsBool: true, Bool: value == "true"}
+// scorePair is one entry of a node's strengthens or supports list: a claim id
+// and its score as written; ok false where the entry is not one key.
+func scorePair(entry Frontmatter) (claimID string, score Value, ok bool) {
+	if len(entry) != 1 {
+		return "", Value{}, false
 	}
-	return Value{Str: value}
-}
-
-func joinFrontmatterValue(lines []string, start, end int) string {
-	_, value, _ := strings.Cut(RStrip(lines[start]), ":")
-	value = Strip(value)
-	tail := lines[start+1 : end]
-	if len(tail) == 0 {
-		return value
+	for k, v := range entry {
+		return k, v, true
 	}
-	if strings.HasPrefix(value, "[") {
-		parts := []string{value}
-		for _, l := range tail {
-			parts = append(parts, Strip(l))
-		}
-		return strings.Join(parts, " ")
-	}
-	items := make([]string, len(tail))
-	for i, l := range tail {
-		items[i] = Strip(fmBulletRE.FindStringSubmatch(l)[1])
-	}
-	return "[" + strings.Join(items, ", ") + "]"
-}
-
-// FrontmatterFieldEnd is one past the last line of the field opening at
-// start: the reader joins exactly this span and the writer replaces it.
-func FrontmatterFieldEnd(lines []string, start int) int {
-	_, value, _ := strings.Cut(RStrip(lines[start]), ":")
-	value = Strip(value)
-	i := start + 1
-	if strings.HasPrefix(value, "[") && !strings.HasSuffix(value, "]") {
-		for i < len(lines) && !strings.HasSuffix(Strip(lines[i]), "]") {
-			i++
-		}
-		return min(i+1, len(lines))
-	}
-	if value == "" {
-		for i < len(lines) && fmBulletRE.MatchString(lines[i]) {
-			i++
-		}
-	}
-	return i
+	return "", Value{}, false
 }

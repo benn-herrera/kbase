@@ -10,10 +10,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/build"
+	"kbase/internal/filelock"
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
+	"kbase/internal/write"
 )
 
 type maintenanceOptions struct {
@@ -28,6 +32,7 @@ type maintenanceOptions struct {
 const (
 	checkWorktree = "worktree"
 	checkKBRoot   = "kb-root"
+	checkLock     = "lock"
 )
 
 // kbRootFrom is the kb-root beside the .git at or above dir, or a refusal
@@ -47,6 +52,40 @@ func kbRootFrom(dir string) (string, []toolresult.Item, error) {
 			Detail: fmt.Sprintf("%s has no %s/ beside its .git", repo, kb.KBDir)}}, nil
 	}
 	return root, nil, nil
+}
+
+// holdKB takes the write lock of the KB at root for a verb that writes it,
+// refusing while a build runs: at once, and again once the lock is taken, for
+// a build that started during the wait. Where release is nil, outcome and
+// items are the verb's answer.
+func holdKB(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
+	if running, err := build.RunningBuild(root); err != nil || running != nil {
+		return nil, toolresult.Refused, running, err
+	}
+	release, err = write.LockKB(root)
+	if errors.Is(err, filelock.ErrHeld) {
+		return nil, toolresult.Retry, []toolresult.Item{{Check: checkLock, Path: filepath.Dir(root), Remedy: remedy,
+			Detail: "another write op or refresh held the KB's write lock past the wait; nothing was written"}}, nil
+	}
+	if err != nil {
+		return nil, "", nil, err
+	}
+	running, err := build.RunningBuild(root)
+	if err != nil || running != nil {
+		release()
+		return nil, toolresult.Refused, running, err
+	}
+	return release, "", nil, nil
+}
+
+// openKB is the KB at root as the loader opens it, or the items it refuses.
+func openKB(root string) (*kb.Source, []toolresult.Item, error) {
+	src, err := kbload.Open(root)
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return nil, refusal, nil
+	}
+	return src, nil, err
 }
 
 // emitResult writes a verb's result document and returns its exit code.
@@ -73,17 +112,38 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(nil, refusals...)
 	}
-	written, err := index.Refresh(root, opts.Logger)
+	untouched := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: []string{}}, {Key: "removed", Value: []string{}}}
+	release, outcome, items, err := holdKB(root, "re-run kbase refresh")
+	if err != nil {
+		return failed([]toolresult.Field{{Key: "kb-root", Value: root}}, err)
+	}
+	if release == nil {
+		return outcome, append(untouched, toolresult.Field{Key: toolresult.RefusalsKey, Value: items})
+	}
+	defer release()
+	src, refusals, err := openKB(root)
+	if err != nil {
+		return failed([]toolresult.Field{{Key: "kb-root", Value: root}}, err)
+	}
+	if refusals != nil {
+		return refused(untouched, refusals...)
+	}
+	written, removed, noDot, err := index.RefreshReporting(src, opts.Logger)
+	if noDot {
+		fmt.Fprintln(opts.Stderr, "refresh: no Graphviz dot on PATH; the claim-graph sheets were not rendered")
+	}
 	slices.Sort(written)
 	written = slices.Compact(written)
-	fields := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: append([]string{}, written...)}}
-	var refusal index.Refusal
+	slices.Sort(removed)
+	fields := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: append([]string{}, written...)},
+		{Key: "removed", Value: append([]string{}, removed...)}}
+	var refusal toolresult.Refusal
 	switch {
 	case errors.As(err, &refusal):
-		return refused(fields, refusal.Items...)
+		return refused(fields, refusal...)
 	case err != nil:
 		return failed(fields, err)
-	case len(written) == 0:
+	case len(written) == 0 && len(removed) == 0:
 		return toolresult.Unchanged, fields
 	}
 	return toolresult.Done, fields
@@ -91,13 +151,13 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 
 // maintenanceCommand is a verb over the KB found from the working directory.
 func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (int, error)) *cobra.Command {
-	return &cobra.Command{
+	return mcpBinding(&cobra.Command{
 		Use:   use,
 		Short: short,
 		Long:  long,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			wd, err := os.Getwd()
+			wd, err := invocationDir(cmd)
 			if err != nil {
 				return err
 			}
@@ -110,16 +170,22 @@ func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (i
 			}
 			return nil
 		},
-	}
+	}, mcpBound)
 }
 
 func init() {
 	rootCmd.AddCommand(maintenanceCommand("refresh",
-		"derive the KB's derived metadata, .index/ and claim-graph sheet",
+		"derive the KB's derived metadata, .index/ and claim-graph sheets",
 		`refresh derives every derived field of the KB at kb-root/ beside the
 repository's .git — subtree aggregates, solidity lines and annotations,
-leaf-references footers — and writes .index/*.jsonl and the placeholder
-claim-graph.svg (only where none exists or the existing one is the
-placeholder). It writes only files whose bytes change. Its result is one YAML
-document on stdout.`, runRefresh))
+leaf-references footers — and writes .index/*.yaml and the claim-graph
+sheets, drawn through Graphviz dot: kb-root/claim-graph.svg and, where two
+or more volumes hold nodes, kb-root/claim-graph-digest.svg and
+<volume>/claim-graph.svg (see render-claim-graph), removing a digest or volume sheet the KB no
+longer calls for. With no
+dot on PATH it draws nothing, says so on stderr, and writes a placeholder
+kb-root/claim-graph.svg only where none exists. A KB in an older metadata
+format is rewritten whole in the current one, the entry point stamped last,
+and the files the old format alone used are removed. It writes only files
+whose bytes change. Its result is one YAML document on stdout.`, runRefresh))
 }

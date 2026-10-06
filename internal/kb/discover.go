@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,22 +25,14 @@ func comparePathParts(a, b string) int {
 	return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
 }
 
-// walkFiles is every regular file under root whose name match accepts and
-// none of whose directories below root is excluded, as kb-root-relative slash
-// paths in Python's Path order.
-func walkFiles(root string, match func(name string) bool) ([]string, error) {
+// walkFiles is every regular file of the KB whose name match accepts and
+// none of whose directories below kb-root is excluded, as kb-root-relative
+// slash paths in Python's Path order.
+func walkFiles(src *Source, match func(name string) bool) ([]string, error) {
+	root := src.Root()
 	var out []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if p != root && ExcludeDirs[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !match(d.Name()) || !IsFile(p) {
+	err := src.walk(root, func(name string) bool { return ExcludeDirs[name] }, func(p string) error {
+		if !match(filepath.Base(p)) || !src.IsFile(p) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -57,31 +48,29 @@ func walkFiles(root string, match func(name string) bool) ([]string, error) {
 
 // Documents is every document of the KB — every .md file outside the
 // excluded directories and names — as kb-root-relative slash paths.
-func Documents(kbRoot string) ([]string, error) {
-	return walkFiles(kbRoot, func(name string) bool {
+func Documents(src *Source) ([]string, error) {
+	return walkFiles(src, func(name string) bool {
 		return strings.HasSuffix(name, ".md") && !ExcludeNames[name]
 	})
 }
 
 // Registers is every claim-quality register outside the excluded
 // directories, as kb-root-relative slash paths.
-func Registers(kbRoot string) ([]string, error) {
-	return walkFiles(kbRoot, func(name string) bool { return name == RegisterFile })
+func Registers(src *Source) ([]string, error) {
+	return walkFiles(src, func(name string) bool { return name == RegisterFile })
 }
 
-func readRel(kbRoot, rel string) (string, error) {
-	return ReadText(filepath.Join(kbRoot, filepath.FromSlash(rel)))
-}
+func readRel(src *Source, rel string) (string, error) { return src.ReadText(src.KBPath(rel)) }
 
 // KnownClaimIDs is every clm- id a register's canonical marker keys.
-func KnownClaimIDs(kbRoot string) (map[string]bool, error) {
-	regs, err := Registers(kbRoot)
+func KnownClaimIDs(src *Source) (map[string]bool, error) {
+	regs, err := Registers(src)
 	if err != nil {
 		return nil, err
 	}
 	known := map[string]bool{}
 	for _, rel := range regs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return nil, err
 		}
@@ -96,19 +85,19 @@ func KnownClaimIDs(kbRoot string) (map[string]bool, error) {
 // document's node bodies, and the framework nodes. A clm- token naming no
 // registered claim is dropped and reported to lg. A MalformedError names
 // metadata no reader can take.
-func Discover(kbRoot string, lg log.Logger) (State, error) {
-	known, err := KnownClaimIDs(kbRoot)
+func Discover(src *Source, lg log.Logger) (State, error) {
+	known, err := KnownClaimIDs(src)
 	if err != nil {
 		return State{}, err
 	}
-	regs, err := Registers(kbRoot)
+	regs, err := Registers(src)
 	if err != nil {
 		return State{}, err
 	}
 	var st State
 	supportQ := map[string]SupportQuality{}
 	for _, rel := range regs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return State{}, err
 		}
@@ -119,13 +108,13 @@ func Discover(kbRoot string, lg log.Logger) (State, error) {
 			supportQ[id] = q
 		}
 	}
-	docs, err := Documents(kbRoot)
+	docs, err := Documents(src)
 	if err != nil {
 		return State{}, err
 	}
 	var hosted []SupportNode
 	for _, rel := range docs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return State{}, err
 		}
@@ -161,7 +150,7 @@ func Discover(kbRoot string, lg log.Logger) (State, error) {
 		s.Quality, s.DependsOn, s.Rationale, s.Solidity, s.SolidityTrace = q.Quality, q.DependsOn, q.Rationale, q.Solidity, q.SolidityTrace
 		st.Supports = append(st.Supports, s)
 	}
-	if st.FrameworkNodes, err = ParseFrameworkNodes(kbRoot); err != nil {
+	if st.FrameworkNodes, err = ParseFrameworkNodes(src); err != nil {
 		return State{}, err
 	}
 	slices.SortStableFunc(st.Works, func(a, b ExternalWork) int { return strings.Compare(a.ID, b.ID) })
@@ -181,14 +170,14 @@ var anyNodeIDFullRE = PyRE(`^` + IDBody() + `$`)
 // register keying the id; a hosting document is the first declaring one, else
 // the first citing one. Duplicates is every id keyed by more than one
 // canonical register entry, with each keying register, repeats kept.
-func AuthoredIDs(kbRoot string) (ids map[string]IDRecord, duplicates map[string][]string, err error) {
-	regs, err := Registers(kbRoot)
+func AuthoredIDs(src *Source) (ids map[string]IDRecord, duplicates map[string][]string, err error) {
+	regs, err := Registers(src)
 	if err != nil {
 		return nil, nil, err
 	}
 	keyed := map[string][]string{}
 	for _, rel := range regs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -196,27 +185,28 @@ func AuthoredIDs(kbRoot string) (ids map[string]IDRecord, duplicates map[string]
 			keyed[e.NodeID] = append(keyed[e.NodeID], rel)
 		}
 	}
-	docs, err := Documents(kbRoot)
+	docs, err := Documents(src)
 	if err != nil {
 		return nil, nil, err
 	}
 	declared, cited := map[string]string{}, map[string]string{}
 	for _, rel := range docs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return nil, nil, err
 		}
-		m := FindFrontmatter(text, 0)
-		if m == nil {
+		fields, err := documentFrontmatter(text, rel)
+		if err != nil {
+			return nil, nil, err
+		}
+		if fields == nil {
 			continue
 		}
-		body := text[m[2]:m[3]]
-		for _, id := range DeclaredNodeIDs(body) {
+		for _, id := range DeclaredNodeIDs(fields) {
 			if _, ok := declared[id]; !ok {
 				declared[id] = rel
 			}
 		}
-		fields := frontmatterFields(body)
 		for _, key := range []string{"claims", "experiments"} {
 			items, err := fields.ListOrEmpty(key)
 			if err != nil {
@@ -367,18 +357,18 @@ func (w RegisterWalk) Unreconciled() []FanOutRecord {
 
 // WalkRegisters reads every register once for its census, its binding and
 // its staged fan-out against the hosting leaves in st.
-func WalkRegisters(st State, kbRoot string) (RegisterWalk, error) {
+func WalkRegisters(st State, src *Source) (RegisterWalk, error) {
 	hosting := map[string]SupportNode{}
 	for _, s := range st.Supports {
 		hosting[s.ID] = s
 	}
-	regs, err := Registers(kbRoot)
+	regs, err := Registers(src)
 	if err != nil {
 		return RegisterWalk{}, err
 	}
 	var w RegisterWalk
 	for _, rel := range regs {
-		text, err := readRel(kbRoot, rel)
+		text, err := readRel(src, rel)
 		if err != nil {
 			return RegisterWalk{}, err
 		}

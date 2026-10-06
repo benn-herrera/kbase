@@ -1,0 +1,9 @@
+entry:
+- register: claim-quality.md
+  title: A Result
+  rigor: 0.5
+  rationale: Shown.
+- register: b/claim-quality.md
+  title: A Result
+  rigor: 0.5
+  rationale: Shown.

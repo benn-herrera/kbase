@@ -1,0 +1,20 @@
+this is not JSON
+{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"the line is not JSON"}}
+[{"jsonrpc":"2.0","id":1,"method":"ping"}]
+{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"a request is one JSON object; batches are not accepted"}}
+{"jsonrpc":"1.0","id":2,"method":"ping"}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"jsonrpc must be \"2.0\""}}
+{"jsonrpc":"2.0","id":{"x":1},"method":"ping"}
+{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"id must be a string, a number or null"}}
+{"jsonrpc":"2.0","id":3,"method":"prompts/list"}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"method \"prompts/list\" is not one this server answers"}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tree","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"no tool is named \"tree\""}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"find","arguments":{}}}
+{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"find: argument \"query\" is required"}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"find","arguments":{"query":5,"limit":1.5,"page":2}}}
+{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"find: argument \"limit\" must be of type integer; argument \"page\" is not one this tool takes (it takes limit, offset, query); argument \"query\" must be of type string"}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"find","arguments":[]}}
+{"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"params.arguments must be an object"}}
+{"jsonrpc":"2.0","method":"no/such/notification"}
+null

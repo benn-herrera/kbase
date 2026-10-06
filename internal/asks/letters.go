@@ -20,13 +20,14 @@ import (
 // the build offers. The stage owns every decision; a reader owns only the
 // call.
 
-// Kind is which letter ask: a paragraph of the node pass, or an edge
-// candidate of classification.
+// Kind is which letter ask: a paragraph of the node pass, an edge candidate
+// of classification, or a shortlisted pair of the unmarked-reference asks.
 type Kind string
 
 const (
 	Paragraph Kind = "paragraph"
 	Classify  Kind = "classify"
+	Unmarked  Kind = "unmarked"
 )
 
 // DefaultReaderConcurrency is how many asks of one group are in flight once

@@ -16,42 +16,37 @@ import (
 	"kbase/internal/sheet"
 )
 
-// Refusal is a KB state refresh, verify or a query will not proceed over,
-// every offending item named.
-type Refusal struct{ Items []result.Item }
-
-func (r Refusal) Error() string { return result.Items(r.Items).Error() }
-
 // The refusal classes refresh and verify raise.
 const (
 	checkMetadata = "metadata"
 	checkKBRoot   = "kb-root"
 )
 
-// refusal turns an input-caused error into a Refusal and passes any other
+// refusal turns an input-caused error into a result.Refusal and passes any other
 // through.
 func refusal(err error) error {
 	var m kb.MalformedError
 	var c CycleError
 	var cov CoverageError
 	if errors.As(err, &m) || errors.As(err, &c) || errors.As(err, &cov) {
-		return Refusal{[]result.Item{{Check: checkMetadata, Detail: err.Error()}}}
+		return result.Refusal{{Check: checkMetadata, Detail: err.Error()}}
 	}
 	return err
 }
 
 // precheck refuses a kb-root that is not a directory or whose CLAUDE.md is
 // not the redirect.
-func precheck(kbRoot string) error {
+func precheck(src *kb.Source) error {
+	kbRoot := src.Root()
 	if info, err := os.Stat(kbRoot); err != nil || !info.IsDir() {
-		return Refusal{[]result.Item{{Check: checkKBRoot, Path: kbRoot, Detail: fmt.Sprintf("KB directory %s not found", kbRoot)}}}
+		return result.Refusal{{Check: checkKBRoot, Path: kbRoot, Detail: fmt.Sprintf("KB directory %s not found", kbRoot)}}
 	}
-	msg, err := kb.UnmigratedAgentsFile(kbRoot)
+	msg, err := kb.UnmigratedAgentsFile(src)
 	if err != nil {
 		return err
 	}
 	if msg != "" {
-		return Refusal{[]result.Item{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}}
+		return result.Refusal{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
 	}
 	return nil
 }
@@ -61,49 +56,82 @@ var (
 	annotationRE   = kb.PyRE(`\(solidity\s+(?:-?\d+(?:\.\d+)?|\*pending\*)\)`)
 )
 
-// Refresh derives every derived field of the KB at kbRoot and writes it: the
+// Refresh derives every derived field of the KB src reads and writes it: the
 // subtree aggregates of every index node, every register entry's solidity
-// line, depends-on annotations and leaf-references footer, the .index/*.jsonl
-// files and the placeholder sheet. It writes only files whose bytes change
-// and returns their kb-root-relative paths. A KB state it refuses is a
-// Refusal; earlier phases' writes stand.
-func Refresh(kbRoot string, lg log.Logger) ([]string, error) {
-	if err := precheck(kbRoot); err != nil {
-		return nil, err
+// line, depends-on annotations and leaf-references footer, the .index/*.yaml
+// files and the claim-graph sheets. It then saves: every file the format
+// covers that src holds in a form the disk does not — the whole KB, where src
+// was migrated — then removes the paths the migration made obsolete, less
+// those the save wrote, then writes the entry point, stamped, last. It writes
+// only files whose bytes change and returns their paths, kb-root-relative
+// inside kb-root and absolute beside it. A KB state it refuses is a result.Refusal;
+// earlier phases' writes stand, and a migrated KB is left unstamped.
+func Refresh(src *kb.Source, lg log.Logger) ([]string, error) {
+	written, _, _, err := RefreshReporting(src, lg)
+	return written, err
+}
+
+// RefreshReporting is Refresh, and also what it removed — the sheets its
+// sheet phase no longer drew and the obsolete paths it drained,
+// kb-root-relative inside kb-root and repository-relative beside it — and
+// whether it ran with no Graphviz dot on PATH, drawing nothing.
+func RefreshReporting(src *kb.Source, lg log.Logger) (written, removed []string, noDot bool, err error) {
+	if err := precheck(src); err != nil {
+		return nil, nil, false, err
 	}
-	r := refresher{root: kbRoot}
-	for _, phase := range []func() error{r.aggregates, r.solidity, r.leafReferences, func() error { return r.emit(lg) }, r.sheet} {
+	r := refresher{src: src}
+	for _, phase := range []func() error{r.aggregates, r.solidity, r.leafReferences, func() error { return r.emit(lg) }, r.sheet, r.save} {
 		if err := phase(); err != nil {
-			return r.written, refusal(err)
+			return r.written, r.removed, r.noDot, refusal(err)
 		}
 	}
-	return r.written, nil
+	return r.written, r.removed, r.noDot, nil
 }
 
 type refresher struct {
-	root    string
+	src     *kb.Source
 	written []string
+	// removed is what the sheet phase and the drain removed; noDot is whether
+	// the sheet phase found no Graphviz dot to draw with.
+	removed []string
+	noDot   bool
 }
 
-func (r *refresher) path(rel string) string { return filepath.Join(r.root, filepath.FromSlash(rel)) }
+func (r *refresher) path(rel string) string { return r.src.KBPath(rel) }
 
-// write replaces a file's text, keeping its mode.
+// write replaces a document's text, keeping its mode. The entry point is
+// held for the save, which writes it once, stamped, last.
 func (r *refresher) write(rel, text string) error {
-	if err := atomicfile.Write(r.path(rel), []byte(text), nil); err != nil {
+	p := r.path(rel)
+	if rel == kb.EntryPointFile {
+		r.src.Put(p, []byte(text))
+		return nil
+	}
+	if err := WriteKBFile(r.src, p, []byte(text)); err != nil {
 		return err
 	}
 	r.written = append(r.written, rel)
 	return nil
 }
 
+// WriteKBFile replaces the KB file at p with data, atomically and keeping
+// its mode, and records the bytes in src so later reads see them.
+func WriteKBFile(src *kb.Source, p string, data []byte) error {
+	if err := atomicfile.Write(p, data, nil); err != nil {
+		return err
+	}
+	src.Put(p, data)
+	return nil
+}
+
 func (r *refresher) aggregates() error {
-	st, err := kb.Discover(r.root, log.Discard())
+	st, err := kb.Discover(r.src, log.Discard())
 	if err != nil {
 		return err
 	}
 	agg := SubtreeAggregates(st)
 	for _, idx := range st.Indexes {
-		text, err := kb.ReadText(r.path(idx.Path))
+		text, err := r.src.ReadText(r.path(idx.Path))
 		if err != nil {
 			return err
 		}
@@ -150,7 +178,7 @@ func lineAt(lines []string, i int, rel string) (string, error) {
 }
 
 func (r *refresher) solidity() error {
-	st, err := kb.Discover(r.root, log.Discard())
+	st, err := kb.Discover(r.src, log.Discard())
 	if err != nil {
 		return err
 	}
@@ -162,7 +190,7 @@ func (r *refresher) solidity() error {
 	for _, e := range st.ClaimEntries {
 		byFile[e.CanonicalPath] = append(byFile[e.CanonicalPath], e)
 	}
-	regs, err := kb.Registers(r.root)
+	regs, err := kb.Registers(r.src)
 	if err != nil {
 		return err
 	}
@@ -185,7 +213,7 @@ func (r *refresher) solidity() error {
 }
 
 func (r *refresher) rewriteSolidity(rel string, entries []kb.ClaimEntry, supports []kb.SupportNode, sol Solidity) error {
-	text, err := kb.ReadText(r.path(rel))
+	text, err := r.src.ReadText(r.path(rel))
 	if err != nil {
 		return err
 	}
@@ -275,17 +303,17 @@ func solidityLine(v *float64, trace string) string {
 }
 
 func (r *refresher) leafReferences() error {
-	st, err := kb.Discover(r.root, log.Discard())
+	st, err := kb.Discover(r.src, log.Discard())
 	if err != nil {
 		return err
 	}
 	refs := LeafReferences(st)
-	regs, err := kb.Registers(r.root)
+	regs, err := kb.Registers(r.src)
 	if err != nil {
 		return err
 	}
 	for _, rel := range regs {
-		text, err := kb.ReadText(r.path(rel))
+		text, err := r.src.ReadText(r.path(rel))
 		if err != nil {
 			return err
 		}
@@ -324,11 +352,11 @@ func (r *refresher) leafReferences() error {
 }
 
 func (r *refresher) emit(lg log.Logger) error {
-	dir := filepath.Join(r.root, kb.IndexDir)
+	dir := r.path(kb.IndexDir)
 	if err := os.Mkdir(dir, 0o777); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	st, err := kb.Discover(r.root, lg)
+	st, err := kb.Discover(r.src, lg)
 	if err != nil {
 		return err
 	}
@@ -336,51 +364,199 @@ func (r *refresher) emit(lg log.Logger) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range IndexFiles {
+	for _, name := range kb.IndexFiles {
 		body := Serialize(records[name])
-		target := filepath.Join(dir, name+".jsonl")
-		if kb.IsFile(target) {
-			if current, err := kb.ReadText(target); err == nil && current == body {
-				continue
-			}
+		rel := kb.IndexDir + "/" + kb.IndexFileName(name)
+		target := r.path(rel)
+		if current, err := r.src.DiskFile(target); err == nil && string(current) == body {
+			r.src.Put(target, current)
+			continue
 		}
-		if err := atomicfile.Write(target, []byte(body), nil); err != nil {
+		if err := WriteKBFile(r.src, target, []byte(body)); err != nil {
 			return err
 		}
-		r.written = append(r.written, kb.IndexDir+"/"+name+".jsonl")
+		r.written = append(r.written, rel)
 	}
 	return nil
 }
 
 func (r *refresher) sheet() error {
-	written, _, err := WriteSheet(r.root)
-	if written {
-		r.written = append(r.written, kb.ClaimGraphFile)
-	}
+	written, removed, drawn, err := WriteSheet(r.src)
+	r.written = append(r.written, written...)
+	r.removed = append(r.removed, removed...)
+	r.noDot = err == nil && !drawn
 	return err
 }
 
-// WriteSheet renders the placeholder sheet from the KB's .index/ and writes it
-// where no sheet exists or the one there is the placeholder, only where its
-// bytes change. A drawn sheet is left as it is and reported drawn.
-func WriteSheet(kbRoot string) (written, drawn bool, err error) {
-	target := filepath.Join(kbRoot, kb.ClaimGraphFile)
-	current, err := os.ReadFile(target)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, false, err
+// save writes every migrated file the disk does not hold as the source does,
+// but the entry point; removes the obsolete paths, less those it or an
+// earlier phase wrote; then stamps the entry point and writes it, last.
+func (r *refresher) save() error {
+	entry := r.path(kb.EntryPointFile)
+	saved := map[string]bool{}
+	for _, w := range r.written {
+		if filepath.IsAbs(w) {
+			saved[w] = true
+		} else {
+			saved[r.path(w)] = true
+		}
 	}
-	if err == nil && !sheet.IsOwn(current) {
-		return false, true, nil
+	for _, rel := range r.src.MigratedFiles() {
+		p := r.src.Path(rel)
+		if p == entry {
+			continue
+		}
+		saved[p] = true
+		if err := r.saveFile(p); err != nil {
+			return err
+		}
 	}
-	svg, err := sheet.Render(filepath.Join(kbRoot, kb.IndexDir))
+	for _, rel := range r.src.Obsolete() {
+		p := r.src.Path(rel)
+		if saved[p] {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		r.removed = append(r.removed, r.reported(p, true))
+	}
+	text, err := r.src.ReadText(entry)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return false, false, err
+		return err
 	}
-	if bytes.Equal(svg, current) {
-		return false, false, nil
+	stamped, err := kb.StampFormat(text, kb.FormatVersion)
+	if err != nil {
+		return err
 	}
-	if err := atomicfile.Write(target, svg, nil); err != nil {
-		return false, false, err
+	r.src.Put(entry, []byte(stamped))
+	if err := r.saveFile(entry); err != nil {
+		return err
 	}
-	return true, false, nil
+	r.src.Saved()
+	return nil
+}
+
+// saveFile writes p as the source holds it, where the disk holds other
+// bytes.
+func (r *refresher) saveFile(p string) error {
+	data, err := r.src.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	if current, err := r.src.DiskFile(p); err == nil && bytes.Equal(current, data) {
+		return nil
+	}
+	if err := WriteKBFile(r.src, p, data); err != nil {
+		return err
+	}
+	r.written = append(r.written, r.reported(p, false))
+	return nil
+}
+
+// reported is p as a result names it: kb-root-relative inside kb-root;
+// beside it, repository-relative for a removal and absolute for a write.
+func (r *refresher) reported(p string, removal bool) string {
+	if rel, err := filepath.Rel(r.src.Root(), p); err == nil && kb.Within(r.src.Root(), p) {
+		return filepath.ToSlash(rel)
+	}
+	if rel, ok := r.src.RepoRel(p); ok && removal {
+		return rel
+	}
+	return p
+}
+
+// WriteSheet draws the KB's claim-graph sheets and writes each whose bytes
+// change, then removes the digest and every volume's sheet the drawing no
+// longer calls for. It returns the kb-root-relative paths it wrote and
+// removed and whether the sheets were drawn. Without Graphviz dot on PATH
+// nothing is drawn: every sheet standing is left as it is, the placeholder is
+// written only where kb-root has no claim-graph.svg, and nothing is removed.
+func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err error) {
+	kbRoot := src.Root()
+	sheets, err := sheet.Render(src)
+	if errors.Is(err, sheet.ErrNoDot) {
+		target := filepath.Join(kbRoot, kb.ClaimGraphFile)
+		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, false, err
+		}
+		svg, err := sheet.Placeholder(src)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if err := atomicfile.Write(target, svg, nil); err != nil {
+			return nil, nil, false, err
+		}
+		return []string{kb.ClaimGraphFile}, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	drawnPaths := map[string]bool{}
+	for _, s := range sheets {
+		drawnPaths[s.Path] = true
+		target := filepath.Join(kbRoot, filepath.FromSlash(s.Path))
+		current, err := src.DiskFile(target)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return written, nil, true, err
+		}
+		if bytes.Equal(s.SVG, current) {
+			continue
+		}
+		if err := atomicfile.Write(target, s.SVG, nil); err != nil {
+			return written, nil, true, err
+		}
+		written = append(written, s.Path)
+	}
+	removed, err = removeUndrawnSheets(src, drawnPaths)
+	return written, removed, true, err
+}
+
+// SheetPaths is every kb-root-relative slash path a claim-graph sheet of the
+// KB at src can stand at — kb-root's sheet and digest, and each top-level
+// directory's sheet — and those of them present, both in path order.
+func SheetPaths(src *kb.Source) (candidates, present []string, err error) {
+	candidates = []string{kb.ClaimGraphFile, kb.ClaimGraphDigestFile}
+	entries, err := os.ReadDir(src.Root())
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			candidates = append(candidates, e.Name()+"/"+kb.ClaimGraphFile)
+		}
+	}
+	slices.Sort(candidates)
+	for _, rel := range candidates {
+		if src.IsFile(src.KBPath(rel)) {
+			present = append(present, rel)
+		}
+	}
+	return candidates, present, nil
+}
+
+// removeUndrawnSheets removes every sheet present that drawn does not hold,
+// returning their kb-root-relative paths in path order.
+func removeUndrawnSheets(src *kb.Source, drawn map[string]bool) ([]string, error) {
+	_, present, err := SheetPaths(src)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, rel := range present {
+		if drawn[rel] {
+			continue
+		}
+		if err := os.Remove(src.KBPath(rel)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, err
+		}
+		removed = append(removed, rel)
+	}
+	return removed, nil
 }

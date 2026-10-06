@@ -128,7 +128,7 @@ func lines(t *testing.T, path string) [][]string {
 	return out
 }
 
-// treeDiff is every path whose bytes differ between two trees, the sheet
+// treeDiff is every path whose bytes differ between two trees, the sheets
 // aside.
 func treeDiff(t *testing.T, a, b string) []string {
 	t.Helper()
@@ -139,7 +139,7 @@ func treeDiff(t *testing.T, a, b string) []string {
 				return err
 			}
 			rel, _ := filepath.Rel(root, p)
-			if filepath.ToSlash(rel) == kb.ClaimGraphFile {
+			if base := filepath.Base(rel); base == kb.ClaimGraphFile || base == kb.ClaimGraphDigestFile {
 				return nil
 			}
 			data, err := os.ReadFile(p)
@@ -233,8 +233,6 @@ type variant struct {
 	mutate func(t *testing.T, root string)
 	// after is the refresh kb_tools' test runs once it has changed the KB.
 	after string
-	// divergence is the named divergence the metadata gates differ by.
-	divergence string
 }
 
 func replaceIn(rel, old, new string) func(*testing.T, string) {
@@ -284,33 +282,41 @@ func restamp(rel string, re *regexp.Regexp) func(*testing.T, string) {
 	}
 }
 
+// nested is pairs, one per line, indented to sit under a node-list entry's key.
+func nested(pairs string) []string {
+	var out []string
+	for _, l := range strings.Split(pairs, "\n") {
+		if l != "" {
+			out = append(out, "    "+l)
+		}
+	}
+	return out
+}
+
 func expLeaf(expID, status, strengthens, extra, title string) string {
-	fields := []string{"exp-id: " + expID, "status: " + status}
+	var fields []string
 	if extra != "" {
 		fields = append(fields, extra)
 	}
-	fields = append(fields, "strengthens:")
-	body := strings.Join(fields, "\n")
-	if strengthens != "" {
-		body += "\n" + strengthens
-	}
-	return "[↑ Mini-KB Common](index.md)\n\n<!-- kb-frontmatter\nkind: leaf\n" + body + "\n-->\n\n# " + title + "\n\nSynthetic experiment leaf body.\n"
+	fields = append(fields, "experiment-nodes:", "  - exp-id: "+expID, "    status: "+status, "    strengthens:")
+	fields = append(fields, nested(strengthens)...)
+	return "---\nkind: leaf\n" + strings.Join(fields, "\n") + "\n---\n[↑ Mini-KB Common](index.md)\n\n# " + title + "\n\nSynthetic experiment leaf body.\n"
 }
 
 func refLeaf(experiments, title string) string {
-	return "[↑ Mini-KB Common](index.md)\n\n<!-- kb-frontmatter\nkind: leaf\nno-claim: \"references the bench experiment only\"\nexperiments: [" +
-		experiments + "]\n-->\n\n## " + title + "\n\nSynthetic by-methodology leaf referencing an experiment.\n"
+	return "---\nkind: leaf\nno-claim: \"references the bench experiment only\"\nexperiments: [" + experiments +
+		"]\n---\n[↑ Mini-KB Common](index.md)\n\n## " + title + "\n\nSynthetic by-methodology leaf referencing an experiment.\n"
 }
 
 func supLeaf(supID, supports, title string) string {
-	return "[↑ Mini-KB Common](index.md)\n\n<!-- kb-frontmatter\nkind: leaf\nno-claim: \"hosts a support node only\"\nsup-id: " + supID +
-		"\nsupports:\n" + supports + "\n-->\n\n## " + title + "\n\nSynthetic support leaf body.\n"
+	return "---\nkind: leaf\nno-claim: \"hosts a support node only\"\nsupport-nodes:\n  - sup-id: " + supID + "\n    supports:\n" +
+		strings.Join(nested(supports), "\n") + "\n---\n[↑ Mini-KB Common](index.md)\n\n## " + title + "\n\nSynthetic support leaf body.\n"
 }
 
 const blocklessDoc = "[↑ Mini-KB Common](../index.md)\n\n## Blockless\n\nSynthetic body.\n"
 
 func edge(source, target, relation, kind, strength, fraction string) string {
-	return fmt.Sprintf(`{"source": %q, "target": %q, "relation": %q, "target_kind": %q, "target_solidity_recorded": null, "strength": %s, "context": null, "fraction": %s}`+"\n",
+	return fmt.Sprintf(`--- {"source": %q, "target": %q, "relation": %q, "target_kind": %q, "target_solidity_recorded": null, "strength": %s, "context": null, "fraction": %s}`+"\n",
 		source, target, relation, kind, strength, fraction)
 }
 
@@ -324,7 +330,7 @@ func stage(block string) func(*testing.T, string) {
 var variants = []variant{
 	{name: "as-materialized"},
 	{name: "stale-cites", mutate: func(t *testing.T, root string) {
-		p := filepath.Join(root, ".index/cites.jsonl")
+		p := filepath.Join(root, ".index/cites.yaml")
 		var kept []string
 		for _, l := range strings.Split(readFile(t, p), "\n") {
 			if l != "" {
@@ -333,13 +339,12 @@ var variants = []variant{
 		}
 		writeFile(t, p, strings.Join(kept[1:], "\n")+"\n")
 	}},
-	{name: "missing-strengthen-by", mutate: remove(".index/strengthen-by.jsonl")},
-	{name: "malformed-claims", mutate: appendTo(".index/claims.jsonl", "not-a-json\n")},
+	{name: "missing-strengthen-by", mutate: remove(".index/strengthen-by.yaml")},
+	{name: "malformed-claims", mutate: appendTo(".index/claims.yaml", "not-a-json\n")},
 	{name: "absent-sheet", mutate: remove(kb.ClaimGraphFile)},
-	{name: "hand-edited-drawn-sheet", mutate: replaceIn(kb.ClaimGraphFile, "</svg>", "<!-- hand-edited -->\n</svg>"),
-		divergence: "claim-graph.svg: kbase checks only its own placeholder sheet (SPEC §3, §4)"},
-	{name: "orphan-edge", mutate: appendTo(".index/depends-on.jsonl", `{"source": "clm-aa1111", "target": "clm-zzz999", "target_solidity_recorded": null, "context": null}`+"\n")},
-	{name: "target-kind-mismatch", mutate: appendTo(".index/depends-on.jsonl", edge("clm-aa1111", "INVARIANT-S2", "depends", "claim", "null", "null"))},
+	{name: "hand-edited-drawn-sheet", mutate: replaceIn(kb.ClaimGraphFile, "</svg>", "<!-- hand-edited -->\n</svg>")},
+	{name: "orphan-edge", mutate: appendTo(".index/depends-on.yaml", `--- {"source": "clm-aa1111", "target": "clm-zzz999", "target_solidity_recorded": null, "context": null}`+"\n")},
+	{name: "target-kind-mismatch", mutate: appendTo(".index/depends-on.yaml", edge("clm-aa1111", "INVARIANT-S2", "depends", "claim", "null", "null"))},
 	{name: "stale-solidity-line", mutate: restamp("common/claim-quality.md", regexp.MustCompile(`(?m)^- solidity: (0\.\d+) \(`))},
 	{name: "stale-annotation", mutate: restamp("claim-quality.md", regexp.MustCompile(`\(solidity (0\.\d+)\)`))},
 	{name: "cycle", mutate: replaceIn("common/claim-quality.md", "- depends-on:\n  - INVARIANT-S2 (context A",
@@ -364,9 +369,9 @@ var variants = []variant{
 	{name: "support-fraction-below-zero", after: afterKbTools, mutate: put("common/sup-bad.md", supLeaf("sup-neg001", "  - clm-bb2222: -0.5", "Negative Support"))},
 	{name: "support-fraction-above-one", after: afterKbTools, mutate: put("common/sup-bad.md", supLeaf("sup-neg001", "  - clm-bb2222: 1.5", "Negative Support"))},
 	{name: "support-bad-id", after: afterKbTools, mutate: put("common/sup-bad.md", supLeaf("sup-TOOLONG9", "  - clm-bb2222: 1.0", "Negative Support"))},
-	{name: "supports-edge-to-experiment", mutate: appendTo(".index/depends-on.jsonl", edge("sup-free01", "exp-bench1", "supports", "claim", "null", "1.0"))},
-	{name: "supports-fraction-in-index", mutate: appendTo(".index/depends-on.jsonl", edge("sup-free01", "clm-bb2222", "supports", "claim", "null", "1.5"))},
-	{name: "strengthens-strength-in-index", mutate: appendTo(".index/depends-on.jsonl", edge("exp-bench1", "clm-bb2222", "strengthens", "claim", "5.0", "null"))},
+	{name: "supports-edge-to-experiment", mutate: appendTo(".index/depends-on.yaml", edge("sup-free01", "exp-bench1", "supports", "claim", "null", "1.0"))},
+	{name: "supports-fraction-in-index", mutate: appendTo(".index/depends-on.yaml", edge("sup-free01", "clm-bb2222", "supports", "claim", "null", "1.5"))},
+	{name: "strengthens-strength-in-index", mutate: appendTo(".index/depends-on.yaml", edge("exp-bench1", "clm-bb2222", "strengthens", "claim", "5.0", "null"))},
 	{name: "zero-on-point-fraction", after: afterKbTools, mutate: replaceIn("common/sup-free.md", "clm-sb2222: 0.50", "clm-sb2222: 0.0")},
 	{name: "marker-above-heading", mutate: replaceIn("common/claim-quality.md",
 		"## Pending Upstream Claim F\n<!-- id: clm-ff6666 -->", "<!-- id: clm-ff6666 -->\n## Pending Upstream Claim F")},
@@ -378,8 +383,7 @@ var variants = []variant{
 	{name: "staged-fan-out-differs", mutate: stage("- supports:\n  - clm-sb1111: 1.0\n  - clm-sb2222: 0.75\n")},
 	{name: "blockless-leaf", mutate: put("common/blockless.md", blocklessDoc)},
 	{name: "blockless-index", mutate: put("common/blockless/index.md", blocklessDoc)},
-	{name: "refreshed-by-kbase", after: afterKbase, mutate: remove(kb.ClaimGraphFile),
-		divergence: "claim-graph.svg: kb_tools' sheet check is red on kbase's placeholder until kb_tools' refresh runs (SPEC §3)"},
+	{name: "refreshed-by-kbase", after: afterKbase, mutate: remove(kb.ClaimGraphFile)},
 }
 
 type refreshInput struct {
@@ -447,30 +451,25 @@ type refreshCase struct {
 	Differences []string `yaml:"differences"`
 }
 
-// gate is one gate's verdict from each toolchain: for the link and citation
-// gates each side's finding count (-1 where kb_tools failed without one),
-// for the metadata gate kb_tools' exit code and kbase's finding count.
+// gate is one gate's verdict from each toolchain: for the link gate each
+// side's finding count (-1 where kb_tools failed without one), for the
+// metadata gate kb_tools' exit code and kbase's finding count.
 type gate struct {
 	KbTools int `yaml:"kbtools"`
 	Kbase   int `yaml:"kbase"`
 }
 
 type verdict struct {
-	Variant    string `yaml:"variant"`
-	Links      gate   `yaml:"links"`
-	Metadata   gate   `yaml:"metadata"`
-	Citations  gate   `yaml:"citations"`
-	Divergence string `yaml:"divergence,omitempty"`
-	Agrees     bool   `yaml:"agrees"`
+	Variant  string `yaml:"variant"`
+	Links    gate   `yaml:"links"`
+	Metadata gate   `yaml:"metadata"`
+	Agrees   bool   `yaml:"agrees"`
 }
 
-var (
-	gatingErrorsRE = regexp.MustCompile(`gating errors: (\d+)`)
-	citationLineRE = regexp.MustCompile(`(?m)^  \[`)
-)
+var gatingErrorsRE = regexp.MustCompile(`gating errors: (\d+)`)
 
 // kbaseGates is a verify result's findings counted by gate.
-func kbaseGates(t *testing.T, path string) (links, metadata, citations int) {
+func kbaseGates(t *testing.T, path string) (links, metadata int) {
 	t.Helper()
 	var doc struct {
 		Refusals []struct {
@@ -481,23 +480,20 @@ func kbaseGates(t *testing.T, path string) (links, metadata, citations int) {
 		t.Fatalf("%s: %v", path, err)
 	}
 	for _, f := range doc.Refusals {
-		switch {
-		case f.Check == "dead link", f.Check == "unknown id":
+		switch f.Check {
+		case "dead link", "unknown id":
 			links++
-		case strings.HasPrefix(f.Check, "citation "):
-			citations++
 		default:
 			metadata++
 		}
 	}
-	return links, metadata, citations
+	return links, metadata
 }
 
 // TestKbToolsComparisons reads what each toolchain left over the staged
-// inputs. Refresh: both exit 0 and every byte of kb-root but the sheet
-// agrees. Verify: the link and citation gates report the same number of
-// findings, and the metadata gates pass and fail together except where a
-// named divergence says otherwise.
+// inputs. Refresh: both exit 0 and every byte of kb-root but the sheets
+// agrees. Verify: the link gates report the same number of findings, and the
+// metadata gates pass and fail together.
 func TestKbToolsComparisons(t *testing.T) {
 	if *kbtoolsStage || *kbtoolsOut == "" {
 		t.Skip("no results named; test-integration-verify-arxiv names them")
@@ -518,27 +514,19 @@ func TestKbToolsComparisons(t *testing.T) {
 	}
 	writeEvidence(t, "refresh-agreement.yaml", refreshed)
 
-	divergence := map[string]string{}
-	for _, v := range variants {
-		divergence[v.name] = v.divergence
-	}
 	var verdicts []verdict
 	for _, v := range lines(t, filepath.Join(*kbtoolsOut, verifyVariants)) {
 		dir := filepath.Join(*kbtoolsOut, "verify", v[0])
-		vd := verdict{Variant: v[0], Divergence: divergence[v[0]]}
+		vd := verdict{Variant: v[0]}
 		if m := gatingErrorsRE.FindStringSubmatch(readFile(t, filepath.Join(dir, "kbtools-links.log"))); m != nil {
 			vd.Links.KbTools, _ = strconv.Atoi(m[1])
 		} else if exitCode(t, filepath.Join(dir, "kbtools-links")) != 0 {
 			vd.Links.KbTools = -1
 		}
-		vd.Citations.KbTools = len(citationLineRE.FindAllString(readFile(t, filepath.Join(dir, "kbtools-citations.log")), -1))
-		if exitCode(t, filepath.Join(dir, "kbtools-citations")) != 0 && vd.Citations.KbTools == 0 {
-			vd.Citations.KbTools = -1
-		}
 		vd.Metadata.KbTools = exitCode(t, filepath.Join(dir, "kbtools-metadata"))
-		vd.Links.Kbase, vd.Metadata.Kbase, vd.Citations.Kbase = kbaseGates(t, filepath.Join(dir, kbaseVerifyFile))
+		vd.Links.Kbase, vd.Metadata.Kbase = kbaseGates(t, filepath.Join(dir, kbaseVerifyFile))
 		metaAgree := (vd.Metadata.KbTools != 0) == (vd.Metadata.Kbase > 0)
-		vd.Agrees = vd.Links.KbTools == vd.Links.Kbase && vd.Citations.KbTools == vd.Citations.Kbase && metaAgree == (vd.Divergence == "")
+		vd.Agrees = vd.Links.KbTools == vd.Links.Kbase && metaAgree
 		verdicts = append(verdicts, vd)
 		if !vd.Agrees {
 			t.Errorf("verify %s: %+v", v[0], vd)

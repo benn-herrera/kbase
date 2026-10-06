@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"kbase/internal/asks"
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/records"
@@ -25,8 +26,8 @@ type Options struct {
 	Records  string
 	Logger   log.Logger
 	// Reader puts each letter ask. It is nil only for a build spending no
-	// inference, which drops the node pass and classifies every candidate as
-	// its draft.
+	// inference, which drops the node pass and the unmarked-reference asks and
+	// classifies every candidate as its draft.
 	Reader asks.LetterReader
 	// ReaderConcurrency is how many asks of one group the reader has in
 	// flight once its first has returned; 0 is asks.DefaultReaderConcurrency.
@@ -34,8 +35,8 @@ type Options struct {
 	// AskRecords is where each letter-ask group's record lands; none is kept
 	// where it is "".
 	AskRecords string
-	// Progress hears the units of a stage that asks: the node pass's leaves
-	// and classification's ask groups.
+	// Progress hears the units of a stage that asks: the node pass's leaves,
+	// and the unmarked-reference asks' and classification's source groups.
 	Progress Progress
 }
 
@@ -104,12 +105,12 @@ func askTotals(records []asks.GroupRecord) result.Record {
 // over the tree it wrote.
 func Discovered(ctx context.Context, opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
-		record, ok, err := ReadNodePass(w.repoRoot)
+		record, ok, err := buildrecords.ReadNodePass(recordsAt(w.repoRoot))
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, stopf("node-pass-record", "no node-pass record stands at %s. The declared pass writes one listing every leaf it stamped, and this pass reads its scope from nothing else", NodePassFile)
+			return nil, stopf("node-pass-record", "no node-pass record stands at %s. The declared pass writes one listing every leaf it stamped, and this pass reads its scope from nothing else", buildrecords.NodePassFile)
 		}
 		if _, err := passTwoGate(t); err != nil {
 			return nil, err
@@ -157,7 +158,7 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 				leaf := readLeaf(t.Documents[p], &inv)
 				asked := leaf.askedParagraphs(leaf.obligated(&inv))
 				nothing := OutcomeNothingToRead
-				entry = LeafEntry{State: ReadPlanned, Outcome: &nothing}
+				entry = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &nothing}
 				if len(asked) > 0 {
 					group, claims, verdicts, err := askLeaf(ctx, leaf, asked, opts)
 					if err != nil {
@@ -168,9 +169,9 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 					if len(claims) > 0 {
 						outcome = OutcomeMinted
 					}
-					entry = LeafEntry{State: ReadPlanned, Outcome: &outcome, Verdicts: verdicts}
+					entry = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &outcome, Verdicts: verdicts}
 					for _, c := range claims {
-						entry.Claims = append(entry.Claims, PlannedClaim{Title: c.title, Locator: c.excerpt})
+						entry.Claims = append(entry.Claims, buildrecords.PlannedClaim{Title: c.title, Locator: c.excerpt})
 					}
 					for _, v := range verdicts {
 						if v.Verdict == JudgementDefaulted {
@@ -263,7 +264,7 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 
 // askLeaf is one leaf's paragraph asks, as one group sharing its render, and
 // what they come to.
-func askLeaf(ctx context.Context, leaf *leafReading, asked []askedParagraph, opts Options) (asks.GroupRecord, []proseClaim, []ParagraphVerdict, error) {
+func askLeaf(ctx context.Context, leaf *leafReading, asked []askedParagraph, opts Options) (asks.GroupRecord, []proseClaim, []buildrecords.ParagraphVerdict, error) {
 	items := make([]asks.ParagraphItem, len(asked))
 	for i, a := range asked {
 		items[i] = asks.ParagraphItem{Paragraph: a.name(), Text: a.labelled()}
@@ -295,6 +296,12 @@ func nonNilStrings(s []string) []string {
 // body over it; a stop ends the report on its finding, and a report with no
 // failure ends on the gate.
 func run(opts Options, body func(t *Tree, recs []records.Record, w writer) ([]Finding, error)) (Report, error) {
+	return runStage(opts, true, body)
+}
+
+// runStage is run, ending on the gate only where gated: a stage writing
+// nothing under kb-root/ has nothing for refresh or verify to judge.
+func runStage(opts Options, gated bool, body func(t *Tree, recs []records.Record, w writer) ([]Finding, error)) (Report, error) {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()
 	}
@@ -321,14 +328,16 @@ func run(opts Options, body func(t *Tree, recs []records.Record, w writer) ([]Fi
 	if err != nil {
 		return r, err
 	}
-	r.Findings = append(r.Findings, gate(opts.KBRoot, opts.Logger)...)
+	if gated {
+		r.Findings = append(r.Findings, gate(opts.KBRoot, opts.Logger)...)
+	}
 	return r, nil
 }
 
 // Declared is the declared pass: conformance with the double-run guard, the
 // inventory, the claims the author marked, their assembly with the endcap,
 // the writes, and the build records written fresh — every declaring leaf
-// unread, no candidate classified — then the gate.
+// unread, no candidate classified, no shortlist planned — then the gate.
 func Declared(opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		if err := conformanceGate(t); err != nil {
@@ -357,16 +366,19 @@ func Declared(opts Options) (Report, error) {
 		if err != nil {
 			return findings, err
 		}
-		leaves := map[string]LeafEntry{}
+		leaves := map[string]buildrecords.LeafEntry{}
 		for _, d := range p.documents {
 			if declaringKinds[d.kind] {
-				leaves[d.path] = LeafEntry{State: ReadUnread}
+				leaves[d.path] = buildrecords.LeafEntry{State: ReadUnread}
 			}
 		}
-		if err := WriteNodePass(w.repoRoot, NodePassRecord{Leaves: leaves}); err != nil {
+		if err := WriteNodePass(w.repoRoot, buildrecords.NodePassRecord{Leaves: leaves}); err != nil {
 			return findings, err
 		}
-		if err := WriteClassification(w.repoRoot, ClassificationRecord{}); err != nil {
+		if err := WriteClassification(w.repoRoot, buildrecords.ClassificationRecord{}); err != nil {
+			return findings, err
+		}
+		if err := WriteUnmarked(w.repoRoot, buildrecords.UnmarkedRecord{}); err != nil {
 			return findings, err
 		}
 		return append(findings, fact("stage-F-node-pass", field("leaves-unread", len(leaves)))), nil
@@ -375,7 +387,7 @@ func Declared(opts Options) (Report, error) {
 
 // counting is every resolving reference that counts: all of them, less those
 // in prose the node pass judged not a claim.
-func counting(t *Tree, inv *Inventory, rec NodePassRecord) []Anchor {
+func counting(t *Tree, inv *Inventory, rec buildrecords.NodePassRecord) []Anchor {
 	leaves := map[string]*leafReading{}
 	var out []Anchor
 	for _, a := range inv.Anchors {
@@ -522,12 +534,17 @@ func Equations(opts Options) (Report, error) {
 }
 
 // Depends is dependency attribution: the entry condition, the authored graph,
-// stage D's narrowing over the node pass's verdicts, every candidate
-// classified — with no reader, every one taking its draft — into the
-// classification record, and one add-depends-on batch.
+// stage D's narrowing over the node pass's verdicts and the unmarked record's
+// yeses — read, never recomputed, and none where no unmarked record stands —
+// every candidate classified — with no reader, every one taking its draft —
+// into the classification record, and one add-depends-on batch.
 func Depends(ctx context.Context, opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		record, err := requireNodePass(w.repoRoot)
+		if err != nil {
+			return nil, err
+		}
+		unmarked, _, err := buildrecords.ReadUnmarked(recordsAt(w.repoRoot))
 		if err != nil {
 			return nil, err
 		}
@@ -557,36 +574,36 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 			fact("stage-A-determinations", field("hosting", len(state.hosting)), field("no-claim", len(state.determined)), field("undeclared", len(state.undeclared))),
 			fact("authored-graph", field("claims", len(g.Nodes)), field("hosting-documents", g.documents())),
 			fact("stage-D-anchors", field("anchors", len(inv.Anchors)), field("resolving", resolving), field("in-proofs", inProof)))
-		a := narrow(t, g, &inv, record)
+		a := narrow(t, g, &inv, record, unmarkedFound(unmarked))
 		findings = append(findings, candidateFindings(a)...)
 		c, err := classify(ctx, w.repoRoot, a.candidates, statements(t, g, &inv), opts)
 		if err != nil {
 			return findings, askStop(err)
 		}
 		findings = append(findings, classificationFindings(c, opts.Reader != nil)...)
-		f, err := w.writeEdges("pass-3-add-depends-on", c.edges, c.refs)
+		f, err := w.writeEdges("pass-3-add-depends-on", c.edges, c.refs, cutEdges(a.demoted, c, unmarkedFound(unmarked)))
 		findings = append(findings, f)
 		return findings, err
 	})
 }
 
-func requireNodePass(repoRoot string) (NodePassRecord, error) {
-	rec, ok, err := ReadNodePass(repoRoot)
+func requireNodePass(repoRoot string) (buildrecords.NodePassRecord, error) {
+	rec, ok, err := buildrecords.ReadNodePass(recordsAt(repoRoot))
 	if err != nil {
 		return rec, err
 	}
 	if !ok {
-		return rec, stopf("node-pass-record", "no node-pass record stands at %s; the declared pass is what writes it", NodePassFile)
+		return rec, stopf("node-pass-record", "no node-pass record stands at %s; the declared pass is what writes it", buildrecords.NodePassFile)
 	}
 	return rec, nil
 }
 
 func candidateFindings(a attribution) []Finding {
 	sources := map[string]bool{}
-	var harvests, offeredLetters, drafts []string
+	var harvested, offeredLetters, drafts []string
 	for _, c := range a.candidates {
 		sources[c.source.ID] = true
-		harvests = append(harvests, strings.Join(c.harvests, "+"))
+		harvested = append(harvested, strings.Join(c.harvests, "+"))
 		names := make([]string, len(c.offered))
 		for i, r := range c.offered {
 			names[i] = string(r)
@@ -597,7 +614,7 @@ func candidateFindings(a attribution) []Finding {
 	routes := counts([]string{byEquation, byIdentifier, bySoleClaim}, a.routes)
 	return []Finding{
 		fact("stage-D-candidates", field("candidates", len(a.candidates)), field("sources", len(sources)),
-			field("by-harvest", tally(harvests)), field("by-offered", tally(offeredLetters))),
+			field("by-harvest", tally(harvested)), field("by-offered", tally(offeredLetters)), field("own-equations-dropped", len(a.ownEquations))),
 		fact("stage-D-drafts", field("by-relation", counts([]string{string(MentionedBy), string(SupportedBy)}, countOf(drafts))), field("directed-by-route", routes)),
 		fact("stage-D-word-filtered", field("pairs", len(a.wordDropped))),
 		fact("stage-D-containment-ring", field("demoted", pairs(a.demoted))),

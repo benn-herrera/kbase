@@ -3,7 +3,6 @@ package claimgraph
 import (
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -54,7 +53,10 @@ func passTwoGate(t *Tree) (determinations, error) {
 		if !declaringKinds[t.kind(p)] {
 			continue
 		}
-		fm := kb.ParseFrontmatter(t.Documents[p].Text)
+		fm, err := kb.ParseFrontmatter(t.Documents[p].Text)
+		if err != nil {
+			return d, fmt.Errorf("%s: %w", p, err)
+		}
 		claims, _ := fm.Get("claims")
 		reason, hasReason := fm.Get("no-claim")
 		switch {
@@ -104,8 +106,8 @@ func checkEntryPoint(t *Tree) error {
 	return nil
 }
 
-// checkUplinks is points 3 and 4: line 1 is an up-link, and the parent names
-// the document back.
+// checkUplinks is points 3 and 4: the first line after the frontmatter is an
+// up-link, and the parent names the document back.
 func checkUplinks(t *Tree) error {
 	for _, p := range t.Paths {
 		if p == kb.EntryPointFile {
@@ -113,7 +115,7 @@ func checkUplinks(t *Tree) error {
 		}
 		parent, ok := t.Parents[p]
 		if !ok {
-			return refusePoint(3, "%s does not open with an up-link carrying %q", p, kb.UplinkMarker)
+			return refusePoint(3, "%s does not open, below its frontmatter, with an up-link carrying %q", p, kb.UplinkMarker)
 		}
 		if _, ok := t.Documents[parent]; !ok {
 			return refusePoint(3, "%s's up-link names %s, which is not a document of this tree", p, parent)
@@ -185,7 +187,7 @@ func checkSpine(t *Tree) error {
 
 // checkMarkdownLinks is point 7 for the link form the dead-link gate sees.
 func checkMarkdownLinks(t *Tree) error {
-	dead, err := kb.DeadLinks(t.Root)
+	dead, err := kb.DeadLinks(builtTree(t.Root))
 	if err != nil {
 		return err
 	}
@@ -237,8 +239,10 @@ func checkCleanliness(t *Tree) error {
 		return err
 	}
 	slices.Sort(files)
+	src := builtTree(t.Root)
+	const rebuild = "This is not a tree the front end just wrote: this stage mints ids, so a second run over its own output would mint a second set and double the graph. Rebuild the tree from the corpus and run once"
 	for _, f := range files {
-		data, err := os.ReadFile(f)
+		text, err := src.ReadText(f)
 		if err != nil {
 			return err
 		}
@@ -246,9 +250,18 @@ func checkCleanliness(t *Tree) error {
 		if err != nil {
 			return err
 		}
-		for _, artifact := range write.MetadataOpeners() {
-			if strings.Contains(string(data), artifact) {
-				return refusePoint(14, "%s already carries %q. This is not a tree the front end just wrote: this stage mints ids, so a second run over its own output would mint a second set and double the graph. Rebuild the tree from the corpus and run once", filepath.ToSlash(rel), artifact)
+		fm, err := kb.ParseFrontmatter(text)
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.ToSlash(rel), err)
+		}
+		for key := range fm {
+			if key != kb.FormatKey {
+				return refusePoint(14, "%s already carries frontmatter (%s). %s", filepath.ToSlash(rel), key, rebuild)
+			}
+		}
+		for _, artifact := range write.MarkerOpeners() {
+			if strings.Contains(text, artifact) {
+				return refusePoint(14, "%s already carries %q. %s", filepath.ToSlash(rel), artifact, rebuild)
 			}
 		}
 	}

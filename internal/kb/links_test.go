@@ -65,6 +65,23 @@ func TestStripCode(t *testing.T) {
 	}
 }
 
+func TestStripCodeSpanPairing(t *testing.T) {
+	sp := strings.Repeat
+	for _, tc := range []struct{ name, in, want string }{
+		{"single backticks", "a `x` b", "a " + sp(" ", 3) + " b"},
+		{"a shorter run inside is content", "a `` c`d `` b", "a " + sp(" ", 9) + " b"},
+		{"a longer run inside is content", "`` ```* `` then `\\bigl[b\\bigr](\\xi)`", sp(" ", 10) + " then " + sp(" ", 20)},
+		{"an unclosed opener is literal", "it`s odd [a](b.md)", "it`s odd [a](b.md)"},
+		{"a span closes on its own line", "`` x ``\n[a](b.md)", sp(" ", 7) + "\n[a](b.md)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := StripCode(tc.in); got != tc.want {
+				t.Errorf("StripCode(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStripTarget(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"<a file.md>", "a file.md"},
@@ -126,7 +143,7 @@ func TestDeadLinks(t *testing.T) {
 	write(".index/skipped.md", "[x](nowhere.md)")
 	write("vol/x.tmpl.md", "[x](nowhere.md)")
 
-	dead, err := DeadLinks(root)
+	dead, err := DeadLinks(OnDisk(root))
 	if err != nil {
 		t.Fatal(err)
 	}

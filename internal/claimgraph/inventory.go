@@ -34,9 +34,6 @@ func classified(name string) bool {
 }
 
 var (
-	// labelLineRE is point 12's label line, bare or wrapped in the identifier
-	// the source's \label became.
-	labelLineRE = kb.PyRE(`^>\s*(?:<span id="([^"]*)">)?\*\*(` + kb.LabelName + `)\*\*(?:</span>)?\s*$`)
 	// printedNameRE is the printed word and number a display line opens with.
 	printedNameRE = regexp.MustCompile(`^\*\*([^*]+)\*\*`)
 	// citationSpanRE is every citation, by its keys and its rendering.
@@ -319,12 +316,12 @@ func readBlocks(doc Document, blocks []Block) error {
 	var found []labelled
 	var displays []string
 	for i, line := range lines {
-		m := labelLineRE.FindStringSubmatch(line)
-		if m == nil {
+		name, ok := kb.LabelLine(line)
+		if !ok {
 			continue
 		}
-		if len(found) < len(blocks) && m[2] != blocks[len(found)].Environment {
-			return stopf("records", "%s:%d: the page's label line names %q where the records name %q; the records describe another tree", doc.Path, i+1, m[2], blocks[len(found)].Environment)
+		if len(found) < len(blocks) && name != blocks[len(found)].Environment {
+			return stopf("records", "%s:%d: the page's label line names %q where the records name %q; the records describe another tree", doc.Path, i+1, name, blocks[len(found)].Environment)
 		}
 		end := i
 		for end < len(lines) && strings.HasPrefix(lines[end], ">") {

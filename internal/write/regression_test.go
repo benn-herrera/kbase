@@ -58,11 +58,7 @@ func loadRecorded(t *testing.T) []recorded {
 	var out []recorded
 	for _, source := range sources {
 		rel := strings.TrimSuffix(filepath.Base(source), "-claim-quality.md") + "/" + kb.RegisterFile
-		raw, err := kb.ReadText(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := repaired(raw)
+		text := repaired(readText(t, source))
 		claims := map[string]kb.ClaimEntry{}
 		for _, c := range kb.ParseClaimEntries(text, rel, nil, log.Discard()) {
 			claims[c.ID] = c
@@ -115,8 +111,27 @@ func registersOf(recs []recorded) []string {
 	return out
 }
 
+// stampedEntryPoint is an entry point that declares the current format and
+// nothing else.
+const stampedEntryPoint = "---\nkb-format: \"1.0.0\"\n---\n# KB\n"
+
+func readText(t *testing.T, p string) string {
+	t.Helper()
+	text, err := kb.OnDisk(filepath.Dir(p)).ReadText(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
 func seedRegisters(t *testing.T, root string, registers []string) {
 	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, kb.EntryPointFile), []byte(stampedEntryPoint), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, rel := range registers {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -134,10 +149,7 @@ func readBack(t *testing.T, root string, registers []string) map[string][2]any {
 	t.Helper()
 	seen := map[string][2]any{}
 	for _, rel := range registers {
-		text, err := kb.ReadText(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		text := readText(t, filepath.Join(root, filepath.FromSlash(rel)))
 		for _, c := range kb.ParseClaimEntries(text, rel, nil, log.Discard()) {
 			var targets []string
 			for _, e := range c.DependsOn {
@@ -152,11 +164,7 @@ func readBack(t *testing.T, root string, registers []string) map[string][2]any {
 func censusTotals(t *testing.T, root string, registers []string) (markers, records int) {
 	t.Helper()
 	for _, rel := range registers {
-		text, err := kb.ReadText(filepath.Join(root, filepath.FromSlash(rel)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := takeCensus(text)
+		c := takeCensus(readText(t, filepath.Join(root, filepath.FromSlash(rel))))
 		if !c.consistent() {
 			t.Errorf("%s: %s", rel, c.describe())
 		}
@@ -227,7 +235,7 @@ func TestRegressionReplayStore(t *testing.T) {
 		}
 		edits = append(edits, e)
 	}
-	out, err := applyEdits(root, edits)
+	out, err := applyEdits(kb.OnDisk(root), edits)
 	if err != nil || out.status != statusWritten {
 		t.Fatalf("applyEdits: %+v, %v", out, err)
 	}
@@ -342,11 +350,7 @@ func TestRegressionFixtureCarriesDefect(t *testing.T) {
 	}
 	markers, records := 0, 0
 	for _, source := range sources {
-		text, err := kb.ReadText(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := takeCensus(text)
+		c := takeCensus(readText(t, source))
 		markers += c.claimMarkers
 		records += c.claimRecords
 	}

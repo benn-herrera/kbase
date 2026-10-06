@@ -37,7 +37,7 @@ type searchBody struct {
 
 func bodyOf(document string) searchBody {
 	b := searchBody{}
-	if m := kb.FrontmatterRE.FindStringIndex(document); m != nil {
+	if m := kb.FindFrontmatter(document); m != nil {
 		b.first = strings.Count(document[:m[1]], "\n") + 1
 	}
 	lines := kb.SplitLines(document)
@@ -177,14 +177,14 @@ func locateExcerpt(document, locator string) (int, error) {
 	hits := excerptLines(document, locator)
 	switch {
 	case len(hits) == 0:
-		return 0, &opRefusal{"locator", fmt.Sprintf("%q does not appear in the document body. The locator is matched against "+
+		return 0, opRefusal("locator", fmt.Sprintf("%q does not appear in the document body. The locator is matched against "+
 			"the body's whitespace-collapsed text, and where that finds nothing against a folded form of it — so wrapping, "+
 			"markup, case and punctuation do not matter, but the words themselves do, and so does the paragraph they sit in", locator),
-			"restore: quote the locator text verbatim from one paragraph of the document body and re-run"}
+			"restore: quote the locator text verbatim from one paragraph of the document body and re-run")
 	case len(hits) > 1:
-		return 0, &opRefusal{"locator", fmt.Sprintf("%q matches %d places in the document body, so the marker's position "+
+		return 0, opRefusal("locator", fmt.Sprintf("%q matches %d places in the document body, so the marker's position "+
 			"would be chosen arbitrarily", locator, len(hits)),
-			"restore: extend the locator until it names exactly one place, then re-run"}
+			"restore: extend the locator until it names exactly one place, then re-run")
 	}
 	return hits[0], nil
 }
@@ -219,10 +219,10 @@ func nearestWindow(needle, haystack string) string {
 
 // renderCitations composes each entry's citation after checking what the
 // citation gate will check of it, all or none.
-func renderCitations(root string, entries []entry) Result {
+func renderCitations(src *kb.Source, entries []entry) Result {
 	res := Result{Outcome: result.Done}
 	for _, e := range entries {
-		citation, err := composeCitation(root, e)
+		citation, err := composeCitation(src, e)
 		if err != nil {
 			return errorResult(err)
 		}
@@ -231,7 +231,8 @@ func renderCitations(root string, entries []entry) Result {
 	return res
 }
 
-func composeCitation(root string, e entry) (string, error) {
+func composeCitation(src *kb.Source, e entry) (string, error) {
+	root := kb.ResolvePath(src.Root())
 	citingRel, citedRel := e.str("citing-document"), e.str("cited-document")
 	anchor, excerpt := collapse(e.str("anchor")), e.str("excerpt")
 	citing, err := containedIn(root, citingRel, "citing-document")
@@ -243,29 +244,29 @@ func composeCitation(root string, e entry) (string, error) {
 		return "", err
 	}
 	if info, err := os.Stat(filepath.Dir(citing)); err != nil || !info.IsDir() {
-		return "", &opRefusal{"citing-document", fmt.Sprintf("%q names a directory that does not exist under kb-root/. The "+
+		return "", opRefusal("citing-document", fmt.Sprintf("%q names a directory that does not exist under kb-root/. The "+
 			"link is rendered relative to the citing document, so its directory decides the target's spelling — the file "+
 			"itself may still be unwritten", citingRel),
-			"restore: correct citing-document to the path this citation will be written into, then re-run"}
+			"restore: correct citing-document to the path this citation will be written into, then re-run")
 	}
-	if !kb.IsFile(cited) {
-		return "", &opRefusal{"cited-document", fmt.Sprintf("%q does not resolve to a file. A citation names a durable KB "+
+	if !src.IsFile(cited) {
+		return "", opRefusal("cited-document", fmt.Sprintf("%q does not resolve to a file. A citation names a durable KB "+
 			"path that exists at the moment it is written", citedRel),
-			"restore: correct cited-document, or cite a document that has been written, then re-run"}
+			"restore: correct cited-document, or cite a document that has been written, then re-run")
 	}
-	data, err := os.ReadFile(cited)
+	data, err := src.ReadFile(cited)
 	if err != nil {
 		return "", fmt.Errorf("cited-document %q exists but could not be read: %w", citedRel, err)
 	}
 	if !utf8.Valid(data) {
-		return "", &opRefusal{"cited-document", fmt.Sprintf("%q is not valid UTF-8, so the excerpt cannot be checked against it", citedRel),
-			"restore: cite a document that decodes as UTF-8, or re-encode " + citedRel + ", then re-run"}
+		return "", opRefusal("cited-document", fmt.Sprintf("%q is not valid UTF-8, so the excerpt cannot be checked against it", citedRel),
+			"restore: cite a document that decodes as UTF-8, or re-encode "+citedRel+", then re-run")
 	}
 	body, ok := kb.AnchorSection(kb.TranslateNewlines(string(data)), anchor)
 	if !ok {
-		return "", &opRefusal{"anchor", fmt.Sprintf("%q names no section of %s. An anchor is a heading's slug, and a "+
+		return "", opRefusal("anchor", fmt.Sprintf("%q names no section of %s. An anchor is a heading's slug, and a "+
 			"heading that exists only inside a fenced example is not a section", anchor, citedRel),
-			"restore: correct anchor to the slug of a heading in " + citedRel + ", then re-run"}
+			"restore: correct anchor to the slug of a heading in "+citedRel+", then re-run")
 	}
 	needle, haystack := collapse(excerpt), collapse(body)
 	if !strings.Contains(haystack, needle) {
@@ -273,9 +274,9 @@ func composeCitation(root string, e entry) (string, error) {
 		if window := nearestWindow(needle, haystack); window != "" {
 			found = fmt.Sprintf("the nearest text there reads %q", window)
 		}
-		return "", &opRefusal{"excerpt", fmt.Sprintf("does not appear at %s#%s — %s. An excerpt is quoted verbatim from "+
+		return "", opRefusal("excerpt", fmt.Sprintf("does not appear at %s#%s — %s. An excerpt is quoted verbatim from "+
 			"the section it cites, compared with whitespace collapsed and fenced examples removed", citedRel, anchor, found),
-			fmt.Sprintf("restore: quote the clause verbatim from %s's %q section, then re-run", citedRel, anchor)}
+			fmt.Sprintf("restore: quote the clause verbatim from %s's %q section, then re-run", citedRel, anchor))
 	}
 	linkTarget := index.RelPosix(citedRel, path.Dir(citingRel))
 	citation := renderCitation(excerpt, linkTarget, anchor)
@@ -284,10 +285,10 @@ func composeCitation(root string, e entry) (string, error) {
 		targets = append(targets, m[1])
 	}
 	if !slices.Equal(targets, []string{linkTarget + "#" + anchor}) {
-		return "", &opRefusal{"excerpt", fmt.Sprintf("composes a citation the toolchain's link reader does not see as one "+
+		return "", opRefusal("excerpt", fmt.Sprintf("composes a citation the toolchain's link reader does not see as one "+
 			"link to %s#%s — an unbalanced '[' or ']' in the excerpt, or whitespace or ')' in the anchor, hides the whole "+
 			"citation from every gate that reads links", linkTarget, anchor),
-			"restore: re-quote the excerpt without an unbalanced bracket, correct the anchor, then re-run"}
+			"restore: re-quote the excerpt without an unbalanced bracket, correct the anchor, then re-run")
 	}
 	return citation, nil
 }

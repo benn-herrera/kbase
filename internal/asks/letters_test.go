@@ -91,7 +91,7 @@ func TestAskGroupDecisionRules(t *testing.T) {
 	if !strings.HasPrefix(reask, s.asked["S2-S3"][0]) || !strings.Contains(reask, "I think it states a result.") {
 		t.Error("the re-ask is not the first ask with the reply quoted after it")
 	}
-	if !strings.HasSuffix(rec.Prefix, "\n") || !strings.Contains(rec.Prefix, "the leaf") || strings.Contains(rec.Prefix, "The paragraph is") {
+	if !strings.HasSuffix(rec.Prefix, "\n") || !strings.Contains(rec.Prefix, "the leaf") || strings.Contains(rec.Prefix, ": text") {
 		t.Errorf("the group's prefix is not its shared context: %q", rec.Prefix)
 	}
 	if _, err := os.Stat(GroupRecordPath(dir, Paragraph, "v/leaf.md")); err != nil {

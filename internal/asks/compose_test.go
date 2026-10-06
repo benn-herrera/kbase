@@ -10,20 +10,26 @@ import (
 func TestRenderFillsEverySlotOnce(t *testing.T) {
 	body := `S1: a \frac{a}{b} with @!dyn.body!@ and {braces}`
 	got, err := Render(paragraphTemplate, map[string]string{
-		"document": "vol/leaf.md", "body": body, "paragraph": "S1", "paragraph-text": "S1: text", "returned": "",
+		"document": "vol/leaf.md", "body": body, "paragraph": "S2-S5", "paragraph-text": "S2: text", "returned": "an unreadable reply",
 	}, letterConstants, map[string]string{"correction": "letter-correction"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"`vol/leaf.md`", body, "The paragraph is S1:", "**A — states a result**", "Answer A if it does, B if it does not",
-		"## An earlier answer to this question could not be used"} {
+	for _, want := range []string{"vol/leaf.md", body, "S2-S5", "S2: text", "an unreadable reply"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered prompt lacks %q", want)
 		}
 	}
-	if strings.Count(got, "@!dyn.body!@") != 1 {
+	if strings.Count(got, "@!dyn.body!@") != 1 || strings.Count(got, "@!") != strings.Count(body, "@!") {
 		t.Error("a filled value was rescanned, or a slot left unfilled")
 	}
+}
+
+// closingNames reports whether the prompt's last paragraph names letter as a
+// word: the closing question carries the letters its ask offers.
+func closingNames(prompt, letter string) bool {
+	p := strings.TrimRight(prompt, "\n")
+	return regexp.MustCompile(`\b` + letter + `\b`).MatchString(p[strings.LastIndex(p, "\n\n")+1:])
 }
 
 func TestRenderIsStrictBothWays(t *testing.T) {
@@ -119,8 +125,8 @@ func TestLint(t *testing.T) {
 	if found, err := Lint(nil); err != nil || len(found) != 0 {
 		t.Errorf("Lint over the shelf = %q, %v; want no stray delimiter", found, err)
 	}
-	found, err := Lint(map[string]*regexp.Regexp{"knowledge base": regexp.MustCompile(`(?i)knowledge base`)})
-	if err != nil || len(found) == 0 || !strings.Contains(found[0], `names "knowledge base"`) {
+	found, err := Lint(map[string]*regexp.Regexp{"the body slot": regexp.MustCompile(`@!dyn\.body!@`)})
+	if err != nil || len(found) == 0 || !strings.Contains(found[0], `names "the body slot"`) {
 		t.Errorf("Lint with a prohibited phrase the shelf spells = %q, %v", found, err)
 	}
 }
@@ -144,14 +150,27 @@ func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"- `clm-aaaaaa` — Theorem 1 (stated in `v/a.md`: **Theorem 1**.)", "P1: alpha\nP2: zeta", "points at it in P1, P2.", "does the candidate need the source"} {
+	for _, want := range []string{"- `clm-aaaaaa` — Theorem 1 (stated in `v/a.md`: **Theorem 1**.)", "P1: alpha\nP2: zeta", "P1, P2"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("first ask lacks %q", want)
 		}
 	}
-	for _, want := range []string{"- `clm-cccccc` — (1) (stated in `v/b.md`)", "points at it in P2.", "This question offers two letters."} {
-		if !strings.Contains(second, want) {
-			t.Errorf("second ask lacks %q", want)
+	if !strings.Contains(second, "- `clm-cccccc` — (1) (stated in `v/b.md`)") {
+		t.Error("second ask lacks its candidate line")
+	}
+	// named counts a passage number outside the numbered list.
+	named := func(prompt, n string) int { return len(regexp.MustCompile(`\b`+n+`\b[^:]`).FindAllString(prompt, -1)) }
+	if named(second, "P1") != 0 || named(second, "P2") != 1 {
+		t.Errorf("second ask names P1 %d times and P2 %d times, want P2 alone", named(second, "P1"), named(second, "P2"))
+	}
+	for _, c := range []struct {
+		prompt  string
+		letters map[string]bool
+	}{{first, map[string]bool{"A": true, "B": true, "C": true}}, {second, map[string]bool{"A": true, "B": false, "C": true}}} {
+		for l, offered := range c.letters {
+			if closingNames(c.prompt, l) != offered {
+				t.Errorf("closing names %s: %t, want %t:\n%s", l, !offered, offered, c.prompt)
+			}
 		}
 	}
 	if sharedPrefix([]string{first, second}) == "" || !strings.HasPrefix(first, sharedPrefix([]string{first, second})) {
@@ -162,13 +181,53 @@ func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	}
 }
 
+func TestUnmarkedAsksShareEverythingBeforeTheQuestion(t *testing.T) {
+	src := Claim{ID: "clm-aaaaaa", Title: "Theorem 1", Document: "vol/a.md", Locator: "**Theorem 1**."}
+	targets := []UnmarkedItem{
+		{Target: Claim{ID: "clm-bbbbbb", Title: "Lemma 2", Document: "vol/b.md", Locator: "**Lemma 2**."}, Statement: "**Lemma 2**. The map is a contraction."},
+		{Target: Claim{ID: "clm-cccccc", Title: "Equation (3)", Document: "vol/b.md"}, Statement: "$$ k = \\sup |f'| $$"},
+	}
+	items := UnmarkedAsks("vol/a.md", "S1: We study the map.\n\n> **Theorem 1**. The map has a unique fixed point.\n", src,
+		"**Theorem 1**. The map has a unique fixed point.\n", targets)
+	var prompts []string
+	for i, it := range items {
+		if want := []string{"clm-bbbbbb", "clm-cccccc"}[i]; it.Item != want || !slices.Equal(it.Offered, []string{"A", "B"}) {
+			t.Errorf("item %d = %s offered %q, want %s offered A and B", i, it.Item, it.Offered, want)
+		}
+		p, err := it.Compose(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompts = append(prompts, p)
+	}
+	prefix := sharedPrefix(prompts)
+	for _, want := range []string{"vol/a.md", "S1: We study the map.", "- `clm-aaaaaa` — Theorem 1 (stated in `vol/a.md`: **Theorem 1**.)", "The map has a unique fixed point."} {
+		if !strings.Contains(prefix, want) {
+			t.Errorf("the group's shared prefix lacks %q:\n%s", want, prefix)
+		}
+	}
+	for i, p := range prompts {
+		rest := p[len(prefix):]
+		if !strings.HasPrefix(rest, targets[i].Target.line()) || !strings.Contains(rest, targets[i].Statement) {
+			t.Errorf("ask %d does not go on from the shared prefix with its candidate:\n%s", i, rest)
+		}
+		if !closingNames(p, "A") || !closingNames(p, "B") {
+			t.Errorf("ask %d's closing does not name both letters:\n%s", i, p)
+		}
+	}
+	again, err := items[0].Compose(new(string))
+	if err != nil || !strings.HasPrefix(again, prompts[0][:len(prompts[0])-1]) || again == prompts[0] {
+		t.Errorf("the re-ask is not the first ask with its correction after it: %v", err)
+	}
+}
+
 func TestOverviewPrompt(t *testing.T) {
 	first, err := OverviewPrompt("==> Knowledge Base <==", nil)
-	if err != nil || !strings.HasSuffix(first, "name it by the title the excerpts give.\n") {
+	if err != nil || !strings.Contains(first, "==> Knowledge Base <==") || strings.Contains(first, "@!") {
 		t.Errorf("first ask = %q, %v", first, err)
 	}
 	again, err := OverviewPrompt("==> Knowledge Base <==", []string{"# Overview", "- a list"})
-	if err != nil || !strings.Contains(again, "````````````text\n# Overview\n- a list\n````````````") {
+	if err != nil || !strings.HasPrefix(again, first[:len(first)-1]) || !strings.Contains(again[len(first)-1:], "# Overview\n- a list") {
 		t.Errorf("re-ask = %q, %v", again, err)
 	}
 }

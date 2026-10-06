@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"kbase/internal/asks"
+	"kbase/internal/buildrecords"
 	"kbase/internal/result"
 )
 
@@ -146,7 +147,7 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 		mk("clm-c", "clm-d", all, MentionedBy),
 	}
 	repo := t.TempDir()
-	if err := WriteClassification(repo, ClassificationRecord{}); err != nil {
+	if err := WriteClassification(repo, buildrecords.ClassificationRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	reader := &letters{by: map[string]string{
@@ -175,7 +176,7 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 	if want := []pair{{"clm-a", "clm-b"}, {"clm-b", "clm-a"}, {"clm-c", "clm-d"}}; !slices.Equal(c.refs, want) {
 		t.Errorf("references = %v, want the mention and the demoted ring", c.refs)
 	}
-	rec, _, _ := ReadClassification(repo)
+	rec, _, _ := buildrecords.ReadClassification(recordsAt(repo))
 	if len(rec.Candidates) != 4 || rec.Candidates[0].Outcome != ClassifyAnswered || !slices.Equal(rec.Candidates[0].Offered, []string{"A", "C"}) {
 		t.Errorf("record = %+v", rec.Candidates)
 	}
@@ -191,7 +192,7 @@ func TestClassifyDefaultsToTheDraft(t *testing.T) {
 	tgt := ClaimNode{ID: "clm-b", Document: "v/b.md", Title: "B"}
 	candidates := []candidate{{source: src, target: tgt, offered: []Relation{SupportedBy, MentionedBy}, draft: SupportedBy, passages: []string{"p"}}}
 	repo := t.TempDir()
-	if err := WriteClassification(repo, ClassificationRecord{}); err != nil {
+	if err := WriteClassification(repo, buildrecords.ClassificationRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	var fallbacks []result.Item
@@ -224,17 +225,17 @@ func TestStandingReadsTheRecord(t *testing.T) {
 	leaf := &leafReading{document: "v/a.md", text: text}
 	leaf.render = renderText(text, nil, excludedLines(text, nil))
 	cause := CauseNoLetter
-	entry := LeafEntry{Verdicts: []ParagraphVerdict{{Line: 4, Verdict: JudgementClaim}, {Line: 6, Verdict: JudgementDefaulted, Cause: &cause}}}
+	entry := buildrecords.LeafEntry{Verdicts: []buildrecords.ParagraphVerdict{{Line: 4, Verdict: JudgementClaim}, {Line: 6, Verdict: JudgementDefaulted, Cause: &cause}}}
 	for line, want := range map[int]standing{2: standingOutside, 4: standingClaim, 6: standingUnjudged} {
 		if got := leaf.standing(Anchor{Line: line}, entry); got != want {
 			t.Errorf("standing at line %d = %d, want %d", line, got, want)
 		}
 	}
-	entry.Verdicts[1] = ParagraphVerdict{Line: 6, Verdict: JudgementNotAClaim}
+	entry.Verdicts[1] = buildrecords.ParagraphVerdict{Line: 6, Verdict: JudgementNotAClaim}
 	if got := leaf.standing(Anchor{Line: 6}, entry); got != standingNotAClaim {
 		t.Errorf("standing under a not-a-claim verdict = %d", got)
 	}
-	if got := leaf.standing(Anchor{Line: 4}, LeafEntry{}); got != standingUnjudged {
+	if got := leaf.standing(Anchor{Line: 4}, buildrecords.LeafEntry{}); got != standingUnjudged {
 		t.Errorf("standing with no verdict = %d", got)
 	}
 }

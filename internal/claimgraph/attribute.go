@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 )
 
@@ -27,11 +28,12 @@ var structuralKinds = map[string]bool{
 type Relation string
 
 const (
-	SupportedBy  Relation = "supported-by"
-	InSupportOf  Relation = "in-support-of"
-	MentionedBy  Relation = "mention"
-	harvestRef            = "reference"
-	harvestNamed          = "hand-named"
+	SupportedBy     Relation = "supported-by"
+	InSupportOf     Relation = "in-support-of"
+	MentionedBy     Relation = "mention"
+	harvestRef               = "reference"
+	harvestNamed             = "hand-named"
+	harvestUnmarked          = "unmarked"
 )
 
 // relations is every relation in its one order.
@@ -152,13 +154,15 @@ func namesNoPremise(word string) bool {
 
 // attribution is what the narrowing produced: every candidate, classed and
 // drafted; the containment-directed pairs counted by the route that settled
-// their target; the pairs a ring demoted; and the pairs the word before an
-// anchor kept from opening.
+// their target; the pairs a ring demoted; the pairs the word before an anchor
+// kept from opening; and the pairs a harvest reached from a claim to one of
+// its own equations, which are no candidate.
 type attribution struct {
-	candidates  []candidate
-	routes      map[string]int
-	demoted     []pair
-	wordDropped []pair
+	candidates   []candidate
+	routes       map[string]int
+	demoted      []pair
+	wordDropped  []pair
+	ownEquations []pair
 }
 
 type reached struct {
@@ -186,10 +190,14 @@ func referenceLine(t *Tree, document string, line int) string {
 }
 
 // narrow is kb_claimgraph stage D's narrowing: every edge candidate the corpus
-// states, from a cross-reference or a hand-written name, classed and drafted.
-// The node pass's verdicts in rec decide the source end of a reference in
-// readable prose.
-func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec NodePassRecord) attribution {
+// states, from a cross-reference, a hand-written name or an unmarked-reference
+// yes, classed and drafted, less every pair from a claim to one of its own
+// equations. The node pass's verdicts in rec decide the source end of a
+// reference in readable prose. Each pair of unmarked is an undirected
+// provenance drafted mention, its passage the source claim's own body, the
+// yes having been about that claim's text; a source no body reaches gets no
+// passage.
+func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePassRecord, unmarked []pair) attribution {
 	blocks := map[int]Block{}
 	for _, b := range inv.Blocks {
 		blocks[b.order] = b
@@ -224,8 +232,15 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec NodePassRecord) attri
 		line     int
 	}
 	passages := map[site]string{}
+	passageAt := func(at site) *string {
+		if _, ok := passages[at]; !ok {
+			passages[at] = referenceLine(t, at.document, at.line)
+		}
+		p := passages[at]
+		return &p
+	}
 
-	add := func(p pair, off map[Relation]bool, at site, harvest string) {
+	add := func(p pair, off map[Relation]bool, passage *string, harvest string) {
 		r, ok := reach[p]
 		if !ok {
 			r = &reached{offered: map[Relation]bool{}, harvests: map[string]bool{}, passages: map[string]bool{}}
@@ -239,10 +254,9 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec NodePassRecord) attri
 				delete(r.offered, rel)
 			}
 		}
-		if _, ok := passages[at]; !ok {
-			passages[at] = referenceLine(t, at.document, at.line)
+		if passage != nil {
+			r.passages[*passage] = true
 		}
-		r.passages[passages[at]] = true
 		r.harvests[harvest] = true
 	}
 
@@ -285,13 +299,36 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec NodePassRecord) attri
 					unopened[p] = true
 					continue
 				}
-				add(p, offered[classOf(directed, tg)], site{a.Document, a.Line}, harvestRef)
+				add(p, offered[classOf(directed, tg)], passageAt(site{a.Document, a.Line}), harvestRef)
 			}
 		}
 	}
 
 	for _, h := range harvestHandNamed(t, g, inv) {
-		add(pair{h.source, h.target}, offered[classOf(false, g.node(h.target))], site{h.document, h.line}, harvestNamed)
+		add(pair{h.source, h.target}, offered[classOf(false, g.node(h.target))], passageAt(site{h.document, h.line}), harvestNamed)
+	}
+
+	if len(unmarked) > 0 {
+		ownText := map[string]string{}
+		for _, b := range claimBodies(t, g, inv) {
+			if _, ok := ownText[b.node.ID]; !ok {
+				ownText[b.node.ID] = kb.NormalizeSpace(b.text)
+			}
+		}
+		for _, p := range unmarked {
+			var passage *string
+			if text, ok := ownText[p.source]; ok {
+				passage = &text
+			}
+			add(p, offered[classOf(false, g.node(p.target))], passage, harvestUnmarked)
+		}
+	}
+
+	stated := map[pair]bool{}
+	for p := range ownEquations(t, g, inv) {
+		if _, ok := reach[p]; ok {
+			stated[p] = true
+		}
 	}
 
 	var settledPairs []pair
@@ -317,6 +354,10 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec NodePassRecord) attri
 	slices.SortFunc(order, comparePairs)
 	out := attribution{routes: routes, demoted: demoted}
 	for _, p := range order {
+		if stated[p] {
+			out.ownEquations = append(out.ownEquations, p)
+			continue
+		}
 		r := reach[p]
 		c := candidate{source: g.node(p.source), target: g.node(p.target), draft: MentionedBy}
 		if _, ok := settled[p]; ok && !onRing[p] {

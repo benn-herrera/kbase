@@ -3,6 +3,7 @@ package kb
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +19,7 @@ func malformed(format string, args ...any) error {
 
 var (
 	tier2InlineRE    = PyRE(`(?s)<!--\s*claim-quality:\s*(.*?)\s*-->`)
-	strengthensPair  = PyRE(`^\s*(?:-\s*)?(` + IDBody("clm") + `)\s*:\s*(-?\d+(?:\.\d+)?)\s*$`)
+	pairClaimIDRE    = PyRE(`^` + IDBody("clm") + `$`)
 	headingLineRE    = PyRE(`^(#{1,6})\s+(.*)$`)
 	expIDFullRE      = PyRE(`^` + IDBody("exp") + `$`)
 	supIDFullRE      = PyRE(`^` + IDBody("sup") + `$`)
@@ -72,10 +73,38 @@ type FrameworkNode struct {
 	NodeType, ID, Title, CanonicalPath, CanonicalAnchor string
 }
 
+// MarkerLines is, for every claim id a tier-2 marker in text names, the
+// 0-based line the first such marker opens on.
+func MarkerLines(text string) map[string]int {
+	out := map[string]int{}
+	for _, m := range tier2InlineRE.FindAllStringSubmatchIndex(text, -1) {
+		line := strings.Count(text[:m[0]], "\n")
+		for _, cid := range ClaimIDs(text[m[2]:m[3]]) {
+			if _, seen := out[cid]; !seen {
+				out[cid] = line
+			}
+		}
+	}
+	return out
+}
+
+// documentFrontmatter is the document's frontmatter, its malformation named
+// with the document.
+func documentFrontmatter(text, rel string) (Frontmatter, error) {
+	fm, err := ParseFrontmatter(text)
+	if err != nil {
+		return nil, malformed("%s: %v", rel, err)
+	}
+	return fm, nil
+}
+
 // ParseLeaf is a leaf's record, or nil where the document has no frontmatter
 // or is not kind: leaf.
 func ParseLeaf(text, rel string) (*LeafRecord, error) {
-	fm := ParseFrontmatter(text)
+	fm, err := documentFrontmatter(text, rel)
+	if err != nil {
+		return nil, err
+	}
 	if len(fm) == 0 || fm.Kind() != DocumentLeaf {
 		return nil, nil
 	}
@@ -125,146 +154,133 @@ func firstHeading(text string) string {
 	return ""
 }
 
-// frontmatterKey splits a frontmatter line the way the node-body scans do.
-func frontmatterKey(stripped string) (key, value string, ok bool) {
-	k, v, ok := strings.Cut(stripped, ":")
-	if !ok {
-		return "", "", false
+// declarations is a leaf's node declaration list under key — nil where the
+// document is no kind: leaf or declares none — refusing an entry that lacks
+// its id key.
+func declarations(fm Frontmatter, key, idKey, rel string) ([]Frontmatter, error) {
+	if fm.Kind() != DocumentLeaf {
+		return nil, nil
 	}
-	return Strip(strings.TrimLeft(Strip(k), "- ")), Strip(v), true
+	v := fm[key]
+	if !v.IsList && v.Truthy() || len(v.List) > 0 {
+		return nil, malformed("%s: %s is not a list of mappings", rel, key)
+	}
+	for _, node := range v.Entries {
+		if _, ok := node[idKey]; !ok {
+			return nil, malformed("%s: an entry of %s carries no %s", rel, key, idKey)
+		}
+	}
+	return v.Entries, nil
 }
 
-// ParseExperimentLeaf is every experiment a kind: leaf container hosts, one
-// per exp-id: key, each owning the status: and strengthens: below it.
-func ParseExperimentLeaf(text, rel string) ([]ExperimentNode, error) {
-	m := FindFrontmatter(text, 0)
-	if m == nil {
-		return nil, nil
-	}
-	kind, hasRefs, inStrengthens := "", false, false
-	var ids []string
-	var statuses []*string
-	var pairs [][]StrengthensPair
-	for _, line := range SplitLines(text[m[2]:m[3]]) {
-		s := Strip(line)
-		if s == "" {
-			continue
-		}
-		if p := strengthensPair.FindStringSubmatch(line); inStrengthens && p != nil && len(pairs) > 0 {
-			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], StrengthensPair{p[1], parseFloat(p[2])})
-			continue
-		}
-		key, value, ok := frontmatterKey(s)
+// pairs is a node's score list under key: each one-key mapping whose key is a
+// claim id and whose score reads, in list order. A score that reads as
+// neither a number nor, where pending is allowed, the pending literal is
+// skipped, as the line scan of the earlier format skipped it.
+func pairs(node Frontmatter, key, rel, id string, pending bool) ([]SupportPair, error) {
+	var out []SupportPair
+	for _, entry := range node[key].Entries {
+		claimID, score, ok := scorePair(entry)
 		if !ok {
+			return nil, malformed("%s: %s: a %s entry is not one claim id and its score", rel, id, key)
+		}
+		if !pairClaimIDRE.MatchString(claimID) || score.IsList || score.IsBool {
 			continue
 		}
-		if key == "strengthens" {
-			inStrengthens = true
+		p := SupportPair{ClaimID: claimID, Fraction: Fraction{Set: true}}
+		if pending && score.Str == PendingLiteral {
+			p.Fraction.Pending = true
+		} else if v, err := strconv.ParseFloat(score.Str, 64); err == nil {
+			p.Fraction.Value = v
+		} else {
 			continue
 		}
-		inStrengthens = false
-		switch key {
-		case "kind":
-			kind = value
-		case "exp-id":
-			ids = append(ids, value)
-			statuses = append(statuses, nil)
-			pairs = append(pairs, nil)
-		case "status":
-			if len(statuses) > 0 {
-				statuses[len(statuses)-1] = &value
-			}
-		case "experiments":
-			if value != "" {
-				hasRefs = true
-			}
-		}
+		out = append(out, p)
 	}
-	if kind != DocumentLeaf || len(ids) == 0 {
-		return nil, nil
+	return out, nil
+}
+
+// ParseExperimentLeaf is every experiment a kind: leaf container declares
+// under experiment-nodes, each with its status and strengthens pairs.
+func ParseExperimentLeaf(text, rel string) ([]ExperimentNode, error) {
+	fm, err := documentFrontmatter(text, rel)
+	if err != nil {
+		return nil, err
 	}
-	if hasRefs {
+	decls, err := declarations(fm, ExperimentNodesKey, ExpIDKey, rel)
+	if err != nil || len(decls) == 0 {
+		return nil, err
+	}
+	if v, ok := fm["experiments"]; ok && (v.IsList || v.IsBool || v.Str != "") {
 		return nil, malformed("%s: experiment-hosting leaf carries experiments: — an owning experiment leaf must not also reference other experiments", rel)
 	}
-	heading := firstHeading(text)
+	heading := firstHeading(StripFrontmatter(text))
 	var nodes []ExperimentNode
-	for i, id := range ids {
+	for _, d := range decls {
+		id := d.Str(ExpIDKey)
 		if !expIDFullRE.MatchString(id) {
 			return nil, malformed("%s: experiment-hosting leaf has malformed exp-id %q", rel, id)
 		}
-		if statuses[i] == nil || (*statuses[i] != "run" && *statuses[i] != "pending") {
+		status, ok := d[StatusKey]
+		if !ok || status.IsList || status.IsBool || (status.Str != "run" && status.Str != "pending") {
 			return nil, malformed("%s: experiment %s has invalid status (expected 'run' or 'pending')", rel, id)
 		}
-		for _, p := range pairs[i] {
-			if !(0 <= p.Strength && p.Strength <= 1) {
-				return nil, malformed("%s: experiment %s strength for %s is %v — must be in [0, 1]", rel, id, p.ClaimID, p.Strength)
+		scored, err := pairs(d, StrengthensKey, rel, id, false)
+		if err != nil {
+			return nil, err
+		}
+		var strengthens []StrengthensPair
+		for _, p := range scored {
+			if !(0 <= p.Fraction.Value && p.Fraction.Value <= 1) {
+				return nil, malformed("%s: experiment %s strength for %s is %v — must be in [0, 1]", rel, id, p.ClaimID, p.Fraction.Value)
 			}
+			strengthens = append(strengthens, StrengthensPair{p.ClaimID, p.Fraction.Value})
 		}
 		nodes = append(nodes, ExperimentNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: Slugify(heading),
-			Status: *statuses[i], Strengthens: pairs[i]})
+			Status: status.Str, Strengthens: strengthens})
 	}
 	return nodes, nil
 }
 
-// ParseSupportLeaf is every support a kind: leaf container hosts, one per
-// sup-id: key with the supports: pairs below it; quality and dependencies
-// are its register entry's and are joined by Discover.
+// ParseSupportLeaf is every support a kind: leaf container declares under
+// support-nodes, each with its supports pairs; quality and dependencies are
+// its register entry's and are joined by Discover.
 func ParseSupportLeaf(text, rel string) ([]SupportNode, error) {
-	m := FindFrontmatter(text, 0)
-	if m == nil {
-		return nil, nil
+	fm, err := documentFrontmatter(text, rel)
+	if err != nil {
+		return nil, err
 	}
-	kind, inSupports := "", false
-	var ids []string
-	var pairs [][]SupportPair
-	for _, line := range SplitLines(text[m[2]:m[3]]) {
-		s := Strip(line)
-		if s == "" {
-			continue
-		}
-		if p, ok := ParseSupportPair(line); inSupports && ok && len(pairs) > 0 {
-			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], p)
-			continue
-		}
-		key, value, ok := frontmatterKey(s)
-		if !ok {
-			continue
-		}
-		if key == "supports" {
-			inSupports = true
-			continue
-		}
-		inSupports = false
-		switch key {
-		case "kind":
-			kind = value
-		case "sup-id":
-			ids = append(ids, value)
-			pairs = append(pairs, nil)
-		}
+	decls, err := declarations(fm, SupportNodesKey, SupIDKey, rel)
+	if err != nil || len(decls) == 0 {
+		return nil, err
 	}
-	if kind != DocumentLeaf || len(ids) == 0 {
-		return nil, nil
-	}
-	heading := firstHeading(text)
+	heading := firstHeading(StripFrontmatter(text))
 	var nodes []SupportNode
-	for i, id := range ids {
+	for _, d := range decls {
+		id := d.Str(SupIDKey)
 		if !supIDFullRE.MatchString(id) {
 			return nil, malformed("%s: support-hosting leaf has malformed sup-id %q", rel, id)
 		}
-		for _, p := range pairs[i] {
+		supports, err := pairs(d, SupportsKey, rel, id, true)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range supports {
 			if !p.Fraction.Pending && !(0 <= p.Fraction.Value && p.Fraction.Value <= 1) {
 				return nil, malformed("%s: support %s on-point fraction for %s is %v — must be in [0, 1] or *pending*", rel, id, p.ClaimID, p.Fraction.Value)
 			}
 		}
-		nodes = append(nodes, SupportNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: Slugify(heading), Supports: pairs[i]})
+		nodes = append(nodes, SupportNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: Slugify(heading), Supports: supports})
 	}
 	return nodes, nil
 }
 
 // parseIndex is a kind: index or entry-point document's record, or nil.
 func parseIndex(text, rel string) (*IndexRecord, error) {
-	fm := ParseFrontmatter(text)
+	fm, err := documentFrontmatter(text, rel)
+	if err != nil {
+		return nil, err
+	}
 	if len(fm) == 0 {
 		return nil, nil
 	}
@@ -291,9 +307,9 @@ func parseIndex(text, rel string) (*IndexRecord, error) {
 
 // FrameworkSource is the file framework nodes are read from — invariants.md,
 // else the legacy AGENTS.md — or "" where neither is a file.
-func FrameworkSource(kbRoot string) string {
+func FrameworkSource(src *Source) string {
 	for _, name := range []string{InvariantsFile, AgentsFile} {
-		if p := filepath.Join(kbRoot, name); IsFile(p) {
+		if p := src.KBPath(name); src.IsFile(p) {
 			return p
 		}
 	}
@@ -302,12 +318,12 @@ func FrameworkSource(kbRoot string) string {
 
 // ParseFrameworkNodes is every invariant heading and then every axiom bullet
 // of the framework source; axioms anchor at INVARIANT-S2's heading.
-func ParseFrameworkNodes(kbRoot string) ([]FrameworkNode, error) {
-	source := FrameworkSource(kbRoot)
+func ParseFrameworkNodes(src *Source) ([]FrameworkNode, error) {
+	source := FrameworkSource(src)
 	if source == "" {
 		return nil, nil
 	}
-	text, err := ReadText(source)
+	text, err := src.ReadText(source)
 	if err != nil {
 		return nil, err
 	}
@@ -359,12 +375,13 @@ const UnmigratedAgentsCheck = "agents-redirect"
 
 // UnmigratedAgentsFile is the refusal for a KB whose CLAUDE.md is not the
 // one-line redirect to AGENTS.md, or "" where it is or is absent.
-func UnmigratedAgentsFile(kbRoot string) (string, error) {
+func UnmigratedAgentsFile(src *Source) (string, error) {
+	kbRoot := src.Root()
 	redirect := filepath.Join(kbRoot, AgentsRedirectFile)
-	if !IsFile(redirect) {
+	if !src.IsFile(redirect) {
 		return "", nil
 	}
-	text, err := ReadText(redirect)
+	text, err := src.ReadText(redirect)
 	if err != nil {
 		return "", err
 	}

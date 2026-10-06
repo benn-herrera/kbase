@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 
+	"go.yaml.in/yaml/v3"
+
 	"kbase/internal/kb"
 )
 
@@ -22,9 +24,6 @@ const (
 	// a hyphen does not cut, and the head would run on over the title.
 	emDashSeparator = " — "
 	bulletIndent    = "  "
-
-	frontmatterOpener = "<!-- kb-frontmatter"
-	frontmatterCloser = "-->"
 )
 
 var (
@@ -51,11 +50,13 @@ func formatScore(v *float64) string {
 }
 
 // dependsOnTarget is one depends-on bullet's values: a clm- id, a framework
-// token or a work- id; the referent's title; the author's context; and, for
-// a work target alone, the pairing's applicability (nil is pending).
+// token or a work- id; the referent's title; the author's context; for a
+// work target alone, the pairing's applicability (nil is pending); and for a
+// demoted target alone, its origin.
 type dependsOnTarget struct {
 	Target, Title, Context string
 	Applicability          *float64
+	Origin                 string
 }
 
 // pair is a claim id and a score: a supports fraction (nil is pending) or a
@@ -96,10 +97,6 @@ func MarkerOpeners() []string {
 	return []string{markerOpener(renderIDMarker(markerProbe)), markerOpener(renderTier2Marker(markerProbe))}
 }
 
-// MetadataOpeners are the marker openers and the frontmatter block's: every
-// metadata artifact the write API inserts into an authored document.
-func MetadataOpeners() []string { return append([]string{frontmatterOpener}, MarkerOpeners()...) }
-
 // renderDependsOnBullet is one depends-on sub-bullet. A claim target carries
 // the solidity placeholder, a work target its applicability, and a framework
 // target its context in parentheses, where the reader takes a framework
@@ -128,10 +125,23 @@ func renderDependsOnBullet(t dependsOnTarget) string {
 
 // renderReferencesBullet is one references sub-bullet: a claim bullet with
 // no parenthetical, since nothing is derived for the edge.
-func renderReferencesBullet(t dependsOnTarget) string {
+func renderReferencesBullet(t dependsOnTarget) string { return claimBullet(t, "") }
+
+// renderDemotedBullet is one demoted sub-bullet: a references bullet with
+// its origin annotated before any context.
+func renderDemotedBullet(t dependsOnTarget) string {
+	return claimBullet(t, kb.RenderOriginAnnotation(t.Origin))
+}
+
+// claimBullet is a claim target's bullet: its title, an annotation where one
+// is given, its context.
+func claimBullet(t dependsOnTarget, annotation string) string {
 	out := bulletIndent + "- " + t.Target
 	if t.Title != "" {
 		out += emDashSeparator + collapse(t.Title)
+	}
+	if annotation != "" {
+		out += " " + annotation
 	}
 	if t.Context != "" {
 		out += " [" + collapse(t.Context) + "]"
@@ -149,12 +159,8 @@ func renderStrengthenByBullet(text string) string { return bulletIndent + "- " +
 // fold's key list, so it must sit above every folding field.
 func renderNoEdgeLine(reason string) string { return "- no-edge: " + collapse(reason) }
 
-func renderStrengthensPairLine(claimID string, strength float64) string {
-	return bulletIndent + "- " + claimID + ": " + kb.PyFloatRepr(strength)
-}
-
-// renderSupportsPairLine serves both homes of a support's fan-out: the
-// hosting document's frontmatter and the register entry's staging block.
+// renderSupportsPairLine is a support's fan-out pair in its register entry's
+// staging block.
 func renderSupportsPairLine(claimID string, fraction *float64) string {
 	return bulletIndent + "- " + claimID + ": " + formatScore(fraction)
 }
@@ -242,45 +248,105 @@ type frontmatterValues struct {
 	SupportNodes    []supportDecl
 }
 
-// wrapFrontmatter is the one composer of the block's delimiters.
-func wrapFrontmatter(body string) string {
-	return frontmatterOpener + "\n" + body + "\n" + frontmatterCloser
+// scoreNode is an authored score in frontmatter: the pending literal a
+// string, a number its shortest round-tripping form.
+func scoreNode(v *float64) *yaml.Node {
+	if v == nil {
+		return kb.FrontmatterString(kb.PendingLiteral)
+	}
+	return kb.FrontmatterNumber(kb.PyFloatRepr(*v))
 }
 
-// renderFrontmatterBlock composes a document's frontmatter block. Lists are
-// the inline shape refresh's field writer emits; free-text fields are
-// double-quoted, which the reader strips exactly once.
-func renderFrontmatterBlock(v frontmatterValues) string {
-	lines := []string{"kind: " + v.Kind}
+// pairList is score pairs as a list of one-key mappings.
+func pairList(pairs []pair) *yaml.Node {
+	var items []*yaml.Node
+	for _, p := range pairs {
+		items = append(items, kb.FrontmatterMapping(kb.FrontmatterString(p.ID), scoreNode(p.Score)))
+	}
+	return kb.FrontmatterList(items)
+}
+
+// experimentNode is one experiment declaration as an experiment-nodes entry.
+func experimentNode(d experimentDecl) *yaml.Node {
+	n := kb.FrontmatterMapping(kb.FrontmatterString(kb.ExpIDKey), kb.FrontmatterString(d.ExpID),
+		kb.FrontmatterString(kb.StatusKey), kb.FrontmatterString(d.Status))
+	if len(d.Strengthens) > 0 {
+		n.Content = append(n.Content, kb.FrontmatterString(kb.StrengthensKey), pairList(d.Strengthens))
+	}
+	return n
+}
+
+// supportNode is one support declaration as a support-nodes entry.
+func supportNode(d supportDecl) *yaml.Node {
+	n := kb.FrontmatterMapping(kb.FrontmatterString(kb.SupIDKey), kb.FrontmatterString(d.SupID))
+	if len(d.Supports) > 0 {
+		n.Content = append(n.Content, kb.FrontmatterString(kb.SupportsKey), pairList(d.Supports))
+	}
+	return n
+}
+
+// renderExperimentNodes is the experiment-nodes key and its entries as
+// frontmatter lines.
+func renderExperimentNodes(decls []experimentDecl) ([]string, error) {
+	var items []*yaml.Node
+	for _, d := range decls {
+		items = append(items, experimentNode(d))
+	}
+	return kb.RenderFrontmatterField(kb.ExperimentNodesKey, kb.FrontmatterList(items))
+}
+
+// renderSupportNodes is the support-nodes key and its entries as frontmatter
+// lines.
+func renderSupportNodes(decls []supportDecl) ([]string, error) {
+	var items []*yaml.Node
+	for _, d := range decls {
+		items = append(items, supportNode(d))
+	}
+	return kb.RenderFrontmatterField(kb.SupportNodesKey, kb.FrontmatterList(items))
+}
+
+// renderFrontmatterBlock composes a document's frontmatter, its fences
+// included: lists of ids inline, as refresh's field writer emits them; node
+// declarations one mapping each under their kind's list.
+func renderFrontmatterBlock(v frontmatterValues) (string, error) {
+	type field struct {
+		key   string
+		value *yaml.Node
+	}
+	fields := []field{{"kind", kb.FrontmatterString(v.Kind)}}
 	if v.PathStable != nil {
-		lines = append(lines, `path-stable: "`+collapse(*v.PathStable)+`"`)
+		fields = append(fields, field{"path-stable", kb.FrontmatterString(collapse(*v.PathStable))})
 	}
 	if len(v.Claims) > 0 {
-		lines = append(lines, kb.RenderIDListField("claims", v.Claims))
+		fields = append(fields, field{"claims", kb.FrontmatterIDList(v.Claims)})
 	}
 	if v.NoClaim != nil {
-		lines = append(lines, `no-claim: "`+collapse(*v.NoClaim)+`"`)
+		fields = append(fields, field{"no-claim", kb.FrontmatterString(collapse(*v.NoClaim))})
 	}
 	if len(v.Experiments) > 0 {
-		lines = append(lines, kb.RenderIDListField("experiments", v.Experiments))
+		fields = append(fields, field{"experiments", kb.FrontmatterIDList(v.Experiments)})
 	}
-	for _, exp := range v.ExperimentNodes {
-		lines = append(lines, "exp-id: "+exp.ExpID, "status: "+exp.Status)
-		if len(exp.Strengthens) > 0 {
-			lines = append(lines, "strengthens:")
-			for _, p := range exp.Strengthens {
-				lines = append(lines, renderStrengthensPairLine(p.ID, *p.Score))
-			}
+	var lines []string
+	for _, f := range fields {
+		rendered, err := kb.RenderFrontmatterField(f.key, f.value)
+		if err != nil {
+			return "", err
 		}
+		lines = append(lines, rendered...)
 	}
-	for _, sup := range v.SupportNodes {
-		lines = append(lines, "sup-id: "+sup.SupID)
-		if len(sup.Supports) > 0 {
-			lines = append(lines, "supports:")
-			for _, p := range sup.Supports {
-				lines = append(lines, renderSupportsPairLine(p.ID, p.Score))
-			}
+	if len(v.ExperimentNodes) > 0 {
+		rendered, err := renderExperimentNodes(v.ExperimentNodes)
+		if err != nil {
+			return "", err
 		}
+		lines = append(lines, rendered...)
 	}
-	return wrapFrontmatter(strings.Join(lines, "\n"))
+	if len(v.SupportNodes) > 0 {
+		rendered, err := renderSupportNodes(v.SupportNodes)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, rendered...)
+	}
+	return kb.WrapFrontmatter(lines), nil
 }

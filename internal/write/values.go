@@ -440,11 +440,12 @@ func tableList(specs []field, of string, build func(map[string]any, *yaml.Node, 
 	}
 }
 
-// dependsOnValue is one requested edge: a target, its context, and a work
-// target's applicability (nil is pending).
+// dependsOnValue is one requested edge: a target, its context, a work
+// target's applicability (nil is pending), and a demoted target's origin.
 type dependsOnValue struct {
 	ID, Context   string
 	Applicability *float64
+	Origin        string
 }
 
 var dependsOnFields = []field{
@@ -456,6 +457,11 @@ var dependsOnFields = []field{
 var referencesFields = []field{
 	{"id", checkClaimID, true},
 	{"context", checkProse, false},
+}
+
+var demotedFields = []field{
+	{"id", checkClaimID, true},
+	{"origin", checkOneOf(kb.Origins, "origin"), true},
 }
 
 var strengthensFields = []field{
@@ -518,6 +524,11 @@ var checkDependsOn = tableList(dependsOnFields, "{ id, context, applicability } 
 var checkReferences = tableList(referencesFields, "{ id, context } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
 		return dependsOnValue{ID: m["id"].(string), Context: optionalString(m, "context")}, nil
+	})
+
+var checkDemoted = tableList(demotedFields, "{ id, origin } tables",
+	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
+		return dependsOnValue{ID: m["id"].(string), Origin: m["origin"].(string)}, nil
 	})
 
 var checkStrengthens = tableList(strengthensFields, "{ id, strength } tables",
@@ -615,6 +626,17 @@ var opFields = map[string][]field{
 		{"id", checkEntryID, true},
 		{"depends-on", checkDependsOn, false},
 		{"references", checkReferences, false},
+	},
+	AddBuildEdges: {
+		{"id", checkEntryID, true},
+		{"depends-on", checkDependsOn, false},
+		{"references", checkReferences, false},
+		{kb.RelationDemoted, checkDemoted, false},
+	},
+	ResolveDemoted: {
+		{"id", checkClaimID, true},
+		{"target", checkClaimID, true},
+		{"action", checkOneOf(resolveActions, "action"), true},
 	},
 	"set-frontmatter": {
 		{"document", checkPath, true},

@@ -3,7 +3,6 @@ package kbdocs
 import (
 	"fmt"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -43,23 +42,21 @@ type Excerpts struct {
 
 type excerpted struct{ title, body string }
 
-// ComposeExcerpts reads the tree under kbRoot into the excerpts: the entry
+// ComposeExcerpts reads the KB's tree into the excerpts: the entry
 // point, then for each document it lists that document's index and, where it
 // has one, its own-prose leaf. Each body loses its metadata block and its
 // up-link, and each link is reduced to its text; a boundary line names each
 // document by title. The same tree gives the same text.
-func ComposeExcerpts(kbRoot string) (Excerpts, error) {
-	docs, err := excerptedDocuments(kbRoot)
+func ComposeExcerpts(src *kb.Source) (Excerpts, error) {
+	docs, err := excerptedDocuments(src)
 	if err != nil {
 		return Excerpts{}, err
 	}
 	return assembleExcerpts(docs), nil
 }
 
-func excerptedDocuments(kbRoot string) ([]excerpted, error) {
-	read := func(rel string) (string, error) {
-		return kb.ReadText(filepath.Join(kbRoot, filepath.FromSlash(rel)))
-	}
+func excerptedDocuments(src *kb.Source) ([]excerpted, error) {
+	read := func(rel string) (string, error) { return src.ReadText(src.KBPath(rel)) }
 	entry, err := read(kb.EntryPointFile)
 	if err != nil {
 		return nil, err

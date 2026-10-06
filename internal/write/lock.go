@@ -1,29 +1,30 @@
 package write
 
 import (
-	"errors"
-	"fmt"
+	"path/filepath"
 	"time"
 
 	"kbase/internal/filelock"
 )
 
-// lockTimeout bounds the wait for another writer's critical section — a
-// re-read, a proof and a rename — so a stopped peer turns a write into a
-// retry rather than a hang.
-const lockTimeout = 5 * time.Second
+// LockWait bounds the wait for another writer — its read, its write,
+// its trailing refresh and sheets — so a stopped peer turns a write, or a
+// starting build, into a retry rather than a hang.
+const LockWait = 30 * time.Second
 
-// lockDir holds the exclusive lock on the directory itself: it exists before
-// a creation, survives every rename into it, and leaves nothing to clean up.
-// Exhausting the wait is a retry, the answer a moved file gets.
-func lockDir(dir, subject string) (func(), error) {
-	l, err := filelock.Acquire(dir, lockTimeout)
-	if errors.Is(err, filelock.ErrHeld) {
-		return nil, &storeError{reason: reasonContended, subject: subject, contended: true,
-			detail: fmt.Sprintf("is held by another writer that did not finish within %v", lockTimeout)}
-	}
+// LockKB takes the write lock of the KB at kbRoot: the exclusive lock on the
+// directory kb-root/ sits in, which exists before kb-root/ does and leaves
+// nothing to clean up. A holder that keeps it past the wait is
+// filelock.ErrHeld.
+func LockKB(kbRoot string) (release func(), err error) {
+	l, err := filelock.Acquire(filepath.Dir(kbRoot), LockWait)
 	if err != nil {
-		return nil, fmt.Errorf("lock %s: %w", dir, err)
+		return nil, err
 	}
 	return l.Release, nil
+}
+
+// RetryRemedy is the remedy of op turned away by a concurrent writer.
+func RetryRemedy(op string) string {
+	return "re-run kbase " + op + " with these values unchanged — never re-author values that were already right"
 }

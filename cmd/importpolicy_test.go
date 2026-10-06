@@ -1,12 +1,9 @@
 package main
 
 import (
-	"go/parser"
 	"go/token"
-	"io/fs"
-	"os"
+	"maps"
 	"path"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,6 +32,15 @@ var dependencyRules = []dependencyRule{{
 	from:      []string{"internal/docgraph"},
 	forbidden: []string{"internal/claimgraph"},
 	why:       "docgraph knows nothing of claims; the record schema both read lives in internal/records",
+}, {
+	from:    []string{"internal/records"},
+	allowed: []string{"internal/atomicfile"},
+	why:     "the record schema imports nothing of kbase but atomicfile, to write its files",
+}, {
+	from:    []string{"internal/buildrecords"},
+	allowed: []string{"internal/kb"},
+	direct:  true,
+	why:     "buildrecords imports no kbase package but kb, so sheet reads the build records without claimgraph and kbload stays above it",
 }, {
 	from:      []string{"internal/claimgraph"},
 	forbidden: []string{"internal/latex"},
@@ -70,6 +76,33 @@ var dependencyRules = []dependencyRule{{
 	forbidden: []string{"internal/model"},
 	direct:    true,
 	why:       "only the caller, build, and cmd's provider verbs import model",
+}, {
+	from:      []string{"internal/migrate"},
+	forbidden: []string{"cmd", "internal"},
+	why:       "migrate imports nothing of kbase: files as bytes in and out, every superseded parser its own (I8)",
+}, {
+	except:    []string{"internal/kbload"},
+	forbidden: []string{"internal/migrate"},
+	direct:    true,
+	why:       "only the loader imports migrate: an older KB is converted where it is opened, and nowhere else (I8)",
+}, {
+	except:    []string{"cmd", "internal/build", "internal/write", "internal/kbload"},
+	forbidden: []string{"internal/kbload"},
+	direct:    true,
+	why:       "only the openers import the loader: a reader takes the source it is handed, and a refusal is result's",
+}, {
+	from:    []string{"internal/kbload"},
+	allowed: []string{"internal/kb", "internal/buildrecords", "internal/migrate", "internal/result", "internal/log"},
+	why:     "the loader stands between kb and every reader: it imports no reader, and buildrecords only for the records' paths",
+}, {
+	from:    []string{"internal/mcp"},
+	allowed: []string{"internal/log"},
+	why:     "the MCP server is framing and dispatch over a table cmd injects: it imports log only, so it reaches no KB package, no model, no caller (I9)",
+}, {
+	except:    []string{"cmd", "internal/mcp"},
+	forbidden: []string{"internal/mcp"},
+	direct:    true,
+	why:       "only cmd imports mcp: the tool table is the command tree",
 }}
 
 func underAny(pkg string, prefixes []string) bool {
@@ -89,36 +122,18 @@ func under(pkg, prefix string) bool { return pkg == prefix || strings.HasPrefix(
 
 // importGraph is every module package's in-module imports, from its
 // production files, by module-relative directory.
-func importGraph(t *testing.T, root string) map[string][]string {
+func importGraph(t *testing.T) map[string][]string {
 	t.Helper()
 	graph := map[string][]string{}
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
+		if !m.production() {
+			continue
 		}
-		if d.IsDir() {
-			if p != root && (strings.HasPrefix(d.Name(), ".") || slices.Contains([]string{"bin", "dist", "build", "test_data", "testdata", "vendor"}, d.Name()) && filepath.Dir(p) == root) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		f, err := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, filepath.Dir(p))
-		if err != nil {
-			return err
-		}
-		pkg := filepath.ToSlash(rel)
+		pkg := path.Dir(m.rel)
 		if _, ok := graph[pkg]; !ok {
 			graph[pkg] = nil
 		}
-		for _, spec := range f.Imports {
+		for _, spec := range m.f.Imports {
 			imported, err := strconv.Unquote(spec.Path.Value)
 			if err != nil || !strings.HasPrefix(imported, modulePath+"/") {
 				continue
@@ -128,10 +143,6 @@ func importGraph(t *testing.T, root string) map[string][]string {
 				graph[pkg] = append(graph[pkg], dep)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking the module: %v", err)
 	}
 	return graph
 }
@@ -152,8 +163,7 @@ func reach(graph map[string][]string, pkg string) map[string]bool {
 }
 
 func TestDependencyRules(t *testing.T) {
-	root := moduleRootDir(t)
-	graph := importGraph(t, root)
+	graph := importGraph(t)
 	if len(graph[path.Join("internal", "kb")]) == 0 && len(graph["cmd"]) == 0 {
 		t.Fatal("no module packages read; the walk found nothing to check")
 	}
@@ -184,27 +194,33 @@ func TestDependencyRules(t *testing.T) {
 	}
 }
 
+// cmdModelImporters are the production files of cmd that may import model:
+// the build verb, and the provider dial the models and configure verbs share.
+var cmdModelImporters = []string{"cmd/build.go", "cmd/provider.go"}
+
+// TestCmdModelImporters: within cmd, model is imported by cmdModelImporters
+// alone, and each of them imports it.
+func TestCmdModelImporters(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
+		if !m.production() || path.Dir(m.rel) != "cmd" || !slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), modulePath+"/internal/model") {
+			continue
+		}
+		seen[m.rel] = true
+		if !slices.Contains(cmdModelImporters, m.rel) {
+			t.Errorf("%s imports model; within cmd only %s may", m.rel, strings.Join(cmdModelImporters, " and "))
+		}
+	}
+	for _, owner := range cmdModelImporters {
+		if !seen[owner] {
+			t.Errorf("%s is listed as importing model and does not; drop it from cmdModelImporters", owner)
+		}
+	}
+}
+
 func TestReach(t *testing.T) {
 	graph := map[string][]string{"a": {"b"}, "b": {"c"}, "c": {"a"}, "d": nil}
 	if got := reach(graph, "a"); !got["b"] || !got["c"] || !got["a"] || got["d"] {
 		t.Errorf("reach(a) = %v, want the cycle a, b, c and not d", got)
-	}
-}
-
-func moduleRootDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the package under test")
-		}
-		dir = parent
 	}
 }

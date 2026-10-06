@@ -11,10 +11,10 @@ import (
 	"kbase/internal/kb"
 )
 
-// WeakPoint is a scored claim below the weak-points bar with the count of
-// distinct nodes holding an edge to it.
+// WeakPoint is a scored claim below the weak-points bar with the count of its
+// dependents (DependentsOf).
 type WeakPoint struct {
-	Claim      Node
+	Claim      kb.NodeRow
 	Dependents int
 }
 
@@ -25,10 +25,10 @@ const (
 )
 
 // claims is the claim nodes, sorted by id.
-func (ix *Index) claims() []Node {
-	var out []Node
+func (ix *Index) claims() []kb.NodeRow {
+	var out []kb.NodeRow
 	for _, n := range ix.nodes {
-		if n.NodeType == "claim" {
+		if n.NodeType == kb.NodeKindClaim {
 			out = append(out, n)
 		}
 	}
@@ -47,24 +47,33 @@ func sortedSet(set map[string]bool) []string {
 
 // DependsOnEdges is every edge sourced at id, sorted by target, file order
 // kept among equal targets.
-func (ix *Index) DependsOnEdges(id string) []Edge {
-	var out []Edge
+func (ix *Index) DependsOnEdges(id string) []kb.EdgeRow {
+	var out []kb.EdgeRow
 	for _, e := range ix.edges {
 		if e.Source == id {
 			out = append(out, e)
 		}
 	}
-	slices.SortStableFunc(out, func(a, b Edge) int { return strings.Compare(a.Target, b.Target) })
+	slices.SortStableFunc(out, func(a, b kb.EdgeRow) int { return strings.Compare(a.Target, b.Target) })
 	return out
 }
 
-// DependentsOf is the distinct sources of every edge, of any relation, that
-// targets id, sorted.
+// DependentsOf is the distinct nodes whose solidity id's enters, sorted: the
+// sources of the depends and rests-on edges targeting id, and the targets of
+// id's own strengthens and supports edges. A references or demoted edge makes
+// neither end a dependent.
 func (ix *Index) DependentsOf(id string) []string {
 	set := map[string]bool{}
 	for _, e := range ix.edges {
-		if e.Target == id {
-			set[e.Source] = true
+		switch e.Relation {
+		case kb.RelationDepends, kb.RelationRestsOn:
+			if e.Target == id {
+				set[e.Source] = true
+			}
+		case kb.RelationStrengthens, kb.RelationSupports:
+			if e.Source == id {
+				set[e.Target] = true
+			}
 		}
 	}
 	return sortedSet(set)
@@ -82,23 +91,23 @@ func (ix *Index) GatedOn(id string) []string {
 }
 
 // CitedBy is the citations of id, sorted by leaf path.
-func (ix *Index) CitedBy(id string) []Citation {
-	var out []Citation
+func (ix *Index) CitedBy(id string) []kb.CiteRow {
+	var out []kb.CiteRow
 	for _, c := range ix.cites {
 		if c.ClaimID == id {
 			out = append(out, c)
 		}
 	}
-	slices.SortStableFunc(out, func(a, b Citation) int { return strings.Compare(a.LeafPath, b.LeafPath) })
+	slices.SortStableFunc(out, func(a, b kb.CiteRow) int { return strings.Compare(a.LeafPath, b.LeafPath) })
 	return out
 }
 
 // Find is the claims whose title or canonical anchor contains query, compared
 // case-folded; an empty query matches every claim.
-func (ix *Index) Find(query string) []Node {
+func (ix *Index) Find(query string) []kb.NodeRow {
 	fold := cases.Fold()
 	needle := fold.String(query)
-	var out []Node
+	var out []kb.NodeRow
 	for _, c := range ix.claims() {
 		if strings.Contains(fold.String(c.Title), needle) || strings.Contains(fold.String(c.CanonicalAnchor), needle) {
 			out = append(out, c)
@@ -119,17 +128,17 @@ func (ix *Index) ReferencedBy(id string) ([]string, error) {
 	if len(cites) == 0 {
 		return []string{}, nil
 	}
-	origin := resolvePath(filepath.Join(ix.kbRoot, filepath.FromSlash(cites[0].LeafPath)))
-	files, err := kb.MarkdownFiles(ix.kbRoot)
+	origin := kb.ResolvePath(ix.src.KBPath(cites[0].LeafPath))
+	files, err := kb.MarkdownFiles(ix.src)
 	if err != nil {
 		return nil, err
 	}
 	set := map[string]bool{}
 	for _, file := range files {
-		if resolvePath(file) == origin {
+		if kb.ResolvePath(file) == origin {
 			continue
 		}
-		text, err := kb.ReadText(file)
+		text, err := ix.src.ReadText(file)
 		if err != nil {
 			continue
 		}
@@ -144,8 +153,8 @@ func (ix *Index) ReferencedBy(id string) ([]string, error) {
 			if !filepath.IsAbs(target) {
 				target = filepath.Join(filepath.Dir(file), target)
 			}
-			if resolvePath(target) == origin {
-				rel, err := filepath.Rel(ix.kbRoot, file)
+			if kb.ResolvePath(target) == origin {
+				rel, err := filepath.Rel(ix.src.Root(), file)
 				if err != nil {
 					return nil, err
 				}
@@ -155,18 +164,6 @@ func (ix *Index) ReferencedBy(id string) ([]string, error) {
 		}
 	}
 	return sortedSet(set), nil
-}
-
-// resolvePath is p absolute with its symlinks resolved, or only cleaned where
-// it names nothing on disk.
-func resolvePath(p string) string {
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		p = real
-	}
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
-	}
-	return filepath.Clean(p)
 }
 
 // SubtreeClaims is the claims under an index node: "" or "." names the first
@@ -181,7 +178,7 @@ func (ix *Index) SubtreeClaims(nodePath string) []string {
 		}
 		return []string{}
 	}
-	byPath := map[string]SubtreeAggregate{}
+	byPath := map[string]kb.AggregateRow{}
 	for _, a := range ix.aggregates {
 		byPath[a.NodePath] = a
 	}
@@ -197,14 +194,14 @@ func (ix *Index) SubtreeClaims(nodePath string) []string {
 
 // SolidityBelow is the scored claims whose solidity is under threshold,
 // ascending by solidity, then id.
-func (ix *Index) SolidityBelow(threshold float64) []Node {
-	var out []Node
+func (ix *Index) SolidityBelow(threshold float64) []kb.NodeRow {
+	var out []kb.NodeRow
 	for _, c := range ix.claims() {
 		if c.Solidity != nil && *c.Solidity < threshold {
 			out = append(out, c)
 		}
 	}
-	slices.SortStableFunc(out, func(a, b Node) int {
+	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
 		return cmp.Or(cmp.Compare(*a.Solidity, *b.Solidity), strings.Compare(a.ID, b.ID))
 	})
 	return out
@@ -232,8 +229,8 @@ func (ix *Index) WeakPoints(maxSolidity float64, minDependents int) []WeakPoint 
 
 // Node is the node carrying id, of any kind, or false. Where ids repeat, the
 // last in load order answers.
-func (ix *Index) Node(id string) (Node, bool) {
-	var found Node
+func (ix *Index) Node(id string) (kb.NodeRow, bool) {
+	var found kb.NodeRow
 	ok := false
 	for _, n := range ix.nodes {
 		if n.ID == id {

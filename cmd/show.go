@@ -12,7 +12,9 @@ func init() {
 		Use:   "show <id>",
 		Short: "the full record of one node of any kind",
 		Long: `show returns the record of the node carrying <id>, whatever its kind, each
-kind with its own fields. An id no node carries is refused.`,
+kind with its own fields. A claim's record also lists, as strengthen_by, its
+strengthen-by items in item order, each with its item_idx, text and
+mentioned_ids. An id no node carries is refused.`,
 		Args: cobra.ExactArgs(1),
 	}, false, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		record, ok := query.ShowPayload(ix, args[0])

@@ -89,5 +89,5 @@ entries that failed to load are reported as warnings, and a summary line
 
 func init() {
 	registerProviderFlags(modelsCmd, &modelsFlagProvider, &modelsFlagTimeout, "query")
-	rootCmd.AddCommand(modelsCmd)
+	rootCmd.AddCommand(mcpBinding(modelsCmd, mcpExcluded))
 }

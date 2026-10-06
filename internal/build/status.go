@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
 // The states status reports.
@@ -36,25 +38,34 @@ type MonitorOptions struct {
 	Logger   log.Logger
 }
 
-func (o MonitorOptions) open() (repo *ledger.Repo, kbRoot, dir string, err error) {
+func (o MonitorOptions) repo() (*ledger.Repo, error) {
 	if o.Logger == nil {
 		o.Logger = log.Discard()
 	}
-	repo, err = ledger.Open(o.WorkDir, ownedPaths, o.Logger)
+	repo, err := ledger.Open(o.WorkDir, ownedPaths, o.Logger)
 	var nw ledger.NotWorktreeError
 	if errors.As(err, &nw) {
-		return nil, "", "", refusal{{Check: checkWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
+		return nil, result.Refusal{{Check: checkWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
 	}
-	if err != nil {
+	return repo, err
+}
+
+// open is the repository, kb-root/ and the state store, a store newer than
+// this kbase refused.
+func (o MonitorOptions) open() (repo *ledger.Repo, kbRoot, dir string, err error) {
+	if repo, err = o.repo(); err != nil {
 		return nil, "", "", err
 	}
 	kbRoot = filepath.Join(repo.Root, kb.KBDir)
-	dir, err = stateDir(o.StateDir, kbRoot)
+	if dir, err = stateDir(o.StateDir, kbRoot); err != nil {
+		return repo, kbRoot, dir, err
+	}
+	_, err = storeVersion(dir)
 	return repo, kbRoot, dir, err
 }
 
-// Status is the build's state read from the run lock, the progress record
-// and the commit trail.
+// Status is the build's state read from the holder lock, the progress record
+// and the commit trail, and the size of the answer cache.
 func Status(opts MonitorOptions) (string, []result.Field) {
 	repo, kbRoot, dir, err := opts.open()
 	if err != nil {
@@ -76,7 +87,7 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 	all := invocations(events)
 	var last invocation
 	for i := len(all) - 1; i >= 0; i-- {
-		if live || all[i].end().Outcome != result.Refused {
+		if outcome := all[i].end().Outcome; live || outcome != result.Refused && outcome != result.Retry {
 			last = all[i]
 			break
 		}
@@ -124,6 +135,10 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 	if state != stateFinished && state != stateRunning && run.Resume != nil {
 		resume = shellJoin(run.Resume)
 	}
+	cacheEntries, cacheBytes, err := answerCache(dir)
+	if err != nil {
+		return monitorEnd(placement, err)
+	}
 	return result.Done, append(placement,
 		result.Field{Key: "state", Value: state},
 		result.Field{Key: "pid", Value: nullable(pid)},
@@ -148,6 +163,8 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 			}
 			return items
 		})},
+		result.Field{Key: "cache-entries", Value: cacheEntries},
+		result.Field{Key: "cache-bytes", Value: cacheBytes},
 		result.Field{Key: "resume", Value: resume},
 	)
 }
@@ -223,10 +240,55 @@ func shellJoin(argv []string) string {
 	return strings.Join(words, " ")
 }
 
+// Locate is the kb-root and the state store a build started from
+// opts.WorkDir works in, a relative opts.StateDir being the repository
+// root's; outcome is "" there, else it and fields are the document saying why
+// there are none.
+func Locate(opts MonitorOptions) (kbRoot, dir, outcome string, fields []result.Field) {
+	if opts.StateDir != "" && !filepath.IsAbs(opts.StateDir) {
+		repo, err := opts.repo()
+		if err != nil {
+			outcome, fields = monitorEnd(nil, err)
+			return "", "", outcome, fields
+		}
+		opts.StateDir = filepath.Join(repo.Root, opts.StateDir)
+	}
+	_, kbRoot, dir, err := opts.open()
+	if err != nil {
+		outcome, fields = monitorEnd(nil, err)
+	}
+	return kbRoot, dir, outcome, fields
+}
+
+// Launched reads the latest invocation the process pid opened in the state store
+// at dir: whether it has passed its launch checks and entered a stage, and
+// the command that resumes it.
+func Launched(dir string, pid int) (entered bool, resume string, err error) {
+	events, err := readProgress(dir)
+	if err != nil {
+		return false, "", err
+	}
+	all := invocations(events)
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i][0].PID != pid {
+			continue
+		}
+		entered = slices.ContainsFunc(all[i], func(e event) bool { return e.Event == eventStage })
+		return entered, shellJoin(all[i][0].Resume), nil
+	}
+	return false, "", nil
+}
+
+// StartWait bounds how long the starter of a build in its own process waits
+// for it to enter its first stage or exit: past the build's own waits for
+// the run lock, the holder lock and a writer in progress, and its launch
+// checks.
+const StartWait = write.LockWait + 2*lockWait + 6*time.Second
+
 // cancelWait bounds how long cancel waits for the holder to let the lock go.
 const cancelWait = 20 * time.Second
 
-// Cancel signals the build holding the run lock and waits for it to stop:
+// Cancel signals the build holding the state store and waits for it to stop:
 // the unit in flight is abandoned with nothing written for it, and the build
 // stays resumable.
 func Cancel(opts MonitorOptions) (string, []result.Field) {
@@ -241,7 +303,7 @@ func Cancel(opts MonitorOptions) (string, []result.Field) {
 		return monitorEnd(fields, err)
 	}
 	if !live {
-		return monitorEnd(fields, refusal{{Check: checkLock, Path: lock, Detail: "no build holds the run lock"}})
+		return monitorEnd(fields, result.Refusal{{Check: checkLock, Path: lock, Detail: "no build holds the state store"}})
 	}
 	h, err := readHolder(dir)
 	if err != nil {
@@ -265,7 +327,7 @@ func Cancel(opts MonitorOptions) (string, []result.Field) {
 	}
 	if live {
 		return monitorEnd(fields, retry{{Check: checkLock, Path: lock,
-			Detail: fmt.Sprintf("pid %d was signalled and has not let the run lock go within %v", h.PID, cancelWait)}})
+			Detail: fmt.Sprintf("pid %d was signalled and has not let go of the state store within %v", h.PID, cancelWait)}})
 	}
 	resume, err := lastResume(dir)
 	if err != nil {

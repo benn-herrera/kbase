@@ -1,0 +1,20 @@
+\documentclass{article}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\title{A Small Paper}
+\author{A. Author}
+\begin{document}
+\maketitle
+\begin{abstract}
+We prove a small theorem.
+\end{abstract}
+\section{Introduction}
+Some opening prose.
+\section{Results}
+\begin{lemma}\label{lem:base}
+Every widget is a gadget.
+\end{lemma}
+\begin{theorem}\label{thm:main}
+By Lemma~\ref{lem:base}, every gadget is a widget.
+\end{theorem}
+\end{document}

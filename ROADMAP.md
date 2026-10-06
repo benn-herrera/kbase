@@ -1,28 +1,31 @@
 # ROADMAP – kbase
 
 Future intent, not commitment. Design truth lives in [SPEC.md](SPEC.md) and
-[ARCHITECTURE.md](ARCHITECTURE.md); the plan under way is `ACTIVE_PLAN.md`. Finished
-items are deleted, not archived.
+[ARCHITECTURE.md](ARCHITECTURE.md); the plan under way is `ACTIVE_PLAN.md`. Finished items are
+deleted, not archived.
 
 ## Now
 
-- Nothing under way; `ACTIVE_PLAN.md` holds the open items the port left.
+- V4 of `ACTIVE_PLAN.md`, under way at the new kb_tools pin; once its recipes are green, a progress
+  merge to `main`.
+- Then inference R&D: the node-matching gap (`ACTIVE_PLAN.md`, "Successor R&D").
 
 ## Reader fidelity
 
 - Display names from `\input`-ed preambles.
-- Resolved numbering: theorem, equation and section numbers as the author's counter
-  scheme produces them, where within-section numbering and `\numberwithin` make
-  pandoc's counter disagree.
-- The `-latex_macros` reading: pandoc's LaTeX reader with macro expansion disabled
-  (`-f latex-latex_macros`), which may preserve author environment names.
+- Resolved numbering: theorem, equation and section numbers as the author's counter scheme produces
+  them, where within-section numbering and `\numberwithin` make pandoc's counter disagree.
+- The `-latex_macros` reading: pandoc's LaTeX reader with macro expansion disabled (`-f
+  latex-latex_macros`), which may preserve author environment names.
 
 ## After kbase is proven in use
 
 - Records-native leaves with a Go writer, replacing the pandoc writer route.
-- The real claim-graph sheet algorithm, replacing the body of `internal/sheet`.
-- Breaking changes to the KB's metadata formats (SPEC §3).
+- The next major bump of the metadata format (SPEC §10): jointly established units — a strongly
+  connected component a person promotes into one node carrying the solidity its members share, the
+  DAG constraint over units — once the `demoted` relation has been lived with.
+- A complete LaTeX reader in place of pandoc's: the `polytexnical` project (`../polytexnical`),
+  taken up only after kbase has shown the pipeline produces a claim graph worth auditing.
 
-Four items are also reported upstream to kb_tools as findings: resolved numbering,
-display names from `\input`-ed preambles, the `-latex_macros` reading, and
-records-native leaves.
+Four items are also reported upstream to kb_tools as findings: resolved numbering, display names
+from `\input`-ed preambles, the `-latex_macros` reading, and records-native leaves.

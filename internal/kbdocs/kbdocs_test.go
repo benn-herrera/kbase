@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"kbase/internal/kb"
+	"kbase/internal/result"
 )
 
 func writeFiles(t *testing.T, root string, files map[string]string) {
@@ -37,7 +38,7 @@ func readFile(t *testing.T, path string) string {
 func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{ConventionsFile: "the project's own\n"})
-	reports, err := Stamp(root, "proj", "A pin naming {braces} as prose.")
+	reports, err := Stamp(kb.OnDisk(root), "proj", "A pin naming {braces} as prose.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 			t.Errorf("AGENTS.md lacks %q", want)
 		}
 	}
-	again, err := Stamp(root, "proj", "another pin")
+	again, err := Stamp(kb.OnDisk(root), "proj", "another pin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +70,8 @@ func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{kb.AgentsRedirectFile: "# old agents file\n"})
-	_, err := Stamp(root, "proj", NoCharterPin)
-	var r Refusal
+	_, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin)
+	var r result.Refusal
 	if !errors.As(err, &r) {
 		t.Fatalf("Stamp over an unmigrated CLAUDE.md = %v, want a Refusal", err)
 	}
@@ -85,7 +86,7 @@ func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 // absent.
 func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Stamp(root, "proj", NoCharterPin); err != nil {
+	if _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin); err != nil {
 		t.Fatal(err)
 	}
 	readme, err := Overview("proj", "A passage.")
@@ -140,12 +141,12 @@ func TestNotProse(t *testing.T) {
 func TestComposeExcerpts(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{
-		"entry-point.md": "<!-- kb-frontmatter\nkind: entry-point\n-->\n# Knowledge Base\n\n- [Volume One](vol/index.md)\n- [Volume One](vol/index.md)\n",
-		"vol/index.md":   "[↑ Knowledge Base](../entry-point.md)\n\n# Volume One\n\n- [Overview](overview.md)\n- [Methods](methods.md)\n",
+		"entry-point.md": "---\nkind: entry-point\nkb-format: \"1.0.0\"\n---\n# Knowledge Base\n\n- [Volume One](vol/index.md)\n- [Volume One](vol/index.md)\n",
+		"vol/index.md":   "---\nkind: index\n---\n[↑ Knowledge Base](../entry-point.md)\n\n# Volume One\n\n- [Overview](overview.md)\n- [Methods](methods.md)\n",
 		"vol/overview.md": "[↑ Volume One](index.md)\n\n# Overview\n\nFirst paragraph with a [link](methods.md).\n\n" +
 			strings.Repeat("é", ExcerptDocumentChars) + "\n",
 	})
-	got, err := ComposeExcerpts(root)
+	got, err := ComposeExcerpts(kb.OnDisk(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +172,7 @@ func TestExcerptsEqualKbTools(t *testing.T) {
 	if *excerptsKBRoot == "" {
 		t.Skip("no kb-root named; test-integration-build-arxiv supplies one")
 	}
-	got, err := ComposeExcerpts(*excerptsKBRoot)
+	got, err := ComposeExcerpts(kb.OnDisk(*excerptsKBRoot))
 	if err != nil {
 		t.Fatal(err)
 	}

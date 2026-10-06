@@ -20,8 +20,10 @@ const (
 
 	// IndexDir is the derived index's directory inside kb-root.
 	IndexDir = ".index"
-	// ClaimGraphFile is the claim-graph sheet, inside kb-root.
-	ClaimGraphFile = "claim-graph.svg"
+	// ClaimGraphFile is the claim-graph sheet, inside kb-root and each
+	// volume; ClaimGraphDigestFile is the volume digest, inside kb-root.
+	ClaimGraphFile       = "claim-graph.svg"
+	ClaimGraphDigestFile = "claim-graph-digest.svg"
 
 	AgentsFile         = "AGENTS.md"
 	AgentsRedirectFile = "CLAUDE.md"
@@ -49,6 +51,25 @@ func RepositoryRoot(dir string) (string, error) {
 			return "", nil
 		}
 		dir = parent
+	}
+}
+
+// ResolvePath is p with every symlink of its longest existing prefix resolved
+// and the rest kept as written, as Python's non-strict resolve has it: p
+// resolved where it resolves, else as given.
+func ResolvePath(p string) string {
+	p = filepath.Clean(p)
+	var rest []string
+	for cur := p; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = append([]string{filepath.Base(cur)}, rest...)
+		cur = parent
 	}
 }
 

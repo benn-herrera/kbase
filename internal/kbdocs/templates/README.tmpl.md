@@ -25,17 +25,26 @@ corpus cites.
 Each edge between the nodes is of one class. A `depends` edge runs from a result to what it was
 derived from. `supports` and `strengthens` run the other way, from evidence to the result it lifts.
 `rests-on` leaves the corpus: it points at a work this KB cites and does not contain. A
-`references` edge records that one result's own text names another, and nothing rests on it.
+`references` edge records that one result's own text names another, and nothing rests on it. A
+`demoted` edge is a `depends` edge the build's cycle breaking cut because it closed a circle; it
+keeps its origin, cited or inferred, and nothing rests on it either.
 
 [`claim-graph.svg`](claim-graph.svg) beside this file is rendered from `.index/` by refresh and
-authored by nobody — read it, never edit it. kbase's refresh writes it as a placeholder stamped with
-a digest of the index; kb_tools' refresh draws the graph, and a drawn sheet is current as of kb_tools' last refresh. A
-drawn sheet draws every node and not every edge. It draws no `references` edge. Of the other classes, edges sharing a source and target
-share one stroke, and a stroke is left off wherever the drawn strokes already lead from its premise
-to what rests on it. So everything a node rests on is reachable along the strokes, but a missing
-stroke is not a missing edge — `.index/` carries every edge. A node only `references` edges touch is
-drawn unattached, in the block below the rest. Nodes are coloured by standing and edges by what they
-carry.
+authored by nobody — read it, never edit it. It draws every volume as a cluster.
+[`claim-graph-digest.svg`](claim-graph-digest.svg) beside it is rendered the same way and draws one
+box per volume, linked to that volume's index and sheet, with the edges between volumes counted by
+how they were found; each of the two links to the other. `<volume>/claim-graph.svg` beside each volume's
+`index.md` shows that volume and every node one edge from it. The digest and the volume sheets exist
+only where the KB holds two or more volumes with claims; a one-volume KB has only `claim-graph.svg`.
+A sheet draws premise relations only:
+no `references` edge, and every `demoted` one as a cut. Of the drawn `depends` edges only the transitive reduction
+appears, so a missing stroke is not a missing edge — `.index/` carries every edge. An edge is black
+solid where cited (the paper's text marks the dependency), blue dashed where inferred (the build
+found it with no mark in the text), red dotted where cut — heavier where the cut edge was cited,
+lighter where inferred. A node's shape gives its kind —
+a labelled block with a bold frame, an equation, prose, a work — and a scored node is filled by its
+solidity band. Claims with no drawn edge are listed as text, volume by volume. Every node links to
+its register entry, and a legend keys the rest.
 
 A claim carrying no confidence value reads {pending-literal} wherever it appears, and so does its
 solidity: that says *unscored*, not *low* and not *doubted*.
@@ -52,8 +61,8 @@ justfile.
 kbase's output and `solidity build-band distribution` in kb-stats': the {pending-literal} band holds
 the unscored claims, and every other band holds scored ones.
 
-It does not split the edges by class. Each edge is one line of `.index/depends-on.jsonl`, and the
-line's `relation` field names its class.
+It does not split the edges by class. Each edge is one line of `.index/depends-on.yaml`, `--- `
+then the edge as a JSON object, and the object's `relation` field names its class.
 
 The `kb-verify` target counts the documents. The files its `[claim-quality] Scanned` line counts
 are the documents, and the same line says how many of them are leaves. kbase has no document count.

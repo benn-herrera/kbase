@@ -21,9 +21,13 @@ type writeOpOptions struct {
 	Stdin      io.Reader
 	Create     bool
 	NoRefresh  bool
-	Stdout     io.Writer
-	Stderr     io.Writer
-	Logger     log.Logger
+	// ArgumentEntry is whether the values are one entry composed from a
+	// tool call's arguments rather than a document the caller wrote, so a
+	// refusal's line and column would point nowhere the caller can see.
+	ArgumentEntry bool
+	Stdout        io.Writer
+	Stderr        io.Writer
+	Logger        log.Logger
 }
 
 func runWriteOp(opts writeOpOptions) (int, error) {
@@ -52,7 +56,22 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 	if err != nil {
 		return failed(fields, fmt.Errorf("reading the values: %w", err))
 	}
-	res := write.Run(opts.Op, write.Options{KBRoot: root, Values: values, Create: opts.Create, NoRefresh: opts.NoRefresh, Logger: opts.Logger})
+	run := write.Options{KBRoot: root, Values: values, Create: opts.Create, NoRefresh: opts.NoRefresh, Logger: opts.Logger}
+	var res write.Result
+	if opts.Op == write.RenderCitation {
+		res = write.Run(opts.Op, run)
+	} else {
+		release, outcome, items, err := holdKB(root, write.RetryRemedy(opts.Op))
+		if err != nil {
+			return failed(fields, err)
+		}
+		if release == nil {
+			res = write.Result{Outcome: outcome, Refusals: items}
+		} else {
+			defer release()
+			res = write.Run(opts.Op, run)
+		}
+	}
 	if opts.Op == write.RenderCitation {
 		fields = append(fields, toolresult.Field{Key: "citations", Value: nonNil(res.Citations)})
 	} else {
@@ -69,7 +88,19 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 		if res.Refreshed != nil {
 			refreshed = res.Refreshed
 		}
-		fields = append(fields, toolresult.Field{Key: "refreshed", Value: refreshed})
+		fields = append(fields, toolresult.Field{Key: "refreshed", Value: refreshed}, toolresult.Field{Key: "removed", Value: nonNil(res.Removed)})
+		if opts.Op == write.ResolveDemoted {
+			resolved := []toolresult.Record{}
+			for _, r := range res.Resolved {
+				resolved = append(resolved, toolresult.Record{{Key: "source", Value: r.Source}, {Key: "target", Value: r.Target}, {Key: "action", Value: r.Action}})
+			}
+			fields = append(fields, toolresult.Field{Key: "resolved", Value: resolved})
+		}
+	}
+	if opts.ArgumentEntry {
+		for i := range res.Refusals {
+			res.Refusals[i].Line, res.Refusals[i].Column = 0, 0
+		}
 	}
 	switch {
 	case len(res.Refusals) > 0:
@@ -103,7 +134,7 @@ func writeOpCommand(op, short, long string) *cobra.Command {
 		Long:  long + "\n" + valuesHelp,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			wd, err := os.Getwd()
+			wd, err := invocationDir(cmd)
 			if err != nil {
 				return err
 			}
@@ -125,5 +156,5 @@ func writeOpCommand(op, short, long string) *cobra.Command {
 	if write.CreatesRegister(op) {
 		cmd.Flags().BoolVar(&create, "create", false, "create the register when it does not exist yet")
 	}
-	return cmd
+	return mcpBinding(cmd, mcpBound)
 }

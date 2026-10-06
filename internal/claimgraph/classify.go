@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kbase/internal/asks"
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -39,7 +40,7 @@ type classification struct {
 
 // held is whether the record already answers for a candidate: a draft does
 // not, to a run that can ask.
-func held(e CandidateEntry, ok, asking bool) bool {
+func held(e buildrecords.CandidateEntry, ok, asking bool) bool {
 	return ok && !(asking && e.Outcome == ClassifyDrafted)
 }
 
@@ -54,11 +55,11 @@ func held(e CandidateEntry, ok, asking bool) bool {
 func classify(ctx context.Context, repoRoot string, candidates []candidate, statement func(ClaimNode) string, opts Options) (classification, error) {
 	reader, progress := opts.Reader, opts.Progress
 	out := classification{relations: map[pair]Relation{}, outcomes: map[pair]string{}}
-	rec, _, err := ReadClassification(repoRoot)
+	rec, _, err := buildrecords.ReadClassification(recordsAt(repoRoot))
 	if err != nil {
 		return out, err
 	}
-	entries := map[pair]CandidateEntry{}
+	entries := map[pair]buildrecords.CandidateEntry{}
 	for _, e := range rec.Candidates {
 		entries[pair{e.Source, e.Target}] = e
 	}
@@ -91,7 +92,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		}
 		if reader == nil {
 			for _, c := range pending {
-				entries[c.pair()] = CandidateEntry{Source: c.source.ID, Target: c.target.ID, Offered: offeredLetters(c), Outcome: ClassifyDrafted}
+				entries[c.pair()] = buildrecords.CandidateEntry{Source: c.source.ID, Target: c.target.ID, Offered: offeredLetters(c), Outcome: ClassifyDrafted}
 			}
 		} else {
 			items := make([]asks.ClassifyItem, len(pending))
@@ -106,7 +107,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 			out.asked = append(out.asked, group)
 			for i, item := range group.Items {
 				c := pending[i]
-				e := CandidateEntry{Source: source.ID, Target: c.target.ID, Offered: item.Offered, Letter: item.Letter, Outcome: string(item.Outcome)}
+				e := buildrecords.CandidateEntry{Source: source.ID, Target: c.target.ID, Offered: item.Offered, Letter: item.Letter, Outcome: string(item.Outcome)}
 				if item.Confidence != nil {
 					e.Confidence = &item.Confidence
 				}
@@ -126,9 +127,6 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		for _, e := range entries {
 			rec.Candidates = append(rec.Candidates, e)
 		}
-		slices.SortFunc(rec.Candidates, func(a, b CandidateEntry) int {
-			return comparePairs(pair{a.Source, a.Target}, pair{b.Source, b.Target})
-		})
 		if err := WriteClassification(repoRoot, rec); err != nil {
 			return out, err
 		}
@@ -168,19 +166,11 @@ func statements(t *Tree, g *AuthoredGraph, inv *Inventory) func(ClaimNode) strin
 		found[b.node.ID] = b.text
 	}
 	lines := map[string][]string{}
-	for _, n := range g.Nodes {
-		if n.Equation == "" {
-			continue
+	for id, f := range equationFences(g, inv) {
+		if lines[f.Document] == nil {
+			lines[f.Document] = pageLines(t, f.Document)
 		}
-		at := slices.IndexFunc(inv.Fences, func(f MathFence) bool { return f.Document == n.Document && slices.Contains(f.Labels, n.Equation) })
-		if at < 0 {
-			continue
-		}
-		if lines[n.Document] == nil {
-			lines[n.Document] = pageLines(t, n.Document)
-		}
-		f := inv.Fences[at]
-		found[n.ID] = strings.Join(lines[n.Document][f.Start:min(f.End, len(lines[n.Document]))], "\n")
+		found[id] = strings.Join(lines[f.Document][f.Start:min(f.End, len(lines[f.Document]))], "\n")
 	}
 	return func(n ClaimNode) string {
 		if s, ok := found[n.ID]; ok {
@@ -193,6 +183,30 @@ func statements(t *Tree, g *AuthoredGraph, inv *Inventory) func(ClaimNode) strin
 // pageLines is a document's lines markers off and unquoted, line for line.
 func pageLines(t *Tree, document string) []string {
 	return kb.SplitLines(unquote(stripMarkers(t.Documents[document].Text)))
+}
+
+// cutEdges is every references record the build's cycle breaking cut from
+// depends, with its origin: an edge a cycle of the classified set demoted,
+// and a containment-directed pair a ring demoted that took its drafted
+// mention rather than a letter. Its origin is inferred where the unmarked
+// record answered the pair yes, cited otherwise.
+func cutEdges(ring []pair, c classification, unmarkedYes []pair) map[pair]string {
+	out := map[pair]string{}
+	cut := func(p pair) {
+		out[p] = kb.OriginCited
+		if slices.Contains(unmarkedYes, p) {
+			out[p] = kb.OriginInferred
+		}
+	}
+	for _, p := range c.demoted {
+		cut(p)
+	}
+	for _, p := range ring {
+		if c.relations[p] == MentionedBy && (c.outcomes[p] == ClassifyDrafted || c.outcomes[p] == ClassifyDefaulted) {
+			cut(p)
+		}
+	}
+	return out
 }
 
 // writtenRecords is the depends edges, references records and cycle-demoted

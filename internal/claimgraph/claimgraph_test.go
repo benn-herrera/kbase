@@ -17,7 +17,7 @@ import (
 func TestLandLeafCarriesTheBlock(t *testing.T) {
 	root := filepath.Join(t.TempDir(), kb.KBDir)
 	for rel, text := range map[string]string{
-		kb.EntryPointFile: "# Entry\n\n- [V](v/index.md)\n",
+		kb.EntryPointFile: "---\nkb-format: \"1.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
 		"v/index.md":      "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n",
 		"v/a.md":          "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n",
 	} {
@@ -53,18 +53,22 @@ func TestLandLeafCarriesTheBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, err := kb.ReadText(filepath.Join(root, "v/a.md"))
+	src := kb.OnDisk(root)
+	text, err := src.ReadText(filepath.Join(root, "v/a.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fm := kb.ParseFrontmatter(text)
+	fm, err := kb.ParseFrontmatter(text)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if claims, _ := fm.ListOrEmpty("claims"); !slices.Equal(claims, ids) {
 		t.Errorf("claims = %v, want %v", claims, ids)
 	}
 	if _, ok := fm.Get("no-claim"); ok {
 		t.Error("the leaf declares both claims and a no-claim reason")
 	}
-	declared := kb.DeclaredNodeIDs(text[kb.FindFrontmatter(text, 0)[2]:kb.FindFrontmatter(text, 0)[3]])
+	declared := kb.DeclaredNodeIDs(fm)
 	if want := []string{exp.IDs[0], sup.IDs[0]}; !slices.Equal(declared, want) {
 		t.Errorf("hosted declarations after landing = %v, want %v kept", declared, want)
 	}

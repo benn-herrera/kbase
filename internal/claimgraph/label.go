@@ -108,11 +108,11 @@ func (r *render) spanOf(p paragraph) span {
 	return out
 }
 
-// bodyStart is the first line a label may name: below the frontmatter block,
-// and never line 0, the up-link.
+// bodyStart is the first line a label may name: below the frontmatter and
+// the up-link line that follows it.
 func bodyStart(text string) int {
-	if m := kb.FrontmatterRE.FindStringIndex(text); m != nil {
-		return max(strings.Count(text[:m[1]], "\n")+1, 1)
+	if m := kb.FindFrontmatter(text); m != nil {
+		return strings.Count(text[:m[1]], "\n") + 2
 	}
 	return 1
 }

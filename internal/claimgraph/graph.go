@@ -1,6 +1,7 @@
 package claimgraph
 
 import (
+	"fmt"
 	"path"
 	"strings"
 
@@ -98,7 +99,7 @@ func (g *AuthoredGraph) documents() int {
 
 // registerTitles is every minted claim id in the KB with its entry's title.
 func registerTitles(kbRoot string) (map[string]string, error) {
-	regs, err := kb.Registers(kbRoot)
+	regs, err := kb.Registers(builtTree(kbRoot))
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +146,11 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 	}
 	g := &AuthoredGraph{byID: map[string]int{}}
 	for _, p := range t.Paths {
-		ids, err := kb.ParseFrontmatter(t.Documents[p].Text).ListOrEmpty("claims")
+		fm, err := kb.ParseFrontmatter(t.Documents[p].Text)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		ids, err := fm.ListOrEmpty("claims")
 		if err != nil {
 			return nil, err
 		}
