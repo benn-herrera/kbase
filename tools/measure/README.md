@@ -4,11 +4,14 @@ Two read-only measurements of a built KB against a reference KB of the same corp
 hand-curated one). Python 3.11+, stdlib only; kb_tools is imported from `PYTHONPATH` and its readers
 are used, not reimplemented. Beside them sit the theorem-number walker over a volume's LaTeX and its
 one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
-this directory. The walker's tests run with `python3 -m unittest discover -s tools/measure`.
+this directory, and `number_match.py`, the comparison's number class, which imports only the
+walker. The tests of the walker and the number class run with
+`python3 -m unittest discover -s tools/measure`.
 
 ```
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/compare_to_pristine.py \
-    --ours <kb-root> --reference <kb-root> --out .claude-temp/<name>/compare [--threshold 0.30]
+    --ours <kb-root> --reference <kb-root> --out .claude-temp/<name>/compare [--threshold 0.30] \
+    [--volume-root <root .tex> ...]
 
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/measure_unmarked_shortlist.py \
     --ours <kb-root> --edges .claude-temp/<name>/compare/edges.tsv --out .claude-temp/<name>/shortlist
@@ -16,7 +19,9 @@ PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/measure_unmarked_shortl
 
 In this repository `<dir holding kb_tools/>` is `.claude/agents`, the installed agent set the
 recipes use (`just measure-kb-roots` sets it). Run the shortlist measurement after the comparison,
-on the same `--ours`: it reads the comparison's `edges.tsv`.
+on the same `--ours`: it reads the comparison's `edges.tsv`. Both read a KB at the metadata format
+the installed kb_tools reads; a KB at an older format is not refused but reads as one declaring no
+claims, so migrate a copy first (kb_tools' `kb_load.land_migration`).
 
 ## Privacy
 
@@ -30,9 +35,10 @@ never results.
 ## Exit status and failures
 
 - **0**: every output file was written.
-- **2**: an argument is unusable. This covers a kb-root that is not a directory, an `--edges` that
-  is not a file, a `--threshold` outside (0, 1], and an `--out` outside `.claude-temp/` or naming an
-  existing file. Nothing is written.
+- **2**: an argument is unusable. This covers a kb-root that is not a directory, an `--edges` or a
+  `--volume-root` that is not a file, a `--threshold` outside (0, 1], an `--out` outside
+  `.claude-temp/` or naming an existing file, and `--volume-root` given a number of times other than
+  the number of volumes `--ours`' entry point lists. Nothing is written.
 - **1**: an input cannot be read as a whole. This covers a kb-root holding no KB document, a
   reference with no claim entry, a tree or graph the kb_tools readers refuse, and an `edges.tsv`
   lacking the columns below. Nothing is written.
@@ -47,11 +53,46 @@ ties are broken by id, and counts are listed most first, then by name.
 
 ## How a claim of the reference is matched
 
-Each claim, on both sides, becomes a bag of words: its title plus its statement, tags and markers
-removed, lower-cased, words of two or more letters, less kb_tools' `shortlist.STOPWORDS`. The bags
-are weighted with `shortlist.idf` and `shortlist.weigh` over one shared vocabulary, then compared by
-`shortlist.cosine`. A node of ours **matches** a reference claim when their cosine is at least
-`--threshold` (default 0.30). A reference claim may match several nodes of ours, or none.
+Three classes are tried in order, and a reference claim takes the first that fires. `number` and
+`label` are the **exact** classes.
+
+1. **`number`**, only with `--volume-root`. A reference title that opens with a result word and a
+   number (`Theorem 5.11 — …`, `Conjecture C.5.1: …`) is keyed by the word and the number's numeric
+   part. A trailing lower-case letter the author added by hand (`5.10c`) is recorded as a suffix and
+   not matched. The walker (below) runs over each volume root. Each environment whose `name` is that
+   word and whose `number` is that number is located. Exactly one must exist across all volumes. Our
+   block it matches sits in the volume directory that root maps to and its display line prints the
+   same word with pandoc's counter equal to the environment's `ordinal_in_group`. The match is
+   one-to-one: when two reference claims reach one block, neither matches.
+2. **`label`** would pair a reference claim and a node carrying the same `\label` identifier. It is
+   not implemented. `summary.md` counts the `<span id="…">` spans each side's claim text carries,
+   so a reference that carries labels shows it there.
+3. **`cosine`**, for every reference claim the exact classes did not match. Each claim, on both
+   sides, becomes a bag of words: its title plus its statement, tags and markers removed,
+   lower-cased, words of two or more letters, less kb_tools' `shortlist.STOPWORDS`. The bags are
+   weighted with `shortlist.idf` and `shortlist.weigh` over one shared vocabulary, then compared by
+   `shortlist.cosine`. A node of ours **matches** a reference claim when their cosine is at least
+   `--threshold` (default 0.30). A reference claim may match several nodes of ours, or none.
+
+**Volume roots.** `--volume-root` is repeated once per volume, in the order `--ours`'
+`entry-point.md` lists its volume directories, which is the build's volume order. The i-th root
+maps to the i-th directory. The repository's build trail does not record its inputs, so the mapping cannot be
+derived from it, and title-to-directory naming is kbase's to compute, not this script's. A wrong
+order shows in `summary.md` as page blocks whose printed word and counter name no walked
+environment of their volume.
+
+**Why a numbered reference claim has no `number` match**, as `summary.md` lists it, first that
+applies:
+
+- `no environment of that word in the source`: no walked environment's `name` is the word;
+- `no walked number`: none walks to the number, and some numbered environment of that word was left
+  without one (outside the walker's grammar);
+- `the block's number differs`: every environment of that word walks to some other number;
+- `ambiguous: …`: more than one environment walks to it, more than one block prints that word and
+  counter, or two reference claims reach one block;
+- `no block with that word and k`: our volume's pages show no block printing that word and counter;
+- `no block node at all for that environment`: the block is there, but the claim graph holds no
+  node for it.
 
 - **A reference claim's statement** is read from each leaf whose frontmatter lists it. It runs from
   the claim's `<!-- claim-quality: … -->` marker to the next heading or marker. Without a marker, it
@@ -68,19 +109,20 @@ All TSV files are UTF-8 with one header line. A tab or newline inside a cell is 
 
 One row per (reference claim, matched node of ours). Rows run in reference title order, then by
 score descending. A reference claim with no match has one row whose `ours_title` is `UNMATCHED` and
-whose other ours cells are empty.
+whose `class`, `score` and other ours cells are empty.
 
 | Column | Meaning |
 |---|---|
 | `ref_id`, `ref_title` | the reference claim |
-| `score` | cosine, 3 decimals |
+| `class` | the class that matched it: `number` or `cosine` |
+| `score` | the pair's cosine, 3 decimals, whatever the class |
 | `ours_id`, `ours_kind`, `ours_title`, `ours_document` | the node of ours; `ours_kind` is `block`, `equation` or `prose` |
 
 ### `candidates.tsv`
 
-Each reference claim's five best-scoring nodes of ours, whether or not they reach the threshold.
-Same columns as `claim-matches.tsv`, plus `rank` (1–5) after `ref_title`. Use it to see why a claim
-went unmatched.
+Each reference claim's five best-scoring nodes of ours, whether or not they reach the threshold or
+the claim matched by an exact class. Same columns as `claim-matches.tsv` less `class`, plus `rank`
+(1–5) after `ref_title`. Use it to see why a claim went unmatched.
 
 ### `ours-nodes.tsv`
 
@@ -108,6 +150,7 @@ matches and B's matches are the nodes of ours each matched.
 | `document_level` | for `references only` and `nothing`: the verdict loosened on B's side to every node of ours hosted in a document hosting a match of B (`depends`, `depends reversed`, `references`, `references reversed`, `nothing`) |
 | `evidence` | for every **miss** (`references only`, `nothing`, `endpoint unmatched`): `present, unused`, `none found` or `undetermined` (below); empty otherwise |
 | `evidence_basis` | the marks and title hits that decided `present, unused` |
+| `pair_class` | how A and B were matched: `both exact`, `one exact` or `both cosine`; an end no class matched counts as cosine, the class last tried |
 
 **The mark test.** It reads the text of every span of A's matches and looks for a mark of B there. A
 mark is either of two things:
@@ -139,13 +182,18 @@ reading` row is `present, unused` only when the title test hits.
 The headline figures:
 
 - claim and edge counts on each side, and the read failures;
-- the match count, matches per reference claim, and the best score per reference claim;
-- the unmatched claims;
+- the match count, overall and by class;
+- for the number class: each volume root and the directory it maps to, the page blocks no walked
+  environment accounts for, and every numbered reference claim with its match or its reason;
+- the label spans each side carries;
+- matches per reference claim, and the best cosine per reference claim;
+- the unmatched claims, with their best cosine;
 - matches by reference top-level directory × our top-level directory;
-- recall-class counts;
+- recall-class counts, overall and against the pair class;
 - the mark split, by scope and at document level;
-- the evidence split, overall and by recall class;
-- a threshold sweep (0.20–0.50), giving the recall classes and marked misses at each threshold.
+- the evidence split, overall, by recall class and against the pair class;
+- a threshold sweep (0.20–0.50) of the cosine class, exact matches held, giving the recall classes
+  and marked misses at each threshold.
 
 ### Reading the numbers
 
@@ -258,6 +306,7 @@ theorem, say) is not seen.
 |---|---|
 | `ordinal` | 1-based position among all rows |
 | `env` | the environment name as written |
+| `name` | the printed word its `\newtheorem` declares (`Theorem`), as written; empty for an environment declared otherwise |
 | `group` | the counter it draws its number from: its own name, or the shared one; empty when unnumbered |
 | `ordinal_in_group` | 1-based count within that counter, never reset: what pandoc's counter shows on the page; empty when unnumbered |
 | `number` | the author's number (`5.11`, `C.2`, `3`); empty when unnumbered or outside the grammar |

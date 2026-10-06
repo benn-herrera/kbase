@@ -16,6 +16,8 @@ from typing import Any
 from kb_tools import kb_index_lib
 from kb_tools.kb_claimgraph import graph, inventory, prose, shortlist, tree
 from kb_tools.kb_claimgraph.tree import strip_markers, unquote
+from latex_numbering import volume_argument, walk
+from number_match import NAME_FORMS, NAME_NUMBER_RE, PageBlock, match_numbers, unwalked_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +29,8 @@ MARKER_RE = re.compile(r"<!-- claim-quality: (clm-[a-z0-9]+) -->")
 HEADING_RE = re.compile(r"^#{1,6} ")
 TAG_RE = re.compile(r"<[^>]+>")
 WORD_RE = re.compile(r"[a-z]{2,}")
-
-NAME_FORMS = {
-    "proposition": r"(?:Proposition|Prop)",
-    "theorem": r"(?:Theorem|Thm)",
-    "corollary": r"(?:Corollary|Cor)",
-    "lemma": r"Lemma",
-    "conjecture": r"(?:Conjecture|Conj)",
-    "definition": r"(?:Definition|Def)",
-    "remark": r"Remark",
-    "assumption": r"Assumption",
-}
-NAME_NUMBER_RE = re.compile(r"^\W*(" + "|".join(NAME_FORMS) + r")\s+([0-9A-Z][0-9.]*[a-z]?)\b", re.IGNORECASE)
+LABEL_SPAN_RE = re.compile(r'<span id="[^"]*"')
+ENTRY_VOLUME_RE = re.compile(r"^- \[.*\]\(([^/()]+)/index\.md\)$", re.MULTILINE)
 
 MISSES = ("references only", "nothing")
 UNMATCHED = "endpoint unmatched"
@@ -70,7 +62,10 @@ EDGE_HEADER = (
     "document_level",
     "evidence",
     "evidence_basis",
+    "pair_class",
 )
+EXACT_CLASSES = ("number", "label")
+PAIR_CLASSES = ("both exact", "one exact", "both cosine")
 COLUMN = {name: index for index, name in enumerate(EDGE_HEADER)}
 
 
@@ -232,6 +227,7 @@ class Ours:
     references: set[tuple[str, str]]
     anchors: list[inventory.Anchor]
     texts: dict[str, list[str]]
+    page_blocks: list[PageBlock]
 
 
 def _our_claim(
@@ -302,7 +298,30 @@ def read_ours(kb_root: Path, failures: list[str]) -> Ours:
     }
     references = {(edge.source, edge.target) for entry in state.claim_entries for edge in entry.references}
     texts = {path: document.text.splitlines() for path, document in documents.documents.items()}
-    return Ours(claims=claims, depends=depends, references=references, anchors=list(sites.anchors), texts=texts)
+    located = {(node.document, node.locator): node_id for node_id, node in authored.nodes.items() if node.equation is None}
+    page_blocks = [
+        PageBlock(
+            volume=block.document.split("/")[0],
+            printed=plain_text(name).rstrip("."),
+            node_id=located.get((block.document, block.display)) if block.claim_bearing else None,
+        )
+        for block in sites.blocks
+        if block.display is not None and (name := inventory._printed_name(block.display))
+    ]
+    return Ours(
+        claims=claims,
+        depends=depends,
+        references=references,
+        anchors=list(sites.anchors),
+        texts=texts,
+        page_blocks=page_blocks,
+    )
+
+
+def entry_volumes(kb_root: Path) -> list[str]:
+    """Our volume directories in the order the entry point lists them: the build's volume order."""
+    text = (kb_root / kb_index_lib.ENTRY_POINT_FILENAME).read_text(encoding="utf-8")
+    return ENTRY_VOLUME_RE.findall(text)
 
 
 # --- edges ----------------------------------------------------------------------------
@@ -423,7 +442,13 @@ def paper_scope(a: set[str], b: set[str], ours: dict[str, Claim]) -> str:
     return "same paper" if papers else "cross paper"
 
 
-def recall(*, mapped: dict[str, set[str]], reference: Reference, ours: Ours) -> list[tuple[str, ...]]:
+def pair_class(source: str, target: str, exact: set[str]) -> str:
+    """How an edge's ends were matched; an end no class matched counts as cosine, the class last tried."""
+    return PAIR_CLASSES[2 - (source in exact) - (target in exact)]
+
+
+def recall(*, mapped: dict[str, set[str]], exact: set[str], reference: Reference, ours: Ours) -> list[tuple[str, ...]]:
+    """One row per reference edge; ``exact`` holds the reference claims matched by an exact class."""
     rows = []
     for source, target in reference.edges:
         a, b = mapped[source], mapped[target]
@@ -451,6 +476,7 @@ def recall(*, mapped: dict[str, set[str]], reference: Reference, ours: Ours) -> 
                 document_level(a, b, ours=ours.claims, depends=ours.depends, references=ours.references) if source_miss else "",
                 evidence,
                 "; ".join(marks + titles),
+                pair_class(source, target, exact),
             )
         )
     return rows
@@ -480,6 +506,14 @@ def main() -> int:
     parser.add_argument("--reference", required=True, type=kb_root_argument, help="the reference kb-root")
     parser.add_argument("--out", required=True, type=scratch_directory_argument, help="output directory under .claude-temp/")
     parser.add_argument("--threshold", type=threshold_argument, default=THRESHOLD, help=f"match cosine (default {THRESHOLD})")
+    parser.add_argument(
+        "--volume-root",
+        action="append",
+        default=[],
+        type=volume_argument,
+        help="each volume's root .tex, repeated in the order --ours' entry-point.md lists its volumes; "
+        "without it the number class is not attempted",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     threshold: float = args.threshold
@@ -495,6 +529,16 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - as above
         print(f"--ours {str(args.ours)!r}: unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+    roots: list[Path] = args.volume_root
+    volume_dirs = entry_volumes(args.ours) if roots else []
+    if len(roots) != len(volume_dirs):
+        print(
+            f"--volume-root given {len(roots)} times; --ours' entry point lists {len(volume_dirs)} volumes: "
+            "give one root per volume, in the entry point's order",
+            file=sys.stderr,
+        )
+        return 2
+    walked = {volume: walk(root) for volume, root in zip(volume_dirs, roots)}
     dangling = [edge for edge in reference.edges if edge[0] not in reference.claims or edge[1] not in reference.claims]
     reference = Reference(
         claims=reference.claims,
@@ -514,29 +558,46 @@ def main() -> int:
         for rid in sorted(reference.claims, key=lambda key: (reference.claims[key].title, key))
     }
 
+    numbered = match_numbers(
+        {rid: claim.title for rid, claim in reference.claims.items()},
+        blocks=ours.page_blocks,
+        walked={volume: numbering.environments for volume, numbering in walked.items()},
+    )
+    exact = {rid: outcome.node_id for rid, outcome in numbered.items() if outcome.node_id in ours.claims}
+    match_class = {rid: "number" if rid in exact else "cosine" for rid in scored}
+
     def mapping(at: float) -> dict[str, set[str]]:
-        return {rid: {oid for oid, score in pairs if score >= at} for rid, pairs in scored.items()}
+        """Exact matches as they stand; every other reference claim matched by cosine at ``at``."""
+        return {
+            rid: {exact[rid]} if rid in exact else {oid for oid, score in pairs if score >= at} for rid, pairs in scored.items()
+        }
 
     mapped = mapping(threshold)
-    edge_rows = recall(mapped=mapped, reference=reference, ours=ours)
+    edge_rows = recall(mapped=mapped, exact=set(exact), reference=reference, ours=ours)
     classes, split = tally(edge_rows)
 
     match_rows, candidate_rows = [], []
     for rid, pairs in scored.items():
         title = reference.claims[rid].title
-        kept = [(oid, score) for oid, score in pairs if score >= threshold]
+        score_of = dict(pairs)
+        kept = [(oid, score_of[oid]) for oid in sorted(mapped[rid], key=lambda oid: (-score_of[oid], oid))]
         if not kept:
-            match_rows.append((rid, title, "", "", "", "UNMATCHED", ""))
+            match_rows.append((rid, title, "", "", "", "", "UNMATCHED", ""))
         for oid, score in kept:
             c = ours.claims[oid]
-            match_rows.append((rid, title, f"{score:.3f}", oid, c.kind, c.title, c.documents[0]))
+            match_rows.append((rid, title, match_class[rid], f"{score:.3f}", oid, c.kind, c.title, c.documents[0]))
         for rank, (oid, score) in enumerate(pairs[:TOP_K], start=1):
             c = ours.claims[oid]
             candidate_rows.append((rid, title, str(rank), f"{score:.3f}", oid, c.kind, c.title, c.documents[0]))
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
-    write_tsv(out, "claim-matches.tsv", ("ref_id", "ref_title", "score", "ours_id", "ours_kind", "ours_title", "ours_document"), match_rows)
+    write_tsv(
+        out,
+        "claim-matches.tsv",
+        ("ref_id", "ref_title", "class", "score", "ours_id", "ours_kind", "ours_title", "ours_document"),
+        match_rows,
+    )
     write_tsv(
         out,
         "candidates.tsv",
@@ -569,10 +630,53 @@ def main() -> int:
     top1 = sorted(pairs[0][1] for pairs in scored.values() if pairs)
     missed_rows = [row for row in edge_rows if row[COLUMN["evidence"]]]
 
+    def by_pair_class(
+        rows: list[tuple[str, ...]], *, heading: str, value: Callable[[tuple[str, ...]], str], values: Iterable[str]
+    ) -> list[str]:
+        """A table of each row's ``value`` against the pair class of the row's edge."""
+        cells = Counter((value(row), row[COLUMN["pair_class"]]) for row in rows)
+        return [
+            f"| {heading} | " + " | ".join(PAIR_CLASSES) + " |",
+            "|" + "---|" * (len(PAIR_CLASSES) + 1),
+            *[f"| {value} | " + " | ".join(str(cells[(value, pair)]) for pair in PAIR_CLASSES) + " |" for value in values],
+            "| total | " + " | ".join(str(sum(1 for row in rows if row[COLUMN["pair_class"]] == pair)) for pair in PAIR_CLASSES) + " |",
+        ]
+
+    block_count = sum(1 for block in ours.page_blocks if block.volume in walked)
+    unwalked = unwalked_blocks(ours.page_blocks, {volume: numbering.environments for volume, numbering in walked.items()})
+
+    def number_line(rid: str) -> str:
+        outcome = numbered[rid]
+        key = f"{outcome.key.word} {outcome.key.number}" + (f" (suffix {outcome.key.suffix})" if outcome.key.suffix else "")
+        result = f"-> {outcome.node_id}" if rid in exact else outcome.reason or f"node {outcome.node_id} not read"
+        return f"  {rid}  {key}  {result}  ({reference.claims[rid].title})"
+
+    if walked:
+        number_section = [
+            f"### number — reference claims titled by a result word and number: {len(numbered)}, matched {len(exact)}",
+            "",
+            "volumes walked (our directory <- volume root; environments, of them left without a number):",
+            *[
+                f"  {volume} <- {root}; {len(numbering.environments)}, {sum(1 for e in numbering.environments if e.ordinal_in_group is not None and not e.number)}"
+                for (volume, numbering), root in zip(walked.items(), roots)
+            ],
+            f"page blocks of a walked volume whose printed word and counter name no walked environment: {len(unwalked)} of {block_count}",
+            *[f"  {block.volume}: {block.printed}" for block in unwalked],
+            "unmatched by reason:",
+            *counted(Counter(outcome.reason or "node not read" for rid, outcome in numbered.items() if rid not in exact)),
+            *[number_line(rid) for rid in sorted(numbered, key=lambda rid: (reference.claims[rid].title, rid))],
+        ]
+    else:
+        number_section = ["### number — not attempted: no --volume-root given"]
+    label_spans = (
+        sum(len(LABEL_SPAN_RE.findall(c.text)) for c in reference.claims.values()),
+        sum(len(LABEL_SPAN_RE.findall(c.text)) for c in ours.claims.values()),
+    )
+
     sweep = []
     for at in SWEEP:
         at_mapped = mapping(at)
-        at_classes, at_split = tally(recall(mapped=at_mapped, reference=reference, ours=ours))
+        at_classes, at_split = tally(recall(mapped=at_mapped, exact=set(exact), reference=reference, ours=ours))
         sweep.append(
             f"| {at:.2f} | {sum(1 for kept in at_mapped.values() if kept)} | "
             + " | ".join(str(at_classes.get(name, 0)) for name in RECALL_CLASSES)
@@ -596,9 +700,18 @@ def main() -> int:
         *([f"  {line}" for line in sorted(failures)] or ["  none"]),
         *[f"  reference edge {s} -> {t}: an end is not a reference claim; not compared" for s, t in dangling],
         "",
-        f"## Claim matching — TF-IDF cosine over title+statement, threshold {threshold}",
+        f"## Claim matching — number, then label, then TF-IDF cosine over title+statement at threshold {threshold}",
         "",
         f"matched: {len(matched)} of {len(reference.claims)}; unmatched {len(reference.claims) - len(matched)}",
+        f"matched by class: {dict(sorted(Counter(match_class[rid] for rid in matched).items()))}",
+        "",
+        *number_section,
+        "",
+        f"### label — not attempted: reference claim statements carry {label_spans[0]} label spans (<span id=…>), "
+        f"ours {label_spans[1]}; the class needs both sides",
+        "",
+        "### cosine, and the matches as a whole",
+        "",
         f"matches per reference claim: {dict(sorted(fan.items()))}",
         f"distinct nodes of ours matched: {len(ours_matched)} ({dict(sorted(Counter(ours.claims[o].kind for o in ours_matched).items()))})",
         f"best score per reference claim, sorted: {', '.join(f'{s:.2f}' for s in top1)}",
@@ -615,6 +728,10 @@ def main() -> int:
         "## Edge recall over reference depends edges",
         "",
         *counted(classes),
+        "",
+        "by pair class (how the edge's two ends were matched; an end no class matched counts as cosine):",
+        "",
+        *by_pair_class(edge_rows, heading="recall", value=lambda row: recall_class(row[COLUMN["recall"]]), values=RECALL_CLASSES),
         "",
         "## Mechanical split of misses (references only + nothing)",
         "",
@@ -638,8 +755,13 @@ def main() -> int:
         *counted(Counter(row[COLUMN["evidence"]] for row in missed_rows)),
         "by recall class:",
         *counted(Counter(f"{recall_class(row[COLUMN['recall']])} / {row[COLUMN['evidence']]}" for row in missed_rows)),
+        "by pair class:",
         "",
-        "## Threshold sensitivity",
+        *by_pair_class(
+            missed_rows, heading="evidence", value=lambda row: row[COLUMN["evidence"]], values=(PRESENT, NONE_FOUND, UNDETERMINED)
+        ),
+        "",
+        "## Threshold sensitivity — the cosine class only; exact matches held",
         "",
         "| threshold | matched | " + " | ".join(RECALL_CLASSES) + " | marked |",
         "|" + "---|" * (len(RECALL_CLASSES) + 3),

@@ -23,7 +23,7 @@ TOKEN_RE = re.compile(
         (
             r"\\(?P<begin_end>begin|end)\s*\{(?P<env>[^}]*)\}",
             r"\\newtheorem(?P<star>\*?)\s*\{(?P<thm_env>[^}]*)\}\s*(?:\[(?P<thm_shared>[^\]]*)\]\s*)?"
-            r"\{(?:[^{}]|\{[^{}]*\})*\}(?:\s*\[(?P<thm_within>[^\]]*)\])?",
+            r"\{(?P<thm_name>(?:[^{}]|\{[^{}]*\})*)\}(?:\s*\[(?P<thm_within>[^\]]*)\])?",
             r"\\numberwithin\s*\{(?P<nw_counter>[^}]*)\}\s*\{(?P<nw_parent>[^}]*)\}",
             r"\\setcounter\s*\{(?P<sc_counter>[^}]*)\}\s*\{(?P<sc_value>[^}]*)\}",
             r"\\(?P<sectioning>chapter|section|subsection|subsubsection)\b(?P<sec_star>\s*\*)?",
@@ -68,6 +68,7 @@ def braced(text: str, start: int) -> tuple[str, int] | None:
 class Environment:
     ordinal: int
     env: str
+    name: str  # the printed word \newtheorem declared; empty where no \newtheorem named it
     group: str
     ordinal_in_group: int | None
     number: str
@@ -102,6 +103,7 @@ class _Walk:
         }
     )
     groups: dict[str, str | None] = field(default_factory=dict)  # environment -> counter; None when unnumbered
+    names: dict[str, str] = field(default_factory=dict)  # environment -> its \newtheorem Name
     secnumdepth: int = 3
     in_document: bool = False
     rows: list[Environment] = field(default_factory=list)
@@ -212,6 +214,7 @@ class _Walk:
         if g("begin_end"):
             return self.begin_end(g("begin_end"), g("env").strip(), path=path, line=line)
         if g("thm_env") is not None:
+            self.names[g("thm_env").strip()] = g("thm_name").strip()
             self.newtheorem(
                 g("thm_env").strip(),
                 starred=bool(g("star")),
@@ -348,6 +351,7 @@ class _Walk:
             Environment(
                 ordinal=index + 1,
                 env=env,
+                name=self.names.get(env, ""),
                 group=group or "",
                 ordinal_in_group=ordinal_in_group,
                 number=number,
@@ -419,7 +423,7 @@ def write_tsv(out: Path, name: str, header: Iterable[str], rows: Iterable[Iterab
     (out / name).write_text("\n".join(body) + "\n", encoding="utf-8", newline="\n")
 
 
-ENVIRONMENT_HEADER = ("ordinal", "env", "group", "ordinal_in_group", "number", "label", "file", "line")
+ENVIRONMENT_HEADER = ("ordinal", "env", "name", "group", "ordinal_in_group", "number", "label", "file", "line")
 
 
 def main() -> int:
@@ -435,7 +439,7 @@ def main() -> int:
         "environments.tsv",
         ENVIRONMENT_HEADER,
         (
-            (str(e.ordinal), e.env, e.group, "" if e.ordinal_in_group is None else str(e.ordinal_in_group), e.number,
+            (str(e.ordinal), e.env, e.name, e.group, "" if e.ordinal_in_group is None else str(e.ordinal_in_group), e.number,
              e.label, e.file, str(e.line))
             for e in numbering.environments
         ),

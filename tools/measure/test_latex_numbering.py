@@ -35,6 +35,7 @@ class GrammarTest(unittest.TestCase):
         self.assertEqual([(r.group, r.ordinal_in_group, r.number) for r in rows],
                          [("theorem", 1, "1"), ("remark", 1, "1"), ("theorem", 2, "2")])
         self.assertEqual([r.ordinal for r in rows], [1, 2, 3])
+        self.assertEqual([r.name for r in rows], ["Lemma", "Remark", "Theorem"])
 
     def test_within_section_resets(self):
         body = r"\section{A}" + THM.format("theorem") * 2 + r"\section{B}" + THM.format("theorem")
