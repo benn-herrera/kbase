@@ -160,5 +160,11 @@ coder chunk (drafted in `../adjagent/proposed-agents-md-edit.md`).
   text between `<` and `>` inside an inequality as if it were an HTML tag, lowering overlap and
   cosine scores on both sides; fixing it changes the October cosine numbers.
 - `measure_unmarked_shortlist.py` still accepts a KB at an older metadata format silently.
-- The measurement tooling's unit tests run by `python3 -m unittest discover -s tools/measure`;
-  no recipe runs them.
+- The measurement tooling's unit tests run by `PYTHONPATH=.claude/agents python3 -m unittest
+  discover -s tools/measure`; no recipe runs them.
+- The unmarked ask probe (`.claude-temp/n3/probe`, 41 pairs with known answers, 123 requests) is
+  the qualifier for a model on the letter asks. Probed 2026-10-06 on reaper: Qwen3.8-Flash-Next
+  true 2 / 6, 0 false `A` on 33 controls; gemma-4-31B-it the same recall with 5 false `A`;
+  Qwen3.6-35B-A3B and Qwen3.8-27B refuse the true pairs; gemma-4-26B-A4B-it is noise. The
+  attribution ask after an unmarked yes is where every model but Flash-Next fails
+  (`.claude-temp/n4/build-verdict.md`).
