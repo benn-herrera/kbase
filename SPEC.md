@@ -182,6 +182,7 @@ there is a defect. Build-orchestration differences are the "Not ported" list in 
 | Tool surface | The subcommands, and the same operations over MCP (§11) | The `kb_util` ops at a shell |
 | Build inputs on the trail | Every boundary's body ends with the build's inputs (§6); a resume given other inputs is refused (§5) | Its bodies carry none, until it adopts, which closes this row |
 | Unmarked-reference shortlist | The unmarked shortlist offers every source its best four prose or equation candidates and offers a block-kind source its best four block candidates besides | Offers the best five of all kinds, until it adopts, which closes this row |
+| Attribution of an unmarked yes | A candidate the unmarked-reference ask answered yes is offered *supported by* and *mention* only: the yes already answered that the source leans on the target, so attribution does not ask the direction again | Offers it *in support of* too, wherever its target is not an equation node, until it adopts, which closes this row |
 
 ---
 

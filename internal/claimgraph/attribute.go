@@ -46,15 +46,18 @@ const (
 	proofDirected candidateClass = iota
 	equationTarget
 	claimToClaim
+	unmarkedYes
 )
 
 // offered is the relations each class may be offered: every set holds
 // supported-by and mention, so an intersection never empties and the draft
-// is always offered.
+// is always offered. An unmarked yes already answered that its source leans
+// on its target, so its direction is not asked again.
 var offered = map[candidateClass]map[Relation]bool{
 	proofDirected:  {SupportedBy: true, MentionedBy: true},
 	equationTarget: {SupportedBy: true, MentionedBy: true},
 	claimToClaim:   {SupportedBy: true, InSupportOf: true, MentionedBy: true},
+	unmarkedYes:    {SupportedBy: true, MentionedBy: true},
 }
 
 func classOf(directed bool, target ClaimNode) candidateClass {
@@ -193,8 +196,8 @@ func referenceLine(t *Tree, document string, line int) string {
 // states, from a cross-reference, a hand-written name or an unmarked-reference
 // yes, classed and drafted, less every pair from a claim to one of its own
 // equations. The node pass's verdicts in rec decide the source end of a
-// reference in readable prose. Each pair of unmarked is an undirected
-// provenance drafted mention, its passage the source claim's own body, the
+// reference in readable prose. Each pair of unmarked is offered supported-by
+// and mention, drafted mention, its passage the source claim's own body, the
 // yes having been about that claim's text; a source no body reaches gets no
 // passage.
 func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePassRecord, unmarked []pair) attribution {
@@ -320,7 +323,7 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePass
 			if text, ok := ownText[p.source]; ok {
 				passage = &text
 			}
-			add(p, offered[classOf(false, g.node(p.target))], passage, harvestUnmarked)
+			add(p, offered[unmarkedYes], passage, harvestUnmarked)
 		}
 	}
 

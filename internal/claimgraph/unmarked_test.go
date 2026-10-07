@@ -265,6 +265,64 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 	}
 }
 
+// TestNarrowOffersAnUnmarkedYesTwoLetters: a pair an unmarked yes reached is
+// offered supported-by and mention, its direction being the yes's, where the
+// same claim-to-claim pair reached by a mark is offered all three; the
+// classification record's offered letters say the same.
+func TestNarrowOffersAnUnmarkedYesTwoLetters(t *testing.T) {
+	tree := &Tree{Documents: map[string]Document{
+		"v/x.md": {Path: "v/x.md", Text: "We use [the bound](y.md).\n"},
+		"v/y.md": {Path: "v/y.md", Text: "The bound holds.\n"},
+	}}
+	g := graphOf(
+		ClaimNode{ID: "clm-a", Document: "v/x.md", Title: "A"},
+		ClaimNode{ID: "clm-b", Document: "v/x.md", Title: "B"},
+		ClaimNode{ID: "clm-c", Document: "v/y.md", Title: "C"},
+		ClaimNode{ID: "clm-d", Document: "v/y.md", Title: "D"},
+	)
+	inv := &Inventory{Anchors: []Anchor{{Document: "v/x.md", Line: 0, Href: "y.md", Target: "v/y.md"}}}
+	a := narrow(tree, g, inv, buildrecords.NodePassRecord{}, []pair{{"clm-c", "clm-a"}})
+
+	all := []Relation{SupportedBy, InSupportOf, MentionedBy}
+	want := map[pair][]Relation{
+		{"clm-a", "clm-c"}: all, {"clm-a", "clm-d"}: all, {"clm-b", "clm-c"}: all, {"clm-b", "clm-d"}: all,
+		{"clm-c", "clm-a"}: {SupportedBy, MentionedBy},
+	}
+	if len(a.candidates) != len(want) {
+		t.Fatalf("candidates = %+v, want %d", a.candidates, len(want))
+	}
+	for _, c := range a.candidates {
+		if !slices.Equal(c.offered, want[c.pair()]) {
+			t.Errorf("%v offered %v, want %v", c.pair(), c.offered, want[c.pair()])
+		}
+	}
+
+	repo := t.TempDir()
+	if err := WriteClassification(repo, buildrecords.ClassificationRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	reader := &letters{by: map[string]string{}}
+	if _, err := classify(context.Background(), repo, a.candidates, func(n ClaimNode) string { return n.Title }, Options{Reader: reader.read}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := buildrecords.ReadClassification(recordsAt(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Candidates) != len(want) {
+		t.Fatalf("record = %+v, want %d candidates", rec.Candidates, len(want))
+	}
+	for _, e := range rec.Candidates {
+		var letters []string
+		for _, r := range want[pair{e.Source, e.Target}] {
+			letters = append(letters, relationLetter[r])
+		}
+		if !slices.Equal(e.Offered, letters) {
+			t.Errorf("record %s -> %s offered %q, want %q", e.Source, e.Target, e.Offered, letters)
+		}
+	}
+}
+
 func TestUnmarkedLocality(t *testing.T) {
 	for _, tc := range []struct{ a, b, want string }{
 		{"p/s/a.md", "p/s/a.md", "same document"},
