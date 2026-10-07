@@ -1,6 +1,15 @@
 # ACTIVE PLAN – the node-matching gap: numbering in the measurement, the matcher, the reading
 
-**Status:** N1, N2, N2b and N3 done. The reading (`.claude-temp/n3/verdict.md`,
+**Status:** N1–N5 done; the first build on the new configuration measured
+(`.claude-temp/n4/build-verdict.md`): with the letter asks on Qwen3.6-35B-A3B the attribution
+ask answers its three letters a third each where Flash-Next answered 79 % "supported by", so five
+author edges the unmarked ask got right came out reversed and 121 candidates landed as
+`references`; depends edges 193 against Saturday's 415, author edges found 6 against 16. The
+light tier fails the classification ask, not only the unmarked one; today's recall is the
+model's, not the shortlist's. Next, with the owner: the 33 author-edge pairs the build asked
+re-asked on Flash-Next to isolate the model effect; the design change of carrying an unmarked
+yes's direction into attribution; a Flash-Next build on the split budget as the shortlist's
+baseline. The reading (`.claude-temp/n3/verdict.md`,
 `.claude-temp/n3/probe-verdict.md`): two bottlenecks in order — the shortlist never offers the
 author's true premise (rank 14–233 at K = 5 over the six exactly matched misses; the stage's
 shortlist reached 4 of 25 unmarked misses, 10 of which cross papers), and the ask's scope, the
