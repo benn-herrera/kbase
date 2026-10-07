@@ -258,7 +258,8 @@ func TestStyleTablesAreTotal(t *testing.T) {
 }
 
 // TestDOTQuoting: a quote, a backslash and markup in the KB's title, a
-// volume's title and a node title stay inside their DOT strings.
+// volume's title and a node title stay inside their DOT strings, and a
+// tooltip's backslash survives Graphviz's escString pass.
 func TestDOTQuoting(t *testing.T) {
 	dep := strokeFor(kb.RelationDepends, false)
 	g := &graph{kbTitle: `K "B" \x`,
@@ -271,7 +272,7 @@ func TestDOTQuoting(t *testing.T) {
 		edges: []edge{{source: "clm-aaaaaa", target: "clm-bbbbbb", stroke: dep}}}
 	sheets := g.sheets()
 	for _, want := range []string{`label=<<b>K &quot;B&quot; \x</b>>]`, `label=<<b>A &quot;quoted&quot; \title &lt;x&gt;</b>`,
-		`label="clm-aaaaaa\nSays \"so\" \\lambda"`, `tooltip="clm-aaaaaa [prose, *pending*] Says \"so\" \\lambda"`} {
+		`label="clm-aaaaaa\nSays \"so\" \\lambda"`, `tooltip="clm-aaaaaa [prose, *pending*] Says \"so\" \\\\lambda"`} {
 		if !strings.Contains(sheets[0].dot, want) {
 			t.Errorf("full sheet lacks %s:\n%s", want, sheets[0].dot)
 		}

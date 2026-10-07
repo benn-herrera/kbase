@@ -304,7 +304,7 @@ func (g *graph) claimsGraph(title string, clusters []string, drawn []node, edges
 	for _, n := range drawn {
 		if n.kind == kindGhost {
 			lines = append(lines, fmt.Sprintf(`  %s [shape=box style="dashed" penwidth=1 color=%s label=%s tooltip=%s]`,
-				quoted(n.id), quoted(ghostColor), quoted(n.id), quoted(n.id+" — no record carries this id")))
+				quoted(n.id), quoted(ghostColor), quoted(n.id), quoted(tip(n.id+" — no record carries this id"))))
 		}
 	}
 	emitted := slices.Clone(edges)
@@ -326,7 +326,7 @@ func nodeStatement(n node, base string) string {
 	s := styleOf(n.kind)
 	fill := cmp.Or(s.fill, bandFills[n.band])
 	return fmt.Sprintf(`%s [shape=%s style=%s penwidth=%d fillcolor=%s label=%s href=%s tooltip=%s]`,
-		quoted(n.id), s.shape, quoted(s.style), s.penwidth, quoted(fill), quoted(labelLines(n)...), quoted(relative(n.href, base)), quoted(tooltip(n)))
+		quoted(n.id), s.shape, quoted(s.style), s.penwidth, quoted(fill), quoted(labelLines(n)...), quoted(relative(n.href, base)), quoted(tip(tooltip(n))))
 }
 
 func edgeStatement(e edge) string {
@@ -337,14 +337,14 @@ func edgeStatement(e edge) string {
 		direction = "dir=back "
 	}
 	return fmt.Sprintf(`%s -> %s [%scolor=%s %s tooltip=%s]`, quoted(tail), quoted(head), direction, quoted(s.color), s.extra,
-		quoted(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.tip)))
+		quoted(tip(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.tip))))
 }
 
 func unattachedTable(nodes []node, base string) string {
 	var rows strings.Builder
 	for _, n := range nodes {
 		fmt.Fprintf(&rows, `<tr><td align="left" href="%s" tooltip="%s">%s — %s</td></tr>`,
-			escape(relative(n.href, base)), escape(tooltip(n)), escape(n.id), escape(cut(displayTitle(n.title), 48)))
+			escape(relative(n.href, base)), escape(tip(tooltip(n))), escape(n.id), escape(cut(displayTitle(n.title), 48)))
 	}
 	return fmt.Sprintf(`<table border="0" cellborder="0" cellspacing="0" cellpadding="1"><tr><td align="left"><b>unattached (%d)</b></td></tr>%s</table>`,
 		len(nodes), rows.String())
@@ -358,6 +358,14 @@ func tooltip(n node) string {
 		classes += ", " + bandLabels[n.band]
 	}
 	return fmt.Sprintf("%s [%s] %s", n.id, classes, strings.Join(strings.Fields(n.title), " "))
+}
+
+// tip readies text for a tooltip, which Graphviz reads as an escString after
+// the string's own unescaping: that pass expands \G, \N, \L, \E, \H and \T and
+// keeps a backslash only where doubled, so every backslash is doubled once
+// more, before quoted or escape. label and href take no such pass.
+func tip(text string) string {
+	return strings.ReplaceAll(text, `\`, `\\`)
 }
 
 // labelLines is a node's id over its title wrapped to at most three lines.

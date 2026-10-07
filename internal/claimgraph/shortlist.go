@@ -13,9 +13,13 @@ import (
 	"kbase/internal/write"
 )
 
-// shortlistK is how many of a source's best-ranked targets the
-// unmarked-reference stage asks about.
-const shortlistK = 5
+// The unmarked-reference stage's budgets per source: shortlistRestK of its
+// best-ranked prose and equation targets, and, for a block source alone,
+// shortlistBlockK of its best-ranked block targets besides.
+const (
+	shortlistRestK  = 4
+	shortlistBlockK = 4
+)
 
 // shortlistStopwords are words too common to tell two claims apart, and the
 // LaTeX control words the fold leaves behind.

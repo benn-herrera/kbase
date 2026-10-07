@@ -36,7 +36,7 @@ personant.
 
 | Interface | Observed version | Contract |
 |---|---|---|
-| kb_tools (reference implementation) | adjagent `dev` at `35fa6cb326f811910dc027249482e47b22d50c3e`, the clone at `.claude/adjagent/` from which this repository's agent set is installed | Every kb_tools citation in this repository's documents names this commit and is read from `.claude/adjagent/kb_tools/`. Sections cited below are kb_tools' SPEC unless noted. |
+| kb_tools (reference implementation) | adjagent `main` at `5a290afab53a9742b89db8e623880e5faa5d5bda`, the clone at `.claude/adjagent/` from which this repository's agent set is installed | Every kb_tools citation in this repository's documents names this commit and is read from `.claude/adjagent/kb_tools/`. Sections cited below are kb_tools' SPEC unless noted. |
 | pandoc | 3.12 (`pandoc-api-version` 1.23.1.2) | Required on the host, not shipped. |
 | Graphviz `dot` | Any version | Optional on the host, found on `PATH`, not shipped. Draws the claim-graph sheets (§3); absent, `refresh` writes the placeholder at the root only and `render-claim-graph` says so (§3, §7). |
 | git | 2.56.0 | Required on the host. The recoverable record of a build (§6). |
@@ -149,7 +149,8 @@ whatever their contexts.
   a support (dashed rounded), an experiment (component shape), an invariant and an axiom (grey, bold
   frame), a work (note). An edge end that no record carries is drawn as a ghost box, dashed red,
   labelled with the id. Claims and supports are filled by solidity band, `*pending*` in grey. A
-  node's tooltip reads `<id> [<kind>, <band>] <title>`.
+  node's tooltip reads `<id> [<kind>, <band>] <title>`, every backslash in it shown as written
+  (`$\Gamma$` does not become the graph's name).
 - *Links*: every node links to its register entry; a digest box links to the volume's index and
   sheet.
 - A legend. The SVG root is `width="100%"` with a `viewBox`, so it scales to the viewer.
@@ -180,6 +181,7 @@ there is a defect. Build-orchestration differences are the "Not ported" list in 
 | Query paging | A list query returns at most `--limit` results (default in ARCHITECTURE §12; `0` means all) from `--offset`, reporting `count` and `truncated` (§7) | Every result, always |
 | Tool surface | The subcommands, and the same operations over MCP (§11) | The `kb_util` ops at a shell |
 | Build inputs on the trail | Every boundary's body ends with the build's inputs (§6); a resume given other inputs is refused (§5) | Its bodies carry none, until it adopts, which closes this row |
+| Unmarked-reference shortlist | The unmarked shortlist offers every source its best four prose or equation candidates and offers a block-kind source its best four block candidates besides | Offers the best five of all kinds, until it adopts, which closes this row |
 
 ---
 

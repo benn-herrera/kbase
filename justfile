@@ -1546,7 +1546,7 @@ _test-integration-build-arxiv: build
     fi
     printf 'integration(test-integration-build-arxiv) ok\n'
 
-[doc("LIVE — NEEDS the local inference endpoint test_data/fixtures/config/ names, pandoc, python3 and the adjagent clone (excluded from test-integration): ./bin/kbase build without --no-inference over the Slice-1 paper BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository with kb_tools installed; kb_tools' verify green before any refresh, then refresh and verify green; README.md with its passage; the asks' captures, cached answers and group records under the state store's scratch/; a second build through claims-discovered configured by KBASE_API_BASE_URL, KBASE_MODEL and KBASE_API_KEY_FILE alone, no configuration directory; config= names another configuration directory; kb_tools' identify over the built tree agreeing with the node-pass record; kb_tools' unmarked-reference shortlist over the tree references-found read planning the pairs the unmarked record plans; counts in comparison.yaml; evidence under test_data/transient/test-integration-build-live-arxiv/")]
+[doc("LIVE — NEEDS the local inference endpoint test_data/fixtures/config/ names, pandoc, python3 and the adjagent clone (excluded from test-integration): ./bin/kbase build without --no-inference over the Slice-1 paper BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository with kb_tools installed; kb_tools' verify green before any refresh, then refresh and verify green; README.md with its passage; the asks' captures, cached answers and group records under the state store's scratch/; a second build through claims-discovered configured by KBASE_API_BASE_URL, KBASE_MODEL and KBASE_API_KEY_FILE alone, no configuration directory; config= names another configuration directory; kb_tools' identify over the built tree agreeing with the node-pass record; kb_tools' unmarked-reference ranking over the tree references-found read, each pool split into its best four of the rest and, for a block source, its best four block claims first, planning the pairs the unmarked record plans; counts in comparison.yaml; evidence under test_data/transient/test-integration-build-live-arxiv/")]
 test-integration-build-live-arxiv config=LIVE_CONFIG_DIR: (prep-test-integration-arxiv BUILD_ARXIV_SPECIAL_ID)
     @mkdir -p "{{BUILD_LIVE_ARXIV_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-live-arxiv "{{config}}" 2>&1 | tee "{{BUILD_LIVE_ARXIV_OUT_DIR}}/log.txt"
@@ -1652,7 +1652,9 @@ _test-integration-build-live-arxiv config: build
 
     # kb_tools' shortlist over the tree references-found planned over — the
     # stage writes nothing under kb-root/, so its commit's tree is the one it
-    # read — with kbase's node-pass record in kb_tools' spelling: the same
+    # read — with kbase's node-pass record in kb_tools' spelling, each pool
+    # split as kbase's shortlist splits it and kb_tools' does not (4 and 4:
+    # shortlistRestK and shortlistBlockK in internal/claimgraph): the same
     # pairs, in the same order, as the unmarked record plans.
     if [[ -f "${dir}/unmarked-plan.json" ]]; then
         at="${dir}/at-references-found"
@@ -1664,7 +1666,7 @@ _test-integration-build-live-arxiv config: build
     import json, sys
     from pathlib import Path
     from kb_tools import kb_pipeline
-    from kb_tools.kb_claimgraph import attribute, classify, equation_sites, graph, inventory, tree, unmarked
+    from kb_tools.kb_claimgraph import attribute, classify, equation_sites, graph, hand_named, inventory, shortlist, tree
     root = Path(sys.argv[1])
     documents = tree.read(root / "kb-root")
     sites = inventory.scan(documents)
@@ -1672,9 +1674,16 @@ _test-integration-build-live-arxiv config: build
     statement_of = classify.statements(documents, authored, sites)
     statement = {node_id: statement_of(node) for node_id, node in authored.nodes.items()}
     narrowed = attribute.narrow(documents, authored, sites, kb_pipeline.read_node_pass(root))
-    planned = unmarked.plan(authored.nodes, statement, candidate_pairs=[c.pair for c in narrowed.candidates],
-                            own=equation_sites.own_equations(documents, authored, sites))
-    theirs = [tuple(pair) for pair in planned.pairs]
+    own = equation_sites.own_equations(documents, authored, sites)
+    blocks = {node.id for node, _, _ in hand_named._block_claims(authored, sites)}
+    sources = sorted(node_id for node_id, node in authored.nodes.items() if node.equation is None)
+    ranked = shortlist.rank(statement, sources=sources, candidate_pairs=[c.pair for c in narrowed.candidates])
+    theirs = []
+    for source in sources:
+        pool = [target for target in ranked[source] if (source, target) not in own]
+        chosen = [t for t in pool if t in blocks][:4] if source in blocks else []
+        chosen += [t for t in pool if t not in blocks][:4]
+        theirs += [(source, target) for target in chosen]
     ours = [tuple(pair) for pair in json.load(open(sys.argv[2]))]
     print(f"kb_tools plans {len(theirs)} pairs, kbase {len(ours)}; the same pairs in the same order: {theirs == ours}")
     for pair in sorted(set(theirs) - set(ours)):
@@ -1757,7 +1766,7 @@ _test-integration-build-live-arxiv config: build
     } > "${out}/comparison.yaml"
 
     {{just_executable()}} _write-evidence "${out}" "test-integration-build-live-arxiv" \
-      "${kbase} models --config-dir <config> into models.*\non {{BUILD_ARXIV_SPECIAL_ID}}, staged into <id>/repo (sources, stub Makefile, .gitignore, just --justfile .claude/adjagent/justfile install):\n(cd <id>/repo && ${kbase} build <volume-root> --config-dir <config> --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\n(cd <id>/repo && PYTHONPATH=.claude/agents python3 -m kb_tools.kb_util install-targets; make kb-verify; make kb-refresh; make kb-verify)\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\nkb_tools' identify.asked_paragraphs and identify.judge over <id>/repo/kb-root with <id>/nodepass.json into <id>/checks/kbtools-identify.*\ngit -C <id>/repo archive <references-found commit> kb-root | tar -x -C <id>/at-references-found; kb_tools' unmarked.plan over it with <id>/kb-build-node-pass.yaml, against <id>/unmarked-plan.json, into <id>/checks/kbtools-shortlist.*\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_MODEL=<config's models.light> KBASE_API_KEY_FILE=<its apiKeyFile> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*"
+      "${kbase} models --config-dir <config> into models.*\non {{BUILD_ARXIV_SPECIAL_ID}}, staged into <id>/repo (sources, stub Makefile, .gitignore, just --justfile .claude/adjagent/justfile install):\n(cd <id>/repo && ${kbase} build <volume-root> --config-dir <config> --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\n(cd <id>/repo && PYTHONPATH=.claude/agents python3 -m kb_tools.kb_util install-targets; make kb-verify; make kb-refresh; make kb-verify)\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\nkb_tools' identify.asked_paragraphs and identify.judge over <id>/repo/kb-root with <id>/nodepass.json into <id>/checks/kbtools-identify.*\ngit -C <id>/repo archive <references-found commit> kb-root | tar -x -C <id>/at-references-found; kb_tools' shortlist.rank over it with <id>/kb-build-node-pass.yaml, own equations dropped, a block source's best 4 block claims then any source's best 4 of the rest, against <id>/unmarked-plan.json, into <id>/checks/kbtools-shortlist.*\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_MODEL=<config's models.light> KBASE_API_KEY_FILE=<its apiKeyFile> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*"
     printf '\nReference: adjagent %s; %s\n' "${adjagent}" "${pandoc_version}" >> "${out}/EVIDENCE.md"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-build-live-arxiv): a check failed — see comparison.yaml\n'

@@ -90,15 +90,15 @@ func (a *answering) count() int {
 
 // script answers the paper's asks: the result-stating paragraph is a claim,
 // the notation paragraph is unreadable once and then not a claim, the
-// pointing paragraph is unreadable twice; the prose claim's text points at
-// the shortlisted lemma and nothing else points; every candidate is
+// pointing paragraph is unreadable twice; the lemma's text points at the
+// shortlisted prose claim and nothing else points; every candidate is
 // supported-by; the overview passage holds a heading once.
 //
 // It tells asks apart by the system fragment and the slot values a prompt
 // carries, never by template wording: an ask naming claims by their claim
 // lines is a classify ask where it numbers reference lines and an unmarked
-// ask otherwise, the prose claim's being the only one whose document holds
-// the notation paragraph; a paragraph ask holds its paragraph's text twice,
+// ask otherwise, the lemma's being the one carrying the lemma's text and the
+// prose claim's; a paragraph ask holds its paragraph's text twice,
 // in the document and as the paragraph; a re-ask quotes the reply it could
 // not use.
 func script(system, prompt string) string {
@@ -115,7 +115,7 @@ func script(system, prompt string) string {
 	case strings.Contains(prompt, "- `clm-") && referenceLine.MatchString(prompt):
 		return "A"
 	case strings.Contains(prompt, "- `clm-"):
-		if strings.Contains(prompt, "recalls the notation") && strings.Contains(prompt, "Every widget is a gadget, as") {
+		if strings.Contains(prompt, "Every widget is a gadget, as") && strings.Contains(prompt, "under mild conditions") {
 			return "A"
 		}
 		return "B"
@@ -180,8 +180,8 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	}
 
 	unmarked, _, err := buildrecords.ReadUnmarked(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
-	if err != nil || unmarked.Planned == nil || len(*unmarked.Planned) != 2 || len(unmarked.Pairs) != 2 {
-		t.Fatalf("unmarked record: %+v, %v; want the two pairs no reference reaches planned and asked", unmarked, err)
+	if err != nil || unmarked.Planned == nil || len(*unmarked.Planned) != 1 || len(unmarked.Pairs) != 1 {
+		t.Fatalf("unmarked record: %+v, %v; want the one pair no reference reaches that a split shortlist offers — the lemma's to the prose claim — planned and asked", unmarked, err)
 	}
 	var yes buildrecords.CandidateEntry
 	for _, p := range unmarked.Pairs {
@@ -189,8 +189,8 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 			yes = p
 		}
 	}
-	if yes.Source == "" || !strings.Contains(files["kb-root/a-small-paper/introduction.md"], yes.Source) {
-		t.Errorf("unmarked pairs = %+v, want the prose claim's pair answered A", unmarked.Pairs)
+	if yes.Target == "" || !strings.Contains(files["kb-root/a-small-paper/introduction.md"], yes.Target) {
+		t.Errorf("unmarked pairs = %+v, want the pair to the prose claim answered A", unmarked.Pairs)
 	}
 
 	classified, _, err := buildrecords.ReadClassification(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
@@ -207,8 +207,8 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	if !found {
 		t.Errorf("the unmarked yes %s -> %s is no candidate classification asked about", yes.Source, yes.Target)
 	}
-	if demoted := classifyField(t, fields, "demoted"); len(demoted) != 2 {
-		t.Errorf("demoted = %q, want the lemma-theorem ring both ways", demoted)
+	if demoted := classifyField(t, fields, "demoted"); len(demoted) != 4 {
+		t.Errorf("demoted = %q, want the four edges of the ring the lemma, the theorem and the prose claim form", demoted)
 	}
 
 	if readme := files["kb-root/README.md"]; !strings.Contains(readme, "A small paper showing that widgets and gadgets coincide.") {
@@ -236,7 +236,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 			groups = append(groups, e.Unit)
 		}
 	}
-	if len(groups) != 2 || !slices.Contains(groups, yes.Source) {
+	if len(groups) != 1 || !slices.Contains(groups, yes.Source) {
 		t.Errorf("references-found's units = %q, want one per source group asked", groups)
 	}
 	scratch := filepath.Join(f.state, scratchDir)
@@ -358,8 +358,8 @@ func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (mode
 // provider only what the answer cache does not hold, and lands what the
 // uninterrupted build lands.
 //
-// The node pass and the unmarked asks take 8 answers; classification asks
-// three groups — the prose claim's of 2 candidates, the lemma's and the
+// The node pass and the unmarked ask take 7 answers; classification asks
+// three groups — the lemma's of 2 candidates, the prose claim's and the
 // theorem's of 1 — in ascending id, and ids are minted at random. Ten answers
 // complete the first group in every order and never all three.
 func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {

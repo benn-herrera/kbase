@@ -27,11 +27,28 @@ type unmarkedPlan struct {
 	ownEquations int
 }
 
-// planUnmarked is the stage's shortlist over the whole node set — per source,
-// every node but a minted equation, its shortlistK best targets less every
-// pair already a candidate and every equation the source states — a pure
-// function of the statements, keyed by node id, and the excluded pairs.
-func planUnmarked(nodes []ClaimNode, statements map[string]string, candidatePairs []pair, own map[pair]bool) unmarkedPlan {
+// splitByKind is targets as two lists, those in blocks and the rest, each
+// keeping targets' order.
+func splitByKind(targets []string, blocks map[string]bool) (inBlocks, rest []string) {
+	for _, t := range targets {
+		if blocks[t] {
+			inBlocks = append(inBlocks, t)
+		} else {
+			rest = append(rest, t)
+		}
+	}
+	return inBlocks, rest
+}
+
+// planUnmarked is the stage's shortlist over the whole node set. Per source —
+// every node but a minted equation — its pool is every other node less every
+// pair already a candidate and every equation the source states, split into
+// block claims and the rest, each best first; it plans the first
+// shortlistRestK of the rest and, where the source is itself a block claim,
+// the first shortlistBlockK of the block claims, those ahead of the rest. A
+// pure function of the statements, keyed by node id, the block claims and the
+// excluded pairs.
+func planUnmarked(nodes []ClaimNode, statements map[string]string, blocks map[string]bool, candidatePairs []pair, own map[pair]bool) unmarkedPlan {
 	var sources []string
 	for _, n := range nodes {
 		if n.Equation == "" {
@@ -49,7 +66,12 @@ func planUnmarked(nodes []ClaimNode, statements map[string]string, candidatePair
 				kept = append(kept, t)
 			}
 		}
-		for _, t := range kept[:min(shortlistK, len(kept))] {
+		blockTargets, rest := splitByKind(kept, blocks)
+		var chosen []string
+		if blocks[s] {
+			chosen = blockTargets[:min(shortlistBlockK, len(blockTargets))]
+		}
+		for _, t := range slices.Concat(chosen, rest[:min(shortlistRestK, len(rest))]) {
 			out.pairs = append(out.pairs, pair{s, t})
 		}
 		out.excluded += pool - len(ranked[s])
@@ -135,7 +157,11 @@ func References(ctx context.Context, opts Options) (Report, error) {
 		for i, c := range a.candidates {
 			existing[i] = c.pair()
 		}
-		planned := planUnmarked(g.Nodes, statement, existing, ownEquations(t, g, &inv))
+		blocks := map[string]bool{}
+		for _, s := range blockClaimSites(g, &inv) {
+			blocks[s.node.ID] = true
+		}
+		planned := planUnmarked(g.Nodes, statement, blocks, existing, ownEquations(t, g, &inv))
 		plan := make([]buildrecords.PlannedPair, len(planned.pairs))
 		for i, p := range planned.pairs {
 			plan[i] = buildrecords.PlannedPair{p.source, p.target}
@@ -245,7 +271,7 @@ func unmarkedFindings(planned unmarkedPlan, rec buildrecords.UnmarkedRecord, g *
 		}
 	}
 	return []Finding{
-		fact("stage-U-shortlist", field("sources", len(planned.sources)), field("k", shortlistK), field("planned", len(planned.pairs)),
+		fact("stage-U-shortlist", field("sources", len(planned.sources)), field("rest-k", shortlistRestK), field("block-k", shortlistBlockK), field("planned", len(planned.pairs)),
 			field("excluded-as-candidates", planned.excluded), field("excluded-as-own-equations", planned.ownEquations),
 			field("held", held), field("asked", len(planned.pairs)-held)),
 		fact("stage-U-asks", append(recordOf(field("sources", len(groups))), askTotals(groups)...)...),

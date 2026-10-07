@@ -1,8 +1,8 @@
 # ARCHITECTURE – kbase
 
 How this implementation meets [SPEC.md](SPEC.md). Purpose and intent are in [THESIS.md](THESIS.md);
-house rules are in [CONVENTIONS.md](CONVENTIONS.md). kb_tools citations name adjagent `dev` at
-`35fa6cb326f811910dc027249482e47b22d50c3e`, by section name; "kb_tools" is the reference
+house rules are in [CONVENTIONS.md](CONVENTIONS.md). kb_tools citations name adjagent `main` at
+`5a290afab53a9742b89db8e623880e5faa5d5bda`, by section name; "kb_tools" is the reference
 implementation, read from `.claude/adjagent/kb_tools/` (the clone this repository's agent set is
 installed from), and a module path in `[brackets]` below is the kb_tools module a kbase package
 ports.
@@ -73,7 +73,7 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 | `claims-declared` | Claim-graph pass over author-declared claims | `kb_claimgraph/` |
 | `claims-discovered` | Claim-graph pass over discovered claims | `kb_claimgraph/` |
 | `equations-minted` | Equation nodes minted | `kb_claimgraph/` |
-| `references-found` | Unmarked references found: a mechanical shortlist of K pairs per source claim, one letter ask per pair, a yes an edge candidate; writes nothing under `kb-root/` | `kb_claimgraph/` (`unmarked.py`, `shortlist.py`, `equation_sites.py`) |
+| `references-found` | Unmarked references found: a mechanical shortlist per source claim within the two unmarked-shortlist budgets (§12), one letter ask per pair, a yes an edge candidate; writes nothing under `kb-root/` | `kb_claimgraph/` (`unmarked.py`, `shortlist.py`, `equation_sites.py`) |
 | `depends-attributed` | Dependency edges attributed | `kb_claimgraph/` |
 | `phase-3a` | `refresh`, `verify`, and the readiness stamp | `kb_driver` `phase-3a` |
 | `overview-drafted` | The overview document | `kb_driver` overview |
@@ -519,6 +519,8 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Run lock path | `<git dir>/kbase-build.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
 | Sheet render concurrency | `sheet.renderConcurrency`: 4, the most `dot` processes at once; output order is kept (§6) |
+| Unmarked shortlist, rest budget | `shortlistRestK` in `internal/claimgraph`: 4, the best-ranked prose and equation candidates `references-found` asks per source (SPEC §4) |
+| Unmarked shortlist, block budget | `shortlistBlockK` in `internal/claimgraph`: 4, the best-ranked block candidates it asks per block source, besides the rest (SPEC §4) |
 
 Exit codes and the placeholder's digest form are in SPEC §7 and §3; the pandoc range is SPEC §2; the
 stage-commit subject is SPEC §6.

@@ -46,7 +46,7 @@ func TestPlanUnmarked(t *testing.T) {
 		"clm-d": "Unrelated widgets gadgets.",
 		"clm-e": "``` math\n\\lambda_c = 1\n```",
 	}
-	p := planUnmarked(nodes, statements, []pair{{"clm-d", "clm-a"}}, map[pair]bool{{"clm-a", "clm-e"}: true})
+	p := planUnmarked(nodes, statements, nil, []pair{{"clm-d", "clm-a"}}, map[pair]bool{{"clm-a", "clm-e"}: true})
 	if !slices.Equal(p.sources, []string{"clm-a", "clm-b", "clm-c", "clm-d"}) {
 		t.Errorf("sources = %q, want every node but the equation", p.sources)
 	}
@@ -72,8 +72,53 @@ func TestPlanUnmarked(t *testing.T) {
 		many = append(many, ClaimNode{ID: id})
 		same[id] = "alpha beta gamma"
 	}
-	if got := targetsOf(planUnmarked(many, same, nil, nil), "clm-1"); !slices.Equal(got, []string{"clm-2", "clm-3", "clm-4", "clm-5", "clm-6"}) {
-		t.Errorf("a pool of six ties = %q, want the first %d by id", got, shortlistK)
+	if got := targetsOf(planUnmarked(many, same, nil, nil, nil), "clm-1"); !slices.Equal(got, []string{"clm-2", "clm-3", "clm-4", "clm-5"}) {
+		t.Errorf("a pool of six ties = %q, want the first %d by id", got, shortlistRestK)
+	}
+}
+
+// TestPlanUnmarkedSplitBudget: every source is offered its best prose and
+// equation candidates, a block source its best block candidates besides and
+// ahead of them, each list in cosine order and capped at its own budget; no
+// block enters the rest list.
+func TestPlanUnmarkedSplitBudget(t *testing.T) {
+	nodes := []ClaimNode{{ID: "clm-s"}, {ID: "clm-p"}, {ID: "clm-q", Equation: "eq:q"}, {ID: "clm-k"}}
+	statements := map[string]string{
+		"clm-s": "attention friction drives market collapse",
+		"clm-p": "attention friction drives market collapse quickly",
+		"clm-q": "friction market collapse rate",
+		"clm-k": "collapse threshold theorem bounds",
+	}
+	for _, c := range []struct {
+		name   string
+		blocks map[string]bool
+		want   []string
+	}{
+		{"no blocks: cosine alone ranks clm-k last", nil, []string{"clm-p", "clm-q", "clm-k"}},
+		{"a prose source: the rest list alone", map[string]bool{"clm-k": true}, []string{"clm-p", "clm-q"}},
+		{"a block source: its block list, then the rest", map[string]bool{"clm-k": true, "clm-s": true}, []string{"clm-k", "clm-p", "clm-q"}},
+	} {
+		if got := targetsOf(planUnmarked(nodes, statements, c.blocks, nil, nil), "clm-s"); !slices.Equal(got, c.want) {
+			t.Errorf("%s: clm-s's shortlist = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	var many []ClaimNode
+	same := map[string]string{}
+	blocks := map[string]bool{}
+	for _, id := range []string{"clm-b0", "clm-b1", "clm-b2", "clm-b3", "clm-b4", "clm-b5", "clm-r0", "clm-r1", "clm-r2", "clm-r3", "clm-r4", "clm-r5"} {
+		many = append(many, ClaimNode{ID: id})
+		same[id] = "alpha beta gamma"
+		blocks[id] = strings.HasPrefix(id, "clm-b")
+	}
+	p := planUnmarked(many, same, blocks, nil, nil)
+	for source, want := range map[string][]string{
+		"clm-b0": {"clm-b1", "clm-b2", "clm-b3", "clm-b4", "clm-r0", "clm-r1", "clm-r2", "clm-r3"},
+		"clm-r0": {"clm-r1", "clm-r2", "clm-r3", "clm-r4"},
+	} {
+		if got := targetsOf(p, source); !slices.Equal(got, want) {
+			t.Errorf("%s's shortlist of ties = %q, want %q: %d blocks for a block source, %d of the rest for any", source, got, want, shortlistBlockK, shortlistRestK)
+		}
 	}
 }
 
