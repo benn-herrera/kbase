@@ -26,6 +26,10 @@ deleted, not archived.
   DAG constraint over units — once the `demoted` relation has been lived with.
 - A complete LaTeX reader in place of pandoc's: the `polytexnical` project (`../polytexnical`),
   taken up only after kbase has shown the pipeline produces a claim graph worth auditing.
+- The claim-graph sheets rendered through Graphviz's library in process (cgo over `libgvc` and
+  `libcgraph`, the `dot` layout and SVG plugins linked statically, the libraries vendored once per
+  build platform), replacing the `dot`-on-PATH requirement; the DOT goldens judge the swap. The
+  exec route stays the contract until then.
 
 Four items are also reported upstream to kb_tools as findings: resolved numbering, display names
 from `\input`-ed preambles, the `-latex_macros` reading, and records-native leaves.
