@@ -6,7 +6,8 @@ are used, not reimplemented. Beside them sit the theorem-number walker over a vo
 one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
 this directory, `number_match.py`, the comparison's number class, which imports only the
 walker, and `statement_match.py`, its statement class, which imports nothing. The tests of the
-walker and both classes run with `python3 -m unittest discover -s tools/measure`.
+walker, both classes and the shortlist sweep's rankings run with
+`PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure` (the sweep's import kb_tools).
 
 ```
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/compare_to_pristine.py \
@@ -280,6 +281,42 @@ and so the pools, may differ from the build's own.
 `forward / either` over the misses measured is shortlist recall at that K, and `asks` is its cost.
 If the misses are reached at K = 5 but the build still misses them, the ask is what bounds recall.
 If they are not reached, the shortlist is.
+
+## sweep_shortlist.py
+
+```
+PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/sweep_shortlist.py \
+    --ours <kb-root> --edges .claude-temp/<name>/compare/edges.tsv [--probe-pairs <pairs.tsv>] \
+    --out .claude-temp/<name>/sweep
+```
+
+The same misses, sources and miss reading as `measure_unmarked_shortlist.py`, ranked several ways.
+Every ranking starts from the stage's pool: `shortlist.rank` less each source's own equations, so
+`today`'s top `shortlist.K` is `unmarked.plan`'s pairs (`sweep.md` states whether it is). A miss's
+rank is its best forward pair's. Each ranking is a pure function of the stage's inputs plus, where
+named, the nodes' kinds or titles:
+
+| ranking | order per source |
+|---|---|
+| `today` | the pool as ranked |
+| `blocks first` | the pool's block candidates, then the rest, each in pool order |
+| `split budget` | two lists, the block candidates and the rest; top K of each is asked, and a target's rank is within its own list |
+| `duplicates removed` | the pool less every candidate whose term set (`shortlist.tokens` of its statement) overlaps the source's at `STATEMENT_THRESHOLD` or above (`statement_match.overlap`) |
+| `title terms weighted` | `shortlist.rank` over each statement with its node's title appended once more |
+| `… + duplicates removed` | the first ranking applied to the `duplicates removed` pool |
+
+`--probe-pairs` is a probe's `pairs.tsv` (columns `pair`, `source`, `target`); each pair's overlap
+and whether `duplicates removed` would drop it are listed. Arguments, privacy and exit statuses are
+as above; an `--probe-pairs` lacking those columns exits 1.
+
+`ranks.tsv`: one row per miss, sorted by edge: `edge`; `exact` (`yes` when the edge's `pair_class`
+is `statement + statement` and its `recall` `nothing`); `target_kinds` (the kinds of B's matches);
+one column per ranking holding the rank, empty when no pair is in the pool; `among blocks` (the
+rank among block candidates alone, empty when B has no block match).
+
+`sweep.md`: the reach of the misses and the asks at K ∈ {3, 5, 10} per ranking (asks as above,
+summed over every list a ranking asks), the exact pairs' ranks per ranking, and the candidates the
+duplicates rule removes per source.
 
 ## latex_numbering.py — the author's theorem numbers
 
