@@ -1,6 +1,18 @@
 # ACTIVE PLAN – the node-matching gap: numbering in the measurement, the matcher, the reading
 
-**Status:** N1, N2 and N2b done; N3, the reading, under way with the owner. Succeeds the closed two-tranche plan, whose record is carried
+**Status:** N1, N2, N2b and N3 done. The reading (`.claude-temp/n3/verdict.md`,
+`.claude-temp/n3/probe-verdict.md`): two bottlenecks in order — the shortlist never offers the
+author's true premise (rank 14–233 at K = 5 over the six exactly matched misses; the stage's
+shortlist reached 4 of 25 unmarked misses, 10 of which cross papers), and the ask's scope, the
+claim's own words, refuses argument-level dependencies by design (the probe: 2 of 6 true pairs
+`A`, 0 false `A` on 21 reverse and random controls, the two near-miss `A`s cross-volume
+duplicates). Next, decided with the owner: N4 (shortlist and duplicates, no inference) now; N5
+(ask scope) when the inference server is free.
+
+| Wave | Builds | Owner | Acceptance |
+|---|---|---|---|
+| **N4 — the shortlist, offline** | (A) cross-paper candidates admitted to the unmarked shortlist and the ranking over statement text rather than whole-node text; (C) a candidate whose statement overlaps the source's at the statement class's bar is a restatement and leaves the shortlist. Measured by `measure_unmarked_shortlist.py`'s rank-of-true-pair over the 25 unmarked misses (run 20261006T143455 is the baseline: forward reach 4 of 25 at K = 5) and the near-miss `A`s of the probe. The change lands in `internal/claimgraph`'s shortlist with kb_tools' `shortlist` kept as the reference for the comparison harness; a divergence row in SPEC §4 until kb_tools adopts | GC | More of the 25 misses reached at K = 5 than 4, the six exact pairs' ranks reported, and no regression on the asked set's planned pairs beyond what the duplicates rule removes; checkpoint green |
+| **N5 — the ask's scope** | The source's proof or argument extent offered beside its statement as what the claim "uses", the precision controls re-run as the probe did (six true pairs, reverse, near-miss, random, three repeats) | PC (the probe), then GC (the template and the extent) | At least 4 of 6 true pairs `A` with the controls still `B`; one session of inference | Succeeds the closed two-tranche plan, whose record is carried
 below. kbase is the canonical source of the KB toolchain's design; kb_tools adopts its changes, and
 leads only on defect fixes found in use (SPEC §2). The contract documents govern on any
 disagreement with this plan, and this plan is corrected. Owners: PC python-coder, GC go-coder, AR
