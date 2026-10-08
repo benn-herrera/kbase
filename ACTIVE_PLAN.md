@@ -1,89 +1,60 @@
-# ACTIVE PLAN – the node-matching gap: numbering in the measurement, the matcher, the reading
+# ACTIVE PLAN – the uncertainty pool and the hit list
 
-**Status:** N1–N5 done; the first build on the new configuration measured
-(`.claude-temp/n4/build-verdict.md`): with the letter asks on Qwen3.6-35B-A3B the attribution
-ask answers its three letters a third each where Flash-Next answered 79 % "supported by", so five
-author edges the unmarked ask got right came out reversed and 121 candidates landed as
-`references`; depends edges 193 against Saturday's 415, author edges found 6 against 16. The
-light tier fails the classification ask, not only the unmarked one; today's recall is the
-model's, not the shortlist's. Since then: the 33 pairs re-asked on Flash-Next agreed with the light tier's unmarked letters on
-29, placing the fault in the attribution re-ask; the Flash-Next build on the split budget
-recovered the same 16 author edges as Saturday's at 15 % fewer asks; the two-letter attribution
-removed the reversals but not the light tier's noise; and an unmarked yes now lands as a depends
-edge with no attribution ask (commit 5415b0f), measured 2026-10-08 on Flash-Next: 19 author edges
-found against 16, references-only 3 → 0, "nothing" 22 → 19, attribution asks 347 → 81, every
-check passing (`.claude-temp/n4/build-verdict.md`). The floor is 27 unmatched endpoints and 19
-edges with no evidence the ask credits; the letter asks are to become classifier calls, so
-model qualification stops here. Next: the uncertainty pool and hit list over the measured floor. The reading (`.claude-temp/n3/verdict.md`,
-`.claude-temp/n3/probe-verdict.md`): two bottlenecks in order — the shortlist never offers the
-author's true premise (rank 14–233 at K = 5 over the six exactly matched misses; the stage's
-shortlist reached 4 of 25 unmarked misses, 10 of which cross papers), and the ask's scope, the
-claim's own words, refuses argument-level dependencies by design (the probe: 2 of 6 true pairs
-`A`, 0 false `A` on 21 reverse and random controls, the two near-miss `A`s cross-volume
-duplicates). Next, decided with the owner: N4 (shortlist and duplicates, no inference) now; N5
-(ask scope) when the inference server is free.
+**Status:** proposed, for the owner's read; nothing dispatched. Succeeds the node-matching plan,
+closed 2026-10-08 with its record carried below. kbase is the canonical source of the KB
+toolchain's design; kb_tools adopts its changes, and leads only on defect fixes found in use
+(SPEC §2). The contract documents govern on any disagreement with this plan, and this plan is
+corrected. Owners: PC python-coder, GC go-coder, TW tech-writer, PE prompt-engineer.
 
-| Wave | Builds | Owner | Acceptance |
-|---|---|---|---|
-| **N4 — the shortlist, offline** | The stage's pool is already every node (cross-paper admitted) and it already ranks statement text (`internal/claimgraph/shortlist.go`, `planUnmarked`); the lever is the ranking, which puts the true premise at rank 14–233 of 325 while four of the five exactly matched true targets are block nodes among 26. First a measurement sweep (`tools/measure/sweep_shortlist.py`) over candidate rankings — blocks first, a split budget of blocks and the rest, restatements dropped at the statement class's bar, title terms weighted, combinations — each a pure function over the inputs kb_tools' `shortlist.rank` takes, reporting reach of the 25 misses at K = 3, 5, 10 and the asks each costs; then the chosen ranking ported to Go. Decided from the sweep and the offline acceptance count (reach of the 25 misses / the 16 recovered edges kept / asks — today 4 / 16 / 1,485; blocks first at K = 5 11 / 8 / 1,485, losing half the recovered edges, which came from unmarked asks on prose targets; split 4 + 4 to every source 13 / 16 / 2,376): **the split budget offered to block sources only** — every source its best four prose or equation candidates, a block-kind source its best four block candidates besides — 8 / 16 / 1,292. Offering blocks to every source stays a later step once a build shows what the block asks yield. Measured by `measure_unmarked_shortlist.py`'s rank-of-true-pair over the 25 unmarked misses (run 20261006T143455 is the baseline: forward reach 4 of 25 at K = 5) and the near-miss `A`s of the probe. The change lands in `internal/claimgraph`'s shortlist with kb_tools' `shortlist` kept as the reference for the comparison harness; a divergence row in SPEC §4 until kb_tools adopts | GC | More of the 25 misses reached at K = 5 than 4, the six exact pairs' ranks reported, and no regression on the asked set's planned pairs beyond what the duplicates rule removes; checkpoint green |
-| **N6 — attribution of an unmarked yes** | Superseded: a candidate born of an unmarked yes is now not asked and lands as a depends edge (SPEC §4); the two-letter offer below is the measured history. A candidate born of an unmarked yes is offered *supported by* and *mention* only; the yes already answered that the source leans on the target, so attribution does not re-decide the direction (`internal/claimgraph/attribute.go`, class `unmarkedYes`; SPEC §4 row until kb_tools adopts). Motivated by the first light-tier build: the three-way attribution ask on Qwen3.6-35B-A3B answered a third each and reversed five author edges the unmarked ask had got right; the re-ask on Flash-Next agreed with 35B-A3B's unmarked letters on 29 of 33 pairs, so the unmarked ask is nearly model-independent and the attribution ask is where the light tier fails | GC | Landed and measured (`.claude-temp/n4/build-verdict.md`): on the light tier reversals fall from 6 author edges to 1 (in-support-of 114 → 3), but the model answers "mention" to 63 % of its own yeses, so depends 159 / references 200 and author edges 7 found + 7 references-only; Flash-Next's attribution agrees with its yes 78 % of the time. Decision owed to the owner: whether an unmarked yes becomes a depends edge with no attribution ask — offline that gives 19 author edges on Flash-Next (16 today) and 12 on 35B-A3B (7), with 0 and 2 reverse-direction yeses — which would make the light tier usable for the letter asks |
-| **N5 — the ask's scope** | The source's proof or argument extent offered beside its statement as what the claim "uses", the precision controls re-run as the probe did (six true pairs, reverse, near-miss, random, three repeats) | PC (the probe), then GC (the template and the extent) | Done, falsified (`.claude-temp/n5/verdict.md`): with the extent narrow or wide, and with the clause that licenses reading it, the same 2 of 6 true pairs say `A` and the same 4 refuse; the four are the floor relative to this ask and model. Precision rises monotonically to 0 false `A` on 33 controls with extent plus clause (the two restatement `A`s vanish): a precision change available at the price of prompt length, the owner's call. Qwen3.6-35B-A3B on the same probe: 36 of 41 agree, but 0 of 6 true and one random `A`; not a drop-in for this prompt | Succeeds the closed two-tranche plan, whose record is carried
-below. kbase is the canonical source of the KB toolchain's design; kb_tools adopts its changes, and
-leads only on defect fixes found in use (SPEC §2). The contract documents govern on any
-disagreement with this plan, and this plan is corrected. Owners: PC python-coder, GC go-coder, AR
-architect.
+## Where the node-matching plan left the problem
 
-## The gap, as measured
+The design notes (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`) set the goal: zero human
+search, human adjudication only over what the build declares uncertain, with the floor measured
+rather than assumed. The floor is now measured, on the fixture against its author's 71 edges, for
+the build of 2026-10-08 (Flash-Next, split-budget shortlist, an unmarked yes landing as a depends
+edge; `.claude-temp/n4/build-verdict.md`): 19 edges recovered, 27 with an endpoint the build cannot
+match (the author's register-only abstractions and pre-surgery numbering), 19 with both ends
+matched and no edge. Of those 19, 18 are unmarked: 3 were asked and answered `B`; 15 were never
+asked, the true target ranking 6, 7, 10, 14, 20, 21, 21, 22, 28, 30, 31, 33, 40, 40 and 226 in
+its source's cosine shortlist (measure run 20261008T102410).
 
-The comparison of a kbase build against the fixture author's hand-curated KB
-(`tools/measure/compare_to_pristine.py`, run `.claude-temp/measure/compare_to_pristine/20261004T170507`)
-matches the author's claims to our nodes by TF-IDF cosine over title and statement at 0.30:
+So the pool's hardest category is already answered on this corpus: a near-miss pool drawn from
+the cosine ranking catches 6 of the 18 at ten pairs per source and 17 at forty, and forty per
+source is 12,600 pairs over 316 nodes — the "pool half the node count" failure the notes name,
+forty times over. Cosine does not put the author's missed premises near the top, so no threshold
+on rank or score gives a small, high-yield near-miss pool. That category waits on a better
+ranking signal, which is the classifier work; the other categories are the build's own
+declarations and cost nothing to list.
 
-- the author's KB: 43 claims, 30 titled as named results, 12 carrying a section-style number
-  (`5.11`, `C.5.1`); 71 depends edges;
-- ours: 326 claim nodes (271 prose, 26 block, 29 equation); no title starts with a result word, one
-  carries a number; a theorem environment becomes a block node titled by its parenthetical name
-  alone, because the page shows pandoc's sequential counter ("Proposition 12") where the author's
-  scheme is `\newtheorem{theorem}{Theorem}[section]` with shared sub-counters;
-- matching: 36 of 43 matched, many to many (97 of our nodes), median best score 0.43; 7 unmatched,
-  3 of them numbered results and 4 the author's framework hinges; 27 of 71 edges have an
-  unmatched endpoint before recall is asked.
+What the build declares on that fixture today: 6 `demoted` edges, 4 `references` edges, 0
+defaulted pairs (every planned pair answered), 316 claims with a pending score (no scoring pass),
+159 claims nothing depends on, 124 claims depending on nothing. The unmarked record carries no
+rank or score for an asked pair, only the letters offered, the letter and the outcome.
 
-So recall against the author's graph cannot be read. The author's number is the exact key for the
-named results, and it is recoverable from the LaTeX: the counter declarations are in the source
-(`grep -hoE '\\(newtheorem|numberwithin)…' <fixture>/*.tex` lists `[section]` resets and shared
-counters), labels sit on ten of the fixture's theorem-like environments, and the pandoc filter
-carries `\label` identifiers forward on a span.
+## Decided for the owner's confirmation
 
-## Decided
-
-- **The number is produced in the measurement, not the product.** A counter walker in
-  `tools/measure` (Python, stdlib) reads the volume's `.tex` files in include order and numbers each
-  theorem-like environment as the author's scheme does; the comparison's matcher uses it. Node
-  titles, the node-pass record and the sheets do not change: that keeps the compat harness, the
-  record bytes and kb_tools parity untouched, and leaves numbered titles in the product to
-  polytexnical (ROADMAP "Reader fidelity"), which replaces the walker when it lands. The walker is
-  R&D tooling in a directory declared as such; deleting it moves nothing else.
-- **The walker's grammar is amsthm's and no more:** `\newtheorem{env}{Name}`,
-  `\newtheorem{env}[shared]{Name}`, `\newtheorem{env}{Name}[section|subsection]`,
-  `\numberwithin`, `\section`/`\subsection`/`\appendix` (letters), `\setcounter`. Outside it the
-  walker yields no number, never a wrong one.
-- **The oracle is a one-off, by hand, in scratch.** A script beside the walker compiles a paper
-  with tectonic under `.claude-temp/` and reads `\newlabel{<label>}{{<number>}…}` from the `.aux`;
-  every labelled result's walked number must equal it. Nothing tracked execs tectonic; no recipe
-  requires it; the exec-monopoly test does not learn of it.
-- **The matcher's order:** result word plus number (exact), then label where both sides carry one,
-  then cosine at the threshold as today; each match carries its class, and the recall tables are
-  split by it.
-- **The measurement corpus stays private** (the rules in `tools/measure/README.md`); the public
-  arxiv corpus is the walker's open evidence.
+- **The hit list is read-only** (open question 2): a list query, emitting SPEC §7 items; the
+  existing write ops land an adjudication (`add-depends-on`, `resolve-demoted`, `set-rigor`,
+  `insert-*`). It joins the query family, binds to MCP by the annotation like every query, and is
+  what the docent's and maintainer's agenda become.
+- **One query, one ordering flag** (open question 3): `--for author` orders undecided edges first,
+  `--for reviewer` unsupported claims first; the member set is the same.
+- **The near-miss category is out until the ranking signal changes** (open question 1): the
+  measured curve above is the reason; the list says nothing it cannot stand behind.
+- **The record stays as it is.** No category the list carries needs a rank or score, so the
+  records-channel change the notes anticipate is not made now; when the near-miss category comes
+  in, the stage records what it needs then.
+- **Pool size is a build-quality number.** `stats` reports the pool's size per category and per
+  node, and the yield measurement joins `tools/measure` so it is taken beside recall after every
+  tactic change.
 
 | Wave | Builds | Owner | Acceptance |
 |---|---|---|---|
-| **N1 — numbering in the measurement** | `tools/measure/latex_numbering.py`: the walker over a volume root (includes followed), yielding for each theorem-like environment in document order its counter group, its ordinal in the group, the author's number, its label if any; `tools/measure/check_numbering.py`: the one-off oracle (tectonic in scratch, `.aux` read) reporting agreement per labelled environment; README entries for both, the oracle's host requirement stated | PC | Over the public arxiv corpus (`test_data/transient/arxiv/<id>`) and the fixture: every labelled theorem-like environment's walked number equals its `.aux` number, with the papers outside the grammar listed by name and reason; the walker runs with no network, no binary, in under a second per paper |
-| **N2 — the matcher** | `compare_to_pristine.py` matches a reference claim whose title names a result word and number to our block node whose page display line is the k-th of its counter group (pandoc's counter) and whose walked number is that number; then by label; then cosine; `claim-matches.tsv` and `summary.md` carry the match class; the recall and evidence tables split by class | PC | On the fixture, the 12 numbered reference claims match exactly or are listed with the reason; the unmatched set and the recall tables re-read beside the 2026-10-04 run in `.claude-temp/`, numbers only in scratch |
-| **N2b — the statement class** (added under the rolling rule: the fixture's reference numbers predate a restructuring of its sources, so the key that survives the author's surgery is the statement text) | Between `label` and `cosine`: the reference claim's marked statement on its page, read as `_our_claim` reads ours, against our node's first span, by token-set overlap at a bar read off the distribution (0.6, the one gap; the three pairs just under it are true matches and the first wrong pair sits at 0.48), one to one; the comparison refuses a KB at another metadata format instead of reading zero nodes | PC | Done: 17 of the 34 reference claims with a marked statement match by statement; 9 reference claims have no marker on any page and fall to cosine; the 7 unmatched stay unmatched (6 unmarked, 1 wrong best pair); the recall table is re-read with one-to-one matching (run `20261006T143311` beside `20261006T142231`) |
-| **N3 — the reading** | The split of the 71 author edges into floor (no textual evidence) and reducible, by match class; wave 4's parked question — does the unmarked ask say `A` on the author's true pairs — answered over the exactly matched pairs; the framework hinges and the prose granularity characterised | coordinator, with the owner | A verdict note in `.claude-temp/` and the next inference change named with the owner, as a wave of this plan |
+| **U1 — yield measured** | `tools/measure/measure_pool_yield.py`: over a built KB and the comparison's `edges.tsv`, each pool category's size (total and per node) and its yield — the author's missed edges or unmatched claims a reader would find in it — for the declared categories (demoted, references, defaulted, unsupported-and-pending, depending on nothing) and, for the record, the near-miss curve by rank; run over the 2026-10-08 build and Saturday's; README entry | PC | The table written beside the recall numbers in `.claude-temp/`; the declared categories' size per node and yield stated; the near-miss curve as above reproduced |
+| **U2 — the query** | `kbase hit-list [--for author\|reviewer] [--limit] [--offset]` in `cmd/` and `internal/query`: members from the index and the three build records (`internal/buildrecords`); each an item with `check` naming its category (`demoted`, `references`, `defaulted`, `unsupported`, `unanchored`), `path` the register or leaf, `key` the node or pair, `detail` the evidence the build saw (origin, letters offered and the default's cause, the pending score), no grade; `--for` the ordering; the MCP binding by annotation, read-only; SPEC §7 row and §8 section; a hermetic test over the results fixture and a transcript under `test_data/fixtures/mcp/`; `stats` gains `pool` (size per category, per node) | GC; TW for SPEC | `test-integration` green with the transcript; over the fixture the list's members equal U1's declared categories; the docent reaches it as a tool (one live question through MCP, the owner's) |
+| **U3 — the agenda in use** | The stamped KB documents and the hand-off to adjagent say what the list is for and how a reader lands an adjudication through the write ops; the docent and maintainer surfaces name it (upstream, adjagent's templates) | TW; PE for the stamped text | The stamp tests pass; the hand-off written |
+| **U4 — hand-off to kb_tools** | One document in `../adjagent/` carrying the build-process changes since the last hand-offs: the split-budget shortlist (SPEC §4 row), an unmarked yes landing as a depends edge with no attribution ask (SPEC §4 row, the classification record's representation), the hit-list query and `stats`' pool, with their measurements | coordinator | The document written; the SPEC §4 rows it closes named |
+| **M — measurement debt** | The comparison's mark test re-keyed on the matched node's walked number and label-rendered numbers so the evidence split is trustworthy; `TAG_RE` no longer eating inequalities (the cosine numbers re-taken); `measure_unmarked_shortlist.py` refusing an older format; a `test-measure` recipe | PC; SDC for the recipe | The evidence split re-read on the 2026-10-08 build; `just test-measure` green |
 
 ## Rules this plan runs under
 
@@ -106,18 +77,27 @@ test asserts a prompt's prose; the inference passes' measured constraints — no
 candidates into one N-letter answer, no embedding model in the shortlist, no persona system prompt
 on a letter ask, no design assuming prefix-cache reuse. *Jointly established units* (a strongly
 connected component a person promotes into one node carrying the solidity its members share; the DAG
-constraint over units) are a later major bump, after the demoted relation has been lived with.
+constraint over units) are a later major bump, after the demoted relation has been lived with. The
+letter asks are to become classifier calls; qualifying smaller LLMs for them is not pursued.
 
-**Successor R&D, behind this plan:** the directional shortlist (`ROADMAP_PLANS` once written); the
-uncertainty pool and hit list (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`); numbered titles in
-the product, with polytexnical (ROADMAP "Reader fidelity").
+**From the node-matching plan (closed 2026-10-08).** The measurement matches the author's claims
+one to one by result number, then statement text, then cosine (`tools/measure/compare_to_pristine.py`,
+with `latex_numbering.py` and its hand-run tectonic oracle); the unmarked shortlist is a split
+budget (SPEC §4); an unmarked yes lands as a depends edge with no attribution ask (SPEC §4);
+measured 2026-10-08 at 19 of the author's 71 edges, the floor 27 unmatched endpoints and 19
+edges with no credited evidence (`.claude-temp/n4/build-verdict.md`, `.claude-temp/n5/verdict.md`).
 
-**Owner items.** One named divergence stands in SPEC §4, the build inputs on the trail, with its
-hand-off in `../adjagent/KB_BUILD_INPUTS_HANDOFF.md`. adjagent findings carried from the port:
-`kb-docent` and `kb-maintainer` name kb_tools' maintenance surface only (the docent's query
-surface, with `strengthen_by` and `gated-on`, is in `../adjagent/KB_QUERY_ROWS_HANDOFF.md`'s
-successor record on adjagent's side); the Edit/Write-only coder rule belongs in adjagent's shared
-coder chunk (drafted in `../adjagent/proposed-agents-md-edit.md`).
+**Successor R&D, behind this plan:** the directional shortlist, which the classifier asks
+subsume; numbered titles in the product, with polytexnical (ROADMAP "Reader fidelity").
+
+**Owner items.** One named divergence stands in SPEC §4 beyond this plan's, the build inputs on
+the trail, with its hand-off in `../adjagent/KB_BUILD_INPUTS_HANDOFF.md`. adjagent findings carried
+from the port: `kb-docent` and `kb-maintainer` name kb_tools' maintenance surface only (the
+docent's query surface, with `strengthen_by` and `gated-on`, is in
+`../adjagent/KB_QUERY_ROWS_HANDOFF.md`'s successor record on adjagent's side); the Edit/Write-only
+coder rule belongs in adjagent's shared coder chunk (drafted in
+`../adjagent/proposed-agents-md-edit.md`). adjagent is under a major refactor; kb_tools still takes
+the build-process changes (wave U4).
 
 **Carried facts.**
 
@@ -173,3 +153,6 @@ coder chunk (drafted in `../adjagent/proposed-agents-md-edit.md`).
   Qwen3.6-35B-A3B and Qwen3.8-27B refuse the true pairs; gemma-4-26B-A4B-it is noise. The
   attribution ask after an unmarked yes is where every model but Flash-Next fails
   (`.claude-temp/n4/build-verdict.md`).
+- The unmarked record carries no shortlist rank or score for an asked pair (`kb-build-unmarked.yaml`:
+  letters offered, letter, outcome); a near-miss category of the hit list would need the stage to
+  record them.
