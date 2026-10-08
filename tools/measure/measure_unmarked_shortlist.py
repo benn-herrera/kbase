@@ -120,6 +120,10 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
+    refusal = compare.format_refusal(args.ours)
+    if refusal is not None:
+        print(f"--ours {str(args.ours)!r}: {refusal}", file=sys.stderr)
+        return 1
     try:
         measured, skipped = read_misses(args.edges)
     except (OSError, UnicodeDecodeError, ValueError) as error:

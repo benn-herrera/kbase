@@ -132,6 +132,16 @@ def match_numbers(
     }
 
 
+def walked_environment(block: PageBlock, walked: Mapping[str, Sequence[Environment]]) -> Environment | None:
+    """The environment the walker counted for ``block``: its volume's one of that word at the page's counter, else None."""
+    parsed = printed_word_counter(block.printed)
+    if parsed is None:
+        return None
+    word, ordinal = parsed
+    found = [env for env in walked.get(block.volume, ()) if env.name.lower() == word and env.ordinal_in_group == ordinal]
+    return found[0] if len(found) == 1 else None
+
+
 def unwalked_blocks(blocks: Iterable[PageBlock], walked: Mapping[str, Sequence[Environment]]) -> list[PageBlock]:
     """The blocks of a walked volume whose printed word and counter name no environment the walker counted there.
 

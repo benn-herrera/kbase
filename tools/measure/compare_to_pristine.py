@@ -17,7 +17,7 @@ from kb_tools import kb_index_lib, kb_load, kb_schema
 from kb_tools.kb_claimgraph import graph, inventory, prose, shortlist, tree
 from kb_tools.kb_claimgraph.tree import strip_markers, unquote
 from latex_numbering import volume_argument, walk
-from number_match import NAME_FORMS, NAME_NUMBER_RE, PageBlock, match_numbers, unwalked_blocks
+from number_match import NAME_FORMS, NAME_NUMBER_RE, PageBlock, match_numbers, unwalked_blocks, walked_environment
 from statement_match import match_statements
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,13 @@ TOP_K = 5
 
 MARKER_RE = re.compile(r"<!-- claim-quality: (clm-[a-z0-9]+) -->")
 HEADING_RE = re.compile(r"^#{1,6} ")
-TAG_RE = re.compile(r"<[^>]+>")
+# An HTML comment, or a tag: a name right after `<` or `</`, attributes each a name with an optional value. A `<`
+# followed by a space, a backslash or a digit is maths (`a < b`, `<\text{…}>`), never a tag.
+TAG_RE = re.compile(
+    r"<!--.*?-->"
+    r"|</?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][-\w:.]*(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))?)*\s*/?>",
+    re.DOTALL,
+)
 WORD_RE = re.compile(r"[a-z]{2,}")
 LABEL_SPAN_RE = re.compile(r'<span id="[^"]*"')
 ENTRY_VOLUME_RE = re.compile(r"^- \[.*\]\(([^/()]+)/index\.md\)$", re.MULTILINE)
@@ -166,6 +172,8 @@ class Claim:
     text: str
     spans: tuple[Span, ...] = ()
     printed: tuple[str, ...] = ()
+    #: The author's ``\label`` the page carries for it: a block's ``<span id>``, an equation's fence label.
+    label: str = ""
 
 
 def tokens(text: str) -> list[str]:
@@ -315,7 +323,9 @@ def _our_claim(
     blocks = [block for block in sites.claim_blocks() if block.document == node.document]
     block = next((found for found in blocks if found.display == node.locator), None)
     printed: tuple[str, ...] = ()
+    label = ""
     if node.equation is not None:
+        label = node.equation
         kind = "equation"
         fence = next((f for f in sites.fences if f.document == node.document and node.equation in f.labels), None)
         if fence is None:
@@ -323,6 +333,7 @@ def _our_claim(
         spans = (Span(node.document, fence.start, fence.end),)
     elif block is not None:
         kind = "block"
+        label = block.identifier or ""
         spans = (Span(node.document, block.start, block.end),) + tuple(
             Span(proof.document, proof.start, proof.end)
             for proof in sites.proofs
@@ -344,7 +355,9 @@ def _our_claim(
     text = "\n".join(
         "\n".join(documents.documents[span.document].text.splitlines()[span.start : span.end]) for span in spans
     )
-    return Claim(id=node.id, title=node.title, kind=kind, documents=(node.document,), text=text, spans=spans, printed=printed)
+    return Claim(
+        id=node.id, title=node.title, kind=kind, documents=(node.document,), text=text, spans=spans, printed=printed, label=label
+    )
 
 
 def read_ours(kb_root: Path, failures: list[str]) -> Ours:
@@ -433,21 +446,33 @@ def mark_test(
     *,
     a_nodes: list[Claim],
     b_nodes: list[Claim],
-    b_reference: Claim,
+    walked_names: Mapping[str, str],
     anchors: list[inventory.Anchor],
     texts: dict[str, list[str]],
 ) -> list[str]:
-    """Every mark of B inside the text our pipeline reads for A's matched claims."""
+    """Every mark of B inside the text our pipeline reads for A's matched claims.
+
+    B is named only through its matches of ours, never the reference title: the reference may number against an
+    earlier version of the sources. ``walked_names`` maps a block node to its environment's word and the author's
+    number the walker gives it ("Theorem 5.11"); for a number-class match that is the number it matched on.
+    """
     b_hosts = {doc for node in b_nodes for doc in node.documents}
+    b_labels = {(node.documents[0].split("/")[0], node.label) for node in b_nodes if node.label}
     names = {name: "ours" for node in b_nodes for name in node.printed}
-    names.setdefault(b_reference.title, "reference title")
+    for node in b_nodes:
+        if node.id in walked_names:
+            names.setdefault(walked_names[node.id], "walked")
     patterns = [(name, origin, found) for name, origin in sorted(names.items()) if (found := name_pattern(name)) is not None]
     marks = []
     for a in a_nodes:
         for span in a.spans:
             for anchor in anchors:
-                if anchor.document == span.document and span.start <= anchor.line < span.end and anchor.target in b_hosts:
+                if not (anchor.document == span.document and span.start <= anchor.line < span.end):
+                    continue
+                if anchor.target in b_hosts:
                     marks.append(f"anchor {a.id}:{anchor.reference_type} -> {anchor.href}")
+                if (anchor.document.split("/")[0], anchor.label) in b_labels:
+                    marks.append(f"label {a.id}:{anchor.reference_type} -> {anchor.label}")
             body = _span_text(span, texts)
             for name, origin, pattern in patterns:
                 hit = pattern.search(body)
@@ -522,8 +547,16 @@ def pair_class(source: str, target: str, fixed: Mapping[str, str]) -> str:
     return " + ".join(ends)
 
 
-def recall(*, mapped: dict[str, set[str]], fixed: Mapping[str, str], reference: Reference, ours: Ours) -> list[tuple[str, ...]]:
-    """One row per reference edge; ``fixed`` holds the class of each reference claim matched by a class before cosine."""
+def recall(
+    *,
+    mapped: dict[str, set[str]],
+    fixed: Mapping[str, str],
+    walked_names: Mapping[str, str],
+    reference: Reference,
+    ours: Ours,
+) -> list[tuple[str, ...]]:
+    """One row per reference edge; ``fixed`` holds the class of each reference claim matched by a class before cosine,
+    ``walked_names`` each block node's walked word and number (``mark_test``)."""
     rows = []
     for source, target in reference.edges:
         a, b = mapped[source], mapped[target]
@@ -532,7 +565,11 @@ def recall(*, mapped: dict[str, set[str]], fixed: Mapping[str, str], reference: 
         a_nodes = [ours.claims[x] for x in sorted(a)]
         b_nodes = [ours.claims[y] for y in sorted(b)]
         b_reference = reference.claims[target]
-        marks = mark_test(a_nodes=a_nodes, b_nodes=b_nodes, b_reference=b_reference, anchors=ours.anchors, texts=ours.texts) if miss and a else []
+        marks = (
+            mark_test(a_nodes=a_nodes, b_nodes=b_nodes, walked_names=walked_names, anchors=ours.anchors, texts=ours.texts)
+            if miss and a
+            else []
+        )
         titles = title_test(a_nodes=a_nodes, b_nodes=b_nodes, b_reference=b_reference, texts=ours.texts) if miss and a else []
         source_miss = found in MISSES
         evidence = "" if not miss else UNDETERMINED if not a else PRESENT if marks or titles else NONE_FOUND
@@ -635,11 +672,15 @@ def main() -> int:
         for rid in sorted(reference.claims, key=lambda key: (reference.claims[key].title, key))
     }
 
+    environments = {volume: numbering.environments for volume, numbering in walked.items()}
     numbered = match_numbers(
-        {rid: claim.title for rid, claim in reference.claims.items()},
-        blocks=ours.page_blocks,
-        walked={volume: numbering.environments for volume, numbering in walked.items()},
+        {rid: claim.title for rid, claim in reference.claims.items()}, blocks=ours.page_blocks, walked=environments
     )
+    walked_names = {
+        block.node_id: f"{env.name} {env.number}"
+        for block in ours.page_blocks
+        if block.node_id is not None and (env := walked_environment(block, environments)) is not None and env.number
+    }
     exact = {rid: outcome.node_id for rid, outcome in numbered.items() if outcome.node_id in ours.claims}
     taken = set(exact.values())
     by_statement = match_statements(
@@ -667,7 +708,7 @@ def main() -> int:
         }
 
     mapped = mapping(threshold)
-    edge_rows = recall(mapped=mapped, fixed=fixed, reference=reference, ours=ours)
+    edge_rows = recall(mapped=mapped, fixed=fixed, walked_names=walked_names, reference=reference, ours=ours)
     classes, split = tally(edge_rows)
 
     match_rows, candidate_rows = [], []
@@ -738,7 +779,7 @@ def main() -> int:
         ]
 
     block_count = sum(1 for block in ours.page_blocks if block.volume in walked)
-    unwalked = unwalked_blocks(ours.page_blocks, {volume: numbering.environments for volume, numbering in walked.items()})
+    unwalked = unwalked_blocks(ours.page_blocks, environments)
 
     def number_line(rid: str) -> str:
         outcome = numbered[rid]
@@ -801,7 +842,9 @@ def main() -> int:
     sweep = []
     for at in SWEEP:
         at_mapped = mapping(at)
-        at_classes, at_split = tally(recall(mapped=at_mapped, fixed=fixed, reference=reference, ours=ours))
+        at_classes, at_split = tally(
+            recall(mapped=at_mapped, fixed=fixed, walked_names=walked_names, reference=reference, ours=ours)
+        )
         sweep.append(
             f"| {at:.2f} | {sum(1 for kept in at_mapped.values() if kept)} | "
             + " | ".join(str(at_classes.get(name, 0)) for name in RECALL_CLASSES)

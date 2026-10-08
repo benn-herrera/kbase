@@ -1,7 +1,10 @@
 # ACTIVE PLAN – the uncertainty pool and the hit list
 
-**Status:** approved 2026-10-08; U1 done and stopped at a large gap under the rolling rule,
-settled with the owner before U2. U1's reading (`tools/measure/measure_pool_yield.py`, runs
+**Status:** closed 2026-10-08. U1 done and stopped at a large gap under the rolling rule,
+settled with the owner; U4 done (`../adjagent/KB_BUILD_PROCESS_HANDOFF.md`); M done (the mark
+test re-keyed, which found no new evidence; `TAG_RE` fixed, which moved the baseline to 37 of 43
+matched and 20 depends / 21 unmatched; the shortlist script refusing an older format; `just
+test-measure`); U2 and U3 parked. U1's reading (`tools/measure/measure_pool_yield.py`, runs
 `.claude-temp/measure/measure_pool_yield/20261008T152600` and `…152603`): on the 2026-10-08 build
 the edge categories the build declares — `demoted` (6 rows), `references` (4), `defaulted` (0) —
 contain none of the author's 47 missed edges; the claim categories — `unsupported` (159 claims,
@@ -11,7 +14,10 @@ declared union is 234 members, 0.74 per claim, 77 % yield: the "pool half the no
 the notes name. Saturday's build reads the same. A hit list over the declared categories would
 list most of the KB and point at nothing; the signal that would localise the work is the
 near-miss ranking, which cosine cannot give and the classifier asks are meant to. U2 as written
-is therefore not worth building now; see the owner's decision below. Succeeds the node-matching plan,
+is therefore not worth building now. Owner's decision 2026-10-08: U2 stopped; U1 stays the
+instrument, run beside recall after every tactic change; U3 goes with U2; U4 and M run now. The
+hit list returns when a scoring pass has run on the fixture and a ranking signal puts the author's
+premises near the top. Succeeds the node-matching plan,
 closed 2026-10-08 with its record carried below. kbase is the canonical source of the KB
 toolchain's design; kb_tools adopts its changes, and leads only on defect fixes found in use
 (SPEC §2). The contract documents govern on any disagreement with this plan, and this plan is
@@ -153,12 +159,13 @@ the build-process changes (wave U4).
   claim there until the author reconciles (the clone's orientation note names the reconciliation
   as pending). Nine of its 43 claims carry no marker on any page and are matchable only by their
   register entries.
-- The comparison's tag stripping (`TAG_RE` in `tools/measure/compare_to_pristine.py`) deletes
-  text between `<` and `>` inside an inequality as if it were an HTML tag, lowering overlap and
-  cosine scores on both sides; fixing it changes the October cosine numbers.
-- `measure_unmarked_shortlist.py` still accepts a KB at an older metadata format silently.
-- The measurement tooling's unit tests run by `PYTHONPATH=.claude/agents python3 -m unittest
-  discover -s tools/measure`; no recipe runs them.
+- The comparison's baseline after wave M (tag stripping no longer eating inequalities; the mark
+  test keyed on our matched node's page name, walked number and label rather than the reference
+  title's number), run 20261008T163115 over the 2026-10-08 build: 37 of 43 author claims matched
+  (19 statement, 1 number, 17 cosine); author edges 20 depends, 4 path, 22 nothing, 21 endpoint
+  unmatched; evidence over 43 misses 1 present-unused, 38 none found, 4 undetermined. The mark
+  test counts a page name like "Theorem 3" found in another volume's text as a mark.
+- The measurement tooling's unit tests run by `just test-measure`.
 - The unmarked ask probe (`.claude-temp/n3/probe`, 41 pairs with known answers, 123 requests) is
   the qualifier for a model on the letter asks. Probed 2026-10-06 on reaper: Qwen3.8-Flash-Next
   true 2 / 6, 0 false `A` on 33 controls; gemma-4-31B-it the same recall with 5 false `A`;

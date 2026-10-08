@@ -6,8 +6,9 @@ are used, not reimplemented. Beside them sit the theorem-number walker over a vo
 one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
 this directory, `number_match.py`, the comparison's number class, which imports only the
 walker, and `statement_match.py`, its statement class, which imports nothing. The tests of the
-walker, both classes, the shortlist sweep's rankings and the pool's category rules run with
-`PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure` (the sweep's import kb_tools).
+walker, both classes, the comparison's tag stripping and mark test, the shortlist sweep's rankings
+and the pool's category rules run with `just test-measure` (the comparison's, the sweep's and the
+pool's import kb_tools).
 
 ```
 PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/compare_to_pristine.py \
@@ -21,9 +22,8 @@ PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/measure_unmarked_shortl
 In this repository `<dir holding kb_tools/>` is `.claude/agents`, the installed agent set the
 recipes use (`just measure-kb-roots` sets it). Run the shortlist measurement after the comparison,
 on the same `--ours`: it reads the comparison's `edges.tsv`. Both read a KB at the metadata format
-the installed kb_tools reads. The comparison refuses any other `kb-format` stamp on either side;
-the shortlist measurement does not, and reads an older KB as one declaring no claims. Migrate a copy
-first (`kbase refresh` on a copy of the repository, never on the fixture itself).
+the installed kb_tools reads and refuse any other `kb-format` stamp on any kb-root they are given.
+Migrate a copy first (`kbase refresh` on a copy of the repository, never on the fixture itself).
 
 ## Privacy
 
@@ -42,8 +42,8 @@ never results.
   `.claude-temp/` or naming an existing file, and `--volume-root` given a number of times other than
   the number of volumes `--ours`' entry point lists. Nothing is written.
 - **1**: an input cannot be read as a whole. This covers a kb-root holding no KB document, a
-  kb-root of the comparison with no entry point or whose `kb-format` stamp is not the one the
-  installed kb_tools reads (the message names both versions), a reference with no claim entry, a tree or graph the kb_tools readers refuse, and an `edges.tsv`
+  kb-root with no entry point or whose `kb-format` stamp is not the one the installed kb_tools
+  reads (the message names both versions), a reference with no claim entry, a tree or graph the kb_tools readers refuse, and an `edges.tsv`
   lacking the columns below. Nothing is written.
 
 One bad document or node does not stop either script. The comparison logs it, leaves that claim out
@@ -165,12 +165,19 @@ matches and B's matches are the nodes of ours each matched.
 | `evidence_basis` | the marks and title hits that decided `present, unused` |
 | `pair_class` | the classes that matched A and B, in class order joined by ` + ` (`number + cosine`, `statement + statement`); an end no class matched counts as cosine, the class last tried |
 
-**The mark test.** It reads the text of every span of A's matches and looks for a mark of B there. A
-mark is either of two things:
+**The mark test.** It reads the text of every span of A's matches, tags and comments removed, and
+looks for a mark of B there. B is named only through its matches of ours, never through the
+reference title, whose number may predate a restructuring of the sources. A mark is any of:
 
 - an anchor in the span that resolves to a document hosting a match of B;
-- B's printed name and number, taken from our block (`Lemma 2`) or from the reference title.
-  Abbreviations count (`Thm`, `Prop`, `Cor`, `Conj`, `Def`), as does an optional `~`.
+- an anchor in the span whose label (its `data-reference`) is the label of a match of B — a block's
+  `<span id="…">` or an equation's fence label — in the same volume. A `\ref` renders as such an
+  anchor, its text pandoc's counter (`Theorem <a … data-reference="thm:x">3</a>`), or the label
+  in brackets where pandoc could not resolve it;
+- a printed name and number of a block match of B: the one its page shows (`Lemma 2`, which is also
+  what a rendered `\ref` to it reads as), or the walked one, the environment's word and the
+  author's number the walker gives that block (`Lemma 3.1`; for a `number`-class match, the number
+  it matched on). Abbreviations count (`Thm`, `Prop`, `Cor`, `Conj`, `Def`), as does an optional `~`.
 
 **The evidence split.** It answers one question: does our text for A carry evidence of B that the
 build did not turn into an edge?
@@ -185,7 +192,7 @@ build did not turn into an edge?
   may still be stated in words neither test recognises ("by the previous result"). Recovering it is
   the job of the unmarked-reference stage, and it is what the shortlist measurement scores.
 
-For an `endpoint unmatched (target)` edge, both tests still run, on the reference title alone. The
+For an `endpoint unmatched (target)` edge, only the title test can hit, on the reference title. The
 `mark_split` column is the source tool's and covers only `references only` and `nothing`, while
 `evidence` covers every miss. A `marked` row is always `present, unused`. An `unmarked — needs
 reading` row is `present, unused` only when the title test hits.

@@ -137,6 +137,11 @@ test-race:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test -race ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-race_log.txt"
 
+[doc("NEEDS python3 and the installed agent set under .claude/agents (excluded from test-integration): run the tools/measure unit tests; log in the unit-test output directory")]
+test-measure:
+    @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
+    PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-measure_log.txt"
+
 # Cheap gate: run after every change.
 edit-gate: fmt-check
     go vet ./...
