@@ -1,6 +1,17 @@
 # ACTIVE PLAN – the uncertainty pool and the hit list
 
-**Status:** proposed, for the owner's read; nothing dispatched. Succeeds the node-matching plan,
+**Status:** approved 2026-10-08; U1 done and stopped at a large gap under the rolling rule,
+settled with the owner before U2. U1's reading (`tools/measure/measure_pool_yield.py`, runs
+`.claude-temp/measure/measure_pool_yield/20261008T152600` and `…152603`): on the 2026-10-08 build
+the edge categories the build declares — `demoted` (6 rows), `references` (4), `defaulted` (0) —
+contain none of the author's 47 missed edges; the claim categories — `unsupported` (159 claims,
+half the KB, since no scoring pass has run on this fixture and every score is pending) and
+`unanchored` (124) — catch 26 and 23 of them, about what a random set of that size would. The
+declared union is 234 members, 0.74 per claim, 77 % yield: the "pool half the node count" failure
+the notes name. Saturday's build reads the same. A hit list over the declared categories would
+list most of the KB and point at nothing; the signal that would localise the work is the
+near-miss ranking, which cosine cannot give and the classifier asks are meant to. U2 as written
+is therefore not worth building now; see the owner's decision below. Succeeds the node-matching plan,
 closed 2026-10-08 with its record carried below. kbase is the canonical source of the KB
 toolchain's design; kb_tools adopts its changes, and leads only on defect fixes found in use
 (SPEC §2). The contract documents govern on any disagreement with this plan, and this plan is
@@ -19,8 +30,9 @@ asked, the true target ranking 6, 7, 10, 14, 20, 21, 21, 22, 28, 30, 31, 33, 40,
 its source's cosine shortlist (measure run 20261008T102410).
 
 So the pool's hardest category is already answered on this corpus: a near-miss pool drawn from
-the cosine ranking catches 6 of the 18 at ten pairs per source and 17 at forty, and forty per
-source is 12,600 pairs over 316 nodes — the "pool half the node count" failure the notes name,
+the cosine ranking catches 4 of the 18 at ten pairs per source and 17 at forty (U1's count by
+rank alone; the three asked-and-refused pairs sit at ranks 5, 12 and 16), and forty per source
+is 11,179 pairs over 316 nodes — the "pool half the node count" failure the notes name,
 forty times over. Cosine does not put the author's missed premises near the top, so no threshold
 on rank or score gives a small, high-yield near-miss pool. That category waits on a better
 ranking signal, which is the classifier work; the other categories are the build's own

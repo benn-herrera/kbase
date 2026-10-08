@@ -6,7 +6,7 @@ are used, not reimplemented. Beside them sit the theorem-number walker over a vo
 one-off oracle ("latex_numbering.py" and "check_numbering.py" below), which import nothing outside
 this directory, `number_match.py`, the comparison's number class, which imports only the
 walker, and `statement_match.py`, its statement class, which imports nothing. The tests of the
-walker, both classes and the shortlist sweep's rankings run with
+walker, both classes, the shortlist sweep's rankings and the pool's category rules run with
 `PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure` (the sweep's import kb_tools).
 
 ```
@@ -317,6 +317,72 @@ rank among block candidates alone, empty when B has no block match).
 `sweep.md`: the reach of the misses and the asks at K ∈ {3, 5, 10} per ranking (asks as above,
 summed over every list a ranking asks), the exact pairs' ranks per ranking, and the candidates the
 duplicates rule removes per source.
+
+## measure_pool_yield.py
+
+```
+PYTHONPATH=<dir holding kb_tools/> python3 tools/measure/measure_pool_yield.py \
+    --ours <kb-root> --edges .claude-temp/<name>/compare/edges.tsv --out .claude-temp/<name>/pool
+```
+
+The uncertainty pool's size and yield, per category. `--ours`' build records must stand beside
+it; the planned unmarked record is required. Arguments, privacy and exit statuses are as above,
+and `--ours` is refused as the comparison refuses it: a `kb-format` stamp other than the one the
+installed kb_tools reads exits 1, as do an index line that is not a record and a missing or
+unplanned unmarked record.
+
+**Categories.** The first five are the build's declared uncertainty; `near-miss@K` is not
+declared and is measured for the record.
+
+| category | members | evidence |
+|---|---|---|
+| `demoted` | every `demoted` row of `.index/depends-on.yaml`, as its (source, target) | the row's `origin` |
+| `references` | every `references` row, as its (source, target) | the row's `origin`, usually empty |
+| `defaulted` | every planned pair of `kb-build-unmarked.yaml` whose outcome is `defaulted` or `drafted`, or that holds no outcome; `answered` and `re-asked` carry a letter and are decided | the outcome and the letters offered, or `not asked` |
+| `unsupported` | every claim whose `solidity` in `.index/claims.yaml` is pending (`null`) and that no `depends`, `rests-on`, `supports` or `strengthens` row of `depends-on.yaml` targets; any `supports` row counts, whatever its fraction | the claim's `canonical_path` |
+| `unanchored` | every claim whose `depends_on_count` is 0 (that count covers `depends` edges only) | the claim's `canonical_path` |
+| `near-miss@K`, K ∈ {5, 10, 20, 40} | every (source, target) with the target at rank ≤ K in the source's pool, the pool as `sweep_shortlist.py`'s `today` (`shortlist.rank`, own equations left out), whose letter in the unmarked record is not `A` | the rank, and the letter or `not asked` |
+
+Note the direction in `unsupported`: a `depends` or `rests-on` row targeting a claim means
+something leans on it, while a `supports` or `strengthens` row targeting it lifts it.
+
+**Yield.** The missed edges are the `edges.tsv` rows whose recall class is `references only`,
+`nothing`, `endpoint unmatched` or `depends reversed`. A pair category holds a missed edge when
+some (s, t) over its `ours_sources` × `ours_targets` is a member, in either direction. A claim
+category holds it when a matched end is a member; an `endpoint unmatched` edge is read at the end
+that matched. The **declared union** holds an edge any of the first five holds; its member count
+is the distinct pairs plus the distinct claims.
+
+### Outputs
+
+`pool.tsv`: one row per category, then `declared union`.
+
+| Column | Meaning |
+|---|---|
+| `category` | as above |
+| `members` | the member count |
+| `per_node` | members divided by the claim count of `.index/claims.yaml`, 3 decimals |
+| `yield` | the missed edges the category holds |
+| `yield_forward` | for a pair category, those held by a forward pair alone (match of A, match of B); empty otherwise |
+| `misses` | the missed edges measured |
+
+`members/<category>.tsv`: the members, sorted. A pair category's columns are `source`, `target`,
+`evidence`; a claim category's `claim`, `evidence`.
+
+`misses.tsv`: one row per missed edge, sorted by edge: `edge`, `recall` (the class), then one
+column per category saying where it holds the edge — `forward`, `reverse` or `both` for a pair
+category, `source`, `target` or `both` for a claim category — empty when it does not.
+
+`summary.md`: the inputs and the node-pass case, the claim count, the missed edges by class and how
+many are unmarked, the declared categories' table with each yield's share of the misses, and the
+near-miss curve. The curve adds the unmarked misses each K reaches forward, the figure
+`measure_unmarked_shortlist.py` reports by rank.
+
+### Reading the numbers
+
+A category earns its place by a high yield at a small size per node. A claim category whose
+members are a large share of the claims holds a large share of the misses by chance alone, so read
+its yield against its `per_node`.
 
 ## latex_numbering.py — the author's theorem numbers
 
