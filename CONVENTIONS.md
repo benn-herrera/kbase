@@ -80,6 +80,10 @@ single source. Working habits they impose:
   (`cmd/modulescan_test.go`), so they agree on which files are the module's source.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
+- **The installed agent set is a pinned artifact, never edited here.** `.claude/agents/` and
+  `.claude/commands/` are tracked so a checkout pins them; a finding that needs an agent change
+  goes to the upstream project, adjagent, as a hand-off, the fix lands there, and the set is
+  updated from it.
 - **Markdown prose wraps at 100 columns** — not unwrapped, not 80. Table rows, fenced code and a
   single token longer than the line (a URL, a path) are the exceptions; any other needs a technical
   reason stated beside it.

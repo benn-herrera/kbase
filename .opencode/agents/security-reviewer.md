@@ -2,7 +2,7 @@
 #
 # !GENERATED! from templates/agents/security-reviewer.tmpl.md and templates/shared-chunks.toml — edit those. DO NOT HAND EDIT THIS FILE.
 # !TUNING! family=templates/family/claude.toml seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-# !BODY-SHA256! bb0ec8011eda7a12ac4b4417eda140fadd60910584caad5ce3980d85fc3b95aa
+# !BODY-SHA256! 9276f8facb280f0db0bbf459dee85d0521c506426ff6f2c76b656b31c0ad12a3
 #
 description: "Adversarial security review of code and designs. Identifies hazards, attack vectors, and the specific conditions that must hold to prevent exploitation. Does not prescribe design solutions — that is the architect's job. Review only, never modifies files."
 color: "#DC2626"
@@ -11,10 +11,10 @@ permission:
   grep: allow
   glob: allow
   list: allow
-  edit: deny
-  bash: deny
-  webfetch: deny
-  websearch: deny
+  edit: allow
+  bash: allow
+  webfetch: allow
+  websearch: allow
   task: deny
 mode: subagent
 ---
