@@ -6,10 +6,15 @@ ask answers its three letters a third each where Flash-Next answered 79 % "suppo
 author edges the unmarked ask got right came out reversed and 121 candidates landed as
 `references`; depends edges 193 against Saturday's 415, author edges found 6 against 16. The
 light tier fails the classification ask, not only the unmarked one; today's recall is the
-model's, not the shortlist's. Next, with the owner: the 33 author-edge pairs the build asked
-re-asked on Flash-Next to isolate the model effect; the design change of carrying an unmarked
-yes's direction into attribution; a Flash-Next build on the split budget as the shortlist's
-baseline. The reading (`.claude-temp/n3/verdict.md`,
+model's, not the shortlist's. Since then: the 33 pairs re-asked on Flash-Next agreed with the light tier's unmarked letters on
+29, placing the fault in the attribution re-ask; the Flash-Next build on the split budget
+recovered the same 16 author edges as Saturday's at 15 % fewer asks; the two-letter attribution
+removed the reversals but not the light tier's noise; and an unmarked yes now lands as a depends
+edge with no attribution ask (commit 5415b0f), measured 2026-10-08 on Flash-Next: 19 author edges
+found against 16, references-only 3 → 0, "nothing" 22 → 19, attribution asks 347 → 81, every
+check passing (`.claude-temp/n4/build-verdict.md`). The floor is 27 unmatched endpoints and 19
+edges with no evidence the ask credits; the letter asks are to become classifier calls, so
+model qualification stops here. Next: the uncertainty pool and hit list over the measured floor. The reading (`.claude-temp/n3/verdict.md`,
 `.claude-temp/n3/probe-verdict.md`): two bottlenecks in order — the shortlist never offers the
 author's true premise (rank 14–233 at K = 5 over the six exactly matched misses; the stage's
 shortlist reached 4 of 25 unmarked misses, 10 of which cross papers), and the ask's scope, the
