@@ -265,11 +265,13 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 	}
 }
 
-// TestNarrowOffersAnUnmarkedYesTwoLetters: a pair an unmarked yes reached is
-// offered supported-by and mention, its direction being the yes's, where the
-// same claim-to-claim pair reached by a mark is offered all three; the
-// classification record's offered letters say the same.
-func TestNarrowOffersAnUnmarkedYesTwoLetters(t *testing.T) {
+// TestAnUnmarkedYesLandsUnasked: a pair an unmarked yes reached is offered
+// and drafted supported-by alone, where a claim-to-claim pair reached by a
+// mark is offered all three. Classification asks the marked pairs and not the
+// yes, which lands as a depends edge in its own direction, recorded as its one
+// letter answered — with a reader or without. A record already holding an
+// answer for the yes keeps it; one holding its draft lands it by the rule.
+func TestAnUnmarkedYesLandsUnasked(t *testing.T) {
 	tree := &Tree{Documents: map[string]Document{
 		"v/x.md": {Path: "v/x.md", Text: "We use [the bound](y.md).\n"},
 		"v/y.md": {Path: "v/y.md", Text: "The bound holds.\n"},
@@ -283,10 +285,11 @@ func TestNarrowOffersAnUnmarkedYesTwoLetters(t *testing.T) {
 	inv := &Inventory{Anchors: []Anchor{{Document: "v/x.md", Line: 0, Href: "y.md", Target: "v/y.md"}}}
 	a := narrow(tree, g, inv, buildrecords.NodePassRecord{}, []pair{{"clm-c", "clm-a"}})
 
+	yes := pair{"clm-c", "clm-a"}
 	all := []Relation{SupportedBy, InSupportOf, MentionedBy}
 	want := map[pair][]Relation{
 		{"clm-a", "clm-c"}: all, {"clm-a", "clm-d"}: all, {"clm-b", "clm-c"}: all, {"clm-b", "clm-d"}: all,
-		{"clm-c", "clm-a"}: {SupportedBy, MentionedBy},
+		yes: {SupportedBy},
 	}
 	if len(a.candidates) != len(want) {
 		t.Fatalf("candidates = %+v, want %d", a.candidates, len(want))
@@ -295,31 +298,80 @@ func TestNarrowOffersAnUnmarkedYesTwoLetters(t *testing.T) {
 		if !slices.Equal(c.offered, want[c.pair()]) {
 			t.Errorf("%v offered %v, want %v", c.pair(), c.offered, want[c.pair()])
 		}
+		if c.pair() == yes && c.draft != SupportedBy {
+			t.Errorf("the yes is drafted %s, want supported-by", c.draft)
+		}
 	}
 
-	repo := t.TempDir()
-	if err := WriteClassification(repo, buildrecords.ClassificationRecord{}); err != nil {
-		t.Fatal(err)
+	statement := func(n ClaimNode) string { return n.Title }
+	run := func(prior []buildrecords.CandidateEntry, reader *letters) (classification, map[pair]buildrecords.CandidateEntry) {
+		t.Helper()
+		repo := t.TempDir()
+		if err := WriteClassification(repo, buildrecords.ClassificationRecord{Candidates: prior}); err != nil {
+			t.Fatal(err)
+		}
+		opts := Options{}
+		if reader != nil {
+			opts.Reader = reader.read
+		}
+		c, err := classify(context.Background(), repo, a.candidates, statement, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, _, err := buildrecords.ReadClassification(recordsAt(repo))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := map[pair]buildrecords.CandidateEntry{}
+		for _, e := range rec.Candidates {
+			entries[pair{e.Source, e.Target}] = e
+		}
+		if len(entries) != len(want) {
+			t.Fatalf("record = %+v, want %d candidates", rec.Candidates, len(want))
+		}
+		return c, entries
 	}
+	landedUnasked := func(how string, c classification, entries map[pair]buildrecords.CandidateEntry) {
+		t.Helper()
+		if !slices.Contains(c.edges, yes) || c.outcomes[yes] != ClassifyAnswered {
+			t.Errorf("%s: edges %v, outcome %q; want the yes a depends edge %v, answered", how, c.edges, c.outcomes[yes], yes)
+		}
+		e := entries[yes]
+		if !slices.Equal(e.Offered, []string{asks.LetterSupportedBy}) || e.Letter == nil || *e.Letter != asks.LetterSupportedBy || e.Outcome != ClassifyAnswered || e.Confidence != nil {
+			t.Errorf("%s: the yes records %+v, want offered [A], letter A, answered, no confidence", how, e)
+		}
+	}
+
+	mention := asks.LetterMention
 	reader := &letters{by: map[string]string{}}
-	if _, err := classify(context.Background(), repo, a.candidates, func(n ClaimNode) string { return n.Title }, Options{Reader: reader.read}); err != nil {
-		t.Fatal(err)
-	}
-	rec, _, err := buildrecords.ReadClassification(recordsAt(repo))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.Candidates) != len(want) {
-		t.Fatalf("record = %+v, want %d candidates", rec.Candidates, len(want))
-	}
-	for _, e := range rec.Candidates {
-		var letters []string
-		for _, r := range want[pair{e.Source, e.Target}] {
-			letters = append(letters, relationLetter[r])
+	for p := range want {
+		if p != yes {
+			reader.by[p.source+"->"+p.target] = mention
 		}
-		if !slices.Equal(e.Offered, letters) {
-			t.Errorf("record %s -> %s offered %q, want %q", e.Source, e.Target, e.Offered, letters)
+	}
+	c, entries := run(nil, reader)
+	landedUnasked("asking", c, entries)
+	if slices.Contains(reader.asked, yes.source+"->"+yes.target) || len(reader.asked) != len(want)-1 {
+		t.Errorf("asked %q, want every marked pair and not the yes", reader.asked)
+	}
+	for p, e := range entries {
+		if p != yes && (e.Letter == nil || *e.Letter != mention || len(e.Offered) != 3) {
+			t.Errorf("marked %v records %+v, want asked three letters and answered C", p, e)
 		}
+	}
+
+	c, entries = run(nil, nil)
+	landedUnasked("no reader", c, entries)
+
+	drafted := buildrecords.CandidateEntry{Source: yes.source, Target: yes.target, Offered: []string{asks.LetterSupportedBy, mention}, Outcome: ClassifyDrafted}
+	c, entries = run([]buildrecords.CandidateEntry{drafted}, &letters{by: reader.by})
+	landedUnasked("over a drafted entry", c, entries)
+
+	answered := drafted
+	answered.Letter, answered.Outcome = &mention, ClassifyAnswered
+	again := &letters{by: reader.by}
+	if c, _ = run([]buildrecords.CandidateEntry{answered}, again); c.relations[yes] != MentionedBy || slices.Contains(again.asked, yes.source+"->"+yes.target) {
+		t.Errorf("over a stored answer: %s, asked %q; want the stored mention kept, unasked", c.relations[yes], again.asked)
 	}
 }
 

@@ -202,10 +202,15 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		if c.Letter == nil || *c.Letter != asks.LetterSupportedBy || c.Outcome != claimgraph.ClassifyAnswered {
 			t.Errorf("candidate %s -> %s = %+v, want answered A", c.Source, c.Target, c)
 		}
-		found = found || (c.Source == yes.Source && c.Target == yes.Target)
+		if c.Source == yes.Source && c.Target == yes.Target {
+			found = true
+			if !slices.Equal(c.Offered, []string{asks.LetterSupportedBy}) {
+				t.Errorf("the unmarked yes was offered %q, want A alone: landed with no ask", c.Offered)
+			}
+		}
 	}
 	if !found {
-		t.Errorf("the unmarked yes %s -> %s is no candidate classification asked about", yes.Source, yes.Target)
+		t.Errorf("the unmarked yes %s -> %s is no candidate in the classification record", yes.Source, yes.Target)
 	}
 	if demoted := classifyField(t, fields, "demoted"); len(demoted) != 4 {
 		t.Errorf("demoted = %q, want the four edges of the ring the lemma, the theorem and the prose claim form", demoted)
@@ -359,9 +364,9 @@ func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (mode
 // uninterrupted build lands.
 //
 // The node pass and the unmarked ask take 7 answers; classification asks
-// three groups — the lemma's of 2 candidates, the prose claim's and the
-// theorem's of 1 — in ascending id, and ids are minted at random. Ten answers
-// complete the first group in every order and never all three.
+// three groups of one candidate each — the lemma's, the prose claim's and the
+// theorem's, the lemma's unmarked yes landing unasked — in ascending id. Nine
+// answers complete two groups and never the third.
 func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	whole := newFixture(t)
 	writeFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
@@ -372,7 +377,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	lost := &stopsAfter{answering: answering{answer: script}, n: 10}
+	lost := &stopsAfter{answering: answering{answer: script}, n: 9}
 	if outcome, fields := f.build(t, f.asking(lost)); outcome != result.Failed {
 		t.Fatalf("build losing its provider = %s %v, want failed", outcome, fields)
 	}

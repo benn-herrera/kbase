@@ -40,9 +40,10 @@ const (
 // DefaultCauses is every cause, in the order a report states them.
 var DefaultCauses = []string{CauseNoLetter, CauseUnplaceable}
 
-// How a candidate's classification was reached: answered, re-asked once and
-// answered, asked and answered with no offered letter twice, or no reader
-// there to ask. The last two take the draft.
+// How a candidate's classification was reached: answered — by the model, or,
+// for a candidate offered one letter, by that offer with no ask spent —
+// re-asked once and answered, asked and answered with no offered letter
+// twice, or no reader there to ask. The last two take the draft.
 const (
 	ClassifyAnswered  = "answered"
 	ClassifyReasked   = "re-asked"

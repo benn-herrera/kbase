@@ -74,7 +74,7 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 | `claims-discovered` | Claim-graph pass over discovered claims | `kb_claimgraph/` |
 | `equations-minted` | Equation nodes minted | `kb_claimgraph/` |
 | `references-found` | Unmarked references found: a mechanical shortlist per source claim within the two unmarked-shortlist budgets (§12), one letter ask per pair, a yes an edge candidate; writes nothing under `kb-root/` | `kb_claimgraph/` (`unmarked.py`, `shortlist.py`, `equation_sites.py`) |
-| `depends-attributed` | Dependency edges attributed | `kb_claimgraph/` |
+| `depends-attributed` | Dependency edges attributed: one letter ask per candidate, except a candidate born of an unmarked yes, which is not asked and lands as a `depends` edge (SPEC §4) | `kb_claimgraph/` |
 | `phase-3a` | `refresh`, `verify`, and the readiness stamp | `kb_driver` `phase-3a` |
 | `overview-drafted` | The overview document | `kb_driver` overview |
 

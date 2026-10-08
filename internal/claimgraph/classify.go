@@ -44,9 +44,19 @@ func held(e buildrecords.CandidateEntry, ok, asking bool) bool {
 	return ok && !(asking && e.Outcome == ClassifyDrafted)
 }
 
+// decided is the record of a candidate offered one relation, which leaves
+// nothing to ask: that relation's letter, answered, with no ask spent. It
+// reads in kb_tools' classification record as an answer it holds.
+func decided(c candidate) buildrecords.CandidateEntry {
+	letter := relationLetter[c.offered[0]]
+	return buildrecords.CandidateEntry{Source: c.source.ID, Target: c.target.ID, Offered: offeredLetters(c), Letter: &letter, Outcome: ClassifyAnswered}
+}
+
 // classify classifies every candidate, one letter ask each, grouped by source
 // in ascending id and offered only the letters of its offered relations;
-// with no reader every candidate takes its draft. Each group lands in the
+// with no reader every candidate takes its draft. A candidate offered one
+// relation is not asked, with or without a reader: it lands as that relation,
+// unless the record already holds an answer for it. Each group lands in the
 // classification record as it completes, and a resumed run asks only what the
 // record does not hold. A call that never completes stops it with every
 // completed group recorded. A run that asks reports each source's group as
@@ -72,12 +82,31 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		bySource[c.source.ID] = append(bySource[c.source.ID], c)
 	}
 	slices.Sort(sources)
+	save := func() error {
+		rec.Candidates = rec.Candidates[:0]
+		for _, e := range entries {
+			rec.Candidates = append(rec.Candidates, e)
+		}
+		return WriteClassification(repoRoot, rec)
+	}
 	pendingOf := map[string][]candidate{}
+	landed := false
 	for _, s := range sources {
 		for _, c := range bySource[s] {
-			if e, ok := entries[c.pair()]; !held(e, ok, reader != nil) {
+			e, ok := entries[c.pair()]
+			switch {
+			case len(c.offered) == 1:
+				if !held(e, ok, true) {
+					entries[c.pair()], landed = decided(c), true
+				}
+			case !held(e, ok, reader != nil):
 				pendingOf[s] = append(pendingOf[s], c)
 			}
+		}
+	}
+	if landed {
+		if err := save(); err != nil {
+			return out, err
 		}
 	}
 	if reader != nil {
@@ -123,11 +152,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 				return out, err
 			}
 		}
-		rec.Candidates = rec.Candidates[:0]
-		for _, e := range entries {
-			rec.Candidates = append(rec.Candidates, e)
-		}
-		if err := WriteClassification(repoRoot, rec); err != nil {
+		if err := save(); err != nil {
 			return out, err
 		}
 	}
