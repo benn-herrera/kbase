@@ -21,8 +21,10 @@ premises near the top. The first scoring pass ran 2026-10-08 (`.claude-temp/scor
 a headless `claude-reaper` session on Flash-Next graded the 114 claims the comparison matches plus
 their cones, 19 batches, 0 ungraded, verify green, tagged `scored-20261008` in the fixture; on the
 20 exactly matched claims the scorer's ranks agree with the author's (Spearman 0.87) about one band
-lower. 202 claims remain pending; a second pass over them is the precondition the pool's claim
-categories still need. Succeeds the node-matching plan,
+lower. 202 claims remain pending by the owner's decision: the pass proved the headless driver
+(`.claude-temp/scoring/run.sh`, `brief.md`) and the scorer's calibration, and more grades would
+prove nothing further; the pool's claim categories wait on a scoring pass taken when the hit list
+is built. Succeeds the node-matching plan,
 closed 2026-10-08 with its record carried below. kbase is the canonical source of the KB
 toolchain's design; kb_tools adopts its changes, and leads only on defect fixes found in use
 (SPEC §2). The contract documents govern on any disagreement with this plan, and this plan is
