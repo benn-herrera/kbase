@@ -17,7 +17,12 @@ near-miss ranking, which cosine cannot give and the classifier asks are meant to
 is therefore not worth building now. Owner's decision 2026-10-08: U2 stopped; U1 stays the
 instrument, run beside recall after every tactic change; U3 goes with U2; U4 and M run now. The
 hit list returns when a scoring pass has run on the fixture and a ranking signal puts the author's
-premises near the top. Succeeds the node-matching plan,
+premises near the top. The first scoring pass ran 2026-10-08 (`.claude-temp/scoring/verdict.md`):
+a headless `claude-reaper` session on Flash-Next graded the 114 claims the comparison matches plus
+their cones, 19 batches, 0 ungraded, verify green, tagged `scored-20261008` in the fixture; on the
+20 exactly matched claims the scorer's ranks agree with the author's (Spearman 0.87) about one band
+lower. 202 claims remain pending; a second pass over them is the precondition the pool's claim
+categories still need. Succeeds the node-matching plan,
 closed 2026-10-08 with its record carried below. kbase is the canonical source of the KB
 toolchain's design; kb_tools adopts its changes, and leads only on defect fixes found in use
 (SPEC §2). The contract documents govern on any disagreement with this plan, and this plan is
