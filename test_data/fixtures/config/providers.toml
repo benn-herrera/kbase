@@ -1,3 +1,7 @@
 [reaper]
 baseUrl = "http://reaper.local:4000/v1"
 apiKeyFile = "api_keys/reaper.txt"
+
+[imp]
+baseUrl = "http://reaper.imp:4000/v1"
+apiKeyFile = "api_keys/imp.txt"
