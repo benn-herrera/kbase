@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
 )
@@ -89,7 +90,7 @@ func TestAdjagentSheetGoldens(t *testing.T) {
 	drawn := map[string]string{}
 	var paths []string
 	for _, s := range g.sheets() {
-		drawn[s.path] = s.dot
+		drawn[s.path] = s.dot(false)
 		paths = append(paths, s.path)
 	}
 	if want := []string{kb.ClaimGraphFile, kb.ClaimGraphDigestFile, "alpha/" + kb.ClaimGraphFile, "beta/" + kb.ClaimGraphFile}; !slices.Equal(paths, want) {
@@ -131,7 +132,7 @@ func at(lines []string, i int) string {
 // and a relation with no stroke is not drawn.
 func TestDrawnEdges(t *testing.T) {
 	rows := []kb.EdgeRow{{Source: "a", Target: "b", Relation: kb.RelationDemoted}, {Source: "c", Target: "b", Relation: "unknown"}}
-	got := drawnEdges(rows, map[pair]bool{{"a", "b"}: true})
+	got := drawnEdges(rows, func(source, target string) bool { return source == "a" && target == "b" })
 	if len(got) != 1 || got[0].source != "a" || got[0].target != "b" ||
 		got[0].stroke.relation != kb.RelationDemoted || got[0].stroke.provenance != kb.OriginCited {
 		t.Errorf("drawnEdges = %+v, want the a → b cut alone, cited", got)
@@ -258,7 +259,8 @@ func TestStyleTablesAreTotal(t *testing.T) {
 }
 
 // TestDOTQuoting: a quote, a backslash and markup in the KB's title, a
-// volume's title and a node title stay inside their DOT strings.
+// volume's title and a node title stay inside their DOT strings, and a
+// tooltip's backslash survives Graphviz's escString pass.
 func TestDOTQuoting(t *testing.T) {
 	dep := strokeFor(kb.RelationDepends, false)
 	g := &graph{kbTitle: `K "B" \x`,
@@ -270,18 +272,18 @@ func TestDOTQuoting(t *testing.T) {
 		},
 		edges: []edge{{source: "clm-aaaaaa", target: "clm-bbbbbb", stroke: dep}}}
 	sheets := g.sheets()
+	full := sheets[0].dot(false)
 	for _, want := range []string{`label=<<b>K &quot;B&quot; \x</b>>]`, `label=<<b>A &quot;quoted&quot; \title &lt;x&gt;</b>`,
-		`label="clm-aaaaaa\nSays \"so\" \\lambda"`, `tooltip="clm-aaaaaa [prose, *pending*] Says \"so\" \\lambda"`} {
-		if !strings.Contains(sheets[0].dot, want) {
-			t.Errorf("full sheet lacks %s:\n%s", want, sheets[0].dot)
+		`label="clm-aaaaaa\nSays \"so\" \\lambda"`, `tooltip="clm-aaaaaa [prose, *pending*] Says \"so\" \\\\lambda"`} {
+		if !strings.Contains(full, want) {
+			t.Errorf("full sheet lacks %s:\n%s", want, full)
 		}
 	}
-	dot, err := exec.LookPath("dot")
-	if err != nil {
+	if _, err := exec.LookPath("dot"); err != nil {
 		return
 	}
 	for _, s := range sheets {
-		if _, err := renderSVG(dot, s.dot); err != nil {
+		if _, err := renderSVG(s.dot); err != nil {
 			t.Errorf("%s does not parse: %v", s.path, err)
 		}
 	}
@@ -297,8 +299,91 @@ func TestVolumeCountRule(t *testing.T) {
 		},
 		edges: []edge{{source: "clm-aaaaaa", target: "clm-bbbbbb", stroke: strokeFor(kb.RelationDepends, false)}}}
 	sheets := g.sheets()
-	if len(sheets) != 1 || sheets[0].path != kb.ClaimGraphFile || strings.Contains(sheets[0].dot, kb.ClaimGraphDigestFile) {
+	if len(sheets) != 1 || sheets[0].path != kb.ClaimGraphFile || strings.Contains(sheets[0].dot(false), kb.ClaimGraphDigestFile) {
 		t.Errorf("one volume: sheets %v, want the full sheet alone, unlinked", sheets)
+	}
+}
+
+// TestLadderThroughFakeDot drives renderSVG over every sheet the emitter
+// composes for the adjagent fixture, with a dot stand-in that refuses any DOT
+// lacking splines=line: the first rung fails and the emitter's retry DOT
+// renders; where the retry fails too, the first error comes back.
+func TestLadderThroughFakeDot(t *testing.T) {
+	g, err := load(openAdjagentFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "dot")
+	script := "#!/bin/sh\ninput=$(cat)\nif printf '%s' \"$input\" | grep -q 'splines=line'; then echo '<svg/>'; exit 0; fi\necho 'routesplines failed' >&2\nexit 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, s := range g.sheets() {
+		if svg, err := renderSVG(s.dot); err != nil || string(svg) != "<svg/>\n" {
+			t.Errorf("%s: renderSVG with fallback = %q, %v; want <svg/>", s.path, svg, err)
+		}
+		unlined := func(bool) string { return s.dot(false) }
+		if _, err := renderSVG(unlined); err == nil || !strings.Contains(err.Error(), "routesplines failed") {
+			t.Errorf("%s: renderSVG where both rungs fail = %v, want the first error", s.path, err)
+		}
+	}
+}
+
+// copiedAdjagentFixture is a writable copy of the adjagent fixture's
+// repository.
+func copiedAdjagentFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for rel, data := range fixtureFiles(t, adjagentFixture) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// fullSheetEdge is the full sheet's DOT line for the edge source → target in
+// the KB at root.
+func fullSheetEdge(t *testing.T, root, source, target string) string {
+	t.Helper()
+	src, err := kbload.Open(filepath.Join(root, kb.KBDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := load(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edgeLine := `"` + source + `" -> "` + target + `" [`
+	for line := range strings.SplitSeq(g.full(false), "\n") {
+		if strings.Contains(line, edgeLine) {
+			return line
+		}
+	}
+	t.Fatalf("the full sheet draws no %s edge", edgeLine)
+	return ""
+}
+
+// TestCullLinkDrawsInferredEitherWay: a depends row whose direction runs
+// against the cull record's link — target first in id order — draws
+// inferred; the same KB without the record draws it cited.
+func TestCullLinkDrawsInferredEitherWay(t *testing.T) {
+	root := copiedAdjagentFixture(t)
+	if line := fullSheetEdge(t, root, "clm-bbb001", "clm-aaa001"); strings.Contains(line, "style=dashed") {
+		t.Errorf("without a cull record: %s, want the cited stroke", line)
+	}
+	record := "links:\n  - a: clm-aaa001\n    b: clm-bbb001\n    harvest: adjacent\n"
+	if err := os.WriteFile(filepath.Join(root, buildrecords.CullFile), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if line := fullSheetEdge(t, root, "clm-bbb001", "clm-aaa001"); !strings.Contains(line, "style=dashed") {
+		t.Errorf("with the link recorded: %s, want the inferred stroke", line)
 	}
 }
 

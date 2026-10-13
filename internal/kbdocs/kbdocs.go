@@ -18,7 +18,7 @@ import (
 	"kbase/internal/result"
 )
 
-//go:embed templates/*.tmpl.md
+//go:embed templates/*.tmpl.md templates/digest-chunk.tmpl.md
 var templates embed.FS
 
 // The documents, by the name each is written under in kb-root/.
@@ -37,7 +37,23 @@ const (
 	slotNodeKinds   = "node-kinds"
 	slotPending     = "pending-literal"
 	slotPassage     = "overview-passage"
+	slotDigestChunk = "digest-chunk"
 )
+
+// digestChunkName names the template sub-piece holding the digest sentence
+// the overview fills its digest-chunk slot with, present only where the KB
+// carries the digest sheet (README.tmpl.md: everything between the "DIGEST"
+// and "END DIGEST" markers). The wording lives in the template, never in Go;
+// a one-volume KB — the common shape — fills the slot with the empty string.
+const digestChunkName = "digest-chunk.tmpl.md"
+
+func digestChunk() (string, error) {
+	b, err := templates.ReadFile("templates/" + digestChunkName)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
 
 // NoCharterPin is the scope pin of a build given no charter: the absence
 // stated, because a KB nobody pinned and one whose pin went missing are
@@ -114,8 +130,19 @@ func Stamp(src *kb.Source, projectName, scopePin string) ([]string, error) {
 }
 
 // Overview is the overview document: its template around the passage.
-func Overview(projectName, passage string) (string, error) {
-	return fill(OverviewFile, map[string]string{slotProjectName: projectName, slotPending: kb.PendingLiteral, slotPassage: passage})
+// digestDrawn is whether the KB carries the volume digest sheet — two or more
+// volumes hold nodes (kb.SheetDigestDrawn); false, the common one-volume
+// shape, leaves the digest sentence out of the README entirely.
+func Overview(projectName, passage string, digestDrawn bool) (string, error) {
+	digest := ""
+	if digestDrawn {
+		var err error
+		if digest, err = digestChunk(); err != nil {
+			return "", err
+		}
+	}
+	return fill(OverviewFile, map[string]string{slotProjectName: projectName, slotPending: kb.PendingLiteral,
+		slotPassage: passage, slotDigestChunk: digest})
 }
 
 func exists(path string) bool {

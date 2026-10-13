@@ -398,7 +398,8 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	writeValues(t, repo, "paper.tex", string(paper))
 	isolateChildBuild(t, base)
 	t.Setenv(config.EnvAPIBaseURL, provider.URL)
-	t.Setenv(config.EnvModel, "m")
+	t.Setenv(config.EnvDecision, "m")
+	t.Setenv(config.EnvText, "m")
 	savedLevel, savedFile := flagLogLevel, flagLogFile
 	t.Cleanup(func() { flagLogLevel, flagLogFile = savedLevel, savedFile })
 	flagLogLevel, flagLogFile = "debug", filepath.Join(base, "build.log")

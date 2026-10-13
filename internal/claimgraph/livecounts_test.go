@@ -87,9 +87,9 @@ func TestLiveBuildCounts(t *testing.T) {
 		letters[l]++
 		classified[c.Outcome]++
 	}
-	classify := resultFinding(t, *liveResult, "stage-D-classify")
+	ring := resultFinding(t, *liveResult, "stage-D-ring")
 	demoted := []string{}
-	list, _ := classify["demoted"].([]any)
+	list, _ := ring["demoted"].([]any)
 	for _, d := range list {
 		demoted = append(demoted, fmt.Sprint(d))
 	}

@@ -1,14 +1,17 @@
 # README – KBase
 
-kbase is a Go binary that builds a knowledge base (KB) from LaTeX and maintains it afterward. Give
-it a paper's top `.tex` file and it writes a navigable Markdown tree with a claim graph, built by a
-mechanical pass and refined by inference.
+kbase is a Go binary that builds a knowledge base (KB) from LaTeX and provides tools to maintain it
+afterward. Given a set of `.tex` entry point files, it writes a navigable Markdown tree plus
+metadata describing a graph structure of the claims forming the argument within. The build process
+starts with a mechanical pass and is refined by an inference pass that is tractable on local 
+hardware.
 
-The KB is the one [kb_tools](#relation-to-kb_tools) builds: either toolchain can maintain a KB the
-other built, both at metadata format `1.0.0`.
+![Volume Graph](readme-assets/kb-volume-graph.png)
+![Claim Graph](readme-assets/kb-claim-graph.png)
 
 ## Requirements and Supported Platforms
 
+### Requirements
 - **pandoc 3.12.** Required on the host, not shipped. Any pandoc whose `pandoc-api-version` is
   1.23.x is accepted; a missing or out-of-range pandoc is refused at preflight.
 - **git 2.56.0.** Required on the host. A build records its progress as commits in your repository.
@@ -20,6 +23,11 @@ other built, both at metadata format `1.0.0`.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
 `toplevel` entry names, else the sole file containing `\documentclass`.
+
+### Platforms
+- macOS (run and dev)
+- Linux (binary can be built from macOS, dev experience untested, your mileage may vary)
+- Windows (binary can be built from macOS, dev experience untested, your mileage will absolutely vary)
 
 ## Quick Start Guide
 
@@ -39,7 +47,7 @@ cat > ~/.config/kbase/providers.toml <<'EOF'
 baseUrl = "http://localhost:8000/v1"
 apiKeyFile = "local.key"
 EOF
-kbase configure --model-map heavy=<model-id>,light=<model-id>
+kbase configure --model-map decision=<model-id>,text=<model-id>
 ```
 
 `kbase models` lists the model ids the provider offers. Details are under
@@ -85,8 +93,14 @@ kbase build <volume-root>... [--bibliography FILE]... [--charter FILE] [--no-inf
   within the KB.
 
 Stages, in order: `start`, `document-graph`, `spine-seed`, `claims-declared`, `claims-discovered`,
-`equations-minted`, `references-found`, `depends-attributed`, `phase-3a`, `overview-drafted`. What
-each does is in [ARCHITECTURE.md](ARCHITECTURE.md) §4.
+`equations-minted`, `references-found`, `claims-culled`, `depends-attributed`, `phase-3a`,
+`overview-drafted`. What each does is in [ARCHITECTURE.md](ARCHITECTURE.md) §4.
+
+`claims-culled` asks, for each pair of linked claims with a prose end, whether one adds nothing to
+the other; a prose claim that adds nothing is removed, and its links pass to the claim it was culled
+into. It adds no edge: `depends-attributed` asks every surviving link its direction. Under
+`--no-inference` it is walked without asks. It records its verdicts and the surviving links in
+`kb-build-cull.yaml`.
 
 ### Resuming and monitoring
 
@@ -133,6 +147,10 @@ for each one.
 
 - Write ops take values as YAML (JSON accepted) on stdin or `--values`. Re-issuing an op leaves
   `kb-root/` byte-identical, and the second call reports `unchanged`.
+- Three write ops have no kb_tools counterpart. `drop-claim-edges` removes a claim's outgoing
+  `depends-on` or `references` bullets. `drop-inbound-edges` removes every bullet that names it.
+  `drop-claim-node` deletes the node itself, and refuses while an edge or any other line still names
+  it, so run the two edge ops first.
 - A write op ends with a `refresh` unless given `--no-refresh`. `kbase verify` then checks freshness
   and links; the citation grammar is checked inside the build.
 - List queries return `--limit` results (default 50; `0` means all) from `--offset`, and report
@@ -242,16 +260,16 @@ strictly: an unknown key fails the whole file, and the message names the key.
 - **`providers.toml`** is the endpoint pool. Each top-level table is a provider you name, with
   `baseUrl` (required) and `apiKeyFile` (relative to the file) or `apiKeyUnsafe`. kbase warns if a
   key file is group- or world-readable; `chmod 600` it.
-- **`config.toml`** holds the choices: `provider`, and `[models]` `heavy` and `light`. `kbase
+- **`config.toml`** holds the choices: `provider`, and `[models]` `decision` and `text`. `kbase
   configure` writes it and preserves every other byte of an existing file.
 
-The environment variables `KBASE_API_BASE_URL`, `KBASE_MODEL` and `KBASE_API_KEY_FILE` each override
-the one corresponding field; `KBASE_MODEL` names both tiers. Precedence is flags, then `KBASE_*`
-environment, then the files, and the environment alone suffices with no config directory.
+The environment variables `KBASE_API_BASE_URL`, `KBASE_DECISION`, `KBASE_TEXT` and
+`KBASE_API_KEY_FILE` each override the one corresponding field. Precedence is flags, then
+`KBASE_*` environment, then the files, and the environment alone suffices with no config directory.
 
 Provider selection is `--provider`, else `config.toml`'s `provider`, else the sole `providers.toml`
-entry. In a build, the claim graph's letter asks go to the light model and the overview passage to
-the heavy one.
+entry. In a build, the claim graph's letter asks go to the decision model and the overview passage
+to the text one.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`
@@ -269,12 +287,14 @@ Differences you will notice:
   of its own layout.
 - Write ops take YAML on stdin or `--values`, not a TOML file, and results are YAML documents with
   the exit codes above.
-- The inference endpoint comes from `providers.toml` or the `KBASE_API_BASE_URL`, `KBASE_MODEL` and
-  `KBASE_API_KEY_FILE` variables, not kb_tools' `API_BASE_URL`, `MODEL`, `API_KEY_FILE` and
-  `ALLOW_HTTP`; a cleartext key over non-loopback `http://` is a one-line warning, not gated.
+- The inference endpoint comes from `providers.toml` or the `KBASE_API_BASE_URL`, `KBASE_DECISION`,
+  `KBASE_TEXT` and `KBASE_API_KEY_FILE` variables, not kb_tools' `API_BASE_URL`, `MODEL`,
+  `API_KEY_FILE` and `ALLOW_HTTP`; a cleartext key over non-loopback `http://` is a one-line
+  warning, not gated.
 - List queries page (`--limit`, `--offset`), where kb_tools returns every result.
-- Build state lives outside the worktree; the three build records at the repository root are YAML:
-  `kb-build-node-pass.yaml`, `kb-build-unmarked.yaml`, `kb-build-classification.yaml`.
+- Build state lives outside the worktree; the four build records at the repository root are YAML:
+  `kb-build-node-pass.yaml`, `kb-build-unmarked.yaml`, `kb-build-classification.yaml`,
+  `kb-build-cull.yaml`.
 - The KB's metadata is format `1.0.0` (YAML frontmatter, YAML records, `.index/*.yaml`), stamped
   `kb-format` in the entry point's frontmatter, in both toolchains. kbase reads a `0.9.0` KB, built
   before either adopted it, by converting it in memory, and its next `refresh` or write op rewrites

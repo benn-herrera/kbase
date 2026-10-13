@@ -267,6 +267,19 @@ var (
 	checkStatus = checkOneOf(experimentStatuses, "status")
 )
 
+// checkEdgeClass takes one of drop-claim-edges' two classes. A demoted value
+// is refused naming its producer: demoted rows are resolve-demoted's to
+// remove, not this op's.
+func checkEdgeClass(n *yaml.Node, field string) (any, *valueError) {
+	v, err := checkOneOf([]string{kb.IndexDependsOn, kb.RelationReferences}, "edge-class")(n, field)
+	if err == nil {
+		return v, nil
+	}
+	text, _ := requireString(n, field, "a string")
+	return nil, refuse(field, n, "%q is outside the closed edge-class vocabulary [%s %s]; demoted rows are "+
+		"resolve-demoted's to remove, not drop-claim-edges'", text, kb.IndexDependsOn, kb.RelationReferences)
+}
+
 // idChecker checks a node id's shape; existence is the op's question. The
 // authored placeholder ids match the grammar and are still refused.
 func idChecker(kinds ...string) check {
@@ -637,6 +650,22 @@ var opFields = map[string][]field{
 		{"id", checkClaimID, true},
 		{"target", checkClaimID, true},
 		{"action", checkOneOf(resolveActions, "action"), true},
+	},
+	"drop-claim-edges": {
+		{"id", checkClaimID, true},
+		{"edge-class", checkEdgeClass, false},
+	},
+	"drop-inbound-edges": {
+		{"id", checkClaimID, true},
+	},
+	DemoteClaimEdge: {
+		{"id", checkClaimID, true},
+		{"target", checkClaimID, true},
+		{"origin", checkOneOf(kb.Origins, "origin"), true},
+		{"context", checkProse, false},
+	},
+	"drop-claim-node": {
+		{"id", checkClaimID, true},
 	},
 	"set-frontmatter": {
 		{"document", checkPath, true},

@@ -40,28 +40,86 @@ func TestRenderParagraphs(t *testing.T) {
 		"S1@4/1 We show that every widget is a gadget.",
 		"S2@4/1 Fig. 3 shows it, and the bound holds.",
 		"S3@10/2 Then $x. Y$ holds and so",
-		"S4@11/2 ``` math",
-		"S5@12/2 a = b",
-		"S6@13/2 ```",
-		"S7@14/2 follows.",
+		"S4@11/2 ``` math a = b ```",
+		"S5@14/2 follows.",
 	}
 	if !slices.Equal(texts, want) {
 		t.Errorf("sentences =\n%s\nwant\n%s", strings.Join(texts, "\n"), strings.Join(want, "\n"))
 	}
-	if len(r.paragraphs) != 2 || r.paragraphs[0].start != 4 || r.paragraphs[1].start != 10 {
+	if len(r.paragraphs) != 2 || r.paragraphs[0].start != 4 || r.paragraphs[1].start != 10 || !slices.Equal(r.paragraphs[1].lines, []int{10, 11, 12, 13, 14}) {
 		t.Errorf("paragraphs = %+v", r.paragraphs)
 	}
 	if !strings.Contains(r.text, "# A\n") || !strings.Contains(r.text, "> **Theorem 1**.\n") || strings.Contains(r.text, ": # A") {
 		t.Errorf("the heading and the block are not shown unlabelled:\n%s", r.text)
 	}
-	if !strings.HasPrefix(r.text, "[↑ V](index.md)\n\n") {
-		t.Errorf("the up-link is not shown as it stands: %q", r.text)
+	if !strings.Contains(r.text, "S3: Then $x. Y$ holds and so\nS4:\n``` math\na = b\n```\nS5: follows.\n") {
+		t.Errorf("the fence is not shown line by line under one label:\n%s", r.text)
+	}
+	if got := r.spanOf(r.paragraphs[1]).locator(); got != "S3-S5" {
+		t.Errorf("the fenced paragraph's locator = %q", got)
 	}
 	if got := r.spanOf(r.paragraphs[0]).locator(); got != "S1-S2" {
 		t.Errorf("locator = %q", got)
 	}
 	if got := r.spanOf(r.paragraphs[0]).excerpt(); got != "We show that every widget is a gadget. Fig. 3 shows it, and the bound holds." {
 		t.Errorf("excerpt = %q", got)
+	}
+	if got := r.spanOf(r.paragraphs[1]).excerpt(); got != "Then $x. Y$ holds and so ``` math a = b ``` follows." {
+		t.Errorf("the fenced paragraph's excerpt = %q", got)
+	}
+}
+
+// leafWithFrontmatter is a leaf as the build writes it: frontmatter, up-link,
+// then a body whose sentence carries a cross-reference and a citation.
+const leafWithFrontmatter = "---\n" +
+	"kind: leaf\n" +
+	"no-claim: \"This document carries no claim block.\"\n" +
+	"---\n" +
+	"[↑ V](index.md)\n" +
+	"\n" +
+	"# A\n" +
+	"\n" +
+	"By <a href=\"b.md#l\" data-reference-type=\"ref\" data-reference=\"lem:l\">Lemma 2</a> the bound holds\n" +
+	"<span class=\"citation\" data-cites=\"k01\">(K 2001)</span>.\n"
+
+const leafWithFrontmatterSentence = "By <a href=\"b.md#l\" data-reference-type=\"ref\" data-reference=\"lem:l\">Lemma 2</a> the bound holds " +
+	"<span class=\"citation\" data-cites=\"k01\">(K 2001)</span>."
+
+func TestRenderBeginsAtTheHeading(t *testing.T) {
+	r := renderText(leafWithFrontmatter, nil, excludedLines(leafWithFrontmatter, nil))
+	if !strings.HasPrefix(r.text, "# A\n") || strings.Contains(r.text, "no-claim") || strings.Contains(r.text, "[↑ V]") {
+		t.Errorf("the render does not begin at the heading:\n%s", r.text)
+	}
+	if len(r.sentences) != 1 {
+		t.Fatalf("sentences = %+v", r.sentences)
+	}
+	s := r.sentences[0]
+	if s.line != 8 || !strings.HasPrefix(leafWithFrontmatter[s.start:], "By <a href=") || !strings.HasSuffix(leafWithFrontmatter[:s.end], "</span>.") {
+		t.Errorf("S1 at line %d, bytes %q; want line 8 and the raw sentence of the original text", s.line, leafWithFrontmatter[s.start:s.end])
+	}
+	if p, ok := r.paragraphAt(9); !ok || p.start != 8 {
+		t.Errorf("the paragraph at line 9 = %+v, %v; want the one opening at line 8", p, ok)
+	}
+}
+
+func TestRenderShowsSentencesAsThePageShowsThem(t *testing.T) {
+	leaf := &leafReading{document: "v/a.md", text: leafWithFrontmatter}
+	leaf.render = renderText(leafWithFrontmatter, nil, excludedLines(leafWithFrontmatter, nil))
+	shown := "S1: By Lemma 2 the bound holds (K 2001)."
+	if !strings.Contains(leaf.render.text, shown+"\n") || strings.Contains(leaf.render.text, "<a ") || strings.Contains(leaf.render.text, "<span") {
+		t.Errorf("the sentence is not shown as the page shows it:\n%s", leaf.render.text)
+	}
+	asked := leaf.askedParagraphs(nil)
+	if len(asked) != 1 || asked[0].labelled() != shown {
+		t.Fatalf("asked = %+v", asked)
+	}
+	if got := asked[0].span.excerpt(); got != leafWithFrontmatterSentence {
+		t.Errorf("excerpt = %q, want the raw span", got)
+	}
+	yes := true
+	claims, _ := leaf.judge([]paragraphAnswer{{asked[0], &yes}})
+	if len(claims) != 1 || claims[0].line != 8 {
+		t.Errorf("claims = %+v, want the raw span located at line 8", claims)
 	}
 }
 
@@ -73,7 +131,7 @@ func TestAskedParagraphsAndTitles(t *testing.T) {
 	for _, a := range asked {
 		names = append(names, fmt.Sprintf("%s#%d", a.name(), a.position))
 	}
-	if want := []string{"S1-S2#1", "S3-S7#2"}; !slices.Equal(names, want) {
+	if want := []string{"S1-S2#1", "S3-S5#2"}; !slices.Equal(names, want) {
 		t.Errorf("asked = %q, want the paragraphs holding an opening sentence", names)
 	}
 	if got := derivedTitle(asked[0], leaf.fences, map[string]bool{}); got != "We show that every widget is a gadget." {
@@ -167,14 +225,11 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 	if total != 3 || !slices.Equal(units, []string{"clm-a", "clm-b", "clm-c"}) {
 		t.Errorf("units %q of %d, want one per source's ask group", units, total)
 	}
-	if want := []pair{{"clm-c", "clm-b"}}; !slices.Equal(c.edges, want) {
-		t.Errorf("depends edges = %v, want in-support-of written target to source and the ring gone: %v", c.edges, want)
+	if want := []pair{{"clm-a", "clm-b"}, {"clm-b", "clm-a"}, {"clm-c", "clm-b"}}; !slices.Equal(c.edges, want) {
+		t.Errorf("depends edges = %v, want every answer written, the ring both ways and in-support-of target to source: %v", c.edges, want)
 	}
-	if want := []pair{{"clm-a", "clm-b"}, {"clm-b", "clm-a"}}; !slices.Equal(c.demoted, want) {
-		t.Errorf("demoted = %v, want the supported-by ring both ways", c.demoted)
-	}
-	if want := []pair{{"clm-a", "clm-b"}, {"clm-b", "clm-a"}, {"clm-c", "clm-d"}}; !slices.Equal(c.refs, want) {
-		t.Errorf("references = %v, want the mention and the demoted ring", c.refs)
+	if want := []pair{{"clm-c", "clm-d"}}; !slices.Equal(c.refs, want) {
+		t.Errorf("references = %v, want the mention", c.refs)
 	}
 	rec, _, _ := buildrecords.ReadClassification(recordsAt(repo))
 	if len(rec.Candidates) != 4 || rec.Candidates[0].Outcome != ClassifyAnswered || !slices.Equal(rec.Candidates[0].Offered, []string{"A", "C"}) {

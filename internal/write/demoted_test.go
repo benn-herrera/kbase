@@ -95,3 +95,71 @@ func TestDemotedEdges(t *testing.T) {
 		t.Errorf("restoring a pair already a depends edge: %+v, want unchanged", nothing)
 	}
 }
+
+// TestDemoteClaimEdge turns an entry's existing depends-on bullet into a
+// demoted row of its own entry: the bullet and its emptied list's header go,
+// the demoted row lands with its context and the given origin, a re-issue
+// over the row alone is unchanged and byte-identical, a depends bullet
+// standing beside the row is removed, a row of another origin is refused
+// naming both, and a pair with no depends edge is refused.
+func TestDemoteClaimEdge(t *testing.T) {
+	root := seedKB(t)
+	b := insertClaim(t, root, "Result B", "  depends-on:\n  - id: "+seedClaim+"\n    context: the seed it rests on\n")
+	other := insertClaim(t, root, "Result C", "")
+	demote := "entry:\n- id: " + b + "\n  target: " + seedClaim + "\n  origin: " + kb.OriginInferred + "\n  context: cut in the cycle walk\n"
+
+	res := run(t, root, DemoteClaimEdge, demote, false)
+	if res.Outcome != result.Done {
+		t.Fatalf("demote: %+v", res)
+	}
+	text := snapshot(t, root)[kb.RegisterFile]
+	if strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+seedClaim+" — Seed Result") {
+		t.Errorf("B's demoted depends bullet stands:\n%s", text)
+	}
+	if strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+b+" — Result B") {
+		t.Errorf("B's emptied depends-on list kept its header:\n%s", text)
+	}
+	demotedRow := "- " + kb.RelationDemoted + ":\n  - " + seedClaim + " — Seed Result (origin " + kb.OriginInferred + ") [cut in the cycle walk]\n"
+	if !strings.Contains(text, demotedRow) {
+		t.Errorf("no demoted row naming the seed with its context:\n%s", text)
+	}
+	seed := readRegister(text).claims[seedClaim]
+	if slices.ContainsFunc(seed.DependsOn, func(d kb.Edge) bool { return d.Target == b }) || slices.ContainsFunc(seed.Demoted, func(d kb.Edge) bool { return d.Target == b }) {
+		t.Errorf("the seed entry moved: %+v demoted %+v\n%s", seed.DependsOn, seed.Demoted, text)
+	}
+	bEntry := readRegister(text).claims[b]
+	if len(bEntry.DependsOn) != 0 || len(bEntry.Demoted) != 1 || bEntry.Demoted[0].Target != seedClaim ||
+		bEntry.Demoted[0].Origin != kb.OriginInferred || bEntry.Demoted[0].Context == nil || *bEntry.Demoted[0].Context != "cut in the cycle walk" {
+		t.Errorf("B did not read back as demoted: depends %+v demoted %+v\n%s", bEntry.DependsOn, bEntry.Demoted, text)
+	}
+
+	before := snapshot(t, root)
+	again := run(t, root, DemoteClaimEdge, demote, false)
+	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
+		t.Errorf("again: %+v, want unchanged, byte-identical", again)
+	}
+
+	if res := run(t, root, AddBuildEdges, "entry:\n- id: "+b+"\n  depends-on:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
+		t.Fatalf("re-planting B's depends bullet beside its demoted row: %+v", res)
+	}
+	both := run(t, root, DemoteClaimEdge, demote, false)
+	text = snapshot(t, root)[kb.RegisterFile]
+	bEntry = readRegister(text).claims[b]
+	if both.Outcome != result.Done || len(bEntry.DependsOn) != 0 || len(bEntry.Demoted) != 1 || !strings.Contains(text, demotedRow) {
+		t.Errorf("row and bullet both standing: %+v, depends %+v demoted %+v, want done, the bullet gone and the row as it stood\n%s",
+			both, bEntry.DependsOn, bEntry.Demoted, text)
+	}
+
+	before = snapshot(t, root)
+	mismatch := run(t, root, DemoteClaimEdge, "entry:\n- id: "+b+"\n  target: "+seedClaim+"\n  origin: "+kb.OriginCited+"\n", false)
+	if mismatch.Outcome != result.Refused || len(mismatch.Refusals) != 1 ||
+		!strings.Contains(mismatch.Refusals[0].Detail, "origin "+kb.OriginInferred+", not "+kb.OriginCited) || !maps.Equal(before, snapshot(t, root)) {
+		t.Errorf("demoting with an origin other than the standing row's: %+v, want refused naming both, nothing written", mismatch)
+	}
+
+	absent := run(t, root, DemoteClaimEdge, "entry:\n- id: "+b+"\n  target: "+other+"\n  origin: "+kb.OriginCited+"\n", false)
+	if absent.Outcome != result.Refused || len(absent.Refusals) != 1 ||
+		!strings.Contains(absent.Refusals[0].Detail, "no depends-on bullet naming") {
+		t.Errorf("demoting an edge B does not hold: %+v, want refused naming the missing bullet", absent)
+	}
+}

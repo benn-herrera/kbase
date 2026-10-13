@@ -87,19 +87,6 @@ func readIndex[T kb.IndexRowType](src *kb.Source) ([]T, error) {
 	return rows, nil
 }
 
-type pair struct{ source, target string }
-
-// letterPairs is every entry's pair whose chosen letter is letter.
-func letterPairs(entries []buildrecords.CandidateEntry, letter string) map[pair]bool {
-	out := map[pair]bool{}
-	for _, e := range entries {
-		if e.Letter != nil && *e.Letter == letter {
-			out[pair{e.Source, e.Target}] = true
-		}
-	}
-	return out
-}
-
 // load reads the graph of the KB src reads.
 func load(src *kb.Source) (*graph, error) {
 	claims, err := readIndex[kb.NodeRow](src)
@@ -115,6 +102,10 @@ func load(src *kb.Source) (*graph, error) {
 		return nil, err
 	}
 	unmarked, _, err := buildrecords.ReadUnmarked(src)
+	if err != nil {
+		return nil, err
+	}
+	cull, _, err := buildrecords.ReadCull(src)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +147,7 @@ func load(src *kb.Source) (*graph, error) {
 		}
 		byID[c.ID] = n
 	}
-	g.edges = drawnEdges(rows, letterPairs(unmarked.Pairs, asks.LetterPoints))
+	g.edges = drawnEdges(rows, buildrecords.InferredLinks(unmarked, cull, asks.LetterPoints))
 	for _, e := range g.edges {
 		for _, end := range []string{e.source, e.target} {
 			if _, ok := byID[end]; !ok {
@@ -210,8 +201,9 @@ func h1(src *kb.Source, rel string) (string, error) {
 // drawnEdges is the depends-on rows the sheet draws, one per source, target,
 // relation and origin whatever their context, ordered by those. A relation
 // with no stroke — references — is not drawn; a depends row is inferred where
-// the unmarked ask said it points, a demoted row where its origin says so.
-func drawnEdges(rows []kb.EdgeRow, askedYes map[pair]bool) []edge {
+// inferred holds for it — the build found it with no mark — and a demoted row
+// where its origin says so.
+func drawnEdges(rows []kb.EdgeRow, inferred func(source, target string) bool) []edge {
 	seen := map[[4]string]bool{}
 	var out []edge
 	for _, r := range rows {
@@ -219,11 +211,11 @@ func drawnEdges(rows []kb.EdgeRow, askedYes map[pair]bool) []edge {
 		if r.Origin != nil {
 			origin = *r.Origin
 		}
-		inferred := askedYes[pair{r.Source, r.Target}]
+		found := inferred(r.Source, r.Target)
 		if r.Relation == kb.RelationDemoted {
-			inferred = origin == kb.OriginInferred
+			found = origin == kb.OriginInferred
 		}
-		s := strokeFor(r.Relation, inferred)
+		s := strokeFor(r.Relation, found)
 		key := [4]string{r.Source, r.Target, r.Relation, origin}
 		if s == nil || seen[key] {
 			continue

@@ -11,10 +11,9 @@ in `ROADMAP_PLANS/` (see "Plan & Execute Process").
 kbase is a Go binary that builds a knowledge base (KB) from a LaTeX document set and maintains it
 afterwards. It builds exactly what kb_tools builds — the reference implementation, read from
 `.claude/adjagent/kb_tools/` at the commit SPEC "Given interfaces" names — and keeps its own
-provider management and inference invocation. Every KB function is a subcommand that personant's
-model calls as a builtin tool. kb_tools is the differential oracle: every difference from it is a
-named divergence (SPEC "Named divergences") or a defect. The contract is SPEC.md; how this
-implementation meets it is ARCHITECTURE.md.
+provider management and inference invocation. kb_tools is the differential oracle: every
+difference from it is a named divergence (SPEC "Named divergences") or a defect. The contract is
+SPEC.md; how this implementation meets it is ARCHITECTURE.md.
 
 ---
 
@@ -49,9 +48,12 @@ them. Working rules for packages that carry over:
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
   provider faults never abort the pool; fault reasons carry no key material.
 - **internal/model**: `Endpoint{Name, BaseURL, APIKey}` is the transport-level slice of a provider.
-  Every ask goes through `model.Chat`: one tool-less request with kb_tools' call shape, re-issued
-  identically on an incomplete stream up to kb_tools' attempt count. API keys never appear in logs
-  or error strings.
+  The overview ask goes through `model.Chat`: one tool-less request with kb_tools' call shape,
+  re-issued identically on an incomplete stream up to kb_tools' attempt count. The letter asks go
+  through `model.SystemOne`: one `POST <base-url>/systemone` request carrying a closed-set question
+  (`choice` or `noul`), answered by probabilities over the offered letters, re-issued identically on
+  a transport error or retry-class 5xx. API keys never appear in logs or error strings. The
+  `[models]` keys are `decision` and `text`.
 
 ---
 
@@ -80,9 +82,10 @@ single source. Working habits they impose:
   (`cmd/modulescan_test.go`), so they agree on which files are the module's source.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
-- **Markdown prose wraps at 100 columns** — not unwrapped, not 80. Table rows, fenced code and a
-  single token longer than the line (a URL, a path) are the exceptions; any other needs a technical
-  reason stated beside it.
+- **The installed agent set is a pinned artifact, never edited here.** `.claude/agents/` and
+  `.claude/commands/` are tracked so a checkout pins them; a finding that needs an agent change
+  goes to the upstream project, adjagent, as a hand-off, the fix lands there, and the set is
+  updated from it.
 - **File formats follow personant's CONVENTIONS "Serialization format" rule:** JSONL for flat
   records, YAML for documents, TOML for flat configuration — with one named departure from `1.0.0`
   (SPEC §10): the KB's index is a YAML stream in flow style, one `--- {…}` record per line, so the
@@ -142,13 +145,14 @@ single source. Working habits they impose:
   return code; a new stage does not get a third kind of exit.
 - **No prompt reaches a model from an in-code string.** Every prompt is an embedded template file
   under `internal/asks`, rendered with its slots filled. One manifest beside the embedded files
-  states each file's provenance — imported, byte-identical to the named kb_tools file at the named
-  adjagent commit; or kbase-authored, derived from the named file and commit — never inside the file
-  itself. A unit test re-reads each imported file at its commit from `.claude/adjagent` and checks
-  the identity, and checks that every derivation source exists. A kbase-authored template gets
-  prompt-engineer review before first use and lands as an experiment with a measured result. A
-  call's system prompt is the fragment named for it, never an agent definition. A slot's value is
-  formatted as kb_tools formats it.
+  states each file's provenance — imported, byte-identical to the file it was ported from at the
+  named adjagent commit; kbase-authored, derived from the named file and commit; or kbase-origin,
+  authored de novo in kbase with no origin file — never inside the file itself. A unit test
+  re-reads each imported file at its commit from `.claude/adjagent` and checks the identity, and
+  checks that every derivation source exists. A kbase-authored or kbase-origin template gets
+  prompt-engineer review before first use; a kbase-authored one lands as an experiment with a
+  measured result. A call's system prompt is the fragment named for it, never an agent definition.
+  A slot's value is formatted as kb_tools formats it.
 - **No test asserts a prompt's prose.** A test keyed on a template's wording is a second copy of the
   template; tests key on the offered letters, the slot set, the system fragment and the closing
   line's letters.

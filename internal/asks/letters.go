@@ -21,13 +21,15 @@ import (
 // call.
 
 // Kind is which letter ask: a paragraph of the node pass, an edge candidate
-// of classification, or a shortlisted pair of the unmarked-reference asks.
+// of classification, a shortlisted pair of the unmarked-reference asks, or a
+// linked pair of the co-linearity cull.
 type Kind string
 
 const (
 	Paragraph Kind = "paragraph"
 	Classify  Kind = "classify"
 	Unmarked  Kind = "unmarked"
+	Colinear  Kind = "colinear"
 )
 
 // DefaultReaderConcurrency is how many asks of one group are in flight once
@@ -40,11 +42,15 @@ const DefaultReaderConcurrency = 4
 const AskRecordsDir = "asks"
 
 // LetterQuestion is one ask as a reader receives it: Group and Item name it,
-// Prompt is all it says, and Attempt counts the item's asks from 1.
+// State is the composed body, Question the one typed question over the
+// offered letters, and Attempt counts the item's asks from 1. A decision
+// model has no free-text reply to quote back, so a re-ask is the identical
+// question again — the attempt ordinal is what distinguishes it.
 type LetterQuestion struct {
 	Kind        Kind
 	Group, Item string
-	Prompt      string
+	State       string
+	Question    Question
 	Offered     []string
 	Attempt     int
 }
@@ -107,16 +113,20 @@ const (
 	Defaulted Outcome = "defaulted"
 )
 
-// LetterItem is one item of a group: its name, its letters, and its prompt
-// given what came back last time — nil on a first ask.
+// LetterItem is one item of a letter-ask group: its name, its letters, its
+// question, and the composed state. A group's constructor fills these; the
+// item's name and question key the answer cache and the records.
 type LetterItem struct {
-	Item    string
-	Offered []string
-	Compose func(returned *string) (string, error)
+	Item     string
+	Offered  []string
+	Question Question
+	Compose  func() (string, error)
 }
 
-// CallRecord is one call: the prompt past the group's shared prefix, what
-// came back, and what it cost.
+// CallRecord is one call: the state past the group's shared prefix, what the
+// answer decided, and what it cost. A decision call carries no free-text
+// reply — Reply is empty and the confidence map carries the answer — and the
+// letter is nil where no offered letter was decided.
 type CallRecord struct {
 	Tail        string             `yaml:"tail"`
 	Reply       string             `yaml:"reply"`
@@ -146,7 +156,7 @@ type GroupRecord struct {
 }
 
 type askCall struct {
-	prompt string
+	state  string
 	reply  Reply
 	letter *string
 	wall   time.Duration
@@ -158,7 +168,7 @@ func ask(ctx context.Context, reader LetterReader, q LetterQuestion) (askCall, e
 	if err != nil {
 		return askCall{}, err
 	}
-	c := askCall{prompt: q.Prompt, reply: reply, wall: time.Since(started)}
+	c := askCall{state: q.State, reply: reply, wall: time.Since(started)}
 	if l, ok := Decide(reply, q.Offered); ok {
 		c.letter = &l
 	}
@@ -166,13 +176,18 @@ func ask(ctx context.Context, reader LetterReader, q LetterQuestion) (askCall, e
 }
 
 // resolve is an item's calls: the first ask, and the one re-ask where it
-// carried no offered letter.
+// carried no offered letter. The re-ask is the identical question — a
+// deterministic decision model answers it identically and defaults — the
+// attempt ordinal keeping the asks apart in the answer cache.
 func resolve(ctx context.Context, reader LetterReader, kind Kind, group string, entry LetterItem) ([]askCall, error) {
-	question := func(returned *string, attempt int) (LetterQuestion, error) {
-		prompt, err := entry.Compose(returned)
-		return LetterQuestion{kind, group, entry.Item, prompt, entry.Offered, attempt}, err
+	question := func(attempt int) (LetterQuestion, error) {
+		state, err := entry.Compose()
+		q := entry.Question
+		q.Key = entry.Item
+		return LetterQuestion{Kind: kind, Group: group, Item: entry.Item, State: state, Question: q,
+			Offered: entry.Offered, Attempt: attempt}, err
 	}
-	q, err := question(nil, 1)
+	q, err := question(1)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +195,7 @@ func resolve(ctx context.Context, reader LetterReader, kind Kind, group string, 
 	if err != nil || first.letter != nil {
 		return []askCall{first}, err
 	}
-	if q, err = question(&first.reply.Text, 2); err != nil {
+	if q, err = question(2); err != nil {
 		return nil, err
 	}
 	second, err := ask(ctx, reader, q)
@@ -253,13 +268,13 @@ func AskGroup(ctx context.Context, kind Kind, group string, items []LetterItem, 
 		}
 	}
 
-	var prompts []string
+	var states []string
 	for _, calls := range resolved {
 		for _, c := range calls {
-			prompts = append(prompts, c.prompt)
+			states = append(states, c.state)
 		}
 	}
-	rec.Prefix = sharedPrefix(prompts)
+	rec.Prefix = sharedPrefix(states)
 	for i, entry := range items {
 		calls := resolved[i]
 		last := calls[len(calls)-1]
@@ -273,7 +288,7 @@ func AskGroup(ctx context.Context, kind Kind, group string, items []LetterItem, 
 		item := ItemRecord{Item: entry.Item, Offered: entry.Offered, Letter: last.letter, Outcome: outcome, Confidence: last.reply.Confidence}
 		for _, c := range calls {
 			item.Calls = append(item.Calls, CallRecord{
-				Tail: c.prompt[len(rec.Prefix):], Reply: c.reply.Text, Confidence: c.reply.Confidence, Letter: c.letter,
+				Tail: c.state[len(rec.Prefix):], Reply: "", Confidence: c.reply.Confidence, Letter: c.letter,
 				WallSeconds: c.wall.Seconds(), Stats: c.reply.Stats,
 			})
 		}

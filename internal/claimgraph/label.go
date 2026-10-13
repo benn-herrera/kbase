@@ -13,8 +13,8 @@ import (
 // The sentence-labelled render a paragraph ask shows its leaf in, and the one
 // paragraph rule the node pass and stage D share. One sentence per line,
 // wraps collapsed; paragraph breaks kept as the write API's excerpt matching
-// sees them, so a paragraph here is a run of lines a slice can span; the
-// navigation above the body shown unlabelled, so no locator can name it.
+// sees them, so a paragraph here is a run of lines a slice can span; nothing
+// above the body's heading shown, so no locator can name it.
 
 const labelPrefix = "S"
 
@@ -41,14 +41,16 @@ var abbreviations = func() map[string]bool {
 	return out
 }()
 
-// sentence is one labelled line of the render: its collapsed text, its byte
-// range in the rendered source, the 0-based line it begins on, and the
-// paragraph it belongs to.
+// sentence is one labelled unit of the render: its collapsed source text, its
+// byte range in the rendered source, the 0-based line it begins on, the
+// paragraph it belongs to, and how the render shows it, label included.
+// Locating reads text; only the ask reads shown.
 type sentence struct {
 	label, text string
 	start, end  int
 	line        int
 	paragraph   int
+	shown       string
 }
 
 // span is a run of sentences and the slice of the document it names.
@@ -190,7 +192,9 @@ const (
 	groupHeading  = "heading"
 )
 
-func groups(lines []string, first int, fenced, excluded map[int]bool) []group {
+// groups is the source's units from line first on. fenceOf maps each line of
+// a maths fence to the fence's opening line, so a fence is one unit.
+func groups(lines []string, first int, fenceOf map[int]int, excluded map[int]bool) []group {
 	var out []group
 	var prose []int
 	opens := false
@@ -201,15 +205,23 @@ func groups(lines []string, first int, fenced, excluded map[int]bool) []group {
 		}
 		opens = false
 	}
+	inFence := func(n int) bool {
+		_, ok := fenceOf[n]
+		return ok
+	}
 	for n := first; n < len(lines); n++ {
 		line := kb.Strip(kb.BlockquotePrefix.ReplaceAllString(lines[n], ""))
 		switch {
 		case excluded[n]:
 			flush()
 			out = append(out, group{groupExcluded, []int{n}, false})
-		case fenced[n]:
+		case inFence(n):
 			flush()
-			out = append(out, group{groupFence, []int{n}, false})
+			if last := len(out) - 1; last >= 0 && out[last].kind == groupFence && fenceOf[out[last].lines[0]] == fenceOf[n] {
+				out[last].lines = append(out[last].lines, n)
+			} else {
+				out = append(out, group{groupFence, []int{n}, false})
+			}
 		case line == "":
 			flush()
 			out = append(out, group{kind: groupBreak})
@@ -229,16 +241,25 @@ func groups(lines []string, first int, fenced, excluded map[int]bool) []group {
 }
 
 type piece struct {
-	text       string
-	start, end int
+	text, shown string
+	start, end  int
 }
 
-// pieces is one group's sentences: collapsed text and byte range in the
-// source.
+// pieces is one group's sentences: collapsed text, how the render shows it
+// after its label, and byte range in the source. A fence is shown line by
+// line, under its label.
 func pieces(lines []string, offsets []int, g group) []piece {
 	if g.kind == groupFence || g.kind == groupHeading {
-		n := g.lines[0]
-		return []piece{{kb.NormalizeSpace(kb.BlockquotePrefix.ReplaceAllString(lines[n], "")), offsets[n], offsets[n] + len(lines[n])}}
+		texts := make([]string, len(g.lines))
+		for i, n := range g.lines {
+			texts[i] = kb.NormalizeSpace(kb.BlockquotePrefix.ReplaceAllString(lines[n], ""))
+		}
+		shown := " " + texts[0]
+		if g.kind == groupFence {
+			shown = "\n" + strings.Join(texts, "\n")
+		}
+		head, tail := g.lines[0], g.lines[len(g.lines)-1]
+		return []piece{{strings.Join(texts, " "), shown, offsets[head], offsets[tail] + len(lines[tail])}}
 	}
 	type token struct {
 		text string
@@ -273,14 +294,16 @@ func pieces(lines []string, offsets []int, g group) []piece {
 				tail = i
 			}
 		}
-		out = append(out, piece{collapsed[b[0]:b[1]], tokens[head].at, tokens[tail].at + len(tokens[tail].text)})
+		text := collapsed[b[0]:b[1]]
+		out = append(out, piece{text, " " + pageText(text), tokens[head].at, tokens[tail].at + len(tokens[tail].text)})
 	}
 	return out
 }
 
-// renderText is text as the ask shows it: navigation verbatim, then one
-// labelled sentence per line. Excluded lines are shown as they stand, carry
-// no label, and end the paragraph they interrupt.
+// renderText is text as the ask shows it, from the heading that opens the
+// body: one labelled sentence per line, as the page shows its words, and one
+// label per maths fence. Excluded lines are shown as they stand, carry no
+// label, and end the paragraph they interrupt. Offsets and lines index text.
 func renderText(text string, fences []MathFence, excluded map[int]bool) render {
 	lines := kb.SplitLines(text)
 	offsets := make([]int, len(lines))
@@ -289,23 +312,26 @@ func renderText(text string, fences []MathFence, excluded map[int]bool) render {
 		offsets[i] = cursor
 		cursor += len(l) + 1
 	}
-	first := bodyStart(text)
-	fenced := map[int]bool{}
-	for _, f := range fences {
-		for n := f.Start; n < f.End; n++ {
-			fenced[n] = true
+	top := bodyStart(text)
+	for n := top; n < len(lines); n++ {
+		if headingRE.MatchString(kb.Strip(kb.BlockquotePrefix.ReplaceAllString(lines[n], ""))) {
+			top = n
+			break
 		}
 	}
-	shown := slices.Clone(lines[:min(first, len(lines))])
-	if first < len(lines) {
-		shown = append(shown, "")
+	fenceOf := map[int]int{}
+	for _, f := range fences {
+		for n := f.Start; n < f.End; n++ {
+			fenceOf[n] = f.Start
+		}
 	}
+	var shown []string
 	var r render
 	held := map[int][]int{}
 	var order []int
 	paragraphIndex := 0
 	previous := groupBreak
-	for _, g := range groups(lines, first, fenced, excluded) {
+	for _, g := range groups(lines, top, fenceOf, excluded) {
 		switch g.kind {
 		case groupBreak:
 			if previous != groupBreak {
@@ -331,8 +357,9 @@ func renderText(text string, fences []MathFence, excluded map[int]bool) render {
 				continue
 			}
 			label := fmt.Sprintf("%s%d", labelPrefix, len(r.sentences)+1)
-			r.sentences = append(r.sentences, sentence{label, p.text, p.start, p.end, strings.Count(text[:p.start], "\n"), paragraphIndex})
-			shown = append(shown, label+": "+p.text)
+			s := sentence{label, p.text, p.start, p.end, strings.Count(text[:p.start], "\n"), paragraphIndex, label + ":" + p.shown}
+			r.sentences = append(r.sentences, s)
+			shown = append(shown, s.shown)
 		}
 	}
 	for _, i := range order {

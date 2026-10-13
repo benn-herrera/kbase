@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"time"
 
@@ -65,12 +66,243 @@ func New(client model.Client, scratch string, lg log.Logger) *Caller {
 	}
 }
 
-// Letters is the production LetterReader: each question put to modelID under
-// the reader-system fragment. It returns no confidence.
+// Letters is the production LetterReader: each question put to modelID as
+// one SystemOne call — the composed state the request's state, the question
+// serialized under its item's key — the answer mapped to a confidence keyed
+// by the offered letters, and the mapped answer cached by the digest of the
+// model, the question and the state.
 func (c *Caller) Letters(modelID string) asks.LetterReader {
 	return func(ctx context.Context, q asks.LetterQuestion) (asks.Reply, error) {
-		return c.ask(ctx, modelID, asks.ReaderSystem, q.Prompt, q.Attempt, nil, fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item))
+		conf, err := c.decide(ctx, modelID, q)
+		if err != nil {
+			return asks.Reply{}, err
+		}
+		return asks.Reply{Confidence: conf}, nil
 	}
+}
+
+// decide is one question's SystemOne round-trip: the cached answer where one
+// stands for these exact inputs, else the call, its every attempt captured.
+//
+// The mapping, per answer type, keyed by which criterion the letter names,
+// never by offered order: a choice answer carries the probabilities whole;
+// without them its own confidence sits under the chosen letter; with neither,
+// the answer is unreadable and takes the re-ask/default path. A noul answer
+// carries one figure read as P(true) — the OpenRouter example's reading,
+// confirmed against the live provider before the hermetic suite treats it as
+// fixed — so the true letter takes noul and the false letter the remainder.
+func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuestion) (map[string]float64, error) {
+	key := decisionDigest(modelID, q)
+	answer := filepath.Join(c.answers, key+".json")
+	switch cached, err := os.ReadFile(answer); {
+	case err == nil:
+		var a model.DecisionAnswer
+		if err := json.Unmarshal(cached, &a); err != nil {
+			return nil, fmt.Errorf("call: cached answer %s: %w", answer, err)
+		}
+		return confidence(a, q), nil
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
+	}
+
+	promptHash := key
+	stem := fileNameUnsafeRE.ReplaceAllString(fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), "_")
+	stem = stem[:min(len(stem), fileStemMaxChars)]
+	capturePath := filepath.Join(c.captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], q.Attempt))
+	if err := os.MkdirAll(c.captures, 0o777); err != nil {
+		return nil, err
+	}
+	f, err := os.Create(capturePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	var writeErr error
+	record := func(v any) {
+		if writeErr == nil {
+			writeErr = enc.Encode(v)
+		}
+	}
+	stateHash := digestOfState(q.State)
+	record(decisionCaptureRequest{
+		Type: "request", Model: modelID, StateSHA256: stateHash,
+		Question: decisionQuestionCapture{
+			Key: q.Question.Key, Type: q.Question.Type,
+			Instructions: q.Question.Instructions, Criteria: q.Question.Criteria,
+		},
+		Attempt: q.Attempt,
+	})
+	started := time.Now()
+	got, err := c.client.SystemOne(ctx, model.DecisionRequest{
+		Model: modelID,
+		State: q.State,
+		Questions: []model.DecisionQuestion{{
+			Key:          q.Question.Key,
+			Type:         q.Question.Type,
+			Instructions: q.Question.Instructions,
+			Criteria:     q.Question.Criteria,
+		}},
+	})
+	wall := time.Since(started)
+	a := oneAnswer(got, err, q)
+	if a.Type != "" {
+		record(decisionCaptureAttempt{
+			Type: "attempt", Attempt: q.Attempt, Outcome: "ok", DurationMS: wall.Milliseconds(),
+			FinishReason: "stop", UsageReported: got.Usage.PromptTokens > 0,
+			PromptTokens: got.Usage.PromptTokens, CompletionTokens: got.Usage.CompletionTokens,
+		})
+	} else {
+		record(decisionCaptureAttempt{
+			Type: "attempt", Attempt: q.Attempt, Outcome: "failed", Error: fmt.Sprint(err), DurationMS: wall.Milliseconds(),
+		})
+	}
+	if flushErr := w.Flush(); writeErr == nil {
+		writeErr = flushErr
+	}
+	if err != nil {
+		// SystemOne has re-issued identically to its attempt count; a call
+		// past it never completed, and no answer is assumed for one.
+		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath)}
+	}
+	if writeErr != nil {
+		return nil, fmt.Errorf("call: writing the capture %s: %w", capturePath, writeErr)
+	}
+	if err := os.MkdirAll(c.answers, 0o777); err != nil {
+		return nil, err
+	}
+	if err := atomicfile.Write(answer, mustMarshal(a), nil); err != nil {
+		return nil, err
+	}
+	return confidence(a, q), nil
+}
+
+// oneAnswer is the response's answer under the question's key: an answer to
+// a decision call arrives keyed like the questions object, and the lookup
+// keys on it. A missing answer decodes to the zero answer — the seam's
+// recoverable path, an unreadable answer here. The response is passed whole
+// and the zero one returned where nothing decided, so the caller caches and
+// maps the one answer it asked for.
+func oneAnswer(resp model.DecisionResponse, err error, q asks.LetterQuestion) model.DecisionAnswer {
+	if err != nil {
+		return model.DecisionAnswer{}
+	}
+	for _, a := range resp.Answers {
+		if a.Key == q.Question.Key {
+			return a
+		}
+	}
+	return model.DecisionAnswer{Key: q.Question.Key}
+}
+
+// confidence maps an answer to a per-letter confidence over the offered
+// letters; nil where the answer decides nothing (an unreadable answer).
+func confidence(a model.DecisionAnswer, q asks.LetterQuestion) map[string]float64 {
+	switch a.Type {
+	case "choice":
+		if a.Probabilities != nil {
+			return a.Probabilities
+		}
+		if a.Choice != "" {
+			return map[string]float64{a.Choice: a.Confidence}
+		}
+	case "noul":
+		if a.Noul >= 0 && a.Noul <= 1 {
+			out := map[string]float64{q.Question.TrueLetter: a.Noul}
+			if other := otherLetter(q); other != "" {
+				out[other] = 1 - a.Noul
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// otherLetter is the offered letter whose criterion is not the true one, ""
+// where the offered set is not two.
+func otherLetter(q asks.LetterQuestion) string {
+	var rest []string
+	for _, l := range q.Offered {
+		if l != q.Question.TrueLetter {
+			rest = append(rest, l)
+		}
+	}
+	if len(rest) != 1 {
+		return ""
+	}
+	return rest[0]
+}
+
+// digestOfState is the state's digest, the prompt-sha256 precedent: the
+// capture carries the composed state as a digest, its bytes under
+// scratch/asks/ as today.
+func digestOfState(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// decisionCaptureRequest opens a decision call's capture: what was asked, by
+// digest, never the endpoint or its key — the state as a digest, its bytes
+// under scratch/asks/ as today, the question whole.
+type decisionCaptureRequest struct {
+	Type        string                  `json:"type"`
+	Model       string                  `json:"model"`
+	StateSHA256 string                  `json:"state-sha256"`
+	Question    decisionQuestionCapture `json:"question"`
+	Attempt     int                     `json:"ask-attempt"`
+}
+
+type decisionQuestionCapture struct {
+	Key          string            `json:"key"`
+	Type         string            `json:"type"`
+	Instructions string            `json:"instructions"`
+	Criteria     map[string]string `json:"criteria"`
+}
+
+// decisionCaptureAttempt is the one request of the decision call, as it
+// ended. SystemOne has no streaming and no finish reason; the usage figures
+// are the API's own.
+type decisionCaptureAttempt struct {
+	Type             string `json:"type"`
+	Attempt          int    `json:"attempt"`
+	Outcome          string `json:"outcome"`
+	Error            string `json:"error,omitempty"`
+	DurationMS       int64  `json:"duration-ms"`
+	FinishReason     string `json:"finish-reason"`
+	UsageReported    bool   `json:"usage-reported"`
+	PromptTokens     int    `json:"prompt-tokens"`
+	CompletionTokens int    `json:"completion-tokens"`
+	CachedTokens     int    `json:"cached-tokens"`
+	Reasoned         bool   `json:"reasoned"`
+}
+
+// decisionDigest is the digest of the model, the question whole, the state
+// and the ask's attempt, so the same ask finds its answer and a re-ask of
+// the identical question does not — the attempt ordinal stays in the answer
+// cache's key, the re-ask reaching the model. The criteria serialize in
+// sorted key order, so the digest is deterministic across map iteration
+// orders.
+func decisionDigest(modelID string, q asks.LetterQuestion) string {
+	keys := make([]string, 0, len(q.Question.Criteria))
+	for k := range q.Question.Criteria {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := []string{modelID, q.Question.Key, q.Question.Type, q.Question.Instructions, q.Question.TrueLetter}
+	for _, k := range keys {
+		parts = append(parts, k, q.Question.Criteria[k])
+	}
+	return digest(append(parts, q.State, strconv.Itoa(q.Attempt))...)
+}
+
+func mustMarshal(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 // Passage is the overview passage asked of modelID from excerpts, rejected

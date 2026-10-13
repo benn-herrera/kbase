@@ -48,6 +48,12 @@ func (w writer) run(name, op string, vs values, create bool) (write.Result, erro
 	return res, stopf(name, "%s ended %s and wrote nothing this stage can proceed from: %s", op, res.Outcome, refusalText(res))
 }
 
+// raw issues op over data once, creating what the op creates, and returns
+// its result whatever the outcome: the caller judges it.
+func (w writer) raw(op string, data []byte) write.Result {
+	return write.Run(op, write.Options{KBRoot: w.kbRoot, Values: data, Create: true, NoRefresh: true, Logger: w.lg})
+}
+
 func refusalText(res write.Result) string {
 	parts := make([]string, 0, len(res.Refusals)+len(res.Failures))
 	for _, r := range res.Refusals {
@@ -141,7 +147,7 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	for _, r := range p.restsOn {
 		edges = append(edges, pair{minted[r.entry], r.workID})
 	}
-	f, err = w.writeEdges("pass-3-rests-on", edges, nil, nil)
+	f, err = w.writeEdges("pass-3-rests-on", edges, nil)
 	if err != nil {
 		return findings, err
 	}
@@ -185,30 +191,22 @@ func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 }
 
 // writeEdges lands every edge in one batch of the build's edge write, one
-// entry per source carrying its dependencies, its references and its
-// references cut from depends as demoted with their origin, so a refusal
+// entry per source carrying its dependencies and its references, so a refusal
 // cannot land half of one claim's edges. A work target's applicability is
 // left for the op to render pending.
-func (w writer) writeEdges(name string, edges, references []pair, cut map[pair]string) (Finding, error) {
+func (w writer) writeEdges(name string, edges, references []pair) (Finding, error) {
 	if len(edges) == 0 && len(references) == 0 {
 		return fact(name, field("dependency-edges", 0), field("dependency-sources", 0), field("references", 0), field("reference-sources", 0)), nil
 	}
 	depends := map[string][]map[string]any{}
 	refs := map[string][]map[string]any{}
-	demoted := map[string][]map[string]any{}
-	referring := map[string]bool{}
 	var sources []string
 	for _, e := range edges {
 		depends[e.source] = append(depends[e.source], map[string]any{"id": e.target})
 		sources = append(sources, e.source)
 	}
 	for _, r := range references {
-		if origin, ok := cut[r]; ok {
-			demoted[r.source] = append(demoted[r.source], map[string]any{"id": r.target, "origin": origin})
-		} else {
-			refs[r.source] = append(refs[r.source], map[string]any{"id": r.target})
-		}
-		referring[r.source] = true
+		refs[r.source] = append(refs[r.source], map[string]any{"id": r.target})
 		sources = append(sources, r.source)
 	}
 	slices.Sort(sources)
@@ -222,15 +220,12 @@ func (w writer) writeEdges(name string, edges, references []pair, cut map[pair]s
 		if r, ok := refs[s]; ok {
 			vs[i]["references"] = r
 		}
-		if d, ok := demoted[s]; ok {
-			vs[i][kb.RelationDemoted] = d
-		}
 	}
 	if _, err := w.run(name, write.AddBuildEdges, vs, false); err != nil {
 		return Finding{}, err
 	}
 	return pass(name, field("dependency-edges", len(edges)), field("dependency-sources", len(depends)),
-		field("references", len(references)), field("reference-sources", len(referring))), nil
+		field("references", len(references)), field("reference-sources", len(refs))), nil
 }
 
 // newClaim is one claim a leaf gains after the declared pass. Locator is what

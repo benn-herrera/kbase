@@ -174,7 +174,7 @@ func (a askedParagraph) name() string { return a.span.locator() }
 func (a askedParagraph) labelled() string {
 	lines := make([]string, len(a.span))
 	for i, s := range a.span {
-		lines[i] = s.label + ": " + s.text
+		lines[i] = s.shown
 	}
 	return strings.Join(lines, "\n")
 }

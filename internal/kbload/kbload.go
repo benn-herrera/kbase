@@ -29,9 +29,8 @@ const (
 	UpdateRemedy = "update kbase"
 )
 
-// RecordFiles is every repository-relative path a build record has stood at
-// under any format version: a path a migration drains is one a build that
-// commits the records must commit the removal of.
+// RecordFiles is every repository-relative path a build of this kbase commits
+// a record at, and every superseded spelling a migration drains.
 func RecordFiles() []string {
 	return slices.Concat(buildrecords.RecordFiles, migrate.SupersededRecordPaths())
 }

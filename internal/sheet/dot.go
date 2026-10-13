@@ -144,28 +144,41 @@ var (
 	markRE       = regexp.MustCompile("[*`]")
 )
 
-// dotSheet is one sheet's DOT text and its kb-root-relative path.
-type dotSheet struct{ path, dot string }
+// dotSheet is one sheet's kb-root-relative path and the function composing
+// its DOT text, with or without straight-line splines.
+type dotSheet struct {
+	path string
+	dot  func(lineSplines bool) string
+}
 
-// sheets is the DOT text of every sheet of g: the root's full sheet, then,
-// where two or more volumes hold nodes, the volume digest and each volume's
-// sheet in key order.
+// sheets is every sheet of g: the root's full sheet, then, where two or more
+// volumes hold nodes, the volume digest and each volume's sheet in key order.
 func (g *graph) sheets() []dotSheet {
-	out := []dotSheet{{kb.ClaimGraphFile, g.full()}}
+	out := []dotSheet{{kb.ClaimGraphFile, g.full}}
 	if !g.multiVolume() {
 		return out
 	}
-	out = append(out, dotSheet{kb.ClaimGraphDigestFile, g.digest()})
+	out = append(out, dotSheet{kb.ClaimGraphDigestFile, g.digest})
 	for _, v := range g.volumes {
 		if v.key != "" {
-			out = append(out, dotSheet{v.key + "/" + kb.ClaimGraphFile, g.volumeSheet(v)})
+			out = append(out, dotSheet{v.key + "/" + kb.ClaimGraphFile, func(lineSplines bool) string { return g.volumeSheet(v, lineSplines) }})
 		}
 	}
 	return out
 }
 
+// lineSplinesAttr is the graph attribute list's tail that draws every edge
+// as a straight line, "" where lineSplines is false.
+func lineSplinesAttr(lineSplines bool) string {
+	if lineSplines {
+		return ", splines=line"
+	}
+	return ""
+}
+
 // multiVolume is whether two or more volumes hold nodes; the root bucket is
-// not a volume.
+// not a volume. The same predicate kb.SheetDigestDrawn states over the
+// claims stream; this spelling reads the loaded graph.
 func (g *graph) multiVolume() bool {
 	n := 0
 	for _, v := range g.volumes {
@@ -218,13 +231,13 @@ func (e edge) emitted() (string, string) {
 
 // full is the full sheet: one cluster per volume, every drawn edge, each
 // cluster's unattached nodes as a table.
-func (g *graph) full() string {
+func (g *graph) full(lineSplines bool) string {
 	connected := edgeEnds(g.edges)
 	var clusters []string
 	for k, v := range g.volumes {
 		clusters = append(clusters, g.ownCluster(k, v, connected, "")...)
 	}
-	lines := g.claimsGraph(g.kbTitle, clusters, g.drawn(connected), reduce(g.edges))
+	lines := g.claimsGraph(g.kbTitle, clusters, g.drawn(connected), reduce(g.edges), lineSplines)
 	if g.multiVolume() {
 		lines = append(lines, sheetLink("volume digest →", kb.ClaimGraphDigestFile, "min")...)
 	}
@@ -234,7 +247,7 @@ func (g *graph) full() string {
 // volumeSheet is v's sheet: its nodes, the nodes one edge from them
 // clustered by volume, and the edges with an end in v, every href relative
 // to v's directory.
-func (g *graph) volumeSheet(v volume) string {
+func (g *graph) volumeSheet(v volume, lineSplines bool) string {
 	inside := map[string]bool{}
 	for _, n := range g.members(v.key) {
 		inside[n.id] = true
@@ -262,7 +275,7 @@ func (g *graph) volumeSheet(v volume) string {
 			clusters = append(clusters, cluster(k, other.title, count(len(body), "neighbour"), body)...)
 		}
 	}
-	lines := g.claimsGraph(v.title, clusters, g.drawn(connected), reduce(edges))
+	lines := g.claimsGraph(v.title, clusters, g.drawn(connected), reduce(edges), lineSplines)
 	return strings.Join(append(lines, "}"), "\n") + "\n"
 }
 
@@ -294,17 +307,18 @@ func cluster(k int, title, subtitle string, body []string) []string {
 
 // claimsGraph is a sheet of claims but its links and closing brace: header,
 // clusters, ghosts, strokes and legend.
-func (g *graph) claimsGraph(title string, clusters []string, drawn []node, edges []edge) []string {
+func (g *graph) claimsGraph(title string, clusters []string, drawn []node, edges []edge, lineSplines bool) []string {
 	lines := slices.Concat([]string{
 		`digraph "claim-graph" {`,
-		fmt.Sprintf(`  graph [rankdir=TB newrank=true nodesep=0.25 ranksep=0.5 pad=0.3 fontname="Helvetica" outputorder=edgesfirst labelloc=t label=<<b>%s</b>>]`, escape(title)),
+		fmt.Sprintf(`  graph [rankdir=TB newrank=true nodesep=0.25 ranksep=0.5 pad=0.3 fontname="Helvetica" outputorder=edgesfirst labelloc=t label=<<b>%s</b>>%s]`,
+			escape(title), lineSplinesAttr(lineSplines)),
 		fmt.Sprintf(`  node [fontname="Helvetica" fontsize=9 margin="0.08,0.04" color="%s"]`, frameColor),
 		"  edge [arrowsize=0.7]",
 	}, clusters)
 	for _, n := range drawn {
 		if n.kind == kindGhost {
 			lines = append(lines, fmt.Sprintf(`  %s [shape=box style="dashed" penwidth=1 color=%s label=%s tooltip=%s]`,
-				quoted(n.id), quoted(ghostColor), quoted(n.id), quoted(n.id+" — no record carries this id")))
+				quoted(n.id), quoted(ghostColor), quoted(n.id), quoted(tip(n.id+" — no record carries this id"))))
 		}
 	}
 	emitted := slices.Clone(edges)
@@ -326,7 +340,7 @@ func nodeStatement(n node, base string) string {
 	s := styleOf(n.kind)
 	fill := cmp.Or(s.fill, bandFills[n.band])
 	return fmt.Sprintf(`%s [shape=%s style=%s penwidth=%d fillcolor=%s label=%s href=%s tooltip=%s]`,
-		quoted(n.id), s.shape, quoted(s.style), s.penwidth, quoted(fill), quoted(labelLines(n)...), quoted(relative(n.href, base)), quoted(tooltip(n)))
+		quoted(n.id), s.shape, quoted(s.style), s.penwidth, quoted(fill), quoted(labelLines(n)...), quoted(relative(n.href, base)), quoted(tip(tooltip(n))))
 }
 
 func edgeStatement(e edge) string {
@@ -337,14 +351,14 @@ func edgeStatement(e edge) string {
 		direction = "dir=back "
 	}
 	return fmt.Sprintf(`%s -> %s [%scolor=%s %s tooltip=%s]`, quoted(tail), quoted(head), direction, quoted(s.color), s.extra,
-		quoted(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.tip)))
+		quoted(tip(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.tip))))
 }
 
 func unattachedTable(nodes []node, base string) string {
 	var rows strings.Builder
 	for _, n := range nodes {
 		fmt.Fprintf(&rows, `<tr><td align="left" href="%s" tooltip="%s">%s — %s</td></tr>`,
-			escape(relative(n.href, base)), escape(tooltip(n)), escape(n.id), escape(cut(displayTitle(n.title), 48)))
+			escape(relative(n.href, base)), escape(tip(tooltip(n))), escape(n.id), escape(cut(displayTitle(n.title), 48)))
 	}
 	return fmt.Sprintf(`<table border="0" cellborder="0" cellspacing="0" cellpadding="1"><tr><td align="left"><b>unattached (%d)</b></td></tr>%s</table>`,
 		len(nodes), rows.String())
@@ -358,6 +372,14 @@ func tooltip(n node) string {
 		classes += ", " + bandLabels[n.band]
 	}
 	return fmt.Sprintf("%s [%s] %s", n.id, classes, strings.Join(strings.Fields(n.title), " "))
+}
+
+// tip readies text for a tooltip, which Graphviz reads as an escString after
+// the string's own unescaping: that pass expands \G, \N, \L, \E, \H and \T and
+// keeps a backslash only where doubled, so every backslash is doubled once
+// more, before quoted or escape. label and href take no such pass.
+func tip(text string) string {
+	return strings.ReplaceAll(text, `\`, `\\`)
 }
 
 // labelLines is a node's id over its title wrapped to at most three lines.
@@ -548,11 +570,11 @@ func compareBool(a, b bool) int {
 
 // digest is one box per volume and one bundle per pair of volumes edges
 // cross between.
-func (g *graph) digest() string {
+func (g *graph) digest(lineSplines bool) string {
 	connected := edgeEnds(g.edges)
 	lines := []string{
 		`digraph "claim-graph-digest" {`,
-		`  graph [rankdir=LR nodesep=0.5 ranksep=1.2 pad=0.3 fontname="Helvetica"]`,
+		`  graph [rankdir=LR nodesep=0.5 ranksep=1.2 pad=0.3 fontname="Helvetica"` + lineSplinesAttr(lineSplines) + `]`,
 		`  node [shape=plaintext fontname="Helvetica" fontsize=10]`,
 		`  edge [fontname="Helvetica" fontsize=9 arrowsize=0.8]`,
 	}

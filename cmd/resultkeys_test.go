@@ -38,7 +38,7 @@ var documentedSubKeys = map[string][]string{
 	"status.current":           {"stage", "units-done", "units-total"},
 	"write-op.adopted":         {"entry", "id", "differs"},
 	"resolve-demoted.resolved": {"source", "target", "action"},
-	"configure.models":         {"heavy", "light"},
+	"configure.models":         {"decision", "text"},
 	"cancelled":                {"stage", "unit"},
 	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }

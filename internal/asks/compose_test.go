@@ -10,56 +10,18 @@ import (
 func TestRenderFillsEverySlotOnce(t *testing.T) {
 	body := `S1: a \frac{a}{b} with @!dyn.body!@ and {braces}`
 	got, err := Render(paragraphTemplate, map[string]string{
-		"document": "vol/leaf.md", "body": body, "paragraph": "S2-S5", "paragraph-text": "S2: text", "returned": "an unreadable reply",
-	}, letterConstants, map[string]string{"correction": "letter-correction"})
+		"document": "vol/leaf.md", "body": body, "paragraph": "S2-S5", "paragraph-text": "S2: text",
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"vol/leaf.md", body, "S2-S5", "S2: text", "an unreadable reply"} {
+	for _, want := range []string{"vol/leaf.md", body, "S2-S5", "S2: text"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("rendered prompt lacks %q", want)
+			t.Errorf("rendered state lacks %q", want)
 		}
 	}
 	if strings.Count(got, "@!dyn.body!@") != 1 || strings.Count(got, "@!") != strings.Count(body, "@!") {
 		t.Error("a filled value was rescanned, or a slot left unfilled")
-	}
-}
-
-// closingNames reports whether the prompt's last paragraph names letter as a
-// word: the closing question carries the letters its ask offers.
-func closingNames(prompt, letter string) bool {
-	p := strings.TrimRight(prompt, "\n")
-	return regexp.MustCompile(`\b` + letter + `\b`).MatchString(p[strings.LastIndex(p, "\n\n")+1:])
-}
-
-func TestRenderIsStrictBothWays(t *testing.T) {
-	full := func() map[string]string {
-		return map[string]string{"document": "d", "body": "b", "paragraph": "S1", "paragraph-text": "t"}
-	}
-	none := map[string]string{"correction": ""}
-	for _, tc := range []struct {
-		name         string
-		slots        map[string]string
-		alternatives map[string]string
-		want         string
-	}{
-		{"a dyn slot unsupplied", func() map[string]string { s := full(); delete(s, "body"); return s }(), none, "no value for @!dyn.body!@"},
-		{"a value never used", func() map[string]string { s := full(); s["excerpts"] = "x"; return s }(), none, "never uses"},
-		{"a composer slot supplied", func() map[string]string { s := full(); s["letter-claim"] = "Z"; return s }(), none, "which the composer fills"},
-		{"no choice for a declared alternative", full(), map[string]string{}, "no alternative chosen for slot correction"},
-		{"a choice for an undeclared slot", full(), map[string]string{"correction": "", "classify-options": "classify-options-two"}, "does not declare"},
-		{"an unregistered choice", full(), map[string]string{"correction": "overview-correction"}, "takes one of"},
-		{"the alternative's own slot unsupplied", full(), map[string]string{"correction": "letter-correction"}, "no value for @!dyn.returned!@"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := Render(paragraphTemplate, tc.slots, letterConstants, tc.alternatives)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("Render = %v, want an error naming %q", err, tc.want)
-			}
-		})
-	}
-	if _, err := Render(paragraphTemplate, full(), nil, none); err == nil || !strings.Contains(err.Error(), "unfilled slot") {
-		t.Errorf("Render with no constants = %v, want an unfilled slot", err)
 	}
 }
 
@@ -116,7 +78,7 @@ func TestSystemPromptsAreTheFragmentsWhole(t *testing.T) {
 			t.Errorf("System(%s) = %q, want the fragment's bytes", name, got)
 		}
 	}
-	if _, err := System("letter-correction"); err == nil {
+	if _, err := System("overview-correction"); err == nil {
 		t.Error("an alternative was served as a system prompt")
 	}
 }
@@ -142,11 +104,20 @@ func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	if !slices.Equal(items[0].Offered, []string{"A", "B", "C"}) || !slices.Equal(items[1].Offered, []string{"A", "C"}) {
 		t.Errorf("offered = %q, %q", items[0].Offered, items[1].Offered)
 	}
-	first, err := items[0].Compose(nil)
+	// The two offered sets carry distinct questions keyed by their criteria:
+	// the three-letter question names all three letters, the two-letter one
+	// names supported-by and mention only, never in-support-of.
+	if !slices.Contains(keys(items[0].Question.Criteria), LetterInSupportOf) {
+		t.Errorf("the three-letter question offers %q", keys(items[0].Question.Criteria))
+	}
+	if slices.Contains(keys(items[1].Question.Criteria), LetterInSupportOf) {
+		t.Errorf("the two-letter question offers in-support-of: %q", keys(items[1].Question.Criteria))
+	}
+	first, err := items[0].Compose()
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := items[1].Compose(nil)
+	second, err := items[1].Compose()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,22 +134,22 @@ func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	if named(second, "P1") != 0 || named(second, "P2") != 1 {
 		t.Errorf("second ask names P1 %d times and P2 %d times, want P2 alone", named(second, "P1"), named(second, "P2"))
 	}
-	for _, c := range []struct {
-		prompt  string
-		letters map[string]bool
-	}{{first, map[string]bool{"A": true, "B": true, "C": true}}, {second, map[string]bool{"A": true, "B": false, "C": true}}} {
-		for l, offered := range c.letters {
-			if closingNames(c.prompt, l) != offered {
-				t.Errorf("closing names %s: %t, want %t:\n%s", l, !offered, offered, c.prompt)
-			}
-		}
-	}
 	if sharedPrefix([]string{first, second}) == "" || !strings.HasPrefix(first, sharedPrefix([]string{first, second})) {
 		t.Error("a group's asks share no prefix")
 	}
 	if !strings.Contains(sharedPrefix([]string{first, second}), "P1: alpha") {
 		t.Error("the group's passages are not part of its shared prefix")
 	}
+}
+
+// keys is m's keys, sorted.
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func TestUnmarkedAsksShareEverythingBeforeTheQuestion(t *testing.T) {
@@ -189,35 +160,82 @@ func TestUnmarkedAsksShareEverythingBeforeTheQuestion(t *testing.T) {
 	}
 	items := UnmarkedAsks("vol/a.md", "S1: We study the map.\n\n> **Theorem 1**. The map has a unique fixed point.\n", src,
 		"**Theorem 1**. The map has a unique fixed point.\n", targets)
-	var prompts []string
+	var states []string
 	for i, it := range items {
 		if want := []string{"clm-bbbbbb", "clm-cccccc"}[i]; it.Item != want || !slices.Equal(it.Offered, []string{"A", "B"}) {
 			t.Errorf("item %d = %s offered %q, want %s offered A and B", i, it.Item, it.Offered, want)
 		}
-		p, err := it.Compose(nil)
+		if it.Question.Type != "noul" || it.Question.TrueLetter != LetterPoints {
+			t.Errorf("item %d's question = %+v, want noul with %s true", i, it.Question, LetterPoints)
+		}
+		p, err := it.Compose()
 		if err != nil {
 			t.Fatal(err)
 		}
-		prompts = append(prompts, p)
+		states = append(states, p)
 	}
-	prefix := sharedPrefix(prompts)
+	prefix := sharedPrefix(states)
 	for _, want := range []string{"vol/a.md", "S1: We study the map.", "- `clm-aaaaaa` — Theorem 1 (stated in `vol/a.md`: **Theorem 1**.)", "The map has a unique fixed point."} {
 		if !strings.Contains(prefix, want) {
 			t.Errorf("the group's shared prefix lacks %q:\n%s", want, prefix)
 		}
 	}
-	for i, p := range prompts {
+	for i, p := range states {
 		rest := p[len(prefix):]
 		if !strings.HasPrefix(rest, targets[i].Target.line()) || !strings.Contains(rest, targets[i].Statement) {
 			t.Errorf("ask %d does not go on from the shared prefix with its candidate:\n%s", i, rest)
 		}
-		if !closingNames(p, "A") || !closingNames(p, "B") {
-			t.Errorf("ask %d's closing does not name both letters:\n%s", i, p)
+	}
+}
+
+// TestColinearAsksOfferThreeLettersAndCompose: each item goes by the key its
+// caller gave, is offered the three letters in their order under one choice
+// question keyed by exactly those letters, and composes from the four slots,
+// the first claim before the second.
+func TestColinearAsksOfferThreeLettersAndCompose(t *testing.T) {
+	items := ColinearAsks([]ColinearItem{
+		{
+			Key:        "clm-bbbbbb",
+			First:      Claim{ID: "clm-aaaaaa", Title: "Theorem 1", Document: "vol/a.md", Locator: "**Theorem 1**."},
+			FirstText:  "**Theorem 1**. The map has a unique fixed point.\n",
+			Second:     Claim{ID: "clm-bbbbbb", Title: "Remark", Document: "vol/a.md"},
+			SecondText: "So the fixed point is unique.\n",
+		},
+		{
+			Key:        "clm-cccccc",
+			First:      Claim{ID: "clm-cccccc", Title: "Lemma 2", Document: "vol/b.md"},
+			FirstText:  "The map is a contraction.",
+			Second:     Claim{ID: "clm-dddddd", Title: "Corollary 3", Document: "vol/c.md"},
+			SecondText: "The fixed point is attracting.",
+		},
+	})
+	offered := []string{LetterSecondAddsNothing, LetterFirstAddsNothing, LetterDistinct}
+	for i, it := range items {
+		if want := []string{"clm-bbbbbb", "clm-cccccc"}[i]; it.Item != want || !slices.Equal(it.Offered, offered) {
+			t.Errorf("item %d = %s offered %q, want %s offered %q", i, it.Item, it.Offered, want, offered)
+		}
+		if want := slices.Sorted(slices.Values(offered)); it.Question.Type != "choice" || !slices.Equal(keys(it.Question.Criteria), want) {
+			t.Errorf("item %d's question is %s keyed %q, want choice keyed %q", i, it.Question.Type, keys(it.Question.Criteria), want)
 		}
 	}
-	again, err := items[0].Compose(new(string))
-	if err != nil || !strings.HasPrefix(again, prompts[0][:len(prompts[0])-1]) || again == prompts[0] {
-		t.Errorf("the re-ask is not the first ask with its correction after it: %v", err)
+	state, err := items[0].Compose()
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{
+		"- `clm-aaaaaa` — Theorem 1 (stated in `vol/a.md`: **Theorem 1**.)", "The map has a unique fixed point.\n`",
+		"- `clm-bbbbbb` — Remark (stated in `vol/a.md`)", "So the fixed point is unique.\n`",
+	}
+	at := 0
+	for _, want := range order {
+		n := strings.Index(state[at:], want)
+		if n < 0 {
+			t.Fatalf("composed state lacks %q after offset %d:\n%s", want, at, state)
+		}
+		at += n + len(want)
+	}
+	if strings.Contains(state, "Lemma 2") {
+		t.Error("item 0's composed state carries item 1's pair")
 	}
 }
 

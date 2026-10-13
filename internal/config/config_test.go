@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	heavyModel = "gemma-4-31b-it"
-	lightModel = "gemma-4-26b-a4b-it"
+	decisionModel = "clef"
+	textModel     = "Qwen3.8-27B"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -16,8 +16,8 @@ func TestLoadConfig(t *testing.T) {
 provider = "reaper"
 
 [models]
-heavy = "`+heavyModel+`"
-light = "`+lightModel+`"
+decision = "`+decisionModel+`"
+text = "`+textModel+`"
 `)
 	cfg, err := LoadConfig(path)
 	if err != nil {
@@ -26,8 +26,8 @@ light = "`+lightModel+`"
 	if cfg.Provider != "reaper" {
 		t.Errorf("Provider = %q, want reaper", cfg.Provider)
 	}
-	if cfg.Models.Heavy != heavyModel || cfg.Models.Light != lightModel {
-		t.Errorf("Models = %+v, want %q/%q", cfg.Models, heavyModel, lightModel)
+	if cfg.Models.Decision != decisionModel || cfg.Models.Text != textModel {
+		t.Errorf("Models = %+v, want %q/%q", cfg.Models, decisionModel, textModel)
 	}
 }
 
@@ -103,21 +103,21 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 		},
 		{
 			name: "misspelled tier",
-			body: "[models]\nheavy = \"" + heavyModel + "\"\nhevy = \"" + lightModel + "\"\n",
-			want: []string{`"models.hevy"`},
+			body: "[models]\ndecision = \"" + decisionModel + "\"\ndecisoin = \"" + textModel + "\"\n",
+			want: []string{`"models.decisoin"`},
 		},
 		{
 			name: "misspelled table",
-			body: "[modles]\nheavy = \"" + heavyModel + "\"\n",
-			want: []string{`"modles.heavy"`},
+			body: "[modles]\ndecision = \"" + decisionModel + "\"\n",
+			want: []string{`"modles.decision"`},
 			// The table itself is unknown too, but "modles.heavy" is
 			// where the user's eye needs to land.
 			absent: []string{`"modles"`},
 		},
 		{
 			name: "several unknowns in one refusal",
-			body: "provdier = \"reaper\"\n[models]\nhevy = \"x\"\n[dev]\ntelemitry = true\n",
-			want: []string{`"provdier"`, `"models.hevy"`, `"dev.telemitry"`},
+			body: "provdier = \"reaper\"\n[models]\ndecisoin = \"x\"\n[dev]\ntelemitry = true\n",
+			want: []string{`"provdier"`, `"models.decisoin"`, `"dev.telemitry"`},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestLoadConfigFixture(t *testing.T) {
 	if cfg.Provider == "" {
 		t.Error("fixture config.toml names no provider")
 	}
-	for _, tier := range []string{TierHeavy, TierLight} {
+	for _, tier := range []string{TierDecision, TierText} {
 		if _, ok := cfg.ModelFor(tier); !ok {
 			t.Errorf("fixture config.toml leaves the %s tier unmapped", tier)
 		}
@@ -172,8 +172,8 @@ func TestLoadConfigMalformed(t *testing.T) {
 // caller must fail loud there; substituting the other tier's model is a
 // silent wrong answer.
 func TestModelFor(t *testing.T) {
-	full := Config{Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
-	heavyOnly := Config{Models: ModelMap{Heavy: heavyModel}}
+	full := Config{Models: ModelMap{Decision: decisionModel, Text: textModel}}
+	decisionOnly := Config{Models: ModelMap{Decision: decisionModel}}
 
 	for _, tc := range []struct {
 		name   string
@@ -182,10 +182,10 @@ func TestModelFor(t *testing.T) {
 		want   string
 		wantOK bool
 	}{
-		{"heavy mapped", full, TierHeavy, heavyModel, true},
-		{"light mapped", full, TierLight, lightModel, true},
-		{"light unmapped", heavyOnly, TierLight, "", false},
-		{"zero config", Config{}, TierHeavy, "", false},
+		{"decision mapped", full, TierDecision, decisionModel, true},
+		{"text mapped", full, TierText, textModel, true},
+		{"text unmapped", decisionOnly, TierText, "", false},
+		{"zero config", Config{}, TierDecision, "", false},
 		{"unknown tier", full, "medium", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

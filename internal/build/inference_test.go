@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"kbase/internal/buildrecords"
 	"kbase/internal/claimgraph"
 	"kbase/internal/kb"
+	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/result"
 )
@@ -55,12 +55,17 @@ Apply Lemma~\ref{lem:base}.
 \end{document}
 `
 
-// answering is a provider answering each request from its prompt alone, so
-// concurrent asks are answered alike whatever order they arrive in.
+// answering is a provider answering each request from its state and question
+// alone, so concurrent asks are answered alike whatever order they arrive in.
 type answering struct {
 	mu     sync.Mutex
 	calls  int
+	asked  map[string]int
 	answer func(system, prompt string) string
+}
+
+func newAnswering(answer func(system, prompt string) string) *answering {
+	return &answering{answer: answer, asked: map[string]int{}}
 }
 
 func (a *answering) Consult(context.Context, model.Request) (model.Response, error) {
@@ -82,70 +87,100 @@ func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamR
 
 func (a *answering) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
 
+// SystemOne answers the letter asks: the state and the question's key name
+// the ask, and the answer is a confidence over the offered letters keyed by
+// their criteria — a noul question's true-letter taking the noul figure and
+// the false letter the remainder. Each answer is one figure the script names
+// per ask, so Decide returns the letter the script holds. A figure outside
+// zero to one is a malformed answer, the seam's unreadable path.
+func (a *answering) SystemOne(_ context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+	a.mu.Lock()
+	a.calls++
+	q := req.Questions[0]
+	state, key := req.State, q.Key
+	n := a.asked[key]
+	a.asked[key] = n + 1
+	a.mu.Unlock()
+	var out model.DecisionAnswer
+	switch q.Type {
+	case "noul":
+		out = model.DecisionAnswer{Key: key, Type: "noul", Noul: a.pTrue(state, key, n)}
+	case "choice":
+		// Every co-linearity ask is answered a step of its own, so no claim is
+		// culled; every other choice is answered A.
+		choice := "A"
+		if q.Instructions == asks.ColinearAsks([]asks.ColinearItem{{}})[0].Question.Instructions {
+			choice = asks.LetterDistinct
+		}
+		probabilities := map[string]float64{}
+		for l := range q.Criteria {
+			if l == choice {
+				probabilities[l] = 0.9
+			} else {
+				probabilities[l] = 0.05
+			}
+		}
+		out = model.DecisionAnswer{Key: key, Type: "choice", Choice: choice, Probabilities: probabilities}
+	}
+	return model.DecisionResponse{Answers: []model.DecisionAnswer{out}}, nil
+}
+
+// pTrue is the scripted P(true) of a noul ask, by the ask the state names —
+// keyed on the slot values a state carries, never on template wording. The
+// nth ask of an item takes the nth figure; a script that runs out keeps the
+// last, so an unreadable item stays unreadable and defaults.
+//
+// A paragraph ask holds its paragraph's text twice, in the document and as
+// the paragraph; the result-stating paragraph is a claim, the notation
+// paragraph is unreadable once and then not a claim, the pointing paragraph
+// is unreadable twice. An unmarked ask holds both claims' text; the lemma and
+// the prose claim each point at the other and nothing else points.
+func (a *answering) pTrue(state, key string, n int) float64 {
+	asked := func(paragraph string) bool { return strings.Count(state, paragraph) == 2 }
+	var figures []float64
+	switch {
+	case asked("We show that every widget"):
+		figures = []float64{0.99}
+	case asked("recalls the notation"):
+		figures = []float64{2, 0.01}
+	case asked("closes the argument"):
+		figures = []float64{2, 2}
+	case strings.Contains(state, "Every widget is a gadget, as") && strings.Contains(state, "under mild conditions"):
+		figures = []float64{0.99}
+	default:
+		figures = []float64{0.01}
+	}
+	return figures[min(n, len(figures)-1)]
+}
+
 func (a *answering) count() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.calls
 }
 
-// script answers the paper's asks: the result-stating paragraph is a claim,
-// the notation paragraph is unreadable once and then not a claim, the
-// pointing paragraph is unreadable twice; the prose claim's text points at
-// the shortlisted lemma and nothing else points; every candidate is
-// supported-by; the overview passage holds a heading once.
-//
-// It tells asks apart by the system fragment and the slot values a prompt
-// carries, never by template wording: an ask naming claims by their claim
-// lines is a classify ask where it numbers reference lines and an unmarked
-// ask otherwise, the prose claim's being the only one whose document holds
-// the notation paragraph; a paragraph ask holds its paragraph's text twice,
-// in the document and as the paragraph; a re-ask quotes the reply it could
-// not use.
+// script answers the paper's overview asks: the README passage the overview
+// call composes, keyed on the excerpt text a prompt carries, never on
+// template wording.
 func script(system, prompt string) string {
 	const heading = "# Widgets and gadgets"
-	reader, _ := asks.System(asks.ReaderSystem)
-	if system != reader {
-		if strings.Contains(prompt, heading) {
-			return "A small paper showing that widgets and gadgets coincide."
-		}
-		return heading + "\nA small paper."
+	if strings.Contains(prompt, heading) {
+		return "A small paper showing that widgets and gadgets coincide."
 	}
-	asked := func(paragraph string) bool { return strings.Count(prompt, paragraph) == 2 }
-	switch {
-	case strings.Contains(prompt, "- `clm-") && referenceLine.MatchString(prompt):
-		return "A"
-	case strings.Contains(prompt, "- `clm-"):
-		if strings.Contains(prompt, "recalls the notation") && strings.Contains(prompt, "Every widget is a gadget, as") {
-			return "A"
-		}
-		return "B"
-	case asked("We show that every widget"):
-		return "A"
-	case asked("recalls the notation"):
-		if strings.Contains(prompt, "Probably not.") {
-			return "B"
-		}
-		return "Probably not."
-	case asked("closes the argument"):
-		return "It might."
-	}
-	return "B"
+	return heading + "\nA small paper."
 }
-
-// referenceLine is one numbered passage of a classify ask.
-var referenceLine = regexp.MustCompile(`(?m)^P\d+: `)
 
 func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
-	opts.Provider = func() (Provider, error) { return Provider{Client: client, Letters: "light", Overview: "heavy"}, nil }
+	opts.Provider = func() (Provider, error) { return Provider{Client: client, Letters: "decision", Overview: "text"}, nil }
 	return opts
 }
 
 func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	provider := &answering{answer: script}
+	provider := newAnswering(script)
 	outcome, fields := f.build(t, f.asking(provider))
 	if outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
@@ -181,34 +216,53 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 
 	unmarked, _, err := buildrecords.ReadUnmarked(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
 	if err != nil || unmarked.Planned == nil || len(*unmarked.Planned) != 2 || len(unmarked.Pairs) != 2 {
-		t.Fatalf("unmarked record: %+v, %v; want the two pairs no reference reaches planned and asked", unmarked, err)
+		t.Fatalf("unmarked record: %+v, %v; want two pairs planned and asked — the lemma and the prose claim are the one pair no reference or adjacency reaches, each in the other's paper and so in its proximity slots, and each source is planned apart", unmarked, err)
+	}
+	yeses := map[[2]string]bool{}
+	for _, p := range unmarked.Pairs {
+		if p.Letter != nil && *p.Letter == asks.LetterPoints {
+			yeses[[2]string{p.Source, p.Target}] = true
+		}
 	}
 	var yes buildrecords.CandidateEntry
 	for _, p := range unmarked.Pairs {
-		if p.Letter != nil && *p.Letter == asks.LetterPoints {
+		if strings.Contains(files["kb-root/a-small-paper/introduction.md"], p.Target) {
 			yes = p
 		}
 	}
-	if yes.Source == "" || !strings.Contains(files["kb-root/a-small-paper/introduction.md"], yes.Source) {
-		t.Errorf("unmarked pairs = %+v, want the prose claim's pair answered A", unmarked.Pairs)
+	if len(yeses) != 2 || yes.Target == "" || !yeses[[2]string{yes.Target, yes.Source}] {
+		t.Errorf("unmarked pairs = %+v, want the lemma's to the prose claim and back, both answered A", unmarked.Pairs)
+	}
+
+	cull, _, err := buildrecords.ReadCull(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
+	if err != nil || len(cull.Entries) != 2 || len(cull.Culls) != 0 {
+		t.Fatalf("cull record: %+v, %v; want two pass-1 asks — the unmarked link and the marked link with a prose end — and no cull", cull, err)
+	}
+	for _, e := range cull.Entries {
+		if e.Verdict != buildrecords.VerdictDistinct || e.Outcome != claimgraph.ClassifyAnswered {
+			t.Errorf("cull entry %+v, want answered distinct", e)
+		}
 	}
 
 	classified, _, err := buildrecords.ReadClassification(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
 	if err != nil || len(classified.Candidates) == 0 {
 		t.Fatalf("classification record: %+v, %v", classified, err)
 	}
-	found := false
+	var linked []buildrecords.CandidateEntry
 	for _, c := range classified.Candidates {
 		if c.Letter == nil || *c.Letter != asks.LetterSupportedBy || c.Outcome != claimgraph.ClassifyAnswered {
 			t.Errorf("candidate %s -> %s = %+v, want answered A", c.Source, c.Target, c)
 		}
-		found = found || (c.Source == yes.Source && c.Target == yes.Target)
+		if yeses[[2]string{c.Source, c.Target}] {
+			linked = append(linked, c)
+		}
 	}
-	if !found {
-		t.Errorf("the unmarked yes %s -> %s is no candidate classification asked about", yes.Source, yes.Target)
+	threeWay := []string{asks.LetterSupportedBy, asks.LetterInSupportOf, asks.LetterMention}
+	if len(linked) != 1 || linked[0].Source != yes.Source || linked[0].Target != yes.Target || !slices.Equal(linked[0].Offered, threeWay) {
+		t.Errorf("the lemma–prose link's candidates = %+v, want one, the lemma to the prose claim before it, offered %q", linked, threeWay)
 	}
-	if demoted := classifyField(t, fields, "demoted"); len(demoted) != 2 {
-		t.Errorf("demoted = %q, want the lemma-theorem ring both ways", demoted)
+	if demoted := dependsField(t, fields, "stage-D-ring", "demoted"); len(demoted) != 4 {
+		t.Errorf("demoted = %q, want all four depends edges: the lemma and the theorem each way, the lemma to the prose claim, and the prose claim to the theorem, every one on a cycle", demoted)
 	}
 
 	if readme := files["kb-root/README.md"]; !strings.Contains(readme, "A small paper showing that widgets and gadgets coincide.") {
@@ -236,8 +290,8 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 			groups = append(groups, e.Unit)
 		}
 	}
-	if len(groups) != 2 || !slices.Contains(groups, yes.Source) {
-		t.Errorf("references-found's units = %q, want one per source group asked", groups)
+	if len(groups) != 2 || !slices.Contains(groups, yes.Source) || !slices.Contains(groups, yes.Target) {
+		t.Errorf("references-found's units = %q, want one per source group asked: the lemma's and the prose claim's", groups)
 	}
 	scratch := filepath.Join(f.state, scratchDir)
 	for _, dir := range []string{call.CapturesDir, call.AnswersDir, asks.AskRecordsDir} {
@@ -249,7 +303,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	// A second build of the same paper lands the same KB modulo node ids.
 	g := newFixture(t)
 	writeFile(t, filepath.Join(g.repo, "paper.tex"), askedPaper)
-	if outcome, fields := g.build(t, g.asking(&answering{answer: script})); outcome != result.Done {
+	if outcome, fields := g.build(t, g.asking(newAnswering(script))); outcome != result.Done {
 		t.Fatalf("rebuild = %s %v", outcome, fields)
 	}
 	sameModuloIDs(t, g.repo, f.repo)
@@ -287,17 +341,64 @@ func claimgraphFindings(t *testing.T, fields []result.Field, stage string) []map
 	return nil
 }
 
-// classifyField is a field of depends-attributed's stage-D-classify finding.
-func classifyField(t *testing.T, fields []result.Field, key string) []any {
+// dependsField is a list field of depends-attributed's finding named check.
+func dependsField(t *testing.T, fields []result.Field, check, key string) []any {
 	t.Helper()
 	for _, finding := range claimgraphFindings(t, fields, "depends-attributed") {
-		if finding["check"] == "stage-D-classify" {
+		if finding["check"] == check {
 			v, _ := finding[key].([]any)
 			return v
 		}
 	}
-	t.Fatalf("no stage-D-classify %s in %v", key, fields)
+	t.Fatalf("no %s %s in %v", check, key, fields)
 	return nil
+}
+
+// settledRingPaper's two lemmas' proofs each cite the other, so containment
+// directs both pairs and they close a two-cycle.
+const settledRingPaper = "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n\\title{A Ring}\n\\begin{document}\n\\maketitle\n" +
+	"\\section{Results}\n" +
+	"\\begin{lemma}\\label{lem:a}\nEvery widget is a gadget.\n\\end{lemma}\n\\begin{proof}\nBy Lemma~\\ref{lem:a2}.\n\\end{proof}\n" +
+	"\\begin{lemma}\\label{lem:a2}\nEvery gadget is a widget.\n\\end{lemma}\n\\begin{proof}\nBy Lemma~\\ref{lem:a}.\n\\end{proof}\n" +
+	"\\end{document}\n"
+
+// TestNoInferenceCutsTheSettledRing: without inference the two settled pairs
+// of a ring leave no depends edge between the lemmas, and each stands as a
+// demoted row of its own source, origin cited.
+func TestNoInferenceCutsTheSettledRing(t *testing.T) {
+	f := newFixture(t)
+	writeFile(t, filepath.Join(f.repo, "paper.tex"), settledRingPaper)
+	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	st, err := kb.Discover(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)), log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids, depends, demoted []string
+	for _, e := range st.ClaimEntries {
+		ids = append(ids, e.ID)
+		for _, d := range e.DependsOn {
+			if d.Relation == kb.RelationDepends && d.TargetKind == kb.NodeKindClaim {
+				depends = append(depends, e.ID+" -> "+d.Target)
+			}
+		}
+		for _, d := range e.Demoted {
+			demoted = append(demoted, e.ID+" -> "+d.Target+" "+d.Origin)
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("claim entries = %q, want the two lemmas", ids)
+	}
+	if len(depends) != 0 {
+		t.Errorf("depends edges = %q, want none", depends)
+	}
+	slices.Sort(demoted)
+	want := []string{ids[0] + " -> " + ids[1] + " " + kb.OriginCited, ids[1] + " -> " + ids[0] + " " + kb.OriginCited}
+	slices.Sort(want)
+	if !slices.Equal(demoted, want) {
+		t.Errorf("demoted = %q, want %q", demoted, want)
+	}
 }
 
 func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
@@ -332,23 +433,37 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 
 // stopsAfter answers its first n requests as answer does and fails every
 // one after, as a provider lost mid-stage. The check and the count are one
-// step, so concurrent asks cannot both take the last answer.
+// step over both transports, so concurrent asks cannot both take the last
+// answer.
 type stopsAfter struct {
 	answering
-	n int
+	n      int
+	made   int
+	failed bool
+}
+
+func (s *stopsAfter) step() bool {
+	s.mu.Lock()
+	over := s.made >= s.n
+	if !over {
+		s.made++
+	}
+	s.mu.Unlock()
+	return over
 }
 
 func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
-	s.mu.Lock()
-	over := s.calls >= s.n
-	if !over {
-		s.calls++
-	}
-	s.mu.Unlock()
-	if over {
+	if s.step() {
 		return nil, errors.New("connection refused")
 	}
 	return s.reply(ctx, req)
+}
+
+func (s *stopsAfter) SystemOne(ctx context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+	if s.step() {
+		return model.DecisionResponse{}, errors.New("connection refused")
+	}
+	return s.answering.SystemOne(ctx, req)
 }
 
 // TestInterruptedAskingStageResumesFromTheAnswerCache: a build whose provider
@@ -358,25 +473,33 @@ func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (mode
 // provider only what the answer cache does not hold, and lands what the
 // uninterrupted build lands.
 //
-// The node pass and the unmarked asks take 8 answers; classification asks
-// three groups — the prose claim's of 2 candidates, the lemma's and the
-// theorem's of 1 — in ascending id, and ids are minted at random. Ten answers
-// complete the first group in every order and never all three.
+// The node pass and the unmarked asks take 8 answers — among them the
+// result-stating paragraph answered at once, the notation paragraph
+// unreadable once and then not a claim, the pointing paragraph unreadable
+// twice and defaulted, and the unmarked pairs, the lemma's to the prose claim
+// and back, asked once each — the cull takes 2, one per link with a prose
+// end, and classification asks three groups of one candidate each — the
+// lemma's, the prose claim's and the theorem's, both unmarked yeses landing
+// unasked — in ascending id. Twelve answers complete two groups and never the
+// third.
 func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	whole := newFixture(t)
 	writeFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
-	clean := &answering{answer: script}
+	clean := newAnswering(script)
 	if outcome, fields := whole.build(t, whole.asking(clean)); outcome != result.Done {
 		t.Fatalf("uninterrupted build = %s %v", outcome, fields)
 	}
 
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	lost := &stopsAfter{answering: answering{answer: script}, n: 10}
+	// n = 12: the thirteenth letter ask never arrives — the third classify
+	// group of one candidate each; the call fails past SystemOne's own attempt
+	// count and the stage stops unrecorded.
+	lost := &stopsAfter{answering: *newAnswering(script), n: 12}
 	if outcome, fields := f.build(t, f.asking(lost)); outcome != result.Failed {
 		t.Fatalf("build losing its provider = %s %v, want failed", outcome, fields)
 	}
-	if got := f.trailStages(t); !slices.Equal(got, stageIDs("references-found")) {
+	if got := f.trailStages(t); !slices.Equal(got, stageIDs("claims-culled")) {
 		t.Fatalf("trail = %q, want dependency attribution unrecorded", got)
 	}
 	answers := filepath.Join(f.state, scratchDir, call.AnswersDir)
@@ -385,7 +508,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 		t.Fatal("the interrupted stage cached no answer")
 	}
 
-	resumed := &answering{answer: script}
+	resumed := newAnswering(script)
 	outcome, fields := f.build(t, f.asking(resumed))
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)

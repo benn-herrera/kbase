@@ -11,8 +11,8 @@ import (
 )
 
 // TestBuildConfiguredByEnvironmentAlone: with no configuration directory at
-// all, the three variables configure the build's provider, the model serving
-// both tiers, and a key bound for a non-loopback http:// endpoint is one line
+// all, the four variables configure the build's provider, the model serving
+// each tier, and a key bound for a non-loopback http:// endpoint is one line
 // on the verb's stderr.
 func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 	saved := flagConfigDir
@@ -23,7 +23,8 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(config.EnvAPIBaseURL, "http://reaper.local:4000/v1")
-	t.Setenv(config.EnvModel, "Some-Model")
+	t.Setenv(config.EnvDecision, "Some-Decision")
+	t.Setenv(config.EnvText, "Some-Text")
 	t.Setenv(config.EnvAPIKeyFile, key)
 
 	_, providers, err := loadVerbContext()
@@ -35,8 +36,8 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}
-	if p.Letters != "Some-Model" || p.Overview != "Some-Model" || p.Client == nil {
-		t.Errorf("provider = %+v, want KBASE_MODEL on both tiers", p)
+	if p.Letters != "Some-Decision" || p.Overview != "Some-Text" || p.Client == nil {
+		t.Errorf("provider = %+v, want each tier's own variable on it", p)
 	}
 	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "cleartext") || strings.Contains(stderr.String(), "secret-key") {
 		t.Errorf("stderr = %q, want one cleartext line naming no key", stderr.String())

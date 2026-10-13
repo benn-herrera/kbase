@@ -18,15 +18,11 @@ mad-*/
 
 .DS_Store
 
-.claude/agents/
-.claude/commands/
 .claude/adjagent/
 .claude/settings.local.json
 .claude/worktrees/
 .claude-temp/
 
-.opencode/agents/
-.opencode/commands/
 .opencode-temp/
 
 # agent set work areas

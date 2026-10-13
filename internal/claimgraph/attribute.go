@@ -34,6 +34,8 @@ const (
 	harvestRef               = "reference"
 	harvestNamed             = "hand-named"
 	harvestUnmarked          = "unmarked"
+	harvestAdjacent          = "adjacent"
+	harvestCulled            = "culled"
 )
 
 // relations is every relation in its one order.
@@ -154,15 +156,37 @@ func namesNoPremise(word string) bool {
 
 // attribution is what the narrowing produced: every candidate, classed and
 // drafted; the containment-directed pairs counted by the route that settled
-// their target; the pairs a ring demoted; the pairs the word before an anchor
-// kept from opening; and the pairs a harvest reached from a claim to one of
-// its own equations, which are no candidate.
+// their target; the pairs the word before an anchor kept from opening; and
+// the pairs a harvest reached from a claim to one of its own equations, which
+// are no candidate.
 type attribution struct {
 	candidates   []candidate
 	routes       map[string]int
-	demoted      []pair
 	wordDropped  []pair
 	ownEquations []pair
+}
+
+// inferredPair is a link the build found with no mark, oriented, with the
+// harvest that found it.
+type inferredPair struct {
+	pair
+	harvest string
+}
+
+// orientLinks orients each link from its later claim in reading order to its
+// earlier, ties by id, except that an equation node is always the target.
+func orientLinks(links []buildrecords.CullLink, g *AuthoredGraph, pos map[string]position) []inferredPair {
+	out := make([]inferredPair, len(links))
+	for i, l := range links {
+		target, source := shownOrder(linkOf(l.A, l.B), pos)
+		if s, _ := g.node(source); s.Equation != "" {
+			if t, _ := g.node(target); t.Equation == "" {
+				source, target = target, source
+			}
+		}
+		out[i] = inferredPair{pair{source, target}, l.Harvest}
+	}
+	return out
 }
 
 type reached struct {
@@ -173,14 +197,15 @@ type reached struct {
 
 // referenceLine is the author's words around a reference: its whole
 // blank-line paragraph, markers off and unquoted first, collapsed to one
-// line. line is 0-based in that numbering.
+// line. line is 0-based in that numbering. The passage never reaches above
+// the body's first line, and a reference above it has none.
 func referenceLine(t *Tree, document string, line int) string {
-	lines := pageLines(t, document)
-	if line >= len(lines) {
+	lines, first := pageBody(t, document)
+	if line < first || line >= len(lines) {
 		return ""
 	}
 	start, end := line, line+1
-	for start > 0 && kb.Strip(lines[start-1]) != "" {
+	for start > first && kb.Strip(lines[start-1]) != "" {
 		start--
 	}
 	for end < len(lines) && kb.Strip(lines[end]) != "" {
@@ -190,14 +215,16 @@ func referenceLine(t *Tree, document string, line int) string {
 }
 
 // narrow is kb_claimgraph stage D's narrowing: every edge candidate the corpus
-// states, from a cross-reference, a hand-written name or an unmarked-reference
-// yes, classed and drafted, less every pair from a claim to one of its own
+// states, from a cross-reference or a hand-written name, and every inferred
+// pair, classed and drafted, less every pair from a claim to one of its own
 // equations. The node pass's verdicts in rec decide the source end of a
-// reference in readable prose. Each pair of unmarked is an undirected
-// provenance drafted mention, its passage the source claim's own body, the
-// yes having been about that claim's text; a source no body reaches gets no
-// passage.
-func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePassRecord, unmarked []pair) attribution {
+// reference in readable prose. A containment-directed pair is drafted
+// supported-by, every other mention. An inferred pair is offered as an
+// unmarked pair of its target's class, its passage the source claim's own
+// body, as the finding was about that claim's text; a source no body reaches
+// gets no passage. An inferred pair whose two claims a marked harvest reached
+// either way round is left to that harvest.
+func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePassRecord, inferred []inferredPair) attribution {
 	blocks := map[int]Block{}
 	for _, b := range inv.Blocks {
 		blocks[b.order] = b
@@ -305,22 +332,31 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePass
 	}
 
 	for _, h := range harvestHandNamed(t, g, inv) {
-		add(pair{h.source, h.target}, offered[classOf(false, g.node(h.target))], passageAt(site{h.document, h.line}), harvestNamed)
+		target, _ := g.node(h.target)
+		add(pair{h.source, h.target}, offered[classOf(false, target)], passageAt(site{h.document, h.line}), harvestNamed)
 	}
 
-	if len(unmarked) > 0 {
+	if len(inferred) > 0 {
+		marked := map[link]bool{}
+		for p := range reach {
+			marked[linkOf(p.source, p.target)] = true
+		}
 		ownText := map[string]string{}
 		for _, b := range claimBodies(t, g, inv) {
 			if _, ok := ownText[b.node.ID]; !ok {
 				ownText[b.node.ID] = kb.NormalizeSpace(b.text)
 			}
 		}
-		for _, p := range unmarked {
+		for _, p := range inferred {
+			if marked[linkOf(p.source, p.target)] {
+				continue
+			}
 			var passage *string
 			if text, ok := ownText[p.source]; ok {
 				passage = &text
 			}
-			add(p, offered[classOf(false, g.node(p.target))], passage, harvestUnmarked)
+			target, _ := g.node(p.target)
+			add(p.pair, offered[classOf(false, target)], passage, p.harvest)
 		}
 	}
 
@@ -331,36 +367,26 @@ func narrow(t *Tree, g *AuthoredGraph, inv *Inventory, rec buildrecords.NodePass
 		}
 	}
 
-	var settledPairs []pair
-	for p := range settled {
-		settledPairs = append(settledPairs, p)
-	}
-	slices.SortFunc(settledPairs, comparePairs)
-	demoted := cycleEdges(settledPairs)
-	onRing := map[pair]bool{}
-	for _, p := range demoted {
-		onRing[p] = true
-	}
 	routes := map[string]int{}
-	for p, name := range settled {
-		if !onRing[p] {
-			routes[name]++
-		}
+	for _, name := range settled {
+		routes[name]++
 	}
 	var order []pair
 	for p := range reach {
 		order = append(order, p)
 	}
 	slices.SortFunc(order, comparePairs)
-	out := attribution{routes: routes, demoted: demoted}
+	out := attribution{routes: routes}
 	for _, p := range order {
 		if stated[p] {
 			out.ownEquations = append(out.ownEquations, p)
 			continue
 		}
 		r := reach[p]
-		c := candidate{source: g.node(p.source), target: g.node(p.target), draft: MentionedBy}
-		if _, ok := settled[p]; ok && !onRing[p] {
+		source, _ := g.node(p.source)
+		target, _ := g.node(p.target)
+		c := candidate{source: source, target: target, draft: MentionedBy}
+		if _, ok := settled[p]; ok {
 			c.draft = SupportedBy
 		}
 		for _, rel := range relations {

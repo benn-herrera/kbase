@@ -26,8 +26,9 @@ These are inputs to tests only: `INSTALL_EXCLUDED_DIRS` carries `tests`, so noth
 
 - **Nodes.** Claims in both volumes, a support and an experiment in `alpha`, and an invariant, an
   axiom and a work at the root. Bands on four ladder rungs and `unknown`. Two unattached claims in
-  `alpha`, none in `beta`. One title carrying `` $`\nabla f`$ ``, `"`, `<` and `&`; one long enough
-  to be cut, and one carrying a Markdown link and emphasis.
+  `alpha`, none in `beta`. One title carrying `` $`\nabla f`$ ``, `"`, `<` and `&`; one carrying
+  `` $`\Gamma`$ ``, whose `\G` a tooltip must not read as Graphviz's graph-name escape; one long
+  enough to be cut, and one carrying a Markdown link and emphasis.
 - **Kinds.** A marker in a labelled blockquote (`clm-aaa001`), the same on the content line of a
   block whose label carries a `<span id>`, under a title that reads as prose (`clm-bbb002`), a
   marker inside a math fence under a prose title (`clm-aaa003`), and a marker in a paragraph

@@ -41,6 +41,7 @@ var Stages = []Stage{
 	{"claims-discovered", "claim discovery"},
 	{"equations-minted", "equation nodes minted"},
 	{"references-found", "unmarked references found"},
+	{"claims-culled", "co-linear claims culled"},
 	{"depends-attributed", "dependency attribution"},
 	{"phase-3a", "validation gate"},
 	{"overview-drafted", "overview drafted"},
@@ -89,6 +90,7 @@ const (
 	checkRecords    = "records"
 	checkStateDir   = "state-dir"
 	checkInputs     = "inputs"
+	checkTrail      = "trail"
 	checkError      = "error"
 )
 
@@ -118,6 +120,7 @@ var rows = []row{
 	{id: "discover.build", stage: "claims-discovered", spendsOwnInference: true, run: claimGraph(claimgraph.Discovered)},
 	{id: "equations.build", stage: "equations-minted", run: claimGraph(mechanical(claimgraph.Equations))},
 	{id: "unmarked.build", stage: "references-found", spendsOwnInference: true, run: claimGraph(claimgraph.References)},
+	{id: "cull.build", stage: "claims-culled", spendsOwnInference: true, run: claimGraph(claimgraph.Culled)},
 	{id: "depends.attribute", stage: "depends-attributed", spendsInferenceInPart: true, run: claimGraph(claimgraph.Depends)},
 	{id: "p3a.gate", stage: "phase-3a", run: validationGate},
 	{id: "p3a.stamp", stage: "phase-3a", run: stampReadiness},
@@ -425,6 +428,9 @@ func (w *walk) run(through Stage) (string, error) {
 		}
 	}
 	recorded := w.recorded()
+	if items := trailRefusal(w.repo.Root, recorded); len(items) > 0 {
+		return "", items
+	}
 	last := slices.IndexFunc(Stages, func(s Stage) bool { return s.ID == through.ID })
 	var remaining []Stage
 	for _, s := range Stages[:last+1] {
@@ -473,6 +479,24 @@ func (w *walk) recorded() map[string]string {
 		}
 	}
 	return recorded
+}
+
+// trailRefusal is the item refusing a trail that records a stage after one it
+// leaves unrecorded, in walk order: a build walking another stage order wrote
+// it, and walking the gap would run a stage over the products of stages meant
+// to follow it. None where the recorded stages are a prefix of the walk.
+func trailRefusal(repoRoot string, recorded map[string]string) result.Refusal {
+	gap := ""
+	for _, s := range Stages {
+		switch {
+		case recorded[s.ID] == "" && gap == "":
+			gap = s.ID
+		case recorded[s.ID] != "" && gap != "":
+			return result.Refusal{{Check: checkTrail, Path: repoRoot, Remedy: "start over from a commit before the trail",
+				Detail: fmt.Sprintf("the trail records %s but not %s: a build walking another stage order wrote it", s.ID, gap)}}
+		}
+	}
+	return nil
 }
 
 // namedSetting is a provider error naming the setting the configuration

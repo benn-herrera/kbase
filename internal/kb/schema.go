@@ -181,6 +181,34 @@ const (
 // NodeKinds is every value a node_type takes, in census order.
 var NodeKinds = []string{NodeKindClaim, NodeKindSupport, NodeKindExperiment, NodeKindInvariant, NodeKindAxiom, NodeKindWork}
 
+// SheetDigestDrawn is whether a KB whose claims stream carries these records
+// holds the volume digest sheet and the per-volume sheets: two or more
+// volumes hold nodes, a node's volume being the top-level directory of its
+// canonical path and the kb-root-level nodes ("") not a volume (SPEC §3, the
+// sheet rules). internal/sheet's drawing decision is the same predicate over
+// the same stream; keeping both spellings honest is this function's one
+// reader rule and the kb_tools verify cross-check over a built KB, whose
+// README must not link a sheet the KB does not carry.
+func SheetDigestDrawn(nodes []NodeRow) bool {
+	volumes := map[string]bool{}
+	for _, n := range nodes {
+		if dir, _, ok := strings.Cut(n.CanonicalPath, "/"); ok {
+			volumes[dir] = true
+		}
+	}
+	return len(volumes) >= 2
+}
+
+// SheetDigestDrawnOf is SheetDigestDrawn over the claims stream of the KB
+// src reads.
+func SheetDigestDrawnOf(src *Source) (bool, error) {
+	_, nodes, _, err := ReadIndex[NodeRow](src, nil)
+	if err != nil {
+		return false, err
+	}
+	return SheetDigestDrawn(nodes), nil
+}
+
 // FrameworkKinds are the bedrock kinds: solidity 1.0, no scoring fields.
 var FrameworkKinds = []string{NodeKindInvariant, NodeKindAxiom}
 

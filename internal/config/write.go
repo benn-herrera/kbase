@@ -26,7 +26,7 @@ const (
 
 	// keyProvider is the top-level key holding the provider choice; it
 	// mirrors Config's `toml` tag. The [models] table's keys are the tier
-	// names themselves, so TierHeavy and TierLight are their single
+	// names themselves, so TierDecision and TierText are their single
 	// source here as everywhere else.
 	keyProvider = "provider"
 
@@ -52,8 +52,9 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 
 [` + tableModels + `]
-# ` + TierHeavy + `: the overview passage.
-# ` + TierLight + `: the claim graph's letter asks.
+# ` + TierDecision + `: the claim graph's letter asks — a SystemOne decision
+#                       model that answers each with one letter.
+# ` + TierText + `: the overview passage — one standard text model.
 %s
 %s
 
@@ -115,8 +116,8 @@ func UpdateConfig(path string, cfg Config) (bool, error) {
 func freshConfig(cfg Config) string {
 	return fmt.Sprintf(configTemplate,
 		assign(keyProvider, cfg.Provider),
-		assign(TierHeavy, cfg.Models.Heavy),
-		assign(TierLight, cfg.Models.Light))
+		assign(TierDecision, cfg.Models.Decision),
+		assign(TierText, cfg.Models.Text))
 }
 
 // updateLines rewrites the provider and [models] lines of an existing
@@ -155,7 +156,7 @@ func updateLines(src string, cfg Config) string {
 		switch {
 		case table == "" && key == keyProvider && !found[keyProvider]:
 			lines[i] = withComment(assign(keyProvider, cfg.Provider), comment)
-		case table == tableModels && (key == TierHeavy || key == TierLight) && !found[key]:
+		case table == tableModels && (key == TierDecision || key == TierText) && !found[key]:
 			lines[i] = withComment(assign(key, tierValue(cfg, key)), comment)
 		default:
 			continue
@@ -169,7 +170,7 @@ func updateLines(src string, cfg Config) string {
 	// Tail insertions first: they are indexed from the [models] table,
 	// which the head insertion below would shift.
 	var missing []string
-	for _, tier := range []string{TierHeavy, TierLight} {
+	for _, tier := range []string{TierDecision, TierText} {
 		if !found[tier] {
 			missing = append(missing, assign(tier, tierValue(cfg, tier)))
 		}
@@ -221,8 +222,8 @@ func verifyUpdate(before, after string, cfg Config) error {
 		models = maps.Clone(m)
 	}
 	want[keyProvider] = cfg.Provider
-	models[TierHeavy] = cfg.Models.Heavy
-	models[TierLight] = cfg.Models.Light
+	models[TierDecision] = cfg.Models.Decision
+	models[TierText] = cfg.Models.Text
 	want[tableModels] = models
 
 	if !reflect.DeepEqual(want, next) {

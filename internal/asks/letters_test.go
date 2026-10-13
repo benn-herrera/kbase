@@ -24,7 +24,7 @@ func (s *scripted) read(_ context.Context, q LetterQuestion) (Reply, error) {
 	if s.asked == nil {
 		s.asked = map[string][]string{}
 	}
-	s.asked[q.Item] = append(s.asked[q.Item], q.Prompt)
+	s.asked[q.Item] = append(s.asked[q.Item], q.State)
 	n := len(s.asked[q.Item])
 	if n > len(s.replies[q.Item]) {
 		return Reply{}, IncompleteError{q.Item, "no reply arrived"}
@@ -88,8 +88,8 @@ func TestAskGroupDecisionRules(t *testing.T) {
 		}
 	}
 	reask := s.asked["S2-S3"][1]
-	if !strings.HasPrefix(reask, s.asked["S2-S3"][0]) || !strings.Contains(reask, "I think it states a result.") {
-		t.Error("the re-ask is not the first ask with the reply quoted after it")
+	if reask != s.asked["S2-S3"][0] {
+		t.Errorf("the re-ask is not the identical question: %q then %q", s.asked["S2-S3"][0], reask)
 	}
 	if !strings.HasSuffix(rec.Prefix, "\n") || !strings.Contains(rec.Prefix, "the leaf") || strings.Contains(rec.Prefix, ": text") {
 		t.Errorf("the group's prefix is not its shared context: %q", rec.Prefix)

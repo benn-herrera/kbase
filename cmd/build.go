@@ -82,9 +82,10 @@ var (
 )
 
 // buildProvider is where the build's model calls go — the environment's
-// layer over the loaded configuration — its letter asks on the light tier and
-// the overview passage on the heavy, or what it lacks. A key bound for a
-// non-loopback http:// endpoint is said on stderr, and the build proceeds.
+// layer over the loaded configuration — its letter asks on the decision tier
+// and the overview passage on the text tier, or what it lacks. A key bound
+// for a non-loopback http:// endpoint is said on stderr, and the build
+// proceeds.
 func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func() (build.Provider, error) {
 	return func() (build.Provider, error) {
 		var entry *config.Provider
@@ -108,7 +109,7 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		if n := p.Config.Asks.ReaderConcurrency; n != nil {
 			concurrency = *n
 		}
-		return build.Provider{Client: client, Letters: inf.Light, Overview: inf.Heavy, ReaderConcurrency: concurrency}, nil
+		return build.Provider{Client: client, Letters: inf.Decision, Overview: inf.Text, ReaderConcurrency: concurrency}, nil
 	}
 }
 
@@ -125,9 +126,10 @@ Each stage's boundary is a commit in the repository, its subject
 invocation resumes from the last boundary the commit trail holds.
 --no-inference drops every row that spends inference and walks the rest;
 without it, the claim graph's letter asks go to the configured provider's
-light model and the overview passage to its heavy one. KBASE_API_BASE_URL,
-KBASE_MODEL (both tiers) and KBASE_API_KEY_FILE each override that one field
-of the configuration files, and configure a build with none. With no --bibliography,
+decision model and the overview passage to its text one. KBASE_API_BASE_URL,
+KBASE_DECISION, KBASE_TEXT and KBASE_API_KEY_FILE each override that one
+field of the configuration files, and configure a build with none. With no
+--bibliography,
 every .bib beside any volume root is offered to every volume, in sorted order.
 Build state — the holder lock, progress.jsonl, the document graph's records, each
 stage's report under reports/, each call's capture and the answer cache under

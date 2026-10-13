@@ -62,6 +62,22 @@ type MockClient struct {
 	// chunks is the per-response chunk count for ConsultStream. 0 →
 	// DefaultMockChunks. Set via SetMockChunks.
 	chunks int
+
+	// DecisionAnswers scripts SystemOne: served in order, one per call,
+	// ErrMockExhausted past the end. Settable directly or via
+	// NewScriptedMockWithDecisions.
+	decisionAnswers []DecisionAnswer
+	decisionStep    int
+}
+
+// NewScriptedMockWithDecisions returns a MockClient whose SystemOne walks
+// `answers` in order, one per call; a call past the end yields
+// ErrMockExhausted. The consult scripting of the other constructors is
+// unaffected.
+func NewScriptedMockWithDecisions(answers []DecisionAnswer) *MockClient {
+	q := make([]DecisionAnswer, len(answers))
+	copy(q, answers)
+	return &MockClient{scripted: true, decisionAnswers: q}
 }
 
 // DefaultMockChunks is the per-response chunk count used by ConsultStream
@@ -236,6 +252,30 @@ func (m *MockClient) Calls() []MockCall {
 	out := make([]MockCall, len(m.calls))
 	copy(out, m.calls)
 	return out
+}
+
+// SystemOne serves the decision answers from DecisionAnswers, in order,
+// one per SystemOne call. The injected error of SetError pre-empts it;
+// a call past the answers' end yields ErrMockExhausted, matching the
+// per-consult queue's semantics.
+func (m *MockClient) SystemOne(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return DecisionResponse{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return DecisionResponse{}, m.err
+	}
+	if m.decisionStep >= len(m.decisionAnswers) {
+		return DecisionResponse{}, ErrMockExhausted
+	}
+	resp := DecisionResponse{
+		Answers: []DecisionAnswer{m.decisionAnswers[m.decisionStep]},
+		Usage:   Usage{PromptTokens: 10, CompletionTokens: 1},
+	}
+	m.decisionStep++
+	return resp, nil
 }
 
 // mockStreamReader splits a Response.Content into N near-equal chunks and

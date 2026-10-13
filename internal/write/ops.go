@@ -3,7 +3,9 @@ package write
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,6 +23,11 @@ const RenderCitation = "render-citation"
 // AddBuildEdges is the build's edge write: add-depends-on's lists and the
 // demoted list. Only the build issues it, so it is no subcommand.
 const AddBuildEdges = "add-build-edges"
+
+// DemoteClaimEdge is the build's ring cut: an existing depends-on edge turned
+// into a demoted row with its origin. Only the build issues it, so it is no
+// subcommand.
+const DemoteClaimEdge = "demote-claim-edge"
 
 // ResolveDemoted removes a demoted edge or restores it to depends-on.
 const ResolveDemoted = "resolve-demoted"
@@ -63,6 +70,10 @@ var writeOps = map[string]opSpec{
 	"set-frontmatter":         {plan: planSetFrontmatter},
 	"mark-claim-in-leaf":      {plan: planMarkClaim},
 	"set-on-point-fraction":   {plan: planSetOnPointFraction},
+	"drop-claim-edges":        {plan: planDropClaimEdges},
+	"drop-inbound-edges":      {plan: planDropInboundEdges},
+	DemoteClaimEdge:           {plan: planDemoteClaimEdge, buildOnly: true},
+	"drop-claim-node":         {plan: planDropClaimNode},
 }
 
 // Ops is every write op a caller may issue, by name, sorted.
@@ -807,6 +818,485 @@ func replaceApplicability(nodeID, workID string, fraction *float64) func(string)
 	}
 }
 
+// planDropClaimEdges removes each entry's outgoing edge bullets of one class,
+// or both, from its register entry, as dropListBullets does. Demoted bullets
+// are resolve-demoted's to remove.
+func planDropClaimEdges(c *opContext, entries []entry) ([]intent, error) {
+	var intents []intent
+	for _, e := range entries {
+		nodeID := e.str("id")
+		rec, err := c.resolve(nodeID, "id", true)
+		if err != nil {
+			return nil, err
+		}
+		register, err := c.contained(rec.RegisterPath, "id")
+		if err != nil {
+			return nil, err
+		}
+		both := !e.has("edge-class")
+		class := e.str("edge-class")
+		classes := []string{kb.IndexDependsOn, kb.RelationReferences}
+		if !both {
+			classes = []string{class}
+		}
+		var splices []func(string) (string, error)
+		for _, list := range classes {
+			splices = append(splices, dropListBullets(nodeID, list, func([]string) bool { return true }))
+		}
+		intents = append(intents, intent{path: rec.RegisterPath, target: register,
+			splice: spliceAll(splices...),
+			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+				cur, err := currentEntry(read, nodeID, rec.RegisterPath)
+				if err != nil {
+					return nil, err
+				}
+				if both || class == kb.RelationReferences {
+					cur.References = nil
+				}
+				if both || class == kb.IndexDependsOn {
+					cur.DependsOn = nil
+				}
+				return []expectedEntry{cur}, nil
+			}})
+	}
+	return intents, nil
+}
+
+// planDropInboundEdges removes, from every register entry holding one, each
+// depends-on or references bullet whose target is id, as dropListBullets
+// does. Entries naming no bullet at id are left as they stand.
+func planDropInboundEdges(c *opContext, entries []entry) ([]intent, error) {
+	var intents []intent
+	for _, e := range entries {
+		target := e.str("id")
+		if _, err := c.resolve(target, "id", true); err != nil {
+			return nil, err
+		}
+		st, err := kb.Discover(c.src, log.Discard())
+		if err != nil {
+			return nil, err
+		}
+		naming := st.ClaimEntries[:0:0]
+		for _, ce := range st.ClaimEntries {
+			if edgesTarget(ce.DependsOn, target) || edgesTarget(ce.References, target) {
+				naming = append(naming, ce)
+			}
+		}
+		for _, ce := range naming {
+			register, err := c.contained(ce.CanonicalPath, "id")
+			if err != nil {
+				return nil, err
+			}
+			intents = append(intents, intent{path: ce.CanonicalPath, target: register,
+				splice: dropInboundEdges(ce.ID, target),
+				expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+					cur, err := currentEntry(read, ce.ID, ce.CanonicalPath)
+					if err != nil {
+						return nil, err
+					}
+					cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+					cur.References = slices.DeleteFunc(cur.References, func(d expectedEdge) bool { return d.Target == target })
+					return []expectedEntry{cur}, nil
+				}})
+		}
+	}
+	return intents, nil
+}
+
+// edgesTarget is whether any edge of edges names target.
+func edgesTarget(edges []kb.Edge, target string) bool {
+	return slices.ContainsFunc(edges, func(d kb.Edge) bool { return d.Target == target })
+}
+
+// dropInboundEdges deletes every bullet of nodeID's depends-on and
+// references lists naming target, as dropListBullets does.
+func dropInboundEdges(nodeID, target string) func(string) (string, error) {
+	return spliceAll(dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
+		dropListBullets(nodeID, kb.RelationReferences, bulletNames(target)))
+}
+
+// bulletNames matches a bullet whose head names any of targets.
+func bulletNames(targets ...string) func(bulletIDs []string) bool {
+	return func(bulletIDs []string) bool {
+		return slices.ContainsFunc(bulletIDs, func(id string) bool { return slices.Contains(targets, id) })
+	}
+}
+
+// spliceAll is splices applied in order, each to the last one's result.
+func spliceAll(splices ...func(string) (string, error)) func(string) (string, error) {
+	return func(document string) (string, error) {
+		for _, sp := range splices {
+			var err error
+			if document, err = sp(document); err != nil {
+				return "", err
+			}
+		}
+		return document, nil
+	}
+}
+
+// planDemoteClaimEdge turns nodeID's existing depends-on edge to target
+// into a demoted row of nodeID's own entry, carrying the given origin: the
+// bullet goes from the depends-on list and a demoted bullet naming target
+// lands in its demoted list. Where the demoted row already stands with that
+// origin, a depends-on bullet still naming target is removed and otherwise
+// the pair is left as it stands; a row of another origin is refused.
+func planDemoteClaimEdge(c *opContext, entries []entry) ([]intent, error) {
+	var intents []intent
+	for _, e := range entries {
+		nodeID, target := e.str("id"), e.str("target")
+		rec, err := c.resolve(nodeID, "id", true)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := c.resolve(target, "target", true); err != nil {
+			return nil, err
+		}
+		register, err := c.contained(rec.RegisterPath, "id")
+		if err != nil {
+			return nil, err
+		}
+		read, err := c.src.ReadText(c.src.KBPath(rec.RegisterPath))
+		if err != nil {
+			return nil, err
+		}
+		cur, err := currentEntry(readRegister(read), nodeID, rec.RegisterPath)
+		if err != nil {
+			return nil, err
+		}
+		origin := e.str("origin")
+		depends := slices.IndexFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+		if demoted := slices.IndexFunc(cur.Demoted, func(d expectedEdge) bool { return d.Target == target }); demoted >= 0 {
+			if standing := cur.Demoted[demoted].Origin; standing != origin {
+				return nil, opRefusal("origin="+origin, fmt.Sprintf("%s's demoted row naming %s stands with origin %s, not %s",
+					nodeID, target, standing, origin),
+					"restore: resolve the standing row with kbase resolve-demoted, then re-run")
+			}
+			if depends < 0 {
+				continue
+			}
+			intents = append(intents, intent{path: rec.RegisterPath, target: register,
+				splice: dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
+				expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+					cur, err := currentEntry(read, nodeID, rec.RegisterPath)
+					if err != nil {
+						return nil, err
+					}
+					cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+					return []expectedEntry{cur}, nil
+				}})
+			continue
+		}
+		if depends < 0 {
+			return nil, opRefusal("target="+target, fmt.Sprintf("%s carries no depends-on bullet naming %s, and this op demotes "+
+				"an existing edge, not adds a demoted row; only the build writes a demoted edge and add-depends-on adds the depends bullet", nodeID, target),
+				"restore: add the edge with kbase add-depends-on, or correct target, then re-run")
+		}
+		t := dependsOnTarget{Target: target, Origin: origin}
+		if t.Title, err = c.titleOf(target); err != nil {
+			return nil, err
+		}
+		if e.has("context") {
+			t.Context = e.str("context")
+		}
+		intents = append(intents, intent{path: rec.RegisterPath, target: register,
+			splice: demoteClaimEdge(nodeID, target, t),
+			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+				cur, err := currentEntry(read, nodeID, rec.RegisterPath)
+				if err != nil {
+					return nil, err
+				}
+				cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+				cur.Demoted = append(cur.Demoted, expectedEdge{Target: target, Context: t.Context, Origin: t.Origin})
+				return []expectedEntry{cur}, nil
+			}})
+	}
+	return intents, nil
+}
+
+// demoteClaimEdge deletes nodeID's depends-on bullet naming target, with its
+// continuation lines and the list's header where no bullet is left, and
+// appends the demoted bullet to the entry's demoted list, its header created
+// where absent.
+func demoteClaimEdge(nodeID, target string, t dependsOnTarget) func(string) (string, error) {
+	return spliceAll(dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
+		addBullets(&edgeAddition{nodeID: nodeID, requested: []dependsOnTarget{t}, added: []dependsOnTarget{t}}, kb.RelationDemoted))
+}
+
+// planDropClaimNode deletes claim nodes entirely: each one's register entry
+// block, its claim-quality marker and claims entry in every leaf carrying
+// either, and every other entry's demoted row naming it. An entry still
+// naming a node in its edges is refused — the caller drops edges first — and
+// so is a leaf whose claims list would empty, an empty claims list being
+// no-claim's decision to make, and any line still naming a node once the
+// removals are composed. A node already gone has only what remains of it
+// removed.
+func planDropClaimNode(c *opContext, entries []entry) ([]intent, error) {
+	st, err := kb.Discover(c.src, log.Discard())
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	dropping := map[string]bool{}
+	for _, e := range entries {
+		ids = append(ids, e.str("id"))
+		dropping[e.str("id")] = true
+	}
+	for _, nodeID := range ids {
+		var refusals result.Refusal
+		for _, ce := range st.ClaimEntries {
+			if !edgesTarget(ce.DependsOn, nodeID) && !edgesTarget(ce.References, nodeID) {
+				continue
+			}
+			refusals = append(refusals, result.Item{Key: "id=" + ce.ID,
+				Remedy: "run kbase drop-claim-edges and kbase drop-inbound-edges first, then re-run",
+				Detail: fmt.Sprintf("%s's depends-on or references still names %s, and dropping the node would strand the edge; "+
+					"run drop-claim-edges and drop-inbound-edges first", ce.ID, nodeID)})
+		}
+		if len(refusals) > 0 {
+			return nil, refusals
+		}
+	}
+	var emptied result.Refusal
+	for _, leaf := range st.Leaves {
+		if len(leaf.Claims) > 0 && !slices.ContainsFunc(leaf.Claims, func(id string) bool { return !dropping[id] }) {
+			emptied = append(emptied, result.Item{Key: leaf.Path,
+				Remedy: "restate the leaf's claims with kbase set-frontmatter, no-claim included, then re-run",
+				Detail: fmt.Sprintf("%s's claims list holds only %s, which this call drops, and an empty claims list is "+
+					"a no-claim decision set-frontmatter makes, not this op's", leaf.Path, strings.Join(leaf.Claims, ", "))})
+		}
+	}
+	if len(emptied) > 0 {
+		return nil, emptied
+	}
+	var intents []intent
+	for _, nodeID := range ids {
+		if rec, ok := c.known[nodeID]; ok && rec.RegisterPath != "" {
+			register, err := c.contained(rec.RegisterPath, "id")
+			if err != nil {
+				return nil, err
+			}
+			intents = append(intents, intent{path: rec.RegisterPath, target: register,
+				splice: dropEntryBlock(nodeID), claimDelta: -1})
+		}
+		for _, leaf := range st.Leaves {
+			text, err := c.src.ReadText(c.src.KBPath(leaf.Path))
+			if err != nil {
+				return nil, err
+			}
+			if !slices.Contains(leaf.Claims, nodeID) && !strings.Contains(text, renderTier2Marker(nodeID)) {
+				continue
+			}
+			target, err := c.contained(leaf.Path, "document")
+			if err != nil {
+				return nil, err
+			}
+			intents = append(intents, intent{path: leaf.Path, target: target,
+				splice: dropLeafClaim(nodeID, leaf.Path),
+				prove:  claimNodeProver(nodeID, leaf.Path), subject: leaf.Path + ":" + nodeID})
+		}
+	}
+	for _, ce := range st.ClaimEntries {
+		if dropping[ce.ID] || !slices.ContainsFunc(ce.Demoted, func(d kb.Edge) bool { return dropping[d.Target] }) {
+			continue
+		}
+		register, err := c.contained(ce.CanonicalPath, "id")
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent{path: ce.CanonicalPath, target: register,
+			splice: dropListBullets(ce.ID, kb.RelationDemoted, bulletNames(ids...)),
+			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+				cur, err := currentEntry(read, ce.ID, ce.CanonicalPath)
+				if err != nil {
+					return nil, err
+				}
+				cur.Demoted = slices.DeleteFunc(cur.Demoted, func(d expectedEdge) bool { return dropping[d.Target] })
+				return []expectedEntry{cur}, nil
+			}})
+	}
+	if err := refuseRemainingMentions(c, intents, ids); err != nil {
+		return nil, err
+	}
+	return intents, nil
+}
+
+// refuseRemainingMentions refuses where, with intents composed, any line
+// under kb-root still names one of ids: verify's claim-id link check reads
+// every such line, so a drop leaving one leaves an unknown id. Refresh's
+// roll-ups are not read, the trailing refresh rewriting them. An edit that
+// does not compose is left to the store, which composes it again and reports
+// it.
+func refuseRemainingMentions(c *opContext, intents []intent, ids []string) error {
+	candidates := map[string]string{}
+	for _, e := range batch(intents) {
+		text, err := c.src.ReadText(c.src.KBPath(e.path))
+		if err != nil {
+			return nil
+		}
+		if candidates[e.path], err = e.splice(text); err != nil {
+			return nil
+		}
+	}
+	files, err := kb.MarkdownFiles(c.src)
+	if err != nil {
+		return err
+	}
+	var refusals result.Refusal
+	for _, file := range files {
+		rel, err := filepath.Rel(c.root, file)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		text, composed := candidates[rel]
+		if !composed {
+			if text, err = c.src.ReadText(file); err != nil {
+				continue
+			}
+		}
+		for n, line := range kb.SplitLines(kb.StripCodeSplitLines(withoutRollups(text))) {
+			named := kb.NodeIDs(line)
+			for _, id := range ids {
+				if !slices.Contains(named, id) {
+					continue
+				}
+				refusals = append(refusals, result.Item{Key: "id=" + id, Path: rel, Line: n + 1,
+					Remedy: "remove the mention — through the op that wrote it, or by hand where it was authored — then re-run",
+					Detail: fmt.Sprintf("%s:%d names %s, a mention this op does not remove, and once the node is gone "+
+						"verify's claim-id link check reports it as an unknown id", rel, n+1, id)})
+			}
+		}
+	}
+	if len(refusals) > 0 {
+		return refusals
+	}
+	return nil
+}
+
+// withoutRollups is text with refresh's frontmatter roll-ups blanked, every
+// line kept where it was.
+func withoutRollups(text string) string {
+	for _, d := range derivedFrontmatterFields {
+		_, start, end, ok := kb.FrontmatterKeySpan(text, d[0])
+		if !ok {
+			continue
+		}
+		text = kb.EditFrontmatterLines(text, func(lines []string) []string {
+			for i := start; i < end; i++ {
+				lines[i] = ""
+			}
+			return lines
+		})
+	}
+	return text
+}
+
+// dropEntryBlock deletes nodeID's whole register entry: from its heading, or
+// its marker where it binds none, back over the separating rule, to the next
+// entry's start, or the file's end.
+func dropEntryBlock(nodeID string) func(string) (string, error) {
+	return func(document string) (string, error) {
+		located := kb.LocateRegisterEntries(document)
+		idx := slices.IndexFunc(located, func(e kb.RegisterEntry) bool { return e.NodeID == nodeID })
+		if idx < 0 {
+			return "", spliceFailed("no canonical entry for %s in this register", nodeID)
+		}
+		e := located[idx]
+		start := e.MarkerLine
+		if e.HeadingLine >= 0 {
+			start = e.HeadingLine
+		}
+		end := len(kb.SplitLines(document))
+		for _, n := range located[idx+1:] {
+			at := n.HeadingLine
+			if at < 0 {
+				at = n.MarkerLine
+			}
+			if at > start {
+				end = at
+				break
+			}
+		}
+		fmEnd := 0
+		if m := kb.FindFrontmatter(document); m != nil {
+			fmEnd = strings.Count(document[:m[1]], "\n") + 1
+		}
+		for start > fmEnd {
+			s := kb.Strip(kb.SplitLines(document)[start-1])
+			if s != "" && s != "---" {
+				break
+			}
+			start--
+		}
+		return spliceLines(document, start, end, nil), nil
+	}
+}
+
+// dropLeafClaim removes nodeID's claim-quality marker from every line it
+// names it on, and nodeID from the frontmatter claims list. A line the
+// marker leaves without prose goes with it.
+func dropLeafClaim(nodeID, rel string) func(string) (string, error) {
+	marker := renderTier2Marker(nodeID)
+	return func(document string) (string, error) {
+		if strings.Contains(document, marker) {
+			var kept []string
+			for _, l := range kb.SplitLinesKeepEnds(document) {
+				if !strings.Contains(l, marker) {
+					kept = append(kept, l)
+					continue
+				}
+				body := strings.ReplaceAll(strings.ReplaceAll(l, " "+marker, ""), marker, "")
+				if kb.Strip(body) == "" {
+					continue
+				}
+				kept = append(kept, body)
+			}
+			document = strings.Join(kept, "")
+		}
+		if _, _, _, ok := kb.FrontmatterKeySpan(document, "claims"); !ok {
+			return document, nil
+		}
+		fm, err := kb.ParseFrontmatter(document)
+		if err != nil {
+			return "", kb.MalformedError{Msg: rel + ": " + err.Error()}
+		}
+		claims, err := fm.ListOrEmpty("claims")
+		if err != nil {
+			return "", kb.MalformedError{Msg: rel + ": claims: " + err.Error()}
+		}
+		kept := slices.DeleteFunc(slices.Clone(claims), func(id string) bool { return id == nodeID })
+		return kb.ReplaceOrInsertFrontmatterField(document, "claims", kept, "kind:"), nil
+	}
+}
+
+// claimNodeProver reads the written leaf back: the marker and the claims
+// entry must both have gone, and a claims list left empty must stand beside
+// no-claim.
+func claimNodeProver(nodeID, rel string) func(string) ([]string, error) {
+	marker := renderTier2Marker(nodeID)
+	return func(candidate string) ([]string, error) {
+		fm, err := kb.ParseFrontmatter(candidate)
+		if err != nil {
+			return nil, kb.MalformedError{Msg: rel + ": " + err.Error()}
+		}
+		var wrong []string
+		if strings.Contains(kb.StripFrontmatter(candidate), marker) {
+			wrong = append(wrong, "claim-quality marker")
+		}
+		claims, err := fm.ListOrEmpty("claims")
+		if err != nil {
+			return nil, kb.MalformedError{Msg: rel + ": claims: " + err.Error()}
+		}
+		_, listed := fm.Get("claims")
+		_, noClaim := fm.Get("no-claim")
+		if slices.Contains(claims, nodeID) || listed && len(claims) == 0 && !noClaim {
+			wrong = append(wrong, "claims")
+		}
+		return wrong, nil
+	}
+}
+
 // edgeAddition is one entry's requested edges of one list and the subset it
 // does not already hold, decided once from the baseline.
 type edgeAddition struct {
@@ -1070,20 +1560,12 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 	var intents []intent
 	for _, nodeID := range order {
 		r := byNode[nodeID]
-		splices := []func(string) (string, error){dropDemoted(nodeID, r.drop)}
+		splices := []func(string) (string, error){dropListBullets(nodeID, kb.RelationDemoted, bulletNames(slices.Collect(maps.Keys(r.drop))...))}
 		if len(r.restore) > 0 {
 			splices = append(splices, addBullets(&edgeAddition{nodeID: nodeID, requested: r.restore, added: r.restore}, "depends-on"))
 		}
 		intents = append(intents, intent{path: r.register, target: r.target,
-			splice: func(document string) (string, error) {
-				for _, sp := range splices {
-					var err error
-					if document, err = sp(document); err != nil {
-						return "", err
-					}
-				}
-				return document, nil
-			},
+			splice: spliceAll(splices...),
 			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
 				cur, err := currentEntry(read, nodeID, r.register)
 				if err != nil {
@@ -1099,11 +1581,13 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 	return intents, nil
 }
 
-// dropDemoted deletes the demoted bullets of nodeID's entry whose target is
-// in targets, each with its continuation lines, and the list's header where
-// no bullet is left.
-func dropDemoted(nodeID string, targets map[string]bool) func(string) (string, error) {
-	header := "- " + kb.RelationDemoted + ":"
+// dropListBullets deletes, from nodeID's list headed "- list:", every bullet
+// whose head's claim ids match accepts, each with its continuation lines. A
+// list left with no bullet loses its header too, unless it still holds other
+// text, which keeps the header so a re-issue finds the list as it left it. An
+// absent list leaves the document as it stands.
+func dropListBullets(nodeID, list string, match func(bulletIDs []string) bool) func(string) (string, error) {
+	header := "- " + list + ":"
 	breakRE := foldBreakFor(nodeID)
 	return func(document string) (string, error) {
 		loc, err := locate(document, nodeID)
@@ -1114,7 +1598,7 @@ func dropDemoted(nodeID string, targets map[string]bool) func(string) (string, e
 		limit := min(loc.QualityEnd, len(lines))
 		head := slices.IndexFunc(lines[loc.QualityStart:limit], func(l string) bool { return strings.HasPrefix(kb.Strip(l), header) })
 		if head < 0 {
-			return "", spliceFailed("%s has no %s list", nodeID, header)
+			return document, nil
 		}
 		head += loc.QualityStart
 		end := head + 1
@@ -1125,19 +1609,21 @@ func dropDemoted(nodeID string, targets map[string]bool) func(string) (string, e
 			end--
 		}
 		var kept []string
-		bullets, dropping := 0, false
+		bullets, text, dropping := 0, false, false
 		for _, l := range lines[head+1 : end] {
 			if l != kb.LStrip(l) && strings.HasPrefix(kb.LStrip(l), "- ") {
-				dropping = slices.ContainsFunc(kb.ClaimIDs(kb.BulletHead(kb.Strip(kb.TrimBulletLead(l)))), func(id string) bool { return targets[id] })
+				dropping = match(kb.ClaimIDs(kb.BulletHead(kb.Strip(kb.TrimBulletLead(l)))))
 				if !dropping {
 					bullets++
 				}
 			}
-			if !dropping {
-				kept = append(kept, l)
+			if dropping {
+				continue
 			}
+			kept = append(kept, l)
+			text = text || kb.Strip(l) != ""
 		}
-		if bullets == 0 {
+		if bullets == 0 && !text {
 			return spliceLines(document, head, end, nil), nil
 		}
 		return spliceLines(document, head+1, end, kept), nil

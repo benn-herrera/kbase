@@ -9,15 +9,17 @@ import (
 )
 
 // Model tiers. The build names a tier, never a model id: which model serves
-// "heavy" is a deployment fact that belongs in config.toml, while "the
-// overview passage is heavy work" is a build fact that belongs in the code.
-// These constants are the single source of the tier names — the `toml` tags
-// on ModelMap must mirror them (struct tags cannot reference constants).
+// the decision tier is a deployment fact that belongs in config.toml, while
+// "the letter asks are decision-model calls" is a build fact that belongs in
+// the code. These constants are the single source of the tier names — the
+// `toml` tags on ModelMap must mirror them (struct tags cannot reference
+// constants).
 const (
-	// TierHeavy is the overview passage's tier.
-	TierHeavy = "heavy"
-	// TierLight is the claim graph's letter asks' tier.
-	TierLight = "light"
+	// TierDecision is the claim graph's letter asks' tier: the SystemOne
+	// decision model that answers them.
+	TierDecision = "decision"
+	// TierText is the overview passage's tier.
+	TierText = "text"
 )
 
 // Config is the kbase settings file (config.toml) — the choices that draw
@@ -51,8 +53,8 @@ const keyReaderConcurrency = "asks.readerConcurrency"
 // `kbase configure` or by hand. An unset tier is not defaulted — a guessed
 // model id is a silent wrong answer, so callers fail loud instead.
 type ModelMap struct {
-	Heavy string `toml:"heavy"`
-	Light string `toml:"light"`
+	Decision string `toml:"decision"`
+	Text     string `toml:"text"`
 }
 
 // ModelFor returns the model id configured for a tier. The second return
@@ -62,10 +64,10 @@ type ModelMap struct {
 func (c Config) ModelFor(tier string) (string, bool) {
 	var id string
 	switch tier {
-	case TierHeavy:
-		id = c.Models.Heavy
-	case TierLight:
-		id = c.Models.Light
+	case TierDecision:
+		id = c.Models.Decision
+	case TierText:
+		id = c.Models.Text
 	default:
 		return "", false
 	}

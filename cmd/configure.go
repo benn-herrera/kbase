@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/config"
-	"kbase/internal/detect"
 	toolresult "kbase/internal/result"
 )
 
@@ -22,15 +21,14 @@ const (
 	modelMapAssign  = "="
 
 	// modelMapSyntax is the flag spelling quoted back to the user in every
-	// failure a manual assignment would resolve. Auto-detection declining
-	// to guess is only helpful if the way past it is on screen.
-	modelMapSyntax = "--model-map " + config.TierHeavy + "=<id>" + modelMapPairSep + config.TierLight + "=<id>"
+	// failure a manual assignment would resolve.
+	modelMapSyntax = "--model-map " + config.TierDecision + "=<id>" + modelMapPairSep + config.TierText + "=<id>"
 )
 
 // configureTiers is the order tiers are resolved, reported, and written
-// in. config.TierHeavy and config.TierLight are the single source of the
+// in. config.TierDecision and config.TierText are the single source of the
 // names; this is the single source of the order.
-var configureTiers = []string{config.TierHeavy, config.TierLight}
+var configureTiers = []string{config.TierDecision, config.TierText}
 
 // configureOptions is the resolved input of the configure verb: the shared
 // provider-reaching options plus this verb's own flag and the path the
@@ -52,15 +50,13 @@ type configureOptions struct {
 }
 
 // runConfigure resolves a provider, discovers its model catalogue, assigns
-// a gemma-4 model to each pipeline tier, writes the result to config.toml,
+// a model to each pipeline tier, writes the result to config.toml,
 // writes its result document and returns the exit code the outcome maps to.
 //
-// A tier is assigned from --model-map when given, otherwise by
-// auto-detection — and only when detection finds exactly one candidate for
-// it. Zero candidates or several is refused, listing what the provider
-// offered, with nothing written: config.toml is what every later stage draws
-// its models from, so a guessed entry there is a wrong answer that never
-// announces itself.
+// Every tier is assigned from --model-map only: a tier the flag does not
+// name is refused, listing what the provider offered, with nothing written —
+// config.toml is what every later stage draws its models from, and nothing
+// between the flag and the file picks a model on the user's behalf.
 func runConfigure(ctx context.Context, opts configureOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "configure"); err != nil {
 		return 0, err
@@ -103,37 +99,28 @@ func configure(ctx context.Context, opts configureOptions) (string, []toolresult
 		}
 	}
 
-	res := detect.Classify(ids)
-	resolved := make(map[string]string, len(configureTiers))
-	var undetected []toolresult.Item
+	// A tier --model-map does not name is refused, one item per missing
+	// tier; the catalogue listing is the ids to choose from, named for the
+	// choosing, never matched against.
+	var unassigned []toolresult.Item
 	for _, tier := range configureTiers {
-		if id, given := manual[tier]; given {
-			resolved[tier] = id
-			continue
-		}
-		candidates := tierCandidates(res, tier)
-		switch len(candidates) {
-		case 1:
-			resolved[tier] = candidates[0]
-		case 0:
-			undetected = append(undetected, noCandidateItem(tier, name, res, ids))
-		default:
-			undetected = append(undetected, ambiguousTierItem(tier, name, candidates))
+		if _, given := manual[tier]; !given {
+			unassigned = append(unassigned, unassignedTierItem(tier, name, ids))
 		}
 	}
-	if undetected != nil {
-		return refused(fields, undetected...)
+	if unassigned != nil {
+		return refused(fields, unassigned...)
 	}
 
 	cfg := config.Config{
 		Provider: name,
 		Models: config.ModelMap{
-			Heavy: resolved[config.TierHeavy],
-			Light: resolved[config.TierLight],
+			Decision: manual[config.TierDecision],
+			Text:     manual[config.TierText],
 		},
 	}
 	fields = append(fields, toolresult.Field{Key: "models", Value: toolresult.Record{
-		{Key: config.TierHeavy, Value: cfg.Models.Heavy}, {Key: config.TierLight, Value: cfg.Models.Light}}})
+		{Key: config.TierDecision, Value: cfg.Models.Decision}, {Key: config.TierText, Value: cfg.Models.Text}}})
 	wrote, err := config.UpdateConfig(opts.ConfigPath, cfg)
 	if err != nil {
 		return failed(append(fields, toolresult.Field{Key: "written", Value: []string{}}), err)
@@ -143,17 +130,18 @@ func configure(ctx context.Context, opts configureOptions) (string, []toolresult
 	}
 	fmt.Fprintf(opts.Stderr, "configured: provider=%s %s=%s %s=%s (wrote %s)\n",
 		name,
-		config.TierHeavy, cfg.Models.Heavy,
-		config.TierLight, cfg.Models.Light,
+		config.TierDecision, cfg.Models.Decision,
+		config.TierText, cfg.Models.Text,
 		opts.ConfigPath)
 	return toolresult.Done, append(fields, toolresult.Field{Key: "written", Value: []string{opts.ConfigPath}})
 }
 
 // parseModelMap turns the raw --model-map values into a tier→id map.
 // Values accumulate across repeats of the flag and across comma-separated
-// entries within one value, so `--model-map heavy=a --model-map light=b`
-// and `--model-map heavy=a,light=b` are the same request. A partial map is
-// legal: tiers it does not name are auto-detected.
+// entries within one value, so `--model-map decision=a --model-map text=b`
+// and `--model-map decision=a,text=b` are the same request. A partial map is
+// syntactically legal here; the verb refuses a tier it does not name, so
+// every accepted run assigns both.
 func parseModelMap(values []string) (map[string]string, error) {
 	out := make(map[string]string, len(configureTiers))
 	for _, value := range values {
@@ -182,20 +170,6 @@ func parseModelMap(values []string) (map[string]string, error) {
 	return out, nil
 }
 
-// tierCandidates returns the detected candidates for a tier. An unknown
-// tier has none, which surfaces as the same fail-loud no-match a provider
-// with no gemma-4 models produces.
-func tierCandidates(res detect.Result, tier string) []string {
-	switch tier {
-	case config.TierHeavy:
-		return res.Heavy
-	case config.TierLight:
-		return res.Light
-	default:
-		return nil
-	}
-}
-
 // modelMapError is a --model-map value refused as usage.
 func modelMapError(detail string) itemError {
 	return itemError{toolresult.Item{Check: checkUsage, Key: "--model-map", Detail: detail}}
@@ -204,33 +178,20 @@ func modelMapError(detail string) itemError {
 // tierKey is a tier as config.toml's [models] table spells its key.
 func tierKey(tier string) string { return "models." + tier }
 
-// noCandidateItem refuses a tier auto-detection could not fill, listing what
-// the provider offered as the ids to choose from: the gemma-4 models whose
-// tier went unrecognized where there are any — the likeliest thing the user
-// meant — else the whole catalogue.
-func noCandidateItem(tier, provider string, res detect.Result, ids []string) toolresult.Item {
-	offered := res.UnclassifiedFamily
-	if len(offered) == 0 {
-		offered = ids
-	}
-	detail := fmt.Sprintf("no gemma-4 %s-tier model detected at provider %q", tier, provider)
+// unassignedTierItem refuses a tier no --model-map assignment supplied. The
+// provider's catalogue is listed as the ids to choose from — informational
+// only, nothing in it is matched against the tier.
+func unassignedTierItem(tier, provider string, ids []string) toolresult.Item {
+	detail := fmt.Sprintf("no model assigned to the %s tier at provider %q; assign it explicitly, the provider offers: %s",
+		tier, provider, strings.Join(sortedCopy(ids), ", "))
 	if len(ids) == 0 {
-		detail += "; it offered no models at all"
+		detail = fmt.Sprintf("no model assigned to the %s tier at provider %q; assign it explicitly, it offered no models at all", tier, provider)
 	}
-	return toolresult.Item{Check: checkDetect, Key: tierKey(tier), Allowed: sortedCopy(offered),
+	return toolresult.Item{Check: checkDetect, Key: tierKey(tier), Allowed: sortedCopy(ids),
 		Remedy: "kbase configure --model-map " + tier + "=<id>", Detail: detail}
 }
 
-// ambiguousTierItem refuses a tier with several detected candidates. kbase
-// does not break the tie — picking one would be a silent best guess — so it
-// names them and asks.
-func ambiguousTierItem(tier, provider string, candidates []string) toolresult.Item {
-	return toolresult.Item{Check: checkDetect, Key: tierKey(tier), Allowed: sortedCopy(candidates),
-		Remedy: "kbase configure --model-map " + tier + "=<id>",
-		Detail: fmt.Sprintf("the %s tier is ambiguous at provider %q: %d gemma-4 candidates", tier, provider, len(candidates))}
-}
-
-// checkDetect names a tier detection could not settle.
+// checkDetect names a tier no --model-map assignment supplied.
 const checkDetect = "detect"
 
 func sortedCopy(values []string) []string {
@@ -247,23 +208,22 @@ var (
 
 var configureCmd = &cobra.Command{
 	Use:   "configure",
-	Short: "detect the provider's gemma-4 models and write config.toml",
-	Long: `Query a provider's model catalogue, assign a model id to each tier —
-heavy and light — and write them, with the provider, to config.toml.
+	Short: "assign the decision and text models with --model-map and write config.toml",
+	Long: `Assign a model id to each tier — decision and text — with --model-map,
+and write them, with the provider, to config.toml.
 
 The provider is resolved exactly as for ` + "`kbase models`" + `: --provider, else the
 provider named in config.toml, else the sole entry in providers.toml.
 
-Tiers are filled from --model-map where given and by detecting the
-provider's gemma-4 models otherwise — and only where detection finds
-exactly one candidate for the tier. A tier with none, or several, is
-refused, naming models.heavy or models.light and listing the ids to choose
-from, and nothing is written: a guessed model mapping is a wrong answer
-that never announces itself. A model named in --model-map but missing from
-the catalogue is a warning, not a failure — provider catalogues rotate.
+Both tiers must be named: --model-map decision=<id>,text=<id>. Nothing is
+guessed or matched between the tiers and the provider's catalogue — a tier
+the flag does not name is refused, naming models.decision or models.text
+and listing the ids the provider offers as the choices, and nothing is
+written. A model named in --model-map but missing from the catalogue is a
+warning, not a failure — provider catalogues rotate.
 
-config.toml is edited in place: only provider and the [models] heavy and
-light keys are rewritten, every other byte is kept, and a file already
+config.toml is edited in place: only provider and the [models] decision and
+text keys are rewritten, every other byte is kept, and a file already
 holding the values is left alone (outcome unchanged). Its result is one
 YAML document on stdout.`,
 	Args: cobra.NoArgs,
@@ -293,6 +253,6 @@ YAML document on stdout.`,
 func init() {
 	registerProviderFlags(configureCmd, &configureFlagProvider, &configureFlagTimeout, "configure")
 	configureCmd.Flags().StringArrayVar(&configureFlagModelMap, "model-map", nil,
-		"explicit tier assignment, e.g. "+config.TierHeavy+"=<id>"+modelMapPairSep+config.TierLight+"=<id> (repeatable; unnamed tiers are auto-detected)")
+		"explicit tier assignment, e.g. "+config.TierDecision+"=<id>"+modelMapPairSep+config.TierText+"=<id> (repeatable; both tiers must be named)")
 	rootCmd.AddCommand(mcpBinding(configureCmd, mcpExcluded))
 }

@@ -9,11 +9,12 @@ import (
 )
 
 // The environment a subcommand that spends inference reads: kb_tools'
-// variables under kbase's prefix, with kb_tools' meanings. KBASE_MODEL names
-// both tiers.
+// variables under kbase's prefix, with kb_tools' meanings. Each names one
+// setting and nothing else — no variable spans both tiers.
 const (
 	EnvAPIBaseURL = "KBASE_API_BASE_URL"
-	EnvModel      = "KBASE_MODEL"
+	EnvDecision   = "KBASE_DECISION"
+	EnvText       = "KBASE_TEXT"
 	EnvAPIKeyFile = "KBASE_API_KEY_FILE"
 )
 
@@ -21,16 +22,17 @@ const (
 const environmentEndpoint = "environment"
 
 // Overrides is one layer of inference settings above the configuration files;
-// a field left "" leaves it to the layer below.
+// a field left "" leaves it to the layer below. Each field names one setting.
 type Overrides struct {
-	BaseURL, Model, APIKeyFile string
+	BaseURL, Decision, Text, APIKeyFile string
 }
 
 // EnvOverrides is the environment's layer, read through getenv.
 func EnvOverrides(getenv func(string) string) Overrides {
 	return Overrides{
 		BaseURL:    strings.TrimSpace(getenv(EnvAPIBaseURL)),
-		Model:      strings.TrimSpace(getenv(EnvModel)),
+		Decision:   strings.TrimSpace(getenv(EnvDecision)),
+		Text:       strings.TrimSpace(getenv(EnvText)),
 		APIKeyFile: strings.TrimSpace(getenv(EnvAPIKeyFile)),
 	}
 }
@@ -39,11 +41,13 @@ func EnvOverrides(getenv func(string) string) Overrides {
 // each tier.
 type Inference struct {
 	Name, BaseURL, APIKey string
-	Heavy, Light          string
+	Decision, Text        string
 }
 
 // LackError is a setting the inference configuration lacks, named by the
-// variable that would supply it and the file that otherwise does.
+// variable that would supply it — or, where only the configuration files
+// supply the setting, the configuration key — and the file that otherwise
+// does.
 type LackError struct {
 	Key, Path, Detail string
 }
@@ -92,19 +96,25 @@ func ResolveInference(cfg Config, entry *Provider, unselected error, layers ...O
 		}
 		inf.APIKey = strings.TrimSpace(string(b))
 	}
-	inf.Heavy, inf.Light = cfg.Models.Heavy, cfg.Models.Light
-	if m := pick(func(o Overrides) string { return o.Model }); m != "" {
-		inf.Heavy, inf.Light = m, m
+	// A tier's id comes from the first of: its specific variable
+	// (KBASE_DECISION / KBASE_TEXT) and the configuration files.
+	tierID := func(specific func(Overrides) string, fromFile string) string {
+		if v := pick(specific); v != "" {
+			return v
+		}
+		return fromFile
 	}
+	inf.Decision = tierID(func(o Overrides) string { return o.Decision }, cfg.Models.Decision)
+	inf.Text = tierID(func(o Overrides) string { return o.Text }, cfg.Models.Text)
 	var unset []string
-	for _, t := range []struct{ tier, id string }{{TierLight, inf.Light}, {TierHeavy, inf.Heavy}} {
+	for _, t := range []struct{ tier, id string }{{TierDecision, inf.Decision}, {TierText, inf.Text}} {
 		if t.id == "" {
 			unset = append(unset, "models."+t.tier)
 		}
 	}
 	if len(unset) > 0 {
-		return inf, LackError{Key: EnvModel, Path: ConfigFileName,
-			Detail: fmt.Sprintf("%s is unset and %s sets no %s", EnvModel, ConfigFileName, strings.Join(unset, " or "))}
+		return inf, LackError{Key: unset[0], Path: ConfigFileName,
+			Detail: fmt.Sprintf("%s sets no %s", ConfigFileName, strings.Join(unset, " or "))}
 	}
 	return inf, nil
 }

@@ -452,7 +452,11 @@ func overview(w *walk) (result.Record, error) {
 	case passage == "":
 		return rec, failure{{Check: checkInference, Path: kbdocs.OverviewFile, Detail: "the overview passage came back empty, twice"}}
 	}
-	text, err := kbdocs.Overview(filepath.Base(w.repo.Root), passage)
+	digestDrawn, err := kb.SheetDigestDrawnOf(src)
+	if err != nil {
+		return rec, err
+	}
+	text, err := kbdocs.Overview(filepath.Base(w.repo.Root), passage, digestDrawn)
 	if err != nil {
 		return rec, err
 	}

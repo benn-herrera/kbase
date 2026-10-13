@@ -34,3 +34,28 @@ func TestResolvePath(t *testing.T) {
 		})
 	}
 }
+
+// TestSheetDigestDrawn: two or more volumes hold nodes draws the digest;
+// the kb-root-level nodes are not a volume (SPEC §3), so root-only claims
+// draw the full sheet alone — the README's digest link would dangle.
+func TestSheetDigestDrawn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		want  bool
+	}{
+		{"one volume", []string{"vol/claim-quality.md"}, false},
+		{"root bucket alone", []string{"claim-quality.md", "other.md"}, false},
+		{"root and one volume", []string{"claim-quality.md", "vol/claim-quality.md"}, false},
+		{"two volumes", []string{"one/claim-quality.md", "two/claim-quality.md"}, true},
+		{"one volume plus root", []string{"one/claim-quality.md", "claim-quality.md"}, false},
+	} {
+		nodes := make([]NodeRow, len(tc.paths))
+		for i, p := range tc.paths {
+			nodes[i] = NodeRow{CanonicalPath: p}
+		}
+		if got := SheetDigestDrawn(nodes); got != tc.want {
+			t.Errorf("%s: SheetDigestDrawn = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}

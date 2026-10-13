@@ -17,10 +17,11 @@ const (
 	NodePassFile       = "kb-build-node-pass.yaml"
 	ClassificationFile = "kb-build-classification.yaml"
 	UnmarkedFile       = "kb-build-unmarked.yaml"
+	CullFile           = "kb-build-cull.yaml"
 )
 
 // RecordFiles is every repository-relative path a build record lives at.
-var RecordFiles = []string{NodePassFile, ClassificationFile, UnmarkedFile}
+var RecordFiles = []string{NodePassFile, ClassificationFile, UnmarkedFile, CullFile}
 
 // NodePassRecord is the node pass's build state, per leaf.
 type NodePassRecord struct {
@@ -113,4 +114,72 @@ func ReadUnmarked(src *kb.Source) (UnmarkedRecord, bool, error) {
 	var r UnmarkedRecord
 	ok, err := Read(src, src.Path(UnmarkedFile), &r)
 	return r, ok, err
+}
+
+// CullRecord is the co-linearity cull's build state: every ask, ordered by
+// pass then pair; every culled claim with the claim it was culled into,
+// ordered by id; and every inferred link that survived the cull, ordered by
+// pair.
+type CullRecord struct {
+	About   string      `json:"about" yaml:"about"`
+	Entries []CullEntry `json:"entries" yaml:"entries"`
+	Culls   []Cull      `json:"culls" yaml:"culls"`
+	Links   []CullLink  `json:"links" yaml:"links"`
+}
+
+// CullEntry is one co-linearity ask over the link A–B, A < B: the pass that
+// asked it (1 or 2), its verdict and how it was reached.
+type CullEntry struct {
+	A       string `json:"a" yaml:"a"`
+	B       string `json:"b" yaml:"b"`
+	Pass    int    `json:"pass" yaml:"pass"`
+	Verdict string `json:"verdict" yaml:"verdict"`
+	Outcome string `json:"outcome" yaml:"outcome"`
+}
+
+// Cull is one culled claim and the claim it was culled into.
+type Cull struct {
+	ID   string `json:"id" yaml:"id"`
+	Into string `json:"into" yaml:"into"`
+}
+
+// CullLink is one inferred link A–B, A < B, with no direction, and the
+// harvest that found it.
+type CullLink struct {
+	A       string `json:"a" yaml:"a"`
+	B       string `json:"b" yaml:"b"`
+	Harvest string `json:"harvest" yaml:"harvest"`
+}
+
+// Verdicts recorded for a co-linearity ask over the link A–B: A adds nothing
+// to B, B adds nothing to A, or the two state distinct steps.
+const (
+	VerdictAAddsNothing = "a-adds-nothing"
+	VerdictBAddsNothing = "b-adds-nothing"
+	VerdictDistinct     = "distinct"
+)
+
+// ReadCull is the cull record, or false where none stands.
+func ReadCull(src *kb.Source) (CullRecord, bool, error) {
+	var r CullRecord
+	ok, err := Read(src, src.Path(CullFile), &r)
+	return r, ok, err
+}
+
+// InferredLinks is whether a depends edge source → target was found with no
+// mark: the unmarked record answered it yes in that direction, the cull
+// record holds its link either way round. yes is the unmarked ask's yes
+// letter.
+func InferredLinks(u UnmarkedRecord, c CullRecord, yes string) func(source, target string) bool {
+	found := map[[2]string]bool{}
+	for _, e := range u.Pairs {
+		if e.Letter != nil && *e.Letter == yes {
+			found[[2]string{e.Source, e.Target}] = true
+		}
+	}
+	for _, l := range c.Links {
+		found[[2]string{l.A, l.B}] = true
+		found[[2]string{l.B, l.A}] = true
+	}
+	return func(source, target string) bool { return found[[2]string{source, target}] }
 }

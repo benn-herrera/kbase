@@ -89,7 +89,7 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 	if _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin); err != nil {
 		t.Fatal(err)
 	}
-	readme, err := Overview("proj", "A passage.")
+	readme, err := Overview("proj", "A passage.", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,4 +189,31 @@ func firstDifference(a, b []rune) int {
 		}
 	}
 	return min(len(a), len(b))
+}
+
+// TestOverviewDigestChunk: the digest sentence fills the digest-chunk slot
+// where the digest is drawn, with the link a kb_tools verify would follow;
+// where it is not, the README names no digest at all — the link that made
+// kb_tools' md-link verify red on a one-volume KB.
+func TestOverviewDigestChunk(t *testing.T) {
+	with, err := Overview("proj", "A passage.", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, "[`claim-graph-digest.svg`](claim-graph-digest.svg)") {
+		t.Error("the digest-drawn README does not link claim-graph-digest.svg")
+	}
+	if strings.Contains(with, "claim-graph-digest") && !strings.Contains(with, "two or more volumes") {
+		t.Error("the digest-drawn README's digest sentence lost its drawn-where clause")
+	}
+	without, err := Overview("proj", "A passage.", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, "claim-graph-digest") {
+		t.Error("the one-volume README carries a digest mention a verify would trip over")
+	}
+	if m := slotRE.FindString(without); m != "" {
+		t.Errorf("the one-volume README carries the slot %s", m)
+	}
 }

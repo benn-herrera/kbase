@@ -33,47 +33,106 @@ func targetsOf(p unmarkedPlan, source string) []string {
 	return out
 }
 
-// TestPlanUnmarked: a source's pool is every other node less the pairs
-// already candidates either way round and the equations it states, ranked
-// best first with ties to the lower id; a minted equation is a target and
-// never a source.
-func TestPlanUnmarked(t *testing.T) {
-	nodes := []ClaimNode{{ID: "clm-a"}, {ID: "clm-b"}, {ID: "clm-c"}, {ID: "clm-d"}, {ID: "clm-e", Equation: "eq:e"}}
+// shortlistPaper is two papers' claims: p holds a directory s of two
+// documents and a directory t of one, q a document alone. clm-z sits before
+// clm-s in their document though its id sorts after; clm-e is an equation
+// node. clm-s and clm-z state the same thing, clm-q most of it, clm-c1 a
+// word of it, and the rest nothing of it.
+func shortlistPaper() ([]ClaimNode, map[string]string, map[string]position) {
+	nodes := []ClaimNode{
+		{ID: "clm-z", Document: "p/s/a.md"}, {ID: "clm-s", Document: "p/s/a.md"},
+		{ID: "clm-e", Document: "p/s/a.md", Equation: "eq:e"}, {ID: "clm-a1", Document: "p/s/a.md"},
+		{ID: "clm-b1", Document: "p/s/b.md"}, {ID: "clm-c1", Document: "p/t/c.md"}, {ID: "clm-q", Document: "q/x.md"},
+	}
 	statements := map[string]string{
-		"clm-a": "The contraction bound holds for the operator $`\\lambda_{c}`$.",
-		"clm-b": "The contraction bound for the operator.",
-		"clm-c": "The contraction bound for the operator.",
-		"clm-d": "Unrelated widgets gadgets.",
-		"clm-e": "``` math\n\\lambda_c = 1\n```",
+		"clm-z": "contraction operator bound holds", "clm-s": "contraction operator bound holds",
+		"clm-e": "zebra", "clm-a1": "gadgets alpha", "clm-b1": "gizmos beta",
+		"clm-c1": "contraction widgets", "clm-q": "contraction operator bound",
 	}
-	p := planUnmarked(nodes, statements, []pair{{"clm-d", "clm-a"}}, map[pair]bool{{"clm-a", "clm-e"}: true})
-	if !slices.Equal(p.sources, []string{"clm-a", "clm-b", "clm-c", "clm-d"}) {
-		t.Errorf("sources = %q, want every node but the equation", p.sources)
+	pos := map[string]position{
+		"clm-z": {1, 5}, "clm-s": {1, 10}, "clm-e": {1, 20}, "clm-a1": {1, 30},
+		"clm-b1": {2, 5}, "clm-c1": {3, 5}, "clm-q": {4, 5},
 	}
-	for source, want := range map[string][]string{
-		"clm-a": {"clm-b", "clm-c"},
-		"clm-b": {"clm-c", "clm-a", "clm-d", "clm-e"},
-		"clm-d": {"clm-b", "clm-c", "clm-e"},
-	} {
-		if got := targetsOf(p, source); !slices.Equal(got, want) {
-			t.Errorf("%s's shortlist = %q, want %q", source, got, want)
+	return nodes, statements, pos
+}
+
+func checkPicks(t *testing.T, name string, p unmarkedPlan, want map[string]unmarkedPicks) {
+	t.Helper()
+	for source, w := range want {
+		got := p.picks[source]
+		if !slices.Equal(got.proximity, w.proximity) || !slices.Equal(got.wildcard, w.wildcard) || !slices.Equal(got.adjacent, w.adjacent) {
+			t.Errorf("%s: %s picks %+v, want %+v", name, source, got, w)
+		}
+		if targets := targetsOf(p, source); !slices.Equal(targets, slices.Concat(w.proximity, w.wildcard)) {
+			t.Errorf("%s: %s is planned %q, want its proximity picks then its wildcards", name, source, targets)
 		}
 	}
-	if p.excluded != 2 || p.ownEquations != 1 {
-		t.Errorf("excluded %d as candidates and %d as own equations, want 2 and 1", p.excluded, p.ownEquations)
-	}
-	if got := shortlistTerms(statements["clm-a"]); !slices.Equal(got, []string{"contraction", "bound", "holds", "operator", "lambda", `m:\lambda_c`}) {
-		t.Errorf("terms = %q, want the folded words and the maths symbol with its subscript unbraced", got)
-	}
+}
 
-	var many []ClaimNode
-	same := map[string]string{}
-	for _, id := range []string{"clm-1", "clm-2", "clm-3", "clm-4", "clm-5", "clm-6", "clm-7"} {
-		many = append(many, ClaimNode{ID: id})
-		same[id] = "alpha beta gamma"
+// TestPlanUnmarkedProximityThenWildcards: a source's proximity slots take its
+// nearest targets by locality, then by places apart in reading order, a tie
+// to the earlier claim whatever the ids; another paper is never near. Its
+// wildcards take the best by cosine less the proximity picks, so another
+// paper is reached there. A minted equation is a target and never a source,
+// and each source is planned apart, so a pair both ends pick is planned both
+// ways.
+func TestPlanUnmarkedProximityThenWildcards(t *testing.T) {
+	nodes, statements, pos := shortlistPaper()
+	p := planUnmarked(nodes, statements, pos, nil, nil)
+	if !slices.Equal(p.sources, []string{"clm-a1", "clm-b1", "clm-c1", "clm-q", "clm-s", "clm-z"}) {
+		t.Errorf("sources = %q, want every node but the equation", p.sources)
 	}
-	if got := targetsOf(planUnmarked(many, same, nil, nil), "clm-1"); !slices.Equal(got, []string{"clm-2", "clm-3", "clm-4", "clm-5", "clm-6"}) {
-		t.Errorf("a pool of six ties = %q, want the first %d by id", got, shortlistK)
+	checkPicks(t, "unexcluded", p, map[string]unmarkedPicks{
+		"clm-s":  {proximity: []string{"clm-z", "clm-e", "clm-a1"}, wildcard: []string{"clm-q", "clm-c1"}},
+		"clm-b1": {proximity: []string{"clm-a1", "clm-e", "clm-s"}, wildcard: []string{"clm-c1", "clm-q"}},
+		"clm-q":  {wildcard: []string{"clm-s", "clm-z"}},
+	})
+	for _, both := range []pair{{"clm-s", "clm-q"}, {"clm-s", "clm-z"}} {
+		if !slices.Contains(p.pairs, both) || !slices.Contains(p.pairs, pair{both.target, both.source}) {
+			t.Errorf("%v is not planned both ways: %v", both, p.pairs)
+		}
+	}
+}
+
+// TestPlanUnmarkedExclusions: a marked or adjacent link is out of both its
+// ends' pools, and a source's own equation out of its own; a proximity slot
+// the source's paper cannot fill stays empty, though another paper's claim
+// stands in the pool. Each adjacency link is listed under both its ends.
+func TestPlanUnmarkedExclusions(t *testing.T) {
+	nodes, statements, pos := shortlistPaper()
+	adjacent := linkOf("clm-s", "clm-a1")
+	exclude := map[link]bool{linkOf("clm-z", "clm-s"): true, adjacent: true}
+	p := planUnmarked(nodes, statements, pos, exclude, map[pair]bool{{"clm-s", "clm-e"}: true})
+	p.addAdjacent([]link{adjacent})
+	checkPicks(t, "excluded", p, map[string]unmarkedPicks{
+		"clm-s":  {proximity: []string{"clm-b1", "clm-c1"}, wildcard: []string{"clm-q"}, adjacent: []string{"clm-a1"}},
+		"clm-z":  {proximity: []string{"clm-e", "clm-a1", "clm-b1"}, wildcard: []string{"clm-q", "clm-c1"}},
+		"clm-a1": {proximity: []string{"clm-e", "clm-z", "clm-b1"}, wildcard: []string{"clm-c1", "clm-q"}, adjacent: []string{"clm-s"}},
+	})
+	if p.adjacent != 1 {
+		t.Errorf("adjacent = %d, want the one link", p.adjacent)
+	}
+}
+
+// TestAYesFromEitherSideIsOneLink: a pair answered yes both ways, or yes one
+// way and no the other, is one link; a pair answered no or defaulted both
+// ways is none.
+func TestAYesFromEitherSideIsOneLink(t *testing.T) {
+	yes, no := asks.LetterPoints, asks.LetterDoesNotPoint
+	rec := buildrecords.UnmarkedRecord{Pairs: []buildrecords.CandidateEntry{
+		{Source: "clm-b", Target: "clm-a", Letter: &yes}, {Source: "clm-a", Target: "clm-b", Letter: &yes},
+		{Source: "clm-d", Target: "clm-c", Letter: &yes}, {Source: "clm-c", Target: "clm-d", Letter: &no},
+		{Source: "clm-e", Target: "clm-f", Letter: &no}, {Source: "clm-f", Target: "clm-e", Letter: &no},
+		{Source: "clm-g", Target: "clm-h"}, {Source: "clm-h", Target: "clm-g"},
+	}}
+	if got := unmarkedLinks(rec); !slices.Equal(got, []link{{"clm-a", "clm-b"}, {"clm-c", "clm-d"}}) {
+		t.Errorf("links = %v, want one per pair a yes reached from either side", got)
+	}
+}
+
+func TestShortlistTerms(t *testing.T) {
+	if got := shortlistTerms("The contraction bound holds for the operator $`\\lambda_{c}`$."); !slices.Equal(got, []string{"contraction", "bound", "holds", "operator", "lambda", `m:\lambda_c`}) {
+		t.Errorf("terms = %q, want the folded words and the maths symbol with its subscript unbraced", got)
 	}
 }
 
@@ -217,6 +276,85 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 	}
 	if f := findings[3].Record(); !slices.Equal(f[2].Value.([]string), []string{"clm-s1 -> clm-t3"}) {
 		t.Errorf("stage-U-defaulted = %v", f)
+	}
+}
+
+// TestAnInferredLinkIsAskedThreeWay: an inferred claim-to-claim pair is
+// offered all three relations and drafted mention, as a pair reached by a
+// mark is, keeping its harvest; classification asks it with the marked pairs,
+// and with no reader it is recorded drafted.
+func TestAnInferredLinkIsAskedThreeWay(t *testing.T) {
+	tree := &Tree{Documents: map[string]Document{
+		"v/x.md": {Path: "v/x.md", Text: "We use [the bound](y.md).\n"},
+		"v/y.md": {Path: "v/y.md", Text: "The bound holds.\n"},
+	}}
+	g := graphOf(
+		ClaimNode{ID: "clm-a", Document: "v/x.md", Title: "A"},
+		ClaimNode{ID: "clm-b", Document: "v/x.md", Title: "B"},
+		ClaimNode{ID: "clm-c", Document: "v/y.md", Title: "C"},
+		ClaimNode{ID: "clm-d", Document: "v/y.md", Title: "D"},
+	)
+	inv := &Inventory{Anchors: []Anchor{{Document: "v/x.md", Line: 0, Href: "y.md", Target: "v/y.md"}}}
+	inferred := pair{"clm-d", "clm-c"}
+	a := narrow(tree, g, inv, buildrecords.NodePassRecord{}, []inferredPair{{inferred, harvestAdjacent}})
+
+	all := []Relation{SupportedBy, InSupportOf, MentionedBy}
+	want := []pair{{"clm-a", "clm-c"}, {"clm-a", "clm-d"}, {"clm-b", "clm-c"}, {"clm-b", "clm-d"}, inferred}
+	if len(a.candidates) != len(want) {
+		t.Fatalf("candidates = %+v, want %v", a.candidates, want)
+	}
+	for _, c := range a.candidates {
+		if !slices.Contains(want, c.pair()) || !slices.Equal(c.offered, all) || c.draft != MentionedBy {
+			t.Errorf("%v offered %v drafted %s, want one of %v offered all three, drafted mention", c.pair(), c.offered, c.draft, want)
+		}
+		if c.pair() == inferred && !slices.Equal(c.harvests, []string{harvestAdjacent}) {
+			t.Errorf("the inferred pair's harvests = %q, want its own", c.harvests)
+		}
+	}
+
+	statement := func(n ClaimNode) string { return n.Title }
+	run := func(reader *letters) map[pair]buildrecords.CandidateEntry {
+		t.Helper()
+		repo := t.TempDir()
+		if err := WriteClassification(repo, buildrecords.ClassificationRecord{}); err != nil {
+			t.Fatal(err)
+		}
+		opts := Options{}
+		if reader != nil {
+			opts.Reader = reader.read
+		}
+		if _, err := classify(context.Background(), repo, a.candidates, statement, opts); err != nil {
+			t.Fatal(err)
+		}
+		rec, _, err := buildrecords.ReadClassification(recordsAt(repo))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := map[pair]buildrecords.CandidateEntry{}
+		for _, e := range rec.Candidates {
+			entries[pair{e.Source, e.Target}] = e
+		}
+		if len(entries) != len(want) {
+			t.Fatalf("record = %+v, want %d candidates", rec.Candidates, len(want))
+		}
+		return entries
+	}
+
+	mention := asks.LetterMention
+	reader := &letters{by: map[string]string{}}
+	for _, p := range want {
+		reader.by[p.source+"->"+p.target] = mention
+	}
+	for p, e := range run(reader) {
+		if e.Letter == nil || *e.Letter != mention || len(e.Offered) != len(all) || e.Outcome != ClassifyAnswered {
+			t.Errorf("%v records %+v, want asked three letters and answered C", p, e)
+		}
+	}
+	if len(reader.asked) != len(want) {
+		t.Errorf("asked %q, want every pair once", reader.asked)
+	}
+	if e := run(nil)[inferred]; e.Letter != nil || e.Outcome != ClassifyDrafted {
+		t.Errorf("with no reader the inferred pair records %+v, want drafted", e)
 	}
 }
 

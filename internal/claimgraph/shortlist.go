@@ -13,9 +13,13 @@ import (
 	"kbase/internal/write"
 )
 
-// shortlistK is how many of a source's best-ranked targets the
-// unmarked-reference stage asks about.
-const shortlistK = 5
+// The unmarked-reference stage's slots per source: shortlistProximityK of its
+// nearest targets in its own paper, then shortlistWildcardK of its best-ranked
+// targets anywhere.
+const (
+	shortlistProximityK = 3
+	shortlistWildcardK  = 2
+)
 
 // shortlistStopwords are words too common to tell two claims apart, and the
 // LaTeX control words the fold leaves behind.

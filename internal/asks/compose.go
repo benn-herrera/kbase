@@ -15,9 +15,9 @@ import (
 	"strings"
 )
 
-// shelf is the imported templates and fragments, byte for byte as upstream
-// wrote them. The top level holds what something dispatches, fragments/ what
-// something splices into one.
+// shelf is the embedded templates and fragments, each byte for byte as its
+// origin file or kbase wrote it. The top level holds what something
+// dispatches, fragments/ what something splices into one.
 //
 //go:embed prompt-templates
 var shelf embed.FS
@@ -39,20 +39,16 @@ var (
 )
 
 // The composer-resolved fragments. A template names none of them: each is a
-// call's whole system prompt, rendered alone.
-const (
-	ReaderSystem   = "reader-system"
-	OverviewSystem = "overview-system"
-)
+// call's whole system prompt. The overview call alone carries one — a
+// decision call's SystemOne request has no system prompt.
+const OverviewSystem = "overview-system"
 
-var fragmentSlots = []string{ReaderSystem, OverviewSystem}
+var fragmentSlots = []string{OverviewSystem}
 
 // alternativeSlots are the caller-chosen pieces, per slot the choices a
 // caller may name; "" is the empty fill, where the slot's absence is itself
 // an answer.
 var alternativeSlots = map[string][]string{
-	"correction":         {"", "letter-correction"},
-	"classify-options":   {"classify-options-three", "classify-options-two"},
 	"passage-correction": {"", "overview-correction"},
 }
 

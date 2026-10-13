@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"path/filepath"
 	"slices"
+	"strings"
 
+	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
@@ -40,9 +42,10 @@ const (
 // DefaultCauses is every cause, in the order a report states them.
 var DefaultCauses = []string{CauseNoLetter, CauseUnplaceable}
 
-// How a candidate's classification was reached: answered, re-asked once and
-// answered, asked and answered with no offered letter twice, or no reader
-// there to ask. The last two take the draft.
+// How a candidate's classification was reached: answered — by the model, or,
+// for a candidate offered one letter, by that offer with no ask spent —
+// re-asked once and answered, asked and answered with no offered letter
+// twice, or no reader there to ask. The last two take the draft.
 const (
 	ClassifyAnswered  = "answered"
 	ClassifyReasked   = "re-asked"
@@ -155,4 +158,51 @@ func WriteUnmarked(repoRoot string, r buildrecords.UnmarkedRecord) error {
 		return err
 	}
 	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.UnmarkedFile), b, nil)
+}
+
+const cullAbout = "The claim-graph co-linearity cull's build record: every co-linearity ask, keyed by its two claim ids in " +
+	"id order, with the pass that asked it, its verdict (a-adds-nothing, b-adds-nothing or distinct) and how it was reached, sorted by pass " +
+	"then pair; every culled claim with the claim it was culled into, sorted by id; and every inferred link that " +
+	"survived the cull, undirected, keyed by its two claim ids in id order with the harvest that found it, sorted by " +
+	"pair. It joins to the tree at this build's own boundary commits, not to a KB a maintainer later edits."
+
+// cullBytes is the cull record as WriteCull lands it: the entries sorted by
+// pass then pair, the culls by id, the links by pair, every list written.
+func cullBytes(r buildrecords.CullRecord) ([]byte, error) {
+	entries := slices.Clone(orEmpty(r.Entries))
+	slices.SortFunc(entries, func(a, b buildrecords.CullEntry) int {
+		return cmp.Or(cmp.Compare(a.Pass, b.Pass), strings.Compare(a.A, b.A), strings.Compare(a.B, b.B))
+	})
+	culls := slices.Clone(orEmpty(r.Culls))
+	slices.SortFunc(culls, func(a, b buildrecords.Cull) int { return strings.Compare(a.ID, b.ID) })
+	links := slices.Clone(orEmpty(r.Links))
+	slices.SortFunc(links, func(a, b buildrecords.CullLink) int {
+		return cmp.Or(strings.Compare(a.A, b.A), strings.Compare(a.B, b.B))
+	})
+	return encodeRecord(buildrecords.CullRecord{About: cullAbout, Entries: entries, Culls: culls, Links: links})
+}
+
+// WriteCull lands the cull record whole.
+func WriteCull(repoRoot string, r buildrecords.CullRecord) error {
+	b, err := cullBytes(r)
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.CullFile), b, nil)
+}
+
+// inferredAt is whether a depends edge source → target was found with no
+// mark, by the unmarked and cull records standing at repoRoot; an absent
+// record finds nothing.
+func inferredAt(repoRoot string) (func(source, target string) bool, error) {
+	src := recordsAt(repoRoot)
+	u, _, err := buildrecords.ReadUnmarked(src)
+	if err != nil {
+		return nil, err
+	}
+	c, _, err := buildrecords.ReadCull(src)
+	if err != nil {
+		return nil, err
+	}
+	return buildrecords.InferredLinks(u, c, asks.LetterPoints), nil
 }

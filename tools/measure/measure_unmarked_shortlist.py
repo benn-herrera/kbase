@@ -1,4 +1,5 @@
-"""Shortlist recall: how many of the reference's unmarked missed edges the production shortlist reaches at K.
+"""Shortlist recall: how far the build's own records reach the reference's unmarked missed edges, and how many of
+them kb_tools' production shortlist reaches at K.
 
 Every input, output file and column is described in tools/measure/README.md. kb_tools is imported from PYTHONPATH.
 """
@@ -7,6 +8,8 @@ import argparse
 import logging
 import sys
 from collections import Counter
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from kb_tools import kb_pipeline
@@ -22,11 +25,83 @@ from kb_tools.kb_claimgraph import (
 )
 
 import compare_to_pristine as compare
+from culled_matches import CULL_RECORD, read_cull_links
 
 logger = logging.getLogger(__name__)
 
 KS = (1, 3, 5)
 EDGE_COLUMNS = ("ref_source", "ref_target", "mark_split", "ours_sources", "ours_targets")
+NEVER_PLANNED = "never planned"
+NOT_ANSWERED = "planned, not answered"
+ANSWERED_NO = "planned, answered no"
+LINK_KEPT = "planned, answered yes; link in the cull record's links"
+LINK_ABSENT = "planned, answered yes; link absent from them"
+#: How far the build's records reach a miss, nearest the edge last; a miss takes the furthest any of its pairs reaches.
+REACHES = (NEVER_PLANNED, NOT_ANSWERED, ANSWERED_NO, LINK_ABSENT, LINK_KEPT)
+REACH_HEADER = ("edge", "reach", "source", "target", "planned", "letter_forward", "letter_reverse", "linked")
+
+
+@dataclass(frozen=True)
+class PairReach:
+    """One (match of A, match of B) pair as the build's unmarked and cull records hold it."""
+
+    source: str
+    target: str
+    planned_forward: bool
+    planned_reverse: bool
+    #: The letter the record holds for the pair asked that way; None where it was not asked or no letter was chosen.
+    letter_forward: str | None
+    letter_reverse: str | None
+    linked: bool
+
+    def planned_way(self) -> str:
+        """``forward``, ``reverse``, ``both``, or empty where the pair was planned neither way."""
+        ways = [way for way, planned in (("forward", self.planned_forward), ("reverse", self.planned_reverse)) if planned]
+        return "both" if len(ways) == 2 else "".join(ways)
+
+    def reach(self) -> str:
+        if not (self.planned_forward or self.planned_reverse):
+            return NEVER_PLANNED
+        letters = [
+            letter
+            for planned, letter in ((self.planned_forward, self.letter_forward), (self.planned_reverse, self.letter_reverse))
+            if planned and letter is not None
+        ]
+        if kb_pipeline.UNMARKED_POINTS_LETTER in letters:
+            return LINK_KEPT if self.linked else LINK_ABSENT
+        return ANSWERED_NO if letters else NOT_ANSWERED
+
+
+def pair_reaches(
+    sources: Sequence[str], targets: Sequence[str], *, record: kb_pipeline.UnmarkedRecord, links: Collection[frozenset[str]]
+) -> list[PairReach]:
+    """Every (s, t) over a miss's matched ends, s != t, read from ``record``'s plan and letters and the cull record's
+    ``links``."""
+    planned = set(record.planned or ())
+
+    def letter(pair: tuple[str, str]) -> str | None:
+        entry = record.pairs.get(pair)
+        return None if entry is None else entry.letter
+
+    return [
+        PairReach(
+            source=s,
+            target=t,
+            planned_forward=(s, t) in planned,
+            planned_reverse=(t, s) in planned,
+            letter_forward=letter((s, t)),
+            letter_reverse=letter((t, s)),
+            linked=frozenset((s, t)) in links,
+        )
+        for s in sources
+        for t in targets
+        if s != t
+    ]
+
+
+def miss_reach(pairs: Sequence[PairReach]) -> str:
+    """The furthest ``REACHES`` value any of the miss's pairs reaches."""
+    return max((pair.reach() for pair in pairs), key=REACHES.index, default=NEVER_PLANNED)
 
 
 class Build:
@@ -120,16 +195,43 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
+    refusal = compare.format_refusal(args.ours)
+    if refusal is not None:
+        print(f"--ours {str(args.ours)!r}: {refusal}", file=sys.stderr)
+        return 1
     try:
         measured, skipped = read_misses(args.edges)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         print(f"--edges {str(args.edges)!r}: {error}", file=sys.stderr)
         return 1
     try:
+        record = kb_pipeline.read_unmarked(args.ours.parent)
+        if record is None or record.planned is None:
+            raise ValueError(f"no planned unmarked record {kb_pipeline.UNMARKED_RELPATH} beside it")
+        cull_path = args.ours.parent / CULL_RECORD
+        links = read_cull_links(cull_path) if cull_path.is_file() else None
         ours = Build(args.ours)
-    except Exception as exc:  # noqa: BLE001 - a kb-root no reader can open is an unusable argument
+    except Exception as exc:  # noqa: BLE001 - a kb-root or record no reader can open is an unusable argument
         print(f"--ours {str(args.ours)!r}: unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+
+    reach_rows = []
+    for miss in measured:
+        pairs = pair_reaches(miss["sources"], miss["targets"], record=record, links=links or set())
+        miss["reach"] = miss_reach(pairs)
+        reach_rows += [
+            (
+                miss["edge"],
+                miss["reach"],
+                pair.source,
+                pair.target,
+                pair.planned_way(),
+                pair.letter_forward or "",
+                pair.letter_reverse or "",
+                "yes" if pair.linked else "no",
+            )
+            for pair in pairs
+        ]
 
     ordered = shortlist.rank(ours.statement, sources=ours.sources, candidate_pairs=ours.candidate_pairs)
     ranked = {source: {t: rank for rank, t in enumerate(targets, start=1)} for source, targets in ordered.items()}
@@ -167,6 +269,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     compare.write_tsv(out, "misses.tsv", ("edge", "locality", "fwd", "rev", "best_pair"), miss_rows)
     compare.write_tsv(out, "curve.tsv", ("K", "asks", "forward", "either"), curve_rows)
+    compare.write_tsv(out, "reach.tsv", REACH_HEADER, reach_rows)
 
     kinds = Counter(ours.kind.values())
     stage_forward = sum(1 for m in measured if m["stage"][0])
@@ -186,24 +289,39 @@ def main() -> int:
         *[f"  {note}" for note in skipped],
         f"node ids in edges.tsv that this build does not have: {len(foreign)}" + (f" ({' '.join(foreign)})" if foreign else ""),
         "",
+        "## Reach of the misses in the build's own records",
+        "",
+        f"unmarked record {kb_pipeline.UNMARKED_RELPATH}: {len(record.planned)} pairs planned, {len(record.pairs)} asked",
+        f"cull record {CULL_RECORD}: "
+        + (
+            f"{len(links)} links"
+            if links is not None
+            else "none found beside --ours; no links read, so every answered-yes miss reads as absent from them"
+        ),
+        "each (match of A, match of B) pair read both ways; a miss takes the furthest any of its pairs reaches "
+        f"(reach.tsv); yes is the letter {kb_pipeline.UNMARKED_POINTS_LETTER}",
+        "",
+        *[f"  {name}: {sum(1 for m in measured if m['reach'] == name)}" for name in REACHES],
+        "",
         "## Locality of the misses (nearest matched pair)",
         "",
         *[f"  {name}: {sum(1 for m in measured if m['locality'] == name)}" for name in unmarked.LOCALITIES],
         f"  no pair: {sum(1 for m in measured if not m['locality'])}",
         "",
-        "## Per-source top-K under shortlist.rank: misses reached, forward / either direction",
+        "## kb_tools' recomputation: per-source top-K under shortlist.rank, misses reached, forward / either direction",
         "",
         "| K | asks | forward | either |",
         "|---|---|---|---|",
         *[f"| {k} | {asks} | {forward} | {either} |" for k, asks, forward, either in curve_rows],
         "",
-        f"## The stage's own shortlist (unmarked.plan, K = {shortlist.K}, own equations left out)",
+        f"## kb_tools' recomputation: unmarked.plan over this tree (K = {shortlist.K}, own equations left out); "
+        "not the record of the plan the build ran",
         "",
         f"  misses reached, forward / either: {stage_forward} / {stage_either}",
         "",
     ]
     (out / "summary.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    print(f"wrote misses.tsv, curve.tsv, summary.md under {out}")
+    print(f"wrote misses.tsv, curve.tsv, reach.tsv, summary.md under {out}")
     return 0
 
 

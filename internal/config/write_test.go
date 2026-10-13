@@ -18,7 +18,7 @@ const newProvider = "reaper"
 // test if it errors.
 func update(t *testing.T, path string) {
 	t.Helper()
-	cfg := Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
+	cfg := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
 	if _, err := UpdateConfig(path, cfg); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
@@ -28,7 +28,7 @@ func update(t *testing.T, path string) {
 // already holds writes nothing and says so.
 func TestUpdateConfigLeavesTheSameValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ConfigFileName)
-	cfg := Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
+	cfg := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
 	if wrote, err := UpdateConfig(path, cfg); err != nil || !wrote {
 		t.Fatalf("first update: wrote %t, %v", wrote, err)
 	}
@@ -54,7 +54,7 @@ func assertValues(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	want := Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}}
+	want := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
 	if got != want {
 		t.Errorf("config = %+v, want %+v", got, want)
 	}
@@ -136,7 +136,7 @@ func TestUpdateConfigCreatesDir(t *testing.T) {
 // survive an update byte for byte — and those three keep their trailing
 // comments, which are the notes a user is likeliest to have written.
 //
-// The heavy value carries a `#` of its own: the comment scan must read it
+// The decision value carries a `#` of its own: the comment scan must read it
 // as part of the string, not as the start of the note that follows it.
 const annotated = `# my kbase config — do not let a tool eat these notes
 #   (second line of the header block)
@@ -147,9 +147,9 @@ provider   =    "old-provider"   # which providers.toml entry to use
 scratch = "keep me"
 
 [models]
-# heavy runs taxonomy design
-heavy = "old#heavy"    # the id, hash and all
-light='old-light'# no space before the marker
+# decision answers the letter asks
+decision = "old#decision"    # the id, hash and all
+text='old-text'# no space before the marker
 
 [experimental]
 notes = "an entire table kbase does not model"
@@ -172,8 +172,8 @@ func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	// The rewritten lines, keyed by their line number in the fixture.
 	rewritten := map[int]string{
 		3:  `provider = "` + newProvider + `"` + commentGap + `# which providers.toml entry to use`,
-		10: `heavy = "` + heavyModel + `"` + commentGap + `# the id, hash and all`,
-		11: `light = "` + lightModel + `"` + commentGap + `# no space before the marker`,
+		10: `decision = "` + decisionModel + `"` + commentGap + `# the id, hash and all`,
+		11: `text = "` + textModel + `"` + commentGap + `# no space before the marker`,
 	}
 	before, after := strings.Split(annotated, "\n"), strings.Split(readBack(t, path), "\n")
 	if len(before) != len(after) {
@@ -200,24 +200,24 @@ func TestUpdateConfigInsertsMissingKeys(t *testing.T) {
 		want string // the whole file after the update
 	}{{
 		name: "a tier is added to the end of its table",
-		src:  "provider = \"old\"\n\n[models]\nheavy = \"old-heavy\"\n\n[other]\nk = 1\n",
-		want: "provider = \"" + newProvider + "\"\n\n[models]\nheavy = \"" + heavyModel + "\"\n" +
-			"light = \"" + lightModel + "\"\n\n[other]\nk = 1\n",
+		src:  "provider = \"old\"\n\n[models]\ndecision = \"old-decision\"\n\n[other]\nk = 1\n",
+		want: "provider = \"" + newProvider + "\"\n\n[models]\ndecision = \"" + decisionModel + "\"\n" +
+			"text = \"" + textModel + "\"\n\n[other]\nk = 1\n",
 	}, {
 		name: "a missing [models] table is added at the end of the file",
 		src:  "# note\nprovider = \"old\"\n",
-		want: "# note\nprovider = \"" + newProvider + "\"\n\n[models]\nheavy = \"" + heavyModel + "\"\n" +
-			"light = \"" + lightModel + "\"\n",
+		want: "# note\nprovider = \"" + newProvider + "\"\n\n[models]\ndecision = \"" + decisionModel + "\"\n" +
+			"text = \"" + textModel + "\"\n",
 	}, {
 		name: "a missing provider goes under the leading comments, above the first table",
-		src:  "# note\n\n[models]\nheavy = \"old-heavy\"\nlight = \"old-light\"\n",
-		want: "# note\n\nprovider = \"" + newProvider + "\"\n[models]\nheavy = \"" + heavyModel + "\"\n" +
-			"light = \"" + lightModel + "\"\n",
+		src:  "# note\n\n[models]\ndecision = \"old-decision\"\ntext = \"old-text\"\n",
+		want: "# note\n\nprovider = \"" + newProvider + "\"\n[models]\ndecision = \"" + decisionModel + "\"\n" +
+			"text = \"" + textModel + "\"\n",
 	}, {
 		name: "an unrelated file keeps its content and gains both",
 		src:  "[experimental]\nnotes = \"kbase does not model this\"\n",
 		want: "provider = \"" + newProvider + "\"\n[experimental]\nnotes = \"kbase does not model this\"\n" +
-			"\n[models]\nheavy = \"" + heavyModel + "\"\nlight = \"" + lightModel + "\"\n",
+			"\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\n",
 	}}
 
 	for _, tt := range tests {
@@ -260,15 +260,15 @@ func TestUpdateConfigRefusesUnparsableLayout(t *testing.T) {
 
 note = """
 [models]
-heavy = "this is prose, not configuration"
+decision = "this is prose, not configuration"
 """
 
 [models]
-heavy = "old-heavy"
-light = "old-light"
+decision = "old-decision"
+text = "old-text"
 `
 	path := writeFile(t, t.TempDir(), ConfigFileName, src)
-	_, err := UpdateConfig(path, Config{Provider: newProvider, Models: ModelMap{Heavy: heavyModel, Light: lightModel}})
+	_, err := UpdateConfig(path, Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}})
 	if err == nil {
 		t.Fatal("multiline string shaped like a table: got nil error, want a refusal")
 	}
@@ -336,8 +336,8 @@ func TestUpdateConfigLeavesAsksTableAlone(t *testing.T) {
 	const src = `provider = "old"
 
 [models]
-heavy = "old-heavy"
-light = "old-light"
+decision = "old-decision"
+text = "old-text"
 
 [asks]
 # one ask at a time on this box

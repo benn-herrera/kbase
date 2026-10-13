@@ -66,7 +66,14 @@ type AuthoredGraph struct {
 	byID  map[string]int
 }
 
-func (g *AuthoredGraph) node(id string) ClaimNode { return g.Nodes[g.byID[id]] }
+// node is the claim id names, false where the graph holds none.
+func (g *AuthoredGraph) node(id string) (ClaimNode, bool) {
+	i, ok := g.byID[id]
+	if !ok {
+		return ClaimNode{}, false
+	}
+	return g.Nodes[i], true
+}
 
 // hostedBy is the claims document hosts, equation nodes not among them: they
 // are reachable through the label-to-fence join alone.

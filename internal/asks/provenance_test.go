@@ -15,10 +15,10 @@ import (
 
 type provenance struct {
 	Files []struct {
-		File       string `yaml:"file"`
-		Upstream   string `yaml:"upstream"`
-		Commit     string `yaml:"commit"`
-		Authorship string `yaml:"authorship"`
+		File         string  `yaml:"file"`
+		Origin       *string `yaml:"origin"`
+		OriginCommit *string `yaml:"origin-commit"`
+		Authorship   string  `yaml:"authorship"`
 	} `yaml:"files"`
 }
 
@@ -38,15 +38,29 @@ func readProvenance(t *testing.T) provenance {
 }
 
 // TestProvenanceCoversTheShelf: the manifest names every embedded file once,
-// and nothing else, each with an authorship of imported or kbase-authored.
+// and nothing else, each with an authorship of imported, kbase-authored or
+// kbase-origin. An imported or kbase-authored entry names its origin and
+// origin-commit; a kbase-origin entry names neither — kbase authored it de novo.
 func TestProvenanceCoversTheShelf(t *testing.T) {
 	var listed []string
 	for _, f := range readProvenance(t).Files {
-		if f.File == "" || f.Upstream == "" || len(f.Commit) != 40 {
-			t.Errorf("an entry lacks its file, upstream path or full commit: %+v", f)
+		if f.File == "" {
+			t.Errorf("an entry lacks its file: %+v", f)
 		}
-		if f.Authorship != "imported" && f.Authorship != "kbase-authored" {
-			t.Errorf("%s: authorship %q, want imported or kbase-authored", f.File, f.Authorship)
+		switch f.Authorship {
+		case "imported", "kbase-authored":
+			if f.Origin == nil || *f.Origin == "" {
+				t.Errorf("%s: authorship %q without an origin", f.File, f.Authorship)
+			}
+			if f.OriginCommit == nil || len(*f.OriginCommit) != 40 {
+				t.Errorf("%s: authorship %q without a full origin-commit", f.File, f.Authorship)
+			}
+		case "kbase-origin":
+			if f.Origin != nil || f.OriginCommit != nil {
+				t.Errorf("%s: kbase-origin with an origin or origin-commit", f.File)
+			}
+		default:
+			t.Errorf("%s: authorship %q, want imported, kbase-authored or kbase-origin", f.File, f.Authorship)
 		}
 		listed = append(listed, f.File)
 	}
@@ -60,11 +74,11 @@ func TestProvenanceCoversTheShelf(t *testing.T) {
 	}
 }
 
-// TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt reads each entry's
-// upstream file from the adjagent clone at the commit it records: it must
+// TestOriginExistsAtTheRecordedCommitAndImportsMatchIt reads each entry's
+// origin file from the adjagent clone at the commit it records: it must
 // exist, and an imported file's embedded bytes must equal it. It skips where
 // the clone is absent.
-func TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt(t *testing.T) {
+func TestOriginExistsAtTheRecordedCommitAndImportsMatchIt(t *testing.T) {
 	clone := filepath.Join("..", "..", ".claude", "adjagent")
 	if _, err := os.Stat(filepath.Join(clone, ".git")); err != nil {
 		t.Skipf("no adjagent clone at %s: %v", clone, err)
@@ -74,20 +88,23 @@ func TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range readProvenance(t).Files {
-		upstream, err := repo.Files(f.Commit, f.Upstream)
-		if err != nil {
-			t.Errorf("%s at %s: %v", f.Upstream, f.Commit, err)
+		if f.Authorship == "kbase-origin" {
 			continue
 		}
-		if len(upstream) != 1 {
-			t.Errorf("%s at %s names %d files, want one", f.Upstream, f.Commit, len(upstream))
+		origin, err := repo.Files(*f.OriginCommit, *f.Origin)
+		if err != nil {
+			t.Errorf("%s at %s: %v", *f.Origin, *f.OriginCommit, err)
+			continue
+		}
+		if len(origin) != 1 {
+			t.Errorf("%s at %s names %d files, want one", *f.Origin, *f.OriginCommit, len(origin))
 			continue
 		}
 		if f.Authorship != "imported" {
 			continue
 		}
 		var want []byte
-		for _, b := range upstream {
+		for _, b := range origin {
 			want = b
 		}
 		got, err := shelf.ReadFile(shelfDir + "/" + f.File)
@@ -95,7 +112,7 @@ func TestUpstreamExistsAtTheRecordedCommitAndImportsMatchIt(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Errorf("%s differs from %s at %s", f.File, f.Upstream, f.Commit)
+			t.Errorf("%s differs from %s at %s", f.File, *f.Origin, *f.OriginCommit)
 		}
 	}
 }

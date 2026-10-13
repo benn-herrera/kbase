@@ -16,6 +16,7 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/records"
 	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
 // Options is one claim-graph stage over the tree at KBRoot, the repository
@@ -26,8 +27,8 @@ type Options struct {
 	Records  string
 	Logger   log.Logger
 	// Reader puts each letter ask. It is nil only for a build spending no
-	// inference, which drops the node pass and the unmarked-reference asks and
-	// classifies every candidate as its draft.
+	// inference, which drops the node pass, the unmarked-reference asks and the
+	// co-linearity cull and classifies every candidate as its draft.
 	Reader asks.LetterReader
 	// ReaderConcurrency is how many asks of one group the reader has in
 	// flight once its first has returned; 0 is asks.DefaultReaderConcurrency.
@@ -36,7 +37,8 @@ type Options struct {
 	// where it is "".
 	AskRecords string
 	// Progress hears the units of a stage that asks: the node pass's leaves,
-	// and the unmarked-reference asks' and classification's source groups.
+	// the unmarked-reference asks' and classification's source groups, and the
+	// cull's groups of each pass.
 	Progress Progress
 }
 
@@ -337,7 +339,8 @@ func runStage(opts Options, gated bool, body func(t *Tree, recs []records.Record
 // Declared is the declared pass: conformance with the double-run guard, the
 // inventory, the claims the author marked, their assembly with the endcap,
 // the writes, and the build records written fresh — every declaring leaf
-// unread, no candidate classified, no shortlist planned — then the gate.
+// unread, no candidate classified, no shortlist planned, nothing culled —
+// then the gate.
 func Declared(opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		if err := conformanceGate(t); err != nil {
@@ -379,6 +382,9 @@ func Declared(opts Options) (Report, error) {
 			return findings, err
 		}
 		if err := WriteUnmarked(w.repoRoot, buildrecords.UnmarkedRecord{}); err != nil {
+			return findings, err
+		}
+		if err := WriteCull(w.repoRoot, buildrecords.CullRecord{}); err != nil {
 			return findings, err
 		}
 		return append(findings, fact("stage-F-node-pass", field("leaves-unread", len(leaves)))), nil
@@ -534,17 +540,18 @@ func Equations(opts Options) (Report, error) {
 }
 
 // Depends is dependency attribution: the entry condition, the authored graph,
-// stage D's narrowing over the node pass's verdicts and the unmarked record's
-// yeses — read, never recomputed, and none where no unmarked record stands —
-// every candidate classified — with no reader, every one taking its draft —
-// into the classification record, and one add-depends-on batch.
+// stage D's narrowing over the node pass's verdicts and the cull record's
+// links, oriented — read, never recomputed, and none where no cull record
+// stands — every candidate classified — with no reader, every one taking its
+// draft — into the classification record, one add-build-edges batch, and then
+// the ring row over the graph that batch left.
 func Depends(ctx context.Context, opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		record, err := requireNodePass(w.repoRoot)
 		if err != nil {
 			return nil, err
 		}
-		unmarked, _, err := buildrecords.ReadUnmarked(recordsAt(w.repoRoot))
+		cull, _, err := buildrecords.ReadCull(recordsAt(w.repoRoot))
 		if err != nil {
 			return nil, err
 		}
@@ -574,17 +581,46 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 			fact("stage-A-determinations", field("hosting", len(state.hosting)), field("no-claim", len(state.determined)), field("undeclared", len(state.undeclared))),
 			fact("authored-graph", field("claims", len(g.Nodes)), field("hosting-documents", g.documents())),
 			fact("stage-D-anchors", field("anchors", len(inv.Anchors)), field("resolving", resolving), field("in-proofs", inProof)))
-		a := narrow(t, g, &inv, record, unmarkedFound(unmarked))
+		a := narrow(t, g, &inv, record, orientLinks(cull.Links, g, claimPositions(t, g, &inv)))
 		findings = append(findings, candidateFindings(a)...)
 		c, err := classify(ctx, w.repoRoot, a.candidates, statements(t, g, &inv), opts)
 		if err != nil {
 			return findings, askStop(err)
 		}
 		findings = append(findings, classificationFindings(c, opts.Reader != nil)...)
-		f, err := w.writeEdges("pass-3-add-depends-on", c.edges, c.refs, cutEdges(a.demoted, c, unmarkedFound(unmarked)))
+		f, err := w.writeEdges("pass-3-add-depends-on", c.edges, c.refs)
 		findings = append(findings, f)
-		return findings, err
+		if err != nil {
+			return findings, err
+		}
+		inferred, err := inferredAt(w.repoRoot)
+		if err != nil {
+			return findings, err
+		}
+		cut, err := ringRow(w, inferred)
+		if err != nil {
+			return findings, err
+		}
+		return append(findings, pass("stage-D-ring", field("demoted", pairs(cut)))), nil
 	})
+}
+
+// ringRow cuts every depends edge lying on a cycle of the captured graph:
+// each leaves depends-on for a demoted row of its own source, origin inferred
+// where inferred holds for it and cited otherwise. It returns the cut edges,
+// sorted.
+func ringRow(w writer, inferred func(source, target string) bool) ([]pair, error) {
+	edges, err := capturedEdges(w.kbRoot, w.lg)
+	if err != nil {
+		return nil, err
+	}
+	cut := cycleEdges(edges)
+	for _, e := range cut {
+		if _, err := issue(w.raw, write.DemoteClaimEdge, map[string]any{"id": e.source, "target": e.target, "origin": demotedOrigin(e, inferred)}); err != nil {
+			return nil, stopf("ring-row", "%v; the ring row cannot proceed", err)
+		}
+	}
+	return cut, nil
 }
 
 func requireNodePass(repoRoot string) (buildrecords.NodePassRecord, error) {
@@ -617,7 +653,6 @@ func candidateFindings(a attribution) []Finding {
 			field("by-harvest", tally(harvested)), field("by-offered", tally(offeredLetters)), field("own-equations-dropped", len(a.ownEquations))),
 		fact("stage-D-drafts", field("by-relation", counts([]string{string(MentionedBy), string(SupportedBy)}, countOf(drafts))), field("directed-by-route", routes)),
 		fact("stage-D-word-filtered", field("pairs", len(a.wordDropped))),
-		fact("stage-D-containment-ring", field("demoted", pairs(a.demoted))),
 	}
 }
 
@@ -648,6 +683,24 @@ func classificationFindings(c classification, asked bool) []Finding {
 		fact("stage-D-classified", field("by-relation", counts(names, countOf(rels))), field("by-outcome", tally(outcomes)), field("asked", asked)),
 		fact("stage-D-defaulted", field("candidates", pairs(defaulted))),
 		fact("stage-D-asks", askTotals(c.asked)...),
-		pass("stage-D-classify", field("dependency-edges", len(c.edges)), field("references", len(c.refs)), field("demoted", pairs(c.demoted))),
+		pass("stage-D-classify", field("dependency-edges", len(c.edges)), field("references", len(c.refs))),
 	}
+}
+
+// capturedEdges is the captured depends graph between the register's claim
+// entries, sources and targets in entry order, read fresh from the tree.
+func capturedEdges(kbRoot string, lg log.Logger) ([]pair, error) {
+	st, err := kb.Discover(builtTree(kbRoot), lg)
+	if err != nil {
+		return nil, err
+	}
+	var out []pair
+	for _, e := range st.ClaimEntries {
+		for _, d := range e.DependsOn {
+			if d.Relation == kb.RelationDepends && d.TargetKind == "claim" {
+				out = append(out, pair{e.ID, d.Target})
+			}
+		}
+	}
+	return out, nil
 }

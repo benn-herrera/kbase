@@ -3,6 +3,7 @@ package claimgraph
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -27,14 +28,12 @@ func letterRelation(letter string) (Relation, bool) {
 
 // classification is what classification decided and what it writes: every
 // candidate's relation and outcome, the depends edges and references records,
-// less the depends edges a cycle of the classified set demoted, and this
-// run's ask records.
+// and this run's ask records.
 type classification struct {
 	relations map[pair]Relation
 	outcomes  map[pair]string
 	edges     []pair
 	refs      []pair
-	demoted   []pair
 	asked     []asks.GroupRecord
 }
 
@@ -72,6 +71,13 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		bySource[c.source.ID] = append(bySource[c.source.ID], c)
 	}
 	slices.Sort(sources)
+	save := func() error {
+		rec.Candidates = rec.Candidates[:0]
+		for _, e := range entries {
+			rec.Candidates = append(rec.Candidates, e)
+		}
+		return WriteClassification(repoRoot, rec)
+	}
 	pendingOf := map[string][]candidate{}
 	for _, s := range sources {
 		for _, c := range bySource[s] {
@@ -123,11 +129,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 				return out, err
 			}
 		}
-		rec.Candidates = rec.Candidates[:0]
-		for _, e := range entries {
-			rec.Candidates = append(rec.Candidates, e)
-		}
-		if err := WriteClassification(repoRoot, rec); err != nil {
+		if err := save(); err != nil {
 			return out, err
 		}
 	}
@@ -141,7 +143,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		}
 		out.relations[c.pair()], out.outcomes[c.pair()] = rel, e.Outcome
 	}
-	out.edges, out.refs, out.demoted = writtenRecords(candidates, out.relations)
+	out.edges, out.refs = writtenRecords(candidates, out.relations)
 	return out, nil
 }
 
@@ -185,34 +187,25 @@ func pageLines(t *Tree, document string) []string {
 	return kb.SplitLines(unquote(stripMarkers(t.Documents[document].Text)))
 }
 
-// cutEdges is every references record the build's cycle breaking cut from
-// depends, with its origin: an edge a cycle of the classified set demoted,
-// and a containment-directed pair a ring demoted that took its drafted
-// mention rather than a letter. Its origin is inferred where the unmarked
-// record answered the pair yes, cited otherwise.
-func cutEdges(ring []pair, c classification, unmarkedYes []pair) map[pair]string {
-	out := map[pair]string{}
-	cut := func(p pair) {
-		out[p] = kb.OriginCited
-		if slices.Contains(unmarkedYes, p) {
-			out[p] = kb.OriginInferred
-		}
-	}
-	for _, p := range c.demoted {
-		cut(p)
-	}
-	for _, p := range ring {
-		if c.relations[p] == MentionedBy && (c.outcomes[p] == ClassifyDrafted || c.outcomes[p] == ClassifyDefaulted) {
-			cut(p)
-		}
-	}
-	return out
+// pageBody is pageLines with the index of the first line of the body, below
+// the frontmatter and the up-link line.
+func pageBody(t *Tree, document string) (lines []string, first int) {
+	page := unquote(stripMarkers(t.Documents[document].Text))
+	return kb.SplitLines(page), bodyStart(page)
 }
 
-// writtenRecords is the depends edges, references records and cycle-demoted
-// edges the classified candidates write: every depends edge on a cycle is
-// demoted, so what remains is acyclic by construction.
-func writtenRecords(candidates []candidate, relations map[pair]Relation) (edges, refs, demoted []pair) {
+// demotedOrigin is the origin of a cut pair: inferred where the build found
+// its edge with no mark, cited otherwise.
+func demotedOrigin(p pair, inferred func(source, target string) bool) string {
+	if inferred(p.source, p.target) {
+		return kb.OriginInferred
+	}
+	return kb.OriginCited
+}
+
+// writtenRecords is the depends edges and references records the classified
+// candidates write, each sorted and deduplicated. The edges may close cycles.
+func writtenRecords(candidates []candidate, relations map[pair]Relation) (edges, refs []pair) {
 	depends := map[pair]bool{}
 	references := map[pair]bool{}
 	for _, c := range candidates {
@@ -222,23 +215,5 @@ func writtenRecords(candidates []candidate, relations map[pair]Relation) (edges,
 			references[p] = true
 		}
 	}
-	var all []pair
-	for p := range depends {
-		all = append(all, p)
-	}
-	slices.SortFunc(all, comparePairs)
-	demoted = cycleEdges(all)
-	for _, p := range all {
-		if !slices.Contains(demoted, p) {
-			edges = append(edges, p)
-		}
-	}
-	for _, p := range demoted {
-		references[p] = true
-	}
-	for p := range references {
-		refs = append(refs, p)
-	}
-	slices.SortFunc(refs, comparePairs)
-	return edges, refs, demoted
+	return slices.SortedFunc(maps.Keys(depends), comparePairs), slices.SortedFunc(maps.Keys(references), comparePairs)
 }

@@ -31,7 +31,8 @@ import (
 func TestResolveStage(t *testing.T) {
 	for name, want := range map[string]string{
 		"phase-3a": "phase-3a", "  Validation   Gate ": "phase-3a", "DEPENDS-ATTRIBUTED": "depends-attributed",
-		"claim discovery": "claims-discovered",
+		"claim discovery":         "claims-discovered",
+		"co-linear claims culled": "claims-culled",
 	} {
 		if s, ok := ResolveStage(name); !ok || s.ID != want {
 			t.Errorf("ResolveStage(%q) = %v, %t; want %s", name, s, ok, want)
@@ -49,8 +50,8 @@ func TestDroppedRowsFollowInference(t *testing.T) {
 			dropped = append(dropped, r.id)
 		}
 	}
-	if strings.Join(dropped, ",") != "discover.build,unmarked.build,ov.docs" {
-		t.Errorf("rows dropped under --no-inference = %q, want the three that spend it", dropped)
+	if strings.Join(dropped, ",") != "discover.build,unmarked.build,cull.build,ov.docs" {
+		t.Errorf("rows dropped under --no-inference = %q, want the four that spend it", dropped)
 	}
 }
 
@@ -323,7 +324,7 @@ func TestBuildEndToEnd(t *testing.T) {
 			t.Errorf("%s body = %q, want it to record the one volume root and no bibliography", s, bodies[s])
 		}
 	}
-	for _, s := range []string{"claims-discovered", "references-found", "overview-drafted"} {
+	for _, s := range []string{"claims-discovered", "references-found", "claims-culled", "overview-drafted"} {
 		if !strings.HasPrefix(bodies[s], "--no-inference: ") {
 			t.Errorf("%s body = %q, want the dropped rows named", s, bodies[s])
 		}
@@ -331,6 +332,9 @@ func TestBuildEndToEnd(t *testing.T) {
 	files := snapshot(t, f.repo)
 	if want := "\nplanned: null\npairs: []\n"; !strings.HasSuffix(files[buildrecords.UnmarkedFile], want) {
 		t.Errorf("%s = %q, want it as the declared pass wrote it, ending %q", buildrecords.UnmarkedFile, files[buildrecords.UnmarkedFile], want)
+	}
+	if want := "\nentries: []\nculls: []\nlinks: []\n"; !strings.HasSuffix(files[buildrecords.CullFile], want) {
+		t.Errorf("%s = %q, want it as the declared pass wrote it, ending %q", buildrecords.CullFile, files[buildrecords.CullFile], want)
 	}
 	if files["kb-root/CLAUDE.md"] != "@AGENTS.md\n" {
 		t.Errorf("CLAUDE.md = %q, want exactly the redirect", files["kb-root/CLAUDE.md"])
@@ -927,6 +931,37 @@ func TestResumeWithOtherInputsRefused(t *testing.T) {
 	}
 }
 
+// TestTrailOutOfOrderRefused: a trail recording a stage past one it leaves
+// unrecorded was written by a build walking another stage order, and a resume
+// over it is refused before anything is restored.
+func TestTrailOutOfOrderRefused(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "references-found"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	if _, err := f.ledger(t).Record("depends-attributed", "dependency attribution", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "a hand edit\n")
+	before := snapshot(t, f.repo)
+
+	opts.Through = ""
+	outcome, fields := f.build(t, opts)
+	items, _ := field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkTrail || items[0].Path != f.ledger(t).Root ||
+		!strings.Contains(items[0].Detail, "depends-attributed") || !strings.Contains(items[0].Detail, "claims-culled") {
+		t.Fatalf("a resume over an out-of-order trail = %s %+v, want refused naming both stages", outcome, items)
+	}
+	if restored := field(fields, "restored"); restored != nil {
+		t.Errorf("the refusal restored %v", restored)
+	}
+	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
+		t.Errorf("the refusal touched the owned paths")
+	}
+}
+
 // TestResumeCarriesEveryLaunchFlag: the resume command restates the charter,
 // the bibliographies, --no-inference, the store and the configuration
 // directory, and leaves the bound off.
@@ -1115,6 +1150,9 @@ func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 					return tc.replies[len(asked)-1], nil
 				},
 			}
+			// The digest predicate reads the claims stream; this fixture
+			// carries none, and a one-volume KB is the shape it must give.
+			writeFile(t, filepath.Join(kbRoot, kb.IndexDir, "claims.yaml"), "")
 			_, err := overview(w)
 			if (err == nil) != tc.ok {
 				t.Fatalf("overview = %v, want ok %t", err, tc.ok)

@@ -159,20 +159,31 @@ func TestWithoutInputs(t *testing.T) {
 	}
 }
 
+// kbaseOnlyStages are the stage ids kbase walks and kb_tools never had; the
+// comparisons against kb_tools set them aside.
+var kbaseOnlyStages = []string{"claims-culled"}
+
 // ledgerCheck compares the two ledgers boundary by boundary: the stages
 // recorded, in order, and each one's body, which names the rows the stage
-// dropped; kbase's trailing build inputs are set aside.
+// dropped; kbase's kbase-only boundaries are set aside, and both ledgers'
+// trailing build inputs.
 func ledgerCheck(kbasePath, kbtoolsPath string) check {
-	a, err := ledgerEntries(kbasePath)
+	entries, err := ledgerEntries(kbasePath)
 	if err != nil {
 		return newCheck("ledger", []string{err.Error()})
 	}
-	for i := range a {
-		a[i] = withoutInputs(a[i])
+	var a []string
+	for i, stage := range ledgerStages(entries) {
+		if !slices.Contains(kbaseOnlyStages, stage) {
+			a = append(a, withoutInputs(entries[i]))
+		}
 	}
 	b, err := ledgerEntries(kbtoolsPath)
 	if err != nil {
 		return newCheck("ledger", []string{err.Error()})
+	}
+	for i := range b {
+		b[i] = withoutInputs(b[i])
 	}
 	var diffs []string
 	for i := range max(len(a), len(b)) {
@@ -188,12 +199,13 @@ func ledgerCheck(kbasePath, kbtoolsPath string) check {
 		}
 	}
 	c := newCheck("ledger: stages recorded and the rows each dropped", diffs)
-	c.Detail = fmt.Sprintf("kbase %d boundaries, kb_tools %d", len(a), len(b))
+	c.Detail = fmt.Sprintf("kbase %d boundaries (%d kbase-only set aside), kb_tools %d", len(a), len(entries)-len(a), len(b))
 	return c
 }
 
 // statusCheck reads kbase status's stages against kb_tools': the vocabulary
-// in order, and the stages recorded as kb_tools' ledger records them.
+// in order, and the stages recorded as kb_tools' ledger records them; kbase's
+// kbase-only stages are set aside.
 func statusCheck(statusPath, stageIDsPath, ledgerPath string) check {
 	var doc struct {
 		Stages []struct {
@@ -217,7 +229,12 @@ func statusCheck(statusPath, stageIDsPath, ledgerPath string) check {
 		return newCheck("status stages", []string{err.Error()})
 	}
 	var listed, recorded []string
+	setAside := 0
 	for _, s := range doc.Stages {
+		if slices.Contains(kbaseOnlyStages, s.Stage) {
+			setAside++
+			continue
+		}
 		listed = append(listed, s.Stage)
 		if s.Commit != nil {
 			recorded = append(recorded, s.Stage)
@@ -231,7 +248,7 @@ func statusCheck(statusPath, stageIDsPath, ledgerPath string) check {
 		diffs = append(diffs, fmt.Sprintf("status records %q; kb_tools' ledger records %q", recorded, want))
 	}
 	c := newCheck("status stages against kb_tools' vocabulary and ledger", diffs)
-	c.Detail = fmt.Sprintf("%d stages listed, %d recorded", len(listed), len(recorded))
+	c.Detail = fmt.Sprintf("%d stages listed, %d recorded (%d kbase-only set aside)", len(listed), len(recorded), setAside)
 	return c
 }
 

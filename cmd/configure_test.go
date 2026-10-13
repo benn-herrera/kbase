@@ -17,8 +17,9 @@ import (
 // Model ids the fixtures configure with — one per tier, in the provider
 // spellings the matcher must tolerate.
 const (
-	denseID = "google/gemma-4-31b-it"
-	moeID   = "gemma4:31b-a4b"
+	decisionID = "clef"
+	textID     = "Qwen3.8-27B"
+	otherText  = "deepseek-v4.1"
 )
 
 // configureResult is what one runConfigure invocation produced: its result
@@ -93,45 +94,6 @@ func soloOpts() configureOptions {
 	return configureOptions{providerOptions: providerOptions{Providers: soloPool()}}
 }
 
-// TestRunConfigureAutoDetect is the max-convenience default: one gemma-4
-// dense and one MoE in the catalogue resolve both tiers with no flags, and
-// the resolved ids land in config.toml.
-func TestRunConfigureAutoDetect(t *testing.T) {
-	got := runConfig(t, soloOpts(),
-		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", denseID, moeID, "gemma-3-27b-it")))
-
-	if got.code != 0 || got.doc.Outcome != "done" {
-		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
-	}
-	cfg, written := got.config(t)
-	if !written {
-		t.Fatal("no config.toml written on success")
-	}
-	want := config.Config{Provider: "solo", Models: config.ModelMap{Heavy: denseID, Light: moeID}}
-	if cfg != want {
-		t.Errorf("config.toml = %+v, want %+v", cfg, want)
-	}
-	models, _ := got.doc.Values["models"].(map[string]any)
-	if got.doc.Values["provider"] != "solo" || models["heavy"] != denseID || models["light"] != moeID ||
-		!slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(got.dir)}) {
-		t.Errorf("result = %v, want the provider, both tiers and config.toml written", got.doc.Values)
-	}
-	again := runConfig(t, configureOptions{providerOptions: providerOptions{Providers: soloPool()}, ConfigPath: config.ConfigPath(got.dir)},
-		model.NewScriptedMock(nil, catalogue(denseID, moeID)))
-	if again.code != 0 || again.doc.Outcome != "unchanged" || len(anyStrings(again.doc.Values["written"])) != 0 {
-		t.Errorf("a second configure to the same values = %s, written %v; want unchanged with nothing written", again.doc.Outcome, again.doc.Values["written"])
-	}
-	for _, want := range []string{"configured:", "provider=solo",
-		config.TierHeavy + "=" + denseID, config.TierLight + "=" + moeID, config.ConfigPath(got.dir)} {
-		if !strings.Contains(got.stderr, want) {
-			t.Errorf("stderr: got %q, want it to report %q", got.stderr, want)
-		}
-	}
-	if strings.Contains(got.stderr, testAPIKey) {
-		t.Error("API key leaked into stderr")
-	}
-}
-
 // anyStrings is a decoded YAML list of strings.
 func anyStrings(v any) []string {
 	list, _ := v.([]any)
@@ -143,90 +105,68 @@ func anyStrings(v any) []string {
 	return out
 }
 
-// TestRunConfigureAmbiguous: two dense candidates is the case the
-// appliance must refuse. The refusal names the tier's key, lists both, and
-// gives the flag that settles it — and nothing is written.
-func TestRunConfigureAmbiguous(t *testing.T) {
-	const otherDense = "gemma-4-31b-instruct"
-	got := runConfig(t, soloOpts(),
-		model.NewScriptedMock(nil, catalogue(denseID, otherDense, moeID)))
+// TestRunConfigureRefusesUnassignedTiers: no tier is guessed — a tier
+// --model-map does not name is refused, one item per missing tier naming its
+// models.<tier> key, listing the provider's catalogue as the choices, and
+// nothing is written.
+func TestRunConfigureRefusesUnassignedTiers(t *testing.T) {
+	ids := []string{"text-embedding-3-large", decisionID, textID, "mistral-small-3"}
 
-	item := got.refusal(t)
-	if item["key"] != "models.heavy" || !slices.Equal(anyStrings(item["allowed"]), []string{otherDense, denseID}) ||
-		item["remedy"] != "kbase configure --model-map heavy=<id>" || !strings.Contains(item["detail"].(string), "heavy tier is ambiguous") {
-		t.Errorf("refusal = %v, want models.heavy with both candidates allowed", item)
-	}
-	if _, written := got.config(t); written {
-		t.Error("config.toml written despite an ambiguity failure")
-	}
-}
-
-// TestRunConfigureNoMatch: a provider with no gemma-4 model of a tier is
-// refused, offering the family members whose tier went unrecognized as the
-// likeliest intended targets, or the whole catalogue where there are none.
-func TestRunConfigureNoMatch(t *testing.T) {
-	const familyNoTier = "gemma-4-9b"
-	got := runConfig(t, soloOpts(),
-		model.NewScriptedMock(nil, catalogue("text-embedding-3-large", familyNoTier, "gemma-3-27b-it")))
-
+	got := runConfig(t, soloOpts(), model.NewScriptedMock(nil, catalogue(ids...)))
 	items := got.doc.items("refusals")
 	if got.code != 1 || len(items) != 2 {
-		t.Fatalf("exit %d, refusals %v: want one per undetected tier", got.code, items)
+		t.Fatalf("no --model-map: exit %d, refusals %v: want one item per tier", got.code, items)
 	}
 	for i, tier := range configureTiers {
-		if items[i]["key"] != "models."+tier || !slices.Equal(anyStrings(items[i]["allowed"]), []string{familyNoTier}) ||
-			!strings.Contains(items[i]["detail"].(string), "no gemma-4 "+tier+"-tier model detected") {
-			t.Errorf("refusal %d = %v, want models.%s offering %s", i, items[i], tier, familyNoTier)
+		if items[i]["key"] != "models."+tier || !slices.Equal(anyStrings(items[i]["allowed"]), sortedStrings(ids)) ||
+			items[i]["remedy"] != "kbase configure --model-map "+tier+"=<id>" ||
+			!strings.Contains(items[i]["detail"].(string), "no model assigned to the "+tier+" tier") {
+			t.Errorf("refusal %d = %v, want models.%s offering the catalogue", i, items[i], tier)
 		}
 	}
-	none := runConfig(t, soloOpts(), model.NewScriptedMock(nil, catalogue("text-embedding-3-large", "gemma-3-27b-it")))
-	if items := none.doc.items("refusals"); len(items) != 2 || !slices.Equal(anyStrings(items[0]["allowed"]), []string{"gemma-3-27b-it", "text-embedding-3-large"}) {
-		t.Errorf("refusals = %v, want the whole catalogue offered where no gemma-4 model is", items)
-	}
 	if _, written := got.config(t); written {
-		t.Error("config.toml written despite a no-match failure")
+		t.Error("config.toml written despite unassigned tiers")
+	}
+
+	opts := soloOpts()
+	opts.ModelMap = []string{"decision=" + decisionID}
+	partial := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(ids...)))
+	item := partial.refusal(t)
+	if item["key"] != "models.text" || !slices.Equal(anyStrings(item["allowed"]), sortedStrings(ids)) ||
+		item["remedy"] != "kbase configure --model-map text=<id>" {
+		t.Errorf("partial-map refusal = %v, want the missing text tier with the catalogue allowed", item)
+	}
+	if _, written := partial.config(t); written {
+		t.Error("config.toml written despite a partially assigned map")
 	}
 }
 
-// TestRunConfigureModelMapOverrides: an explicit assignment wins over
-// detection, and a partial map leaves the tiers it does not name to be
-// detected. Both forms of the flag — repeated and comma-separated — mean
-// the same thing.
-func TestRunConfigureModelMapOverrides(t *testing.T) {
-	const pinned = "some-org/gemma-4-31b-it-q4"
+// sortedStrings is a decoded refusal's `allowed` list in the order it is
+// written: sorted ascending.
+func sortedStrings(values []string) []string {
+	out := append([]string{}, values...)
+	slices.Sort(out)
+	return out
+}
+
+// TestRunConfigureModelMapAssignsBoth: a full map is the only accepted form.
+// Both flag spellings — repeated and comma-separated — mean the same thing,
+// and the resolved ids land in config.toml with the result naming each tier.
+func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
+	const pinned = "some-org/clef-flash-q4"
 
 	tests := []struct {
-		name       string
-		modelMap   []string
-		ids        []string
-		wantHeavy  string
-		wantLight  string
-		wantStderr string // substring expected on stderr, "" for none
+		name     string
+		modelMap []string
+		ids      []string
 	}{{
-		name:      "full map beats an ambiguous catalogue",
-		modelMap:  []string{"heavy=" + pinned + ",light=" + moeID},
-		ids:       []string{denseID, pinned, moeID},
-		wantHeavy: pinned,
-		wantLight: moeID,
+		name:     "one comma-separated value",
+		modelMap: []string{"decision=" + pinned + ",text=" + textID},
+		ids:      []string{decisionID, textID, otherText},
 	}, {
-		name:      "repeated flag is the same as one comma-separated value",
-		modelMap:  []string{"heavy=" + pinned, "light=" + moeID},
-		ids:       []string{denseID, pinned, moeID},
-		wantHeavy: pinned,
-		wantLight: moeID,
-	}, {
-		name:      "partial map: light is still auto-detected",
-		modelMap:  []string{"heavy=" + pinned},
-		ids:       []string{pinned, moeID},
-		wantHeavy: pinned,
-		wantLight: moeID,
-	}, {
-		name:       "a mapped id the catalogue omits warns and proceeds",
-		modelMap:   []string{"heavy=gemma-4-31b-preview"},
-		ids:        []string{moeID},
-		wantHeavy:  "gemma-4-31b-preview",
-		wantLight:  moeID,
-		wantStderr: `heavy tier model "gemma-4-31b-preview" is not in provider "solo"'s catalogue`,
+		name:     "repeated flag",
+		modelMap: []string{"decision=" + pinned, "text=" + textID},
+		ids:      []string{decisionID, textID, otherText},
 	}}
 
 	for _, tt := range tests {
@@ -235,20 +175,54 @@ func TestRunConfigureModelMapOverrides(t *testing.T) {
 			opts.ModelMap = tt.modelMap
 			got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(tt.ids...)))
 
-			if got.code != 0 {
+			if got.code != 0 || got.doc.Outcome != "done" {
 				t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 			}
 			cfg, written := got.config(t)
 			if !written {
 				t.Fatal("no config.toml written on success")
 			}
-			if cfg.Models.Heavy != tt.wantHeavy || cfg.Models.Light != tt.wantLight {
-				t.Errorf("models = %+v, want heavy=%q light=%q", cfg.Models, tt.wantHeavy, tt.wantLight)
+			want := config.Config{Provider: "solo", Models: config.ModelMap{Decision: pinned, Text: textID}}
+			if cfg != want {
+				t.Errorf("config.toml = %+v, want %+v", cfg, want)
 			}
-			if tt.wantStderr != "" && !strings.Contains(got.stderr, tt.wantStderr) {
-				t.Errorf("stderr: got %q, want substring %q", got.stderr, tt.wantStderr)
+			models, _ := got.doc.Values["models"].(map[string]any)
+			if got.doc.Values["provider"] != "solo" || models["decision"] != pinned || models["text"] != textID ||
+				!slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(got.dir)}) {
+				t.Errorf("result = %v, want the provider, both tiers and config.toml written", got.doc.Values)
+			}
+			for _, want := range []string{"configured:", "provider=solo",
+				config.TierDecision + "=" + pinned, config.TierText + "=" + textID, config.ConfigPath(got.dir)} {
+				if !strings.Contains(got.stderr, want) {
+					t.Errorf("stderr: got %q, want it to report %q", got.stderr, want)
+				}
+			}
+			if strings.Contains(got.stderr, testAPIKey) {
+				t.Error("API key leaked into stderr")
+			}
+			again := runConfig(t, configureOptions{providerOptions: providerOptions{Providers: soloPool()}, ConfigPath: config.ConfigPath(got.dir), ModelMap: tt.modelMap},
+				model.NewScriptedMock(nil, catalogue(tt.ids...)))
+			if again.code != 0 || again.doc.Outcome != "unchanged" || len(anyStrings(again.doc.Values["written"])) != 0 {
+				t.Errorf("a second configure to the same values = %s, written %v; want unchanged with nothing written", again.doc.Outcome, again.doc.Values["written"])
 			}
 		})
+	}
+}
+
+// TestRunConfigureUnlistedMappedIDWarns: a mapped id the catalogue omits is
+// a warning on stderr, not a failure — provider catalogues rotate, and a
+// user pinning one the listing omits may know something the listing does
+// not.
+func TestRunConfigureUnlistedMappedIDWarns(t *testing.T) {
+	opts := soloOpts()
+	opts.ModelMap = []string{"decision=clef-preview", "text=" + textID}
+	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(textID)))
+
+	if got.code != 0 {
+		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
+	}
+	if want := `decision tier model "clef-preview" is not in provider "solo"'s catalogue — configuring it anyway`; !strings.Contains(got.stderr, want) {
+		t.Errorf("stderr: got %q, want substring %q", got.stderr, want)
 	}
 }
 
@@ -258,7 +232,8 @@ func TestRunConfigureCreatesConfigDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "kbase")
 	opts := soloOpts()
 	opts.ConfigPath = config.ConfigPath(dir)
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(denseID, moeID))); got.code != 0 {
+	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 	if _, err := os.Stat(config.ConfigPath(dir)); err != nil {
@@ -268,7 +243,7 @@ func TestRunConfigureCreatesConfigDir(t *testing.T) {
 
 // TestRunConfigureKeepsHandEdits: config.toml is a file users annotate, and
 // `kbase configure` is the command that rewrites it. It must land the
-// detected ids without disturbing anything around them.
+// assigned ids without disturbing anything around them.
 func TestRunConfigureKeepsHandEdits(t *testing.T) {
 	dir := t.TempDir()
 	path := config.ConfigPath(dir)
@@ -279,7 +254,8 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 
 	opts := soloOpts()
 	opts.ConfigPath = path
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(denseID, moeID))); got.code != 0 {
+	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 
@@ -294,8 +270,8 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Models.Heavy != denseID || cfg.Models.Light != moeID {
-		t.Errorf("models = %+v, want heavy=%q light=%q", cfg.Models, denseID, moeID)
+	if cfg.Models.Decision != decisionID || cfg.Models.Text != textID {
+		t.Errorf("models = %+v, want decision=%q text=%q", cfg.Models, decisionID, textID)
 	}
 }
 
@@ -303,10 +279,12 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 // previous configuration outliving a failed run is the whole reason the
 // write is the last step.
 func TestRunConfigureListFailure(t *testing.T) {
-	client := model.NewScriptedMock(nil, catalogue(denseID, moeID))
+	client := model.NewScriptedMock(nil, catalogue(decisionID, textID))
 	client.SetError(errors.New("http 503: service unavailable"))
 
-	got := runConfig(t, soloOpts(), client)
+	opts := soloOpts()
+	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	got := runConfig(t, opts, client)
 
 	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
 		t.Fatalf("list failure: exit %d, failures %v; want it reported failed", got.code, failures)
@@ -322,10 +300,10 @@ func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
 	// The client seam is the network: a factory that fails the test is how
 	// "no round trip" becomes an assertion rather than a claim.
 	opts := soloOpts()
-	opts.ModelMap = []string{"heavy"}
+	opts.ModelMap = []string{"decision"}
 	opts.NewClient = func(model.Endpoint) model.Client {
 		t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
-		return model.NewScriptedMock(nil, catalogue(denseID, moeID))
+		return model.NewScriptedMock(nil, catalogue(decisionID, textID))
 	}
 
 	got := runConfig(t, opts, nil)
@@ -351,27 +329,27 @@ func TestParseModelMap(t *testing.T) {
 		want:   map[string]string{},
 	}, {
 		name:   "comma-separated pair",
-		values: []string{"heavy=h,light=l"},
-		want:   map[string]string{config.TierHeavy: "h", config.TierLight: "l"},
+		values: []string{"decision=d,text=t"},
+		want:   map[string]string{config.TierDecision: "d", config.TierText: "t"},
 	}, {
 		name:   "repeated flag accumulates",
-		values: []string{"heavy=h", "light=l"},
-		want:   map[string]string{config.TierHeavy: "h", config.TierLight: "l"},
+		values: []string{"decision=d", "text=t"},
+		want:   map[string]string{config.TierDecision: "d", config.TierText: "t"},
 	}, {
 		name:   "surrounding space and tier case are tolerated",
-		values: []string{" HEAVY = h , light=l "},
-		want:   map[string]string{config.TierHeavy: "h", config.TierLight: "l"},
+		values: []string{" DECISION = d , text=t "},
+		want:   map[string]string{config.TierDecision: "d", config.TierText: "t"},
 	}, {
 		name:   "repeating one tier with the same id is not a conflict",
-		values: []string{"heavy=h", "heavy=h"},
-		want:   map[string]string{config.TierHeavy: "h"},
+		values: []string{"decision=d", "decision=d"},
+		want:   map[string]string{config.TierDecision: "d"},
 	}, {
 		name:    "no assignment",
-		values:  []string{"heavy"},
+		values:  []string{"decision"},
 		wantErr: "malformed --model-map entry",
 	}, {
 		name:    "missing id",
-		values:  []string{"heavy="},
+		values:  []string{"decision="},
 		wantErr: "malformed --model-map entry",
 	}, {
 		name:    "unknown tier",
@@ -379,8 +357,8 @@ func TestParseModelMap(t *testing.T) {
 		wantErr: `unknown tier "medium"`,
 	}, {
 		name:    "conflicting assignments to one tier",
-		values:  []string{"heavy=a,heavy=b"},
-		wantErr: "assigns the heavy tier twice",
+		values:  []string{"decision=a,decision=b"},
+		wantErr: "assigns the decision tier twice",
 	}}
 
 	for _, tt := range tests {

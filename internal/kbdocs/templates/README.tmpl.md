@@ -31,11 +31,8 @@ keeps its origin, cited or inferred, and nothing rests on it either.
 
 [`claim-graph.svg`](claim-graph.svg) beside this file is rendered from `.index/` by refresh and
 authored by nobody — read it, never edit it. It draws every volume as a cluster.
-[`claim-graph-digest.svg`](claim-graph-digest.svg) beside it is rendered the same way and draws one
-box per volume, linked to that volume's index and sheet, with the edges between volumes counted by
-how they were found; each of the two links to the other. `<volume>/claim-graph.svg` beside each volume's
-`index.md` shows that volume and every node one edge from it. The digest and the volume sheets exist
-only where the KB holds two or more volumes with claims; a one-volume KB has only `claim-graph.svg`.
+{digest-chunk}`<volume>/claim-graph.svg` beside each volume's `index.md` shows that volume and every
+node one edge from it.
 A sheet draws premise relations only:
 no `references` edge, and every `demoted` one as a cut. Of the drawn `depends` edges only the transitive reduction
 appears, so a missing stroke is not a missing edge — `.index/` carries every edge. An edge is black

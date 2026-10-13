@@ -25,10 +25,9 @@ harness that speaks MCP.
   `UPLINK_MARKER`), the cross-reference anchor form, the `` ``` math `` fence, the citation span,
   and the labelled blockquote (kb_tools SPEC, "The Document-Tree Contract", points 3, 7, 9, 10, 12).
 
-kbase builds exactly what kb_tools builds. Input is LaTeX only; no other input format is in scope.
-Two consumers use the binary: a person at a shell, and personant (a sibling Go project) whose model
-calls kbase subcommands as builtin tools. kbase is personant's peer; personant's rules govern
-personant.
+kbase builds is an upstream project for kb_tools. What we build, it builds. To keep this true we
+provide handoffs for that project as we change this one. Input is LaTeX only; no other input format
+is in scope.
 
 ---
 
@@ -36,7 +35,7 @@ personant.
 
 | Interface | Observed version | Contract |
 |---|---|---|
-| kb_tools (reference implementation) | adjagent `dev` at `35fa6cb326f811910dc027249482e47b22d50c3e`, the clone at `.claude/adjagent/` from which this repository's agent set is installed | Every kb_tools citation in this repository's documents names this commit and is read from `.claude/adjagent/kb_tools/`. Sections cited below are kb_tools' SPEC unless noted. |
+| kb_tools (reference implementation) | adjagent `main` at `5a290afab53a9742b89db8e623880e5faa5d5bda`, the clone at `.claude/adjagent/` from which this repository's agent set is installed | Every kb_tools citation in this repository's documents names this commit and is read from `.claude/adjagent/kb_tools/`. Sections cited below are kb_tools' SPEC unless noted. |
 | pandoc | 3.12 (`pandoc-api-version` 1.23.1.2) | Required on the host, not shipped. |
 | Graphviz `dot` | Any version | Optional on the host, found on `PATH`, not shipped. Draws the claim-graph sheets (§3); absent, `refresh` writes the placeholder at the root only and `render-claim-graph` says so (§3, §7). |
 | git | 2.56.0 | Required on the host. The recoverable record of a build (§6). |
@@ -137,19 +136,22 @@ only against the edges still kept. Of `depends` edges sharing a source and targe
 whatever their contexts.
 
 - *Edges*: `depends` edges are **cited**, black solid, where the paper's text marks the dependency,
-  or **inferred**, blue dashed, where the build found it with no mark (the unmarked-reference stage,
-  ARCHITECTURE §4). Of the build records beside `kb-root/` the sheet reads only the unmarked record,
-  for that distinction. `strengthens`, `supports` and `rests-on` edges are each drawn in a style of
-  their own, beside them. A **cut**, read from the index's `demoted` rows, is drawn dotted red,
-  heavier where its origin is `cited` (or absent) than where it is `inferred`; its tooltip names the
-  origin (`cut, cited`, `cut, inferred`), and the digest counts cuts by origin (`1 cited cut`) and
-  draws a bundle of cuts at the cited weight. Both origins share one legend row, "cut from depends:
-  part of a circle (cited / inferred)".
+  or **inferred**, blue dashed, where the build found it with no mark. An edge source → target was
+  found with no mark where the unmarked record answers (source, target) yes in that direction, or
+  where the cull record's `links` hold its pair either way round (§6). Of the build records beside
+  `kb-root/` the sheet reads only the unmarked record and the cull record's links, for that
+  distinction; an absent record finds nothing. `strengthens`, `supports` and `rests-on` edges are
+  each drawn in a style of their own, beside them. A **cut**, read from the index's `demoted` rows,
+  is drawn dotted red, heavier where its origin is `cited` (or absent) than where it is `inferred`;
+  its tooltip names the origin (`cut, cited`, `cut, inferred`), and the digest counts cuts by origin
+  (`1 cited cut`) and draws a bundle of cuts at the cited weight. Both origins share one legend row,
+  "cut from depends: part of a circle (cited / inferred)".
 - *Nodes by kind*, eight, each with its own mark: a labelled block (bold frame), an equation, prose,
   a support (dashed rounded), an experiment (component shape), an invariant and an axiom (grey, bold
   frame), a work (note). An edge end that no record carries is drawn as a ghost box, dashed red,
   labelled with the id. Claims and supports are filled by solidity band, `*pending*` in grey. A
-  node's tooltip reads `<id> [<kind>, <band>] <title>`.
+  node's tooltip reads `<id> [<kind>, <band>] <title>`, every backslash in it shown as written
+  (`$\Gamma$` does not become the graph's name).
 - *Links*: every node links to its register entry; a digest box links to the volume's index and
   sheet.
 - A legend. The SVG root is `width="100%"` with a `viewBox`, so it scales to the viewer.
@@ -175,11 +177,14 @@ there is a defect. Build-orchestration differences are the "Not ported" list in 
 | Build-state location | Outside the worktree (§6) | kb_tools' own run directory |
 | Stamped KB documents (`AGENTS.md`, `CONVENTIONS.md`, `README.md`) | Give the maintenance commands for both toolchains: kbase's subcommands and kb_tools' `kb_util` ops | Give kb_tools' only |
 | Tool results | YAML documents (§7) | `[kb-write] STATUS` report lines |
-| Inference endpoint variables | `KBASE_API_BASE_URL`, `KBASE_MODEL`, `KBASE_API_KEY_FILE` (§9), beside the configuration files; a cleartext key is a one-line warning | `API_BASE_URL`, `MODEL`, `API_KEY_FILE`, the environment alone, with `ALLOW_HTTP` gating plaintext (kb_tools SPEC, "The Driver's Contract") |
+| Inference endpoint variables | `KBASE_API_BASE_URL`, `KBASE_DECISION`, `KBASE_TEXT`, `KBASE_API_KEY_FILE` (§9), beside the configuration files; a cleartext key is a one-line warning | `API_BASE_URL`, `MODEL`, `API_KEY_FILE`, the environment alone, with `ALLOW_HTTP` gating plaintext (kb_tools SPEC, "The Driver's Contract") |
 | Re-issued insert | Adopts the existing entry of the same register and title, reports `unchanged` and names any field whose value differs; a work whose key is already keyed likewise `unchanged` (§8, idempotence) | A claim or support insert mints a second entry under the same title; a work re-insert is refused (7) |
 | Query paging | A list query returns at most `--limit` results (default in ARCHITECTURE §12; `0` means all) from `--offset`, reporting `count` and `truncated` (§7) | Every result, always |
 | Tool surface | The subcommands, and the same operations over MCP (§11) | The `kb_util` ops at a shell |
-| Build inputs on the trail | Every boundary's body ends with the build's inputs (§6); a resume given other inputs is refused (§5) | Its bodies carry none, until it adopts, which closes this row |
+| Unmarked-reference shortlist | Claims consecutive in one leaf's claim order are linked by rule, unasked (adjacency links). The shortlist offers every source its proximity slots, its nearest targets within its own paper, then its wildcard slots, its best targets anywhere by cosine less the proximity picks; the slot counts are in ARCHITECTURE §12, and a proximity slot its paper cannot fill stays empty. No pool holds a marked pair or an adjacency link. Each source's shortlist is its own, so a pair both ends pick is asked both ways, and a yes in either direction makes one undirected link | Offers the best five of all kinds by cosine, each an ordered pair, and makes no adjacency link, until it adopts, which closes this row |
+| Cycle breaking | Cuts every `depends` edge lying on a cycle once dependency attribution has written its edges (§5), and nowhere else: a containment-directed pair on a ring is drafted *supported by* like any other. A cut's origin follows §3's rule, which also reads the cull record's `links` either way round (§10) | Drafts a containment-directed pair on a ring *mention*, and cuts each ring of the classified edges; a cut's origin reads the unmarked record alone, in the yes's direction, until it adopts, which closes this row |
+| The `claims-culled` stage | Walks the stage between `references-found` and `depends-attributed` (§5), so a KB can lack prose claim nodes the stage judged to state no step a linked claim does not, hold leaves restated no-claim with a fixed reason, and be accompanied by the cull record (§6), whose `links` the sheet reads for provenance (§3) | Has no such stage: its KB keeps every claim node the earlier stages left, until it adopts, which closes this row |
+| Write-op surface | Three public ops, `drop-claim-edges`, `drop-inbound-edges` and `drop-claim-node` (§8), and one build-only op, `demote-claim-edge` (§10) | Has none of the four, until it adopts, which closes this row |
 
 ---
 
@@ -204,7 +209,11 @@ or written: one item per differing input, `check: inputs`, `key` `<volume-root>`
 run was given (the paths added and removed, or the same paths in another order), remedy "resume with
 the inputs the trail records, or start over from a commit before the trail". A finished build re-run
 with other inputs is refused so, not `unchanged`. A newest boundary that records no inputs, written
-before boundaries carried them, is not compared.
+before boundaries carried them, is not compared. A trail that records a stage while leaving an
+earlier stage in walk order unrecorded was written by a build walking another stage order, and a
+build over it is refused before anything is restored or written: one item, `check: trail`, `path`
+the repository root, `detail` naming the recorded stage and the unrecorded one before it, remedy
+"start over from a commit before the trail".
 
 **Determinism.** The same inputs and pandoc version give a byte-identical document graph: the tree
 `document-graph` writes and the records. The claim-graph stages mint fresh node ids on every build —
@@ -215,7 +224,9 @@ ids from `claims-declared` on, and no consumer may read anything into an id's va
 every stage, and states the rows it dropped. The run is a real KB built without those rows, not a
 stopped walk. Which rows drop follows kb_tools' classification (kb_tools ARCHITECTURE, "The Driver":
 `--no-inference` "drops rows and bounds nothing", `spends_inference`; SPEC, "The Driver's
-Contract").
+Contract") or, for kbase's own `claims-culled` row, the row's own flag (ARCHITECTURE §4). A row
+that spends inference in part is not dropped: its asks are skipped and the rest of the row still
+runs, as for `depends-attributed`.
 
 **`--through <stage>`** bounds the run at the named stage. A bounded run is not a failed one:
 outcome `bounded`, exit 0 (§7).
@@ -224,7 +235,9 @@ outcome `bounded`, exit 0 (§7).
 `refused`) before the first stage it walks when no provider is configured (§9), naming the
 configuration it lacks. A build spending no inference needs none. Every model call a build makes is
 one tool-less chat request answered from its prompt alone, as kb_tools (SPEC, "The Driver's
-Contract").
+Contract") — except the claim-graph letter asks, which are each one `POST <base-url>/systemone`
+request carrying a closed-set question (a `choice` or `noul` question over the offered letters) and
+answered by probabilities over that set, not by reply text (§9).
 
 **Refusals** (outcome `refused`):
 
@@ -242,19 +255,55 @@ the build continues without it and reports the file.
 **Under `--no-inference`** no `README.md` is written: the overview call is the dropped row, and the
 README is assembled around its passage, as in kb_tools.
 
-**Monitoring.** `build` runs in the foreground; personant backgrounds it. `kbase status` and `kbase
-cancel` (§6) observe and stop it.
+**Monitoring.** `build` runs in the foreground; an agent harness backgrounds it. `kbase status` and
+`kbase cancel` (§6) observe and stop it.
 
 **What a build produces** is kb_tools' output, as listed in the cited sections of §2: Markdown
 leaves; the index, up-link and cross-reference structure; load-bearing forms; claim-graph registers
 and nodes; the derived index. The build's stages and what each does are in ARCHITECTURE, "Stage
 table"; how each computes its product is ARCHITECTURE's.
 
+**Co-linearity cull (`claims-culled`).** The stage removes prose claims that state no step a linked
+claim does not. Its candidates are the links — every marked pair, every pair the unmarked-reference
+ask answered yes in either direction, and every adjacency link (§4), each unordered — with at least
+one end a prose claim. Each candidate gets one co-linearity ask, shown both claims in reading order
+and offered three answers: the second adds nothing to the first, the first adds nothing to the
+second, or each is a step of its own. An answer naming a claim as adding nothing — answered, or
+answered after a re-ask — culls it into the other, except that a block claim or an equation node is
+never culled: where the answer names one, the prose claim of the pair is culled into it instead.
+One whose ask yields no readable answer after the re-ask is recorded `defaulted` and both claims
+keep. A claim several answers cull goes into the earliest of their partners in reading order;
+following those to a claim culled into nothing gives its root. A claim whose root is not the claim
+it was culled into is asked once more against its root and kept unless that answer names it as
+adding nothing; no claim is asked a third time. A culled claim is removed — its outgoing and
+inbound edges, then its register entry, its marker and its id in every leaf's `claims`, a leaf whose
+only claim it was restated no-claim with a fixed reason — and no edge is added. The stage asks no
+direction: every inferred link that survives, one with a culled end re-pointed onto that end's root,
+goes undirected to the cull record (§6) for dependency attribution. Under `--no-inference` the stage
+is still walked with its row dropped: no ask is made and the cull record stands as the declared
+pass wrote it.
+
+**Dependency attribution (`depends-attributed`).** A captured link carries no direction; only this
+stage's ask gives it one, or rules it a mention. The candidates are every marked pair, directed as
+the text marks it, and every link of the cull record (§6) whose two claims no marked pair joins
+either way round, directed from its later claim in reading order to its earlier, an equation node
+always the target. Each candidate is asked once, offered *supported by*, *in support of* and
+*mention*, less *in support of* where containment directed the pair or its target is an equation
+node. *Supported by* writes a `depends` edge from source to target, *in support of* one from target
+to source, and *mention* a `references` edge. A candidate whose ask yields no readable answer after
+the re-ask, and every candidate under `--no-inference`, takes its draft: *supported by* where
+containment directed the pair, *mention* otherwise. The stage writes every edge its answers make,
+cycles included; last, every `depends` edge lying on a cycle is demoted (§10), before the stage's
+refresh and verify.
+
 **Records and inference.** The reader and placement facts the claim graph needs travel as records in
 the build state store, not in `kb-root/` (ARCHITECTURE, "Records"). Each inference pass is one
 closed-set decision per call under a template whose provenance the build's manifest states —
 imported from kb_tools or authored here and adopted by kb_tools (§2, reference roles) (ARCHITECTURE,
-"Inference seams"); no stage exits on a model's opinion.
+"Inference seams"); no stage exits on a model's opinion. The letter asks are each one
+`POST <base-url>/systemone` request carrying a closed-set question (`choice` or `noul`) and answered
+by probabilities over that set — no reply text is parsed; the overview call remains one tool-less
+chat request answered from its prompt alone.
 
 ---
 
@@ -266,15 +315,23 @@ with the build's inputs: a `volume-root: <path>` line per volume root, then a `b
 line per `--bibliography`, each in the order given, the path repository-relative with forward
 slashes. A commit carries `kb-root/` and the tracked build records, at the repository root:
 `kb-build-charter.md`, the node-pass record `kb-build-node-pass.yaml`, the unmarked record
-`kb-build-unmarked.yaml` and the classification record `kb-build-classification.yaml`, YAML at
-`1.0.0` (§10). Resume position is read from the commit trail. A user may reset to a stage commit and
-resume from there. Per-leaf work inside an inference stage stays uncommitted until the stage
-boundary; a resume over an interrupted stage restores the kbase-owned paths to the last stage commit
-and re-runs the stage. **A build in flight owns `kb-root/`:** a resume restores every path under it
-to the last boundary, whatever was done to it since, and nothing vets what it finds there. An edit
-made while a build is interrupted is the editor's to carry in git, by waiting for the build or by
-reverting the commit that reset it; a write op, `refresh` or `render-claim-graph` attempted while a
-build runs is refused (§8). Commits are scoped by pathspec to kbase-owned paths.
+`kb-build-unmarked.yaml`, the classification record `kb-build-classification.yaml` and the cull
+record `kb-build-cull.yaml`, YAML at `1.0.0` (§10). The cull record holds `about`; `entries`, one
+per co-linearity ask, sorted by `pass`, `a`, `b`, each with `a` and `b` (the two claim ids, `a`
+before `b` in id order), `pass` (1 or 2), `verdict` (`a-adds-nothing`, `b-adds-nothing` or
+`distinct`) and `outcome` (`answered`, `re-asked` or `defaulted`); `culls`, sorted by `id`, each
+with `id` (a culled claim) and `into` (the claim it was culled into); and `links`, sorted by `a`,
+`b`, every inferred link that survived the cull, each with `a` and `b` (id-sorted, carrying no
+direction) and `harvest` (`unmarked`, `adjacent` or `culled`). The declared pass writes it with
+every list empty. Resume position is read from the commit trail. A user may reset to a stage
+commit and resume from there. Per-leaf work inside an inference stage
+stays uncommitted until the stage boundary; a resume over an interrupted stage restores the
+kbase-owned paths to the last stage commit and re-runs the stage. **A build in flight owns
+`kb-root/`:** a resume restores every path under it to the last boundary, whatever was done to it
+since, and nothing vets what it finds there. An edit made while a build is interrupted is the
+editor's to carry in git, by waiting for the build or by reverting the commit that reset it; a write
+op, `refresh` or `render-claim-graph` attempted while a build runs is refused (§8). Commits are
+scoped by pathspec to kbase-owned paths.
 
 **The state store holds what does not belong in the repository** — the pid and the holder lock
 `status` and `cancel` read, `progress.jsonl`, per-call evidence, the docgraph records (§5), a
@@ -349,7 +406,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `demoted`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `demoted`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The values key, flag or positional argument, spelled as `--help` spells it |
@@ -360,8 +417,8 @@ or `key`:
 
 A refusal lists every offending item. A usage error is one item with `check: usage`. A
 provider-selection refusal names `key: --provider` and lists every entry name as `allowed`; a tier
-`configure` cannot detect names `key: models.heavy` (or `models.light`) and lists the detected
-candidates as `allowed`.
+`configure` is not given names `key: models.<tier>` (`models.decision` or `models.text`) and lists
+the provider's model ids as `allowed`.
 
 **Per-subcommand keys**, following `kb-root`:
 
@@ -379,7 +436,7 @@ candidates as `allowed`.
 | `show`, `stats` | `results` (the `kb_cmd --json` mapping; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `models` (ids, sorted ascending) |
-| `configure` | `provider`; `models` (`heavy`, `light`, as `config.toml`'s `[models]` spells them); `written` (`config.toml`'s path, or `[]` with outcome `unchanged`) |
+| `configure` | `provider`; `models` (`decision`, `text`, as `config.toml`'s `[models]` spells them); `written` (`config.toml`'s path, or `[]` with outcome `unchanged`) |
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
@@ -400,12 +457,15 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 
 ## 8. Maintenance subcommands
 
-Every subcommand below is a builtin tool personant can call. kb_tools' semantics govern each, cited
-from the sections named; kbase's differences are only those in §4 and the rules in this section.
+Every subcommand below is a builtin tool an agent harness can call. kb_tools' semantics govern
+each, cited from the sections named; kbase's differences are only those in §4 and the rules in this
+section.
 
 **Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary is closed.
-It is kb_tools' `kb_write` `values.OP_FIELDS`, and kbase keeps no prose copy of it. A refusal names
-the key, its position, and the allowed set. A prose value containing U+0008 or U+000C is refused.
+For an op kb_tools has, it is kb_tools' `kb_write` `values.OP_FIELDS`; for a kbase-origin op it is
+stated once, in kbase's write package. Neither is copied into prose: a refusal names the key, its
+position, and the allowed set, and `kbase <op> --help` describes the op. A prose value containing
+U+0008 or U+000C is refused.
 
 **Idempotence.** Every mutating op is idempotent under re-issue: the same values issued twice leave
 `kb-root/` byte-identical to issuing them once, and the second call reports `unchanged`. An insert
@@ -457,6 +517,32 @@ a `depends` edge and `restore`. Runs the trailing refresh as every write op does
 ### `set-on-point-fraction`
 
 The register-creating inserts take `--create` where kb_tools' op takes it.
+
+### `drop-claim-edges`
+
+kbase-origin: no kb_tools counterpart. Removes a claim entry's outgoing `depends-on` or
+`references` bullets, the class named or, where none is, both — each bullet with its continuation
+lines — and a list's header where neither bullet nor other text is left; an absent list stands. The
+`demoted` class is refused: demoted rows are `resolve-demoted`'s to remove. Idempotent: a re-issue
+is `unchanged`.
+
+### `drop-inbound-edges`
+
+kbase-origin. Removes, from every register entry holding one, each `depends-on` or `references`
+bullet naming the claim, with its continuation lines, and a list's header where neither bullet nor
+other text is left; an entry naming no such bullet stands. Idempotent: a re-issue is `unchanged`.
+
+### `drop-claim-node`
+
+kbase-origin. Deletes a claim node entirely: its register entry block, its claim-quality marker
+from every leaf carrying it, its id from every leaf claiming it, and every other entry's demoted
+row naming it. Refused, writing nothing, where any entry's depends-on or references still names the
+node — run `drop-claim-edges` and `drop-inbound-edges` first; where the call would empty a leaf's
+claims list, the nodes one call drops from a leaf counted together, that being a no-claim decision
+`set-frontmatter` makes; and where, once those removals are composed, any line under `kb-root/`
+still names the node, each such line named as `path:line` — refresh's own roll-ups excepted, the
+trailing refresh rewriting them. Idempotent: a re-issue removes whatever of the node still stands
+(`done`) and is `unchanged` where nothing does.
 
 ### `render-citation`
 
@@ -521,19 +607,20 @@ version string and a newline. The directory is `--config-dir`, else `$KBASE_CONF
 
 **Provider commands.** `kbase models [--provider NAME] [--timeout DURATION]` lists the selected
 provider's model identifiers, sorted ascending, in its result document (§7). `kbase configure
-[--provider NAME] [--model-map TIER=ID]... [--timeout DURATION]` assigns a model id to each tier — a
-tier not given is detected from the provider's model list, and one it cannot detect is refused
-naming `models.<tier>` with the candidates as `allowed` (§7) — and writes `config.toml` under §9.5.
+[--provider NAME] [--model-map TIER=ID]... [--timeout DURATION]` assigns a model id to each tier
+from `--model-map` alone — the tiers are `decision` and `text`; a tier the flag does not name is
+refused naming `models.<tier>` with the provider's model ids as `allowed` (§7) — and writes
+`config.toml` under §9.5.
 Each writes its result under §7. Provider selection for both is `--provider`, else `config.toml`'s
 `provider`, else the sole `providers.toml` entry; zero usable providers refuses naming
 `providers.toml`, and two or more with none selected refuses listing every entry name.
 
 **The environment.** A subcommand that spends inference also reads `KBASE_API_BASE_URL`,
-`KBASE_MODEL` and `KBASE_API_KEY_FILE` — kb_tools' variables under kbase's prefix, with kb_tools'
-meanings — so an integrator configures a build from the invoking environment with no configuration
-directory at all. Precedence is flags, then the environment, then the configuration files; a
-variable given overrides the corresponding field and nothing else, and `KBASE_MODEL` names both
-tiers. The inference preflight (§5) names the variable or file it lacks. There is no
+`KBASE_DECISION`, `KBASE_TEXT` and `KBASE_API_KEY_FILE`, so an integrator configures a build from
+the invoking environment with no configuration directory at all. Precedence is flags, then the
+environment, then the configuration files; a variable given overrides the corresponding field and
+nothing else. `KBASE_DECISION` and `KBASE_TEXT` name the decision and text tiers where the
+configuration does not. The inference preflight (§5) names the variable or file it lacks. There is no
 plaintext-transport switch: when a key is configured and the base URL is `http://` to a host other
 than loopback, one line on stderr says the key travels in cleartext, and the build proceeds (as
 §9.4's permission warning does).
@@ -563,8 +650,8 @@ faults just that entry the same way. An absent `providers.toml` is an empty pool
 provider = "..."             # active providers.toml entry name
 
 [models]
-heavy = "..."                 # model id for the heavy tier
-light = "..."                  # model id for the light tier
+decision = "..."               # model id for the decision tier (a SystemOne decision model)
+text = "..."                   # model id for the text tier
 
 [asks]
 readerConcurrency = 4          # optional; asks of one group in flight once its first has returned
@@ -574,17 +661,18 @@ A tier left unset resolves to "not configured" — no defaulting, no guessing. `
 how many of one group's letter asks a build has in flight once the group's first ask has returned
 (kb_tools reads it from `KB_READER_CONCURRENCY`); absent, it is 4. A value under 1 fails the load,
 naming `asks.readerConcurrency`. There is no `[dev]` table; an old `[dev]` key fails strict load
-(§9.3).
+(§9.3). A `[models]` table spelling `heavy`/`light` — the superseded tier names — fails strict load
+as unmodeled keys (§9.3); the remedy is a hand edit.
 
 ### 9.3 Strict-load contract
 
 Both files are decoded strictly: any key or table not modeled by the schemas above fails the **whole
 file's** load. The message names the file path and every offending key by its full dotted path (e.g.
-`models.typo_key`), pluralizing "unknown key"/"unknown keys" when more than one. A malformed-TOML
-file fails with a parser-detail message naming the file and line. Only key **names** ever appear in
-either message, never values, since `providers.toml` may carry credential material. `kbase
-configure` cannot repair a config file it cannot load: every subcommand loads configuration before
-doing anything else.
+`models.typo_key` — a superseded tier name such as `models.heavy` fails the same way), pluralizing
+"unknown key"/"unknown keys" when more than one. A malformed-TOML file fails with a parser-detail
+message naming the file and line. Only key **names** ever appear in either message, never values,
+since `providers.toml` may carry credential material. `kbase configure` cannot repair a config file
+it cannot load: every subcommand loads configuration before doing anything else.
 
 ### 9.4 Key-file permission warning
 
@@ -597,14 +685,14 @@ the only file-permission behaviour kbase applies to a file it did not create.
 
 `kbase configure` never re-serializes `config.toml`; it edits the existing bytes in place.
 
-- An absent or blank file gets a full commented template, with `provider`, `models.heavy` and
-  `models.light` filled in.
-- Otherwise **only** the top-level `provider` key and the `[models]` table's `heavy`/`light` keys
+- An absent or blank file gets a full commented template, with `provider`, `models.decision` and
+  `models.text` filled in.
+- Otherwise **only** the top-level `provider` key and the `[models]` table's `decision`/`text` keys
   are rewritten. Every other byte — comments, unrelated keys and tables, spacing, key order — is
   preserved exactly. A rewritten line's own trailing `# comment` is kept; its column position is not
   guaranteed.
-- A missing `provider` key is inserted just after the leading comment block; missing `heavy`/`light`
-  keys are appended inside (or as a new) `[models]` table.
+- A missing `provider` key is inserted just after the leading comment block; missing
+  `decision`/`text` keys are appended inside (or as a new) `[models]` table.
 - Before writing, kbase decodes both the original and the proposed file as TOML and refuses the
   write, leaving the file untouched, unless the only difference between the two decoded structures
   is exactly the values it intended to change.
@@ -678,19 +766,24 @@ only here.
 **The `demoted` relation**, added at `1.0.0`. A claim-graph edge class only the build writes: the
 build's cycle breaking records the `depends` edge it removes as `demoted` with its origin — `cited`
 where the text marked the dependency, `inferred` where the build found it (§3's words) — in place of
-turning it into `references`. Both the classify stage's cuts and, under `--no-inference`, the
-containment-ring stage's cuts are demoted. The origin is `inferred` where the cut pair, in its
-written direction, is a yes in the unmarked record, else `cited`. It stands outside the premise walk
-and the acyclicity check exactly as `references` does and carries no solidity. In the register an
-entry carries a `- demoted:` list after `references:`, its items `- <target> — <title> (origin
-cited)` or `(origin inferred)`, with an optional context, in the annotation style of the other
-lists. In the index the row has `relation: "demoted"`, every field a `references` row carries, then
-`origin` (`cited`, `inferred`, or null where the bullet has none). The build writes cuts through a
-build-only write op, `add-build-edges`, which is no subcommand and not among the public ops, so the
-public write surface cannot create one; `verify` refuses a `demoted` row carrying no valid origin,
-so a KB's demoted edges are the build's and a person's resolutions only remove them. One write op,
-`resolve-demoted` (§8), removes one or restores it to `depends`, refusing a restore that would close
-a cycle (`check: dependency-cycle`, the entry number and the path) and a restore where neither a
+turning it into `references`. The cuts are the dependency-attribution stage's ring row — every
+`depends` edge on a cycle once attribution has written its edges. The origin is `inferred` where
+the build found the cut edge with no mark, by §3's rule, else `cited`. It stands outside the
+premise walk and the acyclicity check exactly as `references` does and carries no solidity. In the
+register an entry carries a `- demoted:` list after `references:`, its items `- <target> — <title>
+(origin cited)` or `(origin inferred)`, with an optional context, in the annotation style of the
+other lists. In the index the row has `relation: "demoted"`, every field a `references` row
+carries, then `origin` (`cited`, `inferred`, or null where the bullet has none). The build writes
+cuts through two build-only write ops, `add-build-edges` and `demote-claim-edge`, neither a
+subcommand nor among the public ops, so the public write surface cannot create one; `verify`
+refuses a `demoted` row carrying no valid origin, so a KB's demoted edges are the build's and a
+person's resolutions only remove them. `demote-claim-edge` turns an entry's existing `depends` edge
+into a `demoted` row of the same entry carrying the origin the build computed for the pair; where
+that row already stands it removes a `depends` edge still standing beside it, and otherwise leaves
+the pair as it stands; it refuses a row standing with the other origin, naming both, and a pair
+with neither a `depends` edge nor a `demoted` row. One write op, `resolve-demoted` (§8), removes
+one or restores it to `depends`, refusing a restore that would close a cycle
+(`check: dependency-cycle`, the entry number and the path) and a restore where neither a
 `demoted` nor a `depends` edge exists. `verify` lists every `demoted` edge under `findings` (§7)
 with outcome `done`; the queries report it under its relation wherever they report `references`
 (`show`, `deps`, `referenced-by`); the sheet draws it as a cut, its origin in the cut's weight and

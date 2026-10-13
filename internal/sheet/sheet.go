@@ -35,8 +35,7 @@ type Sheet struct {
 // more volumes hold nodes, the digest and each volume's in slug order. It is
 // ErrNoDot where dot is not on PATH.
 func Render(src *kb.Source) ([]Sheet, error) {
-	dot, err := exec.LookPath("dot")
-	if err != nil {
+	if _, err := exec.LookPath("dot"); err != nil {
 		return nil, ErrNoDot
 	}
 	g, err := load(src)
@@ -53,7 +52,7 @@ func Render(src *kb.Source) ([]Sheet, error) {
 		slots <- struct{}{}
 		go func() {
 			defer func() { <-slots; wg.Done() }()
-			svg, err := renderSVG(dot, s.dot)
+			svg, err := renderSVG(s.dot)
 			if err != nil {
 				errs[i] = fmt.Errorf("%s: %w", s.path, err)
 				return
@@ -71,8 +70,23 @@ func Render(src *kb.Source) ([]Sheet, error) {
 // renderConcurrency bounds the dot processes Render runs at once.
 const renderConcurrency = 4
 
-func renderSVG(dot, text string) ([]byte, error) {
-	cmd := exec.Command(dot, "-Tsvg")
+// renderSVG is the SVG of the sheet dot composes, retried once with
+// straight-line splines where dot fails; where both fail, the first error.
+func renderSVG(dot func(lineSplines bool) string) ([]byte, error) {
+	svg, err := runDot(dot(false))
+	if err == nil {
+		return svg, nil
+	}
+	// dot's spline router (routesplines) can fail on dense sheets; straight
+	// lines bypass it entirely.
+	if line, lineErr := runDot(dot(true)); lineErr == nil {
+		return line, nil
+	}
+	return nil, err
+}
+
+func runDot(text string) ([]byte, error) {
+	cmd := exec.Command("dot", "-Tsvg")
 	cmd.Stdin = strings.NewReader(text)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
