@@ -66,7 +66,8 @@ deleted, not archived.
   exec route stays the contract until then.
 - Convenient path for MD -> LaTeX via pandoc for KB-canonical workflow
   (don't rewrite an MD -> LaTeX workflow, for pity's sake.)
-- Create a workflow for a scratch start from an empty KB instead of LaTeX -> KB first
+- Scratch creation from an empty KB instead of LaTeX -> KB first is designed and landing: the plan
+  is `ROADMAP_PLANS/KBASE_SCRATCH_INIT.md` (`kbase init`, SPEC §8).
 
 Four items are also reported upstream to kb_tools as findings: resolved numbering, display names
 from `\input`-ed preambles, the `-latex_macros` reading, and records-native leaves.

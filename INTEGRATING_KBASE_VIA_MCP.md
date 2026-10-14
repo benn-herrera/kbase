@@ -6,12 +6,12 @@ contract; where a detail matters, it names the document and section that holds i
 
 ## What you are integrating
 
-kbase is a single Go binary that builds a knowledge base (KB) from a LaTeX document set and
-maintains it afterwards: a tree of Markdown documents with a claim graph over them, held in a
-`kb-root/` directory inside a git repository. Every operation on a KB is a subcommand of `kbase`.
-`kbase mcp` serves those same subcommands to an agent harness over the Model Context Protocol
-(MCP), stdio JSON-RPC, one KB per server process. A harness without MCP loses nothing but
-convenience: every tool is one subcommand with the same arguments and the same result.
+kbase is a single Go binary that builds a knowledge base (KB) from a LaTeX document set — or creates
+one empty with `kbase init` — and maintains it afterwards: a tree of Markdown documents with a claim
+graph over them, held in a `kb-root/` directory inside a git repository. Every operation on a KB is a
+subcommand of `kbase`. `kbase mcp` serves those same subcommands to an agent harness over the Model
+Context Protocol (MCP), stdio JSON-RPC, one KB per server process. A harness without MCP loses nothing
+but convenience: every tool is one subcommand with the same arguments and the same result.
 
 Read in this order:
 
@@ -27,7 +27,8 @@ Read in this order:
 
 1. **Host requirements** (README "Requirements"): pandoc 3.12 and git are required for builds;
    Graphviz `dot` is optional and draws the claim-graph sheets; Go and `just` build the binary.
-   Serving an existing KB for reading needs none of pandoc, git or a provider.
+   Serving an existing KB for reading needs none of pandoc, git or a provider. Creating a KB with
+   `init` needs git and nothing else — no pandoc, no provider.
 2. **Build:** `just build` produces `bin/kbase` for the host platform. `just test` runs the unit
    suite; `just test-integration` the hermetic integration suite, which includes the MCP transcript
    recipe (`test-integration-mcp`: fixed request/response transcripts fed through `bin/kbase mcp`
@@ -35,8 +36,9 @@ Read in this order:
 3. **Provider configuration** is needed only by `build`, the one tool that spends inference. The
    server passes its own environment and `--config-dir` to the build it starts (README
    "Configuration"; SPEC §9 for the `KBASE_*` variables and precedence).
-4. **A KB to serve.** Either one already built (a repository with `kb-root/` in it) or one you
-   build first with `kbase build <volume-root.tex>` from the repository root. A KB built by the
+4. **A KB to serve.** Either one already built (a repository with `kb-root/` in it), one you build
+   first with `kbase build <volume-root.tex>` from the repository root, or one you create empty with
+   `kbase init` and fill through the write ops (SPEC §8). A KB built by the
    Python reference implementation (kb_tools) at an older metadata format is read as is and migrated
    on its first write (SPEC §10).
 
@@ -125,7 +127,7 @@ through `find`, `show` and `deps`, with no Python invoked and no index file read
 
 ## What the harness sees
 
-- **Tools.** One per subcommand, named as the subcommand: the write ops (`insert-claim-entry`,
+- **Tools.** One per subcommand, named as the subcommand: `init`, the write ops (`insert-claim-entry`,
   `set-rigor`, `add-depends-on`, `resolve-demoted`, …), `render-citation`, the queries (`find`,
   `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `solidity-below`, `subtree`,
   `weak-points`, `stats`), `refresh`, `verify`, `render-claim-graph`, `status`, `cancel` and
@@ -160,7 +162,7 @@ Two levels, both cheap.
 1. **Pipe level, no harness.** Feed the server a handshake and a tool call on stdin and read the
    responses: an `initialize` request, the `notifications/initialized` notification, `tools/list`,
    then `tools/call` with `{"name": "stats", "arguments": {}}`, and `resources/list`. Each
-   request gets one JSON-RPC response line; `tools/list` should name 30 tools and `stats` should
+   request gets one JSON-RPC response line; `tools/list` should name 34 tools and `stats` should
    return `outcome: done` in its structured content. The transcript fixtures under
    `test_data/fixtures/mcp/` are worked examples of the exact frames.
 2. **In the harness.** Register the server, open a session in the repository, confirm the harness

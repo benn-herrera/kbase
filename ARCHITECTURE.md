@@ -30,7 +30,7 @@ Violating any is a blocking defect.
 | I3 | Pre-passes are kb_tools' two, in one registry, each naming the reader-level hole it fills and emitting a census. |
 | I4 | System compatibility per SPEC §3; byte equality only where a named reader needs it; presentation is untested. |
 | I5 | One result emitter owns stdout. |
-| I6 | Every mutating op is idempotent under re-issue. |
+| I6 | Every mutating op is idempotent under re-issue; `init`'s creation is birth-once (SPEC §8). |
 | I7 | Every prompt template and fragment is an embedded file with one manifest entry stating its provenance: imported — byte-identical to kb_tools' file at a recorded commit; kbase-authored, derived from a named kb_tools file at a recorded commit and reviewed by the prompt-engineer before first use; or `kbase-origin`, authored de novo with no origin file and reviewed by the prompt-engineer before first use. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate`, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O, no import of a kbase package — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
 | I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree, never listed by hand; the table's test derives its expectation from the same annotations; its stdout carries JSON-RPC frames and nothing else; no tool but `build` reaches a model, and `build` through it is the detached subcommand. |
@@ -208,6 +208,7 @@ which needs `.index/` and is verify's (§6).
 | **Queries** | `internal/query` | `kb_cmd/` | Landed: every query equals `kb_cmd --json` as data over the six kb_tools-built fixtures, `show`'s `strengthen_by` and `deps`' `context` included: 1,550 of 1,550 cases agree at the pin |
 | **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | `claim_sheet.py`, the same drawing; the layout is Graphviz's | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
 | **Readiness stamping and README assembly** | `internal/kbdocs` | `installed/*.tmpl.md`, `kb_readme.py` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
+| **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh and verify over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`/`BuildVerify`, `write.LockKB` and `ledger` | None: no kb_tools counterpart (SPEC §4's scratch-creation row); creation is composition of the maintenance machinery, not a ported mechanism | Landed: refuses outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` is green over the skeleton before `done`; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
 marker or bullet (kb_tools SPEC, "The Write API's Contract"). Input, idempotence (I6) and the
@@ -253,6 +254,19 @@ sheet.
 — and `render-claim-graph` reach it through one seam, `index.WriteSheet`, which renders every sheet
 on each call and writes one only where its bytes change, with no ownership test on an existing
 sheet. `verify` never reaches it.
+
+**Scratch creation.** `cmd/init.go` is the only producer of a KB that is not the build. It composes
+existing mechanisms and owns no new one: the entry point's frontmatter through `kb`'s canonical
+renderers (`RenderFrontmatterField`, `WrapFrontmatter`, `StampFormat`), every file through
+`atomicfile.Write`, the loader's `Open` (I8), the readiness stamp through `kbdocs.Stamp` with
+`kbdocs.AuthoredKBPin` in its scope-pin slot (beside `NoCharterPin`: a KB with no corpus says so,
+rather than that its corpus went unrecorded), the derived layer through `index.RefreshReporting` and
+the gate through `index.BuildVerify`, the lock through `write.LockKB`, and the birth commit through
+`ledger.Commit` — the plain-subject half of `ledger` extracted beside `Record`, its pathspec
+scoping the same so nothing the user staged rides along. Its order is load-bearing: the stamped
+entry point stands before `Open`, the stamps stand before the refresh (whose precheck refuses
+without the redirect), the refresh and the gate stand before the commit, so a `done` means a KB
+`verify` already passed.
 
 ---
 
@@ -316,7 +330,7 @@ sheet. `verify` never reaches it.
 already requires, so the user's configuration, hooks and attributes apply, and no git library is a
 dependency. `internal/build` owns the stage table, the state store, resume, `--no-inference`,
 `--through`, and status, progress and cancel [`kb_driver` head, `phase-3a`, overview]. Only `build`
-imports `ledger`.
+and `cmd`'s `init` verb import `ledger`.
 
 - **Fresh versus resume** is read from the commit trail alone (SPEC §6); nothing in the state store
   is authoritative for position.
@@ -529,7 +543,9 @@ kept: config, model (model.Chat the overview call, model.SystemOne the letter as
 - Only `asks/call`, `build` and `cmd`'s `build`, `models` and `configure` verbs import `model`:
   within `cmd`, file-level, `cmd/build.go` and the provider dial the other two share,
   `cmd/provider.go`. `claimgraph` reaches neither `model` nor `asks/call`, transitively.
-- Only `build` imports `ledger`; `ledger` imports `log` and nothing else of kbase.
+- Only `build` and `cmd`'s `init` verb import `ledger`; `ledger` imports `log` and nothing else of
+  kbase.
+- Only `build` and `cmd`'s `init` verb stamp readiness documents.
 - `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the refusal
   where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`

@@ -8,12 +8,12 @@ in `ROADMAP_PLANS/` (see "Plan & Execute Process").
 ---
 
 ## Project Overview
-kbase is a Go binary that builds a knowledge base (KB) from a LaTeX document set and maintains it
-afterwards. It builds exactly what kb_tools builds — the reference implementation, read from
-`.claude/adjagent/kb_tools/` at the commit SPEC "Given interfaces" names — and keeps its own
-provider management and inference invocation. kb_tools is the differential oracle: every
-difference from it is a named divergence (SPEC "Named divergences") or a defect. The contract is
-SPEC.md; how this implementation meets it is ARCHITECTURE.md.
+kbase is a Go binary that builds a knowledge base (KB) from a LaTeX document set — or creates one
+empty with `kbase init` — and maintains it afterwards. It builds exactly what kb_tools builds — the
+reference implementation, read from `.claude/adjagent/kb_tools/` at the commit SPEC "Given interfaces"
+names — and keeps its own provider management and inference invocation. kb_tools is the differential
+oracle: every difference from it is a named divergence (SPEC "Named divergences") or a defect. The
+contract is SPEC.md; how this implementation meets it is ARCHITECTURE.md.
 
 ---
 
@@ -261,7 +261,9 @@ nothing on the other's.
   `test_data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
-  store (`refresh`, `verify`, the queries) takes no such flag.
+  store (`refresh`, `verify`, the queries) takes no such flag. `build` resolves and creates its
+  state store before its first refusal; every recipe invocation of `build` takes `--state-dir`,
+  refused outcomes included.
 - Unit tests pass hermetically (no network, no corpus) beside their packages; their `go test` log is
   preserved under `test_data/transient/unit_tests/`. Corpus-driven property tests skip when the
   corpus is absent and are wired into an integration recipe where it is guaranteed present.

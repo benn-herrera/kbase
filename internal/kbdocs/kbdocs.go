@@ -62,6 +62,13 @@ const NoCharterPin = "This build was given no charter, so nothing was recorded a
 	"distills beyond the sources it was run on. Nothing here is waiting on a tool: a " +
 	"reader who knows the scope should write it into this section."
 
+// AuthoredKBPin is the scope pin of a KB `init` created empty: no corpus was
+// distilled because there is no corpus — what the KB holds, its author writes
+// into it, a claim at a time.
+const AuthoredKBPin = "This KB was created empty by kbase init, authored, not distilled: " +
+	"there is no corpus. What it holds its author writes into it, a claim at a time, " +
+	"through the ops `CONVENTIONS.md` states."
+
 var slotRE = regexp.MustCompile(`\{([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\}`)
 
 // fill substitutes values into the named template in one pass, so a value

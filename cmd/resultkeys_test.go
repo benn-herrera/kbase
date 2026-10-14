@@ -19,6 +19,7 @@ var documentedKeys = map[string][]string{
 	"build":              {"state-dir", "through", "no-inference", "resumed", "restored", "stages", "resume"},
 	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
 	"cancel":             {"state-dir", "pid", "resume"},
+	"init":               {"written", "removed"},
 	"refresh":            {"written", "removed"},
 	"verify":             {"findings"},
 	"write-op":           {"ids", "minted", "adopted", "written", "refreshed", "removed"},
@@ -145,6 +146,15 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 	keys = keys[1:]
 	if verb != "models" && verb != "configure" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
+	} else if verb == "init" {
+		// A kb-root refusal names a standing kb-root/ (§8: init refuses an existing
+		// one), so §7 requires the key; a refusal that found no kb-root/ — the
+		// worktree refusal, the lock retry — carries none (§8).
+		for _, item := range d.items(toolresult.RefusalsKey) {
+			if item["check"] == checkKBRoot {
+				t.Fatalf("%s: a refusal names a standing kb-root; the document carries no kb-root key: %q", verb, d.Keys)
+			}
+		}
 	}
 	closing := map[string]string{toolresult.Refused: toolresult.RefusalsKey, toolresult.Retry: toolresult.RefusalsKey,
 		toolresult.Failed: toolresult.FailuresKey, toolresult.Cancelled: toolresult.CancelledKey}[d.Outcome]

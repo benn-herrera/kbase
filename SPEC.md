@@ -13,7 +13,9 @@ Every statement here is decided; where a point was once left open, its ruling is
 kbase is a Go binary that builds and maintains a knowledge base (KB) from LaTeX. One or more volume
 roots go in, one KB comes out — its entry point listing every volume — and a set of maintenance
 subcommands then operates on the living KB, at a shell or, through `kbase mcp` (§11), from any agent
-harness that speaks MCP.
+harness that speaks MCP. A KB can also be created empty by `init` (§8) and filled by authoring with
+those same subcommands — no volume, no LaTeX, no build: LaTeX stays the only input format of
+`build`, and `init` is the zero case of the tree, not another input.
 
 - A **volume root** is the top `.tex` file of a paper: the file `00README.json`'s `toplevel` entry
   names, else the sole file containing `\documentclass`.
@@ -185,6 +187,7 @@ there is a defect. Build-orchestration differences are the "Not ported" list in 
 | Cycle breaking | Cuts every `depends` edge lying on a cycle once dependency attribution has written its edges (§5), and nowhere else: a containment-directed pair on a ring is drafted *supported by* like any other. A cut's origin follows §3's rule, which also reads the cull record's `links` either way round (§10) | Drafts a containment-directed pair on a ring *mention*, and cuts each ring of the classified edges; a cut's origin reads the unmarked record alone, in the yes's direction, until it adopts, which closes this row |
 | The `claims-culled` stage | Walks the stage between `references-found` and `depends-attributed` (§5), so a KB can lack prose claim nodes the stage judged to state no step a linked claim does not, hold leaves restated no-claim with a fixed reason, and be accompanied by the cull record (§6), whose `links` the sheet reads for provenance (§3) | Has no such stage: its KB keeps every claim node the earlier stages left, until it adopts, which closes this row |
 | Write-op surface | Three public ops, `drop-claim-edges`, `drop-inbound-edges` and `drop-claim-node` (§8), and one build-only op, `demote-claim-edge` (§10) | Has none of the four, until it adopts, which closes this row |
+| Scratch creation (`init`) | The subcommand `init` (§8) creates a KB empty at `<git root>/kb-root/` — the stamped entry point, `.index/`, the readiness documents, the sheets at zero nodes (§3) — and maintenance (§8) fills it; `build` stays refused against its populated `kb-root/` (§5's fresh-vs-resume reads the `kb-build:` trail, and `init`'s birth commit is a plain subject); outside a git worktree `init` refuses with remedy `git init`, never creating one | Has none: its KBs all come out of a driver run |
 
 ---
 
@@ -360,7 +363,7 @@ not count. The answer cache and the stage reports are kept. `status` and `cancel
 Deleting the store is always safe, but it forfeits the answer cache, whose entries were paid for in
 inference; `status` reports its size.
 
-**Maintenance operations never require git.**
+**Maintenance operations over a standing KB never require git; `init`, creation, is the verb that requires the worktree (§8).**
 
 ### `kbase status`
 
@@ -389,7 +392,8 @@ usage error on its own command line, before it serves, still prints a YAML refus
 
 1. `outcome`.
 2. `kb-root`: the absolute path. Present on every subcommand that resolves a KB, which is all of
-   them except `models` and `configure`.
+   them except `models` and `configure`; `init` omits it from results written while no `kb-root/`
+   stands (§8).
 3. The subcommand's own keys, in the order its table gives.
 4. Exactly one of these, chosen by `outcome`: `refusals` for `refused` and `retry`; `failures` for
    `failed`; `cancelled` (a mapping of `stage` and `unit`) for `cancelled`.
@@ -406,13 +410,13 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `demoted`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `demoted`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The values key, flag or positional argument, spelled as `--help` spells it |
 | `line`, `column` | 1-based position in the values document or in `path` |
 | `allowed` | The closed set the value must come from |
-| `remedy` | The kbase command that clears the item, where one exists (e.g. `kbase refresh`) |
+| `remedy` | The command that clears the item, where one exists (e.g. `kbase refresh`, `git init`) |
 | `detail` | One sentence |
 
 A refusal lists every offending item. A usage error is one item with `check: usage`. A
@@ -427,6 +431,7 @@ the provider's model ids as `allowed`.
 | `build` | `state-dir`; `through`; `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store)); `resume` (absent on `done`/`unchanged`) |
 | `status` | `state-dir`; `state`; `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` |
 | `cancel` | `state-dir`; `pid`; `resume` |
+| `init` | `written` (every path this call wrote — the spine, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
 | `refresh` | `written` (includes every sheet written); `removed` (files the KB no longer calls for — a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none) |
 | `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` edge (§10), as items with `check: demoted`, `path` the register, `detail` the edge and its origin; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
 | every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew, as kb_tools' `minted`); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (as kb_tools' `written`); `refreshed` (paths; null under `--no-refresh`); `removed` (the trailing refresh's, as `refresh`'s; `[]` under `--no-refresh`) |
@@ -470,12 +475,17 @@ U+0008 or U+000C is refused.
 **Idempotence.** Every mutating op is idempotent under re-issue: the same values issued twice leave
 `kb-root/` byte-identical to issuing them once, and the second call reports `unchanged`. An insert
 adopts an existing entry of the same register and title (an insert's values name no host; the host
-is assigned later through `set-frontmatter` and the marker); a work is adopted by its key.
+is assigned later through `set-frontmatter` and the marker); a work is adopted by its key. The one
+exception is `init`: creation is birth-once (below), and a re-issue where a `kb-root/` stands
+is `refused`, never `unchanged`.
 
 **Writes leave nothing stale.** A mutating op ends with a refresh unless `--no-refresh` is given.
 
 **One write lock.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the
-whole run: from loading the KB through the trailing refresh and the sheets to the result. A writer
+whole run: from loading the KB through the trailing refresh and the sheets to the result. `init`
+holds it from before `kb-root/` exists — the lock sits on the directory `kb-root/` stands in, so it
+is available at birth — through the skeleton, the trailing refresh and the birth commit to the
+result. A writer
 that cannot take it within 30 s gets `retry` with `check: lock`, `path` the repository root, and the
 remedy. A write verb probes for a running build (§6) before it waits on the write lock and again
 after taking it: where a build runs it is `refused` with the `lock` item at once, taking no wait. A
@@ -485,6 +495,35 @@ advisory lock exists (§6): neither the `retry` nor the build-running refusal is
 one writer at a time is the operator's to keep.
 
 **Batches** are all-or-nothing, as in kb_tools SPEC, "The Write API's Contract".
+
+### `init`
+
+```
+kbase init [--title TEXT]
+```
+
+Creates a KB directly — no LaTeX, no build: the equivalent of `git init` for a KB. Run at any depth
+in a git worktree; it resolves the repository root and works at `<git root>/kb-root/` (§1's
+placement). **Refusals come before any write** (§7 item shape): outside a git worktree — `check:
+worktree`, `path` the start directory, remedy `git init`, which the tool never runs itself; and
+against a `kb-root/` that exists in any state, an empty one included — `check: kb-root`, no remedy:
+creation is birth-once, a re-issue where a tree stands is `refused`, never `unchanged`. The result of
+a refusal that found no `kb-root/` carries no `kb-root` key; the refusal items name the paths.
+
+Then, under the KB write lock from before the directory exists (§8): it writes `entry-point.md` —
+frontmatter `kind: entry-point`, stamped (§10), with the `--title` text, or the repository's
+directory name, as the only heading and no children — and `kb-root/.index/`, empty; stamps the
+readiness documents, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect, each only where
+absent, `AGENTS.md` pinned that this KB is authored, not distilled — what it holds its author writes
+into it, a claim at a time; then refreshes, so the derived metadata layer is present at birth
+(§3's full sheet always, the placeholder where `dot` is absent, the digest and volume sheets
+not drawn: no volume holds a node), and `verify` (§8) must come back green over the skeleton before
+the result is `done`. Finally the birth commit: `kb-root/` committed with the plain subject
+`kb-init: knowledge base created` — never a `kb-build:` subject, so the trail of §5 stays empty and
+`build`'s populated-`kb-root/` refusal (§5) stands over an initialized KB forever: content joins
+§8's ops, never a later build. The commit rides the host's git identity and configuration; git's own
+refusal (no identity configured) is a `failed` naming git's words, the written tree standing
+uncommitted for the operator to commit or remove. Result keys: §7.
 
 ### Write ops
 
@@ -713,8 +752,8 @@ Patch: the bytes a writer produces changed, their meaning did not.
 
 **Reading the stamp.** Before any other read, kbase reads `kb-format` alone from
 `kb-root/entry-point.md`, recognising either frontmatter form; a KB with no entry point is refused
-(`check: kb-root`) as it is today. Every producer of a KB stamps it: the build's spine, and every
-save (below). A stamp at the current major and minor with another patch is read as current and
+(`check: kb-root`) as it is today. Every producer of a KB stamps it: the build's spine, `init`'s
+entry point at birth, and every save (below). A stamp at the current major and minor with another patch is read as current and
 rewritten on the next save.
 
 **One version read and written.** kbase reads and writes exactly the current version (ARCHITECTURE

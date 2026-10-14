@@ -67,6 +67,21 @@ To build without spending inference, add `--no-inference`. The build drops the r
 inference, states which ones, and still produces a real KB. No `README.md` is written into it,
 because the overview passage is one of the dropped rows.
 
+A KB can also be created empty, with no LaTeX and no build — `git init` for a KB:
+
+```sh
+git init notes-kb && cd notes-kb
+kbase init
+```
+
+`init` writes the skeleton — a stamped `entry-point.md` headed by the repository's name (or
+`--title`'s text), `.index/`, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect —
+refreshes it, refuses until `verify` is green over what it wrote, and commits `kb-root/` as the
+birth commit. Creation is birth-once: a second `init` is refused, and `kbase build` stays refused
+over a created KB. What the KB holds afterwards is authored with the maintenance subcommands —
+insert an entry, set a field, mark a claim, refresh, verify — a claim at a time. Details are
+under [SPEC §8](SPEC.md).
+
 ## Building a KB
 
 ```
@@ -138,6 +153,11 @@ The run lock is not in the store: it is `kbase-build.lock` in the repository's g
 build runs per repository whatever `--state-dir` each names.
 
 ## Maintaining a KB
+
+A KB created empty by `kbase init` and one distilled by `kbase build` are maintained the same
+way — the subcommands below operate on any living `kb-root/`. Over a created KB `kbase build`
+stays refused forever (SPEC §5's fresh-vs-resume reads the `kb-build:` trail, and `init`'s birth
+commit is a plain subject); content joins through the write ops, a claim at a time.
 
 After a build, subcommands operate on the living KB: write ops that insert entries and set fields,
 `render-citation`, queries over the claim graph, `refresh` and `verify`, and `render-claim-graph`.

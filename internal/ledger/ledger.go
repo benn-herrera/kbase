@@ -91,6 +91,18 @@ func (r *Repo) Trail() ([]Entry, error) {
 // Nothing else the user staged rides along, and a boundary that changed
 // nothing is still recorded.
 func (r *Repo) Record(stage, display, body string) (string, error) {
+	return r.commit(fmt.Sprintf("%s %s | %s", Prefix, stage, display), body)
+}
+
+// Commit is Record's commit with a plain subject: the same pathspec scoping
+// to the owned paths, the same guarantee that nothing else the user staged
+// rides along, and a subject outside Prefix, so the commit stands off the
+// trail that Trail() reads — the record of an act, not a build boundary.
+func (r *Repo) Commit(subject, body string) (string, error) {
+	return r.commit(subject, body)
+}
+
+func (r *Repo) commit(subject, body string) (string, error) {
 	paths, err := r.present()
 	if err != nil {
 		return "", err
@@ -100,7 +112,7 @@ func (r *Repo) Record(stage, display, body string) (string, error) {
 			return "", err
 		}
 	}
-	args := []string{"commit", "--quiet", "--allow-empty", "--only", "-m", fmt.Sprintf("%s %s | %s", Prefix, stage, display)}
+	args := []string{"commit", "--quiet", "--allow-empty", "--only", "-m", subject}
 	if body != "" {
 		args = append(args, "-m", body)
 	}

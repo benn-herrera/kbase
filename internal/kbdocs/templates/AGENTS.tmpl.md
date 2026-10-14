@@ -20,7 +20,7 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
 
 {scope-pin}
 
-That is this KB's scope, in the words the build was given: which corpus it distills, and which node
+That is this KB's scope, in the words given at its creation: which corpus it distills, and which node
 kinds and edge classes it populates. A leaf built from the corpus is a verbatim, mechanical
 rendering of it — nothing here rewrites source text in place, so there is no version of that text
 for the corpus and the KB to disagree over. Text a maintainer adds directly — a summary, a

@@ -114,6 +114,50 @@ func TestRecordScopesTheCommitAndTrailReadsItBack(t *testing.T) {
 	}
 }
 
+// TestCommitPlainSubjectIsOffTheTrail: Commit is Record's commit with a
+// plain subject — the first commit of an unborn branch rides the same
+// pathspec scoping, the commit holds the owned paths only, nothing the user
+// staged elsewhere rides along, and Trail() reads no trail, which is what
+// keeps build's fresh-versus-resume rule reading an initialized repository
+// as a populated one with nothing to resume (SPEC §5, §8).
+func TestCommitPlainSubjectIsOffTheTrail(t *testing.T) {
+	r := newRepo(t)
+	write(t, r, "kb-root/entry-point.md", "# entry\n")
+	write(t, r, "elsewhere.txt", "user's work\n")
+	if _, err := r.run("add", "elsewhere.txt"); err != nil {
+		t.Fatal(err)
+	}
+	birth, err := r.Commit("kb-init: knowledge base created", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := r.run("show", "--name-only", "--format=", birth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Fields(files); !slices.Equal(got, []string{"kb-root/entry-point.md"}) {
+		t.Errorf("birth commit holds %q, want the owned paths only", got)
+	}
+	if staged, _ := r.run("diff", "--cached", "--name-only"); strings.TrimSpace(staged) != "elsewhere.txt" {
+		t.Errorf("staged after the birth commit = %q, want the user's elsewhere.txt left staged", staged)
+	}
+	write(t, r, "kb-root/notes.md", "later\n")
+	if _, err := r.Commit("kb-init: knowledge base created", "a second act"); err != nil {
+		t.Fatal(err)
+	}
+	trail, err := r.Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trail) != 0 {
+		t.Errorf("Trail over plain commits = %+v, want empty", trail)
+	}
+	out, err := r.run("rev-list", "--count", "HEAD")
+	if err != nil || strings.TrimSpace(out) != "2" {
+		t.Errorf("commits on HEAD = %q (%v), want 2", strings.TrimSpace(out), err)
+	}
+}
+
 func TestDirtyAndRestore(t *testing.T) {
 	r := newRepo(t)
 	write(t, r, "kb-root/a.md", "a\n")

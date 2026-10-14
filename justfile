@@ -29,6 +29,7 @@ MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arx
 # values its write ops take.
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
+INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 
 DIST_DIR := "dist"
@@ -204,6 +205,7 @@ _write-evidence out_dir recipe invocation:
       [[ -f "{{out_dir}}/findings.yaml" ]]          && echo "- findings.yaml: per fixture, every finding beside the comparison: the fixture left changed, a scoring op or a render-claim-graph step not as expected"; \
       [[ -f "{{out_dir}}/limit.log" ]]              && echo "- limit.log: every list query at its default limit over each fixture, each result within the tool-result cap, and the largest per query"; \
       [[ -f "{{out_dir}}/checks.tsv" ]]             && echo "- checks.tsv, docs/: per invocation its arguments, the outcome wanted and pass or fail; docs/NN-<verb>.out, .log, .exit and .keys.log (the documented-keys parse); repo/ as the run left it"; \
+      [[ -f "{{out_dir}}/init.tsv" ]]               && echo "- init.tsv, docs/: per invocation its arguments, the outcome wanted and pass or fail; docs/NN-<verb>.out, .log, .exit and .keys.log (the documented-keys parse), docs/init-nodot.{out,log}; repo/, repo-nodot/, gitonly/ and state/ as the runs left them"; \
       [[ -f "{{out_dir}}/comparison.tsv" ]]         && echo "- comparison.tsv, transcripts/<name>/: per MCP transcript pass or the response line that differs; requests.jsonl, expected.jsonl (placeholders substituted), actual.jsonl, mcp.log, mcp.exit; insert.*, refresh.* (.out, .log) and repo/ as the staging left them"; \
       [[ -f "{{out_dir}}/monitor.tsv" ]]           && echo "- monitor.tsv, polls/: every status poll the monitor made while the build ran (polls/NNN.out); build.*, cancel.*, cancel-again.*, status-*.*, resume.* (.out, .log, .exit, .keys.log); repo/ and state/ as the run left them"; \
       compgen -G "{{out_dir}}/*/fixture/*.args" > /dev/null && echo "- <id>/: fixture/ (per case NNN.args — the query, then one argument per line — and NNN.kbase.* and NNN.kbcmd.* .out, .log, .exit); scored-clone/, scores/ (the values and each op's run) and scored/ (the cases on the scored clone); sheet/ (clone/, drawn.svg, each render-claim-graph and verify run); stage.log"; \
@@ -2208,6 +2210,114 @@ _test-integration-results-fixture: build
     fi
     printf 'integration(test-integration-results-fixture) ok\n'
 
+# Init legs over the delivered binary in real git repositories, each result
+# checked against its documented keys: refused outside a worktree with nothing
+# created, birth, birth-once, build refused over a created KB, the
+# cross-process maintenance chain closed green, the no-dot placeholder. The
+# born bytes, the birth commit's subject and its trail belong to
+# cmd/init_test.go and ledger_test.go; the recipe never inspects them.
+# It needs only git — no pandoc, no provider, no adjagent clone.
+[doc("hermetic, git-only: init legs over ./bin/kbase, each result checked against its documented keys — refused outside a worktree with nothing created, birth, birth-once, build refused over a created KB, the cross-process maintenance chain closed green, the no-dot placeholder; evidence under test_data/transient/test-integration-init/")]
+test-integration-init:
+    @mkdir -p "{{INIT_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-init 2>&1 | tee "{{INIT_OUT_DIR}}/log.txt"
+
+[private]
+_test-integration-init: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    out="${root}/{{INIT_OUT_DIR}}"
+    kbase="${root}/{{BIN_DIR}}/kbase"
+    repo="${out}/repo"
+    docs="${out}/docs"
+    nodot="${out}/repo-nodot"
+    rm -rf "${repo}" "${docs}" "${nodot}" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/sf.json" "${out}/mc.json" "${out}/sf-run.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state"
+    mkdir -p "${docs}"
+    export GIT_AUTHOR_NAME=init-integration GIT_AUTHOR_EMAIL=init@invalid GIT_COMMITTER_NAME=init-integration GIT_COMMITTER_EMAIL=init@invalid GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/gitconfig"
+    status=0
+    fail() { printf '  fail: %s\n' "$*"; status=1; }
+    # run <verb-for-keys> <outcome> <args...>: one invocation of the
+    # delivered binary from the repository, its result parsed against the
+    # verb's documented keys; LAST names the result document it captured.
+    # Arguments reach the repository absolute: the tool runs in a subshell.
+    n=0
+    run() {
+        local verb="$1" want="$2" stem
+        shift 2
+        n=$((n + 1))
+        stem="${docs}/$(printf '%02d' "${n}")-$1"
+        set +e
+        ( cd "${repo}" && "${kbase}" "$@" ) > "${stem}.out" 2> "${stem}.log"
+        printf '%s\n' "$?" > "${stem}.exit"
+        go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${stem}.out" -result.verb="${verb}" \
+            -result.outcome="${want}" > "${stem}.keys.log" 2>&1
+        local rc=$?
+        set -e
+        printf '%s\t%s\t%s\t%s\n' "$*" "${want}" "$([[ "${rc}" -eq 0 ]] && echo pass || echo fail)" "${stem}.out" >> "${out}/init.tsv"
+        printf '  %s %s: want %s, exit %s\n' "$([[ "${rc}" -eq 0 ]] && echo pass || echo fail)" "$*" "${want}" "$(cat "${stem}.exit")"
+        [[ "${rc}" -eq 0 ]] || status=1
+        LAST="${stem}.out"
+    }
+    # 1. outside a worktree: refused, nothing created. run() executes from
+    # ${repo}, so ${repo} points at mktemp's own tree — somewhere under no
+    # repository at all, not the project's transient dir, which a repository
+    # does hold.
+    outside="$(mktemp -d)"
+    repo="${outside}"
+    run init refused init
+    [[ ! -e "${outside}/kb-root" ]] || fail "a kb-root stands outside a worktree"
+    rm -rf "${outside}"
+    repo="${out}/repo"
+    # 2. birth, default title: the repository's directory name. init commits
+    # its own birth; the commit's subject and trail are ledger's, pinned in
+    # ledger_test.go — the recipe never reads git.
+    git init --quiet "${repo}"
+    printf '%s\n' 'entry:' '- register: claim-quality.md' '  title: An Authored Result' '  rigor: 0.5' '  rationale: Written at birth.' > "${out}/seed.yaml"
+    printf '%s\n' 'entry:' '- document: a.md' '  kind: leaf' '  claims: ["@ID@"]' > "${out}/sf.json"
+    printf '%s\n' 'entry:' '- document: a.md' '  id: "@ID@"' '  locator: authored text stands' > "${out}/mc.json"
+    printf '%s\n' '# A Leaf' '' 'The authored text stands. It cites nothing it cannot show.' > "${out}/leaf.md"
+    run init done init
+    # verify green over the born tree as shipped, before any maintenance
+    # step reaches it.
+    run verify done verify
+    # 3. re-issue: birth-once.
+    run init refused init
+    # 4. build stays refused over a created KB. The store is quarantined to
+    # state/: build opens and creates it before its first refusal, so nothing
+    # reaches the real $XDG_STATE_HOME.
+    printf '%s\n' '\documentclass{article}' '\begin{document}' 'Nothing distilled.' '\end{document}' > "${repo}/paper.tex"
+    run build refused build "${repo}/paper.tex" --no-inference --state-dir "${out}/state"
+    # 5. the cross-process maintenance chain: the id the insert minted
+    # reaches the later invocations through its document, and the loop
+    # closes green on what init wrote.
+    run insert-claim-entry done insert-claim-entry --create --values "${out}/seed.yaml"
+    id="$(sed -n 's/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${LAST}" | head -n 1)"
+    [[ -n "${id}" ]] || fail "the insert minted no id"
+    cp "${out}/leaf.md" "${repo}/kb-root/a.md"
+    sed "s/@ID@/${id}/g" "${out}/sf.json" > "${out}/sf-run.json"
+    sed "s/@ID@/${id}/g" "${out}/mc.json" > "${out}/mc-run.json"
+    run set-frontmatter done set-frontmatter --values "${out}/sf-run.json"
+    run mark-claim-in-leaf done mark-claim-in-leaf --values "${out}/mc-run.json"
+    run refresh unchanged refresh
+    run verify done verify
+    # 6. no dot: the placeholder stands, in its own repository, PATH holding
+    # git alone through a symlink of its own.
+    git init --quiet "${nodot}"
+    mkdir -p "${out}/gitonly"
+    ln -s "$(command -v git)" "${out}/gitonly/git"
+    ( cd "${nodot}" && env PATH="${out}/gitonly" "${kbase}" init ) > "${docs}/init-nodot.out" 2> "${docs}/init-nodot.log"
+    grep -q 'outcome: "done"' "${docs}/init-nodot.out" || fail "the no-dot birth did not reach done: $(cat "${docs}/init-nodot.out")"
+    grep -q 'no Graphviz dot on PATH' "${docs}/init-nodot.log" || fail "the no-dot lack is not said on stderr"
+    grep -q 'no Graphviz dot on PATH' "${nodot}/kb-root/claim-graph.svg" || fail "claim-graph.svg is not the placeholder"
+    {{just_executable()}} _write-evidence "${out}" "test-integration-init" \
+      "git init repo/ (identity fixed in the environment, global config quarantined to gitconfig)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
+    if [[ "${status}" -ne 0 ]]; then
+        printf 'integration(test-integration-init): a birth check failed — see init.tsv\n'
+        exit 1
+    fi
+    printf 'integration(test-integration-init) ok\n'
+
 # The MCP transcripts over the delivered binary: the results fixture staged as
 # cmd/mcp_test.go stages it, each test_data/fixtures/mcp/*.jsonl fed to
 # `./bin/kbase mcp` over real pipes and every response line compared to the
@@ -2313,7 +2423,7 @@ _test-integration-mcp: build
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
 [doc("run every hermetic integration test (the ones needing pandoc, python3, the adjagent clone or a provider are excluded; run those by name)")]
-test-integration: test-integration-results-fixture test-integration-mcp
+test-integration: test-integration-results-fixture test-integration-init test-integration-mcp
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

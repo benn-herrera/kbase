@@ -67,10 +67,15 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/log"},
 	why:     "ledger imports log and nothing else of kbase",
 }, {
-	except:    []string{"internal/build", "internal/ledger"},
+	except:    []string{"internal/build", "cmd"},
+	forbidden: []string{"internal/kbdocs"},
+	direct:    true,
+	why:       "only build and cmd's init verb stamp readiness documents",
+}, {
+	except:    []string{"internal/build", "internal/ledger", "cmd"},
 	forbidden: []string{"internal/ledger"},
 	direct:    true,
-	why:       "only build imports ledger",
+	why:       "only build and cmd's init verb import ledger",
 }, {
 	except:    []string{"internal/asks/call", "internal/build", "internal/model", "cmd"},
 	forbidden: []string{"internal/model"},
@@ -214,6 +219,31 @@ func TestCmdModelImporters(t *testing.T) {
 	for _, owner := range cmdModelImporters {
 		if !seen[owner] {
 			t.Errorf("%s is listed as importing model and does not; drop it from cmdModelImporters", owner)
+		}
+	}
+}
+
+// cmdLedgerImporters is the production file of cmd that may import ledger:
+// the init verb, the only cmd path that commits.
+var cmdLedgerImporters = []string{"cmd/init.go"}
+
+// TestCmdLedgerImporters: within cmd, ledger is imported by
+// cmdLedgerImporters alone, and it imports it — the file-level read of the
+// rule whose package form is the coarse backstop.
+func TestCmdLedgerImporters(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
+		if !m.production() || path.Dir(m.rel) != "cmd" || !slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), modulePath+"/internal/ledger") {
+			continue
+		}
+		seen[m.rel] = true
+		if !slices.Contains(cmdLedgerImporters, m.rel) {
+			t.Errorf("%s imports ledger; within cmd only %s may", m.rel, strings.Join(cmdLedgerImporters, " and "))
+		}
+	}
+	for _, owner := range cmdLedgerImporters {
+		if !seen[owner] {
+			t.Errorf("%s is listed as importing ledger and does not; drop it from cmdLedgerImporters", owner)
 		}
 	}
 }
