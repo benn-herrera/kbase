@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/web_app_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Web app development: JS/TS, HTML/CSS, WebSockets, Web Workers, WASM integration, cross-browser compatibility, mobile web, storage strategies, input events, and browser API expertise. Prefer over generalist-coder for any web or browser target."
+description: "Web app development: JS/TS, HTML/CSS, WebSockets, Web Workers, WASM integration, cross-browser compatibility, mobile web, storage strategies, input events, and browser API expertise. Prefer over generalist-coder for any web or browser target. Prefer typescript-coder for TypeScript or JavaScript whose target is not a browser."
 color: "#00FFFF"
 mode: subagent
 ---

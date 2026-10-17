@@ -305,7 +305,8 @@ func or(s, fallback string) string {
 }
 
 // The tree's link relation: every document's up-link and child list. kb_tools
-// reads it two ways, and each reader here ports one of them.
+// reads it two ways, and each reader here ports one of them; the export's
+// child-list reading (childlist.go) is a third.
 
 // ResolveLink is target, written in the document at source, as a
 // kb-root-relative path.

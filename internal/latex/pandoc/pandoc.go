@@ -1,5 +1,6 @@
 // Package pandoc is the one place kbase execs pandoc: the LaTeX reader, the
-// gfm writer, and the preflight that holds the binary to the accepted range.
+// gfm writer, the defaults-file run, and the preflight that holds the binary
+// to the accepted range.
 package pandoc
 
 import (
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -160,6 +162,22 @@ func WriteGFM(ctx context.Context, w Warner, doc []byte) (string, error) {
 	}
 	warn(w, complaint)
 	return out, nil
+}
+
+// RunDefaults holds the binary to the accepted range, then runs `pandoc -d`
+// over the defaults file at defaultsPath with that file's directory as the
+// working directory: a relative path the defaults or its metadata hand a
+// filter resolves as it does for an author re-running `pandoc -d` there.
+func RunDefaults(ctx context.Context, w Warner, defaultsPath string) error {
+	if _, err := Preflight(ctx); err != nil {
+		return err
+	}
+	_, complaint, err := run(ctx, filepath.Dir(defaultsPath), nil, "-d", filepath.Base(defaultsPath))
+	if err != nil {
+		return err
+	}
+	warn(w, complaint)
+	return nil
 }
 
 func warn(w Warner, complaint string) {

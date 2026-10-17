@@ -93,24 +93,24 @@ func fill(name string, values map[string]string) (string, error) {
 
 // Stamp writes the readiness documents into the KB's kb-root, each only
 // where none stands, and CLAUDE.md as the redirect to AGENTS.md likewise;
-// scopePin is what AGENTS.md says the KB distills. It returns one report line
-// per document. A CLAUDE.md that is not the redirect is a result.Refusal,
-// before anything is written.
-func Stamp(src *kb.Source, projectName, scopePin string) ([]string, error) {
+// scopePin is what AGENTS.md says the KB distills. It returns the
+// kb-root-relative paths it wrote, and one report line per document; on an
+// error, both as far as it got. A CLAUDE.md that is not the redirect is a
+// result.Refusal, before anything is written.
+func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []string, err error) {
 	kbRoot := src.Root()
 	msg, err := kb.UnmigratedAgentsFile(src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if msg != "" {
-		return nil, result.Refusal{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
+		return nil, nil, result.Refusal{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
 	}
 	kinds := make([]string, len(kb.NodeKinds))
 	for i, k := range kb.NodeKinds {
 		kinds[i] = "`" + k + "`"
 	}
 	values := map[string]string{slotProjectName: projectName, slotScopePin: scopePin, slotNodeKinds: strings.Join(kinds, ", ")}
-	var reports []string
 	for _, name := range readinessDocs {
 		target := filepath.Join(kbRoot, name)
 		if exists(target) {
@@ -119,21 +119,22 @@ func Stamp(src *kb.Source, projectName, scopePin string) ([]string, error) {
 		}
 		text, err := fill(name, values)
 		if err != nil {
-			return reports, err
+			return written, reports, err
 		}
 		if err := atomicfile.Write(target, []byte(text), nil); err != nil {
-			return reports, err
+			return written, reports, err
 		}
+		written = append(written, name)
 		reports = append(reports, name+": written from its template")
 	}
 	redirect := filepath.Join(kbRoot, kb.AgentsRedirectFile)
 	if exists(redirect) {
-		return append(reports, kb.AgentsRedirectFile+": present, already the redirect"), nil
+		return written, append(reports, kb.AgentsRedirectFile+": present, already the redirect"), nil
 	}
 	if err := atomicfile.Write(redirect, []byte(kb.AgentsRedirect+"\n"), nil); err != nil {
-		return reports, err
+		return written, reports, err
 	}
-	return append(reports, kb.AgentsRedirectFile+": written as the redirect to "+kb.AgentsFile), nil
+	return append(written, kb.AgentsRedirectFile), append(reports, kb.AgentsRedirectFile+": written as the redirect to "+kb.AgentsFile), nil
 }
 
 // Overview is the overview document: its template around the passage.

@@ -130,8 +130,8 @@ through `find`, `show` and `deps`, with no Python invoked and no index file read
 - **Tools.** One per subcommand, named as the subcommand: `init`, the write ops (`insert-claim-entry`,
   `set-rigor`, `add-depends-on`, `resolve-demoted`, …), `render-citation`, the queries (`find`,
   `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `solidity-below`, `subtree`,
-  `weak-points`, `stats`), `refresh`, `verify`, `render-claim-graph`, `status`, `cancel` and
-  `build`. Not offered: `completion`, `help`, `models`, `configure`, `mcp`. Each tool's input schema
+  `weak-points`, `stats`), `refresh`, `verify`, `render-claim-graph`, `export-latex`, `status`,
+  `cancel` and `build`. Not offered: `completion`, `help`, `models`, `configure`, `mcp`. Each tool's input schema
   is derived from its command's arguments and flags; a write op's schema is one entry with the
   op's closed set of value keys and no others. The queries, `verify`, `status`, `render-citation`
   and `show` carry the read-only annotation.

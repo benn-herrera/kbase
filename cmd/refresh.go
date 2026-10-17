@@ -96,6 +96,12 @@ func emitResult(verb string, stdout io.Writer, outcome string, fields []toolresu
 	return exitCodes[outcome], nil
 }
 
+// sayNoDot tells the human on stderr that a verb's refresh drew no
+// claim-graph sheet for want of Graphviz dot.
+func sayNoDot(stderr io.Writer, verb string) {
+	fmt.Fprintf(stderr, "%s: no Graphviz dot on PATH; the claim-graph sheets were not rendered\n", verb)
+}
+
 func runRefresh(opts maintenanceOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "refresh"); err != nil {
 		return 0, err
@@ -130,7 +136,7 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	}
 	written, removed, noDot, err := index.RefreshReporting(src, opts.Logger)
 	if noDot {
-		fmt.Fprintln(opts.Stderr, "refresh: no Graphviz dot on PATH; the claim-graph sheets were not rendered")
+		sayNoDot(opts.Stderr, "refresh")
 	}
 	slices.Sort(written)
 	written = slices.Compact(written)

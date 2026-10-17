@@ -48,6 +48,7 @@ DIST_DIR := "dist"
 # parsed while silently dropping included files (2609.09821v1), so this sample
 # is pandoc-clean by construction and says nothing about where pandoc itself
 # fails.
+ARXIV_CS_AI := "2603.15381v1"
 ARXIV_CS_GR := "2609.09828v1 2609.09834v1 2609.10363v1 2609.10385v1"
 ARXIV_CS_LG := "2609.10505v1 2609.10514v1 2609.10525v1 2609.10529v1 2609.10534v1"
 ARXIV_ECON_TH := "2609.09693v1 2609.09888v1 2609.10074v1 2609.10499v1"
@@ -59,7 +60,7 @@ ARXIV_MATH_NT := "2609.10423v1 2609.10446v1 2609.10483v1 2609.10526v1"
 ARXIV_MATH_AP := "2609.10427v1 2609.10478v1 2609.10480v1 2609.10517v1 2609.00108v1 2609.00209v1"
 ARXIV_MATH_PR := "2609.10450v1 2609.10528v1 2609.10530v1"
 ARXIV_PHYSICS_OPTICS := "2609.10111v1 2609.10252v1"
-ARXIV_IDS := ARXIV_CS_GR + " " + ARXIV_CS_LG + " " + ARXIV_ECON_TH + " " + ARXIV_EESS_AS + " " + ARXIV_MATH_DG + " " + ARXIV_MATH_ST + " " + ARXIV_MATH_AG + " " + ARXIV_MATH_NT + " " + ARXIV_MATH_AP + " " + ARXIV_MATH_PR + " " + ARXIV_PHYSICS_OPTICS
+ARXIV_IDS := ARXIV_CS_AI + " " + ARXIV_CS_GR + " " + ARXIV_CS_LG + " " + ARXIV_ECON_TH + " " + ARXIV_EESS_AS + " " + ARXIV_MATH_DG + " " + ARXIV_MATH_ST + " " + ARXIV_MATH_AG + " " + ARXIV_MATH_NT + " " + ARXIV_MATH_AP + " " + ARXIV_MATH_PR + " " + ARXIV_PHYSICS_OPTICS
 # The e-prints as downloaded, and one unpacked source tree per id beside them.
 ARXIV_TGZ_DIR := TEST_DATA_TRANSIENT_DIR / "arxiv-tgz"
 ARXIV_DIR := TEST_DATA_TRANSIENT_DIR / "arxiv"
@@ -89,6 +90,19 @@ SLICE_2_UNLOADABLE_ID := "2609.09821v1"
 # slice's six papers, built complete by prep-test-integration-kbtools-full.
 VERIFY_ARXIV_IDS := SLICE_1_IDS + " " + SLICE_2_IDS
 VERIFY_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-verify-arxiv"
+# The export legs: the same kb_tools-built fixtures, the hand-maintained KB,
+# the committed 0.9.0 kb_tools-built KB, the author's preambles the exported
+# maths needs (<id>.tex beside, named for the fixture), and the checker.
+EXPORT_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-export-arxiv"
+EXPORT_MAINTAINED_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-export-maintained"
+EXPORT_MAINTAINED_DIR := TEST_DATA_TRANSIENT_DIR / "ModernCorpNoTex"
+EXPORT_KBTOOLS_090_KB_ROOT := "internal/kbload/testdata/kbtools-0.9.0/kb-root"
+EXPORT_PREAMBLE_DIR := TEST_DATA_FIXTURES_DIR / "export-preambles"
+EXPORT_CHECK_DIR := "tools/export"
+# The fixtures the multi-volume legs combine: of the slice's papers, the two
+# whose Markdown defines a footnote [^1] (a built KB's note definitions sit in
+# another document of the same volume).
+EXPORT_MULTIVOLUME_IDS := "2609.10318v1 2609.09855v1"
 WRITE_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-write-arxiv"
 QUERY_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-query-arxiv"
 CLAIMGRAPH_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-claimgraph-arxiv"
@@ -142,6 +156,11 @@ test-race:
 test-measure:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-measure_log.txt"
+
+[doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the checker the export integration recipes count with; log in the unit-test output directory")]
+test-export-forms:
+    @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
+    python3 -B -m unittest discover -s {{EXPORT_CHECK_DIR}} 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-export-forms_log.txt"
 
 # Cheap gate: run after every change.
 edit-gate: fmt-check
@@ -213,6 +232,8 @@ _write-evidence out_dir recipe invocation:
       [[ -d "{{out_dir}}/kbtools-agreement" ]]      && echo "- kbtools-agreement/: refresh-agreement.yaml and verify-agreement.yaml, each toolchain run over one input, with every input's trees and logs under refresh/ and verify/"; \
       [[ -f "{{out_dir}}/kbtools-fixtures.log" ]]   && echo "- kbtools-fixtures.log: kb_tools' render goldens and write-API regression replay, run over the write package"; \
       [[ -f "{{out_dir}}/summary.yaml" ]]           && echo "- summary.yaml: per fixture, every finding of the op-script run"; \
+      [[ -f "{{out_dir}}/counts.tsv" ]]             && echo "- legs.yaml, counts.tsv: per export leg its checks, pass, fail or skip, each with its detail; per leg and count check the count wanted and the count found"; \
+      compgen -G "{{out_dir}}/*/hashes.1" > /dev/null && echo "- <id>/: repo/ (the clone exported, latex-export/ inside), export.* and reissue.* (.result.yaml, .log), counts.txt, hashes.1 and hashes.2, latexmk-<engine>.log, main-<engine>.log, log-scan.txt, leg.log"; \
       compgen -G "{{out_dir}}/*/ref/commit.txt" > /dev/null && echo "- <id>/: repo/ (the fixture repository kbase built: kb-root/, kb-build-node-pass.yaml, kb-build-classification.yaml, kb-build-unmarked.yaml), repo-2/ and state-2/ (the second build, compared modulo node ids), state/ (records/, reports/), ledger.txt (kbase's boundary commits) and status.* (kbase status over the build), ref/ (kb_tools' kb-root/ and build records at commit.txt, its ledger to that commit in ledger.txt, its stage vocabulary in stage-ids.txt, its depends-attributed report in depends-report.txt), kbtools-verify/ (kb_tools' fixture with kbase's kb-root/), checks/ (kbase-build, kbase-refresh, kbase-verify, kbtools-verify: .out, .log, .exit), comparison.yaml, compare.log"; \
       compgen -G "{{out_dir}}/*/checks/kbase-status.out" > /dev/null && echo "- comparison.yaml: per paper every Direction 1 check, pass or fail, its detail and evidence path"; \
       compgen -G "{{out_dir}}/*/checks/kbase-status.out" > /dev/null && echo "- <id>/: repo/ (the fixture repository kbase built, kb_tools installed, the op script applied), built/ (kb-root/ and the build records as kbase's build left them), state/ (progress.jsonl, records/), config/ (empty), opscript/ and kbtools-steps/ (the op script rendered, and each step run through kb_util), excerpts.kbtools.txt, checks/ (per command .out, .log, .exit); on the special paper also kill/, guard/ and stamp/ (each repo/ and state/), kill/kill.txt, kill/comparison.yaml and kill/compare.log (the resumed build against built/ modulo node ids)"; \
@@ -825,6 +846,304 @@ _test-integration-verify-arxiv: build
         exit 1
     fi
     printf 'integration(test-integration-verify-arxiv) ok\n'
+
+# One export leg: a copy of `source` (a git repository, cloned, or a bare
+# kb-root/ directory, copied into a fresh repository; the source itself is only
+# read), the author's `preamble` copied to <copy>/latex-export/preamble.tex
+# where one is named, then these checks. A failed export ends the leg; any other
+# failed check is printed as a `fail` line and the checks after it still run,
+# so the leg's first `fail` line is its first failing check, and it exits 1:
+#   export    ./bin/kbase export-latex --out <copy>/latex-export -> done
+#   counts    tools/export/export_forms.py counts: the streams' contract forms
+#             against main.tex and the report, each volume's footnotes its own
+#             definitions, every reference macro a label, the links, and the
+#             report's completeness and truth against the KB files
+#   reissue   the same export -> unchanged, every file of the out tree
+#             byte-identical (sha256 before and after)
+#   latexmk   -pdf and -lualatex in gen-tex/ (skipped, with a line, for a
+#             missing latexmk or engine)
+#   logs      the compile logs free of undefined references and citations and
+#             of missing characters
+# Everything it writes is under <out>/<name>/ (comparison.yaml, counts.txt,
+# hashes.1, hashes.2, the *.result.yaml and *.log of each step, log-scan.txt)
+# but leg.log, which the caller tees; the counts are appended to <out>/counts.tsv.
+[private]
+_export-leg out name source preamble:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    kbase="${root}/{{BIN_DIR}}/kbase"
+    checker="${root}/{{EXPORT_CHECK_DIR}}/export_forms.py"
+    name="{{name}}"
+    source="{{source}}"
+    preamble="{{preamble}}"
+    dir="${root}/{{out}}/${name}"
+    repo="${dir}/repo"
+    export_dir="${repo}/latex-export"
+    gen="${export_dir}/gen-tex"
+    comparison="${dir}/comparison.yaml"
+    mkdir -p "${dir}"
+    find "${dir}" -mindepth 1 -maxdepth 1 ! -name leg.log -exec rm -rf {} +
+    printf -- '- id: "%s"\n  checks:\n' "${name}" > "${comparison}"
+    # record <check> <pass|fail|skip> <detail>: one line in comparison.yaml and one on stdout.
+    record() {
+        printf '    - {check: "%s", status: %s, detail: "%s"}\n' "$1" "$2" "${3//\"/\\\"}" >> "${comparison}"
+        printf '%s %s: %s%s\n' "$2" "${name}" "$1" "${3:+ — $3}"
+    }
+    # fail <check> <detail>: a failed check; the checks that do not depend on it still run.
+    failed=0
+    fail() {
+        record "$1" fail "$2"
+        failed=1
+    }
+    if [[ -d "${source}/.git" ]]; then
+        git clone -q "${source}" "${repo}"
+    else
+        mkdir -p "${repo}"
+        cp -R "${source}" "${repo}/kb-root"
+        git init -q "${repo}"
+    fi
+    if [[ -n "${preamble}" ]]; then
+        mkdir -p "${export_dir}"
+        cp "${preamble}" "${export_dir}/preamble.tex"
+    fi
+    # issue <stem>: one export; its exit code in rc, its outcome in outcome.
+    issue() {
+        rc=0
+        ( cd "${repo}" && "${kbase}" export-latex --out "${export_dir}" ) > "${dir}/$1.result.yaml" 2> "${dir}/$1.log" || rc=$?
+        outcome="$(sed -n 's/^outcome: "\(.*\)"$/\1/p' "${dir}/$1.result.yaml")"
+    }
+    hashes() {
+        ( cd "${export_dir}" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 ) > "${dir}/$1"
+    }
+
+    issue export
+    if [[ "${rc}" -ne 0 || "${outcome}" != done ]]; then
+        fail export "exit ${rc}, outcome '${outcome}' (want 0, done): see export.result.yaml and export.log"
+        exit 1
+    fi
+    record export pass "outcome done"
+
+    rc=0
+    python3 -B "${checker}" counts "${gen}" --kb-root "${repo}/kb-root" > "${dir}/counts.txt" || rc=$?
+    tab=$'\t'
+    sed -E "s/^(ok|FAIL): (.*): want (.*) got (.*)\$/${name}${tab}\1${tab}\2${tab}\3${tab}\4/" "${dir}/counts.txt" >> "${root}/{{out}}/counts.tsv"
+    if [[ "${rc}" -eq 0 ]]; then
+        record counts pass "$(grep -c '^ok' "${dir}/counts.txt") checks, see counts.txt"
+    else
+        fail counts "$(grep -m1 '^FAIL' "${dir}/counts.txt"): see counts.txt"
+    fi
+
+    hashes hashes.1
+    issue reissue
+    hashes hashes.2
+    if [[ "${rc}" -ne 0 || "${outcome}" != unchanged ]]; then
+        fail reissue "exit ${rc}, outcome '${outcome}' (want 0, unchanged): see reissue.result.yaml and reissue.log"
+    elif ! cmp -s "${dir}/hashes.1" "${dir}/hashes.2"; then
+        fail reissue "the out tree changed across the re-issue: diff hashes.1 hashes.2"
+    else
+        record reissue pass "unchanged, $(wc -l < "${dir}/hashes.1" | tr -d ' ') files byte-identical"
+    fi
+
+    logs=()
+    for engine in pdf lualatex; do
+        flag="-${engine}"
+        binary="${engine}"
+        [[ "${engine}" == pdf ]] && binary=pdflatex
+        if ! command -v latexmk > /dev/null || ! command -v "${binary}" > /dev/null; then
+            record "latexmk-${engine}" skip "latexmk or ${binary} is not on PATH"
+            continue
+        fi
+        rc=0
+        ( cd "${gen}" && latexmk -C -quiet main.tex && latexmk "${flag}" -interaction=nonstopmode -halt-on-error main.tex ) \
+            > "${dir}/latexmk-${engine}.log" 2>&1 || rc=$?
+        [[ -f "${gen}/main.log" ]] && cp "${gen}/main.log" "${dir}/main-${engine}.log"
+        if [[ "${rc}" -ne 0 ]]; then
+            fail "latexmk-${engine}" "latexmk ${flag} exited ${rc}: $(LC_ALL=C grep -a -m1 -e '^!' -e 'Missing character' "${dir}/main-${engine}.log" || true) (main-${engine}.log)"
+        else
+            record "latexmk-${engine}" pass "main.pdf built"
+        fi
+        [[ ! -f "${dir}/main-${engine}.log" ]] || logs+=("${dir}/main-${engine}.log")
+    done
+    if [[ "${#logs[@]}" -eq 0 ]]; then
+        record logs skip "no compile ran"
+    else
+        rc=0
+        python3 -B "${checker}" log "${logs[@]}" > "${dir}/log-scan.txt" || rc=$?
+        if [[ "${rc}" -eq 0 ]]; then
+            record logs pass "no undefined references or citations, no missing characters"
+        else
+            fail logs "$(grep -m1 '^FAIL' "${dir}/log-scan.txt"): see log-scan.txt"
+        fi
+    fi
+    exit "${failed}"
+
+# One KB of several: <dest>/kb-root/ is a copy of the first of `kb_roots`, with
+# each later kb-root's volume directories copied beside it and its entry-point
+# bullets appended to the entry point; <dest>/preamble.tex is the `preambles`
+# concatenated in order. By hand because no write op edits an entry point's
+# volume list (set-frontmatter replaces frontmatter only), and refresh and
+# verify refuse the result (the registers stay per volume). The sources are only read.
+[private]
+_stage-export-multivolume dest kb_roots preambles:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dest="{{dest}}"
+    read -r -a roots <<< "{{kb_roots}}"
+    read -r -a preambles <<< "{{preambles}}"
+    for root in "${roots[@]}"; do
+        [[ -f "${root}/entry-point.md" ]] || { printf 'error: %s holds no entry-point.md\n' "${root}" >&2; exit 1; }
+    done
+    for path in "${preambles[@]}"; do
+        [[ -f "${path}" ]] || { printf 'error: %s is not a file\n' "${path}" >&2; exit 1; }
+    done
+    rm -rf "${dest}"
+    mkdir -p "${dest}"
+    cp -R "${roots[0]}" "${dest}/kb-root"
+    for root in "${roots[@]:1}"; do
+        added=0
+        while IFS= read -r line; do
+            [[ "${line}" =~ ^-\ \[.*\]\(([^/\)]+)/index\.md\) ]] || continue
+            volume="${BASH_REMATCH[1]}"
+            [[ ! -e "${dest}/kb-root/${volume}" ]] || { printf 'error: volume directory %s is in two of the KBs\n' "${volume}" >&2; exit 1; }
+            cp -R "${root}/${volume}" "${dest}/kb-root/${volume}"
+            printf '%s\n' "${line}" >> "${dest}/kb-root/entry-point.md"
+            added=$((added + 1))
+        done < "${root}/entry-point.md"
+        [[ "${added}" -gt 0 ]] || { printf 'error: %s/entry-point.md lists no volume\n' "${root}" >&2; exit 1; }
+    done
+    cat "${preambles[@]}" > "${dest}/preamble.tex"
+
+# The export legs over the kb_tools-built fixtures. Each fixture of
+# VERIFY_ARXIV_IDS (the slice's six papers, built complete by
+# prep-test-integration-kbtools-full) is cloned to <id>/repo and exported to
+# <id>/repo/latex-export; the committed 0.9.0 kb_tools-built KB runs as the
+# leg `kbtools-0.9.0`; EXPORT_MULTIVOLUME_IDS' fixtures combined into one KB of
+# two volumes run as the leg `multi-volume`, where a footnote [^1] in each
+# volume must come out as its own volume's note. An author's preamble the exported maths needs stands in
+# EXPORT_PREAMBLE_DIR as <id>.tex and is copied in before the export. The
+# checks are _export-leg's; this recipe runs one leg per input, rolls the
+# legs into legs.yaml and counts.tsv, and fails if any leg did.
+[doc("NEEDS pandoc + python3 + a TeX distribution with latexmk (a missing latexmk skips the compile checks) + the adjagent clone (excluded from test-integration): ./bin/kbase export-latex on a clone of each kb_tools-built KB of prep-test-integration-kbtools-full and of the committed 0.9.0 kb_tools-built KB, with the author's preamble from test_data/fixtures/export-preambles/<id>.tex where the maths needs one, and on two of those KBs combined into one (leg multi-volume): done; every data-cites span a \\cite or a citation report line, every label a \\label, every reference anchor a reference macro or an anchor report line; every volume's footnotes the text of its own definitions and every reference macro a label; the report complete and true against the KB files; the same export again unchanged and byte-identical; latexmk -pdf and -lualatex green with logs free of undefined references, undefined citations and missing characters; evidence under test_data/transient/test-integration-export-arxiv/")]
+test-integration-export-arxiv: (prep-test-integration-kbtools-full VERIFY_ARXIV_IDS) test-export-forms
+    @mkdir -p "{{EXPORT_ARXIV_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-export-arxiv 2>&1 | tee "{{EXPORT_ARXIV_OUT_DIR}}/log.txt"
+
+[private]
+_test-integration-export-arxiv: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="{{EXPORT_ARXIV_OUT_DIR}}"
+    for tool in pandoc python3 shasum; do
+        command -v "${tool}" > /dev/null || { printf 'error: %s is not on PATH\n' "${tool}" >&2; exit 1; }
+    done
+    mkdir -p "${out}"
+    printf 'fixture\tstatus\tcheck\twant\tgot\n' > "${out}/counts.tsv"
+    : > "${out}/legs.yaml"
+    legs=0
+    failed=()
+    run_leg() {
+        local name="$1" source="$2" preamble="$3"
+        legs=$((legs + 1))
+        mkdir -p "${out}/${name}"
+        {{just_executable()}} _export-leg "${out}" "${name}" "${source}" "${preamble}" 2>&1 | tee "${out}/${name}/leg.log" \
+            || failed+=("${name}")
+        cat "${out}/${name}/comparison.yaml" >> "${out}/legs.yaml"
+    }
+    printf 'kb_tools-built fixtures (VERIFY_ARXIV_IDS): %s\n' "$(printf '%s\n' {{VERIFY_ARXIV_IDS}} | wc -l | tr -d ' ')"
+    for id in {{VERIFY_ARXIV_IDS}}; do
+        name="$(printf '%s' "${id}" | tr '/' '_')"
+        source="{{KBTOOLS_REF_DIR}}/${name}"
+        if [[ -z "$(git -C "${source}" log -n1 --format=%H --grep='^kb-build: overview-drafted ' 2>/dev/null)" ]]; then
+            printf 'error: %s holds no kb-build: overview-drafted commit\n' "${source}" >&2
+            exit 1
+        fi
+        preamble="{{EXPORT_PREAMBLE_DIR}}/${name}.tex"
+        [[ -f "${preamble}" ]] || preamble=""
+        run_leg "${name}" "${source}" "${preamble}"
+        # The fixture is only read: a changed worktree is a finding of its own.
+        if [[ -n "$(git -C "${source}" status --porcelain)" ]]; then
+            printf 'fail %s: the export left the fixture changed\n' "${name}"
+            failed+=("${name}-fixture-changed")
+        fi
+    done
+    run_leg kbtools-0.9.0 "{{EXPORT_KBTOOLS_090_KB_ROOT}}" ""
+    roots=()
+    preambles=()
+    for id in {{EXPORT_MULTIVOLUME_IDS}}; do
+        roots+=("{{KBTOOLS_REF_DIR}}/${id}/kb-root")
+        [[ ! -f "{{EXPORT_PREAMBLE_DIR}}/${id}.tex" ]] || preambles+=("{{EXPORT_PREAMBLE_DIR}}/${id}.tex")
+    done
+    {{just_executable()}} _stage-export-multivolume "${out}/stage-multi-volume" "${roots[*]}" "${preambles[*]}"
+    run_leg multi-volume "${out}/stage-multi-volume/kb-root" "${out}/stage-multi-volume/preamble.tex"
+    {{just_executable()}} _write-evidence "${out}" "test-integration-export-arxiv" \
+      "stage-multi-volume/: the leg multi-volume's source, _stage-export-multivolume over the kb-root/ of {{EXPORT_MULTIVOLUME_IDS}} (the first copied whole, the later volumes' directories and entry-point bullets added), preamble.tex their preambles concatenated\nper leg <id> (each VERIFY_ARXIV_IDS fixture of {{KBTOOLS_REF_DIR}}, kbtools-0.9.0 from {{EXPORT_KBTOOLS_090_KB_ROOT}}, and multi-volume from stage-multi-volume/), _export-leg: git clone the fixture to <id>/repo; cp {{EXPORT_PREAMBLE_DIR}}/<id>.tex <id>/repo/latex-export/preamble.tex where it exists\n(cd <id>/repo && ./bin/kbase export-latex --out <id>/repo/latex-export) > <id>/export.result.yaml 2> <id>/export.log\npython3 tools/export/export_forms.py counts <id>/repo/latex-export/gen-tex --kb-root <id>/repo/kb-root > <id>/counts.txt\nthe export again > <id>/reissue.result.yaml; sha256 of every file of latex-export/ before and after: <id>/hashes.1, hashes.2\n(cd <id>/repo/latex-export/gen-tex && latexmk -pdf main.tex; latexmk -lualatex main.tex) > <id>/latexmk-<engine>.log; main.log kept as <id>/main-<engine>.log\npython3 tools/export/export_forms.py log <id>/main-*.log > <id>/log-scan.txt"
+    if [[ "${#failed[@]}" -gt 0 ]]; then
+        printf 'integration(test-integration-export-arxiv): %d of %d legs failed (%s) — first failing check of each:\n' "${#failed[@]}" "${legs}" "${failed[*]}"
+        for name in "${failed[@]}"; do
+            grep -h -m1 '^fail ' "${out}/${name}/leg.log" 2>/dev/null || true
+        done
+        exit 1
+    fi
+    printf 'integration(test-integration-export-arxiv) ok: %d legs\n' "${legs}"
+
+# The export leg over the hand-maintained KB test_data/transient/ModernCorpNoTex
+# (a repository; cloned), with its preamble fixture: _export-leg's checks, among
+# them every internal link in the exported documents a \hyperref or a link
+# report line, the report complete (each degraded link and image has its line)
+# and true (each line names a form the KB file at its path holds). The leg
+# `multi-volume` adds EXPORT_MULTIVOLUME_IDS' volumes to that KB (none of the
+# hand-maintained KB's documents defines a footnote, so the footnote check
+# there rests on the two built volumes, which each define a [^1]), the
+# preambles concatenated.
+[doc("NEEDS pandoc + python3 + a TeX distribution with latexmk (a missing latexmk skips the compile checks) + test_data/transient/ModernCorpNoTex (absent: skips with a message) + the adjagent clone for the two kb_tools-built fixtures of the multi-volume leg (excluded from test-integration): ./bin/kbase export-latex on a clone of the hand-maintained KB with test_data/fixtures/export-preambles/ModernCorpNoTex.tex as the author's preamble, and on that KB with two kb_tools-built volumes added (leg multi-volume): done; counts as test-integration-export-arxiv; every internal link a \\hyperref or a link report line; the report complete and true against the KB files; re-issue unchanged and byte-identical; latexmk -pdf and -lualatex green with clean logs; evidence under test_data/transient/test-integration-export-maintained/")]
+test-integration-export-maintained: test-export-forms (prep-test-integration-kbtools-full EXPORT_MULTIVOLUME_IDS)
+    @mkdir -p "{{EXPORT_MAINTAINED_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-export-maintained 2>&1 | tee "{{EXPORT_MAINTAINED_OUT_DIR}}/log.txt"
+
+[private]
+_test-integration-export-maintained: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="{{EXPORT_MAINTAINED_OUT_DIR}}"
+    if [[ ! -d "{{EXPORT_MAINTAINED_DIR}}/kb-root" ]]; then
+        printf 'skip: %s is absent; stage the hand-maintained KB there to run this recipe\n' "{{EXPORT_MAINTAINED_DIR}}"
+        exit 0
+    fi
+    for tool in pandoc python3 shasum; do
+        command -v "${tool}" > /dev/null || { printf 'error: %s is not on PATH\n' "${tool}" >&2; exit 1; }
+    done
+    name="$(basename "{{EXPORT_MAINTAINED_DIR}}")"
+    mkdir -p "${out}/${name}"
+    printf 'fixture\tstatus\tcheck\twant\tgot\n' > "${out}/counts.tsv"
+    : > "${out}/legs.yaml"
+    failed=()
+    run_leg() {
+        local leg="$1" source="$2" preamble="$3"
+        mkdir -p "${out}/${leg}"
+        {{just_executable()}} _export-leg "${out}" "${leg}" "${source}" "${preamble}" 2>&1 | tee "${out}/${leg}/leg.log" \
+            || failed+=("${leg}")
+        cat "${out}/${leg}/comparison.yaml" >> "${out}/legs.yaml"
+    }
+    run_leg "${name}" "{{EXPORT_MAINTAINED_DIR}}" "{{EXPORT_PREAMBLE_DIR}}/${name}.tex"
+    roots=("{{EXPORT_MAINTAINED_DIR}}/kb-root")
+    preambles=("{{EXPORT_PREAMBLE_DIR}}/${name}.tex")
+    for id in {{EXPORT_MULTIVOLUME_IDS}}; do
+        roots+=("{{KBTOOLS_REF_DIR}}/${id}/kb-root")
+        [[ ! -f "{{EXPORT_PREAMBLE_DIR}}/${id}.tex" ]] || preambles+=("{{EXPORT_PREAMBLE_DIR}}/${id}.tex")
+    done
+    {{just_executable()}} _stage-export-multivolume "${out}/stage-multi-volume" "${roots[*]}" "${preambles[*]}"
+    run_leg multi-volume "${out}/stage-multi-volume/kb-root" "${out}/stage-multi-volume/preamble.tex"
+    {{just_executable()}} _write-evidence "${out}" "test-integration-export-maintained" \
+      "stage-multi-volume/: the leg multi-volume's source, _stage-export-multivolume over the kb-root/ of {{EXPORT_MAINTAINED_DIR}} and of {{EXPORT_MULTIVOLUME_IDS}} (the first copied whole, the later volumes' directories and entry-point bullets added), preamble.tex their preambles concatenated\n_export-leg ${name} (and multi-volume from stage-multi-volume/): git clone {{EXPORT_MAINTAINED_DIR}} to ${name}/repo; cp {{EXPORT_PREAMBLE_DIR}}/${name}.tex ${name}/repo/latex-export/preamble.tex\n(cd ${name}/repo && ./bin/kbase export-latex --out ${name}/repo/latex-export) > ${name}/export.result.yaml 2> ${name}/export.log\npython3 tools/export/export_forms.py counts ${name}/repo/latex-export/gen-tex --kb-root ${name}/repo/kb-root > ${name}/counts.txt\nthe export again > ${name}/reissue.result.yaml; sha256 of every file of latex-export/ before and after: ${name}/hashes.1, hashes.2\n(cd ${name}/repo/latex-export/gen-tex && latexmk -pdf main.tex; latexmk -lualatex main.tex) > ${name}/latexmk-<engine>.log; main.log kept as ${name}/main-<engine>.log\npython3 tools/export/export_forms.py log ${name}/main-*.log > ${name}/log-scan.txt"
+    if [[ "${#failed[@]}" -gt 0 ]]; then
+        printf 'integration(test-integration-export-maintained): %d of 2 legs failed (%s) — first failing check of each:\n' "${#failed[@]}" "${failed[*]}"
+        for leg in "${failed[@]}"; do
+            grep -h -m1 '^fail ' "${out}/${leg}/leg.log" 2>/dev/null || true
+        done
+        exit 1
+    fi
+    printf 'integration(test-integration-export-maintained) ok: 2 legs\n'
 
 # The compatibility op script (COMPAT_OP_SCRIPT, rendered per fixture by
 # TestStageOpScript) applied to two clones of each kb_tools-built fixture:
@@ -2232,7 +2551,7 @@ _test-integration-init: build
     repo="${out}/repo"
     docs="${out}/docs"
     nodot="${out}/repo-nodot"
-    rm -rf "${repo}" "${docs}" "${nodot}" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/sf.json" "${out}/mc.json" "${out}/sf-run.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state"
+    rm -rf "${repo}" "${docs}" "${nodot}" "${out}/outside" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/sf.json" "${out}/mc.json" "${out}/sf-run.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state"
     mkdir -p "${docs}"
     export GIT_AUTHOR_NAME=init-integration GIT_AUTHOR_EMAIL=init@invalid GIT_COMMITTER_NAME=init-integration GIT_COMMITTER_EMAIL=init@invalid GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/gitconfig"
     status=0
@@ -2262,11 +2581,14 @@ _test-integration-init: build
     # 1. outside a worktree: refused, nothing created. run() executes from
     # ${repo}, so ${repo} points at mktemp's own tree — somewhere under no
     # repository at all, not the project's transient dir, which a repository
-    # does hold.
+    # does hold. The whole run tree is copied to ${out}/outside before the
+    # temporary directory goes.
     outside="$(mktemp -d)"
     repo="${outside}"
     run init refused init
     [[ ! -e "${outside}/kb-root" ]] || fail "a kb-root stands outside a worktree"
+    mkdir -p "${out}/outside"
+    cp -R "${outside}/." "${out}/outside/"
     rm -rf "${outside}"
     repo="${out}/repo"
     # 2. birth, default title: the repository's directory name. init commits
@@ -2311,7 +2633,7 @@ _test-integration-init: build
     grep -q 'no Graphviz dot on PATH' "${docs}/init-nodot.log" || fail "the no-dot lack is not said on stderr"
     grep -q 'no Graphviz dot on PATH' "${nodot}/kb-root/claim-graph.svg" || fail "claim-graph.svg is not the placeholder"
     {{just_executable()}} _write-evidence "${out}" "test-integration-init" \
-      "git init repo/ (identity fixed in the environment, global config quarantined to gitconfig)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
+      "git init repo/ (identity fixed in the environment, global config quarantined to gitconfig)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir, whose run tree is copied to outside/; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-init): a birth check failed — see init.tsv\n'
         exit 1
@@ -2434,27 +2756,72 @@ clean:
     @rm -f "{{BIN_DIR}}/kbase" "{{BIN_DIR}}/kbase.exe"
 
 # cross-platform dist builds (apple-silicon mac, x86_64 windows, x86_64 linux),
-# staged with the user-facing README + LICENSE and tarballed as the user
-# distro artifact: {{DIST_DIR}}/kbase-dist-<version>.tar.gz, unpacking to
-# kbase-<version>/. Version comes from the binary itself (internal/version
+# staged and signed. staging dir also gets user-facing project docs.
+# distro artifacts in {{DIST_DIR}}: kbase-<version>.tgz, kbase-<version>.asc, install-kbase-<version>.sh
+# tarball unpacks to kbase-<version>/.
+# Version comes from the binary itself (internal/version
 # stays the single source). It runs the full checkpoint first: a cross-build
 # is what users receive, so it ships only from a tree that passes the gate
 # every commit passes.
 [doc("checkpoint, cross-build every target, stage the user distro tarball")]
-dist: checkpoint
-    @mkdir -p {{BIN_DIR}}
+dist: #checkpoint
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{BIN_DIR}}
+    command rm -f "{{BIN_DIR}}"/kbase*
     GOOS=darwin  GOARCH=arm64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-darwin-arm64 ./cmd
-    GOOS=windows GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
     GOOS=linux   GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-linux-amd64 ./cmd
-    @ver="$(go run ./cmd --version)"; \
-    stage="{{DIST_DIR}}/kbase-$ver"; \
-    rm -rf "$stage" && mkdir -p "$stage" && \
-    cp {{BIN_DIR}}/kbase-* "$stage/" && \
-    cp README.md "$stage/README.md" && \
-    cp USER_CONVENTIONS.md "$stage/CONVENTIONS.md" && \
-    cp LICENSE "$stage/" && \
-    tar -czf "{{DIST_DIR}}/kbase-dist-$ver.tar.gz" -C {{DIST_DIR}} "kbase-$ver" && \
-    echo "dist: {{DIST_DIR}}/kbase-dist-$ver.tar.gz"
+    GOOS=windows GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
+    ver="v$(go run ./cmd --version)"
+    ver_dir="kbase-${ver}"
+    tgz="${ver_dir}.tgz"
+    tgz_asc="${tgz}.asc"
+    inst="install-${ver_dir}.sh"
+    command rm -rf "{{DIST_DIR}}/${ver_dir}" "{{DIST_DIR}}/${tgz}" "{{DIST_DIR}}/${tgz_asc}" "{{DIST_DIR}}/${inst}"
+    stage="{{DIST_DIR}}/${ver_dir}"
+    mkdir -p "${stage}"
+    cp "{{BIN_DIR}}"/kbase-*-* "${stage}/"
+    (
+      cd "${stage}"
+      for KB in *; do
+        gpg --detach-sign --armor "${KB}"
+      done
+    )
+    cp USER_CONVENTIONS.md "$stage/CONVENTIONS.md"
+    cp README.md LICENSE "$stage/"
+    tar -czf "{{DIST_DIR}}/${tgz}" -C "{{DIST_DIR}}" "${ver_dir}"
+    gpg --detach-sign --armor "{{DIST_DIR}}/${tgz}"
+    cat > "{{DIST_DIR}}"/${inst} << EOF
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v gpg > /dev/null || { echo "gpg not installed or not in PATH."; exit 1; }
+    printf "If gpg check fails for the tgz or any binary DO NOT USE THIS DOWNLOAD!\n\n"
+    curl -Ls https://github.com/benn-herrera/public-keys/raw/refs/heads/main/pub-sig-benn-herrera.asc | gpg --import
+    [[ -f "${tgz_asc}" ]] || curl -LO "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz_asc}"
+    [[ -f "${tgz}" ]] || curl -LO "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz}"
+    gpg --verify "${tgz_asc}" "${tgz}"
+    [[ -d "${ver_dir}" ]] || tar xzf "${tgz}"
+
+    gpg --verify "./${ver_dir}/kbase-darwin-arm64.asc" "./${ver_dir}/kbase-darwin-arm64"
+    gpg --verify "./${ver_dir}/kbase-linux-amd64.asc" "./${ver_dir}/kbase-linux-amd64"
+    gpg --verify "./${ver_dir}/kbase-windows-amd64.exe.asc" "./${ver_dir}/kbase-windows-amd64.exe"
+
+    case \$(uname) in
+      Darwin)
+        command cp -vf "./${ver_dir}/kbase-darwin-arm64" "./${ver_dir}/kbase"
+        xattr -d com.apple.quarantine "./${ver_dir}/kbase" 2> /dev/null || true
+        ;;
+      Linux)
+        command cp -vf "./${ver_dir}/kbase-linux-amd64" "./${ver_dir}/kbase"
+        ;;
+      MINGW64*|MSYS*)
+        command cp -vf "./${ver_dir}/kbase-windows-amd64.exe" "./${ver_dir}/kbase.exe"
+        ;;
+      *) echo "\$(uname) is not supported." 1>&2; exit 1;;
+    esac
+    EOF
+    chmod 755 "{{DIST_DIR}}/${inst}"
+    echo "dist: {{DIST_DIR}}/${tgz} {{DIST_DIR}}/${tgz_asc} {{DIST_DIR}}/${inst}"
 
 [doc("remove every build output: bin/, dist/, and build/ entirely")]
 nuke:

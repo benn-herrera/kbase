@@ -79,7 +79,14 @@ single source. Working habits they impose:
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
   beside it. The one self-exec owner is a file, not a package: `cmd/mcp.go` alone may exec the kbase
   binary, and the test fails on any other file that does. The policy scans share one module walk
-  (`cmd/modulescan_test.go`), so they agree on which files are the module's source.
+  (`cmd/modulescan_test.go`), so they agree on which files are the module's source. The scan
+  reads test files as source too — the trap: a package test that compiles its output under
+  `pdflatex` has nothing wrong in it and fails the tree. A verification needing a binary no
+  package owns is never a package test: it is a runner recipe (recipes exec freely). Evidence
+  gathered for the change at hand is not a verification but a probe — a script run by hand in
+  scratch, its log cited in the report, with no durable home. A probe whose finding must keep
+  holding becomes a verification: the check lands in a recipe. A probe whose result a commit or
+  plan cites keeps its command in the commit message, so a later reader can re-run it.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
 - **The installed agent set is a pinned artifact, never edited here.** `.claude/agents/` and
@@ -174,6 +181,16 @@ single source. Working habits they impose:
 - **Compare a label in the page's spelling.** pandoc escapes `&<>"'` in attribute values, and
   differently for a `Link` than for a `Span` or `Div`. A fact kbase records to be compared against
   the page carries the escaped form the page carries; never unescape one side to match the other.
+  A label carried out of the page into another format — the LaTeX export — is HTML-decoded once, at
+  its read; the page-spelling rule governs comparisons against the page.
+- **In a pandoc Lua `topdown` walk, what a filter returns in place of its element never meets the
+  walk's filters — not its own type's, not the enclosing list's — though its children are walked.**
+  One element or a list, block or inline alike (pandoc 3.12.1). The trap: a filter that returns
+  anything but nil or the element it was given — a `BlockQuote` filter returning the quote's body
+  expects the `Figure` filter to see a figure in it, and it does not. Such a filter walks its output
+  itself, as a list (`pandoc.Blocks{…}:walk(f)`, `pandoc.Inlines{…}:walk(f)`; an element's own
+  `:walk` skips that element), and returns the result with `false` as the second value, or the
+  descent walks those children twice.
 - **Inside a bracket expression, spell whitespace as `kb.PyWhitespace`, never `\s`.** `kb.PyRE`
   expands `\s` into a bracket expression of its own, and nested inside `[...]` that compiles,
   without error, into a different pattern.
@@ -258,7 +275,9 @@ nothing on the other's.
   adjagent reference is excluded from the hermetic omnibus `test-integration` and says so in its
   `[doc]`.
 - Every integration test preserves its full log, its stats, and its run artifacts under
-  `test_data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. Every
+  `test_data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A leg
+  that must run outside any repository runs in a system temporary directory and copies its whole
+  run tree under `test_data/transient/<test-name>/` before removing it. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
   store (`refresh`, `verify`, the queries) takes no such flag. `build` resolves and creates its

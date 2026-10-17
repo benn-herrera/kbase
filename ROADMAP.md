@@ -6,7 +6,7 @@ deleted, not archived.
 
 ## Now
 
-- The claim-graph pipeline rework (`ACTIVE_PLAN.md`): discovery; mutual references found with
+- The claim-graph pipeline rework (`ROADMAP_PLANS/CLAIM_GRAPH_REWORK.md`): discovery; mutual references found with
   adjacency by rule and a proximity-ranked shortlist, links held in the records; the
   co-linearity cull over links; direction by the three-way ask over every link; the cycle cut
   last and once. The ask-refactor cleanup that preceded it closed 2026-10-12 (its record is
@@ -16,10 +16,10 @@ deleted, not archived.
 
 - The instrument before the readings. The comparison tool in `tools/measure` is the only measure of
   the pipeline against the curated KB, and its threshold moves the edge table by itself
-  (`ACTIVE_PLAN.md`, the resumed run's reading). Done: the architect review (the document is
+  (`ACTIVE_PLAN.md` at commit `fe02521`, §3, the resumed run's reading). Done: the architect review (the document is
   `ROADMAP_PLANS/COMPARE_TO_PRISTINE_REVIEW.md` at commit `06059d2`) and its first two rounds of
   fixes with tests pinning the cascade and every recall class, plus the cull-aware listing
-  (`tools/measure/culled_matches.py`). Remaining, listed as `ACTIVE_PLAN.md` §4: the sibling
+  (`tools/measure/culled_matches.py`). Remaining, listed as `ROADMAP_PLANS/CLAIM_GRAPH_REWORK.md` §4: the sibling
   scripts' reach read from kbase's own records, the review's open notes, and then the per-miss
   diagnostic, one row per curated edge not recovered, naming the path it was lost on (never
   shortlisted, answered no, culled, or read as mention) from the build records. Only then tune
@@ -64,10 +64,6 @@ deleted, not archived.
   `libcgraph`, the `dot` layout and SVG plugins linked statically, the libraries vendored once per
   build platform), replacing the `dot`-on-PATH requirement; the DOT goldens judge the swap. The
   exec route stays the contract until then.
-- Convenient path for MD -> LaTeX via pandoc for KB-canonical workflow
-  (don't rewrite an MD -> LaTeX workflow, for pity's sake.)
-- Scratch creation from an empty KB instead of LaTeX -> KB first is designed and landing: the plan
-  is `ROADMAP_PLANS/KBASE_SCRATCH_INIT.md` (`kbase init`, SPEC §8).
 
 Four items are also reported upstream to kb_tools as findings: resolved numbering, display names
 from `\input`-ed preambles, the `-latex_macros` reading, and records-native leaves.

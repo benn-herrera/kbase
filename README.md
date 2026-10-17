@@ -160,7 +160,8 @@ stays refused forever (SPEC §5's fresh-vs-resume reads the `kb-build:` trail, a
 commit is a plain subject); content joins through the write ops, a claim at a time.
 
 After a build, subcommands operate on the living KB: write ops that insert entries and set fields,
-`render-citation`, queries over the claim graph, `refresh` and `verify`, and `render-claim-graph`.
+`render-citation`, queries over the claim graph, `refresh` and `verify`, `render-claim-graph`, and
+`export-latex`, which writes a LaTeX project from the KB through pandoc.
 The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `solidity-below`,
 `subtree`, `weak-points` and `stats`. Run `kbase --help` for the list and `kbase <command> --help`
 for each one.

@@ -46,8 +46,9 @@ is in scope.
 `pandoc-api-version`, exclusive, where major means the first two components under Haskell's
 versioning policy: 1.23.x is accepted, 1.24 is not. Only the owner widens the range. The range and
 the `pandoc-api-version` are enforced at preflight; a missing pandoc is refused with an error naming
-pandoc's install page. kbase runs pandoc LaTeX to JSON with no filters, and with `--citeproc`
-exactly when a bibliography is offered, as kb_tools does.
+pandoc's install page. The build's reader runs pandoc LaTeX to JSON with no filters, and with
+`--citeproc` exactly when a bibliography is offered, as kb_tools does; `export-latex` (§8) is the
+one run with a filter.
 
 **kb_tools' KB contract**, cited by section at the pinned commit:
 
@@ -188,6 +189,7 @@ there is a defect. Build-orchestration differences are the "Not ported" list in 
 | The `claims-culled` stage | Walks the stage between `references-found` and `depends-attributed` (§5), so a KB can lack prose claim nodes the stage judged to state no step a linked claim does not, hold leaves restated no-claim with a fixed reason, and be accompanied by the cull record (§6), whose `links` the sheet reads for provenance (§3) | Has no such stage: its KB keeps every claim node the earlier stages left, until it adopts, which closes this row |
 | Write-op surface | Three public ops, `drop-claim-edges`, `drop-inbound-edges` and `drop-claim-node` (§8), and one build-only op, `demote-claim-edge` (§10) | Has none of the four, until it adopts, which closes this row |
 | Scratch creation (`init`) | The subcommand `init` (§8) creates a KB empty at `<git root>/kb-root/` — the stamped entry point, `.index/`, the readiness documents, the sheets at zero nodes (§3) — and maintenance (§8) fills it; `build` stays refused against its populated `kb-root/` (§5's fresh-vs-resume reads the `kb-build:` trail, and `init`'s birth commit is a plain subject); outside a git worktree `init` refuses with remedy `git init`, never creating one | Has none: its KBs all come out of a driver run |
+| LaTeX export (`export-latex`) | Creates a compilable LaTeX project from the KB's current state (one combined project per KB; `--volume` may restrict), reading every KB file through the one loader (§10); markers and the refined half (registers, `.index/`) are not exported; forms with no exported target degrade, never refuse | Has none; the export is kbase's alone |
 
 ---
 
@@ -410,7 +412,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `demoted`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `usage`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `demoted`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The values key, flag or positional argument, spelled as `--help` spells it |
@@ -442,6 +444,7 @@ the provider's model ids as `allowed`.
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `models` (ids, sorted ascending) |
 | `configure` | `provider`; `models` (`decision`, `text`, as `config.toml`'s `[models]` spells them); `written` (`config.toml`'s path, or `[]` with outcome `unchanged`) |
+| `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
@@ -504,8 +507,10 @@ kbase init [--title TEXT]
 
 Creates a KB directly — no LaTeX, no build: the equivalent of `git init` for a KB. Run at any depth
 in a git worktree; it resolves the repository root and works at `<git root>/kb-root/` (§1's
-placement). **Refusals come before any write** (§7 item shape): outside a git worktree — `check:
-worktree`, `path` the start directory, remedy `git init`, which the tool never runs itself; and
+placement). **Refusals come before any write** (§7 item shape): a `--title` holding a line break
+(CR or LF) — `check: usage`, `key: --title`: the title is the entry point's one heading line;
+outside a git worktree — `check: worktree`, `path` the start directory, remedy `git init`, which
+the tool never runs itself; and
 against a `kb-root/` that exists in any state, an empty one included — `check: kb-root`, no remedy:
 creation is birth-once, a re-issue where a tree stands is `refused`, never `unchanged`. The result of
 a refusal that found no `kb-root/` carries no `kb-root` key; the refusal items name the paths.
@@ -517,8 +522,8 @@ readiness documents, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect,
 absent, `AGENTS.md` pinned that this KB is authored, not distilled — what it holds its author writes
 into it, a claim at a time; then refreshes, so the derived metadata layer is present at birth
 (§3's full sheet always, the placeholder where `dot` is absent, the digest and volume sheets
-not drawn: no volume holds a node), and `verify` (§8) must come back green over the skeleton before
-the result is `done`. Finally the birth commit: `kb-root/` committed with the plain subject
+not drawn: no volume holds a node). Every input to the skeleton is kbase's own, so `init` runs no
+`verify` of its own; `verify` (§8) over a freshly born KB is green. Finally the birth commit: `kb-root/` committed with the plain subject
 `kb-init: knowledge base created` — never a `kb-build:` subject, so the trail of §5 stays empty and
 `build`'s populated-`kb-root/` refusal (§5) stands over an initialized KB forever: content joins
 §8's ops, never a later build. The commit rides the host's git identity and configuration; git's own
@@ -610,6 +615,63 @@ data.
 Renders every claim-graph sheet (§3) from the index and the build records, writing those whose bytes
 change; kb_tools semantics: "The Claim-Graph Sheet". Without `dot`, §3's rule, and the result names
 the lack. Result keys: §7.
+
+### `export-latex`
+
+```
+kbase export-latex [--out DIR] [--volume NAME]...
+```
+
+Writes a LaTeX project from the KB's current state into `--out` (default `latex-export/` beside
+`kb-root/`; a relative `--out` resolves against the working directory). Every KB file is read through the one loader (§10's stamp rules apply); nothing under
+`kb-root/` is written. `--volume` is repeatable, each naming a volume directory under `kb-root/`;
+the named volumes export in entry-point order, and a `--volume` naming no volume in the entry
+point's list is a usage refusal (§7). The out directory may be any directory, the author's own
+LaTeX project included: kbase owns only its `gen-tex/` subdirectory and writes nothing else there
+but a missing `preamble.tex`. **Manifest refusal.** A `gen-tex/` that exists holding files without
+the export manifest `gen-tex/kbase-export.yaml` is refused whole, nothing written — `check:
+export-dir`, remedy: empty the directory or name another `--out`.
+
+**The project.** `gen-tex/` is kbase's and every export regenerates it: `main.tex`, the whole
+export; `defaults.yaml`, the pandoc defaults file that produced it, its paths relative to itself;
+`kbase-export-front.md`, the entry point's prose, and `kbase-export-vol{N}.md`, one per exported
+volume in order, its documents in walk order — read in that order, each file's footnotes its own;
+`kbase-export.latex`, the template;
+`kbase-export.lua` and `kbase-xref.json`; `assets/`, a copy of every non-Markdown file under each
+exported volume's directory less the claim-graph sheets (§3), at its `kb-root/`-relative path;
+`kbase-export-findings.json`, the
+filter's findings, which the export merges into the report; the report and the manifest. None of it
+is for editing. **The preamble is the author's.** `main.tex` loads `preamble.tex` from the out
+directory, beside `gen-tex/`, after the template's base packages and before its cross-reference
+packages. Where no `preamble.tex` stands, the export writes a starter — commented, loading nothing,
+advising the author to add the packages and macros their sources used; where one stands, the
+export never reads, writes or removes it. Whenever a `preamble.tex` exists, the report carries a
+line naming it as the author's. A built KB keeps its maths as the
+sources wrote it, so a macro or package those sources' preambles supplied is the author's to add
+there; LaTeX names any that is missing. The author may re-run `pandoc -d defaults.yaml` from
+`gen-tex/` without kbase. Compiling `gen-tex/main.tex` is the author's step; kbase runs no TeX
+engine. How the project is produced is ARCHITECTURE §5.7.
+
+**Content.** The export walks every document the index child-list spine names, `overview.md`
+included, as ordinary leaf content; `references.md` leaves are read as bibliography data, never
+walked as documents. Author labels are namespaced per volume, so a label repeated across volumes
+stays distinct, and LaTeX numbers what they label. A reference naming a label its volume defines
+resolves to it; a cleveref-family anchor (`ref+label`, `ref+Label`) renders as one `\cref`/`\Cref`
+over every label it names, one or several, without the anchor's own text beside it. A link to an
+exported KB document becomes a hyperlink to that document's heading. Prose is exported as written:
+a hand-maintained KB's prose mentions of equations and works (`(eq:dv)`, `(Khalil, 2002)`) and its
+bold-line theorem blocks stay text. The bibliography holds `references.md`'s entries or, where a
+volume has none, the register's works.
+
+**Degradation, not refusal** (§3's `dot` posture): a reference whose label its volume does not
+define, a link to a document not exported, and a citation with no bibliography entry each become
+the text they carry; an image whose file is not in the KB becomes its alternative text; a figure or
+table the export cannot rebuild, or one LaTeX cannot float, is written as far as it can be; and
+maths the export cannot recover from the page is left out. Each carries a report line in the
+export report, `gen-tex/kbase-export-report.yaml` (§7's `report` key). Idempotent: a re-issue over the tool's own previous export leaves the
+export byte-identical and reports `unchanged`. The export takes no KB write lock — nothing under
+`kb-root/` is written, so it reads as the queries do — and it runs no git. Result
+keys: §7.
 
 ### `refresh`
 

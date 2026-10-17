@@ -29,14 +29,14 @@ import (
 func preflight(w *walk) (result.Record, error) {
 	version, err := pandoc.Preflight(w.ctx)
 	if err != nil {
-		return nil, pandocFailure(err)
+		return nil, PandocRefusal(err)
 	}
 	return result.Record{{Key: "pandoc", Value: version}}, nil
 }
 
-// pandocFailure is a missing or out-of-range pandoc refused, naming what to
+// PandocRefusal is a missing or out-of-range pandoc refused, naming what to
 // install; anything else as it is.
-func pandocFailure(err error) error {
+func PandocRefusal(err error) error {
 	var missing pandoc.MissingError
 	var bad pandoc.VersionError
 	if errors.As(err, &missing) || errors.As(err, &bad) {
@@ -205,7 +205,7 @@ func documentGraphFailure(err error) error {
 		}
 		return items
 	}
-	if p := pandocFailure(err); p != err {
+	if p := PandocRefusal(err); p != err {
 		return p
 	}
 	return err
@@ -368,7 +368,7 @@ func stampReadiness(w *walk) (result.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	reports, err := kbdocs.Stamp(src, filepath.Base(w.repo.Root), pin)
+	_, reports, err := kbdocs.Stamp(src, filepath.Base(w.repo.Root), pin)
 	rec := result.Record{{Key: "stamped", Value: append([]string{}, reports...)}}
 	return rec, err
 }

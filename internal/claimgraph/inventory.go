@@ -38,10 +38,8 @@ var (
 	printedNameRE = regexp.MustCompile(`^\*\*([^*]+)\*\*`)
 	// citationSpanRE is every citation, by its keys and its rendering.
 	citationSpanRE = kb.PyRE(`(?s)<span\s+class="citation"\s+data-cites="(?P<keys>[^"]*)"\s*>(?P<rendering>.*?)</span>`)
-	// bibliographyEntryRE is one rendered reference-list entry.
-	bibliographyEntryRE = regexp.MustCompile(`(?s)<div id="ref-([^"]+)"[^>]*>(.*?)</div>`)
-	tagRE               = regexp.MustCompile(`<[^>]*>`)
-	emphasisRunRE       = regexp.MustCompile(`\*+`)
+	tagRE          = regexp.MustCompile(`<[^>]*>`)
+	emphasisRunRE  = regexp.MustCompile(`\*+`)
 	// precedingWordRE is the last run of non-space characters ahead of a
 	// position, past any whitespace and opening bracket.
 	precedingWordRE = regexp.MustCompile(`([^` + kb.PyWhitespace + `(\[]+)[` + kb.PyWhitespace + `(\[]*\z`)
@@ -526,12 +524,12 @@ func readCitations(doc Document, cites []records.Record, citations []Citation) e
 }
 
 func readWorks(doc Document, works []Work) error {
-	matches := bibliographyEntryRE.FindAllStringSubmatch(unquote(stripMarkers(doc.Text)), -1)
-	if len(matches) != len(works) {
-		return disagree(doc.Path, "reference-list entries", len(matches), len(works))
+	entries := kb.BibliographyEntries(unquote(stripMarkers(doc.Text)))
+	if len(entries) != len(works) {
+		return disagree(doc.Path, "reference-list entries", len(entries), len(works))
 	}
-	for i, m := range matches {
-		works[i].Text = kb.NormalizeSpace(tagRE.ReplaceAllString(m[2], ""))
+	for i, e := range entries {
+		works[i].Text = kb.NormalizeSpace(tagRE.ReplaceAllString(e.Body, ""))
 	}
 	return nil
 }

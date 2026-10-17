@@ -118,7 +118,9 @@ conformance through G gate) are always written "kb_claimgraph stage B" and so on
 page. It runs LaTeX to JSON with no filters, and with `--citeproc` exactly when a bibliography is
 offered: without one, citeproc would render every citation unanswered, where kb_tools renders it as
 its own keys. It is the reader and the writer seam; the writer runs standalone (`-s`), so the title
-and abstract arrive as the rendering's YAML metadata block. [`pandoc.py`]
+and abstract arrive as the rendering's YAML metadata block. The export's one call is
+`RunDefaults`, `pandoc -d <defaults file>`, under the same version preflight; the `export-latex`
+verb makes it, and `internal/export` never reaches pandoc. The export's mechanism is §5.7. [`pandoc.py`]
 
 ### 5.2 Pre-pass registry
 
@@ -196,6 +198,213 @@ Not ported: `validate_build`'s tree-diff (it compares kbase's path list with kba
 kb_tools' `bibliography-read` and `declaration-read` report lines, and the claim-id link check,
 which needs `.index/` and is verify's (§6).
 
+### 5.7 LaTeX export
+
+How `export-latex` meets SPEC §8, whose outcomes — the files of `gen-tex/`, the content rules,
+degradation, idempotence — this section cites and does not restate. §5.3 chose Go over kb_tools'
+Lua filter because the forward transform emits records; the export emits none, so pandoc's own
+filter mechanism suffices, and the author can re-run the conversion with plain pandoc.
+
+**One run, three owners.** The verb (`cmd/export-latex.go`) opens the KB through `kbload.Open`,
+walks it (`export.Walk`), narrows to `--volume` (`export.SelectVolumes`), assembles `gen-tex/`'s
+inputs in memory (`export.Assemble`), writes them (`export.WriteOut`), makes the one
+`pandoc.RunDefaults` call, and writes the report (`export.WriteReport`). The call is `pandoc -d
+defaults.yaml` run in `gen-tex/`, so every path in the defaults file is relative and the author's
+re-run from there resolves the same way. The version preflight runs before `WriteOut`, so a pandoc
+refusal precedes any write.
+
+| Owner | Owns |
+|---|---|
+| Go (`internal/export`) | What pandoc cannot know: the spine's order and ranks, the label namespaces, the KB's contract forms as data. The stream files, the tables, the defaults file, assets, the manifest |
+| The filter (`kbase-export.lua`) | Every rewrite of the parsed document: references, citations, links, labels, headings, theorem blocks, figures, maths fixes, the bibliography. Constant code over the tables |
+| The template (`kbase-export.latex`) | The LaTeX preamble, package order, theorem machinery, running heads, front and main matter |
+
+Both the filter and the template are embedded (`filter.go`) and written verbatim, so their bytes
+do not vary with the KB.
+
+**Reader.** `gfm+attributes-gfm_auto_identifiers`. The KB's maths is gfm's: pandoc 3.12.1's
+`markdown` reader has `native_spans` but not `tex_math_gfm`, `gfm` the reverse. `markdown`
+would not read the KB's maths, and `gfm` leaves the KB's contract forms (label spans,
+reference anchors, citation spans) as raw-html open and close pairs, which the filter pairs
+itself. `attributes` supplies the `{#id}` the document boundaries use; with `gfm_auto_identifiers`
+off, a heading without one carries no identifier.
+
+**Streams and file scope.** The stream is `kbase-export-front.md` — the entry point's prose, its
+first heading taken as the document `title` and its up-link and volume-list lines removed, every
+remaining heading marked `{.unnumbered}` — then one `kbase-export-vol{N}.md` per volume in order,
+each holding the volume's index and every document of its spine with navigation stripped
+(`export.Strip`). `defaults.yaml` lists them as `input-files` with `file-scope: true`, so pandoc
+parses each file apart and prefixes its identifiers and `#`-link targets with `<file>__`. The
+scope is the volume, for two reasons: one concatenated parse would collide the footnote labels of
+different volumes, and a footnote's definition in a built KB can sit in a different document of its
+volume than the reference, which a per-document scope would sever. The filter's first act removes
+the prefix, for the file names in the tables' `streams` and no other `__`.
+
+**Document boundaries.** The first heading of each document, outside code fences
+(`kb.FirstHeading` over `kb.StripCodeFences`), carries the document's label as a `{#d{N}-…}` id,
+written by Go; a volume's index carries `vol{N}`. A document with no heading opens with one
+naming its path (the file name less its extension; the directory name for an index). Headings
+rather than fenced divs, because a `:::` line inside a code fence closes a fenced div early. Go
+marks the boundary and the filter reads it: the document a node belongs to is the last heading
+before it whose id is a `documents` key, and before the first one the front matter.
+
+**Tables.** `kbase-xref.json` is generated from the walk, each document's first heading and the
+bibliography sources, and named to the filter by the metadata key `kbase-xref`. The field-level
+schema is the head comment of `kbase-export.lua`; the keys:
+
+- `documents`: heading id → path, volume `N`, rank;
+- `paths`: kb-root-relative path → heading id (href resolution);
+- `volumes`: in order, each with its `vol{N}` label and title;
+- `theorems`: every display name `kb.LabelLine` reads off a label line of the front matter or an
+  exported document, so the label-name grammar stays in Go;
+- `bibliography`: citation key → entry body as gfm text. Each exported volume's `references.md`
+  entries (`kb.BibliographyEntries`) and, where any exported volume has none, every register's
+  works (a work's title), the first entry of a key standing;
+- `report`: the path the filter writes its findings to;
+- `assets`: kb-root-relative path of a copied file → its path under the out directory; the
+  claim-graph sheets (SPEC §3) are not copied, being drawings of the metadata;
+- `entry_point`: the entry point's path, the front matter's source;
+- `streams`: the stream file names in reading order.
+
+**The filter.** Preparation, then two passes over the one document pandoc reads, then the end.
+
+Preparation. The file-scope prefix is removed. Each block list is made native: a raw-html `figure`
+or `table` the gfm reader split at its blank lines is reassembled and read as html (its MathML as
+maths carrying the annotation's TeX; spans left as raw pairs), a raw `<img>` or `<embed>` becomes
+an image, and the copy a built KB writes beside such a tag is dropped. A table with no caption or
+id followed by a paragraph ending in an empty id span (the form pandoc's gfm writer gives a
+captioned table, `{#tab:…}`) takes that paragraph as its caption and the id as its own.
+
+Pass 1 collects author labels under the volume of the document they sit in, keyed (volume,
+label): every `\label{L}` in a maths body, every `<span id="L">` pair, every figure and table id,
+and every id on a native span, link, div or code block — the elements whose id the writer prints
+as a label. A figure that holds a table is not one. A label defined twice in one volume is a
+finding, as are two labels of one volume spelled alike in LaTeX.
+
+Pass 2 rewrites in document order; anything a rule returns in place of its element is walked by
+every rule, once.
+
+- `<span id="L">…</span>` pair → span with id `v{N}-L`, which the writer prints as
+  `\protect\phantomsection\label{…}`. A native span, link, div, code block, table or figure id
+  is namespaced the same way.
+- `<a data-reference-type=… data-reference=… href=…>…</a>` pair (also a link carrying the
+  `reference` attribute, which the html reader makes of one inside a figure or table):
+  `data-reference` names the target. Where the href names an exported document, or is absent,
+  and the target volume (that document's, else the current one) defines every label named →
+  `\eqref` for `eqref`, one `\cref{…}` for `ref+label`, one `\Cref{…}` for `ref+Label`, `\ref`
+  otherwise, with labels `v{M}-L`. Where the href names an exported document but the volume does
+  not define every label → `\ref{d{M}-…}`. Otherwise the anchor's text and a finding.
+- `<span class="citation" data-cites="k1 k2">…</span>` pair → `\cite{k1,k2}` where every key has a
+  `bibliography` entry, keys recorded in first-emission order; otherwise the span's text and a
+  finding, so no `\cite` is undefined and no text is dropped.
+- A `\label`, `\ref`, `\eqref`, `\cref` or `\Cref` with a braceless argument inside a maths body is
+  namespaced to its document's volume; a reference whose label the volume does not define is
+  left as written and a finding. A blank line in a maths body becomes a newline, since maths mode
+  cannot hold a paragraph break.
+- A plain link to an exported document (`[text](x.md#frag)`) → a link to that document's heading,
+  which the writer prints as `\hyperref`; to a copied asset → the copy; an external link passes;
+  any other internal link → its text and a finding. A link whose content holds a reference
+  anchor → its content alone, the anchor naming the target. An image is pointed at its copy under
+  `assets/`; one naming no copied file becomes its alternative text and a finding.
+- A labelled blockquote — its first paragraph a label line (`**Name**`, optionally inside a label
+  span pair) with `Name` in `theorems` — is unwrapped; see **Theorem blocks** below. Any other
+  blockquote stays a quote.
+- Headings are shifted by their document's rank: the document's own heading to level rank + 1
+  (a volume index, rank 0, is the chapter), in-document headings below it by their offset. Past
+  level 6 → a bold paragraph and a finding, a document's id kept as a label. Every heading id
+  that is not a document's is removed, so only `vol{N}` and `d{N}-…` ids remain.
+- A figure of more than nine blocks → its blocks one under another: pandoc 3.12.1's writer sets
+  n blocks side by side at 0.9/n of the line and prints a width under 0.1 as `9.0e-2`, which
+  LaTeX cannot read. A figure holding a table → the table's body and caption unfloated, and a
+  finding, since the writer drops a figure's float, caption and label around a table.
+- A table whose column widths are all the writer's default, and whose columns' longest cells
+  (a formula counted as its TeX less markup) with the gaps between them run past the template's
+  line, taken as 96 characters → relative widths, so its cells wrap: a column whose longest
+  cell fits an equal share of the width left keeps that width, the others share the rest by
+  their longest cells, none narrower than its longest word and two fifths (a bold word, alone in
+  its cell, cannot break). A table that fits keeps the writer's natural columns; one that
+  carries widths keeps them.
+- Display maths that is one `eqnarray*`, `xalignat`, `xalignat*` or `xxalignat` environment →
+  raw LaTeX: pandoc 3.12.1's writer wraps those, alone of LaTeX's and amsmath's display
+  environments, in `\[…\]`. A maths body whose last line holds an unescaped `%` ends with a
+  newline, since the writer closes the maths on that line and its own guard reads `\\%` as
+  escaped.
+- Raw html no rule claimed is a finding where it carries `data-reference`, `data-cites` or an
+  `id`, or is a `figure`, `table`, `math`, `img` or `embed` that did not read as a native
+  element: the writer drops raw html.
+
+The writer does the rest unaided: display environments bare (but those above), inner ones
+(`pmatrix`, `aligned`, `cases`) in `\[…\]`, inline maths in `\(…\)`; markers (raw html comments)
+dropped. Prose is not matched: `(eq:L)`, `(Author, Year)` and a hand-maintained KB's bold-line
+theorem blocks export as written, and `\tag{L}` stays, so the printed tag and the prose that names
+it agree; such a KB's internal links resolve through the link rule and its register's works form
+the bibliography.
+
+The end: `thebibliography` over the cited keys in first-emission order, each body rendered with
+`pandoc.write(pandoc.read(body, "gfm"), "latex")`; the `\kbasetheorem` declarations (below) in
+`header-includes`; and the findings, a JSON list of `{form, path, reason}` (`path` the document's
+kb-root-relative path), written to the tables' `report` path.
+
+**Labels.** Three families that cannot collide: volume `vol{N}`; document `d{N}-{path-slug}`
+(`export.DocumentLabel`: the path below the volume directory less its extension, each segment
+lowercased with runs outside `[a-z0-9]` one hyphen, joined by hyphens; an index slugs as its
+directory name and `index`); author `v{N}-{label}`. Go mints the first two; `SelectVolumes`
+numbers them after `--volume` narrows the list. A document label another path already owns is a
+walk finding, and that document gets no id. The author spelling is the filter's `namespaced`,
+the one function every rule that writes a label or a reference calls, so a raw `\label` in maths
+and an id the writer prints agree: it keeps ASCII letters, digits and `+-.:;=_` and spells any
+other character `ux{hex}`, whatever the label's own shape.
+
+**Theorem blocks.** A labelled blockquote whose first body paragraph opens with its printed number
+— `**Display N**.` or `**Display N** (Title).` — becomes `\begin{kb-<name>}[{Title}]\label{v{N}-L}
+… \end{kb-<name>}`, `<name>` the label line's name lowercased with spaces as hyphens, the opening
+dropped, its title kept. A bare-number opening takes the label line's name for `Display`. For each
+environment used, `\kbasetheorem{kb-<name>}{Display}{Plural}` is added to `header-includes`,
+`Plural` by an English rule in the filter; the `kb-` prefix is no LaTeX environment's, so the
+declaration is unconditional. Without that opening (a proof, which prints its own head and end
+mark; a LaTeX environment's name such as `minipage`) the body blocks stand as they are, unquoted,
+and the label span's id is kept as a label. The template's `\kbasetheorem` owns the rest: the
+`definition` style, since the statements carry their own emphasis; one counter shared by every
+kind, numbered within the chapter; and the cleveref names.
+
+**Template.** `book`, `oneside` and `openany`, so every page is laid out alike and no blank page
+precedes a chapter, with options for `hyperref`, `url`, `cleveref` and `geometry` (`margin=1in`,
+on LaTeX's default letter paper) passed before the class so that an author's own load of them
+does not clash and options the preamble passes them take effect; engine-branched fonts
+(`iftex`); the maths packages, `amsthm` and `\kbasetheorem`; the Unicode mappings for Greek,
+arrows, relations and sub- and superscript digits; the writer-conditional blocks (tables,
+highlighting, strikeout and the rest, switched by pandoc's template variables); then
+`\InputIfFileExists{../preamble.tex}`; then `geometry`, `microtype`, `hyperref`, `bookmark`,
+`cleveref` last, then the `header-includes`. The preamble's path is relative to the working
+directory, so the author compiles `main.tex` from inside `gen-tex/`; where `../preamble.tex` is
+absent from the working directory, the template types a notice and loads nothing. The rest:
+mixed-case running heads naming the chapter on every page; the first numbered chapter opens the
+main matter, everything before it being front matter, the title page its unnumbered page i and
+the contents following from ii; `\backmatter` before the bibliography; and
+one generation comment naming kbase's version (`kbase-version`, set by the verb in
+`defaults.yaml`'s `variables`).
+
+**`gen-tex/` and the preamble.** `WriteOut` owns `gen-tex/`. A `gen-tex/` holding files and no
+`kbase-export.yaml` is an `ExportDirError` (the `export-dir` refusal) and nothing is written. The
+manifest lists every file the export owns — the assembled files plus `main.tex`,
+`kbase-export-findings.json` and the report — and is written after the files it names. A file
+whose bytes are already there is not rewritten; a file the previous manifest listed and this
+export does not own is removed, with the directories the removal empties; each manifest path is
+checked to lie inside `gen-tex/` before any removal. The starter `preamble.tex` is written beside
+`gen-tex/` only where nothing stands at that name and is never opened afterwards; the report
+checks its existence only. These are the only writes outside `gen-tex/`.
+
+**Idempotence.** Assembly is deterministic in the KB and the kbase version, so a re-issue
+reproduces every assembled file byte for byte and `WriteOut` writes none. pandoc rewrites
+`main.tex` and the findings each run, so the verb compares their bytes before and after; the
+outcome is `unchanged` when nothing was written, removed or rewritten with different bytes,
+the report included.
+
+**The report.** `kbase-export-report.yaml` is one YAML list: the walk's findings (`export.Report`:
+a target not walked, a path named twice, a label collision), then the filter's, then, where `preamble.tex`
+exists, a line naming it as the author's. `WriteReport` reads the filter's findings back from
+`kbase-export-findings.json`, so the report exists only after pandoc has run.
+
 ---
 
 ## 6. KB model and maintenance
@@ -208,7 +417,7 @@ which needs `.index/` and is verify's (§6).
 | **Queries** | `internal/query` | `kb_cmd/` | Landed: every query equals `kb_cmd --json` as data over the six kb_tools-built fixtures, `show`'s `strengthen_by` and `deps`' `context` included: 1,550 of 1,550 cases agree at the pin |
 | **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | `claim_sheet.py`, the same drawing; the layout is Graphviz's | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
 | **Readiness stamping and README assembly** | `internal/kbdocs` | `installed/*.tmpl.md`, `kb_readme.py` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
-| **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh and verify over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`/`BuildVerify`, `write.LockKB` and `ledger` | None: no kb_tools counterpart (SPEC §4's scratch-creation row); creation is composition of the maintenance machinery, not a ported mechanism | Landed: refuses outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` is green over the skeleton before `done`; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
+| **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | None: no kb_tools counterpart (SPEC §4's scratch-creation row); creation is composition of the maintenance machinery, not a ported mechanism | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
 marker or bullet (kb_tools SPEC, "The Write API's Contract"). Input, idempotence (I6) and the
@@ -260,13 +469,14 @@ existing mechanisms and owns no new one: the entry point's frontmatter through `
 renderers (`RenderFrontmatterField`, `WrapFrontmatter`, `StampFormat`), every file through
 `atomicfile.Write`, the loader's `Open` (I8), the readiness stamp through `kbdocs.Stamp` with
 `kbdocs.AuthoredKBPin` in its scope-pin slot (beside `NoCharterPin`: a KB with no corpus says so,
-rather than that its corpus went unrecorded), the derived layer through `index.RefreshReporting` and
-the gate through `index.BuildVerify`, the lock through `write.LockKB`, and the birth commit through
-`ledger.Commit` — the plain-subject half of `ledger` extracted beside `Record`, its pathspec
-scoping the same so nothing the user staged rides along. Its order is load-bearing: the stamped
-entry point stands before `Open`, the stamps stand before the refresh (whose precheck refuses
-without the redirect), the refresh and the gate stand before the commit, so a `done` means a KB
-`verify` already passed.
+rather than that its corpus went unrecorded) — its `written` list is the paths `Stamp` returns —
+the derived layer through `index.RefreshReporting`, the lock through `write.LockKB`, and the birth
+commit through `ledger.Commit` — the plain-subject half of `ledger` extracted beside `Record`, its
+pathspec scoping the same so nothing the user staged rides along. Its order is load-bearing: the
+stamped entry point stands before `Open`, the stamps stand before the refresh (whose precheck
+refuses without the redirect), and the refresh stands before the commit. It runs no `verify` of its
+own: every input to the skeleton is kbase's, so a red verify over it is a kbase defect, which
+`test-integration-init` catches by running `verify` right after birth.
 
 ---
 
@@ -291,7 +501,7 @@ without the redirect), the refresh and the gate stand before the commit, so a `d
   chat attempt count on a transport error or retry-class 5xx, with no streaming and no
   incomplete-stream path. The system-prompt sentence above is scoped to the overview call; a
   decision call has no system message.
-- Each inference pass is built as plumbing on `model.Chat` where kb_tools places it, reaching the
+- Each inference pass is built as plumbing where kb_tools places it, reaching the
   model only through `internal/asks`' letter seam, injected — nothing in `claimgraph` knows a
   network exists. `internal/asks` holds the embedded templates and fragments with their manifest
   (`provenance.yaml`), the composer, the caller (system fragment, per-call captures and the answer
@@ -418,7 +628,7 @@ and `cmd`'s `init` verb import `ledger`.
   `claimgraph`'s to read and write, the first three as kb_tools' are [`kb_pipeline`, record half:
   `NODE_PASS_RELPATH`, `UNMARKED_RELPATH`, `CLASSIFICATION_RELPATH`], as YAML `kb-build-*.yaml`
   (SPEC §6, §10). `build` commits them.
-- **State store.** Contents and path are SPEC §6; the key form is §12; the layout is below.
+- **State store.** Contents and path are SPEC §6; the key form is §12; the layout is above.
 - **Status, progress, cancel.** `status` reads the holder lock, `progress.jsonl` and the commit
   trail and returns the YAML snapshot in SPEC §6. `cancel` signals the lock holder; the holder
   abandons the in-flight call with nothing written for it, logs the event, releases the lock and
@@ -452,7 +662,7 @@ import graph they allow is acyclic.
 ```
 cmd/                      cobra root; one file per subcommand; outcome-to-exit table
 internal/result           YAML result document + emitter (I5)
-internal/latex/pandoc     reader + writer seam (I1)       [pandoc.py]
+internal/latex/pandoc     reader, writer and defaults-run seam (I1)  [pandoc.py]
 internal/latex/prepass    kb_tools' two scans (I3)        [kb_docgraph/convert.py]
 internal/docgraph         JSON transforms, whole-volume render+cut, outline,
                           records, partition checks, validate_build
@@ -464,7 +674,10 @@ internal/kb               kb-root model: names, exclusions, link primitives, dea
                           nowhere else), `Source` (the one read path), the index row
                           types (one per index file), the index file inventory and the
                           one reader `ReadIndex[T]` (`indexstream.go`), `LabelLine`
-                          (the label-line recogniser)
+                          (the label-line recogniser), the child-list reading of the
+                          tree relation (`ChildList`, `ChildListLines`), the heading
+                          reader `FirstHeading`, the in-body marker predicate `IsMarker`,
+                          the reference-list entry reader `BibliographyEntries`
                           [kb_index_lib parse, kb_schema, kb_links, verify_md_links]
 internal/kbload           `Open(kbRoot)`: reads the stamp, builds `kb.Source` (disk at
                           the current version, `migrate.Chain` in memory for an older
@@ -482,7 +695,10 @@ internal/atomicfile       the one atomic file writer
 internal/query                                            [kb_cmd]
 internal/sheet            DOT emitter, `dot` invocation: index, build records, leaf,
                           entry-point heading in; SVGs out
-`internal/buildrecords`   the four build records' readers (node-pass, unmarked,
+internal/export           the LaTeX export (§5.7): the walk, the inputs of `gen-tex/`,
+                          the embedded filter and template, the starter
+                          `preamble.tex`, the report
+internal/buildrecords     the four build records' readers (node-pass, unmarked,
                           classification, cull) and their paths
                           (`RecordFiles`), imported by claimgraph and sheet, and by
                           kbload for the record paths (the ledger's owned paths derive
@@ -527,7 +743,9 @@ kept: config, model (model.Chat the overview call, model.SystemOne the letter as
   (never `asks/call`), so the records' yes letters have one home.
 - `kb` imports no other kbase package but `log`; `docgraph`, `index`, `write`, `query`, `sheet`,
   `kbdocs` and `claimgraph` read the kb-root vocabulary, the link relation (in kb_tools' two
-  readings, one resolver), the label-name grammar and the id minting from it.
+  readings, one resolver), the label-name grammar and the id minting from it. `export` reads the
+  link relation a third way, `kb.ChildList`: an index's child-list lines only, so a body link is
+  never a spine edge.
 - `write`, `index`, `query`, `sheet` and `kbdocs` never import `docgraph`, `claimgraph` or `build`.
 - `migrate` imports nothing of kbase (I8): it takes and returns files as bytes, and owns the parsers
   of every superseded form; `kbload` is its only importer and the write side drains its delete set —
@@ -545,11 +763,15 @@ kept: config, model (model.Chat the overview call, model.SystemOne the letter as
   `cmd/provider.go`. `claimgraph` reaches neither `model` nor `asks/call`, transitively.
 - Only `build` and `cmd`'s `init` verb import `ledger`; `ledger` imports `log` and nothing else of
   kbase.
-- Only `build` and `cmd`'s `init` verb stamp readiness documents.
+- Only `build` and `cmd`'s `init` verb stamp readiness documents: within `cmd`, file-level,
+  `cmd/init.go` alone imports `kbdocs`.
 - `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the refusal
   where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
   execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself.
+- `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
+  KB, has `export` write `gen-tex/`'s inputs, makes the one `pandoc.RunDefaults` call, and has
+  `export` merge the filter's findings that run wrote into the report.
 
 The dependency rules are enforced by an import-policy test over the transitive import graph
 (`cmd/importpolicy_test.go`), beside the I1 exec-policy test (`cmd/execpolicy_test.go`).
@@ -581,7 +803,7 @@ Exit codes and the placeholder's digest form are in SPEC §7 and §3; the pandoc
 stage-commit subject is SPEC §6.
 
 **Format migration (SPEC §10).** Every verb that reads a KB — `refresh`, `verify`,
-`render-claim-graph`, the queries, the write ops, and the build's spine-seed, phase-3a, readiness
+`render-claim-graph`, the queries, the write ops, `export-latex`, and the build's spine-seed, phase-3a, readiness
 stamp, overview and resume — calls `kbload.Open(kbRoot)`; `status` and `cancel` do not load the KB.
 `Open` reads `kb-format` alone from the entry point (`kb.ReadFormatVersion`, either frontmatter
 form) before anything else. A stamp at the current major and minor builds a `kb.Source` that reads

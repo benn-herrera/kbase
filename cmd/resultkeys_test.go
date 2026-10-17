@@ -30,6 +30,7 @@ var documentedKeys = map[string][]string{
 	"render-claim-graph": {"written", "removed", "sheet", "dot"},
 	"models":             {"provider", "models"},
 	"configure":          {"provider", "models", "written"},
+	"export-latex":       {"written", "volumes", "report"},
 }
 
 // documentedSubKeys is the keys of each mapping a result nests, in order.
@@ -147,9 +148,9 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 	if verb != "models" && verb != "configure" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 	} else if verb == "init" {
-		// A kb-root refusal names a standing kb-root/ (§8: init refuses an existing
-		// one), so §7 requires the key; a refusal that found no kb-root/ — the
-		// worktree refusal, the lock retry — carries none (§8).
+		// A kb-root refusal names a standing kb-root/, so the document must
+		// carry the key; one that names none — the usage refusal, the
+		// worktree refusal, the lock retry — carries none.
 		for _, item := range d.items(toolresult.RefusalsKey) {
 			if item["check"] == checkKBRoot {
 				t.Fatalf("%s: a refusal names a standing kb-root; the document carries no kb-root key: %q", verb, d.Keys)

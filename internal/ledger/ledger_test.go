@@ -119,15 +119,16 @@ func TestRecordScopesTheCommitAndTrailReadsItBack(t *testing.T) {
 // pathspec scoping, the commit holds the owned paths only, nothing the user
 // staged elsewhere rides along, and Trail() reads no trail, which is what
 // keeps build's fresh-versus-resume rule reading an initialized repository
-// as a populated one with nothing to resume (SPEC §5, §8).
+// as a populated one with nothing to resume.
 func TestCommitPlainSubjectIsOffTheTrail(t *testing.T) {
+	const plain = "a plain subject"
 	r := newRepo(t)
 	write(t, r, "kb-root/entry-point.md", "# entry\n")
 	write(t, r, "elsewhere.txt", "user's work\n")
 	if _, err := r.run("add", "elsewhere.txt"); err != nil {
 		t.Fatal(err)
 	}
-	birth, err := r.Commit("kb-init: knowledge base created", "")
+	birth, err := r.Commit(plain, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestCommitPlainSubjectIsOffTheTrail(t *testing.T) {
 		t.Errorf("staged after the birth commit = %q, want the user's elsewhere.txt left staged", staged)
 	}
 	write(t, r, "kb-root/notes.md", "later\n")
-	if _, err := r.Commit("kb-init: knowledge base created", "a second act"); err != nil {
+	if _, err := r.Commit(plain, "a second act"); err != nil {
 		t.Fatal(err)
 	}
 	trail, err := r.Trail()

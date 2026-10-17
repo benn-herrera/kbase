@@ -26,7 +26,7 @@ mad-*/
 .opencode-temp/
 
 # scratch KB trees born by a kbase init run in this repository
-kb-root/
+/kb-root/
 
 # agent set work areas
 mad-design/

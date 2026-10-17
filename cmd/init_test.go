@@ -11,6 +11,7 @@ import (
 
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
+	"kbase/internal/ledger"
 	toolresult "kbase/internal/result"
 )
 
@@ -144,15 +145,14 @@ func treeFiles(t *testing.T, root string) []string {
 // exactly the written list, both directions; the bytes init is the sole
 // author of stand byte-exact — entry-point.md and the zero-node
 // subtree-aggregates row against their fixtures, CLAUDE.md against the
-// redirect constant it exists to be (§3's unmigrated_agents_file reader);
+// redirect constant it exists to be (the unmigrated_agents_file reader);
 // AGENTS.md and CONVENTIONS.md stand non-empty and hold no unfilled slot;
 // the authored pin is asserted where the template puts it, AGENTS.md's
 // {scope-pin}; the derived index's six files stand and are named
 // in written, the five empty ones' bytes not pinned. The birth commit lands —
 // its branch ref standing, since cmd may not exec git to read the subject
-// back — and re-issue refuses. The commit's subject, its emptiness of trail,
-// and the tree's cleanliness are pinned in ledger_test.go and the integration
-// recipe.
+// back — and re-issue refuses. The subject is held off the trail by
+// TestBirthSubjectIsOffTheTrail.
 func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	// Resolve the fixture dir to an absolute path before kbase() chdirs the
 	// test into the staged repo.
@@ -231,10 +231,8 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 		t.Errorf("%s lacks the authored pin", kb.AgentsFile)
 	}
 	// The birth commit landed where git writes a first commit: the branch
-	// ref. Reading its subject and the tree's cleanliness needs git, which
-	// only ledger may exec — those are pinned in ledger_test.go and, over
-	// the shipped binary, in the integration recipe. Here cmd may not exec,
-	// so the ref standing is the exec-free proof commit ran.
+	// ref. Reading the commit back needs git, which only ledger may exec, so
+	// the ref standing is the exec-free proof commit ran.
 	if _, err := os.Stat(filepath.Join(repo, ".git", "refs", "heads", "main")); err != nil {
 		t.Errorf("the birth commit left no branch ref: %v", err)
 	}
@@ -243,6 +241,42 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	d = checkDocument(t, "init", again)
 	if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] || !strings.Contains(again, `check: "kb-root"`) {
 		t.Fatalf("re-issue at a born KB: outcome %s exit %d\n%s", d.Outcome, code, again)
+	}
+}
+
+// TestBirthSubjectIsOffTheTrail: ledger's Trail reads only subjects opening
+// with ledger.Prefix, so a birth subject that opened with it would put the
+// birth commit on build's trail and lift build's refusal over a created KB.
+// ledger_test.go pins that a plain subject leaves Trail empty.
+func TestBirthSubjectIsOffTheTrail(t *testing.T) {
+	if strings.HasPrefix(birthSubject, ledger.Prefix) {
+		t.Errorf("birth subject %q opens with the trail prefix %q", birthSubject, ledger.Prefix)
+	}
+}
+
+// TestInitRefusesATitleSpanningLines: a --title holding a line break is a
+// usage refusal and nothing is written, kb-root/ included; where kb-root/
+// already stands, the refusal lists both items.
+func TestInitRefusesATitleSpanningLines(t *testing.T) {
+	repo := gitWorktree(t)
+	if err := os.Mkdir(filepath.Join(repo, "kb-root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := kbase(t, repo, "init", "--title", "X\nY")
+	if d := checkDocument(t, "init", out); d.Outcome != toolresult.Refused || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `check: "kb-root"`) {
+		t.Errorf("--title spanning lines over a standing kb-root/: outcome %s, want both refusal items\n%s", d.Outcome, out)
+	}
+
+	for _, title := range []string{"X\n- [v](v/index.md)", "X\r\nY", "X\rY", "X\n"} {
+		repo := gitWorktree(t)
+		out, code := kbase(t, repo, "init", "--title", title)
+		d := checkDocument(t, "init", out)
+		if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `key: "--title"`) {
+			t.Errorf("--title %q: outcome %s exit %d, want a usage refusal naming --title\n%s", title, d.Outcome, code, out)
+		}
+		if _, err := os.Lstat(filepath.Join(repo, "kb-root")); !os.IsNotExist(err) {
+			t.Errorf("--title %q: kb-root/ stands after the refusal (%v)", title, err)
+		}
 	}
 }
 
@@ -284,7 +318,7 @@ func TestInitTitleBecomesTheHeading(t *testing.T) {
 
 // TestInitWithoutDotWritesThePlaceholder: PATH keeps git and loses dot, so
 // the birth still lands and claim-graph.svg stands as the placeholder, named
-// in written, with the lack said on stderr (SPEC §3).
+// in written, with the lack said on stderr.
 func TestInitWithoutDotWritesThePlaceholder(t *testing.T) {
 	repo := gitWorktree(t)
 	git := findOnPATH("git")

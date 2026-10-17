@@ -108,6 +108,11 @@ var dependencyRules = []dependencyRule{{
 	forbidden: []string{"internal/mcp"},
 	direct:    true,
 	why:       "only cmd imports mcp: the tool table is the command tree",
+}, {
+	from:    []string{"internal/export"},
+	allowed: []string{"internal/kb", "internal/atomicfile"},
+	direct:  true,
+	why:     "export imports kb and atomicfile and nothing else of kbase: the verb opens the KB and makes every pandoc call",
 }}
 
 func underAny(pkg string, prefixes []string) bool {
@@ -199,51 +204,38 @@ func TestDependencyRules(t *testing.T) {
 	}
 }
 
-// cmdModelImporters are the production files of cmd that may import model:
-// the build verb, and the provider dial the models and configure verbs share.
-var cmdModelImporters = []string{"cmd/build.go", "cmd/provider.go"}
-
-// TestCmdModelImporters: within cmd, model is imported by cmdModelImporters
-// alone, and each of them imports it.
-func TestCmdModelImporters(t *testing.T) {
-	seen := map[string]bool{}
-	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
-		if !m.production() || path.Dir(m.rel) != "cmd" || !slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), modulePath+"/internal/model") {
-			continue
-		}
-		seen[m.rel] = true
-		if !slices.Contains(cmdModelImporters, m.rel) {
-			t.Errorf("%s imports model; within cmd only %s may", m.rel, strings.Join(cmdModelImporters, " and "))
-		}
-	}
-	for _, owner := range cmdModelImporters {
-		if !seen[owner] {
-			t.Errorf("%s is listed as importing model and does not; drop it from cmdModelImporters", owner)
-		}
-	}
+// cmdFileImporters names, per package whose rule reaches into cmd at file
+// level, the production files of cmd that may import it — the file-level
+// read of a rule whose package form exempts all of cmd.
+var cmdFileImporters = map[string][]string{
+	// the build verb, and the provider dial the models and configure verbs share
+	"internal/model": {"cmd/build.go", "cmd/provider.go"},
+	// the init verb, the only cmd path that commits
+	"internal/ledger": {"cmd/init.go"},
+	// the init verb, the only cmd path that stamps readiness documents
+	"internal/kbdocs": {"cmd/init.go"},
 }
 
-// cmdLedgerImporters is the production file of cmd that may import ledger:
-// the init verb, the only cmd path that commits.
-var cmdLedgerImporters = []string{"cmd/init.go"}
-
-// TestCmdLedgerImporters: within cmd, ledger is imported by
-// cmdLedgerImporters alone, and it imports it — the file-level read of the
-// rule whose package form is the coarse backstop.
-func TestCmdLedgerImporters(t *testing.T) {
-	seen := map[string]bool{}
-	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
-		if !m.production() || path.Dir(m.rel) != "cmd" || !slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), modulePath+"/internal/ledger") {
-			continue
+// TestCmdFileImporters: within cmd, each package of cmdFileImporters is
+// imported by its listed files alone, and each of them imports it.
+func TestCmdFileImporters(t *testing.T) {
+	files := moduleGoFiles(t, token.NewFileSet())
+	for _, pkg := range slices.Sorted(maps.Keys(cmdFileImporters)) {
+		owners := cmdFileImporters[pkg]
+		seen := map[string]bool{}
+		for _, m := range files {
+			if !m.production() || path.Dir(m.rel) != "cmd" || !slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), modulePath+"/"+pkg) {
+				continue
+			}
+			seen[m.rel] = true
+			if !slices.Contains(owners, m.rel) {
+				t.Errorf("%s imports %s; within cmd only %s may", m.rel, pkg, strings.Join(owners, " and "))
+			}
 		}
-		seen[m.rel] = true
-		if !slices.Contains(cmdLedgerImporters, m.rel) {
-			t.Errorf("%s imports ledger; within cmd only %s may", m.rel, strings.Join(cmdLedgerImporters, " and "))
-		}
-	}
-	for _, owner := range cmdLedgerImporters {
-		if !seen[owner] {
-			t.Errorf("%s is listed as importing ledger and does not; drop it from cmdLedgerImporters", owner)
+		for _, owner := range owners {
+			if !seen[owner] {
+				t.Errorf("%s is listed as importing %s and does not; drop it from cmdFileImporters", owner, pkg)
+			}
 		}
 	}
 }

@@ -44,6 +44,7 @@ var fileOpenOwners = map[string]string{
 	"internal/build/store.go":           "the state store's lock and progress record",
 	"internal/build/storeformat.go":     "the state store's format stamp",
 	"cmd/write_op.go":                   "a write op's values document",
+	"internal/export/write.go":          "the export's gen-tex/: its manifest, each file's bytes and pandoc's outputs, compared so an unchanged file is not rewritten or reported, and the filter's findings; never the author's preamble.tex",
 	"cmd/mcp.go":                        "the detached build's captured output in the state store",
 }
 

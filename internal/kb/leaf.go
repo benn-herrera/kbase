@@ -26,7 +26,12 @@ var (
 	invariantHeading = PyRE(`^### (INVARIANT-[A-Z]+[0-9]+):\s*(.+)$`)
 	axiomBulletRE    = PyRE(`^- Axiom (\d+): \*\*(.+?)\*\*`)
 	anyHeadingRE     = PyRE(`^(#{1,6})\s`)
+	inBodyMarkerRE   = PyRE(`(?s)^<!--\s*(?:claim-quality|id):.*-->$`)
 )
+
+// IsMarker is whether text, surrounding whitespace aside, is one of the write
+// API's in-body markers: the Tier-2 claim-quality marker or the id marker.
+func IsMarker(text string) bool { return inBodyMarkerRE.MatchString(Strip(text)) }
 
 // LeafRecord is a kind: leaf document's claim-graph metadata.
 type LeafRecord struct {
@@ -144,8 +149,8 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// firstHeading is the text of a document's first heading at any level.
-func firstHeading(text string) string {
+// FirstHeading is the text of a document's first heading at any level.
+func FirstHeading(text string) string {
 	for _, line := range SplitLines(text) {
 		if m := headingLineRE.FindStringSubmatch(line); m != nil {
 			return Strip(m[2])
@@ -214,7 +219,7 @@ func ParseExperimentLeaf(text, rel string) ([]ExperimentNode, error) {
 	if v, ok := fm["experiments"]; ok && (v.IsList || v.IsBool || v.Str != "") {
 		return nil, malformed("%s: experiment-hosting leaf carries experiments: — an owning experiment leaf must not also reference other experiments", rel)
 	}
-	heading := firstHeading(StripFrontmatter(text))
+	heading := FirstHeading(StripFrontmatter(text))
 	var nodes []ExperimentNode
 	for _, d := range decls {
 		id := d.Str(ExpIDKey)
@@ -254,7 +259,7 @@ func ParseSupportLeaf(text, rel string) ([]SupportNode, error) {
 	if err != nil || len(decls) == 0 {
 		return nil, err
 	}
-	heading := firstHeading(StripFrontmatter(text))
+	heading := FirstHeading(StripFrontmatter(text))
 	var nodes []SupportNode
 	for _, d := range decls {
 		id := d.Str(SupIDKey)

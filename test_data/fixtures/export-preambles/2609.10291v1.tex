@@ -1,0 +1,20 @@
+% The macros and packages 2609.10291v1's maths uses from its source preamble
+% (physics: \abs, \norm, \qty, \Tr; the paired delimiters: notation.tex).
+\usepackage{physics}
+\usepackage{etoolbox}
+
+\DeclarePairedDelimiterX{\innerp}[1]{\langle}{\rangle}{\innpargs{#1}}
+
+\NewDocumentCommand{\innpargs}{>{\SplitArgument{1}{,}}m}{\innpargsaux#1}
+
+\NewDocumentCommand{\innpargsaux}{mm}{%
+    \ifblank{#1}{%
+        \ifblank{#2}
+            {{\,\cdot\,}{,}{\,\cdot\,}}%
+            {{\,\cdot\,}{,}{\mkern2mu#2}}%
+    }{%
+        {{#1\mkern2mu}{,}\ifblank{#2}{\,\cdot\,}{\mkern2mu#2}}%
+    }%
+}
+
+\DeclarePairedDelimiterX{\bformparen}[1]{(}{)}{\innpargs{#1}}

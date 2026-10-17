@@ -25,10 +25,10 @@ func comparePathParts(a, b string) int {
 	return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
 }
 
-// walkFiles is every regular file of the KB whose name match accepts and
-// none of whose directories below kb-root is excluded, as kb-root-relative
-// slash paths in Python's Path order.
-func walkFiles(src *Source, match func(name string) bool) ([]string, error) {
+// Files is every regular file of the KB whose name match accepts and none of
+// whose directories below kb-root is excluded, as kb-root-relative slash
+// paths in Python's Path order.
+func Files(src *Source, match func(name string) bool) ([]string, error) {
 	root := src.Root()
 	var out []string
 	err := src.walk(root, func(name string) bool { return ExcludeDirs[name] }, func(p string) error {
@@ -49,7 +49,7 @@ func walkFiles(src *Source, match func(name string) bool) ([]string, error) {
 // Documents is every document of the KB — every .md file outside the
 // excluded directories and names — as kb-root-relative slash paths.
 func Documents(src *Source) ([]string, error) {
-	return walkFiles(src, func(name string) bool {
+	return Files(src, func(name string) bool {
 		return strings.HasSuffix(name, ".md") && !ExcludeNames[name]
 	})
 }
@@ -57,7 +57,7 @@ func Documents(src *Source) ([]string, error) {
 // Registers is every claim-quality register outside the excluded
 // directories, as kb-root-relative slash paths.
 func Registers(src *Source) ([]string, error) {
-	return walkFiles(src, func(name string) bool { return name == RegisterFile })
+	return Files(src, func(name string) bool { return name == RegisterFile })
 }
 
 func readRel(src *Source, rel string) (string, error) { return src.ReadText(src.KBPath(rel)) }

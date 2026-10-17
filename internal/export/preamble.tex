@@ -1,0 +1,25 @@
+% preamble.tex -- yours. kbase export-latex wrote this starter because none
+% stood here; while this file stands, kbase never reads, rewrites or removes it.
+%
+% gen-tex/main.tex loads this file after its own base packages (amsmath,
+% amssymb, mathtools, amsthm, graphicx, xcolor, ...) and before geometry,
+% microtype, hyperref and cleveref. Paper size and margins are set here with
+% \PassOptionsToPackage{...}{geometry}, e.g. {a4paper,margin=2.5cm}.
+% The exported maths is as the source papers wrote it,
+% so add here the packages and macros their preambles supplied, for example:
+%
+%   \usepackage{bm}
+%   \newcommand{\R}{\mathbb{R}}
+%   \DeclareMathOperator{\E}{\mathbb{E}}
+%
+% LaTeX stops at the first command or environment still missing, naming it.
+% A source preamble pasted in whole stops on:
+% - amsmath or graphicx loaded again with options (an option clash);
+% - \hypersetup, undefined here: use \PassOptionsToPackage{...}{hyperref};
+% - cleveref, unless hyperref is loaded before it here;
+% - natbib without [numbers], and ntheorem (amsthm is loaded);
+% - [T1]{fontenc} outside \ifPDFTeX ... \fi, at the first character lualatex
+%   then finds missing.
+% biblatex compiles but leaves every citation undefined: the bibliography is
+% thebibliography. An exported .svg image needs \usepackage{svg} here, which
+% runs Inkscape and so needs --shell-escape.

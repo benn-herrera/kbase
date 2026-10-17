@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -33,14 +34,11 @@ type initOptions struct {
 
 // birthSubject is the birth commit's subject: plain, never ledger.Prefix, so
 // Trail() reads no trail and build's populated-kb-root/ refusal stands over
-// a created KB forever (SPEC §5, §8).
+// a created KB forever.
 const birthSubject = "kb-init: knowledge base created"
 
 // birthOwned is every path the birth commit takes, git-root relative.
 var birthOwned = []string{kb.KBDir}
-
-// stampDocs are the readiness documents init stamps beside the entry point.
-var stampDocs = []string{kb.AgentsFile, kbdocs.ConventionsFile, kb.AgentsRedirectFile}
 
 func runInit(opts initOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "init"); err != nil {
@@ -51,27 +49,36 @@ func runInit(opts initOptions) (int, error) {
 }
 
 // initKB creates the KB: refusals before any write; then, under the write
-// lock, the spine, the readiness stamps, the refresh and the gate, and the
-// birth commit last. The order is load-bearing (SPEC §8): the stamped entry
-// point stands before the loader opens it, the stamps before the refresh,
-// which refuses without the redirect, and a done means verify already passed
-// over what stands. A refusal is a result.Refusal on the error channel, the
-// same shape every underlying package carries its refusals.
+// lock, the spine, the readiness stamps and the refresh, and the birth commit
+// last. The order is load-bearing: the stamped entry point stands before the
+// loader opens it, and the stamps before the refresh, which refuses without
+// the redirect. A refusal is a result.Refusal on the error channel, the same
+// shape every underlying package carries its refusals.
 func initKB(opts initOptions) (string, []toolresult.Field) {
+	// A line break in the title would land as further lines of the entry
+	// point, a child-list line among them.
+	var usage []toolresult.Item
+	if strings.ContainsAny(opts.Title, "\r\n") {
+		usage = append(usage, toolresult.Item{Check: checkUsage, Key: "--title",
+			Detail: "the title is the entry point's one heading line and cannot hold a line break"})
+	}
 	repo, err := kb.RepositoryRoot(opts.WorkDir)
 	if err != nil {
 		return failed(nil, err)
 	}
 	if repo == "" {
-		return refused(nil, toolresult.Item{Check: checkWorktree, Path: opts.WorkDir, Remedy: "git init",
-			Detail: fmt.Sprintf("%s is not inside a git worktree; `git init` there is the operator's to run", opts.WorkDir)})
+		return refused(nil, append(usage, toolresult.Item{Check: checkWorktree, Path: opts.WorkDir, Remedy: "git init",
+			Detail: fmt.Sprintf("%s is not inside a git worktree; `git init` there is the operator's to run", opts.WorkDir)})...)
 	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
 	if _, err := os.Lstat(kbRoot); err == nil {
-		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, toolresult.Item{Check: checkKBRoot, Path: kbRoot,
-			Detail: fmt.Sprintf("%s already exists; creation is birth-once, and what the KB holds afterwards comes from the maintenance subcommands", kbRoot)})
+		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, append(usage, toolresult.Item{Check: checkKBRoot, Path: kbRoot,
+			Detail: fmt.Sprintf("%s already exists; creation is birth-once, and what the KB holds afterwards comes from the maintenance subcommands", kbRoot)})...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return failed(nil, err)
+	}
+	if len(usage) > 0 {
+		return refused(nil, usage...)
 	}
 	release, outcome, items, err := holdKB(kbRoot, "re-run kbase init")
 	if err != nil {
@@ -117,10 +124,9 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 }
 
 // skeleton writes the spine through the canonical renderers, opens the KB,
-// stamps the readiness documents, refreshes and runs the gate over the
-// result, and returns every path it wrote, kb-root-relative. Refusals and
-// failures arrive as errors, the shape the underlying packages carry them
-// in; the caller decides the outcome.
+// stamps the readiness documents and refreshes, and returns every path it
+// wrote, kb-root-relative. Refusals and failures arrive as errors, the shape
+// the underlying packages carry them in; the caller decides the outcome.
 func skeleton(opts initOptions, repo, kbRoot string) ([]string, error) {
 	title := opts.Title
 	if title == "" {
@@ -141,35 +147,21 @@ func skeleton(opts initOptions, repo, kbRoot string) ([]string, error) {
 	if err != nil {
 		return written, err
 	}
-	if _, err := kbdocs.Stamp(src, filepath.Base(repo), kbdocs.AuthoredKBPin); err != nil {
+	stamped, _, err := kbdocs.Stamp(src, filepath.Base(repo), kbdocs.AuthoredKBPin)
+	written = append(written, stamped...)
+	if err != nil {
 		return written, err
 	}
-	for _, doc := range stampDocs {
-		if _, err := os.Lstat(filepath.Join(kbRoot, doc)); err == nil {
-			written = append(written, doc)
-		}
-	}
-	w, _, noDot, err := index.RefreshReporting(src, opts.Logger)
+	refreshed, _, noDot, err := index.RefreshReporting(src, opts.Logger)
 	if noDot {
-		fmt.Fprintln(opts.Stderr, "init: no Graphviz dot on PATH; the claim-graph sheets were not rendered")
+		sayNoDot(opts.Stderr, "init")
 	}
-	written = append(written, w...)
-	if err != nil {
-		return written, err
-	}
-	findings, err := index.BuildVerify(src)
-	if err != nil {
-		return written, err
-	}
-	if len(findings) > 0 {
-		return written, fmt.Errorf("verify is not green over the skeleton just created: %s", findings[0].Detail)
-	}
-	return written, nil
+	return append(written, refreshed...), err
 }
 
 // skeletonEntryPoint is the birth entry point as the canonical renderers
-// compose it: kind first, the format stamp last (§10), the title as the
-// only heading, no children.
+// compose it: kind first, the format stamp last, the title as the only
+// heading, no children.
 func skeletonEntryPoint(title string) (string, error) {
 	kind, err := kb.RenderFrontmatterField("kind", kb.FrontmatterString(kb.DocumentEntryPoint))
 	if err != nil {
@@ -191,11 +183,11 @@ refuses any repository whose kb-root/ already exists, in any state: creation
 is birth-once, and what the KB holds afterwards comes from the maintenance
 subcommands — insert an entry, set a field, refresh, verify, a claim at a
 time. It writes the stamped entry-point.md with --title (or the repository's
-directory name) as its only heading and no children, creates the empty
-.index/, stamps AGENTS.md, CONVENTIONS.md and the CLAUDE.md redirect from
-their templates, and refreshes the skeleton so the derived metadata and the
-claim-graph sheet stand at birth — the placeholder sheet where Graphviz dot
-is absent. verify must be green over the skeleton before init reports done.
+directory name) as its only heading and no children — a --title holding a
+line break is refused — creates the empty .index/, stamps AGENTS.md,
+CONVENTIONS.md and the CLAUDE.md redirect from their templates, and
+refreshes the skeleton so the derived metadata and the claim-graph sheet
+stand at birth — the placeholder sheet where Graphviz dot is absent.
 Finally it commits kb-root/ as the birth commit, "kb-init: knowledge base
 created" — a plain commit, never a kb-build: stage commit, so kbase build,
 which resumes from the build's stage trail, has no trail here and stays

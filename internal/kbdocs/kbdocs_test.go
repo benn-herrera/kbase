@@ -38,13 +38,16 @@ func readFile(t *testing.T, path string) string {
 func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{ConventionsFile: "the project's own\n"})
-	reports, err := Stamp(kb.OnDisk(root), "proj", "A pin naming {braces} as prose.")
+	written, reports, err := Stamp(kb.OnDisk(root), "proj", "A pin naming {braces} as prose.")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"AGENTS.md: written from its template", "CONVENTIONS.md: present, left as authored", "CLAUDE.md: written as the redirect to AGENTS.md"}
 	if !slices.Equal(reports, want) {
 		t.Errorf("reports = %q, want %q", reports, want)
+	}
+	if want := []string{kb.AgentsFile, kb.AgentsRedirectFile}; !slices.Equal(written, want) {
+		t.Errorf("written = %q, want %q: the authored CONVENTIONS.md is not one", written, want)
 	}
 	if got := readFile(t, filepath.Join(root, ConventionsFile)); got != "the project's own\n" {
 		t.Errorf("an authored CONVENTIONS.md was rewritten: %q", got)
@@ -58,9 +61,12 @@ func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 			t.Errorf("AGENTS.md lacks %q", want)
 		}
 	}
-	again, err := Stamp(kb.OnDisk(root), "proj", "another pin")
+	rewritten, again, err := Stamp(kb.OnDisk(root), "proj", "another pin")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(rewritten) != 0 {
+		t.Errorf("second stamp wrote %q, want nothing", rewritten)
 	}
 	if want := []string{"AGENTS.md: present, left as authored", "CONVENTIONS.md: present, left as authored", "CLAUDE.md: present, already the redirect"}; !slices.Equal(again, want) {
 		t.Errorf("second stamp = %q, want %q", again, want)
@@ -70,7 +76,7 @@ func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{kb.AgentsRedirectFile: "# old agents file\n"})
-	_, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin)
+	_, _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin)
 	var r result.Refusal
 	if !errors.As(err, &r) {
 		t.Fatalf("Stamp over an unmigrated CLAUDE.md = %v, want a Refusal", err)
@@ -86,7 +92,7 @@ func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 // absent.
 func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin); err != nil {
+	if _, _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin); err != nil {
 		t.Fatal(err)
 	}
 	readme, err := Overview("proj", "A passage.", false)
