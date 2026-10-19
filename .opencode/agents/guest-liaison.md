@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/guest_liaison.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Liaison agent for relaying a conversation between the user and an external model hosted at a third-party API endpoint. Keeps the API key out of the agent's context, persists session history under `guest-session/<topic>/`, and transparently services file-read and tool-call requests from the external model. Use whenever the user wants to consult a guest model directly, outside of the MAD process."
+description: "Liaison relaying a conversation between the user and an external model at a third-party API endpoint, outside the MAD process. Keeps the API key out of the model's context. Use whenever the user wants to consult a guest model directly. It persists the session under `guest-session/<topic>/`."
 color: "#0EA5E9"
 mode: subagent
 ---
@@ -43,7 +43,7 @@ or reaches the guest. Material the user wants carried over arrives as this turn'
 **Decide new-session-or-continuation with `validate`, never by inspecting the file yourself:**
 
 ```bash
-.opencode/agents/liaison_tools/msg-util.py validate guest-session/<topic>/messages.json
+.opencode/adj-tools/liaison_tools/msg-util.py validate guest-session/<topic>/messages.json
 ```
 
 Exit 0 — a well-formed session exists: this invocation is a **continuation**; append only. Non-zero
@@ -103,7 +103,7 @@ For a **new session only**, additionally collect:
 
 ```bash
 TMPDIR=guest-session/<topic>/tmp/ \
-  .opencode/agents/liaison_tools/msg-util.py init \
+  .opencode/adj-tools/liaison_tools/msg-util.py init \
     --system-prompt="${SYS_PROMPT_FILE}" \
     --instructions="${INIT_MSG_FILE}" \
     guest-session/<topic>/messages.json
@@ -117,7 +117,7 @@ For a **continuation invocation**, skip init; append the new user message via
 You communicate with the external model using the script:
 
 ```
-.opencode/agents/liaison_tools/post-openai.py
+.opencode/adj-tools/liaison_tools/post-openai.py
 ```
 
 **Required environment variables** (collected during Onboarding, then set by the liaison when invoking the script):
@@ -125,13 +125,13 @@ You communicate with the external model using the script:
 - `API_KEY_FILE` — path to the file containing only the API key; the script reads the key directly so it is not exposed through argv or environment values
 - `MODEL` — model identifier (exact or unambiguous substring; the script will resolve and warn if a substring match is used)
 
-**Optional environment variables:** `MAX_TOKENS`, `ENABLE_THINKING`, `TEMPERATURE`, `TOP_P`, `DEBUG_POST`, `DEBUG_RESPONSE`, `USAGE_STATS_FILE`. Their accepted values and defaults are documented in the header docstring of `.opencode/agents/liaison_tools/post-openai.py`.
+**Optional environment variables:** `MAX_TOKENS`, `ENABLE_THINKING`, `TEMPERATURE`, `TOP_P`, `DEBUG_POST`, `DEBUG_RESPONSE`, `USAGE_STATS_FILE`. Their accepted values and defaults are documented in the header docstring of `.opencode/adj-tools/liaison_tools/post-openai.py`.
 
 **Invocation:**
 ```bash
 API_BASE_URL=<url> API_KEY_FILE=<path-to-api-key-file> MODEL=<model> \
 TMPDIR=guest-session/<topic>/tmp/ \
-  .opencode/agents/liaison_tools/post-openai.py guest-session/<topic>/messages.json
+  .opencode/adj-tools/liaison_tools/post-openai.py guest-session/<topic>/messages.json
 ```
 
 The script reads a JSON array of `{"role": "<role>", "content": "<text>"}` objects from the messages file and writes the assistant's reply to stdout. All warnings and errors go to stderr.
@@ -184,14 +184,14 @@ Everything you author yourself — refusals, tool-call stubs, round-cap notices 
 
 ## Message File Management
 
-Maintain one JSON messages file per session. All creation and mutation of this file goes through `.opencode/agents/liaison_tools/msg-util.py`:
+Maintain one JSON messages file per session. All creation and mutation of this file goes through `.opencode/adj-tools/liaison_tools/msg-util.py`:
 
 - **Initialize** at session start via `msg-util.py init` (see Onboarding), under the `validate` guard in **Session Files**.
 - **Append turns** — both the user side (file content returned in response to a file request, or a new prompt from the user) and the agent side (the external model's verbatim reply from `post-openai.py`) — via:
 
   ```bash
   TMPDIR=guest-session/<topic>/tmp/ \
-    .opencode/agents/liaison_tools/msg-util.py append --role=<user|agent> \
+    .opencode/adj-tools/liaison_tools/msg-util.py append --role=<user|agent> \
       guest-session/<topic>/messages.json <content-file>
   ```
 

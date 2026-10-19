@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/typescript_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: typescript-coder
-description: "TypeScript and JavaScript implementation specialist for code outside the browser — Node, Deno and Bun services, CLIs and libraries. Writes for the runtime and module system the project targets, with types that hold at the boundaries where data enters. Covers the type system, runtime validation, async and the event loop, streams, packaging and the exports map, build and emit, and testing. Parallel-execution safe. Prefer over generalist-coder for TypeScript or JavaScript that does not run in a browser; browser targets go to web-app-expert."
+description: "TypeScript and JavaScript implementation specialist for code outside the browser — Node, Deno and Bun services, CLIs and libraries. Prefer over generalist-coder for TypeScript or JavaScript that does not run in a browser; browser targets go to web-app-expert."
 model: opus
 color: "#3178C6"
 ---

@@ -27,7 +27,8 @@ const (
 	OverviewFile    = "README.md"
 )
 
-// readinessDocs are stamped at the validation gate, in this order.
+// readinessDocs are the documents stamped from their templates, in this order:
+// init stamps them at a KB's birth, the build at its validation gate.
 var readinessDocs = []string{kb.AgentsFile, ConventionsFile}
 
 // The slots the templates name.
@@ -55,13 +56,6 @@ func digestChunk() (string, error) {
 	return string(b), nil
 }
 
-// NoCharterPin is the scope pin of a build given no charter: the absence
-// stated, because a KB nobody pinned and one whose pin went missing are
-// different facts.
-const NoCharterPin = "This build was given no charter, so nothing was recorded about which corpus it " +
-	"distills beyond the sources it was run on. Nothing here is waiting on a tool: a " +
-	"reader who knows the scope should write it into this section."
-
 // AuthoredKBPin is the scope pin of a KB `init` created empty: no corpus was
 // distilled because there is no corpus — what the KB holds, its author writes
 // into it, a claim at a time.
@@ -71,8 +65,14 @@ const AuthoredKBPin = "This KB was created empty by kbase init, authored, not di
 
 var slotRE = regexp.MustCompile(`\{([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\}`)
 
+// blankRunRE matches a run of three or more newlines: an empty value leaves
+// one where its slot stood alone on its line.
+var blankRunRE = regexp.MustCompile(`\n{3,}`)
+
 // fill substitutes values into the named template in one pass, so a value
-// holding brace text is content. A slot with no value refuses the fill.
+// holding brace text is content. A slot with no value refuses the fill. A run
+// of three or more newlines — what an empty value leaves — collapses to one
+// blank line.
 func fill(name string, values map[string]string) (string, error) {
 	b, err := templates.ReadFile("templates/" + strings.TrimSuffix(name, ".md") + ".tmpl.md")
 	if err != nil {
@@ -88,15 +88,17 @@ func fill(name string, values map[string]string) (string, error) {
 	if len(missing) > 0 {
 		return "", fmt.Errorf("%s: the template names slot(s) nothing fills: %s", name, strings.Join(missing, ", "))
 	}
-	return slotRE.ReplaceAllStringFunc(text, func(s string) string { return values[s[1:len(s)-1]] }), nil
+	text = slotRE.ReplaceAllStringFunc(text, func(s string) string { return values[s[1:len(s)-1]] })
+	return blankRunRE.ReplaceAllString(text, "\n\n"), nil
 }
 
 // Stamp writes the readiness documents into the KB's kb-root, each only
 // where none stands, and CLAUDE.md as the redirect to AGENTS.md likewise;
-// scopePin is what AGENTS.md says the KB distills. It returns the
-// kb-root-relative paths it wrote, and one report line per document; on an
-// error, both as far as it got. A CLAUDE.md that is not the redirect is a
-// result.Refusal, before anything is written.
+// scopePin is what AGENTS.md says the KB distills, empty where its caller has
+// no statement of its own to make. It returns the kb-root-relative paths it
+// wrote, and one report line per document; on an error, both as far as it
+// got. A CLAUDE.md that is not the redirect is a result.Refusal, before
+// anything is written.
 func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []string, err error) {
 	kbRoot := src.Root()
 	msg, err := kb.UnmigratedAgentsFile(src)

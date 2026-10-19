@@ -95,9 +95,8 @@ const checkUsage = "usage"
 
 const queryHelp = `
 It reads kb-root/.index/ beside the repository's .git and writes nothing; a KB
-in an older metadata format is read in the current one. Its
-result is one YAML document on stdout, the answer under "` + query.ResultsKey + `" in
-kb_cmd --json's names.`
+in an older metadata format is read in the current one. Its result is one YAML
+document on stdout, the answer under "` + query.ResultsKey + `".`
 
 const listQueryHelp = `
 A list answer is returned --limit results at a time from --offset, with

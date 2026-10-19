@@ -18,29 +18,38 @@ func keyFile(t *testing.T, key string) string {
 }
 
 func TestResolveInferencePrecedence(t *testing.T) {
-	files := Config{Models: ModelMap{Decision: "file-decision", Text: "file-text"}}
-	entry := &Provider{Name: "pool", BaseURL: "https://file.example/v1", APIKey: "file-key"}
+	// The layers a resolved field names: the environment above the files, and
+	// the layer each file-supplied field's value came from.
+	const fromEnv, fromPool, fromConfig = LayerSourceEnvironment, LayerSourceRepository, LayerSourceGlobal
+	files := Config{
+		Models:  ModelMap{Decision: "file-decision", Text: "file-text"},
+		Sources: Sources{Decision: fromConfig, Text: fromConfig},
+	}
+	entry := &Provider{Name: "pool", BaseURL: "https://file.example/v1", APIKey: "file-key", Layer: fromPool}
+	decisionEntry := &Provider{Name: "pool", BaseURL: "https://file.example/v1", APIKey: "file-key", Layer: fromPool,
+		DecisionsFlavor: FlavorDecisions}
 	env := Overrides{BaseURL: "https://env.example/v1", Decision: "env-decision", Text: "env-text", APIKeyFile: keyFile(t, "env-key")}
-	flags := Overrides{BaseURL: "https://flag.example/v1"}
+	higher := Overrides{BaseURL: "https://flag.example/v1"}
 	for _, tc := range []struct {
 		name   string
 		entry  *Provider
 		layers []Overrides
 		want   Inference
 	}{
-		{"flag over env", entry, []Overrides{flags, env}, Inference{"pool", "https://flag.example/v1", "env-key", "env-decision", "env-text"}},
-		{"env over file", entry, []Overrides{env}, Inference{"pool", "https://env.example/v1", "env-key", "env-decision", "env-text"}},
-		{"file alone", entry, nil, Inference{"pool", "https://file.example/v1", "file-key", "file-decision", "file-text"}},
-		{"env alone", nil, []Overrides{env}, Inference{"environment", "https://env.example/v1", "env-key", "env-decision", "env-text"}},
-		{"a specific variable overrides its one field", entry, []Overrides{{Decision: "env-decision"}}, Inference{"pool", "https://file.example/v1", "file-key", "env-decision", "file-text"}},
-		{"both specifics absent resolves from the file only", entry, []Overrides{{APIKeyFile: keyFile(t, "env-key")}}, Inference{"pool", "https://file.example/v1", "env-key", "file-decision", "file-text"}},
+		{"the earlier layer over the later one", entry, []Overrides{higher, env}, Inference{"pool", "https://flag.example/v1", "env-key", "env-decision", "env-text", "systemone", Sources{fromEnv, fromEnv, fromEnv, fromEnv}}},
+		{"env over file", entry, []Overrides{env}, Inference{"pool", "https://env.example/v1", "env-key", "env-decision", "env-text", "systemone", Sources{fromEnv, fromEnv, fromEnv, fromEnv}}},
+		{"file alone", entry, nil, Inference{"pool", "https://file.example/v1", "file-key", "file-decision", "file-text", "systemone", Sources{fromPool, fromConfig, fromConfig, fromPool}}},
+		{"env alone", nil, []Overrides{env}, Inference{"environment", "https://env.example/v1", "env-key", "env-decision", "env-text", "systemone", Sources{fromEnv, fromEnv, fromEnv, fromEnv}}},
+		{"a specific variable overrides its one field", entry, []Overrides{{Decision: "env-decision"}}, Inference{"pool", "https://file.example/v1", "file-key", "env-decision", "file-text", "systemone", Sources{fromPool, fromEnv, fromConfig, fromPool}}},
+		{"both specifics absent resolves from the file only", entry, []Overrides{{APIKeyFile: keyFile(t, "env-key")}}, Inference{"pool", "https://file.example/v1", "env-key", "file-decision", "file-text", "systemone", Sources{fromPool, fromConfig, fromConfig, fromEnv}}},
+		{"an entry naming its decision surface", decisionEntry, nil, Inference{"pool", "https://file.example/v1", "file-key", "file-decision", "file-text", "decisions", Sources{fromPool, fromConfig, fromConfig, fromPool}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := files
 			if tc.entry == nil {
 				cfg = Config{}
 			}
-			got, err := ResolveInference(cfg, tc.entry, nil, tc.layers...)
+			got, err := ResolveInference(cfg, tc.entry, nil, t.TempDir(), tc.layers...)
 			if err != nil || got != tc.want {
 				t.Errorf("= %+v, %v; want %+v", got, err, tc.want)
 			}
@@ -75,7 +84,9 @@ func TestEnvOverrides(t *testing.T) {
 }
 
 func TestResolveInferenceNamesWhatItLacks(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "absent.txt")
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "absent.txt")
+	providers, configFile := ProvidersPath(dir), ConfigPath(dir)
 	for _, tc := range []struct {
 		name      string
 		entry     *Provider
@@ -83,15 +94,16 @@ func TestResolveInferenceNamesWhatItLacks(t *testing.T) {
 		key, path string
 		detail    string
 	}{
-		{"no base URL", nil, nil, EnvAPIBaseURL, ProvidersFileName, ""},
-		{"no model", nil, []Overrides{{BaseURL: "https://env.example/v1"}}, "models.decision", ConfigFileName,
-			"config.toml sets no models.decision or models.text"},
-		{"no text model", nil, []Overrides{{BaseURL: "https://env.example/v1", Decision: "clef"}}, "models.text", ConfigFileName,
-			"config.toml sets no models.text"},
+		{"no base URL", nil, nil, "baseUrl", providers,
+			"KBASE_API_BASE_URL is unset and " + providers + " supplies no base URL: no usable provider"},
+		{"no model", nil, []Overrides{{BaseURL: "https://env.example/v1"}}, "models.decision", configFile,
+			configFile + " sets no models.decision or models.text"},
+		{"no text model", nil, []Overrides{{BaseURL: "https://env.example/v1", Decision: "clef"}}, "models.text", configFile,
+			configFile + " sets no models.text"},
 		{"an unreadable key file", nil, []Overrides{{BaseURL: "https://env.example/v1", Decision: "clef", Text: "t", APIKeyFile: missing}}, EnvAPIKeyFile, missing, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ResolveInference(Config{}, tc.entry, errors.New("no usable provider"), tc.layers...)
+			_, err := ResolveInference(Config{}, tc.entry, errors.New("no usable provider"), dir, tc.layers...)
 			var lack LackError
 			if !errors.As(err, &lack) {
 				t.Fatalf("err = %v, want a LackError", err)

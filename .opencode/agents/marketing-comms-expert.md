@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/marketing_comms_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Marketing strategy, brand positioning, copywriting, taglines, product naming, press releases, email campaigns, social media, competitive positioning, critique of marketing materials—particularly software industry (B2B and consumer)."
+description: "Marketing strategy, brand positioning, copywriting, taglines, product naming, press releases, campaigns and social media for software (B2B and consumer); also critiques marketing materials."
 color: "#9B59B6"
 mode: subagent
 ---

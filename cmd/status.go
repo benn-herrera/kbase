@@ -40,8 +40,8 @@ func init() {
 	rootCmd.AddCommand(readOnly(monitorCommand("status", "report the build's state, progress and resume command",
 		`status reads the build over the KB the working directory is in — its run
 lock, its progress record and the kb-build: commit trail — and reports the
-state (none, running, cancelled, failed, bounded, finished), the pid and
-timestamps, each stage recorded or not with its commit, the current stage's
-units done and total, recent refusals and fallbacks, the --no-inference flag
-and the command that resumes it, as one YAML document on stdout.`, build.Status)))
+state (none, running, cancelled, interrupted, failed, bounded, finished), the
+pid and timestamps, each stage recorded or not with its commit, the current
+stage's units done and total, recent refusals and fallbacks, the --no-inference
+flag and the command that resumes it, as one YAML document on stdout.`, build.Status)))
 }

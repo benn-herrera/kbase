@@ -198,12 +198,12 @@ type IndexLineError struct {
 
 var errNotIndexRecord = errors.New("expected the document marker and a JSON object")
 
-// ReadIndex is every row of T's index file as kb_cmd loads it: one per line
-// not blank under Python's whitespace, a key the record lacks taking kb_cmd's
-// default — a node's node_type "claim", an edge's relation "depends" and
-// target_kind "claim". accept, where not nil, sees each decoded row and may
-// refuse it. A line that does not decode or that accept refuses is a problem,
-// its row dropped; err is the file's read error.
+// ReadIndex is every row of T's index file: one per line not blank under
+// Python's whitespace, a key the record lacks taking its default — a node's
+// node_type "claim", an edge's relation "depends" and target_kind "claim".
+// accept, where not nil, sees each decoded row and may refuse it. A line that
+// does not decode or that accept refuses is a problem, its row dropped; err is
+// the file's read error.
 func ReadIndex[T IndexRowType](src *Source, accept func(*T) error) (path string, rows []T, problems []IndexLineError, err error) {
 	path = src.KBPath(IndexDir + "/" + IndexFileName(indexFileOf[T]()))
 	text, err := src.ReadText(path)
@@ -252,7 +252,7 @@ func indexFileOf[T IndexRowType]() string {
 	return IndexSubtreeAggregates
 }
 
-// seedIndexRow sets the keys kb_cmd defaults where a record lacks them.
+// seedIndexRow fills in the defaults a record takes where it lacks them.
 func seedIndexRow(row any) {
 	switch r := row.(type) {
 	case *NodeRow:

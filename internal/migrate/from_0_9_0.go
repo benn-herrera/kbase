@@ -29,9 +29,9 @@ const (
 // and .yaml at 1.0.0.
 var buildRecordStems = []string{"kb-build-node-pass", "kb-build-classification", "kb-build-unmarked"}
 
-// The 0.9.0 comment-block grammar, as kb_tools reads it with Python's
-// whitespace: the first block's body, a field per "key:" line, a value
-// wrapped across lines as "[a,\n b]" or continued as "- item" bullets.
+// The 0.9.0 comment-block grammar, read with Python's whitespace: the first
+// block's body, a field per "key:" line, a value wrapped across lines as
+// "[a,\n b]" or continued as "- item" bullets.
 const pyWhitespace = `\t\n\v\f\r\x1c-\x1f \x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 
 // scoreNumber is a score as the 0.9.0 pair readers took it, widened to the
@@ -472,9 +472,9 @@ func blockValue(value string, tail []string) *yaml.Node {
 	return list
 }
 
-// blockScalar types a one-line value as kb_tools does: "[…]" a list, a
-// double-quoted string with its quotes stripped once, true or false a
-// boolean, anything else the string as written.
+// blockScalar types a one-line value: "[…]" a list, a double-quoted string
+// with its quotes stripped once, true or false a boolean, anything else the
+// string as written.
 func blockScalar(value string) *yaml.Node {
 	switch {
 	case strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]"):

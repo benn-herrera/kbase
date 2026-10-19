@@ -1,4 +1,4 @@
-// Package build walks kb_tools' stage table: each stage's rows in order,
+// Package build walks the stage table: each stage's rows in order,
 // each stage's boundary a commit, bounded by --through, with the rows that
 // spend inference dropped under --no-inference. Whether an invocation opens
 // a build or resumes one is read off the commit trail alone.
@@ -31,8 +31,8 @@ type Stage struct {
 	ID, Display string
 }
 
-// Stages is the build's stage vocabulary in walk order. kb_tools' retired
-// phase-5 is never given to a stage: its ledgers would read it as recorded.
+// Stages is the build's stage vocabulary in walk order. The id "phase-5" is
+// never given to a stage: the ledgers would read it as recorded.
 var Stages = []Stage{
 	{"start", "build started"},
 	{"document-graph", "document tree derived"},
@@ -53,19 +53,10 @@ const (
 	stageSpineSeed     = "spine-seed"
 )
 
-// charterFile is where a build keeps its charter, at the repository root.
-const charterFile = "kb-build-charter.md"
-
 // ownedPaths are the root-relative paths a build commits and restores: the
 // build records under every spelling, so a migration's removal of the old
 // one is committed with the stage that saved it.
-var ownedPaths = append([]string{kb.KBDir, charterFile}, kbload.RecordFiles()...)
-
-// The start boundary's body: the charter it was given, or the absence stated.
-const (
-	charterField = "charter:"
-	noCharter    = "charter: none — this build was given none and runs on its sources"
-)
+var ownedPaths = append([]string{kb.KBDir}, kbload.RecordFiles()...)
 
 // Every boundary's body ends with the build's inputs, one line per path.
 const (
@@ -85,7 +76,6 @@ const (
 	checkMetadata   = "metadata-key"
 	checkProvider   = "provider"
 	checkKBRoot     = "kb-root"
-	checkCharter    = "charter"
 	checkInference  = "inference"
 	checkRecords    = "records"
 	checkStateDir   = "state-dir"
@@ -113,7 +103,6 @@ func (r row) callsAModel() bool { return r.spendsInference() || r.spendsInferenc
 // rows is the step table in walk order.
 var rows = []row{
 	{id: "pre.preflight", stage: stageStart, run: preflight},
-	{id: "pre.charter", stage: stageStart, run: charter},
 	{id: "dg.build", stage: stageDocumentGraph, run: documentGraph},
 	{id: "seed.graph-init", stage: "spine-seed", run: seedSpine},
 	{id: "declared.build", stage: "claims-declared", run: claimGraph(mechanical(claimgraph.Declared))},
@@ -170,9 +159,6 @@ type Options struct {
 	// VolumeRoots are the papers' top .tex files, one volume each.
 	VolumeRoots    []string
 	Bibliographies []string
-	// Charter is a file stating the build's scope, kept at the repository
-	// root as the build's charter when it opens.
-	Charter string
 	// Through is the last stage to walk; empty walks them all.
 	Through string
 	// StateDir overrides the state store's location.
@@ -197,10 +183,17 @@ type Options struct {
 // Provider is where a build's model calls go: the client, the model the
 // claim graph's letter asks and the overview passage are each put to, and
 // how many asks of one group are in flight at once — 0 for the default.
+//
+// Name, Rule and Layer are the provenance its result reports: the pool entry
+// the endpoint came from, the selection rule that named it and the
+// configuration layer that supplies the entry. They are empty together where
+// no pool entry supplied the endpoint.
 type Provider struct {
 	Client            model.Client
 	Letters, Overview string
 	ReaderConcurrency int
+
+	Name, Rule, Layer string
 }
 
 // walk is one build's state as its rows pass it along, and what its result
@@ -232,6 +225,15 @@ type walk struct {
 	resumed  *bool
 	restored []string
 	walked   []result.Record
+
+	// recordedBoundary is whether this invocation recorded a stage boundary.
+	recordedBoundary bool
+
+	// provider, providerRule and providerLayer are the provenance of the
+	// endpoint launch resolved: the pool entry it came from, the rule that
+	// named it and the layer that supplied the entry. Empty together where
+	// no pool entry supplied the endpoint.
+	provider, providerRule, providerLayer string
 }
 
 // retry is a live holder of what the build needs.
@@ -340,7 +342,11 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if err != nil {
 		return w.result(ended("", err))
 	}
-	defer lock.Release()
+	defer func() {
+		if err := lock.ReleaseRemoving(); err != nil {
+			opts.Logger.Error("the state store's holder lock was released and its file not removed", "error", err)
+		}
+	}()
 	if err := readyStore(w.stateDir); err != nil {
 		return w.result(ended("", err))
 	}
@@ -370,10 +376,23 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 // contract gives, then why it ended where it did not succeed.
 func (w *walk) result(end ending) (string, []result.Field) {
 	var fields []result.Field
+	// walked is whether this invocation recorded a boundary: one that recorded
+	// none walked no stage, and its document names neither the bound nor the
+	// stages.
+	walked := w.walked != nil
 	if w.kbRoot != "" {
 		fields = append(fields, result.Field{Key: "kb-root", Value: w.kbRoot}, result.Field{Key: "state-dir", Value: w.stateDir})
 	}
-	if w.through != "" {
+	// The three provenance keys stand together or not at all: a build whose
+	// endpoint no pool entry supplied — no inference at all, or a base URL
+	// from the environment — names none of them.
+	if w.provider != "" {
+		fields = append(fields,
+			result.Field{Key: "provider", Value: w.provider},
+			result.Field{Key: "provider-rule", Value: w.providerRule},
+			result.Field{Key: "provider-layer", Value: w.providerLayer})
+	}
+	if walked {
 		fields = append(fields, result.Field{Key: "through", Value: w.through})
 	}
 	fields = append(fields, result.Field{Key: "no-inference", Value: w.opts.NoInference})
@@ -383,11 +402,24 @@ func (w *walk) result(end ending) (string, []result.Field) {
 	if w.restored != nil {
 		fields = append(fields, result.Field{Key: "restored", Value: w.restored})
 	}
-	if w.walked != nil {
+	if walked {
 		fields = append(fields, result.Field{Key: "stages", Value: w.walked})
 	}
-	if w.kbRoot != "" && end.outcome != result.Done && end.outcome != result.Unchanged {
-		fields = append(fields, result.Field{Key: "resume", Value: shellJoin(w.resumeCommand())})
+	// resume names the command that continues this build, and is absent where
+	// an identical re-issue continues nothing: a bounded run stops at the bound
+	// its own command repeats, and a retry never walks a stage. A cancelled or
+	// failed run is continued wherever it walked a stage; a refusal's only
+	// where it recorded a boundary, since a refusal that recorded none wrote
+	// nothing to continue.
+	switch end.outcome {
+	case result.Cancelled, result.Failed, result.Refused:
+		continues := walked
+		if end.outcome == result.Refused {
+			continues = w.recordedBoundary
+		}
+		if command, confirmed := recordedCommand(w.resumeCommand()); continues && confirmed {
+			fields = append(fields, result.Field{Key: "resume", Value: command})
+		}
 	}
 	return end.outcome, append(fields, end.fields()...)
 }
@@ -500,7 +532,8 @@ func trailRefusal(repoRoot string, recorded map[string]string) result.Refusal {
 }
 
 // namedSetting is a provider error naming the setting the configuration
-// lacks: the variable that would supply it and the file that otherwise does.
+// lacks — by its configuration key or its variable — and the file that
+// supplies it.
 type namedSetting interface{ Named() (key, path string) }
 
 // launch refuses, before any stage is walked, a walk that cannot finish: a
@@ -531,14 +564,15 @@ func (w *walk) launch(remaining []Stage) error {
 			p, err = w.opts.Provider()
 		}
 		if err != nil {
-			it := result.Item{Check: checkProvider, Remedy: "kbase configure",
-				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; configure one, or run with --no-inference", calling.id, calling.stage, err)}
+			it := result.Item{Check: checkProvider,
+				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; run kbase show-config to see the resolved configuration, or run with --no-inference", calling.id, calling.stage, err)}
 			var lack namedSetting
 			if errors.As(err, &lack) {
 				it.Key, it.Path = lack.Named()
 			}
 			items = append(items, it)
 		} else {
+			w.provider, w.providerRule, w.providerLayer = p.Name, p.Rule, p.Layer
 			caller := call.New(p.Client, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
 			w.letters, w.readerConcurrency = caller.Letters(p.Letters), p.ReaderConcurrency
 			w.passage = func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error) {
@@ -578,7 +612,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 		if err != nil {
 			return nil, err
 		}
-		if !interrupted(events, next.ID) {
+		if !uncommittedIn(events, next.ID) {
 			items := make(result.Refusal, len(dirty))
 			for i, p := range dirty {
 				items[i] = result.Item{Check: checkDirtyPaths, Path: p,
@@ -640,7 +674,7 @@ func (w *walk) stage(s Stage) (result.Record, error) {
 	if err != nil {
 		return entry, err
 	}
-	body := w.body(s.ID, dropped)
+	body := w.body(dropped)
 	commit, err := w.repo.Record(s.ID, s.Display, body)
 	if err != nil {
 		return entry, err
@@ -650,6 +684,7 @@ func (w *walk) stage(s Stage) (result.Record, error) {
 	if err := w.progress.emit(event{Event: eventRecorded, Stage: s.ID, Commit: commit}); err != nil {
 		return entry, err
 	}
+	w.recordedBoundary = true
 	return entry, nil
 }
 
@@ -682,17 +717,11 @@ func (w *walk) rows(s Stage, run []row) ([]result.Record, error) {
 	return ran, nil
 }
 
-// body is a boundary commit's body: the start boundary names its charter, a
-// stage that dropped rows names them, and every boundary ends with the
-// build's inputs.
-func (w *walk) body(stage string, dropped []string) string {
+// body is a boundary commit's body: a stage that dropped rows names them, and
+// every boundary ends with the build's inputs.
+func (w *walk) body(dropped []string) string {
 	note := ""
-	switch {
-	case stage == stageStart && kb.IsFile(filepath.Join(w.repo.Root, charterFile)):
-		note = charterField + " " + charterFile
-	case stage == stageStart:
-		note = noCharter
-	case len(dropped) > 0:
+	if len(dropped) > 0 {
 		note = "--no-inference: this build spent no model call, so " + strings.Join(dropped, ", ") + " did not run. " +
 			"Every row of this stage that costs none ran; what the dropped rows would have authored is absent from the KB, " +
 			"and whatever the stage before them wrote about it stands."
@@ -820,9 +849,6 @@ func (w *walk) resumeCommand() []string {
 	}
 	for _, b := range w.opts.Bibliographies {
 		argv = append(argv, "--bibliography", w.absolute(b))
-	}
-	if w.opts.Charter != "" {
-		argv = append(argv, "--charter", w.absolute(w.opts.Charter))
 	}
 	if w.opts.NoInference {
 		argv = append(argv, "--no-inference")

@@ -8,10 +8,10 @@ import (
 	"unicode/utf8"
 )
 
-// The metadata layer is kb_tools' bytes, and kb_tools reads them with
-// Python's text semantics: a file read in text mode, str.splitlines,
-// str.strip, and regular expressions whose \s, \w and \b are Unicode-aware.
-// Go's counterparts differ at the edges, so the readers here go through these.
+// The metadata layer's readers follow Python's text semantics: a file read in
+// text mode, str.splitlines, str.strip, and regular expressions whose \s, \w
+// and \b are Unicode-aware. Go's counterparts differ at the edges, so the
+// readers here go through these.
 
 // PyWhitespace is the body of the class Python's \s and str.isspace() share,
 // for use inside a bracket expression.
@@ -169,10 +169,10 @@ func containsBounded(s, token string) bool {
 	return false
 }
 
-// Slugify is the heading anchor kb_tools computes: lowercased, everything but
-// word characters, whitespace and hyphens dropped, then each whitespace run
-// one hyphen. The collapse is not GitHub's anchor: "A — B" anchors at "a-b",
-// the form every KB's stored canonical_anchor carries.
+// Slugify is the heading anchor every KB's stored canonical_anchor carries:
+// lowercased, everything but word characters, whitespace and hyphens dropped,
+// then each whitespace run one hyphen. The collapse is not GitHub's anchor:
+// "A — B" anchors at "a-b".
 func Slugify(text string) string {
 	var b strings.Builder
 	inSpace := false

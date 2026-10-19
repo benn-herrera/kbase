@@ -1,5 +1,5 @@
 {"jsonrpc":"2.0","id":1,"method":"resources/list"}
-{"jsonrpc":"2.0","id":1,"result":{"resources":[{"uri":"kbase://sheet/claim-graph.svg","name":"claim-graph.svg","mimeType":"image/svg+xml"}]}}
+{"jsonrpc":"2.0","id":1,"result":{"resources":[{"uri":"kbase://sheet/claim-graph.svg","name":"claim-graph.svg","mimeType":"image/svg+xml"},{"uri":"kbase://model-hints","name":"Model hints","mimeType":"text/markdown"},{"uri":"kbase://build-trail","name":"Build trail","mimeType":"application/yaml"},{"uri":"kbase://build","name":"Build state","mimeType":"application/yaml"}]}}
 {"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"kbase://sheet/absent.svg"}}
 {"jsonrpc":"2.0","id":2,"error":{"code":-32002,"message":"Resource not found: no resource has the URI \"kbase://sheet/absent.svg\""}}
 {"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"kbase://sheet/../entry-point.md"}}

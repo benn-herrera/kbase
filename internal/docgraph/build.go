@@ -1,4 +1,4 @@
-// Package docgraph builds kb_tools' document graph from its volume roots: per
+// Package docgraph builds the document graph from its volume roots: per
 // volume the pre-passes, pandoc's read, the JSON transforms, pandoc's gfm
 // render and the whole-volume cut into a tree of its own; then the entry point
 // listing every volume, and the records the claim graph reads.

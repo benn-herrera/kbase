@@ -17,7 +17,7 @@ const (
 	StatusFact = "FACT"
 )
 
-// The build's checks, named as kb_tools' report names them.
+// The build's checks, by the name each report line carries.
 const (
 	nameAST       = "A-ast-to-markdown"
 	nameTree      = "B-markdown-to-tree"

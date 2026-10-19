@@ -8,14 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// systemOneRequest is the one-question request the tests send.
-func systemOneRequest() DecisionRequest {
+// decisionRequest is the one-question request the tests send.
+func decisionRequest() DecisionRequest {
 	return DecisionRequest{
 		Model: "clef",
 		State: "the composed state",
@@ -28,13 +29,13 @@ func systemOneRequest() DecisionRequest {
 	}
 }
 
-// systemOneServer serves the given responses in order: an element of the
+// decisionServer serves the given responses in order: an element of the
 // form "status:<code>" is sent as that status with a short body; the
 // sentinel nilBody kills the connection unread, a transport error; anything
 // else is sent as a 200 body. The handler records method, path, auth header
 // and body of every request it saw. The handler runs on the server's
 // goroutine, so every field it touches is guarded by mu.
-type systemOneServer struct {
+type decisionServer struct {
 	srv      *httptest.Server
 	mu       sync.Mutex
 	requests int
@@ -44,13 +45,13 @@ type systemOneServer struct {
 	bodies   []string
 }
 
-const systemOneNilBody = "\x00nil"
+const decisionNilBody = "\x00nil"
 
-func systemOneStatus(code int) string { return fmt.Sprintf("status:%d", code) }
+func decisionStatus(code int) string { return fmt.Sprintf("status:%d", code) }
 
-func newSystemOneServer(t *testing.T, responses ...string) *systemOneServer {
+func newDecisionServer(t *testing.T, responses ...string) *decisionServer {
 	t.Helper()
-	s := &systemOneServer{}
+	s := &decisionServer{}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -60,7 +61,7 @@ func newSystemOneServer(t *testing.T, responses ...string) *systemOneServer {
 		s.bodies = append(s.bodies, string(body))
 		resp := responses[min(s.requests-1, len(responses)-1)]
 		switch {
-		case resp == systemOneNilBody:
+		case resp == decisionNilBody:
 			// Kill the connection without a response: the transport
 			// error shape.
 			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
@@ -80,42 +81,48 @@ func newSystemOneServer(t *testing.T, responses ...string) *systemOneServer {
 }
 
 // saw reports how many requests the server has handled.
-func (s *systemOneServer) saw() int {
+func (s *decisionServer) saw() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.requests
 }
 
 // snapshot returns the recorded method, auth header and request bodies.
-func (s *systemOneServer) snapshot() (method, auth string, bodies []string) {
+func (s *decisionServer) snapshot() (method, auth string, bodies []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.method, s.auth, append([]string(nil), s.bodies...)
 }
 
-func TestSystemOneURLSuffix(t *testing.T) {
+// TestDecisionSurfacePath: the decision call hangs off BaseURL at the path the
+// endpoint's resolved surface names — systemone where it names none — with no
+// doubled slash on a trailing-slash base.
+func TestDecisionSurfacePath(t *testing.T) {
 	cases := []struct {
-		name    string
-		base    func(string) string
-		want    string
-		comment string
+		name      string
+		decisions bool
+		base      func(string) string
+		want      string
+		comment   string
 	}{
-		{"bare host", func(u string) string { return u }, "/systemone", ""},
-		{"v1 base", func(u string) string { return u + "/v1" }, "/v1/systemone", ""},
-		{"trailing slash", func(u string) string { return u + "/" }, "/systemone", "no doubled slash"},
+		{"bare host", false, func(u string) string { return u }, "/systemone", ""},
+		{"v1 base", false, func(u string) string { return u + "/v1" }, "/v1/systemone", ""},
+		{"trailing slash", false, func(u string) string { return u + "/" }, "/systemone", "no doubled slash"},
+		{"decisions, bare host", true, func(u string) string { return u }, "/decisions", ""},
+		{"decisions, v1 base", true, func(u string) string { return u + "/v1" }, "/v1/decisions", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotPath string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath = r.URL.Path
-				_, _ = w.Write([]byte(`{"model":"clef","answers":{},"usage":{}}`))
+				_, _ = w.Write([]byte(`{"model":"clef"}`))
 			}))
 			defer srv.Close()
 
-			c := NewHTTPClient(Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: testAPIKey})
-			if _, err := c.SystemOne(context.Background(), systemOneRequest()); err != nil {
-				t.Fatalf("SystemOne: %v", err)
+			c := NewHTTPClient(Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: testAPIKey, Decisions: tc.decisions})
+			if _, err := c.Decision(context.Background(), decisionRequest()); err != nil {
+				t.Fatalf("Decision: %v", err)
 			}
 			if gotPath != tc.want {
 				t.Errorf("path: got %q, want %q (%s)", gotPath, tc.want, tc.comment)
@@ -125,10 +132,10 @@ func TestSystemOneURLSuffix(t *testing.T) {
 }
 
 func TestSystemOnePayloadShape(t *testing.T) {
-	s := newSystemOneServer(t, `{"model":"clef","answers":{},"usage":{}}`)
+	s := newDecisionServer(t, `{"model":"clef","answers":{},"usage":{}}`)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-	if _, err := c.SystemOne(context.Background(), systemOneRequest()); err != nil {
-		t.Fatalf("SystemOne: %v", err)
+	if _, err := c.Decision(context.Background(), decisionRequest()); err != nil {
+		t.Fatalf("Decision: %v", err)
 	}
 	gotMethod, gotAuth, bodies := s.snapshot()
 	if gotMethod != http.MethodPost {
@@ -165,9 +172,9 @@ func TestSystemOnePayloadShape(t *testing.T) {
 	if !ok || criteria["A"] != "first" || criteria["B"] != "second" {
 		t.Errorf("criteria = %v, want the per-option guidance", q["criteria"])
 	}
-	for _, forbidden := range []string{"temperature", "stream", "stream_options", "chat_template_kwargs", "messages"} {
+	for _, forbidden := range []string{"temperature", "stream", "stream_options", "chat_template_kwargs", "messages", "input"} {
 		if _, ok := body[forbidden]; ok {
-			t.Errorf("chat-only field %q sent on the SystemOne body: %s", forbidden, bodies[0])
+			t.Errorf("field %q not on the SystemOne body was sent: %s", forbidden, bodies[0])
 		}
 	}
 }
@@ -183,7 +190,7 @@ func TestSystemOneAnswerDecoding(t *testing.T) {
 		},
 		"usage": {"input_tokens": 100, "output_tokens": 5}
 	}`
-	s := newSystemOneServer(t, body)
+	s := newDecisionServer(t, body)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
 	req := DecisionRequest{
 		Model: "clef",
@@ -194,9 +201,9 @@ func TestSystemOneAnswerDecoding(t *testing.T) {
 			{Key: "noul-q", Type: "noul"},
 		},
 	}
-	resp, err := c.SystemOne(context.Background(), req)
+	resp, err := c.Decision(context.Background(), req)
 	if err != nil {
-		t.Fatalf("SystemOne: %v", err)
+		t.Fatalf("Decision: %v", err)
 	}
 
 	if resp.Model != "clef" {
@@ -232,11 +239,11 @@ func TestSystemOneAnswerDecoding(t *testing.T) {
 }
 
 func TestSystemOneRetryTransportErrorThenSuccess(t *testing.T) {
-	s := newSystemOneServer(t, systemOneNilBody, `{"model":"clef","answers":{"q1":{"type":"choice","choice":"A"}},"usage":{"input_tokens":1,"output_tokens":1}}`)
+	s := newDecisionServer(t, decisionNilBody, `{"model":"clef","answers":{"q1":{"type":"choice","choice":"A"}},"usage":{"input_tokens":1,"output_tokens":1}}`)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-	resp, err := c.SystemOne(context.Background(), systemOneRequest())
+	resp, err := c.Decision(context.Background(), decisionRequest())
 	if err != nil {
-		t.Fatalf("SystemOne: %v", err)
+		t.Fatalf("Decision: %v", err)
 	}
 	if s.saw() != 2 {
 		t.Errorf("requests: got %d, want 2 (one transport failure, one re-issue)", s.saw())
@@ -247,11 +254,11 @@ func TestSystemOneRetryTransportErrorThenSuccess(t *testing.T) {
 }
 
 func TestSystemOneRetry500ThenSuccess(t *testing.T) {
-	s := newSystemOneServer(t, systemOneStatus(500), `{"model":"clef","answers":{},"usage":{"input_tokens":7,"output_tokens":2}}`)
+	s := newDecisionServer(t, decisionStatus(500), `{"model":"clef","answers":{},"usage":{"input_tokens":7,"output_tokens":2}}`)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-	resp, err := c.SystemOne(context.Background(), systemOneRequest())
+	resp, err := c.Decision(context.Background(), decisionRequest())
 	if err != nil {
-		t.Fatalf("SystemOne: %v", err)
+		t.Fatalf("Decision: %v", err)
 	}
 	if s.saw() != 2 {
 		t.Errorf("requests: got %d, want 2 (one 500, one re-issue)", s.saw())
@@ -262,9 +269,9 @@ func TestSystemOneRetry500ThenSuccess(t *testing.T) {
 }
 
 func TestSystemOne4xxNoRetry(t *testing.T) {
-	s := newSystemOneServer(t, systemOneStatus(400))
+	s := newDecisionServer(t, decisionStatus(400))
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-	_, err := c.SystemOne(context.Background(), systemOneRequest())
+	_, err := c.Decision(context.Background(), decisionRequest())
 	if err == nil {
 		t.Fatal("expected error from 400, got nil")
 	}
@@ -281,9 +288,9 @@ func TestSystemOne4xxNoRetry(t *testing.T) {
 }
 
 func TestSystemOneAttemptsExhausted(t *testing.T) {
-	s := newSystemOneServer(t, systemOneNilBody, systemOneNilBody, systemOneNilBody)
+	s := newDecisionServer(t, decisionNilBody, decisionNilBody, decisionNilBody)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-	_, err := c.SystemOne(context.Background(), systemOneRequest())
+	_, err := c.Decision(context.Background(), decisionRequest())
 	if err == nil {
 		t.Fatal("expected error after exhausted attempts, got nil")
 	}
@@ -309,19 +316,19 @@ func TestSystemOneContextCancellation(t *testing.T) {
 	go func() { <-time.After(50 * time.Millisecond); cancel() }()
 
 	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	_, err := c.SystemOne(ctx, systemOneRequest())
+	_, err := c.Decision(ctx, decisionRequest())
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 
-func TestMockSystemOneScripted(t *testing.T) {
+func TestMockDecisionScripted(t *testing.T) {
 	m := NewScriptedMockWithDecisions([]DecisionAnswer{
 		{Key: "q1", Type: "choice", Choice: "A", Probabilities: map[string]float64{"A": 0.9, "B": 0.1}},
 		{Key: "q2", Type: "noul", Noul: 0.96},
 	})
 	ctx := context.Background()
-	first, err := m.SystemOne(ctx, DecisionRequest{Model: "clef"})
+	first, err := m.Decision(ctx, DecisionRequest{Model: "clef"})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
@@ -329,21 +336,21 @@ func TestMockSystemOneScripted(t *testing.T) {
 		first.Answers[0].Probabilities["B"] != 0.1 {
 		t.Errorf("first = %+v, want the first scripted answer with probabilities", first)
 	}
-	second, err := m.SystemOne(ctx, DecisionRequest{})
+	second, err := m.Decision(ctx, DecisionRequest{})
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	if len(second.Answers) != 1 || second.Answers[0].Noul != 0.96 {
 		t.Errorf("second = %+v, want the noul answer", second)
 	}
-	if _, err := m.SystemOne(ctx, DecisionRequest{}); !errors.Is(err, ErrMockExhausted) {
+	if _, err := m.Decision(ctx, DecisionRequest{}); !errors.Is(err, ErrMockExhausted) {
 		t.Errorf("past the script: got %v, want ErrMockExhausted", err)
 	}
 }
 
-func TestMockSystemOneUnscriptedExhausted(t *testing.T) {
+func TestMockDecisionUnscriptedExhausted(t *testing.T) {
 	m := NewScriptedMock(nil, nil)
-	if _, err := m.SystemOne(context.Background(), DecisionRequest{}); !errors.Is(err, ErrMockExhausted) {
+	if _, err := m.Decision(context.Background(), DecisionRequest{}); !errors.Is(err, ErrMockExhausted) {
 		t.Errorf("unscripted: got %v, want ErrMockExhausted", err)
 	}
 }
@@ -362,9 +369,9 @@ func TestSystemOneUnaskedKeyRefused(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newSystemOneServer(t, `{"model":"clef","answers":`+tc.answers+`,"usage":{"input_tokens":1,"output_tokens":1}}`)
+			s := newDecisionServer(t, `{"model":"clef","answers":`+tc.answers+`,"usage":{"input_tokens":1,"output_tokens":1}}`)
 			c := NewHTTPClient(newTestEndpoint(s.srv.URL))
-			_, err := c.SystemOne(context.Background(), systemOneRequest())
+			_, err := c.Decision(context.Background(), decisionRequest())
 			if err == nil {
 				t.Fatal("expected error for the unasked key, got nil")
 			}
@@ -385,7 +392,7 @@ func TestSystemOneUnaskedKeyRefused(t *testing.T) {
 // response is the seam's recoverable path, not a transport failure — the
 // transport returns what arrived, whatever keys went unanswered.
 func TestSystemOneMissingAnswerTolerated(t *testing.T) {
-	s := newSystemOneServer(t, `{"model":"clef","answers":{"q2":{"type":"noul","noul":0.9}},"usage":{}}`)
+	s := newDecisionServer(t, `{"model":"clef","answers":{"q2":{"type":"noul","noul":0.9}},"usage":{}}`)
 	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
 	req := DecisionRequest{
 		Model: "clef",
@@ -395,11 +402,176 @@ func TestSystemOneMissingAnswerTolerated(t *testing.T) {
 			{Key: "q2", Type: "noul", Instructions: "judge"},
 		},
 	}
-	resp, err := c.SystemOne(context.Background(), req)
+	resp, err := c.Decision(context.Background(), req)
 	if err != nil {
-		t.Fatalf("SystemOne: %v", err)
+		t.Fatalf("Decision: %v", err)
 	}
 	if len(resp.Answers) != 1 || resp.Answers[0].Key != "q2" || resp.Answers[0].Noul != 0.9 {
 		t.Errorf("answers = %+v, want q2's answer alone, q1's absence left to the seam", resp.Answers)
+	}
+}
+
+// decisionsWireRequest is the Decisions request body as the wire carries it:
+// questions and choices arrays, kept in the order the bytes hold them.
+type decisionsWireRequest struct {
+	Model     string `json:"model"`
+	Input     string `json:"input"`
+	Questions []struct {
+		Type         string `json:"type"`
+		Name         string `json:"name"`
+		Instructions string `json:"instructions"`
+		Choices      []struct {
+			Value       string `json:"value"`
+			Description string `json:"description"`
+		} `json:"choices"`
+	} `json:"questions"`
+}
+
+// TestDecisionsRequestShape: the Decisions surface's body is model, input and
+// an array of named questions — a noul question asked as a predicate, a choice
+// question as a choice, its criteria the choices sorted by value so one
+// question serializes the same way every time. A predicate carries no choices
+// at all (the schema gives it none), so its criterion guidance is written into
+// its instructions instead. None of the SystemOne body's fields appear.
+func TestDecisionsRequestShape(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		question         DecisionQuestion
+		wantType         string
+		wantChoices      []string
+		wantInstructions []string
+	}{
+		{"predicate", DecisionQuestion{Key: "S1", Type: "noul", Instructions: "judge the step",
+			Criteria: map[string]string{"true": "the step follows from the rules", "false": "it does not"}},
+			"predicate", nil,
+			[]string{"judge the step", "The condition is true when: the step follows from the rules",
+				"It is false when: it does not"}},
+		{"choice", DecisionQuestion{Key: "S2", Type: "choice", Instructions: "pick the letter",
+			Criteria: map[string]string{"D": "fourth", "C": "third"}},
+			"choice", []string{"C", "D"}, []string{"pick the letter"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newDecisionServer(t, `{"model":"clef","answers":[]}`)
+			c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+			req := DecisionRequest{Model: "clef", State: "the composed state", Questions: []DecisionQuestion{tc.question}}
+			if _, err := c.Decision(context.Background(), req); err != nil {
+				t.Fatalf("Decision: %v", err)
+			}
+			_, _, bodies := s.snapshot()
+			if len(bodies) != 1 {
+				t.Fatalf("requests: got %d, want 1", len(bodies))
+			}
+			var body decisionsWireRequest
+			if err := json.Unmarshal([]byte(bodies[0]), &body); err != nil {
+				t.Fatalf("unmarshal body %s: %v", bodies[0], err)
+			}
+			if body.Model != "clef" || body.Input != "the composed state" {
+				t.Errorf("model/input = %q/%q, want the model and the composed state", body.Model, body.Input)
+			}
+			if len(body.Questions) != 1 {
+				t.Fatalf("questions = %v, want the one asked", body.Questions)
+			}
+			q := body.Questions[0]
+			if q.Type != tc.wantType || q.Name != tc.question.Key {
+				t.Errorf("question = %+v, want type %s and its key as the name", q, tc.wantType)
+			}
+			for _, want := range tc.wantInstructions {
+				if !strings.Contains(q.Instructions, want) {
+					t.Errorf("instructions = %q, want them to carry %q", q.Instructions, want)
+				}
+			}
+			var values []string
+			for _, choice := range q.Choices {
+				values = append(values, choice.Value)
+				if want := tc.question.Criteria[choice.Value]; choice.Description != want {
+					t.Errorf("choice %s description = %q, want %q", choice.Value, choice.Description, want)
+				}
+			}
+			if !slices.Equal(values, tc.wantChoices) {
+				t.Errorf("choices = %v, want %v", values, tc.wantChoices)
+			}
+			// A predicate has no choices field on the schema, and the endpoint
+			// rejects one it does not know.
+			if tc.wantType == "predicate" && strings.Contains(bodies[0], `"choices"`) {
+				t.Errorf("a predicate carried choices: %s", bodies[0])
+			}
+			for _, forbidden := range []string{`"state"`, `"answers"`, `"temperature"`, `"messages"`} {
+				if strings.Contains(bodies[0], forbidden) {
+					t.Errorf("SystemOne field %s sent on the Decisions body: %s", forbidden, bodies[0])
+				}
+			}
+			// `questions` is the Decisions array, never SystemOne's keyed object.
+			if !strings.Contains(bodies[0], `"questions":[`) {
+				t.Errorf("questions is not a JSON array: %s", bodies[0])
+			}
+		})
+	}
+}
+
+// TestDecisionsAnswerDecoding: each Decisions answer type maps onto the seam's
+// answer — a predicate is a noul P(true), a choice carries its choice,
+// confidence and probabilities (an array of value/probability, read as a
+// map), a refusal its type alone, and a score its score — every one keyed by
+// the name it answered.
+func TestDecisionsAnswerDecoding(t *testing.T) {
+	const body = `{
+		"model": "clef",
+		"answers": [
+			{"type": "predicate", "name": "q1", "probability": 0.96},
+			{"type": "choice", "name": "q2", "choice": "B", "confidence": 0.8,
+			 "probabilities": [{"value": "B", "probability": 0.8}, {"value": "A", "probability": 0.2}]},
+			{"type": "refusal", "name": "q3"},
+			{"type": "score", "name": "q4", "score": 0.4}
+		],
+		"usage": {"input_tokens": 100, "output_tokens": 5}
+	}`
+	s := newDecisionServer(t, body)
+	c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	req := DecisionRequest{Model: "clef", State: "the composed state", Questions: []DecisionQuestion{
+		{Key: "q1", Type: "noul"}, {Key: "q2", Type: "choice"}, {Key: "q3", Type: "choice"}, {Key: "q4", Type: "score"},
+	}}
+	resp, err := c.Decision(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Decision: %v", err)
+	}
+	if resp.Model != "clef" || resp.Usage.PromptTokens != 100 || resp.Usage.CompletionTokens != 5 {
+		t.Errorf("model/usage = %q/%+v, want clef and 100/5", resp.Model, resp.Usage)
+	}
+	if len(resp.Answers) != 4 {
+		t.Fatalf("answers = %+v, want the four the response carried", resp.Answers)
+	}
+	byKey := map[string]DecisionAnswer{}
+	for _, a := range resp.Answers {
+		byKey[a.Key] = a
+	}
+	if a := byKey["q1"]; a.Type != "noul" || a.Noul != 0.96 {
+		t.Errorf("q1 = %+v, want a noul answer carrying the predicate's probability", a)
+	}
+	if a := byKey["q2"]; a.Type != "choice" || a.Choice != "B" || a.Confidence != 0.8 ||
+		a.Probabilities["B"] != 0.8 || a.Probabilities["A"] != 0.2 {
+		t.Errorf("q2 = %+v, want the choice, its confidence and the probabilities as a map", a)
+	}
+	if a := byKey["q3"]; a.Type != "refusal" || a.Choice != "" || a.Noul != 0 || a.Probabilities != nil {
+		t.Errorf("q3 = %+v, want the refusal's type alone", a)
+	}
+	if a := byKey["q4"]; a.Type != "score" || a.Score != 0.4 {
+		t.Errorf("q4 = %+v, want the score", a)
+	}
+}
+
+// TestDecisionsUnaskedNameRefused: an answer naming a question the request did
+// not ask is refused on this surface too, by the name it echoes back.
+func TestDecisionsUnaskedNameRefused(t *testing.T) {
+	s := newDecisionServer(t, `{"model":"clef","answers":[{"type":"predicate","name":"sneaky","probability":0.5}]}`)
+	c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	_, err := c.Decision(context.Background(), decisionRequest())
+	if err == nil {
+		t.Fatal("expected error for the unasked name, got nil")
+	}
+	if !strings.Contains(err.Error(), `unasked question key "sneaky"`) || !strings.Contains(err.Error(), "asked: q1") {
+		t.Errorf("error names neither the offending name nor the asked keys: %v", err)
+	}
+	if s.saw() != 1 {
+		t.Errorf("requests: got %d, want 1 — the refusal is not retried", s.saw())
 	}
 }

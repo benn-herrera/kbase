@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-// Names the KB's readers key on, as kb_tools spells them.
+// Names the KB's readers key on.
 const (
 	KBDir          = "kb-root"
 	EntryPointFile = "entry-point.md"

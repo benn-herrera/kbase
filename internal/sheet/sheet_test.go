@@ -18,9 +18,8 @@ import (
 	"kbase/internal/kbload"
 )
 
-// adjagentFixture is kb_tools' claim-sheet fixture
-// (adjagent kb_tools/tests/fixtures/claim-graph-sheet), copied as it stands: a
-// 1.0.0 KB, its unmarked build record, and the DOT kb_tools composes for it.
+// adjagentFixture is the claim-sheet fixture: a 1.0.0 KB, its unmarked build
+// record, and the DOT the sheets compose to.
 const adjagentFixture = "testdata/adjagent-sheet"
 
 func openAdjagentFixture(t *testing.T) *kb.Source {
@@ -30,31 +29,6 @@ func openAdjagentFixture(t *testing.T) *kb.Source {
 		t.Fatal(err)
 	}
 	return src
-}
-
-// pinnedAdjagentFixture is the fixture adjagentFixture copies, in the pinned
-// adjagent clone.
-const pinnedAdjagentFixture = "../../.claude/adjagent/kb_tools/tests/fixtures/claim-graph-sheet"
-
-// TestAdjagentFixtureIsThePinned: the copy holds the files the pinned
-// clone's fixture holds, byte for byte; it skips where the clone is absent.
-func TestAdjagentFixtureIsThePinned(t *testing.T) {
-	if _, err := os.Stat(pinnedAdjagentFixture); err != nil {
-		t.Skipf("%s is absent; the adjagent clone is not here", pinnedAdjagentFixture)
-	}
-	copied, pinned := fixtureFiles(t, adjagentFixture), fixtureFiles(t, pinnedAdjagentFixture)
-	for rel, data := range copied {
-		if want, ok := pinned[rel]; !ok {
-			t.Errorf("%s is not in the pinned fixture", rel)
-		} else if !bytes.Equal(data, want) {
-			t.Errorf("%s differs from the pinned fixture's; re-copy it from %s", rel, pinnedAdjagentFixture)
-		}
-	}
-	for rel := range pinned {
-		if _, ok := copied[rel]; !ok {
-			t.Errorf("the pinned fixture's %s is not copied", rel)
-		}
-	}
 }
 
 // fixtureFiles is every file under dir, by slash path relative to it.
@@ -79,9 +53,9 @@ func fixtureFiles(t *testing.T, dir string) map[string][]byte {
 	return out
 }
 
-// TestAdjagentSheetGoldens: kbase draws kb_tools' fixture as the full sheet,
+// TestAdjagentSheetGoldens: kbase draws the fixture as the full sheet,
 // the digest and the sheets of the two volumes holding nodes — none for
-// gamma, which holds none — and its sheets are kb_tools' DOT, byte for byte.
+// gamma, which holds none — and its sheets are the goldens' DOT, byte for byte.
 func TestAdjagentSheetGoldens(t *testing.T) {
 	g, err := load(openAdjagentFixture(t))
 	if err != nil {

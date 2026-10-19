@@ -1,9 +1,8 @@
 # The classify ask's question over two offered letters: supported by and
 # mention, where the candidate offering its support in turn is not on offer.
-# Derived from kb_tools' classify.tmpl.md and its classify-options-two
-# fragment: the criteria are the two bullets the question keeps, the closing
-# question states the decision from the source's side, and the offered
-# letters reach it only as composer constants.
+# The criteria are the question's two bullets, the closing question states the
+# decision from the source's side, and the offered letters reach it only as
+# composer constants.
 type: choice
 instructions: |-
   Does the source claim need the candidate claim — does its statement or its

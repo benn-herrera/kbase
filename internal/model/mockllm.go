@@ -63,14 +63,14 @@ type MockClient struct {
 	// DefaultMockChunks. Set via SetMockChunks.
 	chunks int
 
-	// DecisionAnswers scripts SystemOne: served in order, one per call,
+	// DecisionAnswers scripts Decision: served in order, one per call,
 	// ErrMockExhausted past the end. Settable directly or via
 	// NewScriptedMockWithDecisions.
 	decisionAnswers []DecisionAnswer
 	decisionStep    int
 }
 
-// NewScriptedMockWithDecisions returns a MockClient whose SystemOne walks
+// NewScriptedMockWithDecisions returns a MockClient whose Decision walks
 // `answers` in order, one per call; a call past the end yields
 // ErrMockExhausted. The consult scripting of the other constructors is
 // unaffected.
@@ -254,11 +254,11 @@ func (m *MockClient) Calls() []MockCall {
 	return out
 }
 
-// SystemOne serves the decision answers from DecisionAnswers, in order,
-// one per SystemOne call. The injected error of SetError pre-empts it;
+// Decision serves the decision answers from DecisionAnswers, in order,
+// one per Decision call. The injected error of SetError pre-empts it;
 // a call past the answers' end yields ErrMockExhausted, matching the
 // per-consult queue's semantics.
-func (m *MockClient) SystemOne(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (m *MockClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return DecisionResponse{}, err
 	}

@@ -22,6 +22,6 @@ and what remains is only worth measuring on that pipeline's record.
 The rework's first live run leaves a co-linearity record and a direction record over every link.
 Where the misses against the curated reference cluster positionally — isolated steps whose
 neighbours were out of view — the window has its case with numbers in hand. Where they do not,
-it is a solution without a demonstrated problem and is dropped. The sweep tooling in
-`tools/measure` scores rankings against the curated edges only; the chain links proximity
-recovers have no reference there and are read from the records.
+it is a solution without a demonstrated problem and is dropped. Tooling that scores rankings
+against the curated edges only speaks to those edges; the chain links proximity recovers have no
+reference there and are read from the records.

@@ -1,11 +1,7 @@
 # ARCHITECTURE – kbase
 
 How this implementation meets [SPEC.md](SPEC.md). Purpose and intent are in [THESIS.md](THESIS.md);
-house rules are in [CONVENTIONS.md](CONVENTIONS.md). kb_tools citations name adjagent `main` at
-`5a290afab53a9742b89db8e623880e5faa5d5bda`, by section name; "kb_tools" is the reference
-implementation, read from `.claude/adjagent/kb_tools/` (the clone this repository's agent set is
-installed from), and a module path in `[brackets]` below is the kb_tools module a kbase package
-ports.
+house rules are in [CONVENTIONS.md](CONVENTIONS.md).
 
 Every mechanism stated here is decided and landed; §13 records the verdicts of the slice that
 settled the reader's design.
@@ -16,8 +12,8 @@ settled the reader's design.
 
 kbase makes a knowledge base auditable for an academic lab running local inference. The claim graph
 is in scope: the KB carries nodes and edges drafted mechanically and refined by inference, and every
-refinement is checkable against the artifact it refined. kbase builds exactly what kb_tools builds,
-as Go, keeping its own provider management and inference invocation.
+refinement is checkable against the artifact it refined. kbase builds that KB as Go, keeping its own
+provider management and inference invocation.
 
 ## 2. Invariants
 
@@ -26,14 +22,14 @@ Violating any is a blocking defect.
 | # | Invariant |
 |---|---|
 | I1 | Exactly one package execs pandoc (checks version and `pandoc-api-version`, with named errors); exactly one execs git; exactly one execs Graphviz `dot`; exactly one execs kbase itself (the MCP server's detached build, `cmd/mcp.go`). The exec-policy test names each owner. |
-| I2 | The claim-graph inventory's reader and placement facts come from records, never recovered from leaf markup; its page-defined readings (§5.5) come from the leaf through the same readers kb_tools uses; otherwise only stage-A conformance (the link relation, through `kb`), the prose and the marker machinery, and the sheet (a claim's kind, at its marker) read leaf lines, and maintenance ops read only the metadata layer. |
-| I3 | Pre-passes are kb_tools' two, in one registry, each naming the reader-level hole it fills and emitting a census. |
+| I2 | The claim-graph inventory's reader and placement facts come from records, never recovered from leaf markup; its page-defined readings (§5.5) come from the leaf through the page readers; otherwise only stage-A conformance (the link relation, through `kb`), the prose and the marker machinery, and the sheet (a claim's kind, at its marker) read leaf lines, and maintenance ops read only the metadata layer. |
+| I3 | There are two pre-passes, in one registry, each naming the reader-level hole it fills and emitting a census. |
 | I4 | System compatibility per SPEC §3; byte equality only where a named reader needs it; presentation is untested. |
 | I5 | One result emitter owns stdout. |
 | I6 | Every mutating op is idempotent under re-issue; `init`'s creation is birth-once (SPEC §8). |
-| I7 | Every prompt template and fragment is an embedded file with one manifest entry stating its provenance: imported — byte-identical to kb_tools' file at a recorded commit; kbase-authored, derived from a named kb_tools file at a recorded commit and reviewed by the prompt-engineer before first use; or `kbase-origin`, authored de novo with no origin file and reviewed by the prompt-engineer before first use. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
+| I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate`, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O, no import of a kbase package — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
-| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree, never listed by hand; the table's test derives its expectation from the same annotations; its stdout carries JSON-RPC frames and nothing else; no tool but `build` reaches a model, and `build` through it is the detached subcommand. |
+| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool but `build` performs inference, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` through it is the detached subcommand. |
 
 Deliberately unspecified: the internal AST representation, record field encoding, and layout
 algorithms.
@@ -54,8 +50,6 @@ These steer choices the invariants leave open.
   give a byte-identical document graph — tree and records — and a claim graph identical modulo the
   ids it mints (SPEC §5); derived state is regenerable and freshness-gated.
 - **No LaTeX parser is written here, partial or whole.** The reader is pandoc.
-- **kb_tools is the differential oracle.** Every difference from it is a named divergence (SPEC §4)
-  or a defect.
 - **The kbase and personant integration is the target.** A prior decision that prevents it is
   removed, not designed around.
 
@@ -65,45 +59,31 @@ These steer choices the invariants leave open.
 
 The build walks these stages in order. A stage boundary is a commit (§8).
 
-| Stage | Does | Ports |
-|---|---|---|
-| `start` | pandoc and git preflight; populated-`kb-root/` refusal; run lock; charter | kb_tools ARCHITECTURE, "The Driver" (`start`) |
-| `document-graph` | The tree from the volume roots | `kb_docgraph/` |
-| `spine-seed` | Seeds `.index/` over that tree | `graph-init` |
-| `claims-declared` | Claim-graph pass over author-declared claims | `kb_claimgraph/` |
-| `claims-discovered` | Claim-graph pass over discovered claims | `kb_claimgraph/` |
-| `equations-minted` | Equation nodes minted | `kb_claimgraph/` |
-| `references-found` | Unmarked references found: adjacency links made by rule between consecutive non-equation claims of a leaf, unasked; per source claim, the proximity slots — nearest in its own paper by locality (same document, same directory, same paper), then by places apart in the sequence of every claim by reading position and id — then the wildcard slots, best by TF-IDF cosine less the proximity picks, counts in §12, no pool holding a marked pair or an adjacency link; one letter ask per planned pair, a yes in either direction one undirected link for the cull; writes nothing under `kb-root/` | `kb_claimgraph/` (`unmarked.py`, `shortlist.py`, `equation_sites.py`) |
-| `claims-culled` | The co-linearity cull (`Culled`, `internal/claimgraph/cull.go`): one `Colinear` ask per link with a prose end — marked pairs, unmarked yeses and adjacency links, unordered, computed over the tree `references-found` read — grouped by the earlier claim in reading order (`p1-<id>`); one confirming ask per culled claim whose root is not its target, grouped by root (`p2-<root>`); the survivor rule and re-pointing in the pure `cullTargets`, `cullRoots`, `finalCulls` and `PlanCull`; culls issued through `IssueCulls` with no bridge and no claim-to-claim edge; the cull record written once, after the issue. Its row spends its own inference and is dropped under `--no-inference` (SPEC §5, §4) | None: kbase's own (SPEC §4) |
-| `depends-attributed` | Dependency edges attributed: the marked candidates and the cull record's links, each link oriented later claim to earlier (an equation node always the target) and skipped where a marked pair joins its claims; one letter ask per candidate; every answer's edge written in one `add-build-edges` batch, cycles included; then the ring row, every `depends` edge on a cycle demoted with its origin (SPEC §5, §10), before the gate | `kb_claimgraph/` |
-| `phase-3a` | `refresh`, `verify`, and the readiness stamp | `kb_driver` `phase-3a` |
-| `overview-drafted` | The overview document | `kb_driver` overview |
+| Stage | Does |
+|---|---|
+| `start` | pandoc and git preflight; populated-`kb-root/` refusal; run lock |
+| `document-graph` | The tree from the volume roots |
+| `spine-seed` | Seeds `.index/` over that tree |
+| `claims-declared` | Claim-graph pass over author-declared claims |
+| `claims-discovered` | Claim-graph pass over discovered claims |
+| `equations-minted` | Equation nodes minted |
+| `references-found` | Unmarked references found: adjacency links made by rule between consecutive non-equation claims of a leaf, unasked; per source claim, the proximity slots — nearest in its own paper by locality (same document, same directory, same paper), then by places apart in the sequence of every claim by reading position and id — then the wildcard slots, best by TF-IDF cosine less the proximity picks, counts in §12, no pool holding a marked pair or an adjacency link; each source's shortlist is its own, so a pair both ends pick is asked both ways, and a proximity slot its paper cannot fill stays empty; one letter ask per planned pair, a yes in either direction one undirected link for the cull; writes nothing under `kb-root/` |
+| `claims-culled` | The co-linearity cull (`Culled`, `internal/claimgraph/cull.go`): one `Colinear` ask per link with a prose end — marked pairs, unmarked yeses and adjacency links, unordered, computed over the tree `references-found` read — grouped by the earlier claim in reading order (`p1-<id>`); one confirming ask per culled claim whose root is not its target, grouped by root (`p2-<root>`); the survivor rule and re-pointing in the pure `cullTargets`, `cullRoots`, `finalCulls` and `PlanCull`; culls issued through `IssueCulls` with no bridge and no claim-to-claim edge; the cull record written once, after the issue. Its row spends its own inference and is dropped under `--no-inference` (SPEC §5) |
+| `depends-attributed` | Dependency edges attributed: the marked candidates and the cull record's links, each link oriented later claim to earlier (an equation node always the target) and skipped where a marked pair joins its claims; one letter ask per candidate; every answer's edge written in one `add-build-edges` batch, cycles included; then the ring row, every `depends` edge on a cycle demoted with its origin (SPEC §5, §10), before the gate |
+| `phase-3a` | `refresh`, `verify`, and the readiness stamp |
+| `overview-drafted` | The overview document |
 
-`document-graph`, `spine-seed` and the claim-graph stages kb_tools has (every one but
-`claims-culled`) are kb_tools' **head**. Each of those claim-graph stages is one
-`kb_claimgraph` invocation; kb_claimgraph's own stage letters (A
-conformance through G gate) are always written "kb_claimgraph stage B" and so on, never bare.
+Each claim-graph stage is one `internal/claimgraph` invocation.
 
 - `--through <stage>` bounds the walk; `--no-inference` drops the stages' inference rows and walks
   the rest (SPEC §5). Which rows drop follows the classification on the row
   (`row.spendsInference`, `internal/build/build.go`) and never a stage id. A row marked
   `spendsInferenceInPart` (`depends-attributed`) is not dropped: its asks spend
   inference, but the row itself still runs under `--no-inference`, with a nil letter reader. The
-  provider preflight asks `callsAModel`, which counts such a row (kb_tools ARCHITECTURE, "The
-  Driver", `--no-inference` and `spends_inference`).
+  provider preflight asks `callsAModel`, which counts such a row.
 - `phase-3a` stamps `AGENTS.md`, `CLAUDE.md` and `CONVENTIONS.md`, each only if absent;
   `kb-root/CLAUDE.md` is exactly `@AGENTS.md`.
 - There is no opt-in document-audit stage (ROADMAP).
-- **Not ported from kb_tools:** `ov.docent-check` (checks a Claude Code command install);
-  `spine-seed`'s runner include line and its barrier (the compatibility harness installs kb_tools'
-  targets through kb_tools' own installer); relay cards and the exit ladder (replaced by SPEC §7);
-  the environment-variable endpoint configuration (`inference/liaison_tools.check_environment`;
-  kbase's providers are SPEC §9); the preflight items `docent-commands` and `scratch-ignored` and
-  the whole-worktree dirty refusal (`kb_util.preflight_report`; kbase refuses on dirty kbase-owned
-  paths only, SPEC §5); `--config` and `--decide` (kbase's configuration is SPEC §9, and a barrier
-  is a refusal with its answer on the next invocation's flags); `install_location` and the
-  installer; `kb_survey/manifest.py` and `skeleton.py` (uncalled). kb_tools' retired `phase-5` id is
-  never given to a stage.
 - Stage boundaries are where expensive work becomes recoverable: an inference stage's per-leaf work
   is uncommitted until its boundary.
 
@@ -116,30 +96,31 @@ conformance through G gate) are always written "kb_claimgraph stage B" and so on
 `internal/latex/pandoc` is the only package that execs pandoc. It checks the version range and
 `pandoc-api-version` and raises named errors, including a missing pandoc that names the install
 page. It runs LaTeX to JSON with no filters, and with `--citeproc` exactly when a bibliography is
-offered: without one, citeproc would render every citation unanswered, where kb_tools renders it as
-its own keys. It is the reader and the writer seam; the writer runs standalone (`-s`), so the title
+offered: without a bibliography, citeproc would render every citation unanswered. It refuses an
+`\input` or `\include` resolving outside the volume's directory before
+pandoc runs, reading every included file in turn so an escape below the first level is caught
+(SPEC §5). It is the reader and the writer seam; the writer runs standalone (`-s`), so the title
 and abstract arrive as the rendering's YAML metadata block. The export's one call is
 `RunDefaults`, `pandoc -d <defaults file>`, under the same version preflight; the `export-latex`
-verb makes it, and `internal/export` never reaches pandoc. The export's mechanism is §5.7. [`pandoc.py`]
+verb makes it, and `internal/export` never reaches pandoc. The export's mechanism is §5.7.
 
 ### 5.2 Pre-pass registry
 
-`internal/latex/prepass` holds kb_tools' two source scans, `strip_environment_declarations` and
-`theorem_display_names` [`kb_docgraph/convert.py`]. Nothing else massages source. They live in one
+`internal/latex/prepass` holds the two source scans, `stripEnvironmentDeclarations` and
+`theoremDisplayNames`. Nothing else massages source. They live in one
 registry. Each entry names the reader-level hole it fills and emits a census of what it found. A new
 entry is an ARCHITECTURE change. (I3)
 
 ### 5.3 JSON transforms
 
-`internal/docgraph` transforms the pandoc JSON in Go in place of kb_tools' Lua filter
-[`kb_docgraph/authored_blocks.lua`]:
+`internal/docgraph` transforms the pandoc JSON in Go:
 
 - Cite span wrapping
 - author-declared Div to labelled blockquote
 - title-page drop
 - display maths lifted out of emphasis
 
-Whole-volume render and cut, and outline derivation, also live here [`kb_docgraph/*`].
+Whole-volume render and cut, and outline derivation, also live here.
 
 ### 5.4 Writer route
 
@@ -149,9 +130,8 @@ slice gate (§13): every load-bearing form the slice checked is produced under i
 ### 5.5 Records
 
 Alongside the Markdown leaves, Go emits records (JSONL) into the build state store (§8), never into
-`kb-root/`. kb_tools' claim graph takes the tree as its sole input, so its stage B recovers every
-fact by scanning the pages; the records are kbase's channel for the same facts, so nothing is
-recovered from leaf markup (I2). They carry:
+`kb-root/`. The claim graph takes the tree as its sole input; the records are kbase's channel for
+the reader and placement facts, so nothing is recovered from leaf markup (I2). They carry:
 
 - **reader facts:** display name, identifier, owning document, order; references — macro type as
   pandoc spells it, labels; the enclosing author-declared block of each reference and citation
@@ -161,9 +141,9 @@ recovered from leaf markup (I2). They carry:
   and each copy of a heading's reference the navigation lines carry (the up-link line and the index
   child list).
 
-A block record exists exactly where the written leaf carries a label line kb_tools' reader reads
-[`inventory.LABEL_LINE_RE`]: an author block the transform emits as a top-level labelled blockquote
-whose name that reader's environment group accepts (letters and single spaces) — and, because the
+A block record exists exactly where the written leaf carries a label line `kb.LabelLine` reads: an
+author block the transform emits as a top-level labelled blockquote whose name that reader's
+environment group accepts (letters and single spaces) — and, because the
 reader keys on the page, a bold-only paragraph opening an author's blockquote, which it reads as a
 label line. A block nested inside another, one rendered inside raw HTML (a figure), or one whose
 name the reader rejects (`table*`) yields no record, and the facts inside it host to the enclosing
@@ -172,36 +152,31 @@ are recorded in the page's attribute spelling: pandoc escapes `&<>"'` in attribu
 for a `Link` than for a `Span` or `Div`, so a record compared against the page carries the escaped
 form.
 
-**Page-defined readings** are kb_tools' by definition over the written leaf and are read from it,
-through the same readers: the locator span and title off a block's display line
-[`inventory._blocks`, `page_text`]; line extents; the word the page shows before a reference
-[`Anchor.preceding_word`]; a work's rendered text; a claim's statement text — its block extent,
-prose paragraph or equation fence — and the paragraph around a reference, as ask input
-[`classify.statements`, `hand_named.bodies`, `attribute._reference_line`]; printed name-and-number
-mentions in node bodies [`hand_named.printed_claims`]; the printed number and optional title off the
-display line, which no record carries; the source leaf's render shown as the unmarked ask's body
-[`unmarked.py`, `label.render`]. Claim-bearing classification and proof-to-subject binding remain
-claim-graph rules. Field encoding is deliberately unspecified.
+**Page-defined readings** are readings over the written leaf, taken from it through the page
+readers: the locator span and title off a block's display line; line extents; the word the page shows
+before a reference; a work's rendered text; a claim's statement text — its block extent, prose
+paragraph or equation fence — and the paragraph around a reference, as ask input; printed
+name-and-number mentions in node bodies; the printed number and optional title off the display line,
+which no record carries; the source leaf's render shown as the unmarked ask's body. Claim-bearing
+classification and proof-to-subject binding remain claim-graph rules. Field encoding is deliberately
+unspecified.
 
 ### 5.6 Tree derivation, partition checks and `validate_build`
 
 `internal/docgraph` derives the tree and runs the build's own checks: the two partition checks, the
-maths-survival count, the anchor-landing check and the image-asset report [`kb_docgraph/outline.py`,
-`judge.py`, `partition.py`, `build.py`], then the parts of `validate_build` that read the written
-tree rather than restate the cut [`kb_survey/validate.py`] and the dead-link gate over `kb-root/`
-(§6, shared with verify). Each check compares one mechanical product against another: pandoc's
+maths-survival count, the anchor-landing check and the image-asset report, then the parts of
+`validate_build` that read the written tree rather than restate the cut, and
+the dead-link gate over `kb-root/` (§6, shared with verify). Each check compares one mechanical
+product against another: pandoc's
 parsed document against pandoc's rendering (A), that rendering against the tree kbase cut (B),
 pandoc's maths elements against the writer's three forms, the label read back off the link pandoc
 wrote, the author's image files on disk, the tree as it lies on disk. Findings land in the stage's
 report in the state store (§8, `reports/`); any FAIL makes the outcome `failed`, with no fix loop.
-Not ported: `validate_build`'s tree-diff (it compares kbase's path list with kbase's own write),
-kb_tools' `bibliography-read` and `declaration-read` report lines, and the claim-id link check,
-which needs `.index/` and is verify's (§6).
 
 ### 5.7 LaTeX export
 
 How `export-latex` meets SPEC §8, whose outcomes — the files of `gen-tex/`, the content rules,
-degradation, idempotence — this section cites and does not restate. §5.3 chose Go over kb_tools'
+degradation, idempotence — this section cites and does not restate. §5.3 chose Go over a
 Lua filter because the forward transform emits records; the export emits none, so pandoc's own
 filter mechanism suffices, and the author can re-run the conversion with plain pandoc.
 
@@ -409,26 +384,26 @@ exists, a line naming it as the author's. `WriteReport` reads the filter's findi
 
 ## 6. KB model and maintenance
 
-| Mechanism | Package | Ports | Status |
-|---|---|---|---|
-| **Metadata layer**: kb-root model: names, exclusions, link primitives and the dead-link gate over `kb-root/`; frontmatter, register and leaf parse, discovery, schema; the derived-field line renderers and the frontmatter splice refresh writes through | `internal/kb` | `kb_index_lib` parse, `kb_schema`, `kb_links`, `verify_md_links.py`, the render half of `kb_write` refresh needs | Landed |
-| **Write API**: render, values, store, ops | `internal/write` | `kb_write/` | Landed: rendered metadata byte-identical to kb_tools' render goldens; its regression fixtures replay; the op script leaves a KB both toolchains' verify accept. An insert adopts by (register, title) whatever its other values, reporting the differing fields (SPEC §4, §8). There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; the ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
-| **Refresh and verify; the index**: solidity, aggregates, footers, `.index` emit and freshness, the citation gate and the claim-id link check | `internal/index` | `kb_index_lib` compute, `refresh_kb_metadata.py`, `verify_kb_metadata.py`, `verify_citations.py` | Landed: `.index/*.yaml` and every derived field byte-identical to kb_tools' refresh; verify agrees with kb_tools on `mini-kb` and its mutations |
-| **Queries** | `internal/query` | `kb_cmd/` | Landed: every query equals `kb_cmd --json` as data over the six kb_tools-built fixtures, `show`'s `strengthen_by` and `deps`' `context` included: 1,550 of 1,550 cases agree at the pin |
-| **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | `claim_sheet.py`, the same drawing; the layout is Graphviz's | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
-| **Readiness stamping and README assembly** | `internal/kbdocs` | `installed/*.tmpl.md`, `kb_readme.py` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
-| **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | None: no kb_tools counterpart (SPEC §4's scratch-creation row); creation is composition of the maintenance machinery, not a ported mechanism | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
+| Mechanism | Package | Status |
+|---|---|---|
+| **Metadata layer**: kb-root model: names, exclusions, link primitives and the dead-link gate over `kb-root/`; frontmatter, register and leaf parse, discovery, schema; the derived-field line renderers and the frontmatter splice refresh writes through | `internal/kb` | Landed |
+| **Write API**: render, values, store, ops | `internal/write` | Landed. An insert adopts by (register, title) whatever its other values, reporting the differing fields (SPEC §8). There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; the ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
+| **Refresh and verify; the index**: solidity, aggregates, footers, `.index` emit and freshness, the citation gate and the claim-id link check | `internal/index` | Landed |
+| **Queries** | `internal/query` | Landed |
+| **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
+| **Readiness stamping and README assembly** | `internal/kbdocs` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
+| **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
-marker or bullet (kb_tools SPEC, "The Write API's Contract"). Input, idempotence (I6) and the
-trailing refresh are SPEC §8; byte equality is SPEC §3. Two ops are build-only:
+marker or bullet. Input, idempotence (I6) and the trailing refresh are SPEC §8; byte equality is
+SPEC §3. Two ops are build-only:
 `add-build-edges` (`write.AddBuildEdges`), which writes `add-depends-on`'s lists and the `demoted`
 list, and `demote-claim-edge` (`write.DemoteClaimEdge`), which turns an existing `depends` edge into
 a `demoted` row with the origin the build computed. Both are absent from `write.Ops()` and have no
 subcommand, so the public write surface cannot create a `demoted` edge. The build's cuts reach the
 register through `demote-claim-edge`, from the ring row at the tail of the dependency-attribution
-stage; `add-build-edges` keeps its `demoted` list as op vocabulary shared with kb_tools, and no
-build caller passes it. `resolve-demoted` is a public op.
+stage; `add-build-edges` keeps its `demoted` list in the op vocabulary, and no build caller passes
+it. `resolve-demoted` is a public op.
 `index.DependsGraph.Path` is the path finder over the acyclicity check's graph; the check and
 `resolve-demoted`'s cycle refusal both use it.
 
@@ -439,11 +414,11 @@ prose, the document having no frontmatter (SPEC §10).
 
 **Sheet.** `internal/sheet` emits Graphviz DOT and renders it by running `dot -Tsvg` on `PATH`; the
 SVG's bytes are Graphviz's, so the goldens pin the DOT, and a test that renders through `dot` skips
-without it and asserts only that the DOT parses and the root fits the viewer. The goldens are
-adjagent's fixture and its three DOT files, copied to `internal/sheet/testdata/adjagent-sheet/` and
-checked byte-identical to the pinned clone's where the clone is present; the emitted DOT matches
-them byte for byte, as `claim_sheet.py`'s does. Its inputs are the index (claims,
-edges, solidity bands); the build records beside `kb-root/`, read through `internal/buildrecords`
+without it and asserts only that the DOT parses and the root fits the viewer. The goldens are a
+fixture and its three DOT files under `internal/sheet/testdata/adjagent-sheet/`, copied as they
+stand: a `1.0.0` KB, its unmarked build record, and the DOT the sheet composes for it. The emitted
+DOT matches them byte for byte. Its inputs are the index (claims, edges, solidity bands); the build
+records beside `kb-root/`, read through `internal/buildrecords`
 that `claimgraph` and `sheet` both import — only the unmarked record and the cull record's `links`,
 for each edge's provenance (marked, or inferred by SPEC §3's rule), through
 `buildrecords.InferredLinks`, the rule's one implementation, which `claimgraph`'s cut origin calls
@@ -468,8 +443,7 @@ sheet. `verify` never reaches it.
 existing mechanisms and owns no new one: the entry point's frontmatter through `kb`'s canonical
 renderers (`RenderFrontmatterField`, `WrapFrontmatter`, `StampFormat`), every file through
 `atomicfile.Write`, the loader's `Open` (I8), the readiness stamp through `kbdocs.Stamp` with
-`kbdocs.AuthoredKBPin` in its scope-pin slot (beside `NoCharterPin`: a KB with no corpus says so,
-rather than that its corpus went unrecorded) — its `written` list is the paths `Stamp` returns —
+`kbdocs.AuthoredKBPin` in its scope-pin slot — its `written` list is the paths `Stamp` returns —
 the derived layer through `index.RefreshReporting`, the lock through `write.LockKB`, and the birth
 commit through `ledger.Commit` — the plain-subject half of `ledger` extracted beside `Record`, its
 pathspec scoping the same so nothing the user staged rides along. Its order is load-bearing: the
@@ -483,53 +457,80 @@ own: every input to the skeleton is kbase's, so a red verify over it is a kbase 
 ## 7. Inference seams
 
 - Kept from kbase: provider management (`internal/config`) and the client (`internal/model`). The
-  call path is `model.Chat` for the overview call and `model.SystemOne` for the letter asks: the
-  decision tier is a SystemOne decision model, and kbase's tiers apply — letter asks go to the
-  decision tier, the overview call to the text tier (SPEC §4, inference endpoint).
-- Every model call is one tool-less chat request answered from its prompt alone
-  [`inference/liaison_tools.call_chat`]: temperature 0, thinking disabled
-  (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a call that does not
-  complete is re-issued identically up to kb_tools' count [`kb_claimgraph/ask.TRANSPORT_ATTEMPTS`].
+  call path is `model.Chat` for the overview call and `model.Decision` for the letter asks; the
+  decision category is a model id on whichever surface its entry speaks (`decisionsFlavor`, SPEC
+  §9.1), and kbase's categories apply — letter asks go to the decision category, the overview call
+  to the text category (SPEC §9).
+- Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
+  thinking disabled (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a
+  call that does not complete is re-issued identically up to the attempt count (§12).
   `model` makes it, with a system message. This holds for the overview call; the letter asks take
-  the SystemOne path instead (next item). A build with a calling row left to walk checks a provider
-  is configured before its first stage (SPEC §5) [`kb_driver/run.py`, `_require_server`].
-- A letter ask is one `POST <base-url>/systemone` request (`model.SystemOne`): the payload is
-  `model`, `state`, `questions` — `questions` a JSON object keyed by the question key, kbase
-  sending exactly one question (`choice` or `noul`) whose `criteria` carry the per-letter meanings
-  the templates' bullet lists used to carry; the answer comes back keyed the same way, probabilities
-  over the offered letters, no reply text parsed. The request is re-issued identically up to the
-  chat attempt count on a transport error or retry-class 5xx, with no streaming and no
-  incomplete-stream path. The system-prompt sentence above is scoped to the overview call; a
-  decision call has no system message.
-- Each inference pass is built as plumbing where kb_tools places it, reaching the
-  model only through `internal/asks`' letter seam, injected — nothing in `claimgraph` knows a
-  network exists. `internal/asks` holds the embedded templates and fragments with their manifest
-  (`provenance.yaml`), the composer, the caller (system fragment, per-call captures and the answer
-  cache under the state store's `scratch/`), and the letter-ask seam: every claim-graph inference is
-  one decision answered by one letter from a closed set the build offers, an unreadable reply asked
-  once more and then defaulted to the item's mechanical draft, recorded as defaulted
-  [`prompt_templates.py`, `kb_claimgraph/letters.py`, `ask.py`, `classify.py`]. Templates
-  (`*.tmpl.md`) and fragments are embedded files under I7's manifest: those still imported are
-  byte-identical to kb_tools' at the recorded commit; those kbase authors (the unmarked ask first)
-  are derived from kb_tools' and reviewed before first use, and kb_tools adopts them (SPEC §2,
-  reference roles); those authored de novo, the co-linearity ask's two files, are `kbase-origin` and
-  reviewed before first use. The manifest records the file each template was ported from at a
-  frozen commit (`origin`, `origin-commit`): origin history, not a dependency, and a `kbase-origin`
-  entry has none. A template change is an experiment with a measured result (ACTIVE_PLAN).
-- Imported prompts are `@!slot!@` templates (kb_tools ARCHITECTURE, "The Driver",
-  `prompt_templates.py`); a call's system prompt is the fragment kb_tools names for it
+  the decision surface instead (next item). A build with a calling row left to walk checks a
+  provider is configured before its first stage (SPEC §5).
+- Configuration is read from layers and merged once, before a verb's own work: `config.Layers`
+  resolves the directories and `config.Load` reads and merges both files of each. They are
+  `<repository>/.kbase/` over `~/.config/kbase`, or the one directory `--config-dir` /
+  `$KBASE_CONFIG_DIR` names — `explicit` and `environment` in the source vocabulary — so an
+  explicit choice isolates a run from a repository's own `.kbase/`, which every test and pinned
+  deployment needs. The caller resolves the repository root with `kb.RepositoryRoot(workDir)`, which
+  answers `""` outside a worktree, so `internal/config` takes no git dependency and reads the global
+  layer alone there. A pool entry is replaced whole by a higher layer's entry of the same name; a
+  `config.toml` field is overlaid one at a time. `config.Load` drops a fault naming an entry a
+  higher layer already supplied — the pool's entry is the higher one, so the fault describes a
+  value nothing reads — and keeps a higher layer's own fault, whose entry never entered the pool.
+  `config.Layer` carries a directory, its source
+  (`explicit`, `environment`, `repository`, `global`) and — once `config.Report` has probed it —
+  whether the directory and each file stand. `Provider.Layer` and `Config.Sources` record the layer
+  the merge took each pool entry and each category id from, which is what
+  `config.ResolveInference` reports as a field's source; `ProviderFault.Path` names the
+  `providers.toml` a fault came from, and a `LackError`'s path names the file a lacking setting
+  belongs in — the write target's `providers.toml` or `config.toml` — so a layered configuration
+  says which file to edit.
+- Where a verb's inference resolves — the pool entry the selection rules name, and the endpoint and
+  category ids the layers above the files leave — is one function, `resolveProvider`
+  (`cmd/provider.go`). `buildProvider` reads its endpoint and category ids, and reports the entry,
+  the rule that named it and the layer that supplied it in the build's result; the `show-config`
+  verb's report reads the whole resolution (the entry and rule, or what prevented a selection, and
+  what the configuration lacks); and the build's launch refusal consumes the error `buildProvider`
+  returns from it, whose `Named` supplies the setting the item names. The dial that `models` and
+  `configure` share reads the entry, the rule, the layer and the endpoint from the same resolution;
+  no other site applies the selection rules. The report's other facts — the
+  pool's entries and faults, the files' presence, `config.toml`'s choices and the inference variable
+  names the process sets — come from `internal/config.Report`, which reads no file and no
+  environment of its own: the caller passes the existence probe and `getenv`.
+- A letter ask is one `POST` to the entry's decision surface (`model.Decision`; `decisionsFlavor`,
+  SPEC §9.1), one `noul` or `choice` question asked and the answer read by the key it echoes — no
+  reply text parsed. Two shapes stand behind that choice. `systemone`, what an entry silent on the
+  flavour gets: `model`, `state`, and `questions` a JSON object keyed by the question key, each
+  question's `criteria` carrying the per-letter meanings the templates' bullet lists used to carry;
+  the `answers` object comes back keyed the same way. `decisions`: the state as `input`, `questions`
+  an array of named questions — a `noul` question asked as a `predicate`, carrying no choices, its
+  true/false guidance in `instructions`; a `choice` question carrying its criteria as `choices` —
+  answered by an `answers` array, each entry naming the question it answers; a `refusal` carries no
+  value and so takes the seam's re-ask-then-default path. Under either surface an answer naming a
+  question kbase did not ask is refused. The request is re-issued identically up to the chat attempt
+  count on a transport error or retry-class 5xx, with no streaming and no incomplete-stream path.
+  The system-prompt sentence above is scoped to the overview call; a decision call has no system
+  message.
+- Each inference pass is built as plumbing reaching the model only through `internal/asks`' letter
+  seam, injected — nothing in `claimgraph` knows a network exists. `internal/asks` holds the embedded
+  templates and fragments, the composer, the caller (system fragment, per-call captures and the
+  answer cache under the state store's `scratch/`), and the letter-ask seam: every claim-graph
+  inference is one decision answered by one letter from a closed set the build offers, an unreadable
+  reply asked once more and then defaulted to the item's mechanical draft, recorded as defaulted.
+  Templates (`*.tmpl.md`) and fragments are embedded files (I7). A template change is an experiment
+  with a measured result (ACTIVE_PLAN).
+- Prompts are `@!slot!@` templates; a call's system prompt is the fragment named for it
   (`overview-system` — the one surviving system fragment, the overview call's), never an agent
-  definition; a letter ask carries no system message. `asks.Render` builds the one user turn; slot
-  values are formatted as kb_tools formats them, pinned by replaying kb_tools' composed-prompt
-  goldens byte for byte for the imported templates (the overview set). No test asserts a template's
-  prose; tests key on the offered letters, the slot set, the system fragment and the closing line's
-  letters.
+  definition; a letter ask carries no system message. `asks.Render` builds the one user turn. No test
+  asserts a template's prose; tests key on the offered letters, the slot set, the system fragment and
+  the closing line's letters.
 - `claimgraph` reaches a model only through the letter seam injected by `build`; the caller that
   holds `model` lives in `internal/asks/call`, imported by `build` alone, and the import-policy test
   checks the transitive graph so `claimgraph` never reaches `model`.
 - No prompt originates in an in-code string.
-- The overview passage is written from excerpts composed mechanically from the tree
-  [`kb_readme.compose_excerpts`], checked for structure and re-asked once through the
+- The overview passage is written from excerpts composed mechanically from the tree, checked for
+  structure and re-asked once through the
   `overview-correction` fragment.
 
 ---
@@ -539,7 +540,7 @@ own: every input to the skeleton is kbase's, so a red verify over it is a kbase 
 `internal/ledger` is the only package that execs git (I1); it execs the host's git, which SPEC §2
 already requires, so the user's configuration, hooks and attributes apply, and no git library is a
 dependency. `internal/build` owns the stage table, the state store, resume, `--no-inference`,
-`--through`, and status, progress and cancel [`kb_driver` head, `phase-3a`, overview]. Only `build`
+`--through`, and status, progress and cancel. Only `build`
 and `cmd`'s `init` verb import `ledger`.
 
 - **Fresh versus resume** is read from the commit trail alone (SPEC §6); nothing in the state store
@@ -557,11 +558,18 @@ and `cmd`'s `init` verb import `ledger`.
   outside the restored paths referenced the old ones. A classify prompt names claim ids, but those
   were minted in stages already committed and the restore reaches back only to the last boundary, so
   a resumed run's prompts are identical and the cache answers them; a fresh build's are not, and it
-  pays again. The node-pass and classification records are still written per leaf and per group as
-  kb_tools writes them — the tracked record's content is kb_tools' — but kbase's resume does not
-  read them for position. The progress record accounts for the dirt an interrupted stage leaves; the
+  pays again. The node-pass and classification records are still written per leaf and per group, but
+  resume does not read them for position. The progress record accounts for the dirt an interrupted
+  stage leaves; the
   dirty-path refusal (SPEC §5) applies to dirt it cannot account for. The resume command carries
-  every flag the launch did, `--charter` included.
+  every flag the launch carried but the bound, `--through`: resuming past it is what resuming is
+  for. It is emitted only where an identical re-issue continues the work: a `bounded` run is
+  handed none, being finished at the bound — re-issuing its command is not what continues it; the
+  trail document is what a reader uses to reset and re-issue. A refusal that
+  recorded no boundary leaves nothing to continue. It is also emitted only where the
+  recorded invocation reads as a `kbase build` invocation (SPEC §6): the state store is a directory
+  the caller names, so a record naming any other program is repository-supplied text and no document
+  renders it for a harness to run.
 - **Records missing on resume.** The docgraph records live in the state store. A resume that finds
   them absent regenerates them by re-running the document-graph stage into scratch and requires its
   tree byte-identical to the committed `kb-root/` (SPEC §5, determinism); a difference is `failed`,
@@ -581,14 +589,15 @@ and `cmd`'s `init` verb import `ledger`.
   the holder lock; ready the store (upgrade, stamp); the run event; prune captures; wait out
   writers. Its own writes and its seed and gate refreshes take no write lock, so it cannot refuse
   itself. The *holder lock* is in the state store, carrying the holder's pid and start time;
-  `status` reads liveness from it and the progress record, and `cancel` signals its holder. A second
-  builder on the same state-dir is `refused`; where only the holder lock is held the result is
-  `retry`. User-facing text calls it "holds the state store"; "run lock" names only `<git
-  dir>/kbase-build.lock`. On Windows, where no advisory lock exists, `status` cannot see a running
-  build.
+  `status` reads liveness from it and the progress record, and `cancel` signals its holder. A clean
+  exit removes the file, cancel included, so a standing lock file is not by itself evidence of a
+  live holder. A second builder on the same state-dir is `refused`; where only the holder lock is
+  held the result is `retry`. User-facing text calls it "holds the state store"; "run lock" names
+  only `<git dir>/kbase-build.lock`. On Windows, where no advisory lock exists, `status` cannot see
+  a running build.
 - **State store version.** `<state-dir>/format` is one integer, `storeFormat` (§12), written when a
-  build first holds the store; an absent file reads as 1. `build`, `status`, `cancel` and the MCP
-  build tool read it at open, and a store newer than `storeFormat` is refused (`check: state-dir`,
+  build first holds the store; an absent file reads as 1. `build`, `status`, `wait`, `cancel` and the
+  MCP build tool read it at open, and a store newer than `storeFormat` is refused (`check: state-dir`,
   `key: --state-dir`, `path` the store, remedy "update kbase, or use another --state-dir"). An older
   store is converted in place by the build, in "ready the store", through the chain `storeUpgrades`
   in `internal/build`: one step per version, each stamping `format` when it completes, so an
@@ -611,7 +620,7 @@ and `cmd`'s `init` verb import `ledger`.
   groups of each of its two passes for `claims-culled` (each pass announcing its own total), ask
   groups for classification, so `status` moves during an inference stage; a defaulted item is a
   `fallback` event. The node-pass, unmarked and classification records are written per leaf or per
-  group as kb_tools writes them; the cull record once, after the culls are issued.
+  group; the cull record once, after the culls are issued.
 - **Trail order.** `run` refuses a trail recording a stage past one it leaves unrecorded in
   `Stages` order (SPEC §5, `check: trail`), right after reading which stages it records and before
   the launch checks and any restore: walking the gap would run a stage over products of stages
@@ -619,20 +628,20 @@ and `cmd`'s `init` verb import `ledger`.
 - **A stale `.git/index.lock`** left by a kill during a boundary commit is a refusal naming the
   lock.
 - **`--state-dir`** defaults to the §12 key under `$XDG_STATE_HOME/kbase/`.
-- **Under `--no-inference`** the overview call is the dropped row and no `README.md` is written, as
-  in kb_tools' build.
+- **Under `--no-inference`** the overview call is the dropped row and no `README.md` is written.
 
-- **Ledger.** Commit subject, tracked records and pathspec scoping are SPEC §6. The ledger is ported
-  from kb_tools' [`kb_pipeline`, ledger half]; resume position is read from the trail alone. The
+- **Ledger.** Commit subject, tracked records and pathspec scoping are SPEC §6; resume position is
+  read from the trail alone. The
   four tracked build records — node-pass, unmarked, classification and cull — are
-  `claimgraph`'s to read and write, the first three as kb_tools' are [`kb_pipeline`, record half:
-  `NODE_PASS_RELPATH`, `UNMARKED_RELPATH`, `CLASSIFICATION_RELPATH`], as YAML `kb-build-*.yaml`
+  `claimgraph`'s to read and write, as YAML `kb-build-*.yaml`
   (SPEC §6, §10). `build` commits them.
 - **State store.** Contents and path are SPEC §6; the key form is §12; the layout is above.
-- **Status, progress, cancel.** `status` reads the holder lock, `progress.jsonl` and the commit
+- **Status, progress, cancel, wait.** `status` reads the holder lock, `progress.jsonl` and the commit
   trail and returns the YAML snapshot in SPEC §6. `cancel` signals the lock holder; the holder
   abandons the in-flight call with nothing written for it, logs the event, releases the lock and
-  exits `cancelled`.
+  exits `cancelled`. `wait` polls `build.ReadState` — the store alone, as the watcher does — until
+  the run it names is superseded or has ended, then renders `status`'s document through the same
+  `build.Status`: it takes no lock and reads no commit trail until that final document.
 
 ## 9. Result emitter
 
@@ -643,14 +652,14 @@ Policy".
 
 ## 10. Compatibility harness
 
-Compatibility is judged by kb_tools' own readers and checks, never by a byte diff of presentation.
-The harness has two directions: a kbase-built KB judged by kb_tools' checks, and a kb_tools-built KB
-judged by kbase's, with one shared op script applied through each toolchain. Its recipes —
-`test-integration-{docgraph,verify,write,query, claimgraph,build,build-live,monitor}-arxiv`, over
-kb_tools-built fixtures the `prep-test-integration-kbtools-{ref,full}` recipes stage from the pinned
-clone — are excluded from the hermetic test omnibus: they need pandoc and the adjagent reference,
-and the live one a provider. Each writes its evidence and `comparison.yaml` under
-`test_data/transient/<recipe>/`. The acceptance bar is SPEC §3.
+Compatibility is judged by kbase's own readers and checks, never by a byte diff of presentation. The
+hermetic gate is `just test-integration`, whose four members —
+`test-integration-results-fixture`, `test-integration-init`, `test-integration-mcp` and
+`test-integration-config` — each run `./bin/kbase` over fixtures they stage and judge what it
+produces: the result document against the verb's keys, the tree it wrote, the transcript it served.
+Each writes its log under `test_data/transient/<recipe>/`. Recipes needing pandoc, python3 or a
+provider stand outside the gate and run by name — `test-integration-mcp-build`, the MCP notification
+probe that builds a paper, among them.
 
 ---
 
@@ -662,11 +671,10 @@ import graph they allow is acyclic.
 ```
 cmd/                      cobra root; one file per subcommand; outcome-to-exit table
 internal/result           YAML result document + emitter (I5)
-internal/latex/pandoc     reader, writer and defaults-run seam (I1)  [pandoc.py]
-internal/latex/prepass    kb_tools' two scans (I3)        [kb_docgraph/convert.py]
+internal/latex/pandoc     reader, writer and defaults-run seam (I1)
+internal/latex/prepass    the two source scans (I3)
 internal/docgraph         JSON transforms, whole-volume render+cut, outline,
                           records, partition checks, validate_build
-                          [kb_docgraph/*, kb_survey/validate.py]
 internal/records          the record schema (§5.5), written by docgraph, read by claimgraph
 internal/kb               kb-root model: names, exclusions, link primitives, dead-link
                           gate, frontmatter and register parse, schema (the node kinds
@@ -678,7 +686,6 @@ internal/kb               kb-root model: names, exclusions, link primitives, dea
                           tree relation (`ChildList`, `ChildListLines`), the heading
                           reader `FirstHeading`, the in-body marker predicate `IsMarker`,
                           the reference-list entry reader `BibliographyEntries`
-                          [kb_index_lib parse, kb_schema, kb_links, verify_md_links]
 internal/kbload           `Open(kbRoot)`: reads the stamp, builds `kb.Source` (disk at
                           the current version, `migrate.Chain` in memory for an older
                           one); the only importer of `migrate`; imports `buildrecords`
@@ -687,12 +694,10 @@ internal/kbload           `Open(kbRoot)`: reads the stamp, builds `kb.Source` (d
 internal/index            solidity, aggregates, footers, .index emit + freshness,
                           citation gate, claim-id link check, the depends path finder
                           (`DependsGraph.Path`)
-                          [kb_index_lib compute, refresh_/verify_kb_metadata, verify_citations]
 internal/write            render / values / store / ops, the build-only `add-build-edges`
                           and `demote-claim-edge`
-                          [kb_write]
 internal/atomicfile       the one atomic file writer
-internal/query                                            [kb_cmd]
+internal/query
 internal/sheet            DOT emitter, `dot` invocation: index, build records, leaf,
                           entry-point heading in; SVGs out
 internal/export           the LaTeX export (§5.7): the walk, the inputs of `gen-tex/`,
@@ -704,32 +709,36 @@ internal/buildrecords     the four build records' readers (node-pass, unmarked,
                           kbload for the record paths (the ledger's owned paths derive
                           from them; `migrate.SupersededRecordPaths()` names the old
                           spellings)
-internal/kbdocs           readiness stamp, README assembly [installed/*.tmpl, kb_readme]
+internal/kbdocs           readiness stamp, README assembly
 internal/claimgraph       conform, inventory (records + page-defined readings),
                           identify, attribute, shortlist, unmarked, order, cull,
                           elision (the cull's issuer), equation sites, classify,
                           equation(s), endcap, hand_named, assemble, write, gate,
-                          the four build records             [kb_claimgraph]
-internal/asks             embedded templates + fragments + manifest, composer, caller
+                          the four build records
+internal/asks             embedded templates + fragments, composer, caller
                           (captures, answer cache), letter-ask seam
-                                                          [prompt_templates, letters, ask, classify]
-internal/ledger           git checkpoint seam (I1), by exec  [kb_pipeline ledger half, kb_driver/ledger]
+internal/ledger           git checkpoint seam (I1), by exec
 internal/filelock         the one advisory file lock (the KB write lock, the build's run
                           lock in the git directory, the state store's holder lock)
 internal/build            stage table, state store, resume, --no-inference,
-                          --through, status/progress/cancel [kb_driver head, phase-3a, overview]
-internal/asks/call        the caller: the letter asks through model.SystemOne behind the letter
+                          --through, status/progress/cancel, and the store reading
+                          (holder lock, progress record, the run it stands at) that
+                          status's state and the MCP watcher both derive from
+internal/asks/call        the caller: the letter asks through model.Decision behind the letter
                           seam, the overview call through model.Chat; captures, answer
                           cache; imported by build alone
 internal/migrate          (SPEC §10) the N→N+1 converters over the loose
                           representation and the chain; each converter returns the
                           next form plus the paths it made obsolete; no file I/O
 internal/mcp              (SPEC §11) JSON-RPC framing, dispatch, the Tool, Schema and
-                          Property types, the frame checks; imports `log` only. The
-                          tool table, the resources and the server version are injected
-                          by cmd/mcp.go through Serve(in, out, version, tools, resources, lg);
-                          cmd/mcp.go is the one self-exec owner (I1)
-kept: config, model (model.Chat the overview call, model.SystemOne the letter asks), log, version
+                          Property types, the frame checks, and the one subscription the
+                          caller allows, whose frames it writes under the same mutex as
+                          the responses; imports `log` only. The tool table, the resources,
+                          the subscription and the server version are injected by
+                          cmd/mcp.go through Serve(in, out, version, instructions, tools,
+                          resources, subscription, lg); cmd/mcp.go is the one self-exec
+                          owner (I1)
+kept: config, model (model.Chat the overview call, model.Decision the letter asks), log, version
 ```
 
 **Dependency rules.**
@@ -742,8 +751,8 @@ kept: config, model (model.Chat the overview call, model.SystemOne the letter as
   through it, so `sheet` never imports `claimgraph`; `sheet` reads the letter tables from `asks`
   (never `asks/call`), so the records' yes letters have one home.
 - `kb` imports no other kbase package but `log`; `docgraph`, `index`, `write`, `query`, `sheet`,
-  `kbdocs` and `claimgraph` read the kb-root vocabulary, the link relation (in kb_tools' two
-  readings, one resolver), the label-name grammar and the id minting from it. `export` reads the
+  `kbdocs` and `claimgraph` read the kb-root vocabulary, the link relation (in its two readings,
+  one resolver), the label-name grammar and the id minting from it. `export` reads the
   link relation a third way, `kb.ChildList`: an index's child-list lines only, so a body link is
   never a spine edge.
 - `write`, `index`, `query`, `sheet` and `kbdocs` never import `docgraph`, `claimgraph` or `build`.
@@ -783,11 +792,11 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Constant | Value |
 |---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6) |
-| Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six kb_tools-built fixtures, asserted by a test |
-| Transport attempts | 3 per call, as kb_tools' `TRANSPORT_ATTEMPTS`; letter asks re-issue at once, the overview call pauses 5 s then 30 s between attempts, as kb_tools' driver does |
-| Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: SystemOne's `usage` has no cached-token field, so the zero is the API's, not a regression |
+| Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures, asserted by a test |
+| Transport attempts | 3 per call; letter asks re-issue at once, the overview call pauses 5 s then 30 s between attempts |
+| Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
-| Provider tiers | `[models] decision` (a SystemOne decision model; the letter asks) and `[models] text` (the overview call) in `config.toml`; overrides `KBASE_DECISION`/`KBASE_TEXT` (SPEC §9) |
+| Model categories | `[models] decision` (the letter asks' model, on whichever surface its entry speaks) and `[models] text` (the overview call) in `config.toml`; overrides `KBASE_DECISION`/`KBASE_TEXT` (SPEC §9) |
 | Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `1.0.0` |
 | MCP protocol version | `mcp.ProtocolVersion`: the MCP revision the server implements (SPEC §11): `2025-11-25`, confirmed, not chosen, by the owner's live check |
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
@@ -795,9 +804,11 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
 | Run lock path | `<git dir>/kbase-build.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
+| MCP build watcher interval | `buildWatchInterval` in `cmd/mcp.go`: 1 s, how often the watcher reads the state store while `kbase://build` is subscribed, after the reading the subscription itself makes (SPEC §11) |
+| `wait` poll interval | `waitPoll` in `cmd/wait.go`: 1 s, how often `kbase wait` reads the state store while the run it names progresses (SPEC §6) |
 | Sheet render concurrency | `sheet.renderConcurrency`: 4, the most `dot` processes at once; output order is kept (§6) |
-| Unmarked shortlist, proximity slots | `shortlistProximityK` in `internal/claimgraph`: 3, the nearest targets in its own paper `references-found` asks per source (SPEC §4) |
-| Unmarked shortlist, wildcard slots | `shortlistWildcardK` in `internal/claimgraph`: 2, the best-ranked targets by cosine it asks per source besides the proximity picks (SPEC §4) |
+| Unmarked shortlist, proximity slots | `shortlistProximityK` in `internal/claimgraph`: 3, the nearest targets in its own paper `references-found` asks per source (§4) |
+| Unmarked shortlist, wildcard slots | `shortlistWildcardK` in `internal/claimgraph`: 2, the best-ranked targets by cosine it asks per source besides the proximity picks (§4) |
 
 Exit codes and the placeholder's digest form are in SPEC §7 and §3; the pandoc range is SPEC §2; the
 stage-commit subject is SPEC §6.
@@ -821,12 +832,24 @@ are reported as `removed` by `refresh`, every write op and `render-claim-graph`.
 pure function with a golden pair as its test; the chain's order is the version order and a gap in it
 is a test failure. `internal/kbload/parity_test.go` holds a frozen copy of the `0.9.0` readers, in
 test code only, and asserts the migrated KB reads to the same values as the original, over committed
-`0.9.0` KBs, one of them built by kb_tools before it adopted `1.0.0`.
+`0.9.0` KBs.
 
-**MCP server (SPEC §11).** `cmd/mcp.go` builds the tool table from `rootCmd`: one Tool per command,
-less `completion`, `help`, `models`, `configure` and `mcp`. A tool's schema is derived from the
-command's `Use` line positionals and its flags. A command's read-only standing is the cobra
-annotation `kbase.readOnly`, read when the table is built.
+**MCP server (SPEC §11).** `cmd/mcp.go` builds the tool table from `rootCmd`: one Tool per command
+declaring `kbase.mcp` = `bound` — `mcp` and `wait` declare `excluded`, the latter because a held call
+would spend the turn the build takes, and cobra's own `completion` and `help` declare nothing and
+are skipped with them — plus the one listed tool below. A tool's
+schema is derived from the command's `Use` line positionals and its flags. A command's read-only
+standing is the cobra annotation `kbase.readOnly`, read when the table is built.
+
+`rewind-build` is the one tool no command stands behind (I9), so it states for itself what the
+derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional), the
+document key order SPEC §11 gives it in place of a subcommand table's, and the schema property name
+as its refusal key in place of a flag spelling. It reports the build's commit trail and mutates
+nothing, which is what makes the exception affordable — the derivation buys a schema from flags, one
+implementation and one test path, all of which an operation listed by hand would forgo.
+`TestMCPToolsAreTheCommandTree` derives its expectation from the annotations plus that one name and
+asserts the tool set for equality, so a second listed tool fails; `TestMCPRewindBuildIsTheBuildTrail`
+calls the tool and reads the resource through the server's handlers, and requires the text to agree.
 
 A write op runs through `runWriteOp` with one entry composed from the arguments (`create` lifted to
 `--create`); its schema comes from the one exported vocabulary function, `write.OpVocabulary(op)`. A
@@ -839,10 +862,21 @@ never `os.Getwd()`, or `--kb-root` is ignored.
 `internal/mcp` holds newline-delimited JSON-RPC over stdio, `initialize`, `ping`, `tools/list` and
 `tools/call`, the `Tool`, `Schema` and `Property` types, and the frame checks (`jsonrpc`, `id`,
 `method`, known tool, object arguments). Arguments failing the schema (missing, wrong type, unknown
-key) are JSON-RPC `-32602` errors, not refusal documents. `Serve` takes the server version, the tool
-table and the resources from its caller and imports `log` only. `resources/list` and
-`resources/read` serve the sheets cmd/mcp.go supplies, under `kbase://sheet/<kb-root-relative
-path>`; an unknown URI is `-32002`, a missing `uri` `-32602`; `initialize` advertises `resources`.
+key) are JSON-RPC `-32602` errors, not refusal documents. `Serve` takes the server version, the
+instructions `initialize` reports, the tool table and the resources from its caller, and imports
+`log` only. `resources/list` and `resources/read` serve the resources cmd/mcp.go supplies: the
+sheets, under `kbase://sheet/<kb-root-relative path>`, and the model guidance, at
+`kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB.
+Beside them `kbase://build-trail` is `internal/build`'s `Rewind` document (`rewind.go`) for the
+repository the KB sits in, no target named: the same text `cmd/mcp.go`'s `rewindDocument` gives
+the tool, because one function serves both — the resource is discovery, the tool is invocation —
+and `TestMCPRewindBuildIsTheBuildTrail` asserts `resources/read` returns the tool's document byte
+for byte. It is KB-scoped: `List` offers it whether or not a repository or a boundary is found,
+and a repository the read cannot open is refused in the document, not raised as a list fault
+(`TestMCPModelHintsResource` lists it with no KB in sight; `TestRewindOutsideAWorktree` is the
+document the read then returns). An unknown URI is `-32002`, a missing `uri` `-32602`;
+`initialize` advertises `resources`, and its `subscribe` once a client may hold one. A fourth
+resource, `kbase://build`, is stated below with the build tool whose launch it follows.
 
 `--kb-root` is resolved before serving: a kb-root directory, or a repository root (holding `.git`)
 with or without `kb-root/`; any other path is a usage refusal.
@@ -862,30 +896,48 @@ and emits its first progress event before it waits out a write, §8):
 
 | Child, within `build.StartWait` | Result |
 |---|---|
-| Entered a stage | `done` with `kb-root`, `state-dir`, `pid`, `resume` |
+| Entered a stage | `done` with `kb-root`, `state-dir`, `pid`, `resume` and `wait` (`resume` only where the record's command reads as a `kbase build` invocation, SPEC §6; `wait` the run's background command, `build.ShellJoin` of the executable with `wait --state-dir <store> --pid <pid>`) |
 | Exited first | The child's own document; `isError` from its outcome |
 | Neither | `failed`, an item naming the state directory and that the child is still starting |
 
 Before starting, the tool runs `status`'s preconditions: no worktree, or a `--state-dir` inside
 `kb-root/`, returns the refusal `status` gives and starts no process.
 
+`kbase://build` (SPEC §11) is the build's state as the `status` tool reports it, for the store the
+tool last launched: `cmd/mcp.go` records the store `build.Locate` resolved and the pid the launch
+started, so a later launch retargets the resource and the watcher, and a process that launched none
+follows the served repository's default store, which `build.Locate` resolves once because resolving
+it asks git. The resource's document is the verb's: `statusDocument` renders `build.Status`'s
+outcome and fields as the verb does, so a read costs the `git log` a `status` call costs. The
+watcher's reading does not: it is `build.ReadState`, the store's holder lock and progress record and
+the state they derive, behind the same derivation `status` reads. `internal/mcp` starts the watcher
+when a client subscribes to the resource and stops it on the unsubscribe or on `Serve`'s return; it
+reads at the subscription and then every `buildWatchInterval` (§12), and announces each run it reads
+as over — once, keyed on the run's pid and start stamp: a resumed build is a new run, announced
+once. A run already over at the subscription's first reading is announced there, after the
+subscribe response, but only for a run the launch recorded or where this process launched none: a
+launch is not atomic, and until the child takes the holder lock the run before it reads
+`interrupted`. A run that ends between two readings and is superseded before the next is missed —
+inherent to polling, which sees identities and not transitions. The request loop and the watcher
+both write frames, so every write takes one mutex.
+
 ---
 
 ## 13. Slice verdicts
 
 The reader's design was settled by a slice — `kbase build --through document-graph` over six corpus
-papers and a census of all fifty — judged by comparing kbase's tree against kb_tools' for the same
-paper with kb_tools' own readers. The hypotheses and their verdicts:
+papers and a census of all fifty — judged by comparing kbase's tree against the reference tree for
+the same paper, with kbase's own readers. The hypotheses and their verdicts:
 
 | Hypothesis | Confirmed by | Refuted by | Verdict |
 |---|---|---|---|
-| No filter layer is needed | kb_tools' conformance and inventory pass on kbase's tree; per-leaf word streams match; every citation state kb_tools' trees exhibit appears in kbase's | A load-bearing form or word no JSON transform can produce | **Confirmed** on the six Slice-1 and Slice-2 papers; 49 of 50 corpus papers build (`test_data/transient/test-integration-slice-arxiv/stage-{1,2,3}/`) |
-| Records suffice for the inventory | Every reader and placement fact of kb_tools' stage B inventory (§5.5) is carried by kbase's records, item by item in scan order; every record joins exactly one document | A reader or placement fact that exists only in rendered bytes | **Confirmed**, with §5.5's visibility rule: a block record exists only where the page carries a label line kb_tools reads |
-| The preceding text run suffices | Withdrawn: kb_tools defines the word before a reference over the written page, so it is a page-defined reading (§5.5), not a record | — | Withdrawn |
+| No filter layer is needed | The conformance and inventory checks pass on kbase's tree; per-leaf word streams match; every citation state the reference trees exhibit appears in kbase's | A load-bearing form or word no JSON transform can produce | **Confirmed** on the six Slice-1 and Slice-2 papers; 49 of 50 corpus papers build |
+| Records suffice for the inventory | Every reader and placement fact of the inventory (§5.5) is carried by kbase's records, item by item in scan order; every record joins exactly one document | A reader or placement fact that exists only in rendered bytes | **Confirmed**, with §5.5's visibility rule: a block record exists only where the page carries a label line the reader reads |
+| The preceding text run suffices | Withdrawn: the word before a reference is defined over the written page, so it is a page-defined reading (§5.5), not a record | — | Withdrawn |
 | pandoc's writer suffices | Every Slice-1 check passes under it | A load-bearing form it cannot emit | **Confirmed**; the writer route is pandoc's gfm writer with `--wrap=none` (§5.4) |
 
-**Slice-1 checks:** identical tree path set and child order; equal per-leaf word streams under
-`kb_docgraph/text.markdown_tokens`; kb_tools' Document-Tree conformance passes with matching counts
+**Slice-1 checks:** identical tree path set and child order; equal per-leaf word streams under the
+markdown tokeniser; the Document-Tree conformance passes with matching counts
 of up-link lines, three-attribute anchors, math fences, `data-cites` citation spans and labelled
 blockquotes with identifiers; equal inventory; records carry every reader and placement fact of that
 inventory; byte-identical `kb-root/` and records across two runs. All pass: the writer route is

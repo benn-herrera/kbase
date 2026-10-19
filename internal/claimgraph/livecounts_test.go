@@ -24,11 +24,9 @@ var (
 // TestLiveBuildCounts reads what a build that asked wrote — its node-pass,
 // unmarked and classification records, and the stage reports its result
 // names — and writes the counts the live recipe reports: counts.yaml;
-// nodepass.json, the record's verdicts and claims per leaf for kb_tools'
-// reading of the same tree to be compared against; and, for kb_tools'
-// shortlist over that tree, a copy of the node-pass record
-// (kb-build-node-pass.yaml) and the planned pairs (unmarked-plan.json). It
-// skips unless the live recipe names a repository.
+// nodepass.json, the record's verdicts and claims per leaf; and a copy of the
+// node-pass record (kb-build-node-pass.yaml) and the planned pairs
+// (unmarked-plan.json). It skips unless the live recipe names a repository.
 func TestLiveBuildCounts(t *testing.T) {
 	if *liveRepo == "" {
 		t.Skip("no -claimgraph.repo: the live build recipe runs this")

@@ -1,10 +1,10 @@
 package claimgraph
 
-// The slice's Records check: every reader and placement fact of kb_tools'
-// stage B inventory over kbase's tree (tools/slice/README.md is the dump's
-// schema) is carried by the inventory the records alone give, item by item in
-// scan order; and every record names a document of that tree. The recipe
-// test-integration-slice-arxiv supplies the flags; without them it skips.
+// The slice's Records check: every reader and placement fact of the reference's
+// stage B inventory over kbase's tree is carried by the inventory the records
+// alone give, item by item in scan order; and every record names a document of
+// that tree. The recipe test-integration-slice-arxiv supplies the flags;
+// without them it skips.
 
 import (
 	"bytes"

@@ -111,7 +111,7 @@ func TestChatRequestShape(t *testing.T) {
 		t.Errorf("stream %t, stream_options %v, tools %v", body.Stream, body.Options, body.Tools)
 	}
 	if body.MaxTokens != nil {
-		t.Errorf("max_tokens %d sent; kb_tools sends none", *body.MaxTokens)
+		t.Errorf("max_tokens %d sent; the request must carry none", *body.MaxTokens)
 	}
 }
 

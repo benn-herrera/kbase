@@ -1,8 +1,6 @@
 # The classify ask's question over three offered letters: supported by,
-# in support of, mention. Derived from kb_tools' classify.tmpl.md and its
-# classify-options-three fragment: the per-option bullets are the criteria,
-# the fragment's framing the instructions, and the offered letters reach it
-# only as composer constants.
+# in support of, mention. The per-option bullets are the criteria, and the
+# offered letters reach it only as composer constants.
 type: choice
 instructions: |-
   Does the source claim need the candidate claim, does the candidate claim

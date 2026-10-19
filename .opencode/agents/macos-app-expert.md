@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/macos_app_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "macOS desktop development: AppKit, Swift/Objective-C, Core frameworks, sandboxing, XPC services, system integration, notarization, and native macOS APIs. Prefer over generalist-coder for any macOS desktop target."
+description: "macOS desktop development: AppKit, Swift/Objective-C, including sandboxing, XPC services and notarization. Prefer over generalist-coder for any macOS desktop target."
 color: "#A3AAAE"
 mode: subagent
 ---

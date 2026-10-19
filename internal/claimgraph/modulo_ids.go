@@ -38,9 +38,8 @@ type ModuloIDsCheck struct {
 // register, title and hosting leaves rather than by its id: register entries,
 // edges by their endpoints so named, works, claim count and no-claim reason per
 // leaf, and the build records, as data and byte for byte (recordBytes). Ids
-// are minted at random, so this is the
-// equality two builds of the same inputs owe each other, and the one kbase's
-// claim graph owes kb_tools'.
+// are minted at random, so this is the equality two builds of the same inputs
+// owe each other.
 func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 	av, err := readModuloIDsView(a.KBRoot)
 	if err != nil {

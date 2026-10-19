@@ -1,8 +1,8 @@
 // Command kbase builds a knowledge base from LaTeX and maintains it.
 //
-// This file is the composition root: it declares the root command, resolves
-// the configuration directory every verb draws on, builds the one logger the
-// process has, and owns process exit.
+// This file is the composition root: it declares the root command and the
+// global flags every verb draws on, builds the one logger the process has, and
+// owns process exit.
 // Verb logic lives beside its command in its own file, behind a plain
 // function the cobra RunE is a thin shell over — so a verb is testable
 // without a process, a terminal, or a network.
@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -23,8 +22,8 @@ import (
 	"kbase/internal/version"
 )
 
-// flagConfigDir backs the persistent --config-dir flag. See
-// resolveConfigDir for the precedence it participates in.
+// flagConfigDir backs the persistent --config-dir flag. See config.Layers for
+// the precedence it participates in.
 var flagConfigDir string
 
 // flagLogLevel and flagLogFile back the persistent logging flags.
@@ -53,11 +52,11 @@ var rootCmd = &cobra.Command{
 	Long: `kbase builds a knowledge base (KB) from LaTeX and maintains it. Volume roots
 go in — the top .tex file of each paper — and a KB comes out at kb-root/
 beside the repository's .git: the Markdown document tree, its metadata layer
-and .index/, as kb_tools builds it. The maintenance subcommands then operate
-on the living KB: refresh and verify, the write API's ops, render-citation,
-the queries and the claim-graph sheet. build runs in the foreground; status
-and cancel observe and stop it. models and configure choose the provider and
-the models a build's inference goes to.
+and .index/. The maintenance subcommands then operate on the living KB:
+refresh and verify, the write API's ops, render-citation, the queries and the
+claim-graph sheet. build runs in the foreground; status
+and cancel observe and stop it. show-config reports how the provider and model
+configuration resolves; models and configure choose it.
 
 Every subcommand writes one YAML document to stdout, its outcome first, and
 nothing else; stderr is for humans. The exit code follows the outcome: 0 for
@@ -92,22 +91,6 @@ done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.`,
 	SilenceErrors: true,
 }
 
-// resolveConfigDir returns the configuration directory this invocation
-// reads: the --config-dir flag when given, otherwise config.Dir's
-// resolution ($KBASE_CONFIG_DIR, else ~/.config/kbase). The flag is the
-// outermost override — it beats the environment as well as the default,
-// because an explicit path on the command line is the least ambiguous
-// statement of intent available.
-//
-// It is the single place that precedence is expressed; verbs call it and
-// hand the result to the config loaders, which take explicit paths.
-func resolveConfigDir() (string, error) {
-	if dir := strings.TrimSpace(flagConfigDir); dir != "" {
-		return dir, nil
-	}
-	return config.Dir()
-}
-
 // requireStreams checks the writers a verb was handed before it does any
 // work. Both are required rather than defaulted: a verb whose stream is nil
 // was constructed wrong, and quietly substituting os.Stdout would send a
@@ -124,7 +107,7 @@ func requireStreams(stdout, stderr io.Writer, verb string) error {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagConfigDir, "config-dir", "",
-		"configuration directory (default: $"+config.EnvConfigDir+", else ~/.config/kbase)")
+		"the only configuration directory read (default: $"+config.EnvConfigDir+", else <repository>/"+config.RepositoryDirName+" over ~/.config/kbase)")
 
 	// Diagnostics are off by default in all but name: a verb's own summary
 	// and warnings are the CLI's output, and the log is the channel you

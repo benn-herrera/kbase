@@ -10,7 +10,7 @@ import (
 	"kbase/internal/log"
 )
 
-// TestMintID: every id is kb_tools' grammar and clear of the existing set,
+// TestMintID: every id is the grammar's and clear of the existing set,
 // and a large sample holds no two equal draws.
 func TestMintID(t *testing.T) {
 	grammar := PyRE(`^clm-[a-z0-9]{6}$`)

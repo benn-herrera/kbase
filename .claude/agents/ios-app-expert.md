@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/ios_app_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: ios-app-expert
-description: "iOS app development: SwiftUI/UIKit, gestures, URLSession, state persistence, Swift concurrency, sensors, audio, camera, C library integration via SPM, Xcode CLI, and platform gotchas. Prefer over generalist-coder for any iOS target."
+description: "iOS app development: SwiftUI/UIKit and Swift concurrency, including C library integration via SPM and the Xcode CLI. Prefer over generalist-coder for any iOS target."
 model: opus
 color: "#FF69B4"
 ---

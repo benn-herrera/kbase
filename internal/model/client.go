@@ -30,7 +30,7 @@ import (
 type Client interface {
 	Consult(ctx context.Context, req Request) (Response, error)
 	ConsultStream(ctx context.Context, req Request) (StreamReader, error)
-	SystemOne(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
+	Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 

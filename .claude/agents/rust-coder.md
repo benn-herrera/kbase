@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/rust_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: rust-coder
-description: "Rust implementation specialist. Writes idiomatic, minimal Rust — explicit errors, ownership-first, no needless unsafe. Covers traits, concurrency, FFI, the build system, testing, and performance. Parallel-execution safe. Prefer over generalist-coder for userspace Rust work of any kind."
+description: "Rust implementation specialist. Prefer over generalist-coder for userspace Rust work of any kind."
 model: opus
 color: "#dea584"
 ---

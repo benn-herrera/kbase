@@ -102,7 +102,7 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 			want: []string{`"provdier"`},
 		},
 		{
-			name: "misspelled tier",
+			name: "misspelled category",
 			body: "[models]\ndecision = \"" + decisionModel + "\"\ndecisoin = \"" + textModel + "\"\n",
 			want: []string{`"models.decisoin"`},
 		},
@@ -154,9 +154,9 @@ func TestLoadConfigFixture(t *testing.T) {
 	if cfg.Provider == "" {
 		t.Error("fixture config.toml names no provider")
 	}
-	for _, tier := range []string{TierDecision, TierText} {
-		if _, ok := cfg.ModelFor(tier); !ok {
-			t.Errorf("fixture config.toml leaves the %s tier unmapped", tier)
+	for _, category := range []string{CategoryDecision, CategoryText} {
+		if _, ok := cfg.ModelFor(category); !ok {
+			t.Errorf("fixture config.toml leaves the %s category unmapped", category)
 		}
 	}
 }
@@ -168,30 +168,30 @@ func TestLoadConfigMalformed(t *testing.T) {
 	}
 }
 
-// TestModelFor: an unmapped or unknown tier reports not-configured. The
-// caller must fail loud there; substituting the other tier's model is a
+// TestModelFor: an unmapped or unknown category reports not-configured. The
+// caller must fail loud there; substituting the other category's model is a
 // silent wrong answer.
 func TestModelFor(t *testing.T) {
 	full := Config{Models: ModelMap{Decision: decisionModel, Text: textModel}}
 	decisionOnly := Config{Models: ModelMap{Decision: decisionModel}}
 
 	for _, tc := range []struct {
-		name   string
-		cfg    Config
-		tier   string
-		want   string
-		wantOK bool
+		name     string
+		cfg      Config
+		category string
+		want     string
+		wantOK   bool
 	}{
-		{"decision mapped", full, TierDecision, decisionModel, true},
-		{"text mapped", full, TierText, textModel, true},
-		{"text unmapped", decisionOnly, TierText, "", false},
-		{"zero config", Config{}, TierDecision, "", false},
-		{"unknown tier", full, "medium", "", false},
+		{"decision mapped", full, CategoryDecision, decisionModel, true},
+		{"text mapped", full, CategoryText, textModel, true},
+		{"text unmapped", decisionOnly, CategoryText, "", false},
+		{"zero config", Config{}, CategoryDecision, "", false},
+		{"unknown category", full, "medium", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := tc.cfg.ModelFor(tc.tier)
+			got, ok := tc.cfg.ModelFor(tc.category)
 			if got != tc.want || ok != tc.wantOK {
-				t.Errorf("ModelFor(%q) = (%q, %v), want (%q, %v)", tc.tier, got, ok, tc.want, tc.wantOK)
+				t.Errorf("ModelFor(%q) = (%q, %v), want (%q, %v)", tc.category, got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}

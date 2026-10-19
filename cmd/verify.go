@@ -52,10 +52,10 @@ func init() {
 	rootCmd.AddCommand(readOnly(maintenanceCommand("verify",
 		"check the KB's freshness and links",
 		`verify checks the KB's freshness and links at kb-root/ beside the
-repository's .git as kb_tools' kb-verify does: the dead-link and unknown-id
-gate over kb-root/, then the metadata gate (coverage, uniqueness, integrity,
-acyclicity, and freshness of every derived field and of .index/). The
-citation grammar is checked by the build, not here. It writes nothing.
+repository's .git: the dead-link and unknown-id gate over kb-root/, then the
+metadata gate (coverage, uniqueness, integrity, acyclicity, and freshness of
+every derived field and of .index/). The citation grammar is checked by the
+build, not here. It writes nothing.
 Faults are outcome refused, each one an item under refusals; one a refresh
 clears names "kbase refresh" as its remedy; on a KB in an older metadata
 format the index is stale, and a refresh rewrites the KB in the current one.

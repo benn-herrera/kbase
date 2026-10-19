@@ -14,10 +14,10 @@ import (
 	"kbase/internal/result"
 )
 
-// kb_tools' frozen 2026-09-02 registers: every marker authored above its
-// heading, so each register's first entry parses to nothing and every later
-// title is its neighbour's. The replay writes the same population through
-// this package and requires all of it to read back.
+// This repository's test fixture, its registers frozen 2026-09-02: every
+// marker authored above its heading, so each register's first entry parses to
+// nothing and every later title is its neighbour's. The replay writes the same
+// population through this package and requires all of it to read back.
 
 const (
 	regressionClaims = 23
@@ -49,7 +49,7 @@ func repaired(text string) string {
 // the production readers, in document order.
 func loadRecorded(t *testing.T) []recorded {
 	t.Helper()
-	dir := requireKbTools(t, "fixtures/writeapi-regression")
+	dir := requireReferenceFixture(t, "writeapi-regression")
 	sources, err := filepath.Glob(filepath.Join(dir, "*-claim-quality.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestRegressionReplayOps(t *testing.T) {
 // lose one entry each to the marker above its heading — 23 markers, 18
 // records — or the replay's 23 of 23 proves nothing.
 func TestRegressionFixtureCarriesDefect(t *testing.T) {
-	dir := requireKbTools(t, "fixtures/writeapi-regression")
+	dir := requireReferenceFixture(t, "writeapi-regression")
 	sources, err := filepath.Glob(filepath.Join(dir, "*-claim-quality.md"))
 	if err != nil {
 		t.Fatal(err)

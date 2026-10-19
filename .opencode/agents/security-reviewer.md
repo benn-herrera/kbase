@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/security_reviewer.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Adversarial security review of code and designs. Identifies hazards, attack vectors, and the specific conditions that must hold to prevent exploitation. Does not prescribe design solutions — that is the architect's job. Review only, never modifies code files."
+description: "Adversarial security review of code and designs. Does not prescribe design solutions — that is the architect's job. Review only, never modifies code files."
 color: "#DC2626"
 permission:
   read: allow

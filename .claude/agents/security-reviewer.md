@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/security_reviewer.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: security-reviewer
-description: "Adversarial security review of code and designs. Identifies hazards, attack vectors, and the specific conditions that must hold to prevent exploitation. Does not prescribe design solutions — that is the architect's job. Review only, never modifies code files."
+description: "Adversarial security review of code and designs. Does not prescribe design solutions — that is the architect's job. Review only, never modifies code files."
 model: opus
 color: "#DC2626"
 tools: Bash, Read, Grep, Glob, Write, Edit, WebSearch, WebFetch

@@ -1,8 +1,7 @@
 # The unmarked ask's question: does the source claim continue the argument
-# the candidate claim is part of? Derived from kb_tools' unmarked.tmpl.md:
-# the definition of "continues the argument" and the boundary cases are the
-# criteria, the closing question the instructions, and the offered letters
-# reach it only as composer constants.
+# the candidate claim is part of? The definition of "continues the argument"
+# and the boundary cases are the criteria, the closing question the
+# instructions, and the offered letters reach it only as composer constants.
 # The criteria are keyed true/false — a noul answer is one P(true) figure —
 # and true-letter names the offered letter whose criterion "true" is.
 type: noul

@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/shell_dsl_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Shell and build-DSL specialist: bash/zsh/POSIX sh scripts, justfiles, Makefiles, CMake, and shell embedded in CI/config. Writes and reviews recipe/script changes with quoting, exit-code, and portability discipline. Parallel-execution safe. Prefer over go-coder or generalist-coder for any change whose substance is shell or a build DSL."
+description: "Shell and build-DSL specialist: bash/zsh/POSIX sh, justfiles, Makefiles, CMake and shell embedded in CI. Prefer over go-coder or generalist-coder for any change whose substance is shell or a build DSL."
 color: "#4EAA25"
 mode: subagent
 ---

@@ -32,8 +32,8 @@ const mathInfo = "math"
 // no H1.
 const rootTitleDefault = kb.KBDir
 
-// kb_tools' claim_sheet rules for a claim's kind: a title read where no leaf
-// marks the claim, and the first line of the blockquote a marker sits in.
+// The title rules for a claim's kind: a title read where no leaf marks the
+// claim, and the first line of the blockquote a marker sits in.
 var (
 	blockTitleRE   = regexp.MustCompile(`^(?:Theorem|Proposition|Lemma|Corollary|Definition|Conjecture|Remark|Assumption|Axiom|Claim|Example)\b`)
 	printedNameRE  = kb.PyRE(`^\S+(?: \S+)? \d+(?:\.\d+)*$`)

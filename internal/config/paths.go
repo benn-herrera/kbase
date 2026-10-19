@@ -2,22 +2,30 @@
 // endpoint pool (WHERE inference happens) and config.toml (WHICH of those
 // endpoints and models the pipeline draws on).
 //
-// Path resolution and file loading are deliberately separate: Dir resolves
-// the config directory, and every loader takes an explicit path. Tests can
+// Configuration is read from a stack of layers — the repository's own
+// directory over the global one, or the single directory a flag or a variable
+// names — and the two files merge by different rules: a pool entry replaces a
+// same-named entry whole, a config.toml field overrides the corresponding
+// field alone. Which layer supplied what is carried into the report, so a
+// resolved setting always names where it came from.
+//
+// Path resolution and file loading are deliberately separate: Layers resolves
+// the directories, and every loader takes an explicit path. Tests can
 // therefore exercise the loaders against a temp directory without ever
 // reaching for — or writing to — a real home.
+//
+// A leading ~ in a path kbase was handed — a configuration directory, an
+// entry's apiKeyFile — expands from the user's home directory; no other
+// spelling does (see expandHome).
 package config
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
-	// EnvConfigDir overrides the config directory wholesale. It exists so
-	// a test, a CI run, or a second corpus can point kbase at its own
+	// EnvConfigDir overrides the configuration directory wholesale. It exists
+	// so a test, a CI run, or a second corpus can point kbase at its own
 	// configuration without disturbing the user's.
 	EnvConfigDir = "KBASE_CONFIG_DIR"
 
@@ -31,23 +39,6 @@ const (
 	defaultDirParent = ".config"
 	defaultDirName   = "kbase"
 )
-
-// Dir returns the configuration directory: EnvConfigDir when set,
-// otherwise ~/.config/kbase.
-//
-// It does not create the directory or check that it exists — a fresh
-// install has no config at all, and the loaders treat a missing file as
-// "unconfigured", not as an error.
-func Dir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv(EnvConfigDir)); dir != "" {
-		return dir, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("config dir: %w", err)
-	}
-	return filepath.Join(home, defaultDirParent, defaultDirName), nil
-}
 
 // ProvidersPath returns the providers.toml path within dir.
 func ProvidersPath(dir string) string { return filepath.Join(dir, ProvidersFileName) }

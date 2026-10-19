@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/biz_dev_strategist.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=sonnet tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: biz-dev-strategist
-description: "Software business strategy, market analysis, opportunity identification, business plans, pitch materials, monetization planning, investor outreach, competitive positioning, go-to-market strategy."
+description: "Software business strategy, market analysis, competitive positioning, business plans, pitch materials, monetization, investor outreach and go-to-market strategy."
 model: sonnet
 color: "#00FF00"
 ---

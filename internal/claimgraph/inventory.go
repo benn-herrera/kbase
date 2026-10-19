@@ -149,10 +149,10 @@ func (inv *Inventory) claimBlocks() []Block {
 }
 
 // recordInventory is the inventory the records alone give: every reader and
-// placement fact, in kb_tools' scan order — documents by path, then where
-// each item sits in its document. The page-defined readings (locator span,
-// title, line extents, the word before an anchor, a work's text) and the
-// proof-to-subject binding are left to Scan.
+// placement fact, in scan order — documents by path, then where each item sits
+// in its document. The page-defined readings (locator span, title, line
+// extents, the word before an anchor, a work's text) and the proof-to-subject
+// binding are left to Scan.
 func recordInventory(recs []records.Record) Inventory {
 	recs = scanOrder(recs)
 	blockNames := map[int]string{}
@@ -189,8 +189,8 @@ func recordInventory(recs []records.Record) Inventory {
 	return inv
 }
 
-// scanOrder is recs in kb_tools' scan order: documents by path, then record
-// order, which is where each fact sits on its page.
+// scanOrder is recs in the order the scan reads them: documents by path, then
+// record order, which is where each fact sits on its page.
 func scanOrder(recs []records.Record) []records.Record {
 	recs = slices.Clone(recs)
 	slices.SortStableFunc(recs, func(a, b records.Record) int {
@@ -225,10 +225,9 @@ func nonNil(s []string) []string {
 }
 
 // scanInventory joins the records to the page: each document's records, kind
-// by kind and in order, to the page constructs kb_tools' readers find there,
-// which give the readings the page defines. Records and page disagreeing about
-// how many of a construct a document carries means the records describe some
-// other tree.
+// by kind and in order, to the page constructs found there, which give the
+// readings the page defines. Records and page disagreeing about how many of a
+// construct a document carries means the records describe some other tree.
 func scanInventory(t *Tree, recs []records.Record) (Inventory, error) {
 	recs = scanOrder(recs)
 	inv := recordInventory(recs)

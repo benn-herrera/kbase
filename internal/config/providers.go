@@ -27,6 +27,18 @@ const (
 	// default, and the only protocol kbase speaks.
 	ProviderAPIOpenAI = "openai"
 
+	// FlavorSystemOne is the decision surface kbase's letter asks have
+	// always used: `POST <baseUrl>/systemone`, one question keyed by its
+	// own key, answers keyed the same way. The default for an entry that
+	// states no flavour.
+	FlavorSystemOne = "systemone"
+
+	// FlavorDecisions is the OpenAI Decisions surface: `POST
+	// <baseUrl>/decisions`, questions an array of named questions and
+	// answers an array carrying each answer's name. It is a different wire
+	// shape for the same closed-set question, chosen per server.
+	FlavorDecisions = "decisions"
+
 	// keyFileExposedBits are the mode bits that make an apiKeyFile
 	// readable by an account other than its owner. A credential every
 	// local user can read has effectively already left the machine, which
@@ -50,20 +62,27 @@ type Provider struct {
 	// API is the wire protocol. Optional; empty means ProviderAPIOpenAI.
 	API string `toml:"api"`
 
-	// APIKeyUnsafe is an inline API key. Discouraged — it places a secret
-	// directly in providers.toml, making the file unsafe to scan. Prefer
-	// APIKeyFile.
-	APIKeyUnsafe string `toml:"apiKeyUnsafe"`
+	// DecisionsFlavor is which decision surface this endpoint's server
+	// speaks. Optional; empty means FlavorSystemOne. It names a wire
+	// shape, never a model: the decision category's id stays in
+	// config.toml.
+	DecisionsFlavor string `toml:"decisionsFlavor"`
 
 	// APIKeyFile is a path to a file holding the API key. Relative paths
-	// resolve against the providers.toml directory. This is the
-	// recommended form: the secret stays out of providers.toml, so the
+	// resolve against the providers.toml directory. It is the only way an
+	// entry supplies a key: the secret stays out of providers.toml, so the
 	// config file itself is safe to scan and edit.
 	APIKeyFile string `toml:"apiKeyFile"`
 
-	// APIKey is the resolved key — populated by LoadProviders from
-	// APIKeyFile (preferred) or APIKeyUnsafe. Not a TOML field.
+	// APIKey is the resolved key — populated by LoadProviders from the file
+	// APIKeyFile names. Not a TOML field.
 	APIKey string `toml:"-"`
+
+	// Layer is the configuration layer this entry came from — repository or
+	// global, or the source of the one directory a flag or the environment
+	// named. Populated by Load's merge, never by the loader, which knows only
+	// the file it read.
+	Layer string `toml:"-"`
 }
 
 // Providers is a name-keyed set of providers loaded from providers.toml.
@@ -76,6 +95,10 @@ type Providers map[string]Provider
 type ProviderFault struct {
 	Name   string
 	Reason string // never carries key content — path/IO detail only
+
+	// Path is the providers.toml this fault came from: the layer's own file,
+	// never the single path a one-directory report used to assume.
+	Path string
 
 	// Warning distinguishes a fault the provider SURVIVED from one that
 	// dropped it. A warning entry is still in the Providers map and still
@@ -106,6 +129,16 @@ func (p Provider) Protocol() string {
 	return ProviderAPIOpenAI
 }
 
+// Flavor returns the normalized decision surface this entry's server speaks,
+// defaulting to FlavorSystemOne when unstated — an entry that says nothing is
+// a server kbase's letter asks already worked against.
+func (p Provider) Flavor() string {
+	if f := strings.ToLower(strings.TrimSpace(p.DecisionsFlavor)); f != "" {
+		return f
+	}
+	return FlavorSystemOne
+}
+
 // Validate reports whether a pool entry is usable, checking the fields
 // that decide WHERE traffic goes rather than the ones that merely
 // decorate it.
@@ -115,8 +148,9 @@ func (p Provider) Protocol() string {
 // user gets a named reason instead of an endpoint that quietly went
 // missing from the selection list.
 //
-// Reasons quote the offending type/api value — never a credential field —
-// so the message identifies the typo it is complaining about.
+// Reasons quote the offending type/api/decisionsFlavor value — never a
+// credential field — so the message identifies the typo it is complaining
+// about.
 func (p Provider) Validate() error {
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return errors.New("no baseUrl declared")
@@ -128,13 +162,19 @@ func (p Provider) Validate() error {
 		return fmt.Errorf("api %q is not valid for a %s provider (which speaks: %s)",
 			p.API, ProviderTypeInference, ProviderAPIOpenAI)
 	}
+	switch p.Flavor() {
+	case FlavorSystemOne, FlavorDecisions:
+	default:
+		return fmt.Errorf("unknown decisionsFlavor %q (known surfaces: %s, %s)",
+			p.DecisionsFlavor, FlavorSystemOne, FlavorDecisions)
+	}
 	return nil
 }
 
 // LoadProviders reads providers.toml at path and returns a name-keyed
-// map. Each provider's API key is resolved: from APIKeyFile when set
-// (read relative to the providers.toml directory), otherwise from
-// APIKeyUnsafe.
+// map. Each provider's API key is resolved from the file its APIKeyFile
+// names, read relative to the providers.toml directory; an entry that names
+// no file has no key.
 //
 // A nonexistent or empty file yields an empty Providers, no faults, and a
 // nil error — a fresh install has no populated providers.toml yet.
@@ -170,9 +210,9 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 	if err != nil {
 		// Wrapped as-is on purpose. BurntSushi's ParseError.Error() reports
 		// line, column and key; its ErrorWithPosition() additionally prints
-		// the OFFENDING SOURCE LINE — which for a malformed apiKeyUnsafe
-		// entry is the secret itself, in a message headed for the console
-		// and any log behind it. Do not "improve" this error with it.
+		// the OFFENDING SOURCE LINE, whose content this package does not
+		// control, in a message headed for the console and any log behind
+		// it. Do not "improve" this error with it.
 		return nil, nil, fmt.Errorf("providers: parse %s: %w", path, err)
 	}
 	// A file-level refusal, like a parse error: the provider NAMES are the
@@ -194,16 +234,16 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 		// selection lists it would never have matched. Checked first
 		// because there is no point reading a key file for it.
 		if err := p.Validate(); err != nil {
-			faults = append(faults, ProviderFault{Name: name, Reason: err.Error()})
+			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
 			continue
 		}
 		key, err := resolveAPIKey(p, dir)
 		if err != nil {
-			faults = append(faults, ProviderFault{Name: name, Reason: err.Error()})
+			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
 			continue
 		}
 		if reason := keyFileExposure(p, dir); reason != "" {
-			faults = append(faults, ProviderFault{Name: name, Reason: reason, Warning: true})
+			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: reason, Warning: true})
 		}
 		p.APIKey = key
 		out[name] = p
@@ -211,13 +251,13 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 	return out, faults, nil
 }
 
-// resolveAPIKey returns the provider's API key from APIKeyFile
-// (preferred) or APIKeyUnsafe. The key file's content is trimmed of
-// surrounding whitespace. The returned error never carries key content —
-// only the file path, on an I/O failure.
+// resolveAPIKey returns the provider's API key, read from the file
+// APIKeyFile names; an entry that names no file resolves to no key. The
+// key file's content is trimmed of surrounding whitespace. The returned
+// error never carries key content — only the file path, on an I/O failure.
 func resolveAPIKey(p Provider, dir string) (string, error) {
 	if p.APIKeyFile == "" {
-		return p.APIKeyUnsafe, nil
+		return "", nil
 	}
 	b, err := os.ReadFile(keyFilePath(p, dir))
 	if err != nil {
@@ -226,13 +266,15 @@ func resolveAPIKey(p Provider, dir string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// keyFilePath resolves the provider's apiKeyFile, relative paths against
-// the providers.toml directory.
+// keyFilePath resolves the provider's apiKeyFile: a leading ~ expands from the
+// home directory first, so an absolute path after that expansion is never
+// joined to the providers.toml directory; anything else resolves against it.
 func keyFilePath(p Provider, dir string) string {
-	if filepath.IsAbs(p.APIKeyFile) {
-		return p.APIKeyFile
+	path := expandHome(p.APIKeyFile)
+	if filepath.IsAbs(path) {
+		return path
 	}
-	return filepath.Join(dir, p.APIKeyFile)
+	return filepath.Join(dir, path)
 }
 
 // keyFileExposure returns a warning reason when the provider's key file is

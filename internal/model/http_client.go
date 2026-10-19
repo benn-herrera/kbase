@@ -56,6 +56,15 @@ type Endpoint struct {
 	// APIKey is the bearer token. Empty means send no Authorization
 	// header — several local servers reject an empty bearer value.
 	APIKey string
+	// Decisions is whether this server speaks the OpenAI Decisions shape for
+	// the letter asks: true for `POST <base-url>/decisions`, false for the
+	// SystemOne shape kbase's asks have always used. Chat is unaffected: it
+	// stays `chat/completions` on both.
+	//
+	// The configured `decisionsFlavor` value is resolved to this by the caller:
+	// this package knows the two wire shapes, and the configuration owns the
+	// vocabulary that names them, so no third comparison reads the string.
+	Decisions bool
 }
 
 // HTTPClient is a thin OpenAI-compatible chat-completions client.

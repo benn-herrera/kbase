@@ -13,7 +13,7 @@ import (
 	"kbase/internal/kb"
 )
 
-// Names the tree carries, as kb_tools' document graph spells them.
+// The names the tree carries.
 const (
 	entryPointTitle = "Knowledge Base"
 	assetDir        = "assets"
@@ -120,8 +120,8 @@ var frontmatterKeyRe = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*):(.*)$`)
 // parseFrontmatter splits the metadata block -s puts at the head of the
 // rendering off the body, reads each key's value as text, and classifies the
 // keys it carries: an entry the writer dropped is no key here. Every value is
-// read as kb_tools reads it, line by line rather than as typed YAML, so a title
-// that would not parse back as one string is still its text.
+// read line by line rather than as typed YAML, so a title that would not parse
+// back as one string is still its text.
 func parseFrontmatter(markdown string) (frontmatter, error) {
 	lines := kb.Lines(markdown)
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {

@@ -351,8 +351,8 @@ func TestHTTPClientListModelsErrorScrubs(t *testing.T) {
 	}
 }
 
-// TestHTTPClientWiresTheChatShape: the request Chat makes reaches the wire as
-// kb_tools' call shape — `temperature: 0` PRESENT, not omitted as it would be
+// TestHTTPClientWiresTheChatShape: the request Chat makes reaches the wire in
+// the call shape — `temperature: 0` PRESENT, not omitted as it would be
 // with `omitempty`; thinking disabled; no completion cap.
 func TestHTTPClientWiresTheChatShape(t *testing.T) {
 	var rawBody []byte
@@ -375,7 +375,7 @@ func TestHTTPClientWiresTheChatShape(t *testing.T) {
 		t.Errorf("expected literal `\"temperature\":0` in body: %s", rawBody)
 	}
 	if _, ok := asMap["max_tokens"]; ok {
-		t.Errorf("max_tokens sent; kb_tools sends none: %s", rawBody)
+		t.Errorf("max_tokens sent; the request must carry none: %s", rawBody)
 	}
 	ctk, ok := asMap["chat_template_kwargs"].(map[string]any)
 	if !ok || ctk["enable_thinking"] != false {

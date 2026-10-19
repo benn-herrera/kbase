@@ -11,7 +11,7 @@ import (
 	"kbase/internal/kb"
 )
 
-// validateBuild is kb_tools' post-build validation over the tree as it lies
+// validateBuild is the post-build validation over the tree as it lies
 // on disk: every document leaf discovery sees is reachable down from the entry
 // point and up-linked to its own parent index.
 func validateBuild(kbRoot string) ([]Finding, error) {

@@ -51,10 +51,9 @@ func Items(findings []Finding) []result.Item {
 // frontmatter block.
 const CheckFrontmatterPresence = "frontmatter"
 
-// Verify is the standard check kb_tools' kb-verify makes of the KB src reads —
-// the dead-link and unknown-id gate over kb-root/, then the metadata gate —
-// and returns every finding. The error is a failure to read the KB, never a
-// finding.
+// Verify is the standard check of the KB src reads — the dead-link and
+// unknown-id gate over kb-root/, then the metadata gate — and returns every
+// finding. The error is a failure to read the KB, never a finding.
 func Verify(src *kb.Source) ([]Finding, error) {
 	links, err := LinkFindings(src)
 	if err != nil {

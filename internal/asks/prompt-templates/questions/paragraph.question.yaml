@@ -1,9 +1,9 @@
 # The paragraph ask's question: does the paragraph state a result of its own?
-# Derived from kb_tools' paragraph.tmpl.md: the per-option bullets are the
-# criteria, the closing question the instructions, and the offered letters
-# reach it only as composer constants, as they reach the state template. The
-# criteria are keyed true/false — a noul answer is one P(true) figure — and
-# true-letter names the offered letter whose criterion "true" is.
+# The per-option bullets are the criteria, the closing question the
+# instructions, and the offered letters reach it only as composer constants,
+# as they reach the state template. The criteria are keyed true/false — a
+# noul answer is one P(true) figure — and true-letter names the offered letter
+# whose criterion "true" is.
 type: noul
 true-letter: "@!letter-claim!@"
 instructions: |-

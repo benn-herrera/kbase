@@ -78,8 +78,8 @@ func readVolume(doc node, names map[string]string, keysOnly bool) (outline, []dr
 }
 
 // margin is where a block's first line sits on the page: at the page's own
-// margin, at the margin of a blockquote one level deep, or neither. kb_tools'
-// reader reads a label line only at a one-level quote's margin, and the
+// margin, at the margin of a blockquote one level deep, or neither. A reader
+// reads a label line only at a one-level quote's margin, and the
 // transform's labelled blockquote puts its own there only from the page's.
 type margin int
 
@@ -132,8 +132,8 @@ func (c *volumeReader) at(s site, v any, quoted bool) {
 
 // quote walks a blockquote's content. A block whose label line is read inside
 // it, with no readable block around it, hosts what follows it to the quote's
-// end: kb_tools hosts a fact in the first block whose extent covers it, and
-// every extent in one quote ends where the quote does.
+// end: a fact is hosted by the first block whose extent covers it, and every
+// extent in one quote ends where the quote does.
 func (c *volumeReader) quote(content any, m margin) {
 	saved := len(c.within)
 	c.walk(content, true, m)
@@ -287,9 +287,9 @@ func pageLabel(inlines []any) (name, id string, ok bool) {
 	return b.String(), id, labelNameRe.MatchString(b.String())
 }
 
-// block records an author's block where kb_tools' reader reads its label
-// line; one it cannot read is no block to it, and the facts inside host to
-// the enclosing block it does read.
+// block records an author's block where its label line is read; one that
+// cannot be read is no block, and the facts inside host to the enclosing block
+// that is read.
 func (c *volumeReader) block(id, name string, content []any, m margin) {
 	if !labelLineRead(name, m == pageMargin) {
 		c.quote(content, m.inside())

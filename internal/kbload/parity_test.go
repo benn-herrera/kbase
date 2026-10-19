@@ -477,17 +477,16 @@ func declaredNow(t *testing.T, src *kb.Source) map[string]string {
 type parityCase struct{ name, kbRoot string }
 
 // parityCases is the committed 0.9.0 KBs — the migration's golden input, the
-// loose node shapes, and a KB kb_tools built in 0.9.0 (its claim-graph sheet
-// fixture at the adjagent commit adjagent-commit.txt names, the last before
-// kb_tools adopted 1.0.0) — and each kbtools-ref KB under test_data/transient
-// that is in the 0.9.0 form. kb_tools builds 1.0.0 since that adoption, so a
-// kbtools-ref KB staged after it is not 0.9.0 and is no case.
+// loose node shapes, and a KB built in 0.9.0 (the claim-graph sheet fixture at
+// the adjagent commit adjagent-commit.txt names) — plus whatever a local
+// reference clone left under test_data/transient in the 0.9.0 form. That commit
+// is where the 1.0.0 format begins, so a KB staged after it is no 0.9.0 case.
 func parityCases(t *testing.T) []parityCase {
 	t.Helper()
 	cases := []parityCase{
 		{"migrate goldens", "../migrate/testdata/0.9.0/kb-root"},
 		{"loose node shapes", "testdata/loose-0.9.0/kb-root"},
-		{"kb_tools-built", "testdata/kbtools-0.9.0/kb-root"},
+		{"0.9.0-built", "testdata/0.9.0/kb-root"},
 	}
 	refs, _ := filepath.Glob("../../test_data/transient/kbtools-ref/*/" + kb.KBDir)
 	for _, r := range refs {

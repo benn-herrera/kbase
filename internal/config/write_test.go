@@ -199,7 +199,7 @@ func TestUpdateConfigInsertsMissingKeys(t *testing.T) {
 		src  string
 		want string // the whole file after the update
 	}{{
-		name: "a tier is added to the end of its table",
+		name: "a category is added to the end of its table",
 		src:  "provider = \"old\"\n\n[models]\ndecision = \"old-decision\"\n\n[other]\nk = 1\n",
 		want: "provider = \"" + newProvider + "\"\n\n[models]\ndecision = \"" + decisionModel + "\"\n" +
 			"text = \"" + textModel + "\"\n\n[other]\nk = 1\n",

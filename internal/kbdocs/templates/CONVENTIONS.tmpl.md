@@ -1,8 +1,8 @@
 # CONVENTIONS — {project-name} knowledge base
 
 How to behave when operating on this knowledge base. The formats it conforms to are the toolchain's
-own — every metadata byte here was composed by a write op from values a seat supplied, and an op
-refuses values it cannot render and read back. This file is conduct, not format.
+own — what a write op composes here was composed from values a seat supplied, and an op refuses
+values it cannot render and read back. This file is conduct, not format.
 
 ## What this tree is
 
@@ -21,50 +21,45 @@ becomes one.
 
 ## Use the agents
 
-- `kb-docent` — reading and navigation, through `/kb-start` and `/kb-next`. Read-only on the KB;
-  writes only under `session/`.
+- The `kbase` skill — how the KB is reached: it locates this tree and routes to reading, maintenance
+  or building.
 - `kb-maintainer` — every change: new leaves, corrections, frontmatter, claim-graph wiring, and the
   loop back to green.
-- The build (`kbase build`, or kb_tools' `/kb-build`) built this tree. It is not rerun for
+- A build (`kbase build`) writes this tree where it does not already stand; it is not rerun for
   incremental work.
 
-Run `/kb-start` and `/kb-next` from the project root — the directory holding this KB — or from
-inside the KB root itself. Those are the two invocation points the commands support; anywhere else
-they stop and ask. Once a session is running, do not change directory while exploring: navigation is
-the docent's job, and moving the session's ground out from under it breaks the paths it is tracking.
+The skill locates this KB itself. Once it has, do not change directory while exploring: navigation
+is the reading route's job, and moving the session's ground out from under it breaks the paths it
+is tracking.
 
-Working the KB without them is the failure this file exists to prevent. The constraints below are
-not discoverable by reading the files, and an edit that looks right while violating one of them
+Working the KB without the skill is the failure this file exists to prevent. The constraints below
+are not discoverable by reading the files, and an edit that looks right while violating one of them
 either fails at the gate or passes and leaves the graph quietly wrong.
 
-## Two toolchains
+## The toolchain
 
-Two toolchains maintain this KB, and each reads and writes what the other does: **kbase**, a single
-binary run from the project root, and **kb_tools**, a Python package installed under the project's
-`.claude/agents/`, or under `.opencode/agents/` with opencode, which then replaces `.claude/agents`
-in the commands below. Pick either for a piece of work and stay
-with it until the gate is green.
+kbase, a single binary run from the project root, maintains this KB.
 
-| Operation | kbase | kb_tools |
-|---|---|---|
-| A metadata write | `kbase <op>`, values as YAML on stdin or in a `--values` file | `PYTHONPATH=<project-root>/.claude/agents python3 -m kb_tools.kb_util <op> --values <file.toml>` |
-| The op list | `kbase --help`; `kbase <op> --help` | `... -m kb_tools.kb_util --help`; `... -m kb_tools.kb_util <op> --help` |
-| Regenerate derived state | `kbase refresh` | the runner's `kb-refresh` target |
-| The read-only gate | `kbase verify` | the runner's `kb-verify` target |
-| Claim-graph counts | `kbase stats` | the runner's `kb-stats` target |
+| Operation | Command |
+|---|---|
+| A metadata write | `kbase <op>`, values as YAML on stdin or in a `--values` file |
+| The op list | `kbase --help`; `kbase <op> --help` |
+| Regenerate derived state | `kbase refresh` |
+| The read-only gate | `kbase verify` |
+| Claim-graph counts | `kbase stats` |
 
-The ops carry the same names on both sides. kbase writes one YAML document to stdout per command,
-its `outcome` key the result — `refused` (exit 1) and `retry` (exit 2) are kb_tools' 7 and 8;
-kb_tools prints report lines. kb_tools runs under the `python3` first
-on `PATH`, which must be 3.11 or later, standard library only. The toolchains' prose contracts stay
-in their source repositories and are not installed into a consuming project, so no document under
-this project root holds them.
+Every subcommand but `help`, `completion` and `mcp` writes one YAML document to stdout, its
+`outcome` key the result: `refused` exits 1, `retry` exits 2, and `kbase --help` states the whole
+exit table. kbase's prose contract stays in its source repository and is not installed into a
+consuming project, so no document under this project root holds it.
 
 Where the harness has MCP, the `kbase` MCP server (`kbase mcp --kb-root <path>`) offers kbase's
-subcommands as tools, one to one, under the same names and returning the same documents, so what
-this file says of a subcommand holds for its tool; a write op's values are its tool's arguments,
-one entry per call. A document whose exit code is not 0, a refusal among them, arrives as a tool
-error carrying the same items and remedy, and the tool list implies no order of work.
+subcommands as tools, under the same names and returning the same documents, so what this file says
+of a subcommand holds for its tool; a write op's values are its tool's arguments, one entry per
+call. `rewind-build` is the one exception: no subcommand stands behind it; read-only, it reports the
+build's trail and changes nothing. A document whose exit code is not 0, a refusal among them,
+arrives as a tool error carrying the same items and remedy, and the tool list implies no order of
+work.
 
 ## Authored versus derived
 
@@ -84,10 +79,9 @@ have made anyway is what answers the question.
 ## The gate
 
 Refresh regenerates derived state; verify is the read-only gate. Refresh before verify, always, and
-leave the gate green. Run kb_tools' refresh and verify through this project's runner targets rather than invoking its modules
-directly. A failure marked refresh-fixable means run refresh; anything else is a real defect in what
-was authored, and re-running will not clear it. kbase's verify also lists every `demoted` edge under
-`findings`, which are not failures; kbase's `resolve-demoted` removes one or restores it to
+leave the gate green. A failure marked refresh-fixable means run refresh; anything else is a real
+defect in what was authored, and re-running will not clear it. `verify` also lists every `demoted`
+edge under `findings`, which are not failures; `resolve-demoted` removes one or restores it to
 `depends`, refusing a restore that would close a cycle.
 
 `claim-graph.svg` and `claim-graph-digest.svg` beside this file and `<volume>/claim-graph.svg` in
@@ -95,19 +89,19 @@ each volume are the derived files no verifier reads; the digest and the volume s
 the KB holds two or more volumes with claims. Refresh redraws them on every run, so a hand
 edit to one is not reported — the next refresh overwrites it. kbase draws them through Graphviz
 `dot`; without `dot` on `PATH` it draws nothing, leaves existing sheets as they stand, and writes a
-placeholder `claim-graph.svg` only where none exists. Both toolchains' link checks cover `kb-root/` only, and every verify failure is the
-same failure on both sides.
+placeholder `claim-graph.svg` only where none exists. Only documents under `kb-root/` are
+link-checked; a target resolves against the whole repository.
 
 ## Where things may be written
 
 Create files only at targets an assignment names. Output with no assigned home is a question to
 raise, never a location to choose.
 
-`AGENTS.md` and `CONVENTIONS.md` in this tree belong to the build, not to work done in the KB
-afterwards: the build stamps them at its validation gate — `AGENTS.md` carrying this project's
-scope pin — and leaves whole whichever of them a project had already authored for itself. Beside
-them the same stamp writes `CLAUDE.md` as the one line `@AGENTS.md`. No agent authors or edits any
-of the three, and corpus content belongs in none — it belongs in `invariants.md`.
+`AGENTS.md` and `CONVENTIONS.md` in this tree belong to the toolchain, not to work done in the KB
+afterwards: kbase stamps them where none stands — at birth through `kbase init`, at a build's
+validation gate — and leaves whole whichever of them a project had already authored for itself.
+Beside them the same stamp writes `CLAUDE.md` as the one line `@AGENTS.md`. No agent authors or
+edits any of the three, and corpus content belongs in none — it belongs in `invariants.md`.
 
 ## Citations
 

@@ -9,8 +9,7 @@ import (
 
 // LinkFindings is the dead-link gate over kb-root/ and the claim-id link
 // check: every node id a document names must be a node .index/claims.yaml
-// records. A dead link whose target leaves the repository is not a finding,
-// as kb_tools reports such a link without gating on it.
+// records. A dead link whose target leaves the repository is not a finding.
 func LinkFindings(src *kb.Source) ([]Finding, error) {
 	root := src.Root()
 	dead, err := kb.DeadLinksIn(src, src.Repo())

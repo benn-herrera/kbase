@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/tech_writer.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=sonnet tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: tech-writer
-description: "Authors and revises technical documentation: READMEs, architecture docs, API references, contributing guides, getting-started guides, changelogs. Scope: technical writing only — not essays, prose, or long-form narrative writing. Also the reviewer seat for technical documentation — audits docs against the code for accuracy and audience fit; dispatched to review, reports findings and modifies nothing."
+description: "Authors and revises technical documentation: READMEs, architecture docs, API references, guides and changelogs. Technical writing only — not essays, prose or long-form narrative. Also the reviewer seat for documentation — reports findings and modifies nothing."
 model: sonnet
 color: "#14B8A6"
 ---

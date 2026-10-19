@@ -1,6 +1,6 @@
-// Package query answers kb_tools' kb_cmd questions over a KB's derived index:
-// the .index/*.yaml files loaded record by record as kb_cmd loads its
-// index, and each query's payload shaped as kb_cmd --json shapes it.
+// Package query answers questions over a KB's derived index: the
+// .index/*.yaml files loaded record by record, and each query's payload
+// shaped for its result document.
 package query
 
 import (

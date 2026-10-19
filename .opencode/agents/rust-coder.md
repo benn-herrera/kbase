@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/rust_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Rust implementation specialist. Writes idiomatic, minimal Rust — explicit errors, ownership-first, no needless unsafe. Covers traits, concurrency, FFI, the build system, testing, and performance. Parallel-execution safe. Prefer over generalist-coder for userspace Rust work of any kind."
+description: "Rust implementation specialist. Prefer over generalist-coder for userspace Rust work of any kind."
 color: "#dea584"
 mode: subagent
 ---

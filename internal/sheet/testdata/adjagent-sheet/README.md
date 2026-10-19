@@ -1,15 +1,14 @@
 # claim-graph-sheet — the claim-graph sheets' input and their DOT goldens
 
-`kb_tools/claim_sheet.py` reads a KB root's `.index/`, the H1s of `entry-point.md` and each
+The sheet composer reads a KB root's `.index/`, the H1s of `entry-point.md` and each
 volume's `index.md`, the leaves hosting its claims, and the unmarked-reference build record beside
 `kb-root/`. This directory is such a repository: `kb-root/` holds the index, the title documents and
 two leaves and nothing else of a KB (no registers), and the build record sits beside it.
-`test_claim_sheet.py` loads it, composes the sheets and byte-compares them with the three goldens
-here. `kb_load.read_index` finding no line in `.index/` that is not a record is the check that
-they stay well-formed. Every file is in KB metadata format `1.0.0`.
+kbase's sheet tests load it, compose the sheets and byte-compare them with the three goldens
+here. Every line of `.index/` is a record, which is what keeps the fixture well-formed.
+Every file is in KB metadata format `1.0.0`.
 
-These are inputs to tests only: `INSTALL_EXCLUDED_DIRS` carries `tests`, so nothing under
-`kb_tools/tests/` reaches a consuming project.
+These are inputs to tests only.
 
 | File | What it is |
 |---|---|
@@ -35,7 +34,7 @@ These are inputs to tests only: `INSTALL_EXCLUDED_DIRS` carries `tests`, so noth
   (`clm-aaa004`). An equation with no marker is read by
   its title, as every equation is; four more claims fall back to the title and are counted: claims
   no leaf cites, and one whose cited leaf does not exist.
-- **Edges.** Every relation in `kb_schema.EDGE_RELATIONS`. A cross-volume `depends`. An inferred
+- **Edges.** Every relation the schema defines. A cross-volume `depends`. An inferred
   `depends` (the unmarked record's "points" letter) and a cited one the unmarked record answered
   "does not point". A `references` pair in both directions, neither drawn. Two `demoted` rows, one
   per origin: `inferred` within `alpha`, and `cited`, carrying a context, from `beta` into `alpha`,

@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/linux_app_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: linux-app-expert
-description: "Linux desktop development: GTK/Qt, D-Bus, systemd, X11/Wayland, XDG standards, native APIs (ALSA, V4L2, udev, inotify), packaging (deb/rpm/AppImage/Flatpak/Snap). Prefer over generalist-coder for any Linux desktop target."
+description: "Linux desktop development: GTK/Qt, D-Bus, systemd, X11/Wayland, native APIs (V4L2, udev, inotify) and packaging (deb/rpm/AppImage/Flatpak/Snap). Prefer over generalist-coder for any Linux desktop target."
 model: opus
 color: "#FCC624"
 ---

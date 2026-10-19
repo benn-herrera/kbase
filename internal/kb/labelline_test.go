@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestLabelLine: testdata/label-lines.jsonl is each line and the name kb_tools'
-// LABEL_LINE_RE reads from it, null for none. The claim graph's test reads
+// TestLabelLine: testdata/label-lines.jsonl is each line and the name
+// LabelLine reads from it, null for none. The claim graph's test reads
 // the same file.
 func TestLabelLine(t *testing.T) {
 	data, err := os.ReadFile("testdata/label-lines.jsonl")

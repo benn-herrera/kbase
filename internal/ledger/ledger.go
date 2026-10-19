@@ -60,7 +60,7 @@ func Open(dir string, owned []string, lg log.Logger) (*Repo, error) {
 
 // Entry is one boundary commit.
 type Entry struct {
-	Stage, Commit, Body string
+	Stage, Commit, Subject, Body string
 }
 
 // Trail is every boundary commit reachable from HEAD, newest first. A branch
@@ -80,10 +80,19 @@ func (r *Repo) Trail() ([]Entry, error) {
 			continue
 		}
 		if m := subjectRE.FindStringSubmatch(parts[1]); m != nil {
-			trail = append(trail, Entry{Stage: m[1], Commit: parts[0], Body: strings.TrimSpace(parts[2])})
+			trail = append(trail, Entry{Stage: m[1], Commit: parts[0], Subject: parts[1], Body: strings.TrimSpace(parts[2])})
 		}
 	}
 	return trail, nil
+}
+
+// Head is the commit HEAD names, "" on a branch with no commits.
+func (r *Repo) Head() (string, error) {
+	out, err := r.run("rev-parse", "--verify", "--quiet", "HEAD")
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // Record commits the owned paths as the boundary of stage, its subject
@@ -126,7 +135,19 @@ func (r *Repo) commit(subject, body string) (string, error) {
 // Dirty is every owned path git reports changed, staged or untracked, root
 // relative; ignored files are not dirt.
 func (r *Repo) Dirty() ([]string, error) {
-	out, err := r.run(append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--"}, r.owned...)...)
+	return r.status(append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--"}, r.owned...)...)
+}
+
+// DirtyTree is every path git reports changed in the worktree, staged or
+// untracked, root relative, with no pathspec so the whole worktree is reported;
+// ignored files are not dirt.
+func (r *Repo) DirtyTree() ([]string, error) {
+	return r.status("status", "--porcelain=v1", "-z", "--untracked-files=all")
+}
+
+// status is the changed paths of one porcelain read.
+func (r *Repo) status(args ...string) ([]string, error) {
+	out, err := r.run(args...)
 	if err != nil {
 		return nil, err
 	}

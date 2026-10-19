@@ -304,9 +304,10 @@ func or(s, fallback string) string {
 	return s
 }
 
-// The tree's link relation: every document's up-link and child list. kb_tools
-// reads it two ways, and each reader here ports one of them; the export's
-// child-list reading (childlist.go) is a third.
+// The tree's link relation: every document's up-link and child list. Three
+// readers take it here — TreeLinks as the claim graph reads it, DeclaredLinks
+// as the build validator reads it, and the export's child-list reading
+// (childlist.go).
 
 // ResolveLink is target, written in the document at source, as a
 // kb-root-relative path.
@@ -314,11 +315,11 @@ func ResolveLink(source, target string) string { return path.Join(path.Dir(sourc
 
 var urlSchemeRE = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
 
-// TreeLinks is a document's place in the tree as the claim graph reads it
-// (kb_claimgraph's tree.read): the parent its up-link names — the first .md
-// link on the up-link line, the first line after the frontmatter, where that
-// line carries UplinkMarker — and its children, every .md link on any other
-// line of the body in the order written, duplicates dropped, each resolved.
+// TreeLinks is a document's place in the tree as the claim graph reads it: the
+// parent its up-link names — the first .md link on the up-link line, the first
+// line after the frontmatter, where that line carries UplinkMarker — and its
+// children, every .md link on any other line of the body in the order written,
+// duplicates dropped, each resolved.
 // Links inside code are not links.
 func TreeLinks(source, text string) (parent string, hasParent bool, children []string) {
 	text = StripFrontmatter(text)
@@ -350,8 +351,8 @@ func TreeLinks(source, text string) (parent string, hasParent bool, children []s
 }
 
 // DeclaredLink is one link a document declares as the build validator reads
-// it (kb_survey's validate): an inline link, an up-link where its text carries
-// UplinkMarker, or a reference definition.
+// it: an inline link, an up-link where its text carries UplinkMarker, or a
+// reference definition.
 type DeclaredLink struct {
 	Target string
 	Up     bool

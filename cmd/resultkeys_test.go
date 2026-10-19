@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // documentedKeys is each subcommand's own result keys, in their documented
 // order: the contract a model reading a result relies on.
 var documentedKeys = map[string][]string{
-	"build":              {"state-dir", "through", "no-inference", "resumed", "restored", "stages", "resume"},
+	"build":              {"state-dir", "provider", "provider-rule", "provider-layer", "through", "no-inference", "resumed", "restored", "stages", "resume"},
 	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
 	"cancel":             {"state-dir", "pid", "resume"},
 	"init":               {"written", "removed"},
@@ -28,8 +29,9 @@ var documentedKeys = map[string][]string{
 	"list-query":         {"count", "offset", "truncated", "results"},
 	"mapping-query":      {"results"},
 	"render-claim-graph": {"written", "removed", "sheet", "dot"},
-	"models":             {"provider", "models"},
-	"configure":          {"provider", "models", "written"},
+	"models":             {"provider", "provider-rule", "provider-layer", "models"},
+	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
+	"show-config":        {"layers", "providers", "config", "environment", "selection", "inference", "diagnostics"},
 	"export-latex":       {"written", "volumes", "report"},
 }
 
@@ -41,6 +43,11 @@ var documentedSubKeys = map[string][]string{
 	"write-op.adopted":         {"entry", "id", "differs"},
 	"resolve-demoted.resolved": {"source", "target", "action"},
 	"configure.models":         {"decision", "text"},
+	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
+	"show-config.providers":    {"name", "base-url", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
+	"show-config.config":       {"provider", "models"},
+	"show-config.selection":    {"provider", "rule", "detail"},
+	"show-config.inference":    {"name", "base-url", "decision", "text", "sources"},
 	"cancelled":                {"stage", "unit"},
 	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
@@ -55,6 +62,9 @@ func keysFor(verb string) string {
 		return "write-op"
 	case verb == "show" || verb == "stats":
 		return "mapping-query"
+	case verb == "wait":
+		// wait prints the status document for the store it waited on.
+		return "status"
 	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "solidity-below", "subtree", "weak-points"}, verb):
 		return "list-query"
 	}
@@ -145,7 +155,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		t.Fatalf("%s: keys %q, want outcome first", verb, keys)
 	}
 	keys = keys[1:]
-	if verb != "models" && verb != "configure" && len(keys) > 0 && keys[0] == "kb-root" {
+	if verb != "models" && verb != "configure" && verb != "show-config" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 	} else if verb == "init" {
 		// A kb-root refusal names a standing kb-root/, so the document must
@@ -201,10 +211,16 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		nested(key, "item")
 	}
 	nested(toolresult.CancelledKey, "cancelled")
-	for _, sub := range []string{"stages", "current", "adopted", "resolved", "models"} {
-		if _, ok := documentedSubKeys[entry+"."+sub]; ok {
-			nested(sub, entry+"."+sub)
+	// Every record the table nests under this verb's result is checked, in the
+	// table's own names: a record naming a key the table does not document, or
+	// stating its keys out of order, fails here, and a nested record added to
+	// the table needs nothing else to be checked.
+	for _, documented := range slices.Sorted(maps.Keys(documentedSubKeys)) {
+		sub, ok := strings.CutPrefix(documented, entry+".")
+		if !ok || strings.Contains(sub, ".") {
+			continue
 		}
+		nested(sub, documented)
 	}
 	return d
 }

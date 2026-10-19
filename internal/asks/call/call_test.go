@@ -30,7 +30,7 @@ type decisions struct {
 	calls   []model.DecisionRequest
 }
 
-func (d *decisions) SystemOne(_ context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+func (d *decisions) Decision(_ context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, req)
@@ -43,11 +43,11 @@ func (d *decisions) SystemOne(_ context.Context, req model.DecisionRequest) (mod
 }
 
 func (d *decisions) Consult(context.Context, model.Request) (model.Response, error) {
-	return model.Response{}, errors.New("the decision asks go over SystemOne")
+	return model.Response{}, errors.New("the decision asks go over Decision")
 }
 
 func (d *decisions) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
-	return nil, errors.New("the decision asks go over SystemOne")
+	return nil, errors.New("the decision asks go over Decision")
 }
 
 func (d *decisions) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
@@ -182,6 +182,33 @@ func TestAReaskReachesTheModel(t *testing.T) {
 	cached, _ := filepath.Glob(filepath.Join(scratch, AnswersDir, "*.json"))
 	if len(cached) != 4 {
 		t.Errorf("cached answers = %q, want one per ask including the re-asks", cached)
+	}
+}
+
+// TestARefusalTakesTheReaskThenTheDefault: the Decisions surface's refusal
+// answer says the model declined and carries no value at all, so the seam
+// reads it as unreadable — the identical question asked once more, then the
+// item defaulted when that is refused too.
+func TestARefusalTakesTheReaskThenTheDefault(t *testing.T) {
+	refusals := &decisions{answers: []model.DecisionAnswer{
+		{Key: "S1", Type: "refusal"},
+		{Key: "S1", Type: "refusal"},
+	}}
+	read := New(refusals, t.TempDir(), log.Discard()).Letters("m-decision")
+	rec, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1"), read, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refusals.calls) != 2 {
+		t.Fatalf("%d calls, want the refusal re-asked once", len(refusals.calls))
+	}
+	first, again := refusals.calls[0].Questions[0], refusals.calls[1].Questions[0]
+	if refusals.calls[1].State != refusals.calls[0].State ||
+		again.Key != first.Key || again.Type != first.Type || again.Instructions != first.Instructions {
+		t.Error("the re-ask is not the identical question")
+	}
+	if rec.Items[0].Outcome != asks.Defaulted {
+		t.Errorf("S1 = %s, want the refused answer defaulted", rec.Items[0].Outcome)
 	}
 }
 

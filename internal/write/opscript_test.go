@@ -24,13 +24,13 @@ import (
 // fixture, applies the steps through each toolchain, then runs
 // TestCompareOpScript. Without their flags both skip.
 var (
-	opscriptScript = flag.String("opscript.script", "", "the op script, test_data/fixtures/compat/ops.yaml")
-	opscriptKBRoot = flag.String("opscript.kbroot", "", "the kb-root the placeholders are resolved against")
-	opscriptOut    = flag.String("opscript.out", "", "where the rendered steps are written")
-	opscriptKbase  = flag.String("opscript.kbase", "", "the kb-root kbase's run left")
-	opscriptTools  = flag.String("opscript.kbtools", "", "the kb-root kb_tools' run left")
-	opscriptIDs    = flag.String("opscript.ids", "", "a file of 'name kbase-id kbtools-id' lines, one per minted id")
-	opscriptResult = flag.String("opscript.comparison", "", "where the comparison is written")
+	opscriptScript    = flag.String("opscript.script", "", "the op script, test_data/fixtures/compat/ops.yaml")
+	opscriptKBRoot    = flag.String("opscript.kbroot", "", "the kb-root the placeholders are resolved against")
+	opscriptOut       = flag.String("opscript.out", "", "where the rendered steps are written")
+	opscriptKbase     = flag.String("opscript.kbase", "", "the kb-root kbase's run left")
+	opscriptReference = flag.String("opscript.reference", "", "the kb-root the reference run left")
+	opscriptIDs       = flag.String("opscript.ids", "", "a file of 'name kbase-id kbtools-id' lines, one per minted id")
+	opscriptResult    = flag.String("opscript.comparison", "", "where the comparison is written")
 )
 
 // mintToken is how a {minted:<name>} placeholder reaches the rendered steps;
@@ -220,7 +220,7 @@ func tomlValue(t *testing.T, n *yaml.Node) string {
 	return ""
 }
 
-// renderTOML is a values document as kb_tools' values file: one [[entry]]
+// renderTOML is a values document in the reference's file form: one [[entry]]
 // table per entry.
 func renderTOML(t *testing.T, values *yaml.Node) string {
 	t.Helper()
@@ -239,8 +239,8 @@ func renderTOML(t *testing.T, values *yaml.Node) string {
 }
 
 // TestStageOpScript renders the op script against one KB: per step
-// NN-<op>.yaml for kbase and NN-<op>.toml for kb_tools, steps.tsv naming each
-// step's number, op, --create and minted name, and choice.yaml recording
+// NN-<op>.yaml for kbase and NN-<op>.toml for the reference, steps.tsv naming
+// each step's number, op, --create and minted name, and choice.yaml recording
 // what the placeholders became.
 func TestStageOpScript(t *testing.T) {
 	if *opscriptScript == "" {
@@ -308,9 +308,9 @@ var (
 	jsonStringsRE = regexp.MustCompile(`\[("[^"\\]*"(?:, "[^"\\]*")*)\]`)
 )
 
-// comparable is a file's text with kb_tools' minted ids spelled as kbase's
-// and the order of id lists dropped — a frontmatter list, a JSON array of
-// strings, an index file's records: the ids are random on each side, so
+// comparable is a file's text with the reference's minted ids spelled as
+// kbase's and the order of id lists dropped — a frontmatter list, a JSON array
+// of strings, an index file's records: the ids are random on each side, so
 // anything ordered by id is ordered differently.
 func comparable(text string, rename *strings.Replacer, records bool) []string {
 	sorted := func(list string) string {
@@ -351,8 +351,8 @@ func treeFiles(t *testing.T, root string) map[string]string {
 }
 
 // TestCompareOpScript records every difference between the kb-root kbase's
-// run left and the one kb_tools' run left, a claim-graph sheet both runs left
-// with other content tagged as the one named exception, and fails on any
+// run left and the one the reference's run left, a claim-graph sheet both runs
+// left with other content tagged as the one named exception, and fails on any
 // other: a sheet one run left and the other did not is a difference.
 func TestCompareOpScript(t *testing.T) {
 	if *opscriptKbase == "" {
@@ -369,7 +369,7 @@ func TestCompareOpScript(t *testing.T) {
 		}
 	}
 	rename := strings.NewReplacer(pairs...)
-	kbase, tools := treeFiles(t, *opscriptKbase), treeFiles(t, *opscriptTools)
+	kbase, tools := treeFiles(t, *opscriptKbase), treeFiles(t, *opscriptReference)
 	var paths []string
 	for p := range kbase {
 		paths = append(paths, p)
@@ -388,7 +388,7 @@ func TestCompareOpScript(t *testing.T) {
 		case !inTools:
 			diffs = append(diffs, difference{p, "content", "only in kbase's result"})
 		case !inKbase:
-			diffs = append(diffs, difference{p, "content", "only in kb_tools' result"})
+			diffs = append(diffs, difference{p, "content", "only in the reference's result"})
 		case a == b:
 		default:
 			records := path.Base(path.Dir(p)) == kb.IndexDir && path.Ext(p) == kb.IndexFileExt
@@ -425,7 +425,7 @@ func firstDifference(kbase, tools []string) string {
 			b = tools[i]
 		}
 		if a != b {
-			return fmt.Sprintf("line %d: kbase %q, kb_tools %q", i+1, a, b)
+			return fmt.Sprintf("line %d: kbase %q, reference %q", i+1, a, b)
 		}
 	}
 	return ""

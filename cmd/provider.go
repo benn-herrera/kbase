@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/config"
+	"kbase/internal/kb"
 	"kbase/internal/model"
 	toolresult "kbase/internal/result"
 )
@@ -33,8 +34,23 @@ type newClientFunc func(model.Endpoint) model.Client
 // not entitled to name for itself. Verbs embed it and add their own fields,
 // so the shared half is described once, here.
 type providerOptions struct {
-	// Providers and Faults are LoadProviders' two returns: the usable pool
-	// and the entries that dropped out of it.
+	// Layers are the configuration directories this invocation read, in
+	// precedence order, as config.Layers resolved them.
+	Layers []config.Layer
+
+	// RepoRoot is the repository root this invocation resolved, "" outside a
+	// worktree. configure's --project is its one consumer: the layer it names
+	// is chosen whether or not it is in the read stack above.
+	RepoRoot string
+
+	// WriteDir is the configuration directory this invocation writes into —
+	// the layer config.WriteTarget names, and configure's --project may
+	// replace. A verb naming a pool entry the pool lacks points at that
+	// layer's providers.toml, the file the entry belongs in.
+	WriteDir string
+
+	// Providers and Faults are config.Load's two pool returns: the merged
+	// pool and the entries that dropped out of it.
 	Providers config.Providers
 	Faults    []config.ProviderFault
 
@@ -60,16 +76,18 @@ type providerOptions struct {
 }
 
 // dial resolves which pool entry this invocation talks to and opens a client
-// on it. It reports the faulted entries, applies the selection rules, builds
-// the endpoint, and derives the request deadline — the whole preamble every
-// provider-reaching verb runs before it has anything of its own to do.
+// on it. It reports the faulted entries, resolves the selection, builds the
+// endpoint, and derives the request deadline — the whole preamble every
+// provider-reaching verb runs before it has anything of its own to do. The
+// entry's name, the rule that named it and the layer that supplies it are
+// returned for the verb's result document.
 //
 // The deadline context is returned rather than applied internally because
 // the call it bounds is the caller's: release cancels it and must run once
 // the caller is done with the client.
 //
 // Stderr must be set; the verb checks that before it gets here.
-func (o providerOptions) dial(ctx context.Context) (name string, client model.Client, callCtx context.Context, release func(), err error) {
+func (o providerOptions) dial(ctx context.Context) (name string, rule providerRule, layer string, client model.Client, callCtx context.Context, release func(), err error) {
 	// A provider dropped from the pool is a warning, not a failure: the one
 	// being asked for may well have loaded. Fault reasons carry path and IO
 	// detail only, never key material. Like the errors below, they name no
@@ -85,13 +103,13 @@ func (o providerOptions) dial(ctx context.Context) (name string, client model.Cl
 		fmt.Fprintf(o.Stderr, "provider %q unavailable: %s\n", f.Name, f.Reason)
 	}
 
-	name, err = selectProviderName(o.Provider, o.Config.Provider, o.Providers)
-	if err != nil {
-		return "", nil, nil, nil, err
-	}
-	p, ok := o.Providers[name]
-	if !ok {
-		return "", nil, nil, nil, unresolvedProviderError(name, o.Providers, o.Faults)
+	// The selection rules are resolveProvider's, never a second copy here. A
+	// dial needs the entry, not the categories, so a resolution that lacks a
+	// category id is no fault of its own: only a selection that named no
+	// usable entry stops it.
+	r := resolveProvider(o, config.Overrides{})
+	if r.Unselected != nil {
+		return "", "", "", nil, nil, nil, r.Unselected
 	}
 
 	newClient := o.NewClient
@@ -106,8 +124,17 @@ func (o providerOptions) dial(ctx context.Context) (name string, client model.Cl
 		timeout = defaultListTimeout
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	return name, newClient(model.Endpoint{Name: name, BaseURL: p.BaseURL, APIKey: p.APIKey}), callCtx, cancel, nil
+	return r.Provider, r.Rule, r.Layer, newClient(model.Endpoint{
+		Name: r.Inference.Name, BaseURL: r.Inference.BaseURL, APIKey: r.Inference.APIKey,
+		Decisions: decisionsSurface(r.Inference.DecisionsFlavor),
+	}), callCtx, cancel, nil
 }
+
+// decisionsSurface is whether the decision surface a configured flavour names is
+// the OpenAI Decisions shape. The flavour vocabulary is configuration's — it
+// refuses a value it does not know at load — and the wire shapes are model's,
+// so the one mapping between the two lives here.
+func decisionsSurface(flavor string) bool { return flavor == config.FlavorDecisions }
 
 // catalogueIDs fetches the provider's catalogue and returns the model ids in
 // the order the provider listed them. Callers that show them to a human sort
@@ -126,7 +153,9 @@ func catalogueIDs(ctx context.Context, client model.Client) ([]string, error) {
 
 // selectProviderName resolves WHICH pool entry to reach: the --provider
 // flag, else config.toml's `provider`, else — only when the pool holds
-// exactly one usable entry — that entry.
+// exactly one usable entry — that entry. The second return names the rule
+// that answered, so a caller reporting the choice does not decide the
+// precedence a second time.
 //
 // There is deliberately no conventional default name. With several
 // endpoints declared and none chosen, any pick would send the request, and
@@ -137,26 +166,100 @@ func catalogueIDs(ctx context.Context, client model.Client) ([]string, error) {
 // every verb that reaches a provider, so none of them names a verb: a
 // message reading "models: ..." under `kbase configure` sends the user
 // looking at the wrong command. Verb-specific diagnostics keep their prefix.
-func selectProviderName(flag, configured string, providers config.Providers) (string, error) {
+//
+// providersFile is the absolute providers.toml of the layer this invocation
+// writes into — the file a user resolving either refusal must edit.
+func selectProviderName(flag, configured string, providers config.Providers, providersFile string) (string, providerRule, error) {
 	if name := strings.TrimSpace(flag); name != "" {
-		return name, nil
+		return name, providerRuleFlag, nil
 	}
 	if name := strings.TrimSpace(configured); name != "" {
-		return name, nil
+		return name, providerRuleConfig, nil
 	}
 	if len(providers) == 1 {
 		for name := range providers {
-			return name, nil
+			return name, providerRuleSoleEntry, nil
 		}
 	}
 	if len(providers) == 0 {
-		return "", itemError{toolresult.Item{Check: checkProvider, Path: config.ProvidersFileName,
-			Detail: fmt.Sprintf("no usable provider in %s — declare one there", config.ProvidersFileName)}}
+		return "", "", itemError{toolresult.Item{Check: checkProvider, Path: providersFile,
+			Detail: fmt.Sprintf("no usable provider in %s — declare one there", providersFile)}}
 	}
 	names := providerNames(providers)
-	return "", itemError{toolresult.Item{Check: checkProvider, Key: "--provider", Allowed: names,
+	return "", "", itemError{toolresult.Item{Check: checkProvider, Key: "--provider", Allowed: names,
 		Detail: fmt.Sprintf("no provider selected — pass --provider or set `provider` in %s (available: %s)",
 			config.ConfigFileName, strings.Join(names, ", "))}}
+}
+
+// providerRule names which of selectProviderName's rules chose a pool entry.
+type providerRule string
+
+const (
+	// providerRuleFlag is an explicit --provider.
+	providerRuleFlag providerRule = "flag"
+	// providerRuleConfig is config.toml's `provider`.
+	providerRuleConfig providerRule = "config"
+	// providerRuleSoleEntry is the pool's only usable entry.
+	providerRuleSoleEntry providerRule = "sole-entry"
+)
+
+// resolution is where this invocation's inference resolves to and what chose
+// it: the endpoint and category ids, the pool entry a selection rule named
+// (and which rule, from which layer), why no entry was named, and what the
+// configuration lacks when it does not resolve at all.
+type resolution struct {
+	Inference config.Inference
+	// Provider and Rule are the pool entry the selection rules named and
+	// the rule that named it; both are empty where none was selected.
+	Provider string
+	Rule     providerRule
+	// Layer is the configuration layer that supplied the selected entry,
+	// one of config.LayerSource*; empty where none was selected.
+	Layer string
+	// Unselected is why no pool entry was selected — the selection's own
+	// refusal, or the name's absence from the pool — and nil where one was.
+	Unselected error
+	// Err is what the configuration lacks for inference to resolve, nil
+	// when it resolves. A base URL the environment supplies resolves it
+	// with no pool entry selected at all.
+	Err error
+}
+
+// resolveProvider resolves where a verb's model calls go: the pool entry the
+// selection rules name, the endpoint and category ids the layers above the
+// files leave, and what the configuration lacks. It is the one resolution
+// function behind buildProvider and the show-config verb.
+func resolveProvider(p providerOptions, env config.Overrides) resolution {
+	name, rule, unselected := selectProviderName(p.Provider, p.Config.Provider, p.Providers, p.providersFile())
+	var r resolution
+	var entry *config.Provider
+	if unselected == nil {
+		if e, ok := p.Providers[name]; ok {
+			entry, r.Provider, r.Rule, r.Layer = &e, name, rule, e.Layer
+		} else {
+			unselected = unresolvedProviderError(name, p.Providers, p.Faults, p.providersFile())
+		}
+	}
+	r.Unselected = unselected
+	r.Inference, r.Err = config.ResolveInference(p.Config, entry, unselected, p.WriteDir, env)
+	return r
+}
+
+// providerFields is an endpoint's provenance in the order every result
+// document carries it: the pool entry the endpoint came from, the rule that
+// named it and the configuration layer that supplied the entry. It is empty
+// together where no pool entry supplied the endpoint — a base URL from the
+// environment, a configure that dials nothing — so a document never names an
+// entry without its rule and layer.
+func providerFields(name string, rule providerRule, layer string) []toolresult.Field {
+	if name == "" {
+		return nil
+	}
+	return []toolresult.Field{
+		{Key: "provider", Value: name},
+		{Key: "provider-rule", Value: string(rule)},
+		{Key: "provider-layer", Value: layer},
+	}
 }
 
 // checkProvider names a refusal of the provider choice.
@@ -178,18 +281,31 @@ func refusedOrFailed(fields []toolresult.Field, err error) (string, []toolresult
 	return failed(fields, err)
 }
 
+// providersFile is the providers.toml of the layer this invocation writes
+// configuration into: what a refusal sends the user to when the pool lacks the
+// entry they named. An options value built without a resolved layer — a unit
+// test's — leaves the file name bare, which is the whole path there is.
+func (o providerOptions) providersFile() string { return config.ProvidersPath(o.WriteDir) }
+
 // unresolvedProviderError explains a name that is not in the pool,
 // distinguishing a provider that FAULTED out of it from one that was never
 // declared. Without the distinction a dropped provider reads exactly like a
 // typo, and the user goes looking for the wrong mistake.
-func unresolvedProviderError(name string, providers config.Providers, faults []config.ProviderFault) error {
-	item := toolresult.Item{Check: checkProvider, Key: "--provider", Allowed: providerNames(providers),
-		Detail: fmt.Sprintf("provider %q not found in %s", name, config.ProvidersFileName)}
+//
+// providersFile is the absolute providers.toml of the layer this invocation
+// writes into, and names where a declaration would go. A name that faulted
+// keeps that file's own reason and gets no creation remedy: the file stands,
+// and what is wrong is the entry in it.
+func unresolvedProviderError(name string, providers config.Providers, faults []config.ProviderFault, providersFile string) error {
+	item := toolresult.Item{Check: checkProvider, Path: providersFile, Key: "--provider", Allowed: providerNames(providers),
+		Remedy: "kbase configure --create",
+		Detail: fmt.Sprintf("provider %q not found in %s — a pool entry there supplies baseUrl and apiKeyFile", name, providersFile)}
 	for _, f := range faults {
 		// A warning fault belongs to a provider that loaded, so it can
 		// never be the reason one is missing from the pool.
 		if f.Name == name && !f.Warning {
 			item.Detail = fmt.Sprintf("provider %q failed to load: %s", name, f.Reason)
+			item.Remedy = ""
 		}
 	}
 	return itemError{item}
@@ -206,26 +322,41 @@ func providerNames(providers config.Providers) []string {
 	return names
 }
 
-// loadVerbContext is the file-system half of a provider-reaching verb's
-// RunE: it resolves the configuration directory and loads both files out of
-// it, returning the directory (verbs that write need it) and the shared
-// options prefilled from what it read. Flag values and verb-specific fields
-// are the caller's to fill in — this helper is the part that is identical
-// for every verb, and the only part that touches the process.
-func loadVerbContext() (string, providerOptions, error) {
-	dir, err := resolveConfigDir()
+// loadVerbContext is the file-system half of a provider-reaching verb's RunE:
+// it resolves the configuration layers this invocation reads from workDir,
+// loads both files of each, and returns the shared options prefilled from what
+// it read — the layers, the repository root and the write target included, for
+// a verb that reports them or writes into one. Flag values and verb-specific
+// fields are the caller's to fill in — this helper is the part that is
+// identical for every verb, and the only part that touches the process's home
+// directory and the filesystem above workDir.
+func loadVerbContext(workDir string) (providerOptions, error) {
+	repoRoot, err := kb.RepositoryRoot(workDir)
 	if err != nil {
-		return "", providerOptions{}, err
+		return providerOptions{}, err
 	}
-	providers, faults, err := config.LoadProviders(config.ProvidersPath(dir))
+	layers, err := config.Layers(flagConfigDir, repoRoot)
 	if err != nil {
-		return "", providerOptions{}, err
+		return providerOptions{}, err
 	}
-	cfg, err := config.LoadConfig(config.ConfigPath(dir))
+	opts, err := loadConfigContext(layers)
 	if err != nil {
-		return "", providerOptions{}, err
+		return providerOptions{}, err
 	}
-	return dir, providerOptions{
+	opts.RepoRoot = repoRoot
+	opts.WriteDir = config.WriteTarget(layers, "")
+	return opts, nil
+}
+
+// loadConfigContext loads both configuration files of every layer into the
+// shared options a verb works from.
+func loadConfigContext(layers []config.Layer) (providerOptions, error) {
+	providers, faults, cfg, err := config.Load(layers)
+	if err != nil {
+		return providerOptions{}, err
+	}
+	return providerOptions{
+		Layers:    layers,
 		Providers: providers,
 		Faults:    faults,
 		Config:    cfg,
@@ -237,8 +368,14 @@ func loadVerbContext() (string, providerOptions, error) {
 // provider-reaching verb carries. action completes "pool entry ... to
 // <action>" in the --provider help text ("query", "configure").
 func registerProviderFlags(cmd *cobra.Command, provider *string, timeout *time.Duration, action string) {
-	cmd.Flags().StringVar(provider, "provider", "",
-		"pool entry from "+config.ProvidersFileName+" to "+action+" (default: the provider named in "+config.ConfigFileName+", else the sole entry)")
+	registerProviderFlag(cmd, provider, action)
 	cmd.Flags().DurationVar(timeout, "timeout", defaultListTimeout,
 		"deadline for the catalogue request")
+}
+
+// registerProviderFlag declares the --provider flag alone, for a verb that
+// selects a pool entry without making a request.
+func registerProviderFlag(cmd *cobra.Command, provider *string, action string) {
+	cmd.Flags().StringVar(provider, "provider", "",
+		"pool entry from "+config.ProvidersFileName+" to "+action+" (default: the provider named in "+config.ConfigFileName+", else the sole entry)")
 }

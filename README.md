@@ -41,17 +41,16 @@ just build
 Configure a provider. Skip this step for `--no-inference` builds.
 
 ```sh
-mkdir -p ~/.config/kbase
-cat > ~/.config/kbase/providers.toml <<'EOF'
-[local]
-baseUrl = "http://localhost:8000/v1"
-apiKeyFile = "local.key"
-EOF
+kbase configure --create                    # writes providers.toml and config.toml, offline
+$EDITOR ~/.config/kbase/providers.toml      # point [local] at your endpoint
+kbase models                                # the model ids it offers
 kbase configure --model-map decision=<model-id>,text=<model-id>
 ```
 
-`kbase models` lists the model ids the provider offers. Details are under
-[Configuration](#configuration).
+`configure --create` writes into `~/.config/kbase`, or into `<repository>/.kbase/` where that
+directory already stands; add `--project` to name the repository's `.kbase/` whether or not it
+exists. Without `--provider` it makes no request, so the ids it writes are unchecked — `kbase
+models` and the last command above check them. Details are under [Configuration](#configuration).
 
 Build a KB inside a git repository:
 
@@ -85,7 +84,7 @@ under [SPEC §8](SPEC.md).
 ## Building a KB
 
 ```
-kbase build <volume-root>... [--bibliography FILE]... [--charter FILE] [--no-inference]
+kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
             [--through <stage>] [--state-dir DIR]
 ```
 
@@ -94,7 +93,6 @@ kbase build <volume-root>... [--bibliography FILE]... [--charter FILE] [--no-inf
   without it.
 - **`--through <stage>`** stops after the named stage, by id or display name. A bounded run exits 0
   with outcome `bounded`.
-- **`--charter FILE`** records a statement of the build's scope as `kb-build-charter.md`.
 - **Refusals.** The build refuses outside a git worktree (run `git init`), against a populated
   `kb-root/` with no `kb-build:` commit trail, over dirty paths it owns, on unparseable source, on
   an include it cannot load, when a stage that calls a model has no provider configured, and while
@@ -122,8 +120,15 @@ into. It adds no edge: `depends-attributed` asks every surviving link its direct
 Each stage boundary is a commit in your repository, with subject `kb-build: <stage-id> | <display
 name>`. Run `kbase build` again with the same arguments and it resumes from the last boundary on the
 commit trail. After an interrupted stage, it restores the paths the build owns to the last stage
-commit and re-runs that stage. To go back further, reset to an earlier stage commit and resume from
-there.
+commit and re-runs that stage.
+
+To go back further, reset the repository to an earlier boundary and re-issue the build from there.
+`kbase status` names each stage's commit; over [MCP](#using-kbase-from-an-agent-harness-mcp) the
+`rewind-build` tool and the `kbase://build-trail` resource report the whole trail and, for a
+boundary you name, print both commands — the `git reset --hard` and the recorded re-issue — ready to
+run. The reset is yours: the tool reports it and changes nothing. It discards every boundary newer
+than the one you reset to, which the document counts as `discards`. A dirty worktree does not stop
+it; `dirty` lists what the reset would lose.
 
 A resume must be given the inputs the trail's newest boundary records: the commit body ends with a
 `volume-root:` line per volume root, then a `bibliography:` line per `--bibliography` file, in the
@@ -144,13 +149,17 @@ State that does not belong in the repository lives in `$XDG_STATE_HOME/kbase/<ke
 evidence, the answer cache, and the captured output of a build the MCP server started. It holds
 paid-for inference and survives `git clean`.
 
-The store is versioned: `<state-dir>/format` is `1`, and `build`, `status`, `cancel` and the MCP
-`build` tool refuse a newer store (`check: state-dir`). Each build prunes `reports/build-*` and
-`scratch/captures/` older than the fifth-latest ended build, and keeps the answer cache. `status`
-reports `cache-entries` and `cache-bytes`. Deleting the store is safe but forfeits the cache.
+The store is versioned: `<state-dir>/format` is `1`, and `build`, `status`, `wait`, `cancel`, the
+MCP `build` tool and the MCP `rewind-build` tool refuse a newer store (`check: state-dir`). Each build
+prunes `reports/build-*` and `scratch/captures/` older than the fifth-latest ended build, and keeps
+the answer cache. `status` reports `cache-entries` and `cache-bytes`. Deleting the store is safe but
+forfeits the cache.
 
 The run lock is not in the store: it is `kbase-build.lock` in the repository's git directory, so one
 build runs per repository whatever `--state-dir` each names.
+
+The build records are tracked at the repository root, as YAML: `kb-build-node-pass.yaml`,
+`kb-build-unmarked.yaml`, `kb-build-classification.yaml` and `kb-build-cull.yaml`.
 
 ## Maintaining a KB
 
@@ -167,13 +176,14 @@ The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`,
 for each one.
 
 - Write ops take values as YAML (JSON accepted) on stdin or `--values`. Re-issuing an op leaves
-  `kb-root/` byte-identical, and the second call reports `unchanged`.
-- Three write ops have no kb_tools counterpart. `drop-claim-edges` removes a claim's outgoing
+  `kb-root/` byte-identical, and the second call reports `unchanged`. An insert adopts an existing
+  entry of the same register and title instead of writing a second one.
+- Three write ops are kbase's own. `drop-claim-edges` removes a claim's outgoing
   `depends-on` or `references` bullets. `drop-inbound-edges` removes every bullet that names it.
   `drop-claim-node` deletes the node itself, and refuses while an edge or any other line still names
   it, so run the two edge ops first.
 - A write op ends with a `refresh` unless given `--no-refresh`. `kbase verify` then checks freshness
-  and links; the citation grammar is checked inside the build.
+  and links under `kb-root/`; the citation grammar is checked inside the build.
 - List queries return `--limit` results (default 50; `0` means all) from `--offset`, and report
   `count` and `truncated`. When `truncated` is true, re-issue with `--offset` at the offset plus the
   results returned.
@@ -195,7 +205,8 @@ reference. `verify` lists each under `findings` with outcome `done`, `stats` cou
 `target` and `action`: `remove` deletes the edge, `restore` rewrites it as a dependency and is
 refused (`check: dependency-cycle`) where that would close a cycle.
 
-**Format migration.** Read-only commands write nothing, even over an older KB. A write op's
+**Format migration.** A KB's metadata format is `1.0.0`, stamped `kb-format` in the entry point's
+frontmatter. Read-only commands write nothing, even over an older KB. A write op's
 `--no-refresh` on an unmigrated KB is refused (`check: kb-format`, remedy `kbase refresh`), and
 `verify` reports it stale with the same remedy. The migrating `refresh` lists obsolete paths under
 `removed`. A KB stamped with a newer major or minor is refused (`check: kb-format`; update kbase).
@@ -219,7 +230,9 @@ reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 ### Using kbase from an agent harness (MCP)
 
 `kbase mcp` serves one KB to any agent harness that speaks the Model Context Protocol, over stdio.
-Every tool is one subcommand, with the same arguments and the same result.
+Every tool is one subcommand, with the same arguments and the same result — except `rewind-build`,
+which reports the build's commit trail and has no subcommand behind it. Wiring it into a harness is
+covered in [INTEGRATING_KBASE_VIA_MCP.md](INTEGRATING_KBASE_VIA_MCP.md).
 
 The server entry is the same for every harness: command `kbase`, arguments:
 
@@ -245,17 +258,34 @@ opencode, in `opencode.json`:
 These are examples; any MCP-capable harness adds its own equivalent entry.
 
 - **Tools.** The subcommands: the write ops, `render-citation`, the queries (including `show` and
-  `stats`), `refresh`, `verify`, `render-claim-graph`, `status`, `cancel` and `build`. `completion`,
-  `help`, `models`, `configure` and `mcp` are not offered. A write-op tool takes one entry and
-  offers no `--no-refresh`.
+  `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
+  `status`, `cancel` and `build`. `completion`, `help` and `mcp` are not offered, and neither is
+  `wait`: a held call would spend the turn the build takes, so the `build` tool hands you its
+  command to run in the background instead. `models` reads a
+  provider's model catalogue and `configure` writes `config.toml`; neither performs inference —
+  `build` is the one tool that does. A write-op tool takes one entry and offers no `--no-refresh`.
+  `rewind-build` is the exception to one tool per subcommand: it lists the build's boundaries,
+  oldest first, and for a `target` you name — a stage id or display name — returns the
+  `git reset --hard` and the recorded re-issue command, with `discards` counting the boundaries the
+  reset removes. It is read-only; running the reset is yours.
 - **`build` is detached.** It starts the build as its own process and returns once the build has
   entered a stage or has exited, waiting at most 40 s. On entering a stage it returns the
-  `state-dir`, `pid` and `resume` command; follow it with `status` and stop it with `cancel`. At the
-  bound the result is `failed`, naming the state directory and saying the build is still starting;
-  the build keeps running, and `status` reports it once it begins. The build's output is captured
-  under the state store's `reports/`.
+  `state-dir`, `pid`, `resume` command and `wait`, the exact background command that returns when
+  the build is over and prints its `status` document; follow it with `status` and stop it with
+  `cancel`. Run `wait` in the background and your harness wakes the session when it exits, with the
+  outcome in hand. At the bound the result is `failed`, naming the state directory and saying the
+  build is still starting; the build keeps running, and `status` reports it once it begins. The
+  build's output is captured under the state store's `reports/`. A client that subscribes to
+  `kbase://build` needs no `wait`: the server sends one notification when the build stops
+  progressing.
 - **Resources.** The claim-graph sheets are resources, `kbase://sheet/<path under kb-root>`, read as
-  SVG.
+  SVG. `kbase://model-hints` is the model guidance as markdown — the same rows a created
+  `config.toml` states — and needs no KB. `kbase://build-trail` is the `rewind-build` document as
+  YAML, with no target named, for the repository the KB sits in; it is listed whether or not the
+  repository holds a boundary. `kbase://build` is the `status` document for the store the `build`
+  tool last launched, and the one resource a client may subscribe to: once it is subscribed the
+  server sends `notifications/resources/updated` with that URI when the build ends — finished,
+  bounded, cancelled, failed or interrupted — and the client reads the document for the detail.
 - **Requirements are unchanged.** Sheets still need `dot`, and builds still need pandoc and a
   provider configuration, on the host that runs `kbase mcp`.
 
@@ -275,57 +305,58 @@ exit code.
 
 ## Configuration
 
-Two TOML files in `--config-dir`, else `$KBASE_CONFIG_DIR`, else `~/.config/kbase`. Both are loaded
-strictly: an unknown key fails the whole file, and the message names the key.
+Configuration is read from two layers: `<repository>/.kbase/` over `~/.config/kbase`. A directory
+`--config-dir` names, else `$KBASE_CONFIG_DIR`, is instead the one directory read, so an explicit
+choice isolates a run from a repository's own `.kbase/`. Outside a git worktree there is no
+repository layer, and configuration still works: `show-config`, `models` and `configure` run in any
+directory. Both files are loaded strictly: an unknown key fails that file's load and the run, naming
+the key and the file, and no lower layer is read in its place.
 
-- **`providers.toml`** is the endpoint pool. Each top-level table is a provider you name, with
-  `baseUrl` (required) and `apiKeyFile` (relative to the file) or `apiKeyUnsafe`. kbase warns if a
-  key file is group- or world-readable; `chmod 600` it.
-- **`config.toml`** holds the choices: `provider`, and `[models]` `decision` and `text`. `kbase
-  configure` writes it and preserves every other byte of an existing file.
+- **`providers.toml`** is the endpoint pool, merged by entry name: a repository entry of the same
+  name replaces the global entry whole, so a repository never inherits a credential for an endpoint
+  it chose. Each top-level table is a provider you name, with `baseUrl` (required) and `apiKeyFile`
+  — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
+  `~` in `apiKeyFile`, `--config-dir`, `$KBASE_CONFIG_DIR` or `$KBASE_API_KEY_FILE` expands from your
+  home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
+  `chmod 600` it. An entry's `decisionsFlavor` names which decision surface its server speaks —
+  `systemone` (the default) or `decisions` — and changes nothing else: chat stays
+  `chat/completions`, and the decision model is still `config.toml`'s `models.decision`.
+- **`config.toml`** holds the choices: `provider`, and `[models]` `decision` and `text`. A created
+  one also states, beside `[models]`, what each category wants and example ids to choose from — the
+  same guidance an MCP client reads at `kbase://model-hints`. The layers merge these field by
+  field: a value the repository states wins, and one it leaves out keeps the global value.
+  `kbase configure` writes it and preserves every other byte of an existing file.
+- **`kbase configure --create`** writes an annotated `providers.toml` where none stands — nothing
+  else creates that file — and overwrites no other content. `config.toml` is created where absent on
+  any run and edited in place otherwise. It writes the layer a flag or `$KBASE_CONFIG_DIR` names,
+  else `<repository>/.kbase/` where that directory already stands, else `~/.config/kbase`;
+  `--project` names the repository's `.kbase/` whether or not it exists, and is refused outside a
+  worktree. Without `--provider` it makes no request and says the model ids went unchecked; with one
+  it dials, warns on an id the catalogue lacks, and a refusal — or a failed dial or listing —
+  writes nothing.
 
 The environment variables `KBASE_API_BASE_URL`, `KBASE_DECISION`, `KBASE_TEXT` and
-`KBASE_API_KEY_FILE` each override the one corresponding field. Precedence is flags, then
-`KBASE_*` environment, then the files, and the environment alone suffices with no config directory.
+`KBASE_API_KEY_FILE` each override the one corresponding field. The environment overrides the files
+and nothing overrides the environment; no flag sets one of those fields, and the environment alone
+suffices with no config directory.
 
 Provider selection is `--provider`, else `config.toml`'s `provider`, else the sole `providers.toml`
-entry. In a build, the claim graph's letter asks go to the decision model and the overview passage
-to the text one.
+entry. A `--provider` the pool does not hold refuses against the `providers.toml` of the layer
+`configure` writes into — the file an entry belongs in — and offers `kbase configure --create`
+unless that provider faulted out of the pool, where the fault's own reason stands instead. A pool
+with no usable entry refuses against that same file. In a build, the claim graph's letter asks go to
+the decision model and the overview passage to the text one.
+
+`kbase show-config` reports how all of this resolves — the layers read and what named each, the pool
+with each entry's layer, key kind, decision surface and any fault, `config.toml`'s merged choices, the
+inference variables this process sets, the selected entry and rule, and the endpoint inference
+resolves to (naming the layer that supplied each field) or what is missing — and changes nothing: no
+KB read, no file written, no request made. Gaps are diagnostics in a `done` result, not refusals, so
+one call shows them all.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`
 finds the KB from the working directory, as every subcommand does.
-
-## Relation to kb_tools
-
-kbase builds exactly what kb_tools builds, as Go, with its own provider management. A KB from either
-is navigable by the kb-docent agent and maintainable by kb-maintainer, and each toolchain's checks
-run green over the other's output.
-
-Differences you will notice:
-
-- The claim-graph sheets are drawn through Graphviz; kb_tools is adopting the same drawing in place
-  of its own layout.
-- Write ops take YAML on stdin or `--values`, not a TOML file, and results are YAML documents with
-  the exit codes above.
-- The inference endpoint comes from `providers.toml` or the `KBASE_API_BASE_URL`, `KBASE_DECISION`,
-  `KBASE_TEXT` and `KBASE_API_KEY_FILE` variables, not kb_tools' `API_BASE_URL`, `MODEL`,
-  `API_KEY_FILE` and `ALLOW_HTTP`; a cleartext key over non-loopback `http://` is a one-line
-  warning, not gated.
-- List queries page (`--limit`, `--offset`), where kb_tools returns every result.
-- Build state lives outside the worktree; the four build records at the repository root are YAML:
-  `kb-build-node-pass.yaml`, `kb-build-unmarked.yaml`, `kb-build-classification.yaml`,
-  `kb-build-cull.yaml`.
-- The KB's metadata is format `1.0.0` (YAML frontmatter, YAML records, `.index/*.yaml`), stamped
-  `kb-format` in the entry point's frontmatter, in both toolchains. kbase reads a `0.9.0` KB, built
-  before either adopted it, by converting it in memory, and its next `refresh` or write op rewrites
-  it in the current form. A KB stamped with a newer version is refused.
-- Re-issuing an insert adopts the existing entry instead of minting a second one.
-- The dead-link gate covers `kb-root/`, not the whole repository.
-- The KB's stamped `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands for
-  both toolchains.
-
-The full list is [SPEC.md](SPEC.md) §4.
 
 ## Development
 
@@ -342,8 +373,8 @@ gitignored. The tarball ships this README and [USER_CONVENTIONS.md](USER_CONVENT
 `CONVENTIONS.md`, the operating contract for an agent driving the CLI.
 
 Integration recipes run `./bin/kbase` itself and keep their evidence under `test_data/transient/`.
-Recipes that need pandoc, a live provider or the kb_tools reference are excluded from `just
-test-integration` and say so in `just --list`.
+Recipes that need pandoc or a live provider are excluded from `just test-integration` and say so in
+`just --list`.
 
 ## Contract documents
 

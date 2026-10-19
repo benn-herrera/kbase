@@ -2,6 +2,9 @@
 
 {overview-passage}
 
+The passage above is a generated summary of this knowledge base's documents — written from excerpts
+of them, not verified against them; the rest of this file is the build's own text.
+
 ## What Is Here
 
 A `leaf` is translated source — the corpus's own text carried across, not a summary of it. The rest
@@ -49,26 +52,22 @@ solidity: that says *unscored*, not *low* and not *doubted*.
 ## Current Figures
 
 This file states no counts, because the KB changes after it is written. The current ones come from
-the commands below, run from the project root that holds this KB: `kbase stats`, or kb_tools'
-runner targets — `just <target>`, or `make <target>` where that root has a Makefile rather than a
-justfile.
+`kbase stats`, run from the project root that holds this KB.
 
-`kbase stats` and the `kb-stats` target count the claim graph: one count per node kind, then
-`depends_on_edges`, every edge of every class. The claims per band are under `solidity_bands` in
-kbase's output and `solidity build-band distribution` in kb-stats': the {pending-literal} band holds
-the unscored claims, and every other band holds scored ones.
+`kbase stats` counts the claim graph: one count per node kind, then `depends_on_edges`, every edge
+of every class. The claims per band are under `solidity_bands`: the {pending-literal} band holds the
+unscored claims, and every other band holds scored ones.
 
 It does not split the edges by class. Each edge is one line of `.index/depends-on.yaml`, `--- `
 then the edge as a JSON object, and the object's `relation` field names its class.
 
-The `kb-verify` target counts the documents. The files its `[claim-quality] Scanned` line counts
-are the documents, and the same line says how many of them are leaves. kbase has no document count.
+No command counts the documents: `stats` counts the claim graph and `verify` reports faults.
 
 ## Reading It
 
 Don't walk the tree by hand — it is built to be navigated, and a breadth-first read spends context
-the answer never needed. Run `/kb-start` for a new topic or `/kb-next` to switch, from this KB root
-or from the project root that holds it.
+the answer never needed. Reach it through the `kbase` skill, which finds this KB and routes to the
+reading reference.
 
 [`AGENTS.md`](AGENTS.md) beside this file says how this KB expects to be read and changed.
 [`CONVENTIONS.md`](CONVENTIONS.md) is the full operating contract: what is authored versus derived,

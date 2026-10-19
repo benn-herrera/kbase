@@ -16,10 +16,12 @@ import (
 // it never reaches an output stream or an error string.
 const testAPIKey = "sk-MUST-NOT-APPEAR-0001"
 
-// provider builds a pool entry as LoadProviders would return it — Name
-// populated from the table header, APIKey already resolved.
+// provider builds a pool entry as Load returns it — Name populated from the
+// table header, APIKey already resolved, and the layer the merge stamps on
+// it. A test hands the pool to a verb directly, so it sets the layer the
+// merge would have.
 func provider(name, baseURL string) config.Provider {
-	return config.Provider{Name: name, BaseURL: baseURL, APIKey: testAPIKey}
+	return config.Provider{Name: name, BaseURL: baseURL, APIKey: testAPIKey, Layer: config.LayerSourceRepository}
 }
 
 // catalogue builds the ModelInfo slice a mock client serves from ListModels.
@@ -79,7 +81,7 @@ func TestVerbStreamGuard(t *testing.T) {
 			return err
 		}},
 		{"configure", func() error {
-			_, err := runConfigure(context.Background(), configureOptions{ConfigPath: "config.toml"})
+			_, err := runConfigure(context.Background(), configureOptions{})
 			return err
 		}},
 		{"build", func() error {
@@ -111,6 +113,10 @@ func TestRunModelsSortedOutput(t *testing.T) {
 	if got.code != 0 || got.doc.Values["provider"] != "solo" {
 		t.Fatalf("models: exit %d, %v", got.code, got.doc.Values)
 	}
+	if got.doc.Values["provider-rule"] != "flag" || got.doc.Values["provider-layer"] != config.LayerSourceRepository {
+		t.Errorf("models: provenance = %v/%v, want the --provider rule and the layer that supplies the entry",
+			got.doc.Values["provider-rule"], got.doc.Values["provider-layer"])
+	}
 	if want := []string{"alpha", "mu", "zeta"}; !slices.Equal(got.ids(), want) {
 		t.Errorf("models: got %q, want %q", got.ids(), want)
 	}
@@ -126,6 +132,23 @@ func TestRunModelsSortedOutput(t *testing.T) {
 	}
 	if strings.Contains(got.stdout, testAPIKey) || strings.Contains(got.stderr, testAPIKey) {
 		t.Error("API key leaked into an output stream")
+	}
+}
+
+// TestRunModelsCarriesTheDecisionSurface: the client a verb dials is built for
+// the decision surface the pool entry names, so a build's letter asks reach
+// the endpoint its own entry declares.
+func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
+	onDecisions := provider("deciding", "http://deciding.example/v1")
+	onDecisions.DecisionsFlavor = config.FlavorDecisions
+
+	got := run(t, modelsOptions{providerOptions: providerOptions{
+		Providers: config.Providers{"deciding": onDecisions},
+		Provider:  "deciding",
+	}}, model.NewScriptedMock(nil, catalogue("only")))
+
+	if len(got.endpoints) != 1 || !got.endpoints[0].Decisions {
+		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", got.endpoints)
 	}
 }
 
@@ -200,19 +223,23 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		name       string
 		opts       modelsOptions
 		wantChosen string // provider expected in the summary line
+		wantRule   string // the rule the result names for that choice
 		wantErr    string // substring of the expected error
 	}{{
 		name:       "flag beats config",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}, Provider: "alpha"}},
 		wantChosen: "alpha",
+		wantRule:   "flag",
 	}, {
 		name:       "config chosen when flag empty",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
 		wantChosen: "beta",
+		wantRule:   "config",
 	}, {
 		name:       "sole entry needs no choice",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha")}},
 		wantChosen: "alpha",
+		wantRule:   "sole-entry",
 	}, {
 		name:    "several entries, none chosen",
 		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("beta", "alpha")}},
@@ -253,6 +280,10 @@ func TestRunModelsProviderSelection(t *testing.T) {
 			}
 			if got.code != 0 || got.doc.Values["provider"] != tt.wantChosen {
 				t.Fatalf("models: exit %d, %v", got.code, got.doc.Values)
+			}
+			if got.doc.Values["provider-rule"] != tt.wantRule || got.doc.Values["provider-layer"] != config.LayerSourceRepository {
+				t.Errorf("models: provenance = %v/%v, want rule %s from the layer that supplies the entry",
+					got.doc.Values["provider-rule"], got.doc.Values["provider-layer"], tt.wantRule)
 			}
 			if want := "models ok: " + tt.wantChosen + " "; !strings.Contains(got.stderr, want) {
 				t.Errorf("stderr: got %q, want substring %q", got.stderr, want)

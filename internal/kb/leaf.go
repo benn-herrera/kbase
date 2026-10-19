@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// MalformedError is authored metadata no reader can take: kb_tools raises on
-// it and its refresh and verify stop.
+// MalformedError is authored metadata no reader can take: refresh and verify
+// stop on it.
 type MalformedError struct{ Msg string }
 
 func (e MalformedError) Error() string { return e.Msg }

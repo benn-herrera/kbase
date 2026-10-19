@@ -64,7 +64,7 @@ func TestMathIn(t *testing.T) {
 }
 
 // TestQuotedLabelLines: a bold-only paragraph at a one-level quote's margin
-// is a block to kb_tools' reader; it hosts what follows it in its quote only
+// is a block to the reader; it hosts what follows it in its quote only
 // where no readable block encloses it, and nowhere deeper is it read.
 func TestQuotedLabelLines(t *testing.T) {
 	str := func(s string) node { return node{"t": typeStr, "c": s} }

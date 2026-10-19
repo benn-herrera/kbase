@@ -8,9 +8,10 @@ import (
 	"strings"
 )
 
-// The environment a subcommand that spends inference reads: kb_tools'
-// variables under kbase's prefix, with kb_tools' meanings. Each names one
-// setting and nothing else — no variable spans both tiers.
+// The environment a subcommand that spends inference reads: the provider's
+// base URL, the model each category asks, and the file the API key is read
+// from. Each variable names one setting and nothing else — no variable spans
+// both categories.
 const (
 	EnvAPIBaseURL = "KBASE_API_BASE_URL"
 	EnvDecision   = "KBASE_DECISION"
@@ -37,17 +38,33 @@ func EnvOverrides(getenv func(string) string) Overrides {
 	}
 }
 
-// Inference is where a subcommand's model calls go and which model serves
-// each tier.
+// Inference is where a subcommand's model calls go, which model serves each
+// category, and the layer that supplied each field it resolved.
+// DecisionsFlavor is the decision surface the selected entry speaks, and
+// FlavorSystemOne where none was selected: the environment names a base URL,
+// not a surface, so there is nothing else it could be.
 type Inference struct {
 	Name, BaseURL, APIKey string
 	Decision, Text        string
+	DecisionsFlavor       string
+	Sources               Sources
+}
+
+// Sources names the layer that supplied each resolved field: the environment,
+// or the configuration layer — explicit, environment, repository or global —
+// the pool entry or the config.toml value came from. A field no layer supplied
+// — a key an entry does not state, a category an unresolved inference never
+// reached — carries "". The environment is the only layer a subcommand merges
+// above the files, so a field it supplies reports its own name; the files'
+// layers carry theirs from the load.
+type Sources struct {
+	BaseURL, Decision, Text, Key string
 }
 
 // LackError is a setting the inference configuration lacks, named by the
-// variable that would supply it — or, where only the configuration files
-// supply the setting, the configuration key — and the file that otherwise
-// does.
+// variable that would supply it — or, for a setting the configuration files
+// carry, the key they spell it with — and the file it is read from or belongs
+// in.
 type LackError struct {
 	Key, Path, Detail string
 }
@@ -60,9 +77,14 @@ func (e LackError) Named() (key, path string) { return e.Key, e.Path }
 // ResolveInference resolves each setting from the first of layers that gives
 // it — highest precedence first — and otherwise from the configuration files:
 // entry, the providers.toml entry they select (nil where they select none,
-// unselected saying why), and cfg's tiers. A layer's field overrides that
-// field and nothing else.
-func ResolveInference(cfg Config, entry *Provider, unselected error, layers ...Overrides) (Inference, error) {
+// unselected saying why), and cfg's categories. A layer's field overrides that
+// field and nothing else. Each resolved field carries the layer it came from.
+//
+// writeDir is the configuration directory a lack is reported against: the
+// providers.toml or config.toml the setting belongs in is named by its own
+// path, since a repository layer and a global one can each hold either file and
+// a bare name would not say which. An empty writeDir leaves the bare name.
+func ResolveInference(cfg Config, entry *Provider, unselected error, writeDir string, layers ...Overrides) (Inference, error) {
 	pick := func(field func(Overrides) string) string {
 		for _, l := range layers {
 			if v := field(l); v != "" {
@@ -71,12 +93,22 @@ func ResolveInference(cfg Config, entry *Provider, unselected error, layers ...O
 		}
 		return ""
 	}
-	var inf Inference
+	// An endpoint no pool entry supplied has no flavour to state — the
+	// environment names a base URL, not a decision surface — so the SystemOne
+	// shape is what resolves; a selected entry's own flavour overrides it.
+	inf := Inference{DecisionsFlavor: FlavorSystemOne}
 	if entry != nil {
 		inf.Name, inf.BaseURL, inf.APIKey = entry.Name, entry.BaseURL, entry.APIKey
+		inf.DecisionsFlavor = entry.Flavor()
+		if entry.BaseURL != "" {
+			inf.Sources.BaseURL = entry.Layer
+		}
+		if entry.APIKey != "" {
+			inf.Sources.Key = entry.Layer
+		}
 	}
 	if v := pick(func(o Overrides) string { return o.BaseURL }); v != "" {
-		inf.BaseURL = v
+		inf.BaseURL, inf.Sources.BaseURL = v, LayerSourceEnvironment
 		if entry == nil {
 			inf.Name = environmentEndpoint
 		}
@@ -86,35 +118,38 @@ func ResolveInference(cfg Config, entry *Provider, unselected error, layers ...O
 		if unselected != nil {
 			why = unselected.Error()
 		}
-		return inf, LackError{Key: EnvAPIBaseURL, Path: ProvidersFileName,
-			Detail: fmt.Sprintf("%s is unset and %s supplies no base URL: %s", EnvAPIBaseURL, ProvidersFileName, why)}
+		path := ProvidersPath(writeDir)
+		return inf, LackError{Key: "baseUrl", Path: path,
+			Detail: fmt.Sprintf("%s is unset and %s supplies no base URL: %s", EnvAPIBaseURL, path, why)}
 	}
-	if path := pick(func(o Overrides) string { return o.APIKeyFile }); path != "" {
+	if path := expandHome(pick(func(o Overrides) string { return o.APIKeyFile })); path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return inf, LackError{Key: EnvAPIKeyFile, Path: path, Detail: fmt.Sprintf("%s names %s, which cannot be read: %v", EnvAPIKeyFile, path, err)}
 		}
-		inf.APIKey = strings.TrimSpace(string(b))
+		inf.APIKey, inf.Sources.Key = strings.TrimSpace(string(b)), LayerSourceEnvironment
 	}
-	// A tier's id comes from the first of: its specific variable
-	// (KBASE_DECISION / KBASE_TEXT) and the configuration files.
-	tierID := func(specific func(Overrides) string, fromFile string) string {
+	// A category's id comes from the first of: its specific variable
+	// (KBASE_DECISION / KBASE_TEXT) and the configuration, whose merge
+	// recorded which layer supplied the id it holds.
+	categoryID := func(specific func(Overrides) string, id, source string) (string, string) {
 		if v := pick(specific); v != "" {
-			return v
+			return v, LayerSourceEnvironment
 		}
-		return fromFile
+		return id, source
 	}
-	inf.Decision = tierID(func(o Overrides) string { return o.Decision }, cfg.Models.Decision)
-	inf.Text = tierID(func(o Overrides) string { return o.Text }, cfg.Models.Text)
+	inf.Decision, inf.Sources.Decision = categoryID(func(o Overrides) string { return o.Decision }, cfg.Models.Decision, cfg.Sources.Decision)
+	inf.Text, inf.Sources.Text = categoryID(func(o Overrides) string { return o.Text }, cfg.Models.Text, cfg.Sources.Text)
 	var unset []string
-	for _, t := range []struct{ tier, id string }{{TierDecision, inf.Decision}, {TierText, inf.Text}} {
-		if t.id == "" {
-			unset = append(unset, "models."+t.tier)
+	for _, c := range []struct{ category, id string }{{CategoryDecision, inf.Decision}, {CategoryText, inf.Text}} {
+		if c.id == "" {
+			unset = append(unset, "models."+c.category)
 		}
 	}
 	if len(unset) > 0 {
-		return inf, LackError{Key: unset[0], Path: ConfigFileName,
-			Detail: fmt.Sprintf("%s sets no %s", ConfigFileName, strings.Join(unset, " or "))}
+		path := ConfigPath(writeDir)
+		return inf, LackError{Key: unset[0], Path: path,
+			Detail: fmt.Sprintf("%s sets no %s", path, strings.Join(unset, " or "))}
 	}
 	return inf, nil
 }

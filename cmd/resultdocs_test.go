@@ -166,8 +166,11 @@ func TestBuildResultsParse(t *testing.T) {
 	if stages, _ := bounded.Values["stages"].([]any); len(stages) != 3 {
 		t.Errorf("stages = %v, want start through spine-seed", bounded.Values["stages"])
 	}
-	if resume, _ := bounded.Values["resume"].(string); !strings.Contains(resume, "--no-inference") || strings.Contains(resume, "--through") {
-		t.Errorf("resume = %q, want every launch flag but the bound", resume)
+	if _, ok := bounded.Values["resume"]; ok {
+		t.Errorf("a bounded build carries resume: %v", bounded.Values)
+	}
+	if bounded.Values["through"] != "spine-seed" {
+		t.Errorf("through = %v, want spine-seed", bounded.Values["through"])
 	}
 	status := run("done", "status", "--state-dir", state)
 	if status.Values["state"] != "bounded" {
@@ -186,7 +189,7 @@ func TestBuildResultsParse(t *testing.T) {
 	}
 }
 
-var queryFixtures = flag.String("query.fixtures", "", "space-separated kb_tools-built fixture repositories, each with kb-root/ beside its root")
+var queryFixtures = flag.String("query.fixtures", "", "space-separated 0.9.0-built fixture repositories, each with kb-root/ beside its root")
 
 // toolResultCap is the most bytes personant takes back from one tool call.
 const toolResultCap = 8 << 10

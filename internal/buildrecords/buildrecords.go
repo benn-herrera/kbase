@@ -1,7 +1,7 @@
 // Package buildrecords is the schema of the tracked build records the claim
 // graph writes at the repository root, beside kb-root/, where they live, and
-// how they are read back: YAML documents of kb_tools' record schema, which
-// the sheet reads for edge provenance.
+// how they are read back: YAML documents of the record schema, which the sheet
+// reads for edge provenance.
 package buildrecords
 
 import (

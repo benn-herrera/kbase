@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/literature_scout.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Reference-finder for a manuscript or claim: identifies the literature it SHOULD cite — especially the omissions a referee in the field would flag — grades each essential/recommended/minor, says exactly where to cite it and why (what it strengthens or protects), flags claimed results that assert a contrast or build on a framework without the citation they need, and checks that already-cited works are apt. Gives real citations it is confident exist and verifies with web search; flags uncertainty rather than inventing. Spans economics, applied dynamical systems / control / stochastic escape, political economy, organizational theory, and history. Never modifies the work. Use before a paper goes out, or as the literature lens in a review."
+description: "Reference-finder for a manuscript or claim: the literature it should cite, especially omissions a referee in the field would flag, graded essential/recommended/minor with the place for each. Never modifies the work. Use before a paper goes out, or as the literature lens in a review."
 color: "#0F766E"
 permission:
   read: allow

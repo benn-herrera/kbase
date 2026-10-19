@@ -110,16 +110,16 @@ func MintID(kind string, taken func(id string) bool) string {
 }
 
 // LabelName is the name a labelled block's label line carries — letters, in
-// words single-spaced — as a pattern fragment: kb_tools' reader reads a label
-// line only where its name is this.
+// words single-spaced — as a pattern fragment: a label line is read only where
+// its name is this.
 const LabelName = `[A-Za-z]+(?: [A-Za-z]+)*`
 
-// labelLineRE is kb_tools' LABEL_LINE_RE: a labelled block's label line, bare
-// or wrapped in the identifier the source's \label became.
+// labelLineRE is a labelled block's label line, bare or wrapped in the
+// identifier the source's \label became.
 var labelLineRE = PyRE(`^>\s*(?:<span id="[^"]*">)?\*\*(` + LabelName + `)\*\*(?:</span>)?\s*$`)
 
 // LabelLine is the name line carries where it is a labelled block's label
-// line as kb_tools' reader reads one; ok false for any other line.
+// line as it is read; ok false for any other line.
 func LabelLine(line string) (name string, ok bool) {
 	m := labelLineRE.FindStringSubmatch(line)
 	if m == nil {
@@ -187,7 +187,7 @@ var NodeKinds = []string{NodeKindClaim, NodeKindSupport, NodeKindExperiment, Nod
 // canonical path and the kb-root-level nodes ("") not a volume (SPEC §3, the
 // sheet rules). internal/sheet's drawing decision is the same predicate over
 // the same stream; keeping both spellings honest is this function's one
-// reader rule and the kb_tools verify cross-check over a built KB, whose
+// reader rule and the verify cross-check over a built KB, whose
 // README must not link a sheet the KB does not carry.
 func SheetDigestDrawn(nodes []NodeRow) bool {
 	volumes := map[string]bool{}

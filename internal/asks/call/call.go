@@ -41,8 +41,7 @@ const (
 )
 
 // overviewBackoff is the pause before each re-issue of an overview call that
-// did not complete, as kb_tools' driver pauses its calls; a letter ask is
-// re-issued at once, as kb_tools' claim graph re-issues it.
+// did not complete; a letter ask is re-issued at once.
 var overviewBackoff = []time.Duration{5 * time.Second, 30 * time.Second}
 
 // Caller puts composed prompts to one provider. Safe for concurrent use over
@@ -67,7 +66,7 @@ func New(client model.Client, scratch string, lg log.Logger) *Caller {
 }
 
 // Letters is the production LetterReader: each question put to modelID as
-// one SystemOne call — the composed state the request's state, the question
+// one Decision call — the composed state the request's state, the question
 // serialized under its item's key — the answer mapped to a confidence keyed
 // by the offered letters, and the mapped answer cached by the digest of the
 // model, the question and the state.
@@ -81,7 +80,7 @@ func (c *Caller) Letters(modelID string) asks.LetterReader {
 	}
 }
 
-// decide is one question's SystemOne round-trip: the cached answer where one
+// decide is one question's Decision round-trip: the cached answer where one
 // stands for these exact inputs, else the call, its every attempt captured.
 //
 // The mapping, per answer type, keyed by which criterion the letter names,
@@ -136,7 +135,7 @@ func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuesti
 		Attempt: q.Attempt,
 	})
 	started := time.Now()
-	got, err := c.client.SystemOne(ctx, model.DecisionRequest{
+	got, err := c.client.Decision(ctx, model.DecisionRequest{
 		Model: modelID,
 		State: q.State,
 		Questions: []model.DecisionQuestion{{
@@ -163,7 +162,7 @@ func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuesti
 		writeErr = flushErr
 	}
 	if err != nil {
-		// SystemOne has re-issued identically to its attempt count; a call
+		// Decision has re-issued identically to its attempt count; a call
 		// past it never completed, and no answer is assumed for one.
 		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath)}
 	}
@@ -262,7 +261,7 @@ type decisionQuestionCapture struct {
 }
 
 // decisionCaptureAttempt is the one request of the decision call, as it
-// ended. SystemOne has no streaming and no finish reason; the usage figures
+// ended. Decision has no streaming and no finish reason; the usage figures
 // are the API's own.
 type decisionCaptureAttempt struct {
 	Type             string `json:"type"`

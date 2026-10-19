@@ -230,8 +230,7 @@ func takeLock(dir string, now time.Time) (*filelock.Lock, error) {
 		err = l.Write(b)
 	}
 	if err != nil {
-		l.Release()
-		return nil, err
+		return nil, errors.Join(err, l.ReleaseRemoving())
 	}
 	return l, nil
 }
@@ -346,6 +345,31 @@ func (inv invocation) end() event {
 	return event{}
 }
 
+// recorded reports whether the invocation recorded a stage boundary: the fact
+// that decides whether an identical re-issue continues it, since a run that
+// recorded none wrote no boundary and leaves the build where the run before it
+// left it.
+func (inv invocation) recorded() bool {
+	for _, e := range inv {
+		if e.Event == eventRecorded {
+			return true
+		}
+	}
+	return false
+}
+
+// stands reports whether the invocation is the run status and rewind-build read
+// the build's position from: every run but one that refused or asked to be
+// retried without recording a boundary — that one wrote nothing, so the run
+// before it is the one the build stands at.
+func (inv invocation) stands() bool {
+	switch inv.end().Outcome {
+	case result.Refused, result.Retry:
+		return inv.recorded()
+	}
+	return true
+}
+
 // entered is the last stage the invocation entered and whether it recorded
 // it.
 func (inv invocation) entered() (stage string, recorded bool) {
@@ -360,11 +384,12 @@ func (inv invocation) entered() (stage string, recorded bool) {
 	return stage, recorded
 }
 
-// interrupted is whether the progress record accounts for uncommitted work
+// uncommittedIn is whether the progress record accounts for uncommitted work
 // in stage: the latest invocation that entered a stage and was not refused —
 // a refused invocation writes nothing — entered stage last and never
-// recorded it.
-func interrupted(events []event, stage string) bool {
+// recorded it. A cancelled invocation counts: its stage's work stands
+// uncommitted too, whatever word the state is reported under.
+func uncommittedIn(events []event, stage string) bool {
 	all := invocations(events)
 	for i := len(all) - 1; i >= 0; i-- {
 		inv := all[i]

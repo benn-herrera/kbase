@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,11 @@ var (
 // arrives on stdin, which pandoc has no name for.
 var unloadableInclude = regexp.MustCompile(
 	`(?m)^\[WARNING\] Could not load include file (.+) at ((?:\S+ )?line \d+ column \d+)$`)
+
+// includeArg is an \input or \include in its braced form, the one pandoc's
+// reader inlines. Pandoc expands no macro in the argument, so the literal
+// target is the file it reads.
+var includeArg = regexp.MustCompile(`\\(?:input|include)\s*\{([^}]*)\}`)
 
 // MissingError is a pandoc absent from PATH.
 type MissingError struct{}
@@ -93,6 +99,23 @@ func (e IncludeError) Error() string {
 	return "the reader could not load: " + strings.Join(parts, "; ")
 }
 
+// EscapeError is an include that resolves outside the volume's directory, the
+// one pandoc runs in: the reader would inline a file from outside the corpus.
+// Origin names the file carrying the include, volume-relative, and is empty for
+// the volume root itself.
+type EscapeError struct {
+	Target string
+	Origin string
+}
+
+func (e EscapeError) Error() string {
+	named := ""
+	if e.Origin != "" {
+		named = ", named at " + e.Origin
+	}
+	return "include " + e.Target + named + " resolves outside the volume's directory"
+}
+
 // Warner receives what pandoc writes to stderr on an otherwise successful run.
 type Warner interface {
 	Warn(msg string, kv ...any)
@@ -128,9 +151,13 @@ func Preflight(ctx context.Context) (string, error) {
 
 // ReadLaTeX parses source to pandoc's JSON AST. dir is the volume's own
 // directory: pandoc resolves \input against its working directory, not the
-// source's. With bibliographies, citeproc runs and resolves citations against
-// their union; without, no citeproc runs.
+// source's, and an include resolving outside dir is refused. With
+// bibliographies, citeproc runs and resolves citations against their union;
+// without, no citeproc runs.
 func ReadLaTeX(ctx context.Context, w Warner, dir, source string, bibliographies []string) ([]byte, error) {
+	if err := checkIncludes(dir, source); err != nil {
+		return nil, err
+	}
 	args := []string{"-f", "latex", "-t", "json"}
 	if len(bibliographies) > 0 {
 		args = append(args, "--citeproc")
@@ -184,6 +211,75 @@ func warn(w Warner, complaint string) {
 	if complaint != "" {
 		w.Warn("pandoc wrote to stderr on a successful run", "stderr", complaint)
 	}
+}
+
+// checkIncludes refuses an \input or \include that resolves outside dir: the
+// directory pandoc runs in, which it resolves every include against, appending
+// .tex to a target that names no extension. Each included file that exists is
+// read in turn, so an escape a second level down is refused too; a target that
+// resolves inside and names no file is left to pandoc, which warns of it.
+func checkIncludes(dir, source string) error {
+	corpus, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving the volume's directory: %w", err)
+	}
+	corpus, err = filepath.EvalSymlinks(corpus)
+	if err != nil {
+		return fmt.Errorf("resolving the volume's directory: %w", err)
+	}
+	type file struct{ origin, body string }
+	queue := []file{{body: source}}
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, m := range includeArg.FindAllStringSubmatch(stripComments(cur.body), -1) {
+			target := strings.TrimSpace(m[1])
+			if target == "" {
+				continue
+			}
+			path := target
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(corpus, path)
+			}
+			if filepath.Ext(path) == "" {
+				path += ".tex"
+			}
+			real, err := filepath.EvalSymlinks(filepath.Clean(path))
+			if err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(corpus, real)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return EscapeError{Target: target, Origin: cur.origin}
+			}
+			if seen[real] {
+				continue
+			}
+			seen[real] = true
+			body, err := os.ReadFile(real)
+			if err != nil {
+				continue
+			}
+			queue = append(queue, file{origin: filepath.ToSlash(rel), body: string(body)})
+		}
+	}
+	return nil
+}
+
+// stripComments removes TeX's comments: a % not written as \% to the end of
+// its line.
+func stripComments(source string) string {
+	lines := strings.Split(source, "\n")
+	for i, line := range lines {
+		for j := 0; j < len(line); j++ {
+			if line[j] == '%' && (j == 0 || line[j-1] != '\\') {
+				lines[i] = line[:j]
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // run execs pandoc and returns its stdout and stderr, every failure shape as

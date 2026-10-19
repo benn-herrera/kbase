@@ -60,9 +60,9 @@ func TestEncodeRecordAsTheMigrationWrites(t *testing.T) {
 	}
 }
 
-// TestNodePassWrittenAsKbTools checks the writer's normalization: leaves by
+// TestNodePassWrittenAsReference checks the writer's normalization: leaves by
 // path, verdicts by line, nil lists written as [].
-func TestNodePassWrittenAsKbTools(t *testing.T) {
+func TestNodePassWrittenAsReference(t *testing.T) {
 	cause := CauseNoLetter
 	got, err := nodePassBytes(buildrecords.NodePassRecord{Leaves: map[string]buildrecords.LeafEntry{
 		"b.md": {State: ReadLanded, Verdicts: []buildrecords.ParagraphVerdict{{Line: 9, Verdict: JudgementDefaulted, Cause: &cause}, {Line: 2, Verdict: JudgementNotAClaim}}},

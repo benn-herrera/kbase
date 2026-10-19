@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
@@ -43,26 +42,6 @@ func PandocRefusal(err error) error {
 		return result.Refusal{{Check: checkPandoc, Detail: err.Error()}}
 	}
 	return err
-}
-
-// charter keeps the charter the build was given at the repository root,
-// where the start boundary names it. Given none, a charter already standing
-// there is the build's, as kb_tools reads its default charter path.
-func charter(w *walk) (result.Record, error) {
-	target := filepath.Join(w.repo.Root, charterFile)
-	if w.opts.Charter != "" {
-		text, err := os.ReadFile(w.opts.Charter)
-		if err != nil {
-			return nil, result.Refusal{{Check: checkCharter, Path: w.opts.Charter, Key: "--charter", Detail: fmt.Sprintf("--charter %s cannot be read: %v", w.opts.Charter, err)}}
-		}
-		if err := atomicfile.Write(target, text, nil); err != nil {
-			return nil, err
-		}
-	}
-	if !kb.IsFile(target) {
-		return result.Record{{Key: "charter", Value: nil}}, nil
-	}
-	return result.Record{{Key: "charter", Value: charterFile}}, nil
 }
 
 // The kb-root/ tri-state: absent, holding only the derived index, or holding
@@ -104,7 +83,7 @@ func kbRootGuard(kbRoot string) error {
 
 // bibliographies is the set every volume is offered: the build's own, or,
 // given none, every .bib in a directory a volume root sits in, in sorted path
-// order, as kb_tools' driver gathers them.
+// order.
 func (w *walk) bibliographies() ([]string, error) {
 	if w.opts.Bibliographies != nil {
 		return w.opts.Bibliographies, nil
@@ -186,6 +165,7 @@ func documentGraphFailure(err error) error {
 	paper := volume.Root
 	var source pandoc.SourceError
 	var include pandoc.IncludeError
+	var escape pandoc.EscapeError
 	var metadata docgraph.MetadataKeyError
 	switch {
 	case errors.As(err, &source):
@@ -197,6 +177,9 @@ func documentGraphFailure(err error) error {
 				Detail: fmt.Sprintf("%s: could not load include %s, named at %s", paper, inc.Target, inc.Origin)}
 		}
 		return items
+	case errors.As(err, &escape):
+		return result.Refusal{{Check: checkInclude, Path: escape.Target,
+			Detail: fmt.Sprintf("%s: %s", paper, escape)}}
 	case errors.As(err, &metadata):
 		items := make(result.Refusal, len(metadata.Keys))
 		for i, k := range metadata.Keys {
@@ -357,57 +340,20 @@ func validationGate(w *walk) (result.Record, error) {
 }
 
 // stampReadiness writes the readiness documents, each only where none
-// stands, AGENTS.md carrying the scope pin from the charter the start
-// boundary names.
+// stands. AGENTS.md carries no scope pin: a build's KB states no scope beyond
+// the sources it was run on.
 func stampReadiness(w *walk) (result.Record, error) {
-	pin, err := w.scopePin()
-	if err != nil {
-		return nil, err
-	}
 	src, err := w.source()
 	if err != nil {
 		return nil, err
 	}
-	_, reports, err := kbdocs.Stamp(src, filepath.Base(w.repo.Root), pin)
+	_, reports, err := kbdocs.Stamp(src, filepath.Base(w.repo.Root), "")
 	rec := result.Record{{Key: "stamped", Value: append([]string{}, reports...)}}
 	return rec, err
 }
 
 // source is the KB the walk has built so far, as the loader opens it.
 func (w *walk) source() (*kb.Source, error) { return kbload.Open(w.kbRoot) }
-
-// scopePin is the charter the start boundary names, as written, or the
-// stated absence of one. A charter the boundary names and the disk has lost
-// is refused rather than stamped as absent: the two are different facts.
-func (w *walk) scopePin() (string, error) {
-	for _, e := range w.trail {
-		if e.Stage != stageStart {
-			continue
-		}
-		for _, line := range strings.Split(e.Body, "\n") {
-			if line == noCharter || !strings.HasPrefix(line, charterField) {
-				continue
-			}
-			rel := strings.TrimSpace(strings.TrimPrefix(line, charterField))
-			data, err := os.ReadFile(filepath.Join(w.repo.Root, rel))
-			if errors.Is(err, os.ErrNotExist) {
-				return "", result.Refusal{{Check: checkCharter, Path: rel,
-					Detail: fmt.Sprintf("the start boundary records a charter at %s, and no file stands there; restore it so %s carries the scope pin", rel, kb.AgentsFile)}}
-			}
-			if err != nil {
-				return "", err
-			}
-			if !utf8.Valid(data) {
-				return "", fmt.Errorf("%s: not UTF-8", rel)
-			}
-			if pin := kb.Strip(kb.TranslateNewlines(string(data))); pin != "" {
-				return pin, nil
-			}
-		}
-		break
-	}
-	return kbdocs.NoCharterPin, nil
-}
 
 // overviewAsks is how many times the overview passage is asked for: once,
 // and once more where the reply cannot be used.

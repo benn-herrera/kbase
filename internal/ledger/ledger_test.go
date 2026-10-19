@@ -108,9 +108,38 @@ func TestRecordScopesTheCommitAndTrailReadsItBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Entry{{"document-graph", graph, ""}, {"start", start, "charter: none"}}
+	want := []Entry{
+		{"document-graph", graph, "kb-build: document-graph | document tree derived", ""},
+		{"start", start, "kb-build: start | build started", "charter: none"},
+	}
 	if !slices.Equal(trail, want) {
 		t.Errorf("Trail = %+v, want %+v", trail, want)
+	}
+}
+
+func TestHead(t *testing.T) {
+	r := newRepo(t)
+	if head, err := r.Head(); err != nil || head != "" {
+		t.Errorf("Head on an unborn branch = %q, %v, want no commit", head, err)
+	}
+	write(t, r, "kb-root/a.md", "a\n")
+	if _, err := r.Record("start", "build started", ""); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := r.Record("document-graph", "document tree derived", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := r.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.run("rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != strings.TrimSpace(out) || head != commit {
+		t.Errorf("Head = %q, want git rev-parse HEAD = %q", head, strings.TrimSpace(out))
 	}
 }
 
@@ -241,6 +270,35 @@ func TestRestoreWithNoCommitYet(t *testing.T) {
 	}
 	if _, ok := read(t, r, "elsewhere.txt"); !ok {
 		t.Error("Restore removed a path the build does not own")
+	}
+}
+
+// TestDirtyTree: the whole worktree is reported, where Dirty stays scoped to
+// the owned paths.
+func TestDirtyTree(t *testing.T) {
+	r := newRepo(t)
+	write(t, r, "kb-root/a.md", "a\n")
+	if _, err := r.Record("start", "build started", ""); err != nil {
+		t.Fatal(err)
+	}
+	write(t, r, "kb-root/a.md", "changed\n")
+	write(t, r, "kb-root/new.md", "new\n")
+	write(t, r, "elsewhere.txt", "not owned\n")
+	dirty, err := r.DirtyTree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(dirty)
+	if want := []string{"elsewhere.txt", "kb-root/a.md", "kb-root/new.md"}; !slices.Equal(dirty, want) {
+		t.Errorf("DirtyTree = %q, want %q", dirty, want)
+	}
+	owned, err := r.Dirty()
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(owned)
+	if want := []string{"kb-root/a.md", "kb-root/new.md"}; !slices.Equal(owned, want) {
+		t.Errorf("Dirty = %q, want %q", owned, want)
 	}
 }
 

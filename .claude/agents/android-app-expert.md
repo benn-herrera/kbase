@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/android_app_expert.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: android-app-expert
-description: "Android app development: Kotlin/Compose, gestures, networking, coroutines, sensors, audio, camera, NDK/JNI integration, Gradle configuration, assets, and device-specific debugging. Prefer over generalist-coder for any Android target."
+description: "Android app development: Kotlin/Compose, including NDK/JNI integration and Gradle configuration. Prefer over generalist-coder for any Android target."
 model: opus
 color: "#FFA500"
 ---

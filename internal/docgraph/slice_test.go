@@ -1,11 +1,11 @@
 package docgraph
 
-// The slice comparator: kbase's document-graph tree against kb_tools' for the
-// same paper, as kb_tools' own readers see both (tools/slice/README.md is the
-// dump's schema), plus run-to-run determinism of the tree and records, the negative
-// controls, cross-paper citation states, and the corpus census. Each test is
-// driven by its flag and skips without it; the recipe
-// test-integration-slice-arxiv supplies them over artifacts it guarantees.
+// The slice comparator: kbase's document-graph tree against the reference's
+// for the same paper, as the reference's own readers see both, plus run-to-run
+// determinism of the tree and records, the negative controls, cross-paper
+// citation states, and the corpus census. Each test is driven by its flag and
+// skips without it; the recipe test-integration-slice-arxiv supplies them over
+// artifacts it guarantees.
 
 import (
 	"bytes"
@@ -31,12 +31,12 @@ import (
 
 var (
 	sliceOut         = flag.String("slice.out", "", "the slice evidence directory holding one directory per paper")
-	sliceCompare     = flag.String("slice.compare", "", "space-separated paper ids to compare against kb_tools' reference")
+	sliceCompare     = flag.String("slice.compare", "", "space-separated paper ids to compare against the reference")
 	sliceUnparseable = flag.String("slice.unparseable", "", "the negative control that must refuse as unparseable")
 	sliceUnloadable  = flag.String("slice.unloadable", "", "the negative control that must refuse naming unloaded includes")
 	sliceStates      = flag.String("slice.states", "", "space-separated paper directories whose citation states are pooled")
 	sliceCensus      = flag.String("slice.census", "", "space-separated paper ids to take the census of")
-	sliceRefs        = flag.String("slice.refs", "", "the directory holding kb_tools' reference per paper: <id>/kb-root, or <id>/driver-stop.yaml")
+	sliceRefs        = flag.String("slice.refs", "", "the directory holding the reference per paper: <id>/kb-root, or <id>/driver-stop.yaml")
 	sliceRollup      = flag.String("slice.rollup", "", "space-separated paper ids whose comparisons and build checks are rolled up")
 )
 
@@ -225,16 +225,16 @@ func comparePaper(dir, id string) paperComparison {
 	return c
 }
 
-// driverStop is kb_tools' driver stopping short of its document-graph commit,
-// as the reference recipe records it.
+// driverStop is the reference driver stopping short of its document-graph
+// commit, as the recipe records it.
 type driverStop struct {
 	Exit int    `yaml:"exit"`
 	Log  string `yaml:"log"`
 }
 
 // compareBuilds: kbase builds the paper with every one of its own checks
-// green, and kb_tools builds it too; or both refuse it. A paper only one side
-// builds fails. stopped is whether either side left no tree to compare.
+// green, and the reference builds it too; or both refuse it. A paper only one
+// side builds fails. stopped is whether either side left no tree to compare.
 func compareBuilds(dir, id string) (checkResult, bool) {
 	resultPath := filepath.Join(dir, "run-1.result.yaml")
 	refTree := filepath.Join(*sliceRefs, id, "kb-root")
@@ -254,18 +254,18 @@ func compareBuilds(dir, id string) (checkResult, bool) {
 	} else if _, err := os.Stat(refTree); err == nil {
 		evidence = append(evidence, refTree)
 	} else {
-		return newCheck("build", evidence, []string{"kb_tools' reference holds neither a tree nor a driver stop at " + filepath.Dir(refTree)}), true
+		return newCheck("build", evidence, []string{"the reference holds neither a tree nor a driver stop at " + filepath.Dir(refTree)}), true
 	}
 	refused := res.Outcome == "refused"
 	switch {
 	case refused && stop != nil:
 		c := newCheck("build", evidence, nil)
-		c.Detail = fmt.Sprintf("both refuse: kbase %q; kb_tools' driver stopped with exit %d", res.Refusals, stop.Exit)
+		c.Detail = fmt.Sprintf("both refuse: kbase %q; the reference's driver stopped with exit %d", res.Refusals, stop.Exit)
 		return c, true
 	case refused:
-		return newCheck("build", evidence, []string{fmt.Sprintf("kbase refused %q and kb_tools built the paper", res.Refusals)}), true
+		return newCheck("build", evidence, []string{fmt.Sprintf("kbase refused %q and the reference built the paper", res.Refusals)}), true
 	case stop != nil:
-		return newCheck("build", evidence, []string{fmt.Sprintf("kbase's outcome is %s and kb_tools' driver stopped with exit %d", res.Outcome, stop.Exit)}), true
+		return newCheck("build", evidence, []string{fmt.Sprintf("kbase's outcome is %s and the reference's driver stopped with exit %d", res.Outcome, stop.Exit)}), true
 	}
 	var diffs []string
 	if res.Outcome != "bounded" {
@@ -409,8 +409,8 @@ func withoutPositions(list string, item map[string]any) string {
 	return string(data)
 }
 
-// compareInventory: kb_tools' inventory over kbase's tree equals it over its
-// own, item by item in scan order, positional fields excluded.
+// compareInventory: the reference's inventory over kbase's tree equals it over
+// its own, item by item in scan order, positional fields excluded.
 func compareInventory(ref, kbase *dumpRoot) []string {
 	if ref.Inventory == nil || kbase.Inventory == nil {
 		return []string{"an inventory is missing from the dump"}
@@ -628,8 +628,8 @@ func citationStates(r *dumpRoot) map[string]int {
 	return counts
 }
 
-// TestSliceCitationStates: every citation state kb_tools' trees exhibit over
-// the pooled papers also occurs in kbase's.
+// TestSliceCitationStates: every citation state the reference's trees exhibit
+// over the pooled papers also occurs in kbase's.
 func TestSliceCitationStates(t *testing.T) {
 	out, dirs := sliceArgs(t, sliceStates)
 	type side struct {
@@ -677,7 +677,7 @@ func TestSliceCitationStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !rep.Passed {
-		t.Errorf("citation states: a state kb_tools' trees exhibit is missing from kbase's — see %s", path)
+		t.Errorf("citation states: a state the reference's trees exhibit is missing from kbase's — see %s", path)
 	}
 }
 

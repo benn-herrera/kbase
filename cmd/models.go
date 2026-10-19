@@ -33,12 +33,12 @@ func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 }
 
 func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
-	name, client, ctx, release, err := opts.dial(ctx)
+	name, rule, layer, client, ctx, release, err := opts.dial(ctx)
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
 	defer release()
-	fields := []toolresult.Field{{Key: "provider", Value: name}}
+	fields := providerFields(name, rule, layer)
 	start := time.Now()
 	ids, err := catalogueIDs(ctx, client)
 	if err != nil {
@@ -67,7 +67,11 @@ entries that failed to load are reported as warnings, and a summary line
 (provider, count, elapsed) is written to stderr.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, opts, err := loadVerbContext()
+		wd, err := invocationDir(cmd)
+		if err != nil {
+			return err
+		}
+		opts, err := loadVerbContext(wd)
 		if err != nil {
 			return err
 		}
@@ -89,5 +93,5 @@ entries that failed to load are reported as warnings, and a summary line
 
 func init() {
 	registerProviderFlags(modelsCmd, &modelsFlagProvider, &modelsFlagTimeout, "query")
-	rootCmd.AddCommand(mcpBinding(modelsCmd, mcpExcluded))
+	rootCmd.AddCommand(mcpBinding(readOnly(modelsCmd), mcpBound))
 }

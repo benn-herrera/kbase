@@ -19,8 +19,8 @@ If the prerequisite is missing, halt with an error.
 
 Parse the arguments as follows:
 - **Topic name**: the first token — matches a file in `.opencode/agents/mad/design-topics/[topic-name].md`. Load that file as the topic. If the file does not exist, list available topics from `.opencode/agents/mad/design-topics/` and halt.
-- **Seat roster** (`SEATS=`): the seats staffing this run — a comma-separated subset of `fable`,
-  `opus`, `sonnet`, `haiku`, `guest`, at most one of each, at least two. **Required.**
+- **Seat roster** (`SEATS=`): the seats staffing this run — a comma-separated subset of `a`,
+  `b`, `c`, `d`, `guest`, at most one of each, at least two. **Required.**
 - **Env file** (`ENV_FILE=`): path to the guest model's env file (containing `API_BASE_URL=`,
   `API_KEY_FILE=`, and `MODEL=`). Required if and only if `SEATS=` includes `guest`.
 - **Constraints doc** (`CONSTRAINTS=`): path to a requirements/invariants/conventions document.
@@ -35,8 +35,8 @@ Parse the arguments as follows:
 ### Seats are the invoker's call
 
 There is no default roster. If the invocation names no seats, do not choose some — ask the user, and
-**suggest `opus` + `sonnet` as a reasonable default for most design jobs**: two strong local
-pins whose blind spots differ. Widen with `fable` or `haiku` when the problem rewards more independent constructions; add `guest`
+**suggest `b` + `c` as a reasonable default for most design jobs**: two strong local
+pins whose blind spots differ. Widen with `a` or `d` when the problem rewards more independent constructions; add `guest`
 (with `ENV_FILE=`) to bring in a model from outside this harness.
 
 Settle the roster here, before dispatch. The referee has no default of its own and **will refuse to

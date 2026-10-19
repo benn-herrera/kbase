@@ -401,8 +401,10 @@ func excerpt(t *testing.T, name string) string {
 	return string(text)
 }
 
-// The files under testdata/excerpts are byte-exact line ranges of the
-// kb_tools-built fixtures under test_data/transient/kbtools-ref/:
+// The files under testdata/excerpts are byte-exact line ranges of documents in
+// the reference's arXiv KBs; that clone is transient and is not in this
+// repository, so these files are the fixtures. Each line names the source
+// document and range:
 //
 //	theorem-rremark.md    2609.00268v1/kb-root/obstructions-for-morin-and-fold-maps-stiefel/theory/thom-polynomials-and-the-role-of-the/the-factorization-formula-for-schur-polynomials.md, lines 103-108
 //	proof.md              2609.00183v1/kb-root/rectifiability-of-the-singular-strata-for/appendix.md, lines 63-66
@@ -708,8 +710,10 @@ func TestFilterGoldenConsumption(t *testing.T) {
 	}
 }
 
-// The excerpts under testdata/html-forms are byte-exact line ranges of the
-// kb_tools-built fixtures under test_data/transient/kbtools-ref/:
+// The excerpts under testdata/html-forms are byte-exact line ranges of
+// documents in the reference's arXiv KBs; that clone is transient and is not in
+// this repository, so these files are the fixtures. Each line names the source
+// document and range:
 //
 //	figure.md           2609.09888v1/kb-root/<figurePath>, lines 63-87
 //	figure-unclosed.md  2609.09888v1/kb-root/<figurePath>, lines 71-74

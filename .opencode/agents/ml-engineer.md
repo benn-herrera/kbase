@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/ml_engineer.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "ML technique R&D: designing and diagnosing inference, training, sampling, attention, optimization, quantization and distillation mechanisms; adapting a published technique to a regime it was not measured in; deciding what measurement would settle an open question about model behavior. Delivers a mechanism, the justification for it, and the measurement that would falsify it — not the implementation, which goes to a coder agent. Prefer over applied-mathematician when the object is a model or a training/inference pipeline rather than a formal system; prefer over the coder agents when the open question is which technique, not how to write it."
+description: "ML technique R&D: designing and diagnosing inference, training, sampling and optimization mechanisms; adapting a published technique to a regime it was not measured in; and delivering the design with the measurement that would falsify it. Prefer over applied-mathematician when the object is a model or pipeline rather than a formal system; prefer over the coder agents when the question is which technique, not how to write it."
 color: "#F97316"
 mode: subagent
 ---

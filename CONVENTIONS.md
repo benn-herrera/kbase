@@ -9,11 +9,8 @@ in `ROADMAP_PLANS/` (see "Plan & Execute Process").
 
 ## Project Overview
 kbase is a Go binary that builds a knowledge base (KB) from a LaTeX document set — or creates one
-empty with `kbase init` — and maintains it afterwards. It builds exactly what kb_tools builds — the
-reference implementation, read from `.claude/adjagent/kb_tools/` at the commit SPEC "Given interfaces"
-names — and keeps its own provider management and inference invocation. kb_tools is the differential
-oracle: every difference from it is a named divergence (SPEC "Named divergences") or a defect. The
-contract is SPEC.md; how this implementation meets it is ARCHITECTURE.md.
+empty with `kbase init` — and maintains it afterwards. It keeps its own provider management and
+inference invocation. The contract is SPEC.md; how this implementation meets it is ARCHITECTURE.md.
 
 ---
 
@@ -47,13 +44,19 @@ them. Working rules for packages that carry over:
   loader shell, so verbs unit-test without process/network.
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
   provider faults never abort the pool; fault reasons carry no key material.
-- **internal/model**: `Endpoint{Name, BaseURL, APIKey}` is the transport-level slice of a provider.
-  The overview ask goes through `model.Chat`: one tool-less request with kb_tools' call shape,
-  re-issued identically on an incomplete stream up to kb_tools' attempt count. The letter asks go
-  through `model.SystemOne`: one `POST <base-url>/systemone` request carrying a closed-set question
-  (`choice` or `noul`), answered by probabilities over the offered letters, re-issued identically on
-  a transport error or retry-class 5xx. API keys never appear in logs or error strings. The
-  `[models]` keys are `decision` and `text`.
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Decisions}` is the transport-level slice
+  of a provider — the last saying whether its entry speaks the Decisions shape (`systemone` unless
+  the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
+  lives in `cmd`. The overview ask goes through `model.Chat`: one tool-less request, re-issued
+  identically on an incomplete stream up to the attempt count (ARCHITECTURE §12). The letter
+  asks go through `model.Decision`, one `POST` to whichever surface the endpoint names (ARCHITECTURE
+  §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one closed-set question (`choice` or
+  `noul`), answered by probabilities over the offered letters; `decisions` speaks the OpenAI
+  Decisions shape at `<base-url>/decisions` — the state as `input`, questions a named array with a
+  `noul` asked as a `predicate` carrying no choices, its criteria folded into `instructions`, and an
+  `answers` array where a `refusal` is unreadable and takes the seam's re-ask/default path. Either
+  surface is re-issued identically on a transport error or retry-class 5xx. API keys never appear in
+  logs or error strings. The `[models]` keys are `decision` and `text`.
 
 ---
 
@@ -115,8 +118,12 @@ single source. Working habits they impose:
   copied into a tool, or a schema typed beside the command's flags. Each command declares its
   binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`; the table binds only
   `bound` commands, and the test derives its expectation from the annotations, never from a list.
-  Protocol tests are transcript fixtures under `test_data/fixtures/mcp/`, never strings asserted in
-  code.
+  The exception is a tool no command stands behind: listed, and only where the tool-table test
+  (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
+  returns through `toolResult`, so text, structured content and exit code cannot drift from a
+  command's. `rewind-build` in `cmd/mcp.go` is the only one: read-only, schema and description its
+  own. Protocol tests are transcript fixtures under `test_data/fixtures/mcp/`, never strings
+  asserted in code.
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
   outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores `kbase mcp
   --kb-root`, so the tool reads the server's directory instead of the served KB.
@@ -151,19 +158,14 @@ single source. Working habits they impose:
 - **No stage exits on a model's opinion.** Every stage exits on a comparison of artifacts or a
   return code; a new stage does not get a third kind of exit.
 - **No prompt reaches a model from an in-code string.** Every prompt is an embedded template file
-  under `internal/asks`, rendered with its slots filled. One manifest beside the embedded files
-  states each file's provenance — imported, byte-identical to the file it was ported from at the
-  named adjagent commit; kbase-authored, derived from the named file and commit; or kbase-origin,
-  authored de novo in kbase with no origin file — never inside the file itself. A unit test
-  re-reads each imported file at its commit from `.claude/adjagent` and checks the identity, and
-  checks that every derivation source exists. A kbase-authored or kbase-origin template gets
-  prompt-engineer review before first use; a kbase-authored one lands as an experiment with a
+  under `internal/asks`, rendered with its slots filled, and its prose lives in that file alone —
+  never in a code string, a test, or a second copy elsewhere. A new or changed template gets
+  prompt-engineer review before first use, and a template change lands as an experiment with a
   measured result. A call's system prompt is the fragment named for it, never an agent definition.
-  A slot's value is formatted as kb_tools formats it.
 - **No test asserts a prompt's prose.** A test keyed on a template's wording is a second copy of the
   template; tests key on the offered letters, the slot set, the system fragment and the closing
   line's letters.
-- **Compatibility is judged by kb_tools' own readers and checks, never by a byte diff of
+- **Compatibility is judged by kbase's own readers and checks, never by a byte diff of
   presentation.** Byte equality is asserted only where SPEC "Compatibility contract" names a reader
   that needs it.
 - **Name the producer before you write the refusal.** Before writing code that refuses, raises, or
@@ -174,8 +176,8 @@ single source. Working habits they impose:
   is a different act; this rule does not reach it.
 - **A check earns its place by what it reads.** It reads what arrived from somewhere kbase did not
   compute: pandoc's output, an author's LaTeX, a hand edit on the maintenance path, values on stdin,
-  a model's answer to one of our asks, a KB kb_tools built. A check over a value kbase computed
-  restates the computation. That list is not closed; a new source is argued against the same test.
+  a model's answer to one of our asks, a KB this version did not write. A check over a value kbase
+  computed restates the computation. That list is not closed; a new source is argued against the same test.
   Process separation is not the test. Each check argues its own case in the report that lands it; a
   comment asserting boundary status is not that argument.
 - **Compare a label in the page's spelling.** pandoc escapes `&<>"'` in attribute values, and
@@ -194,7 +196,7 @@ single source. Working habits they impose:
 - **Inside a bracket expression, spell whitespace as `kb.PyWhitespace`, never `\s`.** `kb.PyRE`
   expands `\s` into a bracket expression of its own, and nested inside `[...]` that compiles,
   without error, into a different pattern.
-- **A port of a kb_tools float computation sums in Python's order with its compensation**
+- **A float computation that decides a ranking sums in Python's order with its compensation**
   (`shortlist.go`'s `pySum`): Go's plain summation ranks a near-tie differently, and a differently
   ranked shortlist asks a different pair.
 - **A public integration recipe re-invokes `just` for its private body, so a command-line variable
@@ -260,8 +262,8 @@ integration tests.
 **Results are part of the test.** Results that cannot be examined are not results.
 
 **A test harness selects its inputs by content the KB contract fixes, never by presentation.** A
-choice keyed on line wrapping or bullet style holds on one toolchain's output and silently finds
-nothing on the other's.
+choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
+another's.
 
 - MCP protocol tests are transcript fixtures, `test_data/fixtures/mcp/*.jsonl`: each request line is
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
@@ -271,9 +273,13 @@ nothing on the other's.
   the results fixture, inserts `kb-root/b` and `seed.yaml` through `insert-claim-entry --create`,
   and requires exactly the expected lines on stdout.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
-  `prep-test-integration-<corpus>`; anything needing network, a live provider, pandoc or the
-  adjagent reference is excluded from the hermetic omnibus `test-integration` and says so in its
-  `[doc]`.
+  `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
+  hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
+  dependency — pandoc, python3, the adjagent clone — leaves the omnibus the same way, what needs no
+  tool staying in it as a recipe of its own.
+- A Go test that must drive `kbase mcp` over pipes the recipe holds starts no process: the recipe
+  starts the server on two named FIFOs and passes their paths with `-args`, and the test opens the
+  write end first, so neither side waits on the other's open.
 - Every integration test preserves its full log, its stats, and its run artifacts under
   `test_data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A leg
   that must run outside any repository runs in a system temporary directory and copies its whole

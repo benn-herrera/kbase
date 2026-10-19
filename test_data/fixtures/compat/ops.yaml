@@ -1,4 +1,4 @@
-# The op script both toolchains apply to one KB. See README.md beside this
+# The op script applied to one KB. See README.md beside this
 # file for the placeholders and how the script is rendered and run.
 steps:
   - name: premise

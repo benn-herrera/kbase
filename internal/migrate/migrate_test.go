@@ -187,7 +187,7 @@ func TestIndexRecordIsOnePhysicalLine(t *testing.T) {
 	}
 }
 
-// TestDocumentYAMLFrontmatter: each comment-block form kb_tools writes
+// TestDocumentYAMLFrontmatter: each comment-block form 0.9.0 writes
 // becomes the same keys in the same order at the top of the document, the
 // block and its line break gone and every other byte kept.
 func TestDocumentYAMLFrontmatter(t *testing.T) {

@@ -8,18 +8,18 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Model tiers. The build names a tier, never a model id: which model serves
-// the decision tier is a deployment fact that belongs in config.toml, while
-// "the letter asks are decision-model calls" is a build fact that belongs in
-// the code. These constants are the single source of the tier names — the
-// `toml` tags on ModelMap must mirror them (struct tags cannot reference
-// constants).
+// Model categories. The build names a category, never a model id: which model
+// serves the decision category is a deployment fact that belongs in
+// config.toml, while "the letter asks are decision-model calls" is a build
+// fact that belongs in the code. These constants are the single source of the
+// category names — the `toml` tags on ModelMap must mirror them (struct tags
+// cannot reference constants).
 const (
-	// TierDecision is the claim graph's letter asks' tier: the SystemOne
+	// CategoryDecision is the claim graph's letter asks' category: the
 	// decision model that answers them.
-	TierDecision = "decision"
-	// TierText is the overview passage's tier.
-	TierText = "text"
+	CategoryDecision = "decision"
+	// CategoryText is the overview passage's category.
+	CategoryText = "text"
 )
 
 // Config is the kbase settings file (config.toml) — the choices that draw
@@ -31,11 +31,17 @@ type Config struct {
 	// Provider names the active providers.toml pool entry.
 	Provider string `toml:"provider"`
 
-	// Models maps the build's tiers onto model ids at that provider.
+	// Models maps the build's categories onto model ids at that provider.
 	Models ModelMap `toml:"models"`
 
 	// Asks is how the build puts its letter asks.
 	Asks AsksConfig `toml:"asks"`
+
+	// Sources names the layer that supplied each merged model id — one of
+	// LayerSourceRepository, LayerSourceGlobal, LayerSourceExplicit or
+	// LayerSourceEnvironment. It is set by Load's merge, never read from a
+	// file: one config.toml cannot say which layer it is.
+	Sources Sources `toml:"-"`
 }
 
 // AsksConfig is the [asks] table.
@@ -49,24 +55,24 @@ type AsksConfig struct {
 // message names it.
 const keyReaderConcurrency = "asks.readerConcurrency"
 
-// ModelMap is the [models] table: the tier→model-id resolution, written by
-// `kbase configure` or by hand. An unset tier is not defaulted — a guessed
+// ModelMap is the [models] table: the category→model-id resolution, written by
+// `kbase configure` or by hand. An unset category is not defaulted — a guessed
 // model id is a silent wrong answer, so callers fail loud instead.
 type ModelMap struct {
 	Decision string `toml:"decision"`
 	Text     string `toml:"text"`
 }
 
-// ModelFor returns the model id configured for a tier. The second return
-// is false when the tier is unknown or unmapped, which callers must treat
-// as "not configured" — never as license to substitute another tier's
+// ModelFor returns the model id configured for a category. The second return
+// is false when the category is unknown or unmapped, which callers must treat
+// as "not configured" — never as license to substitute another category's
 // model.
-func (c Config) ModelFor(tier string) (string, bool) {
+func (c Config) ModelFor(category string) (string, bool) {
 	var id string
-	switch tier {
-	case TierDecision:
+	switch category {
+	case CategoryDecision:
 		id = c.Models.Decision
-	case TierText:
+	case CategoryText:
 		id = c.Models.Text
 	default:
 		return "", false

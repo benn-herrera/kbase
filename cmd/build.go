@@ -20,7 +20,6 @@ import (
 type buildOptions struct {
 	VolumeRoots    []string
 	Bibliographies []string
-	Charter        string
 	Through        string
 	StateDir       string
 	NoInference    bool
@@ -43,7 +42,7 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 		return 0, err
 	}
 	outcome, fields := build.Run(ctx, build.Options{
-		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Charter: opts.Charter, Through: opts.Through,
+		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
 		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, WorkDir: opts.WorkDir, Provider: opts.Provider,
 		Logger: opts.Logger,
 	})
@@ -75,55 +74,54 @@ func (c exitCode) Error() string { return fmt.Sprintf("exit %d", int(c)) }
 
 var (
 	flagBibliographies []string
-	flagCharter        string
 	flagThrough        string
 	flagStateDir       string
 	flagNoInference    bool
 )
 
 // buildProvider is where the build's model calls go — the environment's
-// layer over the loaded configuration — its letter asks on the decision tier
-// and the overview passage on the text tier, or what it lacks. A key bound
-// for a non-loopback http:// endpoint is said on stderr, and the build
-// proceeds.
+// layer over the loaded configuration — its letter asks on the decision
+// category and the overview passage on the text category, or what it lacks.
+// A key bound for a non-loopback http:// endpoint is said on stderr, and the
+// build proceeds.
 func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func() (build.Provider, error) {
 	return func() (build.Provider, error) {
-		var entry *config.Provider
-		name, unselected := selectProviderName("", p.Config.Provider, p.Providers)
-		if unselected == nil {
-			if e, ok := p.Providers[name]; ok {
-				entry = &e
-			} else {
-				unselected = unresolvedProviderError(name, p.Providers, p.Faults)
-			}
+		r := resolveProvider(p, env)
+		if r.Err != nil {
+			return build.Provider{}, r.Err
 		}
-		inf, err := config.ResolveInference(p.Config, entry, unselected, env)
-		if err != nil {
-			return build.Provider{}, err
-		}
-		if line := config.CleartextWarning(inf.BaseURL, inf.APIKey); line != "" {
+		if line := config.CleartextWarning(r.Inference.BaseURL, r.Inference.APIKey); line != "" {
 			fmt.Fprintln(stderr, line)
 		}
-		client := model.NewHTTPClient(model.Endpoint{Name: inf.Name, BaseURL: inf.BaseURL, APIKey: inf.APIKey})
+		client := model.NewHTTPClient(model.Endpoint{
+			Name: r.Inference.Name, BaseURL: r.Inference.BaseURL, APIKey: r.Inference.APIKey,
+			Decisions: decisionsSurface(r.Inference.DecisionsFlavor),
+		})
 		concurrency := 0
 		if n := p.Config.Asks.ReaderConcurrency; n != nil {
 			concurrency = *n
 		}
-		return build.Provider{Client: client, Letters: inf.Decision, Overview: inf.Text, ReaderConcurrency: concurrency}, nil
+		return build.Provider{
+			Client: client, Letters: r.Inference.Decision, Overview: r.Inference.Text, ReaderConcurrency: concurrency,
+			Name: r.Provider, Rule: string(r.Rule), Layer: r.Layer,
+		}, nil
 	}
 }
 
 var buildCmd = &cobra.Command{
 	Use:   "build <volume-root>...",
-	Short: "build kb_tools' KB from LaTeX volume roots into <git root>/kb-root",
+	Short: "build the KB from LaTeX volume roots into <git root>/kb-root",
 	Long: `build converts LaTeX volume roots — each a paper's top .tex file, never one
-another includes — into the KB kb_tools builds, at kb-root/ beside the
-repository's .git: one tree, each volume its own directory, entry-point.md
-listing every volume in the order given. It walks the build's stages in order through the
+another includes — into a KB, at kb-root/ beside the repository's .git: one
+tree, each volume its own directory, entry-point.md listing every volume in
+the order given. It walks the build's stages in order through the
 stage --through names (an id or a display name; every stage when absent).
 Each stage's boundary is a commit in the repository, its subject
 "kb-build: <stage> | <display>", scoped to the paths the build owns; an
-invocation resumes from the last boundary the commit trail holds.
+invocation resumes from the last boundary the commit trail holds. A build
+resumes from any recorded boundary, not only the last: status names each
+stage's commit, so reset the repository to one and re-issue the build, and the
+kbase://build-trail MCP resource prints the commands.
 --no-inference drops every row that spends inference and walks the rest;
 without it, the claim graph's letter asks go to the configured provider's
 decision model and the overview passage to its text one. KBASE_API_BASE_URL,
@@ -143,7 +141,7 @@ report, and the command that resumes the build where it did not finish.`,
 		if err != nil {
 			return err
 		}
-		_, providers, err := loadVerbContext()
+		providers, err := loadVerbContext(wd)
 		if err != nil {
 			return err
 		}
@@ -152,7 +150,6 @@ report, and the command that resumes the build where it did not finish.`,
 		code, err := runBuild(ctx, buildOptions{
 			VolumeRoots:    args,
 			Bibliographies: flagBibliographies,
-			Charter:        flagCharter,
 			Through:        flagThrough,
 			StateDir:       flagStateDir,
 			NoInference:    flagNoInference,
@@ -176,7 +173,6 @@ report, and the command that resumes the build where it did not finish.`,
 func init() {
 	buildCmd.Flags().StringArrayVar(&flagBibliographies, "bibliography", nil,
 		"a .bib citations resolve against; repeat per file, in the order that decides a key two files define (default: every .bib beside any volume root, sorted)")
-	buildCmd.Flags().StringVar(&flagCharter, "charter", "", "a file stating the build's scope, kept as kb-build-charter.md when the build opens")
 	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id or display name (default: every stage)")
 	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "drop every row that spends inference and walk the rest")

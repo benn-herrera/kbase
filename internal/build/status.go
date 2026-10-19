@@ -19,12 +19,13 @@ import (
 
 // The states status reports.
 const (
-	stateNone      = "none"
-	stateRunning   = "running"
-	stateCancelled = "cancelled"
-	stateFailed    = "failed"
-	stateBounded   = "bounded"
-	stateFinished  = "finished"
+	stateNone        = "none"
+	stateRunning     = "running"
+	stateCancelled   = "cancelled"
+	stateInterrupted = "interrupted"
+	stateFailed      = "failed"
+	stateBounded     = "bounded"
+	stateFinished    = "finished"
 )
 
 // recentItems is how many refusals and fallbacks status lists.
@@ -64,6 +65,135 @@ func (o MonitorOptions) open() (repo *ledger.Repo, kbRoot, dir string, err error
 	return repo, kbRoot, dir, err
 }
 
+// State is the build's state and the run it stands at, as the state store's
+// holder lock and progress record report them: one run, named by its pid and
+// its start stamp, and whether it is still progressing.
+type State struct {
+	State   string
+	PID     int
+	Started string
+}
+
+// ReadState is the build's state in the state store at dir, and the run it
+// stands at. It reads the store alone, never the commit trail, so a monitor
+// may read it as often as it likes.
+func ReadState(dir string) (State, error) {
+	r, err := readStore(dir)
+	if err != nil {
+		return State{}, err
+	}
+	return State{State: r.state(), PID: r.pid(), Started: r.started()}, nil
+}
+
+// WaitState polls the state store at dir every interval until the run pid is
+// no longer progressing — the store stands at another run, or at that run with
+// a state it stopped at — and returns the reading that ended the wait. A pid
+// the store does not hold returns at once with the store's standing run.
+func WaitState(dir string, pid int, interval time.Duration) (State, error) {
+	for {
+		state, err := ReadState(dir)
+		if err != nil {
+			return State{}, err
+		}
+		if state.PID != pid || Ended(state.State) {
+			return state, nil
+		}
+		time.Sleep(interval)
+	}
+}
+
+// Ended reports whether state is one a build stops at: the run is over when it
+// is one of these, and no further progress is coming.
+func Ended(state string) bool {
+	switch state {
+	case stateFinished, stateBounded, stateCancelled, stateFailed, stateInterrupted:
+		return true
+	}
+	return false
+}
+
+// storeReading is what the state store at dir records of the build: whether a
+// build holds it, the run the build stands at, the holder's record, and every
+// invocation the progress record holds. status's state and the MCP watcher's
+// both derive from it; the commit trail, which costs a git log against the
+// repository the build commits to, is status's alone.
+type storeReading struct {
+	live   bool
+	last   invocation
+	all    []invocation
+	holder holder
+}
+
+// readStore is the state store at dir read: its progress record, its holder
+// lock and the holder's record.
+func readStore(dir string) (storeReading, error) {
+	events, err := readProgress(dir)
+	if err != nil {
+		return storeReading{}, err
+	}
+	live, err := filelock.Held(filepath.Join(dir, lockFile))
+	if err != nil {
+		return storeReading{}, err
+	}
+	// The run the build stands at is the newest one: a refusal or retry that
+	// recorded no boundary wrote nothing, so the run before it stands.
+	all := invocations(events)
+	var last invocation
+	for i := len(all) - 1; i >= 0; i-- {
+		if live || all[i].stands() {
+			last = all[i]
+			break
+		}
+	}
+	h, err := readHolder(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return storeReading{}, err
+	}
+	return storeReading{live: live, last: last, all: all, holder: h}, nil
+}
+
+// state is the state the reading reports.
+func (r storeReading) state() string {
+	switch {
+	case r.live:
+		return stateRunning
+	case r.last != nil:
+		end := r.last.end()
+		state := map[string]string{
+			result.Done: stateFinished, result.Unchanged: stateFinished, result.Bounded: stateBounded,
+			result.Cancelled: stateCancelled,
+		}[end.Outcome]
+		switch {
+		case end.Event == "":
+			return stateInterrupted
+		case state == "":
+			return stateFailed
+		}
+		return state
+	}
+	return stateNone
+}
+
+// pid is the run's process: the holder's while a build holds the store, else
+// the run's own; zero where the store records no run.
+func (r storeReading) pid() int {
+	if r.live {
+		return r.holder.PID
+	}
+	if r.last != nil {
+		return r.last[0].PID
+	}
+	return 0
+}
+
+// started is the run's start stamp; "" where the store records no run.
+func (r storeReading) started() string {
+	if r.last != nil {
+		return r.last[0].Time
+	}
+	return ""
+}
+
 // Status is the build's state read from the holder lock, the progress record
 // and the commit trail, and the size of the answer cache.
 func Status(opts MonitorOptions) (string, []result.Field) {
@@ -76,35 +206,11 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 	if err != nil {
 		return monitorEnd(placement, err)
 	}
-	events, err := readProgress(dir)
+	read, err := readStore(dir)
 	if err != nil {
 		return monitorEnd(placement, err)
 	}
-	live, err := filelock.Held(filepath.Join(dir, lockFile))
-	if err != nil {
-		return monitorEnd(placement, err)
-	}
-	all := invocations(events)
-	var last invocation
-	for i := len(all) - 1; i >= 0; i-- {
-		if outcome := all[i].end().Outcome; live || outcome != result.Refused && outcome != result.Retry {
-			last = all[i]
-			break
-		}
-	}
-	state := stateNone
-	switch {
-	case live:
-		state = stateRunning
-	case last != nil:
-		state = map[string]string{
-			result.Done: stateFinished, result.Unchanged: stateFinished, result.Bounded: stateBounded,
-			result.Cancelled: stateCancelled,
-		}[last.end().Outcome]
-		if state == "" {
-			state = stateFailed
-		}
-	}
+	last, state := read.last, read.state()
 	w := &walk{trail: trail}
 	recorded := w.recorded()
 	stages := make([]result.Record, len(Stages))
@@ -123,17 +229,16 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 	if last != nil {
 		run = last[0]
 	}
-	h, err := readHolder(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return monitorEnd(placement, err)
-	}
-	pid := run.PID
-	if live {
-		pid = h.PID
-	}
-	var resume any
-	if state != stateFinished && state != stateRunning && run.Resume != nil {
-		resume = shellJoin(run.Resume)
+	pid := read.pid()
+	// resume is the command that continues the work: none while a build is
+	// running it, none for a finished or bounded build, whose own command
+	// repeats where it stopped, and none where the record's command does not
+	// read as a kbase build invocation. The run this reads is the one the build
+	// stands at, so a refusal that recorded no boundary hands out nothing: it
+	// is not the run reported.
+	command, confirmed := recordedCommand(run.Resume)
+	if !confirmed || state == stateFinished || state == stateRunning || state == stateBounded {
+		command = ""
 	}
 	cacheEntries, cacheBytes, err := answerCache(dir)
 	if err != nil {
@@ -148,13 +253,13 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 		result.Field{Key: "no-inference", Value: run.NoInference},
 		result.Field{Key: "stages", Value: stages},
 		result.Field{Key: "current", Value: current},
-		result.Field{Key: "recent-refusals", Value: recent(all, func(inv invocation) []result.Item {
+		result.Field{Key: "recent-refusals", Value: recent(read.all, func(inv invocation) []result.Item {
 			if e := inv.end(); e.Outcome == result.Refused || e.Outcome == result.Retry || e.Outcome == result.Failed {
 				return e.Items
 			}
 			return nil
 		})},
-		result.Field{Key: "recent-fallbacks", Value: recent(all, func(inv invocation) []result.Item {
+		result.Field{Key: "recent-fallbacks", Value: recent(read.all, func(inv invocation) []result.Item {
 			var items []result.Item
 			for _, e := range inv {
 				if e.Event == eventFallback {
@@ -165,7 +270,7 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 		})},
 		result.Field{Key: "cache-entries", Value: cacheEntries},
 		result.Field{Key: "cache-bytes", Value: cacheBytes},
-		result.Field{Key: "resume", Value: resume},
+		result.Field{Key: "resume", Value: nullable(command)},
 	)
 }
 
@@ -227,8 +332,18 @@ func nullable[T comparable](v T) any {
 	return v
 }
 
-// shellJoin quotes each word a POSIX shell would split or expand.
-func shellJoin(argv []string) string {
+// recordedCommand renders a recorded invocation for a document, and reports
+// whether it reads as a kbase build invocation at all: a record naming another
+// program was not written by kbase, and is never rendered for a harness to run.
+func recordedCommand(argv []string) (string, bool) {
+	if len(argv) < 2 || argv[0] != "kbase" || argv[1] != "build" {
+		return "", false
+	}
+	return ShellJoin(argv), true
+}
+
+// ShellJoin quotes each word a POSIX shell would split or expand.
+func ShellJoin(argv []string) string {
 	words := make([]string, len(argv))
 	for i, a := range argv {
 		if a != "" && strings.Trim(a, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./-_") == "" {
@@ -262,7 +377,8 @@ func Locate(opts MonitorOptions) (kbRoot, dir, outcome string, fields []result.F
 
 // Launched reads the latest invocation the process pid opened in the state store
 // at dir: whether it has passed its launch checks and entered a stage, and
-// the command that resumes it.
+// the command that resumes it, empty where the record's command does not read
+// as a kbase build invocation.
 func Launched(dir string, pid int) (entered bool, resume string, err error) {
 	events, err := readProgress(dir)
 	if err != nil {
@@ -274,7 +390,8 @@ func Launched(dir string, pid int) (entered bool, resume string, err error) {
 			continue
 		}
 		entered = slices.ContainsFunc(all[i], func(e event) bool { return e.Event == eventStage })
-		return entered, shellJoin(all[i][0].Resume), nil
+		command, _ := recordedCommand(all[i][0].Resume)
+		return entered, command, nil
 	}
 	return false, "", nil
 }
@@ -336,16 +453,21 @@ func Cancel(opts MonitorOptions) (string, []result.Field) {
 	return result.Done, append(fields, result.Field{Key: "resume", Value: resume})
 }
 
-// lastResume is the command that resumes the build the progress record
-// names last, or nil where it names none.
+// lastResume is the command that resumes the build the progress record names
+// last, or nil where it names none or names a command that does not read as a
+// kbase build invocation.
 func lastResume(dir string) (any, error) {
 	events, err := readProgress(dir)
 	if err != nil {
 		return nil, err
 	}
 	all := invocations(events)
-	if len(all) == 0 || all[len(all)-1][0].Resume == nil {
+	if len(all) == 0 {
 		return nil, nil
 	}
-	return shellJoin(all[len(all)-1][0].Resume), nil
+	command, confirmed := recordedCommand(all[len(all)-1][0].Resume)
+	if !confirmed {
+		return nil, nil
+	}
+	return command, nil
 }

@@ -1,6 +1,6 @@
-// Package asks is everything kbase puts to a model: kb_tools' prompt
-// templates and fragments, imported unchanged and embedded; the composer that
-// fills their slots; the letter-ask seam every claim-graph decision crosses;
+// Package asks is everything kbase puts to a model: the prompt templates and
+// fragments, embedded as they stand; the composer that fills their slots; the
+// letter-ask seam every claim-graph decision crosses;
 // the asks of each kind; and the Caller that puts a composed prompt to a
 // provider under its system fragment.
 package asks
@@ -15,9 +15,9 @@ import (
 	"strings"
 )
 
-// shelf is the embedded templates and fragments, each byte for byte as its
-// origin file or kbase wrote it. The top level holds what something
-// dispatches, fragments/ what something splices into one.
+// shelf is the set of embedded prompt files, each addressed by name and with
+// no origin to compare against: kbase wrote every one. The top level holds
+// what something dispatches, fragments/ what something splices into one.
 //
 //go:embed prompt-templates
 var shelf embed.FS
@@ -40,7 +40,7 @@ var (
 
 // The composer-resolved fragments. A template names none of them: each is a
 // call's whole system prompt. The overview call alone carries one — a
-// decision call's SystemOne request has no system prompt.
+// decision call's Decision request has no system prompt.
 const OverviewSystem = "overview-system"
 
 var fragmentSlots = []string{OverviewSystem}

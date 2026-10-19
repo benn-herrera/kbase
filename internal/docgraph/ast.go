@@ -240,15 +240,14 @@ func blockLabel(classes []string, names map[string]string) (string, bool) {
 	return name, titlepage
 }
 
-// labelNameRe is the name a label line must carry for kb_tools' reader to
-// read it: inventory.LABEL_LINE_RE's environment group.
+// labelNameRe is the name a label line must carry to be read: kb.LabelName.
 var labelNameRe = regexp.MustCompile(`^` + kb.LabelName + `$`)
 
-// labelLineRead is whether kb_tools' reader reads the label line
-// labelledBlock writes for a block named name. It reads one only at the
-// margin, which the writer keeps exactly where every container above the
-// block is a Div that is not the author's: any other container indents its
-// content, quotes it, or renders it as HTML.
+// labelLineRead is whether the label line labelledBlock writes for a block
+// named name is read. One is read only at the margin, which the writer keeps
+// exactly where every container above the block is a Div that is not the
+// author's: any other container indents its content, quotes it, or renders it
+// as HTML.
 func labelLineRead(name string, atMargin bool) bool {
 	return atMargin && labelNameRe.MatchString(name)
 }
@@ -316,7 +315,7 @@ func liftDisplayMath(n node) ([]any, bool) {
 	return lifted, true
 }
 
-// Metadata keys split by kb_tools' closed classification: content reaches the
+// Metadata keys split by the closed classification: content reaches the
 // tree, apparatus is elided. A key the rendering's metadata block carries in
 // neither stops the build.
 var (

@@ -28,6 +28,26 @@ func writeProviders(t *testing.T, dir, body string) string {
 	return writeFile(t, dir, ProvidersFileName, body)
 }
 
+// exposedKeyFile writes a key file holding body with group- and other-read
+// bits set, and returns its path. A test that needs the exposure to be real
+// skips where the filesystem will not hold the mode.
+func exposedKeyFile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := writeFile(t, dir, name, body)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Skipf("cannot chmod a fixture in this environment: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat key fixture: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		// Windows synthesizes modes, so there is no exposure to detect.
+		t.Skipf("the filesystem did not take the mode (got %v); nothing to test", info.Mode().Perm())
+	}
+	return path
+}
+
 func keysOf(p Providers) []string {
 	out := make([]string, 0, len(p))
 	for k := range p {
@@ -36,16 +56,17 @@ func keysOf(p Providers) []string {
 	return out
 }
 
-// TestLoadProvidersResolvesKeys covers both credential forms in one pool:
-// the inline apiKeyUnsafe and the recommended apiKeyFile, whose relative
-// path resolves against the providers.toml directory.
+// TestLoadProvidersResolvesKeys: each entry's key is the content of the file
+// its relative apiKeyFile names, resolved against the providers.toml
+// directory and trimmed of surrounding whitespace.
 func TestLoadProvidersResolvesKeys(t *testing.T) {
 	dir := t.TempDir()
+	writeFile(t, dir, "local.key", fakeKey)
 	writeFile(t, dir, "reaper.key", "  "+fakeKey+"\n")
 	path := writeProviders(t, dir, `
 [local]
 baseUrl = "http://127.0.0.1:8080/v1"
-apiKeyUnsafe = "`+fakeKey+`"
+apiKeyFile = "local.key"
 
 [reaper]
 baseUrl = "https://api.example.com/v1"
@@ -107,10 +128,11 @@ apiKeyFile = "`+keyPath+`"
 // reason carries the path but no key material.
 func TestLoadProvidersUnreadableKeyFile(t *testing.T) {
 	dir := t.TempDir()
+	writeFile(t, dir, "healthy.key", fakeKey+"\n")
 	path := writeProviders(t, dir, `
 [healthy]
 baseUrl = "http://ok/v1"
-apiKeyUnsafe = "`+fakeKey+`"
+apiKeyFile = "healthy.key"
 
 [broken]
 baseUrl = "http://x/v1"
@@ -146,18 +168,7 @@ apiKeyFile = "not-here.key"
 // just read successfully, which is a puzzle rather than a safeguard.
 func TestLoadProvidersExposedKeyFile(t *testing.T) {
 	dir := t.TempDir()
-	keyPath := writeFile(t, dir, "reaper.key", fakeKey+"\n")
-	if err := os.Chmod(keyPath, 0o644); err != nil {
-		t.Skipf("cannot chmod a fixture in this environment: %v", err)
-	}
-	info, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatalf("stat key fixture: %v", err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		// Windows synthesizes modes, so there is no exposure to detect.
-		t.Skipf("the filesystem did not take the mode (got %v); nothing to test", info.Mode().Perm())
-	}
+	keyPath := exposedKeyFile(t, dir, "reaper.key", fakeKey+"\n")
 	path := writeProviders(t, dir, `
 [reaper]
 baseUrl = "https://api.example.com/v1"
@@ -209,14 +220,15 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 		entry    string
 		wantHint string
 	}{
-		{"no baseUrl", "apiKeyUnsafe = \"" + fakeKey + "\"\n", "no baseUrl declared"},
+		{"no baseUrl", "apiKeyFile = \"never-read.key\"\n", "no baseUrl declared"},
 		{"unknown type", "baseUrl = \"http://x/v1\"\ntype = \"telepathy\"\n", "unknown type"},
 		{"unknown api", "baseUrl = \"http://x/v1\"\napi = \"exa\"\n", "not valid for a inference provider"},
+		{"unknown decisionsFlavor", "baseUrl = \"http://x/v1\"\ndecisionsFlavor = \"systemtwo\"\n", "known surfaces: systemone, decisions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := writeProviders(t, dir,
-				"[healthy]\nbaseUrl = \"http://ok/v1\"\napiKeyUnsafe = \""+fakeKey+"\"\n\n[suspect]\n"+tc.entry)
+				"[healthy]\nbaseUrl = \"http://ok/v1\"\n\n[suspect]\n"+tc.entry)
 
 			got, faults, err := LoadProviders(path)
 			if err != nil {
@@ -238,24 +250,29 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 	}
 }
 
-// TestProviderValidateDefaults: type and api are optional compatibility
-// fields; absent, mixed-case and space-padded spellings of the one legal
-// pairing all validate, and Kind/Protocol report the normalized value so
-// call sites can compare against the constants.
+// TestProviderValidateDefaults: type, api and decisionsFlavor are optional
+// compatibility fields; absent, mixed-case and space-padded spellings of the
+// one legal pairing all validate, and Kind/Protocol/Flavor report the
+// normalized value so call sites can compare against the constants.
 func TestProviderValidateDefaults(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		provider Provider
-		wantOK   bool
+		name       string
+		provider   Provider
+		wantOK     bool
+		wantFlavor string
 	}{
-		{"both absent", Provider{BaseURL: "http://x/v1"}, true},
-		{"both explicit", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference, API: ProviderAPIOpenAI}, true},
-		{"type only", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference}, true},
-		{"api only", Provider{BaseURL: "http://x/v1", API: ProviderAPIOpenAI}, true},
-		{"normalized spelling", Provider{BaseURL: "http://x/v1", Type: " Inference ", API: "OpenAI"}, true},
-		{"wrong type", Provider{BaseURL: "http://x/v1", Type: "search"}, false},
-		{"wrong api", Provider{BaseURL: "http://x/v1", API: "exa"}, false},
-		{"no baseUrl", Provider{Type: ProviderTypeInference}, false},
+		{"both absent", Provider{BaseURL: "http://x/v1"}, true, ""},
+		{"both explicit", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference, API: ProviderAPIOpenAI}, true, ""},
+		{"type only", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference}, true, ""},
+		{"api only", Provider{BaseURL: "http://x/v1", API: ProviderAPIOpenAI}, true, ""},
+		{"normalized spelling", Provider{BaseURL: "http://x/v1", Type: " Inference ", API: "OpenAI"}, true, ""},
+		{"decisions flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorDecisions}, true, FlavorDecisions},
+		{"flavour, normalized spelling", Provider{BaseURL: "http://x/v1", DecisionsFlavor: " Decisions "}, true, FlavorDecisions},
+		{"systemone flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorSystemOne}, true, FlavorSystemOne},
+		{"wrong type", Provider{BaseURL: "http://x/v1", Type: "search"}, false, ""},
+		{"wrong api", Provider{BaseURL: "http://x/v1", API: "exa"}, false, ""},
+		{"unknown decisionsFlavor", Provider{BaseURL: "http://x/v1", DecisionsFlavor: "systemtwo"}, false, ""},
+		{"no baseUrl", Provider{Type: ProviderTypeInference}, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.provider.Validate()
@@ -270,6 +287,14 @@ func TestProviderValidateDefaults(t *testing.T) {
 			}
 			if a := tc.provider.Protocol(); a != ProviderAPIOpenAI {
 				t.Errorf("Protocol() = %q, want %q", a, ProviderAPIOpenAI)
+			}
+			// An entry silent on the flavour speaks the SystemOne surface.
+			wantFlavor := tc.wantFlavor
+			if wantFlavor == "" {
+				wantFlavor = FlavorSystemOne
+			}
+			if f := tc.provider.Flavor(); f != wantFlavor {
+				t.Errorf("Flavor() = %q, want %q", f, wantFlavor)
 			}
 		})
 	}
@@ -328,8 +353,10 @@ func TestLoadProvidersMalformed(t *testing.T) {
 // TestLoadProvidersUnknownField: the table headers are provider NAMES and
 // stay open, but the fields inside an entry are a fixed set. A misspelled
 // one decodes into nothing, leaving an entry that points nowhere — so the
-// load refuses and names it, listing every offender at once. The refusal
-// must name keys only: providers.toml holds credentials.
+// load refuses and names it, listing every offender at once. A field kbase
+// no longer models (apiKeyUnsafe) is refused the same way, by name alone:
+// providers.toml is not to hold credentials, and a file that still spells
+// one must not have its value echoed back.
 func TestLoadProvidersUnknownField(t *testing.T) {
 	dir := t.TempDir()
 	path := writeProviders(t, dir, `
@@ -346,7 +373,7 @@ apiKeyPath = "reaper.key"
 		t.Fatal("a misspelled provider field left the entry unroutable and the load allowed it: got nil error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"providers:", path, `"reaper.url"`, `"reaper.apiKeyPath"`, unknownKeyHint} {
+	for _, want := range []string{"providers:", path, `"local.apiKeyUnsafe"`, `"reaper.url"`, `"reaper.apiKeyPath"`, unknownKeyHint} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal %q does not name %s", msg, want)
 		}
@@ -361,10 +388,12 @@ apiKeyPath = "reaper.key"
 // here keeps a future strictness pass from turning a working config into a
 // refusal.
 func TestLoadProvidersFieldCaseInsensitive(t *testing.T) {
-	path := writeProviders(t, t.TempDir(), `
+	dir := t.TempDir()
+	writeFile(t, dir, "reaper.key", fakeKey+"\n")
+	path := writeProviders(t, dir, `
 [reaper]
 BaseURL = "https://api.example.com/v1"
-APIKEYUNSAFE = "`+fakeKey+`"
+APIKEYFILE = "reaper.key"
 `)
 	got, faults, err := LoadProviders(path)
 	if err != nil {
@@ -401,23 +430,35 @@ baseUrl = "http://127.0.0.1:8081/v1"
 	}
 }
 
-// TestLoadProvidersKeyAbsentFromParseError: when one table is malformed,
-// the wrapped parse error must not contain the apiKey value from a sibling
-// table that did parse.
-func TestLoadProvidersKeyAbsentFromParseError(t *testing.T) {
+// TestLoadProvidersKeyAbsentFromFaults: a fault names a key file by its path
+// and mode, never by its content. The sentinel key really is read — the
+// usable entry carries it — and appears in no fault reason, whichever fault
+// a provider collects.
+func TestLoadProvidersKeyAbsentFromFaults(t *testing.T) {
 	const sentinel = "sk-SECRET-MUST-NOT-LEAK-9f3a0b"
-	path := writeProviders(t, t.TempDir(), `[clean]
+	dir := t.TempDir()
+	exposedKeyFile(t, dir, "reaper.key", sentinel+"\n")
+	path := writeProviders(t, dir, `[reaper]
 baseUrl = "https://api.example.com/v1"
-apiKeyUnsafe = "`+sentinel+`"
+apiKeyFile = "reaper.key"
 
-[broken
-this is not valid toml
+[broken]
+baseUrl = "http://x/v1"
+apiKeyFile = "not-here.key"
 `)
-	_, _, err := LoadProviders(path)
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	got, faults, err := LoadProviders(path)
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
 	}
-	if strings.Contains(err.Error(), sentinel) {
-		t.Fatalf("API key leaked into parse error: %v", err)
+	if got["reaper"].APIKey != sentinel {
+		t.Fatal("the fixture's key file did not resolve, so the fault text proves nothing")
+	}
+	if len(faults) != 2 {
+		t.Fatalf("want the dropped entry and the exposure warning, got %+v", faults)
+	}
+	for _, f := range faults {
+		if strings.Contains(f.Reason, sentinel) {
+			t.Errorf("ProviderFault.Reason carries key material: %q", f.Reason)
+		}
 	}
 }

@@ -10,15 +10,13 @@ import (
 	"kbase/internal/kb"
 )
 
-// kbtoolsTests is kb_tools' test tree in the adjagent clone; corpus-driven
-// tests skip where it is absent.
-const kbtoolsTests = "../../.claude/adjagent/kb_tools/tests"
-
-func requireKbTools(t *testing.T, rel string) string {
+// requireReferenceFixture is the reference's fixture of that name, committed
+// under testdata/ so these tests run without the reference's own tree.
+func requireReferenceFixture(t *testing.T, name string) string {
 	t.Helper()
-	dir := filepath.Join(kbtoolsTests, rel)
+	dir := filepath.Join("testdata", name)
 	if _, err := os.Stat(dir); err != nil {
-		t.Skipf("%s is absent; the adjagent clone is not here", dir)
+		t.Fatalf("fixture %s is not committed: %v", name, err)
 	}
 	return dir
 }
@@ -27,8 +25,8 @@ func f64(v float64) *float64 { return &v }
 
 func str(s string) *string { return &s }
 
-// goldenShapes are kb_tools' render specimens, the same values its render
-// test hands its renderers; the name is the golden's file stem.
+// goldenShapes are the reference's render specimens, the same values its
+// render test hands its renderers; the name is the golden's file stem.
 var goldenShapes = map[string]func() string{
 	"claim-entry-full": func() string {
 		return renderEntry(registerEntry{
@@ -146,11 +144,11 @@ func TestFrontmatterRenderedAsTheGoldens(t *testing.T) {
 	}
 }
 
-// TestRenderGoldens byte-compares every rendered shape against kb_tools'
-// committed golden for it; each golden carries the one trailing newline a
-// text file ends with.
+// TestRenderGoldens byte-compares every rendered shape against the reference's
+// committed golden for it; each golden carries the one trailing newline a text
+// file ends with.
 func TestRenderGoldens(t *testing.T) {
-	dir := requireKbTools(t, "fixtures/writeapi-render-golden")
+	dir := requireReferenceFixture(t, "writeapi-render-golden")
 	onDisk, err := filepath.Glob(filepath.Join(dir, "*.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +175,7 @@ func TestRenderGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			if want, got := string(golden), goldenShapes[name]()+"\n"; got != want {
-				t.Errorf("render differs from kb_tools' golden\n--- golden\n%s--- kbase\n%s", want, got)
+				t.Errorf("render differs from the reference's golden\n--- golden\n%s--- kbase\n%s", want, got)
 			}
 		})
 	}

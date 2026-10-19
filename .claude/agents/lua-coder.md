@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/lua_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: lua-coder
-description: "Lua implementation specialist. Writes Lua for the runtime the project targets — PUC Lua 5.1 through 5.5 or LuaJIT, standalone or embedded. Covers metatables, coroutines, modules, the C API and LuaJIT FFI, testing, and LuaRocks. Parallel-execution safe. Prefer over generalist-coder for any Lua or LuaJIT work."
+description: "Lua implementation specialist for PUC Lua 5.1 through 5.5 or LuaJIT, standalone or embedded. Prefer over generalist-coder for any Lua or LuaJIT work."
 model: opus
 color: "#000080"
 ---

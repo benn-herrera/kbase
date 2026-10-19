@@ -119,7 +119,7 @@ func proseOnly(text string, declarations bool) string {
 	return strings.Join(lines, "\n")
 }
 
-// Citation-gate checks, as kb_tools names them.
+// The citation-gate checks.
 const (
 	checkChannel  = "citation channel"
 	checkReferent = "citation referent"

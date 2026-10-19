@@ -198,7 +198,6 @@ const fmKind = "---\nkind: %s\n---\n\n"
 
 func withKind(kind, body string) string { return strings.Replace(fmKind, "%s", kind, 1) + body }
 
-// The cases are kb_tools' own citation-gate tests (tests/test_verify_citations.py).
 func TestCitationFindings(t *testing.T) {
 	target := "# Target\n\n## The Section\n\nThe load-bearing clause lives here, stated plainly.\n"
 	register := "## Entry\n<!-- id: clm-aa1111 -->\n\nRationale prose naming clm-bb2222 from the other domain.\n"

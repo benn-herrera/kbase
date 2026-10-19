@@ -87,8 +87,8 @@ func unanswered(r buildrecords.UnmarkedRecord) []pair {
 // encodeRecord is v as its record file holds it.
 func encodeRecord(v any) ([]byte, error) { return kb.RecordYAML(v) }
 
-// orEmpty is s, an empty slice where it is nil, so the record writes [] as
-// kb_tools does rather than null.
+// orEmpty is s, an empty slice where it is nil, so the record writes [] rather
+// than null.
 func orEmpty[T any](s []T) []T {
 	if s == nil {
 		return []T{}

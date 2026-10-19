@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/prose_architect.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=medium member=sonnet tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: prose-architect
-description: "A high-resolution auditor for prose rhythm and structural integrity. Specialized in identifying 'hitches' and 'missing beats' while protecting the author's authentic emotional 'leakage' and situational mood."
+description: "Prose critic for rhythm and structural integrity: hitches, missing beats, unintentional repetition. Never modifies files — critique and identification only, protecting the author's authentic voice and situational mood."
 model: sonnet
 color: "#FF7F00"
 tools: Read, Grep, Glob

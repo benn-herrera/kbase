@@ -25,12 +25,12 @@ const (
 	configDirPerm = 0o777
 
 	// keyProvider is the top-level key holding the provider choice; it
-	// mirrors Config's `toml` tag. The [models] table's keys are the tier
-	// names themselves, so TierDecision and TierText are their single
+	// mirrors Config's `toml` tag. The [models] table's keys are the category
+	// names themselves, so CategoryDecision and CategoryText are their single
 	// source here as everywhere else.
 	keyProvider = "provider"
 
-	// tableModels is the table holding the tier→model-id map; it mirrors
+	// tableModels is the table holding the category→model-id map; it mirrors
 	// Config's `toml` tag for Models.
 	tableModels = "models"
 
@@ -41,29 +41,23 @@ const (
 	commentGap = "  "
 )
 
-// configTemplate is what a config.toml that does not exist yet is created
-// as. It is commented because the file is a hand-editing surface first and
-// a program output second: a user who opens it should find out from the
-// file itself what may be changed and what `kbase configure` will rewrite.
-const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase configure`" + ` updates only
-# the ` + keyProvider + ` and [` + tableModels + `] values, and leaves everything else in this
-# file exactly as it found it.
+// CreateProvidersFile writes the annotated providers.toml template at path
+// when no file stands there, creating the containing directory, and reports
+// whether it wrote. It is the only writer of providers.toml: a file that
+// stands is a hand-editing surface nothing here overwrites.
+func CreateProvidersFile(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("config: stat %s: %w", path, err)
+	}
+	if err := installConfig(path, providersTemplate); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
-%s
-
-[` + tableModels + `]
-# ` + TierDecision + `: the claim graph's letter asks — a SystemOne decision
-#                       model that answers each with one letter.
-# ` + TierText + `: the overview passage — one standard text model.
-%s
-%s
-
-# [asks]
-# readerConcurrency = 4  # asks of one group in flight once its first has
-#                        # returned; a whole number, at least 1.
-`
-
-// UpdateConfig sets the provider choice and the [models] tiers in the
+// UpdateConfig sets the provider choice and the [models] categories in the
 // config.toml at path, creating the containing directory and the file if
 // they are missing. The write is atomic: the content lands in a temporary
 // file in the destination directory and is renamed over path, so a reader
@@ -116,14 +110,15 @@ func UpdateConfig(path string, cfg Config) (bool, error) {
 func freshConfig(cfg Config) string {
 	return fmt.Sprintf(configTemplate,
 		assign(keyProvider, cfg.Provider),
-		assign(TierDecision, cfg.Models.Decision),
-		assign(TierText, cfg.Models.Text))
+		modelHintsComment(),
+		assign(CategoryDecision, cfg.Models.Decision),
+		assign(CategoryText, cfg.Models.Text))
 }
 
 // updateLines rewrites the provider and [models] lines of an existing
 // config.toml and returns the new content. Keys the file does not have are
 // added: a missing provider goes in after the leading comment block (a
-// top-level key must precede the first table), missing tiers at the end of
+// top-level key must precede the first table), missing categories at the end of
 // the [models] table, and a missing [models] table at the end of the file.
 func updateLines(src string, cfg Config) string {
 	lines := strings.Split(src, "\n")
@@ -156,8 +151,8 @@ func updateLines(src string, cfg Config) string {
 		switch {
 		case table == "" && key == keyProvider && !found[keyProvider]:
 			lines[i] = withComment(assign(keyProvider, cfg.Provider), comment)
-		case table == tableModels && (key == TierDecision || key == TierText) && !found[key]:
-			lines[i] = withComment(assign(key, tierValue(cfg, key)), comment)
+		case table == tableModels && (key == CategoryDecision || key == CategoryText) && !found[key]:
+			lines[i] = withComment(assign(key, categoryValue(cfg, key)), comment)
 		default:
 			continue
 		}
@@ -170,9 +165,9 @@ func updateLines(src string, cfg Config) string {
 	// Tail insertions first: they are indexed from the [models] table,
 	// which the head insertion below would shift.
 	var missing []string
-	for _, tier := range []string{TierDecision, TierText} {
-		if !found[tier] {
-			missing = append(missing, assign(tier, tierValue(cfg, tier)))
+	for _, category := range []string{CategoryDecision, CategoryText} {
+		if !found[category] {
+			missing = append(missing, assign(category, categoryValue(cfg, category)))
 		}
 	}
 	if len(missing) > 0 {
@@ -222,8 +217,8 @@ func verifyUpdate(before, after string, cfg Config) error {
 		models = maps.Clone(m)
 	}
 	want[keyProvider] = cfg.Provider
-	models[TierDecision] = cfg.Models.Decision
-	models[TierText] = cfg.Models.Text
+	models[CategoryDecision] = cfg.Models.Decision
+	models[CategoryText] = cfg.Models.Text
 	want[tableModels] = models
 
 	if !reflect.DeepEqual(want, next) {
@@ -256,9 +251,9 @@ func installConfig(path, content string) error {
 // value they disagree on fails verifyUpdate rather than landing on disk.
 func assign(key, value string) string { return key + " = " + strconv.Quote(value) }
 
-// tierValue returns the model id cfg maps to a tier key.
-func tierValue(cfg Config, tier string) string {
-	id, _ := cfg.ModelFor(tier)
+// categoryValue returns the model id cfg maps to a category key.
+func categoryValue(cfg Config, category string) string {
+	id, _ := cfg.ModelFor(category)
 	return id
 }
 

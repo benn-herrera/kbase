@@ -29,7 +29,9 @@ MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arx
 # values its write ops take.
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
+MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
+CONFIG_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-config"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 
 DIST_DIR := "dist"
@@ -68,44 +70,10 @@ ARXIV_DIR := TEST_DATA_TRANSIENT_DIR / "arxiv"
 # download that actually happens.
 ARXIV_DELAY := "3"
 
-# The slice: kb_tools' reference trees, the fixture repositories they were
-# built in, and each slice stage's paper list.
-KBTOOLS_REF_DIR := TEST_DATA_TRANSIENT_DIR / "kbtools-ref"
-SLICE_REF_DIR := TEST_DATA_TRANSIENT_DIR / "slice-ref"
-SLICE_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-slice-arxiv"
-DOCGRAPH_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-docgraph-arxiv"
-# The file in each reference fixture naming the adjagent commit it was staged at.
-KBTOOLS_REF_PIN_FILE := "adjagent-commit.txt"
-# The file in a reference directory recording the driver's stop — its exit code
-# and console log — where it stopped short of a document-graph commit; it stands
-# in for kb-root/.
-KBTOOLS_REF_STOP_FILE := "driver-stop.yaml"
-SLICE_1_IDS := "2609.10318v1 2609.09855v1"
-SLICE_2_IDS := "2609.10525v1 2609.10291v1 2609.10111v1 2609.10385v1"
-# Stage 2's negative controls: the first must refuse naming the paper and
-# pandoc's error, the second naming each unloaded file and the line that named it.
-SLICE_2_UNPARSEABLE_ID := "2609.10029v1"
-SLICE_2_UNLOADABLE_ID := "2609.09821v1"
-# kb_tools-built KBs kbase's refresh and verify are measured against: the
-# slice's six papers, built complete by prep-test-integration-kbtools-full.
-VERIFY_ARXIV_IDS := SLICE_1_IDS + " " + SLICE_2_IDS
-VERIFY_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-verify-arxiv"
-# The export legs: the same kb_tools-built fixtures, the hand-maintained KB,
-# the committed 0.9.0 kb_tools-built KB, the author's preambles the exported
-# maths needs (<id>.tex beside, named for the fixture), and the checker.
-EXPORT_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-export-arxiv"
-EXPORT_MAINTAINED_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-export-maintained"
-EXPORT_MAINTAINED_DIR := TEST_DATA_TRANSIENT_DIR / "ModernCorpNoTex"
-EXPORT_KBTOOLS_090_KB_ROOT := "internal/kbload/testdata/kbtools-0.9.0/kb-root"
-EXPORT_PREAMBLE_DIR := TEST_DATA_FIXTURES_DIR / "export-preambles"
-EXPORT_CHECK_DIR := "tools/export"
-# The fixtures the multi-volume legs combine: of the slice's papers, the two
-# whose Markdown defines a footnote [^1] (a built KB's note definitions sit in
-# another document of the same volume).
-EXPORT_MULTIVOLUME_IDS := "2609.10318v1 2609.09855v1"
-WRITE_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-write-arxiv"
-QUERY_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-query-arxiv"
-CLAIMGRAPH_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-claimgraph-arxiv"
+# The papers test-integration-build-arxiv builds: six of the pinned corpus,
+# taken across categories whose LaTeX differs in kind, listed as the VERSIONED
+# e-prints the corpus pins them by.
+BUILD_ARXIV_IDS := "2609.10318v1 2609.09855v1 2609.10525v1 2609.10291v1 2609.10111v1 2609.10385v1"
 BUILD_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-arxiv"
 # The paper test-integration-build-arxiv also kills and resumes, refuses a
 # second fresh build over, and stamps over an authored document.
@@ -118,7 +86,9 @@ MONITOR_ARXIV_ID := "2609.10074v1"
 # configuration fixture names.
 BUILD_LIVE_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-live-arxiv"
 LIVE_CONFIG_DIR := TEST_DATA_FIXTURES_DIR / "config"
-COMPAT_OP_SCRIPT := TEST_DATA_DIR / "fixtures" / "compat" / "ops.yaml"
+# The export contract checker's Python, which test-export-forms runs the unit
+# tests of.
+EXPORT_CHECK_DIR := "tools/export"
 
 # dist-only build trim: -trimpath drops local filesystem paths from the
 # binary; -s -w strips symbol table + DWARF (panic traces keep function
@@ -152,12 +122,7 @@ test-race:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test -race ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-race_log.txt"
 
-[doc("NEEDS python3 and the installed agent set under .claude/agents (excluded from test-integration): run the tools/measure unit tests; log in the unit-test output directory")]
-test-measure:
-    @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
-    PYTHONPATH=.claude/agents python3 -m unittest discover -s tools/measure 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-measure_log.txt"
-
-[doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the checker the export integration recipes count with; log in the unit-test output directory")]
+[doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the export contract checker's own; log in the unit-test output directory")]
 test-export-forms:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     python3 -B -m unittest discover -s {{EXPORT_CHECK_DIR}} 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-export-forms_log.txt"
@@ -212,33 +177,16 @@ _write-evidence out_dir recipe invocation:
       echo; \
       echo "Artifacts present:"; \
       [[ -f "{{out_dir}}/log.txt" ]]      && echo "- log.txt: full recipe log (tee'd stdout+stderr)"; \
-      compgen -G "{{out_dir}}/*/run-1.result.yaml" > /dev/null && echo "- <id>/: per paper, the fixture repositories run-<n>/ (kb-root/ inside), state-<n>/records/, and each build's run-<n>.result.yaml, run-<n>.log, run-<n>.exit"; \
-      compgen -G "{{out_dir}}/*/dump.json" > /dev/null       && echo "- <id>/dump.json: kb_tools' readers over run-1's tree and the reference tree"; \
-      compgen -G "{{out_dir}}/*/comparison.yaml" > /dev/null && echo "- <id>/comparison.yaml: every comparison check, pass or fail, its evidence paths and what differs"; \
-      compgen -G "{{out_dir}}/*/records.yaml" > /dev/null    && echo "- <id>/records.yaml: the Records check and the record join, each with its evidence paths and what differs"; \
-      compgen -G "{{out_dir}}/*/census.yaml" > /dev/null     && echo "- <id>/census.yaml: the paper's census"; \
-      [[ -f "{{out_dir}}/citation-states.yaml" ]]           && echo "- citation-states.yaml: citation states pooled over slice stages 1 and 2"; \
-      [[ -f "{{out_dir}}/rollup.yaml" ]]                    && echo "- rollup.yaml: per comparison check, the papers passing and failing; per build check, the papers reporting each status"; \
-      [[ -f "{{out_dir}}/comparison.yaml" && ! -f "{{out_dir}}/compare.log" ]] && echo "- comparison.yaml: per kb_tools-built fixture, kbase verify's and refresh's exits and every finding: a red verify, a fixture verify changed, a path refresh changed"; \
-      [[ -f "{{out_dir}}/comparison.yaml" && -f "{{out_dir}}/compare.log" ]] && echo "- comparison.yaml, compare.log: per query its cases, how many equal and how many answered non-empty; every case whose kbase and kb_cmd answers differ as data, its arguments and both values"; \
-      [[ -f "{{out_dir}}/findings.yaml" ]]          && echo "- findings.yaml: per fixture, every finding beside the comparison: the fixture left changed, a scoring op or a render-claim-graph step not as expected"; \
-      [[ -f "{{out_dir}}/limit.log" ]]              && echo "- limit.log: every list query at its default limit over each fixture, each result within the tool-result cap, and the largest per query"; \
       [[ -f "{{out_dir}}/checks.tsv" ]]             && echo "- checks.tsv, docs/: per invocation its arguments, the outcome wanted and pass or fail; docs/NN-<verb>.out, .log, .exit and .keys.log (the documented-keys parse); repo/ as the run left it"; \
       [[ -f "{{out_dir}}/init.tsv" ]]               && echo "- init.tsv, docs/: per invocation its arguments, the outcome wanted and pass or fail; docs/NN-<verb>.out, .log, .exit and .keys.log (the documented-keys parse), docs/init-nodot.{out,log}; repo/, repo-nodot/, gitonly/ and state/ as the runs left them"; \
+      [[ -f "{{out_dir}}/config.tsv" ]]             && echo "- config.tsv, docs/: per invocation the configuration it read, the source wanted and pass or fail; docs/NN-<state>-<route>.out, .log and .exit; configs/ as staged (absent, pool, both); work/ (the directory every invocation ran in); mcp.requests.jsonl and mcp.actual.jsonl, the config tools/call and the frames the server answered"; \
+      [[ -d "{{out_dir}}/layered" ]]                && echo "- home/, layered/, literal/: home/ the staged home directory every invocation ran under, holding the ~ fixtures (cfg/, keys/); layered/repo the staged git repository the layered leg read, with its own .kbase/ over layered/home/.config/kbase; literal/ the configuration directory whose pool entries spell ~user/key.txt and a/~/b/key.txt — paths only a join to that directory reaches"; \
       [[ -f "{{out_dir}}/comparison.tsv" ]]         && echo "- comparison.tsv, transcripts/<name>/: per MCP transcript pass or the response line that differs; requests.jsonl, expected.jsonl (placeholders substituted), actual.jsonl, mcp.log, mcp.exit; insert.*, refresh.* (.out, .log) and repo/ as the staging left them"; \
       [[ -f "{{out_dir}}/monitor.tsv" ]]           && echo "- monitor.tsv, polls/: every status poll the monitor made while the build ran (polls/NNN.out); build.*, cancel.*, cancel-again.*, status-*.*, resume.* (.out, .log, .exit, .keys.log); repo/ and state/ as the run left them"; \
-      compgen -G "{{out_dir}}/*/fixture/*.args" > /dev/null && echo "- <id>/: fixture/ (per case NNN.args — the query, then one argument per line — and NNN.kbase.* and NNN.kbcmd.* .out, .log, .exit); scored-clone/, scores/ (the values and each op's run) and scored/ (the cases on the scored clone); sheet/ (clone/, drawn.svg, each render-claim-graph and verify run); stage.log"; \
-      compgen -G "{{out_dir}}/*/verify.result.yaml" > /dev/null && echo "- <id>/: verify.result.yaml and verify.log on the fixture; clone/ refreshed by kbase, refresh.result.yaml, refresh.log and refresh.diff"; \
-      [[ -d "{{out_dir}}/kbtools-agreement" ]]      && echo "- kbtools-agreement/: refresh-agreement.yaml and verify-agreement.yaml, each toolchain run over one input, with every input's trees and logs under refresh/ and verify/"; \
-      [[ -f "{{out_dir}}/kbtools-fixtures.log" ]]   && echo "- kbtools-fixtures.log: kb_tools' render goldens and write-API regression replay, run over the write package"; \
-      [[ -f "{{out_dir}}/summary.yaml" ]]           && echo "- summary.yaml: per fixture, every finding of the op-script run"; \
-      [[ -f "{{out_dir}}/counts.tsv" ]]             && echo "- legs.yaml, counts.tsv: per export leg its checks, pass, fail or skip, each with its detail; per leg and count check the count wanted and the count found"; \
-      compgen -G "{{out_dir}}/*/hashes.1" > /dev/null && echo "- <id>/: repo/ (the clone exported, latex-export/ inside), export.* and reissue.* (.result.yaml, .log), counts.txt, hashes.1 and hashes.2, latexmk-<engine>.log, main-<engine>.log, log-scan.txt, leg.log"; \
-      compgen -G "{{out_dir}}/*/ref/commit.txt" > /dev/null && echo "- <id>/: repo/ (the fixture repository kbase built: kb-root/, kb-build-node-pass.yaml, kb-build-classification.yaml, kb-build-unmarked.yaml), repo-2/ and state-2/ (the second build, compared modulo node ids), state/ (records/, reports/), ledger.txt (kbase's boundary commits) and status.* (kbase status over the build), ref/ (kb_tools' kb-root/ and build records at commit.txt, its ledger to that commit in ledger.txt, its stage vocabulary in stage-ids.txt, its depends-attributed report in depends-report.txt), kbtools-verify/ (kb_tools' fixture with kbase's kb-root/), checks/ (kbase-build, kbase-refresh, kbase-verify, kbtools-verify: .out, .log, .exit), comparison.yaml, compare.log"; \
+      [[ -f "{{out_dir}}/test.log" ]]               && echo "- repo/ (the fixture paper, git init and one commit), requests.fifo and frames.fifo (the pipes the server read and wrote), repo/kb-root and state/ as the probe's two builds left them, mcp.log (the server's stderr) and test.log (the probe's go test output)"; \
       compgen -G "{{out_dir}}/*/checks/kbase-status.out" > /dev/null && echo "- comparison.yaml: per paper every Direction 1 check, pass or fail, its detail and evidence path"; \
-      compgen -G "{{out_dir}}/*/checks/kbase-status.out" > /dev/null && echo "- <id>/: repo/ (the fixture repository kbase built, kb_tools installed, the op script applied), built/ (kb-root/ and the build records as kbase's build left them), state/ (progress.jsonl, records/), config/ (empty), opscript/ and kbtools-steps/ (the op script rendered, and each step run through kb_util), excerpts.kbtools.txt, checks/ (per command .out, .log, .exit); on the special paper also kill/, guard/ and stamp/ (each repo/ and state/), kill/kill.txt, kill/comparison.yaml and kill/compare.log (the resumed build against built/ modulo node ids)"; \
-      compgen -G "{{out_dir}}/*/nodepass.json" > /dev/null && echo "- comparison.yaml: the paper's checks, its state-dir, the scratch/ census and the counts (paragraphs asked, claims minted, defaults by cause; the unmarked pairs planned and asked, their letters and outcomes, the source groups and calls; candidates by harvest, by letter and outcome, own-equation pairs dropped, edges a ring demoted); <id>/: repo/ (the fixture repository the build wrote, kb_tools installed), state/ (progress.jsonl, records/, scratch/captures/, scratch/answers/, scratch/asks/), counts.yaml, nodepass.json, kb-build-node-pass.yaml and unmarked-plan.json (the node-pass record in kb_tools' spelling and the planned pairs), at-references-found/ (kb-root/ at the references-found commit), checks/ (per command .out, .log, .exit); models.*: the provider's catalogue, read before the build"; \
-      compgen -G "{{out_dir}}/*/steps/steps.tsv" > /dev/null && echo "- <id>/: clones kbase/ and kbtools/; steps/ (the rendered script, choice.yaml); kbase-steps/, kbtools-steps/, rerun-steps/ (per step its values, .out, .log, .exit); ids.txt; kbtools-refresh.*; kbase-verify.<clone>.* and kbtools-verify.<clone>.*; raw.diff; comparison.yaml; kb-root.before-rerun/ and rerun.diff"; \
+      compgen -G "{{out_dir}}/*/checks/kbase-status.out" > /dev/null && echo "- <id>/: repo/ (the fixture repository kbase built), built/ (kb-root/ and the build records as kbase's build left them), state/ (progress.jsonl, records/), config/ (empty), checks/ (per command .out, .log, .exit); on the special paper also kill/, guard/ and stamp/ (each repo/ and state/), kill/kill.txt, kill/comparison.yaml and kill/compare.log (the resumed build against built/ modulo node ids)"; \
+      compgen -G "{{out_dir}}/*/nodepass.json" > /dev/null && echo "- comparison.yaml: the paper's checks, its state-dir, the scratch/ census and the counts (paragraphs asked, claims minted, defaults by cause; the unmarked pairs planned and asked, their letters and outcomes, the source groups and calls; candidates by harvest, by letter and outcome, own-equation pairs dropped, edges a ring demoted); <id>/: repo/ (the fixture repository the build wrote), state/ (progress.jsonl, records/, scratch/captures/, scratch/answers/, scratch/asks/), counts.yaml, nodepass.json, kb-build-node-pass.yaml and unmarked-plan.json (the node-pass record and the planned pairs), checks/ (per command .out, .log, .exit); models.*: the provider's catalogue, read before the build"; \
       true; \
     } > "{{out_dir}}/EVIDENCE.md"
 
@@ -316,173 +264,6 @@ _arxiv-volume-root dir:
     fi
     printf '%s\n' "${candidates[0]}"
 
-# kb_tools' own document-graph tree for each paper: the reference the slice
-# compares kbase's tree against. Each paper is staged as a fixture repository
-# the way kb-testing's stage-arxiv-paper stages one, gets the installed agent
-# set (kb_tools included) from this repository's own adjagent clone, and is
-# built by kb_tools' driver with --no-inference --through document-graph. The
-# tree is read out of the document-graph stage commit, so what lands in
-# slice-ref/ is exactly what kb_tools committed. The fixture records the
-# adjagent commit its tooling was installed from; an id is re-staged unless its
-# reference tree exists and that commit is the clone's HEAD. A driver that stops
-# short of the document-graph commit leaves its exit code and log in place of the tree,
-# and the next run stages that id again.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): build kb_tools' reference document-graph tree for each id into test_data/transient/slice-ref/<id>/kb-root, or record the driver's stop in slice-ref/<id>/driver-stop.yaml (no-op per id when the tree is present and staged at the adjagent clone's HEAD)")]
-prep-test-integration-kbtools-ref ids:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    for id in {{ids}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        ref="{{SLICE_REF_DIR}}/${name}"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        pin="${fixture}/{{KBTOOLS_REF_PIN_FILE}}"
-        if [[ -d "${ref}/kb-root" && -f "${pin}" && "$(cat "${pin}")" == "${adjagent}" ]]; then
-            printf 'kbtools-ref %s: present at %s/kb-root, staged at adjagent %s\n' "${id}" "${ref}" "${adjagent}"
-            continue
-        fi
-        log_dir="{{KBTOOLS_REF_DIR}}/logs"
-        log="${log_dir}/${name}.console.log"
-        doc_graph() { git -C "${fixture}" log -n1 --format=%H --grep='^kb-build: document-graph '; }
-        if [[ ! -d "${fixture}/.git" || ! -f "${pin}" || "$(cat "${pin}")" != "${adjagent}" ]]; then
-            {{just_executable()}} _kbtools-ref-stage "${id}"
-        fi
-        # A fixture pinned at the clone's HEAD is never restaged: with the
-        # document-graph commit already in its ledger (whatever stage the build
-        # has reached since) the tree is read out of it; otherwise the driver
-        # resumes from the ledger.
-        if [[ -n "$(doc_graph)" ]]; then
-            driver_exit=0
-        else
-            {{just_executable()}} _kbtools-ref-drive "${id}" document-graph
-            driver_exit="$(cat "${log_dir}/${name}.exit")"
-        fi
-        commit="$(doc_graph)"
-        rm -rf "${ref}"
-        mkdir -p "${ref}"
-        if [[ "${driver_exit}" -ne 0 && "${driver_exit}" -ne 18 ]] || [[ -z "${commit}" ]]; then
-            # The driver's own stop is a reference result too: recorded, never
-            # cached, so the next run asks the driver again.
-            printf 'exit: %s\nlog: "%s"\n' "${driver_exit}" "${log}" > "${ref}/{{KBTOOLS_REF_STOP_FILE}}"
-            printf 'kbtools-ref %s: the driver stopped (exit %s, document-graph commit %s) — log: %s\n' \
-                "${id}" "${driver_exit}" "${commit:-none}" "${log}"
-            continue
-        fi
-        git -C "${fixture}" archive "${commit}" kb-root | tar -x -C "${ref}"
-        printf 'kbtools-ref %s: %s/kb-root from %s\n' "${id}" "${ref}" "${commit}"
-    done
-
-# The complete kb_tools-built KB for each id, in the same fixture repository
-# the reference recipe stages: the driver --no-inference with no --through
-# walks every stage to overview-drafted, so the fixture holds kb-root/ as
-# kb_tools finishes it and the kb-build: commit trail that built it. A fixture
-# staged at the adjagent clone's HEAD resumes from its ledger (the document-graph
-# commit the reference recipe left, or wherever an earlier run stopped);
-# any other is staged afresh, which also drops its slice-ref/ tree. An id whose
-# ledger already holds the overview-drafted commit at that HEAD is a no-op. The
-# driver's exit code is kept in kbtools-ref/logs/<id>.exit and its stop, where
-# it did not finish, in kbtools-ref/logs/<id>.console.log.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): build kb_tools' complete KB (driver --no-inference through overview-drafted) for each id in its fixture repository test_data/transient/kbtools-ref/<id>/, exit code in kbtools-ref/logs/<id>.exit (no-op per id when the fixture's ledger holds overview-drafted at the adjagent clone's HEAD)")]
-prep-test-integration-kbtools-full ids:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    for id in {{ids}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        pin="${fixture}/{{KBTOOLS_REF_PIN_FILE}}"
-        exit_file="{{KBTOOLS_REF_DIR}}/logs/${name}.exit"
-        if [[ -f "${pin}" && "$(cat "${pin}")" == "${adjagent}" ]]; then
-            if [[ -n "$(git -C "${fixture}" log -n1 --format=%H --grep='^kb-build: overview-drafted ')" ]]; then
-                printf 'kbtools-full %s: overview-drafted at adjagent %s\n' "${id}" "${adjagent}"
-                continue
-            fi
-        else
-            {{just_executable()}} _kbtools-ref-stage "${id}"
-        fi
-        {{just_executable()}} _kbtools-ref-drive "${id}" ""
-        driver_exit="$(cat "${exit_file}")"
-        stage="$(git -C "${fixture}" log -n1 --format=%s --grep='^kb-build: ' | sed -e 's/^kb-build: //' -e 's/ |.*//')"
-        printf 'kbtools-full %s: driver exit %s, ledger at %s — log: %s\n' \
-            "${id}" "${driver_exit}" "${stage:-none}" "{{KBTOOLS_REF_DIR}}/logs/${name}.console.log"
-    done
-
-# One fixture repository per id the way kb-testing's stage-arxiv-paper stages
-# one: the sources as fetched, a stub Makefile, a .gitignore for the scratch
-# directory, the reference agent set installed from the adjagent clone, the
-# clone's commit pinned. Everything an earlier staging of the id left — its
-# fixture, run directory, console log and slice-ref/ tree — is removed first.
-[private]
-_kbtools-ref-stage id:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    id="{{id}}"
-    name="$(printf '%s' "${id}" | tr '/' '_')"
-    src="{{ARXIV_DIR}}/${name}"
-    fixture="{{KBTOOLS_REF_DIR}}/${name}"
-    if [[ ! -d "${src}" ]]; then
-        printf 'error: %s is not fetched — run `just prep-test-integration-arxiv "%s"` first\n' "${src}" "${id}" >&2
-        exit 1
-    fi
-    log="{{KBTOOLS_REF_DIR}}/logs/${name}.console.log"
-    notice=""
-    mkdir -p "{{KBTOOLS_REF_DIR}}/logs"
-    if [[ -e "${fixture}" ]]; then
-        notice="restaging ${fixture}: pin is not the adjagent clone's HEAD, or the fixture is not a repository — deleting it, its run directory, logs and slice-ref tree"
-        printf '%s\n' "${notice}" | tee -a "${log}" >&2
-    fi
-    rm -rf "${fixture}" "{{KBTOOLS_REF_DIR}}/runs/${name}" "{{SLICE_REF_DIR}}/${name}" "{{KBTOOLS_REF_DIR}}/logs/${name}".*
-    mkdir -p "${fixture}" "{{KBTOOLS_REF_DIR}}/runs/${name}" "{{KBTOOLS_REF_DIR}}/logs"
-    if [[ -n "${notice}" ]]; then
-        printf '%s\n' "${notice}" > "${log}"
-    fi
-    cp -R "${src}/." "${fixture}/"
-    printf 'default:\n\t@echo %s\n\ntest:\n\t@echo tests passed.\n' "${id}" > "${fixture}/Makefile"
-    printf '%s\n' '.claude-temp/' '__pycache__/' > "${fixture}/.gitignore"
-    git -C "${fixture}" init -q
-    git -C "${fixture}" add -A
-    git -C "${fixture}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "sources as fetched"
-    just --justfile .claude/adjagent/justfile install "${root}/${fixture}"
-    git -C "${root}/.claude/adjagent" rev-parse HEAD > "${fixture}/{{KBTOOLS_REF_PIN_FILE}}"
-    git -C "${fixture}" add -A
-    git -C "${fixture}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "agent defs installed"
-
-# kb_tools' driver --no-inference over a staged fixture, from its ledger
-# position, to `through` (a stage id; empty for no bound). The console log
-# gains the run's header and output; the driver's exit code lands in
-# logs/<id>.exit, and a nonzero one does not fail this recipe — the caller reads
-# it. A --through run that stops at its bound exits 18, the driver's
-# EXIT_BOUNDED (kb_tools/kb_driver/baton.py); 0 is the unbounded success.
-[private]
-_kbtools-ref-drive id through:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    name="$(printf '%s' "{{id}}" | tr '/' '_')"
-    fixture="{{KBTOOLS_REF_DIR}}/${name}"
-    log="{{KBTOOLS_REF_DIR}}/logs/${name}.console.log"
-    volume_root="$({{just_executable()}} _arxiv-volume-root "${fixture}")"
-    bound=()
-    if [[ -n "{{through}}" ]]; then
-        bound=(--through "{{through}}")
-    fi
-    {
-        printf 'adjagent: %s\n' "$(cat "${fixture}/{{KBTOOLS_REF_PIN_FILE}}")"
-        pandoc --version | head -n 1
-        printf 'volume root: %s\n' "${volume_root}"
-    } >> "${log}"
-    set +e
-    ( cd "${fixture}" && \
-      PYTHONPATH=.claude/agents python3 -m kb_tools.kb_driver run \
-        --source "${volume_root}" \
-        --no-inference \
-        ${bound[@]+"${bound[@]}"} \
-        --run-dir "${root}/{{KBTOOLS_REF_DIR}}/runs/${name}" ) >> "${log}" 2>&1
-    driver_exit=$?
-    set -e
-    printf '%s\n' "${driver_exit}" > "{{KBTOOLS_REF_DIR}}/logs/${name}.exit"
-
 # kb-testing's stage-fixture, for a fixture repository the owner staged by hand:
 # a caller-named directory, never a path this file knows. The scratch directory
 # it removes is the installed harness's project-temp-dir, read by adjagent's
@@ -528,1083 +309,20 @@ prep-test-integration-fixture dir: build
     git -C "${dir}" tag -f staged > /dev/null
     printf 'staged %s\n' "${dir}"
 
-# A tools/measure script over kb-root directories, with kb_tools' readers on
-# PYTHONPATH. The scripts accept --out only under .claude-temp/, so the output
-# directory is fixed here, one per run, and printed.
-[positional-arguments]
-[doc("NEEDS python3 and the installed agent set under .claude/agents (excluded from test-integration): run tools/measure/<script>.py over the kb-roots its arguments name, --out under .claude-temp/measure/<script-stem>/<timestamp>/ (printed); read-only over the kb-roots, which are relative to the repository root or absolute. e.g. just measure-kb-roots tools/measure/compare_to_pristine.py --ours <kb-root> --reference <kb-root>; then measure_unmarked_shortlist.py --ours <kb-root> --edges <out dir>/edges.tsv")]
-measure-kb-roots script +dirs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    script="${1}"
-    shift
-    if [[ ! -f "${script}" ]]; then
-        printf 'error: script %s does not exist.\n' "${script}" >&2
-        exit 1
-    fi
-    stem="$(basename "${script}" .py)"
-    out="$(pwd -P)/.claude-temp/measure/${stem}/$(date +%Y%m%dT%H%M%S)"
-    PYTHONPATH=.claude/agents python3 "${script}" "$@" --out "${out}"
-    printf 'measure-kb-roots: output in %s\n' "${out}"
-
-# The slice's evidence for one stage (1, 2 or 3), under its own directory
-# stage-<n>/: stage 3's corpus includes every stage-1 and stage-2 paper, so a
-# shared directory would rebuild their fixtures and delete their comparisons.
-# Stages 1 and 2 build each paper twice and compare it against kb_tools'
-# reference; stage 2 adds its two negative controls and pools citation states
-# over its own papers and stage 1's, which must have run. Stage 3 builds every
-# corpus paper once and takes its census, with no pass threshold. The body is
-# _docgraph-arxiv's.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): slice stage 1, 2 or 3 — build the stage's papers with ./bin/kbase under test_data/transient/test-integration-slice-arxiv/stage-<n>/<id>/, compare them against kb_tools' reference (stages 1, 2) or take their census (stage 3)")]
-test-integration-slice-arxiv stage:
-    @mkdir -p "{{SLICE_ARXIV_OUT_DIR}}/stage-{{stage}}"
-    @{{just_executable()}} _test-integration-slice-arxiv "{{stage}}" 2>&1 | tee "{{SLICE_ARXIV_OUT_DIR}}/stage-{{stage}}/log.txt"
-
-[private]
-_test-integration-slice-arxiv stage:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{stage}}" in
-        1) set -- "{{SLICE_1_IDS}}" "1 2" "" "compare" ;;
-        2) set -- "{{SLICE_2_IDS}}" "1 2" "{{SLICE_2_UNPARSEABLE_ID}} {{SLICE_2_UNLOADABLE_ID}}" "compare controls states" ;;
-        3) set -- "{{ARXIV_IDS}}" "1" "" "census" ;;
-        *) printf 'error: stage is 1, 2 or 3, not %s\n' "{{stage}}" >&2; exit 1 ;;
-    esac
-    {{just_executable()}} _docgraph-arxiv "{{SLICE_ARXIV_OUT_DIR}}/stage-{{stage}}" "$1" "$2" "$3" "$4" "test-integration-slice-arxiv {{stage}}"
-
-# The document graph over the whole corpus: every paper built twice and
-# compared against kb_tools' reference by the slice's checks, its census taken,
-# both negative controls built once, and the roll-up of every comparison and of
-# each build's own checks written to rollup.yaml and EVIDENCE.md. A paper that
-# refuses passes only where kb_tools' driver stopped on it too.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): build every corpus paper twice with ./bin/kbase --through document-graph under test_data/transient/test-integration-docgraph-arxiv/<id>/, compare each against kb_tools' reference, take its census, check both negative controls refuse, and roll the results up")]
-test-integration-docgraph-arxiv:
-    @mkdir -p "{{DOCGRAPH_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _docgraph-arxiv "{{DOCGRAPH_ARXIV_OUT_DIR}}" "{{ARXIV_IDS}}" "1 2" "{{SLICE_2_UNPARSEABLE_ID}} {{SLICE_2_UNLOADABLE_ID}}" "compare controls census rollup" "test-integration-docgraph-arxiv" 2>&1 | tee "{{DOCGRAPH_ARXIV_OUT_DIR}}/log.txt"
-
-# One body for every document-graph comparison over arXiv papers, writing under
-# out/<id>/. Each paper is copied into fresh fixture repositories run-<n>/ and
-# built there with ./bin/kbase build --through document-graph, passing every
-# .bib beside the volume root in sorted path order; each build keeps its stderr
-# log, YAML result and exit code beside its fixture. kb_tools' readers then dump
-# run-1's tree and, where there is one, the reference tree. controls is the
-# unparseable control then the unloadable one, each built once. checks names
-# what the comparator does: compare (against kb_tools' reference, staged
-# first), controls, states (pooled with slice stage 1's papers), census, rollup.
-[private]
-_docgraph-arxiv out ids runs controls checks recipe: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    out="{{out}}"
-    ids="{{ids}}"
-    checks=" {{checks}} "
-    read -r unparseable unloadable <<< "{{controls}} " || true
-    {{just_executable()}} prep-test-integration-arxiv "${ids} {{controls}}"
-    if [[ "${checks}" == *" compare "* ]]; then
-        {{just_executable()}} prep-test-integration-kbtools-ref "${ids}"
-    fi
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'adjagent: %s\n%s\n' "${adjagent}" "${pandoc_version}"
-
-    # One fresh fixture repository holding the paper's sources, and one build
-    # in it. The build's inputs, YAML result, stderr log and exit code land
-    # beside the fixture.
-    build_once() {
-        local id="$1" n="$2" dir="${out}/$1"
-        local fixture="${dir}/run-${n}"
-        rm -rf "${fixture}" "${dir}/state-${n}"
-        mkdir -p "${fixture}"
-        cp -R "{{ARXIV_DIR}}/${id}/." "${fixture}/"
-        git -C "${fixture}" init -q
-        local volume_root
-        if ! volume_root="$({{just_executable()}} _arxiv-volume-root "${fixture}")"; then
-            printf 'no volume root\n' > "${dir}/run-${n}.log"
-            printf '2\n' > "${dir}/run-${n}.exit"
-            return
-        fi
-        printf '%s\n' "${volume_root}" > "${dir}/volume-root.txt"
-        (cd "${fixture}" && find "$(dirname "${volume_root}")" -maxdepth 1 -name '*.bib' | sed 's|^\./||' | LC_ALL=C sort) > "${dir}/bibliographies.txt"
-        local bibs=()
-        while IFS= read -r bib; do
-            bibs+=(--bibliography "${bib}")
-        done < "${dir}/bibliographies.txt"
-        set +e
-        ( cd "${fixture}" && "${root}/{{BIN_DIR}}/kbase" build "${volume_root}" \
-            --through document-graph \
-            --state-dir "${root}/${dir}/state-${n}" \
-            ${bibs[@]+"${bibs[@]}"} ) > "${dir}/run-${n}.result.yaml" 2> "${dir}/run-${n}.log"
-        printf '%s\n' "$?" > "${dir}/run-${n}.exit"
-        set -e
-    }
-
-    # kb_tools' readers over run-1's tree and, where there is one, the
-    # reference tree. kb_tools comes from the reference fixture's installed
-    # agent set where there is one, else from this repository's own; both are
-    # the adjagent clone at ${adjagent}.
-    dump() {
-        local id="$1" dir="${out}/$1" agents=".claude/agents" ref=()
-        if [[ -d "{{SLICE_REF_DIR}}/${id}/kb-root" ]]; then
-            agents="{{KBTOOLS_REF_DIR}}/${id}/.claude/agents"
-            ref=(--ref "${id}={{SLICE_REF_DIR}}/${id}/kb-root")
-        fi
-        PYTHONPATH="${agents}" python3 tools/slice/kbtools_dump.py \
-            ${ref[@]+"${ref[@]}"} --kbase "${id}=${dir}/run-1/kb-root" --out "${dir}/dump.json"
-    }
-
-    for id in ${ids}; do
-        mkdir -p "${out}/${id}"
-        rm -f "${out}/${id}/dump.json" "${out}/${id}/comparison.yaml" "${out}/${id}/census.yaml"
-        for n in {{runs}}; do
-            build_once "${id}" "${n}"
-            printf 'built %s run-%s: exit %s\n' "${id}" "${n}" "$(cat "${out}/${id}/run-${n}.exit")"
-        done
-        if [[ -f "${out}/${id}/run-1/kb-root/entry-point.md" ]]; then
-            dump "${id}" || printf 'dump failed for %s\n' "${id}"
-        fi
-    done
-    for id in {{controls}}; do
-        mkdir -p "${out}/${id}"
-        build_once "${id}" 1
-        printf 'built %s (negative control): exit %s\n' "${id}" "$(cat "${out}/${id}/run-1.exit")"
-    done
-
-    args=(-slice.out="${root}/${out}" -slice.refs="${root}/{{SLICE_REF_DIR}}")
-    for check in ${checks}; do
-        case "${check}" in
-            compare) args+=(-slice.compare="${ids}") ;;
-            controls) args+=(-slice.unparseable="${unparseable}" -slice.unloadable="${unloadable}") ;;
-            states) args+=(-slice.states="$(for id in {{SLICE_1_IDS}}; do printf '%s ' "${root}/{{SLICE_ARXIV_OUT_DIR}}/stage-1/${id}"; done; for id in ${ids}; do printf '%s ' "${root}/${out}/${id}"; done)") ;;
-            census) args+=(-slice.census="${ids}") ;;
-            rollup) ;;
-            *) printf 'error: unknown check %s\n' "${check}" >&2; exit 1 ;;
-        esac
-    done
-    set +e
-    go test -count=1 -v -run '^TestSlice' ./internal/docgraph -args "${args[@]}"
-    verdict=$?
-    set -e
-    invocation="go test -count=1 -v -run '^TestSlice' ./internal/docgraph -args ${args[*]}"
-    # The Records check — records against kb_tools' inventory over kbase's
-    # tree — is the claim graph's, read through its own inventory; it writes
-    # <id>/records.yaml.
-    if [[ "${checks}" == *" compare "* ]]; then
-        set +e
-        go test -count=1 -v -run '^TestSliceRecords$' ./internal/claimgraph -args -slice.out="${root}/${out}" -slice.compare="${ids}"
-        [[ $? -eq 0 ]] || verdict=1
-        set -e
-        invocation="${invocation}\ngo test -count=1 -v -run '^TestSliceRecords\$' ./internal/claimgraph -args -slice.out=${root}/${out} -slice.compare='${ids}'"
-    fi
-    if [[ "${checks}" == *" rollup "* ]]; then
-        rollup=(-slice.out="${root}/${out}" -slice.rollup="${ids}")
-        go test -count=1 -v -run '^TestRollup$' ./internal/docgraph -args "${rollup[@]}"
-        invocation="${invocation}\ngo test -count=1 -v -run '^TestRollup\$' ./internal/docgraph -args ${rollup[*]}"
-    fi
-
-    {{just_executable()}} _write-evidence "${out}" "{{recipe}}" \
-      "per paper, in fresh fixture repositories ${out}/<id>/run-<n>:\n(cd <fixture> && ${root}/{{BIN_DIR}}/kbase build <volume-root> --through document-graph --state-dir ${root}/${out}/<id>/state-<n> [--bibliography <each .bib beside the volume root, sorted>]) > <id>/run-<n>.result.yaml 2> <id>/run-<n>.log\nPYTHONPATH=<kb_tools agents> python3 tools/slice/kbtools_dump.py [--ref <id>={{SLICE_REF_DIR}}/<id>/kb-root] --kbase <id>=<id>/run-1/kb-root --out <id>/dump.json\n${invocation}"
-    printf '\nReference: adjagent %s; %s\n' "${adjagent}" "${pandoc_version}" >> "${out}/EVIDENCE.md"
-    if [[ -f "${out}/rollup.yaml" ]]; then
-        printf '\n## Roll-up (rollup.yaml)\n\n```yaml\n' >> "${out}/EVIDENCE.md"
-        cat "${out}/rollup.yaml" >> "${out}/EVIDENCE.md"
-        printf '```\n' >> "${out}/EVIDENCE.md"
-    fi
-    if [[ "${verdict}" -ne 0 ]]; then
-        printf 'integration(%s): a check failed — see each paper'"'"'s comparison.yaml\n' "{{recipe}}"
-        exit 1
-    fi
-    printf 'integration(%s) ok\n' "{{recipe}}"
-
-# kbase's refresh and verify against kb_tools-built KBs. Per fixture:
-# ./bin/kbase verify runs on the fixture itself, which it must leave untouched
-# and pass; then a git clone of the fixture is refreshed with ./bin/kbase
-# refresh and `git diff --exit-code` over its kb-root/ measures byte equality
-# with kb_tools' refresh. Every difference is a finding in comparison.yaml.
-# Then TestRefreshMatchesKbTools and TestVerifyAgreesWithKbTools run each
-# toolchain over the same inputs — the fixtures as built, with their derived
-# fields stale and with their pending scores valued, and kb_tools' mini-kb
-# with the mutations of kb_tools' own verifier tests — into
-# kbtools-agreement/.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): ./bin/kbase verify on each kb_tools-built KB of prep-test-integration-kbtools-full, ./bin/kbase refresh in a clone of it diffed against kb_tools' bytes, and kbase's refresh and verify gates run beside kb_tools' on the same inputs (mini-kb and its mutations included); evidence under test_data/transient/test-integration-verify-arxiv/")]
-test-integration-verify-arxiv: (prep-test-integration-kbtools-full VERIFY_ARXIV_IDS)
-    @mkdir -p "{{VERIFY_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-verify-arxiv 2>&1 | tee "{{VERIFY_ARXIV_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-verify-arxiv: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    out="{{VERIFY_ARXIV_OUT_DIR}}"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    printf 'adjagent: %s\n' "${adjagent}"
-    status=0
-    comparison="${out}/comparison.yaml"
-    : > "${comparison}"
-    for id in {{VERIFY_ARXIV_IDS}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        dir="${out}/${name}"
-        rm -rf "${dir}"
-        mkdir -p "${dir}"
-        findings=()
-        verify_exit=none
-        refresh_exit=none
-        if [[ -z "$(git -C "${fixture}" log -n1 --format=%H --grep='^kb-build: overview-drafted ' 2>/dev/null)" ]]; then
-            findings+=("${fixture} holds no kb-build: overview-drafted commit")
-        else
-            set +e
-            ( cd "${fixture}" && "${kbase}" verify ) > "${dir}/verify.result.yaml" 2> "${dir}/verify.log"
-            verify_exit=$?
-            set -e
-            if [[ "${verify_exit}" -ne 0 ]]; then
-                findings+=("kbase verify exited ${verify_exit} on the kb_tools-built KB")
-            fi
-            while IFS= read -r line; do
-                findings+=("kbase verify left the fixture changed: ${line}")
-            done < <(git -C "${fixture}" status --porcelain)
-            git clone -q "${fixture}" "${dir}/clone"
-            set +e
-            ( cd "${dir}/clone" && "${kbase}" refresh ) > "${dir}/refresh.result.yaml" 2> "${dir}/refresh.log"
-            refresh_exit=$?
-            git -C "${dir}/clone" diff --exit-code -- kb-root > "${dir}/refresh.diff"
-            set -e
-            if [[ "${refresh_exit}" -ne 0 ]]; then
-                findings+=("kbase refresh exited ${refresh_exit} in the clone")
-            fi
-            while IFS= read -r path; do
-                findings+=("kbase refresh changed ${path}")
-            done < <(git -C "${dir}/clone" diff --name-only -- kb-root ':(exclude,glob)**/claim-graph*.svg'; git -C "${dir}/clone" ls-files --others --exclude-standard -- kb-root ':(exclude,glob)**/claim-graph*.svg')
-        fi
-        printf -- '- id: "%s"\n  verify-exit: %s\n  refresh-exit: %s\n  findings:' "${id}" "${verify_exit}" "${refresh_exit}" >> "${comparison}"
-        if [[ "${#findings[@]}" -eq 0 ]]; then
-            printf ' []\n' >> "${comparison}"
-        else
-            printf '\n' >> "${comparison}"
-            for f in "${findings[@]}"; do
-                printf '    - "%s"\n' "${f//\"/\\\"}" >> "${comparison}"
-            done
-            status=1
-        fi
-        printf '%s: verify exit %s, refresh exit %s, %s finding(s)\n' "${id}" "${verify_exit}" "${refresh_exit}" "${#findings[@]}"
-    done
-
-    # Each toolchain over the same inputs, staged by TestStageKbToolsComparisons
-    # and compared by TestKbToolsComparisons. kb_tools runs from the adjagent
-    # clone, mini-kb materialized by its own refresh as its tests do.
-    agree="${out}/kbtools-agreement"
-    rm -rf "${agree}"
-    mkdir -p "${agree}/mini-kb"
-    cp -R .claude/adjagent/kb_tools/tests/fixtures/mini-kb "${agree}/mini-kb/kb-root"
-    kbtools() { PYTHONPATH="${root}/.claude/adjagent" PYTHONDONTWRITEBYTECODE=1 python3 -m "$@"; }
-    kbtools kb_tools.refresh_kb_metadata --kb-root "${agree}/mini-kb/kb-root" > "${agree}/mini-kb/materialize.log" 2>&1
-    go test -count=1 -v -run '^TestStageKbToolsComparisons$' ./internal/index -args -kbtools.stage \
-        -kbtools.out="${root}/${agree}" -kbtools.minikb="${root}/.claude/adjagent/kb_tools/tests/fixtures/mini-kb" \
-        -kbtools.materialized="${root}/${agree}/mini-kb/kb-root" -kbtools.fixtures="${root}/{{KBTOOLS_REF_DIR}}" \
-        -kbtools.ids="{{VERIFY_ARXIV_IDS}}"
-    # step <dir> <name> <command...>: run a command in dir, its output in
-    # <dir>/<name>.log and its exit code in <dir>/<name>.exit.
-    step() {
-        local dir="$1" name="$2"
-        shift 2
-        set +e
-        ( cd "${dir}" && "$@" ) > "${dir}/${name}.log" 2>&1
-        printf '%s\n' "$?" > "${dir}/${name}.exit"
-        set -e
-    }
-    while read -r case; do
-        d="${agree}/refresh/${case}"
-        step "${d}" kbtools-refresh kbtools kb_tools.refresh_kb_metadata --kb-root kbtools/kb-root
-        git init -q "${d}/kbase"
-        step "${d}/kbase" ../kbase-refresh "${kbase}" refresh
-    done < "${agree}/refresh/cases.txt"
-    while read -r variant after; do
-        d="${agree}/verify/${variant}"
-        git init -q "${d}"
-        case "${after}" in
-            kbtools-refresh) step "${d}" kbtools-after kbtools kb_tools.refresh_kb_metadata --kb-root kb-root ;;
-            kbase-refresh) step "${d}" kbase-after "${kbase}" refresh ;;
-        esac
-        step "${d}" kbtools-links kbtools kb_tools.verify_md_links --root .
-        step "${d}" kbtools-metadata kbtools kb_tools.verify_kb_metadata --kb-root kb-root
-        set +e
-        ( cd "${d}" && "${kbase}" verify ) > "${d}/kbase-verify.yaml" 2> "${d}/kbase-verify.log"
-        set -e
-    done < "${agree}/verify/variants.txt"
-    set +e
-    go test -count=1 -v -run '^TestKbToolsComparisons$' ./internal/index -args -kbtools.out="${root}/${agree}"
-    [[ $? -eq 0 ]] || status=1
-    set -e
-
-    {{just_executable()}} _write-evidence "${out}" "test-integration-verify-arxiv" \
-      "per fixture <id> of {{KBTOOLS_REF_DIR}}:\n(cd {{KBTOOLS_REF_DIR}}/<id> && ${kbase} verify) > <id>/verify.result.yaml 2> <id>/verify.log\ngit clone {{KBTOOLS_REF_DIR}}/<id> <id>/clone\n(cd <id>/clone && ${kbase} refresh) > <id>/refresh.result.yaml 2> <id>/refresh.log\ngit -C <id>/clone diff --exit-code -- kb-root > <id>/refresh.diff\nkbtools-agreement/: go test -run '^TestStageKbToolsComparisons\$' ./internal/index -args -kbtools.stage ...; per refresh case, kb_tools' refresh on kbtools/kb-root and ${kbase} refresh in kbase/; per verify variant, kb_tools' verify_md_links and verify_kb_metadata and ${kbase} verify; go test -run '^TestKbToolsComparisons\$' ./internal/index -args -kbtools.out=${agree}"
-    printf '\nReference: adjagent %s\n' "${adjagent}" >> "${out}/EVIDENCE.md"
-    if [[ "${status}" -ne 0 ]]; then
-        printf 'integration(test-integration-verify-arxiv): a finding — see comparison.yaml and kbtools-agreement/\n'
-        exit 1
-    fi
-    printf 'integration(test-integration-verify-arxiv) ok\n'
-
-# One export leg: a copy of `source` (a git repository, cloned, or a bare
-# kb-root/ directory, copied into a fresh repository; the source itself is only
-# read), the author's `preamble` copied to <copy>/latex-export/preamble.tex
-# where one is named, then these checks. A failed export ends the leg; any other
-# failed check is printed as a `fail` line and the checks after it still run,
-# so the leg's first `fail` line is its first failing check, and it exits 1:
-#   export    ./bin/kbase export-latex --out <copy>/latex-export -> done
-#   counts    tools/export/export_forms.py counts: the streams' contract forms
-#             against main.tex and the report, each volume's footnotes its own
-#             definitions, every reference macro a label, the links, and the
-#             report's completeness and truth against the KB files
-#   reissue   the same export -> unchanged, every file of the out tree
-#             byte-identical (sha256 before and after)
-#   latexmk   -pdf and -lualatex in gen-tex/ (skipped, with a line, for a
-#             missing latexmk or engine)
-#   logs      the compile logs free of undefined references and citations and
-#             of missing characters
-# Everything it writes is under <out>/<name>/ (comparison.yaml, counts.txt,
-# hashes.1, hashes.2, the *.result.yaml and *.log of each step, log-scan.txt)
-# but leg.log, which the caller tees; the counts are appended to <out>/counts.tsv.
-[private]
-_export-leg out name source preamble:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    checker="${root}/{{EXPORT_CHECK_DIR}}/export_forms.py"
-    name="{{name}}"
-    source="{{source}}"
-    preamble="{{preamble}}"
-    dir="${root}/{{out}}/${name}"
-    repo="${dir}/repo"
-    export_dir="${repo}/latex-export"
-    gen="${export_dir}/gen-tex"
-    comparison="${dir}/comparison.yaml"
-    mkdir -p "${dir}"
-    find "${dir}" -mindepth 1 -maxdepth 1 ! -name leg.log -exec rm -rf {} +
-    printf -- '- id: "%s"\n  checks:\n' "${name}" > "${comparison}"
-    # record <check> <pass|fail|skip> <detail>: one line in comparison.yaml and one on stdout.
-    record() {
-        printf '    - {check: "%s", status: %s, detail: "%s"}\n' "$1" "$2" "${3//\"/\\\"}" >> "${comparison}"
-        printf '%s %s: %s%s\n' "$2" "${name}" "$1" "${3:+ — $3}"
-    }
-    # fail <check> <detail>: a failed check; the checks that do not depend on it still run.
-    failed=0
-    fail() {
-        record "$1" fail "$2"
-        failed=1
-    }
-    if [[ -d "${source}/.git" ]]; then
-        git clone -q "${source}" "${repo}"
-    else
-        mkdir -p "${repo}"
-        cp -R "${source}" "${repo}/kb-root"
-        git init -q "${repo}"
-    fi
-    if [[ -n "${preamble}" ]]; then
-        mkdir -p "${export_dir}"
-        cp "${preamble}" "${export_dir}/preamble.tex"
-    fi
-    # issue <stem>: one export; its exit code in rc, its outcome in outcome.
-    issue() {
-        rc=0
-        ( cd "${repo}" && "${kbase}" export-latex --out "${export_dir}" ) > "${dir}/$1.result.yaml" 2> "${dir}/$1.log" || rc=$?
-        outcome="$(sed -n 's/^outcome: "\(.*\)"$/\1/p' "${dir}/$1.result.yaml")"
-    }
-    hashes() {
-        ( cd "${export_dir}" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 ) > "${dir}/$1"
-    }
-
-    issue export
-    if [[ "${rc}" -ne 0 || "${outcome}" != done ]]; then
-        fail export "exit ${rc}, outcome '${outcome}' (want 0, done): see export.result.yaml and export.log"
-        exit 1
-    fi
-    record export pass "outcome done"
-
-    rc=0
-    python3 -B "${checker}" counts "${gen}" --kb-root "${repo}/kb-root" > "${dir}/counts.txt" || rc=$?
-    tab=$'\t'
-    sed -E "s/^(ok|FAIL): (.*): want (.*) got (.*)\$/${name}${tab}\1${tab}\2${tab}\3${tab}\4/" "${dir}/counts.txt" >> "${root}/{{out}}/counts.tsv"
-    if [[ "${rc}" -eq 0 ]]; then
-        record counts pass "$(grep -c '^ok' "${dir}/counts.txt") checks, see counts.txt"
-    else
-        fail counts "$(grep -m1 '^FAIL' "${dir}/counts.txt"): see counts.txt"
-    fi
-
-    hashes hashes.1
-    issue reissue
-    hashes hashes.2
-    if [[ "${rc}" -ne 0 || "${outcome}" != unchanged ]]; then
-        fail reissue "exit ${rc}, outcome '${outcome}' (want 0, unchanged): see reissue.result.yaml and reissue.log"
-    elif ! cmp -s "${dir}/hashes.1" "${dir}/hashes.2"; then
-        fail reissue "the out tree changed across the re-issue: diff hashes.1 hashes.2"
-    else
-        record reissue pass "unchanged, $(wc -l < "${dir}/hashes.1" | tr -d ' ') files byte-identical"
-    fi
-
-    logs=()
-    for engine in pdf lualatex; do
-        flag="-${engine}"
-        binary="${engine}"
-        [[ "${engine}" == pdf ]] && binary=pdflatex
-        if ! command -v latexmk > /dev/null || ! command -v "${binary}" > /dev/null; then
-            record "latexmk-${engine}" skip "latexmk or ${binary} is not on PATH"
-            continue
-        fi
-        rc=0
-        ( cd "${gen}" && latexmk -C -quiet main.tex && latexmk "${flag}" -interaction=nonstopmode -halt-on-error main.tex ) \
-            > "${dir}/latexmk-${engine}.log" 2>&1 || rc=$?
-        [[ -f "${gen}/main.log" ]] && cp "${gen}/main.log" "${dir}/main-${engine}.log"
-        if [[ "${rc}" -ne 0 ]]; then
-            fail "latexmk-${engine}" "latexmk ${flag} exited ${rc}: $(LC_ALL=C grep -a -m1 -e '^!' -e 'Missing character' "${dir}/main-${engine}.log" || true) (main-${engine}.log)"
-        else
-            record "latexmk-${engine}" pass "main.pdf built"
-        fi
-        [[ ! -f "${dir}/main-${engine}.log" ]] || logs+=("${dir}/main-${engine}.log")
-    done
-    if [[ "${#logs[@]}" -eq 0 ]]; then
-        record logs skip "no compile ran"
-    else
-        rc=0
-        python3 -B "${checker}" log "${logs[@]}" > "${dir}/log-scan.txt" || rc=$?
-        if [[ "${rc}" -eq 0 ]]; then
-            record logs pass "no undefined references or citations, no missing characters"
-        else
-            fail logs "$(grep -m1 '^FAIL' "${dir}/log-scan.txt"): see log-scan.txt"
-        fi
-    fi
-    exit "${failed}"
-
-# One KB of several: <dest>/kb-root/ is a copy of the first of `kb_roots`, with
-# each later kb-root's volume directories copied beside it and its entry-point
-# bullets appended to the entry point; <dest>/preamble.tex is the `preambles`
-# concatenated in order. By hand because no write op edits an entry point's
-# volume list (set-frontmatter replaces frontmatter only), and refresh and
-# verify refuse the result (the registers stay per volume). The sources are only read.
-[private]
-_stage-export-multivolume dest kb_roots preambles:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dest="{{dest}}"
-    read -r -a roots <<< "{{kb_roots}}"
-    read -r -a preambles <<< "{{preambles}}"
-    for root in "${roots[@]}"; do
-        [[ -f "${root}/entry-point.md" ]] || { printf 'error: %s holds no entry-point.md\n' "${root}" >&2; exit 1; }
-    done
-    for path in "${preambles[@]}"; do
-        [[ -f "${path}" ]] || { printf 'error: %s is not a file\n' "${path}" >&2; exit 1; }
-    done
-    rm -rf "${dest}"
-    mkdir -p "${dest}"
-    cp -R "${roots[0]}" "${dest}/kb-root"
-    for root in "${roots[@]:1}"; do
-        added=0
-        while IFS= read -r line; do
-            [[ "${line}" =~ ^-\ \[.*\]\(([^/\)]+)/index\.md\) ]] || continue
-            volume="${BASH_REMATCH[1]}"
-            [[ ! -e "${dest}/kb-root/${volume}" ]] || { printf 'error: volume directory %s is in two of the KBs\n' "${volume}" >&2; exit 1; }
-            cp -R "${root}/${volume}" "${dest}/kb-root/${volume}"
-            printf '%s\n' "${line}" >> "${dest}/kb-root/entry-point.md"
-            added=$((added + 1))
-        done < "${root}/entry-point.md"
-        [[ "${added}" -gt 0 ]] || { printf 'error: %s/entry-point.md lists no volume\n' "${root}" >&2; exit 1; }
-    done
-    cat "${preambles[@]}" > "${dest}/preamble.tex"
-
-# The export legs over the kb_tools-built fixtures. Each fixture of
-# VERIFY_ARXIV_IDS (the slice's six papers, built complete by
-# prep-test-integration-kbtools-full) is cloned to <id>/repo and exported to
-# <id>/repo/latex-export; the committed 0.9.0 kb_tools-built KB runs as the
-# leg `kbtools-0.9.0`; EXPORT_MULTIVOLUME_IDS' fixtures combined into one KB of
-# two volumes run as the leg `multi-volume`, where a footnote [^1] in each
-# volume must come out as its own volume's note. An author's preamble the exported maths needs stands in
-# EXPORT_PREAMBLE_DIR as <id>.tex and is copied in before the export. The
-# checks are _export-leg's; this recipe runs one leg per input, rolls the
-# legs into legs.yaml and counts.tsv, and fails if any leg did.
-[doc("NEEDS pandoc + python3 + a TeX distribution with latexmk (a missing latexmk skips the compile checks) + the adjagent clone (excluded from test-integration): ./bin/kbase export-latex on a clone of each kb_tools-built KB of prep-test-integration-kbtools-full and of the committed 0.9.0 kb_tools-built KB, with the author's preamble from test_data/fixtures/export-preambles/<id>.tex where the maths needs one, and on two of those KBs combined into one (leg multi-volume): done; every data-cites span a \\cite or a citation report line, every label a \\label, every reference anchor a reference macro or an anchor report line; every volume's footnotes the text of its own definitions and every reference macro a label; the report complete and true against the KB files; the same export again unchanged and byte-identical; latexmk -pdf and -lualatex green with logs free of undefined references, undefined citations and missing characters; evidence under test_data/transient/test-integration-export-arxiv/")]
-test-integration-export-arxiv: (prep-test-integration-kbtools-full VERIFY_ARXIV_IDS) test-export-forms
-    @mkdir -p "{{EXPORT_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-export-arxiv 2>&1 | tee "{{EXPORT_ARXIV_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-export-arxiv: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    out="{{EXPORT_ARXIV_OUT_DIR}}"
-    for tool in pandoc python3 shasum; do
-        command -v "${tool}" > /dev/null || { printf 'error: %s is not on PATH\n' "${tool}" >&2; exit 1; }
-    done
-    mkdir -p "${out}"
-    printf 'fixture\tstatus\tcheck\twant\tgot\n' > "${out}/counts.tsv"
-    : > "${out}/legs.yaml"
-    legs=0
-    failed=()
-    run_leg() {
-        local name="$1" source="$2" preamble="$3"
-        legs=$((legs + 1))
-        mkdir -p "${out}/${name}"
-        {{just_executable()}} _export-leg "${out}" "${name}" "${source}" "${preamble}" 2>&1 | tee "${out}/${name}/leg.log" \
-            || failed+=("${name}")
-        cat "${out}/${name}/comparison.yaml" >> "${out}/legs.yaml"
-    }
-    printf 'kb_tools-built fixtures (VERIFY_ARXIV_IDS): %s\n' "$(printf '%s\n' {{VERIFY_ARXIV_IDS}} | wc -l | tr -d ' ')"
-    for id in {{VERIFY_ARXIV_IDS}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        source="{{KBTOOLS_REF_DIR}}/${name}"
-        if [[ -z "$(git -C "${source}" log -n1 --format=%H --grep='^kb-build: overview-drafted ' 2>/dev/null)" ]]; then
-            printf 'error: %s holds no kb-build: overview-drafted commit\n' "${source}" >&2
-            exit 1
-        fi
-        preamble="{{EXPORT_PREAMBLE_DIR}}/${name}.tex"
-        [[ -f "${preamble}" ]] || preamble=""
-        run_leg "${name}" "${source}" "${preamble}"
-        # The fixture is only read: a changed worktree is a finding of its own.
-        if [[ -n "$(git -C "${source}" status --porcelain)" ]]; then
-            printf 'fail %s: the export left the fixture changed\n' "${name}"
-            failed+=("${name}-fixture-changed")
-        fi
-    done
-    run_leg kbtools-0.9.0 "{{EXPORT_KBTOOLS_090_KB_ROOT}}" ""
-    roots=()
-    preambles=()
-    for id in {{EXPORT_MULTIVOLUME_IDS}}; do
-        roots+=("{{KBTOOLS_REF_DIR}}/${id}/kb-root")
-        [[ ! -f "{{EXPORT_PREAMBLE_DIR}}/${id}.tex" ]] || preambles+=("{{EXPORT_PREAMBLE_DIR}}/${id}.tex")
-    done
-    {{just_executable()}} _stage-export-multivolume "${out}/stage-multi-volume" "${roots[*]}" "${preambles[*]}"
-    run_leg multi-volume "${out}/stage-multi-volume/kb-root" "${out}/stage-multi-volume/preamble.tex"
-    {{just_executable()}} _write-evidence "${out}" "test-integration-export-arxiv" \
-      "stage-multi-volume/: the leg multi-volume's source, _stage-export-multivolume over the kb-root/ of {{EXPORT_MULTIVOLUME_IDS}} (the first copied whole, the later volumes' directories and entry-point bullets added), preamble.tex their preambles concatenated\nper leg <id> (each VERIFY_ARXIV_IDS fixture of {{KBTOOLS_REF_DIR}}, kbtools-0.9.0 from {{EXPORT_KBTOOLS_090_KB_ROOT}}, and multi-volume from stage-multi-volume/), _export-leg: git clone the fixture to <id>/repo; cp {{EXPORT_PREAMBLE_DIR}}/<id>.tex <id>/repo/latex-export/preamble.tex where it exists\n(cd <id>/repo && ./bin/kbase export-latex --out <id>/repo/latex-export) > <id>/export.result.yaml 2> <id>/export.log\npython3 tools/export/export_forms.py counts <id>/repo/latex-export/gen-tex --kb-root <id>/repo/kb-root > <id>/counts.txt\nthe export again > <id>/reissue.result.yaml; sha256 of every file of latex-export/ before and after: <id>/hashes.1, hashes.2\n(cd <id>/repo/latex-export/gen-tex && latexmk -pdf main.tex; latexmk -lualatex main.tex) > <id>/latexmk-<engine>.log; main.log kept as <id>/main-<engine>.log\npython3 tools/export/export_forms.py log <id>/main-*.log > <id>/log-scan.txt"
-    if [[ "${#failed[@]}" -gt 0 ]]; then
-        printf 'integration(test-integration-export-arxiv): %d of %d legs failed (%s) — first failing check of each:\n' "${#failed[@]}" "${legs}" "${failed[*]}"
-        for name in "${failed[@]}"; do
-            grep -h -m1 '^fail ' "${out}/${name}/leg.log" 2>/dev/null || true
-        done
-        exit 1
-    fi
-    printf 'integration(test-integration-export-arxiv) ok: %d legs\n' "${legs}"
-
-# The export leg over the hand-maintained KB test_data/transient/ModernCorpNoTex
-# (a repository; cloned), with its preamble fixture: _export-leg's checks, among
-# them every internal link in the exported documents a \hyperref or a link
-# report line, the report complete (each degraded link and image has its line)
-# and true (each line names a form the KB file at its path holds). The leg
-# `multi-volume` adds EXPORT_MULTIVOLUME_IDS' volumes to that KB (none of the
-# hand-maintained KB's documents defines a footnote, so the footnote check
-# there rests on the two built volumes, which each define a [^1]), the
-# preambles concatenated.
-[doc("NEEDS pandoc + python3 + a TeX distribution with latexmk (a missing latexmk skips the compile checks) + test_data/transient/ModernCorpNoTex (absent: skips with a message) + the adjagent clone for the two kb_tools-built fixtures of the multi-volume leg (excluded from test-integration): ./bin/kbase export-latex on a clone of the hand-maintained KB with test_data/fixtures/export-preambles/ModernCorpNoTex.tex as the author's preamble, and on that KB with two kb_tools-built volumes added (leg multi-volume): done; counts as test-integration-export-arxiv; every internal link a \\hyperref or a link report line; the report complete and true against the KB files; re-issue unchanged and byte-identical; latexmk -pdf and -lualatex green with clean logs; evidence under test_data/transient/test-integration-export-maintained/")]
-test-integration-export-maintained: test-export-forms (prep-test-integration-kbtools-full EXPORT_MULTIVOLUME_IDS)
-    @mkdir -p "{{EXPORT_MAINTAINED_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-export-maintained 2>&1 | tee "{{EXPORT_MAINTAINED_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-export-maintained: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    out="{{EXPORT_MAINTAINED_OUT_DIR}}"
-    if [[ ! -d "{{EXPORT_MAINTAINED_DIR}}/kb-root" ]]; then
-        printf 'skip: %s is absent; stage the hand-maintained KB there to run this recipe\n' "{{EXPORT_MAINTAINED_DIR}}"
-        exit 0
-    fi
-    for tool in pandoc python3 shasum; do
-        command -v "${tool}" > /dev/null || { printf 'error: %s is not on PATH\n' "${tool}" >&2; exit 1; }
-    done
-    name="$(basename "{{EXPORT_MAINTAINED_DIR}}")"
-    mkdir -p "${out}/${name}"
-    printf 'fixture\tstatus\tcheck\twant\tgot\n' > "${out}/counts.tsv"
-    : > "${out}/legs.yaml"
-    failed=()
-    run_leg() {
-        local leg="$1" source="$2" preamble="$3"
-        mkdir -p "${out}/${leg}"
-        {{just_executable()}} _export-leg "${out}" "${leg}" "${source}" "${preamble}" 2>&1 | tee "${out}/${leg}/leg.log" \
-            || failed+=("${leg}")
-        cat "${out}/${leg}/comparison.yaml" >> "${out}/legs.yaml"
-    }
-    run_leg "${name}" "{{EXPORT_MAINTAINED_DIR}}" "{{EXPORT_PREAMBLE_DIR}}/${name}.tex"
-    roots=("{{EXPORT_MAINTAINED_DIR}}/kb-root")
-    preambles=("{{EXPORT_PREAMBLE_DIR}}/${name}.tex")
-    for id in {{EXPORT_MULTIVOLUME_IDS}}; do
-        roots+=("{{KBTOOLS_REF_DIR}}/${id}/kb-root")
-        [[ ! -f "{{EXPORT_PREAMBLE_DIR}}/${id}.tex" ]] || preambles+=("{{EXPORT_PREAMBLE_DIR}}/${id}.tex")
-    done
-    {{just_executable()}} _stage-export-multivolume "${out}/stage-multi-volume" "${roots[*]}" "${preambles[*]}"
-    run_leg multi-volume "${out}/stage-multi-volume/kb-root" "${out}/stage-multi-volume/preamble.tex"
-    {{just_executable()}} _write-evidence "${out}" "test-integration-export-maintained" \
-      "stage-multi-volume/: the leg multi-volume's source, _stage-export-multivolume over the kb-root/ of {{EXPORT_MAINTAINED_DIR}} and of {{EXPORT_MULTIVOLUME_IDS}} (the first copied whole, the later volumes' directories and entry-point bullets added), preamble.tex their preambles concatenated\n_export-leg ${name} (and multi-volume from stage-multi-volume/): git clone {{EXPORT_MAINTAINED_DIR}} to ${name}/repo; cp {{EXPORT_PREAMBLE_DIR}}/${name}.tex ${name}/repo/latex-export/preamble.tex\n(cd ${name}/repo && ./bin/kbase export-latex --out ${name}/repo/latex-export) > ${name}/export.result.yaml 2> ${name}/export.log\npython3 tools/export/export_forms.py counts ${name}/repo/latex-export/gen-tex --kb-root ${name}/repo/kb-root > ${name}/counts.txt\nthe export again > ${name}/reissue.result.yaml; sha256 of every file of latex-export/ before and after: ${name}/hashes.1, hashes.2\n(cd ${name}/repo/latex-export/gen-tex && latexmk -pdf main.tex; latexmk -lualatex main.tex) > ${name}/latexmk-<engine>.log; main.log kept as ${name}/main-<engine>.log\npython3 tools/export/export_forms.py log ${name}/main-*.log > ${name}/log-scan.txt"
-    if [[ "${#failed[@]}" -gt 0 ]]; then
-        printf 'integration(test-integration-export-maintained): %d of 2 legs failed (%s) — first failing check of each:\n' "${#failed[@]}" "${failed[*]}"
-        for leg in "${failed[@]}"; do
-            grep -h -m1 '^fail ' "${out}/${leg}/leg.log" 2>/dev/null || true
-        done
-        exit 1
-    fi
-    printf 'integration(test-integration-export-maintained) ok: 2 legs\n'
-
-# The compatibility op script (COMPAT_OP_SCRIPT, rendered per fixture by
-# TestStageOpScript) applied to two clones of each kb_tools-built fixture:
-# through ./bin/kbase on kbase/, through kb_tools' kb_util on kbtools/, each
-# step's minted ids substituted from that toolchain's own output. kb_tools'
-# ops do not refresh, so kbtools/ is refreshed once after the script. Both
-# toolchains' verify then run on both clones, each of which must exit 0.
-# TestCompareOpScript compares the two kb-roots with kb_tools' ids read
-# as kbase's, and the script is re-run on kbase/, which must report
-# unchanged at every step and leave kb-root/ byte-identical.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): per kb_tools-built fixture of prep-test-integration-kbtools-full, the compatibility op script through ./bin/kbase on one clone and through kb_tools' kb_util on another, both toolchains' verify on both clones, the two kb-root/ compared, and the script re-run through ./bin/kbase to unchanged; kb_tools' render goldens and write-API regression replay run first; evidence under test_data/transient/test-integration-write-arxiv/")]
-test-integration-write-arxiv: (prep-test-integration-kbtools-full VERIFY_ARXIV_IDS)
-    @mkdir -p "{{WRITE_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-write-arxiv 2>&1 | tee "{{WRITE_ARXIV_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-write-arxiv: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    out="{{WRITE_ARXIV_OUT_DIR}}"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    script="${root}/{{COMPAT_OP_SCRIPT}}"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    printf 'adjagent: %s\n' "${adjagent}"
-    status=0
-
-    # kb_tools' render goldens and write-API regression fixtures: the clone is
-    # present here, so a skip is a failure.
-    set +e
-    go test -count=1 -v -run '^(TestRenderGoldens|TestRegression.*)$' ./internal/write > "${out}/kbtools-fixtures.log" 2>&1
-    rc=$?
-    set -e
-    if [[ "${rc}" -ne 0 ]] || grep -q -- '--- SKIP' "${out}/kbtools-fixtures.log"; then
-        printf 'render goldens or regression replay failed or skipped: see kbtools-fixtures.log\n'
-        status=1
-    fi
-
-    # capture <stem> <dir> <command...>: run the command in dir, stdout to
-    # <stem>.out, stderr to <stem>.log, exit code to <stem>.exit.
-    capture() {
-        local stem="$1" dir="$2"
-        shift 2
-        set +e
-        ( cd "${dir}" && "$@" ) > "${stem}.out" 2> "${stem}.log"
-        printf '%s\n' "$?" > "${stem}.exit"
-        set -e
-    }
-    kbtools() { PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 "$@"; }
-
-    summary="${out}/summary.yaml"
-    : > "${summary}"
-    for id in {{VERIFY_ARXIV_IDS}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        dir="${out}/${name}"
-        rm -rf "${dir}"
-        mkdir -p "${dir}/kbase-steps" "${dir}/kbtools-steps" "${dir}/rerun-steps"
-        findings=()
-        git clone -q "${fixture}" "${dir}/kbase"
-        git clone -q "${fixture}" "${dir}/kbtools"
-        if ! go test -count=1 -run '^TestStageOpScript$' ./internal/write -args -opscript.script="${script}" \
-            -opscript.kbroot="${root}/${dir}/kbase/kb-root" -opscript.out="${root}/${dir}/steps" > "${dir}/stage.log" 2>&1; then
-            findings+=("the op script could not be staged: see stage.log")
-        else
-            kb_subs=(-e 's/^//')
-            tl_subs=(-e 's/^//')
-            : > "${dir}/ids.txt"
-            while IFS=$'\t' read -r nn op create minted; do
-                flags=()
-                [[ "${create}" == true ]] && flags+=(--create)
-                step="${nn}-${op}"
-                sed "${kb_subs[@]}" "${dir}/steps/${step}.yaml" > "${dir}/kbase-steps/${step}.yaml"
-                capture "${dir}/kbase-steps/${step}" "${dir}/kbase" "${kbase}" "${op}" --values "${root}/${dir}/kbase-steps/${step}.yaml" ${flags[@]+"${flags[@]}"}
-                [[ "$(cat "${dir}/kbase-steps/${step}.exit")" -eq 0 ]] || findings+=("kbase ${op} (step ${nn}) exited $(cat "${dir}/kbase-steps/${step}.exit")")
-                sed "${tl_subs[@]}" "${dir}/steps/${step}.toml" > "${dir}/kbtools-steps/${step}.toml"
-                capture "${dir}/kbtools-steps/${step}" "${dir}/kbtools" kbtools python3 -m kb_tools.kb_util "${op}" --values "${root}/${dir}/kbtools-steps/${step}.toml" ${flags[@]+"${flags[@]}"}
-                [[ "$(cat "${dir}/kbtools-steps/${step}.exit")" -eq 0 ]] || findings+=("kb_tools ${op} (step ${nn}) exited $(cat "${dir}/kbtools-steps/${step}.exit")")
-                if [[ "${minted}" != - ]]; then
-                    kid="$(sed -n '/^ids:/{n;s/^ *- "\(.*\)"$/\1/p;}' "${dir}/kbase-steps/${step}.out")"
-                    tid="$(sed -n 's/.*FACT minted  *\([^ ]*\) (.*/\1/p' "${dir}/kbtools-steps/${step}.out" | head -n1)"
-                    [[ -n "${kid}" && -n "${tid}" ]] || findings+=("step ${nn} reported no minted id on one side (kbase '${kid}', kb_tools '${tid}')")
-                    kb_subs+=(-e "s/@MINT-${minted}@/${kid}/g")
-                    tl_subs+=(-e "s/@MINT-${minted}@/${tid}/g")
-                    printf '%s %s %s\n' "${minted}" "${kid}" "${tid}" >> "${dir}/ids.txt"
-                fi
-            done < "${dir}/steps/steps.tsv"
-
-            capture "${dir}/kbtools-refresh" "${dir}/kbtools" kbtools make kb-refresh
-            [[ "$(cat "${dir}/kbtools-refresh.exit")" -eq 0 ]] || findings+=("kb_tools' refresh exited $(cat "${dir}/kbtools-refresh.exit") on kbtools/")
-            for clone in kbase kbtools; do
-                capture "${dir}/kbase-verify.${clone}" "${dir}/${clone}" "${kbase}" verify
-                [[ "$(cat "${dir}/kbase-verify.${clone}.exit")" -eq 0 ]] || findings+=("kbase verify exited $(cat "${dir}/kbase-verify.${clone}.exit") on ${clone}/")
-                capture "${dir}/kbtools-verify.${clone}" "${dir}/${clone}" kbtools make kb-verify
-                rc="$(cat "${dir}/kbtools-verify.${clone}.exit")"
-                [[ "${rc}" -eq 0 ]] || findings+=("kb_tools' verify exited ${rc} on ${clone}/")
-            done
-
-            set +e
-            diff -r "${dir}/kbtools/kb-root" "${dir}/kbase/kb-root" > "${dir}/raw.diff"
-            go test -count=1 -v -run '^TestCompareOpScript$' ./internal/write -args -opscript.kbase="${root}/${dir}/kbase/kb-root" \
-                -opscript.kbtools="${root}/${dir}/kbtools/kb-root" -opscript.ids="${root}/${dir}/ids.txt" \
-                -opscript.comparison="${root}/${dir}/comparison.yaml" > "${dir}/compare.log" 2>&1
-            rc=$?
-            set -e
-            [[ "${rc}" -eq 0 ]] || findings+=("the two kb-roots differ beyond the sheet: see comparison.yaml")
-
-            cp -R "${dir}/kbase/kb-root" "${dir}/kb-root.before-rerun"
-            while IFS=$'\t' read -r nn op create minted; do
-                flags=()
-                [[ "${create}" == true ]] && flags+=(--create)
-                step="${nn}-${op}"
-                capture "${dir}/rerun-steps/${step}" "${dir}/kbase" "${kbase}" "${op}" --values "${root}/${dir}/kbase-steps/${step}.yaml" ${flags[@]+"${flags[@]}"}
-                grep -qx 'outcome: "unchanged"' "${dir}/rerun-steps/${step}.out" || findings+=("re-run ${op} (step ${nn}) did not report unchanged")
-            done < "${dir}/steps/steps.tsv"
-            diff -r "${dir}/kb-root.before-rerun" "${dir}/kbase/kb-root" > "${dir}/rerun.diff" || findings+=("the re-run changed kb-root/: see rerun.diff")
-        fi
-
-        printf -- '- id: "%s"\n  findings:' "${id}" >> "${summary}"
-        if [[ "${#findings[@]}" -eq 0 ]]; then
-            printf ' []\n' >> "${summary}"
-        else
-            printf '\n' >> "${summary}"
-            for f in "${findings[@]}"; do
-                printf '    - "%s"\n' "${f//\"/\\\"}" >> "${summary}"
-            done
-            status=1
-        fi
-        printf '%s: %s finding(s)\n' "${id}" "${#findings[@]}"
-    done
-
-    {{just_executable()}} _write-evidence "${out}" "test-integration-write-arxiv" \
-      "go test -run '^(TestRenderGoldens|TestRegression.*)\$' ./internal/write > kbtools-fixtures.log\nper fixture <id> of {{KBTOOLS_REF_DIR}}, cloned to <id>/kbase and <id>/kbtools:\ngo test -run '^TestStageOpScript\$' ./internal/write -args -opscript.script={{COMPAT_OP_SCRIPT}} -opscript.kbroot=<id>/kbase/kb-root -opscript.out=<id>/steps\nper step NN-op: (cd <id>/kbase && ${kbase} op --values <id>/kbase-steps/NN-op.yaml); (cd <id>/kbtools && PYTHONPATH=.claude/agents python3 -m kb_tools.kb_util op --values <id>/kbtools-steps/NN-op.toml)\n(cd <id>/kbtools && make kb-refresh)\nper clone: ${kbase} verify; make kb-verify\ngo test -run '^TestCompareOpScript\$' ./internal/write -args ... -opscript.comparison=<id>/comparison.yaml\nper step again on <id>/kbase into <id>/rerun-steps/, then diff -r <id>/kb-root.before-rerun <id>/kbase/kb-root > <id>/rerun.diff"
-    printf '\nReference: adjagent %s\n' "${adjagent}" >> "${out}/EVIDENCE.md"
-    if [[ "${status}" -ne 0 ]]; then
-        printf 'integration(test-integration-write-arxiv): a finding — see summary.yaml\n'
-        exit 1
-    fi
-    printf 'integration(test-integration-write-arxiv) ok\n'
-
-# Every query through ./bin/kbase and through kb_tools' kb_cmd --json, the
-# fixture's own installed copy, run from the same repository with the same
-# arguments: on each kb_tools-built fixture, read-only, every case
-# TestStageQueryCases draws from its index; and, because those fixtures score
-# nothing and link no leaf from another's body, again on a clone given one
-# such link and scored by kbase (TestStageQueryScores' values through
-# set-rigor and insert-claim-entry), where referenced-by, solidity-below,
-# weak-points and gated-on have something to answer. TestCompareQueries compares every
-# case as data into comparison.yaml. render-claim-graph is exercised on a
-# third clone: kb_tools' drawn sheet left byte-identical (outcome unchanged), the
-# re-run unchanged, a removed root sheet drawn again (a Graphviz SVG, not the
-# placeholder), and kbase verify green after.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): every query through ./bin/kbase and through kb_tools' kb_cmd --json on each kb_tools-built fixture of prep-test-integration-kbtools-full (read-only) and on a clone kbase scored, compared as data; render-claim-graph's sheet rule on a clone (kb_tools' sheet left byte-identical with outcome unchanged, unchanged on re-run, a removed root sheet drawn again); evidence under test_data/transient/test-integration-query-arxiv/")]
-test-integration-query-arxiv: (prep-test-integration-kbtools-full VERIFY_ARXIV_IDS)
-    @mkdir -p "{{QUERY_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-query-arxiv 2>&1 | tee "{{QUERY_ARXIV_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-query-arxiv: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    out="{{QUERY_ARXIV_OUT_DIR}}"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    printf 'adjagent: %s\n' "${adjagent}"
-    status=0
-
-    # capture <stem> <dir> <command...>: run the command in dir, stdout to
-    # <stem>.out, stderr to <stem>.log, exit code to <stem>.exit.
-    capture() {
-        local stem="$1" dir="$2"
-        shift 2
-        set +e
-        ( cd "${dir}" && "$@" ) > "${stem}.out" 2> "${stem}.log"
-        printf '%s\n' "$?" > "${stem}.exit"
-        set -e
-    }
-    # run_cases <cases-dir> <repo>: each NNN.args (the query, then one argument
-    # per line) through both toolchains from the repository; a list query
-    # through kbase with --limit 0, so its whole answer is compared.
-    run_cases() {
-        local cases="$1" repo="$2" f stem line
-        local -a args paging
-        for f in "${cases}"/*.args; do
-            stem="${f%.args}"
-            args=()
-            while IFS= read -r line; do
-                args+=("${line}")
-            done < "${f}"
-            paging=(--limit 0)
-            case "${args[0]}" in show|stats) paging=() ;; esac
-            capture "${stem}.kbase" "${repo}" "${kbase}" "${args[@]}" ${paging[@]+"${paging[@]}"}
-            capture "${stem}.kbcmd" "${repo}" env PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 \
-                python3 -m kb_tools.kb_cmd "${args[@]}" --json
-        done
-    }
-    # expect <stem> <exit> <outcome>: a finding unless the captured run exited
-    # so and reported that outcome.
-    expect() {
-        local stem="$1" want_exit="$2" want_outcome="$3"
-        local got
-        got="$(cat "${stem}.exit")"
-        if [[ "${got}" -ne "${want_exit}" ]] || ! grep -qx "outcome: \"${want_outcome}\"" "${stem}.out"; then
-            findings+=("$(basename "${stem}"): exit ${got}, want ${want_exit} with outcome ${want_outcome}")
-        fi
-    }
-
-    dirs=()
-    findings_file="${out}/findings.yaml"
-    : > "${findings_file}"
-    for id in {{VERIFY_ARXIV_IDS}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        dir="${out}/${name}"
-        rm -rf "${dir}"
-        mkdir -p "${dir}"
-        findings=()
-        if [[ -z "$(git -C "${fixture}" log -n1 --format=%H --grep='^kb-build: overview-drafted ' 2>/dev/null)" ]]; then
-            findings+=("${fixture} holds no kb-build: overview-drafted commit")
-        else
-            # The fixture itself, read-only.
-            if go test -count=1 -run '^TestStageQueryCases$' ./internal/query -args -query.kbroot="${root}/${fixture}/kb-root" \
-                -query.cases="${root}/${dir}/fixture" > "${dir}/stage.log" 2>&1; then
-                run_cases "${dir}/fixture" "${fixture}"
-                dirs+=("${root}/${dir}/fixture")
-            else
-                findings+=("the fixture's cases could not be staged: see stage.log")
-            fi
-            while IFS= read -r line; do
-                findings+=("the queries left the fixture changed: ${line}")
-            done < <(git -C "${fixture}" status --porcelain)
-
-            # A clone kbase scores, where the scored queries have answers.
-            git clone -q "${fixture}" "${dir}/scored-clone"
-            if go test -count=1 -run '^TestStageQueryScores$' ./internal/query -args -query.kbroot="${root}/${dir}/scored-clone/kb-root" \
-                -query.values="${root}/${dir}/scores" >> "${dir}/stage.log" 2>&1; then
-                if [[ -f "${dir}/scores/set-rigor.yaml" ]]; then
-                    for op in set-rigor insert-claim-entry; do
-                        capture "${dir}/scores/${op}" "${dir}/scored-clone" "${kbase}" "${op}" --values "${root}/${dir}/scores/${op}.yaml"
-                        expect "${dir}/scores/${op}" 0 done
-                    done
-                    if go test -count=1 -run '^TestStageQueryCases$' ./internal/query -args -query.kbroot="${root}/${dir}/scored-clone/kb-root" \
-                        -query.cases="${root}/${dir}/scored" >> "${dir}/stage.log" 2>&1; then
-                        run_cases "${dir}/scored" "${dir}/scored-clone"
-                        dirs+=("${root}/${dir}/scored")
-                    else
-                        findings+=("the scored clone's cases could not be staged: see stage.log")
-                    fi
-                fi
-            else
-                findings+=("the scores could not be staged: see stage.log")
-            fi
-
-            # render-claim-graph's sheet rule on a clone.
-            sheet="${dir}/sheet"
-            mkdir -p "${sheet}"
-            git clone -q "${fixture}" "${sheet}/clone"
-            svg="${sheet}/clone/kb-root/claim-graph.svg"
-            if [[ -f "${svg}" ]]; then
-                cp "${svg}" "${sheet}/drawn.svg"
-                capture "${sheet}/1-drawn" "${sheet}/clone" "${kbase}" render-claim-graph
-                expect "${sheet}/1-drawn" 0 unchanged
-                cmp -s "${sheet}/drawn.svg" "${svg}" || findings+=("render-claim-graph changed the bytes of kb_tools' drawn sheet, want it byte-identical")
-                capture "${sheet}/2-redrawn" "${sheet}/clone" "${kbase}" render-claim-graph
-                expect "${sheet}/2-redrawn" 0 unchanged
-                rm "${svg}"
-            fi
-            capture "${sheet}/3-absent" "${sheet}/clone" "${kbase}" render-claim-graph
-            expect "${sheet}/3-absent" 0 done
-            if [[ ! -f "${svg}" ]]; then
-                findings+=("render-claim-graph wrote no root sheet where none was")
-            elif grep -q '>NYI</text>' "${svg}" || ! grep -q '<svg' "${svg}"; then
-                findings+=("render-claim-graph wrote a placeholder, not a Graphviz sheet, with dot on PATH")
-            fi
-            capture "${sheet}/4-verify" "${sheet}/clone" "${kbase}" verify
-            expect "${sheet}/4-verify" 0 done
-        fi
-
-        printf -- '- id: "%s"\n  findings:' "${id}" >> "${findings_file}"
-        if [[ "${#findings[@]}" -eq 0 ]]; then
-            printf ' []\n' >> "${findings_file}"
-        else
-            printf '\n' >> "${findings_file}"
-            for f in "${findings[@]}"; do
-                printf '    - "%s"\n' "${f//\"/\\\"}" >> "${findings_file}"
-            done
-            status=1
-        fi
-        printf '%s: %s finding(s)\n' "${id}" "${#findings[@]}"
-    done
-
-    set +e
-    go test -count=1 -v -run '^TestCompareQueries$' ./internal/query -args -query.dirs="${dirs[*]+"${dirs[*]}"}" \
-        -query.comparison="${root}/${out}/comparison.yaml" > "${out}/compare.log" 2>&1
-    rc=$?
-    set -e
-    if [[ "${rc}" -ne 0 ]] || grep -q -- '--- SKIP' "${out}/compare.log"; then
-        status=1
-    fi
-
-    # Every list query at its default limit, over each fixture, within the
-    # tool-result cap.
-    fixtures=()
-    for id in {{VERIFY_ARXIV_IDS}}; do
-        fixtures+=("${root}/{{KBTOOLS_REF_DIR}}/$(printf '%s' "${id}" | tr '/' '_')")
-    done
-    set +e
-    go test -count=1 -v -run '^TestDefaultLimitFitsTheToolResultCap$' ./cmd -args -query.fixtures="${fixtures[*]}" > "${out}/limit.log" 2>&1
-    rc=$?
-    set -e
-    if [[ "${rc}" -ne 0 ]] || grep -q -- '--- SKIP' "${out}/limit.log"; then
-        status=1
-    fi
-
-    {{just_executable()}} _write-evidence "${out}" "test-integration-query-arxiv" \
-      "per fixture <id> of {{KBTOOLS_REF_DIR}}:\ngo test -run '^TestStageQueryCases\$' ./internal/query -args -query.kbroot={{KBTOOLS_REF_DIR}}/<id>/kb-root -query.cases=<id>/fixture\nper case NNN.args, from {{KBTOOLS_REF_DIR}}/<id>: ${kbase} <args> [--limit 0 on a list query] and PYTHONPATH=.claude/agents python3 -m kb_tools.kb_cmd <args> --json\ngit clone {{KBTOOLS_REF_DIR}}/<id> <id>/scored-clone; go test -run '^TestStageQueryScores\$' ./internal/query -args -query.kbroot=<id>/scored-clone/kb-root -query.values=<id>/scores\n(cd <id>/scored-clone && ${kbase} set-rigor --values <id>/scores/set-rigor.yaml && ${kbase} insert-claim-entry --values <id>/scores/insert-claim-entry.yaml), then the cases again into <id>/scored\ngit clone {{KBTOOLS_REF_DIR}}/<id> <id>/sheet/clone; ${kbase} render-claim-graph over the drawn sheet (bytes change), again (unchanged), and with the root sheet removed (drawn again); ${kbase} verify\ngo test -run '^TestCompareQueries\$' ./internal/query -args -query.dirs='<every case dir>' -query.comparison=comparison.yaml > compare.log\ngo test -run '^TestDefaultLimitFitsTheToolResultCap\$' ./cmd -args -query.fixtures='<every fixture repository>' > limit.log"
-    printf '\nReference: adjagent %s\n' "${adjagent}" >> "${out}/EVIDENCE.md"
-    if [[ "${status}" -ne 0 ]]; then
-        printf 'integration(test-integration-query-arxiv): a finding — see findings.yaml and comparison.yaml\n'
-        exit 1
-    fi
-    printf 'integration(test-integration-query-arxiv) ok\n'
-
-# kbase's claim graph against kb_tools' over Slice-2's papers. Per paper: a
-# fresh fixture repository from the arXiv sources, built by ./bin/kbase
-# --through depends-attributed --no-inference with every .bib beside the
-# volume root, sorted, as kb_tools' driver passes them; kb_tools' tree and
-# build records read out of the kb_tools-built fixture's depends-attributed
-# commit with git archive; ./bin/kbase refresh and verify on kbase's tree; and
-# kb_tools' own make kb-verify on a clone of that fixture whose kb-root/ is
-# replaced by kbase's, which must exit 0. A second build in a second fresh repository must equal the first
-# modulo node ids. TestCompareKbTools compares the two toolchains, and the two
-# kbase builds, as data by title and host — the three build records included,
-# the unmarked one as the declared pass left it — and the two ledgers to
-# depends-attributed (the stages recorded and the rows each dropped), kbase
-# status's stages against kb_tools' vocabulary and ledger, and
-# depends-attributed's candidate counts against kb_tools' report, and writes
-# every difference, and every run's exit, to comparison.yaml.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): per Slice-2 paper, ./bin/kbase build --through depends-attributed --no-inference twice in fresh fixture repositories, the two equal modulo node ids, compared by title and host — the build records byte for byte, kbase's ids renamed to kb_tools' — against the kb_tools-built fixture's depends-attributed commit (prep-test-integration-kbtools-full) with its ledger, stage vocabulary and candidate counts, with kbase's refresh, verify and status and kb_tools' make kb-verify over kbase's tree; evidence under test_data/transient/test-integration-claimgraph-arxiv/")]
-test-integration-claimgraph-arxiv: (prep-test-integration-arxiv SLICE_2_IDS) (prep-test-integration-kbtools-full SLICE_2_IDS)
-    @mkdir -p "{{CLAIMGRAPH_ARXIV_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-claimgraph-arxiv 2>&1 | tee "{{CLAIMGRAPH_ARXIV_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-claimgraph-arxiv: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd)"
-    out="{{CLAIMGRAPH_ARXIV_OUT_DIR}}"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
-    pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'adjagent: %s\n%s\n' "${adjagent}" "${pandoc_version}"
-    # capture <stem> <dir> <command...>: run the command in dir, stdout to
-    # <stem>.out, stderr to <stem>.log, exit code to <stem>.exit.
-    capture() {
-        local stem="$1" dir="$2"
-        shift 2
-        set +e
-        ( cd "${dir}" && "$@" ) > "${stem}.out" 2> "${stem}.log"
-        printf '%s\n' "$?" > "${stem}.exit"
-        set -e
-    }
-    kbtools() { PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 "$@"; }
-    status=0
-    for id in {{SLICE_2_IDS}}; do
-        name="$(printf '%s' "${id}" | tr '/' '_')"
-        fixture="{{KBTOOLS_REF_DIR}}/${name}"
-        dir="${out}/${name}"
-        rm -rf "${dir}"
-        mkdir -p "${dir}/repo" "${dir}/repo-2" "${dir}/ref" "${dir}/checks"
-        cp -R "{{ARXIV_DIR}}/${name}/." "${dir}/repo/"
-        cp -R "{{ARXIV_DIR}}/${name}/." "${dir}/repo-2/"
-        git -C "${dir}/repo" init -q
-        git -C "${dir}/repo-2" init -q
-        volume_root="$({{just_executable()}} _arxiv-volume-root "${dir}/repo")"
-        (cd "${dir}/repo" && find "$(dirname "${volume_root}")" -maxdepth 1 -name '*.bib' | sed 's|^\./||' | LC_ALL=C sort) > "${dir}/bibliographies.txt"
-        bibs=()
-        while IFS= read -r bib; do
-            bibs+=(--bibliography "${bib}")
-        done < "${dir}/bibliographies.txt"
-        capture "${dir}/checks/kbase-build" "${dir}/repo" "${kbase}" build "${volume_root}" \
-            --through depends-attributed --no-inference --state-dir "${root}/${dir}/state" ${bibs[@]+"${bibs[@]}"}
-        capture "${dir}/checks/kbase-build-2" "${dir}/repo-2" "${kbase}" build "${volume_root}" \
-            --through depends-attributed --no-inference --state-dir "${root}/${dir}/state-2" ${bibs[@]+"${bibs[@]}"}
-
-        commit="$(git -C "${fixture}" log -n1 --format=%H --grep='^kb-build: depends-attributed ')"
-        printf '%s\n' "${commit}" > "${dir}/ref/commit.txt"
-        git -C "${fixture}" archive "${commit}" kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml | tar -x -C "${dir}/ref"
-        # Each side's boundary commits to depends-attributed, oldest first,
-        # NUL-separated; kb_tools' stage vocabulary; and the report kb_tools'
-        # depends-attributed invocation gave its driver, from the newest run
-        # log holding one.
-        git -C "${fixture}" log --reverse -z --format='%s%n%b' --grep='^kb-build: ' "${commit}" > "${dir}/ref/ledger.txt"
-        git -C "${dir}/repo" log --reverse -z --format='%s%n%b' --grep='^kb-build: ' > "${dir}/ledger.txt"
-        (cd "${fixture}" && kbtools python3 -c 'from kb_tools import kb_pipeline; print("\n".join(kb_pipeline.STAGE_IDS))') > "${dir}/ref/stage-ids.txt"
-        python3 -c '
-    import json, pathlib, sys
-    found = ""
-    for log in sorted(pathlib.Path(sys.argv[1]).glob("*/run.log")):
-        for line in log.read_text(encoding="utf-8").splitlines():
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            context = entry.get("context") or {}
-            if entry.get("message") == "front-end report" and context.get("op") == "kb_claimgraph --pass 2 --no-inference":
-                found = context.get("report", "")
-    print(found, end="")
-    ' "{{KBTOOLS_REF_DIR}}/runs/${name}" > "${dir}/ref/depends-report.txt"
-        capture "${dir}/status" "${dir}/repo" "${kbase}" status --state-dir "${root}/${dir}/state"
-
-        capture "${dir}/checks/kbase-refresh" "${dir}/repo" "${kbase}" refresh
-        capture "${dir}/checks/kbase-verify" "${dir}/repo" "${kbase}" verify
-        git clone -q "${fixture}" "${dir}/kbtools-verify"
-        rm -rf "${dir}/kbtools-verify/kb-root"
-        cp -R "${dir}/repo/kb-root" "${dir}/kbtools-verify/kb-root"
-        capture "${dir}/checks/kbtools-verify" "${dir}/kbtools-verify" kbtools make kb-verify
-
-        set +e
-        go test -count=1 -v -run '^TestCompareKbTools$' ./internal/claimgraph -args \
-            -claimgraph.kbase="${root}/${dir}/repo" -claimgraph.rerun="${root}/${dir}/repo-2" -claimgraph.kbtools="${root}/${dir}/ref" \
-            -claimgraph.checks="${root}/${dir}/checks" -claimgraph.comparison="${root}/${dir}/comparison.yaml" \
-            -claimgraph.ledger="${root}/${dir}/ledger.txt" -claimgraph.status="${root}/${dir}/status.out" -claimgraph.state="${root}/${dir}/state" \
-            > "${dir}/compare.log" 2>&1
-        rc=$?
-        set -e
-        [[ "${rc}" -eq 0 ]] || status=1
-        printf '%s: build exit %s, comparison %s — see %s\n' "${id}" "$(cat "${dir}/checks/kbase-build.exit")" \
-            "$([[ "${rc}" -eq 0 ]] && echo passed || echo FAILED)" "${dir}/comparison.yaml"
-    done
-
-    {{just_executable()}} _write-evidence "${out}" "test-integration-claimgraph-arxiv" \
-      "per paper <id> of {{SLICE_2_IDS}}, in a fresh fixture repository <id>/repo from {{ARXIV_DIR}}/<id>:\n(cd <id>/repo && ${kbase} build <volume-root> --through depends-attributed --no-inference --state-dir <id>/state [--bibliography <each .bib beside the volume root, sorted>]) > <id>/checks/kbase-build.out 2> <id>/checks/kbase-build.log\nthe same in a second fixture repository <id>/repo-2 with --state-dir <id>/state-2, into <id>/checks/kbase-build-2.*\ngit -C {{KBTOOLS_REF_DIR}}/<id> archive <depends-attributed commit> kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml | tar -x -C <id>/ref\ngit -C {{KBTOOLS_REF_DIR}}/<id> log --reverse -z --format='%s%n%b' --grep='^kb-build: ' <depends-attributed commit> > <id>/ref/ledger.txt; the same over <id>/repo > <id>/ledger.txt\n(cd {{KBTOOLS_REF_DIR}}/<id> && PYTHONPATH=.claude/agents python3 -c 'print kb_pipeline.STAGE_IDS') > <id>/ref/stage-ids.txt\nthe newest 'kb_claimgraph --pass 2 --no-inference' front-end report in {{KBTOOLS_REF_DIR}}/runs/<id>/*/run.log > <id>/ref/depends-report.txt\n(cd <id>/repo && ${kbase} status --state-dir <id>/state) into <id>/status.*\n(cd <id>/repo && ${kbase} refresh; ${kbase} verify) into <id>/checks/kbase-{refresh,verify}.*\ngit clone {{KBTOOLS_REF_DIR}}/<id> <id>/kbtools-verify, its kb-root/ replaced by <id>/repo/kb-root; (cd <id>/kbtools-verify && PYTHONPATH=.claude/agents make kb-verify) into <id>/checks/kbtools-verify.*\ngo test -run '^TestCompareKbTools\$' ./internal/claimgraph -args -claimgraph.kbase=<id>/repo -claimgraph.rerun=<id>/repo-2 -claimgraph.kbtools=<id>/ref -claimgraph.checks=<id>/checks -claimgraph.comparison=<id>/comparison.yaml -claimgraph.ledger=<id>/ledger.txt -claimgraph.status=<id>/status.out -claimgraph.state=<id>/state > <id>/compare.log"
-    printf '\nReference: adjagent %s; %s\n' "${adjagent}" "${pandoc_version}" >> "${out}/EVIDENCE.md"
-    if [[ "${status}" -ne 0 ]]; then
-        printf 'integration(test-integration-claimgraph-arxiv): a difference — see each paper'"'"'s comparison.yaml\n'
-        exit 1
-    fi
-    printf 'integration(test-integration-claimgraph-arxiv) ok\n'
-
-# §8.3 Direction 1: a kbase-built KB judged by kb_tools. Per slice paper, a
-# fresh fixture repository staged as the reference recipe stages one (sources,
-# stub Makefile, .gitignore, the reference agent set installed from the
-# adjagent clone) is built by ./bin/kbase --no-inference to completion; then
-# kb_tools' install-targets, its make kb-verify (green before any refresh),
-# make kb-refresh and kb-verify green, make kb-stats and the
-# docent's kb_cmd deps/show/subtree, the compatibility op script through
-# kb_util followed by refresh and verify green and ./bin/kbase verify green,
-# and ./bin/kbase status parsed at the end state. The readiness documents are
-# checked as built, and kbase's excerpts of the built tree against kb_tools'
-# compose_excerpts. On BUILD_ARXIV_SPECIAL_ID: a build killed with SIGKILL
-# while claims-declared's writes are in flight, its status read, then resumed
+# §8.3 Direction 1: a kbase-built KB. Per slice paper, a fresh fixture
+# repository (the sources as fetched, a stub Makefile, a .gitignore) is built
+# by ./bin/kbase --no-inference to completion; the build's ledger, its owned
+# paths and the readiness documents are checked as built, and ./bin/kbase
+# status and the build result are parsed against their documented keys. On
+# BUILD_ARXIV_SPECIAL_ID: a build killed with SIGKILL while
+# claims-declared's writes are in flight, its status read, then resumed
 # to a tree and records equal to the uninterrupted build's modulo node ids
-# (TestCompareKbTools with only a rerun named); a fresh
-# build over that tree in a repository with no trail refused; and a charter
-# given, CONVENTIONS.md authored before phase-3a and left as it is. Every
+# (TestCompareReference with only a rerun named); a fresh
+# build over that tree in a repository with no trail refused; and
+# CONVENTIONS.md authored before phase-3a and left as it is. Every
 # result lands in comparison.yaml.
-[doc("NEEDS pandoc + python3 + the adjagent clone (excluded from test-integration): §8.3 Direction 1 — per slice paper ./bin/kbase build --no-inference in a fresh fixture repository with kb_tools installed, judged by kb_tools' verify, refresh, stats, kb_cmd and the op script through kb_util, then ./bin/kbase verify and status; kill-and-resume, the double-run guard and stamping over an authored document on one paper; evidence under test_data/transient/test-integration-build-arxiv/")]
-test-integration-build-arxiv: (prep-test-integration-arxiv VERIFY_ARXIV_IDS)
+[doc("NEEDS pandoc + python3 (excluded from test-integration): §8.3 Direction 1 — per slice paper ./bin/kbase build --no-inference in a fresh fixture repository, then the build's ledger and owned paths, the readiness documents, ./bin/kbase status and its result document checked; kill-and-resume, the double-run guard and stamping over an authored document on one paper; evidence under test_data/transient/test-integration-build-arxiv/")]
+test-integration-build-arxiv: (prep-test-integration-arxiv BUILD_ARXIV_IDS)
     @mkdir -p "{{BUILD_ARXIV_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-arxiv 2>&1 | tee "{{BUILD_ARXIV_OUT_DIR}}/log.txt"
 
@@ -1615,10 +333,8 @@ _test-integration-build-arxiv: build
     root="$(pwd)"
     out="{{BUILD_ARXIV_OUT_DIR}}"
     kbase="${root}/{{BIN_DIR}}/kbase"
-    script="${root}/{{COMPAT_OP_SCRIPT}}"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
     pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'adjagent: %s\n%s\n' "${adjagent}" "${pandoc_version}"
+    printf 'pandoc: %s\n' "${pandoc_version}"
     # capture <stem> <dir> <command...>: run the command in dir, stdout to
     # <stem>.out, stderr to <stem>.log, exit code to <stem>.exit.
     capture() {
@@ -1630,11 +346,10 @@ _test-integration-build-arxiv: build
         set -e
     }
     rc() { cat "$1.exit"; }
-    kbtools() { PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 "$@"; }
-    # stage <repo> <name> [agents]: a fresh fixture repository holding the
-    # paper's sources, committed, with the reference agent set where asked.
+    # stage <repo> <name>: a fresh fixture repository holding the paper's
+    # sources, committed.
     stage() {
-        local repo="$1" name="$2" agents="${3:-}"
+        local repo="$1" name="$2"
         mkdir -p "${repo}"
         cp -R "{{ARXIV_DIR}}/${name}/." "${repo}/"
         printf 'default:\n\t@echo %s\n\ntest:\n\t@echo tests passed.\n' "${name}" > "${repo}/Makefile"
@@ -1642,11 +357,6 @@ _test-integration-build-arxiv: build
         git -C "${repo}" init -q
         git -C "${repo}" add -A
         git -C "${repo}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "sources as fetched"
-        if [[ -n "${agents}" ]]; then
-            just --justfile .claude/adjagent/justfile install "${root}/${repo}" > "${repo}.install.log" 2>&1
-            git -C "${repo}" add -A
-            git -C "${repo}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "agent defs installed"
-        fi
     }
     # check <name> <passed: 0 or 1> <detail> <evidence>: one result.
     checks=()
@@ -1662,16 +372,16 @@ _test-integration-build-arxiv: build
     status=0
     comparison="${out}/comparison.yaml"
     : > "${comparison}"
-    for id in {{VERIFY_ARXIV_IDS}}; do
+    for id in {{BUILD_ARXIV_IDS}}; do
         name="$(printf '%s' "${id}" | tr '/' '_')"
         dir="${out}/${name}"
         repo="${dir}/repo"
         ck="${dir}/checks"
         rm -rf "${dir}" "${dir}".*
-        mkdir -p "${ck}" "${dir}/config" "${dir}/built" "${dir}/kbtools-steps"
+        mkdir -p "${ck}" "${dir}/config" "${dir}/built"
         checks=()
         printf '%s\n' "${id}"
-        stage "${repo}" "${name}" agents
+        stage "${repo}" "${name}"
         volume_root="$({{just_executable()}} _arxiv-volume-root "${repo}")"
         bibs=()
         while IFS= read -r bib; do
@@ -1679,7 +389,7 @@ _test-integration-build-arxiv: build
         done < <(cd "${repo}" && find "$(dirname "${volume_root}")" -maxdepth 1 -name '*.bib' | sed 's|^\./||' | LC_ALL=C sort)
         build_args=(build "${volume_root}" --no-inference --config-dir "${root}/${dir}/config" ${bibs[@]+"${bibs[@]}"})
 
-        # 3. the build, to completion
+        # the build, to completion
         capture "${ck}/kbase-build" "${repo}" "${kbase}" "${build_args[@]}" --state-dir "${root}/${dir}/state"
         check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build.out" && echo 0 || echo 1)" \
             "exit $(rc "${ck}/kbase-build"), $(grep -m1 '^outcome:' "${ck}/kbase-build.out" || echo 'no outcome')" "${ck}/kbase-build.out"
@@ -1687,95 +397,14 @@ _test-integration-build-arxiv: build
         cp "${repo}"/kb-build-*.yaml "${dir}/built/" 2>/dev/null || true
         check ledger "$(ok test "$(git -C "${repo}" log --format=%s --grep='^kb-build: ' | wc -l | tr -d ' ')" -eq 10)" \
             "$(git -C "${repo}" log --format=%s --grep='^kb-build: ' | wc -l | tr -d ' ') kb-build: commits, one per stage" "${repo}/.git"
-        check ledger-scope "$(ok test -z "$(git -C "${repo}" status --porcelain -- kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml kb-build-charter.md)")" \
+        check ledger-scope "$(ok test -z "$(git -C "${repo}" status --porcelain -- kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml)")" \
             "the owned paths are clean after the build" "${repo}"
 
         # readiness documents, as built
         check claude-redirect "$(ok cmp -s <(printf '@AGENTS.md\n') "${dir}/built/kb-root/CLAUDE.md")" "kb-root/CLAUDE.md is exactly @AGENTS.md" "${dir}/built/kb-root/CLAUDE.md"
-        check scope-pin "$(ok grep -qF 'This build was given no charter' "${dir}/built/kb-root/AGENTS.md")" "AGENTS.md carries the scope pin (no charter given)" "${dir}/built/kb-root/AGENTS.md"
         check no-invariant-heading "$(ok test -z "$(grep -l '^### INVARIANT-' "${dir}"/built/kb-root/{AGENTS,CONVENTIONS,CLAUDE}.md 2>/dev/null)")" \
             "no stamped document holds a ### INVARIANT- heading" "${dir}/built/kb-root"
-        check overview-absent "$(ok test ! -e "${dir}/built/kb-root/README.md")" "no README.md, as kb_tools' --no-inference build writes none" "${dir}/built/kb-root"
-
-        # 4. kb_tools' runner targets
-        capture "${ck}/install-targets" "${repo}" kbtools python3 -m kb_tools.kb_util install-targets
-        check install-targets "$(rc "${ck}/install-targets")" "exit $(rc "${ck}/install-targets")" "${ck}/install-targets.out"
-
-        # 5. kb_tools' verify before any refresh: green
-        capture "${ck}/kbtools-verify-unrefreshed" "${repo}" kbtools make kb-verify
-        check kbtools-verify-unrefreshed "$(rc "${ck}/kbtools-verify-unrefreshed")" "green before any refresh: exit $(rc "${ck}/kbtools-verify-unrefreshed")" "${ck}/kbtools-verify-unrefreshed.out"
-
-        # 6. kb_tools' refresh, then verify green
-        capture "${ck}/kbtools-refresh" "${repo}" kbtools make kb-refresh
-        capture "${ck}/kbtools-verify" "${repo}" kbtools make kb-verify
-        check kbtools-refresh-verify "$(( $(rc "${ck}/kbtools-refresh") | $(rc "${ck}/kbtools-verify") ))" \
-            "refresh exit $(rc "${ck}/kbtools-refresh"), verify exit $(rc "${ck}/kbtools-verify")" "${ck}/kbtools-verify.out"
-
-        # 7. kb-stats and the docent's queries
-        capture "${ck}/kbtools-stats" "${repo}" kbtools make kb-stats
-        check kbtools-stats "$(rc "${ck}/kbtools-stats")" "exit $(rc "${ck}/kbtools-stats")" "${ck}/kbtools-stats.out"
-        # docent_queries <after>: kb_cmd deps and show on the index's first
-        # node, and subtree from the entry point. A KB with no node yet has
-        # deps and show asked after the op script has inserted some.
-        first_node() { python3 -c 'import json, sys; lines = open(sys.argv[1]).read().splitlines(); print(json.loads(lines[0].removeprefix("--- "))["id"] if lines else "")' "${repo}/kb-root/.index/claims.yaml"; }
-        docent_queries() {
-            local node query arg
-            node="$(first_node)"
-            for query in deps show subtree; do
-                arg="${node}"
-                [[ "${query}" == subtree ]] && arg=.
-                [[ -n "${arg}" || "$1" == op-script ]] || continue
-                [[ "$1" == op-script && "${query}" == subtree ]] && continue
-                capture "${ck}/kbcmd-${query}" "${repo}" kbtools python3 -m kb_tools.kb_cmd "${query}" "${arg}"
-                check "kbcmd-${query}" "$( [[ -n "${arg}" ]] && rc "${ck}/kbcmd-${query}" || echo 1)" \
-                    "kb_cmd ${query} '${arg}' after the ${1}: exit $(rc "${ck}/kbcmd-${query}")" "${ck}/kbcmd-${query}.out"
-            done
-        }
-        docent_queries build
-        deferred="$([[ -z "$(first_node)" ]] && echo yes || true)"
-
-        # the overview's excerpts, against kb_tools' composition of the same tree
-        ( cd "${repo}" && kbtools python3 -c 'import sys; from pathlib import Path; from kb_tools.kb_readme import compose_excerpts; sys.stdout.write(compose_excerpts(Path(sys.argv[1])).text)' \
-            "${root}/${dir}/built/kb-root" ) > "${dir}/excerpts.kbtools.txt" 2> "${ck}/excerpts.log" || true
-        set +e
-        go test -count=1 -run '^TestExcerptsEqualKbTools$' ./internal/kbdocs -args -kbdocs.kbroot="${root}/${dir}/built/kb-root" \
-            -kbdocs.want="${root}/${dir}/excerpts.kbtools.txt" >> "${ck}/excerpts.log" 2>&1
-        check excerpts "$?" "kbase's excerpts of the built tree equal kb_tools' compose_excerpts" "${ck}/excerpts.log"
-        set -e
-
-        # 8. the op script through kb_util, refresh, verify; then kbase verify
-        set +e
-        go test -count=1 -run '^TestStageOpScript$' ./internal/write -args -opscript.script="${script}" \
-            -opscript.kbroot="${root}/${repo}/kb-root" -opscript.out="${root}/${dir}/opscript" > "${ck}/opscript-stage.log" 2>&1
-        staged=$?
-        set -e
-        check opscript-staged "${staged}" "the op script rendered against the KB" "${ck}/opscript-stage.log"
-        if [[ "${staged}" -eq 0 ]]; then
-            subs=(-e 's/^//')
-            failed_steps=()
-            while IFS=$'\t' read -r nn op create minted; do
-                flags=()
-                [[ "${create}" == true ]] && flags+=(--create)
-                step="${nn}-${op}"
-                sed "${subs[@]}" "${dir}/opscript/${step}.toml" > "${dir}/kbtools-steps/${step}.toml"
-                capture "${dir}/kbtools-steps/${step}" "${repo}" kbtools python3 -m kb_tools.kb_util "${op}" --values "${root}/${dir}/kbtools-steps/${step}.toml" ${flags[@]+"${flags[@]}"}
-                [[ "$(rc "${dir}/kbtools-steps/${step}")" -eq 0 ]] || failed_steps+=("${step}")
-                if [[ "${minted}" != - ]]; then
-                    minted_id="$(sed -n 's/.*FACT minted  *\([^ ]*\) (.*/\1/p' "${dir}/kbtools-steps/${step}.out" | head -n1)"
-                    subs+=(-e "s/@MINT-${minted}@/${minted_id}/g")
-                fi
-            done < "${dir}/opscript/steps.tsv"
-            check opscript-kbutil "$(ok test "${#failed_steps[@]}" -eq 0)" "steps exiting nonzero: ${failed_steps[*]:-none}" "${dir}/kbtools-steps"
-            capture "${ck}/kbtools-refresh-ops" "${repo}" kbtools make kb-refresh
-            capture "${ck}/kbtools-verify-ops" "${repo}" kbtools make kb-verify
-            check opscript-kbtools-verify "$(( $(rc "${ck}/kbtools-refresh-ops") | $(rc "${ck}/kbtools-verify-ops") ))" \
-                "refresh exit $(rc "${ck}/kbtools-refresh-ops"), verify exit $(rc "${ck}/kbtools-verify-ops")" "${ck}/kbtools-verify-ops.out"
-            capture "${ck}/kbase-verify-ops" "${repo}" "${kbase}" verify
-            check opscript-kbase-verify "$(rc "${ck}/kbase-verify-ops")" "exit $(rc "${ck}/kbase-verify-ops")" "${ck}/kbase-verify-ops.out"
-        fi
-        if [[ -n "${deferred}" ]]; then
-            docent_queries op-script
-        fi
+        check overview-absent "$(ok test ! -e "${dir}/built/kb-root/README.md")" "no README.md, as a --no-inference build writes none" "${dir}/built/kb-root"
 
         # status at the end state
         capture "${ck}/kbase-status" "${repo}" "${kbase}" status --state-dir "${root}/${dir}/state"
@@ -1812,15 +441,15 @@ _test-integration-build-arxiv: build
                 "killed inside claims-declared with its writes uncommitted" "${kill_dir}/kill.txt"
             capture "${kill_dir}/status" "${kill_dir}/repo" "${kbase}" status --state-dir "${root}/${kill_dir}/state"
             set +e
-            go test -count=1 -run '^TestStatusDocument$' ./internal/build -args -build.status="${root}/${kill_dir}/status.out" -build.state=failed > "${kill_dir}/status.check.log" 2>&1
-            check status-killed "$?" "status after the kill parses and reports failed in claims-declared with a resume command" "${kill_dir}/status.check.log"
+            go test -count=1 -run '^TestStatusDocument$' ./internal/build -args -build.status="${root}/${kill_dir}/status.out" -build.state=interrupted > "${kill_dir}/status.check.log" 2>&1
+            check status-killed "$?" "status after the kill parses and reports interrupted in claims-declared with a resume command" "${kill_dir}/status.check.log"
             set -e
             capture "${kill_dir}/resume" "${kill_dir}/repo" "${kbase}" "${build_args[@]}" --state-dir "${root}/${kill_dir}/state"
             check kill-resume "$([[ "$(rc "${kill_dir}/resume")" -eq 0 ]] && grep -qx 'resumed: true' "${kill_dir}/resume.out" \
                 && grep -A1 '^restored:' "${kill_dir}/resume.out" | grep -q '^    - ' && echo 0 || echo 1)" \
                 "resume exit $(rc "${kill_dir}/resume"), restoring the interrupted stage's paths" "${kill_dir}/resume.out"
             set +e
-            go test -count=1 -run '^TestCompareKbTools$' ./internal/claimgraph -args -claimgraph.kbase="${root}/${dir}/built" \
+            go test -count=1 -run '^TestCompareReference$' ./internal/claimgraph -args -claimgraph.kbase="${root}/${dir}/built" \
                 -claimgraph.rerun="${root}/${kill_dir}/repo" -claimgraph.comparison="${root}/${kill_dir}/comparison.yaml" > "${kill_dir}/compare.log" 2>&1
             check kill-resume-modulo-ids "$?" "kb-root/ and the build records equal to the uninterrupted build's modulo node ids" "${kill_dir}/comparison.yaml"
             set -e
@@ -1833,12 +462,11 @@ _test-integration-build-arxiv: build
             check double-run-guard "$([[ "$(rc "${guard_dir}/build")" -eq 1 ]] && grep -q 'is populated' "${guard_dir}/build.out" && echo 0 || echo 1)" \
                 "exit $(rc "${guard_dir}/build"), refused over a populated kb-root/ with no trail" "${guard_dir}/build.out"
 
-            # stamping only if absent, and a charter's scope pin
+            # stamping only if absent
             stamp_dir="${dir}/stamp"
             stage "${stamp_dir}/repo" "${name}"
-            printf 'This KB distills arXiv %s and nothing else.\n' "${id}" > "${stamp_dir}/charter.md"
             capture "${stamp_dir}/bounded" "${stamp_dir}/repo" "${kbase}" "${build_args[@]}" --state-dir "${root}/${stamp_dir}/state" \
-                --charter "${root}/${stamp_dir}/charter.md" --through depends-attributed
+                --through depends-attributed
             printf '# Conventions this project wrote for itself\n' > "${stamp_dir}/repo/kb-root/CONVENTIONS.md"
             git -C "${stamp_dir}/repo" add kb-root/CONVENTIONS.md
             git -C "${stamp_dir}/repo" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "the project's own conventions"
@@ -1847,10 +475,8 @@ _test-integration-build-arxiv: build
                 && cmp -s <(printf '# Conventions this project wrote for itself\n') "${stamp_dir}/repo/kb-root/CONVENTIONS.md" \
                 && grep -q 'CONVENTIONS.md: present, left as authored' "${stamp_dir}/state/reports/phase-3a.yaml" && echo 0 || echo 1)" \
                 "an authored CONVENTIONS.md left as it is" "${stamp_dir}/state/reports/phase-3a.yaml"
-            check charter-in-resume "$(ok grep -qF -- "--charter ${root}/${stamp_dir}/charter.md" "${stamp_dir}/bounded.out")" \
-                "the bounded build's resume command carries its --charter" "${stamp_dir}/bounded.out"
-            check charter-scope-pin "$(ok grep -qF "This KB distills arXiv ${id} and nothing else." "${stamp_dir}/repo/kb-root/AGENTS.md")" \
-                "AGENTS.md carries the charter as its scope pin" "${stamp_dir}/repo/kb-root/AGENTS.md"
+            check bounded-no-resume "$(ok test -z "$(grep '^resume:' "${stamp_dir}/bounded.out")")" \
+                "the bounded result carries no resume command" "${stamp_dir}/bounded.out"
         fi
 
         {
@@ -1864,15 +490,15 @@ _test-integration-build-arxiv: build
     done
 
     {{just_executable()}} _write-evidence "${out}" "test-integration-build-arxiv" \
-      "per paper <id> of {{VERIFY_ARXIV_IDS}}, staged into <id>/repo (sources, stub Makefile, .gitignore, just --justfile .claude/adjagent/justfile install):\n(cd <id>/repo && ${kbase} build <volume-root> --no-inference --config-dir <id>/config --state-dir <id>/state [--bibliography <each .bib beside the volume root, sorted>]) into <id>/checks/kbase-build.*\n(cd <id>/repo && PYTHONPATH=.claude/agents python3 -m kb_tools.kb_util install-targets; make kb-verify; make kb-refresh; make kb-verify; make kb-stats; python3 -m kb_tools.kb_cmd deps|show <first claims.yaml id>; subtree .)\nkb_tools' kb_readme.compose_excerpts over <id>/built/kb-root against go test -run '^TestExcerptsEqualKbTools\$' ./internal/kbdocs\ngo test -run '^TestStageOpScript\$' ./internal/write -args -opscript.kbroot=<id>/repo/kb-root -opscript.out=<id>/opscript; each step through kb_util into <id>/kbtools-steps/; make kb-refresh; make kb-verify; ${kbase} verify\n${kbase} status --state-dir <id>/state, parsed by go test -run '^TestStatusDocument\$' ./internal/build\non {{BUILD_ARXIV_SPECIAL_ID}}: kill -9 inside claims-declared, status, resume (<id>/kill/), then go test -run '^TestCompareKbTools\$' ./internal/claimgraph -args -claimgraph.kbase=<id>/built -claimgraph.rerun=<id>/kill/repo -claimgraph.comparison=<id>/kill/comparison.yaml; a fresh build over the built tree with no trail (<id>/guard/); --charter and --through depends-attributed, an authored CONVENTIONS.md committed, then the resume (<id>/stamp/)"
-    printf '\nReference: adjagent %s; %s\n' "${adjagent}" "${pandoc_version}" >> "${out}/EVIDENCE.md"
+      "per paper <id> of {{BUILD_ARXIV_IDS}}, staged into <id>/repo (sources as fetched, stub Makefile, .gitignore, one commit):\n(cd <id>/repo && ${kbase} build <volume-root> --no-inference --config-dir <id>/config --state-dir <id>/state [--bibliography <each .bib beside the volume root, sorted>]) into <id>/checks/kbase-build.*\n<id>/built/kb-root and the three kb-build-*.yaml files as the build left them; the ledger read from <id>/repo/.git\n<id>/built/kb-root's AGENTS.md, CONVENTIONS.md and CLAUDE.md as built, checked against the readiness rules\n${kbase} status --state-dir <id>/state, parsed by go test -run '^TestStatusDocument\$' ./internal/build; the build and status results parsed by go test -run '^TestResultDocument\$' ./cmd\non {{BUILD_ARXIV_SPECIAL_ID}}: kill -9 inside claims-declared, status, resume (<id>/kill/), then go test -run '^TestCompareReference\$' ./internal/claimgraph -args -claimgraph.kbase=<id>/built -claimgraph.rerun=<id>/kill/repo -claimgraph.comparison=<id>/kill/comparison.yaml; a fresh build over the built tree with no trail (<id>/guard/); --through depends-attributed, an authored CONVENTIONS.md committed, then the resume (<id>/stamp/)"
+    printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-build-arxiv): a check failed — see comparison.yaml\n'
         exit 1
     fi
     printf 'integration(test-integration-build-arxiv) ok\n'
 
-[doc("LIVE — NEEDS the local inference endpoint test_data/fixtures/config/ names, pandoc, python3 and the adjagent clone (excluded from test-integration): ./bin/kbase build without --no-inference over the Slice-1 paper BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository with kb_tools installed; kb_tools' verify green before any refresh, then refresh and verify green; README.md with its passage; the asks' captures, cached answers and group records under the state store's scratch/; a second build through claims-discovered configured by KBASE_API_BASE_URL, KBASE_DECISION, KBASE_TEXT and KBASE_API_KEY_FILE alone, no configuration directory; config= names another configuration directory; kb_tools' identify over the built tree agreeing with the node-pass record; kb_tools' unmarked-reference ranking over the tree references-found read, less each source's own equations and its adjacent and proximity picks, leading with the source's wildcard picks the references-found report names; counts in comparison.yaml; evidence under test_data/transient/test-integration-build-live-arxiv/")]
+[doc("LIVE — NEEDS the local inference endpoint test_data/fixtures/config/ names, pandoc and python3 (excluded from test-integration): ./bin/kbase build without --no-inference over the Slice-1 paper BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository; README.md with its passage; the asks' captures, cached answers and group records under the state store's scratch/; a second build through claims-discovered configured by KBASE_API_BASE_URL, KBASE_DECISION, KBASE_TEXT and KBASE_API_KEY_FILE alone, no configuration directory; config= names another configuration directory; a third build naming no configuration directory at all, with HOME on a scratch home holding the fixture's providers.toml as the global layer and configure --create --project dialing reaper out of it into the repository layer, green with its base URL sourced global and its provider and both model ids sourced repository, its show-config the evidence; counts in comparison.yaml; evidence under test_data/transient/test-integration-build-live-arxiv/")]
 test-integration-build-live-arxiv config=LIVE_CONFIG_DIR: (prep-test-integration-arxiv BUILD_ARXIV_SPECIAL_ID)
     @mkdir -p "{{BUILD_LIVE_ARXIV_OUT_DIR}}"
     @{{just_executable()}} _test-integration-build-live-arxiv "{{config}}" 2>&1 | tee "{{BUILD_LIVE_ARXIV_OUT_DIR}}/log.txt"
@@ -1887,9 +513,8 @@ _test-integration-build-live-arxiv config: build
     config="{{config}}"
     [[ "${config}" == /* ]] || config="${root}/${config}"
     id="{{BUILD_ARXIV_SPECIAL_ID}}"
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
     pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'adjagent: %s\n%s\n' "${adjagent}" "${pandoc_version}"
+    printf 'pandoc: %s\n' "${pandoc_version}"
     # capture <stem> <dir> <command...>: run the command in dir, stdout to
     # <stem>.out, stderr to <stem>.log, exit code to <stem>.exit.
     capture() {
@@ -1901,7 +526,6 @@ _test-integration-build-live-arxiv config: build
         set -e
     }
     rc() { cat "$1.exit"; }
-    kbtools() { PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 "$@"; }
     checks=()
     status=0
     check() {
@@ -1938,9 +562,6 @@ _test-integration-build-live-arxiv config: build
     git -C "${repo}" init -q
     git -C "${repo}" add -A
     git -C "${repo}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "sources as fetched"
-    just --justfile .claude/adjagent/justfile install "${root}/${repo}" > "${dir}/repo.install.log" 2>&1
-    git -C "${repo}" add -A
-    git -C "${repo}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "agent defs installed"
     volume_root="$({{just_executable()}} _arxiv-volume-root "${repo}")"
     printf '%s\n' "${id}"
 
@@ -1948,7 +569,7 @@ _test-integration-build-live-arxiv config: build
     capture "${ck}/kbase-build" "${repo}" "${kbase}" build "${volume_root}" --config-dir "${config}" --state-dir "${state}" --log-level info
     check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build.out" && echo 0 || echo 1)" \
         "exit $(rc "${ck}/kbase-build"), $(grep -m1 '^outcome:' "${ck}/kbase-build.out" || echo 'no outcome')" "${ck}/kbase-build.out"
-    check ledger "$(ok test "$(git -C "${repo}" log --format=%s --grep='^kb-build: ' | wc -l | tr -d ' ')" -eq 10)" \
+    check ledger "$(ok test "$(git -C "${repo}" log --format=%s --grep='^kb-build: ' | wc -l | tr -d ' ')" -eq 11)" \
         "$(git -C "${repo}" log --format=%s --grep='^kb-build: ' | wc -l | tr -d ' ') kb-build: commits, one per stage" "${repo}/.git"
     check no-row-dropped "$(ok test -z "$(git -C "${repo}" log --format=%b --grep='^kb-build: ' | grep -- '--no-inference')")" \
         "no boundary names a dropped row" "${repo}/.git"
@@ -1959,106 +580,12 @@ _test-integration-build-live-arxiv config: build
     check captures "$(ok test "${captures}" -gt 0 -a "${answers}" -gt 0 -a "${ask_records}" -gt 0)" \
         "${captures} captures, ${answers} cached answers, ${ask_records} group records under the state store's scratch/" "${state}/scratch"
 
-    # kb_tools' runner targets: verify green before any refresh, then refresh and verify green
-    capture "${ck}/install-targets" "${repo}" kbtools python3 -m kb_tools.kb_util install-targets
-    check install-targets "$(rc "${ck}/install-targets")" "exit $(rc "${ck}/install-targets")" "${ck}/install-targets.out"
-    capture "${ck}/kbtools-verify-unrefreshed" "${repo}" kbtools make kb-verify
-    check kbtools-verify-unrefreshed "$(rc "${ck}/kbtools-verify-unrefreshed")" "green before any refresh: exit $(rc "${ck}/kbtools-verify-unrefreshed")" "${ck}/kbtools-verify-unrefreshed.out"
-    capture "${ck}/kbtools-refresh" "${repo}" kbtools make kb-refresh
-    capture "${ck}/kbtools-verify" "${repo}" kbtools make kb-verify
-    check kbtools-refresh-verify "$(( $(rc "${ck}/kbtools-refresh") | $(rc "${ck}/kbtools-verify") ))" \
-        "refresh exit $(rc "${ck}/kbtools-refresh"), verify exit $(rc "${ck}/kbtools-verify")" "${ck}/kbtools-verify.out"
-
     # the counts, off the build records and the result
     set +e
     go test -count=1 -run '^TestLiveBuildCounts$' ./internal/claimgraph -args -claimgraph.repo="${root}/${repo}" \
         -claimgraph.result="${root}/${ck}/kbase-build.out" -claimgraph.out="${root}/${dir}" > "${ck}/counts.log" 2>&1
     check records "$?" "every leaf landed, every planned pair answered, no candidate drafted; counts.yaml and nodepass.json written" "${ck}/counts.log"
     set -e
-
-    # kb_tools' shortlist over the tree references-found planned over — the
-    # stage writes nothing under kb-root/, so its commit's tree is the one it
-    # read — with kbase's node-pass record in kb_tools' spelling. It has no
-    # counterpart for the proximity slots, so per source its ranking, less the
-    # source's own equations and the adjacent and proximity targets
-    # stage-U-picks names, must lead with kbase's wildcard picks: its first
-    # stage-U-shortlist's wildcard-k entries are the wildcard list.
-    if [[ -f "${dir}/state/reports/references-found.yaml" ]]; then
-        at="${dir}/at-references-found"
-        rm -rf "${at}"
-        mkdir -p "${at}"
-        git -C "${repo}" archive "$(git -C "${repo}" log -n1 --format=%H --grep='^kb-build: references-found ')" kb-root | tar -x -C "${at}"
-        cp "${dir}/kb-build-node-pass.yaml" "${at}/"
-        capture "${ck}/kbtools-shortlist" "${repo}" kbtools python3 -c '
-    import sys
-    from pathlib import Path
-    from kb_tools import kb_pipeline
-    from kb_tools import kb_yaml
-    from kb_tools.kb_claimgraph import attribute, classify, equation_sites, graph, inventory, shortlist, tree
-    root = Path(sys.argv[1])
-    documents = tree.read(root / "kb-root")
-    sites = inventory.scan(documents)
-    authored = graph.read(documents, sites)
-    statement_of = classify.statements(documents, authored, sites)
-    statement = {node_id: statement_of(node) for node_id, node in authored.nodes.items()}
-    narrowed = attribute.narrow(documents, authored, sites, kb_pipeline.read_node_pass(root))
-    own = equation_sites.own_equations(documents, authored, sites)
-    sources = sorted(node_id for node_id, node in authored.nodes.items() if node.equation is None)
-    ranked = shortlist.rank(statement, sources=sources, candidate_pairs=[c.pair for c in narrowed.candidates])
-    report = kb_yaml.parse(Path(sys.argv[2]).read_text())
-    facts = {f["check"]: f for row in report["rows"] for f in row["claimgraph"]}
-    wildcard_k = int(facts["stage-U-shortlist"]["wildcard-k"])
-    picks = {key: value for key, value in facts["stage-U-picks"].items() if key not in ("status", "check")}
-    differing = sorted(set(picks) - set(sources))
-    for source in sources:
-        pick = picks.get(source, {})
-        taken = set(pick.get("adjacent") or []) | set(pick.get("proximity") or [])
-        pool = [target for target in ranked[source] if (source, target) not in own and target not in taken]
-        theirs = pool[:wildcard_k]
-        ours = list(pick.get("wildcard") or [])
-        if theirs != ours:
-            differing.append(source)
-            print(f"{source}: kb_tools {theirs}, kbase {ours}")
-    print(f"{len(sources)} sources, wildcard-k {wildcard_k}, {len(differing)} differ")
-    sys.exit(0 if not differing else 1)
-    ' "${root}/${at}" "${root}/${dir}/state/reports/references-found.yaml"
-        check kbtools-shortlist "$(rc "${ck}/kbtools-shortlist")" "$(head -n 1 "${ck}/kbtools-shortlist.out")" "${ck}/kbtools-shortlist.out"
-    fi
-
-    # kb_tools' own reading of the built tree, judged with the answers kbase recorded
-    if [[ -f "${dir}/nodepass.json" ]]; then
-        capture "${ck}/kbtools-identify" "${repo}" kbtools python3 -c '
-    import json, sys
-    from pathlib import Path
-    from kb_tools.kb_claimgraph import identify, inventory, tree
-    documents = tree.read(Path("kb-root"))
-    sites = inventory.scan(documents)
-    differences = []
-    for path, leaf in sorted(json.load(open(sys.argv[1])).items()):
-        reading = identify.reading_of(documents.documents[path], sites)
-        asked = identify.asked_paragraphs(reading)
-        recorded = {v["line"]: v for v in leaf["verdicts"] or []}
-        if [a.paragraph.start for a in asked] != sorted(recorded):
-            differences.append(f"{path}: kb_tools asks paragraphs at {[a.paragraph.start for a in asked]}, the record judges {sorted(recorded)}")
-            continue
-        def answer(v):
-            if v["verdict"] == "claim" or v.get("cause") == "unplaceable":
-                return True
-            return False if v["verdict"] == "not-a-claim" else None
-        found = identify.judge(reading, [(a, answer(recorded[a.paragraph.start])) for a in asked])
-        got = [(v.line, str(v.judgement), None if v.cause is None else str(v.cause)) for v in found.verdicts]
-        want = [(v["line"], v["verdict"], v.get("cause")) for _, v in sorted(recorded.items())]
-        if got != want:
-            differences.append(f"{path}: kb_tools judges {got}, the record holds {want}")
-        planned = leaf["claims"] or []
-        if [c.title for c in found.claims] != planned:
-            differences.append(f"{path}: kb_tools titles {[c.title for c in found.claims]}, the record plans {planned}")
-    print("\n".join(differences) or "agree")
-    sys.exit(1 if differences else 0)
-    ' "${root}/${dir}/nodepass.json"
-        check kbtools-identify "$(rc "${ck}/kbtools-identify")" \
-            "kb_tools' asked paragraphs, verdicts and titles over the built tree $(head -n 1 "${ck}/kbtools-identify.out")" "${ck}/kbtools-identify.out"
-    fi
 
     # The same server and model configured by the environment alone: no
     # --config-dir, the configuration directory absent, through the node pass
@@ -2085,6 +612,89 @@ _test-integration-build-live-arxiv config: build
         "configured by KBASE_API_BASE_URL, KBASE_DECISION=${decision}, KBASE_TEXT=${text} and KBASE_API_KEY_FILE alone: exit $(rc "${ck}/kbase-build-env"), $(grep -m1 '^outcome:' "${ck}/kbase-build-env.out" || echo 'no outcome'), $(count "${root}/${dir}/env-state/scratch/captures" '*.capture.jsonl') captures, ${warned} cleartext warning(s) (${expect_warning} expected), no configuration directory" \
         "${ck}/kbase-build-env.out"
 
+    # The layering proof, which names no configuration directory at all: every
+    # leg above passes --config-dir, which is single-layer mode. The global
+    # layer is the fixture's pool copied into this leg's own home — its
+    # apiKeyFile paths resolve beside the file, so its keys travel with it —
+    # and the repository layer is what configure --create --project writes,
+    # dialing reaper out of that pool. The build then takes its endpoint from
+    # the global file and its provider and both model ids from the repository's,
+    # with the operator's own ~/.config/kbase read by neither: HOME is this
+    # leg's directory, and the variable that would name a directory, and the
+    # four that would supply a field over the files, are unset.
+    layered="${root}/${dir}/layered"
+    layered_home="${layered}/home"
+    layered_repo="${layered}/repo"
+    mkdir -p "${layered_home}/.config/kbase" "${layered_repo}"
+    cp "${config}/providers.toml" "${layered_home}/.config/kbase/providers.toml"
+    # A relative apiKeyFile resolves beside its providers.toml, so the keys it
+    # names travel with it or both entries drop; owner-only, because a key file
+    # any other account can read is reported as a warning fault.
+    cp -R "${config}/api_keys" "${layered_home}/.config/kbase/api_keys"
+    chmod 0600 "${layered_home}/.config/kbase/api_keys/reaper.txt" "${layered_home}/.config/kbase/api_keys/imp.txt"
+    # The build commits its boundaries with the ambient git identity, which this
+    # home supplies in place of the operator's.
+    printf '[user]\n\tname = kbase integration\n\temail = kbase@invalid\n' > "${layered_home}/.gitconfig"
+    cp -R "{{ARXIV_DIR}}/${name}/." "${layered_repo}/"
+    git -C "${layered_repo}" init -q
+    layered_volume_root="$({{just_executable()}} _arxiv-volume-root "${layered_repo}")"
+    layered_env=(-u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE "HOME=${layered_home}")
+    capture "${ck}/kbase-configure-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" configure \
+        --create --project --provider reaper --model-map "decision=${decision},text=${text}"
+    check configure-layered "$([[ "$(rc "${ck}/kbase-configure-layered")" -eq 0 ]] \
+        && grep -qx 'outcome: "done"' "${ck}/kbase-configure-layered.out" \
+        && grep -q '^    - ".*/\.kbase/config\.toml"$' "${ck}/kbase-configure-layered.out" && echo 0 || echo 1)" \
+        "reaper dialed from the global pool, decision=${decision} and text=${text} written into the repository layer: exit $(rc "${ck}/kbase-configure-layered")" \
+        "${ck}/kbase-configure-layered.out"
+    capture "${ck}/kbase-build-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" build "${layered_volume_root}" \
+        --state-dir "${layered}/state" --log-level info
+    layered_captures="$(count "${layered}/state/scratch/captures" '*.capture.jsonl')"
+    check layered-build "$([[ "$(rc "${ck}/kbase-build-layered")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build-layered.out" \
+        && [[ "${layered_captures}" -gt 0 ]] && echo 0 || echo 1)" \
+        "no --config-dir: exit $(rc "${ck}/kbase-build-layered"), $(grep -m1 '^outcome:' "${ck}/kbase-build-layered.out" || echo 'no outcome'), ${layered_captures} captures against the endpoint the global layer names" \
+        "${ck}/kbase-build-layered.out"
+    capture "${ck}/kbase-show-config-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" show-config
+    layered_show="${ck}/kbase-show-config-layered"
+    layered_pool=0
+    [[ "$(rc "${layered_show}")" -eq 0 ]] || layered_pool=1
+    grep -qx 'outcome: "done"' "${layered_show}.out" || layered_pool=1
+    # the two layers, the global one this leg's home — so no other directory
+    # was read
+    [[ "$(grep -cxF '      source: "global"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
+    [[ "$(grep -cxF '      source: "repository"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
+    grep -qxF "    - path: \"${layered_home}/.config/kbase\"" "${layered_show}.out" || layered_pool=1
+    # the merged pool: the fixture's two entries out of the global file, the
+    # template's [local] out of the repository one, every entry usable
+    [[ "$(grep -c '^    - name: ' "${layered_show}.out")" -eq 3 ]] || layered_pool=1
+    [[ "$(grep -cxF '      usable: true' "${layered_show}.out")" -eq 3 ]] || layered_pool=1
+    [[ "$(grep -cxF '      layer: "global"' "${layered_show}.out")" -eq 2 ]] || layered_pool=1
+    [[ "$(grep -cxF '      layer: "repository"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
+    for entry in imp local reaper; do
+        grep -qxF "    - name: \"${entry}\"" "${layered_show}.out" || layered_pool=1
+    done
+    [[ "$(grep -cxF 'diagnostics: []' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
+    check layered-pool "${layered_pool}" \
+        "3 pool entries, imp and reaper global and local repository, all usable, no diagnostics; the global layer is ${layered_home}/.config/kbase" \
+        "${layered_show}.out"
+    # each resolved field names the layer that supplied it: the endpoint and the
+    # key from the global pool entry, the provider and both ids from the
+    # repository's config.toml
+    layered_sources=0
+    grep -qxF "    name: \"reaper\"" "${layered_show}.out" || layered_sources=1
+    grep -qxF "    base-url: \"${base_url}\"" "${layered_show}.out" || layered_sources=1
+    grep -qxF "    decision: \"${decision}\"" "${layered_show}.out" || layered_sources=1
+    grep -qxF "    text: \"${text}\"" "${layered_show}.out" || layered_sources=1
+    [[ "$(grep -cxF '    provider: "reaper"' "${layered_show}.out")" -eq 2 ]] || layered_sources=1
+    grep -qxF '    rule: "config"' "${layered_show}.out" || layered_sources=1
+    grep -qxF '        base-url: "global"' "${layered_show}.out" || layered_sources=1
+    grep -qxF '        key: "global"' "${layered_show}.out" || layered_sources=1
+    grep -qxF '        decision: "repository"' "${layered_show}.out" || layered_sources=1
+    grep -qxF '        text: "repository"' "${layered_show}.out" || layered_sources=1
+    grep -qxF 'environment: []' "${layered_show}.out" || layered_sources=1
+    check layered-sources "${layered_sources}" \
+        "inference reaper at ${base_url}, decision ${decision}, text ${text}: base-url and key global, provider and both ids repository" \
+        "${layered_show}.out"
+
     {
         printf -- '- id: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    answers: %s\n    ask-records: %s\n  checks:\n' \
             "$(yaml_str "${id}")" "$(yaml_str "${state}")" "${captures}" "${answers}" "${ask_records}"
@@ -2097,8 +707,8 @@ _test-integration-build-live-arxiv config: build
     } > "${out}/comparison.yaml"
 
     {{just_executable()}} _write-evidence "${out}" "test-integration-build-live-arxiv" \
-      "${kbase} models --config-dir <config> into models.*\non {{BUILD_ARXIV_SPECIAL_ID}}, staged into <id>/repo (sources, stub Makefile, .gitignore, just --justfile .claude/adjagent/justfile install):\n(cd <id>/repo && ${kbase} build <volume-root> --config-dir <config> --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\n(cd <id>/repo && PYTHONPATH=.claude/agents python3 -m kb_tools.kb_util install-targets; make kb-verify; make kb-refresh; make kb-verify)\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\nkb_tools' identify.asked_paragraphs and identify.judge over <id>/repo/kb-root with <id>/nodepass.json into <id>/checks/kbtools-identify.*\ngit -C <id>/repo archive <references-found commit> kb-root | tar -x -C <id>/at-references-found; kb_tools' shortlist.rank over it with <id>/kb-build-node-pass.yaml, own equations and each source's adjacent and proximity picks dropped, its first wildcard-k entries against the wildcard picks in <id>/state/reports/references-found.yaml, into <id>/checks/kbtools-shortlist.*\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_DECISION=<config's models.decision> KBASE_TEXT=<config's models.text> KBASE_API_KEY_FILE=<its apiKeyFile> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*"
-    printf '\nReference: adjagent %s; %s\n' "${adjagent}" "${pandoc_version}" >> "${out}/EVIDENCE.md"
+      "${kbase} models --config-dir <config> into models.*\non {{BUILD_ARXIV_SPECIAL_ID}}, staged into <id>/repo (sources, stub Makefile, .gitignore):\n(cd <id>/repo && ${kbase} build <volume-root> --config-dir <config> --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_DECISION=<config's models.decision> KBASE_TEXT=<config's models.text> KBASE_API_KEY_FILE=<its apiKeyFile> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider reaper --model-map decision=<config's models.decision>,text=<config's models.text>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the fixture's providers.toml and its api_keys, the global layer, over .kbase/ that configure wrote, the repository layer)"
+    printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-build-live-arxiv): a check failed — see comparison.yaml\n'
         exit 1
@@ -2117,7 +727,7 @@ _test-integration-build-live-arxiv config: build
 # just admits no required variadic after a defaulted parameter; none given is
 # refused below.)
 [positional-arguments]
-[doc("LIVE — NEEDS the inference endpoint config names, pandoc, python3 and the adjagent clone (excluded from test-integration); DESTRUCTIVE to dir's kb-root/: over a fixture repository prep-test-integration-fixture has staged (HEAD at its `staged` tag), ./bin/kbase build <roots...> from dir without --no-inference, configured by config (default test_data/fixtures/config/, relative to the repository root); then kb_tools' verify through the fixture's installed runner green before any refresh, ./bin/kbase refresh and ./bin/kbase verify green; the counts the arXiv live recipe records in comparison.yaml, the log, the state store and each command's capture under .claude-temp/live-fixture/<timestamp>/; dir is absolute or relative to the invocation directory, roots relative to dir, and a build flag among them (e.g. --through document-graph) is passed as given")]
+[doc("LIVE — NEEDS the inference endpoint config names and pandoc (excluded from test-integration); DESTRUCTIVE to dir's kb-root/: over a fixture repository prep-test-integration-fixture has staged (HEAD at its `staged` tag), ./bin/kbase build <roots...> from dir without --no-inference, configured by config (default test_data/fixtures/config/, relative to the repository root); then ./bin/kbase refresh and ./bin/kbase verify green; the counts the arXiv live recipe records in comparison.yaml, the log, the state store and each command's capture under .claude-temp/live-fixture/<timestamp>/; dir is absolute or relative to the invocation directory, roots relative to dir, and a build flag among them (e.g. --through document-graph) is passed as given")]
 test-integration-build-live-fixture dir config=LIVE_CONFIG_DIR *roots:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2136,7 +746,7 @@ test-integration-build-live-fixture dir config=LIVE_CONFIG_DIR *roots:
 # stage, references-found; kb-root/ is left as the trail has it. The checks
 # and the output directory are the staged form's.
 [positional-arguments]
-[doc("LIVE — NEEDS the inference endpoint config names, pandoc, python3 and the adjagent clone (excluded from test-integration); DESTRUCTIVE to dir's kb-root/ and state: over a fixture repository whose commit trail (its `kb-build: <stage> |` commits) has equations-minted as its newest stage — refused, naming the newest stage the trail holds, otherwise — using state, the prior run's state directory (answer cache and records), ./bin/kbase build <roots...> from dir with --state-dir state and --config-dir config (default test_data/fixtures/config/, relative to the repository root), which resumes at the trail's next stage (references-found); then the post-build checks of test-integration-build-live-fixture (kb_tools' verify through the fixture's runner, ./bin/kbase refresh and verify, comparison.yaml, the log and each command's capture) under a new .claude-temp/live-fixture/<timestamp>/; dir and state are absolute or relative to the invocation directory, roots relative to dir, and a build flag among them is passed as given")]
+[doc("LIVE — NEEDS the inference endpoint config names and pandoc (excluded from test-integration); DESTRUCTIVE to dir's kb-root/ and state: over a fixture repository whose commit trail (its `kb-build: <stage> |` commits) has equations-minted as its newest stage — refused, naming the newest stage the trail holds, otherwise — using state, the prior run's state directory (answer cache and records), ./bin/kbase build <roots...> from dir with --state-dir state and --config-dir config (default test_data/fixtures/config/, relative to the repository root), which resumes at the trail's next stage (references-found); then the post-build checks of test-integration-build-live-fixture (./bin/kbase refresh and verify, comparison.yaml, the log and each command's capture) under a new .claude-temp/live-fixture/<timestamp>/; dir and state are absolute or relative to the invocation directory, roots relative to dir, and a build flag among them is passed as given")]
 test-integration-build-live-fixture-resume dir state config=LIVE_CONFIG_DIR *roots:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -2208,10 +818,9 @@ _test-integration-build-live-fixture out dir state config mode *roots: build
         fi
         where="HEAD ${head_rev} (staged ${staged}), state ${state}"
     fi
-    adjagent="$(git -C .claude/adjagent rev-parse HEAD)"
     pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'fixture: %s at %s\nbuild arguments: %s\nconfig: %s\nout: %s\nadjagent: %s\n%s\n' \
-        "${dir}" "${where}" "$*" "${config}" "${out}" "${adjagent}" "${pandoc_version}"
+    printf 'fixture: %s at %s\nbuild arguments: %s\nconfig: %s\nout: %s\n%s\n' \
+        "${dir}" "${where}" "$*" "${config}" "${out}" "${pandoc_version}"
     ck="${out}/checks"
     mkdir -p "${ck}"
     # capture <stem> <dir> <command...>: run the command in dir, stdout to
@@ -2225,7 +834,6 @@ _test-integration-build-live-fixture out dir state config mode *roots: build
         set -e
     }
     rc() { cat "$1.exit"; }
-    kbtools() { PYTHONPATH=.claude/agents PYTHONDONTWRITEBYTECODE=1 "$@"; }
     checks=()
     status=0
     record() {
@@ -2267,7 +875,7 @@ _test-integration-build-live-fixture out dir state config mode *roots: build
     ask_records="$(count "${state}/scratch/asks" '*.yaml')"
 
     if [[ "${outcome}" != done ]]; then
-        for c in ledger no-row-dropped captures install-targets kbtools-verify-unrefreshed kbase-refresh kbase-verify records; do
+        for c in ledger no-row-dropped captures kbase-refresh kbase-verify records; do
             record "${c}" skipped "the build did not finish (outcome ${outcome:-none}); this check reads a finished KB" "${ck}/kbase-build.out"
         done
     else
@@ -2278,13 +886,6 @@ _test-integration-build-live-fixture out dir state config mode *roots: build
         check captures "$(ok test "${captures}" -gt 0 -a "${answers}" -gt 0 -a "${ask_records}" -gt 0)" \
             "${captures} captures, ${answers} cached answers, ${ask_records} group records under the state store's scratch/" "${state}/scratch"
 
-        # kb_tools' verify through the runner the fixture carries, green before
-        # any refresh; then kbase's refresh and verify green
-        capture "${ck}/install-targets" "${dir}" kbtools python3 -m kb_tools.kb_util install-targets
-        check install-targets "$(rc "${ck}/install-targets")" "exit $(rc "${ck}/install-targets")" "${ck}/install-targets.out"
-        read -r -a verify_argv <<< "$(cd "${dir}" && kbtools python3 -c 'from kb_tools import kb_util; print(kb_util.verify_cmd())')"
-        capture "${ck}/kbtools-verify-unrefreshed" "${dir}" kbtools "${verify_argv[@]}"
-        check kbtools-verify-unrefreshed "$(rc "${ck}/kbtools-verify-unrefreshed")" "${verify_argv[*]}: green before any refresh: exit $(rc "${ck}/kbtools-verify-unrefreshed")" "${ck}/kbtools-verify-unrefreshed.out"
         capture "${ck}/kbase-refresh" "${dir}" "${kbase}" refresh
         check kbase-refresh "$(rc "${ck}/kbase-refresh")" "exit $(rc "${ck}/kbase-refresh")" "${ck}/kbase-refresh.out"
         capture "${ck}/kbase-verify" "${dir}" "${kbase}" verify
@@ -2327,11 +928,12 @@ _test-integration-build-live-fixture out dir state config mode *roots: build
 # recorded and what follows is a resume — ./bin/kbase cancel stops it. Then:
 # the build exited
 # cancelled (exit 4) naming its stage and unit, that stage unrecorded; the
-# lock released (a second cancel is refused, finding no holder); status
-# reports cancelled with a resume command; and that command, run as status
-# gives it, resumes the build to done, status then reporting it finished.
+# lock released and its file removed (a second cancel is refused, finding no
+# holder); status reports cancelled with a resume command; and that command,
+# run as status gives it, resumes the build to done, status then reporting it
+# finished.
 # Every result is parsed against its subcommand's documented keys.
-[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over MONITOR_ARXIV_ID in the background, an out-of-process loop polling ./bin/kbase status and cancelling it with ./bin/kbase cancel; cancelled (exit 4), the lock released, status cancelled with its resume, the resume to done; evidence under test_data/transient/test-integration-monitor-arxiv/")]
+[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over MONITOR_ARXIV_ID in the background, an out-of-process loop polling ./bin/kbase status and cancelling it with ./bin/kbase cancel; cancelled (exit 4), the lock released and its file removed, status cancelled with its resume, the resume to done; evidence under test_data/transient/test-integration-monitor-arxiv/")]
 test-integration-monitor-arxiv: (prep-test-integration-arxiv MONITOR_ARXIV_ID)
     @mkdir -p "{{MONITOR_ARXIV_OUT_DIR}}"
     @{{just_executable()}} _test-integration-monitor-arxiv 2>&1 | tee "{{MONITOR_ARXIV_OUT_DIR}}/log.txt"
@@ -2424,6 +1026,8 @@ _test-integration-monitor-arxiv: build
     check lock-released "$([[ "$(cat "${out}/cancel-again.exit")" -eq 1 ]] && grep -q 'no build holds the state store' "${out}/cancel-again.out" && echo 0 || echo 1)" \
         "a second cancel exit $(cat "${out}/cancel-again.exit"), finding no holder" "${out}/cancel-again.out"
     keys "${out}/cancel-again" cancel refused
+    check lock-absent "$([[ ! -e "${state}/lock" ]] && echo 0 || echo 1)" \
+        "the state store's lock file is gone after the cancel, not merely unheld" "${out}/state"
     capture "${out}/status-cancelled" "${kbase}" status --state-dir "${state}"
     resume="$(field "${out}/status-cancelled" resume)"
     check status-cancelled "$([[ "$(field "${out}/status-cancelled" state)" == cancelled && "${resume}" == "kbase build "* ]] && echo 0 || echo 1)" \
@@ -2650,6 +1254,17 @@ test-integration-mcp:
     @mkdir -p "{{MCP_OUT_DIR}}"
     @{{just_executable()}} _test-integration-mcp 2>&1 | tee "{{MCP_OUT_DIR}}/log.txt"
 
+# The build-end leg over the delivered binary: a notification owes no request,
+# which a transcript cannot express, so a Go test drives a real server — the
+# recipe's child, because the exec monopoly (I1) leaves starting it to
+# cmd/mcp.go inside the module and to a recipe outside it — over two named
+# pipes the recipe holds, waits for the frame, and starts no process of its
+# own. That leg builds a paper with no inference, so it needs pandoc.
+[doc("NEEDS pandoc (excluded from test-integration): a build with no inference over test_data/fixtures/mcp/paper.tex through ./bin/kbase mcp, subscribed to kbase://build, sending nothing until the notification of its end arrives; evidence under test_data/transient/test-integration-mcp-build/")]
+test-integration-mcp-build:
+    @mkdir -p "{{MCP_BUILD_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-mcp-build 2>&1 | tee "{{MCP_BUILD_OUT_DIR}}/log.txt"
+
 [private]
 _test-integration-mcp: build
     #!/usr/bin/env bash
@@ -2740,12 +1355,604 @@ _test-integration-mcp: build
     fi
     printf 'integration(test-integration-mcp) ok\n'
 
+[private]
+_test-integration-mcp-build: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd -P)"
+    out="${root}/{{MCP_BUILD_OUT_DIR}}"
+    kbase="${root}/{{BIN_DIR}}/kbase"
+    # The test drives the protocol and must start no process, so the server is
+    # this recipe's child, its requests and its frames two named pipes the test
+    # opens: it sends nothing after subscribing and waits for a frame no
+    # request owes. The pipes are opened in the order that cannot deadlock —
+    # the test's write end unblocks the server's `< requests`, which then opens
+    # `> frames` for the test's read — and a build that never ends is caught by
+    # the test runner's -timeout.
+    rm -rf "${out}/repo" "${out}/state" "${out}/xdg" "${out}/config" "${out}/home" \
+        "${out}/requests.fifo" "${out}/frames.fifo" "${out}/mcp.log" "${out}/test.log"
+    mkdir -p "${out}/repo" "${out}/config" "${out}/home"
+    cp "{{MCP_TRANSCRIPT_DIR}}/paper.tex" "${out}/repo/"
+    : > "${out}/home/.gitconfig"
+    git -C "${out}/repo" init -q
+    git -C "${out}/repo" add -A
+    git -C "${out}/repo" -c user.name=mcp -c user.email=mcp@invalid commit -qm "sources as fetched"
+    mkfifo "${out}/requests.fifo" "${out}/frames.fifo"
+    (
+        cd "${out}/repo"
+        env HOME="${out}/home" XDG_STATE_HOME="${out}/xdg" KBASE_CONFIG_DIR="${out}/config" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/home/.gitconfig" \
+            GIT_AUTHOR_NAME=mcp GIT_AUTHOR_EMAIL=mcp@invalid GIT_COMMITTER_NAME=mcp GIT_COMMITTER_EMAIL=mcp@invalid \
+            "${kbase}" mcp --kb-root "${out}/repo" < "${out}/requests.fifo" > "${out}/frames.fifo" 2> "${out}/mcp.log"
+    ) &
+    server=$!
+    set +e
+    go test -count=1 -timeout 300s -run '^TestMCPBuildEndNotification$' ./cmd -args \
+        -notify.repo="${out}/repo" -notify.state-dir="${out}/state" \
+        -notify.requests="${out}/requests.fifo" -notify.frames="${out}/frames.fifo" \
+        > "${out}/test.log" 2>&1
+    code=$?
+    set -e
+    wait "${server}" || true
+    {{just_executable()}} _write-evidence "${out}" "test-integration-mcp-build" \
+      "cp {{MCP_TRANSCRIPT_DIR}}/paper.tex repo/; git init repo/ and one commit (identity fixed in the environment, global config quarantined to home/.gitconfig); mkfifo requests.fifo frames.fifo\nrepo/: ${kbase} mcp --kb-root repo/ < requests.fifo > frames.fifo 2> mcp.log, whose build tool launched two builds with no inference into state/\ngo test -count=1 -timeout 300s -run '^TestMCPBuildEndNotification$' ./cmd -args -notify.repo=repo -notify.state-dir=state -notify.requests=requests.fifo -notify.frames=frames.fifo > test.log: initialize, build, subscribe, send nothing until the end's notification arrives, then a second build and a subscription taken again\npass is test.log's exit 0; a frame that is not the one owing, an end announced twice, or a build that never ends fails it"
+    if [[ "${code}" -ne 0 ]]; then
+        printf 'integration(test-integration-mcp-build): the notification never arrived as expected — see %s\n' "${out}/test.log"
+        exit 1
+    fi
+    printf 'integration(test-integration-mcp-build) ok\n'
+
+# The show-config verb over the delivered binary, on three staged configuration
+# directories — absent, providers.toml only, both files — each run through
+# KBASE_CONFIG_DIR and through --config-dir: the outcome, the one layer each
+# reports and the layer's source, the diagnostic count and the absence of the
+# key-file value from stdout. A pool entry that drops and one whose key file any
+# local account can read are what the diagnostics count. One further run sets
+# KBASE_TEXT over the both pool, whose config.toml names both categories: the
+# document must name the environment as the text category's source, and the one
+# layer read for the rest. A layered leg stages a repository's own .kbase over a
+# staged $HOME's ~/.config/kbase — the repository adding a pool entry and
+# overriding one by name — and checks the merged pool, each entry's layer,
+# whole-entry replacement, both layers in precedence order with what each holds,
+# and the layer each resolved field came from. Five further legs cover a leading
+# ~: the configuration directory a flag names and the one $KBASE_CONFIG_DIR
+# names, ~ alone, an entry's apiKeyFile (which must expand rather than join to
+# the configuration directory), ~user and a/~/b staying literal, and a home the
+# lookup cannot give or one that is not absolute, which leaves the spelling
+# alone. The last leg calls the verb over MCP from a directory holding no KB,
+# which is what a verb resolving no KB must answer.
+# It needs git only to stage the layered leg's repository; no pandoc, no
+# provider and no corpus.
+[doc("hermetic: ./bin/kbase show-config over staged configurations with HOME pointed at a staged home — absent, providers.toml alone and both files, each through KBASE_CONFIG_DIR and --config-dir, checked for its outcome, its one layer, that layer's existence flags, its diagnostic count and the absence of key material; a layered leg in a staged git repository whose .kbase adds a pool entry and overrides one by name, checked for the merged pool and each entry's layer, whole-entry replacement, each entry's decision surface (the value an entry names, systemone where it is silent), both layers in precedence order with exists/providersExists/configExists, and the layer each resolved field came from; one run setting KBASE_TEXT over the both pool checked for the layer each resolved field names; legs for a leading ~ in the configuration directory a flag or the variable names, alone, and in an apiKeyFile (never joined to the configuration directory), with ~user and a/~/b staying literal, and with a home missing or not absolute; configure --create --project in a staged repository, checked for creating both files unchecked and without a request, for show-config reporting that layer holding both with models resolving the sole entry [local], for a second call coming back unchanged, for a --provider the pool lacks refusing against the absolute providers.toml with the creation remedy and writing nothing, for --config-dir beside --project refusing as usage, for --config-dir into an empty directory creating both files, and for --project outside a worktree refusing on the worktree; and one show-config tools/call over MCP from a directory holding no KB; evidence under test_data/transient/test-integration-config/")]
+test-integration-config:
+    @mkdir -p "{{CONFIG_OUT_DIR}}"
+    @{{just_executable()}} _test-integration-config 2>&1 | tee "{{CONFIG_OUT_DIR}}/log.txt"
+
+[private]
+_test-integration-config: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd -P)"
+    out="${root}/{{CONFIG_OUT_DIR}}"
+    kbase="${root}/{{BIN_DIR}}/kbase"
+    dirs="${out}/configs"
+    docs="${out}/docs"
+    work="${out}/work"
+    rm -rf "${dirs}" "${docs}" "${work}" "${out}/home" "${out}/layered" "${out}/literal" "${out}/configure" "${out}/mcp.requests.jsonl" "${out}/mcp.actual.jsonl" "${out}/mcp.log" "${out}/mcp.exit" "${out}/config.tsv"
+    mkdir -p "${dirs}/pool" "${dirs}/both" "${docs}" "${work}"
+    file_key='sk-file-MUST-NOT-APPEAR'
+    # The home every invocation runs under, so the global layer is this staged
+    # ~/.config/kbase and no leg reads or writes the operator's own. It is left
+    # empty: a leg that names a directory reads that one layer only.
+    home="${out}/home"
+    mkdir -p "${home}"
+    # One providers.toml, staged into the two states that hold it: an entry that
+    # drops for want of a baseUrl and one supplying its key from a file any local
+    # account can read — so the permission warning fires. configs/absent is never
+    # created: that is the absent state.
+    printf '%s\n' \
+        '[broken]' \
+        '' '[file]' 'baseUrl = "http://file.example/v1"' 'apiKeyFile = "key.txt"' \
+        > "${dirs}/pool/providers.toml"
+    printf '%s\n' "${file_key}" > "${dirs}/pool/key.txt"
+    chmod 0644 "${dirs}/pool/key.txt"
+    cp -R "${dirs}/pool/." "${dirs}/both/"
+    printf '%s\n' 'provider = "file"' '' '[models]' 'decision = "fixture-decision"' 'text = "fixture-text"' \
+        > "${dirs}/both/config.toml"
+    status=0
+    fail() { printf '  fail: %s\n' "$*"; status=1; }
+    # inference <document> <key>: one scalar of the document's inference record.
+    inference() { awk -v k="$2" '/^inference:/ { on = 1; next } on && /^    / { if (index($0, k ": ") == 5) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
+    # field_source <document> <key>: the layer the document names for one resolved field.
+    field_source() { awk -v k="$2" '/^    sources:/ { on = 1; next } on && /^        / { if (index($0, k ": ") == 9) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
+    # selection_field <document> <key>: one scalar of the selection record.
+    selection_field() { awk -v k="$2" '/^selection:/ { on = 1; next } on && /^    / { if (index($0, k ": ") == 5) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
+    # item_field <document> <list> <key>: one scalar of an item under the named
+    # list (refusals, failures); the item's first key sits on its "- " line, the
+    # rest below it.
+    item_field() { awk -v list="$2" -v k="$3" '$0 == list ":" { on = 1; next } on && /^    - / { line = "      " substr($0, 7); if (index(line, k ": ") == 7) { sub(/^[^:]*: /, "", line); gsub(/^"|"$/, "", line); print line; exit } next } on && /^      / { if (index($0, k ": ") == 7) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
+    # diagnostics <stem>: how many items the document's diagnostics list holds.
+    diagnostics() { awk '/^diagnostics:/ { on = 1; next } on && /^    - / { n++ } END { print n + 0 }' "$1.out"; }
+    # layers <stem>: how many layer entries the document reports.
+    layers() { awk '/^layers:/ { on = 1; next } on && /^    - / { n++; next } on && /^    / { next } on { exit } END { print n + 0 }' "$1.out"; }
+    # layer_field <stem> <n> <key>: one scalar of the nth layer entry (1-based);
+    # the entry's first key sits on its "- path:" line, the rest below it.
+    layer_field() { awk -v n="$2" -v k="$3" '/^layers:/ { on = 1; next } on && /^    - / { i++; if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit } next } on && /^    / { if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
+    # provider_names <stem>: the pool's entry names, in the order the document lists them.
+    provider_names() { awk '/^providers:/ { on = 1; next } on && /^    - name: / { n = $0; sub(/^[^:]*: /, "", n); gsub(/^"|"$/, "", n); printf "%s%s", sep, n; sep = ","; next } on && /^    / { next } on { exit }' "$1.out"; }
+    # provider_field <stem> <name> <key>: one scalar of the providers entry called name.
+    provider_field() { awk -v want="$2" -v k="$3" '/^providers:/ { on = 1; next } on && /^    - name: / { cur = $0; sub(/^[^:]*: /, "", cur); gsub(/^"|"$/, "", cur); next } on && /^    / { if (cur == want && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
+    # report <stem> <ok> <label> [detail]: one leg that checks its document
+    # itself — its config.tsv line, its console line, and the run's status. The
+    # console line states the layer and diagnostic counts a show-config document
+    # carries, or detail where the leg's document is not one.
+    report() {
+        local verdict=pass
+        [[ "$2" -eq 0 ]] || { verdict=fail; status=1; }
+        printf '%s\t-\t%s\t%s\n' "$3" "${verdict}" "$1.out" >> "${out}/config.tsv"
+        printf '  %s %s: %s, exit %s\n' \
+            "${verdict}" "$3" "${4:-$(layers "$1") layers, $(diagnostics "$1") diagnostics}" "$(cat "$1.exit")"
+    }
+
+    # run <state> <route> <diagnostics> <files> [args...]: one invocation
+    # against the staged configuration named by state, its document checked for
+    # the outcome, the one layer it reads, that layer's source (the environment
+    # for a route through KBASE_CONFIG_DIR, explicit for --config-dir) and which
+    # of its two files stand (files: none, pool or both), the count of faults,
+    # and the absence of the key-file value. HOME points at the staged home, so
+    # a leg never reads the operator's own, and the four inference variables are
+    # scrubbed, so the document describes the staged configuration and nothing
+    # the host exports; extra adds assignments after the scrubs, for a leg that
+    # supplies one of them.
+    extra=()
+    n=0
+    run() {
+        local state="$1" route="$2" want_count="$3" files="$4" dir stem want_source
+        shift 4
+        n=$((n + 1))
+        dir="${dirs}/${state}"
+        stem="${docs}/$(printf '%02d' "${n}")-${state}-${route}"
+        local -a envargs=(-u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE "HOME=${home}")
+        envargs+=(${extra[@]+"${extra[@]}"})
+        local -a args=(show-config)
+        if [[ "${route}" == environment ]]; then
+            want_source=environment
+            envargs+=("KBASE_CONFIG_DIR=${dir}")
+        else
+            want_source=explicit
+            args+=(--config-dir "${dir}")
+        fi
+        set +e
+        ( cd "${work}" && env "${envargs[@]}" "${kbase}" "${args[@]}" "$@" ) > "${stem}.out" 2> "${stem}.log"
+        printf '%s\n' "$?" > "${stem}.exit"
+        set -e
+        local ok=0 got_source got_count invocation="${args[*]}"
+        local want_exists=false want_providers=false want_config=false
+        case "${files}" in
+            none) ;;
+            pool) want_exists=true; want_providers=true ;;
+            both) want_exists=true; want_providers=true; want_config=true ;;
+            *) ok=1 ;;
+        esac
+        [[ "${route}" == environment ]] && invocation="KBASE_CONFIG_DIR=${dir} ${invocation}"
+        [[ ${#extra[@]} -eq 0 ]] || invocation="${extra[*]} ${invocation}"
+        got_source="$(layer_field "${stem}" 1 source)"
+        got_count="$(diagnostics "${stem}")"
+        [[ "$(cat "${stem}.exit")" -eq 0 ]] || ok=1
+        grep -qx 'outcome: "done"' "${stem}.out" || ok=1
+        [[ "$(layers "${stem}")" == 1 ]] || ok=1
+        [[ "${got_source}" == "${want_source}" ]] || ok=1
+        [[ "${got_count}" == "${want_count}" ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 path)" == "${dir}" ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 exists)" == "${want_exists}" ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 providersExists)" == "${want_providers}" ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 configExists)" == "${want_config}" ]] || ok=1
+        if grep -qF "${file_key}" "${stem}.out"; then ok=1; fi
+        printf '%s\t%s\t%s\t%s\n' "${invocation}" "${want_source}" "$([[ "${ok}" -eq 0 ]] && echo pass || echo fail)" "${stem}.out" >> "${out}/config.tsv"
+        printf '  %s %s %s: source %s, files %s, %s diagnostics, exit %s\n' \
+            "$([[ "${ok}" -eq 0 ]] && echo pass || echo fail)" "${state}" "${route}" "${got_source:-none}" "${files}" "${got_count}" "$(cat "${stem}.exit")"
+        [[ "${ok}" -eq 0 ]] || status=1
+        LAST="${stem}.out"
+    }
+    # 1. absent: no configuration directory at all — nothing selected, no
+    #    endpoint, one diagnostic naming the pool's baseUrl.
+    run absent environment 1 none
+    run absent flag 1 none
+    # 2. providers.toml only: no config.toml to select from and no category set —
+    #    the drop, the key file's warning, and the resolution failure.
+    run pool environment 3 pool
+    run pool flag 3 pool
+    # 3. both files: config.toml names the key-file entry and both categories, so
+    #    the drop and the warning are all that is diagnosed.
+    run both environment 2 both
+    run both flag 2 both
+    [[ "$(grep -c 'usable: false' "${LAST}")" -eq 1 ]] || fail "the dropped entry is not reported unusable in ${LAST}"
+    # 4. KBASE_TEXT over the both pool: config.toml names both categories, so
+    #    the document reports text from the environment and decision from the
+    #    files, with the endpoint and key from the pool — and a variable that
+    #    only overrides a category adds no diagnostic. The layer is the flag's,
+    #    which is what every file-supplied field must name.
+    extra=(KBASE_TEXT=fixture-env-text)
+    run both flag 2 both
+    extra=()
+    [[ "$(inference "${LAST}" text)" == "fixture-env-text" ]] || fail "the text category does not report the variable's value in ${LAST}"
+    [[ "$(field_source "${LAST}" text)" == "environment" ]] || fail "the text category's source is not environment in ${LAST}"
+    [[ "$(field_source "${LAST}" decision)" == "explicit" ]] || fail "the decision category's source is not the configuration layer in ${LAST}"
+    [[ "$(field_source "${LAST}" base-url)" == "explicit" ]] || fail "the base URL's source is not the configuration layer in ${LAST}"
+    [[ "$(field_source "${LAST}" key)" == "explicit" ]] || fail "the key's source is not the configuration layer in ${LAST}"
+    # 5. layered: <repository>/.kbase over the staged home's ~/.config/kbase,
+    #    run from a directory below the repository's root. The repository pool
+    #    adds one entry and overrides one by name; its config.toml overrides the
+    #    decision category and leaves text to the global file.
+    layered="${out}/layered"
+    repo="${layered}/repo"
+    mkdir -p "${layered}/home/.config/kbase" "${repo}/.kbase" "${repo}/nested"
+    printf '%s\n' \
+        '[shared]' 'baseUrl = "http://shared.example/v1"' 'apiKeyFile = "shared.key"' \
+        '' '[inherited]' 'baseUrl = "http://inherited.example/v1"' \
+        > "${layered}/home/.config/kbase/providers.toml"
+    printf '%s\n' "${file_key}-global" > "${layered}/home/.config/kbase/shared.key"
+    chmod 0600 "${layered}/home/.config/kbase/shared.key"
+    printf '%s\n' 'provider = "inherited"' '' '[models]' 'decision = "global-decision"' 'text = "global-text"' \
+        > "${layered}/home/.config/kbase/config.toml"
+    printf '%s\n' \
+        '[shared]' 'baseUrl = "http://shared.example/v2"' 'decisionsFlavor = "decisions"' \
+        '' '[local]' 'baseUrl = "http://local.example/v1"' 'apiKeyFile = "local.key"' \
+        > "${repo}/.kbase/providers.toml"
+    printf '%s\n' "${file_key}-repo" > "${repo}/.kbase/local.key"
+    chmod 0600 "${repo}/.kbase/local.key"
+    printf '%s\n' 'provider = "local"' '' '[models]' 'decision = "repo-decision"' \
+        > "${repo}/.kbase/config.toml"
+    git init -q "${repo}"
+    layered_stem="${docs}/08-layered"
+    set +e
+    ( cd "${repo}/nested" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${layered}/home" "${kbase}" show-config ) > "${layered_stem}.out" 2> "${layered_stem}.log"
+    printf '%s\n' "$?" > "${layered_stem}.exit"
+    set -e
+    layered_ok=0
+    [[ "$(cat "${layered_stem}.exit")" -eq 0 ]] || layered_ok=1
+    grep -qx 'outcome: "done"' "${layered_stem}.out" || layered_ok=1
+    [[ "$(diagnostics "${layered_stem}")" == 0 ]] || layered_ok=1
+    if grep -qF "${file_key}" "${layered_stem}.out"; then layered_ok=1; fi
+    # (a) the pool is the union of both layers, each entry naming its own.
+    [[ "$(provider_names "${layered_stem}")" == "inherited,local,shared" ]] || layered_ok=1
+    [[ "$(provider_field "${layered_stem}" inherited layer)" == "global" ]] || layered_ok=1
+    [[ "$(provider_field "${layered_stem}" local layer)" == "repository" ]] || layered_ok=1
+    [[ "$(provider_field "${layered_stem}" shared layer)" == "repository" ]] || layered_ok=1
+    # (b) the repository entry replaced the global one whole: its URL stands, and
+    #     neither the apiKeyFile nor the key the global entry supplied came with
+    #     it.
+    [[ "$(provider_field "${layered_stem}" shared base-url)" == "http://shared.example/v2" ]] || layered_ok=1
+    [[ "$(provider_field "${layered_stem}" shared key)" == "none" ]] || layered_ok=1
+    [[ -z "$(provider_field "${layered_stem}" shared key-file)" ]] || layered_ok=1
+    # (b) Each entry states the decision surface it speaks: the repository's
+    #     shared entry names one, and the local entry, silent, resolves to the
+    #     systemone default.
+    [[ "$(provider_field "${layered_stem}" shared decisions-flavor)" == "decisions" ]] || layered_ok=1
+    [[ "$(provider_field "${layered_stem}" local decisions-flavor)" == "systemone" ]] || layered_ok=1
+    # (c) both layers in precedence order, each with what it holds.
+    [[ "$(layers "${layered_stem}")" == 2 ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 1 path)" == "${repo}/.kbase" ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 1 source)" == "repository" ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 1 exists)" == true ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 1 providersExists)" == true ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 1 configExists)" == true ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 2 path)" == "${layered}/home/.config/kbase" ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 2 source)" == "global" ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 2 exists)" == true ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 2 providersExists)" == true ]] || layered_ok=1
+    [[ "$(layer_field "${layered_stem}" 2 configExists)" == true ]] || layered_ok=1
+    # (d) every resolved field names the layer that supplied it: the repository's
+    #     pool entry for the endpoint and key, its config.toml for the decision
+    #     category, and the global file for the text category it left alone.
+    [[ "$(inference "${layered_stem}.out" name)" == "local" ]] || layered_ok=1
+    [[ "$(inference "${layered_stem}.out" decision)" == "repo-decision" ]] || layered_ok=1
+    [[ "$(inference "${layered_stem}.out" text)" == "global-text" ]] || layered_ok=1
+    [[ "$(field_source "${layered_stem}.out" base-url)" == "repository" ]] || layered_ok=1
+    [[ "$(field_source "${layered_stem}.out" key)" == "repository" ]] || layered_ok=1
+    [[ "$(field_source "${layered_stem}.out" decision)" == "repository" ]] || layered_ok=1
+    [[ "$(field_source "${layered_stem}.out" text)" == "global" ]] || layered_ok=1
+    report "${layered_stem}" "${layered_ok}" "layered show-config"
+    # 6. ~ expands. A leading ~ in the directory a flag names and in an entry's
+    #    apiKeyFile resolves from the staged home. The key file stands under the
+    #    home alone, so an apiKeyFile joined to the configuration directory
+    #    instead would drop its entry: the diagnostic count and the entry's
+    #    usability are what say it did not. The report keeps the entry's own
+    #    spelling of the path.
+    home_cfg="${home}/cfg"
+    mkdir -p "${home_cfg}" "${home}/keys"
+    printf '%s\n' "${file_key}" > "${home}/keys/home.txt"
+    chmod 0600 "${home}/keys/home.txt"
+    printf '%s\n' '[homekey]' 'baseUrl = "http://home.example/v1"' 'apiKeyFile = "~/keys/home.txt"' \
+        > "${home_cfg}/providers.toml"
+    printf '%s\n' 'provider = "homekey"' '' '[models]' 'decision = "home-decision"' 'text = "home-text"' \
+        > "${home_cfg}/config.toml"
+    tilde_stem="${docs}/09-tilde-flag"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${home}" "${kbase}" show-config --config-dir '~/cfg' ) > "${tilde_stem}.out" 2> "${tilde_stem}.log"
+    printf '%s\n' "$?" > "${tilde_stem}.exit"
+    set -e
+    tilde_ok=0
+    [[ "$(cat "${tilde_stem}.exit")" -eq 0 ]] || tilde_ok=1
+    grep -qx 'outcome: "done"' "${tilde_stem}.out" || tilde_ok=1
+    [[ "$(layers "${tilde_stem}")" == 1 ]] || tilde_ok=1
+    [[ "$(layer_field "${tilde_stem}" 1 path)" == "${home_cfg}" ]] || tilde_ok=1
+    [[ "$(layer_field "${tilde_stem}" 1 source)" == "explicit" ]] || tilde_ok=1
+    [[ "$(diagnostics "${tilde_stem}")" == 0 ]] || tilde_ok=1
+    [[ "$(provider_field "${tilde_stem}" homekey usable)" == true ]] || tilde_ok=1
+    [[ "$(provider_field "${tilde_stem}" homekey key)" == file ]] || tilde_ok=1
+    [[ "$(provider_field "${tilde_stem}" homekey key-file)" == '~/keys/home.txt' ]] || tilde_ok=1
+    if grep -qF "${file_key}" "${tilde_stem}.out"; then tilde_ok=1; fi
+    report "${tilde_stem}" "${tilde_ok}" "show-config --config-dir '~/cfg'"
+    # 7. $KBASE_CONFIG_DIR expands the same way.
+    tilde_env_stem="${docs}/10-tilde-environment"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${home}" KBASE_CONFIG_DIR='~/cfg' "${kbase}" show-config ) > "${tilde_env_stem}.out" 2> "${tilde_env_stem}.log"
+    printf '%s\n' "$?" > "${tilde_env_stem}.exit"
+    set -e
+    tilde_env_ok=0
+    [[ "$(cat "${tilde_env_stem}.exit")" -eq 0 ]] || tilde_env_ok=1
+    grep -qx 'outcome: "done"' "${tilde_env_stem}.out" || tilde_env_ok=1
+    [[ "$(layers "${tilde_env_stem}")" == 1 ]] || tilde_env_ok=1
+    [[ "$(layer_field "${tilde_env_stem}" 1 path)" == "${home_cfg}" ]] || tilde_env_ok=1
+    [[ "$(layer_field "${tilde_env_stem}" 1 source)" == "environment" ]] || tilde_env_ok=1
+    [[ "$(diagnostics "${tilde_env_stem}")" == 0 ]] || tilde_env_ok=1
+    report "${tilde_env_stem}" "${tilde_env_ok}" "KBASE_CONFIG_DIR='~/cfg' show-config"
+    # 8. ~ alone is the home directory: the layer is the staged home, holding
+    #    neither configuration file.
+    tilde_home_stem="${docs}/11-tilde-home"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${home}" "${kbase}" show-config --config-dir '~' ) > "${tilde_home_stem}.out" 2> "${tilde_home_stem}.log"
+    printf '%s\n' "$?" > "${tilde_home_stem}.exit"
+    set -e
+    tilde_home_ok=0
+    [[ "$(cat "${tilde_home_stem}.exit")" -eq 0 ]] || tilde_home_ok=1
+    grep -qx 'outcome: "done"' "${tilde_home_stem}.out" || tilde_home_ok=1
+    [[ "$(layers "${tilde_home_stem}")" == 1 ]] || tilde_home_ok=1
+    [[ "$(layer_field "${tilde_home_stem}" 1 path)" == "${home}" ]] || tilde_home_ok=1
+    [[ "$(layer_field "${tilde_home_stem}" 1 exists)" == true ]] || tilde_home_ok=1
+    [[ "$(layer_field "${tilde_home_stem}" 1 providersExists)" == false ]] || tilde_home_ok=1
+    [[ "$(layer_field "${tilde_home_stem}" 1 configExists)" == false ]] || tilde_home_ok=1
+    report "${tilde_home_stem}" "${tilde_home_ok}" "show-config --config-dir '~'"
+    # 9. A ~ anywhere but the start is literal: the two key files below stand
+    #    under names that only a join to the configuration directory reaches, so
+    #    an expansion of ~user or of a/~/b would drop the entry naming it.
+    literal="${out}/literal"
+    mkdir -p "${literal}/~user" "${literal}/a/~/b"
+    printf '%s\n' "${file_key}" > "${literal}/~user/key.txt"
+    printf '%s\n' "${file_key}" > "${literal}/a/~/b/key.txt"
+    chmod 0600 "${literal}/~user/key.txt" "${literal}/a/~/b/key.txt"
+    printf '%s\n' \
+        '[userdir]' 'baseUrl = "http://user.example/v1"' 'apiKeyFile = "~user/key.txt"' \
+        '' '[inside]' 'baseUrl = "http://inside.example/v1"' 'apiKeyFile = "a/~/b/key.txt"' \
+        > "${literal}/providers.toml"
+    printf '%s\n' 'provider = "userdir"' '' '[models]' 'decision = "literal-decision"' 'text = "literal-text"' \
+        > "${literal}/config.toml"
+    literal_stem="${docs}/12-tilde-literal"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${home}" "${kbase}" show-config --config-dir "${literal}" ) > "${literal_stem}.out" 2> "${literal_stem}.log"
+    printf '%s\n' "$?" > "${literal_stem}.exit"
+    set -e
+    literal_ok=0
+    [[ "$(cat "${literal_stem}.exit")" -eq 0 ]] || literal_ok=1
+    grep -qx 'outcome: "done"' "${literal_stem}.out" || literal_ok=1
+    [[ "$(diagnostics "${literal_stem}")" == 0 ]] || literal_ok=1
+    [[ "$(provider_names "${literal_stem}")" == "inside,userdir" ]] || literal_ok=1
+    [[ "$(provider_field "${literal_stem}" userdir usable)" == true ]] || literal_ok=1
+    [[ "$(provider_field "${literal_stem}" inside usable)" == true ]] || literal_ok=1
+    [[ "$(provider_field "${literal_stem}" userdir key-file)" == '~user/key.txt' ]] || literal_ok=1
+    [[ "$(provider_field "${literal_stem}" inside key-file)" == 'a/~/b/key.txt' ]] || literal_ok=1
+    report "${literal_stem}" "${literal_ok}" "show-config --config-dir with ~ not leading"
+    # 10. A home the lookup cannot give, or one that is not an absolute path,
+    #     leaves the spelling as written: the layer is the literal string, and
+    #     nothing stands there.
+    leg=13
+    for home_value in "" "relative/home"; do
+        label=no-home
+        [[ -z "${home_value}" ]] || label=relative-home
+        stem="${docs}/$(printf '%02d' "${leg}")-tilde-${label}"
+        leg=$((leg + 1))
+        set +e
+        ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+            HOME="${home_value}" "${kbase}" show-config --config-dir '~/cfg' ) > "${stem}.out" 2> "${stem}.log"
+        printf '%s\n' "$?" > "${stem}.exit"
+        set -e
+        ok=0
+        [[ "$(cat "${stem}.exit")" -eq 0 ]] || ok=1
+        grep -qx 'outcome: "done"' "${stem}.out" || ok=1
+        [[ "$(layers "${stem}")" == 1 ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 path)" == '~/cfg' ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 source)" == "explicit" ]] || ok=1
+        [[ "$(layer_field "${stem}" 1 exists)" == false ]] || ok=1
+        report "${stem}" "${ok}" "show-config --config-dir '~/cfg' with HOME='${home_value}'"
+    done
+    # 11. configure --create in a repository: --project names <repo>/.kbase
+    #     whether or not it stands, so one call creates both files there from
+    #     their templates and names them as written. No --provider is given, so
+    #     nothing is dialed and stderr says the ids went unchecked; show-config
+    #     then reports that layer holding both, and models resolves the one live
+    #     pool entry — [local] — by the sole-entry rule. A second identical call
+    #     finds every file holding what it would write.
+    cdir="${out}/configure"
+    crepo="${cdir}/repo"
+    chome="${cdir}/home"
+    mkdir -p "${crepo}/nested" "${chome}"
+    git init --quiet "${crepo}"
+    # scrub: what every configure leg runs under — the four inference variables
+    # and the configuration-directory variable unset, so the leg reads and
+    # writes the staged tree alone, and HOME on the staged home.
+    scrub=(-u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE -u KBASE_CONFIG_DIR "HOME=${chome}")
+    create_stem="${docs}/15-configure-create-project"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure --create --project ) > "${create_stem}.out" 2> "${create_stem}.log"
+    printf '%s\n' "$?" > "${create_stem}.exit"
+    set -e
+    create_ok=0
+    [[ "$(cat "${create_stem}.exit")" -eq 0 ]] || create_ok=1
+    grep -qx 'outcome: "done"' "${create_stem}.out" || create_ok=1
+    grep -qx 'provider: null' "${create_stem}.out" || create_ok=1
+    grep -qx "    - \"${crepo}/.kbase/providers.toml\"" "${create_stem}.out" || create_ok=1
+    grep -qx "    - \"${crepo}/.kbase/config.toml\"" "${create_stem}.out" || create_ok=1
+    grep -q 'the model ids were not checked' "${create_stem}.log" || create_ok=1
+    grep -qx '\[local\]' "${crepo}/.kbase/providers.toml" || create_ok=1
+    report "${create_stem}" "${create_ok}" "configure --create --project" "created ${crepo}/.kbase from the templates, ids unchecked"
+    created_show="${docs}/16-configure-created-layer"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" show-config ) > "${created_show}.out" 2> "${created_show}.log"
+    printf '%s\n' "$?" > "${created_show}.exit"
+    set -e
+    created_show_ok=0
+    [[ "$(cat "${created_show}.exit")" -eq 0 ]] || created_show_ok=1
+    [[ "$(layers "${created_show}")" == 2 ]] || created_show_ok=1
+    [[ "$(layer_field "${created_show}" 1 path)" == "${crepo}/.kbase" ]] || created_show_ok=1
+    [[ "$(layer_field "${created_show}" 1 source)" == repository ]] || created_show_ok=1
+    [[ "$(layer_field "${created_show}" 1 exists)" == true ]] || created_show_ok=1
+    [[ "$(layer_field "${created_show}" 1 providersExists)" == true ]] || created_show_ok=1
+    [[ "$(layer_field "${created_show}" 1 configExists)" == true ]] || created_show_ok=1
+    [[ "$(selection_field "${created_show}.out" provider)" == local ]] || created_show_ok=1
+    [[ "$(selection_field "${created_show}.out" rule)" == sole-entry ]] || created_show_ok=1
+    # The template writes both categories blank, which is exactly the
+    # fresh-install diagnostic: one item naming models.decision.
+    [[ "$(diagnostics "${created_show}")" == 1 ]] || created_show_ok=1
+    report "${created_show}" "${created_show_ok}" "show-config over the created repository layer"
+    created_models="${docs}/17-configure-models"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" models --timeout 300ms ) > "${created_models}.out" 2> "${created_models}.log"
+    printf '%s\n' "$?" > "${created_models}.exit"
+    set -e
+    created_models_ok=0
+    grep -qx 'provider: "local"' "${created_models}.out" || created_models_ok=1
+    # The template's live endpoint is a host that does not answer here, so the
+    # request may fail; what this leg checks is that the sole entry was chosen,
+    # which a refusal would contradict.
+    if grep -qx 'outcome: "refused"' "${created_models}.out"; then created_models_ok=1; fi
+    report "${created_models}" "${created_models_ok}" "models over the created pool" "the sole entry local selected"
+    again_stem="${docs}/18-configure-unchanged"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure --create --project ) > "${again_stem}.out" 2> "${again_stem}.log"
+    printf '%s\n' "$?" > "${again_stem}.exit"
+    set -e
+    again_ok=0
+    [[ "$(cat "${again_stem}.exit")" -eq 0 ]] || again_ok=1
+    grep -qx 'outcome: "unchanged"' "${again_stem}.out" || again_ok=1
+    grep -qx 'written: \[\]' "${again_stem}.out" || again_ok=1
+    report "${again_stem}" "${again_ok}" "configure --create --project, second call" "both files already hold what it would write"
+    # 12. A --provider the pool does not hold refuses before anything is
+    #     written: the item names the target layer's providers.toml by its
+    #     absolute path, and offers the creation remedy. Both files still hold
+    #     exactly what the previous call left.
+    pool_before="$(cksum "${crepo}/.kbase/providers.toml" "${crepo}/.kbase/config.toml")"
+    unknown_stem="${docs}/19-configure-unknown-provider"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure --create --project \
+        --provider nosuch --model-map decision=d,text=t ) > "${unknown_stem}.out" 2> "${unknown_stem}.log"
+    printf '%s\n' "$?" > "${unknown_stem}.exit"
+    set -e
+    unknown_ok=0
+    [[ "$(cat "${unknown_stem}.exit")" -eq 1 ]] || unknown_ok=1
+    grep -qx 'outcome: "refused"' "${unknown_stem}.out" || unknown_ok=1
+    [[ "$(grep -c '^    - check:' "${unknown_stem}.out")" == 1 ]] || unknown_ok=1
+    [[ "$(item_field "${unknown_stem}.out" refusals check)" == provider ]] || unknown_ok=1
+    [[ "$(item_field "${unknown_stem}.out" refusals path)" == "${crepo}/.kbase/providers.toml" ]] || unknown_ok=1
+    [[ "$(item_field "${unknown_stem}.out" refusals key)" == --provider ]] || unknown_ok=1
+    [[ "$(item_field "${unknown_stem}.out" refusals remedy)" == "kbase configure --create" ]] || unknown_ok=1
+    grep -q 'baseUrl' "${unknown_stem}.out" || unknown_ok=1
+    [[ "$(cksum "${crepo}/.kbase/providers.toml" "${crepo}/.kbase/config.toml")" == "${pool_before}" ]] || unknown_ok=1
+    report "${unknown_stem}" "${unknown_ok}" "configure --create --project --provider nosuch" "refused against the absolute providers.toml, nothing written"
+    # 13. --config-dir and --project name different directories, so together
+    #     they are refused as usage, naming --project, and nothing is created.
+    conflict="${cdir}/conflict"
+    conflict_stem="${docs}/20-configure-conflict"
+    set +e
+    ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure --create --project \
+        --config-dir "${conflict}" ) > "${conflict_stem}.out" 2> "${conflict_stem}.log"
+    printf '%s\n' "$?" > "${conflict_stem}.exit"
+    set -e
+    conflict_ok=0
+    [[ "$(cat "${conflict_stem}.exit")" -eq 1 ]] || conflict_ok=1
+    grep -qx 'outcome: "refused"' "${conflict_stem}.out" || conflict_ok=1
+    [[ "$(item_field "${conflict_stem}.out" refusals check)" == usage ]] || conflict_ok=1
+    [[ "$(item_field "${conflict_stem}.out" refusals key)" == --project ]] || conflict_ok=1
+    [[ ! -e "${conflict}" ]] || conflict_ok=1
+    report "${conflict_stem}" "${conflict_ok}" "configure --create --project --config-dir" "refused naming --project, no directory created"
+    # 14. --config-dir into an empty directory creates both files there: the
+    #     directory read is the directory written.
+    flagdir="${cdir}/flagdir"
+    mkdir -p "${flagdir}"
+    flag_stem="${docs}/21-configure-config-dir"
+    set +e
+    ( cd "${work}" && env "${scrub[@]}" "${kbase}" configure --create --config-dir "${flagdir}" ) > "${flag_stem}.out" 2> "${flag_stem}.log"
+    printf '%s\n' "$?" > "${flag_stem}.exit"
+    set -e
+    flag_ok=0
+    [[ "$(cat "${flag_stem}.exit")" -eq 0 ]] || flag_ok=1
+    grep -qx 'outcome: "done"' "${flag_stem}.out" || flag_ok=1
+    grep -qx "    - \"${flagdir}/providers.toml\"" "${flag_stem}.out" || flag_ok=1
+    grep -qx "    - \"${flagdir}/config.toml\"" "${flag_stem}.out" || flag_ok=1
+    [[ -f "${flagdir}/providers.toml" && -f "${flagdir}/config.toml" ]] || flag_ok=1
+    report "${flag_stem}" "${flag_ok}" "configure --create --config-dir into an empty directory" "both files created there"
+    # 15. --project outside a worktree refuses, naming the start directory and
+    #     the git init the tool does not run, and creates nothing. The run
+    #     directory is a mktemp tree, somewhere under no repository at all — the
+    #     project's own transient directory sits in one.
+    outside="$(mktemp -d)"
+    outside_stem="${docs}/22-configure-outside-worktree"
+    set +e
+    ( cd "${outside}" && env "${scrub[@]}" "${kbase}" configure --create --project ) > "${outside_stem}.out" 2> "${outside_stem}.log"
+    printf '%s\n' "$?" > "${outside_stem}.exit"
+    set -e
+    outside_ok=0
+    [[ "$(cat "${outside_stem}.exit")" -eq 1 ]] || outside_ok=1
+    grep -qx 'outcome: "refused"' "${outside_stem}.out" || outside_ok=1
+    [[ "$(item_field "${outside_stem}.out" refusals check)" == worktree ]] || outside_ok=1
+    [[ "$(item_field "${outside_stem}.out" refusals path)" == "${outside}" ]] || outside_ok=1
+    [[ "$(item_field "${outside_stem}.out" refusals remedy)" == "git init" ]] || outside_ok=1
+    [[ ! -e "${outside}/.kbase" ]] || outside_ok=1
+    rm -rf "${outside}"
+    report "${outside_stem}" "${outside_ok}" "configure --create --project outside a worktree" "refused on worktree, nothing created"
+    # The same report over MCP, from a directory holding no KB: the tool binds
+    # the verb (I9), and a verb that resolves no KB answers there.
+    printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"config-recipe","version":"1"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"show-config","arguments":{}}}' \
+        > "${out}/mcp.requests.jsonl"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE \
+        HOME="${home}" KBASE_CONFIG_DIR="${dirs}/both" "${kbase}" mcp < "${out}/mcp.requests.jsonl" ) > "${out}/mcp.actual.jsonl" 2> "${out}/mcp.log"
+    printf '%s\n' "$?" > "${out}/mcp.exit"
+    set -e
+    call="$(awk 'index($0, "\"id\":2") { print; exit }' "${out}/mcp.actual.jsonl")"
+    mcp_ok=0
+    [[ -n "${call}" ]] || mcp_ok=1
+    [[ "${call}" == *'"isError":false'* ]] || mcp_ok=1
+    [[ "${call}" == *"\"path\":\"${dirs}/both\""* ]] || mcp_ok=1
+    [[ "${call}" == *'"source":"environment"'* ]] || mcp_ok=1
+    [[ "${call}" == *'"providersExists":true'* ]] || mcp_ok=1
+    [[ "${call}" == *'"configExists":true'* ]] || mcp_ok=1
+    [[ "$(grep -o '"check":"provider"' <<< "${call}" | wc -l | tr -d ' ')" == 2 ]] || mcp_ok=1
+    printf 'tools/call show-config\t-\t%s\t%s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/mcp.actual.jsonl" >> "${out}/config.tsv"
+    printf '  %s tools/call show-config over MCP: exit %s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/mcp.exit")"
+    [[ "${mcp_ok}" -eq 0 ]] || status=1
+    {{just_executable()}} _write-evidence "${out}" "test-integration-config" \
+      "three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_API_KEY_FILE HOME={{CONFIG_OUT_DIR}}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, exactly one layer naming the directory with its source and whether it and each of its two files stand, its diagnostics count, and that the key-file value appears nowhere on stdout\none run over both with the flag route sets KBASE_TEXT=fixture-env-text (NN-07-both-flag.out): checked for that value in inference.text, environment as text's source, the flag's layer as decision's, base-url's and key's, and the same two diagnostics the run without it has\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providersExists and configExists, and the layer each resolved field names: repository for the endpoint, the key and the decision id, global for the text id\nconfigure/: a staged git repository with an empty Home, and the configuration legs run under it — the four inference variables and KBASE_CONFIG_DIR unset, HOME on configure/home. docs/15-configure-create-project.out is configure --create --project from configure/repo/nested, checked for outcome done, null provider, both repository paths listed written, the unchecked-ids line on stderr and a live [local] in the created providers.toml; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists/providersExists/configExists true, selection local by sole-entry, and the one diagnostic a blank models.decision leaves; docs/17-configure-models.out is models --timeout 300ms over the created pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is the same configure again, checked for unchanged with an empty written list; docs/19-configure-unknown-provider.out is configure --create --project --provider nosuch, checked for one provider refusal naming the absolute configure/repo/.kbase/providers.toml, key --provider, remedy kbase configure --create, and both files unchanged by cksum; docs/20-configure-conflict.out is the same flags plus --config-dir, checked for one usage refusal keyed --project with no directory created; docs/21-configure-config-dir.out is configure --create --config-dir into an empty directory, checked for both files written there; docs/22-configure-outside-worktree.out is configure --create --project from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count"
+    if [[ "${status}" -ne 0 ]]; then
+        printf 'integration(test-integration-config): a config check failed — see config.tsv\n'
+        exit 1
+    fi
+    printf 'integration(test-integration-config) ok\n'
+
 # The omnibus composes the HERMETIC recipes and writes no log of its own: each
 # already preserves its full output under its own name, and a second copy of
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
 [doc("run every hermetic integration test (the ones needing pandoc, python3, the adjagent clone or a provider are excluded; run those by name)")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-mcp
+test-integration: test-integration-results-fixture test-integration-init test-integration-mcp test-integration-config
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

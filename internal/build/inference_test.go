@@ -87,13 +87,13 @@ func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamR
 
 func (a *answering) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
 
-// SystemOne answers the letter asks: the state and the question's key name
+// Decision answers the letter asks: the state and the question's key name
 // the ask, and the answer is a confidence over the offered letters keyed by
 // their criteria — a noul question's true-letter taking the noul figure and
 // the false letter the remainder. Each answer is one figure the script names
 // per ask, so Decide returns the letter the script holds. A figure outside
 // zero to one is a malformed answer, the seam's unreadable path.
-func (a *answering) SystemOne(_ context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+func (a *answering) Decision(_ context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
 	a.mu.Lock()
 	a.calls++
 	q := req.Questions[0]
@@ -173,7 +173,10 @@ func script(system, prompt string) string {
 func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
-	opts.Provider = func() (Provider, error) { return Provider{Client: client, Letters: "decision", Overview: "text"}, nil }
+	opts.Provider = func() (Provider, error) {
+		return Provider{Client: client, Letters: "decision", Overview: "text",
+			Name: "solo", Rule: "sole-entry", Layer: "repository"}, nil
+	}
 	return opts
 }
 
@@ -184,6 +187,18 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	outcome, fields := f.build(t, f.asking(provider))
 	if outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	// The result names the endpoint's provenance between state-dir and the
+	// bound, so a reader of a finished build knows which entry received the
+	// corpus without consulting the configuration again.
+	wantKeys := []string{"kb-root", "state-dir", "provider", "provider-rule", "provider-layer", "through"}
+	if keys := fieldKeys(fields); len(keys) < len(wantKeys) || !slices.Equal(keys[:len(wantKeys)], wantKeys) {
+		t.Errorf("result keys = %q, want %q", keys, wantKeys)
+	}
+	for key, want := range map[string]string{"provider": "solo", "provider-rule": "sole-entry", "provider-layer": "repository"} {
+		if got, _ := field(fields, key).(string); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
 	}
 
 	record, ok, err := buildrecords.ReadNodePass(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
@@ -459,11 +474,11 @@ func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (mode
 	return s.reply(ctx, req)
 }
 
-func (s *stopsAfter) SystemOne(ctx context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+func (s *stopsAfter) Decision(ctx context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
 	if s.step() {
 		return model.DecisionResponse{}, errors.New("connection refused")
 	}
-	return s.answering.SystemOne(ctx, req)
+	return s.answering.Decision(ctx, req)
 }
 
 // TestInterruptedAskingStageResumesFromTheAnswerCache: a build whose provider

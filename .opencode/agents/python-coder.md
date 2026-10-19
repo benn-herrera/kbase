@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/python_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Python implementation specialist. Writes idiomatic, readable Python — explicit over implicit, stdlib-first, no over-engineering. Covers type hints, async, testing, packaging, virtual environments, and common ecosystem tooling. Parallel-execution safe. Prefer over generalist-coder for any Python file modification or Python project task."
+description: "Python implementation specialist. Prefer over generalist-coder for any Python file modification or Python project task."
 color: "#3776AB"
 mode: subagent
 ---

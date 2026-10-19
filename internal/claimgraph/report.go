@@ -1,4 +1,4 @@
-// Package claimgraph authors kb_tools' claim graph into a document tree:
+// Package claimgraph authors the claim graph into a document tree:
 // conformance over the Document-Tree Contract, the claim-site inventory read
 // from the document graph's records and the page, the claims the author marked,
 // the edge candidates and their mechanical drafts, the referenced equations,

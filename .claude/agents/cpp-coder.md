@@ -2,7 +2,7 @@
 # !GENERATED! from adjagent/definitions/cpp_coder.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=opus tier=highest=fable,high=opus,medium=sonnet,low=haiku,lowest=haiku stock=highest,high,medium,low,lowest harness=claude
 name: cpp-coder
-description: "C++ implementation specialist. Writes C++ where lifetime is expressed in types, not in comments — RAII, value semantics, owning handles over raw pointers. Covers ownership, moves, templates and concepts, the standard library, concurrency, and the build. Parallel-execution safe. Prefer over generalist-coder for userspace C++ work of any kind."
+description: "C++ implementation specialist. Prefer over generalist-coder for userspace C++ work of any kind."
 model: opus
 color: "#00599C"
 ---

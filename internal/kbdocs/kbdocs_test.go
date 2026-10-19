@@ -76,7 +76,7 @@ func TestStampWritesOnlyWhatIsAbsent(t *testing.T) {
 func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{kb.AgentsRedirectFile: "# old agents file\n"})
-	_, _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin)
+	_, _, err := Stamp(kb.OnDisk(root), "proj", AuthoredKBPin)
 	var r result.Refusal
 	if !errors.As(err, &r) {
 		t.Fatalf("Stamp over an unmigrated CLAUDE.md = %v, want a Refusal", err)
@@ -88,11 +88,11 @@ func TestStampRefusesAnUnmigratedClaudeFile(t *testing.T) {
 
 // TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading: every slot a
 // template names is filled, and no stamped document declares a framework
-// node, which kb_tools would parse from AGENTS.md where invariants.md is
+// node, which a reader would take AGENTS.md for where invariants.md is
 // absent.
 func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 	root := t.TempDir()
-	if _, _, err := Stamp(kb.OnDisk(root), "proj", NoCharterPin); err != nil {
+	if _, _, err := Stamp(kb.OnDisk(root), "proj", AuthoredKBPin); err != nil {
 		t.Fatal(err)
 	}
 	readme, err := Overview("proj", "A passage.", false)
@@ -119,6 +119,22 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 func TestFillRefusesAnUnfilledSlot(t *testing.T) {
 	if _, err := fill(OverviewFile, map[string]string{slotProjectName: "p"}); err == nil || !strings.Contains(err.Error(), "overview-passage") {
 		t.Errorf("fill without the passage = %v, want a refusal naming it", err)
+	}
+}
+
+// TestStampWithNoScopePinLeavesNoBlankRun: a build passes no scope pin, and an
+// empty slot must leave one blank line where it stood, not a run of them.
+func TestStampWithNoScopePinLeavesNoBlankRun(t *testing.T) {
+	root := t.TempDir()
+	if _, _, err := Stamp(kb.OnDisk(root), "proj", ""); err != nil {
+		t.Fatal(err)
+	}
+	agents := readFile(t, filepath.Join(root, kb.AgentsFile))
+	if agents == "" {
+		t.Fatal("AGENTS.md is empty")
+	}
+	if strings.Contains(agents, "\n\n\n") {
+		t.Errorf("AGENTS.md with an empty scope pin carries a run of blank lines:\n%s", agents)
 	}
 }
 
@@ -169,12 +185,12 @@ func TestComposeExcerpts(t *testing.T) {
 
 var (
 	excerptsKBRoot = flag.String("kbdocs.kbroot", "", "a kb-root to compose excerpts over")
-	excerptsWant   = flag.String("kbdocs.want", "", "kb_tools' compose_excerpts text over that kb-root")
+	excerptsWant   = flag.String("kbdocs.want", "", "the expected excerpts text over that kb-root")
 )
 
-// TestExcerptsEqualKbTools compares the excerpts over a tree with kb_tools'
-// own composition over it; test-integration-build-arxiv supplies both.
-func TestExcerptsEqualKbTools(t *testing.T) {
+// TestExcerptsEqualReference compares the excerpts over a tree with the expected
+// composition over it; test-integration-build-arxiv supplies both.
+func TestExcerptsEqualReference(t *testing.T) {
 	if *excerptsKBRoot == "" {
 		t.Skip("no kb-root named; test-integration-build-arxiv supplies one")
 	}
@@ -183,7 +199,7 @@ func TestExcerptsEqualKbTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := readFile(t, *excerptsWant); got.Text != want {
-		t.Errorf("excerpts differ from kb_tools' (%d against %d characters); first difference at character %d",
+		t.Errorf("excerpts differ from the expected text (%d against %d characters); first difference at character %d",
 			chars(got.Text), chars(want), firstDifference([]rune(got.Text), []rune(want)))
 	}
 }
@@ -198,9 +214,9 @@ func firstDifference(a, b []rune) int {
 }
 
 // TestOverviewDigestChunk: the digest sentence fills the digest-chunk slot
-// where the digest is drawn, with the link a kb_tools verify would follow;
-// where it is not, the README names no digest at all — the link that made
-// kb_tools' md-link verify red on a one-volume KB.
+// where the digest is drawn, with the link a verify would follow; where it is
+// not, the README names no digest at all — a link a verify of a one-volume KB
+// would find dead.
 func TestOverviewDigestChunk(t *testing.T) {
 	with, err := Overview("proj", "A passage.", true)
 	if err != nil {

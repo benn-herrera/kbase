@@ -9,8 +9,8 @@ import (
 	"kbase/internal/result"
 )
 
-// Each *Payload function is one query's answer, keyed as kb_cmd --json keys
-// it: a list, or one mapping for show and stats.
+// Each *Payload function is one query's answer: a list, or one mapping for
+// show and stats.
 
 // ResultsKey holds a query's answer in its result document.
 const ResultsKey = "results"
@@ -98,7 +98,7 @@ func weakPointRecord(wp WeakPoint) result.Record {
 
 // DepsPayload is the edges sourced at id — relation, target, a rests-on
 // edge's fraction as its applicability, and the row's context (null where it
-// has none), keyed as kb_cmd --json keys them — or, inverse, the ids of
+// has none) — or, inverse, the ids of
 // every node with an edge to id.
 func DepsPayload(ix *Index, id string, inverse bool) any {
 	if inverse {
@@ -169,8 +169,7 @@ func SubtreePayload(ix *Index, nodePath string) []string {
 
 // ShowPayload is the record of the node carrying id, or false where none
 // does. A claim's record carries, after strengthen_by_count, strengthen_by:
-// its strengthen-by items (item_idx, text, mentioned_ids) in item_idx order,
-// as kb_cmd --json returns them.
+// its strengthen-by items (item_idx, text, mentioned_ids) in item_idx order.
 func ShowPayload(ix *Index, id string) (result.Record, bool) {
 	n, ok := ix.Node(id)
 	if !ok {

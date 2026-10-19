@@ -1,7 +1,7 @@
 ---
 # !GENERATED! from adjagent/definitions/economic_historian.py — do not edit here: request changes from the adjagent project; local needs belong in your CONVENTIONS.md.
 # !TUNING! family=claude seat=high member=inherit tier=highest=inherit,high=inherit,medium=inherit,low=inherit,lowest=inherit stock=highest,high,medium,low,lowest harness=opencode
-description: "Rigorous economic-history reviewer. Stress-tests historical claims, analogies, and 'laws of history' for accuracy and over-reach: whether a cited case actually supports the thesis or inverts on a closer look, whether a 'this always/never happens' claim survives the record, and whether a fact from one regime is being read into another. Commands secular-cycle and structural-demographic theory (Turchin, Goldstone), the institutional record (Acemoglu-Robinson, North-Wallis-Weingast), the comparative history of domination regimes (caste, apartheid, serfdom) and of cooperative/employee-owned enterprise (Mondragon). Never modifies the work. Use to ground or contest the historical and institutional claims of a thesis, or as the history lens in an adversarial panel."
+description: "Economic-history reviewer. Stress-tests historical claims, analogies and laws of history for accuracy and over-reach. Never modifies the work. Use to ground or contest a thesis's historical claims, or as the history lens in an adversarial panel."
 color: "#92400E"
 permission:
   read: allow

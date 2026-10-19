@@ -36,8 +36,7 @@ const (
 // path, and within a document in the order the page carries them. Order is a
 // record's position in that sequence, from 1. A value the page carries in an
 // HTML attribute — an identifier, a reference's type, labels and href, a
-// citation or work key — is spelled as the writer spells the attribute, which
-// is how kb_tools' readers read it.
+// citation or work key — is spelled as the writer spells the attribute.
 type Record struct {
 	Kind     string `json:"kind"`
 	Order    int    `json:"order"`
