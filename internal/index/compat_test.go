@@ -3,6 +3,7 @@ package index
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -168,31 +169,31 @@ func treeDiff(t *testing.T, a, b string) []string {
 }
 
 var (
-	anySolidity    = regexp.MustCompile(`(?m)^- solidity: .*$`)
-	annotation     = regexp.MustCompile(`\(solidity [^)]*\)`)
-	footerLine     = regexp.MustCompile(`(?m)^> \*\*Leaf references:\*\*.*\n`)
-	subtreeField   = regexp.MustCompile(`(?m)^subtree-(claims|experiments): .*$`)
-	pendingScore   = regexp.MustCompile(`(?m)^(- (?:confidence|quality|strength): )\*pending\*$`)
-	pendingApplies = regexp.MustCompile(`\(applicability \*pending\*\)`)
+	anyStrength  = regexp.MustCompile(`(?m)^- strength: .*$`)
+	annotation   = regexp.MustCompile(`\(strength [^)]*\)`)
+	footerLine   = regexp.MustCompile(`(?m)^> \*\*Leaf references:\*\*.*\n`)
+	subtreeField = regexp.MustCompile(`(?m)^subtree-(claims|experiments): .*$`)
+	pendingScore = regexp.MustCompile(`(?m)^(- (?:rigor|strength): )\*pending\*$`)
+	pendingArc   = regexp.MustCompile(`\(bearing \*pending\*\)`)
 )
 
-// erase stales every derived field: the index gone, solidity lines and
-// annotations wrong, footers dropped, aggregates wrong.
+// erase stales every derived field: the index gone, strength lines and
+// premise annotations wrong, footers dropped, aggregates wrong.
 func erase(t *testing.T, root string) {
 	t.Helper()
 	if err := os.RemoveAll(filepath.Join(root, kb.IndexDir)); err != nil {
 		t.Fatal(err)
 	}
 	rewriteMarkdown(t, root, func(text string) string {
-		text = anySolidity.ReplaceAllString(text, "- solidity: 0.33 (stale)")
-		text = annotation.ReplaceAllString(text, "(solidity 0.11)")
+		text = anyStrength.ReplaceAllString(text, "- strength: 0.33 (stale)")
+		text = annotation.ReplaceAllString(text, "(strength 0.11)")
 		text = footerLine.ReplaceAllString(text, "")
 		return subtreeField.ReplaceAllString(text, "subtree-$1: [clm-stale1]")
 	})
 }
 
-// score replaces every pending authored score and applicability with a value
-// from a fixed cycle that crosses every band and includes 0.
+// score replaces every pending authored value and bearing with a value from a
+// fixed cycle that crosses every band and includes 0.
 func score(t *testing.T, root string) {
 	t.Helper()
 	values := []string{"0.95", "0.70", "0.50", "0.30", "0.10", "0.85", "0.00", "1.00", "0.65", "0.45"}
@@ -202,7 +203,7 @@ func score(t *testing.T, root string) {
 		text = pendingScore.ReplaceAllStringFunc(text, func(m string) string {
 			return pendingScore.ReplaceAllString(m, "${1}") + next()
 		})
-		return pendingApplies.ReplaceAllStringFunc(text, func(string) string { return "(applicability " + next() + ")" })
+		return pendingArc.ReplaceAllStringFunc(text, func(string) string { return "(bearing " + next() + ")" })
 	})
 }
 
@@ -298,7 +299,7 @@ func expLeaf(expID, status, strengthens, extra, title string) string {
 	if extra != "" {
 		fields = append(fields, extra)
 	}
-	fields = append(fields, "experiment-nodes:", "  - exp-id: "+expID, "    status: "+status, "    strengthens:")
+	fields = append(fields, "experiment-nodes:", "  - exp-id: "+expID, "    status: "+status, "    rigor: 1.0", "    lifts:")
 	fields = append(fields, nested(strengthens)...)
 	return "---\nkind: leaf\n" + strings.Join(fields, "\n") + "\n---\n[↑ Mini-KB Common](index.md)\n\n# " + title + "\n\nSynthetic experiment leaf body.\n"
 }
@@ -308,21 +309,25 @@ func refLeaf(experiments, title string) string {
 		"]\n---\n[↑ Mini-KB Common](index.md)\n\n## " + title + "\n\nSynthetic by-methodology leaf referencing an experiment.\n"
 }
 
-func supLeaf(supID, supports, title string) string {
-	return "---\nkind: leaf\nno-claim: \"hosts a support node only\"\nsupport-nodes:\n  - sup-id: " + supID + "\n    supports:\n" +
-		strings.Join(nested(supports), "\n") + "\n---\n[↑ Mini-KB Common](index.md)\n\n## " + title + "\n\nSynthetic support leaf body.\n"
+func anaLeaf(anaID, lifts, title string) string {
+	return "---\nkind: leaf\nno-claim: \"hosts an analysis node only\"\nanalysis-nodes:\n  - ana-id: " + anaID + "\n    lifts:\n" +
+		strings.Join(nested(lifts), "\n") + "\n---\n[↑ Mini-KB Common](index.md)\n\n## " + title + "\n\nSynthetic analysis leaf body.\n"
 }
 
 const blocklessDoc = "[↑ Mini-KB Common](../index.md)\n\n## Blockless\n\nSynthetic body.\n"
 
-func edge(source, target, relation, kind, strength, fraction string) string {
-	return fmt.Sprintf(`--- {"source": %q, "target": %q, "relation": %q, "target_kind": %q, "target_solidity_recorded": null, "strength": %s, "context": null, "fraction": %s}`+"\n",
-		source, target, relation, kind, strength, fraction)
+func edge(source, target, relation, kind string, bearing any) string {
+	arc, err := json.Marshal(bearing)
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf(`--- {"source": %q, "target": %q, "relation": %q, "target_kind": %q, "source_strength_recorded": null, "bearing": %s, "context": null}`+"\n",
+		source, target, relation, kind, string(arc))
 }
 
 func stage(block string) func(*testing.T, string) {
-	anchor := "- rationale: synthetic free-standing support; sup_solidity equals quality (no deps)."
-	return replaceIn("common/claim-quality.md", anchor, anchor+"\n"+block)
+	anchor := "- rationale: synthetic free-standing support; its strength equals its rigor (no deps)."
+	return replaceIn("common/claim-rigor.md", anchor, anchor+"\n"+block)
 }
 
 // variants are the reference's verifier tests that change mini-kb, in their
@@ -343,15 +348,15 @@ var variants = []variant{
 	{name: "malformed-claims", mutate: appendTo(".index/claims.yaml", "not-a-json\n")},
 	{name: "absent-sheet", mutate: remove(kb.ClaimGraphFile)},
 	{name: "hand-edited-drawn-sheet", mutate: replaceIn(kb.ClaimGraphFile, "</svg>", "<!-- hand-edited -->\n</svg>")},
-	{name: "orphan-edge", mutate: appendTo(".index/depends-on.yaml", `--- {"source": "clm-aa1111", "target": "clm-zzz999", "target_solidity_recorded": null, "context": null}`+"\n")},
-	{name: "target-kind-mismatch", mutate: appendTo(".index/depends-on.yaml", edge("clm-aa1111", "INVARIANT-S2", "depends", "claim", "null", "null"))},
-	{name: "stale-solidity-line", mutate: restamp("common/claim-quality.md", regexp.MustCompile(`(?m)^- solidity: (0\.\d+) \(`))},
-	{name: "stale-annotation", mutate: restamp("claim-quality.md", regexp.MustCompile(`\(solidity (0\.\d+)\)`))},
-	{name: "cycle", mutate: replaceIn("common/claim-quality.md", "- depends-on:\n  - INVARIANT-S2 (context A",
-		"- depends-on:\n  - clm-hh8888 — Double-Framework-Edge Claim H (solidity 0.70)\n  - INVARIANT-S2 (context A")},
-	{name: "orphan-quality-block", mutate: appendTo("claim-quality.md",
-		"\n\n---\n\n### Quality\n- confidence: *pending*\n- solidity: *pending*\n- rationale: *pending*\n- strengthen-by:\n  - *pending*\n")},
-	{name: "experiment-orphan-target", after: afterReference, mutate: put("common/exp-orphan.md", expLeaf("exp-orph01", "run", "  - clm-zzz999: 1.0", "", "Orphan-Target Experiment"))},
+	{name: "orphan-edge", mutate: appendTo(".index/edges.yaml", `--- {"source": "clm-aa1111", "target": "clm-zzz999", "relation": "supports", "target_kind": "claim", "source_strength_recorded": null, "bearing": "1.0", "context": null}`+"\n")},
+	{name: "target-kind-mismatch", mutate: appendTo(".index/edges.yaml", edge("INVARIANT-S2", "clm-aa1111", "supports", "claim", "1.0"))},
+	{name: "stale-strength-line", mutate: restamp("common/claim-rigor.md", regexp.MustCompile(`(?m)^- strength: (0\.\d+) \(`))},
+	{name: "stale-annotation", mutate: restamp("claim-rigor.md", regexp.MustCompile(`\(strength (0\.\d+)\)`))},
+	{name: "cycle", mutate: replaceIn("common/claim-rigor.md", "- rests-on:\n  - INVARIANT-S2 (context A",
+		"- rests-on:\n  - clm-hh8888 — Double-Framework-Edge Claim H (strength 0.70) (bearing 0.50)\n  - INVARIANT-S2 (context A")},
+	{name: "orphan-rigor-block", mutate: appendTo("claim-rigor.md",
+		"\n\n---\n\n### Rigor\n- rigor: *pending*\n- strength: *pending*\n- rationale: *pending*\n- strengthen-by:\n  - *pending*\n")},
+	{name: "experiment-orphan-target", after: afterReference, mutate: put("common/exp-orphan.md", expLeaf("exp-orph01", "run", "  - clm-zzz999: \"1.0\"", "", "Orphan-Target Experiment"))},
 	{name: "experiment-pending", after: afterReference, mutate: put("common/exp-bench.md", expLeaf("exp-bench1", "pending", "  - clm-gg7777: 0.80", "", "Pending Bench Experiment"))},
 	{name: "experiment-bad-id", after: afterReference, mutate: put("common/exp-bad.md", expLeaf("exp-TOOLONG9", "run", "  - clm-gg7777: 0.50", "", "Negative Experiment"))},
 	{name: "experiment-bad-status", after: afterReference, mutate: put("common/exp-bad.md", expLeaf("exp-neg001", "halfway", "  - clm-gg7777: 0.50", "", "Negative Experiment"))},
@@ -365,22 +370,22 @@ var variants = []variant{
 		p := filepath.Join(root, "common/index.md")
 		writeFile(t, p, regexp.MustCompile(`subtree-experiments: \[[^\]]*\]`).ReplaceAllString(readFile(t, p), "subtree-experiments: []"))
 	}},
-	{name: "support-orphan-target", after: afterReference, mutate: put("common/sup-orphan.md", supLeaf("sup-orph01", "  - clm-zzz999: 1.0", "Orphan-Target Support"))},
-	{name: "support-fraction-below-zero", after: afterReference, mutate: put("common/sup-bad.md", supLeaf("sup-neg001", "  - clm-bb2222: -0.5", "Negative Support"))},
-	{name: "support-fraction-above-one", after: afterReference, mutate: put("common/sup-bad.md", supLeaf("sup-neg001", "  - clm-bb2222: 1.5", "Negative Support"))},
-	{name: "support-bad-id", after: afterReference, mutate: put("common/sup-bad.md", supLeaf("sup-TOOLONG9", "  - clm-bb2222: 1.0", "Negative Support"))},
-	{name: "supports-edge-to-experiment", mutate: appendTo(".index/depends-on.yaml", edge("sup-free01", "exp-bench1", "supports", "claim", "null", "1.0"))},
-	{name: "supports-fraction-in-index", mutate: appendTo(".index/depends-on.yaml", edge("sup-free01", "clm-bb2222", "supports", "claim", "null", "1.5"))},
-	{name: "strengthens-strength-in-index", mutate: appendTo(".index/depends-on.yaml", edge("exp-bench1", "clm-bb2222", "strengthens", "claim", "5.0", "null"))},
-	{name: "zero-on-point-fraction", after: afterReference, mutate: replaceIn("common/sup-free.md", "clm-sb2222: 0.50", "clm-sb2222: 0.0")},
-	{name: "marker-above-heading", mutate: replaceIn("common/claim-quality.md",
+	{name: "analysis-orphan-target", after: afterReference, mutate: put("common/ana-orphan.md", anaLeaf("ana-orph01", "  - clm-zzz999: 1.0", "Orphan-Target Analysis"))},
+	{name: "analysis-bearing-below-zero", after: afterReference, mutate: put("common/ana-bad.md", anaLeaf("ana-neg001", "  - clm-bb2222: \"-0.5\"", "Negative Analysis"))},
+	{name: "analysis-bearing-above-one", after: afterReference, mutate: put("common/ana-bad.md", anaLeaf("ana-neg001", "  - clm-bb2222: \"1.5\"", "Negative Analysis"))},
+	{name: "analysis-bad-id", after: afterReference, mutate: put("common/ana-bad.md", anaLeaf("ana-TOOLONG9", "  - clm-bb2222: 1.0", "Negative Analysis"))},
+	{name: "supports-edge-to-experiment", mutate: appendTo(".index/edges.yaml", edge("ana-free01", "exp-bench1", "supports", "claim", "1.0"))},
+	{name: "supports-bearing-in-index", mutate: appendTo(".index/edges.yaml", edge("ana-free01", "clm-bb2222", "supports", "claim", "1.5"))},
+	{name: "lifts-bearing-in-index", mutate: appendTo(".index/edges.yaml", edge("exp-bench1", "clm-bb2222", "lifts", "claim", "5.0"))},
+	{name: "zero-bearing", after: afterReference, mutate: replaceIn("common/ana-free.md", "clm-sb2222: 0.50", "clm-sb2222: \"0.0\"")},
+	{name: "marker-above-heading", mutate: replaceIn("common/claim-rigor.md",
 		"## Pending Upstream Claim F\n<!-- id: clm-ff6666 -->", "<!-- id: clm-ff6666 -->\n## Pending Upstream Claim F")},
-	{name: "marker-under-another-heading", mutate: replaceIn("common/claim-quality.md",
+	{name: "marker-under-another-heading", mutate: replaceIn("common/claim-rigor.md",
 		"## Pending Upstream Claim F\n<!-- id: clm-ff6666 -->", "## Preamble\n\nnot an entry.\n\n<!-- id: clm-ff6666 -->\n\n## Pending Upstream Claim F")},
-	{name: "staged-fan-out-agrees", mutate: stage("- supports:\n  - clm-sb1111: 1.0\n  - clm-sb2222: 0.50\n")},
-	{name: "staged-fan-out-extra", mutate: stage("- supports:\n  - clm-sb1111: 1.0\n  - clm-sb2222: 0.50\n  - clm-sb3333: 0.25\n")},
-	{name: "staged-fan-out-short", mutate: stage("- supports:\n  - clm-sb1111: 1.0\n")},
-	{name: "staged-fan-out-differs", mutate: stage("- supports:\n  - clm-sb1111: 1.0\n  - clm-sb2222: 0.75\n")},
+	{name: "staged-fan-out-agrees", mutate: stage("- lifts:\n  - clm-sb1111: \"1.0\"\n  - clm-sb2222: \"0.50\"\n")},
+	{name: "staged-fan-out-extra", mutate: stage("- lifts:\n  - clm-sb1111: \"1.0\"\n  - clm-sb2222: \"0.50\"\n  - clm-sb3333: \"0.25\"\n")},
+	{name: "staged-fan-out-short", mutate: stage("- lifts:\n  - clm-sb1111: \"1.0\"\n")},
+	{name: "staged-fan-out-differs", mutate: stage("- lifts:\n  - clm-sb1111: \"1.0\"\n  - clm-sb2222: \"0.75\"\n")},
 	{name: "blockless-leaf", mutate: put("common/blockless.md", blocklessDoc)},
 	{name: "blockless-index", mutate: put("common/blockless/index.md", blocklessDoc)},
 	{name: "refreshed-by-kbase", after: afterKbase, mutate: remove(kb.ClaimGraphFile)},

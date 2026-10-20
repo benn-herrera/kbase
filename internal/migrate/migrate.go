@@ -24,7 +24,10 @@ type converter struct {
 	Convert  func(Files) (Files, []string, error)
 }
 
-var converters = []converter{{From: version090, To: version100, Convert: convert090To100}}
+var converters = []converter{
+	{From: version090, To: version100, Convert: convert090To100},
+	{From: version100, To: version200, Convert: convert100To200},
+}
 
 // Chain converts files from version from to version to through the
 // registered converters in version order. The obsolete paths are the union of

@@ -48,6 +48,7 @@ var documentedSubKeys = map[string][]string{
 	"show-config.config":       {"provider", "models"},
 	"show-config.selection":    {"provider", "rule", "detail"},
 	"show-config.inference":    {"name", "base-url", "decision", "text", "sources"},
+	"migration":                {"from", "to", "note"},
 	"cancelled":                {"stage", "unit"},
 	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
@@ -65,7 +66,7 @@ func keysFor(verb string) string {
 	case verb == "wait":
 		// wait prints the status document for the store it waited on.
 		return "status"
-	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "solidity-below", "subtree", "weak-points"}, verb):
+	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "weak-points"}, verb):
 		return "list-query"
 	}
 	return verb
@@ -157,6 +158,11 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 	keys = keys[1:]
 	if verb != "models" && verb != "configure" && verb != "show-config" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
+		// A migrated KB's record is conditional: present after kb-root and
+		// nowhere else, so a document carrying one is checked without it.
+		if len(keys) > 0 && keys[0] == "migration" {
+			keys = keys[1:]
+		}
 	} else if verb == "init" {
 		// A kb-root refusal names a standing kb-root/, so the document must
 		// carry the key; one that names none — the usage refusal, the
@@ -210,6 +216,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks", "findings"} {
 		nested(key, "item")
 	}
+	nested("migration", "migration")
 	nested(toolresult.CancelledKey, "cancelled")
 	// Every record the table nests under this verb's result is checked, in the
 	// table's own names: a record naming a key the table does not document, or

@@ -1,6 +1,6 @@
 ---
 kind: entry-point
-kb-format: "1.0.0"
+kb-format: "2.0.0"
 ---
 
 # KB

@@ -13,7 +13,8 @@ func init() {
 		Short: "the index census, the build-band distribution and the rework dashboard",
 		Long: `stats counts the nodes of each kind and the records of each index file,
 the claims in each build band, and lists the ten highest-leverage weak points
-and the ten lowest-solidity claims.`,
+and the ten lowest-strength claims. The value surfaces read the derivation;
+the counts and the census are structural.`,
 		Args: cobra.NoArgs,
 	}, false, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.StatsPayload(ix))

@@ -603,14 +603,14 @@ func TestSpineStampsTheFormat(t *testing.T) {
 	if dirty, err := f.ledger(t).Dirty(); err != nil || len(dirty) > 0 {
 		t.Errorf("the stamp is not in the spine's boundary: dirty %q, %v", dirty, err)
 	}
-	writeFile(t, entry, strings.Replace(string(b), `"`+kb.FormatVersion+`"`, `"2.0.0"`, 1))
+	writeFile(t, entry, strings.Replace(string(b), `"`+kb.FormatVersion+`"`, `"3.0.0"`, 1))
 	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
 	if items, _ := field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != "kb-format" {
-		t.Errorf("a resume over a KB stamped 2.0.0 = %s %v, want refused naming the format", outcome, fields)
+		t.Errorf("a resume over a KB stamped 3.0.0 = %s %v, want refused naming the format", outcome, fields)
 	}
 }
 

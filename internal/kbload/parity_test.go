@@ -26,14 +26,21 @@ var (
 	old090ClaimOrExpRE  = kb.PyRE(kb.IDBody("clm", "exp"))
 	old090Tier2RE       = kb.PyRE(`(?s)<!--\s*claim-quality:\s*(.*?)\s*-->`)
 	old090Strengthens   = kb.PyRE(`^\s*(?:-\s*)?(` + kb.IDBody("clm") + `)\s*:\s*(-?\d+(?:\.\d+)?)\s*$`)
+	old090SupportsPair  = kb.PyRE(`^\s*(?:-\s*)?(` + kb.IDBody("clm") + `)\s*:\s*(-?\d+(?:\.\d+)?|\*pending\*)\s*$`)
 	old090Heading       = kb.PyRE(`^(#{1,6})\s+(.*)$`)
 	old090ExpIDFull     = kb.PyRE(`^` + kb.IDBody("exp") + `$`)
-	old090SupIDFull     = kb.PyRE(`^` + kb.IDBody("sup") + `$`)
+	old090SupIDFull     = kb.PyRE(`^` + old090SupID + `$`)
 	old090Declarations  = []*regexp.Regexp{
 		kb.PyRE(`(?m)^\s*-?\s*exp-id:\s*(` + kb.IDBody("exp") + `)\s*$`),
-		kb.PyRE(`(?m)^\s*-?\s*sup-id:\s*(` + kb.IDBody("sup") + `)\s*$`),
+		kb.PyRE(`(?m)^\s*-?\s*sup-id:\s*(` + old090SupID + `)\s*$`),
 	}
 )
+
+// old090SupID is a 0.9.0 support node's id, which IDBody no longer spells.
+const old090SupID = `sup-[a-z0-9]{6}`
+
+// anaID is a 0.9.0 support id under the 2.0.0 prefix the converter writes.
+func anaID(id string) string { return "ana-" + strings.TrimPrefix(id, "sup-") }
 
 func old090Bounded(re *regexp.Regexp, s string) []string {
 	boundary := func(i int) bool {
@@ -202,7 +209,7 @@ func old090Experiments(text, rel string) ([]kb.ExperimentNode, error) {
 	kind, hasRefs, inStrengthens := "", false, false
 	var ids []string
 	var statuses []*string
-	var pairs [][]kb.StrengthensPair
+	var pairs [][]kb.Edge
 	for _, line := range kb.SplitLines(text[m[2]:m[3]]) {
 		s := kb.Strip(line)
 		if s == "" {
@@ -210,7 +217,8 @@ func old090Experiments(text, rel string) ([]kb.ExperimentNode, error) {
 		}
 		if p := old090Strengthens.FindStringSubmatch(line); inStrengthens && p != nil && len(pairs) > 0 {
 			v, _ := strconv.ParseFloat(p[2], 64)
-			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], kb.StrengthensPair{ClaimID: p[1], Strength: v})
+			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], kb.Edge{Source: ids[len(ids)-1], Target: p[1],
+				Relation: kb.RelationLifts, TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: v}})
 			continue
 		}
 		key, value, ok := old090Key(s)
@@ -255,31 +263,39 @@ func old090Experiments(text, rel string) ([]kb.ExperimentNode, error) {
 			return nil, old090Malformed("%s: experiment %s has invalid status", rel, id)
 		}
 		for _, p := range pairs[i] {
-			if !(0 <= p.Strength && p.Strength <= 1) {
+			if !(0 <= p.Bearing.Value && p.Bearing.Value <= 1) {
 				return nil, old090Malformed("%s: experiment %s strength out of range", rel, id)
 			}
 		}
+		rigor := 1.0
 		nodes = append(nodes, kb.ExperimentNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: kb.Slugify(heading),
-			Status: *statuses[i], Strengthens: pairs[i]})
+			Status: *statuses[i], Rigor: &rigor, Lifts: pairs[i]})
 	}
 	return nodes, nil
 }
 
-func old090Supports(text, rel string) ([]kb.SupportNode, error) {
+func old090Supports(text, rel string) ([]kb.AnalysisNode, error) {
 	m := old090Find(text)
 	if m == nil {
 		return nil, nil
 	}
 	kind, inSupports := "", false
 	var ids []string
-	var pairs [][]kb.SupportPair
+	var pairs [][]kb.Edge
 	for _, line := range kb.SplitLines(text[m[2]:m[3]]) {
 		s := kb.Strip(line)
 		if s == "" {
 			continue
 		}
-		if p, ok := kb.ParseSupportPair(line); inSupports && ok && len(pairs) > 0 {
-			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], p)
+		if p := old090SupportsPair.FindStringSubmatch(line); inSupports && p != nil && len(pairs) > 0 {
+			bearing := kb.Bearing{}
+			if p[2] == kb.PendingLiteral {
+				bearing.Pending = true
+			} else {
+				bearing.Value, _ = strconv.ParseFloat(p[2], 64)
+			}
+			pairs[len(pairs)-1] = append(pairs[len(pairs)-1], kb.Edge{Source: anaID(ids[len(ids)-1]), Target: p[1],
+				Relation: kb.RelationLifts, TargetKind: kb.NodeKindClaim, Bearing: bearing})
 			continue
 		}
 		key, value, ok := old090Key(s)
@@ -303,17 +319,17 @@ func old090Supports(text, rel string) ([]kb.SupportNode, error) {
 		return nil, nil
 	}
 	heading := old090FirstHeading(text)
-	var nodes []kb.SupportNode
+	var nodes []kb.AnalysisNode
 	for i, id := range ids {
 		if !old090SupIDFull.MatchString(id) {
 			return nil, old090Malformed("%s: malformed sup-id %q", rel, id)
 		}
 		for _, p := range pairs[i] {
-			if !p.Fraction.Pending && !(0 <= p.Fraction.Value && p.Fraction.Value <= 1) {
+			if !p.Bearing.Pending && !(0 <= p.Bearing.Value && p.Bearing.Value <= 1) {
 				return nil, old090Malformed("%s: support %s fraction out of range", rel, id)
 			}
 		}
-		nodes = append(nodes, kb.SupportNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: kb.Slugify(heading), Supports: pairs[i]})
+		nodes = append(nodes, kb.AnalysisNode{ID: anaID(id), Title: heading, CanonicalPath: rel, CanonicalAnchor: kb.Slugify(heading), Lifts: pairs[i]})
 	}
 	return nodes, nil
 }
@@ -345,8 +361,8 @@ func old090Index(text, rel string) (*kb.IndexRecord, error) {
 }
 
 // old090Discover is kb.Discover as it read a 0.9.0 KB: the registers through
-// kb's register readers, which the format change does not touch, and the
-// documents through the frozen 0.9.0 readers above.
+// kb's register readers, and the documents through the frozen 0.9.0 readers
+// above.
 func old090Discover(src *kb.Source) (kb.State, error) {
 	known, err := kb.KnownClaimIDs(src)
 	if err != nil {
@@ -357,7 +373,7 @@ func old090Discover(src *kb.Source) (kb.State, error) {
 		return kb.State{}, err
 	}
 	var st kb.State
-	supportQ := map[string]kb.SupportQuality{}
+	supportQ := map[string]kb.AnalysisEntry{}
 	for _, rel := range regs {
 		text, err := src.ReadText(src.KBPath(rel))
 		if err != nil {
@@ -365,7 +381,10 @@ func old090Discover(src *kb.Source) (kb.State, error) {
 		}
 		st.Works = append(st.Works, kb.ParseWorkEntries(text, rel)...)
 		st.ClaimEntries = append(st.ClaimEntries, kb.ParseClaimEntries(text, rel, known, log.Discard())...)
-		_, sq := kb.ParseSupportEntries(text, rel, known, log.Discard())
+		_, sq, err := kb.ParseAnalysisEntries(text, rel, known, log.Discard())
+		if err != nil {
+			return kb.State{}, err
+		}
 		for id, q := range sq {
 			supportQ[id] = q
 		}
@@ -374,7 +393,7 @@ func old090Discover(src *kb.Source) (kb.State, error) {
 	if err != nil {
 		return kb.State{}, err
 	}
-	var hosted []kb.SupportNode
+	var hosted []kb.AnalysisNode
 	for _, rel := range docs {
 		text, err := src.ReadText(src.KBPath(rel))
 		if err != nil {
@@ -409,10 +428,10 @@ func old090Discover(src *kb.Source) (kb.State, error) {
 	}
 	for _, s := range hosted {
 		q := supportQ[s.ID]
-		s.Quality, s.DependsOn, s.Rationale, s.Solidity, s.SolidityTrace = q.Quality, q.DependsOn, q.Rationale, q.Solidity, q.SolidityTrace
-		st.Supports = append(st.Supports, s)
+		s.Rigor, s.Premises, s.Rationale, s.Strength, s.StrengthTrace = q.Rigor, q.Premises, q.Rationale, q.Strength, q.StrengthTrace
+		st.Analyses = append(st.Analyses, s)
 	}
-	if st.FrameworkNodes, err = kb.ParseFrameworkNodes(src); err != nil {
+	if st.Axioms, err = kb.ParseAxioms(src); err != nil {
 		return kb.State{}, err
 	}
 	slices.SortStableFunc(st.Works, func(a, b kb.ExternalWork) int { return strings.Compare(a.ID, b.ID) })
@@ -438,8 +457,12 @@ func old090Declared(src *kb.Source) (map[string]string, error) {
 		}
 		for _, re := range old090Declarations {
 			for _, d := range re.FindAllStringSubmatch(text[m[2]:m[3]], -1) {
-				if _, ok := declared[d[1]]; !ok {
-					declared[d[1]] = rel
+				id := d[1]
+				if strings.HasPrefix(id, "sup-") {
+					id = anaID(id)
+				}
+				if _, ok := declared[id]; !ok {
+					declared[id] = rel
 				}
 			}
 		}
@@ -552,13 +575,13 @@ func normalized(st kb.State) kb.State {
 		}
 	}
 	for i := range st.Experiments {
-		if len(st.Experiments[i].Strengthens) == 0 {
-			st.Experiments[i].Strengthens = nil
+		if len(st.Experiments[i].Lifts) == 0 {
+			st.Experiments[i].Lifts = nil
 		}
 	}
-	for i := range st.Supports {
-		if len(st.Supports[i].Supports) == 0 {
-			st.Supports[i].Supports = nil
+	for i := range st.Analyses {
+		if len(st.Analyses[i].Lifts) == 0 {
+			st.Analyses[i].Lifts = nil
 		}
 	}
 	for i := range st.Indexes {

@@ -14,7 +14,7 @@ import (
 // returns its id.
 func insertClaim(t *testing.T, root, title, extra string) string {
 	t.Helper()
-	res := run(t, root, "insert-claim-entry", "entry:\n- register: claim-quality.md\n  title: "+title+"\n  rigor: 0.5\n  rationale: Shown.\n"+extra, false)
+	res := run(t, root, "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: "+title+"\n  rigor: 0.5\n  rationale: Shown.\n"+extra, false)
 	if res.Outcome != result.Done || len(res.IDs) != 1 {
 		t.Fatalf("insert %s: %+v", title, res)
 	}
@@ -27,7 +27,7 @@ func insertClaim(t *testing.T, root, title, extra string) string {
 // refused naming the cycle.
 func TestDemotedEdges(t *testing.T) {
 	root := seedKB(t)
-	b := insertClaim(t, root, "Result B", "  depends-on:\n  - id: "+seedClaim+"\n")
+	b := insertClaim(t, root, "Result B", "  rests-on:\n  - id: "+seedClaim+"\n")
 	c := insertClaim(t, root, "Result C", "")
 	d := insertClaim(t, root, "Result D", "")
 	register := func() string { return snapshot(t, root)[kb.RegisterFile] }
@@ -52,9 +52,9 @@ func TestDemotedEdges(t *testing.T) {
 	if text := register(); !strings.Contains(text, "- demoted:\n  - "+b+" — Result B (origin cited)\n  - "+c+" — Result C (origin inferred)\n") {
 		t.Fatalf("the demoted list is not spelled as wanted:\n%s", text)
 	}
-	index := snapshot(t, root)[kb.IndexDir+"/"+kb.IndexFileName("depends-on")]
-	if !strings.Contains(index, `"source": "`+seedClaim+`", "target": "`+b+`", "relation": "demoted", "target_kind": "claim", "target_solidity_recorded": null, `+
-		`"strength": null, "context": null, "fraction": null, "origin": "cited"}`) {
+	index := snapshot(t, root)[kb.IndexDir+"/"+kb.IndexFileName(kb.IndexEdges)]
+	if !strings.Contains(index, `"source": "`+seedClaim+`", "target": "`+b+`", "relation": "demoted", "target_kind": "claim", "source_strength_recorded": null, `+
+		`"bearing": null, "context": null, "origin": "cited"}`) {
 		t.Errorf("no demoted index row with its origin:\n%s", index)
 	}
 
@@ -77,16 +77,24 @@ func TestDemotedEdges(t *testing.T) {
 
 	twice(ResolveDemoted, "entry:\n- id: "+seedClaim+"\n  target: "+c+"\n  action: restore\n", []Resolution{{seedClaim, c, resolvedRestore}})
 	text := register()
-	held := readRegister(text).claims[seedClaim]
-	if !strings.Contains(text, "- depends-on:\n  - "+c+" — Result C (solidity ") ||
+	read, err := readRegister(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := read.claims[seedClaim]
+	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+c+" — Result C (strength ") ||
 		slices.ContainsFunc(held.Demoted, func(e kb.Edge) bool { return e.Target == c }) {
-		t.Errorf("the restore did not rewrite the demoted bullet as a depends-on bullet:\n%s", text)
+		t.Errorf("the restore did not rewrite the demoted bullet as a rests-on bullet:\n%s", text)
 	}
 	twice(ResolveDemoted, "entry:\n- id: "+seedClaim+"\n  target: "+b+"\n  action: remove\n", []Resolution{{seedClaim, b, resolvedRemove}})
 	if text := register(); strings.Contains(text, b+" — Result B (origin") {
 		t.Errorf("the removed demoted bullet stands:\n%s", text)
 	}
-	seed := readRegister(register()).claims[seedClaim]
+	read, err = readRegister(register())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := read.claims[seedClaim]
 	if len(seed.Demoted) != 0 || strings.Count(register(), "- demoted:") != 2 {
 		t.Errorf("the emptied demoted list kept its header: %+v\n%s", seed.Demoted, register())
 	}
@@ -96,7 +104,7 @@ func TestDemotedEdges(t *testing.T) {
 	}
 }
 
-// TestDemoteClaimEdge turns an entry's existing depends-on bullet into a
+// TestDemoteClaimEdge turns an entry's existing rests-on bullet into a
 // demoted row of its own entry: the bullet and its emptied list's header go,
 // the demoted row lands with its context and the given origin, a re-issue
 // over the row alone is unchanged and byte-identical, a depends bullet
@@ -104,7 +112,7 @@ func TestDemotedEdges(t *testing.T) {
 // naming both, and a pair with no depends edge is refused.
 func TestDemoteClaimEdge(t *testing.T) {
 	root := seedKB(t)
-	b := insertClaim(t, root, "Result B", "  depends-on:\n  - id: "+seedClaim+"\n    context: the seed it rests on\n")
+	b := insertClaim(t, root, "Result B", "  rests-on:\n  - id: "+seedClaim+"\n    context: the seed it rests on\n")
 	other := insertClaim(t, root, "Result C", "")
 	demote := "entry:\n- id: " + b + "\n  target: " + seedClaim + "\n  origin: " + kb.OriginInferred + "\n  context: cut in the cycle walk\n"
 
@@ -113,24 +121,32 @@ func TestDemoteClaimEdge(t *testing.T) {
 		t.Fatalf("demote: %+v", res)
 	}
 	text := snapshot(t, root)[kb.RegisterFile]
-	if strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+seedClaim+" — Seed Result") {
+	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
 		t.Errorf("B's demoted depends bullet stands:\n%s", text)
 	}
-	if strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+b+" — Result B") {
-		t.Errorf("B's emptied depends-on list kept its header:\n%s", text)
+	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+b+" — Result B") {
+		t.Errorf("B's emptied rests-on list kept its header:\n%s", text)
 	}
 	demotedRow := "- " + kb.RelationDemoted + ":\n  - " + seedClaim + " — Seed Result (origin " + kb.OriginInferred + ") [cut in the cycle walk]\n"
 	if !strings.Contains(text, demotedRow) {
 		t.Errorf("no demoted row naming the seed with its context:\n%s", text)
 	}
-	seed := readRegister(text).claims[seedClaim]
-	if slices.ContainsFunc(seed.DependsOn, func(d kb.Edge) bool { return d.Target == b }) || slices.ContainsFunc(seed.Demoted, func(d kb.Edge) bool { return d.Target == b }) {
-		t.Errorf("the seed entry moved: %+v demoted %+v\n%s", seed.DependsOn, seed.Demoted, text)
+	read, err := readRegister(text)
+	if err != nil {
+		t.Fatal(err)
 	}
-	bEntry := readRegister(text).claims[b]
-	if len(bEntry.DependsOn) != 0 || len(bEntry.Demoted) != 1 || bEntry.Demoted[0].Target != seedClaim ||
+	seed := read.claims[seedClaim]
+	if slices.ContainsFunc(seed.Premises, func(d kb.Edge) bool { return d.Source == b }) || slices.ContainsFunc(seed.Demoted, func(d kb.Edge) bool { return d.Target == b }) {
+		t.Errorf("the seed entry moved: %+v demoted %+v\n%s", seed.Premises, seed.Demoted, text)
+	}
+	bRead, err := readRegister(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bEntry := bRead.claims[b]
+	if len(bEntry.Premises) != 0 || len(bEntry.Demoted) != 1 || bEntry.Demoted[0].Target != seedClaim ||
 		bEntry.Demoted[0].Origin != kb.OriginInferred || bEntry.Demoted[0].Context == nil || *bEntry.Demoted[0].Context != "cut in the cycle walk" {
-		t.Errorf("B did not read back as demoted: depends %+v demoted %+v\n%s", bEntry.DependsOn, bEntry.Demoted, text)
+		t.Errorf("B did not read back as demoted: premises %+v demoted %+v\n%s", bEntry.Premises, bEntry.Demoted, text)
 	}
 
 	before := snapshot(t, root)
@@ -139,15 +155,19 @@ func TestDemoteClaimEdge(t *testing.T) {
 		t.Errorf("again: %+v, want unchanged, byte-identical", again)
 	}
 
-	if res := run(t, root, AddBuildEdges, "entry:\n- id: "+b+"\n  depends-on:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
+	if res := run(t, root, AddBuildEdges, "entry:\n- id: "+b+"\n  rests-on:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
 		t.Fatalf("re-planting B's depends bullet beside its demoted row: %+v", res)
 	}
 	both := run(t, root, DemoteClaimEdge, demote, false)
 	text = snapshot(t, root)[kb.RegisterFile]
-	bEntry = readRegister(text).claims[b]
-	if both.Outcome != result.Done || len(bEntry.DependsOn) != 0 || len(bEntry.Demoted) != 1 || !strings.Contains(text, demotedRow) {
-		t.Errorf("row and bullet both standing: %+v, depends %+v demoted %+v, want done, the bullet gone and the row as it stood\n%s",
-			both, bEntry.DependsOn, bEntry.Demoted, text)
+	bRead, err = readRegister(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bEntry = bRead.claims[b]
+	if both.Outcome != result.Done || len(bEntry.Premises) != 0 || len(bEntry.Demoted) != 1 || !strings.Contains(text, demotedRow) {
+		t.Errorf("row and bullet both standing: %+v, premises %+v demoted %+v, want done, the bullet gone and the row as it stood\n%s",
+			both, bEntry.Premises, bEntry.Demoted, text)
 	}
 
 	before = snapshot(t, root)
@@ -159,7 +179,7 @@ func TestDemoteClaimEdge(t *testing.T) {
 
 	absent := run(t, root, DemoteClaimEdge, "entry:\n- id: "+b+"\n  target: "+other+"\n  origin: "+kb.OriginCited+"\n", false)
 	if absent.Outcome != result.Refused || len(absent.Refusals) != 1 ||
-		!strings.Contains(absent.Refusals[0].Detail, "no depends-on bullet naming") {
+		!strings.Contains(absent.Refusals[0].Detail, "no rests-on bullet naming") {
 		t.Errorf("demoting an edge B does not hold: %+v, want refused naming the missing bullet", absent)
 	}
 }

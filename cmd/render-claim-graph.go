@@ -42,8 +42,14 @@ func renderClaimGraph(opts maintenanceOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(fields, refusals...)
 	}
+	fields = withMigration(fields, src, "render-claim-graph", opts.Stderr)
+	if src.Migrated() {
+		return refused(fields, toolresult.Item{Check: index.CheckIndex, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
+			Detail: fmt.Sprintf("the KB's metadata format is %s and kbase reads %s; render-claim-graph draws from the index a refresh derives",
+				src.Version(), kb.FormatVersion)})
+	}
 	if info, err := os.Stat(filepath.Join(root, kb.IndexDir)); err != nil || !info.IsDir() {
-		return refused(fields, toolresult.Item{Check: "index", Path: kb.IndexDir, Remedy: index.RefreshRemedy,
+		return refused(fields, toolresult.Item{Check: index.CheckIndex, Path: kb.IndexDir, Remedy: index.RefreshRemedy,
 			Detail: fmt.Sprintf("%s has no %s/ to render from; refresh derives it", root, kb.IndexDir)})
 	}
 	written, removed, drawn, err := index.WriteSheet(src)

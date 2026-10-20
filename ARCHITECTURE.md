@@ -69,7 +69,7 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 | `equations-minted` | Equation nodes minted |
 | `references-found` | Unmarked references found: adjacency links made by rule between consecutive non-equation claims of a leaf, unasked; per source claim, the proximity slots — nearest in its own paper by locality (same document, same directory, same paper), then by places apart in the sequence of every claim by reading position and id — then the wildcard slots, best by TF-IDF cosine less the proximity picks, counts in §12, no pool holding a marked pair or an adjacency link; each source's shortlist is its own, so a pair both ends pick is asked both ways, and a proximity slot its paper cannot fill stays empty; one letter ask per planned pair, a yes in either direction one undirected link for the cull; writes nothing under `kb-root/` |
 | `claims-culled` | The co-linearity cull (`Culled`, `internal/claimgraph/cull.go`): one `Colinear` ask per link with a prose end — marked pairs, unmarked yeses and adjacency links, unordered, computed over the tree `references-found` read — grouped by the earlier claim in reading order (`p1-<id>`); one confirming ask per culled claim whose root is not its target, grouped by root (`p2-<root>`); the survivor rule and re-pointing in the pure `cullTargets`, `cullRoots`, `finalCulls` and `PlanCull`; culls issued through `IssueCulls` with no bridge and no claim-to-claim edge; the cull record written once, after the issue. Its row spends its own inference and is dropped under `--no-inference` (SPEC §5) |
-| `depends-attributed` | Dependency edges attributed: the marked candidates and the cull record's links, each link oriented later claim to earlier (an equation node always the target) and skipped where a marked pair joins its claims; one letter ask per candidate; every answer's edge written in one `add-build-edges` batch, cycles included; then the ring row, every `depends` edge on a cycle demoted with its origin (SPEC §5, §10), before the gate |
+| `depends-attributed` | Dependency edges attributed: the marked candidates and the cull record's links, each link oriented later claim to earlier (an equation node always the target) and skipped where a marked pair joins its claims; one letter ask per candidate; every answer's edge written in one `add-build-edges` batch, cycles included; then the ring row, every `supports` edge on a cycle demoted with its origin (SPEC §5, §10), before the gate |
 | `phase-3a` | `refresh`, `verify`, and the readiness stamp |
 | `overview-drafted` | The overview document |
 
@@ -388,24 +388,86 @@ exists, a line naming it as the author's. `WriteReport` reads the filter's findi
 |---|---|---|
 | **Metadata layer**: kb-root model: names, exclusions, link primitives and the dead-link gate over `kb-root/`; frontmatter, register and leaf parse, discovery, schema; the derived-field line renderers and the frontmatter splice refresh writes through | `internal/kb` | Landed |
 | **Write API**: render, values, store, ops | `internal/write` | Landed. An insert adopts by (register, title) whatever its other values, reporting the differing fields (SPEC §8). There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; the ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
-| **Refresh and verify; the index**: solidity, aggregates, footers, `.index` emit and freshness, the citation gate and the claim-id link check | `internal/index` | Landed |
+| **Refresh and verify; the index**: strength, aggregates, footers, `.index` emit and freshness, the citation gate and the claim-id link check | `internal/index` | Landed |
 | **Queries** | `internal/query` | Landed |
 | **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
 | **Readiness stamping and README assembly** | `internal/kbdocs` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
 | **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
-marker or bullet. Input, idempotence (I6) and the trailing refresh are SPEC §8; byte equality is
+marker or bullet, and no op renders a scoring bullet without its `(bearing …)`: the token is
+`kb.RenderBearingAnnotation`'s, and a bullet `render` composes always carries one. One op writes a
+scoring edge's judgement — `set-bearing`, values `id` (the source), `target`, `relation` and
+`bearing` — and one writes a node's local value, `set-rigor`, values `id` and `rigor`; a claim's, an
+analysis's and a work's local value are one register field, `- rigor:`, and an experiment's is its
+host leaf's `rigor:`. `set-bearing` replaces the token at the edge's authored home — the target
+entry's `rests-on` bullet for `supports` and `founds`, the source's pair line for `lifts`, the
+source claim's `refutes:` pair for a claim-sourced `refutes` — and never inserts one: a missing token
+is a load fault (SPEC §10) before the op runs, and a splice that finds none is `spliceFailed`. It
+refuses a pairing `kb.BearingLegal` rejects, a relation outside the four, and a value outside the
+domain or the pending literal. The read-back carries the edge whole: `expectedEdge` holds `Source`,
+`Target` and `kb.Bearing`, `edgeOf` copies the bearing, and `edgesEqual` compares `Value` and
+`Pending`, so a written `0` re-reads as `0` and a written `*pending*` as pending. No build path
+writes a judgement: `add-build-edges` writes `(bearing *pending*)` on every premise bullet it adds
+and no number anywhere, so a claim a build attaches an edge to reads unchanged until that edge is
+scored.
+
+Input, idempotence (I6) and the trailing refresh are SPEC §8; byte equality is
 SPEC §3. Two ops are build-only:
-`add-build-edges` (`write.AddBuildEdges`), which writes `add-depends-on`'s lists and the `demoted`
-list, and `demote-claim-edge` (`write.DemoteClaimEdge`), which turns an existing `depends` edge into
-a `demoted` row with the origin the build computed. Both are absent from `write.Ops()` and have no
-subcommand, so the public write surface cannot create a `demoted` edge. The build's cuts reach the
+`add-build-edges` (`write.AddBuildEdges`), which writes `add-rests-on`'s lists and the `demoted`
+list, and `demote-claim-edge` (`write.DemoteClaimEdge`), which turns an existing `supports` edge
+into a `demoted` row with the origin the build computed. Both are absent from `write.Ops()` and have
+no subcommand, so the public write surface cannot create a `demoted` edge. The build's cuts reach the
 register through `demote-claim-edge`, from the ring row at the tail of the dependency-attribution
 stage; `add-build-edges` keeps its `demoted` list in the op vocabulary, and no build caller passes
 it. `resolve-demoted` is a public op.
 `index.DependsGraph.Path` is the path finder over the acyclicity check's graph; the check and
 `resolve-demoted`'s cycle refusal both use it.
+
+**The node vocabulary.** `kb.NodeKinds` is five words — `claim`, `analysis`, `experiment`, `axiom`,
+`work` — and nothing else is a `node_type` or a `target_kind`. `kb.BearingLegal(relation, sourceKind,
+targetKind)` is the one predicate answering whether a pairing may carry a bearing: every scoring
+pairing may, and `references` and `demoted` may not; it answers that and never whether an edge may
+exist. A node id carries its kind's three-letter prefix — `clm-`, `ana-`, `exp-` and `wrk-` over a
+minted or authored body, `axm-<label>` over the label as authored, which no minted id's body grammar
+governs. The axioms are one document: `axioms.md`, read by the one `### Axiom <label>: Title`
+heading pattern, a declaration's id `axm-<label>` and its anchor the heading's slug. `kb.AxiomSource`
+answers `axioms.md`, else a legacy `invariants.md`, else `AGENTS.md`, and the two legacy documents
+are read by the patterns that heading cannot match, so a KB the converter has not rewritten still
+loads. SPEC §10 carries the prose legend those documents' words map through, and it is the one place
+the synonyms live.
+
+**The derived layer.** `internal/index/strength.go` is the arithmetic's authority: the four
+relations, their three stations — the minimum for `supports` and `founds`, the maximum for `lifts`,
+the cap for `refutes` — the pending rule and the value's two spellings live there and nowhere else.
+The walk computes at full precision and nothing else rounds a strength: `FormatStrengthRecord`
+writes a record's value in the fewest decimals that read back as it — the record's own spelling, and
+`verify`'s messages about it — and a query result carries the value `FormatStrengthDisplay` spells,
+where a trace spells it.
+
+| Relation | Source kinds | Target kinds | Station | Contribution |
+|---|---|---|---|---|
+| `supports` | claim, experiment | claim, analysis | minimum | `bearing × source strength` |
+| `founds` | work, axiom | claim, analysis | minimum | `bearing × the source's rigor`; `kb.AxiomRigor` is an axiom's `1.0` by rule |
+| `lifts` | analysis, experiment | claim, analysis | maximum | `bearing × the lifter's strength` |
+| `refutes` | claim, analysis, experiment | claim, analysis | cap | `1 − bearing × refuter strength`; the smallest cap wins |
+
+A claim of rigor `0.85` with a claim premise at `0.4 × 0.90`, a work at `0.8 × 0.90`, a lift at
+`0.7 × 0.90` and a refutation at `0.5 × 0.90` derives `min(0.85, 0.36, 0.72) = 0.36`, the lift takes
+the final to `0.63`, and the smallest cap, `0.55`, takes it to `0.55`. `ComputeStrength` walks each
+claim into `Strength.Results` and each analysis into `Strength.AnalysisResults`;
+`MinDependencyStrength` is the `[= min(…)]` trace's operand, multiplying every participating edge by
+its bearing and omitting an excluded one; `RenderStrengthTrace` composes the station the walk took.
+[STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) states that arithmetic — the relations, the
+formula and the worked example — and is cited, not reproduced.
+
+**The query layer.** `query.DepsPayload` is the one incidence adapter: it presents an incident edge
+from the reader's side — `relation`, `direction` (`in` where the other end supports `id`, `out` where
+`id` supports it), `target`, `bearing` (the index's number-or-literal text, null only where the
+pairing carries none), `context` — in the fixed relation order and then by the other end's id.
+`DependentsOf` reads the push direction: the targets of an id's outgoing scoring edges. No query verb
+returns scoring text: the index carries no statement body, and `query.Page` accepts list answers
+only, so no passage ever becomes a query answer.
 
 **Frontmatter reading.** `internal/kb` takes a leading `---` block as frontmatter only when its
 first non-empty line is key-shaped (`name:`, kebab-case); a block that then fails to parse as a YAML
@@ -416,8 +478,8 @@ prose, the document having no frontmatter (SPEC §10).
 SVG's bytes are Graphviz's, so the goldens pin the DOT, and a test that renders through `dot` skips
 without it and asserts only that the DOT parses and the root fits the viewer. The goldens are a
 fixture and its three DOT files under `internal/sheet/testdata/adjagent-sheet/`, copied as they
-stand: a `1.0.0` KB, its unmarked build record, and the DOT the sheet composes for it. The emitted
-DOT matches them byte for byte. Its inputs are the index (claims, edges, solidity bands); the build
+stand: a `2.0.0` KB, its unmarked build record, and the DOT the sheet composes for it. The emitted
+DOT matches them byte for byte. Its inputs are the index (claims, edges, strength bands); the build
 records beside `kb-root/`, read through `internal/buildrecords`
 that `claimgraph` and `sheet` both import — only the unmarked record and the cull record's `links`,
 for each edge's provenance (marked, or inferred by SPEC §3's rule), through
@@ -653,13 +715,15 @@ Policy".
 ## 10. Compatibility harness
 
 Compatibility is judged by kbase's own readers and checks, never by a byte diff of presentation. The
-hermetic gate is `just test-integration`, whose four members —
-`test-integration-results-fixture`, `test-integration-init`, `test-integration-mcp` and
-`test-integration-config` — each run `./bin/kbase` over fixtures they stage and judge what it
-produces: the result document against the verb's keys, the tree it wrote, the transcript it served.
-Each writes its log under `test_data/transient/<recipe>/`. Recipes needing pandoc, python3 or a
-provider stand outside the gate and run by name — `test-integration-mcp-build`, the MCP notification
-probe that builds a paper, among them.
+hermetic gate is `just test-integration`, whose five members —
+`test-integration-results-fixture`, `test-integration-init`, `test-integration-mcp`,
+`test-integration-config` and `test-dist` — each judge what their process produced: the first four
+run `./bin/kbase` over fixtures they stage, judging the result document against the verb's keys, the
+tree it wrote, the transcript it served; `test-dist` runs `tools/scripts/build-dist.sh` against stub
+`go`, `gpg`, `curl` and `uname`, judging the release layout it stages and the installer it generates
+byte for byte against its golden. Each writes its log under `test_data/transient/<recipe>/`. Recipes
+needing pandoc, python3 or a provider stand outside the gate and run by name —
+`test-integration-mcp-build`, the MCP notification probe that builds a paper, among them.
 
 ---
 
@@ -691,8 +755,8 @@ internal/kbload           `Open(kbRoot)`: reads the stamp, builds `kb.Source` (d
                           one); the only importer of `migrate`; imports `buildrecords`
                           for the record paths (`RecordFiles()`); imported by `cmd`,
                           `build` and `write` only
-internal/index            solidity, aggregates, footers, .index emit + freshness,
-                          citation gate, claim-id link check, the depends path finder
+internal/index            strength, aggregates, footers, .index emit + freshness,
+                          citation gate, claim-id link check, the path finder
                           (`DependsGraph.Path`)
 internal/write            render / values / store / ops, the build-only `add-build-edges`
                           and `demote-claim-edge`
@@ -740,6 +804,38 @@ internal/mcp              (SPEC §11) JSON-RPC framing, dispatch, the Tool, Sche
                           owner (I1)
 kept: config, model (model.Chat the overview call, model.Decision the letter asks), log, version
 ```
+
+**Loading.** Every KB file is read through `kb.Source`, built by `kbload.Open` (I8), so an older KB
+arrives already in the current form and no verb sees the on-disk bytes of an unmigrated one. The
+loader carries the conversion record: `Source.Migration()` holds the step's `From`, `To` and the one
+sentence `note`, set where the source was migrated and kept across the save that stamps the current
+format, so every call on an older KB until that save carries the `migration` record and writes the
+one stderr sentence (SPEC §7, §10). `build` is the one loader that carries it nowhere: a mid-build KB
+is not a finished state, and its stage commits own that trail. `kb.MigratedSource` carries the paths
+the conversion made obsolete, and the saving refresh removes them.
+
+**The requiredness gate** is `kb.Discover`'s, and it sits at the load of every command that builds a
+state: a `rests-on` bullet or a pair line that breaks a rule yields one `kb.AnnotationError` of
+`AnnotationFault{Field, Path, Line, Allowed, Remedy, Detail}` before any state exists, so no index is
+written and no op runs. A premise bullet naming an `ana-` id is one of those faults: `supports` from
+an analysis is no legal pairing, so the bullet yields no edge (SPEC §10).
+`internal/index/refresh.go`'s refusal path maps it to `result` items with `check: metadata`, the
+field as `key`, and the bullet's file and line;
+`internal/write` maps it the same way, so the op that would have run is refused instead. The
+informational counterpart is `verify`'s: a legacy document that still declares an axiom beside an
+`axioms.md` is one `check: axiom-source` finding, never a refusal (SPEC §7, §10).
+
+**The loader's file set and its other refusals.** A KB document that is a symbolic link is refused,
+not followed: `check: symlink` at the link's path, raised by the document walk and by the conversion's
+own read of the KB's files alike, so no link out of the tree is read or written through. A conversion
+holding bytes it cannot carry refuses before any state is built: `check: conversion`, `path` the
+file, `line` and `detail` the content (SPEC §10).
+
+**The zero-value hazard.** A register parsed outside `kb.Source` — by a test, by a tool, or by a
+command that read bytes of its own — reads a missing `(bearing …)` as the zero `kb.Bearing`, which is
+the value `0.0` and a judgement: a premise contributing zero to the derivation. The loader monopoly
+therefore carries a type's meaning and not only a version's, and every parse in a command takes
+`Source` bytes.
 
 **Dependency rules.**
 
@@ -797,7 +893,9 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
 | Model categories | `[models] decision` (the letter asks' model, on whichever surface its entry speaks) and `[models] text` (the overview call) in `config.toml`; overrides `KBASE_DECISION`/`KBASE_TEXT` (SPEC §9) |
-| Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `1.0.0` |
+| Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `2.0.0` |
+| Pending literal | `kb.PendingLiteral`: `*pending*`, the format's one no-number literal, written for a value not yet judged and accepted wherever a value is absent (SPEC §10) |
+| Conversion record | `migration`: a result's conditional record after `kb-root`, holding `from`, `to` and `note`, and the one stderr sentence the same call writes (SPEC §7, §10) |
 | MCP protocol version | `mcp.ProtocolVersion`: the MCP revision the server implements (SPEC §11): `2025-11-25`, confirmed, not chosen, by the owner's live check |
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `storeFormat` in `internal/build`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
@@ -816,7 +914,7 @@ stage-commit subject is SPEC §6.
 **Format migration (SPEC §10).** Every verb that reads a KB — `refresh`, `verify`,
 `render-claim-graph`, the queries, the write ops, `export-latex`, and the build's spine-seed, phase-3a, readiness
 stamp, overview and resume — calls `kbload.Open(kbRoot)`; `status` and `cancel` do not load the KB.
-`Open` reads `kb-format` alone from the entry point (`kb.ReadFormatVersion`, either frontmatter
+`Open` reads `kb-format` alone from the entry point (`kb.FormatStamp`, either frontmatter
 form) before anything else. A stamp at the current major and minor builds a `kb.Source` that reads
 disk. An older stamp reads every file the format covers (`kb-root/` and the build records beside it)
 into a map of repository-relative paths to bytes and hands it to `migrate.Chain(from, to)`, which
@@ -949,3 +1047,49 @@ line that named it). **Slice-3** records a census, with no pass threshold.
 
 A check that fails for a reason whose fix needs a third pre-pass, a filter, or a change to any of I1
 to I7 is escalated to the owner.
+
+---
+
+## 14. Limits
+
+Where the format and this implementation stop. A limit whose mechanism already states it is not
+repeated here: the zero-value default is §11's, and the index's lack of statement text is §6's.
+
+**A judgement and its absence read alike.** An entry with no `- rigor:` line and one written
+`*pending*` are the same value on read, and a refresh restores neither, so a register records the
+pending state and never that nobody looked at it. A migrated `1.0` and a judged `1.0` are one record
+in the same way: the `migration` record is the only mark of an unscored corpus and the first save
+ends it. Nothing records who judged a value either: `set-rigor` and `set-bearing` write a number or
+`*pending*` and no author, so a value carries no attribution at all.
+
+**A `founds` bearing on a work names its finding in prose.** The `[context]` on the bullet says which
+theorem, table or result the bearing judges, and no id, range or hash joins the two, so no check can
+prove the judgement was about that finding. An axiom's `founds` edge needs no such prose: its source
+is the axiom's own id.
+
+**The reader sees list bullets, and one bearing per bullet.** A `(bearing …)` is found anywhere in a
+line the reader has already taken as a `rests-on` bullet or a pair line, so a field-shaped phrase in
+a bullet's title is read as the field. A line that is no bullet of such a list is not read at all: a
+bearing on it is neither refused nor kept. Inside a bullet, a misplaced token is R4 and a second one
+R5 (SPEC §10).
+
+**The conversion moves no edge's direction into the bytes.** The register stays claim-centric and the
+push direction is the index's, which a refresh derives; a converter that wrote the direction into the
+documents would carry a second model of the same edge. It records no history either: the value
+changes a conversion makes are re-derived from the same claims, and nothing says which of them rose
+or fell.
+
+**No format sits between two majors.** `migrate.Chain` walks converters version by version and
+refuses a step no converter leads, so a KB stamped `1.1.0` is refused at load rather than read; no
+`1.1.0` converter exists and none is reachable.
+
+**The reference comparison is flag-gated and partial.** `internal/index/compat_test.go`'s
+comparisons run only when their `reference.*` flags are set, and they cannot run at all until the
+reference toolchain reads `2.0.0`. The `0.9.0` parity cases in `internal/kbload/parity_test.go` are
+three committed KBs plus whatever local reference clone lies under `test_data/transient`; none of the
+committed ones carries a register, so a `0.9.0` register is compared by the converter's golden pairs
+alone.
+
+**No refresh moves a value.** `refresh` asks no model, so a derived value changes only when an
+authored one does — `set-rigor`, `set-bearing`, or a hand edit. `verify`'s drift is between a record
+and its derived surface, never between two judgements.

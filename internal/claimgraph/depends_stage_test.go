@@ -29,7 +29,7 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 		d = "clm-dddddd"
 		e = "clm-eeeeee"
 	)
-	m := func(id string) string { return " <!-- claim-quality: " + id + " -->" }
+	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
 	root, repo, opts := seedTheoremLeaf(t, []string{a, b, c, d, e},
 		"Alpha holds here."+m(a)+"\n\nBeta holds here, by Theorem 1."+m(b)+"\n\nGamma holds here, by Theorem 1."+m(c)+"\n\n"+
 			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(d)+"\n",
@@ -103,10 +103,18 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 	}
 	var rows []string
 	for _, ce := range st.ClaimEntries {
-		for _, edge := range slices.Concat(ce.DependsOn, ce.References) {
-			if edge.TargetKind == kb.NodeKindClaim {
-				rows = append(rows, ce.ID+" "+edge.Relation+" "+edge.Target)
+		for _, edge := range slices.Concat(ce.Premises, ce.References) {
+			if edge.TargetKind != kb.NodeKindClaim {
+				continue
 			}
+			if edge.Relation != kb.RelationReferences && !edge.Bearing.Pending {
+				t.Errorf("the build wrote a judged bearing %v on %s's edge naming %s", edge.Bearing, ce.ID, edge.Source)
+			}
+			other := edge.Target
+			if edge.Relation != kb.RelationReferences {
+				other = edge.Source
+			}
+			rows = append(rows, ce.ID+" "+edge.Relation+" "+other)
 		}
 		for _, edge := range ce.Demoted {
 			rows = append(rows, ce.ID+" "+kb.RelationDemoted+" "+edge.Target+" "+edge.Origin)
@@ -115,7 +123,7 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 	slices.Sort(rows)
 	wantRows := []string{
 		a + " " + kb.RelationDemoted + " " + c + " " + kb.OriginInferred,
-		a + " " + kb.RelationDepends + " " + b,
+		a + " " + kb.RelationSupports + " " + b,
 		b + " " + kb.RelationReferences + " " + d,
 		b + " " + kb.RelationReferences + " " + e,
 		c + " " + kb.RelationDemoted + " " + d + " " + kb.OriginCited,

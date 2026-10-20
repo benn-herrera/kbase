@@ -18,7 +18,7 @@ rendered against a KB; the choices are recorded beside the rendered steps.
 | Placeholder | Becomes |
 |---|---|
 | `{leaf}` | the first leaf, in path order, whose frontmatter carries only `kind` and either two or more `claims` or a `no-claim` — a leaf left citing two claims owes each a marker, which a single-claim leaf's first claim may lack — and whose body holds a line the locator search finds exactly once |
-| `{register}` | the register of `{leaf}`'s volume, `<first path segment>/claim-quality.md`, created by the first insert where absent |
+| `{register}` | the register of `{leaf}`'s volume, `<first path segment>/claim-rigor.md`, created by the first insert where absent |
 | `{leaf-claims}` | as a list item: the leaf's current `claims`, in order — `set-frontmatter` restates every attribute it does not own, and a `no-claim` is replaced by the claims the script adds |
 | `{locator}` | that line of the leaf's body |
 | `{minted:<name>}` | the id the step named `<name>` minted, substituted at run time on each side from that side's own output |

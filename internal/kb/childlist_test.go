@@ -78,10 +78,10 @@ func TestIsMarker(t *testing.T) {
 		text string
 		want bool
 	}{
-		{"<!-- claim-quality: clm-aa1111 -->", true},
+		{"<!-- claim-rigor: clm-aa1111 -->", true},
 		{"<!-- id: clm-aa1111 -->", true},
 		{"  <!-- id: clm-aa1111 -->\n", true},
-		{"<!-- claim-quality: clm-aa1111 -->", true},
+		{"<!-- claim-rigor: clm-aa1111 -->", true},
 		{"<!--　id: clm-aa1111 -->", true},
 		{"<!-- keep me -->", false},
 		{"<!-- identity: x -->", false},

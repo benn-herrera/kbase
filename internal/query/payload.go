@@ -4,7 +4,10 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -46,7 +49,7 @@ func pageOf[T any](s []T, offset, limit int) ([]T, bool) {
 	return append([]T{}, s[start:end]...), end < len(s)
 }
 
-// aboveEveryScore is a solidity bar every scored claim clears: scores top
+// aboveEveryScore is a strength bar every scored claim clears: scores top
 // out at the framework's 1.0.
 const aboveEveryScore = 1.1
 
@@ -55,6 +58,19 @@ func opt(v *float64) any {
 		return nil
 	}
 	return *v
+}
+
+// displayStrength is a strength as a query result shows it: the display
+// spelling's value, or null where the node has none.
+func displayStrength(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	rounded, err := strconv.ParseFloat(index.FormatStrengthDisplay(v), 64)
+	if err != nil {
+		return *v
+	}
+	return rounded
 }
 
 func optString(s *string) any {
@@ -72,48 +88,90 @@ func identity(n kb.NodeRow) result.Record {
 // nodeFields is each node kind's record, total over kb.NodeKinds.
 var nodeFields = map[string]func(kb.NodeRow) result.Record{
 	kb.NodeKindClaim: func(n kb.NodeRow) result.Record {
-		return append(identity(n), result.Record{{Key: "confidence", Value: opt(n.Confidence)}, {Key: "solidity", Value: opt(n.Solidity)},
+		return append(identity(n), result.Record{{Key: "rigor", Value: opt(n.Rigor)}, {Key: "strength", Value: displayStrength(n.Strength)},
 			{Key: "build_status", Value: optString(n.BuildStatus)}, {Key: "build_band", Value: n.BuildBand},
-			{Key: "rationale", Value: n.Rationale}, {Key: "depends_on_count", Value: n.DependsOnCount},
+			{Key: "rationale", Value: n.Rationale}, {Key: "premise_count", Value: n.PremiseCount},
 			{Key: "strengthen_by_count", Value: n.StrengthenByCount}, {Key: "citation_count", Value: n.CitationCount}}...)
 	},
-	kb.NodeKindSupport: func(n kb.NodeRow) result.Record {
-		return append(identity(n), result.Record{{Key: "quality", Value: opt(n.Quality)}, {Key: "solidity", Value: opt(n.Solidity)},
+	kb.NodeKindAnalysis: func(n kb.NodeRow) result.Record {
+		return append(identity(n), result.Record{{Key: "rigor", Value: opt(n.Rigor)}, {Key: "strength", Value: displayStrength(n.Strength)},
 			{Key: "build_band", Value: n.BuildBand}}...)
 	},
 	kb.NodeKindExperiment: func(n kb.NodeRow) result.Record {
-		return append(identity(n), result.Field{Key: "status", Value: n.Status})
+		return append(identity(n), result.Field{Key: "status", Value: n.Status}, result.Field{Key: "rigor", Value: opt(n.Rigor)})
 	},
-	kb.NodeKindInvariant: identity,
-	kb.NodeKindAxiom:     identity,
-	kb.NodeKindWork: func(n kb.NodeRow) result.Record {
-		return append(identity(n), result.Field{Key: "strength", Value: opt(n.Strength)})
-	},
+	kb.NodeKindAxiom: rigorRecord,
+	kb.NodeKindWork:  rigorRecord,
+}
+
+// rigorRecord is the record of a node whose strength is its rigor: identity
+// fields and the row's rigor, no derived value beside them.
+func rigorRecord(n kb.NodeRow) result.Record {
+	return append(identity(n), result.Field{Key: "rigor", Value: opt(n.Rigor)})
 }
 
 func weakPointRecord(wp WeakPoint) result.Record {
-	return result.Record{{Key: "id", Value: wp.Claim.ID}, {Key: "solidity", Value: opt(wp.Claim.Solidity)},
+	return result.Record{{Key: "id", Value: wp.Claim.ID}, {Key: "strength", Value: displayStrength(wp.Claim.Strength)},
 		{Key: "build_band", Value: wp.Claim.BuildBand}, {Key: "dependents", Value: wp.Dependents}, {Key: "title", Value: wp.Claim.Title}}
 }
 
-// DepsPayload is the edges sourced at id — relation, target, a rests-on
-// edge's fraction as its applicability, and the row's context (null where it
-// has none) — or, inverse, the ids of
-// every node with an edge to id.
+// depsRelationOrder is the fixed order a deps answer lists relations in.
+var depsRelationOrder = kb.Relations
+
+func relationRank(relation string) int {
+	if i := slices.Index(depsRelationOrder, relation); i >= 0 {
+		return i
+	}
+	return len(depsRelationOrder)
+}
+
+// DepsPayload is every edge incident at id — each scoring edge in either
+// direction, and id's own outgoing references and demoted edges — as the
+// relation, the direction it runs (in where id is the supported end, out
+// where it is the supporter), the other end, its bearing as the index writes
+// it or null where its pairing carries none, and its context. Rows are in
+// relation order, then by the other end's id, the direction and the context.
+// Inverse, it is the ids of every node id's strength enters.
 func DepsPayload(ix *Index, id string, inverse bool) any {
 	if inverse {
 		return nonNil(ix.DependentsOf(id))
 	}
-	out := []result.Record{}
-	for _, e := range ix.DependsOnEdges(id) {
-		var applicability any
-		if e.Relation == kb.RelationRestsOn {
-			applicability = e.Fraction
+	type row struct {
+		relation, direction, other string
+		bearing                    any
+		context                    *string
+	}
+	var rows []row
+	for _, e := range ix.edges {
+		var other, direction string
+		switch {
+		case e.Source == id && (kb.Scoring(e.Relation) || e.Relation == kb.RelationReferences || e.Relation == kb.RelationDemoted):
+			other, direction = e.Target, "out"
+		case e.Target == id && kb.Scoring(e.Relation):
+			other, direction = e.Source, "in"
+		default:
+			continue
 		}
-		out = append(out, result.Record{{Key: "relation", Value: e.Relation}, {Key: "target", Value: e.Target},
-			{Key: "applicability", Value: applicability}, {Key: "context", Value: optString(e.Context)}})
+		rows = append(rows, row{relation: e.Relation, direction: direction, other: other, bearing: e.Bearing, context: e.Context})
+	}
+	slices.SortStableFunc(rows, func(a, b row) int {
+		return cmp.Or(cmp.Compare(relationRank(a.relation), relationRank(b.relation)), strings.Compare(a.other, b.other),
+			strings.Compare(a.direction, b.direction), strings.Compare(deref(a.context), deref(b.context)))
+	})
+	out := []result.Record{}
+	for _, r := range rows {
+		out = append(out, result.Record{{Key: "relation", Value: r.relation}, {Key: "direction", Value: r.direction},
+			{Key: "target", Value: r.other}, {Key: "bearing", Value: r.bearing}, {Key: "context", Value: optString(r.context)}})
 	}
 	return out
+}
+
+// deref is *p, "" where p is nil.
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 func nonNil(s []string) []string {
@@ -141,7 +199,7 @@ func FindPayload(ix *Index, query string) []result.Record {
 	out := []result.Record{}
 	for _, c := range ix.Find(query) {
 		out = append(out, result.Record{{Key: "id", Value: c.ID}, {Key: "title", Value: c.Title},
-			{Key: "solidity", Value: opt(c.Solidity)}, {Key: "build_band", Value: c.BuildBand}})
+			{Key: "strength", Value: displayStrength(c.Strength)}, {Key: "build_band", Value: c.BuildBand}})
 	}
 	return out
 }
@@ -152,11 +210,11 @@ func ReferencedByPayload(ix *Index, id string) ([]string, error) {
 	return nonNil(leaves), err
 }
 
-// SolidityBelowPayload is the full record of each scored claim under
+// StrengthBelowPayload is the full record of each scored claim under
 // threshold.
-func SolidityBelowPayload(ix *Index, threshold float64) []result.Record {
+func StrengthBelowPayload(ix *Index, threshold float64) []result.Record {
 	out := []result.Record{}
-	for _, c := range ix.SolidityBelow(threshold) {
+	for _, c := range ix.StrengthBelow(threshold) {
 		out = append(out, nodeFields[kb.NodeKindClaim](c))
 	}
 	return out
@@ -200,19 +258,26 @@ func UnknownNode(id string) result.Item {
 	return result.Item{Check: "unknown-id", Key: "<id>", Detail: fmt.Sprintf("unknown node id: %s", id)}
 }
 
-// WeakPointsPayload is the scored, load-bearing claims under maxSolidity.
-func WeakPointsPayload(ix *Index, maxSolidity float64, minDependents int) []result.Record {
+// WeakPointsPayload is the scored, load-bearing claims under maxStrength.
+func WeakPointsPayload(ix *Index, maxStrength float64, minDependents int) []result.Record {
 	out := []result.Record{}
-	for _, wp := range ix.WeakPoints(maxSolidity, minDependents) {
+	for _, wp := range ix.WeakPoints(maxStrength, minDependents) {
 		out = append(out, weakPointRecord(wp))
 	}
 	return out
 }
 
+// kindCountKey is a node kind's census key: its plural, analyses for analysis.
+func kindCountKey(kind string) string {
+	if kind == kb.NodeKindAnalysis {
+		return "analyses"
+	}
+	return kind + "s"
+}
+
 // StatsPayload is the census — one count per node kind, then each index
-// file's, the demoted edges beside the depends-on rows — the claims per
-// build band, and the ten weak points and ten
-// lowest-solidity claims.
+// file's, the demoted edges beside the edge rows — the claims per build band,
+// and the ten weak points and ten lowest-strength claims.
 func StatsPayload(ix *Index) result.Record {
 	var out result.Record
 	for _, kind := range kb.NodeKinds {
@@ -222,7 +287,7 @@ func StatsPayload(ix *Index) result.Record {
 				n++
 			}
 		}
-		out = append(out, result.Field{Key: kind + "s", Value: n})
+		out = append(out, result.Field{Key: kindCountKey(kind), Value: n})
 	}
 	demoted := 0
 	for _, e := range ix.edges {
@@ -230,7 +295,7 @@ func StatsPayload(ix *Index) result.Record {
 			demoted++
 		}
 	}
-	out = append(out, result.Field{Key: "depends_on_edges", Value: len(ix.edges)}, result.Field{Key: "demoted_edges", Value: demoted},
+	out = append(out, result.Field{Key: "edges", Value: len(ix.edges)}, result.Field{Key: "demoted_edges", Value: demoted},
 		result.Field{Key: "strengthen_by_items", Value: len(ix.strengthenBy)},
 		result.Field{Key: "citation_edges", Value: len(ix.cites)},
 		result.Field{Key: "subtree_aggregates", Value: len(ix.aggregates)})
@@ -246,14 +311,14 @@ func StatsPayload(ix *Index) result.Record {
 	dist = append(dist, result.Field{Key: kb.PendingLiteral, Value: bands[kb.UnknownBandSlug]})
 
 	leverage := []result.Record{}
-	for _, wp := range first(ix.WeakPoints(DefaultMaxSolidity, DefaultMinDependents), statsRankLimit) {
+	for _, wp := range first(ix.WeakPoints(DefaultMaxStrength, DefaultMinDependents), statsRankLimit) {
 		leverage = append(leverage, weakPointRecord(wp))
 	}
 	weakest := []result.Record{}
-	for _, c := range first(ix.SolidityBelow(aboveEveryScore), statsRankLimit) {
-		weakest = append(weakest, result.Record{{Key: "id", Value: c.ID}, {Key: "solidity", Value: opt(c.Solidity)}, {Key: "title", Value: c.Title}})
+	for _, c := range first(ix.StrengthBelow(aboveEveryScore), statsRankLimit) {
+		weakest = append(weakest, result.Record{{Key: "id", Value: c.ID}, {Key: "strength", Value: displayStrength(c.Strength)}, {Key: "title", Value: c.Title}})
 	}
-	return append(out, result.Field{Key: "solidity_bands", Value: dist}, result.Field{Key: "highest_leverage", Value: leverage},
+	return append(out, result.Field{Key: "strength_bands", Value: dist}, result.Field{Key: "highest_leverage", Value: leverage},
 		result.Field{Key: "weakest", Value: weakest})
 }
 

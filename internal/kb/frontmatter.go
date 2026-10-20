@@ -14,11 +14,11 @@ import (
 // its entries.
 const (
 	ExperimentNodesKey = "experiment-nodes"
-	SupportNodesKey    = "support-nodes"
+	AnalysisNodesKey   = "analysis-nodes"
 	ExpIDKey           = "exp-id"
 	StatusKey          = "status"
 	StrengthensKey     = "strengthens"
-	SupIDKey           = "sup-id"
+	AnaIDKey           = "ana-id"
 	SupportsKey        = "supports"
 )
 
@@ -130,7 +130,14 @@ type Value struct {
 	IsBool bool
 	// Entries is a list value's mapping items: a node declaration list's
 	// nodes, or a node's score pairs, one key each.
-	Entries []Frontmatter
+	Entries []FrontmatterEntry
+}
+
+// FrontmatterEntry is one mapping item of a list value and the physical line it
+// opens on.
+type FrontmatterEntry struct {
+	Frontmatter
+	Line int
 }
 
 // Truthy is the value's Python truthiness.
@@ -264,7 +271,9 @@ func fieldValue(n *yaml.Node) (Value, error) {
 				if err != nil {
 					return Value{}, err
 				}
-				v.Entries = append(v.Entries, f)
+				// The block's lines are counted from the one after the opening
+				// fence, and a fault names a document's line.
+				v.Entries = append(v.Entries, FrontmatterEntry{Frontmatter: f, Line: item.Line + 1})
 			default:
 				return Value{}, malformed("frontmatter: line %d: a list item that is neither a value nor a mapping", item.Line)
 			}
@@ -274,14 +283,14 @@ func fieldValue(n *yaml.Node) (Value, error) {
 	return Value{}, malformed("frontmatter: line %d: a value that is a mapping; only a list holds mappings", n.Line)
 }
 
-// DeclaredNodeIDs is every well-formed exp- and sup- id a document's
+// DeclaredNodeIDs is every well-formed exp- and ana- id a document's
 // frontmatter declares, experiments first, each kind in list order.
 func DeclaredNodeIDs(fm Frontmatter) []string {
 	var out []string
 	for _, d := range []struct {
 		list, key string
 		full      func(string) bool
-	}{{ExperimentNodesKey, ExpIDKey, expIDFullRE.MatchString}, {SupportNodesKey, SupIDKey, supIDFullRE.MatchString}} {
+	}{{ExperimentNodesKey, ExpIDKey, expIDFullRE.MatchString}, {AnalysisNodesKey, AnaIDKey, anaIDFullRE.MatchString}} {
 		for _, node := range fm[d.list].Entries {
 			if id := node.Str(d.key); d.full(id) {
 				out = append(out, id)
@@ -291,13 +300,14 @@ func DeclaredNodeIDs(fm Frontmatter) []string {
 	return out
 }
 
-// scorePair is one entry of a node's strengthens or supports list: a claim id
-// and its score as written; ok false where the entry is not one key.
-func scorePair(entry Frontmatter) (claimID string, score Value, ok bool) {
-	if len(entry) != 1 {
+// scorePair is one entry of a node's pair list — an experiment's supports,
+// lifts or refutes, an analysis's lifts or refutes: one key and its value as
+// written; ok false where the entry is not one key.
+func scorePair(entry FrontmatterEntry) (target string, score Value, ok bool) {
+	if len(entry.Frontmatter) != 1 {
 		return "", Value{}, false
 	}
-	for k, v := range entry {
+	for k, v := range entry.Frontmatter {
 		return k, v, true
 	}
 	return "", Value{}, false

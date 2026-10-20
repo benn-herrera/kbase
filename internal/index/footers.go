@@ -9,7 +9,7 @@ import (
 
 // LeafReferences is, for every node a leaf hosts or references, the sorted
 // leaf paths that do: a claim's citing leaves, an experiment's home and its
-// referencing leaves, a support's home.
+// referencing leaves, an analysis's home.
 func LeafReferences(st kb.State) map[string][]string {
 	refs := map[string]map[string]bool{}
 	add := func(id, leaf string) {
@@ -29,7 +29,7 @@ func LeafReferences(st kb.State) map[string][]string {
 	for _, x := range st.Experiments {
 		add(x.ID, x.CanonicalPath)
 	}
-	for _, s := range st.Supports {
+	for _, s := range st.Analyses {
 		add(s.ID, s.CanonicalPath)
 	}
 	out := map[string][]string{}

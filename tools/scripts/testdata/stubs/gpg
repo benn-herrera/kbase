@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Stands in for gpg. Signing writes a .asc recording the key, the signed file's
+# name and its checksum; --verify re-reads that record and fails unless the file
+# it is handed is the one the signature names and still holds those bytes.
+# Listings are answered from the fixture the test writes, and every call is
+# recorded.
+#
+# STUB_STATE_DIR holds:
+#   keyring.tsv  fpr<TAB>uid<TAB>ownertrust, one key per line
+#   packets      the text --list-packets prints
+# It gains:
+#   gpg.log          one line per call
+#   ownertrust.log   the ownertrust records piped in
+set -uo pipefail
+: "${STUB_STATE_DIR:?STUB_STATE_DIR is not set}"
+state="${STUB_STATE_DIR}"
+
+{ printf 'gpg'; printf ' %s' "$@"; printf '\n'; } >> "${state}/gpg.log"
+
+function die() {
+  printf 'stub gpg: %s\n' "${1}" >&2
+  exit 2
+}
+
+# checksum <file>: the CRC and length cksum reports, which is what a signature
+# covers here.
+function checksum() {
+  local crc size name
+  read -r crc size name <<< "$(cksum < "${1}")"
+  printf '%s %s' "${crc}" "${size}"
+}
+
+function signature_header() {
+  printf '%s\n' 'stub-signature v1'
+}
+
+function sign() {
+  local key="" file="" detach=0 armor=0 overwrite=0
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      --local-user) key="${2:-}"; shift 2 ;;
+      --detach-sign) detach=1; shift ;;
+      --armor) armor=1; shift ;;
+      --yes) overwrite=1; shift ;;
+      --batch|--quiet) shift ;;
+      *) file="${1}"; shift ;;
+    esac
+  done
+  [[ -n "${key}" ]] || die "a signing call names no --local-user"
+  [[ "${detach}" -eq 1 && "${armor}" -eq 1 ]] || die "a signing call is not --detach-sign --armor"
+  [[ -n "${file}" ]] || die "a signing call names no file"
+  [[ -f "${file}" ]] || die "no such file: ${file}"
+  if [[ -e "${file}.asc" && "${overwrite}" -eq 0 ]]; then
+    die "${file}.asc exists and this call carries no --yes"
+  fi
+  {
+    signature_header
+    printf 'key %s\n' "${key}"
+    printf 'file %s\n' "$(basename "${file}")"
+    printf 'cksum %s\n' "$(checksum "${file}")"
+  } > "${file}.asc"
+}
+
+function is_signature() {
+  [[ "$(head -n 1 "${1}")" == "$(signature_header)" ]] || die "${1} is not a signature"
+}
+
+function verify() {
+  local sig="${2:-}" data="${3:-}" key="" name="" recorded="" field="" value=""
+  [[ -f "${sig}" ]] || die "cannot verify: ${sig} is absent"
+  [[ -f "${data}" ]] || die "cannot verify: ${data} is absent"
+  is_signature "${sig}"
+  while read -r field value; do
+    case "${field}" in
+      key) key="${value}" ;;
+      file) name="${value}" ;;
+      cksum) recorded="${value}" ;;
+    esac
+  done < "${sig}"
+  [[ -n "${key}" && -n "${name}" && -n "${recorded}" ]] || die "${sig} records no key, file or checksum"
+  [[ "${name}" == "$(basename "${data}")" ]] || die "${sig} signs ${name}, not ${data}"
+  [[ "${recorded}" == "$(checksum "${data}")" ]] || die "bad signature for ${data}: those are not the bytes key ${key} signed"
+}
+
+signing=0
+for arg in "$@"; do
+  if [[ "${arg}" == "--detach-sign" ]]; then
+    signing=1
+  fi
+done
+if [[ "${signing}" -eq 1 ]]; then
+  sign "$@"
+  exit 0
+fi
+
+case "${1:-}" in
+  --auto-key-locate)
+    [[ "${2:-}" == "wkd" && "${3:-}" == "--locate-keys" && -n "${4:-}" ]] || die "unexpected --auto-key-locate form: ${*}"
+    ;;
+  --verify)
+    verify "$@"
+    ;;
+  --batch)
+    shift
+    case "${1:-}" in
+      --list-packets)
+        [[ -f "${2:-}" ]] || die "cannot list packets: ${2:-} is absent"
+        is_signature "${2}"
+        [[ -f "${state}/packets" ]] || die "no packets fixture in ${state}"
+        cat "${state}/packets"
+        ;;
+      --with-colons)
+        # --with-colons --list-keys LOOKUP
+        [[ "${2:-}" == "--list-keys" && -n "${3:-}" ]] || die "unexpected --with-colons form: ${*}"
+        lookup="${3}"
+        record=""
+        while IFS=$'\t' read -r fpr uid trust; do
+          [[ -n "${fpr}" ]] || continue
+          if [[ "${fpr}" == "${lookup}"* ]]; then
+            record="${fpr}:${uid}:${trust}"
+            break
+          fi
+        done < "${state}/keyring.tsv"
+        [[ -n "${record}" ]] || die "no public key ${lookup}"
+        IFS=: read -r fpr uid trust <<< "${record}"
+        # gpg --with-colons: pub field 9 is ownertrust, fpr and uid field 10
+        # their value.
+        printf 'tru::1:0:0:0:0:0:0:0:0\n'
+        printf 'pub:e:3072:1:%s:0:0::%s:\n' "${fpr: -16}" "${trust}"
+        printf 'fpr:::::::::%s:\n' "${fpr}"
+        printf 'uid:u::::::::%s:\n' "${uid}"
+        ;;
+      --import-ownertrust)
+        cat >> "${state}/ownertrust.log"
+        ;;
+      *)
+        die "unexpected --batch option: ${1:-}"
+        ;;
+    esac
+    ;;
+  *)
+    die "unexpected invocation: ${*}"
+    ;;
+esac

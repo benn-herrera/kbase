@@ -22,13 +22,33 @@ const (
 	checkKBRoot   = "kb-root"
 )
 
+// symlinkRefusal is err as the KB's symlink refusal, and false where err is
+// not one.
+func symlinkRefusal(err error) (result.Refusal, bool) {
+	var sym *kb.SymlinkError
+	if !errors.As(err, &sym) {
+		return nil, false
+	}
+	return result.Refusal{{Check: kb.CheckSymlink, Path: sym.Path, Detail: err.Error()}}, true
+}
+
 // refusal turns an input-caused error into a result.Refusal and passes any other
-// through.
-func refusal(err error) error {
+// through; src is what locates a coverage refusal at the bullet that wrote it.
+func refusal(src *kb.Source, err error) error {
 	var m kb.MalformedError
 	var c CycleError
 	var cov CoverageError
-	if errors.As(err, &m) || errors.As(err, &c) || errors.As(err, &cov) {
+	var ann *kb.AnnotationError
+	if r, ok := symlinkRefusal(err); ok {
+		return r
+	}
+	switch {
+	case errors.As(err, &ann):
+		return result.Refusal(AnnotationItems(ann))
+	case errors.As(err, &cov):
+		cov = coverageAt(src, cov)
+		return result.Refusal{{Check: checkMetadata, Key: cov.Key, Path: cov.Path, Line: cov.Line, Detail: cov.Msg}}
+	case errors.As(err, &m) || errors.As(err, &c):
 		return result.Refusal{{Check: checkMetadata, Detail: err.Error()}}
 	}
 	return err
@@ -52,13 +72,13 @@ func precheck(src *kb.Source) error {
 }
 
 var (
-	solidityLineRE = kb.PyRE(`^(\s*)-\s*solidity:`)
-	annotationRE   = kb.PyRE(`\(solidity\s+(?:-?\d+(?:\.\d+)?|\*pending\*)\)`)
+	strengthLineRE = kb.PyRE(`^(\s*)-\s*strength:`)
+	annotationRE   = kb.PyRE(`\(strength\s+(?:-?\d+(?:\.\d+)?|\*pending\*)\)`)
 )
 
 // Refresh derives every derived field of the KB src reads and writes it: the
-// subtree aggregates of every index node, every register entry's solidity
-// line, depends-on annotations and leaf-references footer, the .index/*.yaml
+// subtree aggregates of every index node, every register entry's strength
+// line, premise annotations and leaf-references footer, the .index/*.yaml
 // files and the claim-graph sheets. It then saves: every file the format
 // covers that src holds in a form the disk does not — the whole KB, where src
 // was migrated — then removes the paths the migration made obsolete, less
@@ -80,9 +100,9 @@ func RefreshReporting(src *kb.Source, lg log.Logger) (written, removed []string,
 		return nil, nil, false, err
 	}
 	r := refresher{src: src}
-	for _, phase := range []func() error{r.aggregates, r.solidity, r.leafReferences, func() error { return r.emit(lg) }, r.sheet, r.save} {
+	for _, phase := range []func() error{r.aggregates, r.strength, r.leafReferences, func() error { return r.emit(lg) }, r.sheet, r.save} {
 		if err := phase(); err != nil {
-			return r.written, r.removed, r.noDot, refusal(err)
+			return r.written, r.removed, r.noDot, refusal(src, err)
 		}
 	}
 	return r.written, r.removed, r.noDot, nil
@@ -115,13 +135,31 @@ func (r *refresher) write(rel, text string) error {
 }
 
 // WriteKBFile replaces the KB file at p with data, atomically and keeping
-// its mode, and records the bytes in src so later reads see them.
+// its mode, and records the bytes in src so later reads see them. A file
+// beside kb-root — a build record — is written under the repository; every
+// other is written under kb-root, and a symbolic link at p or a target
+// outside either tree is refused.
 func WriteKBFile(src *kb.Source, p string, data []byte) error {
-	if err := atomicfile.Write(p, data, nil); err != nil {
+	root := src.Root()
+	if !kb.Within(root, p) {
+		root = src.Repo()
+	}
+	if err := writeInside(root, p, data); err != nil {
 		return err
 	}
 	src.Put(p, data)
 	return nil
+}
+
+// writeInside replaces p with data atomically, refusing a path that is a
+// symbolic link or resolves outside root as the KB's symlink refusal.
+func writeInside(root, p string, data []byte) error {
+	err := atomicfile.WriteIn(root, p, data)
+	var link *atomicfile.LinkError
+	if errors.As(err, &link) {
+		return result.Refusal{{Check: kb.CheckSymlink, Path: p, Detail: link.Detail}}
+	}
+	return err
 }
 
 func (r *refresher) aggregates() error {
@@ -177,12 +215,12 @@ func lineAt(lines []string, i int, rel string) (string, error) {
 	return lines[i], nil
 }
 
-func (r *refresher) solidity() error {
+func (r *refresher) strength() error {
 	st, err := kb.Discover(r.src, log.Discard())
 	if err != nil {
 		return err
 	}
-	sol, err := ComputeSolidity(st)
+	strength, err := ComputeStrength(st)
 	if err != nil {
 		return err
 	}
@@ -205,61 +243,53 @@ func (r *refresher) solidity() error {
 	}
 	slices.Sort(files)
 	for _, rel := range files {
-		if err := r.rewriteSolidity(rel, byFile[rel], st.Supports, sol); err != nil {
+		if err := r.rewriteStrength(rel, byFile[rel], st.Analyses, strength); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *refresher) rewriteSolidity(rel string, entries []kb.ClaimEntry, supports []kb.SupportNode, sol Solidity) error {
+func (r *refresher) rewriteStrength(rel string, entries []kb.ClaimEntry, analyses []kb.AnalysisNode, strength Strength) error {
 	text, err := r.src.ReadText(r.path(rel))
 	if err != nil {
 		return err
 	}
 	lines, final := editableLines(text)
 	joined := strings.Join(lines, "\n")
-	finals, supFinals := sol.Finals(), sol.SupFinals()
+	finals := strength.Finals()
+	analysisResults := strength.AnalysisResults
 	byID := map[string]kb.ClaimEntry{}
 	for _, e := range entries {
 		byID[e.ID] = e
 	}
-	supByID := map[string]kb.SupportNode{}
-	for _, s := range supports {
-		supByID[s.ID] = s
+	analysisByID := map[string]kb.AnalysisNode{}
+	for _, s := range analyses {
+		analysisByID[s.ID] = s
 	}
 	var order []string
 	ranges := map[string][2]int{}
 	for _, loc := range kb.LocateEntries(joined) {
-		if loc.QualityStart < 0 {
+		if loc.RigorStart < 0 {
 			continue
 		}
 		if _, ok := ranges[loc.NodeID]; !ok {
 			order = append(order, loc.NodeID)
 		}
-		ranges[loc.NodeID] = [2]int{loc.QualityStart, loc.QualityEnd}
+		ranges[loc.NodeID] = [2]int{loc.RigorStart, loc.RigorEnd}
 	}
 	scrubbed := kb.SplitLines(kb.StripCodeFences(joined))
 	for _, id := range order {
 		entry, isClaim := byID[id]
-		sup, isSup := supByID[id]
-		if !isClaim && !isSup {
+		_, isAnalysis := analysisByID[id]
+		if !isClaim && !isAnalysis {
 			continue
 		}
-		var computed *float64
-		trace := ""
+		var res Result
 		if isClaim {
-			if v, ok := finals[id]; ok {
-				computed = ptr(v)
-			}
-			if res, ok := sol.Results[entry.ID]; ok {
-				trace = RenderSolidityTrace(res)
-			}
+			res = strength.Results[entry.ID]
 		} else {
-			if v, ok := supFinals[id]; ok {
-				computed = ptr(v)
-			}
-			trace = RenderMinTrace(sup.Quality, MinDependencySolidity(sup.DependsOn, finals))
+			res = analysisResults[id]
 		}
 		span := ranges[id]
 		for idx := span[0]; idx < span[1]; idx++ {
@@ -268,23 +298,23 @@ func (r *refresher) rewriteSolidity(rel string, entries []kb.ClaimEntry, support
 				return err
 			}
 			probe := scrubbed[idx]
-			if solidityLineRE.MatchString(probe) {
-				lines[idx] = solidityLine(computed, trace)
+			if strengthLineRE.MatchString(probe) {
+				lines[idx] = strengthLine(res.Final, RenderStrengthTrace(res))
 				continue
 			}
-			if !strings.Contains(probe, "(solidity") {
+			if !strings.Contains(probe, "(strength") {
 				continue
 			}
 			targets := kb.ClaimIDs(kb.BulletHead(kb.TrimBulletLead(kb.Strip(probe))))
 			if len(targets) == 0 {
 				continue
 			}
-			var target *float64
+			var source *float64
 			if v, ok := finals[targets[0]]; ok {
-				target = ptr(v)
+				source = ptr(v)
 			}
 			if loc := annotationRE.FindStringIndex(line); loc != nil {
-				lines[idx] = line[:loc[0]] + kb.RenderSolidityAnnotation(FormatSolidity(target)) + line[loc[1]:]
+				lines[idx] = line[:loc[0]] + kb.RenderStrengthAnnotation(FormatStrengthRecord(source)) + line[loc[1]:]
 			}
 		}
 	}
@@ -294,12 +324,12 @@ func (r *refresher) rewriteSolidity(rel string, entries []kb.ClaimEntry, support
 	return nil
 }
 
-func solidityLine(v *float64, trace string) string {
+func strengthLine(v *float64, trace string) string {
 	if v == nil {
-		return kb.RenderSolidityLine(nil, "", "")
+		return kb.RenderStrengthLine(nil, "", "")
 	}
-	value := FormatSolidity(v)
-	return kb.RenderSolidityLine(&value, *BuildStatusPhrase(v), trace)
+	value := FormatStrengthRecord(v)
+	return kb.RenderStrengthLine(&value, *BuildStatusPhrase(v), trace)
 }
 
 func (r *refresher) leafReferences() error {
@@ -329,7 +359,7 @@ func (r *refresher) leafReferences() error {
 				lines[band.FooterLine] = footer
 				continue
 			}
-			at := band.QualityStart
+			at := band.RigorStart
 			block := []string{footer, ""}
 			if at > band.BodyStart {
 				prev, err := lineAt(lines, at-1, rel)
@@ -490,7 +520,7 @@ func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err erro
 		if err != nil {
 			return nil, nil, false, err
 		}
-		if err := atomicfile.Write(target, svg, nil); err != nil {
+		if err := writeInside(kbRoot, target, svg); err != nil {
 			return nil, nil, false, err
 		}
 		return []string{kb.ClaimGraphFile}, nil, false, nil
@@ -509,7 +539,7 @@ func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err erro
 		if bytes.Equal(s.SVG, current) {
 			continue
 		}
-		if err := atomicfile.Write(target, s.SVG, nil); err != nil {
+		if err := writeInside(kbRoot, target, s.SVG); err != nil {
 			return written, nil, true, err
 		}
 		written = append(written, s.Path)

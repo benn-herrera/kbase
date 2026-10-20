@@ -44,8 +44,10 @@ Read in this order:
    (SPEC §9.6).
 4. **A KB to serve.** Either one already built (a repository with `kb-root/` in it), one you build
    first with `kbase build <volume-root.tex>` from the repository root, or one you create empty with
-   `kbase init` and fill through the write ops (SPEC §8). A KB at an older metadata format is read as
-   is and migrated on its first write (SPEC §10).
+   `kbase init` and fill through the write ops (SPEC §8). A KB at an older metadata format is
+   converted in memory when it is read and stamped by its first write (SPEC §10). Until that save its
+   index belongs to the old form, so every query and `render-claim-graph` is refused (`check: index`,
+   remedy `kbase refresh`): run `kbase refresh` before serving it.
 
 ## Registering the server
 
@@ -110,19 +112,19 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
 
 ## What the harness sees
 
-- **Tools.** One per subcommand, named as the subcommand: `init`, the write ops
-  (`insert-claim-entry`, `set-rigor`, `add-depends-on`, `resolve-demoted`, …), `render-citation`,
-  the queries (`find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `solidity-below`,
-  `subtree`, `weak-points`, `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`,
-  `render-claim-graph`, `export-latex`, `status`, `cancel` and `build`. Not offered: `completion`,
-  `help`, `mcp` — and `wait`, which a tool call would hold for the build's duration; the `build` tool
-  returns its command instead. Each tool's input schema is derived from its command's arguments and
-  flags; a write op's schema is one entry with the op's closed set of value keys and no others. The
-  queries,
-  `verify`, `status`, `render-citation`, `show`, `show-config`, `models` and `rewind-build` carry the
-  read-only annotation. `models` reads the selected provider's model catalogue. `configure` writes
-  `config.toml`, dialling the provider for that catalogue except on its `--create` path with no
-  `--provider`, which dials nothing. Neither performs inference, which stays with `build`.
+- **Tools.** One per subcommand, named as the subcommand: `init`, the write ops (`insert-claim-entry`,
+  `insert-analysis-entry`, `set-rigor`, `set-bearing`, `add-rests-on`, `resolve-demoted`, …),
+  `render-citation`, the queries (`find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`,
+  `strength-below`, `subtree`, `weak-points`, `stats`), `show-config`, `models`, `configure`,
+  `refresh`, `verify`, `render-claim-graph`, `export-latex`, `status`, `cancel` and `build`. Not
+  offered: `completion`, `help`, `mcp` — and `wait`, which a tool call would hold for the build's
+  duration; the `build` tool returns its command instead. Each tool's input schema is derived from
+  its command's arguments and flags; a write op's schema is one entry with the op's closed set of
+  value keys and no others. The queries, `verify`, `status`, `render-citation`, `show`,
+  `show-config`, `models` and `rewind-build` carry the read-only annotation. `models` reads the
+  selected provider's model catalogue. `configure` writes `config.toml`, dialling the provider for
+  that catalogue except on its `--create` path with no `--provider`, which dials nothing. Neither
+  performs inference, which stays with `build`.
 - **`rewind-build` is the one listed tool.** No subcommand stands behind it: its schema is written by
   hand (`target` and `state-dir`, both optional), and a refusal from it is keyed by the schema
   property name rather than a flag spelling. It lists the build's stage boundaries, oldest first,
@@ -132,10 +134,13 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
   and the recorded re-issue, for you to run. It changes nothing. The table test requires it to be the
   only listed tool, by equality.
 - **Results.** Every tool returns the result document of SPEC §7 twice: as the text content (YAML)
-  and as `structuredContent`. `isError` is set exactly when the document's exit code is not 0, so a
-  refusal reaches the model as an error that still carries its items and remedy. Arguments that
-  fail the schema are JSON-RPC `-32602` errors, not result documents. List queries page with
-  `limit` and `offset`.
+  and as `structuredContent`. The document is §7's shared vocabulary — `outcome`, `kb-root`, then
+  the subcommand's own keys — and a `migration` record (`from`, `to`, `note`) stands after `kb-root`
+  on every result from a KB read on an older format, until a save stamps it current; `stats` counts
+  one per node kind in `results` — `claims`, `analyses`, `experiments`, `axioms`, `works`. `isError`
+  is set exactly when the document's exit code is not 0, so a refusal reaches the model as an error
+  that still carries its items and remedy. Arguments that fail the schema are JSON-RPC `-32602`
+  errors, not result documents. List queries page with `limit` and `offset`.
 - **Resources.** The claim-graph sheets on disk, as `image/svg+xml` resources with URI
   `kbase://sheet/<path under kb-root>`; `resources/read` returns the SVG as text. Beside them
   `kbase://model-hints` is the `[models]` guidance as markdown — the same rows a created
@@ -179,7 +184,7 @@ Two levels, both cheap.
    content. The transcript fixtures under `test_data/fixtures/mcp/` are worked examples of the exact
    frames.
 2. **In the harness.** Register the server, open a session in the repository, confirm the harness
-   lists `kbase` as connected with its tools, and ask for something that needs a lookup ("how solid
+   lists `kbase` as connected with its tools, and ask for something that needs a lookup ("how strong
    is <a named result> and what does it rest on"). A pass is the session answering through `find`,
    `show` and `deps` alone, with no file read of the index. On Claude Code this negotiated
    `2025-11-25` and the session answered through five tool calls; the harness's own MCP log records

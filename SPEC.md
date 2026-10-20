@@ -71,8 +71,8 @@ filter.
 **Stamped documents.** `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands:
 kbase's subcommands.
 
-**Formats.** A new KB is written in the current metadata format, `1.0.0` (§10). A KB in the
-superseded `0.9.0` form (§10) is read through migration.
+**Formats.** A new KB is written in the current metadata format, `2.0.0` (§10). A KB in a superseded
+form — `0.9.0` or `1.0.0` (§10) — is read through migration.
 
 **Theorem numbering** is whatever pandoc prints.
 
@@ -105,32 +105,32 @@ box. A one-volume KB has the full sheet alone. A digest or volume sheet the KB n
 is removed by the next render, and reported (§7); a file named `claim-graph.svg` directly inside a
 top-level directory of `kb-root/` is by definition such a sheet.
 
-**What is drawn.** Premise relations, plus the `strengthens`, `supports` and `rests-on` relations.
-Other `references` edges are not drawn, except those the build's cycle breaking cut from `depends`,
-which are the index's `demoted` rows (§10), drawn as cuts. A KB whose cuts are plain `references`
-rows draws no cuts. A claim with no drawn edge is not
-drawn as a node; it is listed in a table titled "unattached (N)", one row per claim with a link and
-a tooltip. Of the drawn `depends` edges, only the transitive reduction appears; it checks an edge
-only against the edges still kept. Of `depends` edges sharing a source and target, one is drawn
-whatever their contexts.
+**What is drawn.** The four scoring relations — `supports`, `founds`, `lifts` and `refutes` — each in
+a stroke of its own, every stroke pointing in the push direction, from the supporter to the node it
+supports. `references` edges are not drawn, except those the build's cycle breaking cut from
+`supports`, which are the index's `demoted` rows (§10), drawn as cuts. A KB whose cuts are plain
+`references` rows draws no cuts. A node with no drawn edge is not drawn as a node; it is listed in a
+table titled "unattached (N)", one row per node with a link and a tooltip. Of the drawn `supports`
+edges, only the transitive reduction appears; it checks an edge only against the edges still kept. Of
+`supports` edges sharing a source and target, one is drawn whatever their contexts.
 
-- *Edges*: `depends` edges are **cited**, black solid, where the paper's text marks the dependency,
+- *Edges*: a `supports` edge is **cited**, black solid, where the paper's text marks the dependency,
   or **inferred**, blue dashed, where the build found it with no mark. An edge source → target was
   found with no mark where the unmarked record answers (source, target) yes in that direction, or
   where the cull record's `links` hold its pair either way round (§6). Of the build records beside
   `kb-root/` the sheet reads only the unmarked record and the cull record's links, for that
-  distinction; an absent record finds nothing. `strengthens`, `supports` and `rests-on` edges are
-  each drawn in a style of their own, beside them. A **cut**, read from the index's `demoted` rows,
-  is drawn dotted red, heavier where its origin is `cited` (or absent) than where it is `inferred`;
-  its tooltip names the origin (`cut, cited`, `cut, inferred`), and the digest counts cuts by origin
-  (`1 cited cut`) and draws a bundle of cuts at the cited weight. Both origins share one legend row,
-  "cut from depends: part of a circle (cited / inferred)".
-- *Nodes by kind*, eight, each with its own mark: a labelled block (bold frame), an equation, prose,
-  a support (dashed rounded), an experiment (component shape), an invariant and an axiom (grey, bold
-  frame), a work (note). An edge end that no record carries is drawn as a ghost box, dashed red,
-  labelled with the id. Claims and supports are filled by solidity band, `*pending*` in grey. A
-  node's tooltip reads `<id> [<kind>, <band>] <title>`, every backslash in it shown as written
-  (`$\Gamma$` does not become the graph's name).
+  distinction; an absent record finds nothing. `founds`, `lifts` and `refutes` edges are each drawn
+  in a style of their own, beside the supports strokes. A **cut**, read from the index's `demoted`
+  rows, is drawn dotted red, heavier where its origin is `cited` (or absent) than where it is
+  `inferred`; its tooltip names the origin (`cut, cited`, `cut, inferred`), and the digest counts
+  cuts by origin (`1 cited cut`) and draws a bundle of cuts at the cited weight. Both origins share
+  one legend row, "cut from supports: part of a circle (cited / inferred)".
+- *Nodes by kind*, seven, each with its own mark: a labelled block (bold frame), an equation, prose,
+  an analysis (dashed rounded), an experiment (component shape), an axiom (grey, bold frame), a work
+  (note). An edge end that no record carries is drawn as a ghost box, dashed red, labelled with the
+  id. Claims and analyses are filled by strength band, `*pending*` in grey. A node's tooltip reads
+  `<id> [<kind>, <band>] <title>`, the band omitted for a node that has none, every backslash in it
+  shown as written (`$\Gamma$` does not become the graph's name).
 - *Links*: every node links to its register entry; a digest box links to the volume's index and
   sheet.
 - A legend. The SVG root is `width="100%"` with a `viewBox`, so it scales to the viewer.
@@ -220,6 +220,11 @@ README is assembled around its passage.
 load-bearing forms; claim-graph registers and nodes; the derived index. The build's stages and what
 each does are in ARCHITECTURE, "Stage table"; how each computes its product is ARCHITECTURE's.
 
+**A build records no judgement.** Every scoring edge a build writes carries `*pending*` as its
+bearing, and no stage writes a `rigor` or any other number into a score: the judgement is a person's,
+through `set-rigor` and `set-bearing` (§8). A claim a build attaches an edge to reads unchanged until
+that edge is judged.
+
 **Co-linearity cull (`claims-culled`).** The stage walks between `references-found` and
 `depends-attributed`, and removes prose claims that state no step a linked claim does not. Its
 candidates are the links — every marked pair, every pair the unmarked-reference ask answered yes in
@@ -247,11 +252,11 @@ the text marks it, and every link of the cull record (§6) whose two claims no m
 either way round, directed from its later claim in reading order to its earlier, an equation node
 always the target. Each candidate is asked once, offered *supported by*, *in support of* and
 *mention*, less *in support of* where containment directed the pair or its target is an equation
-node. *Supported by* writes a `depends` edge from source to target, *in support of* one from target
+node. *Supported by* writes a `supports` edge from source to target, *in support of* one from target
 to source, and *mention* a `references` edge. A candidate whose ask yields no readable answer after
 the re-ask, and every candidate under `--no-inference`, takes its draft: *supported by* where
 containment directed the pair, *mention* otherwise. The stage writes every edge its answers make,
-cycles included; last, every `depends` edge lying on a cycle is demoted (§10), before the stage's
+cycles included; last, every `supports` edge lying on a cycle is demoted (§10), before the stage's
 refresh and verify.
 
 **Records and inference.** The reader and placement facts the claim graph needs travel as records in
@@ -366,8 +371,12 @@ usage error on its own command line, before it serves, still prints a YAML refus
 2. `kb-root`: the absolute path. Present on every subcommand that resolves a KB, which is all of
    them except `models`, `configure` and `show-config`; `init` omits it from results written while
    no `kb-root/` stands (§8).
-3. The subcommand's own keys, in the order its table gives.
-4. Exactly one of these, chosen by `outcome`: `refusals` for `refused` and `retry`; `failures` for
+3. `migration`: a conditional record — `from`, `to`, `note` — present on the result of every verb
+   that reads a KB through the loader on an older format version, and absent otherwise (§10):
+   `refresh`, `verify`, `render-claim-graph`, `render-citation`, `export-latex`, the queries and
+   every write op. It follows `kb-root` where the result carries both.
+4. The subcommand's own keys, in the order its table gives.
+5. Exactly one of these, chosen by `outcome`: `refusals` for `refused` and `retry`; `failures` for
    `failed`; `cancelled` (a mapping of `stage` and `unit`) for `cancelled`.
 
 Keys are kebab-case. The one exception is query data under `results`, which keeps the query data's
@@ -382,7 +391,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `usage`, `provider`, `dirty-paths`, `include`, `metadata-key`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `demoted`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `usage`, `provider`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it |
@@ -405,12 +414,12 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `cancel` | `state-dir`; `pid`; `resume` (absent where the record's command does not read as a `kbase build` invocation, §6) |
 | `init` | `written` (every path this call wrote — the spine, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
 | `refresh` | `written` (includes every sheet written); `removed` (files the KB no longer calls for — a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none) |
-| `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` edge (§10), as items with `check: demoted`, `path` the register, `detail` the edge and its origin; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
+| `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` edge (§10), as items with `check: demoted`, `path` the register, `detail` the edge and its origin; and each declaration a legacy `AGENTS.md` still carries beside an `axioms.md`, as an item with `check: axiom-source`, `path` that file, `line` the declaration's line and `detail` the token as written, informational and carrying no `remedy`; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
 | every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (paths this call wrote); `refreshed` (paths; null under `--no-refresh`); `removed` (the trailing refresh's, as `refresh`'s; `[]` under `--no-refresh`) |
 | `resolve-demoted` | as every write op; `resolved` (list of `source`, `target`, `action`: `removed` or `restored`) |
 | `render-citation` | `citations` (one per entry, in entry order) |
-| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `solidity-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, add `context` after `applicability`: the edge's context string, null where it has none) |
-| `show`, `stats` | `results` (the query's mapping; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
+| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; the context null where the edge has none) |
+| `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag`, `config` or `sole-entry` — and the layer that supplied it, as `build`'s; this verb always resolves one); `models` (ids, sorted ascending) |
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each file's); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `provider`, `models` (`decision`, `text`, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag`, `config` or `sole-entry` — or `detail` where no entry was named); `inference` (`name`, `base-url`, `decision`, `text`, `sources` (one record: `base-url`, `decision`, `text`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset); null where it does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where inference does not resolve) |
@@ -507,54 +516,69 @@ Each op's result keys are §7's.
 
 The op over a cut (§10). Values:
 `entry` items of `id` (the source claim), `target`, and `action`: `remove` or `restore`. `remove`
-deletes the `demoted` row; `restore` rewrites it as a `depends` edge, refused (`check:
+deletes the `demoted` row; `restore` rewrites it as a `supports` premise edge, refused (`check:
 dependency-cycle`, `entry` the item's number, `detail` naming the path `target → … → id → target`)
-where that would close a cycle, and refused where the pair has neither a `demoted` nor a `depends`
+where that would close a cycle, and refused where the pair has neither a `demoted` nor a `supports`
 edge. A batch naming the same (`id`, `target`) pair twice is refused whatever the actions: the
 item's `entry` is the repeat's number, its `key` is `target`, and its `detail` names the first
 entry. Idempotent: a re-issue is `unchanged` — a pair with no `demoted` row and `remove`, or already
-a `depends` edge and `restore`. Runs the trailing refresh as every write op does.
+a `supports` edge and `restore`. Runs the trailing refresh as every write op does.
 
 ### `insert-claim-entry`
-### `insert-support-entry`
+### `insert-analysis-entry`
 ### `insert-experiment-entry`
 ### `insert-work-entry`
-### `set-work-strength`
-### `set-applicability`
+### `set-bearing`
 ### `set-rigor`
 ### `set-rationale`
-### `add-depends-on`
+### `add-rests-on`
 ### `set-frontmatter`
 ### `mark-claim-in-leaf`
-### `set-on-point-fraction`
 
 An insert creates a missing register only under `--create`.
 
+The values take the shapes §10 gives them: a node's `rigor`; `rests-on` entries of `{id, context,
+bearing}`; and pair entries of `{id, bearing}` in a claim's `refutes`, an analysis's `lifts` and
+`refutes`, and an experiment's `supports`, `lifts` and `refutes`, which also takes its `status`.
+`set-rigor` takes `id` and `rigor`; `set-bearing` takes `id` (the source), `target`, `relation` and
+`bearing`; `add-rests-on` takes `id` and the `rests-on` and `references` lists it adds. Each op's
+closed key set is `kbase <op> --help`'s, as for every op.
+
+`set-bearing` **replaces an existing token and never inserts one**: a scoring edge carrying no
+bearing is a load fault (§10) before the op runs. It refuses a relation outside the four, a pairing
+whose bearing is illegal (`references` and `demoted`, and every source and target kind the four do
+not join), and a value outside `[0, 1] ∪ {*pending*}`. A new `rests-on` entry's bearing is
+`*pending*` where the caller leaves it out, as is a new refutation's in a claim's `refutes` list, so
+attaching an edge moves no derived value until it is judged; an analysis's or an experiment's pair
+list requires its bearing.
+
 ### `drop-claim-edges`
 
-Removes a claim entry's outgoing `depends-on` or
-`references` bullets, the class named or, where none is, both — each bullet with its continuation
-lines — and a list's header where neither bullet nor other text is left; an absent list stands. The
-`demoted` class is refused: demoted rows are `resolve-demoted`'s to remove. Idempotent: a re-issue
-is `unchanged`.
+Removes a claim entry's `rests-on` and `references` lists, the `edge-class` named or, where none is,
+both — each bullet with its continuation lines — and a list's header where neither bullet nor other
+text is left; an absent list stands. The `demoted` class is refused: demoted rows are
+`resolve-demoted`'s to remove. Idempotent: a re-issue is `unchanged`.
 
 ### `drop-inbound-edges`
 
-Removes, from every register entry holding one, each `depends-on` or `references`
-bullet naming the claim, with its continuation lines, and a list's header where neither bullet nor
-other text is left; an entry naming no such bullet stands. Idempotent: a re-issue is `unchanged`.
+Removes every authored edge that names the claim: each register entry's `rests-on` bullet naming it,
+each entry's `references` bullet pointing at it, each claim's refutation of it, and each analysis's
+or experiment's `supports`, `lifts` or `refutes` pair naming it — each with its continuation lines,
+and a list's header where neither bullet nor other text is left. An entry authoring no such edge
+stands. Idempotent: a re-issue is `unchanged`.
 
 ### `drop-claim-node`
 
-Deletes a claim node entirely: its register entry block, its claim-quality marker
+Deletes a claim node entirely: its register entry block, its claim-rigor marker
 from every leaf carrying it, its id from every leaf claiming it, and every other entry's demoted
-row naming it. Refused, writing nothing, where any entry's depends-on or references still names the
-node — run `drop-claim-edges` and `drop-inbound-edges` first; where the call would empty a leaf's
-claims list, the nodes one call drops from a leaf counted together, that being a no-claim decision
-`set-frontmatter` makes; and where, once those removals are composed, any line under `kb-root/`
-still names the node, each such line named as `path:line` — refresh's own roll-ups excepted, the
-trailing refresh rewriting them. Idempotent: a re-issue removes whatever of the node still stands
-(`done`) and is `unchanged` where nothing does.
+row naming it. Refused, writing nothing, where any entry or leaf-declared pair list still names the
+node — its `rests-on` bullet, a `references` bullet, a claim's `refutes` entry or an analysis's or
+experiment's pair: run `drop-claim-edges` and `drop-inbound-edges` first; where the call would empty
+a leaf's claims list, the nodes one call drops from a leaf counted together, that being a no-claim
+decision `set-frontmatter` makes; and where, once those removals are composed, any line under
+`kb-root/` still names the node, each such line named as `path:line` — refresh's own roll-ups
+excepted, the trailing refresh rewriting them. Idempotent: a re-issue removes whatever of the node
+still stands (`done`) and is `unchanged` where nothing does.
 
 ### `render-citation`
 
@@ -572,11 +596,18 @@ and §7 gives its result keys.
 ### `cited-by`
 ### `find`
 ### `referenced-by`
-### `solidity-below`
+### `strength-below`
 ### `subtree`
 ### `show`
 ### `weak-points`
 ### `stats`
+
+`weak-points` orders and thresholds on the derived value: its rows read each claim's `strength`, so a
+bearing that moves a claim moves the list. Its `dependents` count and `show`'s `premise_count` are
+structural — counts of edges, which no bearing changes.
+
+`stats` reads the derivation in `strength_bands`, `highest_leverage` and `weakest`, and is
+structural in its per-kind counts, `edges`, `demoted_edges` and `strengthen_by_items`.
 
 ### `render-claim-graph`
 
@@ -877,11 +908,11 @@ process.
 ## 10. Metadata format version
 
 **The stamp.** A KB declares its metadata format as `kb-format: <major>.<minor>.<patch>` in the
-entry point's frontmatter, semver. The superseded formats — the
-comment-block frontmatter, the JSON build records, the JSONL index — are `0.9.0`, and a KB with no
-stamp is `0.9.0`. Major: a reader built for the old major misreads the KB (a renamed field, changed
-semantics, a changed anchor rule). Minor: additive; an old reader ignores the addition safely.
-Patch: the bytes a writer produces changed, their meaning did not.
+entry point's frontmatter, semver. Two forms are superseded: `0.9.0` — the comment-block
+frontmatter, the JSON build records, the JSONL index — and `1.0.0`, which `2.0.0` replaces; a KB
+with no stamp is `0.9.0`. Major: a reader built for the old major misreads the KB (a renamed field,
+changed semantics, a changed anchor rule). Minor: additive; an old reader ignores the addition
+safely. Patch: the bytes a writer produces changed, their meaning did not.
 
 **Reading the stamp.** Before any other read, kbase reads `kb-format` alone from
 `kb-root/entry-point.md`, recognising either frontmatter form; a KB with no entry point is refused
@@ -892,7 +923,8 @@ rewritten on the next save.
 **One version read and written.** kbase reads and writes exactly the current version (ARCHITECTURE
 §12). An older stamp is read through migration (below). A newer major or minor is refused by every
 subcommand that reads the KB — `build` on an existing KB, `refresh`, `verify`, the write ops, the
-queries and `render-claim-graph`; `status` and `cancel` do not load the KB — outcome `refused`, one
+queries, `render-citation`, `render-claim-graph` and `export-latex`; `status` and `cancel` do not
+load the KB — outcome `refused`, one
 item `check: kb-format` naming the KB's version and kbase's, remedy "update kbase". No subcommand
 writes an older format, and nothing downgrades.
 
@@ -906,7 +938,7 @@ less any the save itself wrote, then stamps the entry point last — the stamp i
 migration completed — reporting the removals under `removed` (§7). Every read of a KB file goes
 through one loader, `internal/kbload`, which serves the migrated bytes to every command on an older
 KB (ARCHITECTURE §11); `verify` reports an unmigrated KB stale from its stamp. A write op with
-`--no-refresh` on an unmigrated KB is refused (`check: kb-format`, remedy `kbase refresh`): no save
+`--no-refresh` on an unmigrated KB is refused (`check: index`, remedy `kbase refresh`): no save
 mixes two formats. A save that fails before the stamp leaves the old form standing with some files
 already current; the next load reads each file in the form it finds, and the next save completes the
 migration. On an unmigrated KB `verify` reports the index stale with remedy `kbase refresh`, which
@@ -930,18 +962,210 @@ mappings and block lists, lists of flat mappings, plain or double-quoted scalars
 folded or multi-line scalars; flow style only for a list of scalars (`[clm-a, clm-b]`), an empty
 list or mapping (`[]`, `{}`), and the JSON object of an index line; a scalar is never wrapped. A
 reader of the dialect, in any language, is conformant when it reads the `1.0.0` golden pairs
-(ARCHITECTURE §10) to the same values. The `0.9.0 → 1.0.0` migration converts the record and index
+(ARCHITECTURE §12) to the same values. The `0.9.0 → 1.0.0` migration converts the record and index
 files under their new names and leaves nothing of the old form behind. Elsewhere this document
-describes the `1.0.0` form; `.jsonl` and the comment block are `0.9.0`, the superseded form, named
-only here.
+describes the `2.0.0` form, which keeps this serialisation; `1.0.0` is the form `2.0.0` supersedes,
+and its names appear here and in the migration below. `.jsonl` and the comment block are `0.9.0`,
+the oldest superseded form, named only here.
+
+**`2.0.0`**, the second major bump, is the scoring vocabulary: three quantities named, five node
+types in place of six, and one scalar on every scoring edge. It keeps the serialisation above and
+changes field names, relation names and the arithmetic those fields feed.
+
+**Five node types.** `claim`, `analysis`, `experiment`, `work` and `axiom`. `node_type`,
+`target_kind`, the index, the sheet and the result documents use these five words and no other. Ids
+carry the kind's three-letter prefix — `clm-`, `ana-`, `exp-` and `wrk-` before a minted or authored
+body, and `axm-<label>` for an axiom, whose label is written as authored
+(`[A-Za-z0-9][A-Za-z0-9._-]*`) — so a token names its kind without translation. An axiom is
+declared in `axioms.md`, one `### Axiom <label>: Title` heading per declaration. Authoring prose may
+say *invariant*, *framework premise*, *framework*, *proposition*, *evidence*, *trial*, *cited work*
+or *reference*: *invariant* and *framework premise* name an axiom, *proposition* a claim, *evidence*
+and *trial* an experiment, *cited work* and *reference* a work; *framework* names the document that
+declares axioms and is never a node type. The graph has one word per role; the other words are the
+author's.
+
+**Three quantities.** `rigor` is a node's local value — a claim's, an analysis's, a work's or an
+experiment's — a number in `[0, 1]` or `*pending*`; `bearing` is a scoring edge's scalar, a number in
+`[0, 1]` or `*pending*`, and the one token on every scoring edge; `strength` is the derived value, a
+number in `[0, 1]` or pending, on a claim and on an analysis. `*pending*` is the format's one
+no-number literal: written for a value nobody has judged, and read wherever a value is absent. A work,
+an experiment and an axiom have no derived value — their `rigor` is terminal, and an axiom's is `1.0`
+by rule, which no authored file carries — so each one's strength is its `rigor`.
+
+**Four scoring relations, one arithmetic.** Every scoring edge is stored push: `Source` is the
+supporter, `Target` the supported node, and `target_kind` the target's kind.
+
+| Relation | Source kinds | Target kinds | Contribution |
+|---|---|---|---|
+| `supports` | claim, experiment | claim, analysis | `bearing × source strength` into the minimum |
+| `founds` | work, axiom | claim, analysis | `bearing × the source's rigor` into the minimum; an axiom's rigor is `1.0` by rule |
+| `lifts` | analysis, experiment | claim, analysis | `bearing × the lifter's strength`, maxed above the minimum |
+| `refutes` | claim, analysis, experiment | claim, analysis | a cap, `1 − bearing × refuter strength`; the smallest cap wins |
+
+`supports` carries a premise from the argument itself; `founds` carries support from outside it — a
+cited work, or an axiom the argument leans on. An axiom's declaration in `axioms.md` is bookkeeping,
+not origin: what it states is an external fact.
+
+`references` and `demoted` are the two unscored relations: `references` carries no bearing and no
+value, and `demoted` carries an origin in its place. A bearing is required on every scoring edge and
+illegal on these two. A bearing weights the contribution and never modifies its source's value.
+
+```
+derivation = min(rigor, every supports contribution, every founds contribution)
+final      = min(max(derivation, every lift), every cap)
+```
+
+The walk carries full precision: nothing rounds a value on its way into a derivation, so a dependent
+multiplies its source's exact strength. The record — the `- strength:` line and a premise bullet's
+`(strength …)` — carries the value in the fewest decimals that read back as it: four in the ordinary
+case, more only where four would lose it, trailing zeros trimmed. A query result carries it as a
+number at two decimals, the trace on a `- strength:` line spells it at two, and a `verify` message
+quotes the record's spelling, being about the record. A pending `rigor` leaves that node's derivation
+unknown and propagates nowhere; a lift stands over it — `max(pending, lift)` is the lift, so a node
+corroborated but never judged publishes the lift's number, while a refutation alone leaves its
+strength unknown. A pending bearing, or a pending source strength, excludes its edge — no
+contribution, no lift, no cap — while `0.0` is a judgement and participates, taking a minimum to zero
+and a cap to `1.0`. A non-`run` experiment is inert as a lifter or refuter, and its `supports` edge is
+excluded like any unjudged premise. The interior of the scale is the judge's: kbase validates the
+range and composes.
+
+**A claim stands alone; an analysis is made of its citations.** A claim is a proposition about the
+subject matter: its premises support it, and it means what it means without them. An analysis is
+constituted by the nodes it cites — strip the ids from its sentence and no proposition remains — so
+it has at least one premise and concludes in a claim. The authoring test is that removal: if a
+proposition survives it is a claim, and if nothing survives it is an analysis. A claim is the model's
+atom and needs neither: it may stand with no premises and nothing resting on it. These are rules for
+authors, not faults: the loader enforces neither, and a KB that breaks one is still read.
+
+**Edge direction and authoring.** The register stays claim-centric: a claim's or an analysis's
+`- rests-on:` bullets name its premises, and the parse flips them into push edges — a `clm-` or `exp-`
+token yields a `supports` edge into the entry, a `wrk-` or `Axiom …` token a `founds` edge into it.
+An `ana-` token is not one of these: an analysis lifts or refutes and never supplies a premise, so a
+bullet naming one is refused as a pairing no relation joins. An analysis's `lifts:` and `refutes:`
+lists and an experiment's `supports:`, `lifts:` and `refutes:`
+lists are authored on the source and are already push; a claim's `refutes:` list
+(`- <clm-id>: <bearing>`) is authored on the refuting claim. `rests-on` is a list key and names no
+relation. `deps` presents an incident edge from the reader's side — `relation`, `direction` (`in`
+where the other end supports `id`, `out` where `id` supports it), `target`, `bearing`, `context` —
+and the inverse query is unchanged in name and meaning: the nodes a node's strength enters.
+
+**Required bearings.** A scoring edge carries its bearing on the bullet or pair line that authors it,
+and one bullet names at most one scoring target — a `clm-`, `exp-`, `wrk-` or `Axiom …` token — since
+one bearing cannot judge two edges. The load refuses a bullet that breaks a rule, before any state is
+built: `check: metadata`, `key` the field, `path` the register, `line` the bullet's first physical
+line, and `detail` naming the rule. A premise bullet naming an `ana-` id is one of those refusals: an
+analysis supplies no premise, so the bullet yields no edge and the load names the pairing.
+
+| # | A `rests-on` bullet | Fault |
+|---|---|---|
+| R1 | names two or more scoring targets | ambiguous: split the bullet, one target each |
+| R2 | yields a scoring edge and carries no `(bearing …)` | missing |
+| R3 | carries a bearing outside `[0, 1] ∪ {*pending*}` | domain; `allowed` names the set |
+| R4 | carries a bearing and names no scoring target | misplaced |
+| R5 | carries two or more `(bearing …)` tokens | ambiguous |
+
+A bullet naming one scoring target that resolves to no node is dropped with a log line and is no
+fault: no edge exists, so nothing is required. A pair line under a leaf's `analysis-nodes` or
+`experiment-nodes` mapping, and a claim's `refutes:` pair, names its one target as its key and
+carries a bearing like any scoring edge; one with no readable value, or a second value, is malformed
+and refused by the load, not read as pending.
+
+In the index an edge row carries `source_strength_recorded`, then `bearing`, then `context`, and a
+`demoted` row closes with its `origin`. `source_strength_recorded` is a number or null; a scoring
+row's `bearing` is a number in `[0, 1]` or `*pending*`, written as text; `null` means exactly one
+thing: this row cannot carry one.
+
+**The register's vocabulary.** `confidence`, `quality` and a work's `strength` were three names for
+one local value; all three are `rigor`. `solidity` was the derived value; it is `strength` on every
+surface — the register's `- strength:` line and `(strength …)` annotation, the index columns, the
+query keys, the sheet's bands, `strength-below` and its `--max-strength`. The register file is
+`claim-rigor.md`; an entry's authored fields stand under `### Rigor` and its derived line and trace
+under `### Strength`; the Tier-2 marker is `<!-- claim-rigor: … -->`. A claim's and an analysis's
+entry carries both headings; a work's carries `### Rigor` alone, having no derived value. A
+`- rests-on:` bullet reads `- <id> — <title> (strength 0.90) (bearing 0.4) [context]`, its strength
+annotation the premise's own derived strength and absent on a work or axiom bullet; that order is
+normative for writers and not for readers.
+
+**The `1.0.0 → 2.0.0` migration.** One converter reads a `1.0.0` KB's files as bytes and writes the
+current form's. A file it does not locate it does not touch, and a file already
+malformed under `1.0.0` is carried as bytes for the `2.0.0` load to refuse by name — the converter
+never makes invalid `1.0.0` bytes valid. Nor does it drop bytes: a file holding content the converter
+cannot carry refuses the conversion, `check: conversion`, naming the file, the line and the content,
+so the load writes nothing and the KB stands as it was. It
+
+- renames `- confidence:` on a claim entry, `- quality:` on an analysis entry and a work's
+  `- strength:` to `- rigor:`, and `- solidity:` and `(solidity …)` to `- strength:` and
+  `(strength …)`;
+- renames the premise list `- depends-on:` to `- rests-on:`, an analysis's `supports:` pairs to
+  `lifts:` and an experiment's `strengthens:` pairs to `lifts:`, each pair's value becoming its
+  bearing;
+- gives every scoring edge its bearing: an old `(applicability X)` becomes `(bearing X)` with its
+  value carried, an untokened premise bullet takes `(bearing 1.0)` — work and axiom bullets included
+  — and every experiment's mapping gains `rigor: 1.0`;
+- rewrites each entry's `### Quality` to `### Rigor` and `### Solidity` to `### Strength`, and
+  renames the register file `claim-quality.md` to `claim-rigor.md` with its Tier-2 marker
+  `<!-- claim-quality: … -->` to `<!-- claim-rigor: … -->`;
+- rewrites every authored `work-<citation key>` id to `wrk-<citation key>` where it appears, an
+  analysis's `support-nodes:` to `analysis-nodes:`, its `sup-id:` to `ana-id:` and its `sup-` ids to
+  `ana-`;
+- writes `axioms.md` — one `### Axiom <label>: Title` heading per `### INVARIANT-<label>:` section and
+  per `- Axiom N: **…**` bullet of `invariants.md` or a legacy `AGENTS.md`, each axiom bullet's body
+  beneath its heading — rewrites every `INVARIANT-<label>` citation in the register to
+  `Axiom <label>`, a legacy `Axiom N` citation already being the `2.0.0` spelling, gives that bullet
+  the bearing an axiom premise now requires, and moves a legacy bullet's trailing parenthetical into
+  `[context]`; labels are preserved and nothing renumbered;
+- splits a bullet naming several scoring targets into one bullet per target; and
+- removes both paths the form no longer has, reported under `removed`: `claim-quality.md`, and
+  `invariants.md`, whose declarations have moved into `axioms.md`. Every other file is left byte for
+  byte and no index is converted: the index is derived and regenerated.
+
+**The migration is not value-identical, and no derived-value equality is promised.** Three causes,
+and every one of them is a value a reader will see move:
+
+1. **An analysis's lift moves station; an experiment's does not.** Under `1.0.0` an analysis's
+   support contribution was maxed into the claim's local value, which then entered the minimum: a
+   corroborating analysis could be dragged down by a weak premise. Under `2.0.0` a lift stands above
+   the minimum. A supported claim whose lift exceeds its derivation rises to the lift; where the
+   derivation is at or above the lift, the value is unchanged. An experiment's pair already stood
+   above the minimum, so its station does not move.
+2. **`founds` scales.** An old `applicability X` was a gate: any positive value contributed the
+   work's whole rigor, and `0` skipped the edge. A `2.0.0` `bearing X` contributes `X × rigor`, so
+   every work edge below `1` falls, a `0` drives its claim to zero, and `1` is unchanged.
+3. **An untokened or pending work edge stops pending.** A work bullet with no applicability, or an
+   explicit pending one, left its claim pending. The untokened bullet now carries `1.0` and
+   contributes the work's rigor; an explicit `*pending*` token is carried and the edge is excluded.
+   In both cases the claim reads a number where it withheld one.
+
+An old applicability was authored as a gate, not a weight, so every non-`1` value needs a human
+re-read before it is trusted; the converter carries the number and does not reinterpret it, and it
+invents neither a finding nor a context where a migrated work bullet's context names none.
+
+**The migration announces itself.** A verb that reads a KB through the loader on an older version
+writes one sentence to stderr and carries one `migration` record — `from`, `to`, `note` — after
+`kb-root` (§7), on every such call until the call whose save stamps `2.0.0`; `note` states the three
+value changes in one sentence. §7 names the verbs. Over MCP the document is the channel and stderr
+is the server's log; `status` and `cancel` load no KB and never carry it. A `0.9.0` KB yields one
+record for the whole chain, `0.9.0` to `2.0.0`.
+
+**A converted but unsaved KB answers no query.** A query is refused with remedy `kbase refresh`: the
+index predates the columns, and a legal edge must never be reported without a token. `verify` reports
+the KB stale from its stamp and reports the strength drift the migration's own value changes produce;
+the save clears both. A `2.1.0` and a `3.0.0` KB are refused `check: kb-format`.
+
+**A legacy `AGENTS.md`.** The converter moves a legacy `AGENTS.md`'s declarations into `axioms.md` and
+leaves the file in place, since it also carries instructions; its axioms become inert. The load reads
+`axioms.md`, falling back to a legacy `invariants.md` and then to `AGENTS.md` only for a source the
+converter has not rewritten. `verify` reports each declaration still standing in a legacy document
+beside an `axioms.md` as `check: axiom-source`, with its path and line: informational, under
+`findings`, not refresh-fixable, and never a load refusal (§7).
 
 **The `demoted` relation**, added at `1.0.0`. A claim-graph edge class only the build writes: the
-build's cycle breaking records the `depends` edge it removes as `demoted` with its origin — `cited`
+build's cycle breaking records the `supports` edge it removes as `demoted` with its origin — `cited`
 where the text marked the dependency, `inferred` where the build found it (§3's words) — in place of
 turning it into `references`. The cuts are the dependency-attribution stage's ring row — every
-`depends` edge on a cycle once attribution has written its edges. The origin is `inferred` where
+`supports` edge on a cycle once attribution has written its edges. The origin is `inferred` where
 the build found the cut edge with no mark, by §3's rule, else `cited`. It stands outside the
-premise walk and the acyclicity check exactly as `references` does and carries no solidity. In the
+premise walk and the acyclicity check exactly as `references` does and carries no strength. In the
 register an entry carries a `- demoted:` list after `references:`, its items `- <target> — <title>
 (origin cited)` or `(origin inferred)`, with an optional context, in the annotation style of the
 other lists. In the index the row has `relation: "demoted"`, every field a `references` row
@@ -949,18 +1173,18 @@ carries, then `origin` (`cited`, `inferred`, or null where the bullet has none).
 cuts through two build-only write ops, `add-build-edges` and `demote-claim-edge`, neither a
 subcommand nor among the public ops, so the public write surface cannot create one; `verify`
 refuses a `demoted` row carrying no valid origin, so a KB's demoted edges are the build's and a
-person's resolutions only remove them. `demote-claim-edge` turns an entry's existing `depends` edge
+person's resolutions only remove them. `demote-claim-edge` turns an entry's existing `supports` edge
 into a `demoted` row of the same entry carrying the origin the build computed for the pair; where
-that row already stands it removes a `depends` edge still standing beside it, and otherwise leaves
+that row already stands it removes a `supports` edge still standing beside it, and otherwise leaves
 the pair as it stands; it refuses a row standing with the other origin, naming both, and a pair
-with neither a `depends` edge nor a `demoted` row. One write op, `resolve-demoted` (§8), removes
-one or restores it to `depends`, refusing a restore that would close a cycle
+with neither a `supports` edge nor a `demoted` row. One write op, `resolve-demoted` (§8), removes
+one or restores it to `supports`, refusing a restore that would close a cycle
 (`check: dependency-cycle`, the entry number and the path) and a restore where neither a
-`demoted` nor a `depends` edge exists. `verify` lists every `demoted` edge under `findings` (§7)
-with outcome `done`; the queries report it under its relation wherever they report `references`
-(`show`, `deps`, `referenced-by`); the sheet draws it as a cut, its origin in the cut's weight and
-tooltip (§3); `stats` counts them as `demoted_edges`, after `depends_on_edges`, which still counts
-every row.
+`demoted` nor a `supports` edge exists. `verify` lists every `demoted` edge under `findings` (§7)
+with outcome `done`; `deps` reports it as a row of its own relation and `stats` counts it
+(`demoted_edges`), while `show` carries no edge list and `referenced-by` answers leaf paths; the
+sheet draws it as a cut, its origin in the cut's weight and
+tooltip (§3); `stats` counts them as `demoted_edges`, after `edges`, which counts every row.
 
 ---
 

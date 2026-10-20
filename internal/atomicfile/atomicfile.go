@@ -39,6 +39,50 @@ func Write(path string, data []byte, beforeRename func(keep func())) error {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved
 	}
+	return replace(path, target, data, beforeRename)
+}
+
+// LinkError is WriteIn's refusal of a path it will not write: the path itself
+// is a symbolic link, or what its directory resolves to lies outside the root.
+// Detail is the sentence saying which, naming the path.
+type LinkError struct{ Detail string }
+
+func (e *LinkError) Error() string { return e.Detail }
+
+// WriteIn is Write for a path that must stay inside root: a path that is a
+// symbolic link is refused with a *LinkError, and so is one whose resolved
+// target leaves root. Neither touches the file the link names.
+func WriteIn(root, path string, data []byte) error {
+	target, err := resolveIn(root, path)
+	if err != nil {
+		return err
+	}
+	return replace(path, target, data, nil)
+}
+
+// resolveIn is path as WriteIn writes it: path itself where nothing on its
+// way resolves elsewhere, and the refusal of a link at path or of a target
+// outside root.
+func resolveIn(root, path string) (string, error) {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return "", &LinkError{Detail: fmt.Sprintf("%s is a symbolic link, and a document is replaced only where it stands", path)}
+	}
+	target := path
+	if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		target = filepath.Join(resolved, filepath.Base(path))
+	}
+	resolvedRoot := root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		resolvedRoot = resolved
+	}
+	if rel, err := filepath.Rel(resolvedRoot, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", &LinkError{Detail: fmt.Sprintf("%s resolves to %s, which is outside %s", path, target, root)}
+	}
+	return target, nil
+}
+
+// replace installs data at target, the path Write resolved, as path.
+func replace(path, target string, data []byte, beforeRename func(keep func())) error {
 	info, statErr := os.Stat(target)
 	tmp, err := createTemp(filepath.Dir(target), tempPrefix(target))
 	if err != nil {

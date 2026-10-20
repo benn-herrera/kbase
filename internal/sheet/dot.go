@@ -18,13 +18,13 @@ const (
 	ghostColor = "#c0392b"
 	linkColor  = "#1f6fb2"
 	ellipsis   = "…"
-	// wordCut is what a demoted edge is called on a sheet: a depends edge
+	// wordCut is what a demoted edge is called on a sheet: a supports edge
 	// the build's cycle breaking cut.
 	wordCut      = "cut"
 	ghostMeaning = "an id no record carries"
 	cutColor     = "#c0392b"
 	cutGlyph     = "┈┈┈▷"
-	cutLegend    = "cut from depends: part of a circle (cited / inferred)"
+	cutLegend    = "cut from supports: part of a circle (cited / inferred)"
 )
 
 // nodeStyle is how one kind draws; a fill of "" is the node's band's.
@@ -40,9 +40,8 @@ var nodeStyles = []nodeStyle{
 	{kindBlock, "box", "filled,rounded", 2, "", "labelled block — theorem, lemma, … (bold frame)"},
 	{kindEquation, "box", "filled", 1, "", "equation"},
 	{kindProse, "box", "filled,rounded", 1, "", "prose claim"},
-	{kb.NodeKindSupport, "box", "filled,rounded,dashed", 1, "", "analytical support"},
+	{kb.NodeKindAnalysis, "box", "filled,rounded,dashed", 1, "", "analysis"},
 	{kb.NodeKindExperiment, "component", "filled", 1, "#e8f4fd", "experiment"},
-	{kb.NodeKindInvariant, "box", "filled", 2, "#d9d9d9", "structural invariant"},
 	{kb.NodeKindAxiom, "box", "filled", 2, "#d9d9d9", "axiom"},
 	{kb.NodeKindWork, "note", "filled", 1, "#f0e6ff", "external work"},
 }
@@ -57,10 +56,13 @@ func styleOf(kind string) nodeStyle {
 	return nodeStyles[i]
 }
 
-// plural is how the digest counts a kind.
+// plural is how the digest counts a kind: analysis counts as analyses.
 func plural(kind string) string {
-	if kind == kindProse {
+	switch kind {
+	case kindProse:
 		return kind
+	case kb.NodeKindAnalysis:
+		return "analyses"
 	}
 	return kind + "s"
 }
@@ -108,25 +110,26 @@ type stroke struct {
 }
 
 // strokes is every stroke, in legend and count order. kb.RelationReferences
-// has none: a references edge is not drawn.
+// has none: a references edge is not drawn. Each scoring stroke points in the
+// push direction, from the supporter to the supported.
 var strokes = []stroke{
-	{kb.RelationDepends, kb.OriginCited, kb.OriginCited, "depends, " + kb.OriginCited, false, true, "#222222", "penwidth=1.2", "━━━▶",
-		kb.OriginCited + " — depends, marked in the text; points to the premise"},
-	{kb.RelationDepends, kb.OriginInferred, kb.OriginInferred, "depends, " + kb.OriginInferred, false, true, "#2471a3", "style=dashed penwidth=1.3", "╍╍╍▶",
-		kb.OriginInferred + " — depends, found with no mark in the text; points to the premise"},
-	{kb.RelationStrengthens, "", kb.RelationStrengthens, kb.RelationStrengthens, true, true, linkColor, "style=dashed arrowtail=empty", "╍╍╍▷",
-		kb.RelationStrengthens + " — points to the claim lifted"},
-	{kb.RelationSupports, "", kb.RelationSupports, kb.RelationSupports, true, true, "#2e7d32", "arrowtail=empty", "━━━▷",
-		kb.RelationSupports + " — points to the claim lifted"},
-	{kb.RelationRestsOn, "", kb.RelationRestsOn, kb.RelationRestsOn, false, true, "#7d3c98", "style=dashed arrowhead=diamond", "╍╍╍◆",
-		kb.RelationRestsOn + " — points to the cited work"},
+	{kb.RelationSupports, kb.OriginCited, "supports, " + kb.OriginCited, kb.RelationSupports + ", " + kb.OriginCited, false, true, "#222222", "penwidth=1.2", "━━━▶",
+		kb.OriginCited + " — supports, marked in the text; points from the premise to the claim"},
+	{kb.RelationSupports, kb.OriginInferred, "supports, " + kb.OriginInferred, kb.RelationSupports + ", " + kb.OriginInferred, false, true, "#2471a3", "style=dashed penwidth=1.3", "╍╍╍▶",
+		kb.OriginInferred + " — supports, found with no mark in the text; points from the premise to the claim"},
+	{kb.RelationFounds, "", kb.RelationFounds, kb.RelationFounds, false, true, "#7d3c98", "style=dashed arrowhead=diamond", "╍╍╍◆",
+		kb.RelationFounds + " — points from the cited work or the axiom to the claim"},
+	{kb.RelationLifts, "", kb.RelationLifts, kb.RelationLifts, false, true, "#2e7d32", "penwidth=1.2", "━━━▶",
+		kb.RelationLifts + " — points from the analysis or experiment to the claim or analysis it lifts"},
+	{kb.RelationRefutes, "", kb.RelationRefutes, kb.RelationRefutes, false, true, "#c0392b", "penwidth=1.4", "━━━▶",
+		kb.RelationRefutes + " — points from the claim, analysis or experiment to the claim or analysis it caps"},
 	{kb.RelationDemoted, kb.OriginCited, kb.OriginCited + " " + wordCut, wordCut + ", " + kb.OriginCited, false, false, cutColor,
 		"style=dotted penwidth=1.4 arrowhead=open constraint=false", cutGlyph, cutLegend},
 	{kb.RelationDemoted, kb.OriginInferred, kb.OriginInferred + " " + wordCut, wordCut + ", " + kb.OriginInferred, false, false, cutColor,
 		"style=dotted penwidth=1.0 arrowhead=open constraint=false", cutGlyph, cutLegend},
 }
 
-// strokeFor is relation's stroke, a depends or demoted edge's by whether it
+// strokeFor is relation's stroke, a supports or demoted edge's by whether it
 // is inferred; nil for a relation not drawn.
 func strokeFor(relation string, inferred bool) *stroke {
 	for i := range strokes {
@@ -488,7 +491,7 @@ func strokeRows(edges []edge) []string {
 	return rows
 }
 
-// strokeCounts is edges counted by stroke, "3 cited · 1 rests-on", in
+// strokeCounts is edges counted by stroke, "3 supports · 1 lifts", in
 // legend order.
 func strokeCounts(edges []edge) string {
 	var parts []string

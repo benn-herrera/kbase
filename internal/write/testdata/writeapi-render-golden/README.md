@@ -13,21 +13,21 @@ because where an entry sits among its siblings is the store's business.
 `TestRenderGoldens` also requires this directory and the render test's shape table to name the same
 set — a golden with no shape, or a shape with no golden, fails before any byte is compared.
 
-The `frontmatter-*.md` files are KB format 1.0.0 YAML frontmatter, byte-equal to what kbase's
+The `frontmatter-*.md` files are KB format 2.0.0 YAML frontmatter, byte-equal to what kbase's
 writer gives the same values.
 
 | File | Shape |
 |---|---|
-| `claim-entry-full.md` | a `clm-` register entry carrying every optional field, and every depends-on bullet form |
-| `claim-entry-minimal.md` | a `clm-` entry carrying none — pending score, no dependencies, no strengthen-by |
-| `support-entry.md` | a `sup-` entry: `quality:` in place of `confidence:`, no `strengthen-by` |
-| `support-entry-staged.md` | a `sup-` entry staging its beneficiary fan-out in the register — the fan-out's pre-leaf home |
+| `claim-entry-full.md` | a `clm-` register entry carrying every optional field, and every rested-on bullet form |
+| `claim-entry-minimal.md` | a `clm-` entry carrying none — pending rigor, no premises, no strengthen-by |
+| `support-entry.md` | an `ana-` entry, no `strengthen-by` |
+| `support-entry-staged.md` | an `ana-` entry staging its beneficiary fan-out in the register — the fan-out's pre-leaf home |
 | `frontmatter-claims.md` | the YAML frontmatter's primary `claims:` field, in the canonical inline-list shape |
 | `frontmatter-no-claim.md` | the `no-claim:` branch of the primary field |
 | `frontmatter-path-stable.md` | the `path-stable:` document attribute, double-quoted where it is not plain-safe, like `no-claim:` |
-| `frontmatter-hosts.md` | a container hosting an experiment and two supports under `experiment-nodes:` / `support-nodes:`, with a pending on-point fraction |
-| `markers.md` | the `<!-- id: … -->` register marker and the `<!-- claim-quality: … -->` Tier-2 marker |
-| `depends-on-bullets.md` | each depends-on bullet shape — claim and framework target, with and without title and context |
+| `frontmatter-hosts.md` | a container hosting an experiment and two analyses under `experiment-nodes:` / `analysis-nodes:`, with a pending bearing |
+| `markers.md` | the `<!-- id: … -->` register marker and the `<!-- claim-rigor: … -->` Tier-2 marker |
+| `rests-on-bullets.md` | each rested-on bullet shape — claim, work and framework target, with and without title and context |
 | `no-edge.md` | the entry-level `- no-edge: <reason>` foreign-domain exemption |
 | `citation.md` | the sanctioned `["excerpt"](path#anchor)` authority-citation form |
 
@@ -45,20 +45,18 @@ Four properties of these bytes are load-bearing in a way a reader diffing them s
   with no heading above it — yields no record. That inversion is the whole 2026-09-02 failure: five
   claim records lost across the frozen corpus, with no id or reference check firing
   (`../writeapi-regression`).
-- The depends-on separator is a real em-dash, U+2014, with a space on each side.
+- The rests-on separator is a real em-dash, U+2014, with a space on each side.
   The reader cuts a bullet's head at ` — ` and at the first ` (`; a hyphen cuts nothing, so the head
   runs on over the title and every `clm-`-shaped token in it becomes a phantom edge.
-- `- solidity: *pending*` and the `(solidity *pending*)` annotation are **derived-field
+- `- strength: *pending*` and the `(strength *pending*)` annotation are **derived-field
   placeholders**, never values. They are required rather than decorative: refresh *replaces* each in
   place and never inserts one, so an entry rendered without those slots would never receive a value.
   The leaf-references footer is the third derived line, and the one of the three refresh also
   inserts where it is missing.
-- In `support-entry-staged.md` the `- supports:` block sits directly under
-  `- quality:` and its pairs follow it with nothing between. That contiguity is
-  the grammar: the staged-supports reader ends the block at the next `- ` sibling bullet, so a line
-  inserted between the opener and the first pair truncates the fan-out to nothing. The block is
-  rendered straight after the score line, ahead of every optional bullet and the unconditional
-  `- solidity:` line, so no derived line ever sits above it.
+- In `support-entry-staged.md` the `- lifts:` block sits directly under
+  `- rigor:` and its pairs follow it with nothing between. That contiguity is
+  the grammar: the staged-lifts reader ends the block at the next `- ` field line, so a line
+  inserted between the opener and the first pair truncates the fan-out to nothing.
 
 ## Regenerating them
 

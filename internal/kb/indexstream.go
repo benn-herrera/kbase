@@ -18,15 +18,14 @@ const (
 // The derived index's files, by name.
 const (
 	IndexClaims            = "claims"
-	IndexDependsOn         = "depends-on"
+	IndexEdges             = "edges"
 	IndexStrengthenBy      = "strengthen-by"
-	IndexSupportedBy       = "supported-by"
 	IndexCites             = "cites"
 	IndexSubtreeAggregates = "subtree-aggregates"
 )
 
 // IndexFiles is the derived index's file inventory, in emission order.
-var IndexFiles = []string{IndexClaims, IndexDependsOn, IndexStrengthenBy, IndexSupportedBy, IndexCites, IndexSubtreeAggregates}
+var IndexFiles = []string{IndexClaims, IndexEdges, IndexStrengthenBy, IndexCites, IndexSubtreeAggregates}
 
 // IndexFileName is the file of the derived index named name.
 func IndexFileName(name string) string { return name + IndexFileExt }
@@ -50,24 +49,21 @@ type IndexField struct {
 
 // NodeRow is one claims record. Which fields a record carries is its kind's.
 type NodeRow struct {
-	NodeType             string   `json:"node_type"`
-	ID                   string   `json:"id"`
-	Title                string   `json:"title"`
-	CanonicalPath        string   `json:"canonical_path"`
-	CanonicalAnchor      string   `json:"canonical_anchor"`
-	Confidence           *float64 `json:"confidence"`
-	Quality              *float64 `json:"quality"`
-	DerivationSolidity   *float64 `json:"derivation_solidity"`
-	ExperimentalSolidity *float64 `json:"experimental_solidity"`
-	Solidity             *float64 `json:"solidity"`
-	BuildStatus          *string  `json:"build_status"`
-	BuildBand            string   `json:"build_band"`
-	Rationale            string   `json:"rationale"`
-	DependsOnCount       int      `json:"depends_on_count"`
-	StrengthenByCount    int      `json:"strengthen_by_count"`
-	CitationCount        int      `json:"citation_count"`
-	Status               string   `json:"status"`
-	Strength             *float64 `json:"strength"`
+	NodeType           string   `json:"node_type"`
+	ID                 string   `json:"id"`
+	Title              string   `json:"title"`
+	CanonicalPath      string   `json:"canonical_path"`
+	CanonicalAnchor    string   `json:"canonical_anchor"`
+	Status             string   `json:"status"`
+	Rigor              *float64 `json:"rigor"`
+	DerivationStrength *float64 `json:"derivation_strength"`
+	Strength           *float64 `json:"strength"`
+	BuildStatus        *string  `json:"build_status"`
+	BuildBand          string   `json:"build_band"`
+	Rationale          string   `json:"rationale"`
+	PremiseCount       int      `json:"premise_count"`
+	StrengthenByCount  int      `json:"strengthen_by_count"`
+	CitationCount      int      `json:"citation_count"`
 }
 
 // IndexFields is the record of the row's kind: the identity every node
@@ -77,40 +73,40 @@ func (r NodeRow) IndexFields() []IndexField {
 		{"canonical_path", r.CanonicalPath}, {"canonical_anchor", r.CanonicalAnchor}}
 	switch r.NodeType {
 	case "claim":
-		return append(out, IndexField{"confidence", optFloat(r.Confidence)}, IndexField{"derivation_solidity", optFloat(r.DerivationSolidity)},
-			IndexField{"experimental_solidity", optFloat(r.ExperimentalSolidity)}, IndexField{"solidity", optFloat(r.Solidity)},
+		return append(out, IndexField{"rigor", optFloat(r.Rigor)}, IndexField{"derivation_strength", optFloat(r.DerivationStrength)},
+			IndexField{"strength", optFloat(r.Strength)},
 			IndexField{"build_status", optString(r.BuildStatus)}, IndexField{"build_band", r.BuildBand},
-			IndexField{"rationale", r.Rationale}, IndexField{"depends_on_count", r.DependsOnCount},
+			IndexField{"rationale", r.Rationale}, IndexField{"premise_count", r.PremiseCount},
 			IndexField{"strengthen_by_count", r.StrengthenByCount}, IndexField{"citation_count", r.CitationCount})
 	case "experiment":
-		return append(out, IndexField{"status", r.Status})
-	case "support":
-		return append(out, IndexField{"quality", optFloat(r.Quality)}, IndexField{"solidity", optFloat(r.Solidity)})
-	case "work":
-		return append(out, IndexField{"strength", optFloat(r.Strength)})
+		return append(out, IndexField{"status", r.Status}, IndexField{"rigor", optFloat(r.Rigor)})
+	case "analysis":
+		return append(out, IndexField{"rigor", optFloat(r.Rigor)}, IndexField{"strength", optFloat(r.Strength)})
+	case "work", "axiom":
+		return append(out, IndexField{"rigor", optFloat(r.Rigor)})
 	}
 	return out
 }
 
-// EdgeRow is one depends-on record. Fraction is a float64, PendingLiteral or
-// nil; Origin is a demoted row's alone.
+// EdgeRow is one edges record. Bearing is a number in [0, 1], the
+// PendingLiteral, or nil where the relation allows none; Origin is a demoted
+// row's alone.
 type EdgeRow struct {
 	Source                 string   `json:"source"`
 	Target                 string   `json:"target"`
 	Relation               string   `json:"relation"`
 	TargetKind             string   `json:"target_kind"`
-	TargetSolidityRecorded *float64 `json:"target_solidity_recorded"`
-	Strength               *float64 `json:"strength"`
+	SourceStrengthRecorded *float64 `json:"source_strength_recorded"`
+	Bearing                any      `json:"bearing"`
 	Context                *string  `json:"context"`
-	Fraction               any      `json:"fraction"`
 	Origin                 *string  `json:"origin"`
 }
 
 // IndexFields is the edge's record; a demoted row closes with its origin.
 func (r EdgeRow) IndexFields() []IndexField {
 	out := []IndexField{{"source", r.Source}, {"target", r.Target}, {"relation", r.Relation}, {"target_kind", r.TargetKind},
-		{"target_solidity_recorded", optFloat(r.TargetSolidityRecorded)}, {"strength", optFloat(r.Strength)},
-		{"context", optString(r.Context)}, {"fraction", r.Fraction}}
+		{"source_strength_recorded", optFloat(r.SourceStrengthRecorded)}, {"bearing", r.Bearing},
+		{"context", optString(r.Context)}}
 	if r.Relation == RelationDemoted {
 		out = append(out, IndexField{"origin", optString(r.Origin)})
 	}
@@ -128,19 +124,6 @@ type StrengthenByRow struct {
 // IndexFields is the item's record.
 func (r StrengthenByRow) IndexFields() []IndexField {
 	return []IndexField{{"claim_id", r.ClaimID}, {"item_idx", r.ItemIdx}, {"text", r.Text}, {"mentioned_ids", r.MentionedIDs}}
-}
-
-// SupportedByRow is one supported-by record; Fraction as EdgeRow's.
-type SupportedByRow struct {
-	ClaimID     string   `json:"claim_id"`
-	SupID       string   `json:"sup_id"`
-	Fraction    any      `json:"fraction"`
-	SupSolidity *float64 `json:"sup_solidity"`
-}
-
-// IndexFields is the pair's record.
-func (r SupportedByRow) IndexFields() []IndexField {
-	return []IndexField{{"claim_id", r.ClaimID}, {"sup_id", r.SupID}, {"fraction", r.Fraction}, {"sup_solidity", optFloat(r.SupSolidity)}}
 }
 
 // CiteRow is one cites record.
@@ -186,7 +169,7 @@ func optString(s *string) any {
 
 // IndexRowType is every index row type.
 type IndexRowType interface {
-	NodeRow | EdgeRow | StrengthenByRow | SupportedByRow | CiteRow | AggregateRow
+	NodeRow | EdgeRow | StrengthenByRow | CiteRow | AggregateRow
 }
 
 // IndexLineError is a line of an index file that is not the document marker
@@ -196,14 +179,18 @@ type IndexLineError struct {
 	Err  error
 }
 
-var errNotIndexRecord = errors.New("expected the document marker and a JSON object")
+var (
+	errNotIndexRecord = errors.New("expected the document marker and a JSON object")
+	errNoRelation     = errors.New("edge record carries no relation")
+)
 
 // ReadIndex is every row of T's index file: one per line not blank under
 // Python's whitespace, a key the record lacks taking its default — a node's
-// node_type "claim", an edge's relation "depends" and target_kind "claim".
-// accept, where not nil, sees each decoded row and may refuse it. A line that
-// does not decode or that accept refuses is a problem, its row dropped; err is
-// the file's read error.
+// node_type "claim", an edge's target_kind "claim". An edge's relation has no
+// default: a record that omits it is a problem on its line. accept, where not
+// nil, sees each decoded row and may refuse it. A line that does not decode,
+// that seedIndexRow refuses, or that accept refuses is a problem, its row
+// dropped; err is the file's read error.
 func ReadIndex[T IndexRowType](src *Source, accept func(*T) error) (path string, rows []T, problems []IndexLineError, err error) {
 	path = src.KBPath(IndexDir + "/" + IndexFileName(indexFileOf[T]()))
 	text, err := src.ReadText(path)
@@ -217,10 +204,12 @@ func ReadIndex[T IndexRowType](src *Source, accept func(*T) error) (path string,
 		record, marked := IndexRecordJSON(line)
 		record = Strip(record)
 		var row T
-		seedIndexRow(&row)
 		err := errNotIndexRecord
 		if marked && strings.HasPrefix(record, "{") {
 			err = json.Unmarshal([]byte(record), &row)
+		}
+		if err == nil {
+			err = seedIndexRow(&row)
 		}
 		if err == nil && accept != nil {
 			err = accept(&row)
@@ -241,23 +230,30 @@ func indexFileOf[T IndexRowType]() string {
 	case NodeRow:
 		return IndexClaims
 	case EdgeRow:
-		return IndexDependsOn
+		return IndexEdges
 	case StrengthenByRow:
 		return IndexStrengthenBy
-	case SupportedByRow:
-		return IndexSupportedBy
 	case CiteRow:
 		return IndexCites
 	}
 	return IndexSubtreeAggregates
 }
 
-// seedIndexRow fills in the defaults a record takes where it lacks them.
-func seedIndexRow(row any) {
-	switch r := row.(type) {
-	case *NodeRow:
+// seedIndexRow fills in the defaults a record takes where it lacks them, and
+// refuses an edge record that carries no relation: no default stands in for
+// one. It runs after the decode, so a default chosen unconditionally would
+// overwrite what the record carried.
+func seedIndexRow(row any) error {
+	if r, ok := row.(*NodeRow); ok && r.NodeType == "" {
 		r.NodeType = "claim"
-	case *EdgeRow:
-		r.Relation, r.TargetKind = RelationDepends, "claim"
 	}
+	if r, ok := row.(*EdgeRow); ok {
+		if r.Relation == "" {
+			return errNoRelation
+		}
+		if r.TargetKind == "" {
+			r.TargetKind = "claim"
+		}
+	}
+	return nil
 }

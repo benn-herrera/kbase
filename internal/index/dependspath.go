@@ -6,29 +6,36 @@ import (
 	"kbase/internal/kb"
 )
 
-// DependsGraph is the premise graph the acyclicity check walks: each claim or
-// support to every claim it depends on, and each claim to every support
-// supporting it.
+// DependsGraph is the premise graph the acyclicity check walks: from a node to
+// every node its value is drawn from, one edge per scoring relation target →
+// source. It is the reverse of the push direction the walk reads values in, so
+// a cycle in it is a cycle in the derivation.
 type DependsGraph map[string][]string
 
-// AuthoredDependsGraph is st's premise graph as its registers author it.
+// AuthoredDependsGraph is st's premise graph as its registers and leaves
+// author it.
 func AuthoredDependsGraph(st kb.State) DependsGraph {
 	g := DependsGraph{}
-	add := func(from string, edges []kb.Edge) {
+	add := func(edges []kb.Edge) {
 		for _, e := range edges {
-			if e.Relation == kb.RelationDepends && e.TargetKind == "claim" {
-				g.Add(from, e.Target)
+			if kb.Scoring(e.Relation) {
+				g.Add(e.Target, e.Source)
 			}
 		}
 	}
 	for _, e := range st.ClaimEntries {
-		add(e.ID, e.DependsOn)
+		add(e.Premises)
+		add(e.Refutes)
 	}
-	for _, s := range st.Supports {
-		add(s.ID, s.DependsOn)
-		for _, p := range s.Supports {
-			g.Add(p.ClaimID, s.ID)
-		}
+	for _, s := range st.Analyses {
+		add(s.Premises)
+		add(s.Lifts)
+		add(s.Refutes)
+	}
+	for _, x := range st.Experiments {
+		add(x.Supports)
+		add(x.Lifts)
+		add(x.Refutes)
 	}
 	return g
 }

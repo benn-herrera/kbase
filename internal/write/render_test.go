@@ -30,14 +30,14 @@ func str(s string) *string { return &s }
 var goldenShapes = map[string]func() string{
 	"claim-entry-full": func() string {
 		return renderEntry(registerEntry{
-			NodeID: "clm-aa1111", Title: "Regime Conservation Laws", ScoreField: "confidence", Score: f64(0.7),
+			NodeID: "clm-aa1111", Title: "Regime Conservation Laws", Rigor: f64(0.7),
 			Rationale: "CES asymptotics applied with an explicit exponent formula and a cited " +
 				"methodology; scope marked as leading-order with error-term bounds.",
-			DependsOn: []dependsOnTarget{
-				{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "builds directly on the anchor claim"},
-				{Target: "clm-cc3333", Title: "Single-Dependency Claim C"},
-				{Target: "INVARIANT-S2", Context: "labelling convention for the d-axis treatment"},
-				{Target: "Axiom 4"},
+			Premises: []premiseTarget{
+				{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "builds directly on the anchor claim", Bearing: f64(1)},
+				{Target: "clm-cc3333", Title: "Single-Dependency Claim C", Bearing: f64(0.5)},
+				{Target: "Axiom S2", Bearing: f64(0.8), Context: "labelling convention for the d-axis treatment"},
+				{Target: "Axiom S1", Bearing: f64(1)},
 			},
 			StrengthenBy: []string{
 				"Run an independent derivation to confirm the anchor value.",
@@ -47,18 +47,19 @@ var goldenShapes = map[string]func() string{
 		})
 	},
 	"claim-entry-minimal": func() string {
-		return renderEntry(registerEntry{NodeID: "clm-dd4444", Title: "Unassessed Foundation Result", ScoreField: "confidence", Rationale: "*pending*"})
+		return renderEntry(registerEntry{NodeID: "clm-dd4444", Title: "Unassessed Foundation Result", Rationale: "*pending*"})
 	},
 	"support-entry": func() string {
-		return renderEntry(registerEntry{NodeID: "sup-ee5555", Title: "Free-Standing Analytical Support", ScoreField: "quality", Score: f64(0.9),
+		return renderEntry(registerEntry{NodeID: "ana-ee5555", Title: "Free-Standing Analytical Support", Rigor: f64(0.9),
 			Rationale: "Non-physical analytical support; lifts a claim without gating it.",
-			DependsOn: []dependsOnTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws"}}})
+			Premises:  []premiseTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws", Bearing: f64(1)}}})
 	},
 	"support-entry-staged": func() string {
-		return renderEntry(registerEntry{NodeID: "sup-ee5555", Title: "Staged Analytical Support", ScoreField: "quality", Score: f64(0.9),
+		return renderEntry(registerEntry{NodeID: "ana-ee5555", Title: "Staged Analytical Support", Rigor: f64(0.9),
 			Rationale: "Derives the beneficiary result in full; staged before its hosting leaf exists.",
-			DependsOn: []dependsOnTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws"}},
-			Supports:  []pair{{ID: "clm-bb2222", Score: f64(0.5)}, {ID: "clm-cc3333"}},
+			Premises:  []premiseTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws", Bearing: f64(1)}},
+			Lifts:     []pair{{ID: "clm-bb2222", Score: f64(0.5)}, {ID: "clm-cc3333"}},
+			Refutes:   []pair{{ID: "clm-dd4444", Score: f64(0.25)}},
 			NoEdge:    "the foreign-domain reference is illustrative, not load-bearing"})
 	},
 	"frontmatter-path-stable": func() string {
@@ -68,31 +69,32 @@ var goldenShapes = map[string]func() string{
 		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", Claims: []string{"clm-aa1111", "clm-bb2222", "clm-cc3333"}, Experiments: []string{"exp-ff6666"}}))
 	},
 	"frontmatter-no-claim": func() string {
-		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", NoClaim: str("navigation-only leaf — carries no claim-quality entries")}))
+		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", NoClaim: str("navigation-only leaf — carries no claim-rigor entries")}))
 	},
 	"frontmatter-hosts": func() string {
 		return rendered(renderFrontmatterBlock(frontmatterValues{
-			Kind: "leaf", NoClaim: str("hosts an experiment and two support nodes only"),
-			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Strengthens: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
-			SupportNodes: []supportDecl{
-				{SupID: "sup-hh8888", Supports: []pair{{ID: "clm-bb2222", Score: f64(1.0)}}},
-				{SupID: "sup-ii9999", Supports: []pair{{ID: "clm-bb2222"}, {ID: "clm-cc3333", Score: f64(0.5)}}},
+			Kind: "leaf", NoClaim: str("hosts an experiment and two analysis nodes only"),
+			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Rigor: f64(1), Lifts: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
+			Analyses: []analysisDecl{
+				{AnaID: "ana-hh8888", Lifts: []pair{{ID: "clm-bb2222", Score: f64(1.0)}}},
+				{AnaID: "ana-ii9999", Refutes: []pair{{ID: "clm-bb2222"}, {ID: "clm-cc3333", Score: f64(0.5)}}},
 			},
 		}))
 	},
 	"markers": func() string {
-		return strings.Join([]string{renderIDMarker("clm-aa1111"), renderIDMarker("sup-ee5555"), renderTier2Marker("clm-aa1111")}, "\n")
+		return strings.Join([]string{renderIDMarker("clm-aa1111"), renderIDMarker("ana-ee5555"), renderTier2Marker("clm-aa1111")}, "\n")
 	},
-	"depends-on-bullets": func() string {
+	"rests-on-bullets": func() string {
 		var lines []string
-		for _, t := range []dependsOnTarget{
-			{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "the anchor dependency"},
-			{Target: "clm-bb2222", Title: "Foundation Claim B"},
+		for _, t := range []premiseTarget{
+			{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "the anchor dependency", Bearing: f64(0.5)},
+			{Target: "clm-bb2222", Title: "Foundation Claim B", Bearing: f64(0)},
 			{Target: "clm-bb2222"},
-			{Target: "INVARIANT-S2", Context: "labelling convention"},
-			{Target: "Axiom 4"},
+			{Target: "wrk-smith2020", Title: "Smith (2020)", Bearing: f64(0.8), Context: "Theorem 3"},
+			{Target: "Axiom S2", Bearing: f64(0.8), Context: "labelling convention"},
+			{Target: "Axiom S1", Bearing: f64(1)},
 		} {
-			lines = append(lines, renderDependsOnBullet(t))
+			lines = append(lines, renderRestsOnBullet(t))
 		}
 		return strings.Join(lines, "\n")
 	},
@@ -100,7 +102,7 @@ var goldenShapes = map[string]func() string{
 		return renderNoEdgeLine("cited for context only; the derivation takes nothing from that domain")
 	},
 	"citation": func() string {
-		return renderCitation("the weakest link in the dependency cone", "part3/claim-quality.md", "regime-conservation-laws")
+		return renderCitation("the weakest link in the dependency cone", "part3/claim-rigor.md", "regime-conservation-laws")
 	},
 }
 
@@ -112,13 +114,13 @@ func rendered(s string, err error) string {
 	return s
 }
 
-// TestFrontmatterRenderedAsTheGoldens: each 1.0.0 golden document, its
-// frontmatter read by the production reader and written back by
-// set-frontmatter's splice, is byte-identical to the golden — the writer and
-// the migration write one frontmatter.
+// TestFrontmatterRenderedAsTheGoldens: each converted document of the
+// migration's golden pair, its frontmatter read by the production reader and
+// written back by set-frontmatter's splice, is byte-identical to the golden —
+// the writer and the migration write one frontmatter.
 func TestFrontmatterRenderedAsTheGoldens(t *testing.T) {
-	const dir = "../migrate/testdata/1.0.0/kb-root"
-	for _, rel := range []string{"a.md", "b/c.md", "entry-point.md"} {
+	const dir = "../migrate/testdata/register-2.0.0/kb-root"
+	for _, rel := range []string{"leaf.md", "entry-point.md"} {
 		t.Run(rel, func(t *testing.T) {
 			golden, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 			if err != nil {

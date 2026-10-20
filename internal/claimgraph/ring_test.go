@@ -29,9 +29,9 @@ func seedRingKB(t *testing.T) (string, map[string]string) {
 		t.Fatal(err)
 	}
 	for rel, text := range map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"1.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
+		kb.EntryPointFile: "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
 		"v/index.md":      "---\nkind: index\n---\n[↑ Entry](../entry-point.md)\n\n# V\n\n- [Leaf](leaf.md)\n",
-		"v/leaf.md":       "---\nkind: leaf\nclaims: [" + aID + ", " + bID + ", " + cID + "]\n---\n[↑ V](index.md)\n\n# Leaf\n\nA holds here. <!-- claim-quality: " + aID + " -->\n\nB holds here. <!-- claim-quality: " + bID + " -->\n\nC holds here. <!-- claim-quality: " + cID + " -->\n",
+		"v/leaf.md":       "---\nkind: leaf\nclaims: [" + aID + ", " + bID + ", " + cID + "]\n---\n[↑ V](index.md)\n\n# Leaf\n\nA holds here. <!-- claim-rigor: " + aID + " -->\n\nB holds here. <!-- claim-rigor: " + bID + " -->\n\nC holds here. <!-- claim-rigor: " + cID + " -->\n",
 		kb.RegisterFile:   "# Register\n\n" + registerQuality(aID, "Result A") + registerQuality(bID, "Result B") + registerQuality(cID, "Result C"),
 	} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
@@ -43,9 +43,9 @@ func seedRingKB(t *testing.T) (string, map[string]string) {
 	}
 	w := writer{kbRoot: root, lg: log.Discard()}
 	wires := values{
-		{"id": aID, "depends-on": []map[string]any{{"id": bID}}},
-		{"id": bID, "depends-on": []map[string]any{{"id": cID}}},
-		{"id": cID, "depends-on": []map[string]any{{"id": aID}}},
+		{"id": aID, kb.ListRestsOn: []map[string]any{{"id": bID, "bearing": kb.PendingLiteral}}},
+		{"id": bID, kb.ListRestsOn: []map[string]any{{"id": cID, "bearing": kb.PendingLiteral}}},
+		{"id": cID, kb.ListRestsOn: []map[string]any{{"id": aID, "bearing": kb.PendingLiteral}}},
 	}
 	if _, err := w.run("seed", write.AddBuildEdges, wires, false); err != nil {
 		t.Fatal(err)
@@ -56,9 +56,9 @@ func seedRingKB(t *testing.T) (string, map[string]string) {
 // TestRingRowDemotesSurvivingCycles: the ring row, with its origins read from
 // the build records as Depends reads them, re-reads the captured depends edges
 // and issues demote-claim-edge for every edge lying on a cycle. Over the
-// planted 3-cycle a → b → c → a every edge leaves depends-on and lands as a
-// demoted row in its own entry, and the gate over the tree as the row left it
-// holds. The unmarked record answers a → b yes, and c → b yes, which is b → c
+// planted 3-cycle a → b → c → a every premise edge leaves the rests-on list and
+// lands as a demoted row in its own entry, and the gate over the tree as the
+// row left it holds. The unmarked record answers a → b yes, and c → b yes, which is b → c
 // only in reverse. Without a cull record only a → b is inferred; with one
 // holding the links a–c and b–c, each id-ordered, b → c is inferred as
 // recorded and c → a reversed.
@@ -126,8 +126,8 @@ func TestRingRowDemotesSurvivingCycles(t *testing.T) {
 				if !strings.Contains(text, demoted) {
 					t.Errorf("no demoted row %q stands:\n%s", demoted, text)
 				}
-				if strings.Contains(text, "- "+p.target+" — "+p.title+" (solidity") {
-					t.Errorf("%s's depends-on bullet naming %s survived:\n%s", p.source, p.target, text)
+				if strings.Contains(text, "- "+p.target+" — "+p.title+" (strength") {
+					t.Errorf("%s's rests-on bullet naming %s survived:\n%s", p.source, p.target, text)
 				}
 			}
 		})

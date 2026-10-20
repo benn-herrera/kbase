@@ -6,7 +6,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -20,16 +19,16 @@ import (
 // RenderCitation is the one op that reads instead of writing.
 const RenderCitation = "render-citation"
 
-// AddBuildEdges is the build's edge write: add-depends-on's lists and the
+// AddBuildEdges is the build's edge write: add-rests-on's lists and the
 // demoted list. Only the build issues it, so it is no subcommand.
 const AddBuildEdges = "add-build-edges"
 
-// DemoteClaimEdge is the build's ring cut: an existing depends-on edge turned
+// DemoteClaimEdge is the build's ring cut: an existing rests-on edge turned
 // into a demoted row with its origin. Only the build issues it, so it is no
 // subcommand.
 const DemoteClaimEdge = "demote-claim-edge"
 
-// ResolveDemoted removes a demoted edge or restores it to depends-on.
+// ResolveDemoted removes a demoted edge or restores it to the rests-on list.
 const ResolveDemoted = "resolve-demoted"
 
 // The actions resolve-demoted takes, and what each reports having done.
@@ -56,20 +55,18 @@ type opSpec struct {
 }
 
 var writeOps = map[string]opSpec{
-	AddBuildEdges:             {plan: planAddDependsOn, buildOnly: true},
+	AddBuildEdges:             {plan: planAddRestsOn, buildOnly: true},
 	ResolveDemoted:            {plan: planResolveDemoted},
 	"insert-claim-entry":      {plan: planInserts("clm"), creates: true, inserts: true},
-	"insert-support-entry":    {plan: planInserts("sup"), creates: true, inserts: true},
+	"insert-analysis-entry":   {plan: planInserts("ana"), creates: true, inserts: true},
 	"insert-experiment-entry": {plan: planExperiments, inserts: true},
 	"insert-work-entry":       {plan: planWorkInserts, creates: true, inserts: true},
-	"set-work-strength":       {plan: planFieldUpdate("strength", func(string) string { return "strength" })},
-	"set-applicability":       {plan: planSetApplicability},
-	"set-rigor":               {plan: planFieldUpdate("rigor", rigorField)},
+	"set-bearing":             {plan: planSetBearing},
+	"set-rigor":               {plan: planSetRigor},
 	"set-rationale":           {plan: planFieldUpdate("rationale", func(string) string { return "rationale" })},
-	"add-depends-on":          {plan: planAddDependsOn},
+	"add-rests-on":            {plan: planAddRestsOn},
 	"set-frontmatter":         {plan: planSetFrontmatter},
 	"mark-claim-in-leaf":      {plan: planMarkClaim},
-	"set-on-point-fraction":   {plan: planSetOnPointFraction},
 	"drop-claim-edges":        {plan: planDropClaimEdges},
 	"drop-inbound-edges":      {plan: planDropInboundEdges},
 	DemoteClaimEdge:           {plan: planDemoteClaimEdge, buildOnly: true},
@@ -127,7 +124,8 @@ type Options struct {
 // adopted; Minted the ones this call drew; Adopted the entries already
 // there. Refreshed is what the trailing refresh wrote, nil where none ran,
 // and Removed what it removed. Resolved is each demoted edge resolve-demoted
-// changed.
+// changed. Migration is what the load converted, nil on a KB at the current
+// version.
 type Result struct {
 	Outcome   string
 	Written   []string
@@ -138,6 +136,7 @@ type Result struct {
 	Removed   []string
 	Resolved  []Resolution
 	Citations []string
+	Migration *kb.Migration
 	Refusals  []result.Item
 	Failures  []result.Item
 }
@@ -160,6 +159,10 @@ type Adoption struct {
 // checkWrite is the class of a failure inside the write or its refresh.
 const checkWrite = "write"
 
+// symlinkRemedy is what clears a document that is a symbolic link.
+const symlinkRemedy = "replace the link with the document it should be, so nothing is read or written through it, then re-run"
+
+// failedResult is a failure inside the write.
 func failedResult(detail string) Result {
 	return Result{Outcome: result.Failed, Failures: []result.Item{{Check: checkWrite, Detail: detail}}}
 }
@@ -204,6 +207,15 @@ func Run(op string, opts Options) Result {
 	if err != nil {
 		return errorResult(err)
 	}
+	res := runOverSource(op, opts, src, entries)
+	if m, ok := src.Migration(); ok {
+		res.Migration = &m
+	}
+	return res
+}
+
+// runOverSource is Run's work over the KB its loader opened.
+func runOverSource(op string, opts Options, src *kb.Source, entries []entry) Result {
 	if op == RenderCitation {
 		return renderCitations(src, entries)
 	}
@@ -211,8 +223,17 @@ func Run(op string, opts Options) Result {
 	if !ok {
 		return failedResult("unknown op " + op)
 	}
+	// The annotation gate runs before any op's plan: a bullet the reader
+	// refuses is a fault in the KB, and no write lands over one.
+	if _, err := kb.Discover(src, opts.Logger); err != nil {
+		var ann *kb.AnnotationError
+		if errors.As(err, &ann) {
+			return Result{Outcome: result.Refused, Refusals: index.AnnotationItems(ann)}
+		}
+		return errorResult(err)
+	}
 	if opts.NoRefresh && src.Migrated() {
-		return refusedResult(result.Item{Check: kbload.CheckFormat, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
+		return refusedResult(result.Item{Check: index.CheckIndex, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
 			Detail: fmt.Sprintf("the KB's metadata format is %s and a write lands in %s only through the refresh that rewrites the whole KB, "+
 				"which --no-refresh skips; no save mixes two formats", src.Version(), kb.FormatVersion)})
 	}
@@ -272,9 +293,16 @@ func errorResult(err error) Result {
 	var refused result.Refusal
 	var rb *readbackFailed
 	var mf kb.MalformedError
+	var ann *kb.AnnotationError
+	var sym *kb.SymlinkError
 	switch {
 	case errors.As(err, &refused):
 		return Result{Outcome: result.Refused, Refusals: refused}
+	case errors.As(err, &ann):
+		return Result{Outcome: result.Refused, Refusals: index.AnnotationItems(ann)}
+	case errors.As(err, &sym):
+		return refusedResult(result.Item{Check: kb.CheckSymlink, Path: sym.Path, Remedy: symlinkRemedy,
+			Detail: err.Error()})
 	case errors.As(err, &rb):
 		return refusedResult(result.Item{Key: rb.subject, Remedy: "this is a renderer defect, not a value defect — report it; nothing on disk changed",
 			Detail: "read back from the composed candidate with a different " + strings.Join(rb.mismatched, ", ") +
@@ -292,6 +320,7 @@ type opContext struct {
 	root     string
 	create   bool
 	known    map[string]kb.IDRecord
+	axioms   map[string]bool
 	ids      []string
 	minted   []string
 	adopted  []Adoption
@@ -300,9 +329,9 @@ type opContext struct {
 	read     map[string]bool
 }
 
-// openStore reads the authored-id inventory, refusing a KB that keys one id
-// from two register entries: the inventory keeps the first and would report
-// the collision as clean.
+// openStore reads the authored-id and axiom inventory, refusing a KB that keys
+// one id from two register entries: the inventory keeps the first and would
+// report the collision as clean.
 func openStore(src *kb.Source) (*opContext, error) {
 	known, duplicates, err := kb.AuthoredIDs(src)
 	if err != nil {
@@ -319,7 +348,11 @@ func openStore(src *kb.Source) (*opContext, error) {
 			"would be taken over the inventory that keeps only the first", len(duplicates[id]), strings.Join(duplicates[id], ", ")),
 			fmt.Sprintf("restore: delete the duplicate '<!-- id: %s -->' entry from all but one register, then re-run this op unchanged", id))
 	}
-	return &opContext{src: src, root: src.Root(), known: known, titles: map[string]string{}, read: map[string]bool{}}, nil
+	axioms, err := kb.KnownAxiomIDs(src)
+	if err != nil {
+		return nil, err
+	}
+	return &opContext{src: src, root: src.Root(), known: known, axioms: axioms, titles: map[string]string{}, read: map[string]bool{}}, nil
 }
 
 // mint is a fresh id of kind, clear of every authored id and of every id this
@@ -345,12 +378,15 @@ func (c *opContext) titleOf(nodeID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		r := readRegister(text)
+		r, err := readRegister(text)
+		if err != nil {
+			return "", err
+		}
 		for id, e := range r.claims {
 			c.titles[id] = e.Title
 		}
-		for id, s := range r.supports {
-			c.titles[id] = s.Title
+		for id, a := range r.analyses {
+			c.titles[id] = a.Title
 		}
 		for id, w := range r.works {
 			c.titles[id] = w.Title
@@ -374,8 +410,8 @@ func containedIn(root, rel, key string) (string, error) {
 	return target, err
 }
 
-// resolve is an id-valued field's reference closure. A clm-, sup- or work-
-// id must have its register entry; an exp- id lives in its hosting document.
+// resolve is an id-valued field's reference closure. A clm-, ana- or wrk- id
+// must have its register entry; an exp- id lives in its hosting document.
 func (c *opContext) resolve(nodeID, key string, needsRegister bool) (kb.IDRecord, error) {
 	rec, ok := c.known[nodeID]
 	if !ok {
@@ -391,39 +427,78 @@ func (c *opContext) resolve(nodeID, key string, needsRegister bool) (kb.IDRecord
 	return rec, nil
 }
 
-// dependsTargets resolves requested edges into bullet values; a framework
-// token is passed through, its declaration being the framework source.
-func (c *opContext) dependsTargets(values []dependsOnValue) ([]dependsOnTarget, error) {
-	var out []dependsOnTarget
+// premiseTargets resolves requested premises into bullet values; an axiom
+// token must name an axiom the KB declares, and an exp- id an experiment its
+// documents declare.
+func (c *opContext) premiseTargets(values []restsOnValue) ([]premiseTarget, error) {
+	var out []premiseTarget
 	for _, v := range values {
 		if !isClaimID(v.ID) && !isWorkID(v.ID) {
-			out = append(out, dependsOnTarget{Target: v.ID, Context: v.Context})
+			if recKind(v.ID) == "exp" {
+				if err := c.resolveExperiment(v.ID, kb.ListRestsOn+".id"); err != nil {
+					return nil, err
+				}
+				out = append(out, premiseTarget{Target: v.ID, Context: v.Context, Bearing: v.Bearing})
+				continue
+			}
+			if err := c.resolveAxiom(v.ID, kb.ListRestsOn+".id"); err != nil {
+				return nil, err
+			}
+			out = append(out, premiseTarget{Target: v.ID, Context: v.Context, Bearing: v.Bearing})
 			continue
 		}
-		if _, err := c.resolve(v.ID, "depends-on.id", true); err != nil {
+		if _, err := c.resolve(v.ID, kb.ListRestsOn+".id", true); err != nil {
 			return nil, err
 		}
 		title, err := c.titleOf(v.ID)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, dependsOnTarget{Target: v.ID, Title: title, Context: v.Context, Applicability: v.Applicability, Origin: v.Origin})
+		out = append(out, premiseTarget{Target: v.ID, Title: title, Context: v.Context, Bearing: v.Bearing, Origin: v.Origin})
 	}
 	return out, nil
+}
+
+// resolveExperiment refuses a premise naming an experiment no document
+// declares: the bullet would author an edge into no node, and the index build
+// would refuse the KB it left behind.
+func (c *opContext) resolveExperiment(token, key string) error {
+	if rec, ok := c.known[token]; ok && rec.Kind == "exp" {
+		return nil
+	}
+	return opRefusal(key, fmt.Sprintf("%q is an experiment no document declares. The bullet authors an edge into no "+
+		"node, and the index build refuses a KB carrying one", token),
+		"restore: declare it with insert-experiment-entry, or correct "+key+", then re-run")
+}
+
+// resolveAxiom refuses a premise naming an axiom the axiom source does not
+// declare: the bullet would author an edge into no node, and the index build
+// would refuse the KB it left behind.
+func (c *opContext) resolveAxiom(token, key string) error {
+	if c.axioms[axiomEdgeID(token)] {
+		return nil
+	}
+	source := kb.AxiomsFile
+	if p := kb.AxiomSource(c.src); p != "" {
+		source = filepath.Base(p)
+	}
+	return opRefusal(key, fmt.Sprintf("%q names no axiom %s declares. The bullet authors an edge into no node, "+
+		"and the index build refuses a KB carrying one", token, source),
+		fmt.Sprintf("restore: declare it in %s as \"### %s: <title>\", or correct %s, then re-run", source, token, key))
 }
 
 // intent is one entry's change to one file. expect is stated outright;
 // expectCurrent is derived from the baseline the splice receives; prove
 // reads a document write back.
 type intent struct {
-	path, target                        string
-	splice                              func(string) (string, error)
-	expect                              []expectedEntry
-	expectCurrent                       func(registerRead) ([]expectedEntry, error)
-	prove                               func(string) ([]string, error)
-	subject                             string
-	claimDelta, supportDelta, workDelta int
-	create                              bool
+	path, target                         string
+	splice                               func(string) (string, error)
+	expect                               []expectedEntry
+	expectCurrent                        func(registerRead) ([]expectedEntry, error)
+	prove                                func(string) ([]string, error)
+	subject                              string
+	claimDelta, analysisDelta, workDelta int
+	create                               bool
 }
 
 // batch folds every intent into one edit per resolved file, in first-named
@@ -445,12 +520,15 @@ func batch(intents []intent) []edit {
 		for _, in := range group {
 			*expected = append(*expected, in.expect...)
 			e.claimDelta += in.claimDelta
-			e.supportDelta += in.supportDelta
+			e.analysisDelta += in.analysisDelta
 			e.workDelta += in.workDelta
 			e.create = e.create || in.create
 		}
 		e.splice = func(document string) (string, error) {
-			read := readRegister(document)
+			read, err := readRegister(document)
+			if err != nil {
+				return "", err
+			}
 			for _, in := range group {
 				if in.expectCurrent == nil {
 					continue
@@ -498,14 +576,6 @@ func currentEntry(read registerRead, nodeID, register string) (expectedEntry, er
 	return e, nil
 }
 
-// rigorField is the on-disk name of a node's local rigor, read off its kind.
-func rigorField(nodeID string) string {
-	if strings.HasPrefix(nodeID, "sup-") {
-		return "quality"
-	}
-	return "confidence"
-}
-
 func planInserts(kind string) func(*opContext, []entry) ([]intent, error) {
 	return func(c *opContext, entries []entry) ([]intent, error) {
 		var intents []intent
@@ -515,19 +585,25 @@ func planInserts(kind string) func(*opContext, []entry) ([]intent, error) {
 			if err != nil {
 				return nil, err
 			}
-			depends, err := c.dependsTargets(e.dependsOn("depends-on"))
+			premises, err := c.premiseTargets(e.restsOn(kb.ListRestsOn))
 			if err != nil {
 				return nil, err
 			}
-			supports := e.pairs("supports")
-			for _, p := range supports {
-				if _, err := c.resolve(p.ID, "supports.id", true); err != nil {
-					return nil, err
+			lifts, refutes := e.pairs(kb.LiftsKey), e.pairs(kb.RefutesKey)
+			for _, list := range []struct {
+				key   string
+				pairs []pair
+			}{{kb.LiftsKey, lifts}, {kb.RefutesKey, refutes}} {
+				for _, p := range list.pairs {
+					if _, err := c.resolve(p.ID, list.key+".id", true); err != nil {
+						return nil, err
+					}
 				}
 			}
-			want := expectedEntry{Title: e.str("title"), Rigor: e.score("rigor"), Rationale: e.str("rationale"), Supports: supports}
-			for _, t := range depends {
-				want.DependsOn = append(want.DependsOn, expectedEdge{Target: t.Target, Context: t.Context, Applicability: t.Applicability})
+			want := expectedEntry{Title: e.str("title"), Rigor: e.score("rigor"), Rationale: e.str("rationale"),
+				Lifts: lifts, Refutes: refutes}
+			for _, t := range premises {
+				want.Premises = append(want.Premises, expectedEdge{Source: t.Target, Context: t.Context, Bearing: bearingOf(t.Bearing)})
 			}
 			if kind == "clm" {
 				want.StrengthenBy = e.list("strengthen-by")
@@ -539,13 +615,16 @@ func planInserts(kind string) func(*opContext, []entry) ([]intent, error) {
 			nodeID := c.mint(kind)
 			c.ids = append(c.ids, nodeID)
 			want.NodeID = nodeID
-			rendered := registerEntry{NodeID: nodeID, Title: want.Title, Score: want.Rigor, Rationale: want.Rationale,
-				DependsOn: depends, NoEdge: e.str("no-edge"), ScoreField: rigorField(nodeID), StrengthenBy: want.StrengthenBy, Supports: supports}
+			for i := range want.Premises {
+				want.Premises[i].Target = nodeID
+			}
+			rendered := registerEntry{NodeID: nodeID, Title: want.Title, Rigor: want.Rigor, Rationale: want.Rationale,
+				Premises: premises, NoEdge: e.str("no-edge"), StrengthenBy: want.StrengthenBy, Lifts: lifts, Refutes: refutes}
 			in := intent{path: rel, target: target, splice: insertAll(renderEntry(rendered)), expect: []expectedEntry{want}, create: c.create}
 			if kind == "clm" {
 				in.claimDelta = 1
 			} else {
-				in.supportDelta = 1
+				in.analysisDelta = 1
 			}
 			intents = append(intents, in)
 		}
@@ -561,7 +640,10 @@ func adoptRegisterEntry(src *kb.Source, target, kind string, want expectedEntry)
 	if err != nil {
 		return "", nil
 	}
-	read := readRegister(text)
+	read, err := readRegister(text)
+	if err != nil {
+		return "", nil
+	}
 	title := collapse(want.Title)
 	first, firstDiffers := "", []string(nil)
 	for _, loc := range kb.LocateRegisterEntries(text) {
@@ -574,6 +656,9 @@ func adoptRegisterEntry(src *kb.Source, target, kind string, want expectedEntry)
 		}
 		w := want
 		w.NodeID = loc.NodeID
+		for i := range w.Premises {
+			w.Premises[i].Target = loc.NodeID
+		}
 		differs := mismatchedFields(w, got)
 		if len(differs) == 0 {
 			return loc.NodeID, nil
@@ -604,20 +689,26 @@ func planExperiments(c *opContext, entries []entry) ([]intent, error) {
 		if err != nil {
 			return nil, err
 		}
-		strengthens := e.pairs("strengthens")
-		for _, p := range strengthens {
-			if _, err := c.resolve(p.ID, "strengthens.id", true); err != nil {
-				return nil, err
+		rigor := e.score("rigor")
+		decl := experimentDecl{Status: e.str("status"), Rigor: rigor, Supports: e.pairs(kb.SupportsKey),
+			Lifts: e.pairs(kb.LiftsKey), Refutes: e.pairs(kb.RefutesKey)}
+		for _, list := range []struct {
+			key   string
+			pairs []pair
+		}{{kb.SupportsKey, decl.Supports}, {kb.LiftsKey, decl.Lifts}, {kb.RefutesKey, decl.Refutes}} {
+			for _, p := range list.pairs {
+				if _, err := c.resolve(p.ID, list.key+".id", true); err != nil {
+					return nil, err
+				}
 			}
 		}
-		status := e.str("status")
-		if adopted := adoptExperiment(c.src, target, rel, status, strengthens); adopted != "" {
+		if adopted := adoptExperiment(c.src, target, rel, decl); adopted != "" {
 			c.adopt(e.Index, adopted, nil)
 			continue
 		}
 		expID := c.mint("exp")
 		c.ids = append(c.ids, expID)
-		decl := experimentDecl{ExpID: expID, Status: status, Strengthens: strengthens}
+		decl.ExpID = expID
 		lines, err := renderExperimentNodes([]experimentDecl{decl})
 		if err != nil {
 			return nil, err
@@ -629,8 +720,8 @@ func planExperiments(c *opContext, entries []entry) ([]intent, error) {
 }
 
 // adoptExperiment is an experiment the document already hosts with this
-// status and these strengthens pairs, or "".
-func adoptExperiment(src *kb.Source, target, rel, status string, strengthens []pair) string {
+// status, rigor and pair lists, or "".
+func adoptExperiment(src *kb.Source, target, rel string, want experimentDecl) string {
 	text, err := src.ReadText(target)
 	if err != nil {
 		return ""
@@ -640,15 +731,14 @@ func adoptExperiment(src *kb.Source, target, rel, status string, strengthens []p
 		return ""
 	}
 	for _, n := range nodes {
-		if n.Status == status && strengthensEqual(n.Strengthens, strengthens) {
+		got := experimentDecl{ExpID: n.ID, Status: n.Status, Rigor: n.Rigor, Supports: pairsOf(n.Supports),
+			Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)}
+		if got.Status == want.Status && scoreEqual(got.Rigor, want.Rigor) && pairsEqual(got.Supports, want.Supports) &&
+			pairsEqual(got.Lifts, want.Lifts) && pairsEqual(got.Refutes, want.Refutes) {
 			return n.ID
 		}
 	}
 	return ""
-}
-
-func strengthensEqual(got []kb.StrengthensPair, want []pair) bool {
-	return slices.EqualFunc(got, want, func(g kb.StrengthensPair, w pair) bool { return g.ClaimID == w.ID && g.Strength == *w.Score })
 }
 
 func experimentProver(decl experimentDecl, rel string) func(string) ([]string, error) {
@@ -661,12 +751,22 @@ func experimentProver(decl experimentDecl, rel string) func(string) ([]string, e
 			if n.ID != decl.ExpID {
 				continue
 			}
+			got := experimentDecl{ExpID: n.ID, Status: n.Status, Rigor: n.Rigor, Supports: pairsOf(n.Supports),
+				Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)}
 			var wrong []string
-			if n.Status != decl.Status {
+			if got.Status != decl.Status {
 				wrong = append(wrong, "status")
 			}
-			if !strengthensEqual(n.Strengthens, decl.Strengthens) {
-				wrong = append(wrong, "strengthens")
+			if !scoreEqual(got.Rigor, decl.Rigor) {
+				wrong = append(wrong, "rigor")
+			}
+			for _, list := range []struct {
+				key       string
+				got, want []pair
+			}{{kb.SupportsKey, got.Supports, decl.Supports}, {kb.LiftsKey, got.Lifts, decl.Lifts}, {kb.RefutesKey, got.Refutes, decl.Refutes}} {
+				if !pairsEqual(list.got, list.want) {
+					wrong = append(wrong, list.key)
+				}
 			}
 			return wrong, nil
 		}
@@ -685,7 +785,7 @@ func planWorkInserts(c *opContext, entries []entry) ([]intent, error) {
 		}
 		key := e.str("key")
 		nodeID := kb.WorkPrefix + "-" + key
-		want := expectedEntry{NodeID: nodeID, Title: e.str("title"), Rigor: e.score("strength"), Rationale: e.str("rationale")}
+		want := expectedEntry{NodeID: nodeID, Title: e.str("title"), Rigor: e.score("rigor"), Rationale: e.str("rationale")}
 		if created[nodeID] {
 			return nil, opRefusal("key="+key, fmt.Sprintf("is named twice in this batch (%s). A work's id is derived from its "+
 				"citation key, so a second entry would be a second node for one work", nodeID),
@@ -696,12 +796,12 @@ func planWorkInserts(c *opContext, entries []entry) ([]intent, error) {
 			if err != nil {
 				return nil, err
 			}
-			got, _ := readRegister(text).record(nodeID)
-			differs := mismatchedFields(want, got)
-			if i := slices.Index(differs, "rigor"); i >= 0 {
-				differs[i] = "strength"
+			read, err := readRegister(text)
+			if err != nil {
+				return nil, err
 			}
-			c.adopt(e.Index, nodeID, differs)
+			got, _ := read.record(nodeID)
+			c.adopt(e.Index, nodeID, mismatchedFields(want, got))
 			continue
 		}
 		created[nodeID] = true
@@ -753,69 +853,276 @@ func planFieldUpdate(key string, fieldOf func(string) string) func(*opContext, [
 	}
 }
 
-func planSetApplicability(c *opContext, entries []entry) ([]intent, error) {
+// planSetRigor rewrites one node's local rigor wherever its kind authors it: a
+// claim's, an analysis's or a work's register line, or an experiment's rigor in
+// its host leaf's experiment-nodes mapping.
+func planSetRigor(c *opContext, entries []entry) ([]intent, error) {
 	var intents []intent
 	for _, e := range entries {
-		nodeID, workID, fraction := e.str("id"), e.str("work"), e.score("applicability")
-		rec, err := c.resolve(nodeID, "id", true)
+		nodeID := e.str("id")
+		rec, err := c.resolve(nodeID, "id", recKind(nodeID) != "exp")
 		if err != nil {
 			return nil, err
 		}
-		if _, err := c.resolve(workID, "work", true); err != nil {
-			return nil, err
+		if rec.Kind == "exp" {
+			if rec.HostingLeaf == "" {
+				return nil, opRefusal("id="+nodeID, "is an experiment no document declares, so there is no rigor to rewrite",
+					"restore: declare it with insert-experiment-entry, or correct id, then re-run")
+			}
+			leaf, err := c.contained(rec.HostingLeaf, "id")
+			if err != nil {
+				return nil, err
+			}
+			rigor := e.score("rigor")
+			intents = append(intents, intent{path: rec.HostingLeaf, target: leaf,
+				splice: replaceDeclarationRigor(nodeID, rigor),
+				prove:  declarationRigorProver(nodeID, rigor, rec.HostingLeaf), subject: rec.HostingLeaf + ":" + nodeID})
+			continue
 		}
 		register, err := c.contained(rec.RegisterPath, "id")
 		if err != nil {
 			return nil, err
 		}
+		rigor := e.score("rigor")
+		line := "- rigor: " + formatScore(rigor)
 		intents = append(intents, intent{path: rec.RegisterPath, target: register,
-			splice: replaceApplicability(nodeID, workID, fraction),
+			splice: func(document string) (string, error) { return replaceFieldLine(document, nodeID, "rigor", line) },
 			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
 				cur, err := currentEntry(read, nodeID, rec.RegisterPath)
 				if err != nil {
 					return nil, err
 				}
-				matched := false
-				for i := range cur.DependsOn {
-					if cur.DependsOn[i].Target == workID {
-						cur.DependsOn[i].Applicability, matched = fraction, true
-					}
-				}
-				if !matched {
-					return nil, opRefusal("work="+workID, "is not a dependency of "+nodeID+", so there is no bullet "+
-						"carrying an applicability to rewrite. This op re-scores a pairing; it does not create one",
-						"restore: add the edge with add-depends-on, or correct work, then re-run")
-				}
+				cur.Rigor = rigor
 				return []expectedEntry{cur}, nil
 			}})
 	}
 	return intents, nil
 }
 
-// replaceApplicability rewrites the annotation on every bullet of nodeID
-// naming workID; rewriting it to the value it carries is a no-op.
-func replaceApplicability(nodeID, workID string, fraction *float64) func(string) (string, error) {
-	annotation := "applicability " + formatScore(fraction)
+// recKind is the kind an id's prefix names.
+func recKind(nodeID string) string {
+	kind, _, _ := strings.Cut(nodeID, "-")
+	return kind
+}
+
+// nodeKind is the node_type an id's prefix names.
+func nodeKind(nodeID string) string {
+	switch recKind(nodeID) {
+	case "clm":
+		return kb.NodeKindClaim
+	case "ana":
+		return kb.NodeKindAnalysis
+	case "exp":
+		return kb.NodeKindExperiment
+	case "axm":
+		return kb.NodeKindAxiom
+	case kb.WorkPrefix:
+		return kb.NodeKindWork
+	}
+	return ""
+}
+
+// planSetBearing rewrites one existing scoring edge's bearing where it is
+// authored and never inserts a token: a premise edge's on the target entry's
+// rests-on bullet naming the source, a lift, refutation or experiment support
+// on the source's pair line — in its leaf, or in the register's staged copy,
+// which is a claim's own refutation list where the source is a claim.
+func planSetBearing(c *opContext, entries []entry) ([]intent, error) {
+	var intents []intent
+	for _, e := range entries {
+		source, target, relation := e.str("id"), e.str("target"), e.str("relation")
+		bearing := bearingOf(e.score("bearing"))
+		// An axiom declares no register entry: the rests-on bullet naming it
+		// is where its edge stands and the proof it does.
+		if !strings.HasPrefix(source, axiomIDPrefix) {
+			if _, err := c.resolve(source, "id", false); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := c.resolve(target, "target", false); err != nil {
+			return nil, err
+		}
+		if !kb.BearingLegal(relation, nodeKind(source), nodeKind(target)) {
+			return nil, opRefusal("relation="+relation, fmt.Sprintf("does not join a %s source to a %s target: no bearing "+
+				"judges that pairing", nodeKind(source), nodeKind(target)),
+				"restore: correct relation or the ids, then re-run")
+		}
+		in, err := c.bearingHomes(source, target, relation, bearing)
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, in...)
+	}
+	return intents, nil
+}
+
+// bearingHomes is every intent that rewrites one edge's bearing where it is
+// authored. A premise edge has one home — the target entry's rests-on bullet.
+// A lift or refutation has one or two: its source's declaration in the hosting
+// leaf, and the register's staged copy, which are two records of one edge and
+// must be judged alike or the fan-out disagrees.
+func (c *opContext) bearingHomes(source, target, relation string, bearing kb.Bearing) ([]intent, error) {
+	src := c.known[source]
+	if relation == kb.RelationLifts || relation == kb.RelationRefutes || src.Kind == "exp" {
+		return c.pairHomes(source, target, relation, bearing)
+	}
+	rec, ok := c.known[target]
+	if !ok || rec.RegisterPath == "" {
+		return nil, opRefusal("target="+target, "has no canonical register entry, so it authors no premise bullet "+
+			"this edge could be judged on", "restore: correct target, then re-run")
+	}
+	register, err := c.contained(rec.RegisterPath, "target")
+	if err != nil {
+		return nil, err
+	}
+	return []intent{{path: rec.RegisterPath, target: register,
+		splice: replacePremiseBearing(target, source, relation, bearing),
+		expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+			cur, err := currentEntry(read, target, rec.RegisterPath)
+			if err != nil {
+				return nil, err
+			}
+			at := slices.IndexFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == source })
+			if at < 0 {
+				return nil, opRefusal("id="+source, "is not a premise of "+target+", so there is no bullet carrying a "+
+					"bearing to rewrite. This op re-scores an edge; it does not create one",
+					"restore: add the edge with add-rests-on, or correct id, then re-run")
+			}
+			cur.Premises[at].Bearing = bearing
+			return []expectedEntry{cur}, nil
+		}}}, nil
+}
+
+// scoreOf is a bearing as a values score: nil is pending.
+func scoreOf(b kb.Bearing) *float64 {
+	if b.Pending {
+		return nil
+	}
+	v := b.Value
+	return &v
+}
+
+// pairHomes is every home a pair's bearing is authored in: the hosting leaf's
+// declaration, and the register's staged copy, each where it records the pair.
+// A claim authors its refutations on its register entry's own list, which is
+// the staged home and the only one it has.
+func (c *opContext) pairHomes(source, target, relation string, bearing kb.Bearing) ([]intent, error) {
+	rec, ok := c.known[source]
+	if !ok {
+		return nil, opRefusal("id="+source, "resolves to no node", "restore: correct id, then re-run")
+	}
+	key := relation
+	if relation == kb.RelationSupports {
+		key = kb.SupportsKey
+	}
+	score := scoreOf(bearing)
+	var intents []intent
+	if rec.HostingLeaf != "" {
+		text, err := c.src.ReadText(c.src.KBPath(rec.HostingLeaf))
+		if err != nil {
+			return nil, err
+		}
+		if holdsDeclarationPair(text, source, key, target) {
+			leaf, err := c.contained(rec.HostingLeaf, "id")
+			if err != nil {
+				return nil, err
+			}
+			intents = append(intents, intent{path: rec.HostingLeaf, target: leaf,
+				splice: replaceDeclarationPair(source, key, target, score),
+				prove:  pairBearingProver(source, key, target, bearing, rec.HostingLeaf), subject: rec.HostingLeaf + ":" + source})
+		}
+	}
+	if rec.RegisterPath != "" && c.stagesPair(rec.RegisterPath, source, relation, target) {
+		register, err := c.contained(rec.RegisterPath, "id")
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent{path: rec.RegisterPath, target: register,
+			splice: editStagedPair(source, relation, func(id string) (string, bool, bool) {
+				if id != target {
+					return "", false, false
+				}
+				return renderPairLine(id, score), true, false
+			}),
+			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+				cur, err := currentEntry(read, source, rec.RegisterPath)
+				if err != nil {
+					return nil, err
+				}
+				field := &cur.Lifts
+				if relation == kb.RelationRefutes {
+					field = &cur.Refutes
+				}
+				at := slices.IndexFunc(*field, func(p pair) bool { return p.ID == target })
+				if at < 0 {
+					return nil, opRefusal("id="+source, fmt.Sprintf("stages no %s pair for %s in this register", key, target),
+						"restore: author the pair, then re-run")
+				}
+				(*field)[at] = pair{ID: target, Score: score}
+				return []expectedEntry{cur}, nil
+			}})
+	}
+	if len(intents) == 0 {
+		return nil, opRefusal("id="+source, fmt.Sprintf("authors no %s pair for %s in either home — it is declared in "+
+			"no document's frontmatter and its register entry stages no such pair", key, target),
+			"restore: author the pair, then re-run")
+	}
+	return intents, nil
+}
+
+// holdsDeclarationPair is whether nodeID's declaration in text holds a pair
+// naming target under key.
+func holdsDeclarationPair(text, nodeID, key, target string) bool {
+	decl, err := observedDeclaration(text, nodeID, "")
+	if err != nil || decl == nil {
+		return false
+	}
+	for _, list := range decl.lists() {
+		if list.key != key {
+			continue
+		}
+		for _, p := range list.pairs {
+			if p.ID == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// replacePremiseBearing rewrites the (bearing …) annotation on target's
+// rests-on bullet naming source.
+func replacePremiseBearing(target, source, relation string, bearing kb.Bearing) func(string) (string, error) {
+	annotation := kb.RenderBearingAnnotation(bearing)
 	return func(document string) (string, error) {
-		loc, err := locate(document, nodeID)
+		loc, err := locate(document, target)
 		if err != nil {
 			return "", err
 		}
 		lines := kb.SplitLines(document)
-		for i := loc.QualityStart; i < min(loc.QualityEnd, len(lines)); i++ {
-			if kb.BulletHead(kb.TrimBulletLead(kb.Strip(lines[i]))) != workID {
+		for i := loc.RigorStart; i < min(loc.RigorEnd, len(lines)); i++ {
+			if !headNamesSource(kb.BulletHead(kb.TrimBulletLead(kb.Strip(lines[i]))), source) {
 				continue
 			}
-			m := kb.ApplicabilityRE.FindStringIndex(lines[i])
+			m := kb.BearingRE.FindStringIndex(lines[i])
 			if m == nil {
-				return "", spliceFailed("%s's bullet for %s carries no (applicability …) annotation", nodeID, workID)
+				return "", spliceFailed("%s's bullet for %s carries no %s annotation", target, source, annotation)
 			}
 			replaced := lines[i][:m[0]] + annotation + lines[i][m[1]:]
-			document = spliceLines(document, i, i+1, []string{replaced})
-			lines = kb.SplitLines(document)
+			return spliceLines(document, i, i+1, []string{replaced}), nil
 		}
-		return document, nil
+		return "", spliceFailed("%s carries no rests-on bullet naming %s", target, source)
 	}
+}
+
+// headNamesSource is whether a rests-on bullet's head names source: the id as
+// bullet heads write it, or the "Axiom <label>" citation an axm- id stands
+// for.
+func headNamesSource(head, source string) bool {
+	if head == source {
+		return true
+	}
+	return strings.HasPrefix(source, axiomIDPrefix) && head == "Axiom "+strings.TrimPrefix(source, axiomIDPrefix)
 }
 
 // planDropClaimEdges removes each entry's outgoing edge bullets of one class,
@@ -835,7 +1142,7 @@ func planDropClaimEdges(c *opContext, entries []entry) ([]intent, error) {
 		}
 		both := !e.has("edge-class")
 		class := e.str("edge-class")
-		classes := []string{kb.IndexDependsOn, kb.RelationReferences}
+		classes := []string{kb.ListRestsOn, kb.RelationReferences}
 		if !both {
 			classes = []string{class}
 		}
@@ -853,8 +1160,8 @@ func planDropClaimEdges(c *opContext, entries []entry) ([]intent, error) {
 				if both || class == kb.RelationReferences {
 					cur.References = nil
 				}
-				if both || class == kb.IndexDependsOn {
-					cur.DependsOn = nil
+				if both || class == kb.ListRestsOn {
+					cur.Premises = nil
 				}
 				return []expectedEntry{cur}, nil
 			}})
@@ -862,9 +1169,11 @@ func planDropClaimEdges(c *opContext, entries []entry) ([]intent, error) {
 	return intents, nil
 }
 
-// planDropInboundEdges removes, from every register entry holding one, each
-// depends-on or references bullet whose target is id, as dropListBullets
-// does. Entries naming no bullet at id are left as they stand.
+// planDropInboundEdges removes every authored edge naming id: each register
+// entry's rests-on bullet naming it, each entry's references bullet pointing at
+// it, each claim's refutation of it, and each analysis's or experiment's lift,
+// refutation or support of it — authored in a leaf's declaration or a
+// register's staged copy. An entry authoring no such edge is left as it stands.
 func planDropInboundEdges(c *opContext, entries []entry) ([]intent, error) {
 	var intents []intent
 	for _, e := range entries {
@@ -876,13 +1185,13 @@ func planDropInboundEdges(c *opContext, entries []entry) ([]intent, error) {
 		if err != nil {
 			return nil, err
 		}
-		naming := st.ClaimEntries[:0:0]
+		claims := st.ClaimEntries[:0:0]
 		for _, ce := range st.ClaimEntries {
-			if edgesTarget(ce.DependsOn, target) || edgesTarget(ce.References, target) {
-				naming = append(naming, ce)
+			if namesSource(ce.Premises, target) || edgesTarget(ce.References, target) || edgesTarget(ce.Refutes, target) {
+				claims = append(claims, ce)
 			}
 		}
-		for _, ce := range naming {
+		for _, ce := range claims {
 			register, err := c.contained(ce.CanonicalPath, "id")
 			if err != nil {
 				return nil, err
@@ -894,13 +1203,141 @@ func planDropInboundEdges(c *opContext, entries []entry) ([]intent, error) {
 					if err != nil {
 						return nil, err
 					}
-					cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+					cur.Premises = slices.DeleteFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == target })
 					cur.References = slices.DeleteFunc(cur.References, func(d expectedEdge) bool { return d.Target == target })
+					cur.Refutes = slices.DeleteFunc(cur.Refutes, func(p pair) bool { return p.ID == target })
 					return []expectedEntry{cur}, nil
 				}})
 		}
+		for _, ana := range st.Analyses {
+			if namesSource(ana.Premises, target) {
+				register, err := c.contained(ana.CanonicalPath, "id")
+				if err != nil {
+					return nil, err
+				}
+				id := ana.ID
+				intents = append(intents, intent{path: ana.CanonicalPath, target: register,
+					splice: dropInboundEdges(id, target),
+					expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+						cur, err := currentEntry(read, id, ana.CanonicalPath)
+						if err != nil {
+							return nil, err
+						}
+						cur.Premises = slices.DeleteFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == target })
+						return []expectedEntry{cur}, nil
+					}})
+			}
+			for _, list := range []struct {
+				key   string
+				edges []kb.Edge
+			}{{kb.LiftsKey, ana.Lifts}, {kb.RefutesKey, ana.Refutes}} {
+				if !edgesTarget(list.edges, target) {
+					continue
+				}
+				leaf, err := c.contained(ana.CanonicalPath, "id")
+				if err != nil {
+					return nil, err
+				}
+				id := ana.ID
+				intents = append(intents, intent{path: ana.CanonicalPath, target: leaf,
+					splice: dropDeclarationPairs(id, list.key, target),
+					prove:  declarationPairAbsent(id, list.key, target, ana.CanonicalPath), subject: ana.CanonicalPath + ":" + id})
+			}
+			if rec, ok := c.known[ana.ID]; ok && rec.RegisterPath != "" && c.stagesPair(rec.RegisterPath, ana.ID, "", target) {
+				register, err := c.contained(rec.RegisterPath, "id")
+				if err != nil {
+					return nil, err
+				}
+				id := ana.ID
+				intents = append(intents, intent{path: rec.RegisterPath, target: register,
+					splice: spliceAll(editStagedPair(id, kb.RelationLifts, dropPair(target)),
+						editStagedPair(id, kb.RelationRefutes, dropPair(target))),
+					expectCurrent: func(read registerRead) ([]expectedEntry, error) {
+						cur, err := currentEntry(read, id, rec.RegisterPath)
+						if err != nil {
+							return nil, err
+						}
+						cur.Lifts = slices.DeleteFunc(cur.Lifts, func(p pair) bool { return p.ID == target })
+						cur.Refutes = slices.DeleteFunc(cur.Refutes, func(p pair) bool { return p.ID == target })
+						return []expectedEntry{cur}, nil
+					}})
+			}
+		}
+		for _, x := range st.Experiments {
+			for _, list := range []struct {
+				key   string
+				edges []kb.Edge
+			}{{kb.SupportsKey, x.Supports}, {kb.LiftsKey, x.Lifts}, {kb.RefutesKey, x.Refutes}} {
+				if !edgesTarget(list.edges, target) {
+					continue
+				}
+				leaf, err := c.contained(x.CanonicalPath, "id")
+				if err != nil {
+					return nil, err
+				}
+				id := x.ID
+				intents = append(intents, intent{path: x.CanonicalPath, target: leaf,
+					splice: dropDeclarationPairs(id, list.key, target),
+					prove:  declarationPairAbsent(id, list.key, target, x.CanonicalPath), subject: x.CanonicalPath + ":" + id})
+			}
+		}
 	}
 	return intents, nil
+}
+
+// stagesPair is whether a register entry stages a lift or refutation of
+// target under relation; an empty relation asks either list. A claim's
+// refutation list is staged the same way.
+func (c *opContext) stagesPair(register, source, relation, target string) bool {
+	text, err := c.src.ReadText(c.src.KBPath(register))
+	if err != nil {
+		return false
+	}
+	read, err := readRegister(text)
+	if err != nil {
+		return false
+	}
+	rec, ok := read.record(source)
+	if !ok {
+		return false
+	}
+	staged := func(pairs []pair) bool {
+		return slices.ContainsFunc(pairs, func(p pair) bool { return p.ID == target })
+	}
+	switch relation {
+	case kb.RelationLifts:
+		return staged(rec.Lifts)
+	case kb.RelationRefutes:
+		return staged(rec.Refutes)
+	}
+	return staged(rec.Lifts) || staged(rec.Refutes)
+}
+
+// namesSource is whether any edge of edges is authored from source: a premise
+// bullet naming it, or a pair list owned by it.
+func namesSource(edges []kb.Edge, source string) bool {
+	return slices.ContainsFunc(edges, func(e kb.Edge) bool { return e.Source == source })
+}
+
+// dropPair is an editStagedPair callback that removes the pair naming target.
+func dropPair(target string) func(string) (string, bool, bool) {
+	return func(id string) (string, bool, bool) {
+		if id != target {
+			return "", false, false
+		}
+		return "", true, true
+	}
+}
+
+// declarationPairAbsent proves a leaf declaration no longer holds the pair
+// naming target under key.
+func declarationPairAbsent(nodeID, key, target, rel string) func(string) ([]string, error) {
+	return func(candidate string) ([]string, error) {
+		if holdsDeclarationPair(candidate, nodeID, key, target) {
+			return []string{key}, nil
+		}
+		return nil, nil
+	}
 }
 
 // edgesTarget is whether any edge of edges names target.
@@ -908,10 +1345,11 @@ func edgesTarget(edges []kb.Edge, target string) bool {
 	return slices.ContainsFunc(edges, func(d kb.Edge) bool { return d.Target == target })
 }
 
-// dropInboundEdges deletes every bullet of nodeID's depends-on and
+// dropInboundEdges deletes every bullet of nodeID's rests-on, refutes and
 // references lists naming target, as dropListBullets does.
 func dropInboundEdges(nodeID, target string) func(string) (string, error) {
-	return spliceAll(dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
+	return spliceAll(dropListBullets(nodeID, kb.ListRestsOn, bulletNames(target)),
+		dropListBullets(nodeID, kb.RefutesKey, bulletNames(target)),
 		dropListBullets(nodeID, kb.RelationReferences, bulletNames(target)))
 }
 
@@ -935,12 +1373,12 @@ func spliceAll(splices ...func(string) (string, error)) func(string) (string, er
 	}
 }
 
-// planDemoteClaimEdge turns nodeID's existing depends-on edge to target
-// into a demoted row of nodeID's own entry, carrying the given origin: the
-// bullet goes from the depends-on list and a demoted bullet naming target
-// lands in its demoted list. Where the demoted row already stands with that
-// origin, a depends-on bullet still naming target is removed and otherwise
-// the pair is left as it stands; a row of another origin is refused.
+// planDemoteClaimEdge turns nodeID's existing premise edge to target into a
+// demoted row of nodeID's own entry, carrying the given origin: the bullet
+// goes from the rests-on list and a demoted bullet naming target lands in its
+// demoted list. Where the demoted row already stands with that origin, a
+// premise bullet still naming target is removed and otherwise the pair is
+// left as it stands; a row of another origin is refused.
 func planDemoteClaimEdge(c *opContext, entries []entry) ([]intent, error) {
 	var intents []intent
 	for _, e := range entries {
@@ -960,12 +1398,16 @@ func planDemoteClaimEdge(c *opContext, entries []entry) ([]intent, error) {
 		if err != nil {
 			return nil, err
 		}
-		cur, err := currentEntry(readRegister(read), nodeID, rec.RegisterPath)
+		read_, err := readRegister(read)
+		if err != nil {
+			return nil, err
+		}
+		cur, err := currentEntry(read_, nodeID, rec.RegisterPath)
 		if err != nil {
 			return nil, err
 		}
 		origin := e.str("origin")
-		depends := slices.IndexFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+		depends := slices.IndexFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == target })
 		if demoted := slices.IndexFunc(cur.Demoted, func(d expectedEdge) bool { return d.Target == target }); demoted >= 0 {
 			if standing := cur.Demoted[demoted].Origin; standing != origin {
 				return nil, opRefusal("origin="+origin, fmt.Sprintf("%s's demoted row naming %s stands with origin %s, not %s",
@@ -976,23 +1418,23 @@ func planDemoteClaimEdge(c *opContext, entries []entry) ([]intent, error) {
 				continue
 			}
 			intents = append(intents, intent{path: rec.RegisterPath, target: register,
-				splice: dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
+				splice: dropListBullets(nodeID, kb.ListRestsOn, bulletNames(target)),
 				expectCurrent: func(read registerRead) ([]expectedEntry, error) {
 					cur, err := currentEntry(read, nodeID, rec.RegisterPath)
 					if err != nil {
 						return nil, err
 					}
-					cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
+					cur.Premises = slices.DeleteFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == target })
 					return []expectedEntry{cur}, nil
 				}})
 			continue
 		}
 		if depends < 0 {
-			return nil, opRefusal("target="+target, fmt.Sprintf("%s carries no depends-on bullet naming %s, and this op demotes "+
-				"an existing edge, not adds a demoted row; only the build writes a demoted edge and add-depends-on adds the depends bullet", nodeID, target),
-				"restore: add the edge with kbase add-depends-on, or correct target, then re-run")
+			return nil, opRefusal("target="+target, fmt.Sprintf("%s carries no rests-on bullet naming %s, and this op demotes "+
+				"an existing edge, not adds a demoted row; only the build writes a demoted edge and add-rests-on adds the premise bullet", nodeID, target),
+				"restore: add the edge with kbase add-rests-on, or correct target, then re-run")
 		}
-		t := dependsOnTarget{Target: target, Origin: origin}
+		t := premiseTarget{Target: target, Origin: origin}
 		if t.Title, err = c.titleOf(target); err != nil {
 			return nil, err
 		}
@@ -1006,25 +1448,25 @@ func planDemoteClaimEdge(c *opContext, entries []entry) ([]intent, error) {
 				if err != nil {
 					return nil, err
 				}
-				cur.DependsOn = slices.DeleteFunc(cur.DependsOn, func(d expectedEdge) bool { return d.Target == target })
-				cur.Demoted = append(cur.Demoted, expectedEdge{Target: target, Context: t.Context, Origin: t.Origin})
+				cur.Premises = slices.DeleteFunc(cur.Premises, func(d expectedEdge) bool { return d.Source == target })
+				cur.Demoted = append(cur.Demoted, expectedEdge{Source: nodeID, Target: target, Context: t.Context, Origin: t.Origin})
 				return []expectedEntry{cur}, nil
 			}})
 	}
 	return intents, nil
 }
 
-// demoteClaimEdge deletes nodeID's depends-on bullet naming target, with its
+// demoteClaimEdge deletes nodeID's rests-on bullet naming target, with its
 // continuation lines and the list's header where no bullet is left, and
 // appends the demoted bullet to the entry's demoted list, its header created
 // where absent.
-func demoteClaimEdge(nodeID, target string, t dependsOnTarget) func(string) (string, error) {
-	return spliceAll(dropListBullets(nodeID, kb.IndexDependsOn, bulletNames(target)),
-		addBullets(&edgeAddition{nodeID: nodeID, requested: []dependsOnTarget{t}, added: []dependsOnTarget{t}}, kb.RelationDemoted))
+func demoteClaimEdge(nodeID, target string, t premiseTarget) func(string) (string, error) {
+	return spliceAll(dropListBullets(nodeID, kb.ListRestsOn, bulletNames(target)),
+		addBullets(&edgeAddition{nodeID: nodeID, section: kb.RelationDemoted, requested: []premiseTarget{t}, added: []premiseTarget{t}}, kb.RelationDemoted))
 }
 
 // planDropClaimNode deletes claim nodes entirely: each one's register entry
-// block, its claim-quality marker and claims entry in every leaf carrying
+// block, its claim-rigor marker and claims entry in every leaf carrying
 // either, and every other entry's demoted row naming it. An entry still
 // naming a node in its edges is refused — the caller drops edges first — and
 // so is a leaf whose claims list would empty, an empty claims list being
@@ -1044,14 +1486,39 @@ func planDropClaimNode(c *opContext, entries []entry) ([]intent, error) {
 	}
 	for _, nodeID := range ids {
 		var refusals result.Refusal
-		for _, ce := range st.ClaimEntries {
-			if !edgesTarget(ce.DependsOn, nodeID) && !edgesTarget(ce.References, nodeID) {
-				continue
-			}
-			refusals = append(refusals, result.Item{Key: "id=" + ce.ID,
+		stranded := func(owner, authoring string) {
+			refusals = append(refusals, result.Item{Key: "id=" + owner,
 				Remedy: "run kbase drop-claim-edges and kbase drop-inbound-edges first, then re-run",
-				Detail: fmt.Sprintf("%s's depends-on or references still names %s, and dropping the node would strand the edge; "+
-					"run drop-claim-edges and drop-inbound-edges first", ce.ID, nodeID)})
+				Detail: fmt.Sprintf("%s's %s still names %s, and dropping the node would strand the edge; "+
+					"run drop-claim-edges and drop-inbound-edges first", owner, authoring, nodeID)})
+		}
+		for _, ce := range st.ClaimEntries {
+			if namesSource(ce.Premises, nodeID) {
+				stranded(ce.ID, "rests-on list")
+			}
+			if edgesTarget(ce.References, nodeID) {
+				stranded(ce.ID, "references list")
+			}
+			if edgesTarget(ce.Refutes, nodeID) {
+				stranded(ce.ID, "refutes list")
+			}
+		}
+		for _, ana := range st.Analyses {
+			if namesSource(ana.Premises, nodeID) {
+				stranded(ana.ID, "rests-on list")
+			}
+			for _, edges := range [][]kb.Edge{ana.Lifts, ana.Refutes} {
+				if edgesTarget(edges, nodeID) {
+					stranded(ana.ID, "pair list")
+				}
+			}
+		}
+		for _, x := range st.Experiments {
+			for _, edges := range [][]kb.Edge{x.Supports, x.Lifts, x.Refutes} {
+				if edgesTarget(edges, nodeID) {
+					stranded(x.ID, "pair list")
+				}
+			}
 		}
 		if len(refusals) > 0 {
 			return nil, refusals
@@ -1233,7 +1700,7 @@ func dropEntryBlock(nodeID string) func(string) (string, error) {
 	}
 }
 
-// dropLeafClaim removes nodeID's claim-quality marker from every line it
+// dropLeafClaim removes nodeID's claim-rigor marker from every line it
 // names it on, and nodeID from the frontmatter claims list. A line the
 // marker leaves without prose goes with it.
 func dropLeafClaim(nodeID, rel string) func(string) (string, error) {
@@ -1282,7 +1749,7 @@ func claimNodeProver(nodeID, rel string) func(string) ([]string, error) {
 		}
 		var wrong []string
 		if strings.Contains(kb.StripFrontmatter(candidate), marker) {
-			wrong = append(wrong, "claim-quality marker")
+			wrong = append(wrong, "claim-rigor marker")
 		}
 		claims, err := fm.ListOrEmpty("claims")
 		if err != nil {
@@ -1300,9 +1767,9 @@ func claimNodeProver(nodeID, rel string) func(string) ([]string, error) {
 // edgeAddition is one entry's requested edges of one list and the subset it
 // does not already hold, decided once from the baseline.
 type edgeAddition struct {
-	nodeID    string
-	requested []dependsOnTarget
-	added     []dependsOnTarget
+	nodeID, section string
+	requested       []premiseTarget
+	added           []premiseTarget
 }
 
 // narrow keeps the requested edges present lacks; a target named twice is
@@ -1314,7 +1781,7 @@ func (a *edgeAddition) narrow(present map[string]bool) {
 	}
 	a.added = nil
 	for _, t := range a.requested {
-		edge := readerTarget(a.nodeID, t)
+		edge := readerTarget(a.nodeID, a.section, t)
 		if held[edge] {
 			continue
 		}
@@ -1325,36 +1792,57 @@ func (a *edgeAddition) narrow(present map[string]bool) {
 
 // readerTarget is the id the reader keys this edge under once it is a
 // bullet: the rendered bullet put through the reader that will read it.
-func readerTarget(nodeID string, t dependsOnTarget) string {
-	if edges := kb.ParseDependsOnBullet(renderDependsOnBullet(t), nodeID); len(edges) > 0 {
-		return edges[0].Target
+func readerTarget(nodeID, section string, t premiseTarget) string {
+	if section == kb.ListRestsOn {
+		for _, e := range kb.ParsePremisesBullet(renderRestsOnBullet(t), nodeID, kb.NodeKindClaim) {
+			return e.Source
+		}
 	}
 	return t.Target
 }
 
 var (
-	bulletRenderers = map[string]func(dependsOnTarget) string{
-		"depends-on":       renderDependsOnBullet,
+	bulletRenderers = map[string]func(premiseTarget) string{
+		kb.ListRestsOn:     renderRestsOnBullet,
 		"references":       renderReferencesBullet,
 		kb.RelationDemoted: renderDemotedBullet,
 	}
 	// sectionAnchors are the lines a missing section is placed above, the
 	// first present winning, so the reader's field order survives any order
-	// of writing.
+	// of writing. The derived heading and its line are both anchors: an entry
+	// written before the two headings carries the line alone.
 	sectionAnchors = map[string][]string{
-		"depends-on":       {"- references:", "- " + kb.RelationDemoted + ":", "- solidity:"},
-		"references":       {"- " + kb.RelationDemoted + ":", "- solidity:"},
-		kb.RelationDemoted: {"- solidity:"},
+		kb.ListRestsOn:     {"- references:", "- " + kb.RelationDemoted + ":", "- strengthen-by:", "### Strength", "- strength:"},
+		"references":       {"- " + kb.RelationDemoted + ":", "- strengthen-by:", "### Strength", "- strength:"},
+		kb.RelationDemoted: {"- strengthen-by:", "### Strength", "- strength:"},
 	}
 	// edgeSections is each list an entry's edges are added to, in field
-	// order, with the edges of the entry's record it holds.
+	// order, with the edges of the entry's record it holds, the id a bullet of
+	// that list names, and the expectation adding one writes.
 	edgeSections = []struct {
-		name string
-		held func(*expectedEntry) *[]expectedEdge
+		name     string
+		held     func(*expectedEntry) *[]expectedEdge
+		named    func(expectedEdge) string
+		expected func(nodeID string, t premiseTarget) expectedEdge
 	}{
-		{"depends-on", func(e *expectedEntry) *[]expectedEdge { return &e.DependsOn }},
-		{"references", func(e *expectedEntry) *[]expectedEdge { return &e.References }},
-		{kb.RelationDemoted, func(e *expectedEntry) *[]expectedEdge { return &e.Demoted }},
+		{kb.ListRestsOn,
+			func(e *expectedEntry) *[]expectedEdge { return &e.Premises },
+			func(e expectedEdge) string { return e.Source },
+			func(nodeID string, t premiseTarget) expectedEdge {
+				return expectedEdge{Source: t.Target, Target: nodeID, Context: t.Context, Bearing: bearingOf(t.Bearing)}
+			}},
+		{"references",
+			func(e *expectedEntry) *[]expectedEdge { return &e.References },
+			func(e expectedEdge) string { return e.Target },
+			func(nodeID string, t premiseTarget) expectedEdge {
+				return expectedEdge{Source: nodeID, Target: t.Target, Context: t.Context}
+			}},
+		{kb.RelationDemoted,
+			func(e *expectedEntry) *[]expectedEdge { return &e.Demoted },
+			func(e expectedEdge) string { return e.Target },
+			func(nodeID string, t premiseTarget) expectedEdge {
+				return expectedEdge{Source: nodeID, Target: t.Target, Context: t.Context, Origin: t.Origin}
+			}},
 	}
 )
 
@@ -1376,9 +1864,9 @@ func addBullets(a *edgeAddition, section string) func(string) (string, error) {
 			return "", err
 		}
 		lines := kb.SplitLines(document)
-		limit := min(loc.QualityEnd, len(lines))
+		limit := min(loc.RigorEnd, len(lines))
 		first := func(prefix string) int {
-			for i := loc.QualityStart; i < limit; i++ {
+			for i := loc.RigorStart; i < limit; i++ {
 				if strings.HasPrefix(kb.Strip(lines[i]), prefix) {
 					return i
 				}
@@ -1387,21 +1875,33 @@ func addBullets(a *edgeAddition, section string) func(string) (string, error) {
 		}
 		if head := first(header); head >= 0 {
 			i := head + 1
-			for i < limit && kb.Strip(lines[i]) != "" && !breakRE.MatchString(kb.Strip(lines[i])) {
+			for i < limit && kb.Strip(lines[i]) != "" && !atHeading(kb.Strip(lines[i])) && !breakRE.MatchString(kb.Strip(lines[i])) {
 				i++
 			}
 			return spliceLines(document, i, i, bullets), nil
 		}
 		for _, anchor := range sectionAnchors[section] {
-			if at := first(anchor); at >= 0 {
-				return spliceLines(document, at, at, append([]string{header}, bullets...)), nil
+			at := first(anchor)
+			if at < 0 {
+				continue
 			}
+			start := at
+			added := append([]string{header}, bullets...)
+			if strings.HasPrefix(anchor, "#") {
+				// The heading's own blank line moves above the new list, so the
+				// entry keeps one blank between a list and the heading below it.
+				added = append(added, "")
+				if at > loc.RigorStart && kb.Strip(lines[at-1]) == "" {
+					start = at - 1
+				}
+			}
+			return spliceLines(document, start, at, added), nil
 		}
 		return "", spliceFailed("%s has no %s line to anchor a %s section above", a.nodeID, strings.Join(sectionAnchors[section], " or "), section)
 	}
 }
 
-func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
+func planAddRestsOn(c *opContext, entries []entry) ([]intent, error) {
 	var intents []intent
 	for _, e := range entries {
 		nodeID := e.str("id")
@@ -1416,23 +1916,23 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 		var sections []int
 		additions := map[int]*edgeAddition{}
 		for i, s := range edgeSections {
-			targets, err := c.dependsTargets(e.dependsOn(s.name))
+			targets, err := c.premiseTargets(e.restsOn(s.name))
 			if err != nil {
 				return nil, err
 			}
 			if len(targets) == 0 {
 				continue
 			}
-			if s.name != "depends-on" && !isClaimID(nodeID) {
+			if s.name != kb.ListRestsOn && !isClaimID(nodeID) {
 				return nil, opRefusal(nodeID, "carries a "+s.name+" list, and a reference is one claim of this corpus naming another",
 					"restore: drop the "+s.name+" list, or name a claim entry as the id, then re-run")
 			}
 			sections = append(sections, i)
-			additions[i] = &edgeAddition{nodeID: nodeID, requested: targets, added: targets}
+			additions[i] = &edgeAddition{nodeID: nodeID, section: s.name, requested: targets, added: targets}
 		}
 		if len(sections) == 0 {
 			return nil, opRefusal(nodeID, "this op adds an entry's outgoing edges and neither list names one",
-				"restore: supply a depends-on list, a references list, or both, then re-run")
+				"restore: supply a rests-on list, a references list, or both, then re-run")
 		}
 		var splices []func(string) (string, error)
 		for _, i := range sections {
@@ -1458,11 +1958,11 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 					held := edgeSections[i].held(&cur)
 					present := map[string]bool{}
 					for _, edge := range *held {
-						present[edge.Target] = true
+						present[edgeSections[i].named(edge)] = true
 					}
 					a.narrow(present)
 					for _, t := range a.added {
-						*held = append(*held, expectedEdge{Target: t.Target, Context: t.Context, Applicability: t.Applicability, Origin: t.Origin})
+						*held = append(*held, edgeSections[i].expected(nodeID, t))
 					}
 				}
 				return []expectedEntry{cur}, nil
@@ -1472,17 +1972,17 @@ func planAddDependsOn(c *opContext, entries []entry) ([]intent, error) {
 }
 
 // demotedResolution is one entry's changes to its demoted list: the targets
-// whose demoted bullet goes, and of them the ones gaining a depends-on bullet.
+// whose demoted bullet goes, and of them the ones gaining a rests-on bullet.
 type demotedResolution struct {
 	register, target string
 	drop             map[string]bool
-	restore          []dependsOnTarget
+	restore          []premiseTarget
 }
 
 // planResolveDemoted removes each named demoted edge, or rewrites it as a
-// depends-on bullet where that closes no cycle of the authored premise graph,
+// rests-on bullet where that closes no cycle of the authored premise graph,
 // the batch's earlier restores included. A pair already as asked — no
-// demoted edge to remove, or a depends edge and no demoted one to restore —
+// demoted edge to remove, or a premise edge and no demoted one to restore —
 // is left as it stands.
 func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 	st, err := kb.Discover(c.src, log.Discard())
@@ -1514,14 +2014,14 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 		}
 		cur := claims[nodeID]
 		demoted := slices.IndexFunc(cur.Demoted, func(d kb.Edge) bool { return d.Target == target })
-		depends := slices.ContainsFunc(cur.DependsOn, func(d kb.Edge) bool { return d.Relation == kb.RelationDepends && d.Target == target })
+		depends := slices.ContainsFunc(cur.Premises, func(d kb.Edge) bool { return d.Relation == kb.RelationSupports && d.Source == target })
 		r := byNode[nodeID]
 		if demoted < 0 {
 			if action == actionRemove || depends {
 				continue
 			}
 			return nil, opRefusal("target="+target, fmt.Sprintf("%s carries no demoted edge to %s, so there is nothing to restore; "+
-				"only the build writes a demoted edge", nodeID, target), "restore: add the edge with kbase add-depends-on, or correct target, then re-run")
+				"only the build writes a demoted edge", nodeID, target), "restore: add the edge with kbase add-rests-on, or correct target, then re-run")
 		}
 		if r == nil {
 			register, err := c.contained(rec.RegisterPath, "id")
@@ -1537,15 +2037,15 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 		if action == actionRestore {
 			if path := graph.Path(target, nodeID); path != nil {
 				return nil, result.Refusal{{Check: checkDependencyCycle, Entry: e.Index, Key: "target",
-					Remedy: "kbase resolve-demoted with action remove for this pair, or remove a depends edge on the named path first",
-					Detail: fmt.Sprintf("restoring %s → %s as a depends edge would close the cycle %s", nodeID, target,
+					Remedy: "kbase resolve-demoted with action remove for this pair, or remove a premise edge on the named path first",
+					Detail: fmt.Sprintf("restoring %s → %s as a premise edge would close the cycle %s", nodeID, target,
 						strings.Join(append(path, target), " → "))}}
 			}
 			graph.Add(nodeID, target)
 			done = resolvedRestore
 			if !depends {
 				d := cur.Demoted[demoted]
-				t := dependsOnTarget{Target: target}
+				t := premiseTarget{Target: target}
 				if d.Context != nil {
 					t.Context = *d.Context
 				}
@@ -1562,7 +2062,7 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 		r := byNode[nodeID]
 		splices := []func(string) (string, error){dropListBullets(nodeID, kb.RelationDemoted, bulletNames(slices.Collect(maps.Keys(r.drop))...))}
 		if len(r.restore) > 0 {
-			splices = append(splices, addBullets(&edgeAddition{nodeID: nodeID, requested: r.restore, added: r.restore}, "depends-on"))
+			splices = append(splices, addBullets(&edgeAddition{nodeID: nodeID, section: kb.ListRestsOn, requested: r.restore, added: r.restore}, kb.ListRestsOn))
 		}
 		intents = append(intents, intent{path: r.register, target: r.target,
 			splice: spliceAll(splices...),
@@ -1573,7 +2073,7 @@ func planResolveDemoted(c *opContext, entries []entry) ([]intent, error) {
 				}
 				cur.Demoted = slices.DeleteFunc(cur.Demoted, func(d expectedEdge) bool { return r.drop[d.Target] })
 				for _, t := range r.restore {
-					cur.DependsOn = append(cur.DependsOn, expectedEdge{Target: t.Target, Context: t.Context})
+					cur.Premises = append(cur.Premises, expectedEdge{Source: t.Target, Target: nodeID, Context: t.Context, Bearing: kb.Bearing{Pending: true}})
 				}
 				return []expectedEntry{cur}, nil
 			}})
@@ -1595,14 +2095,14 @@ func dropListBullets(nodeID, list string, match func(bulletIDs []string) bool) f
 			return "", err
 		}
 		lines := kb.SplitLines(document)
-		limit := min(loc.QualityEnd, len(lines))
-		head := slices.IndexFunc(lines[loc.QualityStart:limit], func(l string) bool { return strings.HasPrefix(kb.Strip(l), header) })
+		limit := min(loc.RigorEnd, len(lines))
+		head := slices.IndexFunc(lines[loc.RigorStart:limit], func(l string) bool { return strings.HasPrefix(kb.Strip(l), header) })
 		if head < 0 {
 			return document, nil
 		}
-		head += loc.QualityStart
+		head += loc.RigorStart
 		end := head + 1
-		for end < limit && !breakRE.MatchString(kb.Strip(lines[end])) && kb.Strip(lines[end]) != "---" {
+		for end < limit && !breakRE.MatchString(kb.Strip(lines[end])) && kb.Strip(lines[end]) != "---" && !atHeading(kb.Strip(lines[end])) {
 			end++
 		}
 		for end > head+1 && kb.Strip(lines[end-1]) == "" {
@@ -1635,7 +2135,7 @@ func dropListBullets(nodeID, list string, match func(bulletIDs []string) bool) f
 // verbatim at refresh's own anchors.
 var (
 	knownFrontmatterKeys = []string{"kind", "path-stable", "claims", "no-claim", "experiments", kb.ExperimentNodesKey,
-		kb.SupportNodesKey, kb.FormatKey}
+		kb.AnalysisNodesKey, kb.FormatKey}
 	derivedFrontmatterFields = [][2]string{{"subtree-claims", "kind:"}, {"subtree-experiments", "subtree-claims:"}}
 )
 
@@ -1648,7 +2148,7 @@ func planSetFrontmatter(c *opContext, entries []entry) ([]intent, error) {
 			return nil, err
 		}
 		claims, experiments := e.list("claims"), e.list("experiments")
-		expNodes, supNodes := e.experimentNodes(), e.supportNodes()
+		expNodes, analyses := e.experimentNodes(), e.analyses()
 		for _, id := range claims {
 			if _, err := c.resolve(id, "claims", true); err != nil {
 				return nil, err
@@ -1664,25 +2164,35 @@ func planSetFrontmatter(c *opContext, entries []entry) ([]intent, error) {
 			if _, err := c.resolve(n.ExpID, "experiment-node.exp-id", false); err != nil {
 				return nil, err
 			}
-			for _, p := range n.Strengthens {
-				if _, err := c.resolve(p.ID, "experiment-node.strengthens.id", true); err != nil {
-					return nil, err
+			for _, list := range []struct {
+				key   string
+				pairs []pair
+			}{{kb.SupportsKey, n.Supports}, {kb.LiftsKey, n.Lifts}, {kb.RefutesKey, n.Refutes}} {
+				for _, p := range list.pairs {
+					if _, err := c.resolve(p.ID, "experiment-node."+list.key+".id", true); err != nil {
+						return nil, err
+					}
 				}
 			}
 			redeclared = append(redeclared, n.ExpID)
 		}
-		for _, n := range supNodes {
-			if _, err := c.resolve(n.SupID, "support-node.sup-id", true); err != nil {
+		for _, n := range analyses {
+			if _, err := c.resolve(n.AnaID, "analysis-node.ana-id", true); err != nil {
 				return nil, err
 			}
-			for _, p := range n.Supports {
-				if _, err := c.resolve(p.ID, "support-node.supports.id", true); err != nil {
-					return nil, err
+			for _, list := range []struct {
+				key   string
+				pairs []pair
+			}{{kb.LiftsKey, n.Lifts}, {kb.RefutesKey, n.Refutes}} {
+				for _, p := range list.pairs {
+					if _, err := c.resolve(p.ID, "analysis-node."+list.key+".id", true); err != nil {
+						return nil, err
+					}
 				}
 			}
-			redeclared = append(redeclared, n.SupID)
+			redeclared = append(redeclared, n.AnaID)
 		}
-		intended := frontmatterValues{Kind: e.str("kind"), Claims: claims, Experiments: experiments, ExperimentNodes: expNodes, SupportNodes: supNodes}
+		intended := frontmatterValues{Kind: e.str("kind"), Claims: claims, Experiments: experiments, ExperimentNodes: expNodes, Analyses: analyses}
 		if e.has("path-stable") {
 			s := e.str("path-stable")
 			intended.PathStable = &s
@@ -1802,32 +2312,45 @@ func FrontmatterValues(text, document string) (map[string]any, error) {
 	var exps []map[string]any
 	for _, n := range v.ExperimentNodes {
 		e := map[string]any{"exp-id": n.ExpID, "status": n.Status}
-		var pairs []map[string]any
-		for _, p := range n.Strengthens {
-			pairs = append(pairs, map[string]any{"id": p.ID, "strength": score(p.Score)})
+		if n.Rigor != nil {
+			e["rigor"] = score(n.Rigor)
 		}
-		if len(pairs) > 0 {
-			e["strengthens"] = pairs
+		for _, list := range []struct {
+			key   string
+			pairs []pair
+		}{{kb.SupportsKey, n.Supports}, {kb.LiftsKey, n.Lifts}, {kb.RefutesKey, n.Refutes}} {
+			var rows []map[string]any
+			for _, p := range list.pairs {
+				rows = append(rows, map[string]any{"id": p.ID, "bearing": score(p.Score)})
+			}
+			if len(rows) > 0 {
+				e[list.key] = rows
+			}
 		}
 		exps = append(exps, e)
 	}
 	if len(exps) > 0 {
 		out["experiment-node"] = exps
 	}
-	var sups []map[string]any
-	for _, n := range v.SupportNodes {
-		e := map[string]any{"sup-id": n.SupID}
-		var pairs []map[string]any
-		for _, p := range n.Supports {
-			pairs = append(pairs, map[string]any{"id": p.ID, "fraction": score(p.Score)})
+	var anas []map[string]any
+	for _, n := range v.Analyses {
+		e := map[string]any{"ana-id": n.AnaID}
+		for _, list := range []struct {
+			key   string
+			pairs []pair
+		}{{kb.LiftsKey, n.Lifts}, {kb.RefutesKey, n.Refutes}} {
+			var rows []map[string]any
+			for _, p := range list.pairs {
+				rows = append(rows, map[string]any{"id": p.ID, "bearing": score(p.Score)})
+			}
+			if len(rows) > 0 {
+				e[list.key] = rows
+			}
 		}
-		if len(pairs) > 0 {
-			e["supports"] = pairs
-		}
-		sups = append(sups, e)
+		anas = append(anas, e)
 	}
-	if len(sups) > 0 {
-		out["support-node"] = sups
+	if len(anas) > 0 {
+		out["analysis-node"] = anas
 	}
 	return out, nil
 }
@@ -1866,23 +2389,16 @@ func observedFrontmatter(text, rel string) (*frontmatterValues, error) {
 		return nil, err
 	}
 	for _, n := range exps {
-		d := experimentDecl{ExpID: n.ID, Status: n.Status}
-		for _, p := range n.Strengthens {
-			s := p.Strength
-			d.Strengthens = append(d.Strengthens, pair{ID: p.ClaimID, Score: &s})
-		}
+		d := experimentDecl{ExpID: n.ID, Status: n.Status, Rigor: n.Rigor, Supports: pairsOf(n.Supports),
+			Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)}
 		v.ExperimentNodes = append(v.ExperimentNodes, d)
 	}
-	sups, err := kb.ParseSupportLeaf(text, rel)
+	anas, err := kb.ParseAnalysisLeaf(text, rel)
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range sups {
-		d := supportDecl{SupID: n.ID}
-		for _, p := range n.Supports {
-			d.Supports = append(d.Supports, pair{ID: p.ClaimID, Score: fractionScore(p.Fraction)})
-		}
-		v.SupportNodes = append(v.SupportNodes, d)
+	for _, n := range anas {
+		v.Analyses = append(v.Analyses, analysisDecl{AnaID: n.ID, Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)})
 	}
 	return v, nil
 }
@@ -1921,10 +2437,11 @@ func frontmatterProver(intended frontmatterValues, rel string) func(string) ([]s
 			{"no-claim", optionalStringEqual(got.NoClaim, want.NoClaim)},
 			{"experiments", slices.Equal(got.Experiments, want.Experiments)},
 			{"experiment-node", slices.EqualFunc(got.ExperimentNodes, want.ExperimentNodes, func(a, b experimentDecl) bool {
-				return a.ExpID == b.ExpID && a.Status == b.Status && pairsEqual(a.Strengthens, b.Strengthens)
+				return a.ExpID == b.ExpID && a.Status == b.Status && scoreEqual(a.Rigor, b.Rigor) &&
+					pairsEqual(a.Supports, b.Supports) && pairsEqual(a.Lifts, b.Lifts) && pairsEqual(a.Refutes, b.Refutes)
 			})},
-			{"support-node", slices.EqualFunc(got.SupportNodes, want.SupportNodes, func(a, b supportDecl) bool {
-				return a.SupID == b.SupID && pairsEqual(a.Supports, b.Supports)
+			{"analysis-node", slices.EqualFunc(got.Analyses, want.Analyses, func(a, b analysisDecl) bool {
+				return a.AnaID == b.AnaID && pairsEqual(a.Lifts, b.Lifts) && pairsEqual(a.Refutes, b.Refutes)
 			})},
 		} {
 			if !f.same {
@@ -2012,158 +2529,342 @@ func markerProver(nodeID, rel string) func(string) ([]string, error) {
 			return nil, err
 		}
 		if leaf == nil || !leaf.Tier2Marked[nodeID] {
-			return []string{"claim-quality marker"}, nil
+			return []string{"claim-rigor marker"}, nil
 		}
 		return nil, nil
 	}
 }
 
-func planSetOnPointFraction(c *opContext, entries []entry) ([]intent, error) {
-	var intents []intent
-	for _, e := range entries {
-		supID, claimID, fraction := e.str("id"), e.str("claim"), e.score("fraction")
-		rec, err := c.resolve(supID, "id", true)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := c.resolve(claimID, "claim", true); err != nil {
-			return nil, err
-		}
-		line := renderSupportsPairLine(claimID, fraction)
-		if rec.HostingLeaf != "" {
-			target, err := c.contained(rec.HostingLeaf, "id")
-			if err != nil {
-				return nil, err
-			}
-			intents = append(intents, intent{path: rec.HostingLeaf, target: target,
-				splice: replaceSupportsPair(supID, claimID, fraction),
-				prove:  fractionProver(supID, claimID, fraction, rec.HostingLeaf), subject: rec.HostingLeaf + ":" + supID})
-			continue
-		}
-		register, err := c.contained(rec.RegisterPath, "id")
-		if err != nil {
-			return nil, err
-		}
-		intents = append(intents, intent{path: rec.RegisterPath, target: register,
-			splice: replaceStagedPair(supID, claimID, line),
-			expectCurrent: func(read registerRead) ([]expectedEntry, error) {
-				cur, err := currentEntry(read, supID, rec.RegisterPath)
-				if err != nil {
-					return nil, err
-				}
-				at := slices.IndexFunc(cur.Supports, func(p pair) bool { return p.ID == claimID })
-				if at < 0 {
-					return nil, opRefusal("id="+supID, "authors no supports pair for "+claimID+" in either home — it is "+
-						"declared in no document's frontmatter, and its register entry stages no such pair. This op re-scores "+
-						"an edge that exists; it does not create one",
-						"restore: author the pair — with insert-support-entry's supports value if "+supID+" is being created, "+
-							"or with set-frontmatter once its hosting document exists — then re-run")
-				}
-				cur.Supports = slices.Clone(cur.Supports)
-				cur.Supports[at] = pair{ID: claimID, Score: fraction}
-				return []expectedEntry{cur}, nil
-			}})
-	}
-	return intents, nil
+// declarationPairs is one node declaration's pair lists as the leaf reader
+// returns them.
+type declarationPairs struct {
+	ID                       string
+	Rigor                    *float64
+	Supports, Lifts, Refutes []pair
 }
 
-// replaceSupportsPair rewrites one supports pair line inside its own entry
-// of the document's support-nodes list; every other line is kept.
-func replaceSupportsPair(supID, claimID string, fraction *float64) func(string) (string, error) {
-	pairRE := kb.PyRE(`^(\s*-\s*)` + regexp.QuoteMeta(claimID) + `\s*:`)
-	return func(document string) (string, error) {
-		lines, start, end, ok := kb.FrontmatterKeySpan(document, kb.SupportNodesKey)
-		if !ok {
-			return "", spliceFailed("%s is not declared in this document's frontmatter", supID)
+// lists is the declaration's pair lists in field order.
+func (d declarationPairs) lists() []namedPairs {
+	return []namedPairs{{kb.SupportsKey, d.Supports}, {kb.LiftsKey, d.Lifts}, {kb.RefutesKey, d.Refutes}}
+}
+
+// namedPairs is one pair list under its frontmatter key.
+type namedPairs struct {
+	key   string
+	pairs []pair
+}
+
+// observedDeclaration is nodeID's declaration in text as the production leaf
+// readers return it, or nil where the document declares no such node.
+func observedDeclaration(text, nodeID, rel string) (*declarationPairs, error) {
+	if strings.HasPrefix(nodeID, "ana-") {
+		nodes, err := kb.ParseAnalysisLeaf(text, rel)
+		if err != nil {
+			return nil, err
 		}
-		entry := slices.IndexFunc(lines[start:end], func(l string) bool {
-			return strings.TrimPrefix(kb.Strip(l), "- ") == kb.SupIDKey+": "+supID
-		})
-		if entry < 0 {
-			return "", spliceFailed("%s is not declared in this document's frontmatter", supID)
-		}
-		entry += start
-		itemIndent := lines[entry][:len(lines[entry])-len(kb.LStrip(lines[entry]))]
-		next := end
-		for i := entry + 1; i < end; i++ {
-			if strings.HasPrefix(lines[i], itemIndent+"- ") {
-				next = i
-				break
+		for _, n := range nodes {
+			if n.ID == nodeID {
+				return &declarationPairs{ID: n.ID, Rigor: n.Rigor, Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)}, nil
 			}
 		}
-		pairLine, err := kb.RenderFrontmatterField(claimID, scoreNode(fraction))
+		return nil, nil
+	}
+	nodes, err := kb.ParseExperimentLeaf(text, rel)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if n.ID == nodeID {
+			return &declarationPairs{ID: n.ID, Rigor: n.Rigor, Supports: pairsOf(n.Supports), Lifts: pairsOf(n.Lifts), Refutes: pairsOf(n.Refutes)}, nil
+		}
+	}
+	return nil, nil
+}
+
+// pairBearingProver reads a rewritten declaration back: the pair naming
+// target under key must carry bearing.
+func pairBearingProver(nodeID, key, target string, bearing kb.Bearing, rel string) func(string) ([]string, error) {
+	return func(candidate string) ([]string, error) {
+		decl, err := observedDeclaration(candidate, nodeID, rel)
+		if err != nil {
+			return nil, err
+		}
+		if decl == nil {
+			return []string{"id"}, nil
+		}
+		for _, list := range decl.lists() {
+			if list.key != key {
+				continue
+			}
+			for _, p := range list.pairs {
+				if p.ID == target {
+					if !scoreEqual(p.Score, scoreOf(bearing)) {
+						return []string{key}, nil
+					}
+					return nil, nil
+				}
+			}
+		}
+		return []string{key}, nil
+	}
+}
+
+var claimPairRE = kb.PyRE(`^-\s*(` + kb.IDBody("clm") + `)\s*:`)
+
+// replaceDeclarationPair rewrites the bearing of nodeID's pair naming target
+// under key, in its hosting leaf's declaration. An absent pair is a splice
+// failure: the op re-scores an edge, it does not create one.
+func replaceDeclarationPair(nodeID, key, target string, score *float64) func(string) (string, error) {
+	return func(document string) (string, error) {
+		next, touched, err := editDeclarationPairs(document, nodeID, key, func(id string) (string, bool, bool) {
+			if id != target {
+				return "", false, false
+			}
+			line, err := kb.RenderFrontmatterField(id, scoreNode(score))
+			if err != nil {
+				return "", false, false
+			}
+			return line[0], true, false
+		})
 		if err != nil {
 			return "", err
 		}
-		for i := entry + 1; i < next; i++ {
-			if m := pairRE.FindStringSubmatch(lines[i]); m != nil {
-				replaced := m[1] + pairLine[0]
-				return kb.EditFrontmatterLines(document, func(body []string) []string {
-					body[i] = replaced
-					return body
-				}), nil
-			}
+		if !touched {
+			return "", spliceFailed("%s declares no %s pair for %s", nodeID, key, target)
 		}
-		return "", spliceFailed("%s declares no supports pair for %s", supID, claimID)
+		return next, nil
 	}
 }
 
-// replaceStagedPair rewrites one staged supports pair inside the support's
-// register entry; where the block ends is the reader's pair pattern's call.
-func replaceStagedPair(supID, claimID, line string) func(string) (string, error) {
+// dropDeclarationPairs removes nodeID's pairs naming target under key from its
+// hosting leaf's declaration, appending the paths it changed to *paths; a
+// declaration with no such pair is left as it stands.
+func dropDeclarationPairs(nodeID, key, target string) func(string) (string, error) {
 	return func(document string) (string, error) {
-		loc, err := locate(document, supID)
+		next, _, err := editDeclarationPairs(document, nodeID, key, func(id string) (string, bool, bool) {
+			if id != target {
+				return "", false, false
+			}
+			return "", true, true
+		})
+		return next, err
+	}
+}
+
+// editDeclarationPairs rewrites nodeID's pair list under key in the document's
+// frontmatter: edit returns a pair's replacement line, whether it touched it,
+// and whether the pair goes. A list left with no pair loses its key line; a
+// document declaring no such node or list is a splice failure.
+func editDeclarationPairs(document, nodeID, key string, edit func(id string) (line string, touched, drop bool)) (string, bool, error) {
+	nodeKey, listKey := kb.ExpIDKey, kb.ExperimentNodesKey
+	if strings.HasPrefix(nodeID, "ana-") {
+		nodeKey, listKey = kb.AnaIDKey, kb.AnalysisNodesKey
+	}
+	lines, start, end, ok := kb.FrontmatterKeySpan(document, listKey)
+	if !ok {
+		return "", false, spliceFailed("%s is not declared in this document's frontmatter", nodeID)
+	}
+	entry, indent := -1, ""
+	for i := start; i < end; i++ {
+		if strings.TrimPrefix(kb.Strip(lines[i]), "- ") == nodeKey+": "+nodeID {
+			entry, indent = i, lines[i][:len(lines[i])-len(kb.LStrip(lines[i]))]
+			break
+		}
+	}
+	if entry < 0 {
+		return "", false, spliceFailed("%s is not declared in this document's frontmatter", nodeID)
+	}
+	next := end
+	for i := entry + 1; i < end; i++ {
+		if strings.HasPrefix(lines[i], indent+"- ") {
+			next = i
+			break
+		}
+	}
+	head, keyIndent := -1, ""
+	for i := entry + 1; i < next; i++ {
+		if strings.TrimPrefix(kb.Strip(lines[i]), "- ") == key+":" {
+			head, keyIndent = i, lines[i][:len(lines[i])-len(kb.LStrip(lines[i]))]
+			break
+		}
+	}
+	if head < 0 {
+		return "", false, spliceFailed("%s declares no %s list in this document", nodeID, key)
+	}
+	blockEnd := head + 1
+	for blockEnd < next {
+		line := lines[blockEnd]
+		if kb.Strip(line) != "" && len(line)-len(kb.LStrip(line)) <= len(keyIndent) {
+			break
+		}
+		blockEnd++
+	}
+	var body []string
+	kept, touched := 0, false
+	for _, line := range lines[head+1 : blockEnd] {
+		m := claimPairRE.FindStringSubmatch(kb.Strip(line))
+		if m == nil {
+			body = append(body, line)
+			continue
+		}
+		replacement, t, drop := edit(m[1])
+		if !t {
+			body = append(body, line)
+			kept++
+			continue
+		}
+		touched = true
+		if drop {
+			continue
+		}
+		body = append(body, line[:len(line)-len(kb.LStrip(line))]+"- "+replacement)
+		kept++
+	}
+	if !touched {
+		return document, false, nil
+	}
+	out := kb.EditFrontmatterLines(document, func(all []string) []string {
+		if kept == 0 {
+			return append(slices.Clone(all[:head]), all[blockEnd:]...)
+		}
+		return append(append(slices.Clone(all[:head+1]), body...), all[blockEnd:]...)
+	})
+	return out, true, nil
+}
+
+// editStagedPair rewrites a register-staged pair list under relation: edit
+// returns a pair's replacement line, whether it touched it, and whether the
+// pair goes. A list left with no pair loses its header; a register entry
+// staging no such list is a splice failure.
+func editStagedPair(nodeID, relation string, edit func(id string) (line string, touched, drop bool)) func(string) (string, error) {
+	return func(document string) (string, error) {
+		loc, err := locate(document, nodeID)
 		if err != nil {
 			return "", err
 		}
 		lines := kb.SplitLines(document)
-		limit := min(loc.QualityEnd, len(lines))
+		limit := min(loc.RigorEnd, len(lines))
 		head := -1
-		for i := loc.QualityStart; i < limit; i++ {
-			if kb.Strip(lines[i]) == "- supports:" {
+		for i := loc.RigorStart; i < limit; i++ {
+			if kb.Strip(lines[i]) == "- "+relation+":" {
 				head = i
 				break
 			}
 		}
 		if head < 0 {
-			return "", spliceFailed("%s stages no supports block in this register", supID)
+			return document, nil
 		}
-		for i := head + 1; i < limit; i++ {
-			if p, ok := kb.ParseSupportPair(lines[i]); ok {
-				if p.ClaimID == claimID {
-					return spliceLines(document, i, i+1, []string{line}), nil
+		breakRE := foldBreakFor(nodeID)
+		end := head + 1
+		for end < limit && !breakRE.MatchString(kb.Strip(lines[end])) && kb.Strip(lines[end]) != "---" && !atHeading(kb.Strip(lines[end])) {
+			end++
+		}
+		for end > head+1 && kb.Strip(lines[end-1]) == "" {
+			end--
+		}
+		var body []string
+		kept, touched := 0, false
+		for _, line := range lines[head+1 : end] {
+			p, ok, err := kb.ParsePair(line, nodeID, relation)
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				replacement, t, drop := edit(p.Target)
+				if t {
+					touched = true
+					if drop {
+						continue
+					}
+					body = append(body, replacement)
+					kept++
+					continue
 				}
-				continue
 			}
-			if strings.HasPrefix(kb.Strip(lines[i]), "- ") {
-				break
+			body = append(body, line)
+			if ok {
+				kept++
 			}
 		}
-		return "", spliceFailed("%s stages no supports pair for %s", supID, claimID)
+		if !touched {
+			return document, nil
+		}
+		if kept == 0 {
+			return spliceLines(document, head, end, nil), nil
+		}
+		return spliceLines(document, head+1, end, body), nil
 	}
 }
 
-func fractionProver(supID, claimID string, fraction *float64, rel string) func(string) ([]string, error) {
+// replaceDeclarationRigor rewrites one experiment's rigor in its host leaf's
+// experiment-nodes mapping, placing the key after status where the mapping
+// carries none.
+func replaceDeclarationRigor(nodeID string, rigor *float64) func(string) (string, error) {
+	return func(document string) (string, error) {
+		lines, start, end, ok := kb.FrontmatterKeySpan(document, kb.ExperimentNodesKey)
+		if !ok {
+			return "", spliceFailed("%s is not declared in this document's frontmatter", nodeID)
+		}
+		entry, indent := -1, ""
+		for i := start; i < end; i++ {
+			if strings.TrimPrefix(kb.Strip(lines[i]), "- ") == kb.ExpIDKey+": "+nodeID {
+				entry, indent = i, lines[i][:len(lines[i])-len(kb.LStrip(lines[i]))]
+				break
+			}
+		}
+		if entry < 0 {
+			return "", spliceFailed("%s is not declared in this document's frontmatter", nodeID)
+		}
+		next := end
+		for i := entry + 1; i < end; i++ {
+			if strings.HasPrefix(lines[i], indent+"- ") {
+				next = i
+				break
+			}
+		}
+		fieldIndent := indent + "  "
+		rendered, err := kb.RenderFrontmatterField(kb.RigorKey, scoreNode(rigor))
+		if err != nil {
+			return "", err
+		}
+		for i := entry + 1; i < next; i++ {
+			key, _, ok := strings.Cut(kb.Strip(lines[i]), ":")
+			if ok && key == kb.RigorKey {
+				return kb.EditFrontmatterLines(document, func(body []string) []string {
+					body[i] = fieldIndent + rendered[0]
+					return body
+				}), nil
+			}
+		}
+		for i := entry + 1; i < next; i++ {
+			key, _, ok := strings.Cut(kb.Strip(lines[i]), ":")
+			if ok && key == kb.StatusKey {
+				return kb.EditFrontmatterLines(document, func(body []string) []string {
+					return slices.Insert(body, i+1, fieldIndent+rendered[0])
+				}), nil
+			}
+		}
+		return "", spliceFailed("%s declares no status line to place its rigor beside", nodeID)
+	}
+}
+
+// declarationRigorProver reads a rewritten experiment declaration back: its
+// rigor must be the value supplied.
+func declarationRigorProver(nodeID string, rigor *float64, rel string) func(string) ([]string, error) {
 	return func(candidate string) ([]string, error) {
-		nodes, err := kb.ParseSupportLeaf(candidate, rel)
+		nodes, err := kb.ParseExperimentLeaf(candidate, rel)
 		if err != nil {
 			return nil, err
 		}
 		for _, n := range nodes {
-			if n.ID != supID {
+			if n.ID != nodeID {
 				continue
 			}
-			var got *kb.SupportPair
-			for i := range n.Supports {
-				if n.Supports[i].ClaimID == claimID {
-					got = &n.Supports[i]
-				}
-			}
-			if got == nil || !scoreEqual(fractionScore(got.Fraction), fraction) || (fraction == nil) != got.Fraction.Pending {
-				return []string{"fraction"}, nil
+			if !scoreEqual(n.Rigor, rigor) {
+				return []string{"rigor"}, nil
 			}
 			return nil, nil
 		}
-		return []string{"sup-id"}, nil
+		return []string{"exp-id"}, nil
 	}
 }

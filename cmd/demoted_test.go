@@ -18,7 +18,7 @@ const ringPaper = "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n\\title
 	"\\begin{lemma}\\label{lem:b}\nEvery gadget is a widget.\n\\end{lemma}\n\\begin{proof}\nBy Lemma~\\ref{lem:a}.\n\\end{proof}\n" +
 	"\\end{document}\n"
 
-// demotedRows is every demoted row of the KB's depends-on index.
+// demotedRows is every demoted row of the KB's edges index.
 func demotedRows(t *testing.T, repo string) []kb.EdgeRow {
 	t.Helper()
 	_, rows, problems, err := kb.ReadIndex[kb.EdgeRow](kb.OnDisk(filepath.Join(repo, kb.KBDir)), nil)

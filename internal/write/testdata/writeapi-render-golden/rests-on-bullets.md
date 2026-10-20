@@ -1,0 +1,6 @@
+  - clm-bb2222 — Foundation Claim B (strength *pending*) (bearing 0.5) [the anchor dependency]
+  - clm-bb2222 — Foundation Claim B (strength *pending*) (bearing 0.0)
+  - clm-bb2222 (strength *pending*) (bearing *pending*)
+  - wrk-smith2020 — Smith (2020) (bearing 0.8) [Theorem 3]
+  - Axiom S2 (bearing 0.8) [labelling convention]
+  - Axiom S1 (bearing 1.0)

@@ -8,19 +8,20 @@ import (
 )
 
 func init() {
-	var maxSolidity float64
+	var maxStrength float64
 	var minDependents int
 	cmd := queryCommand(&cobra.Command{
 		Use:   "weak-points",
 		Short: "the shaky, load-bearing claims: the rework targets with most leverage",
-		Long: `weak-points lists every claim whose solidity is set and under --max-solidity
-and that at least --min-dependents nodes hold an edge to: most dependents first,
-then lowest solidity. Pending claims are left out.`,
+		Long: `weak-points lists every claim whose strength is set and under --max-strength
+and that has at least --min-dependents dependents: most dependents first, then
+lowest strength. A dependent is a node the claim's strength enters — the target
+of its outgoing scoring edge. Pending claims are left out.`,
 		Args: cobra.NoArgs,
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
-		return answered(query.WeakPointsPayload(ix, maxSolidity, minDependents))
+		return answered(query.WeakPointsPayload(ix, maxStrength, minDependents))
 	})
-	cmd.Flags().Float64Var(&maxSolidity, "max-solidity", query.DefaultMaxSolidity, "only claims with solidity strictly below this count as shaky")
+	cmd.Flags().Float64Var(&maxStrength, "max-strength", query.DefaultMaxStrength, "only claims with strength strictly below this count as shaky")
 	cmd.Flags().IntVar(&minDependents, "min-dependents", query.DefaultMinDependents, "only claims with at least this many dependents count")
 	rootCmd.AddCommand(cmd)
 }

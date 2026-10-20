@@ -111,7 +111,7 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 			t.Errorf("%s carries a framework-node heading", name)
 		}
 	}
-	if !strings.Contains(docs[ConventionsFile], "`claim`, `support`") {
+	if !strings.Contains(docs[ConventionsFile], "`claim`, `analysis`") {
 		t.Error("CONVENTIONS.md does not name the node kinds")
 	}
 }

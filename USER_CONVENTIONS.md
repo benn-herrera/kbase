@@ -16,8 +16,10 @@ Keys come in this order:
 
 1. `outcome`
 2. `kb-root` — the KB's absolute path (absent on `models`, `configure` and `show-config`)
-3. the subcommand's own keys
-4. by outcome: `refusals` (`refused`, `retry`), `failures` (`failed`), or `cancelled` (`stage`,
+3. `migration` — `from`, `to`, `note`, on the result of a verb that read the KB on an older metadata
+   format, until a save stamps it current; absent otherwise
+4. the subcommand's own keys
+5. by outcome: `refusals` (`refused`, `retry`), `failures` (`failed`), or `cancelled` (`stage`,
    `unit`)
 
 | `outcome` | Exit | What to do |
@@ -28,9 +30,10 @@ Keys come in this order:
 | `failed` | 3 | Defect in the tool, its input or the environment. Re-issuing will not fix it; report the `failures` |
 | `cancelled` | 4 | Stopped on request; resumable |
 
-The same fact always uses the same key: `written` (files this call wrote; `[]` when none), `ids`
-(node ids, in entry order), `count` (total before any limit), `resume` (a shell command that
-continues the work), `state-dir` (the build state store's absolute path).
+The same fact always uses the same key: `written` (files this call wrote; `[]` when none), `removed`
+(files this call removed; `[]` when none), `ids` (node ids, in entry order), `count` (total before
+any limit), `resume` (a shell command that continues the work), `state-dir` (the build state
+store's absolute path).
 
 ### Correcting a refusal
 
@@ -112,9 +115,10 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
 
 Maintenance never requires git.
 
-**Write ops** — `insert-claim-entry`, `insert-support-entry`, `insert-experiment-entry`,
-`insert-work-entry`, `set-work-strength`, `set-applicability`, `set-rigor`, `set-rationale`,
-`add-depends-on`, `set-frontmatter`, `mark-claim-in-leaf`, `set-on-point-fraction`:
+**Write ops** — `insert-claim-entry`, `insert-analysis-entry`, `insert-experiment-entry`,
+`insert-work-entry`, `set-bearing`, `set-rigor`, `set-rationale`,
+`add-rests-on`, `set-frontmatter`, `mark-claim-in-leaf`, and the three removal ops
+`drop-claim-edges`, `drop-inbound-edges` and `drop-claim-node`, beside `resolve-demoted`:
 
 - Values are one YAML (or JSON) document on stdin or in the file `--values` names. Its one key,
   `entry`, lists the entries; the batch is written whole or not at all.
@@ -124,26 +128,39 @@ Maintenance never requires git.
   `unchanged`. An insert whose register already holds an entry with the same title (a work: the same
   key) adopts it rather than writing a second; `adopted` lists `entry`, `id`, and `differs` — the
   supplied keys whose values the existing entry does not carry.
-- `insert-claim-entry`, `insert-support-entry` and `insert-work-entry` create a missing register
+- `insert-claim-entry`, `insert-analysis-entry` and `insert-work-entry` create a missing register
   only under `--create`.
 - Each op ends with a refresh unless given `--no-refresh`; after a run of `--no-refresh` writes, run
   `kbase refresh`.
 - Result keys: `ids` (inserts only), `minted`, `adopted`, `written`, `refreshed` (null under
-  `--no-refresh`).
+  `--no-refresh`), `removed` (the trailing refresh's; `[]` under `--no-refresh`).
+- `resolve-demoted` takes `entry` items of `id`, `target` and `action`: `remove` deletes the demoted
+  edge, and `restore` rewrites it as a `supports` premise, refused (`check: dependency-cycle`) where
+  that would close a cycle.
 
 **`render-citation`** takes values the same way and writes nothing; `citations` holds one sanctioned
 citation string per entry.
 
 **Queries** read `kb-root/.index/` and write nothing; `results` keeps the query's own key names.
 `show <id>` and `stats` return a mapping. The list queries — `deps`, `gated-on`, `cited-by`, `find`,
-`referenced-by`, `solidity-below`, `subtree`, `weak-points` — return at most `--limit` results
+`referenced-by`, `strength-below`, `subtree`, `weak-points` — return at most `--limit` results
 (default 50; `0` for all) from `--offset`, with `count`, `offset` and `truncated`. While `truncated`
 is true, re-issue with `--offset` set to `offset` plus the number of `results` returned.
+
+**Scores.** A node's own value is `rigor`, a scoring edge's is `bearing`, and a claim's or an
+analysis's derived value is `strength`; `set-rigor` and `set-bearing` are the two ops that write a
+judgement. `set-bearing` replaces an existing token and never adds one — every scoring edge already
+carries one, and a missing one is a refused load. A claim, analysis, work or experiment carrying no
+`rigor` reads `*pending*` in every result: unscored, not low. Its `strength` pends with it unless a
+lift stands over it, in which case the lift's product is the published number. A result carries
+`strength` as a number rounded to two decimals, while the register's record carries the value itself;
+the arithmetic always reads the value.
 
 **`refresh`** rewrites derived metadata, `.index/*.yaml` and the `*.svg` claim graph diagrams.
 **`verify`** writes nothing; its findings are `refusals` items, and one a refresh clears carries
 `remedy: kbase refresh`. **`render-claim-graph`** reports `sheet` as `placeholder` or `drawn`; it
-never overwrites a drawn sheet.
+writes only the sheets whose bytes change, so a hand edit to a drawn one is overwritten on the next
+render and never reported.
 
 ## Providers
 
@@ -157,6 +174,9 @@ corresponding field alone. A directory `--config-dir` names, else `$KBASE_CONFIG
 the only layer read. Outside a worktree only the global layer is read, and nothing is refused for
 that.
 
+- An entry's keys are `baseUrl` (required), `apiKeyFile` (the only way an entry supplies a key),
+  `type` (`inference` where unstated), `api` (`openai` where unstated) and `decisionsFlavor` (the
+  decision surface, `systemone` where silent).
 - The provider is `--provider`, else `config.toml`'s `provider`, else the sole `providers.toml`
   entry. With several and none chosen, the refusal names `key: --provider` with every entry name as
   `allowed`. A `--provider` the pool does not hold refuses with `path` the `providers.toml` of the

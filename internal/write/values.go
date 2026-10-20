@@ -24,15 +24,17 @@ const excerptMaxChars = 240
 
 var (
 	readerNumberRE = regexp.MustCompile(`^-?\d+(?:\.\d+)?$`)
-	invariantRE    = regexp.MustCompile(`^INVARIANT-[A-Z]+[0-9]+$`)
-	axiomTokenRE   = regexp.MustCompile(`^Axiom [0-9]+$`)
+	axiomTokenRE   = regexp.MustCompile(`^Axiom (` + kb.AxiomLabel + `)$`)
 	citationKeyRE  = regexp.MustCompile(`^` + strings.TrimPrefix(kb.WorkIDPattern, kb.WorkPrefix+"-") + `$`)
 	blankLineRE    = regexp.MustCompile(`\n[` + strings.Replace(kb.PyWhitespace, `\n`, "", 1) + `]*\n`)
 )
 
-var (
-	experimentStatuses = []string{"run", "pending"}
-)
+// axiomIDPrefix opens every axiom id, whose body is the label as authored.
+const axiomIDPrefix = "axm-"
+
+var axiomIDFullRE = regexp.MustCompile(`^` + axiomIDPrefix + kb.AxiomLabel + `$`)
+
+var experimentStatuses = []string{"run", "pending"}
 
 // valueError is a checker's refusal, positioned at the node it failed on.
 type valueError struct {
@@ -175,12 +177,14 @@ func proseLine(n *yaml.Node, offset int) int {
 	return n.Line
 }
 
-// checkScore is a number in [0, 1] or the pending literal, read as nil.
+// checkScore is a number in [0, 1] or the pending literal, read as nil. The
+// domain is the reader's: BearingFromValue is the one predicate deciding that a
+// token is in it.
 func checkScore(what string) check {
 	return func(n *yaml.Node, field string) (any, *valueError) {
 		domain := "[0, 1] or the literal " + kb.PendingLiteral
 		if isString(n) {
-			if n.Value == kb.PendingLiteral {
+			if b, ok := kb.BearingFromValue(n.Value); ok && b.Pending {
 				return (*float64)(nil), nil
 			}
 			return nil, refuse(field, n, "expected a number in %s, got %q", domain, n.Value)
@@ -189,37 +193,20 @@ func checkScore(what string) check {
 		if err != nil {
 			return nil, err
 		}
-		if number < 0 || number > 1 {
+		// The domain is judged on the token the file will carry: what a reader
+		// reads back is the form the writer emits, not the one supplied.
+		b, ok := kb.BearingFromValue(kb.PyFloatRepr(number))
+		if !ok {
 			return nil, refuse(field, n, "%s is outside [0, 1] — %s. Use a value in %s", kb.PyFloatRepr(number), what, domain)
 		}
-		return &number, nil
+		return &b.Value, nil
 	}
 }
 
 var (
-	checkRigor = checkScore("the domain hand-authored confidence and quality values are verifier-enforced to")
-	// checkFraction is an on-point fraction; zero says the support bears
-	// nothing on the claim, a judgement distinct from pending.
-	checkFraction      = checkScore("the share of the supporting work that bears on this claim")
-	checkWorkStrength  = checkScore("the domain a cited work's standing carries, foundational at 1 and spurious at 0")
-	checkApplicability = checkFraction
+	checkRigor   = checkScore("the domain a node's local value carries")
+	checkBearing = checkScore("the domain one scoring edge's bearing carries")
 )
-
-// checkStrength is a strengthens pair's strength: [0, 1], with no pending
-// form, since the verifier rejects a null strength.
-func checkStrength(n *yaml.Node, field string) (any, *valueError) {
-	if isString(n) {
-		return nil, refuse(field, n, "expected a number, got %q; a strengthens pair carries no pending form", n.Value)
-	}
-	number, err := requireNumber(n, field, "[0, 1]")
-	if err != nil {
-		return nil, err
-	}
-	if number < 0 || number > 1 {
-		return nil, refuse(field, n, "%s is outside [0, 1], the domain a strengthens edge's strength carries", kb.PyFloatRepr(number))
-	}
-	return number, nil
-}
 
 func checkExcerpt(n *yaml.Node, field string) (any, *valueError) {
 	v, err := checkProse(n, field)
@@ -244,7 +231,7 @@ func checkPath(n *yaml.Node, field string) (any, *valueError) {
 	}
 	if filepath.IsAbs(text) || strings.HasPrefix(text, "/") {
 		return nil, refuse(field, n, "%q is absolute. Paths are relative to kb-root/, not to the repository root and not "+
-			"to the filesystem — a register at <kb-root>/part3/claim-quality.md is 'part3/claim-quality.md'", text)
+			"to the filesystem — a register at <kb-root>/part3/claim-rigor.md is 'part3/claim-rigor.md'", text)
 	}
 	return text, nil
 }
@@ -263,21 +250,22 @@ func checkOneOf(vocabulary []string, what string) check {
 }
 
 var (
-	checkKind   = checkOneOf(kb.DocumentKinds, "kind")
-	checkStatus = checkOneOf(experimentStatuses, "status")
+	checkKind     = checkOneOf(kb.DocumentKinds, "kind")
+	checkStatus   = checkOneOf(experimentStatuses, "status")
+	checkRelation = checkOneOf(kb.ScoringRelations, "relation")
 )
 
 // checkEdgeClass takes one of drop-claim-edges' two classes. A demoted value
 // is refused naming its producer: demoted rows are resolve-demoted's to
 // remove, not this op's.
 func checkEdgeClass(n *yaml.Node, field string) (any, *valueError) {
-	v, err := checkOneOf([]string{kb.IndexDependsOn, kb.RelationReferences}, "edge-class")(n, field)
+	v, err := checkOneOf([]string{kb.ListRestsOn, kb.RelationReferences}, "edge-class")(n, field)
 	if err == nil {
 		return v, nil
 	}
 	text, _ := requireString(n, field, "a string")
 	return nil, refuse(field, n, "%q is outside the closed edge-class vocabulary [%s %s]; demoted rows are "+
-		"resolve-demoted's to remove, not drop-claim-edges'", text, kb.IndexDependsOn, kb.RelationReferences)
+		"resolve-demoted's to remove, not drop-claim-edges'", text, kb.ListRestsOn, kb.RelationReferences)
 }
 
 // idChecker checks a node id's shape; existence is the op's question. The
@@ -307,9 +295,38 @@ func idChecker(kinds ...string) check {
 var (
 	checkClaimID      = idChecker("clm")
 	checkExperimentID = idChecker("exp")
-	checkSupportID    = idChecker("sup")
-	checkEntryID      = idChecker("clm", "sup")
+	checkAnalysisID   = idChecker("ana")
+	checkEntryID      = idChecker("clm", "ana")
+	// checkTargetID is a scoring edge's target kind: a claim or an analysis.
+	checkTargetID = idChecker("clm", "ana")
 )
+
+// checkSourceID is a scoring edge's source: a claim, an analysis, an
+// experiment, the axiom a supports edge draws from, or the external work a
+// founds edge draws from.
+func checkSourceID(n *yaml.Node, field string) (any, *valueError) {
+	switch {
+	case isString(n) && strings.HasPrefix(n.Value, axiomIDPrefix):
+		return checkAxiomID(n, field)
+	case isString(n) && strings.HasPrefix(n.Value, kb.WorkPrefix+"-"):
+		return checkWorkID(n, field)
+	}
+	return idChecker("clm", "ana", "exp")(n, field)
+}
+
+// checkAxiomID is a declared axiom's id: the prefix and the label as authored,
+// which is no minted id and so is checked for its own shape.
+func checkAxiomID(n *yaml.Node, field string) (any, *valueError) {
+	expected := "an axiom id matching " + axiomIDPrefix + kb.AxiomLabel
+	token, err := requireString(n, field, expected)
+	if err != nil {
+		return nil, err
+	}
+	if !axiomIDFullRE.MatchString(token) {
+		return nil, refuse(field, n, "%q is not %s", token, expected)
+	}
+	return token, nil
+}
 
 func checkWorkID(n *yaml.Node, field string) (any, *valueError) {
 	token, err := requireString(n, field, "an id matching "+kb.WorkIDPattern)
@@ -329,13 +346,13 @@ func checkCitationKey(n *yaml.Node, field string) (any, *valueError) {
 	}
 	if !citationKeyRE.MatchString(token) {
 		return nil, refuse(field, n, "%q is not a citation key — it must open and close alphanumeric, so the token has "+
-			"no trailing punctuation for a depends-on bullet's head to argue about", token)
+			"no trailing punctuation for a rests-on bullet's head to argue about", token)
 	}
 	return token, nil
 }
 
 // checkRationaleID is any register entry's id: a rationale is one field on a
-// claim, a support and a work alike.
+// claim, an analysis and a work alike.
 func checkRationaleID(n *yaml.Node, field string) (any, *valueError) {
 	if isString(n) && strings.HasPrefix(n.Value, kb.WorkPrefix+"-") {
 		return checkWorkID(n, field)
@@ -343,15 +360,34 @@ func checkRationaleID(n *yaml.Node, field string) (any, *valueError) {
 	return checkEntryID(n, field)
 }
 
-// checkDependsTarget is a clm- id, a work- id, or a framework token in its
-// authored spelling, the one the bullet-head scanner reads.
-func checkDependsTarget(n *yaml.Node, field string) (any, *valueError) {
-	token, err := requireString(n, field, "a claim id, a framework token or a work id")
+// checkRigorID is any node a local rigor lives on: a register entry's, or an
+// experiment's in its host leaf.
+func checkRigorID(n *yaml.Node, field string) (any, *valueError) {
+	switch {
+	case isString(n) && strings.HasPrefix(n.Value, kb.WorkPrefix+"-"):
+		return checkWorkID(n, field)
+	case isString(n) && strings.HasPrefix(n.Value, "exp-"):
+		return checkExperimentID(n, field)
+	}
+	return checkEntryID(n, field)
+}
+
+// checkPremiseTarget is a clm- id, an exp- id, a work- id, or the axiom a
+// bullet cites as "Axiom <label>".
+func checkPremiseTarget(n *yaml.Node, field string) (any, *valueError) {
+	token, err := requireString(n, field, "a claim id, an experiment id, a work id or an \"Axiom <label>\" token")
 	if err != nil {
 		return nil, err
 	}
-	if invariantRE.MatchString(token) || axiomTokenRE.MatchString(token) {
+	if axiomTokenRE.MatchString(token) {
 		return token, nil
+	}
+	if strings.HasPrefix(token, "INVARIANT-") {
+		return nil, refuse(field, n, "%q is the legacy invariant spelling; an axiom is cited as \"Axiom <label>\", "+
+			"so %q would name no node", token, token)
+	}
+	if strings.HasPrefix(token, "exp-") {
+		return checkExperimentID(n, field)
 	}
 	if strings.HasPrefix(token, kb.WorkPrefix+"-") {
 		return checkWorkID(n, field)
@@ -453,18 +489,18 @@ func tableList(specs []field, of string, build func(map[string]any, *yaml.Node, 
 	}
 }
 
-// dependsOnValue is one requested edge: a target, its context, a work
-// target's applicability (nil is pending), and a demoted target's origin.
-type dependsOnValue struct {
-	ID, Context   string
-	Applicability *float64
-	Origin        string
+// restsOnValue is one requested premise: the id it names, the author's
+// context, and its bearing (nil is the pending judgement).
+type restsOnValue struct {
+	ID, Context string
+	Bearing     *float64
+	Origin      string
 }
 
-var dependsOnFields = []field{
-	{"id", checkDependsTarget, true},
+var restsOnFields = []field{
+	{"id", checkPremiseTarget, true},
 	{"context", checkProse, false},
-	{"applicability", checkApplicability, false},
+	{"bearing", checkBearing, false},
 }
 
 var referencesFields = []field{
@@ -477,25 +513,27 @@ var demotedFields = []field{
 	{"origin", checkOneOf(kb.Origins, "origin"), true},
 }
 
-var strengthensFields = []field{
-	{"id", checkClaimID, true},
-	{"strength", checkStrength, true},
-}
-
-var supportsFields = []field{
-	{"id", checkClaimID, true},
-	{"fraction", checkFraction, true},
+// pairFields is one pair-list entry: the claim or analysis it points at and
+// the bearing it judges the edge with. A pair list is authored on the source,
+// so its bearing is always supplied.
+var pairFields = []field{
+	{"id", checkTargetID, true},
+	{"bearing", checkBearing, true},
 }
 
 var experimentNodeFields = []field{
 	{"exp-id", checkExperimentID, true},
 	{"status", checkStatus, true},
-	{"strengthens", checkStrengthens, false},
+	{"rigor", checkRigor, false},
+	{kb.SupportsKey, checkPairs, false},
+	{kb.LiftsKey, checkPairs, false},
+	{kb.RefutesKey, checkPairs, false},
 }
 
-var supportNodeFields = []field{
-	{"sup-id", checkSupportID, true},
-	{"supports", checkSupports, false},
+var analysisNodeFields = []field{
+	{"ana-id", checkAnalysisID, true},
+	{kb.LiftsKey, checkPairs, false},
+	{kb.RefutesKey, checkPairs, false},
 }
 
 func optionalString(m map[string]any, key string) string {
@@ -521,48 +559,42 @@ func listOf(m map[string]any, key string) []any {
 	return v
 }
 
-var checkDependsOn = tableList(dependsOnFields, "{ id, context, applicability } tables",
-	func(m map[string]any, n *yaml.Node, label string) (any, *valueError) {
-		id := m["id"].(string)
-		if _, ok := m["applicability"]; ok && !strings.HasPrefix(id, kb.WorkPrefix+"-") {
-			e := refuse(label+".applicability", n, "%q is not an external work, and applicability is a work pairing's "+
-				"quantity alone — a claim target's paren carries its derived solidity and a framework target's carries "+
-				"its context, so there is nowhere for this value to land", id)
-			e.allowed = fieldNames(dependsOnFields)
-			return nil, e
-		}
-		return dependsOnValue{ID: id, Context: optionalString(m, "context"), Applicability: optionalScore(m, "applicability")}, nil
+var checkRestsOn = tableList(restsOnFields, "{ id, context, bearing } tables",
+	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
+		return restsOnValue{ID: m["id"].(string), Context: optionalString(m, "context"), Bearing: optionalScore(m, "bearing")}, nil
 	})
 
 var checkReferences = tableList(referencesFields, "{ id, context } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		return dependsOnValue{ID: m["id"].(string), Context: optionalString(m, "context")}, nil
+		return restsOnValue{ID: m["id"].(string), Context: optionalString(m, "context")}, nil
 	})
 
 var checkDemoted = tableList(demotedFields, "{ id, origin } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		return dependsOnValue{ID: m["id"].(string), Origin: m["origin"].(string)}, nil
+		return restsOnValue{ID: m["id"].(string), Origin: m["origin"].(string)}, nil
 	})
 
-var checkStrengthens = tableList(strengthensFields, "{ id, strength } tables",
+var checkPairs = tableList(pairFields, "{ id, bearing } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		strength := m["strength"].(float64)
-		return pair{ID: m["id"].(string), Score: &strength}, nil
+		return pair{ID: m["id"].(string), Score: optionalScore(m, "bearing")}, nil
 	})
 
-var checkSupports = tableList(supportsFields, "{ id, fraction } tables",
+// checkRefutes is a claim's requested refutations: a bearing left out is the
+// pending judgement, since nobody has judged the new edge.
+var checkRefutes = tableList([]field{{"id", checkTargetID, true}, {"bearing", checkBearing, false}}, "{ id, bearing } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		return pair{ID: m["id"].(string), Score: optionalScore(m, "fraction")}, nil
+		return pair{ID: m["id"].(string), Score: optionalScore(m, "bearing")}, nil
 	})
 
-var checkExperimentNodes = tableList(experimentNodeFields, "{ exp-id, status, strengthens } tables",
+var checkExperimentNodes = tableList(experimentNodeFields, "{ exp-id, status, rigor, supports, lifts, refutes } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		return experimentDecl{ExpID: m["exp-id"].(string), Status: m["status"].(string), Strengthens: pairs(m, "strengthens")}, nil
+		return experimentDecl{ExpID: m["exp-id"].(string), Status: m["status"].(string), Rigor: optionalScore(m, "rigor"),
+			Supports: pairs(m, kb.SupportsKey), Lifts: pairs(m, kb.LiftsKey), Refutes: pairs(m, kb.RefutesKey)}, nil
 	})
 
-var checkSupportNodes = tableList(supportNodeFields, "{ sup-id, supports } tables",
+var checkAnalysisNodes = tableList(analysisNodeFields, "{ ana-id, lifts, refutes } tables",
 	func(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-		return supportDecl{SupID: m["sup-id"].(string), Supports: pairs(m, "supports")}, nil
+		return analysisDecl{AnaID: m["ana-id"].(string), Lifts: pairs(m, kb.LiftsKey), Refutes: pairs(m, kb.RefutesKey)}, nil
 	})
 
 func scalarList(one check, of string) check {
@@ -591,58 +623,58 @@ var (
 )
 
 // insertCommon is the register inserts' shared keys; each insert adds the
-// one key only its own entry kind renders.
+// key only its own entry kind renders.
 var insertCommon = []field{
 	{"register", checkPath, true},
 	{"title", checkProse, true},
 	{"rigor", checkRigor, true},
 	{"rationale", checkProse, true},
-	{"depends-on", checkDependsOn, false},
+	{kb.ListRestsOn, checkRestsOn, false},
 	{"no-edge", checkProse, false},
 }
 
 // opFields is every op's closed key vocabulary: an unknown key is refused,
 // never ignored, and a required key left out is refused by name.
 var opFields = map[string][]field{
-	"insert-claim-entry":   append(slices.Clone(insertCommon), field{"strengthen-by", checkProseList, false}),
-	"insert-support-entry": append(slices.Clone(insertCommon), field{"supports", checkSupports, false}),
+	"insert-claim-entry":    append(slices.Clone(insertCommon), field{"strengthen-by", checkProseList, false}, field{kb.RefutesKey, checkRefutes, false}),
+	"insert-analysis-entry": append(slices.Clone(insertCommon), field{kb.LiftsKey, checkPairs, false}, field{kb.RefutesKey, checkPairs, false}),
 	"insert-experiment-entry": {
 		{"document", checkPath, true},
 		{"status", checkStatus, true},
-		{"strengthens", checkStrengthens, false},
+		{"rigor", checkRigor, false},
+		{kb.SupportsKey, checkPairs, false},
+		{kb.LiftsKey, checkPairs, false},
+		{kb.RefutesKey, checkPairs, false},
 	},
 	"insert-work-entry": {
 		{"register", checkPath, true},
 		{"key", checkCitationKey, true},
 		{"title", checkProse, true},
-		{"strength", checkWorkStrength, true},
+		{"rigor", checkRigor, true},
 		{"rationale", checkProse, true},
 	},
-	"set-work-strength": {
-		{"id", checkWorkID, true},
-		{"strength", checkWorkStrength, true},
-	},
-	"set-applicability": {
-		{"id", checkClaimID, true},
-		{"work", checkWorkID, true},
-		{"applicability", checkApplicability, true},
+	"set-bearing": {
+		{"id", checkSourceID, true},
+		{"target", checkTargetID, true},
+		{"relation", checkRelation, true},
+		{"bearing", checkBearing, true},
 	},
 	"set-rigor": {
-		{"id", checkEntryID, true},
+		{"id", checkRigorID, true},
 		{"rigor", checkRigor, true},
 	},
 	"set-rationale": {
 		{"id", checkRationaleID, true},
 		{"rationale", checkProse, true},
 	},
-	"add-depends-on": {
+	"add-rests-on": {
 		{"id", checkEntryID, true},
-		{"depends-on", checkDependsOn, false},
+		{kb.ListRestsOn, checkRestsOn, false},
 		{"references", checkReferences, false},
 	},
 	AddBuildEdges: {
 		{"id", checkEntryID, true},
-		{"depends-on", checkDependsOn, false},
+		{kb.ListRestsOn, checkRestsOn, false},
 		{"references", checkReferences, false},
 		{kb.RelationDemoted, checkDemoted, false},
 	},
@@ -675,17 +707,12 @@ var opFields = map[string][]field{
 		{"no-claim", checkProse, false},
 		{"experiments", checkExperimentIDList, false},
 		{"experiment-node", checkExperimentNodes, false},
-		{"support-node", checkSupportNodes, false},
+		{"analysis-node", checkAnalysisNodes, false},
 	},
 	"mark-claim-in-leaf": {
 		{"document", checkPath, true},
 		{"id", checkClaimID, true},
 		{"locator", checkProse, true},
-	},
-	"set-on-point-fraction": {
-		{"id", checkSupportID, true},
-		{"claim", checkClaimID, true},
-		{"fraction", checkFraction, true},
 	},
 	"render-citation": {
 		{"excerpt", checkExcerpt, true},
@@ -707,10 +734,10 @@ func (e entry) score(key string) *float64 { return optionalScore(e.Values, key) 
 func (e entry) list(key string) []string  { v, _ := e.Values[key].([]string); return v }
 func (e entry) has(key string) bool       { _, ok := e.Values[key]; return ok }
 
-func (e entry) dependsOn(key string) []dependsOnValue {
-	var out []dependsOnValue
+func (e entry) restsOn(key string) []restsOnValue {
+	var out []restsOnValue
 	for _, v := range listOf(e.Values, key) {
-		out = append(out, v.(dependsOnValue))
+		out = append(out, v.(restsOnValue))
 	}
 	return out
 }
@@ -725,10 +752,10 @@ func (e entry) experimentNodes() []experimentDecl {
 	return out
 }
 
-func (e entry) supportNodes() []supportDecl {
-	var out []supportDecl
-	for _, v := range listOf(e.Values, "support-node") {
-		out = append(out, v.(supportDecl))
+func (e entry) analyses() []analysisDecl {
+	var out []analysisDecl
+	for _, v := range listOf(e.Values, "analysis-node") {
+		out = append(out, v.(analysisDecl))
 	}
 	return out
 }

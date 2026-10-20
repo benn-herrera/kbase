@@ -72,6 +72,9 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 			res = write.Run(opts.Op, run)
 		}
 	}
+	if res.Migration != nil {
+		fields = append(fields, toolresult.Field{Key: "migration", Value: migrationNotice(opts.Op, opts.Stderr, res.Migration)})
+	}
 	if opts.Op == write.RenderCitation {
 		fields = append(fields, toolresult.Field{Key: "citations", Value: nonNil(res.Citations)})
 	} else {

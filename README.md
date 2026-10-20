@@ -29,14 +29,79 @@ Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00RE
 - Linux (binary can be built from macOS, dev experience untested, your mileage may vary)
 - Windows (binary can be built from macOS, dev experience untested, your mileage will absolutely vary)
 
-## Quick Start Guide
+## Installation
 
-Build the binary (`bin/kbase`, host platform only), then put it on `PATH` or run it as
-`./bin/kbase`. The examples below assume `PATH`.
+Each release is published on the GitHub releases page as four artifacts: the archive
+`kbase-v<version>.tgz`, its detached signature, the installer `install-kbase-v<version>.sh`, and the
+installer's own detached signature. The archive holds one binary per platform, each again with its
+own signature, beside this README, `CONVENTIONS.md` and `LICENSE`.
+
+### With the installer
+
+Download the installer and its signature into an empty directory and run it there:
 
 ```sh
-just build
+base=https://github.com/benn-herrera/kbase/releases/download/v<version>
+curl -LO "$base/install-kbase-v<version>.sh" -LO "$base/install-kbase-v<version>.sh.asc"
+bash install-kbase-v<version>.sh
 ```
+
+The installer reads the platform from `uname -s` and `uname -m` and refuses any but macOS arm64,
+Linux amd64, and Windows amd64 under Git Bash or MSYS, naming both values it read. It needs `gpg` on
+`PATH`. It then:
+
+1. Locates the signing key (`benn@bennherrera.dev`) through WKD, downloads the installer's own
+   `.asc` where it is missing, and reads that signature for the key that made it.
+2. Looks that key up in your keyring. It refuses where the signature names no key, where the key is
+   not in the keyring, and where gpg lists no fingerprint or user ID for it, naming the key and where
+   it is published.
+3. Where the key is in the keyring but not ultimately trusted, prints the user ID, the fingerprint,
+   the key URL and the policy URL, and asks:
+
+   ```
+   Choice [y/o/N]:
+   ```
+
+   `y` records ultimate ownertrust for the fingerprint, so later installs with this key ask nothing.
+   `o` records nothing and verifies this run, leaving the keyring untouched and gpg flagging each
+   signature as untrusted. Any other answer, an empty one included, installs nothing. With no
+   terminal on stdin — the way `curl … | bash` runs it — the installer refuses instead of asking and
+   prints the two commands that establish the trust by hand.
+4. Verifies its own signature against the script it is running, downloads the archive and its
+   signature into the working directory if they are not already there, and verifies them.
+5. Extracts `kbase-v<version>/` where it does not already stand, verifies each of the three binaries
+   against its `.asc`, and copies the platform's binary to `kbase` (`kbase.exe` on Windows) inside
+   that directory, clearing macOS's quarantine attribute from it.
+
+A failed `gpg --verify` stops the script where it stands: it never reaches the extraction after a
+failed archive signature, and never reaches the copy after a failed binary signature. A signature
+made by a key outside your keyring fails the same way, at whichever file it signs. Nothing is
+installed outside the directory you ran the installer in.
+
+### Verifying by hand
+
+Every signature is detached: gpg verifies it, and the installer is only doing that for you. To check
+the archive and unpack it yourself, in place of steps 4 and 5:
+
+```sh
+gpg --verify kbase-v<version>.tgz.asc kbase-v<version>.tgz
+tar xzf kbase-v<version>.tgz
+gpg --verify kbase-v<version>/kbase-darwin-arm64.asc kbase-v<version>/kbase-darwin-arm64
+```
+
+The binaries in the archive are `kbase-darwin-arm64`, `kbase-linux-amd64` and
+`kbase-windows-amd64.exe`, each with an `.asc` beside it. Copy the one for your platform to `kbase`
+(or `kbase.exe`), and put it on `PATH`.
+
+### From source
+
+`just build` writes `bin/kbase` for the host platform; the [Development](#development) section lists
+the recipes.
+
+## Quick Start Guide
+
+Put `kbase` on `PATH` — installed as above, or built with `just build` and run as `./bin/kbase`. The
+examples below assume `PATH`.
 
 Configure a provider. Skip this step for `--no-inference` builds.
 
@@ -75,11 +140,11 @@ kbase init
 
 `init` writes the skeleton — a stamped `entry-point.md` headed by the repository's name (or
 `--title`'s text), `.index/`, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect —
-refreshes it, refuses until `verify` is green over what it wrote, and commits `kb-root/` as the
-birth commit. Creation is birth-once: a second `init` is refused, and `kbase build` stays refused
-over a created KB. What the KB holds afterwards is authored with the maintenance subcommands —
-insert an entry, set a field, mark a claim, refresh, verify — a claim at a time. Details are
-under [SPEC §8](SPEC.md).
+refreshes it, and commits `kb-root/` as the birth commit. It runs no `verify` of its own: `kbase
+verify` over a freshly born KB is green. Creation is birth-once: a second `init` is refused, and
+`kbase build` stays refused over a created KB. What the KB holds afterwards is authored with the
+maintenance subcommands — insert an entry, set a field, mark a claim, refresh, verify — a claim at a
+time. Details are under [SPEC §8](SPEC.md).
 
 ## Building a KB
 
@@ -104,6 +169,9 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
 - **Determinism.** The same inputs and pandoc version give a byte-identical document tree; the claim
   graph is identical except for the node ids, which are minted fresh on every build and are unique
   within the KB.
+- **No judgement.** Every scoring edge a build writes carries `*pending*` as its bearing, and no
+  stage writes a `rigor` or any other number into a score. A claim a build adds an edge to reads
+  unchanged until you judge that edge with `set-bearing`.
 
 Stages, in order: `start`, `document-graph`, `spine-seed`, `claims-declared`, `claims-discovered`,
 `equations-minted`, `references-found`, `claims-culled`, `depends-attributed`, `phase-3a`,
@@ -171,24 +239,33 @@ commit is a plain subject); content joins through the write ops, a claim at a ti
 After a build, subcommands operate on the living KB: write ops that insert entries and set fields,
 `render-citation`, queries over the claim graph, `refresh` and `verify`, `render-claim-graph`, and
 `export-latex`, which writes a LaTeX project from the KB through pandoc.
-The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `solidity-below`,
+The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `strength-below`,
 `subtree`, `weak-points` and `stats`. Run `kbase --help` for the list and `kbase <command> --help`
 for each one.
 
 - Write ops take values as YAML (JSON accepted) on stdin or `--values`. Re-issuing an op leaves
   `kb-root/` byte-identical, and the second call reports `unchanged`. An insert adopts an existing
   entry of the same register and title instead of writing a second one.
-- Three write ops are kbase's own. `drop-claim-edges` removes a claim's outgoing
-  `depends-on` or `references` bullets. `drop-inbound-edges` removes every bullet that names it.
-  `drop-claim-node` deletes the node itself, and refuses while an edge or any other line still names
-  it, so run the two edge ops first.
+- **Scores.** A node's own value is `rigor`, a scoring edge's is `bearing`, and a claim's or an
+  analysis's derived value is `strength`. Two ops record a judgement: `set-rigor` writes a node's
+  `rigor` and `set-bearing` a scoring edge's `bearing`; `set-bearing` replaces an existing token and
+  never adds one, because every scoring edge already carries one. A claim or analysis with no
+  `rigor` reads `*pending*` — unscored, not low. Its derivation pends with it unless a lift stands
+  over it: a node corroborated and never judged publishes the lift's product, while a refutation
+  alone leaves its strength unknown. A `bearing` of `*pending*` leaves its edge out of the
+  derivation until it is judged.
+- Three write ops are kbase's own. `drop-claim-edges` removes a claim's `rests-on` or `references`
+  list. `drop-inbound-edges` removes every edge that names it. `drop-claim-node` deletes the node
+  itself, and refuses while an edge or any other line still names it, so run the two edge ops first.
 - A write op ends with a `refresh` unless given `--no-refresh`. `kbase verify` then checks freshness
   and links under `kb-root/`; the citation grammar is checked inside the build.
 - List queries return `--limit` results (default 50; `0` means all) from `--offset`, and report
   `count` and `truncated`. When `truncated` is true, re-issue with `--offset` at the offset plus the
   results returned.
-- `show` on a claim lists its `strengthen_by` items (`item_idx`, `text`, `mentioned_ids`); `deps`
-  carries each edge's `context`.
+- `show` on a claim lists its `strengthen_by` items (`item_idx`, `text`, `mentioned_ids`), and a
+  node's record carries its `rigor` — `strength` too on a claim and an analysis; `deps` reports each
+  edge as `relation`, `direction` (`in` where the other end supports the node, `out` where it
+  supports the other end), `target`, `bearing` and `context`.
 - Maintenance never requires git.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
@@ -198,19 +275,24 @@ under `kb-root/` to the last boundary, so edits made while a build is interrupte
 carried in git. `render-citation`, `verify` and the queries take no lock. Locks are advisory and
 Unix only.
 
-**Demoted edges.** When the build breaks a dependency cycle, the edge it cuts is recorded as a
-`demoted` relation carrying its origin, `cited` or `inferred`, instead of becoming a plain
+**Demoted edges.** When the build breaks a dependency cycle, the `supports` edge it cuts is recorded
+as a `demoted` relation carrying its origin, `cited` or `inferred`, instead of becoming a plain
 reference. `verify` lists each under `findings` with outcome `done`, `stats` counts them as
 `demoted_edges`, and the sheets draw them as cuts. `resolve-demoted` takes `entry` items of `id`,
-`target` and `action`: `remove` deletes the edge, `restore` rewrites it as a dependency and is
+`target` and `action`: `remove` deletes the edge, `restore` rewrites it as a `supports` edge and is
 refused (`check: dependency-cycle`) where that would close a cycle.
 
-**Format migration.** A KB's metadata format is `1.0.0`, stamped `kb-format` in the entry point's
-frontmatter. Read-only commands write nothing, even over an older KB. A write op's
-`--no-refresh` on an unmigrated KB is refused (`check: kb-format`, remedy `kbase refresh`), and
-`verify` reports it stale with the same remedy. The migrating `refresh` lists obsolete paths under
-`removed`. A KB stamped with a newer major or minor is refused (`check: kb-format`; update kbase).
-`status` and `cancel` do not load the KB.
+**Format migration.** A KB's metadata format is `2.0.0`, stamped `kb-format` in the entry point's
+frontmatter. A KB in either older form, `1.0.0` or `0.9.0`, is converted in memory when it is
+loaded, and the next write stamps `2.0.0`; the result document says so in a `migration` record, and
+one line on stderr says what the conversion moved. Derived values are not carried across unchanged:
+a lifted claim may read higher and a work edge below `1` lower. Read-only commands write nothing,
+even over an older KB, but one that reads the derived index is refused until a save has rewritten it
+— the queries and `render-claim-graph` answer `check: index` with remedy `kbase refresh`. A write
+op's `--no-refresh` on an unmigrated KB is refused the same way (`check: index`, remedy `kbase
+refresh`), and `verify` reports it stale with the same remedy. The migrating `refresh`
+lists obsolete paths under `removed`. A KB stamped with a newer major or minor is refused
+(`check: kb-format`; update kbase). `status` and `cancel` do not load the KB.
 
 ### Claim-graph sheets
 
@@ -218,8 +300,11 @@ frontmatter. Read-only commands write nothing, even over an older KB. A write op
 KB with every volume as a cluster; and, where two or more volumes hold nodes,
 `kb-root/claim-graph-digest.svg`, one box per volume with the edges between volumes counted, and
 `kb-root/<volume>/claim-graph.svg` for each volume (its claims plus every claim one edge away).
-Edges are styled by how the dependency was found, nodes by kind and solidity, and every node links
-to its register entry.
+Every arrow runs from the supporter to the node it supports: a claim or an experiment `supports` a
+claim or an analysis; a work or an axiom `founds` one; and a claim, an analysis or an experiment
+`lifts` or `refutes` one. Each relation has a stroke of its own, and the cut a cycle-breaking
+demotion made is drawn dotted. Nodes are styled by kind and filled by strength band, a pending one
+grey, and every node links to its register entry.
 
 The sheets need Graphviz's `dot` on `PATH`, any version. Without it, existing sheets are left as
 they are, `refresh` writes a placeholder `kb-root/claim-graph.svg` only where none exists, and
@@ -257,11 +342,11 @@ opencode, in `opencode.json`:
 
 These are examples; any MCP-capable harness adds its own equivalent entry.
 
-- **Tools.** The subcommands: the write ops, `render-citation`, the queries (including `show` and
-  `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
-  `status`, `cancel` and `build`. `completion`, `help` and `mcp` are not offered, and neither is
-  `wait`: a held call would spend the turn the build takes, so the `build` tool hands you its
-  command to run in the background instead. `models` reads a
+- **Tools.** The subcommands: `init`, the write ops, `render-citation`, the queries (including `show`
+  and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
+  `export-latex`, `status`, `cancel` and `build`. `completion`, `help` and `mcp` are not offered,
+  and neither is `wait`: a held call would spend the turn the build takes, so the `build` tool hands
+  you its command to run in the background instead. `models` reads a
   provider's model catalogue and `configure` writes `config.toml`; neither performs inference —
   `build` is the one tool that does. A write-op tool takes one entry and offers no `--no-refresh`.
   `rewind-build` is the exception to one tool per subcommand: it lists the build's boundaries,
@@ -365,12 +450,17 @@ just             # list recipes
 just edit-gate   # cheap gate: run after every change
 just checkpoint  # full suite: run at checkpoints
 just test        # unit tests (VERBOSE=1 for per-test output)
-just dist        # checkpoint, cross-build every target, stage the user distro tarball
+just dist        # cross-build every target and stage the signed distro; run checkpoint first
 ```
 
-`just dist` stages the distribution tarball. No built binaries are committed; `bin/` and `dist/` are
-gitignored. The tarball ships this README and [USER_CONVENTIONS.md](USER_CONVENTIONS.md) as
-`CONVENTIONS.md`, the operating contract for an agent driving the CLI.
+`just dist` writes four artifacts to `dist/`: the tarball `kbase-v<version>.tgz`, its detached
+signature `kbase-v<version>.tgz.asc`, the installer `install-kbase-v<version>.sh` and its signature
+`install-kbase-v<version>.sh.asc`. It runs no checkpoint of its own: a cross-build is what users
+receive, so the gate is a precondition of the release, not a step the recipe runs. No built binaries
+are committed; `bin/` and `dist/` are gitignored. The tarball unpacks to `kbase-v<version>/` holding
+this README, [USER_CONVENTIONS.md](USER_CONVENTIONS.md) as `CONVENTIONS.md` — the operating contract
+for an agent driving the CLI — the LICENSE, and one binary per platform, each with its own `.asc`.
+[Installation](#installation) is what a user does with them.
 
 Integration recipes run `./bin/kbase` itself and keep their evidence under `test_data/transient/`.
 Recipes that need pandoc or a live provider are excluded from `just test-integration` and say so in

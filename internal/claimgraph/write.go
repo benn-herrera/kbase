@@ -171,7 +171,7 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 }
 
 // writeWorks inserts one entry per external work into the KB root's register,
-// every strength the pending literal.
+// every rigor the pending literal.
 func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 	if len(works) == 0 {
 		return fact("pass-1b-insert-work-entry", field("works", 0), field("named", 0), field("key-only", 0)), nil
@@ -179,7 +179,7 @@ func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 	vs := make(values, len(works))
 	named := 0
 	for i, wk := range works {
-		vs[i] = map[string]any{"register": kb.RegisterFile, "key": wk.Key, "title": wk.Title, "strength": kb.PendingLiteral, "rationale": workRationale(wk)}
+		vs[i] = map[string]any{"register": kb.RegisterFile, "key": wk.Key, "title": wk.Title, "rigor": kb.PendingLiteral, "rationale": workRationale(wk)}
 		if wk.Named {
 			named++
 		}
@@ -191,18 +191,18 @@ func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 }
 
 // writeEdges lands every edge in one batch of the build's edge write, one
-// entry per source carrying its dependencies and its references, so a refusal
-// cannot land half of one claim's edges. A work target's applicability is
-// left for the op to render pending.
+// entry per source carrying its premises and its references, so a refusal
+// cannot land half of one claim's edges. Every premise is written pending: the
+// build judges no edge, and a bearing is a human's to set.
 func (w writer) writeEdges(name string, edges, references []pair) (Finding, error) {
 	if len(edges) == 0 && len(references) == 0 {
 		return fact(name, field("dependency-edges", 0), field("dependency-sources", 0), field("references", 0), field("reference-sources", 0)), nil
 	}
-	depends := map[string][]map[string]any{}
+	premises := map[string][]map[string]any{}
 	refs := map[string][]map[string]any{}
 	var sources []string
 	for _, e := range edges {
-		depends[e.source] = append(depends[e.source], map[string]any{"id": e.target})
+		premises[e.source] = append(premises[e.source], map[string]any{"id": e.target, "bearing": kb.PendingLiteral})
 		sources = append(sources, e.source)
 	}
 	for _, r := range references {
@@ -214,8 +214,8 @@ func (w writer) writeEdges(name string, edges, references []pair) (Finding, erro
 	vs := make(values, len(sources))
 	for i, s := range sources {
 		vs[i] = map[string]any{"id": s}
-		if d, ok := depends[s]; ok {
-			vs[i]["depends-on"] = d
+		if d, ok := premises[s]; ok {
+			vs[i][kb.ListRestsOn] = d
 		}
 		if r, ok := refs[s]; ok {
 			vs[i]["references"] = r
@@ -224,7 +224,7 @@ func (w writer) writeEdges(name string, edges, references []pair) (Finding, erro
 	if _, err := w.run(name, write.AddBuildEdges, vs, false); err != nil {
 		return Finding{}, err
 	}
-	return pass(name, field("dependency-edges", len(edges)), field("dependency-sources", len(depends)),
+	return pass(name, field("dependency-edges", len(edges)), field("dependency-sources", len(premises)),
 		field("references", len(references)), field("reference-sources", len(refs))), nil
 }
 

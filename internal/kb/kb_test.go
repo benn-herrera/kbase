@@ -44,11 +44,11 @@ func TestSheetDigestDrawn(t *testing.T) {
 		paths []string
 		want  bool
 	}{
-		{"one volume", []string{"vol/claim-quality.md"}, false},
-		{"root bucket alone", []string{"claim-quality.md", "other.md"}, false},
-		{"root and one volume", []string{"claim-quality.md", "vol/claim-quality.md"}, false},
-		{"two volumes", []string{"one/claim-quality.md", "two/claim-quality.md"}, true},
-		{"one volume plus root", []string{"one/claim-quality.md", "claim-quality.md"}, false},
+		{"one volume", []string{"vol/claim-rigor.md"}, false},
+		{"root bucket alone", []string{"claim-rigor.md", "other.md"}, false},
+		{"root and one volume", []string{"claim-rigor.md", "vol/claim-rigor.md"}, false},
+		{"two volumes", []string{"one/claim-rigor.md", "two/claim-rigor.md"}, true},
+		{"one volume plus root", []string{"one/claim-rigor.md", "claim-rigor.md"}, false},
 	} {
 		nodes := make([]NodeRow, len(tc.paths))
 		for i, p := range tc.paths {

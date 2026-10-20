@@ -29,6 +29,9 @@ type Finding struct {
 // RefreshRemedy is the command that clears a refresh-fixable finding.
 const RefreshRemedy = "kbase refresh"
 
+// CheckIndex is the refusal class of a derived index a verb cannot read.
+const CheckIndex = "index"
+
 // Item is the finding as a result item.
 func (f Finding) Item() result.Item {
 	it := result.Item{Check: f.Check, Path: f.Path, Line: f.Line, Detail: f.Detail}
@@ -51,16 +54,39 @@ func Items(findings []Finding) []result.Item {
 // frontmatter block.
 const CheckFrontmatterPresence = "frontmatter"
 
+// AnnotationItems is every annotation fault as a metadata refusal item: the
+// list field it was read from, the file and line it opens on, the value set it
+// allows and the remedy that clears it.
+func AnnotationItems(err *kb.AnnotationError) []result.Item {
+	items := make([]result.Item, len(err.Faults))
+	for i, f := range err.Faults {
+		item := result.Item{Check: checkMetadata, Key: f.Field, Path: f.Path, Line: f.Line, Remedy: f.Remedy, Detail: f.Detail}
+		if f.Allowed != "" {
+			item.Allowed = []string{f.Allowed}
+		}
+		items[i] = item
+	}
+	return items
+}
+
 // Verify is the standard check of the KB src reads — the dead-link and
 // unknown-id gate over kb-root/, then the metadata gate — and returns every
-// finding. The error is a failure to read the KB, never a finding.
+// finding. The error is a failure to read the KB, or a refusal: the symlink
+// refusal of a document that is a link, or the annotation refusal of every
+// malformed bullet a load found. Never a finding.
 func Verify(src *kb.Source) ([]Finding, error) {
 	links, err := LinkFindings(src)
 	if err != nil {
+		if r, ok := symlinkRefusal(err); ok {
+			return nil, r
+		}
 		return nil, err
 	}
 	meta, err := MetadataFindings(src)
 	if err != nil {
+		if r, ok := symlinkRefusal(err); ok {
+			return nil, r
+		}
 		return nil, err
 	}
 	return slices.Concat(links, meta), nil
@@ -86,6 +112,25 @@ func DemotedFindings(src *kb.Source) ([]result.Item, error) {
 	return items, nil
 }
 
+// CheckAxiomSource is the check a verify finding for an axiom declaration a
+// legacy document still carries names.
+const CheckAxiomSource = "axiom-source"
+
+// LegacyAxiomFindings is every axiom declaration the legacy AGENTS.md still
+// carries beside the KB's axioms.md, one finding each. The converter moves a
+// declaration and leaves the file behind, so a declaration left is
+// informational: no refresh clears it and no load refuses it.
+func LegacyAxiomFindings(src *kb.Source) ([]Finding, error) {
+	if !src.IsFile(src.KBPath(kb.AxiomsFile)) {
+		return nil, nil
+	}
+	var out []Finding
+	for _, d := range kb.LegacyAxiomDeclarations(src) {
+		out = append(out, Finding{Check: CheckAxiomSource, Path: d.Path, Line: d.Line, Detail: d.Token})
+	}
+	return out, nil
+}
+
 // BuildVerify is the build-time check: Verify, then the citation gate, every
 // gate run whatever the earlier found, findings in that order.
 func BuildVerify(src *kb.Source) ([]Finding, error) {
@@ -101,10 +146,10 @@ func BuildVerify(src *kb.Source) ([]Finding, error) {
 }
 
 var (
-	scoreLineRE     = kb.PyRE(`^\s*-\s+(confidence|quality|strength):\s*(\S.*?)\s*$`)
+	scoreLineRE     = kb.PyRE(`^\s*-\s+(rigor|strength):\s*(\S.*?)\s*$`)
 	leadingNumberRE = regexp.MustCompile(`^[-+]?[0-9]*\.?[0-9]+`)
 	expIDFull       = regexp.MustCompile(`^` + kb.IDBody("exp") + `$`)
-	supIDFull       = regexp.MustCompile(`^` + kb.IDBody("sup") + `$`)
+	anaIDFull       = regexp.MustCompile(`^` + kb.IDBody("ana") + `$`)
 	claimIDFull     = regexp.MustCompile(`^` + kb.IDBody("clm") + `$`)
 	workIDFull      = regexp.MustCompile(`^` + kb.WorkIDPattern + `$`)
 )
@@ -127,7 +172,8 @@ func (d document) items(key string) ([]string, error) {
 // of every derived field and of .index/. A KB
 // state its readers cannot take — malformed node bodies, a claim graph with
 // a cycle, an edge into a node nothing declares — ends the gate with that
-// one finding.
+// one finding; a malformed bullet one load refuses ends it with a refusal
+// naming each fault's field, file and line.
 func MetadataFindings(src *kb.Source) ([]Finding, error) {
 	if err := precheck(src); err != nil {
 		var r result.Refusal
@@ -142,9 +188,17 @@ func MetadataFindings(src *kb.Source) ([]Finding, error) {
 	}
 	m := metaCheck{src: src}
 	findings, err := m.run()
+	var ann *kb.AnnotationError
 	var mal kb.MalformedError
 	var cov CoverageError
-	if errors.As(err, &mal) || errors.As(err, &cov) {
+	if errors.As(err, &ann) {
+		return nil, result.Refusal(AnnotationItems(ann))
+	}
+	if errors.As(err, &cov) {
+		cov = coverageAt(m.src, cov)
+		return append(findings, Finding{Check: checkMetadata, Path: cov.Path, Line: cov.Line, Detail: cov.Msg}), nil
+	}
+	if errors.As(err, &mal) {
 		return append(findings, Finding{Check: checkMetadata, Detail: err.Error()}), nil
 	}
 	return findings, err
@@ -217,7 +271,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 		}
 	}
 	for _, rel := range regs {
-		m.qualityBlocks(rel, registerText[rel])
+		m.rigorBlocks(rel, registerText[rel])
 		m.scoreValues(rel, registerText[rel])
 	}
 	equations := map[string]bool{}
@@ -281,7 +335,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 		}
 	}
 
-	sol, err := ComputeSolidity(st)
+	sol, err := ComputeStrength(st)
 	var cycle CycleError
 	if errors.As(err, &cycle) {
 		return []Finding{{Check: "acyclicity", Detail: cycle.Error()}}, nil
@@ -299,7 +353,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 	if err := m.referentialIntegrity(); err != nil {
 		return nil, err
 	}
-	if err := m.solidityFresh(st, sol); err != nil {
+	if err := m.strengthFresh(st, sol); err != nil {
 		return nil, err
 	}
 	refs := LeafReferences(st)
@@ -347,7 +401,7 @@ func setMinus(a, b map[string]bool) []string {
 	return out
 }
 
-func (m *metaCheck) qualityBlocks(rel, text string) {
+func (m *metaCheck) rigorBlocks(rel, text string) {
 	lines := kb.SplitLines(kb.StripCodeFences(text))
 	type section struct {
 		start int
@@ -365,14 +419,14 @@ func (m *metaCheck) qualityBlocks(rel, text string) {
 	}
 	sections = append(sections, current)
 	for _, sec := range sections {
-		quality := slices.IndexFunc(sec.lines, func(l string) bool { return kb.Strip(l) == "### Quality" })
-		if quality < 0 {
+		rigor := slices.IndexFunc(sec.lines, func(l string) bool { return kb.Strip(l) == "### Rigor" })
+		if rigor < 0 {
 			continue
 		}
 		hasTitle := slices.ContainsFunc(sec.lines, func(l string) bool { return strings.HasPrefix(l, "## ") })
 		hasID := slices.ContainsFunc(sec.lines, func(l string) bool { return kb.CanonicalEntryMarkerRE.MatchString(kb.Strip(l)) })
 		if !hasTitle || !hasID {
-			m.addAt("quality block", false, rel, sec.start+quality, "%s:%d: `### Quality` block without its `## <title>` heading and id marker", rel, sec.start+quality)
+			m.addAt("rigor block", false, rel, sec.start+rigor, "%s:%d: `### Rigor` block without its `## <title>` heading and id marker", rel, sec.start+rigor)
 		}
 	}
 }
@@ -394,7 +448,7 @@ func (m *metaCheck) scoreValues(rel, text string) {
 	}
 }
 
-var tier2RE = kb.PyRE(`(?s)<!--\s*claim-quality:\s*(.*?)\s*-->`)
+var tier2RE = kb.PyRE(`(?s)<!--\s*claim-rigor:\s*(.*?)\s*-->`)
 
 func (m *metaCheck) tier2(f document, claims []string, equations map[string]bool) error {
 	var ids []string
@@ -602,11 +656,6 @@ func jsonItems(v any) []any {
 	return nil
 }
 
-func inUnit(v any) bool {
-	f, ok := v.(float64)
-	return ok && 0 <= f && f <= 1
-}
-
 func (m *metaCheck) referentialIntegrity() error {
 	claimsText, ok, err := indexText(m.src, "claims")
 	if err != nil || !ok {
@@ -675,15 +724,15 @@ func (m *metaCheck) referentialIntegrity() error {
 		file string
 		keys []string
 	}{
-		{"depends-on", []string{"source", "target"}}, {"strengthen-by", []string{"claim_id"}}, {"cites", []string{"claim_id"}},
-		{"supported-by", []string{"claim_id", "sup_id"}}, {"subtree-aggregates", []string{"subtree_claims", "subtree_experiments"}},
+		{kb.IndexEdges, []string{"source", "target"}}, {kb.IndexStrengthenBy, []string{"claim_id"}}, {kb.IndexCites, []string{"claim_id"}},
+		{kb.IndexSubtreeAggregates, []string{"subtree_claims", "subtree_experiments"}},
 	} {
 		if err := orphans(c.file, c.keys...); err != nil {
 			return err
 		}
 	}
 	typeOf := func(v any) (string, bool) { t, ok := nodeType[jsonKey(v)]; return t, ok }
-	deps, nums, _, err := recordLines(m.src, "depends-on")
+	deps, nums, _, err := recordLines(m.src, kb.IndexEdges)
 	if err != nil {
 		return err
 	}
@@ -694,80 +743,48 @@ func (m *metaCheck) referentialIntegrity() error {
 		}
 		n := nums[i]
 		source, target, kind := rec["source"], rec["target"], rec["target_kind"]
-		strength, fraction := rec["strength"], rec["fraction"]
+		relation, isStr := rec["relation"].(string)
+		if !isStr || !slices.Contains(kb.Relations, relation) {
+			violation(kb.IndexEdges, source, "line %d, unknown relation %v", n, rec["relation"])
+			continue
+		}
 		src, srcOK := typeOf(source)
 		tgt, tgtOK := typeOf(target)
-		relation, _ := rec["relation"].(string)
-		if _, isStr := rec["relation"].(string); !isStr {
-			relation = "\x00"
+		if tgtOK && jsonKey(kind) != tgt {
+			violation(kb.IndexEdges, target, "line %d, %s edge target_kind %v != node_type %q", n, relation, kind, tgt)
 		}
-		expect := func(want, end string, ok bool, got string, id any) {
-			if ok && got != want {
-				violation("depends-on", id, "line %d, %s edge %s resolves to %q, expected %s", n, relation, end, got, want)
-			}
-		}
-		kindIs := func(want string) {
-			if k, isStr := kind.(string); !isStr || k != want {
-				violation("depends-on", target, "line %d, %s edge target_kind %v != %q", n, relation, kind, want)
-			}
-		}
-		nullStrength := func() {
-			if strength != nil {
-				violation("depends-on", source, "line %d, %s edge has non-null strength %v", n, relation, strength)
-			}
-		}
-		fractionOrPending := func() {
-			if fraction != kb.PendingLiteral && !inUnit(fraction) {
-				violation("depends-on", source, "line %d, %s edge fraction %v not in [0, 1] or *pending*", n, relation, fraction)
-			}
-		}
-		switch relation {
-		case kb.RelationSupports:
-			expect("support", "source", srcOK, src, source)
-			expect("claim", "target", tgtOK, tgt, target)
-			kindIs("claim")
-			nullStrength()
-			fractionOrPending()
-		case kb.RelationStrengthens:
-			expect("experiment", "source", srcOK, src, source)
-			expect("claim", "target", tgtOK, tgt, target)
-			kindIs("claim")
-			if strength == nil {
-				violation("depends-on", source, "line %d, strengthens edge has null strength", n)
-			} else if !inUnit(strength) {
-				violation("depends-on", source, "line %d, strengthens edge strength %v not in [0, 1]", n, strength)
-			}
-		case kb.RelationRestsOn:
-			expect("claim", "source", srcOK, src, source)
-			expect("work", "target", tgtOK, tgt, target)
-			kindIs("work")
-			nullStrength()
-			fractionOrPending()
-		case kb.RelationReferences, kb.RelationDemoted:
-			expect("claim", "source", srcOK, src, source)
-			expect("claim", "target", tgtOK, tgt, target)
-			kindIs("claim")
-			nullStrength()
-			if fraction != nil {
-				violation("depends-on", source, "line %d, %s edge has non-null fraction %v", n, relation, fraction)
-			}
-			if origin, _ := rec["origin"].(string); relation == kb.RelationDemoted && !slices.Contains(kb.Origins, origin) {
-				violation("depends-on", source, "line %d, demoted edge to %v carries origin %v, not one of %v; only the build writes a demoted edge, "+
+		if relation == kb.RelationDemoted {
+			if origin, _ := rec["origin"].(string); !slices.Contains(kb.Origins, origin) {
+				violation(kb.IndexEdges, source, "line %d, demoted edge to %v carries origin %v, not one of %v; only the build writes a demoted edge, "+
 					"and its origin says whether the text marked the dependency", n, target, rec["origin"], kb.Origins)
 			}
-		case kb.RelationDepends:
-			if srcOK && src != "claim" && src != "support" {
-				violation("depends-on", source, "line %d, depends edge source resolves to %q, expected claim or support", n, src)
+		}
+		// A migrated source's index is the one an older writer left, whose
+		// bearing column this format does not have: the backstop is skipped
+		// and the freshness check refuses the index whole.
+		if m.src.Migrated() {
+			continue
+		}
+		if !srcOK || !tgtOK {
+			continue
+		}
+		bearing := rec["bearing"]
+		if !kb.BearingLegal(relation, src, tgt) {
+			if bearing != nil {
+				violation(kb.IndexEdges, source, "line %d, %s edge carries bearing %v where its pairing allows none", n, relation, bearing)
 			}
-			if tgtOK && jsonKey(kind) != tgt {
-				violation("depends-on", target, "line %d, target_kind %v != node_type %q", n, kind, tgt)
-			}
-			if tgt == "experiment" {
-				violation("depends-on", target, "line %d, depends edge targets an experiment node", n)
-			}
-			nullStrength()
+			continue
+		}
+		text, isText := bearing.(string)
+		switch {
+		case bearing == nil:
+			violation(kb.IndexEdges, source, "line %d, %s edge carries no bearing, and its pairing has one", n, relation)
+		case !isText:
+			violation(kb.IndexEdges, source, "line %d, %s edge carries bearing %v, not the text the writer emits", n, relation, bearing)
 		default:
-			violation("depends-on", source, "line %d, unknown relation %v", n, rec["relation"])
+			if _, ok := kb.BearingFromValue(text); !ok {
+				violation(kb.IndexEdges, source, "line %d, %s edge bearing %q is not in [0, 1] or %s", n, relation, text, kb.PendingLiteral)
+			}
 		}
 	}
 	experiments := map[string]bool{}
@@ -778,8 +795,8 @@ func (m *metaCheck) referentialIntegrity() error {
 			if !expIDFull.MatchString(id) {
 				violation("claims", id, "experiment node id is not %s", kb.IDBody("exp"))
 			}
-		case t == "support" && !supIDFull.MatchString(id):
-			violation("claims", id, "support node id is not %s", kb.IDBody("sup"))
+		case t == "analysis" && !anaIDFull.MatchString(id):
+			violation("claims", id, "analysis node id is not %s", kb.IDBody("ana"))
 		case t == "work" && !workIDFull.MatchString(id):
 			violation("claims", id, "external-work node id is not %s", kb.WorkIDPattern)
 		}
@@ -815,22 +832,6 @@ func (m *metaCheck) referentialIntegrity() error {
 			}
 		}
 	}
-	sb, sbNums, _, err := recordLines(m.src, "supported-by")
-	if err != nil {
-		return err
-	}
-	for i, r := range sb {
-		rec, ok := r.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, ok := typeOf(rec["claim_id"]); ok && t != "claim" {
-			violation("supported-by", rec["claim_id"], "line %d, claim_id resolves to %q, expected claim", sbNums[i], t)
-		}
-		if t, ok := typeOf(rec["sup_id"]); ok && t != "support" {
-			violation("supported-by", rec["sup_id"], "line %d, sup_id resolves to %q, expected support", sbNums[i], t)
-		}
-	}
 	return nil
 }
 
@@ -838,7 +839,7 @@ func approx(a, b *float64) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return math.Abs(*a-*b) < 1e-9
+	return math.Abs(*a-*b) < strengthTolerance
 }
 
 func optFinal(m map[string]float64, id string) *float64 {
@@ -848,66 +849,77 @@ func optFinal(m map[string]float64, id string) *float64 {
 	return nil
 }
 
-func (m *metaCheck) annotationDrift(owner string, edges []kb.Edge, finals map[string]float64) {
+// annotationDrift reports a premise bullet's "(strength …)" annotation that
+// records other than its source claim's derived strength. The annotation's
+// subject is the bullet head's claim id — the premise, which in this format
+// is the edge's source.
+func (m *metaCheck) annotationDrift(owner string, edges []kb.Edge, finals map[string]float64, claims map[string]bool) {
 	for _, e := range edges {
-		if e.TargetKind != "claim" {
+		if e.Relation != kb.RelationSupports && e.Relation != kb.RelationFounds {
 			continue
 		}
-		target := optFinal(finals, e.Target)
+		if !claims[e.Source] {
+			continue
+		}
+		source := optFinal(finals, e.Source)
 		switch {
-		case target == nil && e.TargetSolidityRecorded != nil:
-			m.add("solidity freshness", true, "%s: depends-on annotation for %s — recorded %s, expected *pending*", owner, e.Target, FormatSolidity(e.TargetSolidityRecorded))
-		case target != nil && e.TargetSolidityRecorded != nil && !approx(e.TargetSolidityRecorded, target):
-			m.add("solidity freshness", true, "%s: depends-on annotation for %s — recorded %s, expected %s", owner, e.Target, FormatSolidity(e.TargetSolidityRecorded), FormatSolidity(target))
+		case source == nil && e.SourceStrengthRecorded != nil:
+			m.add("strength freshness", true, "%s: premise annotation for %s — recorded %s, expected %s", owner, e.Source, FormatStrengthRecord(e.SourceStrengthRecorded), kb.PendingLiteral)
+		case source != nil && e.SourceStrengthRecorded != nil && !approx(e.SourceStrengthRecorded, source):
+			m.add("strength freshness", true, "%s: premise annotation for %s — recorded %s, expected %s", owner, e.Source, FormatStrengthRecord(e.SourceStrengthRecorded), FormatStrengthRecord(source))
 		}
 	}
 }
 
-func (m *metaCheck) solidityFresh(st kb.State, sol Solidity) error {
-	finals, supFinals := sol.Finals(), sol.SupFinals()
-	drift := func(id, got, want string) { m.add("solidity freshness", true, "%s: %s, %s", id, got, want) }
-	for _, s := range st.Supports {
-		computed := optFinal(supFinals, s.ID)
+func (m *metaCheck) strengthFresh(st kb.State, strength Strength) error {
+	finals, analysisFinals := strength.Finals(), strength.AnalysisFinals()
+	claims := map[string]bool{}
+	for _, e := range st.ClaimEntries {
+		claims[e.ID] = true
+	}
+	drift := func(id, got, want string) { m.add("strength freshness", true, "%s: %s, %s", id, got, want) }
+	for _, s := range st.Analyses {
+		computed := optFinal(analysisFinals, s.ID)
 		switch {
 		case computed == nil:
-			if s.Solidity != nil {
-				drift(s.ID, "solidity "+FormatSolidity(s.Solidity), "expected *pending*")
+			if s.Strength != nil {
+				drift(s.ID, "strength "+FormatStrengthRecord(s.Strength), "expected *pending*")
 			}
-		case !approx(s.Solidity, computed):
-			drift(s.ID, "solidity "+FormatSolidity(s.Solidity), "expected "+FormatSolidity(computed))
+		case !approx(s.Strength, computed):
+			drift(s.ID, "strength "+FormatStrengthRecord(s.Strength), "expected "+FormatStrengthRecord(computed))
 		default:
-			if want := RenderMinTrace(s.Quality, MinDependencySolidity(s.DependsOn, finals)); s.SolidityTrace != want {
-				drift(s.ID, "trace "+s.SolidityTrace, "expected "+want)
+			if want := RenderStrengthTrace(strength.AnalysisResults[s.ID]); s.StrengthTrace != want {
+				drift(s.ID, "trace "+s.StrengthTrace, "expected "+want)
 			}
 		}
-		m.annotationDrift(s.ID, s.DependsOn, finals)
+		m.annotationDrift(s.ID, s.Premises, finals, claims)
 	}
 	for _, e := range st.ClaimEntries {
 		computed := optFinal(finals, e.ID)
 		if computed == nil {
-			if e.Solidity != nil {
-				drift(e.ID, "solidity "+FormatSolidity(e.Solidity), "expected *pending*")
+			if e.Strength != nil {
+				drift(e.ID, "strength "+FormatStrengthRecord(e.Strength), "expected *pending*")
 			}
 			continue
 		}
 		phrase := BuildStatusPhrase(computed)
 		switch {
-		case !approx(e.Solidity, computed):
-			drift(e.ID, "solidity "+FormatSolidity(e.Solidity), "expected "+FormatSolidity(computed))
+		case !approx(e.Strength, computed):
+			drift(e.ID, "strength "+FormatStrengthRecord(e.Strength), "expected "+FormatStrengthRecord(computed))
 		case e.BuildStatus == nil || *e.BuildStatus != *phrase:
 			drift(e.ID, "build-status mismatch", "expected "+*phrase)
 		default:
-			if want := RenderSolidityTrace(sol.Results[e.ID]); e.SolidityTrace != want {
-				drift(e.ID, "trace "+e.SolidityTrace, "expected "+want)
+			if want := RenderStrengthTrace(strength.Results[e.ID]); e.StrengthTrace != want {
+				drift(e.ID, "trace "+e.StrengthTrace, "expected "+want)
 			}
 		}
-		m.annotationDrift(e.ID, e.DependsOn, finals)
+		m.annotationDrift(e.ID, e.Premises, finals, claims)
 	}
-	text, ok, err := indexText(m.src, "claims")
+	text, ok, err := indexText(m.src, kb.IndexClaims)
 	if err != nil || !ok {
 		return err
 	}
-	claimsFile := kb.IndexFileName("claims")
+	claimsFile := kb.IndexFileName(kb.IndexClaims)
 	for _, line := range streamLines(text) {
 		v, ok := parseJSON(line.record)
 		if !ok || !line.marked {
@@ -917,26 +929,30 @@ func (m *metaCheck) solidityFresh(st kb.State, sol Solidity) error {
 		if !ok {
 			continue
 		}
-		nodeType := "claim"
+		nodeType := kb.NodeKindClaim
 		if t, ok := rec["node_type"]; ok {
 			nodeType = jsonKey(t)
 		}
 		var computed *float64
 		switch nodeType {
-		case "support":
-			computed = optFinal(supFinals, jsonKey(rec["id"]))
-		case "claim":
+		case kb.NodeKindAnalysis:
+			computed = optFinal(analysisFinals, jsonKey(rec["id"]))
+		case kb.NodeKindClaim:
 			computed = optFinal(finals, jsonKey(rec["id"]))
 		default:
 			continue
 		}
-		onDisk := rec["solidity"]
+		onDisk := rec["strength"]
 		f, isNum := onDisk.(float64)
+		recorded := fmt.Sprintf("%v", onDisk)
+		if isNum {
+			recorded = FormatStrengthRecord(&f)
+		}
 		switch {
 		case computed == nil && onDisk != nil:
-			drift(jsonKey(rec["id"]), fmt.Sprintf("%s solidity %v", claimsFile, onDisk), "expected null")
+			drift(jsonKey(rec["id"]), fmt.Sprintf("%s strength %s", claimsFile, recorded), "expected null")
 		case computed != nil && (!isNum || !approx(&f, computed)):
-			drift(jsonKey(rec["id"]), fmt.Sprintf("%s solidity %v", claimsFile, onDisk), "expected "+FormatSolidity(computed))
+			drift(jsonKey(rec["id"]), fmt.Sprintf("%s strength %s", claimsFile, recorded), "expected "+FormatStrengthRecord(computed))
 		}
 	}
 	return nil
@@ -968,8 +984,8 @@ func (m *metaCheck) registerWalk(w kb.RegisterWalk) {
 			e.RegisterPath, e.Entry.MarkerLine+1, e.Entry.NodeID, e.Entry.HeadingTitle, e.Entry.HeadingLine+1)
 	}
 	for _, r := range w.Unreconciled() {
-		m.add("support fan-out", false, "%s -> %s: register %s and hosting leaf %s disagree (recorded at %s)",
-			r.SupID, r.ClaimID, r.RegisterPath, r.LeafPath, strings.Join(r.Ends(), ", "))
+		m.add("analysis fan-out", false, "%s %s -> %s: register %s and hosting leaf %s disagree (recorded at %s)",
+			r.Relation, r.AnaID, r.ClaimID, r.RegisterPath, r.LeafPath, strings.Join(r.Ends(), ", "))
 	}
 }
 

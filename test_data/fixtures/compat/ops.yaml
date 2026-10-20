@@ -19,9 +19,10 @@ steps:
           title: Compatibility Probe Result
           rigor: 0.5
           rationale: Written by the compatibility op script to exercise the write API on both toolchains.
-          depends-on:
+          rests-on:
             - id: "{minted:premise}"
               context: the result the probe extends
+              bearing: "*pending*"
           strengthen-by:
             - Replace the probe with a claim the corpus states.
   - op: set-rigor
@@ -36,23 +37,24 @@ steps:
         - register: "{register}"
           key: CompatProbe2026
           title: Compatibility Probe (2026)
-          strength: "*pending*"
+          rigor: "*pending*"
           rationale: A work the probe rests on; no bibliography answers its key.
-  - op: add-depends-on
+  - op: add-rests-on
     values:
       entry:
         - id: "{minted:probe}"
-          depends-on:
-            - id: work-CompatProbe2026
-              applicability: "*pending*"
+          rests-on:
+            - id: wrk-CompatProbe2026
+              bearing: "*pending*"
           references:
             - id: "{minted:premise}"
-  - op: set-applicability
+  - op: set-bearing
     values:
       entry:
-        - id: "{minted:probe}"
-          work: work-CompatProbe2026
-          applicability: 0.5
+        - id: wrk-CompatProbe2026
+          target: "{minted:probe}"
+          relation: founds
+          bearing: 0.5
   - op: set-frontmatter
     values:
       entry:

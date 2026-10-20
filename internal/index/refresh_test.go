@@ -1,6 +1,8 @@
 package index
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +11,7 @@ import (
 
 	"kbase/internal/kb"
 	"kbase/internal/log"
+	"kbase/internal/result"
 )
 
 func smallKB(t *testing.T) string {
@@ -16,8 +19,8 @@ func smallKB(t *testing.T) string {
 		"entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
 		"vol/index.md":   "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
 		"vol/a.md":       "---\nkind: leaf\nclaims: [clm-aaaaaa]\n---\n[↑ Vol](index.md)\n\n# A\n",
-		"vol/claim-quality.md": "# Register\n\n## Claim A\n<!-- id: clm-aaaaaa -->\n\n### Quality\n" +
-			"- confidence: 0.70\n- solidity: *pending*\n- rationale: r.\n",
+		"vol/claim-rigor.md": "# Register\n\n## Claim A\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n" +
+			"- rigor: 0.70\n- strength: *pending*\n- rationale: r.\n",
 	})
 }
 
@@ -44,19 +47,19 @@ func TestRefreshThenVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"vol/index.md", "entry-point.md", "vol/claim-quality.md", ".index/claims.yaml", kb.ClaimGraphFile} {
+	for _, want := range []string{"vol/index.md", "entry-point.md", "vol/claim-rigor.md", ".index/claims.yaml", kb.ClaimGraphFile} {
 		if !slices.Contains(written, want) {
 			t.Errorf("first refresh wrote %q, missing %s", written, want)
 		}
 	}
-	register := read(t, filepath.Join(root, "vol/claim-quality.md"))
-	for _, want := range []string{"- solidity: 0.70 (ok to build on, see caveats)\n", "> **Leaf references:** [a](./a.md).\n"} {
+	register := read(t, filepath.Join(root, "vol/claim-rigor.md"))
+	for _, want := range []string{"- strength: 0.7 (ok to build on, see caveats)\n", "> **Leaf references:** [a](./a.md).\n"} {
 		if !strings.Contains(register, want) {
 			t.Errorf("register lacks %q:\n%s", want, register)
 		}
 	}
 	if got, want := read(t, filepath.Join(root, kb.EntryPointFile)),
-		"---\nkind: entry-point\nsubtree-claims: [clm-aaaaaa]\nsubtree-experiments: []\nkb-format: \"1.0.0\"\n---\n\n# KB\n\n- [vol](vol/index.md)\n"; got != want {
+		"---\nkind: entry-point\nsubtree-claims: [clm-aaaaaa]\nsubtree-experiments: []\nkb-format: \"2.0.0\"\n---\n\n# KB\n\n- [vol](vol/index.md)\n"; got != want {
 		t.Errorf("entry point after refresh =\n%s\nwant\n%s", got, want)
 	}
 	if findings, err := Verify(kb.OnDisk(root)); err != nil || len(findings) > 0 {
@@ -64,6 +67,78 @@ func TestRefreshThenVerify(t *testing.T) {
 	}
 	if again, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil || len(again) > 0 {
 		t.Errorf("second refresh wrote %q (%v), want nothing", again, err)
+	}
+}
+
+// TestRefreshRecordsTheExactStrength: a premise's own value reaches the record
+// unrounded — 0.70 × 0.72 = 0.504 as itself, and the dependent of a value that
+// needs more than four decimals as that value — and every record refresh writes
+// compares fresh.
+func TestRefreshRecordsTheExactStrength(t *testing.T) {
+	entry := func(title, id, rigor, rests string) string {
+		return "## " + title + "\n<!-- id: " + id + " -->\n\n### Rigor\n- rigor: " + rigor + "\n" + rests +
+			"- strength: *pending*\n- rationale: r.\n\n"
+	}
+	root := writeKB(t, map[string]string{
+		"entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
+		"vol/index.md":   "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
+		"vol/a.md": "---\nkind: leaf\nclaims: [clm-aaaaaa, clm-bbbbbb, clm-cccccc, clm-dddddd]\n---\n[↑ Vol](index.md)\n\n# A\n\n" +
+			"<!-- claim-rigor: clm-aaaaaa -->\n\nBody A.\n\n<!-- claim-rigor: clm-bbbbbb -->\n\nBody B.\n\n" +
+			"<!-- claim-rigor: clm-cccccc -->\n\nBody C.\n\n<!-- claim-rigor: clm-dddddd -->\n\nBody D.\n",
+		"vol/claim-rigor.md": "# Register\n\n" +
+			entry("Claim A", "clm-aaaaaa", "0.70", "") +
+			entry("Claim B", "clm-bbbbbb", "0.90", "- rests-on:\n  - clm-aaaaaa (strength *pending*) (bearing 0.72)\n") +
+			entry("Claim C", "clm-cccccc", "0.90", "- rests-on:\n  - clm-bbbbbb (strength *pending*) (bearing 0.72)\n") +
+			entry("Claim D", "clm-dddddd", "1.00", ""),
+	})
+	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	register := read(t, filepath.Join(root, "vol/claim-rigor.md"))
+	for _, want := range []string{
+		"- strength: 0.7 (ok to build on, see caveats)",
+		"- strength: 0.504 (use as input only",
+		"- strength: 0.36288 (do not build on, rework needed)",
+		"- strength: 1 (ok to build on)",
+		"(strength 0.7) (bearing 0.72)",
+		"(strength 0.504) (bearing 0.72)",
+	} {
+		if !strings.Contains(register, want) {
+			t.Errorf("register lacks %q:\n%s", want, register)
+		}
+	}
+	for _, unwanted := range []string{"- strength: 0.5 ", "(strength 0.5)"} {
+		if strings.Contains(register, unwanted) {
+			t.Errorf("register carries the two-decimal spelling %q:\n%s", unwanted, register)
+		}
+	}
+	if findings, err := Verify(kb.OnDisk(root)); err != nil || len(findings) > 0 {
+		t.Fatalf("verify after refresh: %v %v", findings, err)
+	}
+	if again, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil || len(again) > 0 {
+		t.Errorf("second refresh wrote %q (%v), want nothing", again, err)
+	}
+	if findings, err := Verify(kb.OnDisk(root)); err != nil || len(findings) > 0 {
+		t.Errorf("verify after the second refresh: %v %v", findings, err)
+	}
+
+	truncated := strings.Replace(register, "- strength: 0.504 ", "- strength: 0.5 ", 1)
+	if err := os.WriteFile(filepath.Join(root, "vol/claim-rigor.md"), []byte(truncated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := Verify(kb.OnDisk(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(findings, func(f Finding) bool {
+		return f.Check == "strength freshness" && strings.Contains(f.Detail, "clm-bbbbbb")
+	}) {
+		t.Errorf("a hand-truncated record drew no strength freshness finding: %v", findings)
+	}
+	if !slices.ContainsFunc(findings, func(f Finding) bool {
+		return f.Check == "strength freshness" && strings.Contains(f.Detail, "strength 0.5, expected 0.504")
+	}) {
+		t.Errorf("the freshness finding does not show the truncation it reports: %v", findings)
 	}
 }
 
@@ -107,16 +182,16 @@ func TestRefreshRemovesSheetsNoLongerCalledFor(t *testing.T) {
 		return "---\nkind: leaf\n" + fm + "\n---\n[↑ " + up + "](index.md)\n\n# A\n"
 	}
 	register := func(title, id string) string {
-		return "# Register\n\n## " + title + "\n<!-- id: " + id + " -->\n\n### Quality\n- confidence: 0.70\n- solidity: *pending*\n- rationale: r.\n"
+		return "# Register\n\n## " + title + "\n<!-- id: " + id + " -->\n\n### Rigor\n- rigor: 0.70\n- strength: *pending*\n- rationale: r.\n"
 	}
 	root := writeKB(t, map[string]string{
-		"entry-point.md":       "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n- [wol](wol/index.md)\n",
-		"vol/index.md":         "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
-		"vol/a.md":             leaf("Vol", "claims: [clm-aaaaaa]"),
-		"vol/claim-quality.md": register("Claim A", "clm-aaaaaa"),
-		"wol/index.md":         "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Wol\n\n- [a](a.md)\n",
-		"wol/a.md":             leaf("Wol", "claims: [clm-bbbbbb]"),
-		"wol/claim-quality.md": register("Claim B", "clm-bbbbbb"),
+		"entry-point.md":     "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n- [wol](wol/index.md)\n",
+		"vol/index.md":       "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
+		"vol/a.md":           leaf("Vol", "claims: [clm-aaaaaa]"),
+		"vol/claim-rigor.md": register("Claim A", "clm-aaaaaa"),
+		"wol/index.md":       "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Wol\n\n- [a](a.md)\n",
+		"wol/a.md":           leaf("Wol", "claims: [clm-bbbbbb]"),
+		"wol/claim-rigor.md": register("Claim B", "clm-bbbbbb"),
 	})
 	sheets := []string{kb.ClaimGraphDigestFile, "vol/" + kb.ClaimGraphFile, "wol/" + kb.ClaimGraphFile}
 	written, removed, noDot, err := RefreshReporting(kb.OnDisk(root), log.Discard())
@@ -131,7 +206,7 @@ func TestRefreshRemovesSheetsNoLongerCalledFor(t *testing.T) {
 			t.Fatalf("first refresh wrote %q, missing %s", written, s)
 		}
 	}
-	if err := os.Remove(filepath.Join(root, "wol/claim-quality.md")); err != nil {
+	if err := os.Remove(filepath.Join(root, "wol/claim-rigor.md")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "wol/a.md"), []byte(leaf("Wol", `no-claim: "moved"`)), 0o644); err != nil {
@@ -252,6 +327,115 @@ func TestSaveDrainsTheObsoleteButWhatItSaves(t *testing.T) {
 	}
 	if src.Migrated() {
 		t.Error("the source still reads as migrated after the save")
+	}
+}
+
+// TestRefreshRefusesASymlinkedIndexFile: a derived file that is a relative
+// symbolic link out of the tree is refused, and the file the link names keeps
+// its bytes.
+func TestRefreshRefusesASymlinkedIndexFile(t *testing.T) {
+	root := smallKB(t)
+	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(filepath.Dir(root)), "outside.yaml")
+	if err := os.WriteFile(outside, []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, kb.IndexDir, kb.IndexFileName(kb.IndexClaims))
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../../outside.yaml", link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Refresh(kb.OnDisk(root), log.Discard())
+	var r result.Refusal
+	if !errors.As(err, &r) || len(r) != 1 || r[0].Check != kb.CheckSymlink || r[0].Path != link {
+		t.Fatalf("refresh over a symlinked index file = %v, want one %s refusal naming %s", err, kb.CheckSymlink, link)
+	}
+	if got := read(t, outside); got != "kept\n" {
+		t.Errorf("%s = %q, want it untouched", outside, got)
+	}
+}
+
+// TestSaveRefusesASymlinkedDocument: a migrated KB whose document is a
+// symbolic link is refused at the save, the entry point stays unstamped and
+// the file the link names keeps its bytes.
+func TestSaveRefusesASymlinkedDocument(t *testing.T) {
+	root := smallKB(t)
+	entry := read(t, filepath.Join(root, kb.EntryPointFile))
+	outside := filepath.Join(t.TempDir(), "a.md")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "vol/a.md")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	converted := []byte("---\nkind: leaf\nclaims: [clm-aaaaaa]\n---\n[↑ Vol](index.md)\n\n# A changed\n")
+	src := kb.MigratedSource(root, "1.0.0", map[string][]byte{"kb-root/vol/a.md": converted}, nil)
+	_, _, _, err := RefreshReporting(src, log.Discard())
+	var r result.Refusal
+	if !errors.As(err, &r) || len(r) != 1 || r[0].Check != kb.CheckSymlink || r[0].Path != link {
+		t.Fatalf("refresh over a symlinked document = %v, want one %s refusal naming %s", err, kb.CheckSymlink, link)
+	}
+	if got := read(t, filepath.Join(root, kb.EntryPointFile)); got != entry {
+		t.Errorf("the entry point after a refused save =\n%s\nwant it unstamped", got)
+	}
+	if got := read(t, outside); got != "outside\n" {
+		t.Errorf("%s = %q, want it untouched", outside, got)
+	}
+}
+
+// TestLegacyAxiomFindings: a declaration the converter leaves in AGENTS.md
+// beside the KB's axioms.md is reported once each, informational and never
+// refresh-fixable, and the metadata gate stays clean; a KB with no axioms.md
+// reports none.
+func TestLegacyAxiomFindings(t *testing.T) {
+	agents := "# Agents\n\n### INVARIANT-S1: First rule\n\nBody.\n\n- Axiom 1: **One** — a bullet.\n\nInstructions stay.\n"
+	root := smallKB(t)
+	for rel, text := range map[string]string{"axioms.md": "# Axioms\n\n### Axiom S1: First rule\n\nBody.\n", "AGENTS.md": agents} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := LegacyAxiomFindings(kb.OnDisk(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range findings {
+		if f.Check != CheckAxiomSource || f.Path != kb.AgentsFile {
+			t.Errorf("finding %+v, want check %s in %s", f, CheckAxiomSource, kb.AgentsFile)
+		}
+		if f.RefreshFixable {
+			t.Errorf("%s is refresh-fixable, want informational", f.Detail)
+		}
+		if item := f.Item(); item.Remedy != "" {
+			t.Errorf("%s carries remedy %q, want none", f.Detail, item.Remedy)
+		}
+		got = append(got, fmt.Sprintf("%d:%s", f.Line, f.Detail))
+	}
+	if want := []string{"3:INVARIANT-S1", "7:Axiom 1"}; !slices.Equal(got, want) {
+		t.Errorf("findings %q, want %q", got, want)
+	}
+	if findings, err := Verify(kb.OnDisk(root)); err != nil || len(findings) > 0 {
+		t.Errorf("verify over a KB carrying both: %v %v, want none", findings, err)
+	}
+
+	root = smallKB(t)
+	if err := os.WriteFile(filepath.Join(root, kb.AgentsFile), []byte(agents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if findings, err := LegacyAxiomFindings(kb.OnDisk(root)); err != nil || len(findings) > 0 {
+		t.Errorf("a KB with no axioms.md: %v %v, want none", findings, err)
 	}
 }
 

@@ -17,14 +17,13 @@ type record = []kb.IndexField
 // Records is every index file's records, by name.
 type Records map[string][]record
 
-func fractionValue(f kb.Fraction) any {
-	switch {
-	case !f.Set:
+// bearingValue is an edge's bearing column: the text BearingText returns where
+// its relation allows a bearing, null where it allows none.
+func bearingValue(e kb.Edge, sourceKind string) any {
+	if !kb.BearingLegal(e.Relation, sourceKind, e.TargetKind) {
 		return nil
-	case f.Pending:
-		return kb.PendingLiteral
 	}
-	return f.Value
+	return kb.BearingText(e.Bearing)
 }
 
 // fieldsOf is each row's record.
@@ -36,7 +35,29 @@ func fieldsOf[T interface{ IndexFields() []kb.IndexField }](rows []T) []record {
 	return out
 }
 
-func buildClaims(st kb.State, sol Solidity) []kb.NodeRow {
+// kindsOf is every authored node's kind by id, read off the state the walk
+// read.
+func kindsOf(st kb.State) map[string]string {
+	out := map[string]string{}
+	for _, e := range st.ClaimEntries {
+		out[e.ID] = kb.NodeKindClaim
+	}
+	for _, s := range st.Analyses {
+		out[s.ID] = kb.NodeKindAnalysis
+	}
+	for _, x := range st.Experiments {
+		out[x.ID] = kb.NodeKindExperiment
+	}
+	for _, w := range st.Works {
+		out[w.ID] = kb.NodeKindWork
+	}
+	for _, n := range st.Axioms {
+		out[n.ID] = n.NodeType
+	}
+	return out
+}
+
+func buildClaims(st kb.State, strength Strength) []kb.NodeRow {
 	cites := map[string]int{}
 	for _, leaf := range st.Leaves {
 		for _, c := range leaf.Claims {
@@ -45,37 +66,30 @@ func buildClaims(st kb.State, sol Solidity) []kb.NodeRow {
 	}
 	var out []kb.NodeRow
 	for _, e := range st.ClaimEntries {
-		r := sol.Results[e.ID]
-		depends := 0
-		for _, d := range e.DependsOn {
-			if d.Relation == kb.RelationDepends {
-				depends++
-			}
-		}
-		out = append(out, kb.NodeRow{NodeType: "claim", ID: e.ID, Title: e.Title,
+		r := strength.Results[e.ID]
+		out = append(out, kb.NodeRow{NodeType: kb.NodeKindClaim, ID: e.ID, Title: e.Title,
 			CanonicalPath: e.CanonicalPath, CanonicalAnchor: e.CanonicalAnchor,
-			Confidence: e.Confidence, DerivationSolidity: r.Derivation,
-			ExperimentalSolidity: r.Experimental, Solidity: r.Final,
+			Rigor: e.Rigor, DerivationStrength: r.Derivation, Strength: r.Final,
 			BuildStatus: BuildStatusPhrase(r.Final), BuildBand: BuildBand(r.Final),
-			Rationale: e.Rationale, DependsOnCount: depends,
+			Rationale: e.Rationale, PremiseCount: len(e.Premises),
 			StrengthenByCount: len(e.StrengthenBy), CitationCount: cites[e.ID]})
 	}
 	for _, x := range st.Experiments {
-		out = append(out, kb.NodeRow{NodeType: "experiment", ID: x.ID, Title: x.Title,
-			CanonicalPath: x.CanonicalPath, CanonicalAnchor: x.CanonicalAnchor, Status: x.Status})
+		out = append(out, kb.NodeRow{NodeType: kb.NodeKindExperiment, ID: x.ID, Title: x.Title,
+			CanonicalPath: x.CanonicalPath, CanonicalAnchor: x.CanonicalAnchor, Status: x.Status, Rigor: x.Rigor})
 	}
-	for _, s := range st.Supports {
-		out = append(out, kb.NodeRow{NodeType: "support", ID: s.ID, Title: s.Title,
+	for _, s := range st.Analyses {
+		out = append(out, kb.NodeRow{NodeType: kb.NodeKindAnalysis, ID: s.ID, Title: s.Title,
 			CanonicalPath: s.CanonicalPath, CanonicalAnchor: s.CanonicalAnchor,
-			Quality: s.Quality, Solidity: sol.SupSolidity[s.ID]})
+			Rigor: s.Rigor, Strength: strength.AnalysisResults[s.ID].Final})
 	}
-	for _, n := range st.FrameworkNodes {
+	for _, n := range st.Axioms {
 		out = append(out, kb.NodeRow{NodeType: n.NodeType, ID: n.ID, Title: n.Title,
-			CanonicalPath: n.CanonicalPath, CanonicalAnchor: n.CanonicalAnchor})
+			CanonicalPath: n.CanonicalPath, CanonicalAnchor: n.CanonicalAnchor, Rigor: ptr(kb.AxiomRigor)})
 	}
 	for _, w := range st.Works {
-		out = append(out, kb.NodeRow{NodeType: "work", ID: w.ID, Title: w.Title,
-			CanonicalPath: w.CanonicalPath, CanonicalAnchor: w.CanonicalAnchor, Strength: w.Strength})
+		out = append(out, kb.NodeRow{NodeType: kb.NodeKindWork, ID: w.ID, Title: w.Title,
+			CanonicalPath: w.CanonicalPath, CanonicalAnchor: w.CanonicalAnchor, Rigor: w.Rigor})
 	}
 	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
 		return cmp.Or(strings.Compare(a.NodeType, b.NodeType), strings.Compare(a.ID, b.ID))
@@ -83,37 +97,35 @@ func buildClaims(st kb.State, sol Solidity) []kb.NodeRow {
 	return out
 }
 
-func edgeRow(source, target, relation, targetKind string, recorded, strength *float64, context *string, fraction kb.Fraction) kb.EdgeRow {
-	return kb.EdgeRow{Source: source, Target: target, Relation: relation, TargetKind: targetKind,
-		TargetSolidityRecorded: recorded, Strength: strength, Context: context, Fraction: fractionValue(fraction)}
+// authoredEdges is every edge the KB's bullets and pair lines author: a claim's
+// premises, refutations, references and demoted edges, an analysis's premises,
+// lifts and refutations, and an experiment's supports, lifts and refutations.
+func authoredEdges(st kb.State) []kb.Edge {
+	var out []kb.Edge
+	for _, e := range st.ClaimEntries {
+		out = append(out, slices.Concat(e.Premises, e.Refutes, e.References, e.Demoted)...)
+	}
+	for _, s := range st.Analyses {
+		out = append(out, slices.Concat(s.Premises, s.Lifts, s.Refutes)...)
+	}
+	for _, x := range st.Experiments {
+		out = append(out, slices.Concat(x.Supports, x.Lifts, x.Refutes)...)
+	}
+	return out
 }
 
-func buildDependsOn(st kb.State) []kb.EdgeRow {
+// buildEdges is every scoring edge of the KB, push-authored or flipped, as an
+// index row.
+func buildEdges(st kb.State) []kb.EdgeRow {
+	kinds := kindsOf(st)
 	var out []kb.EdgeRow
-	emit := func(e kb.Edge) {
-		r := edgeRow(e.Source, e.Target, e.Relation, e.TargetKind, e.TargetSolidityRecorded, e.Strength, e.Context, e.Fraction)
+	for _, e := range authoredEdges(st) {
+		r := kb.EdgeRow{Source: e.Source, Target: e.Target, Relation: e.Relation, TargetKind: e.TargetKind,
+			SourceStrengthRecorded: e.SourceStrengthRecorded, Bearing: bearingValue(e, kinds[e.Source]), Context: e.Context}
 		if e.Origin != "" {
 			r.Origin = &e.Origin
 		}
 		out = append(out, r)
-	}
-	for _, e := range st.ClaimEntries {
-		for _, d := range slices.Concat(e.DependsOn, e.References, e.Demoted) {
-			emit(d)
-		}
-	}
-	for _, s := range st.Supports {
-		for _, d := range s.DependsOn {
-			emit(d)
-		}
-		for _, p := range s.Supports {
-			out = append(out, edgeRow(s.ID, p.ClaimID, kb.RelationSupports, "claim", nil, nil, nil, p.Fraction))
-		}
-	}
-	for _, x := range st.Experiments {
-		for _, p := range x.Strengthens {
-			out = append(out, edgeRow(x.ID, p.ClaimID, kb.RelationStrengthens, "claim", nil, ptr(p.Strength), nil, kb.Fraction{}))
-		}
 	}
 	context := func(r kb.EdgeRow) string {
 		if r.Context == nil {
@@ -136,19 +148,6 @@ func buildStrengthenBy(st kb.State) []kb.StrengthenByRow {
 	}
 	slices.SortStableFunc(out, func(a, b kb.StrengthenByRow) int {
 		return cmp.Or(strings.Compare(a.ClaimID, b.ClaimID), cmp.Compare(a.ItemIdx, b.ItemIdx))
-	})
-	return out
-}
-
-func buildSupportedBy(st kb.State, sol Solidity) []kb.SupportedByRow {
-	var out []kb.SupportedByRow
-	for _, s := range st.Supports {
-		for _, p := range s.Supports {
-			out = append(out, kb.SupportedByRow{ClaimID: p.ClaimID, SupID: s.ID, Fraction: fractionValue(p.Fraction), SupSolidity: sol.SupSolidity[s.ID]})
-		}
-	}
-	slices.SortStableFunc(out, func(a, b kb.SupportedByRow) int {
-		return cmp.Or(strings.Compare(a.ClaimID, b.ClaimID), strings.Compare(a.SupID, b.SupID))
 	})
 	return out
 }
@@ -219,60 +218,89 @@ func buildSubtreeAggregates(st kb.State) []kb.AggregateRow {
 	return out
 }
 
-// CoverageError is an edge naming a framework node or external work that no
-// authored source stands up.
-type CoverageError struct{ Msg string }
+// CoverageError is an edge naming an axiom or external work that no authored
+// source stands up: the key is the node id it names, and the path and line are
+// the register bullet that cites it.
+type CoverageError struct {
+	Key, Path string
+	Line      int
+	Msg       string
+}
 
 func (e CoverageError) Error() string { return e.Msg }
 
-func checkCoverage(claims []kb.NodeRow, dependsOn []kb.EdgeRow) error {
-	frameworkPresent, workPresent := map[string]bool{}, map[string]bool{}
+// checkCoverage refuses an index whose edges name a source the rebuilt index
+// does not carry: an axiom-shaped id is an axiom token the axiom source did not
+// yield, and any other scoring source is an external work with no register
+// entry.
+func checkCoverage(st kb.State, claims []kb.NodeRow) error {
+	present := map[string]bool{}
 	for _, r := range claims {
-		switch {
-		case slices.Contains(kb.FrameworkKinds, r.NodeType):
-			frameworkPresent[r.ID] = true
-		case r.NodeType == "work":
-			workPresent[r.ID] = true
-		}
+		present[r.ID] = true
 	}
-	framework := map[string]bool{}
+	axioms := map[string]bool{}
 	works := map[string]bool{}
-	for _, e := range dependsOn {
+	for _, e := range authoredEdges(st) {
+		if present[e.Source] {
+			continue
+		}
 		switch {
-		case slices.Contains(kb.FrameworkKinds, e.TargetKind) && !frameworkPresent[e.Target]:
-			framework[e.Target] = true
-		case e.TargetKind == "work" && !workPresent[e.Target]:
-			works[e.Target] = true
+		case strings.HasPrefix(e.Source, kb.AxiomPrefix):
+			axioms[e.Source] = true
+		case kb.Scoring(e.Relation):
+			works[e.Source] = true
 		}
 	}
-	if len(framework) > 0 {
-		missing := sortedSet(framework)
-		return CoverageError{fmt.Sprintf("%d depends-on edge target(s) reference framework nodes absent from the rebuilt index: %s; "+
-			"the framework source (%s, or legacy %s) did not yield them", len(missing), strings.Join(missing, ", "), kb.InvariantsFile, kb.AgentsFile)}
+	if len(axioms) > 0 {
+		missing := sortedSet(axioms)
+		return CoverageError{Key: missing[0], Msg: fmt.Sprintf("%d premise edge source(s) name axioms absent from the rebuilt index: %s; "+
+			"the axiom source (%s, else legacy %s or %s) did not yield them", len(missing), strings.Join(missing, ", "),
+			kb.AxiomsFile, kb.InvariantsFile, kb.AgentsFile)}
 	}
 	if len(works) > 0 {
 		missing := sortedSet(works)
-		return CoverageError{fmt.Sprintf("%d rests-on edge target(s) name external works with no register entry: %s",
-			len(missing), strings.Join(missing, ", "))}
+		return CoverageError{Key: missing[0], Msg: fmt.Sprintf("%d scoring edge source(s) name no node the rebuilt index carries: %s; "+
+			"an external work's source is its register entry", len(missing), strings.Join(missing, ", "))}
 	}
 	return nil
 }
 
+// coverageAt is cov with the register bullet citing its key earliest: that
+// register and the bullet's line.
+func coverageAt(src *kb.Source, cov CoverageError) CoverageError {
+	regs, err := kb.Registers(src)
+	if err != nil {
+		return cov
+	}
+	for _, rel := range regs {
+		text, err := src.ReadText(src.KBPath(rel))
+		if err != nil {
+			return cov
+		}
+		for _, c := range kb.WorkCitations(text, rel) {
+			if c.ID == cov.Key {
+				cov.Path, cov.Line = c.Path, c.Line
+				return cov
+			}
+		}
+	}
+	return cov
+}
+
 // BuildRecords is every index file's records for st.
 func BuildRecords(st kb.State) (Records, error) {
-	sol, err := ComputeSolidity(st)
+	strength, err := ComputeStrength(st)
 	if err != nil {
 		return nil, err
 	}
-	claims := buildClaims(st, sol)
-	dependsOn := buildDependsOn(st)
-	if err := checkCoverage(claims, dependsOn); err != nil {
+	claims := buildClaims(st, strength)
+	edges := buildEdges(st)
+	if err := checkCoverage(st, claims); err != nil {
 		return nil, err
 	}
 	return Records{
-		kb.IndexClaims: fieldsOf(claims), kb.IndexDependsOn: fieldsOf(dependsOn), kb.IndexStrengthenBy: fieldsOf(buildStrengthenBy(st)),
-		kb.IndexSupportedBy: fieldsOf(buildSupportedBy(st, sol)), kb.IndexCites: fieldsOf(buildCites(st)),
-		kb.IndexSubtreeAggregates: fieldsOf(buildSubtreeAggregates(st)),
+		kb.IndexClaims: fieldsOf(claims), kb.IndexEdges: fieldsOf(edges), kb.IndexStrengthenBy: fieldsOf(buildStrengthenBy(st)),
+		kb.IndexCites: fieldsOf(buildCites(st)), kb.IndexSubtreeAggregates: fieldsOf(buildSubtreeAggregates(st)),
 	}, nil
 }
 

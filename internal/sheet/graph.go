@@ -44,7 +44,7 @@ type node struct {
 	id, kind, title string
 	// href is the register entry, relative to kb-root; "" for a ghost.
 	href string
-	// band is a claim's or a support's build band slug, "" for any other node.
+	// band is a claim's or an analysis's build band slug, "" for any other node.
 	band string
 	// group is the top-level directory of the node's canonical path, "" for
 	// a node registered at kb-root.
@@ -139,9 +139,9 @@ func load(src *kb.Source) (*graph, error) {
 			if _, ok := bandFills[n.band]; !ok {
 				n.band = kb.UnknownBandSlug
 			}
-		case kb.NodeKindSupport:
+		case kb.NodeKindAnalysis:
 			n.band = kb.UnknownBandSlug
-			if b := kb.BandFor(c.Solidity); b != nil {
+			if b := kb.BandFor(c.Strength); b != nil {
 				n.band = b.Slug
 			}
 		}
@@ -198,9 +198,9 @@ func h1(src *kb.Source, rel string) (string, error) {
 	return "", nil
 }
 
-// drawnEdges is the depends-on rows the sheet draws, one per source, target,
+// drawnEdges is the edge rows the sheet draws, one per source, target,
 // relation and origin whatever their context, ordered by those. A relation
-// with no stroke — references — is not drawn; a depends row is inferred where
+// with no stroke — references — is not drawn; a supports row is inferred where
 // inferred holds for it — the build found it with no mark — and a demoted row
 // where its origin says so.
 func drawnEdges(rows []kb.EdgeRow, inferred func(source, target string) bool) []edge {
@@ -211,7 +211,10 @@ func drawnEdges(rows []kb.EdgeRow, inferred func(source, target string) bool) []
 		if r.Origin != nil {
 			origin = *r.Origin
 		}
-		found := inferred(r.Source, r.Target)
+		// The unmarked asks record the pair in the authored direction — the
+		// entry holding the bullet, then the premise it names — while a
+		// drawn edge runs supporter to supported.
+		found := inferred(r.Target, r.Source)
 		if r.Relation == kb.RelationDemoted {
 			found = origin == kb.OriginInferred
 		}
@@ -232,14 +235,16 @@ func compareEdges(a, b edge) int {
 		strings.Compare(a.stroke.provenance, b.stroke.provenance))
 }
 
-// reduce is edges, ordered by compareEdges, less each depends edge whose
-// target its source still reaches through the depends edges kept so far and
-// those not yet taken; so no reachability is lost even where depends holds a
-// cycle. No other relation is a route or dropped.
+// reduce is edges, ordered by compareEdges, less each supports edge whose
+// target its source still reaches through the supports edges kept so far and
+// those not yet taken; so no reachability is lost even where supports holds a
+// cycle. No other relation is a route or dropped: a founds edge leaves a work
+// or an axiom, neither of which has premises, and a lift or refutation is drawn
+// as it was authored.
 func reduce(edges []edge) []edge {
 	following := map[string]map[string]bool{}
 	for _, e := range edges {
-		if isDepends(e) {
+		if isSupports(e) {
 			if following[e.source] == nil {
 				following[e.source] = map[string]bool{}
 			}
@@ -266,7 +271,7 @@ func reduce(edges []edge) []edge {
 	}
 	var kept []edge
 	for _, e := range edges {
-		if isDepends(e) {
+		if isSupports(e) {
 			delete(following[e.source], e.target)
 			if reaches(e.source, e.target) {
 				continue
@@ -278,7 +283,7 @@ func reduce(edges []edge) []edge {
 	return kept
 }
 
-func isDepends(e edge) bool { return e.stroke.relation == kb.RelationDepends }
+func isSupports(e edge) bool { return e.stroke.relation == kb.RelationSupports }
 
 // kindReader reads each claim's kind from its leaves, each leaf read once.
 type kindReader struct {

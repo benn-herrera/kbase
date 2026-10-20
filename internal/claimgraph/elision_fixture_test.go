@@ -17,7 +17,7 @@ import (
 // registerQuality is one claim's Quality section as the fixture's register
 // carries it.
 func registerQuality(id, title string) string {
-	return "## " + title + "\n\n<!-- id: " + id + " -->\n\n### Quality\n\n- confidence: *pending*\n- solidity: *pending*\n- rationale: " + title + ".\n\n"
+	return "## " + title + "\n\n<!-- id: " + id + " -->\n\n### Rigor\n\n- rigor: *pending*\n- rationale: " + title + ".\n\n### Strength\n\n- strength: *pending*\n\n"
 }
 
 // The fixture's claims, keyed by the name the tests use, with the title each
@@ -34,7 +34,7 @@ var (
 func seedElisionLeaves(t *testing.T, leaves [][]string, wires values) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), kb.KBDir)
-	entry := "---\nkb-format: \"1.0.0\"\n---\n# Entry\n\n"
+	entry := "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n"
 	register := "# Register\n\n"
 	files := map[string]string{}
 	for i, names := range leaves {
@@ -47,7 +47,7 @@ func seedElisionLeaves(t *testing.T, leaves [][]string, wires values) string {
 		prose := ""
 		for j, n := range names {
 			ids[j] = elisionIDs[n]
-			prose += "\n" + elisionTitles[n] + " holds here. <!-- claim-quality: " + ids[j] + " -->\n"
+			prose += "\n" + elisionTitles[n] + " holds here. <!-- claim-rigor: " + ids[j] + " -->\n"
 			register += registerQuality(ids[j], elisionTitles[n])
 		}
 		files[rel] = "---\nkind: leaf\nclaims: [" + strings.Join(ids, ", ") + "]\n---\n[↑ Entry](entry-point.md)\n\n# " + title + "\n" + prose
@@ -69,14 +69,14 @@ func seedElisionLeaves(t *testing.T, leaves [][]string, wires values) string {
 	return root
 }
 
-// dependsOn is the fixture's build-edge entry for claim from depending on
-// each claim in to.
+// restsOn is the fixture's build-edge entry for claim from resting on each
+// claim in to.
 func dependsOn(from string, to ...string) map[string]any {
 	items := make([]map[string]any, len(to))
 	for i, n := range to {
-		items[i] = map[string]any{"id": elisionIDs[n]}
+		items[i] = map[string]any{"id": elisionIDs[n], "bearing": kb.PendingLiteral}
 	}
-	return map[string]any{"id": elisionIDs[from], "depends-on": items}
+	return map[string]any{"id": elisionIDs[from], kb.ListRestsOn: items}
 }
 
 // elisionWires is the chain a → x → b with c → a and b → d around it.

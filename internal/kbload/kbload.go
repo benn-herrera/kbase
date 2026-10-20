@@ -24,9 +24,10 @@ import (
 // The refusal classes the loader raises, and the remedy for a KB newer than
 // this kbase.
 const (
-	CheckFormat  = "kb-format"
-	CheckKBRoot  = "kb-root"
-	UpdateRemedy = "update kbase"
+	CheckFormat     = "kb-format"
+	CheckKBRoot     = "kb-root"
+	CheckConversion = "conversion"
+	UpdateRemedy    = "update kbase"
 )
 
 // RecordFiles is every repository-relative path a build of this kbase commits
@@ -76,6 +77,11 @@ func migrated(kbRoot, stamp, from string) (*kb.Source, error) {
 	}
 	out, obsolete, err := migrate.Chain(from, kb.FormatVersion, files)
 	if err != nil {
+		var surplus *migrate.ConversionError
+		if errors.As(err, &surplus) {
+			return nil, result.Refusal{{Check: CheckConversion, Path: filepath.Join(filepath.Dir(kbRoot), filepath.FromSlash(surplus.Path)),
+				Line: surplus.Line, Detail: err.Error()}}
+		}
 		return nil, formatRefusal(kbRoot, "", fmt.Sprintf("the KB's metadata at format %s does not convert to %s: %v", stamp, kb.FormatVersion, err))
 	}
 	return kb.MigratedSource(kbRoot, stamp, out, obsolete), nil
@@ -111,7 +117,10 @@ func formatStamp(kbRoot string) (string, error) {
 
 // coveredFiles is every file a format covers, under its repository-relative
 // slash path: kb-root's documents, its index in either spelling, and the
-// build records beside it in either spelling.
+// build records beside it in either spelling. It is the reader's file set: a
+// directory leaf discovery never descends into holds no document the
+// conversion reads or makes obsolete, and the index is the one excluded
+// directory a format covers, since a migration drains and rewrites it.
 func coveredFiles(kbRoot string) (migrate.Files, error) {
 	repo := filepath.Dir(kbRoot)
 	files := migrate.Files{}
@@ -128,7 +137,7 @@ func coveredFiles(kbRoot string) (migrate.Files, error) {
 		return nil
 	}
 	err := filepath.WalkDir(kbRoot, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !d.Type().IsRegular() {
+		if err != nil {
 			return err
 		}
 		rel, err := filepath.Rel(kbRoot, p)
@@ -136,11 +145,24 @@ func coveredFiles(kbRoot string) (migrate.Files, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		inIndex := path.Dir(rel) == kb.IndexDir && (strings.HasSuffix(rel, ".jsonl") || strings.HasSuffix(rel, ".yaml"))
-		if strings.HasSuffix(rel, ".md") || inIndex {
-			return read(p)
+		if d.IsDir() {
+			if kb.ExcludeDirs[d.Name()] && rel != kb.IndexDir {
+				return fs.SkipDir
+			}
+			return nil
 		}
-		return nil
+		inIndex := path.Dir(rel) == kb.IndexDir && (strings.HasSuffix(rel, ".jsonl") || strings.HasSuffix(rel, ".yaml"))
+		if !strings.HasSuffix(rel, ".md") && !inIndex {
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return result.Refusal{{Check: kb.CheckSymlink, Path: p,
+				Detail: fmt.Sprintf("%s is a symbolic link, and a KB document is read only where it stands", p)}}
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		return read(p)
 	})
 	if err != nil {
 		return nil, err

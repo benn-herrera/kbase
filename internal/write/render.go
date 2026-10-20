@@ -20,7 +20,7 @@ import (
 // placeholder refresh recognizes and replaces, never at a value.
 
 const (
-	// emDashSeparator cuts a depends-on bullet's target head from its title;
+	// emDashSeparator cuts a rests-on bullet's target head from its title;
 	// a hyphen does not cut, and the head would run on over the title.
 	emDashSeparator = " — "
 	bulletIndent    = "  "
@@ -39,7 +39,7 @@ func isClaimID(token string) bool { return claimIDFullRE.MatchString(token) }
 
 func isWorkID(token string) bool { return workIDFullRE.MatchString(token) }
 
-// formatScore renders an authored score: nil is the pending literal, a number
+// formatScore renders an authored value: nil is the pending literal, a number
 // its shortest round-tripping form, so the stored text reads back as the same
 // number.
 func formatScore(v *float64) string {
@@ -49,18 +49,27 @@ func formatScore(v *float64) string {
 	return kb.PyFloatRepr(*v)
 }
 
-// dependsOnTarget is one depends-on bullet's values: a clm- id, a framework
-// token or a work- id; the referent's title; the author's context; for a
-// work target alone, the pairing's applicability (nil is pending); and for a
-// demoted target alone, its origin.
-type dependsOnTarget struct {
+// bearingOf is a values document's optional bearing as the edge's: an absent
+// value is the pending judgement.
+func bearingOf(v *float64) kb.Bearing {
+	if v == nil {
+		return kb.Bearing{Pending: true}
+	}
+	return kb.Bearing{Value: *v}
+}
+
+// premiseTarget is one rests-on bullet's values: a clm- id, an "Axiom …"
+// token or a work- id; the referent's title; the author's context; the bearing
+// the bullet carries; and, for a demoted target alone, its origin.
+type premiseTarget struct {
 	Target, Title, Context string
-	Applicability          *float64
+	Bearing                *float64
 	Origin                 string
 }
 
-// pair is a claim id and a score: a supports fraction (nil is pending) or a
-// strengthens strength (never nil).
+// pair is a claim id and a bearing: one entry of an analysis's or experiment's
+// lift or refutation list, of an experiment's support list, or of a claim's
+// refutation list. A nil score is the pending judgement.
 type pair struct {
 	ID    string
 	Score *float64
@@ -68,17 +77,21 @@ type pair struct {
 
 type experimentDecl struct {
 	ExpID, Status string
-	Strengthens   []pair
+	Rigor         *float64
+	Supports      []pair
+	Lifts         []pair
+	Refutes       []pair
 }
 
-type supportDecl struct {
-	SupID    string
-	Supports []pair
+type analysisDecl struct {
+	AnaID   string
+	Lifts   []pair
+	Refutes []pair
 }
 
 func renderIDMarker(nodeID string) string { return "<!-- id: " + nodeID + " -->" }
 
-func renderTier2Marker(nodeID string) string { return "<!-- claim-quality: " + nodeID + " -->" }
+func renderTier2Marker(nodeID string) string { return "<!-- claim-rigor: " + nodeID + " -->" }
 
 // Tier2Marker is the in-body marker mark-claim-in-leaf appends for nodeID.
 func Tier2Marker(nodeID string) string { return renderTier2Marker(nodeID) }
@@ -97,45 +110,38 @@ func MarkerOpeners() []string {
 	return []string{markerOpener(renderIDMarker(markerProbe)), markerOpener(renderTier2Marker(markerProbe))}
 }
 
-// renderDependsOnBullet is one depends-on sub-bullet. A claim target carries
-// the solidity placeholder, a work target its applicability, and a framework
-// target its context in parentheses, where the reader takes a framework
-// edge's context from.
-func renderDependsOnBullet(t dependsOnTarget) string {
+// renderRestsOnBullet is one rests-on sub-bullet: its target, the referent's
+// title after an em dash, the claim target's strength placeholder, the bearing
+// every target carries, and the author's context last.
+func renderRestsOnBullet(t premiseTarget) string {
 	var b strings.Builder
 	b.WriteString(bulletIndent + "- " + t.Target)
-	switch {
-	case isClaimID(t.Target) || isWorkID(t.Target):
-		if t.Title != "" {
-			b.WriteString(emDashSeparator + collapse(t.Title))
-		}
-		if isWorkID(t.Target) {
-			b.WriteString(" " + renderApplicabilityAnnotation(formatScore(t.Applicability)))
-		} else {
-			b.WriteString(" " + kb.SolidityAnnotationPending)
-		}
-		if t.Context != "" {
-			b.WriteString(" [" + collapse(t.Context) + "]")
-		}
-	case t.Context != "":
-		b.WriteString(" (" + collapse(t.Context) + ")")
+	if t.Title != "" {
+		b.WriteString(emDashSeparator + collapse(t.Title))
+	}
+	if isClaimID(t.Target) {
+		b.WriteString(" " + kb.RenderStrengthAnnotation(kb.PendingLiteral))
+	}
+	b.WriteString(" " + kb.RenderBearingAnnotation(bearingOf(t.Bearing)))
+	if t.Context != "" {
+		b.WriteString(" [" + collapse(t.Context) + "]")
 	}
 	return b.String()
 }
 
 // renderReferencesBullet is one references sub-bullet: a claim bullet with
 // no parenthetical, since nothing is derived for the edge.
-func renderReferencesBullet(t dependsOnTarget) string { return claimBullet(t, "") }
+func renderReferencesBullet(t premiseTarget) string { return claimBullet(t, "") }
 
 // renderDemotedBullet is one demoted sub-bullet: a references bullet with
-// its origin annotated before any context.
-func renderDemotedBullet(t dependsOnTarget) string {
+// its origin annotated before any context. It carries no bearing.
+func renderDemotedBullet(t premiseTarget) string {
 	return claimBullet(t, kb.RenderOriginAnnotation(t.Origin))
 }
 
 // claimBullet is a claim target's bullet: its title, an annotation where one
 // is given, its context.
-func claimBullet(t dependsOnTarget, annotation string) string {
+func claimBullet(t premiseTarget, annotation string) string {
 	out := bulletIndent + "- " + t.Target
 	if t.Title != "" {
 		out += emDashSeparator + collapse(t.Title)
@@ -149,43 +155,49 @@ func claimBullet(t dependsOnTarget, annotation string) string {
 	return out
 }
 
-func renderApplicabilityAnnotation(valueText string) string {
-	return "(applicability " + valueText + ")"
-}
-
 func renderStrengthenByBullet(text string) string { return bulletIndent + "- " + collapse(text) }
 
 // renderNoEdgeLine is the entry-level foreign-domain exemption. It is in no
 // fold's key list, so it must sit above every folding field.
 func renderNoEdgeLine(reason string) string { return "- no-edge: " + collapse(reason) }
 
-// renderSupportsPairLine is a support's fan-out pair in its register entry's
-// staging block.
-func renderSupportsPairLine(claimID string, fraction *float64) string {
-	return bulletIndent + "- " + claimID + ": " + formatScore(fraction)
+// renderPairLine is one pair of an analysis's, a claim's or an experiment's
+// register-staged list: the claim and the bearing the edge is judged with.
+func renderPairLine(claimID string, bearing *float64) string {
+	return bulletIndent + "- " + claimID + ": " + formatScore(bearing)
+}
+
+// renderRefutesList is an entry's refutation list: one pair line per edge, the
+// claim the entry refutes and the bearing it caps it with.
+func renderRefutesList(refutes []pair) []string {
+	lines := []string{"- " + kb.RefutesKey + ":"}
+	for _, p := range refutes {
+		lines = append(lines, renderPairLine(p.ID, p.Score))
+	}
+	return lines
 }
 
 // renderCitation is the sanctioned authority-citation form.
 func renderCitation(excerpt, kbPath, anchor string) string {
-	return `["` + collapse(excerpt) + `"](` + kbPath + "#" + anchor + ")"
+	return `["` + collapse(excerpt) + `"](` + kbPath + "#" + anchor + `)`
 }
 
-// registerEntry is a claim or support entry's values. ScoreField is
-// "confidence" or "quality".
+// registerEntry is a claim or analysis entry's values.
 type registerEntry struct {
-	NodeID, Title, ScoreField string
-	Score                     *float64
-	Rationale                 string
-	DependsOn                 []dependsOnTarget
-	StrengthenBy              []string
-	Supports                  []pair
-	NoEdge                    string
+	NodeID, Title  string
+	Rigor          *float64
+	Rationale      string
+	Premises       []premiseTarget
+	StrengthenBy   []string
+	Lifts, Refutes []pair
+	NoEdge         string
 }
 
-// renderEntry composes a claim or support entry, heading above marker. Field
-// order is the reader's: each folding field runs until the next key, so the
-// staging block sits under the score where the unconditional solidity line
-// closes it, and no-edge sits above every folding field.
+// renderEntry composes a claim or analysis entry, its two headings above their
+// markers' section. Field order is the reader's: each folding field runs until
+// the next key, so the no-edge line sits above every folding field and the
+// premise lists follow the rationale; the derived line sits alone under its own
+// heading, after every authored field.
 func renderEntry(e registerEntry) string {
 	lines := []string{
 		"## " + collapse(e.Title),
@@ -193,44 +205,48 @@ func renderEntry(e registerEntry) string {
 		"",
 		kb.LeafReferencesPendingFooter,
 		"",
-		"### Quality",
-		"- " + e.ScoreField + ": " + formatScore(e.Score),
-	}
-	if len(e.Supports) > 0 {
-		lines = append(lines, "- supports:")
-		for _, p := range e.Supports {
-			lines = append(lines, renderSupportsPairLine(p.ID, p.Score))
-		}
+		"### Rigor",
+		"- rigor: " + formatScore(e.Rigor),
 	}
 	if e.NoEdge != "" {
 		lines = append(lines, renderNoEdgeLine(e.NoEdge))
 	}
-	if len(e.DependsOn) > 0 {
-		lines = append(lines, "- depends-on:")
-		for _, t := range e.DependsOn {
-			lines = append(lines, renderDependsOnBullet(t))
+	lines = append(lines, "- rationale: "+collapse(e.Rationale))
+	if len(e.Premises) > 0 {
+		lines = append(lines, "- "+kb.ListRestsOn+":")
+		for _, t := range e.Premises {
+			lines = append(lines, renderRestsOnBullet(t))
 		}
 	}
-	lines = append(lines, kb.SolidityPendingLine, "- rationale: "+collapse(e.Rationale))
+	if len(e.Lifts) > 0 {
+		lines = append(lines, "- "+kb.LiftsKey+":")
+		for _, p := range e.Lifts {
+			lines = append(lines, renderPairLine(p.ID, p.Score))
+		}
+	}
+	if len(e.Refutes) > 0 {
+		lines = append(lines, renderRefutesList(e.Refutes)...)
+	}
 	if len(e.StrengthenBy) > 0 {
 		lines = append(lines, "- strengthen-by:")
 		for _, item := range e.StrengthenBy {
 			lines = append(lines, renderStrengthenByBullet(item))
 		}
 	}
+	lines = append(lines, "", "### Strength", kb.StrengthPendingLine)
 	return strings.Join(lines, "\n")
 }
 
-// renderWorkEntry composes an external work's entry: no solidity line, no
-// depends-on and no leaf-references footer, since nothing derives one and the
-// node is terminal.
-func renderWorkEntry(nodeID, title string, strength *float64, rationale string) string {
+// renderWorkEntry composes an external work's entry: one heading and no
+// strength line, no rests-on and no leaf-references footer, since a work has no
+// derived value and the node is terminal.
+func renderWorkEntry(nodeID, title string, rigor *float64, rationale string) string {
 	return strings.Join([]string{
 		"## " + collapse(title),
 		renderIDMarker(nodeID),
 		"",
-		"### Quality",
-		"- strength: " + formatScore(strength),
+		"### Rigor",
+		"- rigor: " + formatScore(rigor),
 		"- rationale: " + collapse(rationale),
 	}, "\n")
 }
@@ -245,10 +261,10 @@ type frontmatterValues struct {
 	NoClaim         *string
 	Experiments     []string
 	ExperimentNodes []experimentDecl
-	SupportNodes    []supportDecl
+	Analyses        []analysisDecl
 }
 
-// scoreNode is an authored score in frontmatter: the pending literal a
+// scoreNode is an authored value in frontmatter: the pending literal a
 // string, a number its shortest round-tripping form.
 func scoreNode(v *float64) *yaml.Node {
 	if v == nil {
@@ -270,17 +286,30 @@ func pairList(pairs []pair) *yaml.Node {
 func experimentNode(d experimentDecl) *yaml.Node {
 	n := kb.FrontmatterMapping(kb.FrontmatterString(kb.ExpIDKey), kb.FrontmatterString(d.ExpID),
 		kb.FrontmatterString(kb.StatusKey), kb.FrontmatterString(d.Status))
-	if len(d.Strengthens) > 0 {
-		n.Content = append(n.Content, kb.FrontmatterString(kb.StrengthensKey), pairList(d.Strengthens))
+	if d.Rigor != nil {
+		n.Content = append(n.Content, kb.FrontmatterString(kb.RigorKey), scoreNode(d.Rigor))
+	}
+	for _, list := range []struct {
+		key   string
+		pairs []pair
+	}{{kb.SupportsKey, d.Supports}, {kb.LiftsKey, d.Lifts}, {kb.RefutesKey, d.Refutes}} {
+		if len(list.pairs) > 0 {
+			n.Content = append(n.Content, kb.FrontmatterString(list.key), pairList(list.pairs))
+		}
 	}
 	return n
 }
 
-// supportNode is one support declaration as a support-nodes entry.
-func supportNode(d supportDecl) *yaml.Node {
-	n := kb.FrontmatterMapping(kb.FrontmatterString(kb.SupIDKey), kb.FrontmatterString(d.SupID))
-	if len(d.Supports) > 0 {
-		n.Content = append(n.Content, kb.FrontmatterString(kb.SupportsKey), pairList(d.Supports))
+// analysisNode is one analysis declaration as an analysis-nodes entry.
+func analysisNode(d analysisDecl) *yaml.Node {
+	n := kb.FrontmatterMapping(kb.FrontmatterString(kb.AnaIDKey), kb.FrontmatterString(d.AnaID))
+	for _, list := range []struct {
+		key   string
+		pairs []pair
+	}{{kb.LiftsKey, d.Lifts}, {kb.RefutesKey, d.Refutes}} {
+		if len(list.pairs) > 0 {
+			n.Content = append(n.Content, kb.FrontmatterString(list.key), pairList(list.pairs))
+		}
 	}
 	return n
 }
@@ -295,14 +324,14 @@ func renderExperimentNodes(decls []experimentDecl) ([]string, error) {
 	return kb.RenderFrontmatterField(kb.ExperimentNodesKey, kb.FrontmatterList(items))
 }
 
-// renderSupportNodes is the support-nodes key and its entries as frontmatter
+// renderAnalysisNodes is the analysis-nodes key and its entries as frontmatter
 // lines.
-func renderSupportNodes(decls []supportDecl) ([]string, error) {
+func renderAnalysisNodes(decls []analysisDecl) ([]string, error) {
 	var items []*yaml.Node
 	for _, d := range decls {
-		items = append(items, supportNode(d))
+		items = append(items, analysisNode(d))
 	}
-	return kb.RenderFrontmatterField(kb.SupportNodesKey, kb.FrontmatterList(items))
+	return kb.RenderFrontmatterField(kb.AnalysisNodesKey, kb.FrontmatterList(items))
 }
 
 // renderFrontmatterBlock composes a document's frontmatter, its fences
@@ -341,8 +370,8 @@ func renderFrontmatterBlock(v frontmatterValues) (string, error) {
 		}
 		lines = append(lines, rendered...)
 	}
-	if len(v.SupportNodes) > 0 {
-		rendered, err := renderSupportNodes(v.SupportNodes)
+	if len(v.Analyses) > 0 {
+		rendered, err := renderAnalysisNodes(v.Analyses)
 		if err != nil {
 			return "", err
 		}

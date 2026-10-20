@@ -9,7 +9,7 @@ import (
 
 // dropListFixture is a claim register holding the list shapes the edge ops
 // splice: a demoted list of two bullets and a bulletless references header,
-// a depends-on list of one bullet and a references list of two, and a
+// a rests-on list of one bullet and a references list of two, and a
 // references list whose bullet follows non-bullet text.
 const dropListFixture = `# Register
 
@@ -18,13 +18,13 @@ const dropListFixture = `# Register
 
 > **Leaf references:** [leaf](./leaf.md).
 
-### Quality
-- confidence: 0.9
+### Rigor
+- rigor: 0.9
 - demoted:
   - clm-bbbbbb — Result B (origin cited)
   - clm-cccccc — Result C (origin inferred)
 - references:
-- solidity: 0.90 (ok to build on)
+- strength: 0.90 (ok to build on)
 - rationale: Seeded.
 
 ---
@@ -34,14 +34,14 @@ const dropListFixture = `# Register
 
 > **Leaf references:** *(none — entry has no citing leaf; bidirectional-coverage check will fail)*
 
-### Quality
-- confidence: 0.5
-- depends-on:
-  - clm-aaaaaa — Seed Result (solidity 0.90) [the bound it rests on]
+### Rigor
+- rigor: 0.5
+- rests-on:
+  - clm-aaaaaa — Seed Result (strength 0.90) (bearing 0.50) [the bound it rests on]
 - references:
   - clm-aaaaaa — Seed Result
   - clm-cccccc — Result C
-- solidity: 0.50 (use as input only, don't build deeper) [= min(0.50, 0.90)]
+- strength: 0.50 (use as input only, don't build deeper) [= min(0.50, 0.90)]
 - rationale: Shown.
 
 ---
@@ -51,12 +51,12 @@ const dropListFixture = `# Register
 
 > **Leaf references:** *(none — entry has no citing leaf; bidirectional-coverage check will fail)*
 
-### Quality
-- confidence: 0.5
+### Rigor
+- rigor: 0.5
 - references:
   Cites the seed informally.
   - clm-aaaaaa — Seed Result
-- solidity: 0.50 (use as input only, don't build deeper)
+- strength: 0.50 (use as input only, don't build deeper)
 - rationale: Shown.
 `
 
@@ -75,24 +75,24 @@ func TestDropListBullets(t *testing.T) {
 		return strings.Replace(dropListFixture, old, new, 1)
 	}
 	without := func(cut string) string { t.Helper(); return replaced(cut, "") }
-	dependsOn, references, demoted := kb.IndexDependsOn, kb.RelationReferences, kb.RelationDemoted
+	restsOn, references, demoted := kb.ListRestsOn, kb.RelationReferences, kb.RelationDemoted
 	for _, tc := range []struct {
 		name, nodeID, list string
 		match              func([]string) bool
 		want               string
 	}{
-		{"every bullet, the list's only one", b, dependsOn, every,
-			without("- depends-on:\n  - clm-aaaaaa — Seed Result (solidity 0.90) [the bound it rests on]\n")},
+		{"every bullet, the list's only one", b, restsOn, every,
+			without("- rests-on:\n  - clm-aaaaaa — Seed Result (strength 0.90) (bearing 0.50) [the bound it rests on]\n")},
 		{"every bullet of two", b, references, every,
 			without("- references:\n  - clm-aaaaaa — Seed Result\n  - clm-cccccc — Result C\n")},
 		{"every bullet, a bulletless header", a, references, every,
-			replaced("- references:\n- solidity: 0.90", "- solidity: 0.90")},
-		{"every bullet, an absent list", c, dependsOn, every, dropListFixture},
+			replaced("- references:\n- strength: 0.90", "- strength: 0.90")},
+		{"every bullet, an absent list", c, restsOn, every, dropListFixture},
 		{"every bullet, text before it kept with the header", c, references, every,
 			replaced("informally.\n  - clm-aaaaaa — Seed Result\n", "informally.\n")},
 		{"one bullet of two naming the target", b, references, bulletNames(c), without("  - clm-cccccc — Result C\n")},
-		{"the only bullet naming the target", b, dependsOn, bulletNames(a),
-			without("- depends-on:\n  - clm-aaaaaa — Seed Result (solidity 0.90) [the bound it rests on]\n")},
+		{"the only bullet naming the target", b, restsOn, bulletNames(a),
+			without("- rests-on:\n  - clm-aaaaaa — Seed Result (strength 0.90) (bearing 0.50) [the bound it rests on]\n")},
 		{"no bullet naming the target", b, references, bulletNames("clm-dddddd"), dropListFixture},
 		{"one demoted bullet of two", a, demoted, bulletNames(b), without("  - clm-bbbbbb — Result B (origin cited)\n")},
 		{"every demoted bullet", a, demoted, bulletNames(b, c),

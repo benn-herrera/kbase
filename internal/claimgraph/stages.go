@@ -588,7 +588,7 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 			return findings, askStop(err)
 		}
 		findings = append(findings, classificationFindings(c, opts.Reader != nil)...)
-		f, err := w.writeEdges("pass-3-add-depends-on", c.edges, c.refs)
+		f, err := w.writeEdges("pass-3-add-rests-on", c.edges, c.refs)
 		findings = append(findings, f)
 		if err != nil {
 			return findings, err
@@ -605,10 +605,10 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 	})
 }
 
-// ringRow cuts every depends edge lying on a cycle of the captured graph:
-// each leaves depends-on for a demoted row of its own source, origin inferred
-// where inferred holds for it and cited otherwise. It returns the cut edges,
-// sorted.
+// ringRow cuts every premise edge lying on a cycle of the captured graph:
+// each leaves the rests-on list for a demoted row of its own source, origin
+// inferred where inferred holds for it and cited otherwise. It returns the cut
+// edges, sorted.
 func ringRow(w writer, inferred func(source, target string) bool) ([]pair, error) {
 	edges, err := capturedEdges(w.kbRoot, w.lg)
 	if err != nil {
@@ -687,8 +687,10 @@ func classificationFindings(c classification, asked bool) []Finding {
 	}
 }
 
-// capturedEdges is the captured depends graph between the register's claim
-// entries, sources and targets in entry order, read fresh from the tree.
+// capturedEdges is the captured premise graph between the register's claim
+// entries, in the authored direction — the entry holding the bullet, and the
+// premise it names — sources and targets in entry order, read fresh from the
+// tree.
 func capturedEdges(kbRoot string, lg log.Logger) ([]pair, error) {
 	st, err := kb.Discover(builtTree(kbRoot), lg)
 	if err != nil {
@@ -696,9 +698,9 @@ func capturedEdges(kbRoot string, lg log.Logger) ([]pair, error) {
 	}
 	var out []pair
 	for _, e := range st.ClaimEntries {
-		for _, d := range e.DependsOn {
-			if d.Relation == kb.RelationDepends && d.TargetKind == "claim" {
-				out = append(out, pair{e.ID, d.Target})
+		for _, d := range e.Premises {
+			if d.Relation == kb.RelationSupports && d.TargetKind == "claim" {
+				out = append(out, pair{e.ID, d.Source})
 			}
 		}
 	}

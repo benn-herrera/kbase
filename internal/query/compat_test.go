@@ -42,7 +42,7 @@ func loadOpened(kbRoot string) (*Index, error) {
 }
 
 // comparedQueries is every query the comparison must see answered non-empty.
-var comparedQueries = []string{"deps", "gated-on", "cited-by", "find", "referenced-by", "solidity-below", "subtree", "show", "weak-points", "stats"}
+var comparedQueries = []string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "show", "weak-points", "stats"}
 
 // stageCases is every case over ix: each query over every node id it takes,
 // every index node path in both spellings, a find over each distinct first
@@ -77,8 +77,9 @@ func stageCases(ix *Index) [][]string {
 		}
 	}
 	cases = append(cases, []string{"find", ""}, []string{"find", "no-such-claim"},
-		[]string{"solidity-below", "0.5"}, []string{"solidity-below", "0.65"}, []string{"solidity-below", "1.1"},
-		[]string{"weak-points"}, []string{"weak-points", "--max-solidity", "1.1", "--min-dependents", "0"},
+		[]string{"strength-below", "--max-strength", "0.5"}, []string{"strength-below", "--max-strength", "0.65"},
+		[]string{"strength-below", "--max-strength", "1.1"},
+		[]string{"weak-points"}, []string{"weak-points", "--max-strength", "1.1", "--min-dependents", "0"},
 		[]string{"stats"})
 	return cases
 }
@@ -142,10 +143,14 @@ func TestStageQueryScores(t *testing.T) {
 	}
 	var target *kb.NodeRow
 	for _, c := range ix.claims() {
+		// c gates on nothing: no scoring edge supports it. Something depends
+		// on c: c supports another node.
 		gates := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool {
-			return e.Source == c.ID && (e.Relation == kb.RelationDepends || e.Relation == kb.RelationRestsOn)
+			return e.Target == c.ID && (e.Relation == kb.RelationSupports || e.Relation == kb.RelationFounds)
 		})
-		held := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool { return e.Target == c.ID && e.Source != c.ID })
+		held := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool {
+			return e.Source == c.ID && (e.Relation == kb.RelationSupports || e.Relation == kb.RelationFounds)
+		})
 		if held && !gates {
 			target = &c
 			break

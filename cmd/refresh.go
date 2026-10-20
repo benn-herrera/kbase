@@ -88,6 +88,24 @@ func openKB(root string) (*kb.Source, []toolresult.Item, error) {
 	return src, nil, err
 }
 
+// withMigration appends the record a migrated KB's result carries after
+// kb-root, and writes the sentence that says what the load converted to
+// stderr: once per call, on every verb that loads the KB.
+func withMigration(fields []toolresult.Field, src *kb.Source, verb string, stderr io.Writer) []toolresult.Field {
+	if m, ok := src.Migration(); ok {
+		return append(fields, toolresult.Field{Key: "migration", Value: migrationNotice(verb, stderr, &m)})
+	}
+	return fields
+}
+
+// migrationNotice is one migrated KB's conditional record and the sentence
+// that earns it.
+func migrationNotice(verb string, stderr io.Writer, m *kb.Migration) toolresult.Record {
+	fmt.Fprintf(stderr, "%s: the KB's metadata format %s was converted to %s in memory: %s; kbase refresh writes the conversion\n",
+		verb, m.From, m.To, m.Note)
+	return toolresult.Record{{Key: "from", Value: m.From}, {Key: "to", Value: m.To}, {Key: "note", Value: m.Note}}
+}
+
 // emitResult writes a verb's result document and returns its exit code.
 func emitResult(verb string, stdout io.Writer, outcome string, fields []toolresult.Field) (int, error) {
 	if err := toolresult.Emit(stdout, outcome, fields...); err != nil {
@@ -134,6 +152,7 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(untouched, refusals...)
 	}
+	fields := withMigration([]toolresult.Field{{Key: "kb-root", Value: root}}, src, "refresh", opts.Stderr)
 	written, removed, noDot, err := index.RefreshReporting(src, opts.Logger)
 	if noDot {
 		sayNoDot(opts.Stderr, "refresh")
@@ -141,8 +160,8 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	slices.Sort(written)
 	written = slices.Compact(written)
 	slices.Sort(removed)
-	fields := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: append([]string{}, written...)},
-		{Key: "removed", Value: append([]string{}, removed...)}}
+	fields = append(fields, toolresult.Field{Key: "written", Value: append([]string{}, written...)},
+		toolresult.Field{Key: "removed", Value: append([]string{}, removed...)})
 	var refusal toolresult.Refusal
 	switch {
 	case errors.As(err, &refusal):
@@ -183,7 +202,7 @@ func init() {
 	rootCmd.AddCommand(maintenanceCommand("refresh",
 		"derive the KB's derived metadata, .index/ and claim-graph sheets",
 		`refresh derives every derived field of the KB at kb-root/ beside the
-repository's .git — subtree aggregates, solidity lines and annotations,
+repository's .git — subtree aggregates, strength lines and annotations,
 leaf-references footers — and writes .index/*.yaml and the claim-graph
 sheets, drawn through Graphviz dot: kb-root/claim-graph.svg and, where two
 or more volumes hold nodes, kb-root/claim-graph-digest.svg and

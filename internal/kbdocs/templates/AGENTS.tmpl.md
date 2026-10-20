@@ -22,14 +22,17 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
 
 A leaf built from a corpus is a verbatim, mechanical rendering of it — nothing here rewrites
 source text in place, so there is never a second copy for a corpus and the KB to disagree over.
-Text a maintainer adds directly — a summary, a rationale, an analysis — lives in its own place in
+Text a maintainer adds directly — a summary, a rationale, a note — lives in its own place in
 the tree; it was never a distillation of a corpus, so it is the KB's own word, not a claim about
-what any corpus says. For live node and edge counts — what is in the graph right now — run
-`kbase stats`.
+what any corpus says. Its nodes are `claim`, `analysis`, `experiment`, `work` and `axiom`, its
+scoring edges `supports`, `founds`, `lifts` and `refutes` — each from what bears on the argument to
+what it supports — and its unscored edges `references` and `demoted`. For live node and edge counts
+— what is in the graph right now — run `kbase stats`.
 
-Corpus invariants — notation and cross-cutting definitions — live in `invariants.md` beside this
-file. Read it before reasoning about anything here. Where there is no such file none is declared,
-and nothing here is waiting on it.
+Corpus axioms — notation and cross-cutting definitions — are declared in `axioms.md` beside this
+file, one `### Axiom <label>: Title` heading each; prose may call one an invariant or a framework
+premise, and the graph has one word for it. Read it before reasoning about anything here. Where there
+is no such file none is declared, and nothing here is waiting on it.
 
 `CONVENTIONS.md` beside this file is the full contract: what is authored versus derived, how
 metadata gets written, how citations must be formed, and what to do when the gate goes red. Read it

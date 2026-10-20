@@ -2,117 +2,394 @@ package index
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"kbase/internal/kb"
+	"kbase/internal/log"
 	"kbase/internal/migrate"
+	"kbase/internal/result"
 )
 
-func TestRoundHalfUp2(t *testing.T) {
-	for _, tc := range []struct{ in, want float64 }{
-		{0.125, 0.13}, {0.196, 0.2}, {0.005, 0.01}, {0.004999, 0.0}, {2.675, 2.68}, {-0.125, -0.13}, {0.9, 0.9}, {0.18, 0.18},
+// TestFormatStrength: the record's spelling reads back as the walk's own
+// value, four decimals at most where that suffices and as many as the value
+// needs; the display's is two decimals.
+func TestFormatStrength(t *testing.T) {
+	// A product one ulp off 0.21: its own decimal spelling carries the noise,
+	// and four decimals hold it exactly.
+	noisy := 0.3 * 0.7
+	for _, tc := range []struct {
+		in              *float64
+		record, display string
+	}{
+		{nil, kb.PendingLiteral, kb.PendingLiteral},
+		{f(0.7), "0.7", "0.70"},
+		{f(0.504), "0.504", "0.50"},
+		{f(0.99995), "0.99995", "1.00"},
+		{f(0.36288), "0.36288", "0.36"},
+		{f(noisy), "0.21", "0.21"},
+		{f(0), "0", "0.00"},
+		{f(1), "1", "1.00"},
 	} {
-		if got := RoundHalfUp2(tc.in); got != tc.want {
-			t.Errorf("RoundHalfUp2(%v) = %v, want %v", tc.in, got, tc.want)
+		if got := FormatStrengthRecord(tc.in); got != tc.record {
+			t.Errorf("FormatStrengthRecord(%v) = %q, want %q", tc.in, got, tc.record)
+		}
+		if tc.in != nil {
+			if back, err := strconv.ParseFloat(tc.record, 64); err != nil || math.Abs(back-*tc.in) >= strengthTolerance {
+				t.Errorf("the record %q does not read back as %v", tc.record, *tc.in)
+			}
+		}
+		if got := FormatStrengthDisplay(tc.in); got != tc.display {
+			t.Errorf("FormatStrengthDisplay(%v) = %q, want %q", tc.in, got, tc.display)
 		}
 	}
 }
 
 func f(v float64) *float64 { return &v }
 
-func claimEntry(id string, confidence *float64, deps ...kb.Edge) kb.ClaimEntry {
-	for i := range deps {
-		deps[i].Source = id
+func claimEntry(id string, rigor *float64, premises ...kb.Edge) kb.ClaimEntry {
+	for i := range premises {
+		premises[i].Target, premises[i].TargetKind = id, kb.NodeKindClaim
 	}
-	return kb.ClaimEntry{ID: id, Confidence: confidence, DependsOn: deps}
+	return kb.ClaimEntry{ID: id, Rigor: rigor, Premises: premises}
 }
 
-func dep(target string) kb.Edge {
-	return kb.Edge{Target: target, Relation: "depends", TargetKind: "claim"}
+// supports is one premise bullet's edge: the premise is the source, the entry
+// it is authored on the target.
+func supports(source string, bearing float64) kb.Edge {
+	return kb.Edge{Source: source, Relation: kb.RelationSupports, Bearing: kb.Bearing{Value: bearing}}
 }
 
-func restsOn(work string, fraction kb.Fraction) kb.Edge {
-	return kb.Edge{Target: work, Relation: "rests-on", TargetKind: "work", Fraction: fraction}
+func founds(source string, bearing kb.Bearing) kb.Edge {
+	return kb.Edge{Source: source, Relation: kb.RelationFounds, Bearing: bearing}
 }
 
-func TestComputeSolidity(t *testing.T) {
+func TestComputeStrength(t *testing.T) {
 	st := kb.State{
 		ClaimEntries: []kb.ClaimEntry{
 			claimEntry("clm-base01", f(0.9)),
-			claimEntry("clm-weak01", f(0.4), dep("clm-base01")),
-			claimEntry("clm-chain1", f(0.8), dep("clm-weak01"), kb.Edge{Target: "INVARIANT-S1", Relation: "depends", TargetKind: "invariant"}),
+			claimEntry("clm-weak01", f(0.4), supports("clm-base01", 1)),
+			claimEntry("clm-chain1", f(0.8), supports("clm-weak01", 1)),
 			claimEntry("clm-pend01", nil),
-			claimEntry("clm-poisn1", f(0.9), dep("clm-pend01")),
+			claimEntry("clm-excl01", f(0.9), supports("clm-pend01", 1)),
+			claimEntry("clm-far001", f(1), supports("clm-excl01", 1)),
 			claimEntry("clm-lift01", f(0.2)),
+			claimEntry("clm-low001", f(0.9)),
 			claimEntry("clm-rescu1", nil),
-			claimEntry("clm-work00", f(0.9), restsOn("work-a", kb.Fraction{Set: true, Value: 0})),
-			claimEntry("clm-work01", f(0.9), restsOn("work-a", kb.Fraction{Set: true, Value: 0.3})),
-			claimEntry("clm-workpd", f(0.9), restsOn("work-a", kb.Fraction{Set: true, Pending: true})),
-			claimEntry("clm-workns", f(0.9), restsOn("work-b", kb.Fraction{Set: true, Value: 1})),
+			claimEntry("clm-cap001", f(0.9)),
+			claimEntry("clm-cap002", nil),
+			claimEntry("clm-both01", f(0.9), supports("clm-base01", 0.6667)),
+			claimEntry("clm-half01", f(0.9), supports("clm-base01", 0.5)),
+			claimEntry("clm-axm04", f(0.9), founds("axm-S1", kb.Bearing{Value: 0.4})),
+			claimEntry("clm-axm00", f(0.9), founds("axm-S1", kb.Bearing{Value: 0})),
+			claimEntry("clm-work00", f(0.9), founds("wrk-a", kb.Bearing{Value: 0})),
+			claimEntry("clm-work01", f(0.9), founds("wrk-a", kb.Bearing{Value: 0.3})),
+			claimEntry("clm-workpd", f(0.9), founds("wrk-a", kb.Bearing{Pending: true})),
+			claimEntry("clm-workns", f(0.9), founds("wrk-b", kb.Bearing{Value: 1})),
+			{ID: "clm-targ01", Rigor: f(0.8)},
+			{ID: "clm-refr01", Rigor: f(0.3), Refutes: []kb.Edge{{Source: "clm-refr01", Target: "clm-targ01", Relation: kb.RelationRefutes,
+				TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: 1}}}},
 		},
-		Supports: []kb.SupportNode{
-			{ID: "sup-lift01", Quality: f(0.9), Supports: []kb.SupportPair{{ClaimID: "clm-lift01", Fraction: kb.Fraction{Set: true, Value: 0.98}}}},
+		Axioms: []kb.AxiomNode{{NodeType: kb.NodeKindAxiom, ID: "axm-S1", Title: "I", CanonicalPath: "axioms.md", CanonicalAnchor: "axiom-s1-the-rule"}},
+		Analyses: []kb.AnalysisNode{
+			{ID: "ana-lift01", Rigor: f(0.9), Lifts: []kb.Edge{{Source: "ana-lift01", Target: "clm-lift01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.98}}}},
+			{ID: "ana-lift02", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-lift02", Target: "clm-low001", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
+			{ID: "ana-ref01", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref01", Target: "clm-cap001", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
+			{ID: "ana-both1", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-both1", Target: "clm-both01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
+			{ID: "ana-ref02", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref02", Target: "clm-both01", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.3}}}},
+			{ID: "ana-lift03", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-lift03", Target: "clm-cap002", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.9}}}},
+			{ID: "ana-ref03", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref03", Target: "clm-cap002", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
+			{ID: "ana-min01", Rigor: f(0.5)},
+			{ID: "ana-cap01", Rigor: f(0.9)},
 		},
 		Experiments: []kb.ExperimentNode{
-			{ID: "exp-run001", Status: "run", Strengthens: []kb.StrengthensPair{{ClaimID: "clm-rescu1", Strength: 0.7}, {ClaimID: "clm-weak01", Strength: 0.6}}},
-			{ID: "exp-pend01", Status: "pending", Strengthens: []kb.StrengthensPair{{ClaimID: "clm-pend01", Strength: 1}}},
+			{ID: "exp-run001", Status: "run", Rigor: f(1), Lifts: []kb.Edge{
+				{Source: "exp-run001", Target: "clm-rescu1", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.7}}}},
+			{ID: "exp-pend01", Status: "pending", Rigor: f(1), Lifts: []kb.Edge{
+				{Source: "exp-pend01", Target: "clm-pend01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 1}}}},
+			{ID: "exp-boost1", Status: "run", Rigor: f(0.9), Lifts: []kb.Edge{
+				{Source: "exp-boost1", Target: "ana-min01", Relation: kb.RelationLifts, TargetKind: kb.NodeKindAnalysis, Bearing: kb.Bearing{Value: 1}}}},
+			{ID: "exp-skept1", Status: "run", Rigor: f(1), Refutes: []kb.Edge{
+				{Source: "exp-skept1", Target: "ana-cap01", Relation: kb.RelationRefutes, TargetKind: kb.NodeKindAnalysis, Bearing: kb.Bearing{Value: 0.25}}}},
 		},
-		Works: []kb.ExternalWork{{ID: "work-a", Strength: f(0.5)}, {ID: "work-b"}},
+		Works: []kb.ExternalWork{{ID: "wrk-a", Rigor: f(0.5)}, {ID: "wrk-b"}},
 	}
-	sol, err := ComputeSolidity(st)
+	strength, err := ComputeStrength(st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	finals := sol.Finals()
+	if len(strength.Results) != len(st.ClaimEntries) {
+		t.Errorf("Results carries %d entries, want one per claim (%d)", len(strength.Results), len(st.ClaimEntries))
+	}
+	if got, want := len(strength.AnalysisResults), len(st.Analyses); got != want {
+		t.Errorf("AnalysisResults carries %d entries, want one per analysis (%d)", got, want)
+	}
+	finals := strength.Finals()
 	for _, tc := range []struct {
 		id   string
 		want *float64
 	}{
 		{"clm-base01", f(0.9)},
-		{"clm-weak01", f(0.6)},
-		{"clm-chain1", f(0.6)},
+		{"clm-weak01", f(0.4)},
+		{"clm-chain1", f(0.4)},
 		{"clm-pend01", nil},
-		{"clm-poisn1", nil},
-		{"clm-lift01", f(0.88)},
+		{"clm-excl01", f(0.9)},
+		{"clm-far001", f(0.9)},
+		{"clm-lift01", f(0.882)},
+		{"clm-low001", f(0.9)},
 		{"clm-rescu1", f(0.7)},
-		{"clm-work00", f(0.9)},
-		{"clm-work01", f(0.5)},
-		{"clm-workpd", nil},
-		{"clm-workns", nil},
+		{"clm-cap001", f(0.8)},
+		{"clm-cap002", f(0.8)},
+		{"clm-both01", f(0.7)},
+		{"clm-half01", f(0.45)},
+		{"clm-axm04", f(0.4)},
+		{"clm-axm00", f(0)},
+		{"clm-work00", f(0)},
+		{"clm-work01", f(0.15)},
+		{"clm-workpd", f(0.9)},
+		{"clm-workns", f(0.9)},
+		{"clm-targ01", f(0.7)},
 	} {
 		got, ok := finals[tc.id]
 		if tc.want == nil && ok || tc.want != nil && (!ok || got != *tc.want) {
 			t.Errorf("%s: final %v (set %v), want %v", tc.id, got, ok, tc.want)
 		}
 	}
-	if got := RenderSolidityTrace(sol.Results["clm-weak01"]); got != " [= max(0.40, 0.60)]" {
-		t.Errorf("experimentally rescued trace = %q", got)
+	for _, tc := range []struct{ id, want string }{
+		{"clm-chain1", " [= min(0.80, 0.40)]"},
+		{"clm-lift01", " [= max(0.20, 0.88)]"},
+		{"clm-low001", ""},
+		{"clm-rescu1", " [= lift 0.70]"},
+		{"clm-cap001", " [= min(0.90, 0.80)]"},
+		{"clm-cap002", " [= min(lift 0.90, 0.80)]"},
+		{"clm-both01", " [= min(max(min(0.90, 0.60), 0.80), 0.70)]"},
+		{"clm-axm04", " [= min(0.90, 0.40)]"},
+		{"clm-axm00", " [= min(0.90, 0.00)]"},
+		{"clm-half01", " [= min(0.90, 0.45)]"},
+		{"clm-far001", " [= min(1.00, 0.90)]"},
+		{"clm-pend01", ""},
+		{"clm-base01", ""},
+		{"clm-targ01", " [= min(0.80, 0.70)]"},
+	} {
+		if got := RenderStrengthTrace(strength.Results[tc.id]); got != tc.want {
+			t.Errorf("%s trace = %q, want %q", tc.id, got, tc.want)
+		}
 	}
-	if got := RenderSolidityTrace(sol.Results["clm-rescu1"]); got != " [= experimental 0.70]" {
-		t.Errorf("rescue-only trace = %q", got)
-	}
-	if got := RenderSolidityTrace(sol.Results["clm-chain1"]); got != " [= min(0.80, 0.60)]" {
-		t.Errorf("weakest-link trace = %q", got)
-	}
-	if got := RenderSolidityTrace(sol.Results["clm-lift01"]); got != "" {
-		t.Errorf("dependency-free trace = %q", got)
+	for _, tc := range []struct {
+		id    string
+		final *float64
+		trace string
+	}{{"ana-min01", f(0.9), " [= max(0.50, 0.90)]"}, {"ana-cap01", f(0.75), " [= min(0.90, 0.75)]"}} {
+		r := strength.AnalysisResults[tc.id]
+		if r.Final == nil || *r.Final != *tc.final {
+			t.Errorf("%s final = %v, want %v", tc.id, r.Final, *tc.final)
+		}
+		if got := RenderStrengthTrace(r); got != tc.trace {
+			t.Errorf("%s trace = %q, want %q", tc.id, got, tc.trace)
+		}
 	}
 }
 
-func TestComputeSolidityRefusesACycleAmongUnscoredClaims(t *testing.T) {
+// TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength: a node with no inputs has
+// strength = rigor, so a work and an axiom each feed bearing × rigor into a
+// dependent's min — a work's rigor judged once by a person, an axiom's 1.0 by
+// rule — and neither derives a strength of its own, in the walk or in its row.
+func TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength(t *testing.T) {
+	st := kb.State{
+		ClaimEntries: []kb.ClaimEntry{
+			claimEntry("clm-work01", f(0.9), founds("wrk-a", kb.Bearing{Value: 0.5})),
+			claimEntry("clm-axm001", f(0.9), founds("axm-S1", kb.Bearing{Value: 0.5})),
+		},
+		Axioms: []kb.AxiomNode{{NodeType: kb.NodeKindAxiom, ID: "axm-S1", Title: "S1", CanonicalPath: "axioms.md", CanonicalAnchor: "axiom-s1"}},
+		Works:  []kb.ExternalWork{{ID: "wrk-a", Title: "A", CanonicalPath: "claim-rigor.md", CanonicalAnchor: "a", Rigor: f(0.6)}},
+	}
+	strength, err := ComputeStrength(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"clm-work01", 0.5 * 0.6},
+		{"clm-axm001", 0.5 * kb.AxiomRigor},
+	} {
+		r := strength.Results[tc.id]
+		if r.MinDep == nil || *r.MinDep != tc.want || r.Final == nil || *r.Final != tc.want {
+			t.Errorf("%s: min %v, final %v, want %v from the source's rigor", tc.id, r.MinDep, r.Final, tc.want)
+		}
+	}
+	rows := map[string]kb.NodeRow{}
+	for _, row := range buildClaims(st, strength) {
+		rows[row.ID] = row
+	}
+	finals := strength.Finals()
+	for id, rigor := range map[string]float64{"wrk-a": 0.6, "axm-S1": kb.AxiomRigor} {
+		row := rows[id]
+		if row.Rigor == nil || *row.Rigor != rigor {
+			t.Errorf("%s row rigor = %v, want %v", id, row.Rigor, rigor)
+		}
+		if row.Strength != nil || row.DerivationStrength != nil {
+			t.Errorf("%s row carries a derived strength: %+v", id, row)
+		}
+		if _, derived := finals[id]; derived {
+			t.Errorf("%s has a derived strength", id)
+		}
+	}
+}
+
+// TestDependentUsesItsSourcesExactStrength: a premise multiplies the value its
+// source published, so 0.70 × 0.72 = 0.504 enters a dependent's min as 0.504
+// and not as the 0.5 a two-decimal walk would have published.
+func TestDependentUsesItsSourcesExactStrength(t *testing.T) {
 	st := kb.State{ClaimEntries: []kb.ClaimEntry{
-		claimEntry("clm-aaaaaa", nil, dep("clm-bbbbbb")),
-		claimEntry("clm-bbbbbb", nil, dep("clm-aaaaaa")),
+		claimEntry("clm-aaaaaa", f(0.7)),
+		claimEntry("clm-bbbbbb", f(0.9), supports("clm-aaaaaa", 0.72)),
+		claimEntry("clm-cccccc", f(0.9), supports("clm-bbbbbb", 0.72)),
+	}}
+	strength, err := ComputeStrength(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := 0.72 * 0.7
+	second := 0.72 * first
+	finals := strength.Finals()
+	for _, tc := range []struct {
+		id     string
+		want   float64
+		record string
+	}{
+		{"clm-aaaaaa", 0.7, "0.7"},
+		{"clm-bbbbbb", first, "0.504"},
+		{"clm-cccccc", second, "0.36288"},
+	} {
+		got, ok := finals[tc.id]
+		if !ok {
+			t.Fatalf("%s published no strength", tc.id)
+		}
+		if got != tc.want {
+			t.Errorf("%s strength = %v, want %v", tc.id, got, tc.want)
+		}
+		if spelled := FormatStrengthRecord(&got); spelled != tc.record {
+			t.Errorf("%s's record spells %q, want %q", tc.id, spelled, tc.record)
+		}
+	}
+}
+
+// TestClaimRefuterAndPairsIntoAnalysesReachTheRecords walks a KB whose claim
+// refutes a claim and whose run experiments lift and refute analyses, and reads
+// the numbers and the edge rows back off what the walk publishes.
+func TestClaimRefuterAndPairsIntoAnalysesReachTheRecords(t *testing.T) {
+	root := writeKB(t, map[string]string{
+		"entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
+		"vol/index.md":   "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n- [ana](ana.md)\n- [exp](exp.md)\n",
+		"vol/a.md":       "---\nkind: leaf\nclaims: [clm-targ01, clm-refr01]\n---\n[↑ Vol](index.md)\n\n# A\n",
+		"vol/ana.md": "---\nkind: leaf\nanalysis-nodes:\n  - ana-id: ana-aaaaaa\n  - ana-id: ana-bbbbbb\n---\n" +
+			"[↑ Vol](index.md)\n\n# An\n",
+		"vol/exp.md": "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 0.9\n" +
+			"    lifts:\n      - ana-aaaaaa: 1.0\n  - exp-id: exp-bbbbbb\n    status: run\n    rigor: 1.0\n" +
+			"    refutes:\n      - ana-bbbbbb: 0.25\n---\n[↑ Vol](index.md)\n\n# Ex\n",
+		"vol/claim-rigor.md": "# Register\n\n" +
+			"## Claim T\n<!-- id: clm-targ01 -->\n\n### Rigor\n- rigor: 0.80\n- strength: *pending*\n- rationale: r.\n\n" +
+			"## Claim R\n<!-- id: clm-refr01 -->\n\n### Rigor\n- rigor: 0.30\n- strength: *pending*\n- rationale: r.\n" +
+			"- refutes:\n  - clm-targ01: 1.0\n\n" +
+			"## Ana A\n<!-- id: ana-aaaaaa -->\n\n### Rigor\n- rigor: 0.50\n- strength: *pending*\n- rationale: r.\n\n" +
+			"## Ana B\n<!-- id: ana-bbbbbb -->\n\n### Rigor\n- rigor: 0.90\n- strength: *pending*\n- rationale: r.\n",
+	})
+	st, err := kb.Discover(kb.OnDisk(root), log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	strength, err := ComputeStrength(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finals := strength.Finals()
+	for id, r := range strength.AnalysisResults {
+		if r.Final != nil {
+			finals[id] = *r.Final
+		}
+	}
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"clm-targ01", 0.7},
+		{"ana-aaaaaa", 0.9},
+		{"ana-bbbbbb", 0.75},
+	} {
+		got, ok := finals[tc.id]
+		if !ok || got != tc.want {
+			t.Errorf("%s final = %v (set %v), want %v", tc.id, got, ok, tc.want)
+		}
+	}
+	edges := map[string]bool{}
+	for _, e := range buildEdges(st) {
+		edges[e.Source+" "+e.Target+" "+e.Relation+" "+e.TargetKind+" "+fmt.Sprint(e.Bearing)] = true
+	}
+	for _, want := range []string{
+		"clm-refr01 clm-targ01 refutes claim 1.0",
+		"exp-aaaaaa ana-aaaaaa lifts analysis 1.0",
+		"exp-bbbbbb ana-bbbbbb refutes analysis 0.25",
+	} {
+		if !edges[want] {
+			t.Errorf("edges.yaml lacks the row %q; it carries %v", want, edges)
+		}
+	}
+	if got := AuthoredDependsGraph(st)["clm-targ01"]; !slices.Contains(got, "clm-refr01") {
+		t.Errorf("the acyclicity graph draws no edge from clm-targ01 to its refuter; it holds %v", got)
+	}
+}
+
+// TestComputeStrengthRefusesARefutationOfAPremise: a claim refuting a claim it
+// rests on is a cycle in the derivation — the refuter's value draws on the
+// target it caps.
+func TestComputeStrengthRefusesARefutationOfAPremise(t *testing.T) {
+	st := kb.State{ClaimEntries: []kb.ClaimEntry{
+		claimEntry("clm-aaaaaa", f(0.5)),
+		{ID: "clm-bbbbbb", Rigor: f(0.5), Premises: []kb.Edge{supports("clm-aaaaaa", 1)},
+			Refutes: []kb.Edge{{Source: "clm-bbbbbb", Target: "clm-aaaaaa",
+				Relation: kb.RelationRefutes, TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: 0.5}}}},
+	}}
+	_, err := ComputeStrength(st)
+	var cycle CycleError
+	if !errors.As(err, &cycle) || !slices.Equal(cycle.Members, []string{"clm-aaaaaa", "clm-bbbbbb"}) {
+		t.Errorf("err = %v, want a cycle over the target and its refuter", err)
+	}
+}
+
+func TestComputeStrengthRefusesACycleAmongUnscoredClaims(t *testing.T) {
+	st := kb.State{ClaimEntries: []kb.ClaimEntry{
+		claimEntry("clm-aaaaaa", nil, supports("clm-bbbbbb", 1)),
+		claimEntry("clm-bbbbbb", nil, supports("clm-aaaaaa", 1)),
 		claimEntry("clm-cccccc", f(0.5)),
 	}}
-	_, err := ComputeSolidity(st)
+	_, err := ComputeStrength(st)
 	var cycle CycleError
 	if !errors.As(err, &cycle) || !slices.Equal(cycle.Members, []string{"clm-aaaaaa", "clm-bbbbbb"}) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// TestComputeStrengthRefusesALiftOfAPremise: an analysis that lifts a claim it
+// rests on is a cycle, whichever list each edge was authored in.
+func TestComputeStrengthRefusesALiftOfAPremise(t *testing.T) {
+	st := kb.State{
+		ClaimEntries: []kb.ClaimEntry{claimEntry("clm-aaaaaa", f(0.5))},
+		Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Rigor: f(0.9),
+			Premises: []kb.Edge{supports("clm-aaaaaa", 1)},
+			Lifts:    []kb.Edge{{Source: "ana-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 1}}}}},
+	}
+	_, err := ComputeStrength(st)
+	var cycle CycleError
+	if !errors.As(err, &cycle) || !slices.Equal(cycle.Members, []string{"ana-aaaaaa", "clm-aaaaaa"}) {
+		t.Errorf("err = %v, want a cycle over the claim and its analysis", err)
 	}
 }
 
@@ -141,7 +418,7 @@ func TestSerialize(t *testing.T) {
 func TestSerializeAsTheMigrationWrites(t *testing.T) {
 	recs := []record{
 		{{Key: "node_type", Value: "claim"}, {Key: "id", Value: "clm-aaaaaa"}, {Key: "title", Value: "A — \"quoted\" <b> & ü x"},
-			{Key: "confidence", Value: 0.5}, {Key: "solidity"}, {Key: "n", Value: 2}},
+			{Key: "rigor", Value: 0.5}, {Key: "strength"}, {Key: "n", Value: 2}},
 		{{Key: "claim_id", Value: "clm-aaaaaa"}, {Key: "mentioned_ids", Value: []string{"exp-bbbbbb"}}, {Key: "tier2_marked", Value: false}, {Key: "text", Value: "tab\tff\fbs\bc1\u0085"}},
 	}
 	stream := Serialize(recs)
@@ -165,9 +442,9 @@ func TestRenderLeafReferences(t *testing.T) {
 		leaves   []string
 		want     string
 	}{
-		{"claim-quality.md", []string{"common/a.md", "b.md"}, "> **Leaf references:** [a](./common/a.md), [b](./b.md)."},
-		{"vol/claim-quality.md", []string{"vol/x/a.md", "common/b.md"}, "> **Leaf references:** [a](./x/a.md), [b](../common/b.md)."},
-		{"vol/claim-quality.md", nil, kb.LeafReferencesPendingFooter},
+		{"claim-rigor.md", []string{"common/a.md", "b.md"}, "> **Leaf references:** [a](./common/a.md), [b](./b.md)."},
+		{"vol/claim-rigor.md", []string{"vol/x/a.md", "common/b.md"}, "> **Leaf references:** [a](./x/a.md), [b](../common/b.md)."},
+		{"vol/claim-rigor.md", nil, kb.LeafReferencesPendingFooter},
 	} {
 		if got := RenderLeafReferences(tc.register, tc.leaves); got != tc.want {
 			t.Errorf("RenderLeafReferences(%q, %q) = %q, want %q", tc.register, tc.leaves, got, tc.want)
@@ -194,6 +471,40 @@ func writeKB(t *testing.T, files map[string]string) string {
 	return root
 }
 
+// TestCoverageRefusalNamesTheBullet: an edge whose source no authored node
+// stands up is refused with the register, the line and the id it names, so the
+// one who wrote the bullet can find it.
+func TestCoverageRefusalNamesTheBullet(t *testing.T) {
+	register := "# Register\n\n## A\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n- rigor: 0.8\n" +
+		"- rests-on:\n  - wrk-ghost — Missing (bearing 0.5)\n\n### Strength\n- strength: *pending*\n"
+	root := writeKB(t, map[string]string{
+		"entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
+		"vol/index.md":   "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
+		"vol/a.md":       "---\nkind: leaf\nclaims: [clm-aaaaaa]\n---\n[↑ Vol](index.md)\n\n# A\n",
+		kb.RegisterFile:  register,
+	})
+	st, err := kb.Discover(kb.OnDisk(root), log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = BuildRecords(st)
+	var cov CoverageError
+	if !errors.As(err, &cov) {
+		t.Fatalf("BuildRecords = %v, want a CoverageError", err)
+	}
+	if cov.Key != "wrk-ghost" {
+		t.Errorf("coverage = %+v, want the id it names", cov)
+	}
+	line := strings.Count(register[:strings.Index(register, "wrk-ghost")], "\n") + 1
+	var items result.Refusal
+	if mapped := refusal(kb.OnDisk(root), err); !errors.As(mapped, &items) || len(items) != 1 {
+		t.Fatalf("refusal(err) = %#v, want one item", mapped)
+	}
+	if it := items[0]; it.Check != checkMetadata || it.Key != "wrk-ghost" || it.Path != kb.RegisterFile || it.Line != line {
+		t.Errorf("item = %+v, want check %s for wrk-ghost at %s:%d", it, checkMetadata, kb.RegisterFile, line)
+	}
+}
+
 const fmKind = "---\nkind: %s\n---\n\n"
 
 func withKind(kind, body string) string { return strings.Replace(fmKind, "%s", kind, 1) + body }
@@ -215,16 +526,32 @@ func TestCitationFindings(t *testing.T) {
 		{"clean prose", map[string]string{"index.md": withKind("index", "Nothing citation-shaped here at all.\n")}, nil},
 		{"fenced example", map[string]string{"index.md": withKind("index", "How:\n\n```\nSee INVARIANT-S2 and clm-aa1111, per Invariant 11.\n```\n")}, nil},
 		{"sanctioned channels", map[string]string{
-			"claim-quality.md": "## A Claim\n<!-- id: clm-aa1111 -->\n\n- confidence: 0.75\n- depends-on:\n  - INVARIANT-S2 (axiom scaffold)\n  - clm-bb2222 (a real dependency)\n- solidity: 0.75 (ok to build on, see caveats)\n",
-			"leaf.md":          withKind("leaf", "<!-- claim-quality: clm-aa1111 -->\n\nProse.\n"),
+			"claim-rigor.md": "## A Claim\n<!-- id: clm-aa1111 -->\n\n- rigor: 0.75\n- rests-on:\n  - INVARIANT-S2 (axiom scaffold)\n  - Axiom S1 (bearing 0.8)\n  - clm-bb2222 — a real dependency (strength 0.80) (bearing 1.0)\n- strength: 0.75 (ok to build on, see caveats)\n",
+			"leaf.md":        withKind("leaf", "<!-- claim-rigor: clm-aa1111 -->\n\nProse.\n"),
 		}, nil},
+		{"axiom declaration sections", map[string]string{
+			"axioms.md": "# Axioms\n\n### Axiom S1: First rule\n\nHolds with Axiom S2 and INVARIANT-S3 around it.\n",
+		}, nil},
+		{"axiom token outside its declaration", map[string]string{
+			"axioms.md": "# Axioms\n\n## Preamble\n\nThis corpus relies on Axiom S2 throughout.\n\n### Axiom S2: Axiom numbering\n\nBody.\n",
+		}, []string{checkChannel}},
+		{"bare axiom token in prose", map[string]string{"index.md": withKind("index", "See Axiom S1 for the design rule.\n")}, []string{checkChannel}},
+		{"legacy declaration in AGENTS.md", map[string]string{
+			"AGENTS.md": "# Agents\n\n### INVARIANT-S1: First rule\n\nHolds jointly with INVARIANT-S2.\n\n### INVARIANT-S2: Axiom numbering\n\nBody.\n",
+		}, nil},
+		{"legacy axiom bullet in AGENTS.md", map[string]string{
+			"AGENTS.md": "# Agents\n\n- Axiom 1: **One** — a bullet declaration.\n\nOther instructions.\n",
+		}, nil},
+		{"axiom token in AGENTS.md prose", map[string]string{
+			"AGENTS.md": "# Agents\n\nFollow Axiom S2 when in doubt.\n\n### INVARIANT-S1: First rule\n\nBody.\n",
+		}, []string{checkChannel}},
 		{"leaf body exempt", map[string]string{
 			"leaf.md": withKind("leaf", "The source says INVARIANT-S2 and clm-aa1111, per Invariant 4.\n"),
 		}, nil},
 		{"declaration sections may name siblings", map[string]string{
 			"invariants.md": "# Invariants\n\n### INVARIANT-S1: First rule\n\nHolds jointly with INVARIANT-S2, which numbers the axioms.\n\n### INVARIANT-S2: Axiom numbering\n\n- Axiom 1: **One** — a bullet.\n",
 		}, nil},
-		{"framework prose outside a declaration", map[string]string{
+		{"invariant prose outside a declaration", map[string]string{
 			"invariants.md": "# Invariants\n\n## Preamble\n\nThis corpus relies on INVARIANT-S2 throughout.\n\n### INVARIANT-S2: Axiom numbering\n\nBody.\n",
 		}, []string{checkChannel}},
 		{"well-formed authority citation", map[string]string{
@@ -271,16 +598,16 @@ func TestCitationFindings(t *testing.T) {
 		}, []string{checkDurable}},
 		{"external link", map[string]string{"index.md": withKind("index", "See [the spec](https://example.invalid/spec).\n")}, nil},
 		{"foreign-domain reference without an edge", map[string]string{
-			"alpha/claim-quality.md": register, ".index/claims.yaml": nodes, ".index/depends-on.yaml": "",
+			"alpha/claim-rigor.md": register, ".index/claims.yaml": nodes, ".index/edges.yaml": "",
 		}, []string{checkChannel, checkEdge}},
 		{"foreign-domain reference with an edge", map[string]string{
-			"alpha/claim-quality.md": register, ".index/claims.yaml": nodes,
-			".index/depends-on.yaml": `--- {"source": "clm-aa1111", "target": "clm-bb2222"}` + "\n",
+			"alpha/claim-rigor.md": register, ".index/claims.yaml": nodes,
+			".index/edges.yaml": `--- {"source": "clm-bb2222", "target": "clm-aa1111"}` + "\n",
 		}, []string{checkChannel}},
 		{"no-edge exemption", map[string]string{
-			"alpha/claim-quality.md": "## Entry\n<!-- id: clm-aa1111 -->\n\n- no-edge: cited as contrast\n\nRationale prose naming clm-bb2222 from the other domain.\n",
-			".index/claims.yaml":     nodes,
-			".index/depends-on.yaml": "",
+			"alpha/claim-rigor.md": "## Entry\n<!-- id: clm-aa1111 -->\n\n- no-edge: cited as contrast\n\nRationale prose naming clm-bb2222 from the other domain.\n",
+			".index/claims.yaml":   nodes,
+			".index/edges.yaml":    "",
 		}, []string{checkChannel}},
 		{".index out of scope", map[string]string{".index/SCHEMA.md": "# Schema\n\n1. Invariant 1: the index is derived.\n"}, nil},
 	} {

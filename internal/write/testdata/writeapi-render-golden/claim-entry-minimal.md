@@ -3,7 +3,9 @@
 
 > **Leaf references:** *(none — entry has no citing leaf; bidirectional-coverage check will fail)*
 
-### Quality
-- confidence: *pending*
-- solidity: *pending*
+### Rigor
+- rigor: *pending*
 - rationale: *pending*
+
+### Strength
+- strength: *pending*

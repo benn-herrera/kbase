@@ -34,7 +34,7 @@ func lockedRepo(t *testing.T) string {
 // reports through its return so a goroutine may call it.
 func insertClaim(repo, title string) (string, error) {
 	values := filepath.Join(repo, title+".yaml")
-	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- register: claim-quality.md\n  title: %s\n  rigor: 0.5\n  rationale: Shown.\n", title), 0o644); err != nil {
+	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- register: claim-rigor.md\n  title: %s\n  rigor: 0.5\n  rationale: Shown.\n", title), 0o644); err != nil {
 		return "", err
 	}
 	var out bytes.Buffer
@@ -51,7 +51,7 @@ func runQuiet(run func(maintenanceOptions) (int, error), repo string) (string, e
 
 func register(t *testing.T, repo string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repo, "kb-root", "claim-quality.md"))
+	b, err := os.ReadFile(filepath.Join(repo, "kb-root", "claim-rigor.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

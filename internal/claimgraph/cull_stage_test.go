@@ -30,7 +30,7 @@ const (
 // the kb-root, the repository root and the stage's options with reader.
 func seedCullStage(t *testing.T, reader asks.LetterReader) (string, string, Options) {
 	t.Helper()
-	m := func(id string) string { return " <!-- claim-quality: " + id + " -->" }
+	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
 	root, repo, opts := seedTheoremLeaf(t, []string{cullA, cullB, cullD},
 		"Alpha holds here."+m(cullA)+"\n\nAlpha holds here, said again."+m(cullB)+"\n\n"+
 			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(cullD)+"\n",
@@ -54,7 +54,7 @@ func seedTheoremLeaf(t *testing.T, claims []string, body, register string) (stri
 	root := filepath.Join(t.TempDir(), kb.KBDir)
 	repo := filepath.Dir(root)
 	for rel, text := range map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"1.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
+		kb.EntryPointFile: "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
 		"v/index.md":      "---\nkind: index\n---\n[↑ Entry](../entry-point.md)\n\n# V\n\n- [Leaf](leaf.md)\n",
 		cullLeaf:          "---\nkind: leaf\nclaims: [" + strings.Join(claims, ", ") + "]\n---\n[↑ V](index.md)\n\n# Leaf\n\n" + body,
 		kb.RegisterFile:   "# Register\n\n" + register,

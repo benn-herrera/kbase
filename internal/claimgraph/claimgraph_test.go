@@ -17,7 +17,7 @@ import (
 func TestLandLeafCarriesTheBlock(t *testing.T) {
 	root := filepath.Join(t.TempDir(), kb.KBDir)
 	for rel, text := range map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"1.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
+		kb.EntryPointFile: "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
 		"v/index.md":      "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n",
 		"v/a.md":          "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n",
 	} {
@@ -29,22 +29,22 @@ func TestLandLeafCarriesTheBlock(t *testing.T) {
 		}
 	}
 	w := writer{kbRoot: root, lg: log.Discard()}
-	seed, err := w.insertClaims("seed", "v/claim-quality.md", []string{"Seed"}, []string{"Seeded."})
+	seed, err := w.insertClaims("seed", "v/claim-rigor.md", []string{"Seed"}, []string{"Seeded."})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sup, err := w.run("support", "insert-support-entry", values{{"register": "v/claim-quality.md", "title": "Support",
-		"rigor": kb.PendingLiteral, "rationale": "Supports.", "supports": []map[string]any{{"id": seed[0], "fraction": 0.5}}}}, true)
+	analysis, err := w.run("analysis", "insert-analysis-entry", values{{"register": "v/claim-rigor.md", "title": "Analysis",
+		"rigor": kb.PendingLiteral, "rationale": "Supports.", kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	block := values{{"document": "v/a.md", "kind": kb.DocumentLeaf, "no-claim": "Nothing marked.",
-		"support-node": []map[string]any{{"sup-id": sup.IDs[0], "supports": []map[string]any{{"id": seed[0], "fraction": 0.5}}}}}}
+		"analysis-node": []map[string]any{{"ana-id": analysis.IDs[0], kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}}}
 	if _, err := w.run("block", "set-frontmatter", block, false); err != nil {
 		t.Fatal(err)
 	}
 	exp, err := w.run("experiment", "insert-experiment-entry", values{{"document": "v/a.md", "status": "run",
-		"strengthens": []map[string]any{{"id": seed[0], "strength": 0.5}}}}, false)
+		kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLandLeafCarriesTheBlock(t *testing.T) {
 		t.Error("the leaf declares both claims and a no-claim reason")
 	}
 	declared := kb.DeclaredNodeIDs(fm)
-	if want := []string{exp.IDs[0], sup.IDs[0]}; !slices.Equal(declared, want) {
+	if want := []string{exp.IDs[0], analysis.IDs[0]}; !slices.Equal(declared, want) {
 		t.Errorf("hosted declarations after landing = %v, want %v kept", declared, want)
 	}
 }

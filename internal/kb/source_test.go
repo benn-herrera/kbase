@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -61,6 +62,29 @@ func TestMigratedSourceReads(t *testing.T) {
 	src.Saved()
 	if src.Migrated() || src.Version() != FormatVersion || len(src.Obsolete()) != 0 {
 		t.Errorf("after Saved: migrated %t at %s, obsolete %q", src.Migrated(), src.Version(), src.Obsolete())
+	}
+}
+
+// TestDirFilesRefusesASymlink: a file in the directory that is a symbolic
+// link is refused, naming it, rather than listed as the KB's.
+func TestDirFilesRefusesASymlink(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, IndexDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "claims.yaml")
+	if err := os.WriteFile(outside, []byte("--- {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "claims.yaml")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := OnDisk(root).DirFiles(dir)
+	var sym *SymlinkError
+	if !errors.As(err, &sym) || sym.Path != link {
+		t.Fatalf("DirFiles(%s) = %v, want a SymlinkError naming %s", dir, err, link)
 	}
 }
 

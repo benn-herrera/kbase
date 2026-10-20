@@ -11,14 +11,15 @@ func init() {
 	var inverse bool
 	cmd := queryCommand(&cobra.Command{
 		Use:   "deps <id>",
-		Short: "a node's dependency edges, or with -i the nodes depending on it",
-		Long: `deps lists the edges sourced at <id>, sorted by target: each one's relation,
-target, for a rests-on edge its applicability, and its context (null where
-the edge records none). With -i it lists instead
-the ids of <id>'s dependents, the nodes whose solidity <id>'s enters: the
-sources of depends and rests-on edges to <id> and, for an experiment or
-support, the targets of its strengthens and supports edges. A references or
-demoted edge makes neither end a dependent.`,
+		Short: "a node's incident edges, or with -i the nodes depending on it",
+		Long: `deps lists every edge incident at <id> — each scoring edge in either
+direction and <id>'s own outgoing references and demoted edges — as its
+relation, its direction (in where <id> is the supported end, out where it is
+the supporter), the other end, its bearing (null where the pairing carries
+none) and its context (null where the edge records none), in relation order and
+then by the other end. With -i it lists instead the ids of <id>'s dependents,
+the nodes <id>'s strength enters: the targets of its outgoing scoring edges. A
+references or demoted edge makes neither end a dependent.`,
 		Args: cobra.ExactArgs(1),
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.DepsPayload(ix, args[0], inverse))

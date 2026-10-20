@@ -20,18 +20,38 @@ deleted, not archived.
   latex-latex_macros`), which may preserve author environment names.
 
 ## KB format changes
-- Add a 'bearing' field for internal edges as exist for intervolume and external work edges
-  - The same principle applies - a derivation may be tight and rigorous, but not be dead on point
-  - Separating local rigor from applicability has 2 significant benefits
-    - More accurate representation of state of the argument
-    - Allows for inference or human judgment asks during claim-scoring to be cleanly split on
-      easier-to-focus-on local conditions. For smaller models in particular 2 clean asks is just
-      going to get better results than one mixed ask.
+The `2.0.0` model is in force: five node types — `claim`, `analysis`, `experiment`, `work` and
+`axiom`; four scoring relations — `supports`, `founds`, `lifts` and `refutes` — beside the two
+unscored ones, `references` and `demoted`; and three quantities — `rigor`, a node's local value,
+`bearing`, a scoring edge's scalar, and `strength`, the derived value.
+
+- `3.0.0`: the derived index as **one file** instead of `.index/`'s five tables, each record
+  carrying its table's name. A new table becomes a record type rather than a new file, so a feature
+  does not grow the file set and needs no migration for it; the save commits one rename instead of
+  five, and the tables no longer have a partial state between them. The line-per-record shape makes
+  the merge mechanical; the cost is that every refresh rewrites the file and one malformed line
+  takes out every consumer at once.
+
+## Deferred from `2.0.0`
+Two questions the model answers no to. Each names the move that would settle it.
+
+- **May a work refute a claim directly?** `2.0.0` says no: a work carries no authored role list, so a
+  work's counter-evidence reaches a claim as an analysis the work founds, and that analysis refutes
+  the claim. The move is a `refutes:` list on the work's register entry; the arithmetic is already
+  defined — a cap at `1 − bearing × the work's rigor` — so the change is the list and its parse, not
+  the walk.
+- **Does the sheet want a bearing axis?** `2.0.0` draws the derived value alone: a bearing is an edge
+  judgement, and a second visual axis over it is a ruling of its own. The move is a stroke attribute
+  per bearing drawn from the index column every scoring row already carries, with the DOT goldens
+  regenerated.
 
 ## After kbase is proven in use
+- The README's argument-graph images are snapshots of another project's graph. They are replaced by
+  `render-claim-graph` output from kbase's own KB once a KB argues the scoring mechanism, so the
+  pictures become kbase's own graph rather than an illustration of its capability.
 - Records-native leaves with a Go writer, replacing the pandoc writer route.
-- The next major bump of the metadata format (SPEC §10): jointly established units — a strongly
-  connected component a person promotes into one node carrying the solidity its members share, the
-  DAG constraint over units — once the `demoted` relation has been lived with.
+- The next major bump of the metadata format, `3.0.0` (SPEC §10): jointly established units — a
+  strongly connected component a person promotes into one node carrying the strength its members
+  share, the DAG constraint over units — once the `demoted` relation has been lived with.
 - A complete LaTeX reader in place of pandoc's: the `polytexnical` project (`../polytexnical`),
   taken up only after kbase has shown the pipeline produces a claim graph worth auditing.

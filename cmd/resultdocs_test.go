@@ -64,14 +64,14 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	run("done", "verify")
 	run("unchanged", "render-claim-graph")
 
-	insert := writeValues(t, values, "insert.yaml", "entry:\n- register: claim-quality.md\n  title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
-		"- register: claim-quality.md\n  title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")
+	insert := writeValues(t, values, "insert.yaml", "entry:\n- register: claim-rigor.md\n  title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
+		"- register: claim-rigor.md\n  title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")
 	first := run("done", "insert-claim-entry", "--create", "--values", insert)
 	ids := anyStrings(first.Values["ids"])
 	if len(ids) != 2 || !slices.Equal(anyStrings(first.Values["minted"]), ids) || first.Values["refreshed"] == nil {
 		t.Fatalf("insert: %v", first.Values)
 	}
-	differ := writeValues(t, values, "differ.yaml", "entry:\n- register: claim-quality.md\n  title: A Result\n  rigor: 0.9\n  rationale: Shown.\n")
+	differ := writeValues(t, values, "differ.yaml", "entry:\n- register: claim-rigor.md\n  title: A Result\n  rigor: 0.9\n  rationale: Shown.\n")
 	again := run("unchanged", "insert-claim-entry", "--no-refresh", "--values", differ)
 	adopted, _ := again.Values["adopted"].([]any)
 	if a, _ := adopted[0].(map[string]any); len(adopted) != 1 || a["entry"] != 1 || a["id"] != ids[0] || !slices.Equal(anyStrings(a["differs"]), []string{"rigor"}) {
@@ -90,13 +90,13 @@ func TestMaintenanceResultsParse(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"deps", ids[0]}, {"deps", ids[0], "-i"}, {"gated-on", ids[0]}, {"cited-by", ids[0]}, {"find", ""},
-		{"referenced-by", ids[0]}, {"solidity-below", "0.5"}, {"subtree", ""}, {"weak-points"},
+		{"referenced-by", ids[0]}, {"strength-below", "--max-strength", "0.5"}, {"subtree", ""}, {"weak-points"},
 		{"show", ids[0]}, {"stats"},
 	} {
 		run("done", args...)
 	}
 	run("refused", "show", "clm-zzzzzz")
-	run("refused", "solidity-below", "half")
+	run("refused", "strength-below", "--max-strength", "half")
 	page := run("done", "find", "", "--limit", "1", "--offset", "1")
 	if page.Values["count"] != 2 || page.Values["offset"] != 1 || page.Values["truncated"] != false || len(page.Values["results"].([]any)) != 1 {
 		t.Errorf("find --limit 1 --offset 1 = %v, want the second of two, nothing past it", page.Values)
@@ -221,7 +221,7 @@ func TestDefaultLimitFitsTheToolResultCap(t *testing.T) {
 		for _, p := range append(query.SubtreePayload(ix, ""), "", ".") {
 			cases = append(cases, []string{"subtree", p})
 		}
-		cases = append(cases, []string{"find", ""}, []string{"solidity-below", "1.1"}, []string{"weak-points", "--max-solidity", "1.1", "--min-dependents", "0"})
+		cases = append(cases, []string{"find", ""}, []string{"strength-below", "--max-strength", "1.1"}, []string{"weak-points", "--max-strength", "1.1", "--min-dependents", "0"})
 		for _, c := range cases {
 			out, code := kbase(t, repo, c...)
 			if code != 0 {

@@ -22,8 +22,9 @@ this file, is the reference for available actions. Key habits: `just edit-gate` 
 hermetic `just test-integration` omnibus and says so in its docstring.
 
 `just dist` cross-compiles every target from one host (pure Go, no extra toolchain setup needed) and
-runs `checkpoint` first — a cross-build is what users receive, so it ships only from a tree that
-passes the full gate.
+stages the signed distro tarball and installer. Run it on a tree that has passed `just checkpoint`: a
+cross-build is what users receive, so the gate is a precondition of the release, not a step the
+recipe runs.
 
 **No built binaries live in the repo.** `bin/` and `dist/` are gitignored build products;
 distribution is the `just dist` tarball attached to a GitHub release by the user. Never commit build
@@ -139,8 +140,9 @@ single source. Working habits they impose:
   *iterates* — a census, a breakdown, a union, an ordering — reads the list and names no kind. A
   site that *branches* names kinds, and its table must be total over the list. A count derived from
   the list ("all four kinds") is the same copy in a shorter form.
-- **Never spell a relation.** The relation names (`kb.RelationDepends`, `RelationReferences`,
-  `RelationDemoted`, the premise relations, and `kb.Relations`) live in `internal/kb/schema.go` and
+- **Never spell a relation.** The relation names (`kb.RelationSupports`, `kb.RelationFounds`,
+  `kb.RelationLifts`, `kb.RelationRefutes`, `kb.RelationReferences` and `kb.RelationDemoted`, with
+  `kb.Relations` and `kb.ScoringRelations` holding the sets) live in `internal/kb/schema.go` and
   nowhere else; a site that needs one names the constant. `cmd/relationpolicy_test.go` is an AST
   scan that fails on a spelling elsewhere, with a short allowlist of files where the same word means
   something else.
@@ -168,6 +170,14 @@ single source. Working habits they impose:
 - **Compatibility is judged by kbase's own readers and checks, never by a byte diff of
   presentation.** Byte equality is asserted only where SPEC "Compatibility contract" names a reader
   that needs it.
+- **A derived strength is one value; only its spelling differs.** The walk computes and publishes at
+  full precision, so a dependent multiplies its source's exact strength. A record — the `- strength:`
+  line and a premise bullet's `(strength …)` — carries the value in the fewest decimals that read
+  back as it: four in the ordinary case, more where four would lose it, trailing zeros trimmed; and
+  it is never the source of a dependent's arithmetic — the walk reads the value, not the record's
+  spelling. A surface that shows a value to a reader puts it at two decimals — a query result as the
+  number, the trace on a `- strength:` line as the spelling — while `verify` quotes the record's
+  spelling, because its message is about the record.
 - **Name the producer before you write the refusal.** Before writing code that refuses, raises, or
   reports a finding on a state, name what produces that state. If nothing on a reachable path
   produces it, the code restates a design the rest of the code already states; delete it. If it can

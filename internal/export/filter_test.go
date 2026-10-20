@@ -384,10 +384,10 @@ func TestFilterResidue(t *testing.T) {
 }
 
 func TestFilterDropsMarkers(t *testing.T) {
-	stream := "# A {#d1-a}\n\n<!-- id: clm-abc123 -->\n\nA claim. <!-- claim-quality: solid -->\n"
+	stream := "# A {#d1-a}\n\n<!-- id: clm-abc123 -->\n\nA claim. <!-- claim-rigor: solid -->\n"
 	latex, findings := runFilter(t, stream, fixtureTables(), false)
 	wantContains(t, latex, "A claim.")
-	wantAbsent(t, latex, "clm-abc123", "claim-quality")
+	wantAbsent(t, latex, "clm-abc123", "claim-rigor")
 	wantFindings(t, findings, "")
 }
 

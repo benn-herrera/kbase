@@ -1,17 +1,18 @@
 ---
 kind: leaf
-no-claim: "hosts an experiment and two support nodes only"
+no-claim: "hosts an experiment and two analysis nodes only"
 experiment-nodes:
   - exp-id: exp-gg7777
     status: run
-    strengthens:
+    rigor: 1.0
+    lifts:
       - clm-aa1111: 0.8
-support-nodes:
-  - sup-id: sup-hh8888
-    supports:
+analysis-nodes:
+  - ana-id: ana-hh8888
+    lifts:
       - clm-bb2222: 1.0
-  - sup-id: sup-ii9999
-    supports:
+  - ana-id: ana-ii9999
+    refutes:
       - clm-bb2222: "*pending*"
       - clm-cc3333: 0.5
 ---

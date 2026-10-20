@@ -222,10 +222,10 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		t.Errorf("planned claims = %+v, want one titled by its paragraph's sentence", intro.Claims)
 	}
 	files := snapshot(t, f.repo)
-	if !strings.Contains(files["kb-root/a-small-paper/claim-quality.md"], title) {
+	if !strings.Contains(files["kb-root/a-small-paper/claim-rigor.md"], title) {
 		t.Error("the prose claim reached no register")
 	}
-	if !strings.Contains(files["kb-root/a-small-paper/introduction.md"], "under mild conditions. <!-- claim-quality: clm-") {
+	if !strings.Contains(files["kb-root/a-small-paper/introduction.md"], "under mild conditions. <!-- claim-rigor: clm-") {
 		t.Errorf("the prose claim's paragraph carries no marker:\n%s", files["kb-root/a-small-paper/introduction.md"])
 	}
 
@@ -393,9 +393,9 @@ func TestNoInferenceCutsTheSettledRing(t *testing.T) {
 	var ids, depends, demoted []string
 	for _, e := range st.ClaimEntries {
 		ids = append(ids, e.ID)
-		for _, d := range e.DependsOn {
-			if d.Relation == kb.RelationDepends && d.TargetKind == kb.NodeKindClaim {
-				depends = append(depends, e.ID+" -> "+d.Target)
+		for _, d := range e.Premises {
+			if d.Relation == kb.RelationSupports && d.TargetKind == kb.NodeKindClaim {
+				depends = append(depends, d.Source+" -> "+e.ID)
 			}
 		}
 		for _, d := range e.Demoted {

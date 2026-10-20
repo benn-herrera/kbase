@@ -9,15 +9,16 @@ values it cannot render and read back. This file is conduct, not format.
 Two graphs over one tree of Markdown files, beside which sit the images leaves embed, under
 `assets/` directories. The **topography graph** is the navigation hierarchy: entry point, domain
 indexes, subtopic indexes, leaves. The **claim graph** is a graph over results, of node kinds
-{node-kinds}, registered in `claim-quality.md` files — the framework kinds in `invariants.md`
-instead (below) — and materialized under `.index/`. Its `depends` and `supports` edges close no
-cycle: solidity is undefined on one, and verify fails it. `references` edges carry no solidity and
-may cycle; so may `demoted` edges, the `depends` edges the build's cycle breaking cut. A leaf is a container — its position label says where it sits in the hierarchy and
-nothing about what it hosts.
+{node-kinds}, registered in `claim-rigor.md` files — axioms are declared in `axioms.md` instead
+(below) — and materialized under `.index/`. Its four scoring relations — `supports`, `founds`,
+`lifts` and `refutes` — close no cycle: the derived value is undefined on one, and verify fails it.
+`references` and `demoted` edges are unscored and may cycle; a `demoted` edge is a `supports` edge
+the build's cycle breaking cut. A leaf is a container — its position label says where it sits in the
+hierarchy and nothing about what it hosts.
 
-Corpus invariants — notation and cross-cutting definitions — belong in `invariants.md`, which is
-also the file the toolchain parses for framework nodes, so a line in it shaped like a declaration
-becomes one.
+Corpus axioms — notation and cross-cutting definitions — are declared in `axioms.md`, which is the
+file the toolchain parses for axiom nodes: a heading in it shaped `### Axiom <label>: Title` becomes
+one. Prose may call an axiom an invariant or a framework premise; the graph has one word for it.
 
 ## Use the agents
 
@@ -63,10 +64,10 @@ work.
 
 ## Authored versus derived
 
-Authored: leaf content, leaf frontmatter, register entry text, dependency membership, and local
-rigor (`confidence` on a claim, `quality` on a support). Derived and regenerated: solidity, build
-status, the parenthetical solidity annotations, subtree aggregates, the `Leaf references:` line in
-each register entry, the `claim-graph.svg` and `claim-graph-digest.svg` sheets, and everything under `.index/`. **A hand-edited derived
+Authored: leaf content, leaf frontmatter, register entry text, premise membership, a node's local
+`rigor`, and a scoring edge's `bearing`. Derived and regenerated: `strength`, build status, the
+parenthetical `(strength …)` annotations, subtree aggregates, the `Leaf references:` line in each
+register entry, the `claim-graph.svg` and `claim-graph-digest.svg` sheets, and everything under `.index/`. **A hand-edited derived
 field is a verifier failure**, not a shortcut — the value is overwritten and the drift is reported.
 
 Authored does not mean typed. Everything authored except leaf prose is metadata, and metadata is
@@ -81,12 +82,12 @@ have made anyway is what answers the question.
 Refresh regenerates derived state; verify is the read-only gate. Refresh before verify, always, and
 leave the gate green. A failure marked refresh-fixable means run refresh; anything else is a real
 defect in what was authored, and re-running will not clear it. `verify` also lists every `demoted`
-edge under `findings`, which are not failures; `resolve-demoted` removes one or restores it to
-`depends`, refusing a restore that would close a cycle.
+edge under `findings`, which are not failures; `resolve-demoted` removes one or restores it to a
+`supports` premise edge, refusing a restore that would close a cycle.
 
 `claim-graph.svg` and `claim-graph-digest.svg` beside this file and `<volume>/claim-graph.svg` in
 each volume are the derived files no verifier reads; the digest and the volume sheets exist only where
-the KB holds two or more volumes with claims. Refresh redraws them on every run, so a hand
+the KB holds two or more volumes with nodes. Refresh redraws them on every run, so a hand
 edit to one is not reported — the next refresh overwrites it. kbase draws them through Graphviz
 `dot`; without `dot` on `PATH` it draws nothing, leaves existing sheets as they stand, and writes a
 placeholder `claim-graph.svg` only where none exists. Only documents under `kb-root/` are
@@ -101,11 +102,11 @@ raise, never a location to choose.
 afterwards: kbase stamps them where none stands — at birth through `kbase init`, at a build's
 validation gate — and leaves whole whichever of them a project had already authored for itself.
 Beside them the same stamp writes `CLAUDE.md` as the one line `@AGENTS.md`. No agent authors or
-edits any of the three, and corpus content belongs in none — it belongs in `invariants.md`.
+edits any of the three, and corpus content belongs in none — it belongs in `axioms.md`.
 
 ## Citations
 
-In authored files — registers, indexes, summaries, `invariants.md`, and meta-docs — a reference to a
+In authored files — registers, indexes, summaries, `axioms.md`, and meta-docs — a reference to a
 node is a structured field, a marker, or a link, never an id or a rule name sitting loose in prose.
 A cited authority carries the minimal quoted excerpt that makes the citing statement falsifiable
 where it stands, linked to a durable path in this tree; one clause, not the passage, because a

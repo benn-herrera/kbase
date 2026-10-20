@@ -11,7 +11,7 @@ A `leaf` is translated source — the corpus's own text carried across, not a su
 is navigation the build wrote: the `entry-point` at the root, and an `index` in each directory that
 holds documents beneath it. An index carries no translated source of its own — a section's own prose
 is a leaf beneath it. Those three kinds are the documents, and nothing else is one: no
-`claim-quality.md` register, no `invariants.md`, not this file, `AGENTS.md` or `CONVENTIONS.md`, and
+`claim-rigor.md` register, no `axioms.md`, not this file, `AGENTS.md` or `CONVENTIONS.md`, and
 none of the images under `assets/` that leaves embed. Every document names its kind in the `kind`
 field of its frontmatter. Reading order is what the indexes themselves carry.
 
@@ -20,46 +20,60 @@ field of its frontmatter. Reading order is what the indexes themselves carry.
 This graph is over results rather than documents: what the corpus establishes, what each result
 stands on, and which outside works it leans on.
 
-Every node has an entry in a `claim-quality.md` register: its title, its quality values, and a
-rationale for them. An entry for a result of this corpus links the document that states it. A
-domain's register holds that domain's nodes; the register at this root holds the outside works the
-corpus cites.
+A node is one of five kinds: `claim`, `analysis`, `experiment`, `work` or `axiom`. A claim, an
+analysis and a cited work have an entry in a `claim-rigor.md` register — its title, its local
+`rigor`, and a rationale for the judgement — and a claim and an analysis also carry the `strength`
+derived from their premises. An entry for a result of this corpus links the document that states it.
+A domain's register holds that domain's nodes; the register at this root holds the outside works the
+corpus cites. An experiment is declared in the document that reports it, with its `status` and its own
+pairs, and has no register entry. An axiom is declared in `axioms.md` beside the root and carries no
+value of its own — its strength is `1.0` by definition — and prose may call one an invariant or a
+framework premise.
 
-Each edge between the nodes is of one class. A `depends` edge runs from a result to what it was
-derived from. `supports` and `strengthens` run the other way, from evidence to the result it lifts.
-`rests-on` leaves the corpus: it points at a work this KB cites and does not contain. A
-`references` edge records that one result's own text names another, and nothing rests on it. A
-`demoted` edge is a `depends` edge the build's cycle breaking cut because it closed a circle; it
-keeps its origin, cited or inferred, and nothing rests on it either.
+Each edge between the nodes is of one class, and every scoring edge runs from what bears on the
+argument to what it supports. `supports` runs from a claim, an experiment or an axiom to the claim or
+analysis it supports. `founds` runs from a cited work — one this KB names and does not contain — to
+the claim or analysis that uses it. `lifts` runs from an analysis or an experiment to the claim it
+corroborates, raising that claim above what its premises alone would give. `refutes` runs from a
+claim, an analysis or an experiment and caps the claim it attacks. Each of the four carries a
+`bearing`: how much of the supporter's value bears on the target, a number from 0 to 1 or
+{pending-literal}. A `references` edge records that one result's own text names another, and nothing
+rests on it. A `demoted` edge is a `supports` edge the build's cycle breaking cut because it closed a
+circle; it keeps its origin, cited or inferred, and nothing rests on it either.
 
 [`claim-graph.svg`](claim-graph.svg) beside this file is rendered from `.index/` by refresh and
 authored by nobody — read it, never edit it. It draws every volume as a cluster.
 {digest-chunk}`<volume>/claim-graph.svg` beside each volume's `index.md` shows that volume and every
 node one edge from it.
-A sheet draws premise relations only:
-no `references` edge, and every `demoted` one as a cut. Of the drawn `depends` edges only the transitive reduction
-appears, so a missing stroke is not a missing edge — `.index/` carries every edge. An edge is black
-solid where cited (the paper's text marks the dependency), blue dashed where inferred (the build
-found it with no mark in the text), red dotted where cut — heavier where the cut edge was cited,
-lighter where inferred. A node's shape gives its kind —
-a labelled block with a bold frame, an equation, prose, a work — and a scored node is filled by its
-solidity band. Claims with no drawn edge are listed as text, volume by volume. Every node links to
-its register entry, and a legend keys the rest.
+A sheet draws the four scoring relations and no `references` edge, and every `demoted` one as a cut;
+every arrow points from the supporter to what it supports. Of the drawn `supports` edges only the
+transitive reduction appears, so a missing stroke is not a missing edge — `.index/` carries every
+edge. A `supports` edge is black solid where cited (the paper's text marks the dependency) and blue
+dashed where inferred (the build found it with no mark in the text); `founds`, `lifts` and `refutes`
+each have a stroke of their own; and a cut is red dotted, heavier where the cut edge was cited,
+lighter where inferred. A node's shape gives its kind — a labelled block with a bold frame, an
+equation, prose, an analysis, an experiment, an axiom, a work — and a claim's or an analysis's fill
+is its strength band. Nodes with no drawn edge are listed as text, volume by volume. Every node links
+to its register entry, and a legend keys the rest.
 
-A claim carrying no confidence value reads {pending-literal} wherever it appears, and so does its
-solidity: that says *unscored*, not *low* and not *doubted*.
+A claim, analysis, work or experiment with no `rigor` reads {pending-literal} wherever it appears,
+and so does the `strength` of a claim or an analysis whose value cannot be derived yet: that says
+*unscored*, not *low* and not *doubted*. A {pending-literal} bearing takes its edge out of the
+derivation until it is judged, and a bearing of `0` is a judgement that participates.
 
 ## Current Figures
 
 This file states no counts, because the KB changes after it is written. The current ones come from
 `kbase stats`, run from the project root that holds this KB.
 
-`kbase stats` counts the claim graph: one count per node kind, then `depends_on_edges`, every edge
-of every class. The claims per band are under `solidity_bands`: the {pending-literal} band holds the
-unscored claims, and every other band holds scored ones.
+`kbase stats` counts the claim graph: one count per node kind — `claims`, `analyses`, `experiments`,
+`axioms`, `works` — then `edges`, every edge of every class, and `demoted_edges` beside it. The claims
+per band are under `strength_bands`: the {pending-literal} band holds the unscored claims, and every
+other band holds scored ones.
 
-It does not split the edges by class. Each edge is one line of `.index/depends-on.yaml`, `--- `
-then the edge as a JSON object, and the object's `relation` field names its class.
+It does not split the edges by class. Each edge is one line of `.index/edges.yaml`, `--- ` then the
+edge as a JSON object, and the object's `relation` field names its class and its `bearing` field its
+scalar — a number written as text, or {pending-literal}, null where the relation carries none.
 
 No command counts the documents: `stats` counts the claim graph and `verify` reports faults.
 

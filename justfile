@@ -90,10 +90,6 @@ LIVE_CONFIG_DIR := TEST_DATA_FIXTURES_DIR / "config"
 # tests of.
 EXPORT_CHECK_DIR := "tools/export"
 
-# dist-only build trim: -trimpath drops local filesystem paths from the
-# binary; -s -w strips symbol table + DWARF (panic traces keep function
-# names). Local `just build` stays fat for debugging.
-RELEASE_FLAGS := "-trimpath -ldflags=-s\\ -w"
 GOPKGS := "./..."
 GOSRCDIRS := "cmd internal"
 
@@ -121,6 +117,23 @@ test:
 test-race:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test -race ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-race_log.txt"
+
+[doc("run one package's unit tests and its subpackages: just test-pkg ./internal/kb, or internal/kb, or internal/kb/... — one package alone, for testing it while OTHER packages still fail to build; log under the package's name in the unit-test output directory; VERBOSE=1 for per-test output; a package that is not named, or that names the whole repository, is refused")]
+test-pkg pkg:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkg="{{pkg}}"
+    # Reduce the spellings to the path alone; `./<pkg>/...` is built below, so a
+    # bare pattern is never handed to go test.
+    pkg="${pkg#./}"
+    pkg="${pkg%/...}"
+    pkg="${pkg%/}"
+    if [[ -z "${pkg}" || "${pkg}" == "." || "${pkg}" == "..." ]]; then
+        printf 'error: name the package to test, e.g. just test-pkg ./internal/kb — the whole repository is `just test`.\n' >&2
+        exit 1
+    fi
+    mkdir -p "{{UNIT_TEST_OUT_DIR}}"
+    go test ${VERBOSE:+-v} "./${pkg}/..." 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-pkg_${pkg//\//-}_log.txt"
 
 [doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the export contract checker's own; log in the unit-test output directory")]
 test-export-forms:
@@ -1117,7 +1130,7 @@ _test-integration-results-fixture: build
     run gated-on done gated-on "${id}"
     run cited-by done cited-by "${id}"
     run referenced-by done referenced-by "${id}"
-    run solidity-below done solidity-below 0.5
+    run strength-below done strength-below --max-strength 0.5
     run subtree done subtree ""
     run weak-points done weak-points
     run show done show "${id}"
@@ -1199,7 +1212,7 @@ _test-integration-init: build
     # its own birth; the commit's subject and trail are ledger's, pinned in
     # ledger_test.go — the recipe never reads git.
     git init --quiet "${repo}"
-    printf '%s\n' 'entry:' '- register: claim-quality.md' '  title: An Authored Result' '  rigor: 0.5' '  rationale: Written at birth.' > "${out}/seed.yaml"
+    printf '%s\n' 'entry:' '- register: claim-rigor.md' '  title: An Authored Result' '  rigor: 0.5' '  rationale: Written at birth.' > "${out}/seed.yaml"
     printf '%s\n' 'entry:' '- document: a.md' '  kind: leaf' '  claims: ["@ID@"]' > "${out}/sf.json"
     printf '%s\n' 'entry:' '- document: a.md' '  id: "@ID@"' '  locator: authored text stands' > "${out}/mc.json"
     printf '%s\n' '# A Leaf' '' 'The authored text stands. It cites nothing it cannot show.' > "${out}/leaf.md"
@@ -1947,12 +1960,17 @@ _test-integration-config: build
     fi
     printf 'integration(test-integration-config) ok\n'
 
+[doc("NEEDS expect (the trust prompt is answered over a pty): hermetic run of tools/scripts/build-dist.sh against stub go, gpg, curl and uname — the release layout it stages, the installer checked byte for byte against its golden, the platform matrix, what the installer verifies before it installs anything (a tampered tarball, another file's signature, a 404 in place of a signature), a second run at one version, the version-string refusal, and what it does about the signing key; scratch under .opencode-temp/test-dist/, log in the transient tree")]
+test-dist:
+    @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist"
+    @tools/scripts/test-build-dist.sh 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist/log.txt"
+
 # The omnibus composes the HERMETIC recipes and writes no log of its own: each
 # already preserves its full output under its own name, and a second copy of
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
 [doc("run every hermetic integration test (the ones needing pandoc, python3, the adjagent clone or a provider are excluded; run those by name)")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-mcp test-integration-config
+test-integration: test-integration-results-fixture test-integration-init test-integration-mcp test-integration-config test-dist
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build
@@ -1964,71 +1982,18 @@ clean:
 
 # cross-platform dist builds (apple-silicon mac, x86_64 windows, x86_64 linux),
 # staged and signed. staging dir also gets user-facing project docs.
-# distro artifacts in {{DIST_DIR}}: kbase-<version>.tgz, kbase-<version>.asc, install-kbase-<version>.sh
+# distro artifacts in {{DIST_DIR}}: kbase-<version>.tgz, kbase-<version>.asc, install-kbase-<version>.sh, install-kbase-<version>.sh.asc
 # tarball unpacks to kbase-<version>/.
-# Version comes from the binary itself (internal/version
-# stays the single source). It runs the full checkpoint first: a cross-build
-# is what users receive, so it ships only from a tree that passes the gate
-# every commit passes.
-[doc("checkpoint, cross-build every target, stage the user distro tarball")]
-dist: #checkpoint
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{BIN_DIR}}
-    command rm -f "{{BIN_DIR}}"/kbase*
-    GOOS=darwin  GOARCH=arm64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-darwin-arm64 ./cmd
-    GOOS=linux   GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-linux-amd64 ./cmd
-    GOOS=windows GOARCH=amd64 go build {{RELEASE_FLAGS}} -o {{BIN_DIR}}/kbase-windows-amd64.exe ./cmd
-    ver="v$(go run ./cmd --version)"
-    ver_dir="kbase-${ver}"
-    tgz="${ver_dir}.tgz"
-    tgz_asc="${tgz}.asc"
-    inst="install-${ver_dir}.sh"
-    command rm -rf "{{DIST_DIR}}/${ver_dir}" "{{DIST_DIR}}/${tgz}" "{{DIST_DIR}}/${tgz_asc}" "{{DIST_DIR}}/${inst}"
-    stage="{{DIST_DIR}}/${ver_dir}"
-    mkdir -p "${stage}"
-    cp "{{BIN_DIR}}"/kbase-*-* "${stage}/"
-    (
-      cd "${stage}"
-      for KB in *; do
-        gpg --detach-sign --armor "${KB}"
-      done
-    )
-    cp USER_CONVENTIONS.md "$stage/CONVENTIONS.md"
-    cp README.md LICENSE "$stage/"
-    tar -czf "{{DIST_DIR}}/${tgz}" -C "{{DIST_DIR}}" "${ver_dir}"
-    gpg --detach-sign --armor "{{DIST_DIR}}/${tgz}"
-    cat > "{{DIST_DIR}}"/${inst} << EOF
-    #!/usr/bin/env bash
-    set -euo pipefail
-    command -v gpg > /dev/null || { echo "gpg not installed or not in PATH."; exit 1; }
-    printf "If gpg check fails for the tgz or any binary DO NOT USE THIS DOWNLOAD!\n\n"
-    curl -Ls https://github.com/benn-herrera/public-keys/raw/refs/heads/main/pub-sig-benn-herrera.asc | gpg --import
-    [[ -f "${tgz_asc}" ]] || curl -LO "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz_asc}"
-    [[ -f "${tgz}" ]] || curl -LO "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz}"
-    gpg --verify "${tgz_asc}" "${tgz}"
-    [[ -d "${ver_dir}" ]] || tar xzf "${tgz}"
-
-    gpg --verify "./${ver_dir}/kbase-darwin-arm64.asc" "./${ver_dir}/kbase-darwin-arm64"
-    gpg --verify "./${ver_dir}/kbase-linux-amd64.asc" "./${ver_dir}/kbase-linux-amd64"
-    gpg --verify "./${ver_dir}/kbase-windows-amd64.exe.asc" "./${ver_dir}/kbase-windows-amd64.exe"
-
-    case \$(uname) in
-      Darwin)
-        command cp -vf "./${ver_dir}/kbase-darwin-arm64" "./${ver_dir}/kbase"
-        xattr -d com.apple.quarantine "./${ver_dir}/kbase" 2> /dev/null || true
-        ;;
-      Linux)
-        command cp -vf "./${ver_dir}/kbase-linux-amd64" "./${ver_dir}/kbase"
-        ;;
-      MINGW64*|MSYS*)
-        command cp -vf "./${ver_dir}/kbase-windows-amd64.exe" "./${ver_dir}/kbase.exe"
-        ;;
-      *) echo "\$(uname) is not supported." 1>&2; exit 1;;
-    esac
-    EOF
-    chmod 755 "{{DIST_DIR}}/${inst}"
-    echo "dist: {{DIST_DIR}}/${tgz} {{DIST_DIR}}/${tgz_asc} {{DIST_DIR}}/${inst}"
+# Signing key, by fingerprint: 5E19B09B9B4CD771F938734C8418EF9F1BE16E1E
+# (Benn Herrera <benn@bennherrera.dev>; tools/scripts/build-dist.sh holds the
+# same constant).
+# Version comes from the binary itself (internal/version stays the single
+# source). Run it on a tree that has passed the checkpoint: a cross-build is
+# what users receive, so the gate is a precondition of the release, not a step
+# this recipe runs.
+[doc("cross-build every target and stage the signed user distro tarball")]
+dist:
+    @BIN_DIR="{{BIN_DIR}}" DIST_DIR="{{DIST_DIR}}" tools/scripts/build-dist.sh
 
 [doc("remove every build output: bin/, dist/, and build/ entirely")]
 nuke:
@@ -2065,6 +2030,24 @@ fmt-check:
       echo "run 'just fmt' to fix."; \
       exit 1; \
     fi
+
+# readme-assets/strength-walk.svg is the rendering of STRENGTH_SCORING_SCHEME.md's
+# graph, and readme-assets/strength-walk.dot is its source of record: the file a
+# reader reviews and edits. dot lays the graph out itself, so the image is a
+# function of the .dot AND the Graphviz version that rendered it — an upgrade
+# re-renders different bytes from unchanged source. The SVG 1.1 DOCTYPE's two
+# lines are dropped, so the checked-in image names no resource a viewer would
+# fetch.
+[private]
+_strength-walk-svg out:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v dot > /dev/null || { echo "error: no Graphviz dot on PATH — install graphviz, then re-run." >&2; exit 1; }
+    dot -Tsvg readme-assets/strength-walk.dot | sed '/^<!DOCTYPE svg/,/svg11\.dtd">$/d' > "{{out}}"
+
+[doc("render readme-assets/strength-walk.svg from readme-assets/strength-walk.dot with Graphviz dot")]
+strength-walk:
+    @{{just_executable()}} _strength-walk-svg readme-assets/strength-walk.svg
 
 # add-dependency pins ONE vetted module into go.mod/go.sum. It exists so
 # adding a dependency has a recipe like every other toolchain operation —

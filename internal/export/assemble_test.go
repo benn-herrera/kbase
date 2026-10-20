@@ -46,7 +46,7 @@ func exportKB() map[string]string {
 	files["vol2/v2-leaf.md"] = "---\nkind: leaf\n---\n[↑ Second Volume](index.md)\n\n# §1 The Second Leaf\n\n" +
 		"> **Lemma**\n>\n> **Lemma 1**. Body cites <span class=\"citation\" data-cites=\"smith2020\">(Smith)</span>.\n"
 	files["vol2/v2-noheading.md"] = "---\nkind: leaf\n---\n[↑ Second Volume](index.md)\n\nJust prose.\n"
-	files["claim-quality.md"] = "# Register\n\n## Smith, *A Work*\n<!-- id: work-smith2020 -->\n\n### Quality\n- strength: 0.70\n- rationale: sound.\n"
+	files["claim-rigor.md"] = "# Register\n\n## Smith, *A Work*\n<!-- id: wrk-smith2020 -->\n\n### Rigor\n- rigor: 0.70\n- rationale: sound.\n"
 	files["vol1/fig.png"] = string(fig)
 	files["vol1/nested/data.csv"] = "a,b\n"
 	files["logo.png"] = "outside every volume"

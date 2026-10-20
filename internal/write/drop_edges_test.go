@@ -21,8 +21,8 @@ func TestDropClaimEdges(t *testing.T) {
 		t.Helper()
 		root := seedKB(t)
 		id := insertClaim(t, root, "Second Result",
-			"  depends-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
-		if res := run(t, root, "add-depends-on", "entry:\n- id: "+id+"\n  references:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
+			"  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
+		if res := run(t, root, "add-rests-on", "entry:\n- id: "+id+"\n  references:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
 			t.Fatalf("add references: %+v", res)
 		}
 		return root, id
@@ -35,7 +35,7 @@ func TestDropClaimEdges(t *testing.T) {
 		t.Fatalf("drop both classes: %+v", res)
 	}
 	text := register(t, root)
-	if strings.Contains(text, "- depends-on:") || strings.Contains(text, "- references:") {
+	if strings.Contains(text, "- "+kb.ListRestsOn+":") || strings.Contains(text, "- references:") {
 		t.Errorf("an edge list survived:\n%s", text)
 	}
 	if !strings.Contains(text, "## Seed Result") || !strings.Contains(text, "rationale: Seeded.") {
@@ -54,8 +54,8 @@ func TestDropClaimEdges(t *testing.T) {
 		t.Fatalf("drop references: %+v", res)
 	}
 	text = register(t, root)
-	if !strings.Contains(text, "- depends-on:\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("the depends-on list did not survive:\n%s", text)
+	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
+		t.Errorf("the rests-on list did not survive:\n%s", text)
 	}
 	if strings.Contains(text, "- references:\n  - "+seedClaim+" — Seed Result") {
 		t.Errorf("the references list did not go:\n%s", text)
@@ -114,9 +114,9 @@ func TestDropClaimEdgesEmptyList(t *testing.T) {
 func TestDropInboundEdges(t *testing.T) {
 	root := seedKB(t)
 	b := insertClaim(t, root, "Bound Result",
-		"  depends-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
+		"  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
 	insertClaim(t, root, "Dependent Result",
-		"  depends-on:\n  - id: "+b+"\n    context: rests on the bound result\n")
+		"  rests-on:\n  - id: "+b+"\n    context: rests on the bound result\n")
 	d := insertClaim(t, root, "Isolated Result", "")
 
 	res := run(t, root, "drop-inbound-edges", "entry:\n- id: "+b+"\n", false)
@@ -124,11 +124,11 @@ func TestDropInboundEdges(t *testing.T) {
 		t.Fatalf("drop inbound: %+v", res)
 	}
 	text := snapshot(t, root)[kb.RegisterFile]
-	if strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+b+" — Bound Result") {
-		t.Errorf("C's depends-on bullet naming B survived:\n%s", text)
+	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+b+" — Bound Result") {
+		t.Errorf("C's rests-on bullet naming B survived:\n%s", text)
 	}
-	if !strings.Contains(text, "- "+kb.IndexDependsOn+":\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("B's own depends-on list did not survive:\n%s", text)
+	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
+		t.Errorf("B's own rests-on list did not survive:\n%s", text)
 	}
 	if !strings.Contains(text, "## Seed Result") || !strings.Contains(text, "rationale: Seeded.") {
 		t.Errorf("the seed entry moved:\n%s", text)
@@ -171,7 +171,7 @@ func seedSharedLeaf(t *testing.T, extra string) (string, string) {
 func TestDropClaimNode(t *testing.T) {
 	seed := func(t *testing.T) (string, string) {
 		t.Helper()
-		return seedSharedLeaf(t, "  depends-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
+		return seedSharedLeaf(t, "  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
 	}
 
 	root, b := seed(t)
@@ -281,7 +281,7 @@ func TestDropClaimNodeRestatedLeaf(t *testing.T) {
 func TestDropClaimNodeDemotedRow(t *testing.T) {
 	root := seedKB(t)
 	b := insertClaim(t, root, "Bound Result", "")
-	y := insertClaim(t, root, "Holding Result", "  depends-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
+	y := insertClaim(t, root, "Holding Result", "  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
 	entryY := func() string {
 		t.Helper()
 		register := snapshot(t, root)[kb.RegisterFile]
@@ -319,24 +319,24 @@ func TestDropClaimNodeBatchEmptiesLeaf(t *testing.T) {
 	}
 }
 
-// TestDropClaimNodeSupportDependsOn: a support entry whose depends-on names
-// the node refuses the drop, naming the bullet's path:line. The support
+// TestDropClaimNodeAnalysisPremise: an analysis entry whose rests-on list names
+// the node refuses the drop, naming the bullet's path:line. The analysis
 // stands in a register of its own, so the line is the same whether read
 // before or after the node's entry leaves the claim register.
-func TestDropClaimNodeSupportDependsOn(t *testing.T) {
-	const supports = "supports/claim-quality.md"
+func TestDropClaimNodeAnalysisPremise(t *testing.T) {
+	const analyses = "analyses/claim-rigor.md"
 	root := seedKB(t)
 	b := insertClaim(t, root, "Bound Result", "")
-	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(supports)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(analyses)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if res := run(t, root, "insert-support-entry", "entry:\n- register: "+supports+"\n  title: A Support\n  rigor: \"*pending*\"\n  rationale: Rests on the bound.\n  depends-on:\n  - id: "+b+"\n", true); res.Outcome != result.Done {
-		t.Fatalf("insert support: %+v", res)
+	if res := run(t, root, "insert-analysis-entry", "entry:\n- register: "+analyses+"\n  title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Rests on the bound.\n  rests-on:\n  - id: "+b+"\n", true); res.Outcome != result.Done {
+		t.Fatalf("insert analysis: %+v", res)
 	}
-	at := fmt.Sprintf("%s:%d", supports, lineOf(t, snapshot(t, root)[supports], b))
+	at := fmt.Sprintf("%s:%d", analyses, lineOf(t, snapshot(t, root)[analyses], b))
 	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
 	if !refusedNaming(res, at, b) {
-		t.Errorf("support depends-on: %+v, want refused naming %s and %s", res, at, b)
+		t.Errorf("analysis rests-on: %+v, want refused naming %s and %s", res, at, b)
 	}
 }
 

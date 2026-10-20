@@ -51,18 +51,30 @@ func PyFloatRepr(f float64) string {
 	return sign + digits[:point] + "." + digits[point:]
 }
 
-// RenderSolidityLine is an entry's derived "- solidity:" line; a nil value
-// is the pending placeholder, carrying no phrase and no trace.
-func RenderSolidityLine(valueText *string, statusPhrase, trace string) string {
+// RenderStrengthLine is an entry's derived "- strength:" line; a nil value is
+// the pending placeholder, carrying no phrase and no trace.
+func RenderStrengthLine(valueText *string, statusPhrase, trace string) string {
 	if valueText == nil {
-		return SolidityPendingLine
+		return StrengthPendingLine
 	}
-	return "- solidity: " + *valueText + " (" + statusPhrase + ")" + trace
+	return "- strength: " + *valueText + " (" + statusPhrase + ")" + trace
 }
 
-// RenderSolidityAnnotation is a claim-target depends-on bullet's
-// "(solidity …)" annotation.
-func RenderSolidityAnnotation(valueText string) string { return "(solidity " + valueText + ")" }
+// RenderStrengthAnnotation is a premise bullet's "(strength …)" annotation:
+// the source's recorded derived strength.
+func RenderStrengthAnnotation(valueText string) string { return "(strength " + valueText + ")" }
+
+// BearingText is a bearing as a bullet writes it: its value, or the pending
+// literal.
+func BearingText(b Bearing) string {
+	if b.Pending {
+		return PendingLiteral
+	}
+	return PyFloatRepr(b.Value)
+}
+
+// RenderBearingAnnotation is a scoring edge's "(bearing …)" annotation.
+func RenderBearingAnnotation(b Bearing) string { return "(bearing " + BearingText(b) + ")" }
 
 // RenderOriginAnnotation is a demoted bullet's "(origin …)" annotation.
 func RenderOriginAnnotation(origin string) string { return "(origin " + origin + ")" }

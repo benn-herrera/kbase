@@ -28,10 +28,15 @@ const (
 	AgentsFile         = "AGENTS.md"
 	AgentsRedirectFile = "CLAUDE.md"
 	AgentsRedirect     = "@" + AgentsFile
-	// InvariantsFile is the framework-node source; AGENTS.md is its legacy
-	// fallback.
+	// AxiomsFile is the declaration document axioms are stated in;
+	// InvariantsFile and AGENTS.md are its legacy fallbacks.
+	AxiomsFile     = "axioms.md"
 	InvariantsFile = "invariants.md"
 )
+
+// CheckSymlink is the refusal class of a KB document that is a symbolic link:
+// a read meets it where the document stands, a write where it would replace it.
+const CheckSymlink = "symlink"
 
 // RepositoryRoot is the nearest directory at or above dir holding .git — the
 // directory kb-root/ sits in — or "" where there is none.
@@ -79,6 +84,6 @@ var (
 	ExcludeDirs  = map[string]bool{"session": true, IndexDir: true, "tools": true}
 	ExcludeNames = map[string]bool{
 		RegisterFile: true, "claim-quality-closure-roadmap.md": true, AgentsFile: true,
-		AgentsRedirectFile: true, "CONVENTIONS.md": true, "README.md": true, InvariantsFile: true,
+		AgentsRedirectFile: true, "CONVENTIONS.md": true, "README.md": true, AxiomsFile: true, InvariantsFile: true,
 	}
 )

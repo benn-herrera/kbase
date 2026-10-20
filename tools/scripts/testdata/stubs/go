@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stands in for the go toolchain. `build` writes its -o target; `run` prints
+# STUB_GO_VERSION. Every call is recorded with the GOOS/GOARCH it ran under.
+set -uo pipefail
+: "${STUB_STATE_DIR:?STUB_STATE_DIR is not set}"
+state="${STUB_STATE_DIR}"
+
+{ printf 'GOOS=%s GOARCH=%s go' "${GOOS:-}" "${GOARCH:-}"; printf ' %s' "$@"; printf '\n'; } >> "${state}/go.log"
+
+case "${1:-}" in
+  run)
+    : "${STUB_GO_VERSION:?STUB_GO_VERSION is not set}"
+    printf '%s\n' "${STUB_GO_VERSION}"
+    ;;
+  build)
+    shift
+    target=""
+    while [[ "$#" -gt 0 ]]; do
+      case "${1}" in
+        -o) target="${2:-}"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [[ -n "${target}" ]] || { printf 'stub go build: no -o target\n' >&2; exit 2; }
+    printf 'stub %s/%s binary\n' "${GOOS:-}" "${GOARCH:-}" > "${target}"
+    ;;
+  *)
+    printf 'stub go: unexpected invocation: %s\n' "${*}" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Stands in for curl. Serves the files staged under STUB_STATE_DIR/serve by
+# basename and answers anything else with a 404: with --fail that is an error
+# and nothing is written, without it the server's body lands in the output file.
+# Only https is spoken, and a fetch that does not say --proto '=https'
+# --max-time <n> is refused, so a fetch missing that hardening fails here.
+set -uo pipefail
+: "${STUB_STATE_DIR:?STUB_STATE_DIR is not set}"
+state="${STUB_STATE_DIR}"
+
+{ printf 'curl'; printf ' %s' "$@"; printf '\n'; } >> "${state}/curl.log"
+
+function die() {
+  printf 'stub curl: %s\n' "${1}" >&2
+  exit 1
+}
+
+fail_on_error=0
+remote_name=0
+output=""
+proto=""
+max_time=""
+url=""
+
+while [[ "$#" -gt 0 ]]; do
+  case "${1}" in
+    -f|--fail) fail_on_error=1; shift ;;
+    -s|--silent|-S|--show-error|-L|--location) shift ;;
+    --proto) proto="${2:-}"; shift 2 ;;
+    --max-time) max_time="${2:-}"; shift 2 ;;
+    -O|--remote-name) remote_name=1; shift ;;
+    -o|--output) output="${2:-}"; shift 2 ;;
+    -*) die "unsupported option: ${1}" ;;
+    *)
+      [[ -z "${url}" ]] || die "more than one URL: ${url} ${1}"
+      url="${1}"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "${url}" ]] || die "no URL"
+[[ "${url}" == https://* ]] || die "not https: ${url}"
+[[ "${proto}" == "=https" ]] || die "no --proto '=https' on ${url}"
+[[ "${max_time}" =~ ^[0-9]+$ ]] || die "no --max-time on ${url}"
+if [[ "${remote_name}" -eq 1 ]]; then
+  output="./${url##*/}"
+fi
+[[ -n "${output}" ]] || die "no output file for ${url}"
+
+name="${url##*/}"
+staged="${state}/serve/${name}"
+if [[ ! -f "${staged}" ]]; then
+  if [[ "${fail_on_error}" -eq 1 ]]; then
+    printf 'curl: (22) The requested URL returned error: 404\n' >&2
+    exit 22
+  fi
+  printf '404: Not Found\n' > "${output}"
+  exit 0
+fi
+cp "${staged}" "${output}"

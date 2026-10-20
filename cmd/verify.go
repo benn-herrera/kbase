@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+
 	"kbase/internal/index"
 	toolresult "kbase/internal/result"
 )
@@ -29,7 +31,12 @@ func verify(opts maintenanceOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(fields, refusals...)
 	}
+	fields = withMigration(fields, src, "verify", opts.Stderr)
 	faults, err := index.Verify(src)
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return refused(fields, refusal...)
+	}
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -40,6 +47,12 @@ func verify(opts maintenanceOptions) (string, []toolresult.Field) {
 	case err != nil:
 		// The faults already name what keeps the registers from being read.
 		findings = []toolresult.Item{}
+	default:
+		legacy, err := index.LegacyAxiomFindings(src)
+		if err != nil && len(faults) == 0 {
+			return failed(fields, err)
+		}
+		findings = append(findings, index.Items(legacy)...)
 	}
 	fields = append(fields, toolresult.Field{Key: "findings", Value: findings})
 	if len(faults) == 0 {
@@ -59,7 +72,7 @@ build, not here. It writes nothing.
 Faults are outcome refused, each one an item under refusals; one a refresh
 clears names "kbase refresh" as its remedy; on a KB in an older metadata
 format the index is stale, and a refresh rewrites the KB in the current one.
-Every demoted edge — one the build's cycle breaking cut from depends-on — is
+Every demoted edge — one the build's cycle breaking cut from the premise graph — is
 listed under findings, which are not faults. Its result is one YAML document
 on stdout.`, runVerify)))
 }

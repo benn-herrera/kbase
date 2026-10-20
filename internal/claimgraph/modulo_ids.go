@@ -54,7 +54,7 @@ func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 	}
 	checks := []ModuloIDsCheck{
 		sized("register entries by (register, title, host)", len(av.entries), len(bv.entries), multisetDiff(a.Name, b.Name, av.entries, bv.entries)),
-		sized("depends, rests-on and references edges by endpoint title and host", len(av.edges), len(bv.edges), multisetDiff(a.Name, b.Name, av.edges, bv.edges)),
+		sized("premise and references edges by endpoint title and host", len(av.edges), len(bv.edges), multisetDiff(a.Name, b.Name, av.edges, bv.edges)),
 		sized("works", len(av.works), len(bv.works), multisetDiff(a.Name, b.Name, av.works, bv.works)),
 		sized("claim count per leaf", len(av.counts), len(bv.counts), mapDiff(a.Name, b.Name, av.counts, bv.counts)),
 		sized("no-claim reason per leaf", len(av.reasons), len(bv.reasons), mapDiff(a.Name, b.Name, av.reasons, bv.reasons)),
@@ -283,7 +283,7 @@ func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
 		return id
 	}
 	for _, e := range entries {
-		for _, edge := range slices.Concat(e.DependsOn, e.References) {
+		for _, edge := range slices.Concat(e.Premises, e.References) {
 			v.edges = append(v.edges, fmt.Sprintf("%s  -[%s]->  %s", name(edge.Source), edge.Relation, name(edge.Target)))
 		}
 	}

@@ -65,6 +65,7 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(fields, refusals...)
 	}
+	fields = withMigration(fields, src, opts.Verb, opts.Stderr)
 	ix, err := query.Load(src)
 	var refusal toolresult.Refusal
 	if errors.As(err, &refusal) {
@@ -95,7 +96,8 @@ const checkUsage = "usage"
 
 const queryHelp = `
 It reads kb-root/.index/ beside the repository's .git and writes nothing; a KB
-in an older metadata format is read in the current one. Its result is one YAML
+in an older metadata format is refused, the index being derived, with
+"kbase refresh" as the remedy. Its result is one YAML
 document on stdout, the answer under "` + query.ResultsKey + `".`
 
 const listQueryHelp = `

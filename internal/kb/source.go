@@ -11,6 +11,17 @@ import (
 	"unicode/utf8"
 )
 
+// Migration is what a load did to an older KB: the format version it carried,
+// the one it was converted to, and the one sentence that says what changed.
+type Migration struct {
+	From, To, Note string
+}
+
+// MigrationNote is the one sentence a migrated KB's record carries: the three
+// value changes the 2.0.0 format makes, which no derived-value equality
+// survives.
+const MigrationNote = "a lift now raises the derivation, a work's bearing scales its finding, and an untokened work edge no longer pends"
+
 // Source is where kbase reads one KB's files — kb-root and the build records
 // beside it — named by absolute path. A KB at the current format version is
 // read from disk. One loaded at an older version is read from the bytes its
@@ -23,9 +34,10 @@ type Source struct {
 	root, repo string
 	version    string
 	// files is keyed by repository-relative slash path.
-	files    map[string][]byte
-	obsolete []string
-	migrated bool
+	files     map[string][]byte
+	obsolete  []string
+	migrated  bool
+	migration *Migration
 }
 
 // OnDisk is the source of the KB at kbRoot read from disk, as the current
@@ -44,6 +56,7 @@ func MigratedSource(kbRoot, version string, files map[string][]byte, obsolete []
 	s.version, s.migrated = version, true
 	s.files = maps.Clone(files)
 	s.obsolete = slices.Clone(obsolete)
+	s.migration = &Migration{From: version, To: FormatVersion, Note: MigrationNote}
 	return s
 }
 
@@ -59,6 +72,15 @@ func (s *Source) Version() string { return s.version }
 // Migrated is whether the KB was loaded at an older version and its files
 // are read in the current form only in memory.
 func (s *Source) Migrated() bool { return s.migrated }
+
+// Migration is what this load converted, and the sentence that says so; ok is
+// false where the KB was read at the current version.
+func (s *Source) Migration() (Migration, bool) {
+	if s.migration == nil {
+		return Migration{}, false
+	}
+	return *s.migration, true
+}
 
 // Saved records that the KB now stands on disk in the current form, its
 // obsolete paths gone: later reads are of a current KB.
@@ -153,9 +175,15 @@ func (s *Source) Put(p string, data []byte) {
 // DiskFile is p's bytes on disk now, whatever the source holds for it.
 func (s *Source) DiskFile(p string) ([]byte, error) { return os.ReadFile(p) }
 
+// isSymlink is whether p itself, not what it resolves to, is a symbolic link.
+func isSymlink(p string) bool {
+	info, err := os.Lstat(p)
+	return err == nil && info.Mode()&fs.ModeSymlink != 0
+}
+
 // DirFiles is every regular file directly in dir as the KB reads it — on
 // disk less the obsolete ones, and those the source holds — absolute and
-// sorted.
+// sorted. A file that is a symbolic link is refused rather than read through.
 func (s *Source) DirFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -163,9 +191,14 @@ func (s *Source) DirFiles(dir string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range entries {
-		if p := filepath.Join(dir, e.Name()); !e.IsDir() && s.IsFile(p) {
-			out = append(out, p)
+		p := filepath.Join(dir, e.Name())
+		if e.IsDir() || !s.IsFile(p) {
+			continue
 		}
+		if e.Type()&fs.ModeSymlink != 0 {
+			return nil, &SymlinkError{Path: p}
+		}
+		out = append(out, p)
 	}
 	for _, p := range s.held(dir) {
 		if filepath.Dir(p) == dir && !slices.Contains(out, p) {

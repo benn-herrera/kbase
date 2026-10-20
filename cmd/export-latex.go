@@ -76,6 +76,7 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 	if refusals != nil {
 		return refused(fields, refusals...)
 	}
+	fields = withMigration(fields, src, "export-latex", opts.Stderr)
 	rep := &export.Report{}
 	tree, err := export.Walk(src, rep)
 	if err != nil {

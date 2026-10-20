@@ -1,0 +1,33 @@
+// The strength walk of ../STRENGTH_SCORING_SCHEME.md, drawn from the page's
+// worked example. Each box carries the values its node holds: a claim or an
+// analysis its rigor and its derived strength, a work, an experiment or an
+// axiom its rigor (which is that node's source strength) — the axiom's 1.00 by
+// rule, no authored file carrying it. Each edge carries its bearing. The
+// numbers are the worked example's, so the picture and the arithmetic beneath
+// it agree.
+//
+// No node takes a fill: on a sheet a fill is a strength band, and this is not
+// a sheet. Every font is a generic family, so the rendered SVG names no font a
+// viewer has to fetch.
+
+digraph "strength-walk" {
+  graph [rankdir=TB, nodesep=0.75, ranksep=0.8, pad=0.3,
+         fontname="sans-serif", fontsize=14, labelloc=t,
+         label="The strength walk: every arrow points from the supporter to what it supports"]
+  node [shape=box, style="rounded", fontname="sans-serif", fontsize=11,
+        margin="0.16,0.1", penwidth=1.1, color="#333333"]
+  edge [fontname="sans-serif", fontsize=10, color="#333333", fontcolor="#333333", arrowsize=0.7]
+
+  "clm-c20000" [label="claim  C2\lclm-c20000\lrigor 0.65\lstrength 0.65\l"]
+  "wrk-w00000" [label="work  W\lwrk-w00000\lrigor 0.72\lstrength=rigor\l"]
+  "axm-S1"     [label="axiom  S1\laxm-S1\lrigor 1.00\lstrength=rigor\l"]
+  "exp-e00000" [label="experiment  E\lexp-e00000\lrigor 0.64\lstrength=rigor\l"]
+  "ana-r00000" [label="analysis  R\lana-r00000\lrigor 0.75\lstrength 0.75\l"]
+  "clm-c10000" [label="claim  C1\lclm-c10000\lrigor 0.84\lstrength 0.40\l"]
+
+  "clm-c20000" -> "clm-c10000" [label="supports\nbearing 0.40"]
+  "wrk-w00000" -> "clm-c10000" [label="founds\nbearing 0.70"]
+  "axm-S1"     -> "clm-c10000" [label="founds\nbearing 0.90"]
+  "exp-e00000" -> "clm-c10000" [label="lifts\nbearing 0.75"]
+  "ana-r00000" -> "clm-c10000" [label="refutes\nbearing 0.80"]
+}

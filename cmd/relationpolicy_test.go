@@ -17,9 +17,9 @@ import (
 var relationHomonyms = map[string][]string{
 	// write's per-op value keys, and the register fields its renderers and
 	// readback name.
-	"internal/write/values.go": {kb.RelationReferences, kb.RelationSupports, kb.RelationStrengthens},
-	"internal/write/ops.go":    {kb.RelationReferences, kb.RelationSupports, kb.RelationStrengthens},
-	"internal/write/store.go":  {kb.RelationReferences, kb.RelationSupports},
+	"internal/write/values.go": {kb.RelationReferences},
+	"internal/write/ops.go":    {kb.RelationReferences},
+	"internal/write/store.go":  {kb.RelationReferences},
 	// a write op's value key, and the claim graph's report fact names.
 	"internal/claimgraph/write.go":  {kb.RelationReferences},
 	"internal/claimgraph/stages.go": {kb.RelationReferences, kb.RelationDemoted},

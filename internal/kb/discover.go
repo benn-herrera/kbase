@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,13 +11,13 @@ import (
 
 // State is the KB's authored metadata after one load.
 type State struct {
-	ClaimEntries   []ClaimEntry
-	Leaves         []LeafRecord
-	Indexes        []IndexRecord
-	FrameworkNodes []FrameworkNode
-	Experiments    []ExperimentNode
-	Supports       []SupportNode
-	Works          []ExternalWork
+	ClaimEntries []ClaimEntry
+	Leaves       []LeafRecord
+	Indexes      []IndexRecord
+	Axioms       []AxiomNode
+	Experiments  []ExperimentNode
+	Analyses     []AnalysisNode
+	Works        []ExternalWork
 }
 
 // comparePathParts orders slash paths the way Python orders Paths: segment
@@ -25,15 +26,27 @@ func comparePathParts(a, b string) int {
 	return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
 }
 
+// SymlinkError is a KB document that is a symbolic link: a load refuses it
+// rather than reading through it.
+type SymlinkError struct{ Path string }
+
+func (e *SymlinkError) Error() string {
+	return fmt.Sprintf("%s is a symbolic link, and a KB document is read only where it stands", e.Path)
+}
+
 // Files is every regular file of the KB whose name match accepts and none of
 // whose directories below kb-root is excluded, as kb-root-relative slash
-// paths in Python's Path order.
+// paths in Python's Path order. A file match accepts that is a symbolic link
+// is refused rather than read through.
 func Files(src *Source, match func(name string) bool) ([]string, error) {
 	root := src.Root()
 	var out []string
 	err := src.walk(root, func(name string) bool { return ExcludeDirs[name] }, func(p string) error {
 		if !match(filepath.Base(p)) || !src.IsFile(p) {
 			return nil
+		}
+		if isSymlink(p) {
+			return &SymlinkError{Path: p}
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
@@ -54,7 +67,7 @@ func Documents(src *Source) ([]string, error) {
 	})
 }
 
-// Registers is every claim-quality register outside the excluded
+// Registers is every claim-rigor register outside the excluded
 // directories, as kb-root-relative slash paths.
 func Registers(src *Source) ([]string, error) {
 	return Files(src, func(name string) bool { return name == RegisterFile })
@@ -81,12 +94,56 @@ func KnownClaimIDs(src *Source) (map[string]bool, error) {
 	return known, nil
 }
 
+// KnownAxiomIDs is every axiom id the KB's axiom source declares.
+func KnownAxiomIDs(src *Source) (map[string]bool, error) {
+	axioms, err := ParseAxioms(src)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, a := range axioms {
+		known[a.ID] = true
+	}
+	return known, nil
+}
+
+// AnnotationFault is one malformed register bullet: the list field it was read
+// from, the file and physical line it opens on, and what the reader refused.
+type AnnotationFault struct {
+	Field   string
+	Path    string
+	Line    int
+	Allowed string
+	Remedy  string
+	Detail  string
+}
+
+// AnnotationError is every annotation fault one load found, in register order.
+type AnnotationError struct{ Faults []AnnotationFault }
+
+func (e *AnnotationError) Error() string {
+	parts := make([]string, len(e.Faults))
+	for i, f := range e.Faults {
+		parts[i] = fmt.Sprintf("%s:%d: %s: %s", f.Path, f.Line, f.Field, f.Detail)
+	}
+	return strings.Join(parts, "; ")
+}
+
 // Discover loads the KB's authored metadata: every register's entries, every
-// document's node bodies, and the framework nodes. A clm- token naming no
-// registered claim is dropped and reported to lg. A MalformedError names
-// metadata no reader can take.
+// document's node bodies, and the axioms its declaration document states. A
+// clm-, ana-, exp- or "Axiom <label>" token naming no node is dropped and
+// reported to lg. A MalformedError names metadata no reader can take, and one
+// AnnotationError carries every malformed scored bullet or pair line.
 func Discover(src *Source, lg log.Logger) (State, error) {
 	known, err := KnownClaimIDs(src)
+	if err != nil {
+		return State{}, err
+	}
+	axiomIDs, err := KnownAxiomIDs(src)
+	if err != nil {
+		return State{}, err
+	}
+	authored, _, err := AuthoredIDs(src)
 	if err != nil {
 		return State{}, err
 	}
@@ -95,24 +152,32 @@ func Discover(src *Source, lg log.Logger) (State, error) {
 		return State{}, err
 	}
 	var st State
-	supportQ := map[string]SupportQuality{}
+	var faults []AnnotationFault
+	analysisQ := map[string]AnalysisEntry{}
 	for _, rel := range regs {
 		text, err := readRel(src, rel)
 		if err != nil {
 			return State{}, err
 		}
 		st.Works = append(st.Works, ParseWorkEntries(text, rel)...)
-		st.ClaimEntries = append(st.ClaimEntries, ParseClaimEntries(text, rel, known, lg)...)
-		_, sq := ParseSupportEntries(text, rel, known, lg)
-		for id, q := range sq {
-			supportQ[id] = q
+		sink := readSink{faults: &faults}
+		st.ClaimEntries = append(st.ClaimEntries, parseClaimEntries(text, rel, known, axiomIDs, authored, lg, sink)...)
+		_, aq, err := parseAnalysisEntries(text, rel, known, axiomIDs, authored, lg, sink)
+		if err != nil {
+			return State{}, err
 		}
+		for id, q := range aq {
+			analysisQ[id] = q
+		}
+	}
+	if len(faults) > 0 {
+		return State{}, &AnnotationError{Faults: faults}
 	}
 	docs, err := Documents(src)
 	if err != nil {
 		return State{}, err
 	}
-	var hosted []SupportNode
+	var hosted []AnalysisNode
 	for _, rel := range docs {
 		text, err := readRel(src, rel)
 		if err != nil {
@@ -125,17 +190,17 @@ func Discover(src *Source, lg log.Logger) (State, error) {
 		if leaf != nil {
 			st.Leaves = append(st.Leaves, *leaf)
 		}
-		exps, err := ParseExperimentLeaf(text, rel)
+		exps, err := parseExperimentLeaf(text, rel, &faults)
 		if err != nil {
 			return State{}, err
 		}
 		st.Experiments = append(st.Experiments, exps...)
-		sups, err := ParseSupportLeaf(text, rel)
+		anas, err := parseAnalysisLeaf(text, rel, &faults)
 		if err != nil {
 			return State{}, err
 		}
-		hosted = append(hosted, sups...)
-		if leaf == nil && len(exps) == 0 && len(sups) == 0 {
+		hosted = append(hosted, anas...)
+		if leaf == nil && len(exps) == 0 && len(anas) == 0 {
 			idx, err := parseIndex(text, rel)
 			if err != nil {
 				return State{}, err
@@ -145,16 +210,38 @@ func Discover(src *Source, lg log.Logger) (State, error) {
 			}
 		}
 	}
-	for _, s := range hosted {
-		q := supportQ[s.ID]
-		s.Quality, s.DependsOn, s.Rationale, s.Solidity, s.SolidityTrace = q.Quality, q.DependsOn, q.Rationale, q.Solidity, q.SolidityTrace
-		st.Supports = append(st.Supports, s)
+	if len(faults) > 0 {
+		return State{}, &AnnotationError{Faults: faults}
 	}
-	if st.FrameworkNodes, err = ParseFrameworkNodes(src); err != nil {
+	for _, a := range hosted {
+		q := analysisQ[a.ID]
+		a.Rigor, a.Premises, a.Rationale, a.Strength, a.StrengthTrace = q.Rigor, q.Premises, q.Rationale, q.Strength, q.StrengthTrace
+		a.Lifts, a.Refutes = unionPairs(a.Lifts, q.Lifts), unionPairs(a.Refutes, q.Refutes)
+		st.Analyses = append(st.Analyses, a)
+	}
+	if st.Axioms, err = ParseAxioms(src); err != nil {
 		return State{}, err
 	}
 	slices.SortStableFunc(st.Works, func(a, b ExternalWork) int { return strings.Compare(a.ID, b.ID) })
 	return st, nil
+}
+
+// unionPairs is declared plus every staged pair whose target declared does not
+// carry: one edge per target, the leaf's declaration winning where both homes
+// record the same one.
+func unionPairs(declared, staged []Edge) []Edge {
+	seen := map[string]bool{}
+	out := declared
+	for _, e := range declared {
+		seen[e.Target] = true
+	}
+	for _, e := range staged {
+		if !seen[e.Target] {
+			seen[e.Target] = true
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // IDRecord is where one authored node id lives: the register keying its
@@ -276,36 +363,34 @@ func (c RegisterCensus) Lost() []string {
 	return slices.Compact(out)
 }
 
-// FanOutRecord is one supports edge as each authored end records it: the
-// register's staged fraction and the hosting leaf's declared one, each
-// absent (Set false) where that end does not name the beneficiary.
+// FanOutRecord is one pair an analysis authors as each end records it: the
+// register's staged bearing and the hosting leaf's declared one, each nil
+// where that end does not record the edge.
 type FanOutRecord struct {
-	SupID, ClaimID, RegisterPath, LeafPath string
-	Staged, Declared                       Fraction
-	RegisterStages                         bool
+	AnaID, ClaimID, Relation, RegisterPath, LeafPath string
+	Staged, Declared                                 *Bearing
+	RegisterStages                                   bool
 }
 
 // DoubleEntered is whether both ends are live and so must agree.
 func (r FanOutRecord) DoubleEntered() bool { return r.RegisterStages && r.LeafPath != "" }
 
-// Agrees is whether both ends record the edge at the same fraction.
+// Agrees is whether both ends record the edge at the same bearing. Two
+// pendings agree.
 func (r FanOutRecord) Agrees() bool {
-	if !r.Staged.Set || !r.Declared.Set {
+	if r.Staged == nil || r.Declared == nil {
 		return false
 	}
-	if r.Staged.Pending || r.Declared.Pending {
-		return r.Staged.Pending && r.Declared.Pending
-	}
-	return r.Staged.Value == r.Declared.Value
+	return *r.Staged == *r.Declared
 }
 
 // Ends is which authored ends record the edge.
 func (r FanOutRecord) Ends() []string {
 	var out []string
-	if r.Staged.Set {
+	if r.Staged != nil {
 		out = append(out, "register")
 	}
-	if r.Declared.Set {
+	if r.Declared != nil {
 		out = append(out, "leaf")
 	}
 	return out
@@ -355,12 +440,13 @@ func (w RegisterWalk) Unreconciled() []FanOutRecord {
 	return out
 }
 
-// WalkRegisters reads every register once for its census, its binding and
-// its staged fan-out against the hosting leaves in st.
+// WalkRegisters reads every register once for its census, its binding and its
+// staged pair fan-out — lifts and refutations alike — against the hosting
+// leaves in st.
 func WalkRegisters(st State, src *Source) (RegisterWalk, error) {
-	hosting := map[string]SupportNode{}
-	for _, s := range st.Supports {
-		hosting[s.ID] = s
+	hosting := map[string]AnalysisNode{}
+	for _, a := range st.Analyses {
+		hosting[a.ID] = a
 	}
 	regs, err := Registers(src)
 	if err != nil {
@@ -380,11 +466,14 @@ func WalkRegisters(st State, src *Source) (RegisterWalk, error) {
 		for _, c := range ParseClaimEntries(text, rel, nil, log.Discard()) {
 			claimRecords = append(claimRecords, c.ID)
 		}
-		supRecords, _ := ParseSupportEntries(text, rel, nil, log.Discard())
+		anaRecords, analyses, err := ParseAnalysisEntries(text, rel, nil, log.Discard())
+		if err != nil {
+			return RegisterWalk{}, err
+		}
 		for _, kc := range []struct {
 			kind    string
 			records []string
-		}{{"clm", claimRecords}, {"sup", supRecords}} {
+		}{{"clm", claimRecords}, {"ana", anaRecords}} {
 			c := RegisterCensus{RegisterPath: rel, Kind: kc.kind, Records: kc.records}
 			for _, e := range located {
 				if e.Kind == kc.kind {
@@ -393,39 +482,47 @@ func WalkRegisters(st State, src *Source) (RegisterWalk, error) {
 			}
 			w.Census = append(w.Census, c)
 		}
-		order, staged := ParseStagedSupports(text)
-		slices.Sort(order)
-		for _, sup := range order {
-			pairs := staged[sup]
-			stagedBy := map[string]Fraction{}
-			for _, p := range pairs {
-				stagedBy[p.ClaimID] = p.Fraction
-			}
-			declaredBy := map[string]Fraction{}
-			host, hosted := hosting[sup]
-			if hosted {
-				for _, p := range host.Supports {
-					declaredBy[p.ClaimID] = p.Fraction
-				}
-			}
-			var claims []string
-			for c := range stagedBy {
-				claims = append(claims, c)
-			}
-			for c := range declaredBy {
-				if _, ok := stagedBy[c]; !ok {
-					claims = append(claims, c)
-				}
-			}
-			slices.Sort(claims)
-			for _, c := range claims {
-				r := FanOutRecord{SupID: sup, ClaimID: c, RegisterPath: rel, Staged: stagedBy[c], Declared: declaredBy[c], RegisterStages: len(pairs) > 0}
-				if hosted {
-					r.LeafPath = host.CanonicalPath
-				}
-				w.FanOut = append(w.FanOut, r)
+		for _, ana := range anaRecords {
+			host := hosting[ana]
+			entry := analyses[ana]
+			for _, list := range []struct {
+				relation         string
+				staged, declared []Edge
+			}{{RelationLifts, entry.Lifts, host.Lifts}, {RelationRefutes, entry.Refutes, host.Refutes}} {
+				w.FanOut = append(w.FanOut, fanOut(ana, rel, host.CanonicalPath, list.relation, list.staged, list.declared)...)
 			}
 		}
 	}
 	return w, nil
+}
+
+// fanOut is one staged pair list reconciled against the hosting leaf's declared
+// one: a record per target either end records, in target order.
+func fanOut(ana, register, leaf, relation string, staged, declared []Edge) []FanOutRecord {
+	stagedBy := map[string]*Bearing{}
+	for _, e := range staged {
+		b := e.Bearing
+		stagedBy[e.Target] = &b
+	}
+	declaredBy := map[string]*Bearing{}
+	for _, e := range declared {
+		b := e.Bearing
+		declaredBy[e.Target] = &b
+	}
+	var targets []string
+	for t := range stagedBy {
+		targets = append(targets, t)
+	}
+	for t := range declaredBy {
+		if _, ok := stagedBy[t]; !ok {
+			targets = append(targets, t)
+		}
+	}
+	slices.Sort(targets)
+	var out []FanOutRecord
+	for _, t := range targets {
+		out = append(out, FanOutRecord{AnaID: ana, ClaimID: t, Relation: relation, RegisterPath: register, LeafPath: leaf,
+			Staged: stagedBy[t], Declared: declaredBy[t], RegisterStages: len(staged) > 0})
+	}
+	return out
 }

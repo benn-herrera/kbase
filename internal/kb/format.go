@@ -7,7 +7,7 @@ import (
 
 const (
 	// FormatVersion is the one metadata format version kbase reads and writes.
-	FormatVersion = "1.0.0"
+	FormatVersion = "2.0.0"
 	// UnstampedFormatVersion is the version of a KB whose entry point carries
 	// no stamp.
 	UnstampedFormatVersion = "0.9.0"

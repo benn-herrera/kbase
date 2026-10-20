@@ -20,7 +20,7 @@ type WeakPoint struct {
 
 // Defaults of the weak-points query.
 const (
-	DefaultMaxSolidity   = 0.65
+	DefaultMaxStrength   = 0.65
 	DefaultMinDependents = 1
 )
 
@@ -45,35 +45,15 @@ func sortedSet(set map[string]bool) []string {
 	return out
 }
 
-// DependsOnEdges is every edge sourced at id, sorted by target, file order
-// kept among equal targets.
-func (ix *Index) DependsOnEdges(id string) []kb.EdgeRow {
-	var out []kb.EdgeRow
-	for _, e := range ix.edges {
-		if e.Source == id {
-			out = append(out, e)
-		}
-	}
-	slices.SortStableFunc(out, func(a, b kb.EdgeRow) int { return strings.Compare(a.Target, b.Target) })
-	return out
-}
-
-// DependentsOf is the distinct nodes whose solidity id's enters, sorted: the
-// sources of the depends and rests-on edges targeting id, and the targets of
-// id's own strengthens and supports edges. A references or demoted edge makes
-// neither end a dependent.
+// DependentsOf is the distinct nodes id's strength enters, sorted: the targets
+// of id's outgoing scoring edges — the nodes that rest on a claim or analysis,
+// and the claim or analysis a lift raises or a refutation caps. A references or
+// demoted edge makes neither end a dependent.
 func (ix *Index) DependentsOf(id string) []string {
 	set := map[string]bool{}
 	for _, e := range ix.edges {
-		switch e.Relation {
-		case kb.RelationDepends, kb.RelationRestsOn:
-			if e.Target == id {
-				set[e.Source] = true
-			}
-		case kb.RelationStrengthens, kb.RelationSupports:
-			if e.Source == id {
-				set[e.Target] = true
-			}
+		if e.Source == id && kb.Scoring(e.Relation) {
+			set[e.Target] = true
 		}
 	}
 	return sortedSet(set)
@@ -192,28 +172,27 @@ func (ix *Index) SubtreeClaims(nodePath string) []string {
 	return append([]string{}, a.SubtreeClaims...)
 }
 
-// SolidityBelow is the scored claims whose solidity is under threshold,
-// ascending by solidity, then id.
-func (ix *Index) SolidityBelow(threshold float64) []kb.NodeRow {
+// StrengthBelow is the scored claims whose strength is under threshold,
+// ascending by strength, then id.
+func (ix *Index) StrengthBelow(threshold float64) []kb.NodeRow {
 	var out []kb.NodeRow
 	for _, c := range ix.claims() {
-		if c.Solidity != nil && *c.Solidity < threshold {
+		if c.Strength != nil && *c.Strength < threshold {
 			out = append(out, c)
 		}
 	}
 	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
-		return cmp.Or(cmp.Compare(*a.Solidity, *b.Solidity), strings.Compare(a.ID, b.ID))
+		return cmp.Or(cmp.Compare(*a.Strength, *b.Strength), strings.Compare(a.ID, b.ID))
 	})
 	return out
 }
 
-// WeakPoints is the scored claims under maxSolidity with at least
-// minDependents dependents: most dependents first, then lowest solidity,
-// then id.
-func (ix *Index) WeakPoints(maxSolidity float64, minDependents int) []WeakPoint {
+// WeakPoints is the scored claims under maxStrength with at least minDependents
+// dependents: most dependents first, then lowest strength, then id.
+func (ix *Index) WeakPoints(maxStrength float64, minDependents int) []WeakPoint {
 	var out []WeakPoint
 	for _, c := range ix.claims() {
-		if c.Solidity == nil || *c.Solidity >= maxSolidity {
+		if c.Strength == nil || *c.Strength >= maxStrength {
 			continue
 		}
 		if n := len(ix.DependentsOf(c.ID)); n >= minDependents {
@@ -221,7 +200,7 @@ func (ix *Index) WeakPoints(maxSolidity float64, minDependents int) []WeakPoint 
 		}
 	}
 	slices.SortStableFunc(out, func(a, b WeakPoint) int {
-		return cmp.Or(cmp.Compare(b.Dependents, a.Dependents), cmp.Compare(*a.Claim.Solidity, *b.Claim.Solidity),
+		return cmp.Or(cmp.Compare(b.Dependents, a.Dependents), cmp.Compare(*a.Claim.Strength, *b.Claim.Strength),
 			strings.Compare(a.Claim.ID, b.Claim.ID))
 	})
 	return out
