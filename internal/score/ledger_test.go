@@ -244,7 +244,7 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	// model's positive statement that it found no fault; a failed attempt
 	// writes no faults at all and no text.
 	nl := kept(t, t.TempDir())
-	if err := nl.Append(node(kb.NodeKindClaim, "clm-3"), Entry{Status: StatusDone, Value: "0.95", Reply: "none"}); err != nil {
+	if err := nl.Append(node(kb.NodeKindClaim, "clm-3"), Entry{Status: StatusDone, Value: "1.0", Reply: "none"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := nl.Append(node(kb.NodeKindClaim, "clm-4"), Entry{Status: StatusFailed, Reply: "line 1 is not a charge line"}); err != nil {
@@ -396,7 +396,7 @@ func TestLastIsTheLastLinesEntry(t *testing.T) {
 	if err := l.Append(claim, Entry{Status: StatusFailed, Reply: "the register refused it", Model: "small", PromptSHA256: "aa"}); err != nil {
 		t.Fatal(err)
 	}
-	want := Entry{Status: StatusDone, Value: "0.6", Faults: []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "A span", Offset: 4}},
+	want := Entry{Status: StatusDone, Value: "0.65", Faults: []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "A span", Offset: 4}},
 		Reply: "flt-overreach: A span", Model: "small", PromptSHA256: "bb"}
 	if err := l.Append(claim, want); err != nil {
 		t.Fatal(err)
@@ -432,10 +432,10 @@ func TestResumeAfterAnUpdateContinues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			l := kept(t, dir)
-			// One overreach is what the running table gives 0.6, so the resume
+			// One overreach is what the running table gives 0.65, so the resume
 			// moves no value: this case is the ask alone.
 			first := node(kb.NodeKindClaim, "clm-1")
-			if err := l.Append(first, landedEntry("0.6", kb.FaultOverreach)); err != nil {
+			if err := l.Append(first, landedEntry("0.65", kb.FaultOverreach)); err != nil {
 				t.Fatal(err)
 			}
 			if err := l.Close(); err != nil {
@@ -463,14 +463,14 @@ func TestResumeAfterAnUpdateContinues(t *testing.T) {
 				t.Errorf("the landed item = %q, want %q: the resume read the run back", got, StatusDone)
 			}
 			next := node(kb.NodeKindClaim, "clm-2")
-			if err := back.Append(next, Entry{Status: StatusDone, Value: "0.95", Reply: "none"}); err != nil {
+			if err := back.Append(next, Entry{Status: StatusDone, Value: "1.0", Reply: "none"}); err != nil {
 				t.Fatalf("the resumed run does not go on: %v", err)
 			}
 			if err := back.Close(); err != nil {
 				t.Fatal(err)
 			}
 			lines := lines(t, filepath.Join(l.Dir(), linesFile))
-			if len(lines) != 2 || lines[1]["value"] != "0.95" {
+			if len(lines) != 2 || lines[1]["value"] != "1.0" {
 				t.Errorf("the ledger = %v, want the resumed item recorded behind the run's own", lines)
 			}
 			// The digest is the record of what the run's judgements answered:
@@ -511,7 +511,7 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	if err := l.Append(stale, moved); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Append(node(kb.NodeKindClaim, "clm-2"), landedEntry("0.7", kb.FaultEquivocation)); err != nil {
+	if err := l.Append(node(kb.NodeKindClaim, "clm-2"), landedEntry("0.75", kb.FaultEquivocation)); err != nil {
 		t.Fatal(err)
 	}
 	oldTable := node(kb.NodeKindClaim, "clm-3")
@@ -529,20 +529,20 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	landed, land := landingOn(nil)
 	back := resumed(t, dir, land)
 	defer back.Close()
-	if got, _ := back.Last(stale); got.Value != "0.6" {
-		t.Errorf("the re-derived value = %q, want the table's 0.6 for one overreach", got.Value)
+	if got, _ := back.Last(stale); got.Value != "0.65" {
+		t.Errorf("the re-derived value = %q, want the table's 0.65 for one overreach", got.Value)
 	}
-	if got, _ := back.Last(node(kb.NodeKindClaim, "clm-2")); got.Value != "0.7" {
-		t.Errorf("a line whose value stood = %q, want 0.7", got.Value)
+	if got, _ := back.Last(node(kb.NodeKindClaim, "clm-2")); got.Value != "0.75" {
+		t.Errorf("a line whose value stood = %q, want 0.75", got.Value)
 	}
-	if got, _ := back.Last(oldTable); got.Value != "0.95" {
-		t.Errorf("the line the old table priced = %q, want the claim's own table's 0.95", got.Value)
+	if got, _ := back.Last(oldTable); got.Value != "1.0" {
+		t.Errorf("the line the old table priced = %q, want the claim's own table's 1.0", got.Value)
 	}
 	// The values the tables moved reached the write the run lands through, in
 	// the order the lines stand.
 	wantLandings := []landing{
-		{item: node(kb.NodeKindClaim, "clm-1"), value: "0.6"},
-		{item: node(kb.NodeKindClaim, "clm-3"), value: "0.95"},
+		{item: node(kb.NodeKindClaim, "clm-1"), value: "0.65"},
+		{item: node(kb.NodeKindClaim, "clm-3"), value: "1.0"},
 	}
 	if !reflect.DeepEqual(*landed, wantLandings) {
 		t.Errorf("the re-pricing landed %+v, want %+v", *landed, wantLandings)
@@ -566,8 +566,8 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []rePricedLine{
-		{Item: "clm-1", From: "0.30", To: "0.6"},
-		{Item: "clm-3", From: "0.65", To: "0.95"},
+		{Item: "clm-1", From: "0.30", To: "0.65"},
+		{Item: "clm-3", From: "0.65", To: "1.0"},
 	}
 	if got.Run != "run-1" || !slices.Equal(got.Moved, want) {
 		t.Errorf("the record = %+v, want run-1 with %+v", got, want)

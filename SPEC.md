@@ -575,11 +575,11 @@ bearing}`; and pair entries of `{id, bearing}` in a claim's `refutes`, an analys
 `bearing`; `add-rests-on` takes `id` and the `rests-on` and `references` lists it adds. Each op's
 closed key set is `kbase <op> --help`'s, as for every op.
 
-A written `rigor` is a number in `[0, 0.95]` or `*pending*`: `1.00` belongs to an axiom by rule, so
-every op taking a node's own rigor — the four inserts, `set-rigor` and `set-frontmatter`'s
-`experiment-node` — refuses a value above, naming the key and the range. `0.95` is the rigor tables'
-maximum, the value a charge list with no charge takes (§10); a bearing's writes are unchanged, its
-table reserving nothing.
+A written `rigor` is a number in `[0, 1]` or `*pending*`. `1.00` is the rigor tables' maximum — the
+whole of the rigor scale, and the value a charge list with no charge takes (§10) — so every op taking
+a node's own rigor — the four inserts, `set-rigor` and `set-frontmatter`'s `experiment-node` —
+refuses a value above it, naming the key and the range. A bearing's writes take the same top, its
+table reserving nothing either.
 
 `set-bearing` **replaces an existing token and never inserts one**: a scoring edge carrying no
 bearing is a load fault (§10) before the op runs. It refuses a relation outside the four, a pairing
@@ -772,9 +772,9 @@ format version stands, and what moves one is a new version, which `--resume` rea
 A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written under
 a new grammar.
 
-**The value.** kbase prices the charge list: the item's class's maximum — `0.95` under either rigor
-vocabulary, `1.00` for `bearing` — less each id's weight per occurrence under that class's table,
-floored at zero and exact at two decimals, summed in integer hundredths. `none` is the empty list and
+**The value.** kbase prices the charge list: the item's class's maximum — `1.00` under each of the
+three tables — less each id's weight per occurrence under that class's table, floored at zero and
+exact at two decimals, summed in integer hundredths. `none` is the empty list and
 reaches the maximum; `flt-pending` is `*pending*` whatever the table. The tables are `internal/kb`'s
 and no template carries a weight, a maximum or a band: the ids and the criteria are the ask's, the
 price is kbase's, and nothing else is an input. A landing is therefore checkable against its own
@@ -1429,17 +1429,17 @@ two scoring passes asks a model for the faults the text commits — the ids
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) defines, each with the
 span that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
 occurrence, floored at zero and exact at two decimals (§8). A written `rigor` is a value in
-`[0, 0.95]` or `*pending*`, and a bearing's in `[0, 1]` or `*pending*`; what changed is who chooses a
-number. A pass derives it, `1.00` is reserved to an axiom's rigor by rule, and `0.95` is the rigor
-tables' maximum — the largest a `rigor` pass derives, which reads *no charge among the six*, never
-*the text displays its reasoning*. An authored `rigor` above the maximum is read as the maximum: a
-file already carrying `1.0` — a converted experiment, which the `1.0.0` migration gives `rigor: 1.0`
-— reads as `0.95` everywhere the system shows it — the strength line a refresh derives from it, the
-index's derivation, a query's display and the walk — and the file keeps its text, `refresh` rewriting
-no rigor it found. The clamp is a reading rule, not a finding: `verify` reports nothing for it. `1.00`
-belongs to an axiom by rule and is no read value, so nothing authored clamps it, and a bearing's `1.0`
-stands — its table reserves nothing. The walk itself is unchanged and reads the value it is handed,
-whatever wrote the number.
+`[0, 1]` or `*pending*`, and a bearing's the same; what changed is who chooses a number. A pass
+derives it, `1.00` is the rigor tables' maximum — the largest a `rigor` pass derives, which reads *no
+charge among the six*, never *the text displays its reasoning*. An axiom's `1.00` by rule is that
+same number and no separate case on the read path: an authored `rigor: 1.0` — a converted
+experiment, which the `1.0.0` migration gives `rigor: 1.0` — is in domain and reads as itself
+everywhere the system shows it — the strength line a refresh derives from it, the index's
+derivation, a query's display and the walk. An authored `rigor` above the maximum is read as the
+maximum: a hand-edited `1.20` reads as `1.00`, and the file keeps its text, `refresh` rewriting no
+rigor it found. The clamp is a reading rule, not a finding: `verify` reports nothing for it. A
+bearing's `1.0` stands, its table reserving nothing either. The walk itself is unchanged and reads
+the value it is handed, whatever wrote the number.
 
 **The band ladder.** A `strength` is read against five rungs, each an inclusive lower bound: `0.85`
 *ok to build on*, `0.65` *ok to build on, see caveats*, `0.45` *use as input only*, `0.20` *do not
@@ -1741,3 +1741,14 @@ position that `status` and the commit trail already state, and changes nothing.
   absolute, the `kbase` skill is named as the workflow, and `show-config` is the one tool it names.
 - **Registration** is the harness's: one server entry naming the command `kbase mcp --kb-root
   <absolute path>`. README gives the entry for two harnesses as examples.
+
+---
+
+## 12. Interim releases
+
+**0.8.0 — the rigor ceiling is `1.00`.** The rigor tables' maximum, the most a write carries, and
+an axiom's rule value are one number: a rigor pass's maximum is `1.00`, so a text charged with
+nothing prices at `1.00` (§8), and an authored `rigor: 1.0` is in domain and reads as itself (§10).
+A charge that means *this leaves nothing* is the table's whole maximum by reference rather than a
+weight of its own, so a ceiling change carries it: `flt-unaddressed` weighs `1.00` with the method
+vocabulary's maximum, and `flt-no-engagement` the bearing one's, which is unchanged at `1.00`.

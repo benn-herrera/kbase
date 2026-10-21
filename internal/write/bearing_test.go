@@ -413,21 +413,21 @@ func TestSetRigorOnEveryHome(t *testing.T) {
 	}
 }
 
-// TestARigorWriteTakesTheTablesMaximum: 1.00 belongs to an axiom by rule, so
-// every op that takes a node's own rigor refuses a value above the rigor
-// tables' maximum, naming the key and the range, and the maximum itself is
-// written and read back.
+// TestARigorWriteTakesTheTablesMaximum: every op that takes a node's own rigor
+// refuses a value above the rigor tables' maximum, naming the key and the
+// range, and the maximum itself — the whole of the scale — is written and read
+// back.
 func TestARigorWriteTakesTheTablesMaximum(t *testing.T) {
 	root := seedKB(t)
 	before := snapshot(t, root)
-	rangeText := "[0, " + kb.PyFloatRepr(kb.RigorMaximum) + "]"
+	rangeText := "[0, " + domainTop(kb.RigorMaximum) + "]"
 	for _, tc := range []struct{ name, op, values string }{
-		{"set-rigor", "set-rigor", "entry:\n- id: " + seedClaim + "\n  rigor: 1.0\n"},
-		{"insert-claim-entry", "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: A New Result\n  rigor: 1.0\n  rationale: Shown.\n"},
-		{"insert-analysis-entry", "insert-analysis-entry", "entry:\n- register: claim-rigor.md\n  title: An Analysis\n  rigor: 1.0\n  rationale: Lifts.\n"},
-		{"insert-work-entry", "insert-work-entry", "entry:\n- register: claim-rigor.md\n  key: Smith2020\n  title: Smith (2020)\n  rigor: 1.0\n  rationale: Cited.\n"},
-		{"insert-experiment-entry", "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n"},
-		{"set-frontmatter's experiment node", "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  experiment-node:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n"},
+		{"set-rigor", "set-rigor", "entry:\n- id: " + seedClaim + "\n  rigor: 1.2\n"},
+		{"insert-claim-entry", "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: A New Result\n  rigor: 1.2\n  rationale: Shown.\n"},
+		{"insert-analysis-entry", "insert-analysis-entry", "entry:\n- register: claim-rigor.md\n  title: An Analysis\n  rigor: 1.2\n  rationale: Lifts.\n"},
+		{"insert-work-entry", "insert-work-entry", "entry:\n- register: claim-rigor.md\n  key: Smith2020\n  title: Smith (2020)\n  rigor: 1.2\n  rationale: Cited.\n"},
+		{"insert-experiment-entry", "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.2\n"},
+		{"set-frontmatter's experiment node", "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  experiment-node:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.2\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := run(t, root, tc.op, tc.values, false)
@@ -435,7 +435,7 @@ func TestARigorWriteTakesTheTablesMaximum(t *testing.T) {
 				t.Fatalf("%s: %+v, want one refusal", tc.op, res)
 			}
 			if it := res.Refusals[0]; !strings.HasSuffix(it.Key, "rigor") ||
-				!strings.Contains(it.Detail, "outside "+rangeText) || !strings.Contains(it.Detail, "axiom by rule") {
+				!strings.Contains(it.Detail, "outside "+rangeText) {
 				t.Errorf("%s refusal = %+v, want key rigor and the range %s", tc.op, it, rangeText)
 			}
 			if !maps.Equal(before, snapshot(t, root)) {
@@ -453,11 +453,12 @@ func TestARigorWriteTakesTheTablesMaximum(t *testing.T) {
 	}
 }
 
-// TestAnAuthoredOneIsRead: a KB carrying an authored `rigor: 1.0` — a converted
-// experiment — reads it as the rigor tables' maximum, never refusing it: the
-// walk, show's record and the index's row all carry 0.95, and verify reports
-// nothing, a clamped value being no finding. An axiom's 1.00 is its rigor by
-// rule, no read value, and every surface still carries it.
+// TestAnAuthoredOneIsRead: 1.00 is the rigor tables' maximum, so an authored
+// `rigor: 1.0` — a converted experiment — is in domain and reads as itself, and
+// a hand-edited value above it reads at the maximum: the walk, show's record and
+// the index's row all carry the read value, and verify reports nothing, neither
+// a value at the maximum nor a clamped one being a finding. An axiom's 1.00 is
+// its rigor by rule, and every surface still carries it.
 func TestAnAuthoredOneIsRead(t *testing.T) {
 	root := seedKB(t)
 	leaf := filepath.Join(root, "leaf.md")
@@ -465,7 +466,8 @@ func TestAnAuthoredOneIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	declared := "claims: [" + seedClaim + "]\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0"
+	declared := "claims: [" + seedClaim + "]\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0" +
+		"\n  - exp-id: exp-bbbbbb\n    status: run\n    rigor: 1.20"
 	converted := strings.Replace(string(text), "claims: ["+seedClaim+"]", declared, 1)
 	if converted == string(text) {
 		t.Fatalf("the seed leaf declares no claims list:\n%s", text)
@@ -478,22 +480,25 @@ func TestAnAuthoredOneIsRead(t *testing.T) {
 	}
 	src := kb.OnDisk(root)
 	if _, err := index.Refresh(src, log.Discard()); err != nil {
-		t.Fatalf("refresh over an authored 1.0: %v", err)
+		t.Fatalf("refresh over an authored 1.0 and a hand-edited 1.20: %v", err)
 	}
 	if findings, err := index.Verify(src); err != nil || len(findings) > 0 {
-		t.Errorf("verify over an authored 1.0: %v, %v; want no finding", findings, err)
+		t.Errorf("verify over an authored 1.0 and a hand-edited 1.20: %v, %v; want no finding", findings, err)
 	}
 
 	state, err := kb.Discover(src, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
+	read := map[string]*float64{}
 	for _, x := range state.Experiments {
-		if x.ID == "exp-aaaaaa" {
-			if !scoreEqual(x.Rigor, f64(kb.RigorMaximum)) {
-				t.Errorf("the converted experiment reads rigor %v, want the maximum %v", x.Rigor, kb.RigorMaximum)
-			}
-		}
+		read[x.ID] = x.Rigor
+	}
+	if got := read["exp-aaaaaa"]; !scoreEqual(got, f64(kb.RigorMaximum)) {
+		t.Errorf("the converted experiment reads rigor %v, want the 1.0 it authored", got)
+	}
+	if got := read["exp-bbbbbb"]; !scoreEqual(got, f64(kb.RigorMaximum)) {
+		t.Errorf("the hand-edited experiment reads rigor %v, want the maximum %v", got, kb.RigorMaximum)
 	}
 
 	ix, err := query.Load(src)
@@ -526,7 +531,7 @@ func TestAnAuthoredOneIsRead(t *testing.T) {
 		id   string
 		want float64
 	}{
-		{"exp-aaaaaa", kb.RigorMaximum}, {"axm-S1", kb.AxiomRigor},
+		{"exp-aaaaaa", kb.RigorMaximum}, {"exp-bbbbbb", kb.RigorMaximum}, {"axm-S1", kb.AxiomRigor},
 	} {
 		if got := shown(tc.id); got != tc.want {
 			t.Errorf("show %s carries rigor %v, want %v", tc.id, got, tc.want)

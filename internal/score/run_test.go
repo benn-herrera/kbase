@@ -239,7 +239,7 @@ func TestRunWalksTheSet(t *testing.T) {
 				{title: "# Claim C", reply: "flt-overreach: A premise of the quoted claim.\n"},
 			},
 			want:   Counts{Total: 6, Done: 2, Failed: 2, Remaining: 2},
-			landed: []landed{{"ana-aaaaaa", "0.95"}, {"clm-cccccc", "0.6"}},
+			landed: []landed{{"ana-aaaaaa", "1.0"}, {"clm-cccccc", "0.65"}},
 		},
 		{
 			name:   "a limit of one",
@@ -247,7 +247,7 @@ func TestRunWalksTheSet(t *testing.T) {
 			limit:  1,
 			answer: []asked{{title: "# An Analysis", reply: "none"}},
 			want:   Counts{Total: 3, Done: 1, Remaining: 2},
-			landed: []landed{{"ana-aaaaaa", "0.95"}},
+			landed: []landed{{"ana-aaaaaa", "1.0"}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -446,7 +446,7 @@ func TestRunContinuesARun(t *testing.T) {
 	if len(*prompts) != 2 {
 		t.Errorf("the second run made %d calls, want the two the ledger leaves", len(*prompts))
 	}
-	if want := []landed{{"clm-aaaaaa", "0.6"}, {"clm-bbbbbb", "0.9"}}; !slices.Equal(*secondLanded, want) {
+	if want := []landed{{"clm-aaaaaa", "0.65"}, {"clm-bbbbbb", "0.95"}}; !slices.Equal(*secondLanded, want) {
 		t.Errorf("the write seam was handed %v, want %v", *secondLanded, want)
 	}
 }

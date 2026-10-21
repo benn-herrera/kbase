@@ -154,9 +154,9 @@ contribution — and no premise proves nothing. Let `c` be a supporting edge's c
 The first row is the claim standing on one thing: the premise carries it and the statement caps it,
 so a premise worth more than the statement cannot make the claim worth more than its statement, and a
 thin premise gives it less. The second row is the bare claim, where `r` does not enter at all. A bare
-claim whose statement fires nothing is the case `r = 0.95`, the statement vocabulary's maximum
+claim whose statement fires nothing is the case `r = 1.00`, the statement vocabulary's maximum
 ([RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md), "The statement table"):
-`0.95` rigor and `0.00` strength — a statement fully specified, consistent and single-sensed, with
+`1.00` rigor and `0.00` strength — a statement fully specified, consistent and single-sensed, with
 nothing carrying it. What it proves is what it says, and nothing about whether anything supports it.
 
 ## Worked example
@@ -196,17 +196,17 @@ is the exercise's, not the format's — and it is what lets each relation be rea
 | authored input | value | the table it comes from |
 |---|---|---|
 | a work's `rigor` | `0.60` | method vocabulary, one `flt-overreach` |
-| a claim's `rigor` | `0.95` | statement vocabulary, no charge — the table's maximum |
-| an analysis's `rigor` | `0.95` | method vocabulary, no charge — the table's maximum |
-| an experiment's `rigor` | `0.95` | method vocabulary, no charge — the table's maximum |
+| a claim's `rigor` | `1.00` | statement vocabulary, no charge — the table's maximum |
+| an analysis's `rigor` | `1.00` | method vocabulary, no charge — the table's maximum |
+| an experiment's `rigor` | `1.00` | method vocabulary, no charge — the table's maximum |
 | `founds` `bearing` | `1.00` | bearing vocabulary, no charge |
 | `supports` `bearing` | `0.50` | one of `flt-referent`, `flt-partial`, `flt-narrower` |
 | `lifts` `bearing` | `1.00` | bearing vocabulary, no charge |
 | `refutes` `bearing` | `1.00` | bearing vocabulary, no charge |
 
 Every one of these is a value its table reaches, not merely a multiple of `0.05`: the method vocabulary
-reaches eleven of the range's twenty steps and `0.60` is one of them, and the bearing vocabulary reaches
-six — `1.00`, `0.65`, `0.50`, `0.30`, `0.15`, `0.00`
+reaches twelve of the range's twenty-one steps and `0.60` is one of them, and the bearing vocabulary
+reaches six — `1.00`, `0.65`, `0.50`, `0.30`, `0.15`, `0.00`
 ([RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md), "The method table", "The
 bearing values"). Three of the four bearings are `1.00`, a link with no bearing charge, and those
 contributions are their sources' own values: the sources are what this set holds still. The exception is
@@ -219,7 +219,7 @@ The four products, one per relation, are therefore:
 ```
 founds      1.00 x a work's rigor 0.60         = 0.60
 supports    0.50 x a claim's strength 0.60     = 0.30
-lifts       1.00 x an experiment's rigor 0.95  = 0.95
+lifts       1.00 x an experiment's rigor 1.00  = 1.00
 refutes     cap = 1 - (1.00 x a claim's strength 0.60) = 0.40
 ```
 
@@ -243,19 +243,19 @@ Every figure below is exact at two decimals. The record trims a trailing zero �
 
 ```
   W  --founds 1.00--> C2  --supports 0.50--> C1
- 0.60                 0.95                   0.95
+ 0.60                 1.00                   1.00
 ```
 
 ```
 founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
-D(C2)                 min(rigor 0.95, W 0.60) = 0.60
+D(C2)                 min(rigor 1.00, W 0.60) = 0.60
 σ(C2)                 min(max(0.60, −∞), +∞) = 0.60
 supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
-D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
+D(C1)                 min(rigor 1.00, C2 0.30) = 0.30
 σ(C1)                 min(max(0.30, −∞), +∞) = 0.30
 ```
 
-`σ(C1) = 0.30`, band `do-not-build`. At neither node does the `0.95` bind — a rigor caps what the premises
+`σ(C1) = 0.30`, band `do-not-build`. At neither node does the `1.00` bind — a rigor caps what the premises
 establish, and at both nodes the premise is the lower operand — while the second hop costs exactly the
 bearing: `0.60` in, `0.30` out. The work is cited at full relevance and `σ(C2)` carries its `0.60`
 unchanged; what puts C1 under the `0.45` cut is the link it stands on, not the work.
@@ -264,40 +264,40 @@ unchanged; what puts C1 under the `0.45` cut is the link it stands on, not the w
 
 ```
   W  --founds 1.00--> C2  --supports 0.50--> C1
- 0.60                 0.95                   0.95
+ 0.60                 1.00                   1.00
   E  --lifts 1.00-------------------------> C1
- 0.95   (run)
+ 1.00   (run)
 ```
 
 ```
 founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
 supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
-D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
-lifts      E  -> C1   bearing 1.00 x strength 0.95 = 0.95
-L(C1)                 max{ E 0.95 } = 0.95
+D(C1)                 min(rigor 1.00, C2 0.30) = 0.30
+lifts      E  -> C1   bearing 1.00 x strength 1.00 = 1.00
+L(C1)                 max{ E 1.00 } = 1.00
 C(C1)                 none — no refute edge, so +∞
-σ(C1)                 min(max(0.30, 0.95), +∞) = 0.95
+σ(C1)                 min(max(0.30, 1.00), +∞) = 1.00
 ```
 
-`σ(C1) = 0.95`, band `ok-to-build`. `D(C1)` is case 1's `0.30`, untouched: a lift is not a premise and
+`σ(C1) = 1.00`, band `ok-to-build`. `D(C1)` is case 1's `0.30`, untouched: a lift is not a premise and
 does not enter the min, so the derivation still says the node stands on `0.30`. What `max` does is stand
-the lift's `0.95` beside that derivation and keep the larger — the only station in the walk that can raise
+the lift's `1.00` beside that derivation and keep the larger — the only station in the walk that can raise
 a value, and here it carries the node from `do-not-build` to `ok-to-build`, three rungs. Take the edge away
 and this is case 1 exactly; that is the case the station exists for.
 
 ### 3. A refutation caps — and sometimes does not
 
-One refuter serves both readings: a claim `R` at `rigor 0.95`, founded by the same work, so
-`σ(R) = min(0.95, 1.00 × 0.60) = 0.60`, refuting at `bearing 1.00`. The cap is `0.40` in both.
+One refuter serves both readings: a claim `R` at `rigor 1.00`, founded by the same work, so
+`σ(R) = min(1.00, 1.00 × 0.60) = 0.60`, refuting at `bearing 1.00`. The cap is `0.40` in both.
 
 Binding:
 
 ```
 founds     W  -> R    bearing 1.00 x strength 0.60 = 0.60
-D(R)                  min(rigor 0.95, W 0.60) = 0.60
+D(R)                  min(rigor 1.00, W 0.60) = 0.60
 σ(R)                  min(max(0.60, −∞), +∞) = 0.60
 founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
-D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+D(C1)                 min(rigor 1.00, W 0.60) = 0.60
 lifts                 none, so −∞
 refutes    R  -> C1   cap = 1 - (bearing 1.00 x strength 0.60) = 0.40
 C(C1)                 min{ R 0.40 } = 0.40
@@ -312,9 +312,9 @@ Not binding:
 ```
 founds     W  -> R    bearing 1.00 x strength 0.60 = 0.60; σ(R) = 0.60
 founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
-D(C2)                 min(rigor 0.95, W 0.60) = 0.60
+D(C2)                 min(rigor 1.00, W 0.60) = 0.60
 supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
-D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
+D(C1)                 min(rigor 1.00, C2 0.30) = 0.30
 refutes    R  -> C1   cap = 1 - (bearing 1.00 x strength 0.60) = 0.40
 C(C1)                 min{ R 0.40 } = 0.40
 σ(C1)                 min(max(0.30, −∞), 0.40) = 0.30
@@ -328,7 +328,7 @@ already under it.
 ### 4. A claim nothing supports
 
 ```
-  C1   rigor 0.95, strength 0.00   — no incoming scoring edge
+  C1   rigor 1.00, strength 0.00   — no incoming scoring edge
 ```
 
 ```
@@ -340,7 +340,7 @@ C(C1)                 +∞      (no refute edge)
 ```
 
 `σ(C1) = 0.00`, band `unsubstantiated`; the record writes `- strength: 0`. Its statement is at the
-vocabulary's maximum — `0.95`, no fault charged: fixed, consistent, single-sensed and fully specified —
+vocabulary's maximum — `1.00`, no fault charged: fixed, consistent, single-sensed and fully specified —
 and that number is nowhere in the arithmetic. `r(n)` caps what a premise set establishes and is not a
 premise, and `P(C1)` is empty, so there is nothing for the cap to cap. What the node proves is what its
 text says, and nothing about whether anything carries it: no improvement to the statement could move this
@@ -374,14 +374,14 @@ L(C1), C(C1)          −∞, +∞   (no lift edge, no refute edge)
 ```
 
 Strength `0.00`, band `unsubstantiated`. An unjudged bearing is not support yet, so the edge is no
-supporter; the node's `0.95` does not enter, for case 4's reason.
+supporter; the node's `1.00` does not enter, for case 4's reason.
 
 The same pending bearing beside a premise that participates:
 
 ```
 founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
 supports   C2 -> C1   bearing *pending* — excluded, adds no operand
-D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+D(C1)                 min(rigor 1.00, W 0.60) = 0.60
 L(C1), C(C1)          −∞, +∞   (no lift edge, no refute edge)
 σ(C1)                 0.60
 ```
@@ -395,20 +395,20 @@ an edge.
 ### 6. A claim and an analysis on the same number
 
 ```
-  W  --founds 1.00--> C1   claim,    rigor 0.95
-  W  --founds 1.00--> A1   analysis, rigor 0.95
+  W  --founds 1.00--> C1   claim,    rigor 1.00
+  W  --founds 1.00--> A1   analysis, rigor 1.00
 ```
 
 ```
 founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
-D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+D(C1)                 min(rigor 1.00, W 0.60) = 0.60
 σ(C1)                 min(max(0.60, −∞), +∞) = 0.60
 founds     W  -> A1   bearing 1.00 x strength 0.60 = 0.60
-D(A1)                 min(rigor 0.95, W 0.60) = 0.60
+D(A1)                 min(rigor 1.00, W 0.60) = 0.60
 σ(A1)                 min(max(0.60, −∞), +∞) = 0.60
 ```
 
-Both `0.60`, both band `input-only`, and the arithmetic is identical term for term. The `0.95` inside each
+Both `0.60`, both band `input-only`, and the arithmetic is identical term for term. The `1.00` inside each
 min is a different judgement: on C1 it is the statement vocabulary charged nothing — the assertion's text
 is fixed, consistent and single-sensed, and says nothing about an argument, which a claim does not display;
 on A1 it is the method vocabulary charged nothing — the derivation engages what it sets out to establish
@@ -421,7 +421,7 @@ the number.
 | case | the edges | `D` | `L` | `C` | `σ` | band |
 |---|---|---|---|---|---|---|
 | 1 chain | `W→C2` founds, `C2→C1` supports | `0.30` | — | — | `0.30` | `do-not-build` |
-| 2 lift | as 1, plus `E→C1` lifts | `0.30` | `0.95` | — | `0.95` | `ok-to-build` |
+| 2 lift | as 1, plus `E→C1` lifts | `0.30` | `1.00` | — | `1.00` | `ok-to-build` |
 | 3a cap binds | `W→C1` founds, `R→C1` refutes | `0.60` | — | `0.40` | `0.40` | `do-not-build` |
 | 3b cap idle | `W→C2`, `C2→C1`, `R→C1` | `0.30` | — | `0.40` | `0.30` | `do-not-build` |
 | 4 bare | none | `0` | — | — | `0.00` | `unsubstantiated` |

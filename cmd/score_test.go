@@ -258,7 +258,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	rigors := []struct {
 		id   string
 		want float64
-	}{{"ana-aaaaaa", 0.95}, {"clm-aaaaaa", 0.60}, {"clm-bbbbbb", 0.90}, {"exp-aaaaaa", 0.95}}
+	}{{"ana-aaaaaa", 1.00}, {"clm-aaaaaa", 0.65}, {"clm-bbbbbb", 0.95}, {"exp-aaaaaa", 1.00}}
 	if scored := anyStrings(rigor.doc.Values["scored"]); !slices.Equal(scored, []string{"ana-aaaaaa", "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa"}) {
 		t.Errorf("scored %q, want the four nodes in id order", scored)
 	}
@@ -360,7 +360,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	if scored := anyStrings(partial.doc.Values["scored"]); slices.Contains(scored, "clm-aaaaaa") {
 		t.Errorf("the refused item's value landed anyway: %q", scored)
 	}
-	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.60 {
+	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.65 {
 		t.Errorf("the refused item's rigor = %v, want the value the last run landed", got)
 	}
 	failures := partial.doc.items("failures")
@@ -387,8 +387,8 @@ func TestScoreResumeAppliesAnUpdate(t *testing.T) {
 	if first.doc.Outcome != "done" {
 		t.Fatalf("the run: outcome %s\n%s", first.doc.Outcome, first.stdout)
 	}
-	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.6 {
-		t.Fatalf("the claim's rigor = %v, want the reply's 0.6", got)
+	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.65 {
+		t.Fatalf("the claim's rigor = %v, want the reply's 0.65", got)
 	}
 	run, _ := first.doc.Values["run"].(string)
 	dir, _ := first.doc.Values["ledger"].(string)
@@ -419,11 +419,11 @@ func TestScoreResumeAppliesAnUpdate(t *testing.T) {
 	if calls := unreachable.Calls(); len(calls) != 0 {
 		t.Errorf("the resumed run asked %d time(s), want none: a re-price re-derives from the ids", len(calls))
 	}
-	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.6 {
-		t.Errorf("the claim's rigor = %v, want the running table's 0.6: the moved value landed", got)
+	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 0.65 {
+		t.Errorf("the claim's rigor = %v, want the running table's 0.65: the moved value landed", got)
 	}
 	rec := lineRecord(t, filepath.Join(dir, "ledger.jsonl"))
-	if rec["value"] != "0.6" {
+	if rec["value"] != "0.65" {
 		t.Errorf("the ledger's value = %v, want the value the table gives its ids", rec["value"])
 	}
 	record, err := os.ReadFile(filepath.Join(dir, "repriced.yaml"))
@@ -436,7 +436,7 @@ func TestScoreResumeAppliesAnUpdate(t *testing.T) {
 	if len(scored) != 1 {
 		t.Fatalf("the first run scored %q, want the one item it landed", scored)
 	}
-	for _, want := range []string{"item: " + scored[0], `from: "0.30"`, `to: "0.6"`} {
+	for _, want := range []string{"item: " + scored[0], `from: "0.30"`, `to: "0.65"`} {
 		if !strings.Contains(string(record), want) {
 			t.Errorf("the record does not carry %q:\n%s", want, record)
 		}
@@ -784,7 +784,7 @@ func TestScoreMigratesAnOlderKB(t *testing.T) {
 	if format := formatOf(t, repo); format != kb.FormatVersion {
 		t.Errorf("the KB stands at %s after a done run, want %s", format, kb.FormatVersion)
 	}
-	if v := rigorOf(t, repo, "clm-aaaaaa"); v != 0.95 {
+	if v := rigorOf(t, repo, "clm-aaaaaa"); v != 1.0 {
 		t.Errorf("the claim's rigor = %v, want the maximum the reply `none` lands", v)
 	}
 	again := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })

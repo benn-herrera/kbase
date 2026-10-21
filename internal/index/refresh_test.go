@@ -70,12 +70,12 @@ func TestRefreshThenVerify(t *testing.T) {
 	}
 }
 
-// TestRefreshLeavesAnAuthoredOneInTheFile: a rigor standing above the rigor
-// tables' maximum reads at the maximum, and that is a reading rule — refresh
-// derives the index from 0.95 and leaves the leaf holding `rigor: 1.0` byte for
-// byte, the number it found never rewritten.
-func TestRefreshLeavesAnAuthoredOneInTheFile(t *testing.T) {
-	leaf := "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n" +
+// TestRefreshLeavesAnAboveMaximumRigorInTheFile: a rigor standing above the
+// rigor tables' maximum — a hand-edited 1.20 — reads at the maximum, and that
+// is a reading rule: refresh derives the index from 1.00 and leaves the leaf
+// holding `rigor: 1.20` byte for byte, the number it found never rewritten.
+func TestRefreshLeavesAnAboveMaximumRigorInTheFile(t *testing.T) {
+	leaf := "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.20\n" +
 		"    lifts:\n      - clm-aaaaaa: 0.5\n---\n[↑ Vol](index.md)\n\n# Exp\n"
 	root := writeKB(t, map[string]string{
 		"entry-point.md":     "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",

@@ -53,12 +53,13 @@ this names only what would move.
 - **The bottom cut's height.** The last rung takes every strength under `0.20` and reads
   `unsubstantiated`; where the cut belongs is open, and moving it moves published strengths.
 - **Whether a bare assertion becomes a criterion.** Today it charges none of the six and keeps
-  `0.95`; adding a seventh `rigor` id and a weight is a revision of the scheme, not an edit.
+  `1.00`; adding a seventh `rigor` id and a weight is a revision of the scheme, not an edit.
 - **Whether the twelve ids freeze.** A rename moves the ledger's recorded ids and the templates' text
   with them, and so moves `ask_sha256`; what a re-derivation does with a recorded id the running
   table lacks stays open until the vocabulary is frozen or a rule is written for it.
-- **Whether `0.95` is discipline or enforcement.** A pass cannot derive `1.00`, and `set-rigor`
-  accepts it; refusing `1.0` for a claim, an analysis and an experiment is the open move.
+- **The ceiling and the axiom's rule value are one number** (0.8.0): a pass derives `1.00` and
+  `set-rigor` takes it, so the reserve is no longer an open question of discipline against
+  enforcement.
 - **What `counts` reports for a run re-priced mid-run.** The run records the re-price in
   `repriced.yaml`, and no result key states it.
 

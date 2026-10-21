@@ -18,10 +18,10 @@ func TestFaultTablesAreTheSchemes(t *testing.T) {
 		maximum float64
 	}{
 		{"statement", RigorStatement, []string{
-			FaultContradiction, FaultOverreach, FaultEquivocation, FaultUnderspecified, FaultPending}, 0.95},
+			FaultContradiction, FaultOverreach, FaultEquivocation, FaultUnderspecified, FaultPending}, 1.00},
 		{"method", RigorMethod, []string{
 			FaultUnaddressed, FaultContradiction, FaultOverreach,
-			FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement, FaultPending}, 0.95},
+			FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement, FaultPending}, 1.00},
 		{"bearing", BearingFaults, []string{
 			FaultNoEngagement, FaultReferent, FaultPartial,
 			FaultNarrower, FaultTransfer, FaultConditional, FaultPending}, 1.00},
@@ -118,30 +118,30 @@ func TestFaultPricesAreTheSchemes(t *testing.T) {
 		ids   []string
 		want  float64
 	}{
-		{"a bare statement", RigorStatement, nil, 0.95},
-		{"one underspecification", RigorStatement, []string{FaultUnderspecified}, 0.90},
-		{"two underspecifications", RigorStatement, []string{FaultUnderspecified, FaultUnderspecified}, 0.85},
-		{"one equivocation", RigorStatement, []string{FaultEquivocation}, 0.70},
-		{"one statement overreach", RigorStatement, []string{FaultOverreach}, 0.60},
-		{"one statement contradiction", RigorStatement, []string{FaultContradiction}, 0.50},
-		{"a contradiction and an underspecification", RigorStatement, []string{FaultContradiction, FaultUnderspecified}, 0.45},
-		{"two equivocations", RigorStatement, []string{FaultEquivocation, FaultEquivocation}, 0.45},
-		{"an equivocation and an overreach", RigorStatement, []string{FaultEquivocation, FaultOverreach}, 0.35},
-		{"two statement overreaches", RigorStatement, []string{FaultOverreach, FaultOverreach}, 0.25},
-		{"an overreach and a contradiction", RigorStatement, []string{FaultOverreach, FaultContradiction}, 0.15},
-		{"two statement contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction}, 0.05},
+		{"a bare statement", RigorStatement, nil, 1.00},
+		{"one underspecification", RigorStatement, []string{FaultUnderspecified}, 0.95},
+		{"two underspecifications", RigorStatement, []string{FaultUnderspecified, FaultUnderspecified}, 0.90},
+		{"one equivocation", RigorStatement, []string{FaultEquivocation}, 0.75},
+		{"one statement overreach", RigorStatement, []string{FaultOverreach}, 0.65},
+		{"one statement contradiction", RigorStatement, []string{FaultContradiction}, 0.55},
+		{"a contradiction and an underspecification", RigorStatement, []string{FaultContradiction, FaultUnderspecified}, 0.50},
+		{"two equivocations", RigorStatement, []string{FaultEquivocation, FaultEquivocation}, 0.50},
+		{"an equivocation and an overreach", RigorStatement, []string{FaultEquivocation, FaultOverreach}, 0.40},
+		{"two statement overreaches", RigorStatement, []string{FaultOverreach, FaultOverreach}, 0.30},
+		{"an overreach and a contradiction", RigorStatement, []string{FaultOverreach, FaultContradiction}, 0.20},
+		{"two statement contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction}, 0.10},
 		{"three contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction, FaultContradiction}, 0.00},
 
-		{"no method charge", RigorMethod, nil, 0.95},
-		{"one gap", RigorMethod, []string{FaultClaimedStep}, 0.65},
-		{"one method overreach", RigorMethod, []string{FaultOverreach}, 0.60},
-		{"one method contradiction", RigorMethod, []string{FaultContradiction}, 0.50},
-		{"two gaps", RigorMethod, []string{FaultClaimedStep, FaultBareMeasurement}, 0.35},
-		{"a gap and an overreach", RigorMethod, []string{FaultUnstatedPremise, FaultOverreach}, 0.30},
-		{"two method overreaches", RigorMethod, []string{FaultOverreach, FaultOverreach}, 0.25},
-		{"a gap and a contradiction", RigorMethod, []string{FaultBareMeasurement, FaultContradiction}, 0.20},
-		{"three gaps", RigorMethod, []string{FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement}, 0.05},
-		{"two method contradictions", RigorMethod, []string{FaultContradiction, FaultContradiction}, 0.05},
+		{"no method charge", RigorMethod, nil, 1.00},
+		{"one gap", RigorMethod, []string{FaultClaimedStep}, 0.70},
+		{"one method overreach", RigorMethod, []string{FaultOverreach}, 0.65},
+		{"one method contradiction", RigorMethod, []string{FaultContradiction}, 0.55},
+		{"two gaps", RigorMethod, []string{FaultClaimedStep, FaultBareMeasurement}, 0.40},
+		{"a gap and an overreach", RigorMethod, []string{FaultUnstatedPremise, FaultOverreach}, 0.35},
+		{"two method overreaches", RigorMethod, []string{FaultOverreach, FaultOverreach}, 0.30},
+		{"a gap and a contradiction", RigorMethod, []string{FaultBareMeasurement, FaultContradiction}, 0.25},
+		{"three gaps", RigorMethod, []string{FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement}, 0.10},
+		{"two method contradictions", RigorMethod, []string{FaultContradiction, FaultContradiction}, 0.10},
 		{"the unaddressed text", RigorMethod, []string{FaultUnaddressed}, 0.00},
 		{"a method sum past the maximum", RigorMethod, []string{FaultUnaddressed, FaultOverreach}, 0.00},
 
@@ -161,14 +161,14 @@ func TestFaultPricesAreTheSchemes(t *testing.T) {
 }
 
 // TestFaultPriceReachesOnlyTheSchemesValues: enumerating every charge list up to
-// one charge per id reaches exactly the statement vocabulary's twenty multiples
-// of 0.05, the method vocabulary's eleven values and bearing's six, and nothing
-// else. A statement value is checked by the table's arithmetic rather than
-// membership in a short list, because underspecification stacks; a method value
-// off its eleven is a defect of a landing, not a judgement.
+// one charge per id reaches exactly the statement vocabulary's twenty-one
+// multiples of 0.05, the method vocabulary's twelve values and bearing's six,
+// and nothing else. A statement value is checked by the table's arithmetic
+// rather than membership in a short list, because underspecification stacks; a
+// method value off its twelve is a defect of a landing, not a judgement.
 func TestFaultPriceReachesOnlyTheSchemesValues(t *testing.T) {
 	var statement []float64
-	for i := 0; i <= 19; i++ {
+	for i := 0; i <= 20; i++ {
 		statement = append(statement, float64(i)/20)
 	}
 	for _, c := range []struct {
@@ -177,7 +177,7 @@ func TestFaultPriceReachesOnlyTheSchemesValues(t *testing.T) {
 		values []float64
 	}{
 		{"statement", RigorStatement, statement},
-		{"method", RigorMethod, []float64{0.00, 0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.60, 0.65, 0.95}},
+		{"method", RigorMethod, []float64{0.00, 0.05, 0.10, 0.20, 0.25, 0.30, 0.35, 0.40, 0.55, 0.65, 0.70, 1.00}},
 		{"bearing", BearingFaults, []float64{0.00, 0.15, 0.30, 0.50, 0.65, 1.00}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

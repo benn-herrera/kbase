@@ -212,10 +212,10 @@ func checkScore(what string, ceiling float64) check {
 }
 
 var (
-	// checkRigor's ceiling is the rigor tables' maximum: 1.00 belongs to an axiom
-	// by rule, so no authored node carries it. A bearing's ceiling is the format's
-	// own top, which its table reserves nothing from.
-	checkRigor   = checkScore("the domain a node's own rigor carries, 1.00 belonging to an axiom by rule", kb.RigorMaximum)
+	// checkRigor's ceiling is the rigor tables' maximum: the whole of the rigor
+	// scale, so a value at it is an ordinary authored value. A bearing's ceiling
+	// is the format's own top, which its table reserves nothing from either.
+	checkRigor   = checkScore("the domain a node's own rigor carries", kb.RigorMaximum)
 	checkBearing = checkScore("the domain one scoring edge's bearing carries", 1)
 )
 

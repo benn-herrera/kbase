@@ -80,7 +80,7 @@ unverifiable question.
 
 ### The `statement` faults
 
-Four faults, maximum `0.95`. The weight is per occurrence. The subject is a claim's title read
+Four faults, maximum `1.00`. The weight is per occurrence. The subject is a claim's title read
 together with the statement under it: the title announces, the statement fixes, and both are the
 claim's own text.
 
@@ -113,14 +113,14 @@ charged for failing to derive its title, because deriving is not what a claim do
 **The owner's worked case.** *"Parisian bleu cheese emits 2.8×10⁹ scent molecules per gram per degree
 above 270 K"* is specific, disprovable and underspecified: it does not fix the producer or brand, the
 vintage or year, the humidity or the pressure, and the emission rate can turn on each. Four free
-parameters charge `0.20` and land `0.75`; naming all four fires nothing and lands `0.95`. The
+parameters charge `0.20` and land `0.80`; naming all four fires nothing and lands `1.00`. The
 statement is not charged for the method it does not display, because that method is its supporter's.
 
 **A bare assertion fires none of the four, and that is the vocabulary working, not a gap.** A claim
 whose title and statement say the same thing, whose parameters are fixed, whose terms carry one sense
-and whose parts are consistent, answers `none` and keeps `0.95`. The value reads *the statement is
+and whose parts are consistent, answers `none` and keeps `1.00`. The value reads *the statement is
 fully specified, consistent and single-sensed*; it never reads *the claim is supported*. Support is
-`strength`, and a claim whose statement is impeccable and which nothing supports earns `0.95` rigor
+`strength`, and a claim whose statement is impeccable and which nothing supports earns `1.00` rigor
 and `0.00` strength. The old worry — that a bare assertion and a text that argues impeccably were the
 same value — does not arise for a claim: a claim is not supposed to argue, and the walk states what
 supports it. This is settled: neither the four nor the six names bareness — a bare claim fires none
@@ -136,14 +136,14 @@ one claim is `flt-equivocation`; a term two texts use differently, carrying a li
 
 ### The `method` faults
 
-Six faults, maximum `0.95`. The weight is per occurrence. The subject is an analysis's or an
+Six faults, maximum `1.00`. The weight is per occurrence. The subject is an analysis's or an
 experiment's text: the derivation or procedure it displays, against what the node sets out to
 establish. A work, judged by `set-rigor` with its document in hand, is judged by this vocabulary; no
 pass asks it, because the document is not in the corpus.
 
 | fault id | the fault | one occurrence is | weight per occurrence |
 |---|---|---|---|
-| `flt-unaddressed` | The method does not address what it sets out to establish: no step, procedure, result or citation the text displays bears on the conclusion the node asserts. | The text, whose test is universal over it: at most one. | `0.95` |
+| `flt-unaddressed` | The method does not address what it sets out to establish: no step, procedure, result or citation the text displays bears on the conclusion the node asserts. | The text, whose test is universal over it: at most one. | `1.00` |
 | `flt-contradiction` | The method's text cannot all be true: two statements it makes cannot both hold and the conclusion rests on at least one of them, or the conclusion is incompatible with a statement the text makes — while a limitation, counter-case or range the conclusion names, and a tension a condition the text states resolves, are not contradictions. | One minimal set of statements that cannot all hold: as many sets. | `0.45` |
 | `flt-overreach` | The conclusion the method draws claims more than its text establishes: the narrowest proposition the text establishes does not entail the conclusion — a wider scope, a stronger modality, a value stated for a case the text does not cover — while a restatement that entails nothing more is not overreach. | One respect in which the entailment fails: as many as fail, and at most three, because the respects are a closed list — scope, modality, an uncovered value; a fourth charge repeats one of them. | `0.35` |
 | `flt-claimed-step` | A step is claimed and none is shown: the text marks an inference — *hence*, *it follows*, *therefore*, *clearly*, *one can show* — and displays no statement from which the asserted conclusion follows; a conclusion claimed with no marker is not this. | One marked inference with no displayed statement the conclusion follows from: as many as the markers so placed. | `0.30` |
@@ -153,7 +153,7 @@ pass asks it, because the document is not in the corpus.
 **A method that displays nothing has not made a claim's mistake.** The old `0.95`-for-a-bare-assertion
 consequence does not exist here: a text that asserts a conclusion and displays nothing bearing on it
 is one `flt-unaddressed` and answers `0.00`; a text that displays a procedure and no reasoning for its
-conclusion is charged where the gap is. `0.95` on a method reads *no charge among the six*, and for an
+conclusion is charged where the gap is. `1.00` on a method reads *no charge among the six*, and for an
 analysis or an experiment that is a statement about its method, not about whether anyone supports it.
 
 ### The `bearing` faults
@@ -178,7 +178,7 @@ below states when each pass answers it.
 
 ## The value
 
-The maximum is per vocabulary: `M = 0.95` for the statement faults, `M = 0.95` for the method faults,
+The maximum is per vocabulary: `M = 1.00` for the statement faults, `M = 1.00` for the method faults,
 and `M = 1.00` for `bearing`. For a charge list `C` under the table the item's class selects:
 
 ```
@@ -222,6 +222,13 @@ text it wrote, a refresh rewriting no rigor it found. The ceiling is a rule on r
 writing, and `kb.RigorMaximum` is its one statement; `1.00` belongs to an axiom by rule, is no read
 value, and is never clamped. `bearing` has no such reserve, and `none` reaches `1.00`.
 
+> **Superseded in 0.8.0.** The reserve above is withdrawn: `kb.RigorMaximum` is `1.00`, a rigor pass's
+> maximum is the same number as an axiom's rule value, and a text charged with nothing prices at
+> `1.00` — so an authored `1.0` is in domain and reads as itself, and only a value above `1.00` is
+> read at the ceiling. The reasoning stays as the ruling that produced it; the figures in this
+> paragraph are the earlier ones, while the tables and values this page states elsewhere carry the
+> current ceiling.
+
 ## The strength is the walk's, not the rigor's
 
 [STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) owns the walk — the sets, the `⊥` table, the
@@ -230,11 +237,11 @@ reader of a `rigor` value: an empty `P(n)` means no premise carries the node, so
 `0` however good its statement.
 
 **What a bare assertion earns.** "Bare" means a claim whose statement fires nothing: its rigor is the
-maximum the statement vocabulary reaches, `0.95`, and its strength is decided by its edges. A claim
-whose statement is impeccable and which nothing supports is `0.95` rigor and `0.00` strength; with one
-supporting edge it keeps its `0.95` and takes the edge's contribution as its strength, unless that
-product exceeds `0.95`, in which case its own statement quality is the cap. An analysis reads the same,
-with its method rigor in place of `0.95`. The statement quality is kept in every case; what varies is
+maximum the statement vocabulary reaches, `1.00`, and its strength is decided by its edges. A claim
+whose statement is impeccable and which nothing supports is `1.00` rigor and `0.00` strength; with one
+supporting edge it keeps its `1.00` and takes the edge's contribution as its strength, unless that
+product exceeds `1.00`, in which case its own statement quality is the cap. An analysis reads the same,
+with its method rigor in place of `1.00`. The statement quality is kept in every case; what varies is
 whether anything carries it. The ladder reads `strength` and not `rigor`, so this pair is not a band:
 its strength is `0.00`, and [the band outcomes](#the-band-outcomes) bottom out there unless a lift
 raises it.
@@ -251,7 +258,7 @@ row in either rigor table reaches a band: strength is `0`, and the bottom rung i
 
 ### The statement table
 
-The reachable values are **all twenty multiples of `0.05` in `[0, 0.95]`**, because
+The reachable values are **all twenty-one multiples of `0.05` in `[0, 1.00]`**, because
 `flt-underspecified` weighs one step and its occurrences are not capped: any value is reachable by
 stacking underspecifications. A statement value is therefore checked by the table's arithmetic, not
 by membership in a short list; a value off the multiples is a defect of a landing, and a value on one
@@ -259,45 +266,45 @@ is not evidence that the charges are ordinary.
 
 | charges | statement rigor | band it would read, when rigor is what binds |
 |---|---|---|
-| `none` | `0.95` | ok to build on |
-| one `flt-underspecified` | `0.90` | ok to build on |
-| two `flt-underspecified` | `0.85` | ok to build on — exactly at the cut |
-| one `flt-equivocation` | `0.70` | ok to build on, see caveats |
-| one `flt-overreach` | `0.60` | use as input only |
-| one `flt-contradiction` | `0.50` | use as input only |
-| one `flt-contradiction` and one `flt-underspecified` | `0.45` | use as input only — exactly at the cut |
-| two `flt-equivocation` | `0.45` | use as input only — exactly at the cut |
-| one `flt-equivocation` and one `flt-overreach` | `0.35` | do not build on, rework needed |
-| two `flt-overreach` | `0.25` | do not build on, rework needed |
-| one `flt-overreach` and one `flt-contradiction` | `0.15` | unsubstantiated |
-| two `flt-contradiction` | `0.05` | unsubstantiated |
-| three `flt-contradiction`, or any sum of `0.95` or more | `0.00` | unsubstantiated |
+| `none` | `1.00` | ok to build on |
+| one `flt-underspecified` | `0.95` | ok to build on |
+| two `flt-underspecified` | `0.90` | ok to build on |
+| one `flt-equivocation` | `0.75` | ok to build on, see caveats |
+| one `flt-overreach` | `0.65` | ok to build on, see caveats — exactly at the cut |
+| one `flt-contradiction` | `0.55` | use as input only |
+| one `flt-contradiction` and one `flt-underspecified` | `0.50` | use as input only |
+| two `flt-equivocation` | `0.50` | use as input only |
+| one `flt-equivocation` and one `flt-overreach` | `0.40` | do not build on, rework needed |
+| two `flt-overreach` | `0.30` | do not build on, rework needed |
+| one `flt-overreach` and one `flt-contradiction` | `0.20` | do not build on, rework needed — exactly at the cut |
+| two `flt-contradiction` | `0.10` | unsubstantiated |
+| three `flt-contradiction`, or any sum of `1.00` or more | `0.00` | unsubstantiated |
 | `flt-pending` | `*pending*` | no band |
 
-`0.75`, the owner's worked case at four free parameters, is `ok to build on, see caveats`. A statement
+`0.80`, the owner's worked case at four free parameters, is `ok to build on, see caveats`. A statement
 does not reach `unsubstantiated` by ordinary underspecification: four parameters cost `0.20`, and the
 weights are chosen so that the statement vocabulary's own deductions leave the bottom rung to
 contradictions, to stacked defects, and to the walk's empty `P(n)`.
 
 ### The method table
 
-The reachable values are the old eleven; nine of the range's twenty multiples are unreachable —
-`0.10`, `0.40`, `0.45`, `0.55`, `0.70`, `0.75`, `0.80`, `0.85`, `0.90` — so a method value off this
-list is a defect of a landing, not a judgement.
+The reachable values are these twelve; nine of the range's twenty-one multiples are unreachable —
+`0.15`, `0.45`, `0.50`, `0.60`, `0.75`, `0.80`, `0.85`, `0.90` and `0.95` — so a method value off
+this list is a defect of a landing, not a judgement.
 
 | charges | method rigor | band it would read, when rigor is what binds |
 |---|---|---|
-| `none` | `0.95` | ok to build on |
-| one gap id | `0.65` | ok to build on, see caveats — exactly at the cut |
-| one `flt-overreach` | `0.60` | use as input only |
-| one `flt-contradiction` | `0.50` | use as input only |
-| two gap ids | `0.35` | do not build on, rework needed |
-| a gap id and an `flt-overreach` | `0.30` | do not build on, rework needed |
-| two `flt-overreach` | `0.25` | do not build on, rework needed |
-| a gap id and an `flt-contradiction` | `0.20` | do not build on, rework needed — exactly at the cut |
-| an `flt-overreach` and an `flt-contradiction` | `0.15` | unsubstantiated |
-| three gap ids, or two `flt-contradiction` | `0.05` | unsubstantiated |
-| an `flt-unaddressed`, or any sum of `0.95` or more | `0.00` | unsubstantiated |
+| `none` | `1.00` | ok to build on |
+| one gap id | `0.70` | ok to build on, see caveats |
+| one `flt-overreach` | `0.65` | ok to build on, see caveats — exactly at the cut |
+| one `flt-contradiction` | `0.55` | use as input only |
+| two gap ids | `0.40` | do not build on, rework needed |
+| a gap id and an `flt-overreach` | `0.35` | do not build on, rework needed |
+| two `flt-overreach` | `0.30` | do not build on, rework needed |
+| a gap id and an `flt-contradiction` | `0.25` | do not build on, rework needed |
+| an `flt-overreach` and an `flt-contradiction` | `0.20` | do not build on, rework needed — exactly at the cut |
+| three gap ids, or two `flt-contradiction` | `0.10` | unsubstantiated |
+| an `flt-unaddressed`, or any sum of `1.00` or more | `0.00` | unsubstantiated |
 | `flt-pending` | `*pending*` | no band |
 
 "Gap id" stands for any of `flt-claimed-step`, `flt-unstated-premise` and `flt-bare-measurement`,

@@ -232,7 +232,8 @@ func Discover(src *Source, lg log.Logger) (State, error) {
 // RigorMaximum becomes RigorMaximum here, for every node kind at once. The
 // readers stay document readers — the bytes a file holds are what they return,
 // which is how the write path leaves a rigor it found as it is — and an
-// axiom's 1.00 is no read value and is never clamped.
+// authored value at the maximum, an axiom's 1.00 included, is nothing this
+// rule touches.
 func (st *State) readAuthoredRigor() {
 	for i := range st.Works {
 		st.Works[i].Rigor = AuthoredRigor(st.Works[i].Rigor)

@@ -338,20 +338,20 @@ func TestDiscoverPremisePairings(t *testing.T) {
 	}
 }
 
-// TestAnAuthoredRigorAboveTheMaximumReadsAtIt: 1.00 belongs to an axiom by
-// rule, so an authored value standing above the rigor tables' maximum reads as
-// that maximum whatever kind carries it — the claim, analysis and work
-// registers and the experiment a leaf hosts — while the document keeps the
-// value it wrote. Pending stays pending, and a value at the maximum reads as
-// itself.
+// TestAnAuthoredRigorAboveTheMaximumReadsAtIt: the rigor tables' maximum is the
+// whole of the scale, so a hand-edited value standing above it reads as that
+// maximum whatever kind carries it — the claim, analysis and work registers and
+// the experiment a leaf hosts — while the document keeps the value it wrote.
+// Pending stays pending, and a value at the maximum, which is what a converted
+// experiment's 1.0 is, reads as itself.
 func TestAnAuthoredRigorAboveTheMaximumReadsAtIt(t *testing.T) {
 	register := "# Register\n\n" +
-		"## A Claim\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
-		"## An Analysis\n<!-- id: ana-aaaaaa -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
-		"## A Work\n<!-- id: wrk-Smith2020 -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
-		"## A Claim At The Maximum\n<!-- id: clm-bbbbbb -->\n\n### Rigor\n- rigor: 0.95\n\n---\n\n" +
+		"## A Claim\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n- rigor: 1.20\n\n---\n\n" +
+		"## An Analysis\n<!-- id: ana-aaaaaa -->\n\n### Rigor\n- rigor: 1.20\n\n---\n\n" +
+		"## A Work\n<!-- id: wrk-Smith2020 -->\n\n### Rigor\n- rigor: 1.20\n\n---\n\n" +
+		"## A Claim At The Maximum\n<!-- id: clm-bbbbbb -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
 		"## A Pending Claim\n<!-- id: clm-cccccc -->\n\n### Rigor\n- rigor: *pending*\n"
-	const leaf = "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n" +
+	const leaf = "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.20\n" +
 		"analysis-nodes:\n  - ana-id: ana-aaaaaa\n---\n# The leaf\n"
 	st, err := discoverFiles(t, map[string]string{RegisterFile: register, "vol/a.md": leaf}, log.Discard())
 	if err != nil {
@@ -371,6 +371,12 @@ func TestAnAuthoredRigorAboveTheMaximumReadsAtIt(t *testing.T) {
 	for _, x := range st.Experiments {
 		rigors[x.ID] = x.Rigor
 	}
+	show := func(p *float64) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
 	for _, tc := range []struct {
 		id   string
 		want *float64
@@ -384,7 +390,7 @@ func TestAnAuthoredRigorAboveTheMaximumReadsAtIt(t *testing.T) {
 			continue
 		}
 		if (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
-			t.Errorf("%s reads rigor %v, want %v", tc.id, got, tc.want)
+			t.Errorf("%s reads rigor %v, want %v", tc.id, show(got), show(tc.want))
 		}
 	}
 }

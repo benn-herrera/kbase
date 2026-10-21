@@ -80,25 +80,25 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 			name: "one charge, priced", text: rigor, table: kb.RigorStatement,
 			reply:   "flt-overreach: continuous and bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded", Offset: 22}},
-			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
+			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
 		},
 		{
 			name: "the reply's own spelling kept, its case folded for the id", text: rigor, table: kb.RigorStatement,
 			reply:   "FLT-OVERREACH: Continuous and Bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "Continuous and Bounded"}},
-			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
+			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
 		},
 		{
 			name: "a re-wrapped citation", text: rigor, table: kb.RigorMethod,
 			reply:   "flt-claimed-step: bounded. Every",
 			faults:  []Charge{{ID: kb.FaultClaimedStep, Passage: passageStatement, Citation: "bounded. Every"}},
-			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
+			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.70},
 		},
 		{
 			name: "the form's brackets stripped", text: rigor, table: kb.RigorStatement,
 			reply:   "[flt-overreach]: [continuous and bounded]",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"}},
-			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
+			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
 		},
 		{
 			name: "a title citation", text: rigor, table: kb.RigorMethod,
@@ -113,13 +113,13 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 				{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"},
 				{ID: kb.FaultContradiction, Passage: passageStatement, Citation: "continuous and bounded"},
 			},
-			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.15},
+			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.20},
 		},
 		{
 			name: "one occurrence written twice collapses", text: rigor, table: kb.RigorStatement,
 			reply:   "flt-overreach: continuous and bounded\nflt-overreach: continuous and bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"}},
-			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
+			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
 		},
 		{
 			name: "two disjoint spans of one id are two occurrences", text: rigor, table: kb.RigorMethod,
@@ -128,15 +128,15 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 				{ID: kb.FaultBareMeasurement, Passage: passageStatement, Citation: "The map is"},
 				{ID: kb.FaultBareMeasurement, Passage: passageStatement, Citation: "Every chart"},
 			},
-			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.35},
+			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.40},
 		},
 		{
 			name: "none alone", text: rigor, table: kb.RigorStatement,
-			reply: "none", faults: []Charge{}, value: kb.Bearing{Value: 0.95},
+			reply: "none", faults: []Charge{}, value: kb.Bearing{Value: 1.00},
 		},
 		{
 			name: "none among blank lines", text: rigor, table: kb.RigorStatement,
-			reply: "\n  none  \n\n", faults: []Charge{}, value: kb.Bearing{Value: 0.95},
+			reply: "\n  none  \n\n", faults: []Charge{}, value: kb.Bearing{Value: 1.00},
 		},
 		{
 			name: "bearing's maximum", text: bearing, table: kb.BearingFaults,
@@ -165,7 +165,7 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 			name: "a rigor span the title and the statement share is both", text: rigorTextOf(t, "A Claim", "A claim is made here."), table: kb.RigorStatement,
 			reply:   "flt-overreach: a claim",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageBoth, Citation: "a claim"}},
-			passage: []string{passageBoth}, value: kb.Bearing{Value: 0.60},
+			passage: []string{passageBoth}, value: kb.Bearing{Value: 0.65},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -403,17 +403,17 @@ func TestParseAnswerPricesUnderTheClasssTable(t *testing.T) {
 		want  float64
 	}{
 		{"a claim's one free parameter", statement, kb.RigorStatement,
-			"flt-underspecified: continuous", 0.90},
+			"flt-underspecified: continuous", 0.95},
 		{"a claim's four free parameters", statement, kb.RigorStatement,
-			"flt-underspecified: The map\nflt-underspecified: is continuous\nflt-underspecified: and bounded\nflt-underspecified: .", 0.75},
+			"flt-underspecified: The map\nflt-underspecified: is continuous\nflt-underspecified: and bounded\nflt-underspecified: .", 0.80},
 		{"a method's unaddressed text", method, kb.RigorMethod,
 			"flt-unaddressed: An Analysis", 0.00},
 		{"a method's claimed step", method, kb.RigorMethod,
-			"flt-claimed-step: continuous", 0.65},
+			"flt-claimed-step: continuous", 0.70},
 		{"a shared id under the statement table", statement, kb.RigorStatement,
-			"flt-overreach: continuous", 0.60},
+			"flt-overreach: continuous", 0.65},
 		{"the same id under the method table", method, kb.RigorMethod,
-			"flt-overreach: continuous", 0.60},
+			"flt-overreach: continuous", 0.65},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := ParseAnswer(c.reply, c.text, c.table)
