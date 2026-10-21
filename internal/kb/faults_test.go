@@ -45,6 +45,31 @@ func TestFaultTablesAreTheSchemes(t *testing.T) {
 	}
 }
 
+// TestTheChargeThatLeavesNothingTracksTheCeiling: the charge that means "this
+// leaves nothing" is one of each table's faults and is the table's whole
+// maximum, not a number chosen on its own — so charging it alone prices the
+// text to zero, whatever the ceiling is. A weight written back as a literal
+// beside a moved ceiling keeps pricing the old gap and fails here.
+func TestTheChargeThatLeavesNothingTracksTheCeiling(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		table FaultTable
+		id    string
+	}{
+		{"method", RigorMethod, FaultUnaddressed},
+		{"bearing", BearingFaults, FaultNoEngagement},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.table.Price([]string{c.id}); got.Pending || got.Value != 0 {
+				t.Errorf("Price(%s) = %+v, want 0: the charge that leaves nothing is the table's whole maximum", c.id, got)
+			}
+			if w := weightOf(c.table, c.id); w != c.table.maximum {
+				t.Errorf("%s weighs %d, want the table's maximum %d", c.id, w, c.table.maximum)
+			}
+		})
+	}
+}
+
 // TestFaultIDsNameOneFaultEach: the bearing set is disjoint from both rigor sets,
 // the two rigor sets meet in the two ids that name one fault at different
 // subjects, and each of those carries one weight — so a ledger line's price does

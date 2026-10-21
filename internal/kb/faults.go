@@ -47,8 +47,24 @@ const ChargeNone = "none"
 // charge list with no charge prices to: the rigor tables' maximum, the largest
 // multiple of 0.05 below the 1.0 an axiom's rigor holds by rule. It is the
 // ceiling of every write that takes a node's own rigor, and no authored value
-// reaches the reserve. Bearing has none — its table's maximum is 1.00.
+// reaches the reserve. Bearing has no reserve — BearingMaximum is its table's.
 const RigorMaximum = 0.95
+
+// rigorMaximumHundredths is RigorMaximum in the tables' integer hundredths:
+// the whole of what either rigor table prices, and what the one charge in the
+// method table that leaves nothing costs. It is written as the expression, so a
+// ceiling change carries that charge with it.
+const rigorMaximumHundredths = int(RigorMaximum * 100)
+
+// BearingMaximum is the most bearing a link carries: the bearing table's whole
+// maximum, which reserves nothing the way the rigor one does.
+const BearingMaximum = 1.0
+
+// bearingMaximumHundredths is BearingMaximum in the tables' integer hundredths:
+// the whole of what the bearing table prices, and what the one charge that
+// leaves nothing costs. It is written as the expression, so a ceiling change
+// carries that charge with it.
+const bearingMaximumHundredths = int(BearingMaximum * 100)
 
 // AuthoredRigor is an authored value as the system reads it: above
 // RigorMaximum it reads as RigorMaximum — a converted experiment's 1.0 reads
@@ -71,8 +87,9 @@ func AuthoredRigor(v *float64) *float64 {
 // Weights and the maximum are integer hundredths of the value's range, so every
 // sum and every value is exact at two decimals and nothing rounds.
 type FaultTable struct {
-	// maximum is what a charge list with no charge takes: RigorMaximum under
-	// either rigor vocabulary, and 1.00 for bearing, which reserves nothing.
+	// maximum is what a charge list with no charge takes:
+	// rigorMaximumHundredths under either rigor vocabulary, and
+	// bearingMaximumHundredths for bearing, which reserves nothing.
 	maximum int
 	faults  []fault
 }
@@ -90,24 +107,29 @@ type fault struct {
 var (
 	// RigorStatement is the statement vocabulary's: what a claim's own text is
 	// charged with.
-	RigorStatement = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
+	RigorStatement = FaultTable{maximum: rigorMaximumHundredths, faults: []fault{
 		{FaultContradiction, 45},
 		{FaultOverreach, 35},
 		{FaultEquivocation, 25},
 		{FaultUnderspecified, 5},
 	}}
 	// RigorMethod is the method vocabulary's: what an analysis's or an
-	// experiment's own text is charged with.
-	RigorMethod = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
-		{FaultUnaddressed, 95},
+	// experiment's own text is charged with. FaultUnaddressed costs the
+	// table's whole maximum rather than a weight chosen on its own: a text
+	// charged with it has nothing left to carry the assertion.
+	RigorMethod = FaultTable{maximum: rigorMaximumHundredths, faults: []fault{
+		{FaultUnaddressed, rigorMaximumHundredths},
 		{FaultContradiction, 45},
 		{FaultOverreach, 35},
 		{FaultClaimedStep, 30},
 		{FaultUnstatedPremise, 30},
 		{FaultBareMeasurement, 30},
 	}}
-	BearingFaults = FaultTable{maximum: 100, faults: []fault{
-		{FaultNoEngagement, 100},
+	// BearingFaults is the bearing vocabulary's. FaultNoEngagement is the
+	// table's whole maximum rather than a weight chosen on its own: a link that
+	// engages nothing leaves nothing to carry.
+	BearingFaults = FaultTable{maximum: bearingMaximumHundredths, faults: []fault{
+		{FaultNoEngagement, bearingMaximumHundredths},
 		{FaultReferent, 50},
 		{FaultPartial, 50},
 		{FaultNarrower, 50},
