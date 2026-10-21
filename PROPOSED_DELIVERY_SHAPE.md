@@ -2,114 +2,136 @@
 
 **Status.** A proposal. Nothing here is built, and none of it is in 0.8.0. It records the decisions
 taken about how kbase is delivered to a user and how a scoring run reaches a model, so that the work
-after this release starts from them rather than rediscovering them.
+after this release starts from them.
 
-## 1. kbase ships as a skill
+## 1. The skill is kbase's delivery, and its text is adjagent's
 
-The delivery package is a skill: an entry point and one reference per verb family — building, reading,
-scoring, maintenance. That is the shape an agent reads today, and it is the shape kbase takes.
+The delivery package is a skill: a routing file and one reference per verb family — building, reading,
+scoring, maintenance. That is the shape an agent reads, and it is the shape kbase takes.
 
-**kbase owns the content; adjagent owns the rendering.** kbase's text is harness-neutral, and adjagent
-takes it and produces each runtime's tree, handling the harness differences that matter. kbase does not
-grow a renderer: owning the whole skill would mean rebuilding adjagent's rendering and agent-set
-handling inside kbase, which is the one thing the split exists to avoid.
+**adjagent owns the text.** The references are generated from adjagent's own definitions and rendered
+per harness; kbase has no skill files and no skill source. What kbase supplies is the interface those
+references point at: the MCP tool descriptions and the verbs' own output — refusals, `verify` findings,
+`show-config`, `--help`. A reference states procedure and points at that surface; it never restates a
+rule, a vocabulary or a number, because every copy is a second source that goes stale on the next
+release.
 
-The test of the boundary: **if a change to the skill would need kbase to know what a harness is, it
-isn't kbase's change.** In practice that means no tool names, no config paths and no runtime-specific
-instructions in kbase's references — each of those would be rendered faithfully into every harness,
-where each wanted something else.
+**The scoring criteria are not part of that surface.** They live in the ask templates embedded in the
+binary, which travel to whatever back end runs the ask as payload. They are not documentation, and a
+reference must not describe them.
 
-Both projects are maintained and released in lockstep by the same person, so a rendered skill and the
-binary it drives share one identity. No version-pairing mechanism is built: there is nothing to pair.
+**Harness differences are rendering, not content.** The text carries no harness nouns — no harness's
+tool names, no config paths, no runtime-specific instructions. Each of those would be rendered
+faithfully into every harness, where each wanted something else.
 
-**The limit.** A skill is prose, and kbase's rule is that no test asserts a prompt's prose. "The
-package works" is therefore checked by walking the documented procedure against a fixture — an
-acceptance run, not a diff.
+**The MCP entry is trackable.** The registered command is a path to the installed binary, relative to
+the project, and `--kb-root` is omitted: the server walks up to `.git` and serves the `kb-root/` beside
+it, the same resolution every verb uses. So `.mcp.json` and `opencode.jsonc` carry nothing
+machine-specific. Both relativities rest on one premise — the harness starts the server inside the
+project — and both fail loudly when it does not: a missing command, or a KB that is not there.
+
+**There is no version pairing to build.** adjagent installs the kbase release it was built against
+(`KBASE_VERSION`) and drives that binary; the release and the skill move in one act. kbase does not
+check the pairing, and what a mismatch looks like is a reference naming a verb the installed binary
+does not have.
 
 ## 2. Harness awareness lives in the Ask internals
 
 The only place kbase may know what a harness is, is the Ask implementation for that back end. Outside
-it, kbase is harness-neutral.
+it kbase is harness-neutral.
 
-One place breaks that today: `internal/config/template.go` ships a profile naming one harness's flags,
-and documents another's missing ones. Under this proposal the file goes entirely (§3).
+One place breaks that today: the `harnessesTemplate` constant in `internal/config/template.go`, which
+ships a profile naming one harness's flags. That constant and its use in `configure --create` go; the
+file's other two templates stay.
 
-## 3. The harness profile mechanism goes away
+## 3. The profile mechanism goes away
 
 There are no user-supplied commands. The driver internalises the command lines for the back ends it
-ships, and a run selects among those.
+ships.
 
-What goes with it:
+**With one back end there is no selector**: a run uses the one that can resolve. A second back end
+brings the flag and the refusal naming the set with it, in the same commit — a selector that exists
+before there is a choice is a name a user has to learn to do nothing.
+
+What goes with the mechanism:
 
 - `harnesses.toml`, its loader, and the layer merge that let a repository replace a global profile.
-- The `{model}` and `{prompt}` token contract, and the refusals that policed it — a profile naming no
-  model, a model id beginning with `-`, a token in two elements.
-- The shipped profile template, and with it the one place kbase named a harness outside the Ask
-  internals.
+- The `{model}` and `{prompt}` token contract, and the refusals that policed it — a model id beginning
+  with `-`, a `--scoring-model` the command cannot carry, a `{prompt}` token in two elements.
+- The records the SPEC keeps for it: `back-end: harness`, the `harness` and `harness-layer` fields,
+  `harnesses` and `harnessesExists` in `show-config`, and the `check: harness` class.
 
 **Why.** A user who assembles a command that both reaches a model correctly and answers in the exact
-form the driver requires is a low-odds bet; the failures are silent, because a wrong answer still
-parses. The support cost is high and recurring. Supported therefore means shipped and tested: the back
-ends kbase names are the ones it tests, and anything else is out of scope rather than "you might be
-able to make it work".
+form the driver requires is a low-odds bet, and its failures are silent, because a wrong answer still
+parses. The support cost is high and recurring. Supported therefore means shipped and tested.
 
 ## 4. One internal seam survives
 
 The integration suite fakes a back end: an over-limit reply, a non-zero exit, a leftover file, a
-megabyte of stderr. With profiles gone there is no injection point, so one override remains inside the
-driver — an environment variable naming a command for the duration of the run. It is undocumented, not
-part of the support surface, and the same shape as §2: harness knowledge reachable only from inside.
-
-Without it the hermetic integration targets regress to asserting against whatever harness happens to be
-installed.
+megabyte of stderr. With profiles gone there is no injection point, so one override remains: an
+environment variable naming a command for the duration of the run. It is outside the support surface
+and outside the child's environment, and it is not silent — a run that sees it announces it on stderr
+and records it in the run's header, as a repository-supplied profile is announced today. A stray
+inherited variable must never score a KB with a command nobody chose and nothing to say so.
 
 ## 5. opencode: v2 only
 
-The opencode adapter targets v2, the version in use and the only one supported. There is no pinning
-below the major: opencode updates often, and a build-exact pin fails minutes after an upload.
+The adapter targets opencode v2. A run against a lower major is refused before the first item, and
+there is no pin below the major: opencode updates often, and a build-exact pin breaks minutes after an
+upload.
 
 Mechanism: `opencode run`, plus the inline config environment variable that defines the agent for that
-process — no tools, no instructions of its own — together with the CLI options that go with it. Nothing
-is written to the user's configuration, so there is no file to clean up, no stale definition after a
-crash, and no name to collide with a user's own agent.
+process — no tools, no instructions of its own — with the CLI options that go with it. Nothing is
+written to the user's configuration, so there is no file to clean up, no stale definition after a
+crash, and no name to collide with a user's own agent. None of it reaches the user: there is no config
+to tune and no agent definition to edit; the adapter builds both.
 
-None of this reaches the user. There is no config to tune and no agent definition to edit; the adapter
-builds it.
+Instruction discovery is the hole tool removal does not close. The item's directory is inside the run's
+ledger, which may sit in a user's project, so the inline config has to stop the upward walk as well.
 
-The working directory is inside the run's ledger, which may sit within a user's project, so
-instruction discovery upward has to be suppressed by that inline config too — tool removal alone
-leaves the instructions channel open.
+**The scoring model.** The adapter is handed the scoring role's model and passes it in whatever form
+the back end's own flag or inline config takes. A model the back end cannot name is refused before the
+walk, never dropped, and the run records the id it passed.
 
-**No probe layer.** The first run against a fixture is the experiment. What the adapter sends is in the
-run's digest, so a wrong assumption about the mechanism is visible afterwards rather than inferred
-forward.
+**Nothing verifies this at run time.** The digest records what kbase sent, not what the harness added:
+an instruction-bearing run still returns a closed answer. What would show it is a fixture run from a
+directory with an instruction file above it, whose charges differ from the same run in a clean
+directory. That is a manual probe, run when the assumption is re-checked, and its command and result
+belong in the commit.
 
 ## 6. What a back end must satisfy
 
-The requirements stated in the scoring handoff become the contract each adapter implements:
+The contract is SPEC §8's harness back end, which each adapter implements and where SPEC wins on any
+disagreement. As a checklist for an adapter:
 
-- one process per item, the prompt whole, and a closed answer on stdout;
+- one process per item, the prompt whole, and the reply parsed by the same rule a provider's is;
 - no tools, and no instructions of its own;
-- one attempt per item, so a retry kbase cannot see is a variance it cannot account for;
-- failure loud: a non-zero exit with a reason, never a fabricated answer.
-
-The adapter is where these are met, which is why the adapter is the only harness-aware code.
+- no re-issue: one attempt per item, so a retry kbase cannot see is a variance it cannot account for;
+- failure loud — a non-zero exit with a reason, never a fabricated answer.
 
 ## 7. What this leaves for adjagent
 
-- Render the skill (§1).
-- If it ever acts as a scoring back end, implement §6 itself. That is a choice adjagent holds, not a
-  need kbase has.
-- Retire its own scoring agent definition, and the references that name it: the scoring prompt now
-  carries the whole instruction set, so an agent definition left in place adds instructions the run
-  cannot account for.
+adjagent retires `definitions/kb_claim_scorer.py` and the agent definition it renders. The scoring
+prompt carries the whole instruction set now, so an agent definition left in place adds instructions
+the run cannot account for. `PLAN_3_TOOLING.md` B.1 already requires the retirement.
+
+Its `scoring` reference also carries two facts that are already false: the ledger records `done`,
+`failed` and `pending` (not `malformed`), and under this proposal the answer comes through a back end
+rather than the configured provider.
 
 ## 8. Still open
 
 - Which back ends ship in the first cut — opencode alone, or claude alongside it.
-- What, if anything, replaces `--harness` on the command line.
 - Whether the direct provider path stays beside the adapters, or the adapters are the only way a
   scoring run reaches a model.
 - The name and home of the override in §4.
-- Sequencing against the revised scoring scheme: the `scoring` reference is the only document that
-  changes when that scheme lands.
+
+## 9. What this supersedes
+
+Text that already carries an obligation this page voids or restates, and must move with it:
+
+- `SPEC.md` §8's *harness back end* and *The model*, §9.3, and §9.7's `harnesses`/`harnessesExists`.
+- `CONVENTIONS.md`'s `internal/harness` paragraph and its exec-owner list — a back end that execs a
+  program needs an owner, as `internal/harness` has one today.
+- `USER_CONVENTIONS.md`'s `harnesses.toml` paragraph, and `ROADMAP.md`'s *Configuration* bullet.
+- `PLAN_3_TOOLING.md` B.1 and B.3.
