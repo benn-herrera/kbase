@@ -15,12 +15,12 @@ import (
 // selfExec is the binary os.Executable names: kbase itself.
 const selfExec = "kbase"
 
-// dynamicExec is the sentinel execOwners holds for an owner whose binary is the
-// user's configuration rather than a program kbase names: a harness profile's
-// command. It cannot be resolved statically, so the per-site check exempts the
-// owner — the price of running a program kbase did not write, named rather than
-// hidden.
-const dynamicExec = "<the harness profile's command>"
+// dynamicExec is the sentinel execOwners holds for an owner whose binary is not
+// a program kbase names: the harness back end's command, which is what the
+// back end override supplied where a run saw one. It cannot be resolved
+// statically, so the per-site check exempts the owner — the price of running a
+// program kbase did not write, named rather than hidden.
+const dynamicExec = "<the harness back end's command>"
 
 // execOwners are the only places that may start a process, each with the one
 // binary it starts: a package, or one file of a package that otherwise may

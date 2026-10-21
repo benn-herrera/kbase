@@ -79,7 +79,6 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 		{Key: "selection", Value: selectionRecord(s, opts.Provider)},
 		{Key: "mode", Value: modeRecord(mode, modeErr)},
 		{Key: "roles", Value: roles},
-		{Key: "harnesses", Value: harnessRecords(opts.Harnesses)},
 		{Key: "diagnostics", Value: diagnostics(faults, modeErr, roleItems)},
 	}
 }
@@ -96,7 +95,6 @@ func layerRecords(layers []config.Layer) []toolresult.Record {
 			{Key: "exists", Value: l.Exists},
 			{Key: "providersExists", Value: l.ProvidersExists},
 			{Key: "configExists", Value: l.ConfigExists},
-			{Key: "harnessesExists", Value: l.HarnessesExists},
 		})
 	}
 	return records
@@ -137,23 +135,6 @@ func providerRecords(entries []config.Entry) []toolresult.Record {
 			record = append(record, toolresult.Field{Key: "fault", Value: e.Fault})
 		}
 		records = append(records, record)
-	}
-	return records
-}
-
-// harnessRecords is the loaded profiles in name order: each name, the layer
-// whose file supplied it, and the command as written — the tokens in place, so
-// the report states what --harness would run without substituting anything.
-// `[]` where no layer supplies a profile, because a reader must be able to see
-// what --harness offers.
-func harnessRecords(profiles config.Harnesses) []toolresult.Record {
-	records := make([]toolresult.Record, 0, len(profiles))
-	for _, name := range config.ProfileNames(profiles) {
-		p := profiles[name]
-		records = append(records, toolresult.Record{
-			{Key: "name", Value: p.Name},
-			{Key: "layer", Value: p.Layer},
-			{Key: "command", Value: p.Command}})
 	}
 	return records
 }
@@ -210,7 +191,7 @@ func resolvedRoles(reg *clients, s config.Inputs, mode config.Mode, modeErr erro
 				{Key: "detail", Value: "no role resolves while the inference mode is undecided: " + modeErr.Error()}})
 			continue
 		}
-		ep, err := config.Resolve(s, mode, role, config.BackEndProvider, "")
+		ep, err := config.Resolve(s, mode, role, "")
 		if err != nil {
 			records = append(records, toolresult.Record{{Key: "role", Value: string(role)}, {Key: "detail", Value: err.Error()}})
 			items = append(items, refusalItems(err)...)
@@ -266,8 +247,7 @@ the kind of key it supplies and why any faulted; the merged role values; the
 names of the inference variables this process sets; which pool entry the
 selection rules name and which rule named it; which source supplies inference
 and, for each role, what answers it, the endpoint and the layer that supplied
-each field — or what it lacks, with an item saying so; and every harness profile
-the layers load, with the layer that supplied it and its command as written.
+each field — or what it lacks, with an item saying so.
 
 Not every role resolves here and that is no refusal: an unresolved role is a
 diagnostic, and so is a mixed or partial environment. Diagnostics are not

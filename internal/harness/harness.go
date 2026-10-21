@@ -1,6 +1,5 @@
-// Package harness runs one configured command per item: the argv a user's
-// harness profile states, the prompt an ask is handed, and the reply the
-// command answers with.
+// Package harness runs one command per item: the argv the back end states, the
+// prompt an ask is handed, and the reply the command answers with.
 //
 // It knows nothing of kbase — no provider, no endpoint, no KB path, no
 // configuration type — and composes no prompt: it receives one and hands it
@@ -35,9 +34,9 @@ const (
 	PromptLimit = 64 << 10
 )
 
-// tokenPrompt is the argv token a profile's command carries where the prompt
-// goes. An element naming it receives the prompt and stdin is closed empty; an
-// argv naming it nowhere receives the prompt on stdin.
+// tokenPrompt is the argv token a command carries where the prompt goes. An
+// element naming it receives the prompt and stdin is closed empty; an argv
+// naming it nowhere receives the prompt on stdin.
 const tokenPrompt = "{prompt}"
 
 // waitDelay bounds how long Wait waits for the child's output pipes after the
@@ -46,9 +45,9 @@ const tokenPrompt = "{prompt}"
 // kbase-owned process will close.
 const waitDelay = 5 * time.Second
 
-// Command is one harness command: the argv a profile states, the program that
-// argv names, the environment it runs in, and — once the item is known — the
-// prompt, held here when no argv element names it.
+// Command is one harness command: the argv the back end states, the program
+// that argv names, the environment it runs in, and — once the item is known —
+// the prompt, held here when no argv element names it.
 //
 // The prompt lives on the command rather than being handed to Ask, so Ask
 // cannot be called with a prompt the argv already carried, and cannot leave one
@@ -69,9 +68,9 @@ type Command struct {
 // starts: an item runs in the run's own directory, where a path relative to
 // kbase's would name another program or none. A relative argv[0] carrying a
 // separator is kept rather than refused, resolved against the directory kbase
-// was launched from — that is the only place a profile naming ./bin/agent can
+// was launched from — that is the only place a command naming ./bin/agent can
 // mean, and refusing it would forbid a local command standing exactly where it
-// says. An element naming {prompt} twice is refused here too: that is a profile
+// says. An element naming {prompt} twice is refused here too: that is a command
 // defect, and it fails setup rather than every item.
 func New(argv []string, lg log.Logger) (*Command, error) {
 	if len(argv) == 0 {
@@ -98,11 +97,11 @@ func New(argv []string, lg log.Logger) (*Command, error) {
 	return &Command{program: program, argv: slices.Clone(argv), lg: lg}, nil
 }
 
-// Argv is the command as it stands, argv[0] as the profile wrote it: on the
-// probed command — the one a run records what invoked it — the profile's
-// {model} is substituted and {prompt} is still the token, the run's invocation
-// and never the text of one item. The program that invocation starts is the one
-// New resolved; the profile's own command is not aliased, so filling an item's
+// Argv is the command as it stands, argv[0] as the back end wrote it: on the
+// probed command — the one a run records what invoked it — the token naming the
+// prompt is still the token, so the record names how the run was invoked and
+// never the text of one item. The program that invocation starts is the one New
+// resolved; the back end's own command is not aliased, so filling an item's
 // prompt cannot reach it.
 func (c *Command) Argv() []string { return slices.Clone(c.argv) }
 
@@ -117,13 +116,13 @@ func (c Command) WithEnv(env []string) Command {
 
 // Item is one item's command built from the probed argv: {prompt} filled in the
 // one element that names it, or held for stdin where none does. What the token
-// decides is a property of the profile, so it is decided once here and never
+// decides is a property of the command, so it is decided once here and never
 // re-examined per item.
 //
 // A prompt carrying a NUL and a prompt past PromptLimit fail the item before a
 // process starts: an argv cannot carry the first, and an element that grows
 // without bound is how one item takes the run's memory. An argv naming the
-// token in two elements is refused for the profile's reason — the prompt would
+// token in two elements is refused for the command's reason — the prompt would
 // be sent twice — and an unknown brace token is passed through as written. Both
 // copies inside one element are refused earlier still, by New.
 func (c *Command) Item(prompt string) (Command, error) {

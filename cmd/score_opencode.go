@@ -15,17 +15,17 @@ import (
 )
 
 // The built-in opencode back end. `--harness opencode` selects it: kbase
-// composes the command and the environment opencode runs in here, and no
-// harnesses.toml profile is read. It knows opencode — argv, environment,
-// version — and nothing else, so this is the whole of what kbase knows of a
-// harness's own interface.
+// composes the command and the environment opencode runs in here. It knows
+// opencode — argv, environment, version — and nothing else, so this is the whole
+// of what kbase knows of a harness's own interface.
 
 const (
-	// opencodeHarness is the --harness value selecting this back end.
+	// opencodeHarness is the --harness value selecting this back end, and the
+	// whole set of values the flag takes.
 	opencodeHarness = "opencode"
 	// opencodeAgent is the agent the inline configuration defines for this
-	// process alone. No profile and no file names it, and it stands nowhere
-	// but the environment one run's process reads.
+	// process alone. No file names it, and it stands nowhere but the environment
+	// one run's process reads.
 	opencodeAgent = "kbase-scoring"
 	// opencodeVersion is the major this back end targets. opencode updates
 	// often, so nothing is pinned below it.
@@ -103,7 +103,7 @@ func opencodeReference(model string) bool {
 // opencode.json starts there. PWD names the item's directory because `opencode
 // run` takes its working directory from PWD, not from the one it is started in.
 func opencodeEnv(dir string) []string {
-	return withEnv(os.Environ(), map[string]string{
+	return withEnv(withoutBackEndCommand(os.Environ()), map[string]string{
 		"OPENCODE_CONFIG_CONTENT":         opencodeConfig(),
 		"OPENCODE_CONFIG_DIR":             filepath.Join(dir, opencodeConfigDir),
 		"OPENCODE_CONFIG_PROJECT_DISABLE": "1",
@@ -133,35 +133,36 @@ func withEnv(base []string, overrides map[string]string) []string {
 
 // opencodeSetup is --harness opencode's half of the setup: the version gate,
 // the scoring role's model in opencode's form, and the probed command every
-// item starts.
+// item starts, with the environment each item's process is started in.
 //
-// A harnesses.toml profile of the same name is not run and says so once, naming
-// its file: the name selects the built-in back end, and a user's profile
-// standing behind a name kbase also uses is exactly the substitution silence
-// would hide.
-func opencodeSetup(ctx context.Context, in config.Inputs, opts scoreOptions) (config.Profile, config.Endpoint, *harness.Command, error) {
-	if err := opencodeCheck(ctx, opts); err != nil {
-		return config.Profile{}, config.Endpoint{}, nil, err
+// The back end override replaces the whole of that: where it names a command,
+// that command is what every item runs, there is no version to gate and no argv
+// to compose, and each item's process gets kbase's own environment with the
+// override taken out of it. The caller announces it and records it.
+func opencodeSetup(ctx context.Context, in config.Inputs, opts scoreOptions, override []string) (config.Endpoint, *harness.Command, func(string) []string, error) {
+	if override == nil {
+		if err := opencodeCheck(ctx, opts); err != nil {
+			return config.Endpoint{}, nil, nil, err
+		}
 	}
-	if p, ok := opts.Harnesses[opencodeHarness]; ok {
-		fmt.Fprintf(opts.Stderr, "%s holds an %q harness profile, and --harness %s runs the built-in opencode back end: the profile is not run\n",
-			config.HarnessesPath(harnessLayerPath(opts.Layers, p.Layer)), opencodeHarness, opencodeHarness)
-	}
-	written, _, source, err := config.HarnessModel(in, config.RoleScoring, opts.ScoringModel)
+	written, source, err := config.BackEndModel(in, config.RoleScoring, opts.ScoringModel)
 	if err != nil {
-		return config.Profile{}, config.Endpoint{}, nil, err
+		return config.Endpoint{}, nil, nil, err
 	}
-	argv, err := opencodeArgv(written)
-	if err != nil {
-		return config.Profile{}, config.Endpoint{}, nil, err
+	argv, itemEnv := override, func(string) []string { return backEndEnv() }
+	named := backEndCommandEnv + " names a command"
+	if argv == nil {
+		if argv, err = opencodeArgv(written); err != nil {
+			return config.Endpoint{}, nil, nil, err
+		}
+		itemEnv, named = opencodeEnv, "--harness "+opencodeHarness+" runs the opencode back end"
 	}
 	command, err := harness.New(argv, opts.Logger)
 	if err != nil {
-		return config.Profile{}, config.Endpoint{}, nil, config.Refusal{Check: config.CheckHarness, Key: "--harness",
-			Detail: fmt.Sprintf("--harness %s runs the opencode back end: %v", opencodeHarness, err)}
+		return config.Endpoint{}, nil, nil, config.Refusal{Check: config.CheckHarness, Key: "--harness",
+			Detail: fmt.Sprintf("%s: %v", named, err)}
 	}
-	return config.Profile{Name: opencodeHarness},
-		config.Endpoint{Role: config.RoleScoring, Model: written, ModelSource: source}, command, nil
+	return config.Endpoint{Role: config.RoleScoring, Model: written, ModelSource: source}, command, itemEnv, nil
 }
 
 // opencodeCheck refuses a program that is not opencode v2, before any item is

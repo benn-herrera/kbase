@@ -40,10 +40,9 @@ derived value.
   reader-facing examples, `USER_CONVENTIONS.md` and Phase 3's `references/scoring.md` have moved off
   it; until then strict load keeps modelling the key so the file a user has stays loadable and
   `kbase configure` can rewrite it.
-- **`harnesses.toml` gains no entry but the two seeds.** A profile is added by editing the file, and
-  the tool-less agent — one that cannot read the KB its ask is about — is adjagent's to supply for
-  both harnesses, not kbase's to write. `opencode`'s seed stays commented until that agent lands or a
-  user uncomments it.
+- **Which back ends ship beside `opencode`.** `--harness` takes the one name kbase ships today, and a
+  second back end brings its own name and adapter; whether one does, and whether the direct provider
+  path stays beside the back ends, is undecided.
 
 ## Scoring rubric
 

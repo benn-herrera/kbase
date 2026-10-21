@@ -116,7 +116,7 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		var records []toolresult.Record
 		warned := map[string]bool{}
 		role := func(r config.Role) (model.Client, string, error) {
-			ep, err := config.Resolve(s, mode, r, config.BackEndProvider, "")
+			ep, err := config.Resolve(s, mode, r, "")
 			if err != nil {
 				return nil, "", err
 			}

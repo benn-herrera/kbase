@@ -92,7 +92,7 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Fatalf("layers = %v, want the one directory the flag named", layers)
 	}
 	if want := (map[string]any{"path": dir, "source": config.LayerSourceExplicit, "exists": true,
-		"providersExists": true, "configExists": true, "harnessesExists": false}); !reflect.DeepEqual(layers[0], want) {
+		"providersExists": true, "configExists": true}); !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers[0] = %v, want %v", layers[0], want)
 	}
 
@@ -216,7 +216,7 @@ func TestShowConfigReportsAnAbsentConfiguration(t *testing.T) {
 	}
 	layers := reportedLayers(t, doc)
 	if want := (map[string]any{"path": dir, "source": config.LayerSourceEnvironment,
-		"exists": false, "providersExists": false, "configExists": false, "harnessesExists": false}); len(layers) != 1 || !reflect.DeepEqual(layers[0], want) {
+		"exists": false, "providersExists": false, "configExists": false}); len(layers) != 1 || !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers = %v, want %v", layers, want)
 	}
 	if providers, _ := doc.Values["providers"].([]any); len(providers) != 0 {
@@ -470,41 +470,5 @@ decisionsFlavor = "decisions"
 	}
 	if got, ok := entries["broken"]["decisions-flavor"]; ok {
 		t.Errorf("the dropped entry states a decision surface (%v): %v", got, entries["broken"])
-	}
-}
-
-// TestShowConfigListsHarnesses: the loaded profiles, in name order, each with
-// the layer whose file supplied it and the command as written — a reader's only
-// way to see what --harness could choose — and `[]` where no layer supplies one.
-func TestShowConfigListsHarnesses(t *testing.T) {
-	unsetInferenceEnv(t)
-	dir := t.TempDir()
-	writeValues(t, dir, config.HarnessesFileName,
-		"[zeta]\ncommand = [\"z\", \"{prompt}\"]\n\n[alpha]\ncommand = [\"a\", \"--model\", \"{model}\"]\n")
-	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
-	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d\n%s", doc.Outcome, code, stdout)
-	}
-	got, ok := doc.Values["harnesses"].([]any)
-	if !ok || len(got) != 2 {
-		t.Fatalf("harnesses = %v, want the two profiles", doc.Values["harnesses"])
-	}
-	want := []any{
-		map[string]any{"name": "alpha", "layer": "explicit", "command": []any{"a", "--model", "{model}"}},
-		map[string]any{"name": "zeta", "layer": "explicit", "command": []any{"z", "{prompt}"}},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("harnesses = %v, want %v in name order with each command as written", got, want)
-	}
-	if got := reportedLayers(t, doc)[0]["harnessesExists"]; got != true {
-		t.Errorf("harnessesExists = %v, want the file it probes reported present", got)
-	}
-
-	empty, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", t.TempDir())
-	if code != 0 || empty.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d\n%s", empty.Outcome, code, stdout)
-	}
-	if got, ok := empty.Values["harnesses"].([]any); !ok || len(got) != 0 {
-		t.Errorf("harnesses with no file = %v, want []", empty.Values["harnesses"])
 	}
 }

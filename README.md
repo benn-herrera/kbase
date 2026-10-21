@@ -19,8 +19,8 @@ hardware.
   sheets](#claim-graph-sheets); without it they are not drawn.
 - **A provider configuration**, for builds that spend inference and for scoring runs. A build run with
   `--no-inference` needs none, and so does a `kbase score --dry-run`. A `kbase score --harness` run
-  dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model, even where
-  the profile's command carries no `{model}`.
+  dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model: the role is
+  what declares which model judges the KB.
 - **opencode v2**, for `--harness opencode` alone: the installed binary, authenticated for the model
   the scoring role names. kbase passes that model as opencode's own `<provider>/<model>` reference
   and reads its configuration from nowhere but an empty directory it creates for the run.
@@ -111,7 +111,7 @@ examples below assume `PATH`.
 Configure a provider. Skip this step for `--no-inference` builds.
 
 ```sh
-kbase configure --create                    # writes providers.toml, harnesses.toml and config.toml, offline
+kbase configure --create                    # writes providers.toml and config.toml, offline
 $EDITOR ~/.config/kbase/providers.toml      # point [local] at your endpoint
 kbase models                                # the model ids it offers
 kbase configure --model-map decision=local/<id>,text=local/<id>,scoring=local/<id>
@@ -308,16 +308,14 @@ start — on an older KB that is the write that converts and saves it — and on
 or the values a resume re-priced, each refresh holding the KB write lock; a dry run does neither.
 
 `--scoring-model` overrides the role for one run: a `<provider>/<model>` reference in file mode, a
-bare id under the environment's endpoint, the harness's own id under `--harness` — which under
-`--harness opencode` must be opencode's `<provider>/<model>`, the form it takes. `--harness NAME`
-runs one process per item instead of asking an endpoint: the profile of that name in
-[`harnesses.toml`](#configuration), with the prompt on its stdin or in the element carrying
-`{prompt}`, its stdout the reply. `--harness opencode` is the one name that is not a profile: it runs
-an installed opencode v2, with an agent kbase defines for that process alone — no tools, no
-instructions of its own, its configuration sources cut back to an empty directory under the run's own
-records — and needs no `harnesses.toml` entry. Nothing is written to your opencode configuration.
-A profile is a command kbase did not write: it brings its own tools and instructions, and kbase
-cannot remove them — a profile a repository supplied says so once on stderr.
+bare id under the environment's endpoint, the role's value whole under `--harness` — which under
+`--harness opencode` must be opencode's `<provider>/<model>`, the form it takes. `--harness opencode`
+runs one process per item instead of asking an endpoint: an installed opencode v2, with an agent
+kbase defines for that process alone — no tools, no instructions of its own, its configuration
+sources cut back to an empty directory under the run's own records — the prompt on its stdin and its
+stdout the reply. Nothing is written to your opencode configuration. It is the only value the flag
+takes: kbase runs no command a configuration file names, and any other name is refused before the KB
+is opened.
 A run asks a model for minutes, so it is a command line: nothing is offered for it over MCP.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
@@ -473,17 +471,9 @@ read in its place.
   writes it and preserves every other byte of an existing file. Its top-level `provider` key is
   **superseded**: it still loads and nothing chooses by it, and a file-mode run says so once on
   stderr; `kbase configure` removes it.
-- **`harnesses.toml`** holds the harness profiles `--harness` can name — every name but `opencode`,
-  which selects the back end kbase ships and is not a profile: one top-level table per
-  profile, with a `command` — an argv array — as its one key. It layers as the pool does, a
-  same-named profile replacing the global one whole, and it shares no namespace with `providers.toml`.
-  A profile whose command carries `{model}` is handed the scoring model; one that names none runs on
-  the harness's own. A profile a repository supplied is announced once on stderr, and where its
-  name replaced a same-named global profile the line says so (SPEC §9.3); `show-config` lists
-  every profile with the layer that supplied it.
-- **`kbase configure --create`** writes an annotated `providers.toml` and `harnesses.toml` where none
-  stands — nothing else creates either, and neither is ever added to — and overwrites no other
-  content. `config.toml` is created where absent by a run that resolves a provider, or by `--create`
+- **`kbase configure --create`** writes an annotated `providers.toml` where none stands — nothing
+  else creates it — and overwrites no other content. `config.toml` is created where absent by a run
+  that resolves a provider, or by `--create`
   with no `--provider`, and edited in place otherwise. It writes the layer a flag or
   `$KBASE_CONFIG_DIR` names, else `<repository>/.kbase/` where that directory
   already stands, else `~/.config/kbase`; `--project` names the repository's `.kbase/` whether or not
@@ -511,7 +501,7 @@ file. In a build, the claim graph's letter asks go to the `decision` role and th
 `kbase show-config` reports how all of this resolves, and changes nothing: no KB read, no file
 written, no request made. It states the layers read and what named each; the pool, with each entry's
 layer, key kind, decision surface and any fault; `config.toml`'s merged `[models]` values; the
-harness profiles and the layer each came from; the inference variables this process sets; the mode;
+inference variables this process sets; the mode;
 the selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
@@ -560,7 +550,7 @@ Directly consumed Go modules (versions in `go.mod`):
 
 | Library | Owner | License | Use |
 |---|---|---|---|
-| [BurntSushi/toml](https://github.com/BurntSushi/toml) | TOML authors | MIT | Strict decoding of `providers.toml`, `config.toml` and `harnesses.toml` |
+| [BurntSushi/toml](https://github.com/BurntSushi/toml) | TOML authors | MIT | Strict decoding of `providers.toml` and `config.toml` |
 | [spf13/cobra](https://github.com/spf13/cobra) | spf13 | Apache-2.0 | Command-line structure, flags and help |
 | [spf13/pflag](https://github.com/spf13/pflag) | spf13 | BSD-3-Clause | Flag parsing behind the MCP server's tool schemas and its flag reset |
 | [go.yaml.in/yaml/v3](https://go.yaml.in/yaml/v3) | YAML organization | MIT and Apache-2.0 | YAML values input, tool results and build records |

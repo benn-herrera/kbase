@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# A harness stub: the command the integration fixture's profiles name. Every
-# mode answers the item with the one answer no closed text can refuse — `none` —
-# and the mode decides what else it does: where the prompt reached it, what it
-# leaves in the working directory, or how it fails.
+# A harness stub: the command the integration recipes name through the back end
+# override. Every mode answers the item with the one answer no closed text can
+# refuse — `none` — and the mode decides what else it does: where the prompt
+# reached it, what it leaves in the working directory, or how it fails.
 #
 # It writes the sha256 of the text it was handed, never the text: the recipes
 # compare that digest with the ledger's prompt_sha256, which is how they say the
@@ -31,12 +31,6 @@ argv)
 stdin)
     # The prompt is the whole of stdin, and the argv carries none.
     digest > stdin.digest
-    printf 'none\n'
-    ;;
-model)
-    # The argv carries both tokens: the model kbase named and the prompt.
-    printf '%s\n' "${1-}" > model.txt
-    printf '%s' "${2-}" | digest > argv.digest
     printf 'none\n'
     ;;
 isolate)

@@ -59,11 +59,6 @@ type providerOptions struct {
 	// it.
 	Config config.Config
 
-	// Harnesses are the profiles the loaded layers supply: what --harness
-	// names, and what show-config lists. Every verb loads them and only score
-	// runs one.
-	Harnesses config.Harnesses
-
 	// Provider is the --provider flag, for the verbs that select a pool entry
 	// to dial. It names no role: a role's endpoint is its own reference's.
 	Provider string
@@ -245,60 +240,6 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 	}
 }
 
-// harnessProfile is the profile --harness names and, where no loaded layer
-// supplies it, the refusal: the loaded names are the allowed set, so a profile
-// still commented out of harnesses.toml reads as a choice that does not stand
-// rather than as a name of its own shape.
-func harnessProfile(profiles config.Harnesses, name string) (config.Profile, []toolresult.Item) {
-	if p, ok := profiles[name]; ok {
-		return p, nil
-	}
-	return config.Profile{}, []toolresult.Item{{
-		Check: config.CheckHarness, Key: "--harness", Allowed: config.ProfileNames(profiles),
-		Detail: fmt.Sprintf("--harness names %q, and no loaded %s supplies that profile", name, config.HarnessesFileName)}}
-}
-
-// announceHarness is the one line a repository-supplied profile writes: the file
-// and the layer that named the command a run is about to execute. A profile the
-// user put in the global layer, or in the one directory a flag or the variable
-// names, says nothing — the user put it there. Where the repository's name also
-// stood in a lower layer, the same line names the layer it displaced: a user's
-// own profile replaced whole reads differently from a profile merely added.
-func announceHarness(stderr io.Writer, p config.Profile, layers []config.Layer) {
-	if p.Layer != config.LayerSourceRepository {
-		return
-	}
-	path := config.HarnessesPath(harnessLayerPath(layers, p.Layer))
-	where := p.Layer
-	if p.ReplacedLayer != "" {
-		where = fmt.Sprintf("%s, replacing the %s layer's", p.Layer, p.ReplacedLayer)
-	}
-	fmt.Fprintf(stderr, "%s supplies the %q harness profile (layer: %s) — kbase runs the command it names\n",
-		path, p.Name, where)
-}
-
-// harnessLayerPath is the directory of the layer whose source is source.
-func harnessLayerPath(layers []config.Layer, source string) string {
-	for _, layer := range layers {
-		if layer.Source == source {
-			return layer.Path
-		}
-	}
-	return ""
-}
-
-// harnessFields is a harness back end's provenance in §7.1's order, after the
-// model: the profile that answered the role and the layer whose file supplied
-// it, so a document says which command judged the KB. A built-in back end has
-// no layer, and names none.
-func harnessFields(p config.Profile) []toolresult.Field {
-	fields := []toolresult.Field{{Key: "harness", Value: p.Name}}
-	if p.Layer != "" {
-		fields = append(fields, toolresult.Field{Key: "harness-layer", Value: p.Layer})
-	}
-	return fields
-}
-
 // roleRecord is one role's record in a result document, in §7.1's key order:
 // the role, what answered it, where that endpoint came from, and the model
 // this invocation asked for. The pool entry's name, rule and layer stand
@@ -314,7 +255,8 @@ func roleRecord(ep config.Endpoint, backEnd config.BackEnd) toolresult.Record {
 	return append(record, toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
 }
 
-// backEndName is what answered ep, as a record states it.
+// backEndName is what answered ep, as a record states it: the harness back end
+// where the run asked a command, else the mode the endpoint came from.
 func backEndName(ep config.Endpoint, backEnd config.BackEnd) string {
 	if backEnd == config.BackEndHarness {
 		return string(config.BackEndHarness)
@@ -415,7 +357,6 @@ func loadConfigContext(layers []config.Layer) (providerOptions, error) {
 		Providers: loaded.Providers,
 		Faults:    loaded.Faults,
 		Config:    loaded.Cfg,
-		Harnesses: loaded.Harnesses,
 		Stderr:    os.Stderr,
 	}, nil
 }

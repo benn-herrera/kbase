@@ -194,8 +194,8 @@ func TestScoreScoringModelNamesAMissingProvider(t *testing.T) {
 }
 
 // TestScoreHelpNamesTheScoringFlag: the flags are documented where a user looks
-// for them — the scoring model, and the harness that asks instead of an endpoint
-// — and the retired --provider is not.
+// for them — the scoring model, and the back end that asks instead of an
+// endpoint — and neither the retired --provider nor the internal override is.
 func TestScoreHelpNamesTheScoringFlag(t *testing.T) {
 	help := scoreCmd.UsageString()
 	for _, flag := range []string{"--scoring-model", "--harness"} {
@@ -205,5 +205,8 @@ func TestScoreHelpNamesTheScoringFlag(t *testing.T) {
 	}
 	if strings.Contains(help, "--provider") {
 		t.Errorf("score --help names --provider:\n%s", help)
+	}
+	if strings.Contains(help, backEndCommandEnv) {
+		t.Errorf("score --help names the internal back end override:\n%s", help)
 	}
 }

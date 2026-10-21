@@ -371,15 +371,13 @@ func writeConfig(opts configureOptions, cfg config.Config, fields []toolresult.F
 }
 
 // writeConfiguration creates the target layer's files where --create was given
-// permission to and they are absent — providers.toml, harnesses.toml, then
-// config.toml — and always sets cfg's values in config.toml. It reports the
-// files it wrote, in the order it wrote them.
+// permission to and they are absent — providers.toml, then config.toml — and
+// always sets cfg's values in config.toml. It reports the files it wrote, in the
+// order it wrote them.
 //
-// Nothing is overwritten: the providers.toml and harnesses.toml templates land
-// only where no file stands, and config.toml is edited line by line, so a
-// directory a user has already filled in keeps everything this call was not
-// asked to change. A harness profile is added by editing the file, never by
-// this verb: a seed a user deleted stays deleted.
+// Nothing is overwritten: the providers.toml template lands only where no file
+// stands, and config.toml is edited line by line, so a directory a user has
+// already filled in keeps everything this call was not asked to change.
 func writeConfiguration(opts configureOptions, cfg config.Config) ([]string, error) {
 	var written []string
 	if opts.Create {
@@ -390,14 +388,6 @@ func writeConfiguration(opts configureOptions, cfg config.Config) ([]string, err
 		}
 		if created {
 			written = append(written, providersFile)
-		}
-		harnessesFile := config.HarnessesPath(opts.WriteDir)
-		created, err = config.CreateHarnessesFile(harnessesFile)
-		if err != nil {
-			return written, err
-		}
-		if created {
-			written = append(written, harnessesFile)
 		}
 	}
 	configFile := config.ConfigPath(opts.WriteDir)
@@ -512,14 +502,12 @@ listing the models the provider offers as the choices, and nothing is written
 already holds one. A model named in --model-map but missing from its entry's
 catalogue is a warning, not a failure — provider catalogues rotate.
 
---create creates the target layer's providers.toml, harnesses.toml and
-config.toml where they are absent, from annotated templates, and overwrites
-none: config.toml is edited in place — the [models] decision, text and scoring
-keys are rewritten, a superseded top-level provider key is removed, every other
-byte kept, and a file already holding the values is left alone (outcome
-unchanged) — and a harnesses.toml is created, never edited, so the profile a
-user added or deleted there stays as they left it. A refused or failed run
-writes nothing.
+--create creates the target layer's providers.toml and config.toml where they
+are absent, from an annotated template, and overwrites none: config.toml is
+edited in place — the [models] decision, text and scoring keys are rewritten, a
+superseded top-level provider key is removed, every other byte kept, and a file
+already holding the values is left alone (outcome unchanged). A refused or
+failed run writes nothing.
 
 The target layer is the repository a --project flag names — <repository>/` + config.RepositoryDirName + `,
 whether or not it exists, refused outside a git worktree — else the directory
@@ -561,7 +549,7 @@ stdout.`,
 func init() {
 	registerProviderFlags(configureCmd, &configureFlagProvider, &configureFlagTimeout, "configure")
 	configureCmd.Flags().BoolVar(&configureFlagCreate, "create", false,
-		"create the target layer's "+config.ProvidersFileName+", "+config.HarnessesFileName+" and "+config.ConfigFileName+" where they are absent")
+		"create the target layer's "+config.ProvidersFileName+" and "+config.ConfigFileName+" where they are absent")
 	configureCmd.Flags().BoolVar(&configureFlagProject, "project", false,
 		"write into <repository>/"+config.RepositoryDirName+", whether or not it exists (refused outside a git worktree)")
 	configureCmd.Flags().StringArrayVar(&configureFlagModelMap, "model-map", nil,

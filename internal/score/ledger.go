@@ -59,10 +59,11 @@ func RunsDir(dir string) string { return filepath.Join(dir, runsDir) }
 // of the three, and an absent key is how a reader tells a run that asked nothing
 // from one whose back end was unnamed.
 //
-// The harness fields are present under a harness alone: the profile's name, the
-// layer whose file supplied it, and the argv that invoked it, with the model
-// substituted and the prompt left as the token — how the run was invoked, never
-// the text of one item.
+// Command is present under a harness alone: the argv that invoked it — how the
+// run was invoked, never the text of one item. CommandOverride names the
+// environment variable that supplied that argv where one did, and is empty where
+// kbase composed the command itself, so a run whose command nobody chose says so
+// in its own record.
 type RunHeader struct {
 	Run    string `yaml:"run"`
 	KBRoot string `yaml:"kb_root"`
@@ -79,14 +80,13 @@ type RunHeader struct {
 	// behaviour. A header written before the rigor pair carries one render's
 	// digest, and is read as the one ask that run began under, which is what it
 	// recorded.
-	AskSHA256    string   `yaml:"ask_sha256"`
-	BackEnd      string   `yaml:"backend,omitempty"`
-	Provider     string   `yaml:"provider"`
-	Harness      string   `yaml:"harness,omitempty"`
-	HarnessLayer string   `yaml:"harness_layer,omitempty"`
-	Model        string   `yaml:"model"`
-	Command      []string `yaml:"command,omitempty"`
-	Started      string   `yaml:"started"`
+	AskSHA256       string   `yaml:"ask_sha256"`
+	BackEnd         string   `yaml:"backend,omitempty"`
+	Provider        string   `yaml:"provider"`
+	Model           string   `yaml:"model"`
+	Command         []string `yaml:"command,omitempty"`
+	CommandOverride string   `yaml:"command_override,omitempty"`
+	Started         string   `yaml:"started"`
 }
 
 // Entry is what one attempt at an item records: its status and the evidence
@@ -110,9 +110,8 @@ type Entry struct {
 }
 
 // attempt is one item's line in ledger.jsonl. It carries what answered its item
-// — the back end beside the requested model, and under a harness the profile
-// and the layer whose file supplied it — so a mixed or resumed run's lines say
-// what answered each one.
+// — the back end beside the requested model — so a mixed or resumed run's lines
+// say what answered each one.
 //
 // Faults is a pointer so that an empty list is written: a landed line always
 // carries the charges it records, and `[]` is the model's answer that it found
@@ -132,8 +131,6 @@ type attempt struct {
 	Value        string    `json:"value,omitempty"`
 	Reply        string    `json:"reply,omitempty"`
 	Model        string    `json:"model,omitempty"`
-	Harness      string    `json:"harness,omitempty"`
-	HarnessLayer string    `json:"harness_layer,omitempty"`
 	PromptSHA256 string    `json:"prompt_sha256,omitempty"`
 	Started      string    `json:"started,omitempty"`
 	Ended        string    `json:"ended,omitempty"`
@@ -148,12 +145,14 @@ type attempt struct {
 // header names the first invocation's back end while each line names the one
 // that asked it.
 type Ledger struct {
-	dir   string
-	run   string
-	pass  string
-	facts runFacts
-	f     *os.File
-	lines map[string]Entry
+	dir  string
+	run  string
+	pass string
+	// backEnd is what answers this invocation's items: the back end each line
+	// it appends records.
+	backEnd string
+	f       *os.File
+	lines   map[string]Entry
 	// order is every complete line a resume read back, in the file's order: a
 	// re-derivation rewrites the file, and the last status per item does not say
 	// where a line stands.
@@ -162,16 +161,6 @@ type Ledger struct {
 	// lines recorded: the count says whether the KB holds a write this
 	// invocation must publish.
 	moved []rePricedLine
-}
-
-// runFacts is what every line this invocation appends records of what answered.
-type runFacts struct {
-	backEnd, harness, harnessLayer string
-}
-
-// factsOf is a header's back-end facts as the lines record them.
-func factsOf(h RunHeader) runFacts {
-	return runFacts{backEnd: h.BackEnd, harness: h.Harness, harnessLayer: h.HarnessLayer}
 }
 
 // Create starts the ledger of a run in the state directory dir, at
@@ -186,7 +175,7 @@ func factsOf(h RunHeader) runFacts {
 // refusal: the error is returned rather than a run written with no digest.
 func Create(dir string, h RunHeader) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), run: h.Run, pass: h.Pass,
-		facts: factsOf(h), lines: map[string]Entry{}}
+		backEnd: h.BackEnd, lines: map[string]Entry{}}
 	if err := os.MkdirAll(RunsDir(dir), 0o777); err != nil {
 		return nil, err
 	}
@@ -237,7 +226,7 @@ func Resume(dir string, h RunHeader, w Write) (*Ledger, error) {
 	}
 	// The header's own facts are h's, not the file's: the file names the run's
 	// opening, and this invocation's lines name what asks now.
-	l.run, l.pass, l.facts = have.Run, have.Pass, factsOf(h)
+	l.run, l.pass, l.backEnd = have.Run, have.Pass, h.BackEnd
 	if err := l.readBack(); err != nil {
 		return nil, err
 	}
@@ -367,9 +356,8 @@ func (l *Ledger) readBack() error {
 // charges are a landed line's alone: a failed attempt records the reason it
 // failed and keeps no text of the reply, so it carries neither faults nor moot.
 func (l *Ledger) line(it query.Item, e Entry) attempt {
-	a := attempt{Run: l.run, Pass: l.pass, Backend: l.facts.backEnd, Status: e.Status,
-		Value: e.Value, Reply: e.Reply, Model: e.Model, Harness: l.facts.harness,
-		HarnessLayer: l.facts.harnessLayer, PromptSHA256: e.PromptSHA256,
+	a := attempt{Run: l.run, Pass: l.pass, Backend: l.backEnd, Status: e.Status,
+		Value: e.Value, Reply: e.Reply, Model: e.Model, PromptSHA256: e.PromptSHA256,
 		Started: e.Started, Ended: e.Ended}
 	if e.Status == StatusDone {
 		faults := e.Faults

@@ -55,7 +55,6 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 		layer.Exists = exists(layer.Path)
 		layer.ProvidersExists = exists(ProvidersPath(layer.Path))
 		layer.ConfigExists = exists(ConfigPath(layer.Path))
-		layer.HarnessesExists = exists(HarnessesPath(layer.Path))
 		f.Layers = append(f.Layers, layer)
 	}
 

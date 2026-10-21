@@ -446,12 +446,8 @@ func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
 		models[config.CategoryScoring] != ref(scoringID) {
 		t.Errorf("models = %v, want the three references the flag named", models)
 	}
-	if want := []string{config.ProvidersPath(dir), config.HarnessesPath(dir), config.ConfigPath(dir)}; !slices.Equal(anyStrings(got.doc.Values["written"]), want) {
-		t.Errorf("written = %v, want %v: the pool, the profiles, then the choices", got.doc.Values["written"], want)
-	}
-	profiles, err := config.LoadHarnesses(config.HarnessesPath(dir))
-	if err != nil || len(profiles) != 1 || profiles["claude"].Name != "claude" {
-		t.Errorf("the created harnesses.toml = %v, %v; want the one live claude profile", profiles, err)
+	if want := []string{config.ProvidersPath(dir), config.ConfigPath(dir)}; !slices.Equal(anyStrings(got.doc.Values["written"]), want) {
+		t.Errorf("written = %v, want %v: the pool, then the choices", got.doc.Values["written"], want)
 	}
 	if !strings.Contains(got.stderr, "were not checked") {
 		t.Errorf("stderr = %q, want the line saying the references were not checked", got.stderr)
@@ -552,10 +548,10 @@ func TestRunConfigureCreateKeepsWhatStandsThere(t *testing.T) {
 	if kept, err := os.ReadFile(config.ProvidersPath(dir)); err != nil || string(kept) != pool {
 		t.Errorf("providers.toml = %q (%v), want it untouched", kept, err)
 	}
-	// harnesses.toml stands nowhere here, so --create writes it beside the
+	// harnesses.toml stands nowhere here, so --create writes only the
 	// config.toml it edits; providers.toml already stood and is untouched.
-	if written := anyStrings(got.doc.Values["written"]); !slices.Equal(written, []string{config.HarnessesPath(dir), config.ConfigPath(dir)}) {
-		t.Errorf("written = %v, want harnesses.toml and config.toml: providers.toml already stood", written)
+	if written := anyStrings(got.doc.Values["written"]); !slices.Equal(written, []string{config.ConfigPath(dir)}) {
+		t.Errorf("written = %v, want config.toml alone: providers.toml already stood", written)
 	}
 }
 

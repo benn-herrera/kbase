@@ -540,7 +540,7 @@ stops before the next ask and records nothing for the item in flight.
 the reply, so the runner has no view of a provider and none of a harness: `internal/score` imports
 `asks`, `kb`, `query`, `result`, `atomicfile` and `log`, and reaches neither `model` nor `harness`.
 `cmd/score.go` fills the seam twice — `model.Chat` on the scoring role's endpoint with an empty
-system prompt, or `(*harness.Command).Ask` on the profile's argv — and the runner learns nothing of
+system prompt, or `(*harness.Command).Ask` on the back end's argv — and the runner learns nothing of
 which. Each score template splices the `score-system` fragment into its own text, so the instruction
 is carried once, in the user turn.
 
@@ -619,7 +619,7 @@ A line carries `faults` — the parsed charges, `id`, `passage`, `citation`, `of
 written — and `moot`, the charge lines a `flt-pending` made moot, parsed the same way and priced
 nowhere; `[]` is written for one reply alone, the word `none`, so an empty list always carries the
 model's positive statement that it found no fault. A failed attempt carries neither, and no text:
-its `reply` is the reason. `backend`, and under a harness `harness` and `harness_layer`, sit on every
+its `reply` is the reason. `backend` sits on every
 line, because a resumed or mixed run's lines must say what answered each item. `Create` also stamps
 `ask_sha256`, from the header's `Pass`, as it stamps the format — one digest over every instruction
 that pass can send, each rendered for an empty subject and concatenated in a fixed order, so a rigor
@@ -659,11 +659,10 @@ once. `Ledger.Repriced()` says how many values moved, so the verb's closing refr
 re-price as it follows a landing. No model is asked: the ids are the whole input of the price, and
 the model never saw a weight.
 
-**The verb.** `runScore` is the body: the pass, limit and dry-run/resume checks; the KB root; the
-state directory; the back end and the scoring role resolved before the KB is opened — the mode
-decided, or the profile selected and its command probed, or `--harness opencode`'s built-in back end
-gated by `opencode --version` and composed in `cmd/score_opencode.go` — `config.HarnessArgv` refusing
-there a model id beginning with `-`, because the profile's command would read it as an option — so a
+**The verb.** `runScore` is the body: the pass, harness value, limit and dry-run/resume checks; the KB
+root; the state directory; the back end and the scoring role resolved before the KB is opened — the
+mode decided, or `--harness opencode`'s built-in back end gated by `opencode --version` and composed
+in `cmd/score_opencode.go` — so a
 setup refusal writes nothing and mints no run; `openKB` and the migration record; the run id; the run
 lock; one refresh through
 `holdKB`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
@@ -697,33 +696,35 @@ it appears in no `tools/list` and carries no read-only annotation.
   the decision surface instead (next item). A build with a calling row left to walk checks a
   provider is configured before its first stage (SPEC §5).
 - Configuration is read from layers and merged once, before a verb's own work: `config.Layers`
-  resolves the directories and `config.Load` reads and merges the three files of each, returning one
-  `Loaded` — the pool and its faults, the harness profiles, and the choices. They are
+  resolves the directories and `config.Load` reads and merges the two files of each, returning one
+  `Loaded` — the pool and its faults, and the choices. They are
   `<repository>/.kbase/` over `~/.config/kbase`, or the one directory `--config-dir` /
   `$KBASE_CONFIG_DIR` names — `explicit` and `environment` in the source vocabulary — so an
   explicit choice isolates a run from a repository's own `.kbase/`, which every test and pinned
   deployment needs. The caller resolves the repository root with `kb.RepositoryRoot(workDir)`, which
   answers `""` outside a worktree, so `internal/config` takes no git dependency and reads the global
-  layer alone there. A pool entry and a harness profile are each replaced whole by a higher layer's
+  layer alone there. A pool entry is replaced whole by a higher layer's
   of the same name; a `config.toml` field is overlaid one at a time. `config.Load` drops a fault
   naming an entry a higher layer already supplied — the pool's entry is the higher one, so the fault
   describes a value nothing reads — and keeps a higher layer's own fault, whose entry never entered
   the pool. `config.Layer` carries a directory, its source (`explicit`, `environment`,
   `repository`, `global`) and — once `config.Report` has probed it — whether the directory and each
-  of the three files stand, `HarnessesExists` beside `ProvidersExists` and `ConfigExists`.
+  of the two files stand, `ConfigExists` beside `ProvidersExists`.
   `Provider.Layer` and `Config.ModelLayer` record the layer the merge took each pool entry and each
-  role's value from; `Profile.Layer` records the layer whose file supplied each profile;
-  `ProviderFault.Path` names the `providers.toml` a fault came from, and a `Refusal`'s path names
-  the file a lacking setting belongs in — the write target's `providers.toml` or `config.toml` — so
+  role's value from; `ProviderFault.Path` names the `providers.toml` a fault came from, and a
+  `Refusal`'s path names the file a lacking setting belongs in — the write target's
+  `providers.toml` or `config.toml` — so
   a layered configuration says which file to edit.
 - **Resolution is three pure functions, and connection is the registry's.** `config.ModeOf`
   (`internal/config/resolve.go`) decides once per invocation which source supplies inference; it
   reads the loaded configuration and the environment's strings and nothing else, and its refusals
   are the mixed sources, the partial environment and the environment beside a standing `[models]`
-  value. `config.Resolve` answers one role's `Endpoint` in that mode, or under a harness with no
-  endpoint at all; it reads no file, opens no connection, writes no stderr and names no verb — the
+  value. `config.Resolve` answers one role's `Endpoint` in that mode; it reads no file, opens no
+  connection, writes no stderr and names no verb — the
   key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
-  never by resolution. `config.Select` is the catalogue verbs' choice of a pool entry to dial — a
+  never by resolution. `config.BackEndModel` answers the value a harness back end is handed, which
+  is the same model without an endpoint behind it. `config.Select` is the catalogue verbs' choice of
+  a pool entry to dial — a
   flag, else the pool's only entry — and no role is chosen that way. `config.Refusal` (with
   `Refusals` for a decision that has more than one side to state) is the one typed refusal, and its
   `Named` is what `internal/build`'s launch refusal reads. No other site applies a selection or a
@@ -731,7 +732,7 @@ it appears in no `tools/list` and carries no read-only annotation.
   `model.Client`: one client per endpoint, opened on first use, keyed by the entry's name or — in
   environment mode — by its base URL, and closed together before the verb returns on every outcome.
   The report's other facts — the pool's entries and faults, the files' presence, `config.toml`'s
-  values, the harness profiles and the inference variable names the process sets — come from
+  values, the inference variable names the process sets — come from
   `internal/config.Report`, which reads no file and no environment of its own: the caller passes the
   existence probe and `getenv`.
 - A letter ask is one `POST` to the entry's decision surface (`model.Decision`; `decisionsFlavor`,
@@ -970,7 +971,7 @@ internal/score            the score passes' closed text, its guard and the passa
                           made of, the parse, the runner, the run's ledger and its
                           re-pricing; imports neither model nor harness; imported by cmd
                           alone
-internal/harness          one configured command, one prompt, one reply, one process
+internal/harness          one command, one prompt, one reply, one process
                           group: the setup probe, per-item argv substitution, the
                           environment the caller composed, the two bounds and the kill
                           on deadline; imports stdlib and `log` alone of kbase;
@@ -1069,7 +1070,7 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   nor `asks/call`, transitively. `cmd/provider.go` is the only constructor of a `model.Client`, and
   a verb opens one only where it is about to ask something.
 - `internal/config` imports no kbase package but `atomicfile`: it holds the grammar, the three
-  roles, the two modes, `ModeOf`, `Resolve`, `Select`, `HarnessArgv`, the refusals, the loaded files
+  roles, the two modes, `ModeOf`, `Resolve`, `BackEndModel`, `Select`, the refusals, the loaded files
   and the templates, and it never imports `model`, `result` or `log`, opens no client and names no
   verb.
 - `internal/harness` imports stdlib and `log` alone of kbase. It knows no provider, no endpoint, no
@@ -1085,14 +1086,14 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
   execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs a
-  harness back end's program — the command a profile names, or the built-in opencode back end's
-  `opencode`. A profile's binary is the one the exec policy cannot name statically: it is
-  configuration's, chosen by the user's `--harness`, so `cmd/execpolicy_test.go` carries it with a
-  sentinel and exempts its site from the per-binary check. What stays enforced is that no other
-  package execs for this purpose, and that the only way either is reached is `score --harness`. A
-  repository may supply the profile, which is the trust a repository's `providers.toml` already asks
-  for: the source is announced, never silent (SPEC §9.3), and no verb runs a profile it was not told
-  to run.
+  harness back end's program: the built-in opencode back end's `opencode`, or the command one run's
+  internal override named in its place. That second program is the one the exec policy cannot name
+  statically — it comes from the environment, never from a configuration file — so
+  `cmd/execpolicy_test.go` carries it with a sentinel and exempts its site from the per-binary
+  check. What stays enforced is that no other package execs for this purpose, and that the only way
+  either is reached is `score --harness`. The override is announced once on stderr and recorded in
+  the run's header, so a command nobody chose is never executed silently, and it is removed from the
+  child's environment.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB, has `export` write `gen-tex/`'s inputs, makes the one `pandoc.RunDefaults` call, and has
   `export` merge the filter's findings that run wrote into the report.

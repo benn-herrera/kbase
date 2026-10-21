@@ -18,7 +18,7 @@ func probe(t *testing.T, argv ...string) *Command {
 }
 
 // TestItemFillsThePromptWhereTheCommandNamesIt: {prompt} is replaced in the one
-// element that names it and nowhere else, the profile's own command is not
+// element that names it and nowhere else, the command is not
 // rewritten, and the argv-borne prompt leaves stdin empty.
 func TestItemFillsThePromptWhereTheCommandNamesIt(t *testing.T) {
 	c := probe(t, "sh", "-c", "true", "--message", "{prompt}", "{model}")
@@ -40,7 +40,7 @@ func TestItemFillsThePromptWhereTheCommandNamesIt(t *testing.T) {
 }
 
 // TestItemHoldsThePromptForStdin: a command naming no {prompt} receives it on
-// stdin, and the argv is the profile's unchanged.
+// stdin, and the argv is the command's unchanged.
 func TestItemHoldsThePromptForStdin(t *testing.T) {
 	c := probe(t, "sh", "-c", "true")
 	item, err := c.Item("the item's text")
@@ -51,9 +51,9 @@ func TestItemHoldsThePromptForStdin(t *testing.T) {
 		t.Errorf("the prompt held for stdin = %q", item.prompt)
 	}
 	if got := strings.Join(item.Argv(), " "); got != "sh -c true" {
-		t.Errorf("argv = %q, want the profile's own", got)
+		t.Errorf("argv = %q, want the command's own", got)
 	}
-	// {prompt} is decided once, at the profile: the item is not rescanned for
+	// {prompt} is decided once, at the command: the item is not rescanned for
 	// a token the command does not carry.
 	if strings.Contains(strings.Join(item.Argv(), " "), "the item's text") {
 		t.Error("a prompt reached an argv naming no token")
@@ -107,11 +107,11 @@ func TestNewProbesTheProgram(t *testing.T) {
 		t.Errorf("program = %q, want the probed path resolved absolutely", c.program)
 	}
 	if got := c.Argv(); len(got) != 1 || got[0] != "sh" {
-		t.Errorf("argv = %q, want the profile's own argv[0] recorded", got)
+		t.Errorf("argv = %q, want the command's own argv[0] recorded", got)
 	}
 }
 
-// TestNewRefusesThePromptTwiceInOneElement: a profile element naming {prompt}
+// TestNewRefusesThePromptTwiceInOneElement: a command element naming {prompt}
 // twice would hand the prompt to the command twice, so it fails setup rather
 // than every item — as the two-element form already does.
 func TestNewRefusesThePromptTwiceInOneElement(t *testing.T) {

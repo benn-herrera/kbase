@@ -202,7 +202,7 @@ func scenario(t *testing.T) Inputs {
 // with the model it names and the provenance its record states.
 func TestResolveFileMode(t *testing.T) {
 	in := scenario(t)
-	ep, err := Resolve(in, ModeFile, RoleDecision, BackEndProvider, "")
+	ep, err := Resolve(in, ModeFile, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestResolveFileMode(t *testing.T) {
 	// The key file is no mode: it replaces the key of whichever endpoint is in
 	// force, and the dial reads it.
 	in.Env = Overrides{APIKeyFile: "~/keys/lab.txt"}
-	ep, err = Resolve(in, ModeFile, RoleText, BackEndProvider, "")
+	ep, err = Resolve(in, ModeFile, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestResolveFileMode(t *testing.T) {
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
-	ep, err = Resolve(in, ModeFile, RoleScoring, BackEndProvider, "lab/judge")
+	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/judge")
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
 		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
 	}
@@ -235,7 +235,7 @@ func TestResolveFileMode(t *testing.T) {
 // and no pool entry behind it.
 func TestResolveEnvironmentMode(t *testing.T) {
 	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"}}
-	ep, err := Resolve(in, ModeEnvironment, RoleText, BackEndProvider, "")
+	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestResolveEnvironmentMode(t *testing.T) {
 	}
 	// A value bearing a slash is the endpoint's model, sent verbatim: nothing
 	// parses it against a provider the environment does not name.
-	ep, err = Resolve(in, ModeEnvironment, RoleText, BackEndProvider, "org/model")
+	ep, err = Resolve(in, ModeEnvironment, RoleText, "org/model")
 	if err != nil || ep.Model != "org/model" || ep.ModelSource != "" {
 		t.Errorf("= %+v, %v; want the flag verbatim", ep, err)
 	}
@@ -291,7 +291,7 @@ func TestResolveRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, tc.mode, tc.role, BackEndProvider, tc.flag)
+			_, err := Resolve(in, tc.mode, tc.role, tc.flag)
 			var refusal Refusal
 			if !asRefusal(err, &refusal) {
 				t.Fatalf("err = %v, want one refusal", err)
@@ -326,53 +326,32 @@ func asRefusal(err error, out *Refusal) bool {
 func TestResolveNeverFallsBack(t *testing.T) {
 	in := scenario(t)
 	in.Cfg.Models.Scoring = ""
-	if _, err := Resolve(in, ModeFile, RoleScoring, BackEndProvider, "lab/clef"); err == nil {
+	if _, err := Resolve(in, ModeFile, RoleScoring, "lab/clef"); err == nil {
 		t.Error("the scoring role resolved from another role's endpoint, or from the flag")
 	}
 }
 
-// TestResolveHarness: under a harness no endpoint is chosen and the mode is
-// not consulted — the environment's id where it names one, else the reference
-// model part.
-func TestResolveHarness(t *testing.T) {
-	in := scenario(t)
-	ep, err := Resolve(in, "", RoleScoring, BackEndHarness, "")
-	if err != nil || ep.Model != "clef" || ep.Provider != "" || ep.BaseURL != "" || ep.ModelSource != LayerSourceRepository {
-		t.Fatalf("= %+v, %v; want the reference's model part alone", ep, err)
-	}
-	in.Env = Overrides{Scoring: "other/clef"}
-	ep, err = Resolve(in, "", RoleScoring, BackEndHarness, "")
-	if err != nil || ep.Model != "other/clef" {
-		t.Fatalf("= %+v, %v; want the environment's id verbatim", ep, err)
-	}
-	in.Cfg.Models.Scoring = ""
-	in.Env = Overrides{}
-	if _, err := Resolve(in, "", RoleScoring, BackEndHarness, ""); err == nil {
-		t.Error("an unconfigured role resolved under a harness")
-	}
-}
-
-// TestHarnessModel: the value a harness back end is handed comes in two forms —
-// the file reference whole, or the environment's id and the flag verbatim — and
-// the model part a profile's {model} takes is the reference's second half.
-func TestHarnessModel(t *testing.T) {
+// TestBackEndModel: the value a harness back end is handed is the file
+// reference whole, or the environment's id and the flag verbatim, with the layer
+// that supplied it.
+func TestBackEndModel(t *testing.T) {
 	for _, tc := range []struct {
-		name                   string
-		mutate                 func(*Inputs)
-		flag                   string
-		wantWritten, wantModel string
-		wantSource             string
-		wantRefusal            bool
+		name        string
+		mutate      func(*Inputs)
+		flag        string
+		wantWritten string
+		wantSource  string
+		wantRefusal bool
 	}{
-		{name: "the file's reference", wantWritten: "cloud/clef", wantModel: "clef", wantSource: LayerSourceRepository},
+		{name: "the file's reference", wantWritten: "cloud/clef", wantSource: LayerSourceRepository},
 		{name: "a model id carrying a slash", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "lab/openrouter/anthropic/x" },
-			wantWritten: "lab/openrouter/anthropic/x", wantModel: "openrouter/anthropic/x", wantSource: LayerSourceRepository},
+			wantWritten: "lab/openrouter/anthropic/x", wantSource: LayerSourceRepository},
 		{name: "the environment's id", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
-			wantWritten: "other/clef", wantModel: "other/clef", wantSource: LayerSourceEnvironment},
+			wantWritten: "other/clef", wantSource: LayerSourceEnvironment},
 		{name: "the flag over the file", flag: "lab/other",
-			wantWritten: "lab/other", wantModel: "lab/other", wantSource: ""},
+			wantWritten: "lab/other", wantSource: ""},
 		{name: "the flag over the environment", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
-			flag: "lab/other", wantWritten: "lab/other", wantModel: "lab/other", wantSource: ""},
+			flag: "lab/other", wantWritten: "lab/other", wantSource: ""},
 		{name: "no source names one", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" }, wantRefusal: true},
 		{name: "a file value that is no reference", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" }, wantRefusal: true},
 	} {
@@ -381,50 +360,19 @@ func TestHarnessModel(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			written, model, source, err := HarnessModel(in, RoleScoring, tc.flag)
+			written, source, err := BackEndModel(in, RoleScoring, tc.flag)
 			if tc.wantRefusal {
 				var refusal Refusal
 				if !asRefusal(err, &refusal) || refusal.Key != "models.scoring" {
-					t.Fatalf("= %q, %q, %q, %v; want a refusal naming models.scoring", written, model, source, err)
+					t.Fatalf("= %q, %q, %v; want a refusal naming models.scoring", written, source, err)
 				}
 				return
 			}
-			if err != nil || written != tc.wantWritten || model != tc.wantModel || source != tc.wantSource {
-				t.Errorf("= %q, %q, %q, %v; want %q, %q, %q",
-					written, model, source, err, tc.wantWritten, tc.wantModel, tc.wantSource)
+			if err != nil || written != tc.wantWritten || source != tc.wantSource {
+				t.Errorf("= %q, %q, %v; want %q, %q",
+					written, source, err, tc.wantWritten, tc.wantSource)
 			}
 		})
-	}
-}
-
-// TestHarnessArgv: {model} is filled once and {prompt} is left for the item;
-// a model no element names is refused rather than dropped, and so is one the
-// child would read as an option.
-func TestHarnessArgv(t *testing.T) {
-	profile := Profile{Name: "p", Command: []string{"harness", "--model", "{model}", "{prompt}"}}
-	argv, err := HarnessArgv(profile, "anthropic/x")
-	if err != nil || strings.Join(argv, " ") != "harness --model anthropic/x {prompt}" {
-		t.Fatalf("= %q, %v", argv, err)
-	}
-	if strings.Join(profile.Command, " ") != "harness --model {model} {prompt}" {
-		t.Errorf("the profile's own command was rewritten: %q", profile.Command)
-	}
-	named := Profile{Name: "p", Command: []string{"harness", "--model", "{model}"}}
-	if argv, err := HarnessArgv(named, ""); err != nil || strings.Join(argv, " ") != "harness --model " {
-		t.Errorf("= %q, %v; want the empty substitution with no refusal", argv, err)
-	}
-	plain := Profile{Name: "claude", Command: []string{"claude", "-p"}}
-	_, err = HarnessArgv(plain, "d3")
-	var refusal Refusal
-	if !asRefusal(err, &refusal) || refusal.Check != CheckHarness || refusal.Key != "--scoring-model" {
-		t.Errorf("err = %v, want a harness refusal naming --scoring-model", err)
-	}
-	if argv, err := HarnessArgv(plain, ""); err != nil || len(argv) != 2 {
-		t.Errorf("a model nothing names is no refusal: %q, %v", argv, err)
-	}
-	// The child would read -d3 as an option of its own, not as a model id.
-	if _, err := HarnessArgv(profile, "-d3"); !asRefusal(err, &refusal) || refusal.Check != CheckHarness || refusal.Key != keyScoringModel {
-		t.Errorf("a model beginning with - = %v, want a harness refusal naming --scoring-model", err)
 	}
 }
 

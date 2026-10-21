@@ -70,14 +70,14 @@ const (
 	ModeEnvironment Mode = "environment"
 )
 
-// BackEnd is which seam fills an ask. A role under a harness resolves with no
-// provider and no endpoint, its model alone.
+// BackEnd is which seam fills an ask, as a run's records name it.
 type BackEnd string
 
 const (
 	// BackEndProvider asks a pool entry, or the environment's endpoint.
 	BackEndProvider BackEnd = "provider"
-	// BackEndHarness asks a configured command.
+	// BackEndHarness asks a command kbase composes: the built-in back end
+	// --harness selects.
 	BackEndHarness BackEnd = "harness"
 )
 
@@ -216,14 +216,9 @@ func ModeOf(in Inputs) (Mode, error) {
 //
 // The role's configured value is read first and a flag is an override of it,
 // never a substitute for it: a role the source does not configure refuses even
-// where flagModel names a model. Under BackEndHarness no endpoint is chosen and
-// the mode is not consulted — the environment names the model where it names
-// one, the file's reference's model part otherwise.
-func Resolve(in Inputs, mode Mode, role Role, backEnd BackEnd, flagModel string) (Endpoint, error) {
-	switch {
-	case backEnd == BackEndHarness:
-		return resolveHarness(in, role, flagModel)
-	case mode == ModeEnvironment:
+// where flagModel names a model.
+func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
+	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
 	}
 	return resolveFile(in, role, flagModel)
@@ -306,48 +301,35 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 	return ep, nil
 }
 
-// resolveHarness is the model a harness profile is asked for: the model part of
-// what HarnessModel names. No entry is contacted, so neither the provider part
-// nor the pool matters.
-func resolveHarness(in Inputs, role Role, flagModel string) (Endpoint, error) {
-	_, model, source, err := HarnessModel(in, role, flagModel)
-	if err != nil {
-		return Endpoint{}, err
-	}
-	return Endpoint{Role: role, Model: model, Flavor: FlavorSystemOne, ModelSource: source}, nil
-}
-
-// HarnessModel is the model a harness back end is handed, in the two forms such
-// a back end reads: written, the source's value as it stands — a file
-// reference's <provider>/<model>, the environment's id, or the flag — which a
-// back end naming models <provider>/<model> needs whole; and model, that
-// value's model part, which a profile's {model} takes. source is the layer that
-// supplied it, "" where the flag did.
+// BackEndModel is the model a harness back end is handed, as that back end
+// names models: the source's value as it stands — a file reference's
+// <provider>/<model>, or the environment's id — overridden by --scoring-model.
+// source is the layer that supplied it, "" where the flag did, so a document
+// naming the model names where it came from.
 //
-// The environment's id stands where it names one, else the file's reference,
-// overridden by --scoring-model; a role no source configures refuses. No entry
-// is contacted, so the pool matters to neither form.
-func HarnessModel(in Inputs, role Role, flagModel string) (written, model, source string, err error) {
+// The environment's id stands where it names one, else the file's reference; a
+// role no source configures refuses. No entry is contacted, so the pool matters
+// to nothing here: a harness back end chooses no endpoint.
+func BackEndModel(in Inputs, role Role, flagModel string) (written, source string, err error) {
 	written = role.fromEnv(in.Env)
-	model, source = written, LayerSourceEnvironment
+	source = LayerSourceEnvironment
 	if written == "" {
 		if value := role.model(in.Cfg.Models); value != "" {
-			ref, err := FileReference(value)
-			if err != nil {
-				return "", "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
+			if _, err := FileReference(value); err != nil {
+				return "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
 					Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model>", role.key(), value)}
 			}
-			written, model, source = value, ref.Model, in.Cfg.ModelLayer(role)
+			written, source = value, in.Cfg.ModelLayer(role)
 		}
 	}
 	if written == "" {
-		return "", "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
+		return "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
 			Detail: fmt.Sprintf("no model is configured for the %s role: set %s, or %s", role, role.key(), role.variable())}
 	}
 	if flagModel != "" {
-		written, model, source = flagModel, flagModel, ""
+		written, source = flagModel, ""
 	}
-	return written, model, source, nil
+	return written, source, nil
 }
 
 // Select is a catalogue verb's choice of which pool entry to dial — not a
@@ -376,40 +358,6 @@ func Select(in Inputs, flag string) (name, rule string, err error) {
 	names := providerNames(in.Providers)
 	return "", "", Refusal{Key: "--provider", Allowed: names,
 		Detail: fmt.Sprintf("no provider selected — pass --provider (available: %s)", strings.Join(names, ", "))}
-}
-
-// tokenModel is the argv token a harness profile's command carries where the
-// model goes.
-const tokenModel = "{model}"
-
-// HarnessArgv fills {model} in a profile's command — and only {model}: {prompt}
-// is the item's, filled per item by the command that runs it. Substitution is
-// one pass, so an element whose text happens to spell the token again is not
-// rewritten. A model is refused where no element names it: an id that would
-// reach nowhere is a silent wrong answer. Where the profile does carry the
-// model it arrives as an argv element of its own, so an id beginning with `-`
-// is refused here: after substitution nothing tells it from an option the
-// profile meant. The model is the role's, so the caller resolves the role
-// before it pairs the two.
-func HarnessArgv(p Profile, model string) ([]string, error) {
-	argv := slices.Clone(p.Command)
-	if !p.CarriesModel() {
-		if model != "" {
-			return nil, Refusal{Check: CheckHarness, Key: keyScoringModel,
-				Detail: fmt.Sprintf("the %s profile's command names no %s, so the model it is given can never reach it: add %s where that command takes a model id, or drop the model",
-					p.Name, tokenModel, tokenModel)}
-		}
-		return argv, nil
-	}
-	if strings.HasPrefix(model, "-") {
-		return nil, Refusal{Check: CheckHarness, Key: keyScoringModel,
-			Detail: fmt.Sprintf("the %s profile's command carries the model as an argv element of its own, and %q begins with -: that command would read it as an option rather than a model id, so name a model id that does not begin with -",
-				p.Name, model)}
-	}
-	for i, element := range argv {
-		argv[i] = strings.ReplaceAll(element, tokenModel, model)
-	}
-	return argv, nil
 }
 
 // unresolvedProvider explains a name the pool does not hold, distinguishing a
@@ -444,10 +392,10 @@ func providerNames(providers Providers) []string {
 	return names
 }
 
-// CheckHarness is the refusal class a profile that cannot carry what it is
-// given raises, and CheckUsage a flag value that is not the form the flag
-// takes; a resolution refusal's Check is otherwise empty, which is the provider
-// choice its rows are about.
+// CheckHarness is the refusal class the built-in harness back end raises where
+// it cannot run what it is given, and CheckUsage a flag value that is not the
+// form the flag takes; a resolution refusal's Check is otherwise empty, which is
+// the provider choice its rows are about.
 const (
 	CheckHarness = "harness"
 	CheckUsage   = "usage"

@@ -170,8 +170,8 @@ work's rigor is never asked — set it by hand.
 - The model is the `scoring` role: `models.scoring` in `config.toml`, or `KBASE_SCORING` under the
   environment's endpoint. A run whose mode names none is refused before the KB is opened, naming that
   key; nothing falls back to the text model. `--scoring-model` overrides the role for one run — a
-  `<provider>/<model>` reference in file mode, a bare id in environment mode, the harness's id under
-  `--harness` — and never substitutes for one.
+  `<provider>/<model>` reference in file mode, a bare id in environment mode, and the role's value
+  whole under `--harness` — and never substitutes for one.
 - A reply the parse refuses, a call cut off at the completion cap, and a failed call or landing each
   write nothing for that item: the attempt is recorded `failed` with the reason and no text, and the
   run goes on.
@@ -180,12 +180,12 @@ work's rigor is never asked — set it by hand.
   landing. A resume whose landed values the running table now prices differently **re-prices** them —
   through the same write path, no model asked — and records the move in `repriced.yaml`; a resume
   under a changed ask continues under the current ask, and neither refuses.
-- `--harness NAME` runs one process per item from the profile of that name in `harnesses.toml`
-  instead of asking an endpoint: no endpoint is chosen, the mode is not consulted, and a repository
-  profile says so once on stderr. `--harness opencode` is not a profile: it runs the opencode v2 back
-  end kbase composes itself — no tools, no instructions of its own, its own model naming
-  `<provider>/<model>` — and needs no `harnesses.toml` entry. `--dry-run` lists the set, asks nothing
-  and cannot be resumed.
+- `--harness opencode` runs one opencode v2 process per item instead of asking an endpoint: kbase
+  composes the command and the environment — no tools, no instructions of its own, its own model
+  naming `<provider>/<model>`, and nothing written to your configuration — so no endpoint is chosen
+  and the mode is not consulted. It is the only value the flag takes; any other name is refused
+  before the KB is opened, because kbase runs no command a user supplies. `--dry-run` lists the set,
+  asks nothing and cannot be resumed.
 - A run holds `<state-dir>/score`, so a second is `retry` (`check: lock`).
 
 Keys: `state-dir`, `pass`, `roles` (one record, `scoring`; absent under `--dry-run`), `run`,
@@ -206,15 +206,15 @@ render and never reported.
 Only a `build` with an inference-spending stage left to walk, `score` (a dry run and a `--harness`
 run excepted), `models` and `configure` use a provider. A build that needs one and has none is
 refused before its first stage; `--no-inference` needs none. A `--harness` run dials no endpoint, but
-`models.scoring` — or `KBASE_SCORING` — must still name a model, even where the profile's command
-carries no `{model}`.
+`models.scoring` — or `KBASE_SCORING` — must still name a model: the role is the run's declaration
+of which model judges it.
 
 Configuration is read from two layers: `<repository>/.kbase/` over `~/.config/kbase`, a repository
-pool entry or harness profile replacing a same-named global one whole and a `config.toml` value
+pool entry replacing a same-named global one whole and a `config.toml` value
 overriding the corresponding field alone. A directory `--config-dir` names, else
 `$KBASE_CONFIG_DIR`, is instead the only layer read. Outside a worktree only the global layer is
-read, and nothing is refused for that. Three files are read from each layer: `providers.toml`,
-`config.toml` and `harnesses.toml`.
+read, and nothing is refused for that. Two files are read from each layer: `providers.toml` and
+`config.toml`.
 
 - An entry's keys are `baseUrl` (required), `apiKeyFile` (the only way an entry supplies a key),
   `type` (`inference` where unstated), `api` (`openai` where unstated) and `decisionsFlavor` (the
@@ -242,27 +242,22 @@ read, and nothing is refused for that. Three files are read from each layer: `pr
   item per side rather than merged. A role variable without the base URL, or the base URL beside
   file-supplied models, refuses the same way. `KBASE_API_KEY_FILE` replaces the key of whichever
   endpoint is in force and is not a mode. A `--harness` run consults neither mode.
-- `harnesses.toml` holds the harness profiles `--harness` names: one top-level table per profile,
-  with `command` (an argv array) as its only key. `configure --create` seeds `claude` live and
-  `opencode` commented with its limitation; a profile is added by editing the file, never by a
-  command. A profile the repository supplied is announced once on stderr, and where it replaces a
-  same-named global one whole the line names that layer too (SPEC §9.3).
 - The guidance for choosing those ids is in the files themselves: a `config.toml` kbase creates
   states beside `[models]` what each category wants and example ids, and an MCP client reads the
   same rows at `kbase://model-hints`. The ids are examples, not requirements — match the stated
   capability — and no provider surface is bound to a model class.
-- `kbase configure --create` writes an annotated `providers.toml` where none stands, overwriting no
+- `configure --create` writes an annotated `providers.toml` where none stands, overwriting no
   other content; `config.toml` is created where absent and edited in place otherwise. Without
   `--provider` it makes no request and says the ids went unchecked. `--project` writes
   `<repository>/.kbase/` whether or not that directory exists, is refused outside a worktree, and
   beside `--config-dir` is a usage refusal naming `--project`.
 - `kbase show-config` reports how this invocation's configuration resolves — the layers read and
   what named each, the pool with each entry's layer and any fault, `config.toml`'s merged `[models]`
-  values, the harness profiles and their layers, the `mode`, the selection, and one `roles` record
+  values, the `mode`, the selection, and one `roles` record
   per role naming what answers it — and changes nothing: no KB read, no file written, no request
   made. Each resolved field names the layer that supplied it, and a gap is a diagnostic in a `done`
   result, not a refusal.
-- The verbs that read configuration load all three files strictly before doing anything else (README
+- The verbs that read configuration load both files strictly before doing anything else (README
   "Configuration"); an unknown key fails the load of the layer holding it, no lower layer is read in
   its place, and `configure` cannot repair a file that does not load.
 - Reference an API key with `apiKeyFile`, written with a leading `~` where the file lives under the

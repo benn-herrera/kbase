@@ -26,15 +26,14 @@ UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
 RESULTS_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-results-fixture"
 MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arxiv"
 # The committed KB the hermetic result-contract recipe works over, with the
-# values its write ops take, and the harness stub its profiles name: one
-# command, one mode per behaviour the process contract has.
+# values its write ops take, and the harness stub the back end override names:
+# one command, one mode per behaviour the process contract has.
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
 HARNESS_STUB := TEST_DATA_FIXTURES_DIR / "harness" / "stub.sh"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
 MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
 CONFIG_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-config"
-HARNESS_LIVE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-score-live-harness"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 
 DIST_DIR := "dist"
@@ -1159,7 +1158,7 @@ _test-integration-monitor-arxiv: build
 # each result parsed against its subcommand's documented keys and outcome.
 # It needs only git, which SPEC requires on the host — no pandoc, no
 # provider, no adjagent clone — so it joins the omnibus.
-[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring with and without --scoring-model, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's — and the harness back end over stub profiles: the prompt on argv versus stdin compared with the ledger's digest, {model} substituted, one process per item in a directory emptied per item, a non-zero exit and each of the two bounds failing that item alone, a command that cannot be started and a name no layer supplies refused before the walk, a dry run touching no profile, the environment set beside --harness, and a repository-declared profile announced once with harness_layer repository; evidence under test-data/transient/test-integration-results-fixture/")]
+[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring with and without --scoring-model, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's — and the harness back end over the internal command override: the prompt on argv versus stdin compared with the ledger's digest, one process per item in a directory emptied per item, a non-zero exit and each of the two bounds failing that item alone, the override announced once and recorded in run.yaml, a command that cannot be started and a --harness name kbase ships no back end for refused before the walk, a dry run touching no command, and the environment set beside --harness; evidence under test-data/transient/test-integration-results-fixture/")]
 test-integration-results-fixture:
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"
     @{{just_executable()}} _test-integration-results-fixture 2>&1 | tee "{{RESULTS_FIXTURE_OUT_DIR}}/log.txt"
@@ -1174,8 +1173,9 @@ _test-integration-results-fixture: build
     fixture="${root}/{{RESULTS_FIXTURE_DIR}}"
     # The inference variables are scrubbed for the whole recipe: every leg below
     # reads the staged tree and nothing the host exports, except the one that
-    # sets them to prove the environment supplies a run.
-    unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR
+    # sets them to prove the environment supplies a run, and the back end
+    # override, which the harness legs set for themselves.
+    unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR KBASE_SCORE_BACK_END_COMMAND
     repo="${out}/repo"
     docs="${out}/docs"
     rm -rf "${repo}" "${docs}" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
@@ -1281,97 +1281,81 @@ _test-integration-results-fixture: build
         "$([[ "${env_score_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${env_score}.exit")"
     [[ "${env_score_ok}" -eq 0 ]] || status=1
 
-    # The harness back end: one process per item, from a profile harnesses.toml
-    # declares. The stub answers each item with one value and leaves, in the
-    # run's own working directory, the digest of the text it was handed — so
-    # these legs say where the prompt reached it, and that it was exactly the
-    # prompt the ledger digested. It never writes a prompt.
+    # The harness back end: one process per item, its command named by the
+    # back end override — the one way a run's command is chosen from outside
+    # kbase, and the way the suite fakes a back end now that no profile can.
+    # The stub answers each item with one value and leaves, in the run's own
+    # working directory, the digest of the text it was handed — so these legs
+    # say where the prompt reached it, and that it was exactly the prompt the
+    # ledger digested. It never writes a prompt. The variable is set per leg
+    # and unset again, and the announcement every run that saw it writes is
+    # checked with the first.
     stub="${root}/{{HARNESS_STUB}}"
-    printf '%s\n' \
-        '[argv]' "command = [\"${stub}\", \"argv\", \"{prompt}\"]" \
-        '' '[stdin]' "command = [\"${stub}\", \"stdin\"]" \
-        '' '[modelled]' "command = [\"${stub}\", \"model\", \"{model}\", \"{prompt}\"]" \
-        '' '[isolate]' "command = [\"${stub}\", \"isolate\", \"{prompt}\"]" \
-        '' '[fail]' "command = [\"${stub}\", \"fail\", \"{prompt}\"]" \
-        '' '[big-reply]' "command = [\"${stub}\", \"big-reply\", \"{prompt}\"]" \
-        '' '[big-stderr]' "command = [\"${stub}\", \"big-stderr\", \"{prompt}\"]" \
-        '' '[absent]' "command = [\"${stub}-missing\", \"value\"]" \
-        > "${score_config}/harnesses.toml"
     hstate="${root}/${out}/harness-state"
     # ledger_of <document>: the run directory its ledger field names.
     ledger_of() { sed -n 's/^ledger: "\(.*\)"$/\1/p' "$1" | head -n 1; }
     # line_digest <line>: the prompt_sha256 the ledger's line records.
     line_digest() { sed -n 's/.*"prompt_sha256":"\([0-9a-f]*\)".*/\1/p' <<< "$1"; }
 
-    # 29 (argv): the prompt reaches the element that names it, and stdin is
+    # 29 (argv): the prompt reaches the one element that names it, and stdin is
     # closed empty. The stub's digest is the ledger's, so the text the command
     # was handed is the text the run composed.
-    run score bounded score --pass rigor --limit 1 --harness argv --config-dir "${score_config}" --state-dir "${hstate}"
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} argv {prompt}"
+    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
     hline="$(head -n 1 "${hledger}/ledger.jsonl" 2>/dev/null || true)"
-    [[ -f "${hledger}/harness/argv.digest" ]] || { printf '  fail: the argv profile left no digest\n'; status=1; }
-    [[ ! -e "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the argv profile also received the prompt on stdin\n'; status=1; }
+    [[ -f "${hledger}/harness/argv.digest" ]] || { printf '  fail: the argv command left no digest\n'; status=1; }
+    [[ ! -e "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the argv command also received the prompt on stdin\n'; status=1; }
     [[ -n "${hline}" && "$(cat "${hledger}/harness/argv.digest")" == "$(line_digest "${hline}")" ]] \
         || { printf '  fail: the argv prompt is not the prompt the ledger digested\n'; status=1; }
     grep -qx '    - role: "scoring"' "${LAST}" || { printf '  fail: the harness document names no scoring role\n'; status=1; }
     grep -qx '      back-end: "harness"' "${LAST}" || { printf '  fail: the roles record does not name the harness back end\n'; status=1; }
-    grep -qx '      harness: "argv"' "${LAST}" || { printf '  fail: the roles record does not name the profile\n'; status=1; }
-    grep -qx '      harness-layer: "explicit"' "${LAST}" || { printf '  fail: the roles record does not name the profile layer\n'; status=1; }
-    grep -qx '      model: null' "${LAST}" || { printf '  fail: a profile naming no {model} reported a model\n'; status=1; }
-    for key in provider provider-rule provider-layer; do
+    grep -qx '      model: "unreachable/s"' "${LAST}" || { printf '  fail: the roles record does not name the scoring role\x27s model\n'; status=1; }
+    for key in provider provider-rule provider-layer harness harness-layer; do
         if grep -q "^      ${key}:" "${LAST}"; then printf '  fail: a harness role names %s\n' "${key}"; status=1; fi
     done
     grep -qx 'backend: harness' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not name the back end\n'; status=1; }
-    grep -qx 'harness: argv' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not name the profile\n'; status=1; }
-    grep -qx 'harness_layer: explicit' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not name the profile layer\n'; status=1; }
+    grep -qx 'command_override: KBASE_SCORE_BACK_END_COMMAND' "${hledger}/run.yaml" \
+        || { printf '  fail: run.yaml does not name the variable that supplied the command\n'; status=1; }
     grep -qx "    - '{prompt}'" "${hledger}/run.yaml" || { printf '  fail: run.yaml does not record the argv with the prompt left as the token\n'; status=1; }
+    if grep -qE '^harness(_layer)?:' "${hledger}/run.yaml"; then printf '  fail: run.yaml names a profile\n'; status=1; fi
     grep -qF '"backend":"harness"' "${hledger}/ledger.jsonl" || { printf '  fail: the ledger line does not name the back end\n'; status=1; }
-    grep -qF '"harness":"argv"' "${hledger}/ledger.jsonl" || { printf '  fail: the ledger line does not name the profile\n'; status=1; }
-    grep -qF '"harness_layer":"explicit"' "${hledger}/ledger.jsonl" || { printf '  fail: the ledger line does not name the profile layer\n'; status=1; }
+    if grep -qF '"harness":' "${hledger}/ledger.jsonl"; then printf '  fail: the ledger line names a profile\n'; status=1; fi
+    # The announcement: once per run, naming the variable and the argv, so a
+    # command nobody chose is never executed silently.
+    [[ "$(grep -c 'names the command' "${LAST%.out}.log")" -eq 1 ]] \
+        || { printf '  fail: the back end override did not announce itself exactly once\n'; status=1; }
+    grep -qF 'KBASE_SCORE_BACK_END_COMMAND' "${LAST%.out}.log" \
+        || { printf '  fail: the announcement does not name the variable\n'; status=1; }
     # 43: the header records the run's ask once — the digest of its pass's
     # prompt rendered for an empty subject — and a landed line records the
     # charges it was priced from. This run's reply is `none`, so its empty list
     # is the model's own statement that it found no fault.
     grep -qE '^ask_sha256: [0-9a-f]{64}$' "${hledger}/run.yaml" || { printf '  fail: run.yaml records no ask digest\n'; status=1; }
     grep -qF '"faults":[]' "${hledger}/ledger.jsonl" || { printf '  fail: a landed line records no empty charge list for `none`\n'; status=1; }
-    # A profile a named directory supplied says nothing on stderr: the user put
-    # it there.
-    if grep -q 'harness profile' "${LAST%.out}.log"; then printf '  fail: a named directory'"'"'s profile announced itself\n'; status=1; fi
 
-    # 20/29 (stdin): a profile naming no {prompt} receives it there.
-    run score bounded score --pass rigor --limit 1 --harness stdin --config-dir "${score_config}" --state-dir "${hstate}"
+    # 20/29 (stdin): a command naming no {prompt} receives the prompt there.
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} stdin"
+    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
     hline="$(head -n 1 "${hledger}/ledger.jsonl" 2>/dev/null || true)"
-    [[ -f "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the stdin profile left no digest\n'; status=1; }
-    [[ ! -e "${hledger}/harness/argv.digest" ]] || { printf '  fail: the stdin profile also received the prompt in an element\n'; status=1; }
+    [[ -f "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the stdin command left no digest\n'; status=1; }
+    [[ ! -e "${hledger}/harness/argv.digest" ]] || { printf '  fail: the stdin command also received the prompt in an element\n'; status=1; }
     [[ -n "${hline}" && "$(cat "${hledger}/harness/stdin.digest")" == "$(line_digest "${hline}")" ]] \
         || { printf '  fail: the stdin prompt is not the prompt the ledger digested\n'; status=1; }
 
-    # 17/18/22: a command naming {model} is handed the flag's value verbatim
-    # (never split at its slash), one naming none is handed the role's model
-    # part, and run.yaml records the argv with the model substituted beside the
-    # token {prompt} the run left alone.
-    run score bounded score --pass rigor --limit 1 --harness modelled --scoring-model org/model \
-        --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    grep -qx '      model: "org/model"' "${LAST}" || { printf '  fail: the flag'"'"'s id is not the roles record'"'"'s model\n'; status=1; }
-    [[ "$(cat "${hledger}/harness/model.txt" 2>/dev/null)" == "org/model" ]] \
-        || { printf '  fail: the harness was not handed the flag'"'"'s id verbatim\n'; status=1; }
-    grep -qx 'model: org/model' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not name the model asked\n'; status=1; }
-    grep -qx '    - org/model' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not record the substituted argv\n'; status=1; }
-    run score bounded score --pass rigor --limit 1 --harness modelled --config-dir "${score_config}" --state-dir "${hstate}"
-    grep -qx '      model: "s"' "${LAST}" || { printf '  fail: a modelled profile was not asked the role'"'"'s model part\n'; status=1; }
-
     # 23: two items, two processes, and nothing one item wrote visible to the
     # next — the stub fails an item that finds the previous one's file.
-    run score done score --pass rigor --harness isolate --config-dir "${score_config}" --state-dir "${hstate}"
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} isolate {prompt}"
+    run score done score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
-    [[ "$(sed -n 's/^    done: //p' "${LAST}")" -eq 2 ]] || { printf '  fail: the isolation profile did not answer both items\n'; status=1; }
+    [[ "$(sed -n 's/^    done: //p' "${LAST}")" -eq 2 ]] || { printf '  fail: the isolation command did not answer both items\n'; status=1; }
     [[ -f "${hledger}/harness/seen" ]] || { printf '  fail: the isolation stub never ran\n'; status=1; }
 
     # 24: a non-zero exit is that item's failure — the line carries the exit code
     # and the stderr tail, the next item is asked, and the run closes on failures.
-    run score failed score --pass rigor --harness fail --config-dir "${score_config}" --state-dir "${hstate}"
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} fail {prompt}"
+    run score failed score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
     [[ "$(grep -cF '"status":"failed"' "${hledger}/ledger.jsonl")" -eq 2 ]] \
         || { printf '  fail: the walk did not carry on past the first failed item\n'; status=1; }
@@ -1379,39 +1363,31 @@ _test-integration-results-fixture: build
     grep -qF 'exit status 3' "${LAST}" || { printf '  fail: the failure does not carry the exit code\n'; status=1; }
     [[ "$(grep -c '^    - check: "error"' "${LAST}")" -eq 2 ]] || { printf '  fail: failures does not name both items\n'; status=1; }
     # 28: the command that continues the run continues it on the same back end.
-    grep -q '^resume: ".* --harness fail"$' "${LAST}" || { printf '  fail: the resume command does not carry --harness\n'; status=1; }
-
-    # 30: a fresh configuration directory is seeded with one live profile, and a
-    # name no loaded layer supplies refuses listing it — so the seed's opencode
-    # entry, commented, reads as a choice that does not stand rather than as a
-    # profile of its own shape.
-    seed_cfg="${out}/harness-seed"
-    run configure done configure --create --config-dir "${seed_cfg}"
-    grep -qx "    - \"${seed_cfg}/harnesses.toml\"" "${LAST}" || { printf '  fail: --create did not write harnesses.toml\n'; status=1; }
-    run score refused score --pass rigor --harness opencode --config-dir "${seed_cfg}" --state-dir "${hstate}"
-    grep -qF 'check: "harness"' "${LAST}" || { printf '  fail: a commented seed is not a harness refusal\n'; status=1; }
-    grep -qF 'key: "--harness"' "${LAST}" || { printf '  fail: the refusal does not name --harness\n'; status=1; }
-    [[ "$(sed -n '/^      allowed:/,/^      [a-z]/p' "${LAST}" | sed -n 's/^        - "\(.*\)"$/\1/p' | tr '\n' ' ')" == "claude " ]] \
-        || { printf '  fail: the refusal does not list the seed'"'"'s one live profile\n'; status=1; }
+    grep -q '^resume: ".* --harness opencode"$' "${LAST}" || { printf '  fail: the resume command does not carry --harness\n'; status=1; }
 
     # 25: a command that cannot be started refuses before the walk.
-    run score refused score --pass rigor --harness absent --config-dir "${score_config}" --state-dir "${hstate}"
+    export KBASE_SCORE_BACK_END_COMMAND="${stub}-missing value"
+    run score refused score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     grep -qF 'check: "harness"' "${LAST}" || { printf '  fail: a command that cannot start is not a harness refusal\n'; status=1; }
     grep -qF 'key: "--harness"' "${LAST}" || { printf '  fail: the refusal does not name --harness\n'; status=1; }
+    unset KBASE_SCORE_BACK_END_COMMAND
 
     # 27: a dry run asks nothing, so --harness changes nothing.
-    run score done score --dry-run --pass rigor --harness argv --config-dir "${score_config}" --state-dir "${hstate}"
+    run score done score --dry-run --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
     if grep -q '^roles:' "${LAST}"; then printf '  fail: a dry run carries a roles record\n'; status=1; fi
     [[ ! -e "${hledger}/harness" ]] || { printf '  fail: a dry run left a working directory for a command it never ran\n'; status=1; }
 
     # 33: both bounds fail the item with the reason that bound produces.
-    run score bounded score --pass rigor --limit 1 --harness big-reply --config-dir "${score_config}" --state-dir "${hstate}"
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} big-reply {prompt}"
+    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
-    grep -q 'the reply is over the' "${hledger}/ledger.jsonl" || { printf '  fail: an over-limit reply is not the item'"'"'s failure\n'; status=1; }
-    run score bounded score --pass rigor --limit 1 --harness big-stderr --config-dir "${score_config}" --state-dir "${hstate}"
+    grep -q 'the reply is over the' "${hledger}/ledger.jsonl" || { printf '  fail: an over-limit reply is not the item\x27s failure\n'; status=1; }
+    export KBASE_SCORE_BACK_END_COMMAND="${stub} big-stderr {prompt}"
+    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
     hledger="$(ledger_of "${LAST}")"
-    grep -q 'stderr bound' "${hledger}/ledger.jsonl" || { printf '  fail: over-limit stderr is not the item'"'"'s failure\n'; status=1; }
+    grep -q 'stderr bound' "${hledger}/ledger.jsonl" || { printf '  fail: over-limit stderr is not the item\x27s failure\n'; status=1; }
+    unset KBASE_SCORE_BACK_END_COMMAND
 
     # 21: a harness consults no mode, so a base URL and the role variables set
     # beside it are neither a mixed mode nor a refusal.
@@ -1419,7 +1395,8 @@ _test-integration-results-fixture: build
     set +e
     ( cd "${repo}" && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE "HOME=${out}/score-home" \
         KBASE_API_BASE_URL=http://127.0.0.1:1/v1 KBASE_DECISION=env-decision KBASE_TEXT=env-text KBASE_SCORING=env-scoring \
-        "${kbase}" score --pass rigor --limit 1 --harness modelled --config-dir "${score_config}" --state-dir "${harness_env}" ) \
+        KBASE_SCORE_BACK_END_COMMAND="${stub} argv {prompt}" \
+        "${kbase}" score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${harness_env}" ) \
         > "${out}/harness-env.out" 2> "${out}/harness-env.log"
     printf '%s\n' "$?" > "${out}/harness-env.exit"
     set -e
@@ -1427,50 +1404,22 @@ _test-integration-results-fixture: build
     [[ "$(cat "${out}/harness-env.exit")" -eq 0 ]] || harness_env_ok=1
     grep -qx 'outcome: "bounded"' "${out}/harness-env.out" || harness_env_ok=1
     grep -qx '      back-end: "harness"' "${out}/harness-env.out" || harness_env_ok=1
-    # The environment names the model where it names one: the profile carries
-    # {model}, so the id the harness was handed says which source was read.
+    # The environment names the model where it names one.
     grep -qx '      model: "env-scoring"' "${out}/harness-env.out" || harness_env_ok=1
-    printf 'score --pass rigor --limit 1 --harness modelled (environment set)\tbounded\t%s\t%s\n' \
+    [[ "$(grep -c 'names the command' "${out}/harness-env.log")" -eq 1 ]] || harness_env_ok=1
+    printf 'score --pass rigor --limit 1 --harness opencode (environment set)\tbounded\t%s\t%s\n' \
         "$([[ "${harness_env_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/harness-env.out" >> "${out}/checks.tsv"
     printf '  %s score --harness with the environment set: want bounded, exit %s\n' \
         "$([[ "${harness_env_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/harness-env.exit")"
     [[ "${harness_env_ok}" -eq 0 ]] || status=1
 
-    # 20: a profile the repository's own harnesses.toml declares loads and runs,
-    # and the run writes one line naming that file and the layer; the roles
-    # record and the ledger carry the same fact. The home is this leg's own, so
-    # no reader's global layer is consulted.
-    hrepo="${out}/harness-repo"
-    hhome="${out}/harness-home"
-    mkdir -p "${hrepo}/.kbase" "${hhome}"
-    # The KB the legs above asked their items over, so this leg has a set to
-    # walk; the layer its profile comes from is the one added here.
-    cp -R "${repo}/." "${hrepo}/"
-    printf '%s\n' '[repo-prof]' "command = [\"${stub}\", \"argv\", \"{prompt}\"]" > "${hrepo}/.kbase/harnesses.toml"
-    printf '%s\n' '[models]' 'scoring = "none/none"' > "${hrepo}/.kbase/config.toml"
-    set +e
-    ( cd "${hrepo}" && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT \
-        -u KBASE_SCORING -u KBASE_API_KEY_FILE "HOME=${hhome}" \
-        "${kbase}" score --pass rigor --limit 1 --harness repo-prof --state-dir "${root}/${out}/harness-repo-state" ) \
-        > "${out}/harness-repo.out" 2> "${out}/harness-repo.log"
-    printf '%s\n' "$?" > "${out}/harness-repo.exit"
-    set -e
-    repo_prof_ok=0
-    [[ "$(cat "${out}/harness-repo.exit")" -eq 0 ]] || repo_prof_ok=1
-    grep -qx 'outcome: "bounded"' "${out}/harness-repo.out" || repo_prof_ok=1
-    grep -qx '      harness-layer: "repository"' "${out}/harness-repo.out" || repo_prof_ok=1
-    [[ "$(grep -c "supplies the \"repo-prof\" harness profile (layer: repository)" "${out}/harness-repo.log")" -eq 1 ]] \
-        || { printf '  fail: the repository profile did not announce itself once\n'; repo_prof_ok=1; }
-    grep -qF "${hrepo}/.kbase/harnesses.toml" "${out}/harness-repo.log" \
-        || { printf '  fail: the line does not name the file that supplied the profile\n'; repo_prof_ok=1; }
-    repo_ledger="$(ledger_of "${out}/harness-repo.out")"
-    grep -qx 'harness_layer: repository' "${repo_ledger}/run.yaml" || repo_prof_ok=1
-    grep -qF '"harness_layer":"repository"' "${repo_ledger}/ledger.jsonl" || repo_prof_ok=1
-    printf 'score --harness repo-prof (repository layer)\tbounded\t%s\t%s\n' \
-        "$([[ "${repo_prof_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/harness-repo.out" >> "${out}/checks.tsv"
-    printf '  %s score --harness over a repository profile: one stderr line, harness_layer repository\n' \
-        "$([[ "${repo_prof_ok}" -eq 0 ]] && echo pass || echo fail)"
-    [[ "${repo_prof_ok}" -eq 0 ]] || status=1
+    # 30: the flag names the back ends kbase ships and no profile, so a name
+    # nothing ships refuses before the KB is opened, listing the one it takes.
+    run score refused score --pass rigor --harness claude --config-dir "${score_config}" --state-dir "${hstate}"
+    grep -qF 'check: "harness"' "${LAST}" || { printf '  fail: a name kbase ships no back end for is not a harness refusal\n'; status=1; }
+    grep -qF 'key: "--harness"' "${LAST}" || { printf '  fail: the refusal does not name --harness\n'; status=1; }
+    [[ "$(sed -n '/^      allowed:/,/^      [a-z]/p' "${LAST}" | sed -n 's/^        - "\(.*\)"$/\1/p' | tr '\n' ' ')" == "opencode " ]] \
+        || { printf '  fail: the refusal does not list the one back end kbase ships\n'; status=1; }
 
     run set-rigor refused set-rigor --values "${fixture}/values/bad-rigor.yaml"
     run render-citation refused render-citation --values "${fixture}/values/cite-nowhere.yaml"
@@ -1493,125 +1442,12 @@ _test-integration-results-fixture: build
     run status done status --state-dir "${root}/${out}/state"
     run cancel refused cancel --state-dir "${root}/${out}/state"
     {{just_executable()}} _write-evidence "${out}" "test-integration-results-fixture" \
-      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring with and without --scoring-model, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nharness: score-config's harnesses.toml declares profiles over {{HARNESS_STUB}}, one per behaviour: argv and stdin (the prompt's two routes, each leaving the digest of what it was handed, compared with the ledger's prompt_sha256), modelled ({model} substituted, once from --scoring-model verbatim and once from the role), isolate (a second item fails if it can see the first's file), fail (exit 3 with stderr: the item's failure, the walk carrying on), big-reply and big-stderr (each past a bound), absent (a command that cannot start), and a dry run that touches none; run.yaml and the ledger's lines name backend, harness and harness_layer, and a repository-declared profile (harness-repo/, its own .kbase/ over this leg's own HOME) writes one stderr line naming that file and the layer\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
+      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring with and without --scoring-model, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nharness: the harness legs run --harness opencode with KBASE_SCORE_BACK_END_COMMAND naming {{HARNESS_STUB}}, one mode per behaviour: argv and stdin (the prompt's two routes, each leaving the digest of what it was handed, compared with the ledger's prompt_sha256), isolate (a second item fails if it can see the first's file), fail (exit 3 with stderr: the item's failure, the walk carrying on), big-reply and big-stderr (each past a bound), and a missing program (refused before the walk); the first leg also checks the override announced once on stderr and recorded as command_override in run.yaml, and that run.yaml and the ledger's lines name the back end and no profile; a --harness name kbase ships no back end for refuses listing opencode; a dry run touches no command, and a run with the environment set beside --harness is bounded and reads its model from KBASE_SCORING\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'
         exit 1
     fi
     printf 'integration(test-integration-results-fixture) ok\n'
-
-# The live half of the harness back end: the profile `configure --create` seeds,
-# run over a KB. Everything the hermetic legs prove stops at the process
-# contract's edge — a stub is kbase's own script — so this leg is what says the
-# seed's command is a command that answers.
-[doc("LIVE — NEEDS claude installed and authenticated (excluded from test-integration): the harnesses.toml configure --create seeds, its live claude profile run over a staged copy of the results fixture's KB with two claims inserted, one rigor item asked and landed; the roles record, run.yaml and the ledger's line checked for the harness back end, the profile and its command, and a profile name no layer supplies refused with the live profile as allowed; evidence under test-data/transient/test-integration-score-live-harness/")]
-test-integration-score-live-harness:
-    @mkdir -p "{{HARNESS_LIVE_OUT_DIR}}"
-    @{{just_executable()}} _test-integration-score-live-harness 2>&1 | tee "{{HARNESS_LIVE_OUT_DIR}}/log.txt"
-
-[private]
-_test-integration-score-live-harness: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    root="$(pwd -P)"
-    out="${root}/{{HARNESS_LIVE_OUT_DIR}}"
-    kbase="${root}/{{BIN_DIR}}/kbase"
-    fixture="${root}/{{RESULTS_FIXTURE_DIR}}"
-    unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR
-    if ! command -v claude > /dev/null 2>&1; then
-        printf 'error: claude is not on PATH — this leg runs the profile configure --create seeds.\n' >&2
-        exit 1
-    fi
-    repo="${out}/repo"
-    cfg="${out}/config"
-    state="${out}/state"
-    docs="${out}/docs"
-    rm -rf "${repo}" "${cfg}" "${state}" "${docs}"
-    mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}"
-    printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
-    cp -R "${fixture}/kb-root" "${repo}/"
-    status=0
-    # capture <stem> <dir> <command...>: run in dir, its stdout, stderr and exit
-    # code kept beside each other.
-    capture() {
-        local stem="$1" in="$2"
-        shift 2
-        set +e
-        ( cd "${in}" && "$@" ) > "${stem}.out" 2> "${stem}.log"
-        printf '%s\n' "$?" > "${stem}.exit"
-        set -e
-    }
-    rc() { cat "$1.exit"; }
-    check() {
-        local verdict=pass
-        [[ "$2" -eq 0 ]] || { verdict=fail; status=1; }
-        printf '  %s %s: %s\n' "${verdict}" "$1" "$3"
-    }
-    yaml_str() { local s="${1//\\/\\\\}"; printf '"%s"' "${s//\"/\\\"}"; }
-
-    # The KB the run walks: the fixture's, refreshed, with two claims inserted —
-    # the fixture ships none, because its ids belong to the insert ops.
-    capture "${docs}/01-refresh" "${repo}" "${kbase}" refresh
-    check refresh "$([[ "$(rc "${docs}/01-refresh")" -eq 0 ]] && echo 0 || echo 1)" "exit $(rc "${docs}/01-refresh")"
-    capture "${docs}/02-insert" "${repo}" "${kbase}" insert-claim-entry --create --values "${fixture}/values/insert.yaml"
-    check insert "$([[ "$(rc "${docs}/02-insert")" -eq 0 ]] && echo 0 || echo 1)" "exit $(rc "${docs}/02-insert")"
-
-    # The fresh configuration: three files, the pool's one live entry, the
-    # seed's one live profile and one commented entry, and three references.
-    capture "${docs}/03-configure" "${root}" "${kbase}" configure --create --config-dir "${cfg}" \
-        --model-map decision=local/d,text=local/t,scoring=local/s
-    check configure "$([[ "$(rc "${docs}/03-configure")" -eq 0 ]] && echo 0 || echo 1)" \
-        "exit $(rc "${docs}/03-configure")"
-    check seed "$([[ -f "${cfg}/harnesses.toml" ]] && grep -qx '\[claude\]' "${cfg}/harnesses.toml" && echo 0 || echo 1)" \
-        "harnesses.toml carries the live claude profile"
-
-    # The run: one item, asked by the seed's own command on its own model.
-    capture "${docs}/04-score" "${repo}" "${kbase}" score --pass rigor --limit 1 --harness claude \
-        --config-dir "${cfg}" --state-dir "${state}"
-    score_ok=0
-    [[ "$(rc "${docs}/04-score")" -eq 0 ]] || score_ok=1
-    grep -qx 'outcome: "bounded"' "${docs}/04-score.out" || score_ok=1
-    grep -qx '      back-end: "harness"' "${docs}/04-score.out" || score_ok=1
-    grep -qx '      harness: "claude"' "${docs}/04-score.out" || score_ok=1
-    grep -qx '      harness-layer: "explicit"' "${docs}/04-score.out" || score_ok=1
-    # The seed names no {model}: the profile asks its own, and the document says
-    # so by naming none.
-    grep -qx '      model: null' "${docs}/04-score.out" || score_ok=1
-    ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${docs}/04-score.out" | head -n 1)"
-    [[ -n "${ledger}" && -f "${ledger}/run.yaml" ]] || score_ok=1
-    grep -qx 'backend: harness' "${ledger}/run.yaml" || score_ok=1
-    grep -qx 'harness: claude' "${ledger}/run.yaml" || score_ok=1
-    grep -qx '    - claude' "${ledger}/run.yaml" || score_ok=1
-    grep -qx '    - --safe-mode' "${ledger}/run.yaml" || score_ok=1
-    grep -qF '"backend":"harness"' "${ledger}/ledger.jsonl" || score_ok=1
-    grep -qF '"harness":"claude"' "${ledger}/ledger.jsonl" || score_ok=1
-    check score "$score_ok" \
-        "one item asked by the seeded claude profile; the record and the ledger name it, and the model is null because the seed carries none"
-
-    # A name no loaded layer supplies is a choice that does not stand. The
-    # name is not `opencode`: that one selects the built-in back end, which runs
-    # whatever harnesses.toml says.
-    capture "${docs}/05-nosuch" "${repo}" "${kbase}" score --pass rigor --harness nosuch \
-        --config-dir "${cfg}" --state-dir "${state}"
-    nosuch_ok=0
-    [[ "$(rc "${docs}/05-nosuch")" -eq 1 ]] || nosuch_ok=1
-    grep -qx 'outcome: "refused"' "${docs}/05-nosuch.out" || nosuch_ok=1
-    grep -qF 'check: "harness"' "${docs}/05-nosuch.out" || nosuch_ok=1
-    grep -qF 'key: "--harness"' "${docs}/05-nosuch.out" || nosuch_ok=1
-    check nosuch "$nosuch_ok" "a profile no layer supplies refuses by name"
-
-    {
-        printf -- '- fixture: %s\n  kb: %s\n  config: %s\n  state: %s\n' \
-            "$(yaml_str "${fixture}")" "$(yaml_str "${repo}/kb-root")" "$(yaml_str "${cfg}")" "$(yaml_str "${state}")"
-        printf '  outcome: %s\n' "$(yaml_str "$(sed -n 's/^outcome: "\(.*\)"$/\1/p' "${docs}/04-score.out" | head -n 1)")"
-    } > "${out}/comparison.yaml"
-    {{just_executable()}} _write-evidence "${out}" "test-integration-score-live-harness" \
-      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git); ${kbase} refresh, ${kbase} insert-claim-entry --create --values {{RESULTS_FIXTURE_DIR}}/values/insert.yaml\n${kbase} configure --create --config-dir config --model-map decision=local/d,text=local/t,scoring=local/s: the three seeded files, the live claude profile among them\n(cd repo && ${kbase} score --pass rigor --limit 1 --harness claude --config-dir config --state-dir state) into docs/04-score.*: one item asked on the profile's own model; roles, run.yaml and the ledger line checked for the harness back end and the profile, and its command recorded\n(cd repo && ${kbase} score --pass rigor --harness nosuch --config-dir config --state-dir state) into docs/05-nosuch.*: refused, naming --harness, the loaded profile set; opencode is a built-in back end and is not among them\ncomparison.yaml: the fixture, the KB, the configuration and the state directory, and the run's outcome"
-    if [[ "${status}" -ne 0 ]]; then
-        printf 'integration(test-integration-score-live-harness): a check failed — see comparison.yaml and docs/\n'
-        exit 1
-    fi
-    printf 'integration(test-integration-score-live-harness) ok\n'
 
 # Init legs over the delivered binary in real git repositories, each result
 # checked against its documented keys: refused outside a worktree with nothing
@@ -1962,19 +1798,6 @@ _test-integration-config: build
     layer_field() { awk -v n="$2" -v k="$3" '/^layers:/ { on = 1; next } on && /^    - / { i++; if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit } next } on && /^    / { if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
     # provider_names <stem>: the pool's entry names, in the order the document lists them.
     provider_names() { awk '/^providers:/ { on = 1; next } on && /^    - name: / { n = $0; sub(/^[^:]*: /, "", n); gsub(/^"|"$/, "", n); printf "%s%s", sep, n; sep = ","; next } on && /^    / { next } on { exit }' "$1.out"; }
-    # harness_names <stem>: the names the document's harnesses list holds, in
-    # its order, space-joined — the pool's own name list is a different list.
-    harness_names() { awk '/^harnesses:/ { on = 1; next } on && /^[a-z]/ { exit } on && /^    - name: / { n = $0; sub(/^.*name: /, "", n); gsub(/"/, "", n); printf "%s ", n }' "$1.out"; }
-    # harness_command <stem> <name>: the argv the report lists for that harness
-    # profile, elements joined by |, an empty element left empty — so the
-    # command a profile states is compared as the list it is.
-    harness_command() { awk -v n="$2" '
-        /^harnesses:/ { on = 1; next }
-        on && /^[a-z]/ { exit }
-        !on { next }
-        /^    - name: / { cur = $0; sub(/^.*name: /, "", cur); gsub(/"/, "", cur); next }
-        /^        - / { if (cur == n) { v = $0; sub(/^ *- /, "", v); gsub(/^"|"$/, "", v); printf "%s|", v } }
-    ' "$1.out"; }
     # provider_field <stem> <name> <key>: one scalar of the providers entry called name.
     provider_field() { awk -v want="$2" -v k="$3" '/^providers:/ { on = 1; next } on && /^    - name: / { cur = $0; sub(/^[^:]*: /, "", cur); gsub(/^"|"$/, "", cur); next } on && /^    / { if (cur == want && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
     # report <stem> <ok> <label> [detail]: one leg that checks its document
@@ -2042,7 +1865,6 @@ _test-integration-config: build
         [[ "$(layer_field "${stem}" 1 exists)" == "${want_exists}" ]] || ok=1
         [[ "$(layer_field "${stem}" 1 providersExists)" == "${want_providers}" ]] || ok=1
         [[ "$(layer_field "${stem}" 1 configExists)" == "${want_config}" ]] || ok=1
-        [[ "$(layer_field "${stem}" 1 harnessesExists)" == false ]] || ok=1
         # With no inference variable set, the files supply inference and the
         # document names that mode; a leg that sets one is checked for the
         # refusal that sets the mode nowhere.
@@ -2336,22 +2158,17 @@ _test-integration-config: build
     grep -qx 'outcome: "done"' "${create_stem}.out" || create_ok=1
     grep -qx 'provider: null' "${create_stem}.out" || create_ok=1
     grep -qx "    - \"${crepo}/.kbase/providers.toml\"" "${create_stem}.out" || create_ok=1
-    grep -qx "    - \"${crepo}/.kbase/harnesses.toml\"" "${create_stem}.out" || create_ok=1
     grep -qx "    - \"${crepo}/.kbase/config.toml\"" "${create_stem}.out" || create_ok=1
-    # The three files in the order --create writes them: the pool, the profiles,
-    # the choices.
+    # The two files in the order --create writes them: the pool, then the
+    # choices.
     [[ "$(sed -n 's/^    - "\(.*\)"$/\1/p' "${create_stem}.out" | tr '\n' ' ')" == \
-        "${crepo}/.kbase/providers.toml ${crepo}/.kbase/harnesses.toml ${crepo}/.kbase/config.toml " ]] || create_ok=1
+        "${crepo}/.kbase/providers.toml ${crepo}/.kbase/config.toml " ]] || create_ok=1
     grep -q 'the references were not checked' "${create_stem}.log" || create_ok=1
     grep -qx '\[local\]' "${crepo}/.kbase/providers.toml" || create_ok=1
-    # The seed: one live profile — claude, taking its prompt on stdin with its
-    # tools removed — and opencode commented with the limitation of its command.
-    grep -qx '\[claude\]' "${crepo}/.kbase/harnesses.toml" || create_ok=1
-    grep -qxF 'command = ["claude", "-p", "--tools", "", "--strict-mcp-config", "--safe-mode"]' "${crepo}/.kbase/harnesses.toml" || create_ok=1
-    grep -qxF '# command = ["opencode", "run", "--format", "default", "{prompt}"]' "${crepo}/.kbase/harnesses.toml" || create_ok=1
-    grep -q 'has no flag that removes tools or' "${crepo}/.kbase/harnesses.toml" || create_ok=1
-    if grep -qx '\[opencode\]' "${crepo}/.kbase/harnesses.toml"; then create_ok=1; fi
-    report "${create_stem}" "${create_ok}" "configure --create --project" "created ${crepo}/.kbase from the three templates, ids unchecked"
+    # Nothing else is written: the harness profiles a run may execute are
+    # kbase's, so there is no file a user stocks with commands.
+    [[ ! -e "${crepo}/.kbase/harnesses.toml" ]] || create_ok=1
+    report "${create_stem}" "${create_ok}" "configure --create --project" "created ${crepo}/.kbase from the two templates, ids unchecked"
     created_show="${docs}/16-configure-created-layer"
     set +e
     ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" show-config ) > "${created_show}.out" 2> "${created_show}.log"
@@ -2365,13 +2182,6 @@ _test-integration-config: build
     [[ "$(layer_field "${created_show}" 1 exists)" == true ]] || created_show_ok=1
     [[ "$(layer_field "${created_show}" 1 providersExists)" == true ]] || created_show_ok=1
     [[ "$(layer_field "${created_show}" 1 configExists)" == true ]] || created_show_ok=1
-    # The third file is probed with the other two, and the report lists what
-    # --harness could choose: the live profile alone, from this layer, with its
-    # command as written.
-    [[ "$(layer_field "${created_show}" 1 harnessesExists)" == true ]] || created_show_ok=1
-    [[ "$(harness_names "${created_show}")" == "claude " ]] || created_show_ok=1
-    grep -qx '      layer: "repository"' "${created_show}.out" || created_show_ok=1
-    [[ "$(harness_command "${created_show}" claude)" == "claude|-p|--tools||--strict-mcp-config|--safe-mode|" ]] || created_show_ok=1
     [[ "$(selection_field "${created_show}.out" provider)" == local ]] || created_show_ok=1
     [[ "$(selection_field "${created_show}.out" rule)" == sole-entry ]] || created_show_ok=1
     # The template writes the model keys blank, which is exactly the
@@ -2402,14 +2212,16 @@ _test-integration-config: build
     [[ "$(cat "${again_stem}.exit")" -eq 0 ]] || again_ok=1
     grep -qx 'outcome: "unchanged"' "${again_stem}.out" || again_ok=1
     grep -qx 'written: \[\]' "${again_stem}.out" || again_ok=1
-    report "${again_stem}" "${again_ok}" "configure --create --project, second call" "the three files already hold what it would write"
-    # 32. A harnesses.toml the user wrote is theirs: --create adds no entry to
-    # it — the seed included — and reports the file unwritten, so a seed a user
-    # deleted stays deleted.
+    report "${again_stem}" "${again_ok}" "configure --create --project, second call" "both files already hold what it would write"
+    # 32. A file a user left in the layer is theirs: --create adds nothing to it
+    #     — the templates kbase writes today included — and reports every file
+    #     unwritten, so a file a user deleted stays deleted. The file here is
+    #     the harnesses.toml an older kbase seeded: it is read by nothing, and
+    #     the run neither rewrites nor removes it.
     user_harnesses="${crepo}/.kbase/harnesses.toml"
     printf '%s\n' '# mine' '' '[only-mine]' 'command = ["mine", "{prompt}"]' > "${user_harnesses}"
     cp "${user_harnesses}" "${out}/harnesses-expected.toml"
-    hseed_stem="${docs}/18b-configure-harnesses-existing"
+    hseed_stem="${docs}/18b-configure-existing-file"
     set +e
     ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure --create --project ) > "${hseed_stem}.out" 2> "${hseed_stem}.log"
     printf '%s\n' "$?" > "${hseed_stem}.exit"
@@ -2419,18 +2231,20 @@ _test-integration-config: build
     grep -qx 'outcome: "unchanged"' "${hseed_stem}.out" || hseed_ok=1
     grep -qx 'written: \[\]' "${hseed_stem}.out" || hseed_ok=1
     cmp -s "${user_harnesses}" "${out}/harnesses-expected.toml" || hseed_ok=1
-    if grep -qx '\[claude\]' "${user_harnesses}"; then hseed_ok=1; fi
-    report "${hseed_stem}" "${hseed_ok}" "configure --create --project over a written harnesses.toml" "no entry added and the file untouched"
-    hshow_stem="${docs}/18c-harnesses-written"
+    report "${hseed_stem}" "${hseed_ok}" "configure --create --project over a leftover harnesses.toml" "every file unwritten and the leftover untouched"
+    hshow_stem="${docs}/18c-harnesses-leftover"
     set +e
     ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" show-config ) > "${hshow_stem}.out" 2> "${hshow_stem}.log"
     printf '%s\n' "$?" > "${hshow_stem}.exit"
     set -e
     hshow_ok=0
     [[ "$(cat "${hshow_stem}.exit")" -eq 0 ]] || hshow_ok=1
-    [[ "$(harness_names "${hshow_stem}")" == "only-mine " ]] || hshow_ok=1
-    [[ "$(harness_command "${hshow_stem}" only-mine)" == "mine|{prompt}|" ]] || hshow_ok=1
-    report "${hshow_stem}" "${hshow_ok}" "show-config over the profile the user wrote" "only-mine alone, from the repository layer"
+    # The report lists the layer's two files and no third: a leftover
+    # harnesses.toml is a file nothing reads, and the report says nothing of it.
+    [[ "$(layer_field "${hshow_stem}" 1 providersExists)" == true ]] || hshow_ok=1
+    [[ "$(layer_field "${hshow_stem}" 1 configExists)" == true ]] || hshow_ok=1
+    if grep -q '^harnesses' "${hshow_stem}.out"; then hshow_ok=1; fi
+    report "${hshow_stem}" "${hshow_ok}" "show-config over a layer holding a leftover harnesses.toml" "two files reported, the leftover unread"
     # 12. A --provider the pool does not hold refuses before anything is
     #     written: the item names the target layer's providers.toml by its
     #     absolute path, and offers the creation remedy. Both files still hold
@@ -2570,7 +2384,7 @@ _test-integration-config: build
     printf '  %s tools/call show-config over MCP: exit %s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/mcp.exit")"
     [[ "${mcp_ok}" -eq 0 ]] || status=1
     {{just_executable()}} _write-evidence "${out}" "test-integration-config" \
-      "three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME={{CONFIG_OUT_DIR}}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, mode file, exactly one layer naming the directory with its source and whether it and each of its three files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the superseded provider key said once on stderr, and for the roles record: provider, model, back-end and the layer that supplied the model and the key\none run over both with the flag route sets KBASE_TEXT=fixture-env-text (NN-07-both-flag.out): the two sources are exclusive, so the document reports mode null, no role back-end, and one item per side — the variable and each standing [models] key (models.decision, models.text, models.scoring)\none run with KBASE_API_BASE_URL and the three role variables and no configuration directory (07b-environment-mode.out): checked for mode environment, no diagnostics, and every role naming the environment back end, the environment's base URL and its own variable's id\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providersExists and configExists, the superseded provider key said once on stderr, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty Home, and the configuration legs run under it — the five inference variables and KBASE_CONFIG_DIR unset, HOME on configure/home. docs/15-configure-create-project.out is configure --create --project from configure/repo/nested, checked for outcome done, null provider, both repository paths listed written, the unchecked-ids line on stderr and a live [local] in the created providers.toml; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists/providersExists/configExists true, selection local by sole-entry, and the three diagnostics a blank [models] table leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over the created pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is the same configure again, checked for unchanged with an empty written list; docs/19-configure-unknown-provider.out is configure --create --project --provider nosuch, checked for one provider refusal naming the absolute configure/repo/.kbase/providers.toml, key --provider, remedy kbase configure --create, and both files unchanged by cksum; docs/20-configure-conflict.out is the same flags plus --config-dir, checked for one usage refusal keyed --project with no directory created; docs/21-configure-config-dir.out is configure --create --config-dir into an empty directory, checked for both files written there; docs/22-configure-outside-worktree.out is configure --create --project from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-references.out is configure --create over an empty directory with --model-map decision=local/d3,text=local/qwen,scoring=local/clef, checked for three references written and no provider key; docs/24-configure-references-show.out is show-config over that directory, checked for no diagnostics and every role on the reference's entry and model\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count"
+      "three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME={{CONFIG_OUT_DIR}}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, mode file, exactly one layer naming the directory with its source and whether it and each of its two files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the superseded provider key said once on stderr, and for the roles record: provider, model, back-end and the layer that supplied the model and the key\none run over both with the flag route sets KBASE_TEXT=fixture-env-text (NN-07-both-flag.out): the two sources are exclusive, so the document reports mode null, no role back-end, and one item per side — the variable and each standing [models] key (models.decision, models.text, models.scoring)\none run with KBASE_API_BASE_URL and the three role variables and no configuration directory (07b-environment-mode.out): checked for mode environment, no diagnostics, and every role naming the environment back end, the environment's base URL and its own variable's id\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providersExists and configExists, the superseded provider key said once on stderr, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty Home, and the configuration legs run under it — the five inference variables and KBASE_CONFIG_DIR unset, HOME on configure/home. docs/15-configure-create-project.out is configure --create --project from configure/repo/nested, checked for outcome done, null provider, both repository paths listed written, the unchecked-ids line on stderr and a live [local] in the created providers.toml; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists/providersExists/configExists true, selection local by sole-entry, and the three diagnostics a blank [models] table leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over the created pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is the same configure again, checked for unchanged with an empty written list; docs/18b-configure-existing-file.out and docs/18c-harnesses-leftover.out put back the harnesses.toml an older kbase seeded and check that configure writes nothing over it and show-config reports the layer's two files and nothing of that one, a file nothing reads; docs/19-configure-unknown-provider.out is configure --create --project --provider nosuch, checked for one provider refusal naming the absolute configure/repo/.kbase/providers.toml, key --provider, remedy kbase configure --create, and both files unchanged by cksum; docs/20-configure-conflict.out is the same flags plus --config-dir, checked for one usage refusal keyed --project with no directory created; docs/21-configure-config-dir.out is configure --create --config-dir into an empty directory, checked for both files written there; docs/22-configure-outside-worktree.out is configure --create --project from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-references.out is configure --create over an empty directory with --model-map decision=local/d3,text=local/qwen,scoring=local/clef, checked for three references written and no provider key; docs/24-configure-references-show.out is show-config over that directory, checked for no diagnostics and every role on the reference's entry and model\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-config): a config check failed — see config.tsv\n'
         exit 1

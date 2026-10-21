@@ -289,17 +289,15 @@ func TestLineRecordsMootBesideAPendingAnswer(t *testing.T) {
 	}
 }
 
-// TestHarnessRunRecordsWhatAnswered: a harness run's header names the profile,
-// its layer and the argv — the model substituted, the prompt left as the token
-// — and every line names the back end, the profile and the layer. A resumed run
-// on another back end leaves the header's opening alone and stamps each new
-// line with what asked it.
+// TestHarnessRunRecordsWhatAnswered: a harness run's header names the argv that
+// invoked it and the variable that supplied it, and every line names the back
+// end. A resumed run on another back end leaves the header's opening alone and
+// stamps each new line with what asked it.
 func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
 	dir := t.TempDir()
 	h := header()
 	h.BackEnd, h.Provider, h.Model = "harness", "", "judge"
-	h.Harness, h.HarnessLayer = "mine", "repository"
-	h.Command = []string{"ask", "--model", "judge", "{prompt}"}
+	h.Command, h.CommandOverride = []string{"ask", "--model", "judge", "{prompt}"}, "KBASE_SCORE_BACK_END_COMMAND"
 	l, err := Create(dir, h)
 	if err != nil {
 		t.Fatal(err)
@@ -321,16 +319,17 @@ func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
 	}
 	want := map[string]any{"run": "run-1", "kb_root": "/repo/kb-root", "format": 1, "pass": query.PassRigor,
 		"ask_sha256": rigorAskDigest(t),
-		"backend":    "harness", "provider": "", "harness": "mine", "harness_layer": "repository",
+		"backend":    "harness", "provider": "",
 		"model": "judge", "command": []any{"ask", "--model", "judge", "{prompt}"},
-		"started": "2026-10-20T10:00:00Z"}
+		"command_override": "KBASE_SCORE_BACK_END_COMMAND",
+		"started":          "2026-10-20T10:00:00Z"}
 	// reflect.DeepEqual rather than maps.Equal: the argv is a list, and a
 	// header carrying one is the one shape maps.Equal cannot compare.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("run.yaml = %v, want %v", got, want)
 	}
 	line := lines(t, filepath.Join(l.Dir(), linesFile))[0]
-	if line["backend"] != "harness" || line["harness"] != "mine" || line["harness_layer"] != "repository" || line["model"] != "judge" {
+	if line["backend"] != "harness" || line["model"] != "judge" {
 		t.Errorf("the line = %v, want what answered it", line)
 	}
 
@@ -354,7 +353,7 @@ func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["harness"] != "mine" {
+	if got["command_override"] != "KBASE_SCORE_BACK_END_COMMAND" {
 		t.Errorf("run.yaml = %v, want the run's opening left as it was written", got)
 	}
 }

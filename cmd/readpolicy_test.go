@@ -36,7 +36,6 @@ var fileOpenOwners = map[string]string{
 	"internal/records/records.go":       "the document graph's records in the state store",
 	"internal/config/config.go":         "the configuration files",
 	"internal/config/write.go":          "the configuration files",
-	"internal/config/harnesses.go":      "the harness profiles file, read like the pool and the choices",
 	"internal/config/providers.go":      "the configuration files and key files",
 	"internal/filelock/filelock.go":     "the lock files",
 	"internal/asks/call/call.go":        "the answer cache in the state store",
