@@ -288,6 +288,28 @@ func TestDOTQuoting(t *testing.T) {
 	}
 }
 
+// TestGhostDraws: an edge end no node row carries draws as a ghost — a red
+// dashed box with no href, a tooltip saying no record carries it, and a
+// legend row. A refreshed KB never carries one, the index refusing an edge
+// whose source it cannot name.
+func TestGhostDraws(t *testing.T) {
+	g := &graph{kbTitle: "K", volumes: []volume{{"", "K", kb.EntryPointFile}},
+		nodes: []node{
+			{id: "clm-aaaaaa", kind: kindProse, title: "A", href: "claim-rigor.md#a", band: kb.UnknownBandSlug},
+			{id: "clm-zzz999", kind: kindGhost},
+		},
+		edges: []edge{{source: "clm-zzz999", target: "clm-aaaaaa", stroke: strokeFor(kb.RelationSupports, false)}}}
+	full := g.sheets()[0].dot(false)
+	for _, want := range []string{
+		`"clm-zzz999" [shape=box style="dashed" penwidth=1 color="#c0392b" label="clm-zzz999" tooltip="clm-zzz999 — no record carries this id"]`,
+		`<td border="1" color="#c0392b" style="dashed">ghost</td><td align="left">an id no record carries</td>`,
+	} {
+		if !strings.Contains(full, want) {
+			t.Errorf("the sheet lacks %s:\n%s", want, full)
+		}
+	}
+}
+
 // TestVolumeCountRule: one volume holding nodes, beside the root bucket,
 // draws the full sheet alone, with no link to a digest.
 func TestVolumeCountRule(t *testing.T) {

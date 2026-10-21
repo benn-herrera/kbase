@@ -1,0 +1,4 @@
+--- {"node_path": "alpha/index.md", "node_kind": "index", "subtree_claims": ["clm-aaa001", "clm-aaa002", "clm-aaa003", "clm-aaa004"], "subtree_experiments": ["exp-aaa008"]}
+--- {"node_path": "beta/index.md", "node_kind": "index", "subtree_claims": ["clm-bbb002"], "subtree_experiments": []}
+--- {"node_path": "entry-point.md", "node_kind": "entry-point", "subtree_claims": ["clm-aaa001", "clm-aaa002", "clm-aaa003", "clm-aaa004", "clm-bbb002"], "subtree_experiments": ["exp-aaa008"]}
+--- {"node_path": "gamma/index.md", "node_kind": "index", "subtree_claims": [], "subtree_experiments": []}
