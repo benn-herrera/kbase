@@ -218,6 +218,10 @@ single source. Working habits they impose:
   class's set, checked against `kb`, and its text holds none of those spellings. The trap: a weight in
   a template, or a second copy of the id list in the parser, which is a second home for a fact and
   drifts where the prompt does not.
+- **A `flt-*` id is frozen for its meaning once named.** The set may grow or lose members, but a
+  fault that has been named keeps its id for life: a ledger line records ids, and a rename would
+  silently re-point every line that carried the old one. A new fault takes a new id; a retired fault's
+  id never carries a new meaning.
 - **A citation is looked up in the closed text the call carried, never in the register.** The parse's
   one job is where a span is, not whether it earns its id: a span is an anchor, and the criteria's
   satisfaction is the model's judgement and a later reader's audit, never a check. The trap: a

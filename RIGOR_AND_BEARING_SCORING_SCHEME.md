@@ -123,7 +123,10 @@ fully specified, consistent and single-sensed*; it never reads *the claim is sup
 `strength`, and a claim whose statement is impeccable and which nothing supports earns `0.95` rigor
 and `0.00` strength. The old worry — that a bare assertion and a text that argues impeccably were the
 same value — does not arise for a claim: a claim is not supposed to argue, and the walk states what
-supports it.
+supports it. This is settled: neither the four nor the six names bareness — a bare claim fires none
+of the four, its rigor is the maximum and its strength is the walk's `0` because support is the
+edges' — and no seventh criterion is added over either vocabulary
+([STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md), "One premise, and none").
 
 **Where the boundary runs.** A condition the assertion leaves free is `flt-underspecified`. A
 condition a displayed step needs and the text does not state is the method's `flt-unstated-premise`. A
@@ -616,21 +619,8 @@ the ledger's charge records are settled in the same way.
 
 ## Not settled
 
-- What `counts` reports for a run whose values have been re-priced mid-run.
 - The bottom cut's height: the last rung takes every strength under `0.20`, and where the cut belongs
-  is open.
-- The occurrence units: the parse enforces no count, and which proposition, which minimal set, which
-  part, which free parameter a second site counts as is the reader's judgement rather than a frozen
-  rule. What a row's unit settles — the universal tests' one, `flt-overreach`'s three — is stated
-  where the row is.
-- Whether the two shared rigor ids should have per-vocabulary spellings, so that a ledger line's id
-  names its subject without the item's class.
-- Whether `flt-underspecified`'s one-step weight is the right grain, or a coarser occurrence unit —
-  a family of parameters rather than a parameter — would give the statement table a sparse reachable
-  set like the method table's.
-- Whether `0.95` is a discipline of the table alone, or `set-rigor` refuses `1.0` for a claim, an
-  analysis and an experiment — and what becomes of the `rigor: 1.0` a conversion writes on every
-  experiment.
-- How a change to the table's numbers is decided and announced. A run records the ask set, not the
-  table, so a weight change re-prices silently and is visible only in the values it moves; whether
-  that is enough, and who decides a change, is not stated here.
+  is open; it stays at `0.20` for now, reviewable if the bands crowd.
+- Whether the table's numbers are right. The statement table was built to keep `unsubstantiated`
+  rare — its weights leave the bottom rung to contradictions, stacked defects and the walk's empty
+  `P(n)` — and whether those numbers are right is a corpus question.

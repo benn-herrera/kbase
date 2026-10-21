@@ -739,7 +739,7 @@ with no call made.
 
 **The answer.** A reply is a list of charge lines, each one fault id and the span of the item's own
 text that shows the fault — one line per occurrence, in the order written — or the word `none`,
-alone, or `flt-pending`, alone.
+alone, or `flt-pending` — alone, or beside charge lines, which it moots.
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) states the criteria, the
 three closed sets and the citation rule; this section states what kbase does with a reply.
 
@@ -758,6 +758,13 @@ three closed sets and the citation rule; this section states what kbase does wit
 - **Duplicates and overlaps.** One id on one span, written twice, is one charge; two spans of one id
   that overlap without coinciding is `malformed`, naming both lines; two ids on one span are both
   charged, the offset shared.
+
+**The four parse rules are frozen for the life of the format version.** The citation's one-character
+floor, `flt-pending` beside charges read as the judgement with the rest moot, `none` beside charges
+refused, and one id over two spans that overlap without coinciding refused — fixed while the ledger's
+format version stands, and what moves one is a new version, which `--resume` reads by its own rules.
+A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written under
+a new grammar.
 
 **The value.** kbase prices the charge list: the item's class's maximum — `0.95` under either rigor
 vocabulary, `1.00` for `bearing` — less each id's weight per occurrence under that class's table,
