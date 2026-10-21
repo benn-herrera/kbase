@@ -174,8 +174,15 @@ func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
 	opts.Provider = func() (Provider, error) {
-		return Provider{Client: client, Letters: "decision", Overview: "text",
-			Name: "solo", Rule: "sole-entry", Layer: "repository"}, nil
+		return Provider{LettersClient: client, Letters: "decision", OverviewClient: client, Overview: "text",
+			Roles: []result.Record{
+				{{Key: "role", Value: "decision"}, {Key: "back-end", Value: "provider"},
+					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
+					{Key: "provider-layer", Value: "repository"}, {Key: "model", Value: "decision"}},
+				{{Key: "role", Value: "text"}, {Key: "back-end", Value: "provider"},
+					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
+					{Key: "provider-layer", Value: "repository"}, {Key: "model", Value: "text"}},
+			}}, nil
 	}
 	return opts
 }
@@ -188,16 +195,23 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
-	// The result names the endpoint's provenance between state-dir and the
+	// The result names where each role's asks went between state-dir and the
 	// bound, so a reader of a finished build knows which entry received the
 	// corpus without consulting the configuration again.
-	wantKeys := []string{"kb-root", "state-dir", "provider", "provider-rule", "provider-layer", "through"}
+	wantKeys := []string{"kb-root", "state-dir", "roles", "through"}
 	if keys := fieldKeys(fields); len(keys) < len(wantKeys) || !slices.Equal(keys[:len(wantKeys)], wantKeys) {
 		t.Errorf("result keys = %q, want %q", keys, wantKeys)
 	}
-	for key, want := range map[string]string{"provider": "solo", "provider-rule": "sole-entry", "provider-layer": "repository"} {
-		if got, _ := field(fields, key).(string); got != want {
-			t.Errorf("%s = %q, want %q", key, got, want)
+	roles, _ := field(fields, "roles").([]result.Record)
+	if len(roles) != 2 || roles[0][0].Value != "decision" || roles[1][0].Value != "text" {
+		t.Fatalf("roles = %v, want decision then text", roles)
+	}
+	for _, role := range roles {
+		want := map[string]any{"back-end": "provider", "provider": "solo", "provider-rule": "config", "provider-layer": "repository"}
+		for key, value := range want {
+			if got := roleValue(role, key); got != value {
+				t.Errorf("%s's %s = %v, want %v", role[0].Value, key, got, value)
+			}
 		}
 	}
 

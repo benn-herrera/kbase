@@ -106,6 +106,15 @@ func (ix *Index) checkBearings() error {
 	return nil
 }
 
+// Nodes is the index's node records in the order Load leaves them: by id, kinds
+// in kb.NodeKinds order where ids tie. A caller reading the graph reads them
+// here rather than reading the index files a second time.
+func (ix *Index) Nodes() []kb.NodeRow { return slices.Clone(ix.nodes) }
+
+// Cites is the index's citation records in file order, which is the order a
+// claim's declaring leaf is the first tier-2-marked one of.
+func (ix *Index) Cites() []kb.CiteRow { return slices.Clone(ix.cites) }
+
 // kinds is every node's kind by id.
 func (ix *Index) kinds() map[string]string {
 	out := map[string]string{}

@@ -1,7 +1,7 @@
 # tools/eval — KB inferential-quality evaluation prompt
 
 `extract_kb_eval_prompt.py` turns the evaluation instrument
-`test_data/fixtures/eval/kb-quality-eval-brief.md` into the prompt a session dispatches. Python
+`test-data/fixtures/eval/kb-quality-eval-brief.md` into the prompt a session dispatches. Python
 3.11+, stdlib only.
 
 ## What the instrument is for

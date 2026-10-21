@@ -24,7 +24,7 @@ const (
 	synthetic090Dir = "testdata/0.9.0"
 	golden100Dir    = "testdata/1.0.0"
 	// gotDir receives a golden mismatch's output, laid out as the goldens are.
-	gotDir = "../../test_data/transient/unit_tests/migrate/got"
+	gotDir = "../../test-data/transient/unit_tests/migrate/got"
 )
 
 // readTree is every file under dir by slash path relative to dir, prefixed.
@@ -316,6 +316,33 @@ func TestIndexLineMustBeAnObject(t *testing.T) {
 	_, _, err := Chain(version090, version100, Files{indexDir + "/claims.jsonl": []byte("{\"id\": \"a\"}\n[1, 2]\n")})
 	if err == nil || !strings.Contains(err.Error(), "line 2") {
 		t.Errorf("err = %v, want line 2 named", err)
+	}
+}
+
+// TestChainReachesAPatchBeyondTheLastConverter: a patch above the form the last
+// converter produces converts nothing — a patch changes the bytes a writer
+// produces, not a file's form — so the chain hands the files back as the last
+// step left them rather than naming a gap.
+func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
+	files := Files{"kb-root/a.md": []byte("prose")}
+	out, obsolete, err := Chain(version100, "2.0.1", files)
+	if err != nil {
+		t.Fatalf("Chain(1.0.0, 2.0.1): %v", err)
+	}
+	if len(obsolete) != 0 {
+		t.Errorf("the patch made %v obsolete, want nothing", obsolete)
+	}
+	if _, held := out["kb-root/a.md"]; !held {
+		t.Error("the chain lost a file the patch does not touch")
+	}
+	// The same target one step short: the same files, so a patch above the form
+	// changes no file's form.
+	short, _, err := Chain(version100, version200, files)
+	if err != nil {
+		t.Fatalf("Chain(1.0.0, 2.0.0): %v", err)
+	}
+	if !maps.EqualFunc(out, short, func(a, b []byte) bool { return string(a) == string(b) }) {
+		t.Errorf("the patch's chain = %v, want the form's own %v", out, short)
 	}
 }
 

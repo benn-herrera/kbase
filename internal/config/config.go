@@ -12,14 +12,16 @@ import (
 // serves the decision category is a deployment fact that belongs in
 // config.toml, while "the letter asks are decision-model calls" is a build
 // fact that belongs in the code. These constants are the single source of the
-// category names — the `toml` tags on ModelMap must mirror them (struct tags
-// cannot reference constants).
+// category names — a role is one of them typed as Role, and the `toml` tags on
+// ModelMap must mirror them (struct tags cannot reference constants).
 const (
 	// CategoryDecision is the claim graph's letter asks' category: the
 	// decision model that answers them.
 	CategoryDecision = "decision"
 	// CategoryText is the overview passage's category.
 	CategoryText = "text"
+	// CategoryScoring is kbase score's asks' category.
+	CategoryScoring = "scoring"
 )
 
 // Config is the kbase settings file (config.toml) — the choices that draw
@@ -28,10 +30,14 @@ const (
 // on its providers.toml pool entry, which is what keeps config.toml safe
 // to read and edit.
 type Config struct {
-	// Provider names the active providers.toml pool entry.
+	// Provider names the active providers.toml pool entry. It is superseded
+	// and inert: it loads and it merges, and nothing resolves from it — a
+	// role names its own entry in its own reference. The one reader left is
+	// the diagnostic that reports the key superseded, until it is removed at
+	// the next major.
 	Provider string `toml:"provider"`
 
-	// Models maps the build's categories onto model ids at that provider.
+	// Models maps the verb's roles onto the endpoint and model each asks.
 	Models ModelMap `toml:"models"`
 
 	// Asks is how the build puts its letter asks.
@@ -55,12 +61,15 @@ type AsksConfig struct {
 // message names it.
 const keyReaderConcurrency = "asks.readerConcurrency"
 
-// ModelMap is the [models] table: the category→model-id resolution, written by
-// `kbase configure` or by hand. An unset category is not defaulted — a guessed
-// model id is a silent wrong answer, so callers fail loud instead.
+// ModelMap is the [models] table: the role→model resolution, written by
+// `kbase configure` or by hand. A value is a file-mode reference,
+// `<provider>/<model>` — the pool entry that supplies the endpoint, then the
+// model it serves. An unset role is not defaulted — a guessed model id is a
+// silent wrong answer, so callers fail loud instead.
 type ModelMap struct {
 	Decision string `toml:"decision"`
 	Text     string `toml:"text"`
+	Scoring  string `toml:"scoring"`
 }
 
 // ModelFor returns the model id configured for a category. The second return
@@ -74,10 +83,33 @@ func (c Config) ModelFor(category string) (string, bool) {
 		id = c.Models.Decision
 	case CategoryText:
 		id = c.Models.Text
+	case CategoryScoring:
+		id = c.Models.Scoring
 	default:
 		return "", false
 	}
 	return id, id != ""
+}
+
+// ModelLayer is the layer that supplied the model the role asks, "" where no
+// layer did.
+func (c Config) ModelLayer(role Role) string {
+	switch role {
+	case RoleDecision:
+		return c.Sources.Decision
+	case RoleText:
+		return c.Sources.Text
+	case RoleScoring:
+		return c.Sources.Scoring
+	}
+	return ""
+}
+
+// Sources names the layer that supplied each model id the merge took: the
+// configuration layer — explicit, environment, repository or global — the
+// config.toml value came from. A role no layer supplied carries "".
+type Sources struct {
+	Decision, Text, Scoring string
 }
 
 // LoadConfig reads config.toml at path. A nonexistent file yields a zero

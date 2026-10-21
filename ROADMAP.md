@@ -20,10 +20,11 @@ deleted, not archived.
   latex-latex_macros`), which may preserve author environment names.
 
 ## KB format changes
-The `2.0.0` model is in force: five node types — `claim`, `analysis`, `experiment`, `work` and
-`axiom`; four scoring relations — `supports`, `founds`, `lifts` and `refutes` — beside the two
-unscored ones, `references` and `demoted`; and three quantities — `rigor`, a node's local value,
-`bearing`, a scoring edge's scalar, and `strength`, the derived value.
+The `2.0` model is in force, at `2.0.1` (the patch is the bottom band's words): five node types —
+`claim`, `analysis`, `experiment`, `work` and `axiom`; four scoring relations — `supports`, `founds`,
+`lifts` and `refutes` — beside the two unscored ones, `references` and `demoted`; and three
+quantities — `rigor`, a node's local value, `bearing`, a scoring edge's scalar, and `strength`, the
+derived value.
 
 - `3.0.0`: the derived index as **one file** instead of `.index/`'s five tables, each record
   carrying its table's name. A new table becomes a record type rather than a new file, so a feature
@@ -31,6 +32,35 @@ unscored ones, `references` and `demoted`; and three quantities — `rigor`, a n
   five, and the tables no longer have a partial state between them. The line-per-record shape makes
   the merge mechanical; the cost is that every refresh rewrites the file and one malformed line
   takes out every consumer at once.
+
+## Configuration
+
+- **Remove the inert `provider` key from `config.toml` at the next major.** It loads and chooses
+  nothing today, and a file-mode run reports it superseded (SPEC §9). It leaves the schema once the
+  reader-facing examples, `USER_CONVENTIONS.md` and Phase 3's `references/scoring.md` have moved off
+  it; until then strict load keeps modelling the key so the file a user has stays loadable and
+  `kbase configure` can rewrite it.
+- **`harnesses.toml` gains no entry but the two seeds.** A profile is added by editing the file, and
+  the tool-less agent — one that cannot read the KB its ask is about — is adjagent's to supply for
+  both harnesses, not kbase's to write. `opencode`'s seed stays commented until that agent lands or a
+  user uncomments it.
+
+## Scoring rubric
+
+Carried from the rubric's landing; the scheme's `## Not settled` is the full statement of each, and
+this names only what would move.
+
+- **The bottom cut's height.** The last rung takes every strength under `0.20` and reads
+  `unsubstantiated`; where the cut belongs is open, and moving it moves published strengths.
+- **Whether a bare assertion becomes a criterion.** Today it charges none of the six and keeps
+  `0.95`; adding a seventh `rigor` id and a weight is a revision of the scheme, not an edit.
+- **Whether the twelve ids freeze.** A rename moves the ledger's recorded ids and the templates' text
+  with them, and so moves `ask_sha256`; what a re-derivation does with a recorded id the running
+  table lacks stays open until the vocabulary is frozen or a rule is written for it.
+- **Whether `0.95` is discipline or enforcement.** A pass cannot derive `1.00`, and `set-rigor`
+  accepts it; refusing `1.0` for a claim, an analysis and an experiment is the open move.
+- **What `counts` reports for a run re-priced mid-run.** The run records the re-price in
+  `repriced.yaml`, and no result key states it.
 
 ## Deferred from `2.0.0`
 Two questions the model answers no to. Each names the move that would settle it.

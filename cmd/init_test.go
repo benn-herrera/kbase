@@ -156,7 +156,7 @@ func treeFiles(t *testing.T, root string) []string {
 func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	// Resolve the fixture dir to an absolute path before kbase() chdirs the
 	// test into the staged repo.
-	fixture, err := filepath.Abs(filepath.Join("..", "test_data", "fixtures", "init", "skeleton"))
+	fixture, err := filepath.Abs(filepath.Join("..", "test-data", "fixtures", "init", "skeleton"))
 	if err != nil {
 		t.Fatal(err)
 	}

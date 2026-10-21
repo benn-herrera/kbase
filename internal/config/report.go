@@ -39,8 +39,7 @@ type Entry struct {
 // carries no key material and no variable value.
 type Facts struct {
 	Layers      []Layer  // in precedence order, each with its existence probed
-	Provider    string   // the merged pool entry config.toml selects
-	Models      ModelMap // the merged category ids
+	Models      ModelMap // the merged role values
 	Entries     []Entry  // one per usable pool entry and per dropped provider, sorted by name
 	Environment []string // the inference variable names set, sorted
 }
@@ -51,11 +50,12 @@ type Facts struct {
 // this process having to be the one that holds it.
 func Report(cfg Config, providers Providers, faults []ProviderFault, layers []Layer,
 	exists func(string) bool, getenv func(string) string) Facts {
-	f := Facts{Provider: cfg.Provider, Models: cfg.Models}
+	f := Facts{Models: cfg.Models}
 	for _, layer := range layers {
 		layer.Exists = exists(layer.Path)
 		layer.ProvidersExists = exists(ProvidersPath(layer.Path))
 		layer.ConfigExists = exists(ConfigPath(layer.Path))
+		layer.HarnessesExists = exists(HarnessesPath(layer.Path))
 		f.Layers = append(f.Layers, layer)
 	}
 
@@ -80,7 +80,7 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 	// declares them. EnvConfigDir is not among them: it chooses a layer, which
 	// the report states separately. A variable set to nothing supplies
 	// nothing, so it counts as unset.
-	for _, name := range []string{EnvAPIBaseURL, EnvDecision, EnvText, EnvAPIKeyFile} {
+	for _, name := range []string{EnvAPIBaseURL, EnvDecision, EnvText, EnvScoring, EnvAPIKeyFile} {
 		if strings.TrimSpace(getenv(name)) != "" {
 			f.Environment = append(f.Environment, name)
 		}

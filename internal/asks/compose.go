@@ -38,12 +38,16 @@ var (
 	delimiterRE = regexp.MustCompile(`@!|!@`)
 )
 
-// The composer-resolved fragments. A template names none of them: each is a
-// call's whole system prompt. The overview call alone carries one — a
-// decision call's Decision request has no system prompt.
-const OverviewSystem = "overview-system"
+// The composer-resolved fragments. A template splices one where its call
+// carries one, and System serves it whole as a call's system prompt: the score
+// asks splice ScoreSystem into their own text, the overview call carries
+// OverviewSystem. A decision call's Decision request has no system prompt.
+const (
+	OverviewSystem = "overview-system"
+	ScoreSystem    = "score-system"
+)
 
-var fragmentSlots = []string{OverviewSystem}
+var fragmentSlots = []string{OverviewSystem, ScoreSystem}
 
 // alternativeSlots are the caller-chosen pieces, per slot the choices a
 // caller may name; "" is the empty fill, where the slot's absence is itself

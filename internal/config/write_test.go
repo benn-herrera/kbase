@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,17 +19,22 @@ const newProvider = "reaper"
 // test if it errors.
 func update(t *testing.T, path string) {
 	t.Helper()
-	cfg := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
-	if _, err := UpdateConfig(path, cfg); err != nil {
+	if _, err := UpdateConfig(path, updateValues()); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
+}
+
+// updateValues is what every update in this file writes: the three categories,
+// and the superseded provider key the editor is asked to remove.
+func updateValues() Config {
+	return Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel, Scoring: scoringModel}}
 }
 
 // TestUpdateConfigLeavesTheSameValues: an update to the values the file
 // already holds writes nothing and says so.
 func TestUpdateConfigLeavesTheSameValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ConfigFileName)
-	cfg := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
+	cfg := updateValues()
 	if wrote, err := UpdateConfig(path, cfg); err != nil || !wrote {
 		t.Fatalf("first update: wrote %t, %v", wrote, err)
 	}
@@ -54,7 +60,7 @@ func assertValues(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	want := Config{Provider: newProvider, Models: ModelMap{Decision: decisionModel, Text: textModel}}
+	want := Config{Models: ModelMap{Decision: decisionModel, Text: textModel, Scoring: scoringModel}}
 	if got != want {
 		t.Errorf("config = %+v, want %+v", got, want)
 	}
@@ -77,13 +83,18 @@ func TestUpdateConfigFreshTemplate(t *testing.T) {
 	if !strings.Contains(body, "safe to hand-edit") {
 		t.Errorf("template does not say the file is hand-editable:\n%s", body)
 	}
-	// Field order is stable and matches the documented layout: the
-	// provider choice first, then the [models] table. A config.toml whose
-	// shape shifts between writes makes every diff of it unreadable.
+	// Field order is stable and matches the documented layout: the [models]
+	// table and its three categories. A config.toml whose shape shifts
+	// between writes makes every diff of it unreadable. The superseded
+	// provider key is not written at all.
+	models := strings.Index(body, "\n[models]\n")
+	decision, text, scoring := strings.Index(body, "\ndecision ="), strings.Index(body, "\ntext ="), strings.Index(body, "\nscoring =")
+	if models < 0 || decision < models || text < decision || scoring < text {
+		t.Errorf("want [models] then decision, text and scoring, got:\n%s", body)
+	}
 	// The table header, not the mention of it in the header comment.
-	provider, models := strings.Index(body, "provider ="), strings.Index(body, "\n[models]\n")
-	if provider < 0 || models < 0 || provider > models {
-		t.Errorf("want `provider` before `[models]`, got:\n%s", body)
+	if strings.Contains(body, "\nprovider =") {
+		t.Errorf("the template writes the superseded provider key:\n%s", body)
 	}
 
 	// No temp file may outlive the write; a stale config.toml.tmp* next
@@ -132,9 +143,10 @@ func TestUpdateConfigCreatesDir(t *testing.T) {
 
 // annotated is a config.toml as a user leaves it: comments above and beside
 // keys, keys and tables kbase does not model, quoting and spacing kbase
-// would never emit. Every line of it except the three assignments must
-// survive an update byte for byte — and those three keep their trailing
-// comments, which are the notes a user is likeliest to have written.
+// would never emit. Every line of it except the superseded provider line and
+// the three assignments must survive an update byte for byte — the provider
+// line is removed, and the three keep their trailing comments, which are the
+// notes a user is likeliest to have written.
 //
 // The decision value carries a `#` of its own: the comment scan must read it
 // as part of the string, not as the start of the note that follows it.
@@ -150,17 +162,19 @@ scratch = "keep me"
 # decision answers the letter asks
 decision = "old#decision"    # the id, hash and all
 text='old-text'# no space before the marker
+scoring = "old-scoring"
 
 [experimental]
 notes = "an entire table kbase does not model"
 `
 
 // TestUpdateConfigPreservesHandEdits is the deal-breaker case: an update
-// rewrites the three lines it owns and nothing else. config.toml is a
-// primary hand-editing surface, so a write that eats a user's comments,
-// grouping, or unmodelled keys is a defect, not a documented limitation.
-// That holds for the owned lines too: only the value changes, and the note
-// beside it comes along (at normalized spacing — the value's width moved).
+// rewrites the three lines it owns, removes the one it deletes, and changes
+// nothing else. config.toml is a primary hand-editing surface, so a write
+// that eats a user's comments, grouping, or unmodelled keys is a defect, not
+// a documented limitation. That holds for the owned lines too: only the value
+// changes, and the note beside it comes along (at normalized spacing — the
+// value's width moved).
 func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, annotated)
 	update(t, path)
@@ -169,24 +183,26 @@ func TestUpdateConfigPreservesHandEdits(t *testing.T) {
 	// does not model, and a strict load refuses those on purpose. The
 	// line-by-line comparison below covers the written values exactly.
 	//
-	// The rewritten lines, keyed by their line number in the fixture.
+	// The rewritten lines, keyed by their line number in the fixture. The
+	// provider line is the one line with no counterpart in the result.
 	rewritten := map[int]string{
-		3:  `provider = "` + newProvider + `"` + commentGap + `# which providers.toml entry to use`,
 		10: `decision = "` + decisionModel + `"` + commentGap + `# the id, hash and all`,
 		11: `text = "` + textModel + `"` + commentGap + `# no space before the marker`,
+		12: `scoring = "` + scoringModel + `"`,
 	}
 	before, after := strings.Split(annotated, "\n"), strings.Split(readBack(t, path), "\n")
-	if len(before) != len(after) {
-		t.Fatalf("line count changed: %d → %d\n%s", len(before), len(after), strings.Join(after, "\n"))
+	var want []string
+	for i, line := range before {
+		if i == 3 {
+			continue
+		}
+		if replaced, ok := rewritten[i]; ok {
+			line = replaced
+		}
+		want = append(want, line)
 	}
-	for i := range before {
-		want, ok := rewritten[i]
-		if !ok {
-			want = before[i]
-		}
-		if after[i] != want {
-			t.Errorf("line %d = %q, want %q", i, after[i], want)
-		}
+	if !slices.Equal(after, want) {
+		t.Errorf("file =\n%s\nwant\n%s", strings.Join(after, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -199,25 +215,25 @@ func TestUpdateConfigInsertsMissingKeys(t *testing.T) {
 		src  string
 		want string // the whole file after the update
 	}{{
-		name: "a category is added to the end of its table",
+		name: "missing categories are added to the end of their table, and the provider line goes",
 		src:  "provider = \"old\"\n\n[models]\ndecision = \"old-decision\"\n\n[other]\nk = 1\n",
-		want: "provider = \"" + newProvider + "\"\n\n[models]\ndecision = \"" + decisionModel + "\"\n" +
-			"text = \"" + textModel + "\"\n\n[other]\nk = 1\n",
+		want: "\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\n" +
+			"scoring = \"" + scoringModel + "\"\n\n[other]\nk = 1\n",
 	}, {
 		name: "a missing [models] table is added at the end of the file",
 		src:  "# note\nprovider = \"old\"\n",
-		want: "# note\nprovider = \"" + newProvider + "\"\n\n[models]\ndecision = \"" + decisionModel + "\"\n" +
-			"text = \"" + textModel + "\"\n",
+		want: "# note\n\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\n" +
+			"scoring = \"" + scoringModel + "\"\n",
 	}, {
-		name: "a missing provider goes under the leading comments, above the first table",
+		name: "a missing category is added to the table and no provider is written",
 		src:  "# note\n\n[models]\ndecision = \"old-decision\"\ntext = \"old-text\"\n",
-		want: "# note\n\nprovider = \"" + newProvider + "\"\n[models]\ndecision = \"" + decisionModel + "\"\n" +
-			"text = \"" + textModel + "\"\n",
+		want: "# note\n\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\n" +
+			"scoring = \"" + scoringModel + "\"\n",
 	}, {
-		name: "an unrelated file keeps its content and gains both",
+		name: "an unrelated file keeps its content and gains the table",
 		src:  "[experimental]\nnotes = \"kbase does not model this\"\n",
-		want: "provider = \"" + newProvider + "\"\n[experimental]\nnotes = \"kbase does not model this\"\n" +
-			"\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\n",
+		want: "[experimental]\nnotes = \"kbase does not model this\"\n" +
+			"\n[models]\ndecision = \"" + decisionModel + "\"\ntext = \"" + textModel + "\"\nscoring = \"" + scoringModel + "\"\n",
 	}}
 
 	for _, tt := range tests {
@@ -323,7 +339,7 @@ func TestUpdateConfigFollowsSymlink(t *testing.T) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("the update replaced the symlink with a %v", info.Mode().Type())
 	}
-	if got := readBack(t, real); !strings.Contains(got, newProvider) {
+	if got := readBack(t, real); !strings.Contains(got, decisionModel) {
 		t.Errorf("the linked-to file did not receive the update:\n%s", got)
 	}
 }

@@ -29,10 +29,11 @@ func TestFormatStamp(t *testing.T) {
 	}
 }
 
-// TestFormatVersion: kbase reads and writes 2.0.0.
+// TestFormatVersion: kbase reads and writes 2.0.1, the patch the ladder's last
+// rung's words moved and the scoring vocabulary did not.
 func TestFormatVersion(t *testing.T) {
-	if FormatVersion != "2.0.0" {
-		t.Errorf("FormatVersion = %q, want 2.0.0", FormatVersion)
+	if FormatVersion != "2.0.1" {
+		t.Errorf("FormatVersion = %q, want 2.0.1", FormatVersion)
 	}
 }
 
@@ -40,11 +41,12 @@ func TestFormatVersion(t *testing.T) {
 // carried, and a document with no frontmatter gains one holding it alone.
 func TestStampFormat(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
-		{"no frontmatter", "# KB\n", "---\nkb-format: \"2.0.0\"\n---\n# KB\n"},
-		{"appended last", "---\nkind: entry-point\n---\n\n# KB\n", "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n\n# KB\n"},
-		{"an older stamp moved last", "---\nkb-format: \"0.9.0\"\nkind: entry-point\nsubtree-claims: []\n---\n", "---\nkind: entry-point\nsubtree-claims: []\nkb-format: \"2.0.0\"\n---\n"},
-		{"already stamped", "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n", "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n"},
-		{"empty frontmatter", "---\n---\n# KB\n", "---\nkb-format: \"2.0.0\"\n---\n# KB\n"},
+		{"no frontmatter", "# KB\n", "---\nkb-format: \"2.0.1\"\n---\n# KB\n"},
+		{"appended last", "---\nkind: entry-point\n---\n\n# KB\n", "---\nkind: entry-point\nkb-format: \"2.0.1\"\n---\n\n# KB\n"},
+		{"an older stamp moved last", "---\nkb-format: \"0.9.0\"\nkind: entry-point\nsubtree-claims: []\n---\n", "---\nkind: entry-point\nsubtree-claims: []\nkb-format: \"2.0.1\"\n---\n"},
+		{"an older patch restamped", "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n", "---\nkind: entry-point\nkb-format: \"2.0.1\"\n---\n"},
+		{"already stamped", "---\nkind: entry-point\nkb-format: \"2.0.1\"\n---\n", "---\nkind: entry-point\nkb-format: \"2.0.1\"\n---\n"},
+		{"empty frontmatter", "---\n---\n# KB\n", "---\nkb-format: \"2.0.1\"\n---\n# KB\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := StampFormat(c.in, FormatVersion)

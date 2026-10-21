@@ -1,13 +1,15 @@
 // Package config loads kbase's on-disk configuration: the providers.toml
-// endpoint pool (WHERE inference happens) and config.toml (WHICH of those
-// endpoints and models the pipeline draws on).
+// endpoint pool (WHERE inference happens), config.toml (WHICH of those
+// endpoints and models the pipeline draws on) and harnesses.toml (the commands
+// a run may execute instead of asking an endpoint).
 //
 // Configuration is read from a stack of layers — the repository's own
 // directory over the global one, or the single directory a flag or a variable
-// names — and the two files merge by different rules: a pool entry replaces a
-// same-named entry whole, a config.toml field overrides the corresponding
-// field alone. Which layer supplied what is carried into the report, so a
-// resolved setting always names where it came from.
+// names — and the three files merge by different rules: a pool entry and a
+// harness profile each replace a same-named entry whole, while a config.toml
+// field overrides the corresponding field alone. Which layer supplied what is
+// carried into the report, so a resolved setting always names where it came
+// from.
 //
 // Path resolution and file loading are deliberately separate: Layers resolves
 // the directories, and every loader takes an explicit path. Tests can
@@ -33,6 +35,8 @@ const (
 	ProvidersFileName = "providers.toml"
 	// ConfigFileName holds the choices that draw from that pool.
 	ConfigFileName = "config.toml"
+	// HarnessesFileName holds the harness profiles.
+	HarnessesFileName = "harnesses.toml"
 
 	// The default location, ~/.config/kbase, split into the XDG-ish parent
 	// and the application directory beneath it.
@@ -45,3 +49,6 @@ func ProvidersPath(dir string) string { return filepath.Join(dir, ProvidersFileN
 
 // ConfigPath returns the config.toml path within dir.
 func ConfigPath(dir string) string { return filepath.Join(dir, ConfigFileName) }
+
+// HarnessesPath returns the harnesses.toml path within dir.
+func HarnessesPath(dir string) string { return filepath.Join(dir, HarnessesFileName) }

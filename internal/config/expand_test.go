@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,8 +94,7 @@ apiKeyFile = "~other/key.txt"
 }
 
 // TestExpandHomeEnvKeyFile: the key file $KBASE_API_KEY_FILE names expands the
-// same way, and a file it cannot read is named in the fault by its resolved
-// path.
+// same way, and the endpoint carries the expanded path for the dial to read.
 func TestExpandHomeEnvKeyFile(t *testing.T) {
 	home := stagedHome(t)
 	keys := filepath.Join(home, "keys")
@@ -104,18 +102,26 @@ func TestExpandHomeEnvKeyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, keys, "env.txt", fakeKey)
-	cfg := Config{Models: ModelMap{Decision: "d", Text: "t"},
-		Sources: Sources{Decision: LayerSourceGlobal, Text: LayerSourceGlobal}}
+	in := Inputs{Cfg: Config{Models: ModelMap{Decision: "p/d", Text: "p/t"}},
+		Providers: Providers{"p": {Name: "p", BaseURL: "https://p.example/v1"}},
+		Env:       Overrides{APIKeyFile: "~/keys/env.txt"}}
 
-	inf, err := ResolveInference(cfg, nil, nil, t.TempDir(), Overrides{BaseURL: "https://env.example/v1", APIKeyFile: "~/keys/env.txt"})
-	if err != nil || inf.APIKey != fakeKey {
-		t.Fatalf("ResolveInference = %+v, %v; want the key under the home directory", inf, err)
+	ep, err := Resolve(in, ModeFile, RoleText, BackEndProvider, "")
+	if err != nil || ep.APIKeyFile != filepath.Join(keys, "env.txt") {
+		t.Fatalf("Resolve = %+v, %v; want the key file under the home directory", ep, err)
 	}
-	missing := filepath.Join(home, "keys", "absent.txt")
-	_, err = ResolveInference(cfg, nil, nil, t.TempDir(), Overrides{BaseURL: "https://env.example/v1", APIKeyFile: "~/keys/absent.txt"})
-	var lack LackError
-	if !errors.As(err, &lack) || lack.Path != missing {
-		t.Errorf("an unreadable key file = %v, want the resolved path %s named", err, missing)
+	missing := filepath.Join(keys, "absent.txt")
+	ep, err = Resolve(Inputs{Cfg: in.Cfg, Providers: in.Providers, Env: Overrides{APIKeyFile: "~/keys/absent.txt"}},
+		ModeFile, RoleText, BackEndProvider, "")
+	if err != nil || ep.APIKeyFile != missing {
+		t.Errorf("= %+v, %v; want the expanded path, unread", ep, err)
+	}
+	// In environment mode the same variable names the environment endpoint's
+	// key.
+	env, err := Resolve(Inputs{Env: Overrides{BaseURL: "https://env/v1", Text: "t", APIKeyFile: "~/keys/env.txt"}},
+		ModeEnvironment, RoleText, BackEndProvider, "")
+	if err != nil || env.APIKeyFile != filepath.Join(keys, "env.txt") || env.KeySource != LayerSourceEnvironment {
+		t.Errorf("= %+v, %v; want the environment's key file", env, err)
 	}
 }
 

@@ -9,7 +9,7 @@ dist/
 # integration-test working data (pinned corpus clones etc.)
 # most test data will be pulled from cloud git repos.
 # manual local test fixtures
-test_data/transient/
+test-data/transient/
 
 mad-*/
 

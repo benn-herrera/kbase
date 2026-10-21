@@ -18,7 +18,7 @@ import (
 
 // rootSkipDirs hold no module source at the module root; deeper, a directory
 // of the same name (internal/build) is source.
-var rootSkipDirs = map[string]bool{"bin": true, "dist": true, "build": true, "test_data": true, "vendor": true}
+var rootSkipDirs = map[string]bool{"bin": true, "dist": true, "build": true, "test-data": true, "vendor": true}
 
 // moduleGoFile is one Go file of the module, parsed with object resolution,
 // by module-relative slash path.

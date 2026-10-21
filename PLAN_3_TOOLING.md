@@ -32,8 +32,8 @@ for `<!-- claim-quality:` must follow all three, or it finds no register in any 
 names survive only inside `internal/migrate`'s read of `1.0.0` bytes.
 
 **The harness side, split by landing.** At `7e0cfee` (landed) Phase 1 renamed
-`internal/index/compat_test.go`'s case table and its two regexes to the `2.0.0` names; the rework in
-`PLAN_1_FORMAT.md`'s WP2 carries the node words (`ana-`, `analysis-nodes`, `analysis`) through the
+`internal/index/compat_test.go`'s case table and its two regexes to the `2.0.0` names; the node-pass
+rework carried the node words (`ana-`, `analysis-nodes`, `analysis`) through the
 same table, and the two regexes are `pendingScore` and `pendingArc`
 (`internal/index/compat_test.go:176-177`). Nothing in this phase edits that file; if the comparison
 finds a mismatch, the finding is fixed on whichever side is wrong, not by relaxing the case.

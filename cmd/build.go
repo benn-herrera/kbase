@@ -27,12 +27,16 @@ type buildOptions struct {
 	ConfigDir string
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
-	// Provider is where the build's model calls go, or what the configuration
-	// lacks for them.
-	Provider func() (build.Provider, error)
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Logger   log.Logger
+	// Provider builds where the build's model calls go, or what the
+	// configuration lacks for them, over the registry the verb opened and
+	// closes when the build returns.
+	Provider func(reg *clients) (build.Provider, error)
+	// NewClient is the client seam the registry opens its clients through;
+	// nil means model.NewHTTPClient.
+	NewClient newClientFunc
+	Stdout    io.Writer
+	Stderr    io.Writer
+	Logger    log.Logger
 }
 
 // runBuild runs the build, writes its result document, and returns the exit
@@ -41,15 +45,27 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
 		return 0, err
 	}
+	reg := newClients(opts.NewClient, opts.Logger)
+	defer reg.closeAll()
 	outcome, fields := build.Run(ctx, build.Options{
 		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
-		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, WorkDir: opts.WorkDir, Provider: opts.Provider,
+		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, WorkDir: opts.WorkDir, Provider: providerFor(opts, reg),
 		Logger: opts.Logger,
 	})
 	if err := toolresult.Emit(opts.Stdout, outcome, fields...); err != nil {
 		return 0, fmt.Errorf("build: writing the result: %w", err)
 	}
 	return exitCodes[outcome], nil
+}
+
+// providerFor is the build's Provider seam over the registry the verb opened.
+// A run that names no Provider — a caller with nothing to hand it — resolves
+// none, and the walk's launch refuses a model call it cannot make.
+func providerFor(opts buildOptions, reg *clients) func() (build.Provider, error) {
+	if opts.Provider == nil {
+		return nil
+	}
+	return func() (build.Provider, error) { return opts.Provider(reg) }
 }
 
 // refused is a refusal of every item, after fields.
@@ -79,32 +95,60 @@ var (
 	flagNoInference    bool
 )
 
-// buildProvider is where the build's model calls go — the environment's
-// layer over the loaded configuration — its letter asks on the decision
-// category and the overview passage on the text category, or what it lacks.
-// A key bound for a non-loopback http:// endpoint is said on stderr, and the
-// build proceeds.
-func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func() (build.Provider, error) {
-	return func() (build.Provider, error) {
-		r := resolveProvider(p, env)
-		if r.Err != nil {
-			return build.Provider{}, r.Err
+// buildProvider is where the build's model calls go: each role resolved from
+// the loaded configuration, its own entry dialled through reg — the letter
+// asks on the decision role, the overview passage on the text role — or what
+// it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
+// and the build proceeds.
+func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func(reg *clients) (build.Provider, error) {
+	return func(reg *clients) (build.Provider, error) {
+		s := p.inputs(env)
+		mode, err := config.ModeOf(s)
+		if err != nil {
+			return build.Provider{}, err
 		}
-		if line := config.CleartextWarning(r.Inference.BaseURL, r.Inference.APIKey); line != "" {
-			fmt.Fprintln(stderr, line)
+		if mode == config.ModeFile {
+			// An environment-mode invocation reads no file value, so it says
+			// nothing of the key the files state.
+			supersededProvider(stderr, p.Config)
 		}
-		client := model.NewHTTPClient(model.Endpoint{
-			Name: r.Inference.Name, BaseURL: r.Inference.BaseURL, APIKey: r.Inference.APIKey,
-			Decisions: decisionsSurface(r.Inference.DecisionsFlavor),
-		})
-		concurrency := 0
+		warnFaults(stderr, p.Faults)
+		var records []toolresult.Record
+		warned := map[string]bool{}
+		role := func(r config.Role) (model.Client, string, error) {
+			ep, err := config.Resolve(s, mode, r, config.BackEndProvider, "")
+			if err != nil {
+				return nil, "", err
+			}
+			// One line per endpoint, however many roles reach it: the key is
+			// what the run sends, and the registry is what read it.
+			if !warned[ep.BaseURL] {
+				if key, err := reg.key(ep); err == nil {
+					if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
+						fmt.Fprintln(stderr, line)
+						warned[ep.BaseURL] = true
+					}
+				}
+			}
+			client, err := reg.get(ep)
+			if err != nil {
+				return nil, "", err
+			}
+			records = append(records, roleRecord(ep, config.BackEndProvider))
+			return client, ep.Model, nil
+		}
+		var provider build.Provider
+		if provider.LettersClient, provider.Letters, err = role(config.RoleDecision); err != nil {
+			return build.Provider{}, err
+		}
+		if provider.OverviewClient, provider.Overview, err = role(config.RoleText); err != nil {
+			return build.Provider{}, err
+		}
 		if n := p.Config.Asks.ReaderConcurrency; n != nil {
-			concurrency = *n
+			provider.ReaderConcurrency = *n
 		}
-		return build.Provider{
-			Client: client, Letters: r.Inference.Decision, Overview: r.Inference.Text, ReaderConcurrency: concurrency,
-			Name: r.Provider, Rule: string(r.Rule), Layer: r.Layer,
-		}, nil
+		provider.Roles = records
+		return provider, nil
 	}
 }
 
@@ -123,10 +167,14 @@ resumes from any recorded boundary, not only the last: status names each
 stage's commit, so reset the repository to one and re-issue the build, and the
 kbase://build-trail MCP resource prints the commands.
 --no-inference drops every row that spends inference and walks the rest;
-without it, the claim graph's letter asks go to the configured provider's
-decision model and the overview passage to its text one. KBASE_API_BASE_URL,
-KBASE_DECISION, KBASE_TEXT and KBASE_API_KEY_FILE each override that one
-field of the configuration files, and configure a build with none. With no
+without it, the claim graph's letter asks go to the endpoint [models] decision
+names and the overview passage to the one [models] text names — each value a
+provider/model reference, the providers.toml entry that supplies the endpoint
+then the model it serves. KBASE_API_BASE_URL, KBASE_DECISION and KBASE_TEXT
+configure the build from the environment with no configuration directory at
+all: the environment supplies the whole inference configuration or nothing, so
+a variable set beside a config.toml model is refused, and KBASE_API_KEY_FILE —
+no mode, a key — replaces the key of whichever endpoint is in force. With no
 --bibliography,
 every .bib beside any volume root is offered to every volume, in sorted order.
 Build state — the holder lock, progress.jsonl, the document graph's records, each

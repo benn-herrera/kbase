@@ -24,7 +24,7 @@ import (
 // fixture, applies the steps through each toolchain, then runs
 // TestCompareOpScript. Without their flags both skip.
 var (
-	opscriptScript    = flag.String("opscript.script", "", "the op script, test_data/fixtures/compat/ops.yaml")
+	opscriptScript    = flag.String("opscript.script", "", "the op script, test-data/fixtures/compat/ops.yaml")
 	opscriptKBRoot    = flag.String("opscript.kbroot", "", "the kb-root the placeholders are resolved against")
 	opscriptOut       = flag.String("opscript.out", "", "where the rendered steps are written")
 	opscriptKbase     = flag.String("opscript.kbase", "", "the kb-root kbase's run left")

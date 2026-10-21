@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -19,8 +20,18 @@ import (
 const (
 	decisionID = "clef"
 	textID     = "Qwen3.8-27B"
+	scoringID  = "clef-scoring"
 	otherText  = "deepseek-v4.1"
 )
+
+// ref is a category's model as a --model-map value: a reference to the solo
+// pool entry the fixtures configure against.
+func ref(id string) string { return "solo/" + id }
+
+// refs is the three-category --model-map one value, at the solo entry.
+func refs(decision, text, scoring string) []string {
+	return []string{"decision=" + ref(decision) + ",text=" + ref(text) + ",scoring=" + ref(scoring)}
+}
 
 // configureResult is what one runConfigure invocation produced: its result
 // document, stderr, the exit code, and the config directory it was pointed
@@ -111,13 +122,13 @@ func TestRunConfigureRefusesUnassignedCategories(t *testing.T) {
 
 	got := runConfig(t, soloOpts(), model.NewScriptedMock(nil, catalogue(ids...)))
 	items := got.doc.items("refusals")
-	if got.code != 1 || len(items) != 2 {
+	if got.code != 1 || len(items) != len(modelCategories) {
 		t.Fatalf("no --model-map: exit %d, refusals %v: want one item per category", got.code, items)
 	}
 	for i, category := range modelCategories {
 		if items[i]["key"] != "models."+category || !slices.Equal(anyStrings(items[i]["allowed"]), sortedStrings(ids)) ||
-			items[i]["remedy"] != "kbase configure --model-map "+category+"=<id>" ||
-			!strings.Contains(items[i]["detail"].(string), "no model assigned to the "+category+" category") {
+			items[i]["remedy"] != "kbase configure --model-map "+category+"=solo/<id>" ||
+			!strings.Contains(items[i]["detail"].(string), "no reference assigned to the "+category+" category") {
 			t.Errorf("refusal %d = %v, want models.%s offering the catalogue", i, items[i], category)
 		}
 	}
@@ -126,12 +137,12 @@ func TestRunConfigureRefusesUnassignedCategories(t *testing.T) {
 	}
 
 	opts := soloOpts()
-	opts.ModelMap = []string{"decision=" + decisionID}
+	opts.ModelMap = []string{"decision=" + ref(decisionID)}
 	partial := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(ids...)))
-	item := partial.refusal(t)
-	if item["key"] != "models.text" || !slices.Equal(anyStrings(item["allowed"]), sortedStrings(ids)) ||
-		item["remedy"] != "kbase configure --model-map text=<id>" {
-		t.Errorf("partial-map refusal = %v, want the missing text category with the catalogue allowed", item)
+	items = partial.doc.items("refusals")
+	if len(items) != 2 || items[0]["key"] != "models.text" || items[1]["key"] != "models.scoring" ||
+		!slices.Equal(anyStrings(items[0]["allowed"]), sortedStrings(ids)) {
+		t.Errorf("partial-map refusals = %v, want text and scoring with the catalogue allowed", items)
 	}
 	if _, written := partial.config(t); written {
 		t.Error("config.toml written despite a partially assigned map")
@@ -159,11 +170,11 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 		ids      []string
 	}{{
 		name:     "one comma-separated value",
-		modelMap: []string{"decision=" + pinned + ",text=" + textID},
+		modelMap: refs(pinned, textID, scoringID),
 		ids:      []string{decisionID, textID, otherText},
 	}, {
 		name:     "repeated flag",
-		modelMap: []string{"decision=" + pinned, "text=" + textID},
+		modelMap: []string{"decision=" + ref(pinned), "text=" + ref(textID), "scoring=" + ref(scoringID)},
 		ids:      []string{decisionID, textID, otherText},
 	}}
 
@@ -180,21 +191,24 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 			if !written {
 				t.Fatal("no config.toml written on success")
 			}
-			want := config.Config{Provider: "solo", Models: config.ModelMap{Decision: pinned, Text: textID}}
+			want := config.Config{Models: config.ModelMap{
+				Decision: ref(pinned), Text: ref(textID), Scoring: ref(scoringID)}}
 			if cfg != want {
 				t.Errorf("config.toml = %+v, want %+v", cfg, want)
 			}
 			models, _ := got.doc.Values["models"].(map[string]any)
-			if got.doc.Values["provider"] != "solo" || models["decision"] != pinned || models["text"] != textID ||
+			if got.doc.Values["provider"] != "solo" || models["decision"] != ref(pinned) ||
+				models["text"] != ref(textID) || models["scoring"] != ref(scoringID) ||
 				!slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(got.dir)}) {
-				t.Errorf("result = %v, want the provider, both categories and config.toml written", got.doc.Values)
+				t.Errorf("result = %v, want the provider, all three references and config.toml written", got.doc.Values)
 			}
 			if got.doc.Values["provider-rule"] != "sole-entry" || got.doc.Values["provider-layer"] != config.LayerSourceRepository {
 				t.Errorf("result provenance = %v/%v, want the sole-entry rule and the layer that supplies the entry",
 					got.doc.Values["provider-rule"], got.doc.Values["provider-layer"])
 			}
-			for _, want := range []string{"configured:", "provider=solo",
-				config.CategoryDecision + "=" + pinned, config.CategoryText + "=" + textID, config.ConfigPath(got.dir)} {
+			for _, want := range []string{"configured:",
+				config.CategoryDecision + "=" + ref(pinned), config.CategoryText + "=" + ref(textID),
+				config.CategoryScoring + "=" + ref(scoringID), config.ConfigPath(got.dir)} {
 				if !strings.Contains(got.stderr, want) {
 					t.Errorf("stderr: got %q, want it to report %q", got.stderr, want)
 				}
@@ -217,8 +231,8 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 // not.
 func TestRunConfigureUnlistedMappedIDWarns(t *testing.T) {
 	opts := soloOpts()
-	opts.ModelMap = []string{"decision=clef-preview", "text=" + textID}
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(textID)))
+	opts.ModelMap = []string{"decision=" + ref("clef-preview"), "text=" + ref(textID), "scoring=" + ref(scoringID)}
+	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(textID, scoringID)))
 
 	if got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
@@ -234,8 +248,8 @@ func TestRunConfigureCreatesConfigDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "kbase")
 	opts := soloOpts()
 	opts.WriteDir = dir
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID))); got.code != 0 {
+	opts.ModelMap = refs(decisionID, textID, scoringID)
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 	if _, err := os.Stat(config.ConfigPath(dir)); err != nil {
@@ -256,8 +270,8 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 
 	opts := soloOpts()
 	opts.WriteDir = dir
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID))); got.code != 0 {
+	opts.ModelMap = refs(decisionID, textID, scoringID)
+	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 
@@ -268,12 +282,15 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 	if !strings.Contains(string(body), note) {
 		t.Errorf("configure ate a hand-written comment:\n%s", body)
 	}
+	if strings.Contains(string(body), "provider =") {
+		t.Errorf("configure kept the superseded provider key:\n%s", body)
+	}
 	cfg, err := config.LoadConfig(path)
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Models.Decision != decisionID || cfg.Models.Text != textID {
-		t.Errorf("models = %+v, want decision=%q text=%q", cfg.Models, decisionID, textID)
+	if cfg.Models.Decision != ref(decisionID) || cfg.Models.Text != ref(textID) || cfg.Models.Scoring != ref(scoringID) {
+		t.Errorf("models = %+v, want the three references", cfg.Models)
 	}
 }
 
@@ -281,11 +298,11 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 // previous configuration outliving a failed run is the whole reason the
 // write is the last step.
 func TestRunConfigureListFailure(t *testing.T) {
-	client := model.NewScriptedMock(nil, catalogue(decisionID, textID))
+	client := model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
 	client.SetError(errors.New("http 503: service unavailable"))
 
 	opts := soloOpts()
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	opts.ModelMap = refs(decisionID, textID, scoringID)
 	got := runConfig(t, opts, client)
 
 	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
@@ -301,90 +318,93 @@ func TestRunConfigureListFailure(t *testing.T) {
 func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
 	// The client seam is the network: a factory that fails the test is how
 	// "no round trip" becomes an assertion rather than a claim.
-	opts := soloOpts()
-	opts.ModelMap = []string{"decision"}
-	opts.NewClient = func(model.Endpoint) model.Client {
-		t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
-		return model.NewScriptedMock(nil, catalogue(decisionID, textID))
-	}
+	for _, value := range []string{"decision", "decision=" + decisionID} {
+		opts := soloOpts()
+		opts.ModelMap = []string{value}
+		opts.NewClient = func(model.Endpoint) model.Client {
+			t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
+			return model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+		}
 
-	got := runConfig(t, opts, nil)
-	if item := got.refusal(t); item["key"] != "--model-map" || item["check"] != "usage" {
-		t.Errorf("refusal = %v, want a usage refusal of --model-map", item)
-	}
-	if _, written := got.config(t); written {
-		t.Error("config.toml written despite a malformed --model-map")
+		got := runConfig(t, opts, nil)
+		if item := got.refusal(t); item["key"] != "--model-map" || item["check"] != "usage" {
+			t.Errorf("--model-map %q = %v, want a usage refusal of --model-map", value, item)
+		}
+		if _, written := got.config(t); written {
+			t.Errorf("config.toml written despite --model-map %q", value)
+		}
 	}
 }
 
 // TestParseModelMap covers the flag grammar, including the forms that must
 // be rejected rather than half-understood.
 func TestParseModelMap(t *testing.T) {
-	tests := []struct {
+	for _, tc := range []struct {
 		name    string
 		values  []string
-		want    map[string]string
+		want    map[string]config.Reference
 		wantErr string
 	}{{
 		name:   "empty",
 		values: nil,
-		want:   map[string]string{},
+		want:   map[string]config.Reference{},
 	}, {
 		name:   "comma-separated pair",
-		values: []string{"decision=d,text=t"},
-		want:   map[string]string{config.CategoryDecision: "d", config.CategoryText: "t"},
+		values: []string{"decision=a/d,text=b/t"},
+		want:   map[string]config.Reference{config.CategoryDecision: {Provider: "a", Model: "d"}, config.CategoryText: {Provider: "b", Model: "t"}},
 	}, {
 		name:   "repeated flag accumulates",
-		values: []string{"decision=d", "text=t"},
-		want:   map[string]string{config.CategoryDecision: "d", config.CategoryText: "t"},
+		values: []string{"decision=a/d", "text=a/t"},
+		want:   map[string]config.Reference{config.CategoryDecision: {Provider: "a", Model: "d"}, config.CategoryText: {Provider: "a", Model: "t"}},
 	}, {
 		name:   "surrounding space and category case are tolerated",
-		values: []string{" DECISION = d , text=t "},
-		want:   map[string]string{config.CategoryDecision: "d", config.CategoryText: "t"},
+		values: []string{" DECISION = a/d , text=a/t "},
+		want:   map[string]config.Reference{config.CategoryDecision: {Provider: "a", Model: "d"}, config.CategoryText: {Provider: "a", Model: "t"}},
 	}, {
-		name:   "repeating one category with the same id is not a conflict",
-		values: []string{"decision=d", "decision=d"},
-		want:   map[string]string{config.CategoryDecision: "d"},
+		name:   "a model id may carry a slash of its own",
+		values: []string{"scoring=openrouter/anthropic/x"},
+		want:   map[string]config.Reference{config.CategoryScoring: {Provider: "openrouter", Model: "anthropic/x"}},
+	}, {
+		name:   "repeating one category with the same reference is not a conflict",
+		values: []string{"decision=a/d", "decision=a/d"},
+		want:   map[string]config.Reference{config.CategoryDecision: {Provider: "a", Model: "d"}},
 	}, {
 		name:    "no assignment",
 		values:  []string{"decision"},
 		wantErr: "malformed --model-map entry",
 	}, {
-		name:    "missing id",
+		name:    "missing value",
 		values:  []string{"decision="},
 		wantErr: "malformed --model-map entry",
 	}, {
+		name:    "a bare id is not a reference",
+		values:  []string{"decision=clef"},
+		wantErr: "a value is a reference",
+	}, {
 		name:    "unknown category",
-		values:  []string{"medium=m"},
+		values:  []string{"medium=a/m"},
 		wantErr: `unknown category "medium"`,
 	}, {
 		name:    "conflicting assignments to one category",
-		values:  []string{"decision=a,decision=b"},
+		values:  []string{"decision=a/d,decision=a/e"},
 		wantErr: "assigns the decision category twice",
-	}}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseModelMap(tt.values)
-			if tt.wantErr != "" {
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseModelMap(tc.values)
+			if tc.wantErr != "" {
 				if err == nil {
-					t.Fatalf("expected an error containing %q, got %v", tt.wantErr, got)
+					t.Fatalf("expected an error containing %q, got %v", tc.wantErr, got)
 				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Errorf("error: got %v, want substring %q", err, tt.wantErr)
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error: got %v, want substring %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("parseModelMap: %v", err)
 			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("map = %v, want %v", got, tt.want)
-			}
-			for category, id := range tt.want {
-				if got[category] != id {
-					t.Errorf("map[%s] = %q, want %q", category, got[category], id)
-				}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("map = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -400,10 +420,10 @@ func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
 	opts := soloOpts()
 	opts.WriteDir = dir
 	opts.Create = true
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	opts.ModelMap = refs(decisionID, textID, scoringID)
 	opts.NewClient = func(model.Endpoint) model.Client {
 		dialed = true
-		return model.NewScriptedMock(nil, catalogue(decisionID, textID))
+		return model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
 	}
 	got := runConfig(t, opts, nil)
 
@@ -422,22 +442,28 @@ func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
 		}
 	}
 	models, _ := got.doc.Values["models"].(map[string]any)
-	if models[config.CategoryDecision] != decisionID || models[config.CategoryText] != textID {
-		t.Errorf("models = %v, want the ids the flag named", models)
+	if models[config.CategoryDecision] != ref(decisionID) || models[config.CategoryText] != ref(textID) ||
+		models[config.CategoryScoring] != ref(scoringID) {
+		t.Errorf("models = %v, want the three references the flag named", models)
 	}
-	if want := []string{config.ProvidersPath(dir), config.ConfigPath(dir)}; !slices.Equal(anyStrings(got.doc.Values["written"]), want) {
-		t.Errorf("written = %v, want %v", got.doc.Values["written"], want)
+	if want := []string{config.ProvidersPath(dir), config.HarnessesPath(dir), config.ConfigPath(dir)}; !slices.Equal(anyStrings(got.doc.Values["written"]), want) {
+		t.Errorf("written = %v, want %v: the pool, the profiles, then the choices", got.doc.Values["written"], want)
+	}
+	profiles, err := config.LoadHarnesses(config.HarnessesPath(dir))
+	if err != nil || len(profiles) != 1 || profiles["claude"].Name != "claude" {
+		t.Errorf("the created harnesses.toml = %v, %v; want the one live claude profile", profiles, err)
 	}
 	if !strings.Contains(got.stderr, "were not checked") {
-		t.Errorf("stderr = %q, want the line saying the ids were not checked", got.stderr)
+		t.Errorf("stderr = %q, want the line saying the references were not checked", got.stderr)
 	}
 	pool, faults, err := config.LoadProviders(config.ProvidersPath(dir))
 	if err != nil || len(faults) != 0 || len(pool) != 1 {
 		t.Fatalf("the created pool = %v, faults %v, err %v; want one usable entry", pool, faults, err)
 	}
 	cfg, written := got.config(t)
-	if !written || cfg.Provider != "" || cfg.Models != (config.ModelMap{Decision: decisionID, Text: textID}) {
-		t.Errorf("config.toml = %+v (%t), want the ids and no provider", cfg, written)
+	want := config.ModelMap{Decision: ref(decisionID), Text: ref(textID), Scoring: ref(scoringID)}
+	if !written || cfg.Provider != "" || cfg.Models != want {
+		t.Errorf("config.toml = %+v (%t), want the references and no provider", cfg, written)
 	}
 }
 
@@ -447,7 +473,7 @@ func TestRunConfigureCreateIsIdempotent(t *testing.T) {
 	opts := soloOpts()
 	opts.WriteDir = t.TempDir()
 	opts.Create = true
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	opts.ModelMap = refs(decisionID, textID, scoringID)
 
 	if first := runConfig(t, opts, nil); first.code != 0 || first.doc.Outcome != "done" {
 		t.Fatalf("first configure --create: exit %d, %v", first.code, first.doc.Values)
@@ -468,9 +494,9 @@ func TestRunConfigureCreateDialedRefusalWritesNothing(t *testing.T) {
 	opts.WriteDir = dir
 	opts.Create = true
 	opts.Provider = "typo"
-	opts.ModelMap = []string{"decision=" + decisionID, "text=" + textID}
+	opts.ModelMap = refs(decisionID, textID, scoringID)
 
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID)))
+	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
 	item := got.refusal(t)
 	if item["check"] != checkProvider || item["key"] != "--provider" || item["path"] != config.ProvidersPath(dir) ||
 		item["remedy"] != "kbase configure --create" {
@@ -501,17 +527,17 @@ func TestRunConfigureCreateKeepsWhatStandsThere(t *testing.T) {
 	opts := soloOpts()
 	opts.WriteDir = dir
 	opts.Create = true
-	opts.ModelMap = []string{"text=" + textID}
+	opts.ModelMap = []string{"text=" + ref(textID)}
 	got := runConfig(t, opts, nil)
 	if got.code != 0 || got.doc.Outcome != "done" {
 		t.Fatalf("configure --create: exit %d, %v", got.code, got.doc.Values)
 	}
-	if got.doc.Values["provider"] != "solo" {
-		t.Errorf("provider = %v, want the provider config.toml already names", got.doc.Values["provider"])
+	if got.doc.Values["provider"] != nil {
+		t.Errorf("provider = %v, want null: this path configures no entry", got.doc.Values["provider"])
 	}
 	cfg, _ := got.config(t)
-	if cfg.Provider != "solo" || cfg.Models.Decision != "kept" || cfg.Models.Text != textID {
-		t.Errorf("config.toml = %+v, want the standing provider and decision kept and text set", cfg)
+	if cfg.Provider != "" || cfg.Models.Decision != "kept" || cfg.Models.Text != ref(textID) {
+		t.Errorf("config.toml = %+v, want the standing decision kept, text set and the provider key removed", cfg)
 	}
 	body, err := os.ReadFile(config.ConfigPath(dir))
 	if err != nil {
@@ -520,11 +546,16 @@ func TestRunConfigureCreateKeepsWhatStandsThere(t *testing.T) {
 	if !strings.Contains(string(body), note) {
 		t.Errorf("configure ate a hand-written comment:\n%s", body)
 	}
+	if strings.Contains(string(body), "provider =") {
+		t.Errorf("configure kept the superseded provider key:\n%s", body)
+	}
 	if kept, err := os.ReadFile(config.ProvidersPath(dir)); err != nil || string(kept) != pool {
 		t.Errorf("providers.toml = %q (%v), want it untouched", kept, err)
 	}
-	if written := anyStrings(got.doc.Values["written"]); !slices.Equal(written, []string{config.ConfigPath(dir)}) {
-		t.Errorf("written = %v, want only config.toml: providers.toml already stood", written)
+	// harnesses.toml stands nowhere here, so --create writes it beside the
+	// config.toml it edits; providers.toml already stood and is untouched.
+	if written := anyStrings(got.doc.Values["written"]); !slices.Equal(written, []string{config.HarnessesPath(dir), config.ConfigPath(dir)}) {
+		t.Errorf("written = %v, want harnesses.toml and config.toml: providers.toml already stood", written)
 	}
 }
 

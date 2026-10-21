@@ -24,10 +24,12 @@ const (
 	// so the directory is ordinary user data, not a keystore.
 	configDirPerm = 0o777
 
-	// keyProvider is the top-level key holding the provider choice; it
-	// mirrors Config's `toml` tag. The [models] table's keys are the category
-	// names themselves, so CategoryDecision and CategoryText are their single
-	// source here as everywhere else.
+	// keyProvider is the top-level key the editor removes; it mirrors
+	// Config's `toml` tag. The key is modelled so an old config.toml still
+	// loads and the diagnostic that reports it superseded can name it, and
+	// nothing writes it: a reference names its own pool entry. The [models]
+	// table's keys are the category names themselves, so the Category
+	// constants are their single source here as everywhere else.
 	keyProvider = "provider"
 
 	// tableModels is the table holding the category→model-id map; it mirrors
@@ -46,31 +48,47 @@ const (
 // whether it wrote. It is the only writer of providers.toml: a file that
 // stands is a hand-editing surface nothing here overwrites.
 func CreateProvidersFile(path string) (bool, error) {
+	return createTemplateFile(path, providersTemplate)
+}
+
+// CreateHarnessesFile writes the annotated harnesses.toml template at path when
+// no file stands there, and reports whether it wrote. It is the only writer of
+// harnesses.toml, and creation is all it does: a profile is added by editing the
+// file, never by a verb, so a seed a user deleted stays deleted and a file they
+// wrote keeps every entry they wrote.
+func CreateHarnessesFile(path string) (bool, error) {
+	return createTemplateFile(path, harnessesTemplate)
+}
+
+// createTemplateFile installs template at path where nothing stands.
+func createTemplateFile(path, template string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("config: stat %s: %w", path, err)
 	}
-	if err := installConfig(path, providersTemplate); err != nil {
+	if err := installConfig(path, template); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// UpdateConfig sets the provider choice and the [models] categories in the
-// config.toml at path, creating the containing directory and the file if
-// they are missing. The write is atomic: the content lands in a temporary
-// file in the destination directory and is renamed over path, so a reader
-// sees either the previous config or the new one, never a half-written
-// file, and a failed write leaves the previous config intact.
+// UpdateConfig writes the [models] categories into the config.toml at path,
+// creating the containing directory and the file if they are missing, and
+// removes the superseded top-level provider key. The write is atomic: the
+// content lands in a temporary file in the destination directory and is
+// renamed over path, so a reader sees either the previous config or the new
+// one, never a half-written file, and a failed write leaves the previous
+// config intact.
 //
 // It is an editor, not a serializer. config.toml is a primary user-editable
 // file, so an existing one is updated line by line: the lines carrying the
-// keys above are rewritten and every other byte — comments, blank-line
-// grouping, key spelling and spacing, keys and tables Config does not model —
-// passes through untouched. A rewritten line's own trailing comment
-// survives too: those three lines are the ones a user is likeliest to have
-// annotated. Only its spacing is normalized (see commentGap).
+// [models] keys are rewritten, the provider line is deleted, and every other
+// byte — comments, blank-line grouping, key spelling and spacing, keys and
+// tables Config does not model — passes through untouched. A rewritten line's
+// own trailing comment survives too: those lines are the ones a user is
+// likeliest to have annotated. Only its spacing is normalized (see
+// commentGap).
 //
 // The line editor understands the TOML layouts config.toml is written in,
 // not all of TOML (a multiline string whose text looks like a table header
@@ -81,7 +99,8 @@ func CreateProvidersFile(path string) (bool, error) {
 // offer.
 //
 // It reports whether it wrote: a file already holding the values is left as
-// it stands.
+// it stands. cfg.Provider is not written — the key is the one the editor
+// deletes, and a reference names its own pool entry.
 func UpdateConfig(path string, cfg Config) (bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -109,17 +128,16 @@ func UpdateConfig(path string, cfg Config) (bool, error) {
 // not exist yet.
 func freshConfig(cfg Config) string {
 	return fmt.Sprintf(configTemplate,
-		assign(keyProvider, cfg.Provider),
 		modelHintsComment(),
 		assign(CategoryDecision, cfg.Models.Decision),
-		assign(CategoryText, cfg.Models.Text))
+		assign(CategoryText, cfg.Models.Text),
+		assign(CategoryScoring, cfg.Models.Scoring))
 }
 
-// updateLines rewrites the provider and [models] lines of an existing
-// config.toml and returns the new content. Keys the file does not have are
-// added: a missing provider goes in after the leading comment block (a
-// top-level key must precede the first table), missing categories at the end of
-// the [models] table, and a missing [models] table at the end of the file.
+// updateLines rewrites the [models] lines of an existing config.toml, removes
+// a top-level provider line, and returns the new content. Keys the file does
+// not have are added: missing categories at the end of the [models] table, and
+// a missing [models] table at the end of the file.
 func updateLines(src string, cfg Config) string {
 	lines := strings.Split(src, "\n")
 	// A trailing newline splits into a final empty element. Holding it
@@ -134,6 +152,7 @@ func updateLines(src string, cfg Config) string {
 		table       string
 		modelsFound bool
 		modelsEnd   = -1 // first line past the [models] table
+		providerAt  = -1 // the superseded top-level line, removed below
 		found       = map[string]bool{}
 	)
 	for i, line := range lines {
@@ -149,23 +168,32 @@ func updateLines(src string, cfg Config) string {
 		}
 		key := lineKey(trimmed)
 		switch {
-		case table == "" && key == keyProvider && !found[keyProvider]:
-			lines[i] = withComment(assign(keyProvider, cfg.Provider), comment)
-		case table == tableModels && (key == CategoryDecision || key == CategoryText) && !found[key]:
+		case table == "" && key == keyProvider && providerAt < 0:
+			providerAt = i
+			found[keyProvider] = true
+		case table == tableModels && isCategory(key) && !found[key]:
 			lines[i] = withComment(assign(key, categoryValue(cfg, key)), comment)
+			found[key] = true
 		default:
 			continue
 		}
-		found[key] = true
 	}
 	if modelsFound && modelsEnd < 0 {
 		modelsEnd = len(lines)
 	}
 
-	// Tail insertions first: they are indexed from the [models] table,
-	// which the head insertion below would shift.
+	// The editor's one deletion, and the only change that is not a value
+	// rewrite. Nothing writes the key: a reference names its own pool entry.
+	if providerAt >= 0 {
+		lines = slices.Delete(lines, providerAt, providerAt+1)
+		if modelsEnd > providerAt {
+			modelsEnd--
+		}
+	}
+
 	var missing []string
-	for _, category := range []string{CategoryDecision, CategoryText} {
+	for _, role := range Roles {
+		category := string(role)
 		if !found[category] {
 			missing = append(missing, assign(category, categoryValue(cfg, category)))
 		}
@@ -180,9 +208,6 @@ func updateLines(src string, cfg Config) string {
 		}
 		lines = slices.Insert(lines, lastTextLine(lines, modelsEnd), missing...)
 	}
-	if !found[keyProvider] {
-		lines = slices.Insert(lines, endOfLeadingComments(lines), assign(keyProvider, cfg.Provider))
-	}
 
 	out := strings.Join(lines, "\n")
 	if endsWithNewline {
@@ -191,12 +216,24 @@ func updateLines(src string, cfg Config) string {
 	return out
 }
 
+// isCategory reports whether key names one of the [models] table's categories.
+// The roles are the categories typed, so the file and every document that
+// reports them state the same set in the same order.
+func isCategory(key string) bool {
+	for _, role := range Roles {
+		if key == string(role) {
+			return true
+		}
+	}
+	return false
+}
+
 // verifyUpdate is the guard on the line editor: it decodes the previous
 // content and the proposed replacement and requires that they differ in
-// exactly the values UpdateConfig was asked to set. Anything else the edit
-// touched — an unknown key, a table, the text inside a multiline string the
-// editor mistook for config — shows up here as a mismatch, and a mismatch
-// refuses the write.
+// exactly the values UpdateConfig was asked to set — the three [models] keys,
+// and the removal of the provider key. Anything else the edit touched — an
+// unknown key, a table, the text inside a multiline string the editor mistook
+// for config — shows up here as a mismatch, and a mismatch refuses the write.
 func verifyUpdate(before, after string, cfg Config) error {
 	var prev, next map[string]any
 	if strings.TrimSpace(before) != "" {
@@ -216,14 +253,15 @@ func verifyUpdate(before, after string, cfg Config) error {
 	if m, ok := want[tableModels].(map[string]any); ok {
 		models = maps.Clone(m)
 	}
-	want[keyProvider] = cfg.Provider
+	delete(want, keyProvider)
 	models[CategoryDecision] = cfg.Models.Decision
 	models[CategoryText] = cfg.Models.Text
+	models[CategoryScoring] = cfg.Models.Scoring
 	want[tableModels] = models
 
 	if !reflect.DeepEqual(want, next) {
-		return fmt.Errorf("the update would change more than the %s and [%s] values — "+
-			"this layout is beyond the line editor; set them by hand", keyProvider, tableModels)
+		return fmt.Errorf("the update would change more than the [%s] values and the removal of %s — "+
+			"this layout is beyond the line editor; set them by hand", tableModels, keyProvider)
 	}
 	return nil
 }
@@ -324,16 +362,4 @@ func lastTextLine(lines []string, end int) int {
 		end--
 	}
 	return end
-}
-
-// endOfLeadingComments returns the index of the first line that is neither
-// blank nor a comment — where a missing top-level key is inserted, since it
-// must sit above the first table header and below the file's own preamble.
-func endOfLeadingComments(lines []string) int {
-	for i, line := range lines {
-		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-			return i
-		}
-	}
-	return len(lines)
 }

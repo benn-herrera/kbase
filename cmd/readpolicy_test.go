@@ -36,7 +36,7 @@ var fileOpenOwners = map[string]string{
 	"internal/records/records.go":       "the document graph's records in the state store",
 	"internal/config/config.go":         "the configuration files",
 	"internal/config/write.go":          "the configuration files",
-	"internal/config/inference.go":      "a key file",
+	"internal/config/harnesses.go":      "the harness profiles file, read like the pool and the choices",
 	"internal/config/providers.go":      "the configuration files and key files",
 	"internal/filelock/filelock.go":     "the lock files",
 	"internal/asks/call/call.go":        "the answer cache in the state store",
@@ -44,7 +44,9 @@ var fileOpenOwners = map[string]string{
 	"internal/build/rows.go":            "the tree regenerated into the state store's scratch",
 	"internal/build/store.go":           "the state store's lock and progress record",
 	"internal/build/storeformat.go":     "the state store's format stamp",
+	"internal/score/ledger.go":          "a scoring run's run.yaml and the lines its attempts appended, in the state store",
 	"cmd/write_op.go":                   "a write op's values document",
+	"cmd/provider.go":                   "the key file $KBASE_API_KEY_FILE names, read at the dial",
 	"internal/export/write.go":          "the export's gen-tex/: its manifest, each file's bytes and pandoc's outputs, compared so an unchanged file is not rewritten or reported, and the filter's findings; never the author's preamble.tex",
 	"cmd/mcp.go":                        "the detached build's captured output in the state store",
 }

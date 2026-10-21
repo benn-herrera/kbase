@@ -387,12 +387,13 @@ exists, a line naming it as the author's. `WriteReport` reads the filter's findi
 | Mechanism | Package | Status |
 |---|---|---|
 | **Metadata layer**: kb-root model: names, exclusions, link primitives and the dead-link gate over `kb-root/`; frontmatter, register and leaf parse, discovery, schema; the derived-field line renderers and the frontmatter splice refresh writes through | `internal/kb` | Landed |
-| **Write API**: render, values, store, ops | `internal/write` | Landed. An insert adopts by (register, title) whatever its other values, reporting the differing fields (SPEC §8). There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; the ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
+| **Write API**: render, values, store, ops | `internal/write` | Landed. An insert adopts by (register, title) whatever its other values, reporting the differing fields (SPEC §8). There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; `cmd/score.go` takes it around each landing and around each of the run's two refreshes, never across a run (§6's Scoring). The ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
 | **Refresh and verify; the index**: strength, aggregates, footers, `.index` emit and freshness, the citation gate and the claim-id link check | `internal/index` | Landed |
 | **Queries** | `internal/query` | Landed |
 | **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
 | **Readiness stamping and README assembly** | `internal/kbdocs` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
 | **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
+| **Scoring (`kbase score`)**: the closed text one call carries and its guard, the runner, the run's ledger | `internal/score` | Landed: the set is `query.ScoringSet`'s, the ledger stands under the build's state directory (`internal/statedir`, extracted from `internal/build`), and the verb is `cmd/score.go`, excluded from MCP |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
 marker or bullet, and no op renders a scoring bullet without its `(bearing …)`: the token is
@@ -514,15 +515,167 @@ refuses without the redirect), and the refresh stands before the commit. It runs
 own: every input to the skeleton is kbase's, so a red verify over it is a kbase defect, which
 `test-integration-init` catches by running `verify` right after birth.
 
+### Scoring
+
+`kbase score` is SPEC §8's; this states the mechanism. Five packages and the verb carry it:
+`internal/score` (the runner, the closed text and its passages, the parse, the run's ledger),
+`internal/kb` (the fault vocabulary, the two weight tables and the price), `internal/asks` (the two
+templates and the check that they name their pass's ids), `internal/query` (the set),
+`internal/statedir` (the state directory) and `cmd/score.go`.
+
+**The runner.** `score.Runner` owns the loop and no I/O of its own. It takes the enumerated items, an
+`Ask` seam, a `Write` seam, the ledger, the model name the lines record, `Limit`, `DryRun` and a
+logger — and, because the text is composed in that package, the `kb.Source` and `query.Index` the
+renderers read. Per item it composes the closed text, asks, parses the reply as the charges it
+records against that text, prices them, writes and appends `done`; a text the guard refuses, a reply
+the parse refuses, or a call or write that fails appends `failed` with nothing written, and the loop
+continues. Items are walked one at a time, in the set's order, with no concurrency. `Counts` is
+computed from the ledger's last status per item, not this invocation's attempts, so a resumed run
+reports the whole run. A cancelled context stops before the next ask and records nothing for the item
+in flight.
+
+**The two back ends are one seam.** The runner's `Ask` takes the rendered prompt whole and returns
+the reply, so the runner has no view of a provider and none of a harness: `internal/score` imports
+`asks`, `kb`, `query`, `result`, `atomicfile` and `log`, and reaches neither `model` nor `harness`.
+`cmd/score.go` fills the seam twice — `model.Chat` on the scoring role's endpoint with an empty
+system prompt, or `(*harness.Command).Ask` on the profile's argv — and the runner learns nothing of
+which. Each score template splices the `score-system` fragment into its own text, so the instruction
+is carried once, in the user turn.
+
+**The prompt shelf.** Two templates, `score-rigor.tmpl.md` and `score-bearing.tmpl.md`, each with the
+one `dyn.` slot the runner fills with the assembled text, and one shared fragment,
+`fragments/score-system.tmpl.md`, registered in `fragmentSlots`; `asks.ScoreRigor` and
+`asks.ScoreBearing` render them through `asks.Render`. Provenance is the shelf's rule: embedded in
+the binary, written by kbase, no upstream origin and no version pin to drift. The templates carry the
+criteria and the line form; they carry no id the pass does not accept, no weight, no maximum, no band
+and no number — the price is `kb`'s and one fact lives once. A test asserts each template declares
+one `dyn.` slot, fills it with the text the runner composed, splices the shared fragment, and names
+exactly its pass's ids (`flt-[a-z0-9-]+` tokens against `kb.RigorFaults.IDs()` /
+`kb.BearingFaults.IDs()`); the shelf's `asks.Lint` covers both files as it does every template.
+
+**The closed text and its guard.** `internal/score/text.go`'s two unexported renderers assemble every
+character a call may see. `rigorText` renders a node's title and its statement: a claim's statement
+is the block its tier-2 marker sits in, in the leaf the index records as declaring it; an analysis's
+or an experiment's is the section at its canonical anchor in the leaf its `CanonicalPath` names. A
+claim no leaf marks renders its title alone, and a work renders its title alone — its register
+entry's body is its `### Rigor` subsection, which the guard would refuse, and its `- rationale:` is
+never sent. A claim's `CanonicalPath` names the register, which is never opened. `bearingText`
+renders the source's and the target's statements by that same rule, then the edge's authored
+`[context]` from the row `Index.Edge(ScoringEdge)` answers. `scoreTokenRE` and `frameRE` scan each
+assembled passage — no guard pattern spans the blank line between two — and a hit is
+`scoreTokenError`, naming the document and line, with the item `failed` and no call made: the guard
+refuses, it never strips. The four scoring tokens are half of what it refuses; `frameRE` adds the
+frame's own structure — a run of twelve backticks closes the fence the templates draw around the
+corpus, and what follows then sits outside the instruction to judge it, and a line opening
+`## Source:`, `## Target:` or `## Context` forges the frame's map of the text; a label a blockquote
+or an indent displaces from the line's start opens nothing. Neither half is adaptive to the text:
+a rendered prompt stays a function of its template, so a text carrying the frame's structure is
+refused rather than escaped. An
+out-of-scope subject is refused by name and type — a `wrk-` or `axm-` id on `rigorText`, a
+`references` or `demoted` relation on `bearingText`.
+
+**The parse reads the closed text's passages.** `assemble` returns the closed text *and the extents
+of the passages it is made of*, because a charge's `passage` and its `offset` are facts about that
+text: a `rigor` call's two passages are a node's `title` and `statement`, a `bearing` call's are the
+`source`'s and the `target`'s. `score.ParseAnswer` (`internal/score/answer.go`) reads a reply against
+them and the pass's `kb.FaultTable`: a charge line is looked up by collapsed whitespace and folded
+case, **one passage at a time**, so a span crossing from one to another is unfound and `malformed`,
+and the edge's `## Context` — assembled but not a passage — is citable by no charge. A span the two
+passages carry alike records `both` at its earlier match. The read yields `Answer{Faults, Moot,
+Value}`: the charges, the charge lines a `flt-pending` made moot, and the price `kb` gives the ids.
+Duplicate and overlap collapsing is the parse's; the ids the ledger records are the whole input of
+the price, which is what makes a landing checkable and a run re-scorable without a model. The
+context stays in the assembled text because the ask judges an edge on it; the parse merely refuses to
+anchor a charge there.
+
+**The scoring set.** `query.ScoringSet(ix, pass)` reads the loaded index in-package and returns
+`[]query.Item`, each carrying a `ScoringNode` or a `ScoringEdge` and never both, in the walk's order;
+`query.PassRigor` and `query.PassBearing` are the two spellings the set and the `--pass` flag share.
+An item carries identity only, so an edge's row comes from `Index.Edge` and no caller builds a
+`kb.EdgeRow` by hand. The set has no verb: it is consumed in-process, and `--dry-run` is the
+inspection surface. Which nodes and edges are in it, and which are excluded, is SPEC §8's.
+
+**The ledger and the state directory.** `score.Ledger` opens `<state-dir>/score/<run>/`, writes
+`run.yaml` through `atomicfile.Write`, appends each attempt as one JSON line with `O_APPEND` and
+`Sync`, and reads back the last entry per item — its status and the evidence behind it — so `--resume`
+skips what landed and a failed run names each failed item's reason. A line is appended after the item's
+write and validation, never before: a crash between the two re-asks a write that is idempotent, where
+the reverse would skip a value that never landed. `Create` never reuses a run directory: the run id
+is minted past any that stands, and a directory that appears under it fails the call. `Resume`
+refuses a `run.yaml` naming another KB root, format or pass, and drops a tail torn after its last
+newline so the item it names is asked again. `items.jsonl` holds the run's set, which is all a dry
+run writes beside `run.yaml`.
+
+A line carries `faults` — the parsed charges, `id`, `passage`, `citation`, `offset`, in the order
+written — and `moot`, the charge lines a `flt-pending` made moot, parsed the same way and priced
+nowhere; `[]` is written for one reply alone, the word `none`, so an empty list always carries the
+model's positive statement that it found no fault. A failed attempt carries neither, and no text:
+its `reply` is the reason. `backend`, and under a harness `harness` and `harness_layer`, sit on every
+line, because a resumed or mixed run's lines must say what answered each item. `Create` also stamps
+`ask_sha256`, from the header's `Pass`, as it stamps the format — one site, so no caller can open a
+run without the ask its judgements answer, and a render that fails is a defect of the build rather
+than a run written with no digest. `Resume` reads the header's digest and compares nothing against
+it: the digest is a record of which instruction answered which judgement, and an update applies its
+behaviour. `reprice` (below) is `Resume`'s other half.
+
+The state directory is `internal/statedir.Dir`'s — the override,
+else `$XDG_STATE_HOME/kbase/<key>`, and never inside `kb-root/` — extracted from
+`internal/build/store.go` so that a run and a build agree on what the state directory for a KB is;
+the build store's own format stamp stays in `internal/build` (§8). The run lock is
+`filelock.Acquire` on `<state-dir>/score` with no wait — the runs' directory stands before any run
+does — so a second run is `retry`, `check: lock`, `path` that directory.
+
+**The one-op landing.** `landScore` calls `write.Run` with `set-rigor` for a node and `set-bearing`
+for an edge — values `id` and `rigor`, or `id` (the source), `target`, `relation` and `bearing` — and
+`NoRefresh: true`, under the KB write lock, which `holdKB` takes for the landing and releases before
+the next item. A `done` or `unchanged` write lands; a refusal or a failure is returned as the item's
+error and recorded `failed`, and so is a lock `holdKB` could not take — the item's line carries the
+detail of the item `holdKB` answered with (`retry` past the wait, `refused` at once while a build
+runs) and the run goes on. The verb refreshes once after the loop where anything landed, so a run's
+values are published by that one refresh and no refresh rewrites the KB per item.
+
+**The re-price.** `Resume` takes the same `Write` seam a landing is opened with, and `reprice`
+re-derives every landed line's value from the ids its line records, under the running pass's
+`kb.FaultTable`. A value the running table gives differently is landed through that seam first —
+`set-rigor`/`set-bearing`, under the KB lock as a landing holds it — and the line records it after,
+so no line claims a value the KB did not take: a refused write fails the resume with the ledger as it
+stood, and the next resume re-derives the same move, the write being idempotent. Each moved line is
+listed in `repriced.yaml` in the run's directory — the run, the time, and per line the item, the
+value it held and the value it took — which is where a re-price is recorded, `run.yaml` being written
+once. `Ledger.Repriced()` says how many values moved, so the verb's closing refresh can follow a
+re-price as it follows a landing. No model is asked: the ids are the whole input of the price, and
+the model never saw a weight.
+
+**The verb.** `runScore` is the body: the pass, limit and dry-run/resume checks; the KB root; the
+state directory; the back end and the scoring role resolved before the KB is opened — the mode
+decided, or the profile selected and its command probed — `config.HarnessArgv` refusing there a model
+id beginning with `-`, because the profile's command would read it as an option — so a setup refusal
+writes nothing and mints no run; `openKB` and the migration record; the run id; the run lock; one
+refresh through
+`holdKB`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
+the set; then either the dry run's records and an inert `Runner`, or the registry's client (none
+under a harness), the one `Ask` the back end needs and the walk; `counts` and `scored`; `resume`
+where any item is not `done`, ahead of the end refresh and of the record the outcome closes on; then,
+where anything landed or a resume re-priced, the KB re-read and the end refresh
+— either refresh ending the run where it cannot take the KB write lock, with `holdKB`'s own outcome
+and its `lock` item — and last, `failures` on `failed` (one `check: error` item per item the ledger
+records failed, detail its name and its line's reason, or one item naming the error a refresh stopped
+on) or `cancelled` on `cancelled` (the walk's first item with no attempt, `{}` where every one has
+one). The refresh cadence, the closing records and `resume`'s reach are SPEC §8's. Registration is
+`mcpBinding(scoreCmd, mcpExcluded)` (SPEC §11): the command is bound with the excluded annotation, so
+it appears in no `tools/list` and carries no read-only annotation.
+
 ---
 
 ## 7. Inference seams
 
 - Kept from kbase: provider management (`internal/config`) and the client (`internal/model`). The
-  call path is `model.Chat` for the overview call and `model.Decision` for the letter asks; the
-  decision category is a model id on whichever surface its entry speaks (`decisionsFlavor`, SPEC
-  §9.1), and kbase's categories apply — letter asks go to the decision category, the overview call
-  to the text category (SPEC §9).
+  call path is `model.Chat` for the overview call and for each scoring call, and `model.Decision`
+  for the letter asks; the decision role's model is an id on whichever surface its entry speaks
+  (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter asks go to the `decision`
+  role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
+  names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
+  the environment by `KBASE_<ROLE>`; no role falls back to another.
 - Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
   thinking disabled (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a
   call that does not complete is re-issued identically up to the attempt count (§12).
@@ -530,36 +683,43 @@ own: every input to the skeleton is kbase's, so a red verify over it is a kbase 
   the decision surface instead (next item). A build with a calling row left to walk checks a
   provider is configured before its first stage (SPEC §5).
 - Configuration is read from layers and merged once, before a verb's own work: `config.Layers`
-  resolves the directories and `config.Load` reads and merges both files of each. They are
+  resolves the directories and `config.Load` reads and merges the three files of each, returning one
+  `Loaded` — the pool and its faults, the harness profiles, and the choices. They are
   `<repository>/.kbase/` over `~/.config/kbase`, or the one directory `--config-dir` /
   `$KBASE_CONFIG_DIR` names — `explicit` and `environment` in the source vocabulary — so an
   explicit choice isolates a run from a repository's own `.kbase/`, which every test and pinned
   deployment needs. The caller resolves the repository root with `kb.RepositoryRoot(workDir)`, which
   answers `""` outside a worktree, so `internal/config` takes no git dependency and reads the global
-  layer alone there. A pool entry is replaced whole by a higher layer's entry of the same name; a
-  `config.toml` field is overlaid one at a time. `config.Load` drops a fault naming an entry a
-  higher layer already supplied — the pool's entry is the higher one, so the fault describes a
-  value nothing reads — and keeps a higher layer's own fault, whose entry never entered the pool.
-  `config.Layer` carries a directory, its source
-  (`explicit`, `environment`, `repository`, `global`) and — once `config.Report` has probed it —
-  whether the directory and each file stand. `Provider.Layer` and `Config.Sources` record the layer
-  the merge took each pool entry and each category id from, which is what
-  `config.ResolveInference` reports as a field's source; `ProviderFault.Path` names the
-  `providers.toml` a fault came from, and a `LackError`'s path names the file a lacking setting
-  belongs in — the write target's `providers.toml` or `config.toml` — so a layered configuration
-  says which file to edit.
-- Where a verb's inference resolves — the pool entry the selection rules name, and the endpoint and
-  category ids the layers above the files leave — is one function, `resolveProvider`
-  (`cmd/provider.go`). `buildProvider` reads its endpoint and category ids, and reports the entry,
-  the rule that named it and the layer that supplied it in the build's result; the `show-config`
-  verb's report reads the whole resolution (the entry and rule, or what prevented a selection, and
-  what the configuration lacks); and the build's launch refusal consumes the error `buildProvider`
-  returns from it, whose `Named` supplies the setting the item names. The dial that `models` and
-  `configure` share reads the entry, the rule, the layer and the endpoint from the same resolution;
-  no other site applies the selection rules. The report's other facts — the
-  pool's entries and faults, the files' presence, `config.toml`'s choices and the inference variable
-  names the process sets — come from `internal/config.Report`, which reads no file and no
-  environment of its own: the caller passes the existence probe and `getenv`.
+  layer alone there. A pool entry and a harness profile are each replaced whole by a higher layer's
+  of the same name; a `config.toml` field is overlaid one at a time. `config.Load` drops a fault
+  naming an entry a higher layer already supplied — the pool's entry is the higher one, so the fault
+  describes a value nothing reads — and keeps a higher layer's own fault, whose entry never entered
+  the pool. `config.Layer` carries a directory, its source (`explicit`, `environment`,
+  `repository`, `global`) and — once `config.Report` has probed it — whether the directory and each
+  of the three files stand, `HarnessesExists` beside `ProvidersExists` and `ConfigExists`.
+  `Provider.Layer` and `Config.ModelLayer` record the layer the merge took each pool entry and each
+  role's value from; `Profile.Layer` records the layer whose file supplied each profile;
+  `ProviderFault.Path` names the `providers.toml` a fault came from, and a `Refusal`'s path names
+  the file a lacking setting belongs in — the write target's `providers.toml` or `config.toml` — so
+  a layered configuration says which file to edit.
+- **Resolution is three pure functions, and connection is the registry's.** `config.ModeOf`
+  (`internal/config/resolve.go`) decides once per invocation which source supplies inference; it
+  reads the loaded configuration and the environment's strings and nothing else, and its refusals
+  are the mixed sources, the partial environment and the environment beside a standing `[models]`
+  value. `config.Resolve` answers one role's `Endpoint` in that mode, or under a harness with no
+  endpoint at all; it reads no file, opens no connection, writes no stderr and names no verb — the
+  key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
+  never by resolution. `config.Select` is the catalogue verbs' choice of a pool entry to dial — a
+  flag, else the pool's only entry — and no role is chosen that way. `config.Refusal` (with
+  `Refusals` for a decision that has more than one side to state) is the one typed refusal, and its
+  `Named` is what `internal/build`'s launch refusal reads. No other site applies a selection or a
+  resolution rule, and `cmd/provider.go`'s `clients` type is the only constructor of a
+  `model.Client`: one client per endpoint, opened on first use, keyed by the entry's name or — in
+  environment mode — by its base URL, and closed together before the verb returns on every outcome.
+  The report's other facts — the pool's entries and faults, the files' presence, `config.toml`'s
+  values, the harness profiles and the inference variable names the process sets — come from
+  `internal/config.Report`, which reads no file and no environment of its own: the caller passes the
+  existence probe and `getenv`.
 - A letter ask is one `POST` to the entry's decision surface (`model.Decision`; `decisionsFlavor`,
   SPEC §9.1), one `noul` or `choice` question asked and the answer read by the key it echoes — no
   reply text parsed. Two shapes stand behind that choice. `systemone`, what an entry silent on the
@@ -721,7 +881,7 @@ hermetic gate is `just test-integration`, whose five members —
 run `./bin/kbase` over fixtures they stage, judging the result document against the verb's keys, the
 tree it wrote, the transcript it served; `test-dist` runs `tools/scripts/build-dist.sh` against stub
 `go`, `gpg`, `curl` and `uname`, judging the release layout it stages and the installer it generates
-byte for byte against its golden. Each writes its log under `test_data/transient/<recipe>/`. Recipes
+byte for byte against its golden. Each writes its log under `test-data/transient/<recipe>/`. Recipes
 needing pandoc, python3 or a provider stand outside the gate and run by name —
 `test-integration-mcp-build`, the MCP notification probe that builds a paper, among them.
 
@@ -741,9 +901,11 @@ internal/docgraph         JSON transforms, whole-volume render+cut, outline,
                           records, partition checks, validate_build
 internal/records          the record schema (§5.5), written by docgraph, read by claimgraph
 internal/kb               kb-root model: names, exclusions, link primitives, dead-link
-                          gate, frontmatter and register parse, schema (the node kinds
-                          and the relation names, `Relation*` and `Relations`, spelled
-                          nowhere else), `Source` (the one read path), the index row
+                          gate, frontmatter and register parse, schema (the node kinds,
+                          the relation names, `Relation*` and `Relations`, and the band
+                          ladder, spelled nowhere else), the scoring faults' vocabulary
+                          and the two weight tables (`faults.go`), `Source` (the one
+                          read path), the index row
                           types (one per index file), the index file inventory and the
                           one reader `ReadIndex[T]` (`indexstream.go`), `LabelLine`
                           (the label-line recogniser), the child-list reading of the
@@ -780,7 +942,9 @@ internal/claimgraph       conform, inventory (records + page-defined readings),
                           equation(s), endcap, hand_named, assemble, write, gate,
                           the four build records
 internal/asks             embedded templates + fragments, composer, caller
-                          (captures, answer cache), letter-ask seam
+                          (captures, answer cache), letter-ask seam; the scoring
+                          templates' line form, and the test that asserts the ids
+                          each names against `kb`'s pass set
 internal/ledger           git checkpoint seam (I1), by exec
 internal/filelock         the one advisory file lock (the KB write lock, the build's run
                           lock in the git directory, the state store's holder lock)
@@ -788,6 +952,17 @@ internal/build            stage table, state store, resume, --no-inference,
                           --through, status/progress/cancel, and the store reading
                           (holder lock, progress record, the run it stands at) that
                           status's state and the MCP watcher both derive from
+internal/score            the score passes' closed text, its guard and the passages it is
+                          made of, the parse, the runner, the run's ledger and its
+                          re-pricing; imports neither model nor harness; imported by cmd
+                          alone
+internal/harness          one configured command, one prompt, one reply, one process
+                          group: the setup probe, per-item argv substitution, the two
+                          bounds and the kill on deadline; imports stdlib and `log`
+                          alone of kbase; imported by cmd alone
+internal/statedir         the state directory of one KB: the override, else
+                          $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
+                          imported by build and cmd
 internal/asks/call        the caller: the letter asks through model.Decision behind the letter
                           seam, the overview call through model.Chat; captures, answer
                           cache; imported by build alone
@@ -863,9 +1038,20 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   stays free of `kbload`.
 - `mcp` is imported by `cmd` alone and reaches no `model` or `asks/call` (I9); it imports `log`
   only.
-- Only `asks/call`, `build` and `cmd`'s `build`, `models` and `configure` verbs import `model`:
-  within `cmd`, file-level, `cmd/build.go` and the provider dial the other two share,
-  `cmd/provider.go`. `claimgraph` reaches neither `model` nor `asks/call`, transitively.
+- Only `asks/call`, `build` and `cmd`'s `build`, `models`, `configure` and `score` verbs import
+  `model`: within `cmd`, file-level, `cmd/build.go`, the client registry the other three share,
+  `cmd/provider.go`, and the score verb's ask, `cmd/score.go`. `claimgraph` reaches neither `model`
+  nor `asks/call`, transitively. `cmd/provider.go` is the only constructor of a `model.Client`, and
+  a verb opens one only where it is about to ask something.
+- `internal/config` imports no kbase package but `atomicfile`: it holds the grammar, the three
+  roles, the two modes, `ModeOf`, `Resolve`, `Select`, `HarnessArgv`, the refusals, the loaded files
+  and the templates, and it never imports `model`, `result` or `log`, opens no client and names no
+  verb.
+- `internal/harness` imports stdlib and `log` alone of kbase. It knows no provider, no endpoint, no
+  KB path, no configuration type and no prompt: it receives a prompt and hands it over whole, and
+  composes none.
+- `internal/score` imports neither `model` nor `harness`: the back end is below its `Ask` seam, so
+  the runner, the guard, the parse and the ledger learn nothing of what answered.
 - Only `build` and `cmd`'s `init` verb import `ledger`; `ledger` imports `log` and nothing else of
   kbase.
 - Only `build` and `cmd`'s `init` verb stamp readiness documents: within `cmd`, file-level,
@@ -873,7 +1059,14 @@ therefore carries a type's meaning and not only a version's, and every parse in 
 - `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the refusal
   where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
-  execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself.
+  execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs
+  the program a harness profile names. That fifth owner's binary is the one the exec policy cannot
+  name statically: it is configuration's, chosen by the user's `--harness`, so `cmd/execpolicy_test.go`
+  carries it with a sentinel and exempts its site from the per-binary check. What stays enforced is
+  that no other package execs for this purpose, and that the only way it is reached is `score
+  --harness`. A repository may supply the profile, which is the trust a repository's `providers.toml`
+  already asks for: the source is announced, never silent (SPEC §9.3), and no verb runs a profile it
+  was not told to run.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB, has `export` write `gen-tex/`'s inputs, makes the one `pandoc.RunDefaults` call, and has
   `export` merge the filter's findings that run wrote into the report.
@@ -892,8 +1085,9 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Transport attempts | 3 per call; letter asks re-issue at once, the overview call pauses 5 s then 30 s between attempts |
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
-| Model categories | `[models] decision` (the letter asks' model, on whichever surface its entry speaks) and `[models] text` (the overview call) in `config.toml`; overrides `KBASE_DECISION`/`KBASE_TEXT` (SPEC §9) |
-| Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `2.0.0` |
+| Model roles | `[models] decision` (the letter asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference; `KBASE_DECISION`/`KBASE_TEXT`/`KBASE_SCORING` name a bare id under the environment's endpoint instead (SPEC §9) |
+| Harness bounds | `harness.ReplyLimit`, `StderrLimit` and `PromptLimit`: 64 KiB each — one item's reply, the stderr kept for a failure's reason, and the prompt one argv element can carry. A reply or stderr past its bound fails that item; a prompt past its bound fails it before a process starts. `harness.waitDelay`: 5 s, how long `Wait` waits on the child's output pipes once the child or its process group is gone — a command that daemonizes leaves a writer behind (§6's Scoring, SPEC §8) |
+| Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `2.0.1` |
 | Pending literal | `kb.PendingLiteral`: `*pending*`, the format's one no-number literal, written for a value not yet judged and accepted wherever a value is absent (SPEC §10) |
 | Conversion record | `migration`: a result's conditional record after `kb-root`, holding `from`, `to` and `note`, and the one stderr sentence the same call writes (SPEC §7, §10) |
 | MCP protocol version | `mcp.ProtocolVersion`: the MCP revision the server implements (SPEC §11): `2025-11-25`, confirmed, not chosen, by the owner's live check |
@@ -1086,7 +1280,7 @@ refuses a step no converter leads, so a KB stamped `1.1.0` is refused at load ra
 **The reference comparison is flag-gated and partial.** `internal/index/compat_test.go`'s
 comparisons run only when their `reference.*` flags are set, and they cannot run at all until the
 reference toolchain reads `2.0.0`. The `0.9.0` parity cases in `internal/kbload/parity_test.go` are
-three committed KBs plus whatever local reference clone lies under `test_data/transient`; none of the
+three committed KBs plus whatever local reference clone lies under `test-data/transient`; none of the
 committed ones carries a register, so a `0.9.0` register is compared by the converter's golden pairs
 alone.
 

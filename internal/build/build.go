@@ -24,6 +24,7 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/result"
+	"kbase/internal/statedir"
 )
 
 // Stage is one stage of the build: its id and what it is for.
@@ -180,20 +181,21 @@ type Options struct {
 	now func() time.Time
 }
 
-// Provider is where a build's model calls go: the client, the model the
-// claim graph's letter asks and the overview passage are each put to, and
-// how many asks of one group are in flight at once — 0 for the default.
-//
-// Name, Rule and Layer are the provenance its result reports: the pool entry
-// the endpoint came from, the selection rule that named it and the
-// configuration layer that supplies the entry. They are empty together where
-// no pool entry supplied the endpoint.
+// Provider is where a build's model calls go: one client and the model it is
+// asked for, per role — the letter asks and the overview passage reach their
+// own endpoints independently — how many asks of one group are in flight at
+// once (0 for the default), and the provenance its result states, one record
+// per role in role order.
 type Provider struct {
-	Client            model.Client
-	Letters, Overview string
+	LettersClient     model.Client
+	Letters           string
+	OverviewClient    model.Client
+	Overview          string
 	ReaderConcurrency int
 
-	Name, Rule, Layer string
+	// Roles is the build's result record of where each role's asks went, one
+	// per role the build resolved, in role order.
+	Roles []result.Record
 }
 
 // walk is one build's state as its rows pass it along, and what its result
@@ -229,11 +231,10 @@ type walk struct {
 	// recordedBoundary is whether this invocation recorded a stage boundary.
 	recordedBoundary bool
 
-	// provider, providerRule and providerLayer are the provenance of the
-	// endpoint launch resolved: the pool entry it came from, the rule that
-	// named it and the layer that supplied the entry. Empty together where
-	// no pool entry supplied the endpoint.
-	provider, providerRule, providerLayer string
+	// roles is where launch's resolved endpoints went, one record per role the
+	// build resolved, in role order. Empty where no endpoint was resolved at
+	// all — a build spending no inference names no role.
+	roles []result.Record
 }
 
 // retry is a live holder of what the build needs.
@@ -383,14 +384,11 @@ func (w *walk) result(end ending) (string, []result.Field) {
 	if w.kbRoot != "" {
 		fields = append(fields, result.Field{Key: "kb-root", Value: w.kbRoot}, result.Field{Key: "state-dir", Value: w.stateDir})
 	}
-	// The three provenance keys stand together or not at all: a build whose
-	// endpoint no pool entry supplied — no inference at all, or a base URL
-	// from the environment — names none of them.
-	if w.provider != "" {
-		fields = append(fields,
-			result.Field{Key: "provider", Value: w.provider},
-			result.Field{Key: "provider-rule", Value: w.providerRule},
-			result.Field{Key: "provider-layer", Value: w.providerLayer})
+	// The roles record stands where the endpoint's provenance did: one record
+	// per role the build resolved, in role order. A build whose endpoints no
+	// pool entry supplied — no inference at all — names none.
+	if len(w.roles) > 0 {
+		fields = append(fields, result.Field{Key: "roles", Value: w.roles})
 	}
 	if walked {
 		fields = append(fields, result.Field{Key: "through", Value: w.through})
@@ -435,7 +433,7 @@ func (w *walk) open() error {
 		return err
 	}
 	w.repo, w.kbRoot = repo, filepath.Join(repo.Root, kb.KBDir)
-	if w.stateDir, err = stateDir(w.opts.StateDir, w.kbRoot); err != nil {
+	if w.stateDir, err = statedir.Dir(w.opts.StateDir, w.kbRoot); err != nil {
 		return err
 	}
 	if _, err := storeVersion(w.stateDir); err != nil {
@@ -572,11 +570,12 @@ func (w *walk) launch(remaining []Stage) error {
 			}
 			items = append(items, it)
 		} else {
-			w.provider, w.providerRule, w.providerLayer = p.Name, p.Rule, p.Layer
-			caller := call.New(p.Client, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
-			w.letters, w.readerConcurrency = caller.Letters(p.Letters), p.ReaderConcurrency
+			w.roles = p.Roles
+			letters := call.New(p.LettersClient, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
+			overview := call.New(p.OverviewClient, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
+			w.letters, w.readerConcurrency = letters.Letters(p.Letters), p.ReaderConcurrency
 			w.passage = func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error) {
-				return caller.Passage(ctx, p.Overview, excerpts, rejected, attempt)
+				return overview.Passage(ctx, p.Overview, excerpts, rejected, attempt)
 			}
 		}
 	}

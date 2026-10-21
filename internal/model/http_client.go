@@ -99,6 +99,16 @@ func NewHTTPClient(e Endpoint) *HTTPClient {
 	}
 }
 
+// Close releases the client's idle connections. A verb that opened a client
+// calls it before it returns, on every outcome: the pooled connections would
+// otherwise outlive the invocation that made them.
+func (c *HTTPClient) Close() error {
+	if tr, ok := c.http.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	return nil
+}
+
 // Consult performs one chat-completions round-trip.
 //
 // On any non-2xx response, the body is included in the returned error,

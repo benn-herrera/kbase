@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,12 +47,25 @@ func templateKeys(template string) map[string]bool {
 	return keys
 }
 
+// modelledNotWritten is the key config's schema models and no template writes:
+// the superseded top-level provider key, which loads so an old config.toml
+// keeps working and which `kbase configure` removes rather than writes. The
+// entry fails the test once a template spells the key, so it cannot outlive its
+// reason.
+var modelledNotWritten = map[string]bool{"provider": true}
+
 // TestTemplatesSpellEveryModeledKey: a template is the only schema prose a
 // user is handed, so neither may fall behind the structs it describes. Every
 // key the loaders model is spelled in the template it belongs to, as a live or
 // a commented `key =` line — a field added to Provider or Config without a line
 // here fails before a user meets a key the file never mentions.
 func TestTemplatesSpellEveryModeledKey(t *testing.T) {
+	configKeys := tomlKeys(reflect.TypeOf(Config{}), "")
+	for key := range modelledNotWritten {
+		if !slices.Contains(configKeys, key) {
+			t.Fatalf("%s is exempt from the template but no longer modelled", key)
+		}
+	}
 	for _, tc := range []struct {
 		file     string
 		typ      reflect.Type
@@ -64,6 +78,12 @@ func TestTemplatesSpellEveryModeledKey(t *testing.T) {
 			shown := templateKeys(tc.template)
 			for _, key := range tomlKeys(tc.typ, "") {
 				leaf := key[strings.LastIndex(key, ".")+1:]
+				if modelledNotWritten[key] {
+					if shown[leaf] {
+						t.Errorf("the %s template states %s: drop its modelledNotWritten entry", tc.file, key)
+					}
+					continue
+				}
 				if !shown[leaf] {
 					t.Errorf("the %s template states no %s key (`%s =`)", tc.file, key, leaf)
 				}
@@ -85,6 +105,7 @@ func TestConfigTemplateCarriesTheModelGuidance(t *testing.T) {
 	for _, want := range []string{
 		"a mid-weight reasoning model (e.g. d3, clef)",
 		"a ~9B instruct model (e.g. Qwen3.5-9B)",
+		"the strongest reasoning model on offer (e.g. clef, d3)",
 	} {
 		if !strings.Contains(prose, want) {
 			t.Errorf("the guidance states no %q:\n%s", want, prose)
@@ -116,10 +137,11 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
-	providers, faults, cfg, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	providers, faults, cfg := loaded.Providers, loaded.Faults, loaded.Cfg
 	if len(faults) != 0 {
 		t.Errorf("faults = %+v, want none: a fresh template drops nothing", faults)
 	}

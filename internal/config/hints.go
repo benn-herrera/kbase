@@ -35,11 +35,18 @@ var modelHints = []modelHint{
 		examples:   []string{"Qwen3.5-9B"},
 		note:       "kbase sets passage length; dense prose warrants a larger model",
 	},
+	{
+		category:   CategoryScoring,
+		does:       "the KB's rigor and bearing, one item per ask",
+		capability: "the strongest reasoning model on offer",
+		examples:   []string{"clef", "d3"},
+		note:       "a scoring model may differ from text's; nothing falls back to it",
+	},
 }
 
 // modelHintsShared and modelHintsVendor hold for every row.
 const (
-	modelHintsShared = "One model may serve both roles where the provider accepts its catalogue on " +
+	modelHintsShared = "One model may serve more than one role where the provider accepts its catalogue on " +
 		"the decision surface (oMLX does); check decision quality before settling."
 	modelHintsVendor = "OpenAI's own /v1/decisions currently accepts gpt-6-luna alone; " +
 		"OpenAI-compatible servers decide their own sets, selected by the entry's decisionsFlavor."

@@ -3,8 +3,6 @@ package build
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +14,6 @@ import (
 	"kbase/internal/asks/call"
 	"kbase/internal/atomicfile"
 	"kbase/internal/filelock"
-	"kbase/internal/kb"
 	"kbase/internal/result"
 	"kbase/internal/write"
 )
@@ -39,44 +36,10 @@ const (
 	// regenerateDir, under scratch, is where a resume rebuilds the document
 	// graph to regenerate missing records; it is removed once read.
 	regenerateDir = "regenerate"
-	// stateKeyHexDigits is the key's length: the first 16 hex digits of the
-	// SHA-256 of the resolved kb-root/ path.
-	stateKeyHexDigits = 16
 	// lockWait bounds the wait for the run lock and the holder lock, so a
 	// monitor probing one does not turn a starting build away.
 	lockWait = 2 * time.Second
 )
-
-// stateDir is the store for the KB at kbRoot: override, else
-// $XDG_STATE_HOME/kbase/<key>, $XDG_STATE_HOME defaulting to
-// ~/.local/state. It refuses a store inside kb-root/.
-func stateDir(override, kbRoot string) (string, error) {
-	dir := override
-	if dir == "" {
-		key, err := stateKey(kbRoot)
-		if err != nil {
-			return "", err
-		}
-		base := os.Getenv("XDG_STATE_HOME")
-		if base == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			base = filepath.Join(home, ".local", "state")
-		}
-		dir = filepath.Join(base, "kbase", key)
-	}
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	if kb.Within(kbRoot, dir) {
-		return "", result.Refusal{{Check: checkUsage, Path: dir, Key: "--state-dir",
-			Detail: fmt.Sprintf("the state directory %s is inside %s; build state is never written there", dir, kbRoot)}}
-	}
-	return dir, nil
-}
 
 // reportPath is where a stage's report lands in the store at dir.
 func reportPath(dir, stage string) string { return filepath.Join(dir, ReportsDir, stage+".yaml") }
@@ -91,20 +54,6 @@ func writeReport(path string, report result.Record) error {
 		return err
 	}
 	return atomicfile.Write(path, b.Bytes(), nil)
-}
-
-// stateKey names the store of the kb-root/ at kbRoot, whether or not it
-// exists yet; its directory must.
-func stateKey(kbRoot string) (string, error) {
-	abs, err := filepath.Abs(kbRoot)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(filepath.Dir(abs)); err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(kb.ResolvePath(abs)))
-	return hex.EncodeToString(sum[:])[:stateKeyHexDigits], nil
 }
 
 // holder is what the holder lock says about the build holding it.

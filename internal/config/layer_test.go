@@ -148,10 +148,11 @@ baseUrl = "http://local.example/v1"
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
 	}
-	providers, faults, cfg, err := Load(layers)
+	loaded, err := Load(layers)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	providers, faults, cfg := loaded.Providers, loaded.Faults, loaded.Cfg
 	if len(faults) != 0 {
 		t.Fatalf("a healthy stack reported faults: %+v", faults)
 	}
@@ -189,10 +190,11 @@ func TestLoadOneLayer(t *testing.T) {
 	writeProviders(t, dir, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
 	writeFile(t, dir, ConfigFileName, "provider = \"solo\"\n\n[models]\ndecision = \"d\"\ntext = \"t\"\n")
 
-	providers, _, cfg, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	providers, cfg := loaded.Providers, loaded.Cfg
 	if got := providers["solo"].Layer; got != LayerSourceExplicit {
 		t.Errorf("solo.Layer = %q, want %q", got, LayerSourceExplicit)
 	}
@@ -208,16 +210,23 @@ func TestLoadFaultNamesItsFile(t *testing.T) {
 	writeProviders(t, globalDir, "[ok]\nbaseUrl = \"http://ok.example/v1\"\n")
 	repoPath := writeProviders(t, repoDir, "[broken]\n")
 
-	_, faults, _, err := Load([]Layer{
+	faults := mustLoad(t, []Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
-	})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	}).Faults
 	if len(faults) != 1 || faults[0].Name != "broken" || faults[0].Path != repoPath {
 		t.Fatalf("faults = %+v, want the dropped repository entry naming %s", faults, repoPath)
 	}
+}
+
+// mustLoad is Load for a test that has already checked it succeeds.
+func mustLoad(t *testing.T, layers []Layer) Loaded {
+	t.Helper()
+	loaded, err := Load(layers)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return loaded
 }
 
 // TestLoadDropsSupersededFault: a fault naming an entry a higher layer already
@@ -265,10 +274,11 @@ apiKeyFile = "not-here.key"
 				{Path: repoDir, Source: LayerSourceRepository},
 				{Path: globalDir, Source: LayerSourceGlobal},
 			}
-			providers, faults, cfg, err := Load(layers)
+			loaded, err := Load(layers)
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
+			providers, faults, cfg := loaded.Providers, loaded.Faults, loaded.Cfg
 			if len(providers) != 1 || providers["local"].Layer != tc.wantLayer {
 				t.Fatalf("pool = %+v, want the one local entry from %s", providers, tc.wantLayer)
 			}
@@ -309,14 +319,14 @@ func TestLoadRefusesTheStack(t *testing.T) {
 	globalConfig := writeFile(t, globalDir, ConfigFileName, "provider = \"a\"\n")
 	repoConfig := writeFile(t, repoDir, ConfigFileName, "provdier = \"b\"\n")
 
-	providers, faults, cfg, err := Load([]Layer{
+	loaded, err := Load([]Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
 	})
 	if err == nil || !strings.Contains(err.Error(), repoConfig) || strings.Contains(err.Error(), globalConfig) {
 		t.Fatalf("Load = %v, want the repository file refused and the global one unnamed", err)
 	}
-	if providers != nil || faults != nil || cfg != (Config{}) {
-		t.Errorf("a refused load returned a partial configuration: %v %v %+v", providers, faults, cfg)
+	if loaded.Providers != nil || loaded.Faults != nil || loaded.Cfg != (Config{}) {
+		t.Errorf("a refused load returned a partial configuration: %+v", loaded)
 	}
 }

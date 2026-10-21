@@ -17,7 +17,7 @@ import (
 // documentedKeys is each subcommand's own result keys, in their documented
 // order: the contract a model reading a result relies on.
 var documentedKeys = map[string][]string{
-	"build":              {"state-dir", "provider", "provider-rule", "provider-layer", "through", "no-inference", "resumed", "restored", "stages", "resume"},
+	"build":              {"state-dir", "roles", "through", "no-inference", "resumed", "restored", "stages", "resume"},
 	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
 	"cancel":             {"state-dir", "pid", "resume"},
 	"init":               {"written", "removed"},
@@ -31,8 +31,9 @@ var documentedKeys = map[string][]string{
 	"render-claim-graph": {"written", "removed", "sheet", "dot"},
 	"models":             {"provider", "provider-rule", "provider-layer", "models"},
 	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
-	"show-config":        {"layers", "providers", "config", "environment", "selection", "inference", "diagnostics"},
+	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "harnesses", "diagnostics"},
 	"export-latex":       {"written", "volumes", "report"},
+	"score":              {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
 }
 
 // documentedSubKeys is the keys of each mapping a result nests, in order.
@@ -42,14 +43,19 @@ var documentedSubKeys = map[string][]string{
 	"status.current":           {"stage", "units-done", "units-total"},
 	"write-op.adopted":         {"entry", "id", "differs"},
 	"resolve-demoted.resolved": {"source", "target", "action"},
-	"configure.models":         {"decision", "text"},
-	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
+	"configure.models":         {"decision", "text", "scoring"},
+	"score.counts":             {"total", "done", "failed", "remaining"},
+	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists", "harnessesExists"},
 	"show-config.providers":    {"name", "base-url", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
-	"show-config.config":       {"provider", "models"},
+	"show-config.config":       {"models"},
 	"show-config.selection":    {"provider", "rule", "detail"},
-	"show-config.inference":    {"name", "base-url", "decision", "text", "sources"},
+	"build.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer"},
+	"score.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer"},
+	"show-config.roles":        {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer", "base-url", "sources", "detail"},
+	"show-config.harnesses":    {"name", "layer", "command"},
 	"migration":                {"from", "to", "note"},
-	"cancelled":                {"stage", "unit"},
+	"build.cancelled":          {"stage", "unit"},
+	"score.cancelled":          {"item"},
 	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
 
@@ -217,11 +223,12 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		nested(key, "item")
 	}
 	nested("migration", "migration")
-	nested(toolresult.CancelledKey, "cancelled")
 	// Every record the table nests under this verb's result is checked, in the
 	// table's own names: a record naming a key the table does not document, or
 	// stating its keys out of order, fails here, and a nested record added to
-	// the table needs nothing else to be checked.
+	// the table needs nothing else to be checked. `cancelled` is documented per
+	// verb — a build names the stage and unit it stopped at, a score run the
+	// item it stopped before — so it is reached through the same loop.
 	for _, documented := range slices.Sorted(maps.Keys(documentedSubKeys)) {
 		sub, ok := strings.CutPrefix(documented, entry+".")
 		if !ok || strings.Contains(sub, ".") {

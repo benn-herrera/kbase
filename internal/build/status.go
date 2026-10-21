@@ -14,6 +14,7 @@ import (
 	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/result"
+	"kbase/internal/statedir"
 	"kbase/internal/write"
 )
 
@@ -58,7 +59,7 @@ func (o MonitorOptions) open() (repo *ledger.Repo, kbRoot, dir string, err error
 		return nil, "", "", err
 	}
 	kbRoot = filepath.Join(repo.Root, kb.KBDir)
-	if dir, err = stateDir(o.StateDir, kbRoot); err != nil {
+	if dir, err = statedir.Dir(o.StateDir, kbRoot); err != nil {
 		return repo, kbRoot, dir, err
 	}
 	_, err = storeVersion(dir)

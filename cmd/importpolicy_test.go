@@ -67,6 +67,10 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/log"},
 	why:     "ledger imports log and nothing else of kbase",
 }, {
+	from:    []string{"internal/config"},
+	allowed: []string{"internal/atomicfile"},
+	why:     "the configuration is grammar and resolution: it imports atomicfile to write its files, and never model, result or log — it opens no client and names no verb",
+}, {
 	except:    []string{"internal/build", "cmd"},
 	forbidden: []string{"internal/kbdocs"},
 	direct:    true,
@@ -76,6 +80,11 @@ var dependencyRules = []dependencyRule{{
 	forbidden: []string{"internal/ledger"},
 	direct:    true,
 	why:       "only build and cmd's init verb import ledger",
+}, {
+	except:    []string{"internal/build", "cmd"},
+	forbidden: []string{"internal/statedir"},
+	direct:    true,
+	why:       "only the build and the verbs that read a run's state open the state store",
 }, {
 	except:    []string{"internal/asks/call", "internal/build", "internal/model", "cmd"},
 	forbidden: []string{"internal/model"},
@@ -103,6 +112,14 @@ var dependencyRules = []dependencyRule{{
 	from:    []string{"internal/mcp"},
 	allowed: []string{"internal/log"},
 	why:     "the MCP server is framing and dispatch over a table cmd injects: it imports log only, so it reaches no KB package, no model, no caller (I9)",
+}, {
+	from:    []string{"internal/harness"},
+	allowed: []string{"internal/log"},
+	why:     "the harness runs one command and knows nothing of kbase: no provider, no endpoint, no config type, no KB path",
+}, {
+	from:      []string{"internal/score"},
+	forbidden: []string{"internal/model", "internal/harness"},
+	why:       "the back end sits below the score verb's Ask seam: the runner, the guard, the parse and the ledger learn nothing of what answered",
 }, {
 	except:    []string{"cmd", "internal/mcp"},
 	forbidden: []string{"internal/mcp"},
@@ -208,8 +225,9 @@ func TestDependencyRules(t *testing.T) {
 // level, the production files of cmd that may import it — the file-level
 // read of a rule whose package form exempts all of cmd.
 var cmdFileImporters = map[string][]string{
-	// the build verb, and the provider dial the models and configure verbs share
-	"internal/model": {"cmd/build.go", "cmd/provider.go"},
+	// the build verb, the provider dial the models and configure verbs share, and
+	// the score verb's ask
+	"internal/model": {"cmd/build.go", "cmd/provider.go", "cmd/score.go"},
 	// the init verb, the only cmd path that commits
 	"internal/ledger": {"cmd/init.go"},
 	// the init verb, the only cmd path that stamps readiness documents

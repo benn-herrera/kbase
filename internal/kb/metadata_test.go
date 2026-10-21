@@ -507,7 +507,7 @@ const register = `# Register
     over two lines
 
 ### Strength
-- strength: 0.10 (refuted, do not use) [= min(0.80, 0.10)]
+- strength: 0.10 (unsubstantiated) [= min(0.80, 0.10)]
 
 ---
 
@@ -540,7 +540,7 @@ func TestParseClaimEntries(t *testing.T) {
 	if e.Title != "First Claim" || e.CanonicalAnchor != "first-claim" || *e.Rigor != 0.8 {
 		t.Errorf("entry = %+v", e)
 	}
-	if *e.Strength != 0.1 || *e.BuildStatus != "refuted, do not use" || e.StrengthTrace != " [= min(0.80, 0.10)]" {
+	if *e.Strength != 0.1 || *e.BuildStatus != "unsubstantiated" || e.StrengthTrace != " [= min(0.80, 0.10)]" {
 		t.Errorf("strength line read as %v %q %q", *e.Strength, *e.BuildStatus, e.StrengthTrace)
 	}
 	if e.Rationale != "first line continues here." {

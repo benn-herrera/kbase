@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/kb"
 	"kbase/internal/log"
 )
 
@@ -139,7 +140,7 @@ func TestRefreshAndVerifyVerbs(t *testing.T) {
 	if code, out := runMaintenance(t, runRefresh, sub); code != 0 || !strings.Contains(out, `outcome: "done"`) || !strings.Contains(out, `- ".index/claims.yaml"`) {
 		t.Errorf("first refresh: exit %d\n%s", code, out)
 	}
-	if b, _ := os.ReadFile(filepath.Join(sub, "entry-point.md")); !strings.HasPrefix(string(b), "---\nkind: entry-point\n") || !strings.Contains(string(b), "kb-format: \"2.0.0\"\n---\n") {
+	if b, _ := os.ReadFile(filepath.Join(sub, "entry-point.md")); !strings.HasPrefix(string(b), "---\nkind: entry-point\n") || !strings.Contains(string(b), "kb-format: \""+kb.FormatVersion+"\"\n---\n") {
 		t.Errorf("the first refresh left the entry point unstamped:\n%s", b)
 	}
 	if code, out := runMaintenance(t, runRefresh, repo); code != 0 || !strings.Contains(out, `outcome: "unchanged"`) {

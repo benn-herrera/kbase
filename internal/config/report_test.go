@@ -37,7 +37,7 @@ func TestReport(t *testing.T) {
 		},
 		{
 			name: "a pool with one fault of each kind",
-			cfg:  Config{Provider: "reaper", Models: ModelMap{Decision: "clef", Text: "qwen"}},
+			cfg:  Config{Provider: "reaper", Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"}},
 			providers: Providers{
 				"reaper": {Name: "reaper", BaseURL: "https://reaper.example/v1", APIKeyFile: "keys/reaper.txt", Layer: LayerSourceRepository,
 					DecisionsFlavor: FlavorDecisions},
@@ -68,8 +68,7 @@ func TestReport(t *testing.T) {
 					{Path: repoDir, Source: LayerSourceRepository, ProvidersExists: true},
 					{Path: globalDir, Source: LayerSourceGlobal},
 				},
-				Provider: "reaper",
-				Models:   ModelMap{Decision: "clef", Text: "qwen"},
+				Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"},
 				Entries: []Entry{
 					{Name: "broken", Layer: LayerSourceRepository, Fault: "no baseUrl declared"},
 					{Name: "nokey", BaseURL: "https://nokey.example/v1", DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},

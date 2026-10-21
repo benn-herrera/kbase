@@ -32,7 +32,9 @@ var converters = []converter{
 // Chain converts files from version from to version to through the
 // registered converters in version order. The obsolete paths are the union of
 // every step's, sorted. A version no converter leads on from is an error
-// naming it.
+// naming it, unless only its patch differs from the form the last step
+// produces: a patch changes the bytes a writer produces and not a file's form,
+// so nothing converts to one and the next save stamps it (SPEC §10).
 func Chain(from, to string, files Files) (Files, []string, error) {
 	return chain(converters, from, to, files)
 }
@@ -53,6 +55,10 @@ func chain(steps []converter, from, to string, files Files) (Files, []string, er
 	for version := from; compareSemver(current, target) < 0; {
 		step, ok := nextStep(steps, version, target)
 		if !ok {
+			// A patch above the form the last step produces converts nothing.
+			if current[0] == target[0] && current[1] == target[1] {
+				break
+			}
 			return nil, nil, fmt.Errorf("migrate: no converter leads from %s toward %s", version, to)
 		}
 		next, gone, err := step.Convert(files)

@@ -36,12 +36,17 @@ Read in this order:
    over real pipes). The build-end leg (`test-integration-mcp-build`: a build whose end the server
    announces over a subscription, the probe sending nothing) needs pandoc, so it runs by name rather
    than inside the hermetic suite. All of them should be green on a fresh clone.
-3. **Provider configuration** is read by `build`, `models` and `configure`; only `build` spends
-   inference. The server passes its own environment and `--config-dir` to the build it starts (README
-   "Configuration"; SPEC §9 for the `KBASE_*` variables and precedence). The `show-config` tool
-   reports how the server's configuration resolves — the pool and its faults, the selected entry,
-   the endpoint or what is missing — and needs no provider: it takes no action and makes no request
-   (SPEC §9.6).
+3. **Configuration** is read from `providers.toml`, `config.toml` and `harnesses.toml` by the verbs
+   that load it — SPEC §9 names them — while `build` and `score` spend inference, and `score` is a
+   command line rather than a tool. Each role — `decision`, `text`, `scoring` — names its own
+   endpoint and model in `[models]` as a `<provider>/<model>` reference, or in the environment as
+   `KBASE_<ROLE>` beside `KBASE_API_BASE_URL`; the two sources are modes and never merge. The server
+   passes its own environment and `--config-dir` to the build it starts (README "Configuration";
+   SPEC §9 for the `KBASE_*` variables and the two modes). The `show-config` tool reports how the
+   `KBASE_*` variables and the two modes). The `show-config` tool reports how the server's
+   configuration resolves — the pool and its faults, the `mode`, the selected entry, one `roles`
+   record per role, the harness profiles and their layers — and needs no provider: it takes no
+   action and makes no request (SPEC §9.7).
 4. **A KB to serve.** Either one already built (a repository with `kb-root/` in it), one you build
    first with `kbase build <volume-root.tex>` from the repository root, or one you create empty with
    `kbase init` and fill through the write ops (SPEC §8). A KB at an older metadata format is
@@ -73,13 +78,14 @@ the harness's.
 
 The server gives a harness the tools; the agents that know how to use them come from a separate
 repository, [adjagent](https://github.com/benn-herrera/adjagent), which renders a whole agent set
-from templates and installs it into a project. The KB part of that set is one skill and two
+from templates and installs it into a project. The KB part of that set is one skill and its
 subagents:
 
 - **skill:** `kbase` — the KB as one of the session's capabilities rather than a command to
   remember. It locates the KB and routes to a reference for reading, maintenance or building.
 - **subagents:** `kb-maintainer` (the write side: inserts entries, sets fields, runs the
-  refresh/verify loop) and `kb-claim-scorer` (grades derivations; writes nothing).
+  refresh/verify loop). Scoring runs `kbase score`; the former scorer seat is retired by the
+  adjagent hand-off.
 
 **Acquiring them.** Clone adjagent anywhere; it needs Python 3.11 or later. From its root:
 
@@ -118,12 +124,15 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
   `strength-below`, `subtree`, `weak-points`, `stats`), `show-config`, `models`, `configure`,
   `refresh`, `verify`, `render-claim-graph`, `export-latex`, `status`, `cancel` and `build`. Not
   offered: `completion`, `help`, `mcp` — and `wait`, which a tool call would hold for the build's
-  duration; the `build` tool returns its command instead. Each tool's input schema is derived from
+  duration; the `build` tool returns its command instead. `score` is not offered either: a scoring
+  run asks one model call per item and takes minutes, so it runs as `kbase score` at a shell
+  (SPEC §8). Each tool's input schema is derived from
   its command's arguments and flags; a write op's schema is one entry with the op's closed set of
   value keys and no others. The queries, `verify`, `status`, `render-citation`, `show`,
   `show-config`, `models` and `rewind-build` carry the read-only annotation. `models` reads the
-  selected provider's model catalogue. `configure` writes `config.toml`, dialling the provider for
-  that catalogue except on its `--create` path with no `--provider`, which dials nothing. Neither
+  selected provider's model catalogue. `configure` writes `config.toml` — and, under `--create`,
+  creates `providers.toml` and `harnesses.toml` where none stand — dialling the provider for that
+  catalogue except on its `--create` path with no `--provider`, which dials nothing. Neither
   performs inference, which stays with `build`.
 - **`rewind-build` is the one listed tool.** No subcommand stands behind it: its schema is written by
   hand (`target` and `state-dir`, both optional), and a refusal from it is keyed by the schema
@@ -169,8 +178,10 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
 - **Protocol.** The server implements one MCP revision, pinned as a constant (ARCHITECTURE §12,
   currently `2025-11-25`); an `initialize` naming another revision is answered with the server's
   for the client to decide. Calls are answered one at a time, in order. EOF on stdin ends the
-  server. The server sends no sampling request, offers no prompts, and reads no harness
-  configuration.
+  server. The server sends no sampling request and offers no prompts. It loads no configuration itself:
+  the verbs it exposes load their own on each call (SPEC §9), `harnesses.toml` included, and no tool
+  asks a harness — `score`, the one verb that runs a profile, is not a tool. The `build` child it
+  starts inherits the server's environment and `--config-dir`.
 
 ## Checking the integration
 
@@ -181,7 +192,7 @@ Two levels, both cheap.
    then `tools/call` with `{"name": "stats", "arguments": {}}`, and `resources/list`. Each
    request gets one JSON-RPC response line; `tools/list` should name every bound tool (SPEC §11) and
    the one listed tool, `rewind-build`, and `stats` should return `outcome: done` in its structured
-   content. The transcript fixtures under `test_data/fixtures/mcp/` are worked examples of the exact
+   content. The transcript fixtures under `test-data/fixtures/mcp/` are worked examples of the exact
    frames.
 2. **In the harness.** Register the server, open a session in the repository, confirm the harness
    lists `kbase` as connected with its tools, and ask for something that needs a lookup ("how strong
@@ -210,4 +221,4 @@ trail, each covered above; the KB's own documents are not resources — they are
 harness reads itself. Nor does any tool name a configuration directory: `--config-dir` is the
 server's flag, so the layers the server resolved are what `show-config` reports and `models` selects
 its entry from, and `configure` writes into one of them — or into the served KB's repository layer,
-when `--project` names it. `show-config` changes nothing (SPEC §9.6).
+when `--project` names it. `show-config` changes nothing (SPEC §9.7).

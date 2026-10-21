@@ -28,13 +28,18 @@ type BuildBand struct {
 	Label        string
 }
 
-// BuildBandLadder is in descending threshold order.
+// BuildBandLadder is in descending threshold order. Its last rung states an
+// outcome and not a cause: every strength under 0.20 lands there from either
+// direction — a refuter's cap, or a minimum no premise carries — and what it
+// says is that nothing a claim built on this would inherit substantiates the
+// claim. The cause, where a reader needs it, is the fault record and the
+// derivation trace's own.
 var BuildBandLadder = []BuildBand{
 	{"ok-to-build", 0.85, "ok to build on", "ok to build on"},
 	{"ok-with-caveats", 0.65, "ok to build on, see caveats", "ok to build on, see caveats"},
 	{"input-only", 0.45, "use as input only, don't build deeper", "use as input only"},
 	{"do-not-build", 0.20, "do not build on, rework needed", "do not build on, rework needed"},
-	{"refuted", 0.00, "refuted, do not use", "refuted, do not use"},
+	{"unsubstantiated", 0.00, "unsubstantiated", "unsubstantiated"},
 }
 
 // UnknownBandSlug is the band of an unassessed strength.

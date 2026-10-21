@@ -59,7 +59,7 @@ func TestRefreshThenVerify(t *testing.T) {
 		}
 	}
 	if got, want := read(t, filepath.Join(root, kb.EntryPointFile)),
-		"---\nkind: entry-point\nsubtree-claims: [clm-aaaaaa]\nsubtree-experiments: []\nkb-format: \"2.0.0\"\n---\n\n# KB\n\n- [vol](vol/index.md)\n"; got != want {
+		"---\nkind: entry-point\nsubtree-claims: [clm-aaaaaa]\nsubtree-experiments: []\nkb-format: \""+kb.FormatVersion+"\"\n---\n\n# KB\n\n- [vol](vol/index.md)\n"; got != want {
 		t.Errorf("entry point after refresh =\n%s\nwant\n%s", got, want)
 	}
 	if findings, err := Verify(kb.OnDisk(root)); err != nil || len(findings) > 0 {

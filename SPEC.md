@@ -53,7 +53,7 @@ filter.
 
 - A KB kbase builds is navigable in Claude Code or opencode through the kbase skill's reading
   route, and maintainable through the same skill's maintenance route by kb-maintainer;
-  kb-claim-scorer grades derivations.
+  `kbase score` grades the KB's rigor and bearings.
 - Exact: the metadata layer, the load-bearing forms, and the KB's placement (`kb-root/` beside
   `.git`; reading starts at `kb-root/entry-point.md` and descends through `index.md` files).
 - Free and untested: presentation — wrap width, bullet characters and the like.
@@ -71,7 +71,7 @@ filter.
 **Stamped documents.** `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands:
 kbase's subcommands.
 
-**Formats.** A new KB is written in the current metadata format, `2.0.0` (§10). A KB in a superseded
+**Formats.** A new KB is written in the current metadata format, `2.0.1` (§10). A KB in a superseded
 form — `0.9.0` or `1.0.0` (§10) — is read through migration.
 
 **Theorem numbering** is whatever pandoc prints.
@@ -187,7 +187,7 @@ outcome `bounded`, exit 0 (§7).
 **Inference preflight.** A build with a stage left to walk that calls a model refuses (§7,
 `refused`) before the first stage it walks when no provider is configured (§9), naming the
 configuration it lacks; its `detail` names `kbase show-config` as the diagnostic that shows how the
-configuration resolved (§9.6). A build spending no inference needs none. Every model call a build
+configuration resolved (§9.7). A build spending no inference needs none. Every model call a build
 makes is one tool-less chat request answered from its prompt alone — except the claim-graph letter
 asks, which are each one `POST` to the decision surface the selected entry names (§9.1) carrying a
 closed-set question (a `choice` or `noul` question over the offered letters) and answered by
@@ -373,11 +373,13 @@ usage error on its own command line, before it serves, still prints a YAML refus
    no `kb-root/` stands (§8).
 3. `migration`: a conditional record — `from`, `to`, `note` — present on the result of every verb
    that reads a KB through the loader on an older format version, and absent otherwise (§10):
-   `refresh`, `verify`, `render-claim-graph`, `render-citation`, `export-latex`, the queries and
-   every write op. It follows `kb-root` where the result carries both.
+   `refresh`, `verify`, `render-claim-graph`, `render-citation`, `export-latex`, the queries, `score`
+   and every write op. It follows `kb-root` where the result carries both.
 4. The subcommand's own keys, in the order its table gives.
-5. Exactly one of these, chosen by `outcome`: `refusals` for `refused` and `retry`; `failures` for
-   `failed`; `cancelled` (a mapping of `stage` and `unit`) for `cancelled`.
+5. Exactly one of these, chosen by `outcome`, and it closes the document: `refusals` for `refused`
+   and `retry`; `failures` for `failed`; `cancelled` for `cancelled` — a mapping of `stage` and
+   `unit` on a build, and of `item` on a `score` run (§8). `done`, `unchanged` and `bounded` close
+   on no such key.
 
 Keys are kebab-case. The one exception is query data under `results`, which keeps the query data's
 own names verbatim (`strengthen_by`, `mentioned_ids`). The same fact always uses the same key:
@@ -391,7 +393,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `usage`, `provider`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `harness`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it |
@@ -402,14 +404,14 @@ or `key`:
 
 A refusal lists every offending item. A usage error is one item with `check: usage`. A
 provider-selection refusal names `key: --provider` and lists every entry name as `allowed`; a
-category `configure` is not given names `key: models.<category>` (`models.decision` or
-`models.text`) and lists the provider's model ids as `allowed`.
+category `configure` is not given names `key: models.<category>` (`models.decision`,
+`models.text` or `models.scoring`, `check: detect`) and lists the provider's model ids as `allowed`.
 
 **Per-subcommand keys**, following `kb-root`:
 
 | Subcommand | Keys |
 |---|---|
-| `build` | `state-dir`; `provider`, `provider-rule`, `provider-layer` (the endpoint's provenance: the pool entry it came from, the rule that named it — `flag`, `config` or `sole-entry` — and the layer that supplied the entry — `explicit`, `environment`, `repository` or `global`; the three are absent together where no pool entry supplied the endpoint: `--no-inference`, a build that resolved no provider, or a base URL the environment supplies); `through` (absent where this invocation walked no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store); absent where this invocation walked no stage); `resume` (absent where an identical re-issue continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that walked no stage, and a `refused` run that recorded no boundary) |
+| `build` | `state-dir`; `roles` (one record per role the build resolved, in role order — `decision`, then `text` — in the role record's shape below; absent where it resolved none, as under `--no-inference`); `through` (absent where this invocation walked no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store); absent where this invocation walked no stage); `resume` (absent where an identical re-issue continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that walked no stage, and a `refused` run that recorded no boundary) |
 | `status` | `state-dir`; `state` (§6's vocabulary, `interrupted` included); `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` (absent for `finished`, `running` and `bounded`; read from the run §6 names) |
 | `cancel` | `state-dir`; `pid`; `resume` (absent where the record's command does not read as a `kbase build` invocation, §6) |
 | `init` | `written` (every path this call wrote — the spine, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
@@ -421,10 +423,37 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; the context null where the edge has none) |
 | `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
-| `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag`, `config` or `sole-entry` — and the layer that supplied it, as `build`'s; this verb always resolves one); `models` (ids, sorted ascending) |
-| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each file's); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `provider`, `models` (`decision`, `text`, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag`, `config` or `sole-entry` — or `detail` where no entry was named); `inference` (`name`, `base-url`, `decision`, `text`, `sources` (one record: `base-url`, `decision`, `text`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset); null where it does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where inference does not resolve) |
-| `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote, `providers.toml` before `config.toml` where `--create` created both; `[]` with outcome `unchanged`) |
+| `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
+| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists`, `harnessesExists` — the directory's presence and each of its three files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `harnesses` (the loaded profiles in name order: `name`, `layer` (the layer whose file supplied it), `command` (the argv as written, tokens in place); `[]` where none loads); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
+| `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `harnesses.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
+| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass`; `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
+
+**The role record.** A verb whose endpoints are per role states them in `roles`, one record per role
+it resolved, in role order — `decision`, `text`, `scoring` — with these keys in this order, each
+omitted where it does not apply:
+
+| Key | Holds |
+|---|---|
+| `role` | `decision`, `text` or `scoring` |
+| `back-end` | what answered: `provider` (a pool entry), `environment` (the environment's endpoint) or `harness` (a profile) |
+| `provider` | the pool entry's name |
+| `provider-rule` | the rule that named it: `flag` (a flag overrode the reference) or `config` (the reference named it) |
+| `provider-layer` | the layer that supplied the entry: `explicit`, `environment`, `repository` or `global` |
+| `model` | the model id this invocation asked for; null where no source named one |
+| `harness` | the profile's name, under a harness alone |
+| `harness-layer` | the layer that supplied the profile: `explicit`, `environment`, `repository` or `global` |
+| `base-url`, `sources` | `show-config` alone: the endpoint, and the layer that supplied each field |
+| `detail` | `show-config` alone: why the role does not resolve, where it does not |
+
+`provider`, `provider-rule` and `provider-layer` stand together or not at all: no pool entry supplied
+the endpoint when the environment did, or when a harness did. `back-end` is what tells the three
+cases apart, so a reader never infers the source from an absence.
+
+**The model is the one requested, never one observed.** `model` is the id this invocation asked for,
+and no result document or ledger line states one a server or a command ran. It is null where no
+source named one, and a harness profile whose command names no `{model}` asks its own model, which
+kbase cannot name — that null is how a reader tells a harness's own choice from a named model.
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
@@ -445,8 +474,9 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 
 ## 8. Maintenance subcommands
 
-Every subcommand below is a builtin tool an agent harness can call. The rules in this section govern
-each.
+Every subcommand below but `score` is a builtin tool an agent harness can call; `score` drives one
+model call per item and runs as the binary, excluded from the server (§11). The rules in this
+section govern each.
 
 **Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary is closed,
 and stated once, in kbase's write package; it is not copied into prose. A refusal names the key, its
@@ -466,7 +496,8 @@ is `refused`, never `unchanged`.
 whole run: from loading the KB through the trailing refresh and the sheets to the result. `init`
 holds it from before `kb-root/` exists — the lock sits on the directory `kb-root/` stands in, so it
 is available at birth — through the skeleton, the trailing refresh and the birth commit to the
-result. A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
+result. `score` takes it around each landing and around each of its two refreshes, never across the
+run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
 repository root, and the remedy. A write verb probes for a running build (§6) before it waits on the
 write lock and again after taking it: where a build runs it is `refused` with the `lock` item at
 once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes
@@ -672,6 +703,212 @@ export byte-identical and reports `unchanged`. The export takes no KB write lock
 `kb-root/` is written, so it reads as the queries do — and it runs no git. Result
 keys: §7.
 
+### `score`
+
+```
+kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--harness NAME]
+            [--dry-run] [--resume RUN] [--state-dir DIR] [--timeout DURATION]
+```
+
+Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
+call, each value landed through the write API and recorded in a ledger. `--pass` is required and names
+one of the two; `--timeout` is the deadline for one item's call (default `30s`). It is a CLI verb and
+not a tool (§11): a run asks one call per item and takes minutes, so a harness runs `kbase score` at a
+shell rather than holding a tool call open. There is no `--provider`: a scoring-time endpoint is named
+by `--scoring-model`, which states the provider and the model in one value, and passing `--provider`
+is a usage refusal.
+
+**The two passes.** `rigor` walks every claim, analysis and experiment, by id — a node's own value.
+`bearing` walks every scoring edge — `supports`, `founds`, `lifts` and `refutes` — by relation in
+that order, then source, then target. The set is read from the index once, at the run's start, and
+does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a run
+walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
+work's standing is judged with the document in hand, and `set-rigor` is what writes it. An axiom is
+on neither pass either, its rigor being `1.0` by rule; a `founds` edge is a bearing subject like any
+other.
+
+**One item, one quantity, one call.** A call carries one node's text or one edge's — never two
+subjects, never the other pass's quantity. The text is closed to the subject: a node's title and
+statement, or an edge's two statements, its authored context and the target's passage; the register's
+own score and strength sections are never read. A text carrying a scoring token (`- rigor:`,
+`- strength:`, `(bearing …)`, `(strength …)`) is refused before the call, naming the document and
+line, and that item is `failed` with no call made.
+
+**The answer.** A reply is a list of charge lines, each one fault id and the span of the item's own
+text that shows the fault — one line per occurrence, in the order written — or the word `none`,
+alone, or `flt-pending`, alone.
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) states the criteria, the
+two closed sets and the citation rule; this section states what kbase does with a reply.
+
+- **The ids are the pass's.** `rigor` accepts its six and `flt-pending`, `bearing` its six and
+  `flt-pending`, and nothing else; an id outside that set is `malformed`, the refusal naming the id
+  and the pass's ids as `allowed`.
+- **The citation is looked up in the text the call carried** — never in the register — by collapsed
+  whitespace and folded case, whole within one passage: a node's `title` or `statement`, an edge's
+  `source` or `target`. An edge's `## Context` is not citable. A span the two ends carry alike is
+  recorded as `both`, at its earlier match. A citation not found is `malformed`, naming the id and the
+  span; so is an empty or whitespace-only span.
+- **Nothing is read out of prose.** Blank lines are ignored and any other line that is not a charge
+  line is `malformed`. So is `none` beside any other line, a bare number — a decimal, a percentage, a
+  fraction, a `*pending*` written as a value — and an empty reply: silence is never a clean pass.
+- **Duplicates and overlaps.** One id on one span, written twice, is one charge; two spans of one id
+  that overlap without coinciding is `malformed`, naming both lines; two ids on one span are both
+  charged, the offset shared.
+
+**The value.** kbase prices the charge list: the pass's maximum — `0.95` for `rigor`, `1.00` for
+`bearing` — less each id's weight per occurrence, floored at zero and exact at two decimals, summed in
+integer hundredths. `none` is the empty list and reaches the maximum; `flt-pending` is `*pending*`
+whatever the table. The table is `internal/kb`'s and no template carries a weight, a maximum or a
+band: the ids and the criteria are the ask's, the price is kbase's, and nothing else is an input. A
+landing is therefore checkable against its own ledger line without asking a model.
+
+**A refused reply is a failed attempt.** A `malformed` reply writes nothing, and the attempt's line
+records `status: failed` and the reason — the case, and where it names one the id and the span — and
+**no text of the reply**. The same holds for a reply cut off at the completion cap, whose charge list
+may be incomplete, and for a call or a write that failed. The run goes on, and `--resume` asks the
+item again. Nothing is defaulted or supplied by kbase: `*pending*` is an answer the model may give,
+and a record like any other.
+
+**Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
+`set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. Each op
+runs with `--no-refresh`, under the KB write lock taken and released for that one landing. A write
+refusal is that item's `failed`, and so is a landing that cannot take the lock: the item's line
+carries the lock item's `detail` — another writer held it past the wait, or a build is running — and
+the run goes on.
+
+**The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
+`KBASE_SCORING` in environment mode. The role is the KB's declaration of which model judges it, so a
+mode that names none refuses the run as setup — naming that key, before the KB is opened and before
+the run's start refresh — and nothing falls back to the text role. `--scoring-model` **overrides** a
+configured role for one run and never substitutes for one, and the value is read in the mode's own
+form: a `<provider>/<model>` reference in file mode, a bare id under the environment's endpoint,
+verbatim under `--harness`. A `--dry-run` resolves no role and refuses nothing for one.
+
+**The harness back end.** `--harness NAME` runs one process per item instead of asking an endpoint:
+the profile that name selects in `harnesses.toml` (§9.3). It consults no mode and no pool — a harness
+chooses no endpoint, so a `KBASE_API_BASE_URL` or a role variable set beside it is neither a mixed
+mode nor a refusal. The prompt goes to the command's stdin, or into the one element carrying
+`{prompt}`; a profile whose command carries no `{prompt}` receives it on stdin, and stdin is closed
+empty where the element carried it. The command's stdout is the reply and is parsed by the same rule a
+provider's reply is; its stderr is captured to a bound and recorded only in a failing attempt's
+reason, never forwarded. Each item runs in its own process, in one directory under the run's records
+that is emptied before each item, so nothing a command wrote is visible to the next.
+
+- **No re-issue.** A provider call is re-issued up to the transport attempt count
+  (ARCHITECTURE §12); a harness call is not. One item is one process and one judgement, and
+  `--resume` is how a user asks again.
+- **A failure is the item's.** A non-zero exit, a deadline, a reply or a stderr past its bound, or a
+  process that cannot be started after the walk began fails that item — the exit code and the bounded
+  stderr tail in the line's `reply` — and the next item is asked. A command that cannot be started at
+  all is a refusal before the walk (`check: harness`, `key: --harness`), because nothing was asked.
+- **The model.** The scoring role resolves whether or not the profile carries `{model}`: a
+  configuration that names no scoring model refuses the run as setup even where the command names no
+  `{model}`, because the role is the run's declaration of which model judges it. Where the profile's
+  command names `{model}`, it is handed the role's model — the environment's id, else the reference's
+  model part, overridden by `--scoring-model`. Where it names none, the command asks its own model
+  and kbase names none: `roles[0].model` is null, and a `--scoring-model` a profile cannot carry is
+  refused (`check: harness`) rather than dropped. Where the profile's command carries the model as
+  an argv element of its own, a model beginning `-` is refused there too (`check: harness`,
+  `key: --scoring-model`): after substitution the command would read that id as an option, not a
+  model id.
+- **What kbase cannot guarantee.** A command is executable code and may bring its own tools, its own
+  system prompt and its own instructions; kbase can remove neither, and does not sandbox a child. The
+  input guard keeps the register's scoring tokens out of the prompt and the parse refuses a reply that
+  is no answer; neither says what a tool-enabled command's own instructions ask for. The profile's
+  name, layer and argv are recorded so a reader knows which command answered, and a profile a
+  repository supplied says so on stderr once per run.
+
+**The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
+`ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,
+its KB root, the ledger's format, the pass, `backend` (`provider`, `environment` or `harness`; absent
+under `--dry-run`, which resolves no back end because it asks nothing), the provider, the model,
+`ask_sha256`, the start, and under a harness the profile's name,
+`harness_layer` and the argv (`command`, `{model}` substituted and `{prompt}` left as the token, so
+the header names how the run was invoked and never the text of one item). **It is written once, at
+the run's creation, and no resume rewrites it**: a resumed or mixed run's header states the first
+invocation's back end and model, and each ledger line states what answered its own item.
+
+`ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the reply, `faults`
+(the parsed charges: `id`, `passage`, `citation`, `offset`, in the order written), `moot` (the charge
+lines a `flt-pending` made moot), `backend`, the model, `harness` and `harness_layer` where a harness
+answered, the prompt's digest and the attempt's bounds — appended after the item's write and its
+validation, never before. `faults` is `[]` for one reply alone, the word `none`; a failed attempt
+carries neither `faults` nor text. The state directory is `build`'s:
+`$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
+
+**`ask_sha256` records the ask and gates nothing.** It is the digest of the pass's prompt rendered for
+an empty subject — every fixed byte of the instruction and nothing that varies with an item — so one
+digest certifies one instruction. `--resume RUN` continues a run: it refuses a ledger for another KB
+root, format or pass, skips every item the ledger records `done`, and re-asks the `failed` ones. A run
+resumed after an update continues and asks nothing about versions: one whose `ask_sha256` differs, or
+which carries none as every run written before the field existed does, is asked under the running
+template's ask, and the header keeps the digest the run began under. Where the running table prices a
+landed line's recorded ids differently, the resume re-derives it, lands the moved value through the
+same write path a landing uses — before the line records it — and leaves `repriced.yaml` in the run's
+directory naming each line that moved, the value it held and the value it took. An id the running
+table no longer holds charges nothing, so a re-price can move a value up. A re-derivation that
+moves nothing records nothing and lands nothing. A run given no `--resume` is a new run that asks
+everything: a value already in the KB is not evidence about the one this run would judge.
+
+**The run lock.** A run holds `<state-dir>/score` for its length and does not wait: a second run is
+`retry`, `check: lock`, `path` that directory.
+
+**Refresh and format.** Both refreshes hold the KB write lock for the refresh and release it before
+the run continues. One `refresh` opens a run, before the index is read, so the set comes from a
+current index; on an older KB it is the natural write that converts and stamps the KB (§10), so a
+scoring run is the call that saves a conversion, and its document carries `migration`. One more
+`refresh` follows the last write — on completion, on `--limit` and on cancellation. A refresh that
+cannot take the lock ends the run there, with the lock's own outcome — `retry` where another writer
+held it past the wait, `refused` at once where a build is running — and the `lock` item, whose remedy
+is `re-run kbase score`. A crash after a write leaves a stale index, which `verify` reports and the
+next run's start refresh repairs.
+
+**Outcomes.** `done` when the run finished; `bounded` when `--limit` stopped it, and a run that both
+stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or SIGTERM stopped it
+at an item boundary, with no line recorded for the item in flight and the ledger standing as it was;
+`failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
+`<state-dir>/score`, or where a refresh could not take the KB write lock past the wait; `refused`
+where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
+inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
+a mode whose sources are mixed or whose environment is partial, a `--harness` naming no loaded
+profile, a profile that cannot carry the model it is given, a model a profile's command would read
+as an option, a command that cannot be started, an index the load cannot answer), a refresh that found
+a build running, or a KB that no longer opens when the end refresh re-reads it.
+
+**The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
+`check: error` item per item the ledger records `failed`, `detail` the item as the document names it
+and the reason its line recorded — `<node id>: <reason>`, or `<relation> <source> → <target>:
+<reason>` — in the walk's order; the reason is the line's reply as a bounded, control-stripped
+summary, the ledger's line being the one place a harness child's stderr stands whole; a run a
+refresh stopped closes on one `check: error` item naming the
+refresh's own error. A `cancelled` run closes on `cancelled`, whose `item` is the walk's first item
+carrying no attempt, the one it stopped before, and `{}` where every item of the walk carries one. A
+`refused` or `retry` run closes on its `refusals`. A `bounded` run that failed an item carries no
+`failures`: the failure is counted in `counts.failed` and reasoned in the ledger alone.
+
+**`resume`** carries the command that continues the run, present wherever an item is not `done` — one
+`--limit` left, one `failed` — and it stands after `counts` and `scored` and before the closing
+record, so a stop at the end refresh carries it whenever an item is still not `done`. It is absent
+from a dry run and from a stop before the walk: the start refresh's, the dial's, the
+ledger's or the index load's. It carries `--config-dir` wherever the invocation named one — the
+resumed run must read that directory and no other, or the same run id would resolve another profile
+or reference — and it carries `--scoring-model` and `--harness` whenever the invocation
+did — the command must reach the same model on the same back end, or it is a different judgement
+under the same run id — and under the environment mode the settings this invocation read, as
+assignments before the program (`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and
+`KBASE_API_KEY_FILE` where it was set), so re-issuing it in a shell with none of them set asks the
+same endpoint with the same models. The key is named by its path, never printed.
+
+**`--dry-run`** lists the set and asks nothing. It writes `run.yaml` and `items.jsonl` (one pending
+line per item), dials no provider, resolves no role and runs no mode decision, and writes no KB file:
+its `counts.done` is `0`, its `scored` is `[]`, it carries no `resume` and no `roles`, and its outcome
+is `done`. It writes no charge record. It cannot
+be resumed — `--resume` with `--dry-run` is a usage refusal naming `--resume`. Because the refresh
+that would save a conversion is a write, a dry run on an older KB is refused by the load
+(`check: index`, remedy `kbase refresh`), and a real run on the same KB then migrates and saves.
+
+Result keys: §7.
+
 ### `refresh`
 
 Derives the metadata layer's derived fields and `.index/*.yaml` and writes every claim-graph sheet
@@ -697,22 +934,24 @@ See §6.
 
 ## 9. Configuration
 
-Two TOML files — `providers.toml` (§9.1, the endpoint pool) and `config.toml` (§9.2, the
-choices) — read under the strict-load contract (§9.3), in one or two layers.
+Three TOML files — `providers.toml` (§9.1, the endpoint pool), `config.toml` (§9.2, the choices) and
+`harnesses.toml` (§9.3, the harness profiles) — read under the strict-load contract (§9.4), in one or
+two layers.
 `<repository>/.kbase/` is read over `~/.config/kbase`; a directory `--config-dir` names, else
 `$KBASE_CONFIG_DIR`, is instead the one directory read, so an explicit choice isolates a run from a
 repository's own `.kbase/`. An invocation outside a worktree has no repository layer:
 `show-config`, `models` and `configure` run in any directory.
 
-**Merging.** The two files merge by different rules. `providers.toml` merges by entry name and an
-entry is replaced whole: a repository entry of the same name supersedes the global one entirely,
-never field by field, so a repository cannot inherit a credential for an endpoint it chose. A fault
-naming an entry a higher layer superseded is not reported: the pool's entry is the higher one, and a
-diagnostic about a value nobody reads is not a fact about this run.
-`config.toml` merges field by field: a value a higher layer states wins, and one it leaves out keeps
-the lower layer's value — the rule the environment's variables follow below. A layer that fails the
-strict load refuses the whole load, naming its file: no lower layer is read, so a broken repository
-file never silently falls through to the global one.
+**Merging.** The three files merge by two rules. `providers.toml` and `harnesses.toml` merge by entry
+name and an entry is replaced whole: a repository entry of the same name supersedes the global one
+entirely, never field by field, so a repository cannot inherit a credential for an endpoint it chose,
+or borrow the command of a profile it named. A fault naming a pool entry a higher layer superseded is
+not reported: the pool's entry is the higher one, and a diagnostic about a value nobody reads is not a
+fact about this run. `config.toml` merges field by field: a value a higher layer states wins, and one
+it leaves out keeps the lower layer's value. The environment is not a layer: it is one of the two
+modes below, and it never merges with a file. A layer that fails the strict load refuses the whole
+load, naming its file: no lower layer is read, so a broken repository file never silently falls
+through to the global one.
 
 **A leading `~` expands; nothing else does.** In the `--config-dir` and `$KBASE_CONFIG_DIR` values,
 in an entry's `apiKeyFile`, and in `$KBASE_API_KEY_FILE`, `~` alone is the home directory and `~`
@@ -728,20 +967,26 @@ one read, the flag before the variable; otherwise configuration is read from the
 
 **Provider commands.** `kbase models [--provider NAME] [--timeout DURATION]` lists the selected
 provider's model identifiers, sorted ascending, in its result document (§7). `kbase configure
-[--create] [--project] [--provider NAME] [--model-map CATEGORY=ID]... [--timeout DURATION]` assigns
-a model id to each category from `--model-map` alone — the categories are `decision` and `text`; a
-category the flag does not name is refused naming `models.<category>` with the provider's model ids
-as `allowed` (§7) — and writes `config.toml` under §9.5. `kbase show-config [--provider NAME]`
-reports how the configuration resolves and changes nothing (§9.6). Each writes its result under §7.
-Provider selection is shared by all three: `--provider`, else `config.toml`'s `provider`, else the
-sole `providers.toml` entry. Where no pool entry is named — zero usable providers, two or more with
-none selected, or a `--provider` the pool does not hold — `models` and `configure` refuse. An empty
-pool, and a name the pool does not hold, point at the `providers.toml` of the layer `configure`
-writes into, the file an entry belongs in; the name the pool does not hold also carries `key:
---provider`, and the remedy `kbase configure --create` unless that provider faulted out of the pool,
-where the fault's own reason stands instead. Two or more entries with none chosen list every entry
-name as `allowed` with `key: --provider`. `show-config` reports any of these in its document and
-still exits 0.
+[--create] [--project] [--provider NAME] [--model-map CATEGORY=<entry>/<id>]... [--timeout
+DURATION]` assigns a model to each category from `--model-map` alone — the categories are `decision`,
+`text` and `scoring`, and a value is the `<provider>/<model>` reference §9.2 states. The dialled path requires every
+category: a category the flag does not name is refused naming `models.<category>`, `check: detect`,
+with the provider's model ids as `allowed` (§7) — except `scoring` where the target file already
+states one, which is left standing, so `configure --provider P` over a complete file writes no
+scoring value and is `unchanged` where it changes nothing else. A file `configure` writes is never
+left making `kbase score` refuse. `kbase show-config [--provider NAME]` reports how the configuration
+resolves and changes nothing (§9.7). Each writes its result under §7.
+
+**Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
+dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is
+`--provider`, else the sole `providers.toml` entry; `config.toml`'s `provider` key is superseded and
+takes no part in it. Where no pool entry is named — zero usable providers, two or more with none
+selected, or a `--provider` the pool does not hold — `models` and `configure` refuse. An empty pool,
+and a name the pool does not hold, point at the `providers.toml` of the layer `configure` writes into,
+the file an entry belongs in; the name the pool does not hold also carries `key: --provider`, and the
+remedy `kbase configure --create` unless that provider faulted out of the pool, where the fault's own
+reason stands instead. Two or more entries with none chosen list every entry name as `allowed` with
+`key: --provider`. `show-config` reports any of these in its document and still exits 0.
 
 **`configure`'s write target.** `configure` writes `config.toml` — and, under `--create`, the files
 it creates — into the directory a flag or variable named, whether or not it exists: the
@@ -752,27 +997,60 @@ with `--project` is a usage refusal naming `--project`, the two naming different
 started from, and `git init` as the remedy. Otherwise `configure` writes the repository layer where
 its directory already stands, and the global layer otherwise.
 
-**`configure --create`** writes the target layer's `providers.toml` where no file stands, from the
-annotated template — no other command creates that file — and overwrites no file's other content.
-`config.toml` is created where absent on any `configure` run, and otherwise edited under §9.5, which
-keeps every byte `configure` was not asked to change. Without `--provider` it makes no request, and
-one line on stderr says the model ids went unchecked; with `--provider` the ordinary path runs —
-select, dial, list the catalogue, warn on an id the catalogue does not offer. A refusal writes
-nothing, and so does a dial or catalogue failure.
+**`configure --create`** writes the target layer's `providers.toml` and `harnesses.toml` where no file
+stands, from their annotated templates — no other command creates either — and overwrites no file's
+other content, `harnesses.toml` included: a profile is added by editing the file, so a seed a user
+deleted stays deleted. `config.toml` is created where absent by a run that resolves a provider, and
+by `--create` with no `--provider` — a run over a pool that resolves none refuses before writing
+anything (§9, "Provider selection") — and otherwise edited under §9.6, which keeps every byte
+`configure` was not asked to change. Without `--provider` it makes no request, and one line on stderr
+says the model ids went unchecked; with `--provider` the ordinary path runs — select, dial, list the
+catalogue, warn on an id the catalogue does not offer. A refusal writes nothing, and so does a dial or
+catalogue failure.
 
-**The environment.** A subcommand that spends inference — and `show-config`, which reports the
-names it reads — also reads `KBASE_API_BASE_URL`, `KBASE_DECISION`, `KBASE_TEXT` and
-`KBASE_API_KEY_FILE`, so an integrator configures a build from the invoking environment with no
-configuration directory at all. The environment overrides the configuration files: a variable given
-overrides the corresponding field and nothing else, and no flag sets one of those fields. A flag
-chooses the configuration directory or the pool entry, and §9.6's report names the rule behind each.
-`KBASE_DECISION` and `KBASE_TEXT` name the decision and text categories where the configuration does
-not. The inference preflight (§5) names each lacking setting by the key its configuration file
-spells it with — `baseUrl`, `models.decision`, `models.text` — except where the lack is a variable's
-doing, as `KBASE_API_KEY_FILE` naming an unreadable file is, and then by that variable. There is no
-plaintext-transport switch: when a key is configured and the base URL is `http://` to a host other
-than loopback, one line on stderr says the key travels in cleartext, and the build proceeds (as
-§9.4's permission warning does).
+**The two modes.** Inference comes from exactly one of two sources, and never from both. An
+integrator configures a build — or a scoring run — from the invoking environment with no
+configuration directory at all; a run in file mode has no inference variable set.
+
+| | File mode | Environment mode |
+|---|---|---|
+| Supplied by | `providers.toml` and `config.toml` | `KBASE_API_BASE_URL` and the role variables |
+| A model is named | a `<provider>/<model>` reference in `[models]` | a bare model id in `KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING` |
+| The endpoint | the named pool entry | `KBASE_API_BASE_URL`; no pool entry |
+| Entered when | no inference variable is set | `KBASE_API_BASE_URL` or any role variable is set |
+| Complete when | every role the verb needs has a reference | the base URL and every role the verb needs are set |
+
+`KBASE_DECISION`, `KBASE_TEXT` and `KBASE_SCORING` are the three roles, spelled as `[models]` spells
+them; there is no `KBASE_*_MODEL`. The sources are exclusive: an environment role variable alongside
+a `[models]` value is refused with one item per side — the variable, and the `models.<role>` key —
+and the detail says which side to unset. The environment is also all or nothing: a role variable
+without `KBASE_API_BASE_URL` names the variable that is set and the one that is missing, and a base
+URL alone beside a `[models]` value is the same refusal the other way round, because a base URL is an
+endpoint and an endpoint is the whole of what the environment mode supplies. Where the mode's rows
+overlap every item is listed: a user facing two sides needs both named, not one representative of
+them.
+
+**`KBASE_API_KEY_FILE` is not a mode.** It names a file, not a provider and not a model: it overrides
+the key of whichever endpoint is in force — the selected entry's in file mode, the environment's in
+environment mode — and is optional in both: absent everywhere, no key is sent. It alone never flips
+the mode and never makes a mixed source. A harness consults neither mode (§8), choosing no endpoint.
+
+**The preflight.** The inference preflight (§5) names each lacking setting in the mode's own
+spelling: `baseUrl` or `models.<role>` in file mode — `models.decision`, `models.text`,
+`models.scoring` — and `KBASE_API_BASE_URL` or `KBASE_<ROLE>` in environment mode, never
+`models.<role>` for a mode the files do not supply. A lack a variable's doing names that variable, as
+`KBASE_API_KEY_FILE` naming an unreadable file does. `show-config` runs the same decision and reports
+its refusal as a diagnostic rather than stopping (§9.7).
+
+**The `provider` key is superseded.** `config.toml`'s top-level `provider` loads and merges and
+chooses nothing: no role's endpoint is taken from it, and no catalogue verb selects by it. A file-mode
+invocation of a verb that resolves a role or selects an entry writes one line on stderr saying so and
+naming `kbase configure` as the rewrite. It leaves the schema at the next major
+([ROADMAP.md](ROADMAP.md)).
+
+There is no plaintext-transport switch: when a key is configured and the base URL is `http://` to a
+host other than loopback, one line on stderr says the key travels in cleartext, and the build
+proceeds (as §9.5's permission warning does).
 
 ### 9.1 `providers.toml` — the endpoint pool
 
@@ -814,86 +1092,167 @@ shape; a question left unanswered is the seam's own re-ask-then-default path.
 ### 9.2 `config.toml` — the choices
 
 ```toml
-provider = "..."             # active providers.toml entry name
+provider = "..."             # SUPERSEDED — loads, and chooses nothing (§9); removed
+                             # at the next major
 
 [models]
-decision = "..."               # model id for the decision category (a model the
-                               # entry's decision surface serves)
-text = "..."                   # model id for the text category
+decision = "<entry>/<id>"      # the claim graph's letter asks: a providers.toml
+                               # entry name, then the model that entry's
+                               # decision surface serves
+text = "<entry>/<id>"          # the overview passage
+scoring = "<entry>/<id>"       # kbase score's asks; required for score, in every mode
 
 [asks]
 readerConcurrency = 4          # optional; asks of one group in flight once its first has returned
 ```
 
-A category left unset resolves to "not configured" — no defaulting, no guessing. `readerConcurrency`
-is how many of one group's letter asks a build has in flight once the group's first ask has returned;
-absent, it is 4. A value under 1 fails the load, naming `asks.readerConcurrency`. There is no `[dev]`
-table; an old `[dev]` key fails strict load
-(§9.3). A `[models]` table spelling `heavy`/`light` — the superseded category names — fails strict
-load as unmodeled keys (§9.3); the remedy is a hand edit.
+**A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider
+name is a `providers.toml` table's and carries none, while a model id may (`openrouter/anthropic/…`).
+Either part empty, or no `/` at all, is not a reference and is refused at resolution, naming
+`models.<role>` and the form — never resolved through the superseded `provider` key, even where that
+key names the entry that would work. Nothing is normalised but whitespace: a model id is the
+provider's spelling, not kbase's. In environment mode a model is a bare id of the environment's
+endpoint instead (§9), and one form of value is never read as the other.
 
-### 9.3 Strict-load contract
+A category left unset resolves to "not configured" — no defaulting, no guessing, and no role falls
+back to another. `readerConcurrency` is how many of one group's letter asks a build has in flight once
+the group's first ask has returned; absent, it is 4. A value under 1 fails the load, naming
+`asks.readerConcurrency`. There is no `[dev]` table; an old `[dev]` key fails strict load (§9.4). A
+`[models]` table spelling `heavy`/`light` — the superseded category names — fails strict load as
+unmodeled keys (§9.4); the remedy is a hand edit.
 
-Both files are decoded strictly: any key or table not modeled by the schemas above fails the **whole
+### 9.3 `harnesses.toml` — the harness profiles
+
+A `kbase score` run can ask a command instead of an endpoint (§8's `--harness`). The commands live in
+their own file, so `providers.toml` stays exactly what it was and no name in it is reserved:
+
+```toml
+# harnesses.toml — an excerpt of what `configure --create` writes: the file carries
+# a header, and above each profile the comment it ships with.
+[claude]
+command = ["claude", "-p", "--tools", "", "--strict-mcp-config", "--safe-mode"]
+
+# [opencode]
+# command = ["opencode", "run", "--format", "default", "{prompt}"]
+# Off by default: `opencode run` (v2.0.32) has no flag that removes tools or
+# suppresses instructions, so a profile runs the default `build` agent with its
+# tools, its own system prompt and the instruction files opencode loads — and an
+# agent with tools can read the KB the ask is about. Run an agent that cannot
+# instead, by naming it with `--agent`: that agent comes from the agent set you
+# install, not from kbase.
+```
+
+Top-level tables are profile names, an open set the user chooses — the grammar `providers.toml` uses
+for pool entries, with its merge rule: a profile of the same name is replaced whole by a higher
+layer's. A profile is `<name>` at the top level and never a nested table. An absent `harnesses.toml`
+is no profiles, not a load error.
+
+**`command` is the profile's closed schema:** an array of strings, non-empty, where an element may be
+empty — the `claude` seed's `--tools ""` is one, and a schema that refused it would refuse the seed
+the template prints. A key the schema does not model fails the whole file's load as either other
+file's does (§9.4), and so does a profile naming no command: a profile is a command, and one that
+states none would load as a name a run could select and nothing to execute.
+
+**Two tokens, one grammar.** `{model}` is filled once per run from the scoring role's model, and
+`{prompt}` per item, in the one element that names it — a profile carrying `{prompt}` receives the
+prompt there and stdin is closed empty; an argv naming it nowhere receives the prompt on stdin. That
+is how a command taking its prompt as an argument and one taking it on stdin share one contract
+without kbase knowing either CLI. Substitution is one pass, `{model}` then `{prompt}`, and the result
+is never re-scanned; `{prompt}` in two elements is refused.
+
+**The profiles layer as the pool does**, the repository's over the global one, or the one directory
+`--config-dir`/`$KBASE_CONFIG_DIR` names. **The source is never silent:** a profile resolved from the
+repository layer writes one line on stderr naming the file and the layer, once per invocation — a
+warning, never a refusal, and it does not stop the run. Where a lower layer supplied the same name,
+that line names the layer whose profile it replaced whole; where the name was added, the line
+carries no such clause and reads as it did before. A profile from the global layer, or from the
+directory a flag or the variable names, says nothing: the user put it there. `show-config` says
+nothing on stderr and reports the layer in `harnesses[].layer` (§9.7).
+
+**Five verbs load it, and one verb uses it.** `build`, `score`, `models`, `configure` and
+`show-config` load configuration before doing anything else (§9.4), and so parse this file; every other
+verb reads no configuration file, and a file that will not load does not stop it. `score --harness`
+alone resolves a profile, and `score` is not an MCP tool.
+
+**The seeds.** `configure --create` writes this file where none stands (§9), with `claude` live and
+`opencode` commented out with its limitation stated in the file the user edits. Neither seed names
+`{model}`: each runs on the harness's own configured model, which is what a fresh install can rely
+on. A pool entry that happens to be named `harness` is an ordinary entry, and the pool template's
+one-live-entry rule does not apply here — a profile is only ever named by `--harness`, so a live
+profile is not a choice the configuration makes behind the user's back.
+
+### 9.4 Strict-load contract
+
+All three files are decoded strictly: any key or table not modeled by the schemas above fails the **whole
 file's** load. The message names the file path and every offending key by its full dotted path (e.g.
 `models.typo_key` — a superseded category name such as `models.heavy` fails the same way),
 pluralizing "unknown key"/"unknown keys" when more than one. A malformed-TOML file fails with a
 parser-detail message naming the file and line. Only key **names** ever appear in either message,
 never values: a file may still hold a secret a hand edit left behind — a field no longer modeled, a
 stray value — and the refusal that names its key is exactly where that value would be echoed.
-`kbase configure` cannot repair a config file it cannot load: every subcommand loads configuration
-before doing anything else.
+`kbase configure` cannot repair a config file it cannot load: the verbs §9.3 names load configuration
+before doing anything else. A layer that supplies a pool entry supplies its `apiKeyFile` path too, and
+kbase confines no key file's location: trusting a cloned configuration means trusting the key file it
+names as much as the endpoint it names.
 
-### 9.4 Key-file permission warning
+### 9.5 Key-file permission warning
 
 When a `providers.toml` entry sets `apiKeyFile` and the host is not Windows, kbase stats the
 resolved key-file path. If its permission bits grant group-read or other-read, it prints a warning
 naming the path and the offending mode and recommending `chmod 600`. The entry stays usable. This is
 the only file-permission behaviour kbase applies to a file it did not create.
 
-### 9.5 `configure`'s targeted update (byte-preservation contract)
+### 9.6 `configure`'s targeted update (byte-preservation contract)
 
 `kbase configure` never re-serializes `config.toml`; it edits the existing bytes in place.
 
-- An absent or blank file gets a full commented template, with `provider`, `models.decision` and
-  `models.text` filled in.
-- Otherwise **only** the top-level `provider` key and the `[models]` table's `decision`/`text` keys
-  are rewritten. Every other byte — comments, unrelated keys and tables, spacing, key order — is
-  preserved exactly. A rewritten line's own trailing `# comment` is kept; its column position is not
-  guaranteed.
-- A missing `provider` key is inserted just after the leading comment block; missing
-  `decision`/`text` keys are appended inside (or as a new) `[models]` table.
+- An absent or blank file gets a full commented template, its `models.decision`, `models.text` and
+  `models.scoring` written with the values the run resolves and blank for the user to fill where the
+  run names none, and no `provider` key.
+- Otherwise **only** the four keys it writes are touched: the `[models]` table's `decision`, `text`
+  and `scoring`, and — its one deletion — a top-level `provider` line, which is removed. Every other
+  byte — comments, unrelated keys and tables, spacing, key order — is preserved exactly. A rewritten
+  line's own trailing `# comment` is kept; its column position is not guaranteed.
+- Missing `decision`/`text`/`scoring` keys are appended inside (or as a new) `[models]` table. A
+  category the run is not given and the file does not hold stays absent: the offline path writes
+  what it was told and refuses nothing, and the dialled path is where an unassigned category is a
+  refusal (§9, "Provider commands").
 - Before writing, kbase decodes both the original and the proposed file as TOML and refuses the
   write, leaving the file untouched, unless the only difference between the two decoded structures
-  is exactly the values it intended to change.
+  is exactly the values it intended to change — the deletion included.
 - The write is atomic (temp file in the same directory, then rename). A `config.toml` that is a
   symlink has its target rewritten; the symlink stays.
 - Any failure along this path leaves the file completely unwritten.
 
-### 9.6 `kbase show-config`
+### 9.7 `kbase show-config`
 
 `kbase show-config [--provider NAME]` reports how this invocation's configuration resolves, and
 changes nothing: it reads no KB, writes no file and makes no network request. A configuration that
-fails strict load is refused before the verb runs, as for every verb (§9.3). Otherwise the outcome is
-`done` whatever the report finds: a fault in the pool and an unresolved inference are diagnostics,
-not refusals, so one call shows every gap at once.
+fails strict load is refused before the verb runs, as for every verb (§9.4). Otherwise the outcome is
+`done` whatever the report finds: a fault in the pool, an unresolved role and a mixed or partial
+inference mode are diagnostics, not refusals, so one call shows every gap at once. It makes no
+request and opens no client, so an unreadable key file reaches it through the registry's preflight
+rather than by dialling.
 
 The report states the layers this invocation read, in precedence order, each with its path, the
 source that named it — `explicit` (a flag), `environment` (`$KBASE_CONFIG_DIR`), `repository` or
-`global` — and whether the directory and each of its two files stand; `config.toml`'s merged
-`provider` and both category ids, null where a category is unset; every pool entry in name order
-with the layer that supplied it and the decision surface it speaks — its default filled in, so an
-entry silent on the flavour reads `systemone` — including a provider a dropping fault removed
-(unusable, with the fault's reason); the inference variable names this process sets (§9, "The
-environment"); the pool entry the selection names and the rule that named it, or why no entry was
-named; and the endpoint and category ids inference resolves to, or null with a `provider` item saying
-what the configuration lacks. Each resolved field names the layer that supplied it, in the same four names `layers` uses:
-`repository` or `global` for a value a file holds, `explicit` or `environment` for one read from the
-one directory a flag or `$KBASE_CONFIG_DIR` named, and `environment` for one a `KBASE_*` variable
-supplied. Its diagnostics are one `provider` item per fault, each carrying `path` the
-`providers.toml` that carries the fault — which need not be the file a selection or `configure`
-names — and the resolution's own failure where inference does not resolve, its `path` naming the
-file the setting belongs in: the write target's `providers.toml` or `config.toml`.
+`global` — and whether the directory and each of its three files stand; `config.toml`'s merged
+`[models]` values, null where a category is unset; every pool entry in name order with the layer
+that supplied it and the decision surface it speaks — its default filled in, so an entry silent on
+the flavour reads `systemone` — including a provider a dropping fault removed (unusable, with the
+fault's reason); the inference variable names this process sets (§9, "The two modes"); the mode, or
+null where the sources are mixed; the pool entry the selection names and the rule that named it, or
+why no entry was named; one record per role — the endpoint it resolves to, the layer that supplied
+each field, or why it does not resolve; and the loaded harness profiles with the layer that supplied
+each, so a profile's source is visible here even though nothing is said on stderr.
+
+The sources vocabulary is `layers`': `repository` or `global` for a value a file holds, `explicit` or
+`environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named, and
+`environment` for one a `KBASE_*` variable supplied. Its diagnostics are one `provider` item per
+fault, each carrying `path` the `providers.toml` that carries the fault — which need not be the file
+a selection or `configure` names — and one item per role that does not resolve or per side of a mixed
+mode, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
+`config.toml`. It says nothing about harnesses beyond listing them: a profile supplies no endpoint.
 
 **Names and paths, never secrets.** A key is reported by the kind it is — from a file, or none —
 and a key file by the path its entry states, never by its content; an inference variable by its
@@ -920,11 +1279,18 @@ safely. Patch: the bytes a writer produces changed, their meaning did not.
 entry point at birth, and every save (below). A stamp at the current major and minor with another patch is read as current and
 rewritten on the next save.
 
+The current version is `2.0.1`. Its patch over `2.0.0` is the band ladder's bottom rung's words
+above: the bytes a writer produces changed — every derived `- strength:` line carrying
+`unsubstantiated` at that rung — and their meaning did not, the value being unchanged. A `2.0.0` KB
+is read as current; its derived lines re-render on the next `refresh`, and the save stamps `2.0.1`.
+No converter leads to a patch, so a migration chain stops at the form its last converter produces and
+the next save supplies the stamp.
+
 **One version read and written.** kbase reads and writes exactly the current version (ARCHITECTURE
 §12). An older stamp is read through migration (below). A newer major or minor is refused by every
 subcommand that reads the KB — `build` on an existing KB, `refresh`, `verify`, the write ops, the
-queries, `render-citation`, `render-claim-graph` and `export-latex`; `status` and `cancel` do not
-load the KB — outcome `refused`, one
+queries, `score`, `render-citation`, `render-claim-graph` and `export-latex`; `status` and `cancel` do
+not load the KB — outcome `refused`, one
 item `check: kb-format` naming the KB's version and kbase's, remedy "update kbase". No subcommand
 writes an older format, and nothing downgrades.
 
@@ -1026,8 +1392,28 @@ corroborated but never judged publishes the lift's number, while a refutation al
 strength unknown. A pending bearing, or a pending source strength, excludes its edge — no
 contribution, no lift, no cap — while `0.0` is a judgement and participates, taking a minimum to zero
 and a cap to `1.0`. A non-`run` experiment is inert as a lifter or refuter, and its `supports` edge is
-excluded like any unjudged premise. The interior of the scale is the judge's: kbase validates the
-range and composes.
+excluded like any unjudged premise.
+
+**A value is derived from a charge list, not composed from the interior of the scale.** Each of the
+two scoring passes asks a model for the faults the text commits — the ids
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) defines, each with the
+span that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
+occurrence, floored at zero and exact at two decimals (§8). `set-rigor` and `set-bearing` still write
+a value in `[0, 1]` or `*pending*`, and `1.0` is still accepted, so the register's range is the
+format's; what changed is who chooses a number. A pass derives it, `1.00` is reserved to an axiom's
+rigor by rule, and `0.95` is the largest a `rigor` pass derives — which reads *no charge among the
+six*, never *the text displays its reasoning*. The walk itself is unchanged and reads the value
+whatever wrote it.
+
+**The band ladder.** A `strength` is read against five rungs, each an inclusive lower bound: `0.85`
+*ok to build on*, `0.65` *ok to build on, see caveats*, `0.45` *use as input only*, `0.20` *do not
+build on, rework needed*, and `0.00` **unsubstantiated**. The bottom rung states an outcome and not a
+cause: every strength below `0.20` lands there from either direction — a refuter's cap, or a minimum
+no premise carries — and what it says is that nothing a claim built on this would inherit
+substantiates the claim. The cause, where a reader needs it, is the run's fault record and the
+derivation trace. One value carries one band wherever a band is shown: a claim's or an analysis's
+record (`build_status`, `build_band`), the `stats` distribution's row, and the sheet's fill and
+tooltip. A pending strength has no band, and a strength below `0.00` cannot occur.
 
 **A claim stands alone; an analysis is made of its citations.** A claim is a proposition about the
 subject matter: its premises support it, and it means what it means without them. An analysis is
@@ -1142,10 +1528,10 @@ invents neither a finding nor a context where a migrated work bullet's context n
 
 **The migration announces itself.** A verb that reads a KB through the loader on an older version
 writes one sentence to stderr and carries one `migration` record — `from`, `to`, `note` — after
-`kb-root` (§7), on every such call until the call whose save stamps `2.0.0`; `note` states the three
+`kb-root` (§7), on every such call until the call whose save stamps `2.0.1`; `note` states the three
 value changes in one sentence. §7 names the verbs. Over MCP the document is the channel and stderr
 is the server's log; `status` and `cancel` load no KB and never carry it. A `0.9.0` KB yields one
-record for the whole chain, `0.9.0` to `2.0.0`.
+record for the whole chain, `0.9.0` to `2.0.1`.
 
 **A converted but unsaved KB answers no query.** A query is refused with remedy `kbase refresh`: the
 index predates the columns, and a legal edge must never be reported without a token. `verify` reports
@@ -1196,23 +1582,23 @@ with the same arguments and the same result, so a harness without MCP loses noth
 The exception is `rewind-build`, the one listed tool — it has no subcommand behind it, reports
 position that `status` and the commit trail already state, and changes nothing.
 
-- **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself
-  and `wait` — a tool call would hold the turn for the build's duration — plus `rewind-build`, which
-  no subcommand stands behind. A tool's input schema is derived
-  from its command's arguments and flags (the global flags excluded; the server carries its own),
-  and a duration flag's argument is the Go duration string the command line spells (`30s`). A write
-  op's schema is one entry: the op's closed vocabulary (§8) as properties, no others allowed, plus
-  `create` where the CLI offers `--create`; a call writes that one entry, and `--no-refresh` is not
-  offered. A refusal over MCP carries `entry` as `1` and no `line` or `column`; its `key` keeps the
-  CLI spelling (§7), or, where no command stands behind the tool, is the schema property name
-  (`target` on `rewind-build`). Arguments that fail the tool's schema (a missing required key, a
-  wrong type, an unknown key) are JSON-RPC `-32602` errors, not refusal documents. A command
-  declares itself read-only in its definition, and the tool carries that as its read-only
-  annotation; the queries, `verify`, `status`, `render-citation`, `show`, `show-config` and
-  `models` are the read-only set, and `rewind-build` completes it, its annotation hand-set with its
-  description because no command declares it. The table is the bound commands plus that one listed
-  tool, and a test asserts the set for equality, so a second listed tool fails as a missing command
-  does.
+- **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself and
+  `wait` — a tool call would hold the turn for the build's duration — and `score`, whose run asks one
+  call per item for minutes and runs as the binary; plus `rewind-build`, which no subcommand stands
+  behind. A tool's input schema is derived from its command's arguments and flags (the global flags
+  excluded; the server carries its own), and a duration flag's argument is the Go duration string
+  the command line spells (`30s`). A write op's schema is one entry: the op's closed vocabulary (§8)
+  as properties, no others allowed, plus `create` where the CLI offers `--create`; a call writes that
+  one entry, and `--no-refresh` is not offered. A refusal over MCP carries `entry` as `1` and no
+  `line` or `column`; its `key` keeps the CLI spelling (§7), or, where no command stands behind the
+  tool, is the schema property name (`target` on `rewind-build`). Arguments that fail the tool's
+  schema (a missing required key, a wrong type, an unknown key) are JSON-RPC `-32602` errors, not
+  refusal documents. A command declares itself read-only in its definition, and the tool carries that
+  as its read-only annotation; the queries, `verify`, `status`, `render-citation`, `show`,
+  `show-config` and `models` are the read-only set, and `rewind-build` completes it, its annotation
+  hand-set with its description because no command declares it. The table is the bound commands plus
+  that one listed tool, and a test asserts the set for equality, so a second listed tool fails as a
+  missing command does.
 - **Results.** The §7 document, as the result's text and as structured content. `isError` is set
   exactly when the document's exit code (§7) is not 0, so a refusal reaches the model as an error
   carrying its items and remedy while `bounded` and a completed `cancel` do not. List queries take
@@ -1302,10 +1688,13 @@ position that `status` and the commit trail already state, and changes nothing.
 - **What the server never does.** It sends no sampling request and offers no prompts; no inference
   runs from any tool but `build`, and `build`'s inference is the build's own. `models` reads the
   selected provider's model catalogue; `configure` reads that catalogue before it writes the model
-  map, refusing a category `--model-map` leaves unassigned and naming the catalogue as the ids to
-  choose from — except under `--create` with no `--provider`, where it dials nothing and says the ids
-  are unchecked. Neither asks a model anything. It writes nothing but JSON-RPC frames to stdout;
-  diagnostics go to stderr and `--log-file`. It reads no harness configuration and names no harness.
+  map, refusing a category `--model-map` leaves unassigned — `scoring` alone excepted where the
+  target file already states one — and naming the catalogue as the ids to choose from, except under
+  `--create` with no `--provider`, where it dials nothing and says the ids are unchecked. Neither asks a model anything. It writes nothing but JSON-RPC frames to stdout;
+  diagnostics go to stderr and `--log-file`. It loads no configuration itself — the verbs it exposes
+  load their own on each call (§9.3), harness profiles included — and uses none of it for a harness:
+  no tool asks a harness, and `score` is not a tool. The `build` child it starts inherits the
+  server's environment and `--config-dir`. It names no harness.
 - **Protocol.** One MCP revision, the one the server implements, pinned as one constant
   (ARCHITECTURE §12); an initialise naming another revision is answered with the server's for the
   client to decide; calls are answered one at a time, in order; EOF on stdin ends the server.

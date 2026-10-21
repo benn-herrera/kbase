@@ -30,8 +30,8 @@ recipe runs.
 distribution is the `just dist` tarball attached to a GitHub release by the user. Never commit build
 outputs or publish releases.
 
-**Test data layout.** `test_data/fixtures/` holds version-controlled test data we author, own, and
-maintain. `test_data/transient/` (gitignored) holds cloud-sourced corpus clones, generated test
+**Test data layout.** `test-data/fixtures/` holds version-controlled test data we author, own, and
+maintain. `test-data/transient/` (gitignored) holds cloud-sourced corpus clones, generated test
 data, and test output. Never write generated or downloaded data into `fixtures/`.
 
 ---
@@ -44,20 +44,34 @@ them. Working rules for packages that carry over:
 - **cmd/**: verb logic lives behind a plain options-struct function; the cobra `RunE` is a thin
   loader shell, so verbs unit-test without process/network.
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
-  provider faults never abort the pool; fault reasons carry no key material.
+  provider faults never abort the pool; fault reasons carry no key material. Resolution is pure and
+  lives here alone — `ModeOf`, `Resolve`, `Select` — and reads no file, opens no client, writes no
+  stderr and names no verb: the key file `KBASE_API_KEY_FILE` names is read by whoever dials (in
+  `cmd`, the registry; in `show-config`, its preflight). The package imports no kbase package but
+  `atomicfile`, never `model`, `result` or `log`. A `[models]` value is parsed by one function,
+  `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
+  reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
+  parses. No site splits an id or concatenates a reference by hand. A
+  harness profile is `harnesses.toml`'s, and it is a separate namespace from the pool: a profile's
+  command comes from neither `providers.toml` nor a pool entry from `harnesses.toml`.
 - **internal/model**: `Endpoint{Name, BaseURL, APIKey, Decisions}` is the transport-level slice
   of a provider — the last saying whether its entry speaks the Decisions shape (`systemone` unless
   the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
-  lives in `cmd`. The overview ask goes through `model.Chat`: one tool-less request, re-issued
-  identically on an incomplete stream up to the attempt count (ARCHITECTURE §12). The letter
-  asks go through `model.Decision`, one `POST` to whichever surface the endpoint names (ARCHITECTURE
-  §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one closed-set question (`choice` or
-  `noul`), answered by probabilities over the offered letters; `decisions` speaks the OpenAI
-  Decisions shape at `<base-url>/decisions` — the state as `input`, questions a named array with a
-  `noul` asked as a `predicate` carrying no choices, its criteria folded into `instructions`, and an
-  `answers` array where a `refusal` is unreadable and takes the seam's re-ask/default path. Either
-  surface is re-issued identically on a transport error or retry-class 5xx. API keys never appear in
-  logs or error strings. The `[models]` keys are `decision` and `text`.
+  lives in `cmd`. The chat asks — the overview and each scoring call — go through `model.Chat`: one
+  tool-less request, re-issued identically on an incomplete stream up to the attempt count
+  (ARCHITECTURE §12). The letter asks go through `model.Decision`, one `POST` to whichever surface
+  the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
+  closed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
+  `decisions` speaks the OpenAI Decisions shape at `<base-url>/decisions` — the state as `input`,
+  questions a named array with a `noul` asked as a `predicate` carrying no choices, its criteria
+  folded into `instructions`, and an `answers` array where a `refusal` is unreadable and takes the
+  seam's re-ask/default path. Either surface is re-issued identically on a transport error or
+  retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
+  `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference in file mode.
+- **internal/harness**: the user's command, run once per item. It imports stdlib and `log` alone of
+  kbase and knows nothing of kbase — no provider, no endpoint, no KB path, no configuration type.
+  It receives a prompt and hands it over whole: it composes none, and it is not the place a prompt's
+  text, its slots or its rules live.
 
 ---
 
@@ -82,7 +96,13 @@ single source. Working habits they impose:
   (`cmd/execpolicy_test.go`), and ARCHITECTURE §11's dependency rules by `cmd/importpolicy_test.go`
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
   beside it. The one self-exec owner is a file, not a package: `cmd/mcp.go` alone may exec the kbase
-  binary, and the test fails on any other file that does. The policy scans share one module walk
+  binary, and the test fails on any other file that does. A fifth owner is `internal/harness`, which
+  execs the program a harness profile names — a binary only the user's configuration states, so the
+  policy carries it with a sentinel and exempts its site from the per-static-binary check; what the
+  policy still holds is that no other package execs for that purpose, and that a profile can only be
+  run by `score --harness <name>`. A repository may supply one: the source is announced on stderr,
+  recorded in the role record and the ledger, and the promise is disclosure and explicit selection,
+  never inspection. The policy scans share one module walk
   (`cmd/modulescan_test.go`), so they agree on which files are the module's source. The scan
   reads test files as source too — the trap: a package test that compiles its output under
   `pdflatex` has nothing wrong in it and fails the tree. A verification needing a binary no
@@ -107,6 +127,16 @@ single source. Working habits they impose:
   multi-version reader the design forbids. A converter's test is a golden pair, old bytes in and new
   bytes out. The one permitted exception is a frozen copy of the superseded readers in test code
   only, for the parity test (`internal/kbload/parity_test.go`).
+- **A `kb-format` patch bump moves the stamp and every fixture that pins its bytes, and stops the
+  chain where its last converter does.** Two halves, both load-bearing. `kb.FormatVersion` moves, and
+  every fixture whose bytes carry the stamp — or a derived line the change rewrote — is rewritten in
+  the same commit: the loader reads an older patch of the same minor as current — no chain runs — and
+  restamps it on the next save, so what moves under a fixture left behind is a leg that pins bytes
+  after a write, not one that only reads. And `migrate.Chain` must stop at the form its last converter
+  produces, because **no converter leads to a patch**: the chain breaks
+  out where the major and minor already match the target, and the next save supplies the stamp. The
+  trap on that side is teaching the chain to reach the patch, which is a converter whose output
+  differs from its input only by the stamp.
 - **Every KB file is read through `kb.Source` from `kbload.Open`.** The trap: an `os.ReadFile` of a
   KB file in a verb or package, which sees the on-disk form of an unmigrated KB.
   `cmd/readpolicy_test.go` fails on any direct KB file read outside its allowlist. The rule covers
@@ -123,7 +153,7 @@ single source. Working habits they impose:
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `toolResult`, so text, structured content and exit code cannot drift from a
   command's. `rewind-build` in `cmd/mcp.go` is the only one: read-only, schema and description its
-  own. Protocol tests are transcript fixtures under `test_data/fixtures/mcp/`, never strings
+  own. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings
   asserted in code.
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
   outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores `kbase mcp
@@ -178,6 +208,23 @@ single source. Working habits they impose:
   spelling. A surface that shows a value to a reader puts it at two decimals — a query result as the
   number, the trace on a `- strength:` line as the spelling — while `verify` quotes the record's
   spelling, because its message is about the record.
+- **A scoring-model fact lives once, in `internal/kb`.** The twelve fault ids, `flt-pending`, the word
+  `none`, each id's weight per occurrence and each pass's maximum live in `faults.go` and nowhere
+  else. A template names only the ids its pass accepts and carries no digit at all, and
+  `internal/asks` asserts both against `kb`: the `flt-…` tokens it names are exactly its pass's set,
+  and its text holds no number — no weight, no maximum, no band. The trap: a weight in a template, or
+  a second copy of the id list in the parser, which is a second home for a fact and drifts where the
+  prompt does not.
+- **A citation is looked up in the closed text the call carried, never in the register.** The parse's
+  one job is where a span is, not whether it earns its id: a span is an anchor, and the criteria's
+  satisfaction is the model's judgement and a later reader's audit, never a check. The trap: a
+  validity test dressed as a parse, which refuses defensible answers on a question no code can
+  settle.
+- **A scoring value is derived in integer hundredths.** Weights, maxima and sums are integers; the
+  value is `maximum − Σ weights`, floored at zero and exact at two decimals. The trap: subtracting in
+  `float64`, where three weights land `0.3499999999999999` and the record's four-decimal rule breaks.
+  A value is a projection of a ledger line's ids alone, which is what makes a landing checkable and
+  a run re-scorable without asking a model.
 - **Name the producer before you write the refusal.** Before writing code that refuses, raises, or
   reports a finding on a state, name what produces that state. If nothing on a reachable path
   produces it, the code restates a design the rest of the code already states; delete it. If it can
@@ -231,6 +278,15 @@ file is one power-cycle from gone.
 - **`ROADMAP_PLANS/`** holds partly-planned work that is not under way: a plan with enough design
   done that someone could pick it up, usually behind a ROADMAP.md item. A plan leaves when it
   becomes the active plan, is finished, or is abandoned. A plan there cites only tracked paths.
+- **A plan may name a normative page outside the contract documents, and that page outranks the
+  plan.** The contract documents are THESIS.md, SPEC.md, ARCHITECTURE.md and CONVENTIONS.md. A plan
+  may make a page of its own subject normative — as `PLAN_4_INFERENCE.md` does with
+  `RIGOR_AND_BEARING_SCORING_SCHEME.md`, which states the scoring rubric the contract cites — and on
+  that subject the page is the requirement while the plan is the route. Where a plan row and the
+  page disagree, the work implements the page and the plan's line is reported as moved, in the
+  commit that lands it; the page is not edited by the landing, and the contract documents cite it
+  rather than restate it. A plan that needs such a page names it in the plan, so a reader knows which
+  source settles a disagreement.
 - Working drafts and half-formed notes are scratch (`.claude-temp/`), not plans.
 
 ## Coordinator Policy
@@ -275,7 +331,14 @@ integration tests.
 choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
 another's.
 
-- MCP protocol tests are transcript fixtures, `test_data/fixtures/mcp/*.jsonl`: each request line is
+**A fixture whose answer shape a change invalidates moves in the same commit, and the commit body
+names it.** When a change moves what an answer must look like — the parse now reads charge lines, so
+a stub answering `0.5` is no answer — the fixture that answers in the old form moves with it, not in
+a later package: a stub left behind makes every leg over it red at the boundary, and reads as a
+failure of the change that came after. The commit body names the fixture and what it now answers, the
+way it names any other truth it moved, so a reader can see which change made it answer differently.
+
+- MCP protocol tests are transcript fixtures, `test-data/fixtures/mcp/*.jsonl`: each request line is
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
   `${VERSION}`, `${ID1}`, `${ID2}`, `${REPO}` (the repository root) and `${STATE_DIR}`, applied to
   requests as well as responses. The detached-build test needs a kbase binary to re-execute:
@@ -287,20 +350,33 @@ another's.
   hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
   dependency — pandoc, python3, the adjagent clone — leaves the omnibus the same way, what needs no
   tool staying in it as a recipe of its own.
+- `just` never syntax-checks a recipe body: it parses its own syntax, not the shell inside a body, so a
+  body can be invalid shell and still parse. After changing a `[private]` body, render it and check the
+  shell by hand — `set -o pipefail; just --dry-run <private-recipe> <its args> 2>&1 | bash -n`. Both
+  parts are load-bearing: `--dry-run` renders to stderr, so a plain `| bash -n` feeds it an empty stream
+  and passes vacuously, and `pipefail` keeps a justfile that did not parse from reading as a pass. The
+  check runs only when the justfile parses — that failure is loud already at the next `just` invocation —
+  and it does not replace running the recipe. A habit, not a target or a script: there is deliberately
+  no `just check-recipes`, because a checker built on `just --dry-run` cannot run when the file it would
+  check is the thing that is broken.
+- The results fixture ships no claims: `test-data/fixtures/results/kb-root` holds its papers and nothing
+  else, so a leg needing a claim to score cannot run against it as it stands — it looks ready and is
+  not, for that purpose. Copy the fixture's repo to a scratch directory and insert what the leg needs
+  through `insert-claim-entry --create`, as the transcript staging above does.
 - A Go test that must drive `kbase mcp` over pipes the recipe holds starts no process: the recipe
   starts the server on two named FIFOs and passes their paths with `-args`, and the test opens the
   write end first, so neither side waits on the other's open.
 - Every integration test preserves its full log, its stats, and its run artifacts under
-  `test_data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A leg
+  `test-data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A leg
   that must run outside any repository runs in a system temporary directory and copies its whole
-  run tree under `test_data/transient/<test-name>/` before removing it. Every
+  run tree under `test-data/transient/<test-name>/` before removing it. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
   store (`refresh`, `verify`, the queries) takes no such flag. `build` resolves and creates its
   state store before its first refusal; every recipe invocation of `build` takes `--state-dir`,
   refused outcomes included.
 - Unit tests pass hermetically (no network, no corpus) beside their packages; their `go test` log is
-  preserved under `test_data/transient/unit_tests/`. Corpus-driven property tests skip when the
+  preserved under `test-data/transient/unit_tests/`. Corpus-driven property tests skip when the
   corpus is absent and are wired into an integration recipe where it is guaranteed present.
 - Observational evidence (counts, measurements, A/B numbers) is emitted to an inspectable location,
   never left in agent reports or scrollback.

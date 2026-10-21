@@ -74,28 +74,6 @@ func TestKBRootState(t *testing.T) {
 	check(kbRootPopulated)
 }
 
-func TestStateKeyResolvesTheUnbuiltTree(t *testing.T) {
-	real := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	before, err := stateKey(filepath.Join(link, kb.KBDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(real, kb.KBDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	after, err := stateKey(filepath.Join(real, kb.KBDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before != after || len(before) != stateKeyHexDigits {
-		t.Errorf("state keys %q (through a link, kb-root absent) and %q (resolved, present) must be one 16-digit key", before, after)
-	}
-}
-
 func TestShellJoin(t *testing.T) {
 	got := ShellJoin([]string{"kbase", "build", "/a b/p.tex", "--state-dir", "/s/it's"})
 	if want := `kbase build '/a b/p.tex' --state-dir '/s/it'"'"'s'`; got != want {
@@ -233,6 +211,16 @@ func field(fields []result.Field, key string) any {
 	return nil
 }
 
+// roleValue is one key's value in a role record, nil where it carries none.
+func roleValue(record result.Record, key string) any {
+	for _, f := range record {
+		if f.Key == key {
+			return f.Value
+		}
+	}
+	return nil
+}
+
 // carries is whether the document holds key at all, an absent key told apart
 // from one holding an empty value.
 func carries(fields []result.Field, key string) bool {
@@ -330,9 +318,9 @@ func TestBuildEndToEnd(t *testing.T) {
 	if through, _ := field(fields, "through").(string); through != Stages[len(Stages)-1].ID || carries(fields, "resume") {
 		t.Errorf("a build walked to the end reports through %q and resume %v, want the last stage and none: it has nothing left to continue", through, field(fields, "resume"))
 	}
-	for _, key := range []string{"provider", "provider-rule", "provider-layer"} {
+	for _, key := range []string{"provider", "provider-rule", "provider-layer", "roles"} {
 		if carries(fields, key) {
-			t.Errorf("a build spending no inference = %v, want no %s: no pool entry supplied an endpoint", fields, key)
+			t.Errorf("a build spending no inference = %v, want no %s: it resolved no endpoint", fields, key)
 		}
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("")) {
@@ -791,7 +779,7 @@ func TestLaunchRefusals(t *testing.T) {
 	opts.NoInference, opts.Through = false, "claims-discovered"
 	const baseURLKey = "baseUrl"
 	opts.Provider = func() (Provider, error) {
-		return Provider{}, config.LackError{Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}
+		return Provider{}, config.Refusal{Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}
 	}
 	if _, fields := f.build(t, opts); func() bool {
 		items, _ := field(fields, "refusals").([]result.Item)

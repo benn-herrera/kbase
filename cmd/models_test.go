@@ -231,10 +231,9 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		wantChosen: "alpha",
 		wantRule:   "flag",
 	}, {
-		name:       "config chosen when flag empty",
-		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
-		wantChosen: "beta",
-		wantRule:   "config",
+		name:    "the superseded provider key chooses nothing",
+		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
+		wantErr: "no provider selected",
 	}, {
 		name:       "sole entry needs no choice",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha")}},

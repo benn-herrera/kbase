@@ -4,20 +4,25 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/config"
+	"kbase/internal/log"
 	toolresult "kbase/internal/result"
 )
 
 // modelsOptions is the resolved input of the models verb: the shared
-// provider-reaching options plus the stream its result document goes to.
+// provider-reaching options, the logger the registry reports a close failure
+// to, plus the stream its result document goes to.
 type modelsOptions struct {
 	providerOptions
 
 	Stdout io.Writer
+	Logger log.Logger
 }
 
 // runModels selects a provider from the loaded pool, fetches its model
@@ -33,14 +38,30 @@ func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 }
 
 func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
-	name, rule, layer, client, ctx, release, err := opts.dial(ctx)
+	env := config.EnvOverrides(os.Getenv)
+	s := opts.inputs(env)
+	warnFaults(opts.Stderr, opts.Faults)
+	supersededProvider(opts.Stderr, opts.Config)
+	name, rule, err := config.Select(s, opts.Provider)
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
-	defer release()
-	fields := providerFields(name, rule, layer)
+	reg := newClients(opts.NewClient, opts.Logger)
+	defer reg.closeAll()
+	entry := opts.Providers[name]
+	client, err := reg.get(entryEndpoint(entry))
+	if err != nil {
+		return refusedOrFailed(nil, err)
+	}
+	fields := providerFields(name, rule, entry.Layer)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultListTimeout
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	start := time.Now()
-	ids, err := catalogueIDs(ctx, client)
+	ids, err := catalogueIDs(callCtx, client)
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -60,9 +81,10 @@ var modelsCmd = &cobra.Command{
 	Long: `Query a provider's /models endpoint and write its model identifiers,
 sorted ascending, as one YAML document on stdout.
 
-The provider is --provider, else the provider named in config.toml, else
-the sole entry in providers.toml — with several entries declared and none
-chosen, the command refuses, listing them, rather than picking one. Pool
+The provider is --provider, else the sole entry in providers.toml — with
+several entries declared and none chosen, the command refuses, listing them,
+rather than picking one. config.toml names no entry: its provider key is
+superseded, and each role names its own entry in its own model reference. Pool
 entries that failed to load are reported as warnings, and a summary line
 (provider, count, elapsed) is written to stderr.`,
 	Args: cobra.NoArgs,
@@ -80,6 +102,7 @@ entries that failed to load are reported as warnings, and a summary line
 		code, err := runModels(cmd.Context(), modelsOptions{
 			providerOptions: opts,
 			Stdout:          cmd.OutOrStdout(),
+			Logger:          processLog.logger,
 		})
 		if err != nil {
 			return err

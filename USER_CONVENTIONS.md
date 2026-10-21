@@ -19,8 +19,8 @@ Keys come in this order:
 3. `migration` — `from`, `to`, `note`, on the result of a verb that read the KB on an older metadata
    format, until a save stamps it current; absent otherwise
 4. the subcommand's own keys
-5. by outcome: `refusals` (`refused`, `retry`), `failures` (`failed`), or `cancelled` (`stage`,
-   `unit`)
+5. by outcome, and last: `refusals` (`refused`, `retry`), `failures` (`failed`), or `cancelled`
+   (`stage` and `unit` on a build, `item` on `score`)
 
 | `outcome` | Exit | What to do |
 |---|---|---|
@@ -74,9 +74,11 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
 - `--bibliography` replaces the default set: every `.bib` beside the volume root.
 - `--state-dir` overrides the state store, `$XDG_STATE_HOME/kbase/<key>/`. Pass the same value to
   every `build`, `status` and `cancel` for that KB.
-- Result keys: `state-dir`, `through`, `no-inference`, `resumed`, `restored`, `stages` (each
-  `stage`, `commit`, `dropped`, `report`), and `resume`. `through` and `stages` are absent from a
-  result whose invocation walked no stage; `resume` is absent unless an identical re-issue continues
+- Result keys: `state-dir`, `roles` (one record per role the build resolved — `role`, `back-end`,
+  `provider`, `provider-rule`, `provider-layer`, `model` — absent under `--no-inference`), `through`,
+  `no-inference`, `resumed`, `restored`, `stages` (each `stage`, `commit`, `dropped`, `report`), and
+  `resume`. `through` and `stages` are absent from a result whose invocation walked no stage;
+  `resume` is absent unless an identical re-issue continues
   the work: present only where the run recorded a boundary, so of the outcomes `cancelled`, `failed`
   and `refused`, only a run that walked a stage supplies one. A `bounded` result
   carries no `resume`: the run is finished at the bound, so re-issuing its command is not what
@@ -156,6 +158,40 @@ lift stands over it, in which case the lift's product is the published number. A
 `strength` as a number rounded to two decimals, while the register's record carries the value itself;
 the arithmetic always reads the value.
 
+**`score`** runs the scoring pass — a CLI verb, not an MCP tool: `kbase score --pass rigor|bearing`;
+`--help` lists its flags. One item per call, landed through `set-rigor` or `set-bearing` under the KB
+write lock. The call asks for the faults the text commits — one charge line per occurrence, each a
+fault id and a span of the item's own text, or `none`, or `flt-pending` — and kbase prices the list
+into the value: the scheme's criteria, its two id sets and its weights are
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md)'s. `rigor` covers every
+claim, analysis and experiment, `bearing` every `supports`, `founds`, `lifts` and `refutes` edge; a
+work's rigor is never asked — set it by hand.
+
+- The model is the `scoring` role: `models.scoring` in `config.toml`, or `KBASE_SCORING` under the
+  environment's endpoint. A run whose mode names none is refused before the KB is opened, naming that
+  key; nothing falls back to the text model. `--scoring-model` overrides the role for one run — a
+  `<provider>/<model>` reference in file mode, a bare id in environment mode, the harness's id under
+  `--harness` — and never substitutes for one.
+- A reply the parse refuses, a call cut off at the completion cap, and a failed call or landing each
+  write nothing for that item: the attempt is recorded `failed` with the reason and no text, and the
+  run goes on.
+- Records stand under `<state-dir>/score/<run>/`; `--resume` skips what landed and a fresh run asks
+  everything again. Each of the two refreshes takes the KB write lock briefly, and so does each
+  landing. A resume whose landed values the running table now prices differently **re-prices** them —
+  through the same write path, no model asked — and records the move in `repriced.yaml`; a resume
+  under a changed ask continues under the current ask, and neither refuses.
+- `--harness NAME` runs one process per item from the profile of that name in `harnesses.toml`
+  instead of asking an endpoint: no endpoint is chosen, the mode is not consulted, and a repository
+  profile says so once on stderr. `--dry-run` lists the set, asks nothing and cannot be resumed.
+- A run holds `<state-dir>/score`, so a second is `retry` (`check: lock`).
+
+Keys: `state-dir`, `pass`, `roles` (one record, `scoring`; absent under `--dry-run`), `run`,
+`ledger`, `counts` (`total`, `done`, `malformed`, `failed`, `remaining`), `scored`, `resume` (wherever
+an item is not `done`, ahead of the closing record, carrying the flags, the back end and — in
+environment mode — the variables it read), and last — `failures` on `failed` (`check: error` items:
+each failed item and its reason, or the error that stopped the run), `cancelled` (`item`, the one it
+stopped before) on `cancelled`, `refusals` on `refused` and `retry`.
+
 **`refresh`** rewrites derived metadata, `.index/*.yaml` and the `*.svg` claim graph diagrams.
 **`verify`** writes nothing; its findings are `refusals` items, and one a refresh clears carries
 `remedy: kbase refresh`. **`render-claim-graph`** reports `sheet` as `placeholder` or `drawn`; it
@@ -164,29 +200,50 @@ render and never reported.
 
 ## Providers
 
-Only a `build` with an inference-spending stage left to walk, `models` and `configure` use a
-provider. A build that needs one and has none is refused before its first stage; `--no-inference`
-needs none.
+Only a `build` with an inference-spending stage left to walk, `score` (a dry run and a `--harness`
+run excepted), `models` and `configure` use a provider. A build that needs one and has none is
+refused before its first stage; `--no-inference` needs none. A `--harness` run dials no endpoint, but
+`models.scoring` — or `KBASE_SCORING` — must still name a model, even where the profile's command
+carries no `{model}`.
 
 Configuration is read from two layers: `<repository>/.kbase/` over `~/.config/kbase`, a repository
-pool entry replacing a same-named global one whole and a `config.toml` value overriding the
-corresponding field alone. A directory `--config-dir` names, else `$KBASE_CONFIG_DIR`, is instead
-the only layer read. Outside a worktree only the global layer is read, and nothing is refused for
-that.
+pool entry or harness profile replacing a same-named global one whole and a `config.toml` value
+overriding the corresponding field alone. A directory `--config-dir` names, else
+`$KBASE_CONFIG_DIR`, is instead the only layer read. Outside a worktree only the global layer is
+read, and nothing is refused for that. Three files are read from each layer: `providers.toml`,
+`config.toml` and `harnesses.toml`.
 
 - An entry's keys are `baseUrl` (required), `apiKeyFile` (the only way an entry supplies a key),
   `type` (`inference` where unstated), `api` (`openai` where unstated) and `decisionsFlavor` (the
   decision surface, `systemone` where silent).
-- The provider is `--provider`, else `config.toml`'s `provider`, else the sole `providers.toml`
-  entry. With several and none chosen, the refusal names `key: --provider` with every entry name as
-  `allowed`. A `--provider` the pool does not hold refuses with `path` the `providers.toml` of the
-  layer kbase writes configuration into — the file an entry belongs in — and
-  `remedy: kbase configure --create`; a provider that faulted out of the pool carries the fault's
-  own reason instead.
-- `kbase models` lists a provider's model ids. `kbase configure` assigns the `decision` and `text`
-  categories; a category it is not given is refused naming `models.decision` or `models.text` with
-  the provider's model ids as `allowed` — re-issue with `--model-map decision=<id>,text=<id>`. No
-  other category name is accepted: an unknown one is a usage refusal.
+- `config.toml`'s `[models]` holds `decision`, `text` and `scoring`, and each value is a
+  **reference**: a `providers.toml` entry name, then the model id that entry serves, split at the
+  first `/` — `local/Qwen3.5-9B`, `openrouter/anthropic/claude`. A bare model id there is refused,
+  naming `models.<role>`, the form and the `kbase configure` command that rewrites it; the
+  top-level `provider` key is superseded, loads, and chooses nothing (a file-mode run says so once on
+  stderr).
+- The provider is `--provider`, else the sole `providers.toml` entry — a rule for `models` and
+  `configure`, which dial an entry to list its catalogue; it is not a rule for a role. With several
+  and none chosen, the refusal names `key: --provider` with every entry name as `allowed`. A
+  `--provider` the pool does not hold refuses with `path` the `providers.toml` of the layer kbase
+  writes configuration into — the file an entry belongs in — and `remedy: kbase configure --create`;
+  a provider that faulted out of the pool carries the fault's own reason instead.
+- `kbase models` lists a provider's model ids. `kbase configure` assigns the `decision`, `text` and
+  `scoring` roles; a category it is not given is refused naming `models.<category>` (`check: detect`)
+  with the provider's model ids as `allowed` — re-issue with `--model-map
+  decision=<entry>/<id>,text=<entry>/<id>,scoring=<entry>/<id>` — except `scoring`, where the target
+  file already holds one. No other category name is accepted: an unknown one is a usage refusal.
+- **The environment is a second mode, not an override.** `KBASE_API_BASE_URL` plus
+  `KBASE_DECISION`, `KBASE_TEXT` and `KBASE_SCORING` — bare model ids — configure inference with no
+  configuration directory at all, and a role variable beside a `[models]` value is refused with one
+  item per side rather than merged. A role variable without the base URL, or the base URL beside
+  file-supplied models, refuses the same way. `KBASE_API_KEY_FILE` replaces the key of whichever
+  endpoint is in force and is not a mode. A `--harness` run consults neither mode.
+- `harnesses.toml` holds the harness profiles `--harness` names: one top-level table per profile,
+  with `command` (an argv array) as its only key. `configure --create` seeds `claude` live and
+  `opencode` commented with its limitation; a profile is added by editing the file, never by a
+  command. A profile the repository supplied is announced once on stderr, and where it replaces a
+  same-named global one whole the line names that layer too (SPEC §9.3).
 - The guidance for choosing those ids is in the files themselves: a `config.toml` kbase creates
   states beside `[models]` what each category wants and example ids, and an MCP client reads the
   same rows at `kbase://model-hints`. The ids are examples, not requirements — match the stated
@@ -197,12 +254,14 @@ that.
   `<repository>/.kbase/` whether or not that directory exists, is refused outside a worktree, and
   beside `--config-dir` is a usage refusal naming `--project`.
 - `kbase show-config` reports how this invocation's configuration resolves — the layers read and
-  what named each, the pool with each entry's layer and any fault, `config.toml`'s merged choices,
-  the selection and the endpoint — and changes nothing: no KB read, no file written, no request
-  made. Each resolved field names the layer that supplied it.
-- Every subcommand loads both configuration files strictly first; an unknown key fails the load of
-  the layer holding it, no lower layer is read in its place, and `configure` cannot repair a file
-  that does not load.
+  what named each, the pool with each entry's layer and any fault, `config.toml`'s merged `[models]`
+  values, the harness profiles and their layers, the `mode`, the selection, and one `roles` record
+  per role naming what answers it — and changes nothing: no KB read, no file written, no request
+  made. Each resolved field names the layer that supplied it, and a gap is a diagnostic in a `done`
+  result, not a refusal.
+- The verbs that read configuration load all three files strictly before doing anything else (README
+  "Configuration"); an unknown key fails the load of the layer holding it, no lower layer is read in
+  its place, and `configure` cannot repair a file that does not load.
 - Reference an API key with `apiKeyFile`, written with a leading `~` where the file lives under the
   home directory (`~/keys/lab.txt`): a relative path resolves beside `providers.toml`, and `~user`
   is not expanded. The same rule holds for `--config-dir`, `$KBASE_CONFIG_DIR` and

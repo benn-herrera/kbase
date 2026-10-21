@@ -9,6 +9,7 @@ import (
 const (
 	decisionModel = "clef"
 	textModel     = "Qwen3.8-27B"
+	scoringModel  = "clef-scoring"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -146,7 +147,7 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 // config.toml is read here — the fixture providers.toml names a key file,
 // and no test reads a credential.
 func TestLoadConfigFixture(t *testing.T) {
-	path := filepath.Join("..", "..", "test_data", "fixtures", "config", ConfigFileName)
+	path := filepath.Join("..", "..", "test-data", "fixtures", "config", ConfigFileName)
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		t.Fatalf("the committed fixture no longer loads: %v", err)

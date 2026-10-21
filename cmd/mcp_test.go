@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	mcpTranscriptDir = "../test_data/fixtures/mcp"
-	resultsFixture   = "../test_data/fixtures/results"
+	mcpTranscriptDir = "../test-data/fixtures/mcp"
+	resultsFixture   = "../test-data/fixtures/results"
 	// noResponse is the transcript line standing where a request is owed
 	// no response.
 	noResponse = "null"

@@ -1,117 +1,99 @@
 # ACTIVE PLAN
 
-**Scope.** Three phases on the `2.0.0` metadata format. Phase 1 lands the format itself: three
-quantities (`rigor`, `bearing`, `strength`), four scoring relations, one walk, one converter. Phase 2
-lands `kbase score`, the scoring loop kbase now owns. Phase 3 is the two external hand-offs that
-consume them — the reference toolchain's `2.0.0` reader and the adjagent skill/scorer retirement —
-and lands nothing in this repository.
+**Scope.** The `2.0.0` format (Phase 1) and the scoring loop (Phase 2) are landed. The next landing
+is **Phase 4, the inference asking rework**: how kbase names a model, resolves it to an endpoint, and
+what it asks it through. Phase 3 — the two external hand-offs that consume the format — stands
+beside it, owned elsewhere and landing nothing here.
+
+Phase 4 is planned in two steps. The **design is its first work item**: it settles the endpoint
+resolution, the client lifecycle, the per-role model references, the `scoring` role, the two
+scoring-time flags and the harness back end, and names the work packages afterward. Nothing in Phase 4
+is coded before that design is written and gets its prompt-engineer review — a design is not the
+subject of an intersprint review. The intersprint review follows this rework's landing and covers the
+scoring driver sprint as a whole.
 
 ## Plan documents
 
 | Phase | Document | Lands | Depends on | Status |
 |---|---|---|---|---|
-| 1 | [`PLAN_1_FORMAT.md`](PLAN_1_FORMAT.md) | one commit series, merged once | — | reissued for the node-pass rework — WP1–WP5 committed, the rework open |
-| 2 | [`PLAN_2_SCORE.md`](PLAN_2_SCORE.md) | one commit series, merged once | Phase 1 | blocked on Phase 1 |
-| 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2 | blocked; external owners |
+| 1 | — | one commit series, merged once | — | **landed**, one squashed commit `07bf4c6` on `main` |
+| 2 | — | one commit series, merged once | Phase 1 | **landed** on `kb-score`, WP1–WP8 and the contract fixes, plus the `test-data/` rename; `just checkpoint` green. **The merge waits on the intersprint review**, which follows Phase 4's landing and covers the scoring driver sprint. |
+| 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2 | ready: both phases are landed; external owners |
+| 4 | [`PLAN_4_INFERENCE.md`](PLAN_4_INFERENCE.md) | one commit series, merged once | Phase 2 landed | **landed** on `kb-score`: `WP1` resolution and the registry, `WP2` the scoring role and the flags, `WP3` the harness back end, `WP4` the rigour-and-bearing rubric — charge lines priced by kbase ([scheme](RIGOR_AND_BEARING_SCORING_SCHEME.md), [design](RIGOR_AND_BEARING_SCORING_DESIGN.md)) — and `WP5` the contract text; **the merge waits on the intersprint review** over the scoring driver sprint |
 
-The landing branch is `kb-2.0.0-format`. Its checkpoints are WP1 at `d2c49dc`, WP2–WP4 at `7e0cfee`,
-WP5 at `81300cf`, the document checkpoint at `d4479dc`, the node-pass design at `8cd1ae4`, the
-vocabulary design at `012ba17` and the design of record at `d103548`; the reissued plans stand on the
-branch above them. The head moves as work lands and is not recorded here — read it from the branch.
-WP1–WP5 are committed checkpoints that implement the model before the node pass: they are reworked
-inside the same landing, not accepted as finished, and Phase 1's work packages say for each what is
-landed and what the rework adds. Coding resumes on the reissued Phase 1 and continues the one
-landing, not a second series.
+`PLAN_2_SCORE.md` is retired with Phase 2 landed; its open issues are carried in this document, and
+git holds the record of what it said. Phase 1's plan was retired the same way.
 
 [`STRENGTH_SCORING_SCHEME.md`](STRENGTH_SCORING_SCHEME.md) states the scoring model — the three
-quantities, the four relations and the walk's arithmetic. The format is [SPEC.md](SPEC.md) §10, and
-[ARCHITECTURE.md](ARCHITECTURE.md) is how this implementation carries it.
+quantities, the four relations and the walk's arithmetic. The format is [SPEC.md](SPEC.md) §10, the
+configuration surface §9, and [ARCHITECTURE.md](ARCHITECTURE.md) is how this implementation carries
+them.
 
-`ROADMAP_PLANS/BEARING_FIELD.md` is retired: its content is folded into Phase 1 and the file was
-removed with this checkpoint. There is one plan of record per phase.
+## Phase 4 — outcomes
 
-## Outcomes
+1. **Resolution is not connection.** Which endpoint a verb uses is a fact about the KB's
+   configuration, decided without I/O and refused by name before anything is asked; opening a client
+   is a separate step. One verb may hold several clients at once — a build whose decision and text
+   roles sit on different providers — and closes them together at its exit.
+2. **Per-role model references.** A model is named `provider/model` in the configuration, and the
+   global `provider` goes: each role carries its own provider, model, rule and layer, so the result
+   document reports those per role rather than for the verb. Existing configurations that name a
+   provider globally get a stated compatibility path, not a silent reinterpretation.
+3. **A `scoring` role.** `[models] scoring` names the model the scoring asks go to. Absent, it is a
+   refusal — never a fallback to `text` — in provider mode and in harness mode alike.
+4. **Two scoring-time flags.** `--scoring-model` chooses the model at scoring time; `--harness`
+   chooses the back end the asks go to. They compose: `--scoring-model` names the model to use in
+   either back end, a pool reference under provider mode and the harness's own model id under a
+   harness.
+5. **The harness back end.** The scoring runner already reaches a model through one seam. A harness
+   implementation of that seam is the second back end, and the design states what the ledger records
+   when a harness answers, how one item is kept from carrying into the next, whether a harness failure
+   is an item's or the run's, and whether the model a document names is the one requested or the one
+   the harness reports using.
+6. **The contract moves with it.** SPEC §9 for the configuration surface, §7 and §8 for the result
+   keys and the scoring flags, and `show-config`, `configure`, README, USER_CONVENTIONS and the MCP
+   integration guide for the reader's side.
 
-1. **A `2.0.0` KB.** Five node types — `claim`, `analysis`, `experiment`, `work`, `axiom` — and
-   four scoring relations. `rigor` is a node's local value, `bearing` a scoring edge's scalar,
-   `strength` the derived value. `supports` and `founds` multiply into the min, `lifts` max above
-   it, `refutes` cap from above; every scoring edge carries a bearing, an axiom's strength is `1.0`.
-   Scoring edges are stored push; the register stays claim-centric under `- rests-on:`. Ids carry a
-   three-letter prefix — `clm-`, `ana-`, `exp-`, `wrk-`, `axm-<label>` — and the register is
-   `claim-rigor.md`, its authored section `### Rigor` and its derived block `### Strength`. A
-   **valid** `1.0.0` KB opens through one converter and is re-derived on its first `refresh`; a file
-   already malformed under `1.0.0` is refused by the load and is not the converter's to fix.
-2. **A scoring run kbase owns.** `kbase score --pass rigor|bearing` enumerates the scoring set from
-   the index, renders closed score-free text, calls the configured provider one item per call,
-   validates one value, lands it through `set-rigor`/`set-bearing`, and ledgers the run. It is a CLI
-   verb, excluded from MCP. Its start refresh is the natural write that saves an older KB in
-   `2.0.0` — a `1.0.0` KB is migrated and saved by `score`, and the run's document carries the
-   `migration` record. External works are human-authored and outside both passes.
-3. **The consumers.** The reference toolchain reads `2.0.0` and the compat harness compares again;
-   adjagent retires `kb-claim-scorer` and routes scoring to `kbase score`.
+## Carried forward from Phase 2
 
-## Decisions at kickoff
+Open issues the scoring landing leaves, none of them blocking its merge:
 
-These are the kickoff decisions; each is argued where it is carried.
+- **A `bounded` run that also failed an item** reports `bounded` and carries no `failures` record;
+  the reasons stand in `counts.failed` and the ledger only, because `bounded` outranks `failed`.
+- **The landing's write lock is unproven under contention.** A landing denied the KB write lock is
+  that item's `failed`, and the repo has no cheap way to hold that lock without its fixed wait, so
+  the behaviour is covered by code reading alone. A wait seam for `holdKB` would close it for every
+  writer, not just scoring.
+- **A stop in the end refresh** reports the refresh's outcome over the walk's, so a run whose walk
+  was cancelled and whose closing refresh was retried reads `retry`. Which of the two a two-half
+  failure reports is a contract question, not a code one.
 
-- **One landing for the format.** Vocabulary, walk, parse, index, query, writer, converter and
-  fixtures cannot go green in pieces. Phase 1 is one commit series merged once; no checkpoint
-  passes until its last work package is in.
-- **Graph words are functions; prose keeps the synonyms.** Five node types and four relations use
-  one word each; `invariant` and `framework` are prose, mapped by a contract legend. An axiom is a
-  node type with strength `1.0`, not a bearingless special case.
-- **Scoring is a kbase verb, not a seat and not an MCP tool.** Provider mode only — no harness, no
-  per-item session, no tool allowlist. One item per call, one quantity per answer; kbase composes
-  through the walk.
-- **The two text renderers are internal.** `rigorText`/`bearingText` are unexported functions of the
-  score engine (argued in `PLAN_2_SCORE.md`, Decisions taken), and their signatures are where an
-  out-of-scope subject is refused. A public verb is a separate change if an external harness ever
-  needs one.
-- **The scoring prompts live on `internal/asks`' shelf**, embedded and kbase-authored — the
-  package's existing provenance rule. They are model-facing and get prompt-engineer review before
-  first use. Their names and shape are `PLAN_2_SCORE.md`'s.
-- **The scoring set is enumerated in-process from the index.** No verb, no separate query language.
-  A `--dry-run` writes the per-run ledger's item list and no KB change.
-- **The ledger is a run record, not a cache**, outside the repository under the build state store's
-  directory. A fresh run re-asks every item; `--resume <run>` continues one. Its shape is
-  `PLAN_2_SCORE.md`'s.
-- **Two subjects are never scored by a pass.** A work's `rigor` and a `founds` edge's `bearing` are
-  human-authored through `set-rigor`/`set-bearing`; neither the scoring set nor a text renderer can
-  name them.
-- **No new dependency.** The provider client, prompt composer, state directory, lock, logger and
-  atomic write all exist.
+- **A tool-less agent for the ask**, supplied by adjagent and usable from either harness through its
+  own agent configuration, so a harness profile can run an agent that cannot read the KB instead of
+  one that is merely instructed not to. Phase 3's territory; unowned.
 
 ## Order and gates
 
-Phase 1 first: Phase 2 consumes `rigor`, `bearing`, the `lifts`/`refutes` relations and `deps`'
-`direction`. Phase 3 consumes both and does not gate either landing in this repository — the compat
-harness is flag-gated until the reference toolchain reads `2.0.0`, so CI stays green while it is
-blocked.
+Phase 4's order is design, then its prompt-engineer review, then work packages, then the contract
+text in the same landing. The design is reviewed before any code, because it decides the shape of a
+surface the verbs that load configuration read.
 
-Per phase: `just test`, `just edit-gate`, and the integration targets named in the phase document.
-Phase 1 runs `just test-integration` and `just test-integration-mcp`, whose legs move with the
-renames. Phase 2 adds one leg to the private `_test-integration-results-fixture` recipe — the
-`score --dry-run` invocation, run by the public `test-integration-results-fixture` through the same
-`run <verb-for-keys> <outcome> <args…>` helper — and no network-dependent target.
+Per landing: `just test`, `just edit-gate`, and the integration targets the plan names. The Phase 2
+landing adds one leg to `_test-integration-results-fixture` — the `score --dry-run` invocation, run by
+the public target through the `run <verb-for-keys> <outcome> <args…>` helper — and no
+network-dependent target.
 
-**Seats.** The contract documents (`SPEC.md`, `ARCHITECTURE.md`, `README.md`, `USER_CONVENTIONS.md`)
-are dual-audience and belong to the tech-writer seat; the phase's coder supplies the built behaviour
-and the acceptance evidence, and the writer lands the prose in the same landing. The two scoring
-prompt templates are model-facing and get prompt-engineer review before their first real run and
-before merge.
+**Seats.** The contract documents (`SPEC.md`, `ARCHITECTURE.md`, `README.md`, `USER_CONVENTIONS.md`,
+`INTEGRATING_KBASE_VIA_MCP.md`) are dual-audience and belong to the tech-writer seat; the coder
+supplies the built behaviour and the acceptance evidence, and the writer lands the prose in the same
+landing. Model-facing text — the two scoring prompt templates, and any the harness back end adds —
+gets prompt-engineer review before its first real run and before merge. The Phase 4 design is the
+architect's.
 
 ## What this plan does not do
 
-- It does not promise derived-value equality across the migration. Lifts move station, `founds`
-  scales, and untokened work edges stop pending; the installed base is re-derived and re-scored.
-- It does not draw a bearing on the sheet, add an "unscored" query, add a pending count, aliases for
-  retired names, or a fifth relation.
-- It does not install a scoring agent, and it does not let a pass read the other pass's answer.
-- It does not make the reference toolchain or adjagent updates here; Phase 3 names their owners and
-  their acceptance.
-
-## Deferred chores
-
-- **Rename `test_data/` to `test-data/`.** Every other top-level directory is lower-kebab-case; this
-  one is not. The name is spelled in the `justfile`, the transient-path constants in `internal/*`,
-  the tests that build paths into it, and the project documents.
+- It does not change the scoring model: no fifth relation, no bearing on the sheet, no new derived
+  quantity.
+- It does not let a pass read the other pass's answer, and it does not make a scoring run's judgement
+  a verdict.
+- It does not take up Phase 3's hand-offs, and it does not merge Phase 2 ahead of the review.

@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/model"
 )
 
 // TestBuildConfiguredByEnvironmentAlone: with no configuration directory at
-// all, the four variables configure the build's provider, the model serving
-// each category, and a key bound for a non-loopback http:// endpoint is one
-// line on the verb's stderr.
+// all, the environment's endpoint and its two role variables configure the
+// build, one client is opened on that endpoint for both roles, and a key bound
+// for a non-loopback http:// endpoint is one line on the verb's stderr.
 func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 	saved := flagConfigDir
 	t.Cleanup(func() { flagConfigDir = saved })
@@ -32,17 +33,34 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 		t.Fatalf("loading an absent configuration directory: %v", err)
 	}
 	var stderr bytes.Buffer
-	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)()
+	var dialled []model.Endpoint
+	providers.NewClient = func(e model.Endpoint) model.Client {
+		dialled = append(dialled, e)
+		return model.NewScriptedMock(nil, nil)
+	}
+	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(newClients(providers.NewClient, nil))
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}
-	if p.Letters != "Some-Decision" || p.Overview != "Some-Text" || p.Client == nil {
-		t.Errorf("provider = %+v, want each category's own variable on it", p)
+	if p.Letters != "Some-Decision" || p.Overview != "Some-Text" {
+		t.Errorf("provider = %+v, want each role's own variable on it", p)
 	}
-	// The environment supplied the endpoint and no pool entry did, so the
-	// build's result carries no provenance for it.
-	if p.Name != "" || p.Rule != "" || p.Layer != "" {
-		t.Errorf("provider provenance = %q/%q/%q, want none: no pool entry supplied the endpoint", p.Name, p.Rule, p.Layer)
+	// One environment endpoint serves both roles, so it is dialled once.
+	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey != "secret-key" {
+		t.Errorf("endpoints dialled = %+v, want the one the environment names, with its key file read", dialled)
+	}
+	// The environment supplied the endpoint and no pool entry did, so each
+	// record says environment and names no entry.
+	if len(p.Roles) != 2 {
+		t.Fatalf("roles = %v, want one per role the build asks", p.Roles)
+	}
+	for i, role := range p.Roles {
+		if got := roleField(role, "back-end"); got != "environment" {
+			t.Errorf("roles[%d] back-end = %v, want environment", i, got)
+		}
+		if got := roleField(role, "provider"); got != nil {
+			t.Errorf("roles[%d] names provider %v, want none", i, got)
+		}
 	}
 	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "cleartext") || strings.Contains(stderr.String(), "secret-key") {
 		t.Errorf("stderr = %q, want one cleartext line naming no key", stderr.String())
