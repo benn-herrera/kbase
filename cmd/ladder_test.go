@@ -34,7 +34,7 @@ func TestRefreshRewritesTheBottomRungsWords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(text), "- strength: 0.1 (unsubstantiated)") {
+	if !strings.Contains(string(text), "- strength: 0 (unsubstantiated)") {
 		t.Fatalf("the refresh did not write the rung's words:\n%s", text)
 	}
 	edit := strings.Replace(string(text), "(unsubstantiated)", "(refuted, do not use)", 1)

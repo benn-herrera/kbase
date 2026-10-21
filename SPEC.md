@@ -1377,22 +1377,29 @@ value, and `demoted` carries an origin in its place. A bearing is required on ev
 illegal on these two. A bearing weights the contribution and never modifies its source's value.
 
 ```
-derivation = min(rigor, every supports contribution, every founds contribution)
+premises   = every supports and founds contribution that participates
+derivation = min(rigor, every contribution in premises), and 0 where premises is empty
 final      = min(max(derivation, every lift), every cap)
 ```
+
+`rigor` caps what the premises establish and is no premise itself. A node no participating premise
+carries has an empty premise set and a derivation of `0` — whatever its `rigor` says, judged, pending
+or absent — so a bare claim reads `0.00` and lands `unsubstantiated`, however good its statement. An
+edge that does not contribute is no supporter, so a node whose only edge is excluded reads `0` too.
+Where a premise does participate and `rigor` is pending, the derivation is unknown and propagates
+nowhere: a lift stands over it — `max(pending, lift)` is the lift — while a refutation alone leaves it
+unknown. `lifts` and `refutes` compose around the derivation unchanged: a node whose only scoring
+edge is a lift takes the lift's product, and one whose only scoring edge is a refutation takes `0`.
 
 The walk carries full precision: nothing rounds a value on its way into a derivation, so a dependent
 multiplies its source's exact strength. The record — the `- strength:` line and a premise bullet's
 `(strength …)` — carries the value in the fewest decimals that read back as it: four in the ordinary
 case, more only where four would lose it, trailing zeros trimmed. A query result carries it as a
 number at two decimals, the trace on a `- strength:` line spells it at two, and a `verify` message
-quotes the record's spelling, being about the record. A pending `rigor` leaves that node's derivation
-unknown and propagates nowhere; a lift stands over it — `max(pending, lift)` is the lift, so a node
-corroborated but never judged publishes the lift's number, while a refutation alone leaves its
-strength unknown. A pending bearing, or a pending source strength, excludes its edge — no
-contribution, no lift, no cap — while `0.0` is a judgement and participates, taking a minimum to zero
-and a cap to `1.0`. A non-`run` experiment is inert as a lifter or refuter, and its `supports` edge is
-excluded like any unjudged premise.
+quotes the record's spelling, being about the record. A pending bearing, or a pending source strength,
+excludes its edge — no contribution, no lift, no cap — while `0.0` is a judgement and participates,
+taking a minimum to zero and a cap to `1.0`. A non-`run` experiment is inert as a lifter or refuter,
+and its `supports` edge is excluded like any unjudged premise.
 
 **A value is derived from a charge list, not composed from the interior of the scale.** Each of the
 two scoring passes asks a model for the faults the text commits — the ids

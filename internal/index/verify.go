@@ -260,6 +260,18 @@ func (m *metaCheck) run() ([]Finding, error) {
 			canonicalSet[mm[1]] = true
 		}
 	}
+	// recordedAnalyses is every analysis a register holds a record for. A leaf
+	// declares an analysis and names its edges, but the register carries its
+	// values: without that entry there is no authored strength for the walk to
+	// be fresh against, and the register census reports the missing record.
+	recordedAnalyses := map[string]bool{}
+	for _, rel := range regs {
+		for _, e := range kb.LocateRegisterEntries(registerText[rel]) {
+			if e.Kind == "ana" && e.Bound() {
+				recordedAnalyses[e.NodeID] = true
+			}
+		}
+	}
 	st, err := kb.Discover(m.src, log.Discard())
 	if err != nil {
 		return nil, err
@@ -353,7 +365,7 @@ func (m *metaCheck) run() ([]Finding, error) {
 	if err := m.referentialIntegrity(); err != nil {
 		return nil, err
 	}
-	if err := m.strengthFresh(st, sol); err != nil {
+	if err := m.strengthFresh(st, sol, recordedAnalyses); err != nil {
 		return nil, err
 	}
 	refs := LeafReferences(st)
@@ -871,7 +883,7 @@ func (m *metaCheck) annotationDrift(owner string, edges []kb.Edge, finals map[st
 	}
 }
 
-func (m *metaCheck) strengthFresh(st kb.State, strength Strength) error {
+func (m *metaCheck) strengthFresh(st kb.State, strength Strength, recordedAnalyses map[string]bool) error {
 	finals, analysisFinals := strength.Finals(), strength.AnalysisFinals()
 	claims := map[string]bool{}
 	for _, e := range st.ClaimEntries {
@@ -879,6 +891,9 @@ func (m *metaCheck) strengthFresh(st kb.State, strength Strength) error {
 	}
 	drift := func(id, got, want string) { m.add("strength freshness", true, "%s: %s, %s", id, got, want) }
 	for _, s := range st.Analyses {
+		if !recordedAnalyses[s.ID] {
+			continue
+		}
 		computed := optFinal(analysisFinals, s.ID)
 		switch {
 		case computed == nil:

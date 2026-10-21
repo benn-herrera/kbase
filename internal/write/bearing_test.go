@@ -414,11 +414,18 @@ func TestSetRigorOnEveryHome(t *testing.T) {
 }
 
 // TestANewPremiseIsPendingAndMovesNoClaim: an inserted premise lands with a
-// pending bearing and leaves its target's strength where it was; judging the
-// edge afterwards is what moves it.
+// pending bearing, so it contributes nothing and the claim reads 0 until the
+// bearing is judged; judging the edge afterwards is what moves it.
 func TestANewPremiseIsPendingAndMovesNoClaim(t *testing.T) {
 	root := seedKB(t)
-	// The seed rests on nothing, so its strength is its rigor.
+	// The seed rests on an axiom, so it holds a value of its own for the
+	// inserted claim's edge to multiply once that edge is judged.
+	if err := os.WriteFile(filepath.Join(root, kb.AxiomsFile), []byte("# Axioms\n\n### Axiom S1: The rule\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := run(t, root, "add-rests-on", "entry:\n- id: "+seedClaim+"\n  rests-on:\n  - id: Axiom S1\n    bearing: 1.0\n", false); res.Outcome != result.Done {
+		t.Fatalf("add-rests-on: %+v", res)
+	}
 	claim := insertClaim(t, root, "Bound Result", "  rests-on:\n  - id: "+seedClaim+"\n")
 	strengthOf := func(id string) *float64 {
 		t.Helper()
@@ -434,8 +441,8 @@ func TestANewPremiseIsPendingAndMovesNoClaim(t *testing.T) {
 		t.Fatalf("no index row for %s", id)
 		return nil
 	}
-	if got := strengthOf(claim); got == nil || *got != 0.5 {
-		t.Fatalf("a pending premise moved the claim: strength %v, want 0.50", got)
+	if got := strengthOf(claim); got == nil || *got != 0 {
+		t.Fatalf("a pending premise moved the claim: strength %v, want 0", got)
 	}
 	if res := run(t, root, "set-bearing", "entry:\n- id: "+seedClaim+"\n  target: "+claim+"\n  relation: supports\n  bearing: 0.2\n", false); res.Outcome != result.Done {
 		t.Fatalf("set-bearing: %+v", res)

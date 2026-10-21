@@ -123,7 +123,8 @@ func minOf(first float64, rest ...float64) float64 {
 // took, leading space included, or "" where the line has nothing to explain.
 // The expression nests innermost-first: the min over the premises, the lift
 // above it, then the cap around both. A pending rigor has no min to show, so a
-// lift standing over it is the whole expression.
+// lift standing over it is the whole expression; no premise at all leaves the
+// derivation 0, which is the base a lift and a cap compose around.
 func RenderStrengthTrace(r Result) string {
 	if r.Final == nil {
 		return ""
@@ -138,7 +139,7 @@ func RenderStrengthTrace(r Result) string {
 		}
 		return " [= " + expr + "]"
 	}
-	expr := FormatStrengthDisplay(r.Rigor)
+	expr := FormatStrengthDisplay(r.Derivation)
 	composed := false
 	if r.MinDep != nil {
 		expr = "min(" + FormatStrengthDisplay(r.Rigor) + ", " + FormatStrengthDisplay(r.MinDep) + ")"
@@ -225,24 +226,23 @@ func capStrength(edges []kb.Edge, strength map[string]*float64) *float64 {
 }
 
 // derive is one node's result: the derivation is the least of its rigor and
-// its premises' contributions; the final is that value raised to the largest
-// lift and capped by the smallest refutation. A pending rigor leaves the
-// derivation pending, and a lift still stands it.
+// its premises' contributions, or 0 where no premise contributes — a rigor caps
+// what the premises establish and is no premise itself. The final is that value
+// raised to the largest lift and capped by the smallest refutation. A pending
+// rigor over a premise set leaves the derivation pending, and a lift still
+// stands it; over no premise it caps nothing, and the node reads 0.
 func derive(rigor *float64, premises, lifts, caps []kb.Edge, strength map[string]*float64) Result {
 	r := Result{Rigor: rigor}
-	var derivation *float64
-	if rigor != nil {
-		r.MinDep = MinDependencyStrength(premises, strength)
-		least := *rigor
-		if r.MinDep != nil && *r.MinDep < least {
-			least = *r.MinDep
-		}
-		derivation = &least
-		r.Derivation = ptr(least)
+	r.MinDep = MinDependencyStrength(premises, strength)
+	switch {
+	case r.MinDep == nil:
+		r.Derivation = ptr(0)
+	case rigor != nil:
+		r.Derivation = ptr(minOf(*rigor, *r.MinDep))
 	}
+	position := r.Derivation
 	r.Lift = liftStrength(lifts, strength)
 	r.Cap = capStrength(caps, strength)
-	position := derivation
 	if r.Lift != nil && (position == nil || *r.Lift > *position) {
 		position = r.Lift
 	}
@@ -316,19 +316,21 @@ func derivationOrder(nodes []string, deps map[string][]string) ([]string, error)
 // ComputeStrength derives every claim's and analysis's strength.
 //
 // A node's derivation is min(its rigor, every participating premise's
-// contribution): a claim or analysis premise contributes its bearing times its
-// final strength, and a work or axiom premise its bearing times the source's
-// rigor — a work's judged once by a person, an axiom's 1.0 by rule. A final
-// strength is min(max(derivation, every lift), every cap), a lift contributing
-// its bearing times the lifter's strength and a refutation capping at 1 − that
-// product, the smallest cap winning. Every figure is carried at full
+// contribution), and 0 where no premise participates: rigor caps what the
+// premises establish and is no premise itself, so a node nothing carries reads
+// 0 whatever its rigor, judged or not. A claim or analysis premise contributes
+// its bearing times its final strength, and a work or axiom premise its bearing
+// times the source's rigor — a work's judged once by a person, an axiom's 1.0 by
+// rule. A final strength is min(max(derivation, every lift), every cap), a lift
+// contributing its bearing times the lifter's strength and a refutation capping
+// at 1 − that product, the smallest cap winning. Every figure is carried at full
 // precision: a dependent multiplies the value its source published, not a
 // rounded one. A claim's refutations, an analysis's and an experiment's lifts
 // and refutations all land on the node they name. An edge whose bearing or
 // whose source's strength is pending is excluded; a pending rigor leaves the
-// node's derivation pending and its final open to a lift. A non-run
-// experiment's edges are excluded as an unjudged premise's are. A cycle among
-// claims and analyses is a CycleError, scored or not.
+// node's derivation pending where a premise participates and its final open to a
+// lift. A non-run experiment's edges are excluded as an unjudged premise's are.
+// A cycle among claims and analyses is a CycleError, scored or not.
 func ComputeStrength(st kb.State) (Strength, error) {
 	claims := map[string]kb.ClaimEntry{}
 	var claimOrder []string

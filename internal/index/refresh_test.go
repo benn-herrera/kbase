@@ -53,7 +53,7 @@ func TestRefreshThenVerify(t *testing.T) {
 		}
 	}
 	register := read(t, filepath.Join(root, "vol/claim-rigor.md"))
-	for _, want := range []string{"- strength: 0.7 (ok to build on, see caveats)\n", "> **Leaf references:** [a](./a.md).\n"} {
+	for _, want := range []string{"- strength: 0 (unsubstantiated)\n", "> **Leaf references:** [a](./a.md).\n"} {
 		if !strings.Contains(register, want) {
 			t.Errorf("register lacks %q:\n%s", want, register)
 		}
@@ -86,10 +86,11 @@ func TestRefreshRecordsTheExactStrength(t *testing.T) {
 			"<!-- claim-rigor: clm-aaaaaa -->\n\nBody A.\n\n<!-- claim-rigor: clm-bbbbbb -->\n\nBody B.\n\n" +
 			"<!-- claim-rigor: clm-cccccc -->\n\nBody C.\n\n<!-- claim-rigor: clm-dddddd -->\n\nBody D.\n",
 		"vol/claim-rigor.md": "# Register\n\n" +
-			entry("Claim A", "clm-aaaaaa", "0.70", "") +
+			entry("Claim A", "clm-aaaaaa", "0.70", "- rests-on:\n  - Axiom S1 (bearing 0.70)\n") +
 			entry("Claim B", "clm-bbbbbb", "0.90", "- rests-on:\n  - clm-aaaaaa (strength *pending*) (bearing 0.72)\n") +
 			entry("Claim C", "clm-cccccc", "0.90", "- rests-on:\n  - clm-bbbbbb (strength *pending*) (bearing 0.72)\n") +
 			entry("Claim D", "clm-dddddd", "1.00", ""),
+		kb.AxiomsFile: "# Axioms\n\n### Axiom S1: The rule\n\nBody.\n",
 	})
 	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
 		t.Fatal(err)
@@ -99,7 +100,7 @@ func TestRefreshRecordsTheExactStrength(t *testing.T) {
 		"- strength: 0.7 (ok to build on, see caveats)",
 		"- strength: 0.504 (use as input only",
 		"- strength: 0.36288 (do not build on, rework needed)",
-		"- strength: 1 (ok to build on)",
+		"- strength: 0 (unsubstantiated)",
 		"(strength 0.7) (bearing 0.72)",
 		"(strength 0.504) (bearing 0.72)",
 	} {

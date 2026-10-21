@@ -70,19 +70,25 @@ func founds(source string, bearing kb.Bearing) kb.Edge {
 	return kb.Edge{Source: source, Relation: kb.RelationFounds, Bearing: bearing}
 }
 
+// axiomPremise is one analysis's premise set: an axiom's rigor is 1.0 by rule,
+// so the edge contributes its bearing alone.
+func axiomPremise() []kb.Edge { return []kb.Edge{founds("axm-S1", kb.Bearing{Value: 1})} }
+
 func TestComputeStrength(t *testing.T) {
 	st := kb.State{
 		ClaimEntries: []kb.ClaimEntry{
-			claimEntry("clm-base01", f(0.9)),
+			claimEntry("clm-base01", f(0.9), founds("wrk-c", kb.Bearing{Value: 1})),
+			claimEntry("clm-bare01", f(0.95)),
+			claimEntry("clm-bare02", f(0.95), founds("wrk-a", kb.Bearing{Value: 0.9})),
 			claimEntry("clm-weak01", f(0.4), supports("clm-base01", 1)),
 			claimEntry("clm-chain1", f(0.8), supports("clm-weak01", 1)),
-			claimEntry("clm-pend01", nil),
+			claimEntry("clm-pend01", nil, supports("clm-base01", 1)),
 			claimEntry("clm-excl01", f(0.9), supports("clm-pend01", 1)),
 			claimEntry("clm-far001", f(1), supports("clm-excl01", 1)),
 			claimEntry("clm-lift01", f(0.2)),
 			claimEntry("clm-low001", f(0.9)),
 			claimEntry("clm-rescu1", nil),
-			claimEntry("clm-cap001", f(0.9)),
+			claimEntry("clm-cap001", f(0.9), founds("wrk-c", kb.Bearing{Value: 1})),
 			claimEntry("clm-cap002", nil),
 			claimEntry("clm-both01", f(0.9), supports("clm-base01", 0.6667)),
 			claimEntry("clm-half01", f(0.9), supports("clm-base01", 0.5)),
@@ -92,21 +98,25 @@ func TestComputeStrength(t *testing.T) {
 			claimEntry("clm-work01", f(0.9), founds("wrk-a", kb.Bearing{Value: 0.3})),
 			claimEntry("clm-workpd", f(0.9), founds("wrk-a", kb.Bearing{Pending: true})),
 			claimEntry("clm-workns", f(0.9), founds("wrk-b", kb.Bearing{Value: 1})),
-			{ID: "clm-targ01", Rigor: f(0.8)},
-			{ID: "clm-refr01", Rigor: f(0.3), Refutes: []kb.Edge{{Source: "clm-refr01", Target: "clm-targ01", Relation: kb.RelationRefutes,
-				TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: 1}}}},
+			claimEntry("clm-targ01", f(0.8), founds("wrk-c", kb.Bearing{Value: 1})),
+			claimEntry("clm-refut1", f(0.9)),
+			{ID: "clm-refr01", Rigor: f(0.3), Premises: []kb.Edge{founds("wrk-a", kb.Bearing{Value: 0.6})},
+				Refutes: []kb.Edge{
+					{Source: "clm-refr01", Target: "clm-targ01", Relation: kb.RelationRefutes, TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: 1}},
+					{Source: "clm-refr01", Target: "clm-refut1", Relation: kb.RelationRefutes, TargetKind: kb.NodeKindClaim, Bearing: kb.Bearing{Value: 1}},
+				}},
 		},
 		Axioms: []kb.AxiomNode{{NodeType: kb.NodeKindAxiom, ID: "axm-S1", Title: "I", CanonicalPath: "axioms.md", CanonicalAnchor: "axiom-s1-the-rule"}},
 		Analyses: []kb.AnalysisNode{
-			{ID: "ana-lift01", Rigor: f(0.9), Lifts: []kb.Edge{{Source: "ana-lift01", Target: "clm-lift01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.98}}}},
-			{ID: "ana-lift02", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-lift02", Target: "clm-low001", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
-			{ID: "ana-ref01", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref01", Target: "clm-cap001", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
-			{ID: "ana-both1", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-both1", Target: "clm-both01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
-			{ID: "ana-ref02", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref02", Target: "clm-both01", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.3}}}},
-			{ID: "ana-lift03", Rigor: f(1), Lifts: []kb.Edge{{Source: "ana-lift03", Target: "clm-cap002", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.9}}}},
-			{ID: "ana-ref03", Rigor: f(1), Refutes: []kb.Edge{{Source: "ana-ref03", Target: "clm-cap002", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
+			{ID: "ana-lift01", Rigor: f(0.9), Premises: axiomPremise(), Lifts: []kb.Edge{{Source: "ana-lift01", Target: "clm-lift01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.98}}}},
+			{ID: "ana-lift02", Rigor: f(1), Premises: axiomPremise(), Lifts: []kb.Edge{{Source: "ana-lift02", Target: "clm-low001", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
+			{ID: "ana-ref01", Rigor: f(1), Premises: axiomPremise(), Refutes: []kb.Edge{{Source: "ana-ref01", Target: "clm-cap001", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
+			{ID: "ana-both1", Rigor: f(1), Premises: axiomPremise(), Lifts: []kb.Edge{{Source: "ana-both1", Target: "clm-both01", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.8}}}},
+			{ID: "ana-ref02", Rigor: f(1), Premises: axiomPremise(), Refutes: []kb.Edge{{Source: "ana-ref02", Target: "clm-both01", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.3}}}},
+			{ID: "ana-lift03", Rigor: f(1), Premises: axiomPremise(), Lifts: []kb.Edge{{Source: "ana-lift03", Target: "clm-cap002", Relation: kb.RelationLifts, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.9}}}},
+			{ID: "ana-ref03", Rigor: f(1), Premises: axiomPremise(), Refutes: []kb.Edge{{Source: "ana-ref03", Target: "clm-cap002", Relation: kb.RelationRefutes, TargetKind: "claim", Bearing: kb.Bearing{Value: 0.2}}}},
 			{ID: "ana-min01", Rigor: f(0.5)},
-			{ID: "ana-cap01", Rigor: f(0.9)},
+			{ID: "ana-cap01", Rigor: f(0.9), Premises: axiomPremise()},
 		},
 		Experiments: []kb.ExperimentNode{
 			{ID: "exp-run001", Status: "run", Rigor: f(1), Lifts: []kb.Edge{
@@ -118,7 +128,7 @@ func TestComputeStrength(t *testing.T) {
 			{ID: "exp-skept1", Status: "run", Rigor: f(1), Refutes: []kb.Edge{
 				{Source: "exp-skept1", Target: "ana-cap01", Relation: kb.RelationRefutes, TargetKind: kb.NodeKindAnalysis, Bearing: kb.Bearing{Value: 0.25}}}},
 		},
-		Works: []kb.ExternalWork{{ID: "wrk-a", Rigor: f(0.5)}, {ID: "wrk-b"}},
+		Works: []kb.ExternalWork{{ID: "wrk-a", Rigor: f(0.5)}, {ID: "wrk-b"}, {ID: "wrk-c", Rigor: f(0.9)}},
 	}
 	strength, err := ComputeStrength(st)
 	if err != nil {
@@ -136,13 +146,15 @@ func TestComputeStrength(t *testing.T) {
 		want *float64
 	}{
 		{"clm-base01", f(0.9)},
+		{"clm-bare01", f(0)},
+		{"clm-bare02", f(0.45)},
 		{"clm-weak01", f(0.4)},
 		{"clm-chain1", f(0.4)},
 		{"clm-pend01", nil},
-		{"clm-excl01", f(0.9)},
-		{"clm-far001", f(0.9)},
+		{"clm-excl01", f(0)},
+		{"clm-far001", f(0)},
 		{"clm-lift01", f(0.882)},
-		{"clm-low001", f(0.9)},
+		{"clm-low001", f(0.8)},
 		{"clm-rescu1", f(0.7)},
 		{"clm-cap001", f(0.8)},
 		{"clm-cap002", f(0.8)},
@@ -152,9 +164,10 @@ func TestComputeStrength(t *testing.T) {
 		{"clm-axm00", f(0)},
 		{"clm-work00", f(0)},
 		{"clm-work01", f(0.15)},
-		{"clm-workpd", f(0.9)},
-		{"clm-workns", f(0.9)},
+		{"clm-workpd", f(0)},
+		{"clm-workns", f(0)},
 		{"clm-targ01", f(0.7)},
+		{"clm-refut1", f(0)},
 	} {
 		got, ok := finals[tc.id]
 		if tc.want == nil && ok || tc.want != nil && (!ok || got != *tc.want) {
@@ -162,20 +175,27 @@ func TestComputeStrength(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ id, want string }{
+		{"clm-base01", " [= min(0.90, 0.90)]"},
+		{"clm-bare01", ""},
+		{"clm-bare02", " [= min(0.95, 0.45)]"},
+		{"clm-weak01", " [= min(0.40, 0.90)]"},
 		{"clm-chain1", " [= min(0.80, 0.40)]"},
-		{"clm-lift01", " [= max(0.20, 0.88)]"},
-		{"clm-low001", ""},
+		{"clm-excl01", ""},
+		{"clm-far001", " [= min(1.00, 0.00)]"},
+		{"clm-lift01", " [= max(0.00, 0.88)]"},
+		{"clm-low001", " [= max(0.00, 0.80)]"},
 		{"clm-rescu1", " [= lift 0.70]"},
-		{"clm-cap001", " [= min(0.90, 0.80)]"},
+		{"clm-cap001", " [= min(min(0.90, 0.90), 0.80)]"},
 		{"clm-cap002", " [= min(lift 0.90, 0.80)]"},
 		{"clm-both01", " [= min(max(min(0.90, 0.60), 0.80), 0.70)]"},
 		{"clm-axm04", " [= min(0.90, 0.40)]"},
 		{"clm-axm00", " [= min(0.90, 0.00)]"},
 		{"clm-half01", " [= min(0.90, 0.45)]"},
-		{"clm-far001", " [= min(1.00, 0.90)]"},
+		{"clm-workpd", ""},
+		{"clm-workns", ""},
+		{"clm-targ01", " [= min(min(0.80, 0.90), 0.70)]"},
+		{"clm-refut1", ""},
 		{"clm-pend01", ""},
-		{"clm-base01", ""},
-		{"clm-targ01", " [= min(0.80, 0.70)]"},
 	} {
 		if got := RenderStrengthTrace(strength.Results[tc.id]); got != tc.want {
 			t.Errorf("%s trace = %q, want %q", tc.id, got, tc.want)
@@ -185,7 +205,7 @@ func TestComputeStrength(t *testing.T) {
 		id    string
 		final *float64
 		trace string
-	}{{"ana-min01", f(0.9), " [= max(0.50, 0.90)]"}, {"ana-cap01", f(0.75), " [= min(0.90, 0.75)]"}} {
+	}{{"ana-min01", f(0.9), " [= max(0.00, 0.90)]"}, {"ana-cap01", f(0.75), " [= min(min(0.90, 1.00), 0.75)]"}} {
 		r := strength.AnalysisResults[tc.id]
 		if r.Final == nil || *r.Final != *tc.final {
 			t.Errorf("%s final = %v, want %v", tc.id, r.Final, *tc.final)
@@ -248,11 +268,14 @@ func TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength(t *testing.T) {
 // source published, so 0.70 × 0.72 = 0.504 enters a dependent's min as 0.504
 // and not as the 0.5 a two-decimal walk would have published.
 func TestDependentUsesItsSourcesExactStrength(t *testing.T) {
-	st := kb.State{ClaimEntries: []kb.ClaimEntry{
-		claimEntry("clm-aaaaaa", f(0.7)),
-		claimEntry("clm-bbbbbb", f(0.9), supports("clm-aaaaaa", 0.72)),
-		claimEntry("clm-cccccc", f(0.9), supports("clm-bbbbbb", 0.72)),
-	}}
+	st := kb.State{
+		ClaimEntries: []kb.ClaimEntry{
+			claimEntry("clm-aaaaaa", f(0.7), founds("wrk-a", kb.Bearing{Value: 1})),
+			claimEntry("clm-bbbbbb", f(0.9), supports("clm-aaaaaa", 0.72)),
+			claimEntry("clm-cccccc", f(0.9), supports("clm-bbbbbb", 0.72)),
+		},
+		Works: []kb.ExternalWork{{ID: "wrk-a", Rigor: f(0.7)}},
+	}
 	strength, err := ComputeStrength(st)
 	if err != nil {
 		t.Fatal(err)
@@ -296,11 +319,15 @@ func TestClaimRefuterAndPairsIntoAnalysesReachTheRecords(t *testing.T) {
 			"    lifts:\n      - ana-aaaaaa: 1.0\n  - exp-id: exp-bbbbbb\n    status: run\n    rigor: 1.0\n" +
 			"    refutes:\n      - ana-bbbbbb: 0.25\n---\n[↑ Vol](index.md)\n\n# Ex\n",
 		"vol/claim-rigor.md": "# Register\n\n" +
-			"## Claim T\n<!-- id: clm-targ01 -->\n\n### Rigor\n- rigor: 0.80\n- strength: *pending*\n- rationale: r.\n\n" +
-			"## Claim R\n<!-- id: clm-refr01 -->\n\n### Rigor\n- rigor: 0.30\n- strength: *pending*\n- rationale: r.\n" +
+			"## Claim T\n<!-- id: clm-targ01 -->\n\n### Rigor\n- rigor: 0.80\n- rests-on:\n  - Axiom S1 (bearing 1.0)\n" +
+			"- strength: *pending*\n- rationale: r.\n\n" +
+			"## Claim R\n<!-- id: clm-refr01 -->\n\n### Rigor\n- rigor: 0.30\n- rests-on:\n  - Axiom S1 (bearing 1.0)\n" +
+			"- strength: *pending*\n- rationale: r.\n" +
 			"- refutes:\n  - clm-targ01: 1.0\n\n" +
 			"## Ana A\n<!-- id: ana-aaaaaa -->\n\n### Rigor\n- rigor: 0.50\n- strength: *pending*\n- rationale: r.\n\n" +
-			"## Ana B\n<!-- id: ana-bbbbbb -->\n\n### Rigor\n- rigor: 0.90\n- strength: *pending*\n- rationale: r.\n",
+			"## Ana B\n<!-- id: ana-bbbbbb -->\n\n### Rigor\n- rigor: 0.90\n- rests-on:\n  - Axiom S1 (bearing 1.0)\n" +
+			"- strength: *pending*\n- rationale: r.\n",
+		kb.AxiomsFile: "# Axioms\n\n### Axiom S1: The rule\n\nBody.\n",
 	})
 	st, err := kb.Discover(kb.OnDisk(root), log.Discard())
 	if err != nil {
