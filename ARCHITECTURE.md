@@ -1013,6 +1013,14 @@ field as `key`, and the bullet's file and line;
 informational counterpart is `verify`'s: a legacy document that still declares an axiom beside an
 `axioms.md` is one `check: axiom-source` finding, never a refusal (SPEC §7, §10).
 
+**The rigor ceiling is read at the same gate.** `kb.State` is where a document's numbers become the
+system's, so an authored `rigor` above `kb.RigorMaximum` becomes that maximum there and nowhere
+else: `State.readAuthoredRigor` clamps a work's, a claim's, an analysis's and an experiment's value
+together, and every derived surface — the index row, the strength line, a query's display, the walk —
+carries `0.95` for a file holding `1.0` (SPEC §10). The readers stay document readers: they return
+the bytes a file holds, which is how the write path that re-renders a frontmatter block leaves a
+rigor it found as it is, and an axiom's `1.00` is `kb.AxiomRigor`'s by rule, no read value at all.
+
 **The loader's file set and its other refusals.** A KB document that is a symbolic link is refused,
 not followed: `check: symlink` at the link's path, raised by the document walk and by the conversion's
 own read of the KB's files alike, so no link out of the tree is read or written through. A conversion

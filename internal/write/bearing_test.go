@@ -454,8 +454,10 @@ func TestARigorWriteTakesTheTablesMaximum(t *testing.T) {
 }
 
 // TestAnAuthoredOneIsRead: a KB carrying an authored `rigor: 1.0` — a converted
-// experiment — is read, never refused, this rule being the write path's alone:
-// refresh restamps it and verify reports nothing.
+// experiment — reads it as the rigor tables' maximum, never refusing it: the
+// walk, show's record and the index's row all carry 0.95, and verify reports
+// nothing, a clamped value being no finding. An axiom's 1.00 is its rigor by
+// rule, no read value, and every surface still carries it.
 func TestAnAuthoredOneIsRead(t *testing.T) {
 	root := seedKB(t)
 	leaf := filepath.Join(root, "leaf.md")
@@ -471,6 +473,9 @@ func TestAnAuthoredOneIsRead(t *testing.T) {
 	if err := os.WriteFile(leaf, []byte(converted), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, kb.AxiomsFile), []byte("# Axioms\n\n### Axiom S1: The rule\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	src := kb.OnDisk(root)
 	if _, err := index.Refresh(src, log.Discard()); err != nil {
 		t.Fatalf("refresh over an authored 1.0: %v", err)
@@ -478,19 +483,58 @@ func TestAnAuthoredOneIsRead(t *testing.T) {
 	if findings, err := index.Verify(src); err != nil || len(findings) > 0 {
 		t.Errorf("verify over an authored 1.0: %v, %v; want no finding", findings, err)
 	}
+
 	state, err := kb.Discover(src, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range state.Experiments {
-		if e.ID == "exp-aaaaaa" {
-			if e.Rigor == nil || !scoreEqual(e.Rigor, f64(kb.AxiomRigor)) {
-				t.Errorf("the converted experiment reads rigor %v, want 1", e.Rigor)
+	for _, x := range state.Experiments {
+		if x.ID == "exp-aaaaaa" {
+			if !scoreEqual(x.Rigor, f64(kb.RigorMaximum)) {
+				t.Errorf("the converted experiment reads rigor %v, want the maximum %v", x.Rigor, kb.RigorMaximum)
 			}
-			return
 		}
 	}
-	t.Errorf("the converted experiment is in no discovered leaf: %+v", state.Experiments)
+
+	ix, err := query.Load(src)
+	if err != nil {
+		t.Fatalf("query.Load: %v", err)
+	}
+	shown := func(id string) any {
+		t.Helper()
+		record, ok := query.ShowPayload(ix, id)
+		if !ok {
+			t.Fatalf("show %s: no record", id)
+		}
+		for _, f := range record {
+			if f.Key == "rigor" {
+				return f.Value
+			}
+		}
+		t.Fatalf("show %s carries no rigor field: %+v", id, record)
+		return nil
+	}
+	_, rows, problems, err := kb.ReadIndex[kb.NodeRow](src, nil)
+	if err != nil || len(problems) > 0 {
+		t.Fatalf("reading the index rows: %v, %v", problems, err)
+	}
+	row := map[string]*float64{}
+	for _, r := range rows {
+		row[r.ID] = r.Rigor
+	}
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"exp-aaaaaa", kb.RigorMaximum}, {"axm-S1", kb.AxiomRigor},
+	} {
+		if got := shown(tc.id); got != tc.want {
+			t.Errorf("show %s carries rigor %v, want %v", tc.id, got, tc.want)
+		}
+		if got := row[tc.id]; got == nil || !scoreEqual(got, f64(tc.want)) {
+			t.Errorf("the index row for %s carries rigor %v, want %v", tc.id, got, tc.want)
+		}
+	}
 }
 
 // TestANewPremiseIsPendingAndMovesNoClaim: an inserted premise lands with a

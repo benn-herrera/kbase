@@ -50,6 +50,21 @@ const ChargeNone = "none"
 // reaches the reserve. Bearing has none — its table's maximum is 1.00.
 const RigorMaximum = 0.95
 
+// AuthoredRigor is an authored value as the system reads it: above
+// RigorMaximum it reads as RigorMaximum — a converted experiment's 1.0 reads
+// 0.95 — and nil is no value, pending staying pending. The clamp is a reading
+// rule and not a rewrite: the file keeps the bytes it had, and refresh leaves
+// its rigor as it found it. A value the write path refuses therefore reads at
+// the ceiling rather than making its KB unreadable, and an axiom's 1.0 is no
+// read value and is never clamped.
+func AuthoredRigor(v *float64) *float64 {
+	if v == nil || *v <= RigorMaximum {
+		return v
+	}
+	maximum := RigorMaximum
+	return &maximum
+}
+
 // FaultTable is one vocabulary's closed set of fault ids, in walk order, and
 // what one occurrence of each charges. The weight is per occurrence and the table
 // caps no count: a text committing one fault three times loses three weights.

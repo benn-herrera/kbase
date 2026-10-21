@@ -222,8 +222,30 @@ func Discover(src *Source, lg log.Logger) (State, error) {
 	if st.Axioms, err = ParseAxioms(src); err != nil {
 		return State{}, err
 	}
+	st.readAuthoredRigor()
 	slices.SortStableFunc(st.Works, func(a, b ExternalWork) int { return strings.Compare(a.ID, b.ID) })
 	return st, nil
+}
+
+// readAuthoredRigor is every authored rigor as the system reads it: State is
+// where a document's numbers become the system's, so a value standing above
+// RigorMaximum becomes RigorMaximum here, for every node kind at once. The
+// readers stay document readers — the bytes a file holds are what they return,
+// which is how the write path leaves a rigor it found as it is — and an
+// axiom's 1.00 is no read value and is never clamped.
+func (st *State) readAuthoredRigor() {
+	for i := range st.Works {
+		st.Works[i].Rigor = AuthoredRigor(st.Works[i].Rigor)
+	}
+	for i := range st.ClaimEntries {
+		st.ClaimEntries[i].Rigor = AuthoredRigor(st.ClaimEntries[i].Rigor)
+	}
+	for i := range st.Analyses {
+		st.Analyses[i].Rigor = AuthoredRigor(st.Analyses[i].Rigor)
+	}
+	for i := range st.Experiments {
+		st.Experiments[i].Rigor = AuthoredRigor(st.Experiments[i].Rigor)
+	}
 }
 
 // unionPairs is declared plus every staged pair whose target declared does not

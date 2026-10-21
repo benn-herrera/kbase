@@ -267,7 +267,10 @@ func old090Experiments(text, rel string) ([]kb.ExperimentNode, error) {
 				return nil, old090Malformed("%s: experiment %s strength out of range", rel, id)
 			}
 		}
-		rigor := 1.0
+		// The 0.9.0 form gives an experiment no authored rigor; the converter
+		// invents 1.0 in its mapping, which the system reads at the rigor
+		// tables' maximum, so the read this reader reconstructs is that.
+		rigor := kb.RigorMaximum
 		nodes = append(nodes, kb.ExperimentNode{ID: id, Title: heading, CanonicalPath: rel, CanonicalAnchor: kb.Slugify(heading),
 			Status: *statuses[i], Rigor: &rigor, Lifts: pairs[i]})
 	}

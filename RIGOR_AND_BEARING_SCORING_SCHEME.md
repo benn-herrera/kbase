@@ -214,9 +214,13 @@ rigor vocabulary is the largest multiple of `0.05` below the reserve, `0.95`, an
 answer that reaches it. A charge list under either rigor table cannot reach `1.00` at all. `0.95` is
 the largest value a rigor pass derives and the largest a write carries: `set-rigor` and every other op
 that takes a node's own `rigor` refuse a value above it, naming the key and the range, so `1.00` is
-never an authored value. A file already holding `1.0` — a converted experiment — is read as it stands:
-the ceiling is a rule on writing, and `kb.RigorMaximum` is its one statement. `bearing` has no such
-reserve, and `none` reaches `1.00`.
+never an authored value. A file already holding `1.0` — a converted experiment — is read as the
+maximum: an authored rigor above `kb.RigorMaximum` reads as `kb.RigorMaximum`, so the `1.0` a
+converted experiment carries is `0.95` everywhere the system shows it — the strength line a refresh
+derives from it, the index's derivation, a query's display and the walk — while the file keeps the
+text it wrote, a refresh rewriting no rigor it found. The ceiling is a rule on reading as well as
+writing, and `kb.RigorMaximum` is its one statement; `1.00` belongs to an axiom by rule, is no read
+value, and is never clamped. `bearing` has no such reserve, and `none` reaches `1.00`.
 
 ## The strength is the walk's, not the rigor's
 

@@ -70,6 +70,46 @@ func TestRefreshThenVerify(t *testing.T) {
 	}
 }
 
+// TestRefreshLeavesAnAuthoredOneInTheFile: a rigor standing above the rigor
+// tables' maximum reads at the maximum, and that is a reading rule — refresh
+// derives the index from 0.95 and leaves the leaf holding `rigor: 1.0` byte for
+// byte, the number it found never rewritten.
+func TestRefreshLeavesAnAuthoredOneInTheFile(t *testing.T) {
+	leaf := "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n" +
+		"    lifts:\n      - clm-aaaaaa: 0.5\n---\n[↑ Vol](index.md)\n\n# Exp\n"
+	root := writeKB(t, map[string]string{
+		"entry-point.md":     "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
+		"vol/index.md":       "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n- [exp](exp.md)\n",
+		"vol/a.md":           "---\nkind: leaf\nclaims: [clm-aaaaaa]\n---\n[↑ Vol](index.md)\n\n# A\n",
+		"vol/exp.md":         leaf,
+		"vol/claim-rigor.md": "# Register\n\n## Claim A\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n- rigor: 0.70\n- strength: *pending*\n- rationale: r.\n",
+	})
+	written, err := Refresh(kb.OnDisk(root), log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(root, "vol/exp.md")); got != leaf {
+		t.Errorf("refresh rewrote the leaf:\n%s\nwant it as it found it:\n%s", got, leaf)
+	}
+	if slices.Contains(written, "vol/exp.md") {
+		t.Errorf("refresh reports the leaf written; it wrote %q", written)
+	}
+	_, rows, problems, err := kb.ReadIndex[kb.NodeRow](kb.OnDisk(root), nil)
+	if err != nil || len(problems) > 0 {
+		t.Fatalf("reading the index rows: %v, %v", problems, err)
+	}
+	for _, r := range rows {
+		if r.ID != "exp-aaaaaa" {
+			continue
+		}
+		if r.Rigor == nil || *r.Rigor != kb.RigorMaximum {
+			t.Errorf("the index row reads rigor %v, want the maximum %v", r.Rigor, kb.RigorMaximum)
+		}
+		return
+	}
+	t.Errorf("the index carries no row for exp-aaaaaa: %+v", rows)
+}
+
 // TestRefreshRecordsTheExactStrength: a premise's own value reaches the record
 // unrounded — 0.70 × 0.72 = 0.504 as itself, and the dependent of a value that
 // needs more than four decimals as that value — and every record refresh writes

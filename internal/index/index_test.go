@@ -307,7 +307,9 @@ func TestDependentUsesItsSourcesExactStrength(t *testing.T) {
 
 // TestClaimRefuterAndPairsIntoAnalysesReachTheRecords walks a KB whose claim
 // refutes a claim and whose run experiments lift and refute analyses, and reads
-// the numbers and the edge rows back off what the walk publishes.
+// the numbers and the edge rows back off what the walk publishes. The refuting
+// experiment authors 1.0, which reads at the rigor tables' maximum, so its
+// 0.25 bearing caps the analysis at 1 − 0.25 × 0.95.
 func TestClaimRefuterAndPairsIntoAnalysesReachTheRecords(t *testing.T) {
 	root := writeKB(t, map[string]string{
 		"entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [vol](vol/index.md)\n",
@@ -349,7 +351,7 @@ func TestClaimRefuterAndPairsIntoAnalysesReachTheRecords(t *testing.T) {
 	}{
 		{"clm-targ01", 0.7},
 		{"ana-aaaaaa", 0.9},
-		{"ana-bbbbbb", 0.75},
+		{"ana-bbbbbb", 0.7625},
 	} {
 		got, ok := finals[tc.id]
 		if !ok || got != tc.want {

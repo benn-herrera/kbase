@@ -338,6 +338,57 @@ func TestDiscoverPremisePairings(t *testing.T) {
 	}
 }
 
+// TestAnAuthoredRigorAboveTheMaximumReadsAtIt: 1.00 belongs to an axiom by
+// rule, so an authored value standing above the rigor tables' maximum reads as
+// that maximum whatever kind carries it — the claim, analysis and work
+// registers and the experiment a leaf hosts — while the document keeps the
+// value it wrote. Pending stays pending, and a value at the maximum reads as
+// itself.
+func TestAnAuthoredRigorAboveTheMaximumReadsAtIt(t *testing.T) {
+	register := "# Register\n\n" +
+		"## A Claim\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
+		"## An Analysis\n<!-- id: ana-aaaaaa -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
+		"## A Work\n<!-- id: wrk-Smith2020 -->\n\n### Rigor\n- rigor: 1.0\n\n---\n\n" +
+		"## A Claim At The Maximum\n<!-- id: clm-bbbbbb -->\n\n### Rigor\n- rigor: 0.95\n\n---\n\n" +
+		"## A Pending Claim\n<!-- id: clm-cccccc -->\n\n### Rigor\n- rigor: *pending*\n"
+	const leaf = "---\nkind: leaf\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n" +
+		"analysis-nodes:\n  - ana-id: ana-aaaaaa\n---\n# The leaf\n"
+	st, err := discoverFiles(t, map[string]string{RegisterFile: register, "vol/a.md": leaf}, log.Discard())
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	atMaximum := RigorMaximum
+	rigors := map[string]*float64{}
+	for _, c := range st.ClaimEntries {
+		rigors[c.ID] = c.Rigor
+	}
+	for _, a := range st.Analyses {
+		rigors[a.ID] = a.Rigor
+	}
+	for _, w := range st.Works {
+		rigors[w.ID] = w.Rigor
+	}
+	for _, x := range st.Experiments {
+		rigors[x.ID] = x.Rigor
+	}
+	for _, tc := range []struct {
+		id   string
+		want *float64
+	}{
+		{"clm-aaaaaa", &atMaximum}, {"ana-aaaaaa", &atMaximum}, {"wrk-Smith2020", &atMaximum},
+		{"exp-aaaaaa", &atMaximum}, {"clm-bbbbbb", &atMaximum}, {"clm-cccccc", nil},
+	} {
+		got, ok := rigors[tc.id]
+		if !ok {
+			t.Errorf("%s is in no discovered node", tc.id)
+			continue
+		}
+		if (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+			t.Errorf("%s reads rigor %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 // TestDiscoverRefusesALeafSupportsPair: an analysis's supports list names
 // pairings the table rejects, refused at each pair's line rather than dropped.
 func TestDiscoverRefusesALeafSupportsPair(t *testing.T) {
