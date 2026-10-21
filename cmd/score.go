@@ -717,7 +717,7 @@ func init() {
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",
-		"model that judges the KB, overriding models.scoring: <provider>/<model> in file mode, a bare id under the environment's endpoint, the harness's own id under --harness")
+		"model that judges the KB, overriding models.scoring: <provider>/<model> in file mode, a bare id under the environment's endpoint, the role's value whole under --harness")
 	scoreCmd.Flags().StringVar(&scoreFlagHarness, "harness", "",
 		"back end that asks each item, one process per item: "+opencodeHarness+" (no difference under --dry-run, which asks nothing)")
 	scoreCmd.Flags().StringVar(&scoreFlagResume, "resume", "", "continue the run with this id")
