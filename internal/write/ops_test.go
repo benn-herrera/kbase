@@ -83,7 +83,7 @@ func TestIdempotence(t *testing.T) {
 		{"set-bearing", "entry:\n- id: wrk-Smith2020\n  target: {claim}\n  relation: founds\n  bearing: 0.5\n", ""},
 		{"insert-analysis-entry", "entry:\n- register: claim-rigor.md\n  title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "analysis"},
 		{"set-bearing", "entry:\n- id: {analysis}\n  target: {claim}\n  relation: lifts\n  bearing: 0.25\n", ""},
-		{"insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "experiment"},
+		{"insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 0.9\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "experiment"},
 	}
 	for i, s := range steps {
 		values := s.values
@@ -197,15 +197,15 @@ func TestValuesRefusalShape(t *testing.T) {
 // number, and the pending literal is nil.
 func TestValuesAccepted(t *testing.T) {
 	for _, doc := range []string{
-		"entry:\n- id: clm-abcdef\n  rigor: 1\n- id: ana-abcdef\n  rigor: \"*pending*\"\n",
-		`{"entry": [{"id": "clm-abcdef", "rigor": 1}, {"id": "ana-abcdef", "rigor": "*pending*"}]}`,
+		"entry:\n- id: clm-abcdef\n  rigor: 0\n- id: ana-abcdef\n  rigor: \"*pending*\"\n",
+		`{"entry": [{"id": "clm-abcdef", "rigor": 0}, {"id": "ana-abcdef", "rigor": "*pending*"}]}`,
 	} {
 		entries, refusals := parseValues([]byte(doc), "set-rigor")
 		if refusals != nil || len(entries) != 2 {
 			t.Fatalf("%q: %v %v", doc, entries, refusals)
 		}
-		if v := entries[0].score("rigor"); v == nil || *v != 1 || formatScore(v) != "1.0" {
-			t.Errorf("rigor 1 read as %v", v)
+		if v := entries[0].score("rigor"); v == nil || *v != 0 || formatScore(v) != "0.0" {
+			t.Errorf("rigor 0 read as %v", v)
 		}
 		if entries[1].score("rigor") != nil {
 			t.Error("the pending literal did not read as nil")

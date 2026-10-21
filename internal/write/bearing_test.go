@@ -60,7 +60,7 @@ func TestSetBearingOnEveryRelation(t *testing.T) {
 		return res.IDs[0]
 	}()
 	experiment := func() string {
-		res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n  supports:\n  - id: "+claim+"\n    bearing: 0.6\n", false)
+		res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 0.9\n  supports:\n  - id: "+claim+"\n    bearing: 0.6\n", false)
 		if res.Outcome != result.Done {
 			t.Fatalf("insert experiment: %+v", res)
 		}
@@ -370,7 +370,7 @@ func TestSetRigorOnEveryHome(t *testing.T) {
 		return res.IDs[0]
 	}()
 	experiment := func() string {
-		res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n", false)
+		res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 0.9\n", false)
 		if res.Outcome != result.Done {
 			t.Fatalf("insert experiment: %+v", res)
 		}
@@ -411,6 +411,86 @@ func TestSetRigorOnEveryHome(t *testing.T) {
 			t.Errorf("%s rigor = %v, want %v", tc.id, got, tc.want)
 		}
 	}
+}
+
+// TestARigorWriteTakesTheTablesMaximum: 1.00 belongs to an axiom by rule, so
+// every op that takes a node's own rigor refuses a value above the rigor
+// tables' maximum, naming the key and the range, and the maximum itself is
+// written and read back.
+func TestARigorWriteTakesTheTablesMaximum(t *testing.T) {
+	root := seedKB(t)
+	before := snapshot(t, root)
+	rangeText := "[0, " + kb.PyFloatRepr(kb.RigorMaximum) + "]"
+	for _, tc := range []struct{ name, op, values string }{
+		{"set-rigor", "set-rigor", "entry:\n- id: " + seedClaim + "\n  rigor: 1.0\n"},
+		{"insert-claim-entry", "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: A New Result\n  rigor: 1.0\n  rationale: Shown.\n"},
+		{"insert-analysis-entry", "insert-analysis-entry", "entry:\n- register: claim-rigor.md\n  title: An Analysis\n  rigor: 1.0\n  rationale: Lifts.\n"},
+		{"insert-work-entry", "insert-work-entry", "entry:\n- register: claim-rigor.md\n  key: Smith2020\n  title: Smith (2020)\n  rigor: 1.0\n  rationale: Cited.\n"},
+		{"insert-experiment-entry", "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n"},
+		{"set-frontmatter's experiment node", "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  experiment-node:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := run(t, root, tc.op, tc.values, false)
+			if res.Outcome != result.Refused || len(res.Refusals) != 1 {
+				t.Fatalf("%s: %+v, want one refusal", tc.op, res)
+			}
+			if it := res.Refusals[0]; !strings.HasSuffix(it.Key, "rigor") ||
+				!strings.Contains(it.Detail, "outside "+rangeText) || !strings.Contains(it.Detail, "axiom by rule") {
+				t.Errorf("%s refusal = %+v, want key rigor and the range %s", tc.op, it, rangeText)
+			}
+			if !maps.Equal(before, snapshot(t, root)) {
+				t.Errorf("a refused %s wrote", tc.op)
+			}
+		})
+	}
+
+	atMaximum := f64(kb.RigorMaximum)
+	if res := run(t, root, "set-rigor", "entry:\n- id: "+seedClaim+"\n  rigor: "+formatScore(atMaximum)+"\n", false); res.Outcome != result.Done {
+		t.Fatalf("set-rigor at the maximum: %+v", res)
+	}
+	if got := readRegisterOrFail(t, snapshot(t, root)[kb.RegisterFile]).claims[seedClaim].Rigor; !scoreEqual(got, atMaximum) {
+		t.Errorf("rigor = %v, want the maximum %v", got, *atMaximum)
+	}
+}
+
+// TestAnAuthoredOneIsRead: a KB carrying an authored `rigor: 1.0` — a converted
+// experiment — is read, never refused, this rule being the write path's alone:
+// refresh restamps it and verify reports nothing.
+func TestAnAuthoredOneIsRead(t *testing.T) {
+	root := seedKB(t)
+	leaf := filepath.Join(root, "leaf.md")
+	text, err := os.ReadFile(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := "claims: [" + seedClaim + "]\nexperiment-nodes:\n  - exp-id: exp-aaaaaa\n    status: run\n    rigor: 1.0"
+	converted := strings.Replace(string(text), "claims: ["+seedClaim+"]", declared, 1)
+	if converted == string(text) {
+		t.Fatalf("the seed leaf declares no claims list:\n%s", text)
+	}
+	if err := os.WriteFile(leaf, []byte(converted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := kb.OnDisk(root)
+	if _, err := index.Refresh(src, log.Discard()); err != nil {
+		t.Fatalf("refresh over an authored 1.0: %v", err)
+	}
+	if findings, err := index.Verify(src); err != nil || len(findings) > 0 {
+		t.Errorf("verify over an authored 1.0: %v, %v; want no finding", findings, err)
+	}
+	state, err := kb.Discover(src, log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range state.Experiments {
+		if e.ID == "exp-aaaaaa" {
+			if e.Rigor == nil || !scoreEqual(e.Rigor, f64(kb.AxiomRigor)) {
+				t.Errorf("the converted experiment reads rigor %v, want 1", e.Rigor)
+			}
+			return
+		}
+	}
+	t.Errorf("the converted experiment is in no discovered leaf: %+v", state.Experiments)
 }
 
 // TestANewPremiseIsPendingAndMovesNoClaim: an inserted premise lands with a

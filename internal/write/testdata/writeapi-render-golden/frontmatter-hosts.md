@@ -4,7 +4,7 @@ no-claim: "hosts an experiment and two analysis nodes only"
 experiment-nodes:
   - exp-id: exp-gg7777
     status: run
-    rigor: 1.0
+    rigor: 0.9
     lifts:
       - clm-aa1111: 0.8
 analysis-nodes:

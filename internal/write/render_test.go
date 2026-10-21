@@ -74,7 +74,7 @@ var goldenShapes = map[string]func() string{
 	"frontmatter-hosts": func() string {
 		return rendered(renderFrontmatterBlock(frontmatterValues{
 			Kind: "leaf", NoClaim: str("hosts an experiment and two analysis nodes only"),
-			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Rigor: f64(1), Lifts: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
+			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Rigor: f64(0.9), Lifts: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
 			Analyses: []analysisDecl{
 				{AnaID: "ana-hh8888", Lifts: []pair{{ID: "clm-bb2222", Score: f64(1.0)}}},
 				{AnaID: "ana-ii9999", Refutes: []pair{{ID: "clm-bb2222"}, {ID: "clm-cc3333", Score: f64(0.5)}}},

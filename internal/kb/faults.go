@@ -43,15 +43,21 @@ const (
 // list is empty.
 const ChargeNone = "none"
 
+// RigorMaximum is the most rigor an authored node carries, and what a rigor
+// charge list with no charge prices to: the rigor tables' maximum, the largest
+// multiple of 0.05 below the 1.0 an axiom's rigor holds by rule. It is the
+// ceiling of every write that takes a node's own rigor, and no authored value
+// reaches the reserve. Bearing has none — its table's maximum is 1.00.
+const RigorMaximum = 0.95
+
 // FaultTable is one vocabulary's closed set of fault ids, in walk order, and
 // what one occurrence of each charges. The weight is per occurrence and the table
 // caps no count: a text committing one fault three times loses three weights.
 // Weights and the maximum are integer hundredths of the value's range, so every
 // sum and every value is exact at two decimals and nothing rounds.
 type FaultTable struct {
-	// maximum is what a charge list with no charge takes: 0.95 for either rigor
-	// vocabulary, the largest multiple of 0.05 below the 1.0 an axiom's rigor
-	// holds by rule, and 1.00 for bearing, which reserves nothing.
+	// maximum is what a charge list with no charge takes: RigorMaximum under
+	// either rigor vocabulary, and 1.00 for bearing, which reserves nothing.
 	maximum int
 	faults  []fault
 }
@@ -69,7 +75,7 @@ type fault struct {
 var (
 	// RigorStatement is the statement vocabulary's: what a claim's own text is
 	// charged with.
-	RigorStatement = FaultTable{maximum: 95, faults: []fault{
+	RigorStatement = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
 		{FaultContradiction, 45},
 		{FaultOverreach, 35},
 		{FaultEquivocation, 25},
@@ -77,7 +83,7 @@ var (
 	}}
 	// RigorMethod is the method vocabulary's: what an analysis's or an
 	// experiment's own text is charged with.
-	RigorMethod = FaultTable{maximum: 95, faults: []fault{
+	RigorMethod = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
 		{FaultUnaddressed, 95},
 		{FaultContradiction, 45},
 		{FaultOverreach, 35},

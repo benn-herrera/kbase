@@ -575,6 +575,12 @@ bearing}`; and pair entries of `{id, bearing}` in a claim's `refutes`, an analys
 `bearing`; `add-rests-on` takes `id` and the `rests-on` and `references` lists it adds. Each op's
 closed key set is `kbase <op> --help`'s, as for every op.
 
+A written `rigor` is a number in `[0, 0.95]` or `*pending*`: `1.00` belongs to an axiom by rule, so
+every op taking a node's own rigor — the four inserts, `set-rigor` and `set-frontmatter`'s
+`experiment-node` — refuses a value above, naming the key and the range. `0.95` is the rigor tables'
+maximum, the value a charge list with no charge takes (§10); a bearing's writes are unchanged, its
+table reserving nothing.
+
 `set-bearing` **replaces an existing token and never inserts one**: a scoring edge carrying no
 bearing is a load fault (§10) before the op runs. It refuses a relation outside the four, a pairing
 whose bearing is illegal (`references` and `demoted`, and every source and target kind the four do
@@ -1422,12 +1428,13 @@ and its `supports` edge is excluded like any unjudged premise.
 two scoring passes asks a model for the faults the text commits — the ids
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) defines, each with the
 span that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
-occurrence, floored at zero and exact at two decimals (§8). `set-rigor` and `set-bearing` still write
-a value in `[0, 1]` or `*pending*`, and `1.0` is still accepted, so the register's range is the
-format's; what changed is who chooses a number. A pass derives it, `1.00` is reserved to an axiom's
-rigor by rule, and `0.95` is the largest a `rigor` pass derives — which reads *no charge among the
-six*, never *the text displays its reasoning*. The walk itself is unchanged and reads the value
-whatever wrote it.
+occurrence, floored at zero and exact at two decimals (§8). A written `rigor` is a value in
+`[0, 0.95]` or `*pending*`, and a bearing's in `[0, 1]` or `*pending*`; what changed is who chooses a
+number. A pass derives it, `1.00` is reserved to an axiom's rigor by rule, and `0.95` is the rigor
+tables' maximum — the largest a `rigor` pass derives, which reads *no charge among the six*, never
+*the text displays its reasoning*. A file already carrying an authored `1.0` — a converted experiment,
+which the `1.0.0` migration gives `rigor: 1.0` — is read, refreshed and priced as it stands: the
+ceiling is a rule on writing. The walk itself is unchanged and reads the value whatever wrote it.
 
 **The band ladder.** A `strength` is read against five rungs, each an inclusive lower bound: `0.85`
 *ok to build on*, `0.65` *ok to build on, see caveats*, `0.45` *use as input only*, `0.20` *do not

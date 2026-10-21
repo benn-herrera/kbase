@@ -177,12 +177,20 @@ func proseLine(n *yaml.Node, offset int) int {
 	return n.Line
 }
 
-// checkScore is a number in [0, 1] or the pending literal, read as nil. The
-// domain is the reader's: BearingFromValue is the one predicate deciding that a
-// token is in it.
-func checkScore(what string) check {
+// domainTop is a domain's upper bound as a refusal writes it: the reader's own
+// domain is [0, 1] in every message, not the "1.0" PyFloatRepr keeps for a
+// stored value.
+func domainTop(ceiling float64) string {
+	return strings.TrimSuffix(kb.PyFloatRepr(ceiling), ".0")
+}
+
+// checkScore is a number in [0, ceiling] or the pending literal, read as nil.
+// The domain is the reader's: BearingFromValue is the one predicate deciding
+// that a token is in [0, 1], and ceiling is the op's own bound inside it.
+func checkScore(what string, ceiling float64) check {
 	return func(n *yaml.Node, field string) (any, *valueError) {
-		domain := "[0, 1] or the literal " + kb.PendingLiteral
+		top := "[0, " + domainTop(ceiling) + "]"
+		domain := top + " or the literal " + kb.PendingLiteral
 		if isString(n) {
 			if b, ok := kb.BearingFromValue(n.Value); ok && b.Pending {
 				return (*float64)(nil), nil
@@ -196,16 +204,19 @@ func checkScore(what string) check {
 		// The domain is judged on the token the file will carry: what a reader
 		// reads back is the form the writer emits, not the one supplied.
 		b, ok := kb.BearingFromValue(kb.PyFloatRepr(number))
-		if !ok {
-			return nil, refuse(field, n, "%s is outside [0, 1] — %s. Use a value in %s", kb.PyFloatRepr(number), what, domain)
+		if !ok || b.Value > ceiling {
+			return nil, refuse(field, n, "%s is outside %s — %s. Use a value in %s", kb.PyFloatRepr(number), top, what, domain)
 		}
 		return &b.Value, nil
 	}
 }
 
 var (
-	checkRigor   = checkScore("the domain a node's local value carries")
-	checkBearing = checkScore("the domain one scoring edge's bearing carries")
+	// checkRigor's ceiling is the rigor tables' maximum: 1.00 belongs to an axiom
+	// by rule, so no authored node carries it. A bearing's ceiling is the format's
+	// own top, which its table reserves nothing from.
+	checkRigor   = checkScore("the domain a node's own rigor carries, 1.00 belonging to an axiom by rule", kb.RigorMaximum)
+	checkBearing = checkScore("the domain one scoring edge's bearing carries", 1)
 )
 
 func checkExcerpt(n *yaml.Node, field string) (any, *valueError) {

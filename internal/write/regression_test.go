@@ -290,7 +290,11 @@ func TestRegressionReplayOps(t *testing.T) {
 		}
 		var values []map[string]any
 		for _, r := range ready {
-			v := map[string]any{"register": r.register, "title": r.title, "rigor": *r.rigor, "rationale": r.rationale}
+			// The corpus predates the rule that 1.00 is an axiom's alone: the one
+			// entry recording it is replayed at the rigor tables' maximum, the most
+			// the insert op takes.
+			rigor := min(*r.rigor, kb.RigorMaximum)
+			v := map[string]any{"register": r.register, "title": r.title, "rigor": rigor, "rationale": r.rationale}
 			var deps []map[string]any
 			for _, d := range r.premises {
 				deps = append(deps, map[string]any{"id": minted[d], "bearing": 1.0})

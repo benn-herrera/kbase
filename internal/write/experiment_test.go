@@ -15,7 +15,7 @@ import (
 // edge from that experiment to the entry.
 func TestAnExperimentPremiseResolvesAtWrite(t *testing.T) {
 	root := seedKB(t)
-	res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 1.0\n", false)
+	res := run(t, root, "insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 0.9\n", false)
 	if res.Outcome != result.Done || len(res.IDs) != 1 {
 		t.Fatalf("insert experiment: %+v", res)
 	}

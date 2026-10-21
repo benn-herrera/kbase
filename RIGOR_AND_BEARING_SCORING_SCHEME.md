@@ -212,8 +212,11 @@ axiom premise contributes `bearing × 1.0`, and no authored file carries `1.00`.
 neither pass — its `rigor` is kbase's rule, not a judgement — so the authored maximum under either
 rigor vocabulary is the largest multiple of `0.05` below the reserve, `0.95`, and `none` is the only
 answer that reaches it. A charge list under either rigor table cannot reach `1.00` at all. `0.95` is
-the largest value a rigor pass derives and not the largest the register holds: `set-rigor` accepts any
-value in `[0,1]`, `1.0` included. `bearing` has no such reserve, and `none` reaches `1.00`.
+the largest value a rigor pass derives and the largest a write carries: `set-rigor` and every other op
+that takes a node's own `rigor` refuse a value above it, naming the key and the range, so `1.00` is
+never an authored value. A file already holding `1.0` — a converted experiment — is read as it stands:
+the ceiling is a rule on writing, and `kb.RigorMaximum` is its one statement. `bearing` has no such
+reserve, and `none` reaches `1.00`.
 
 ## The strength is the walk's, not the rigor's
 
