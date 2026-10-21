@@ -232,6 +232,12 @@ single source. Working habits they impose:
   `float64`, where three weights land `0.3499999999999999` and the record's four-decimal rule breaks.
   A value is a projection of a ledger line's ids alone, which is what makes a landing checkable and
   a run re-scorable without asking a model.
+- **A scoring page's value tables are derived, not authored.** A page's maxima, its reachable-value
+  tables and its worked figures are functions of the ceiling and the weights, so they move in the
+  commit that moves either. The trap: leaving a page alone because no test pins its numbers — a value
+  table is a second copy of the arithmetic, and a stale one states a value the code cannot produce.
+  The reasoning a page gives for a superseded choice stays, marked superseded in one note; what moves
+  is the numbers.
 - **Name the producer before you write the refusal.** Before writing code that refuses, raises, or
   reports a finding on a state, name what produces that state. If nothing on a reachable path
   produces it, the code restates a design the rest of the code already states; delete it. If it can
