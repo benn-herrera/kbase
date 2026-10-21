@@ -352,6 +352,51 @@ func TestResolveHarness(t *testing.T) {
 	}
 }
 
+// TestHarnessModel: the value a harness back end is handed comes in two forms —
+// the file reference whole, or the environment's id and the flag verbatim — and
+// the model part a profile's {model} takes is the reference's second half.
+func TestHarnessModel(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		mutate                 func(*Inputs)
+		flag                   string
+		wantWritten, wantModel string
+		wantSource             string
+		wantRefusal            bool
+	}{
+		{name: "the file's reference", wantWritten: "cloud/clef", wantModel: "clef", wantSource: LayerSourceRepository},
+		{name: "a model id carrying a slash", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "lab/openrouter/anthropic/x" },
+			wantWritten: "lab/openrouter/anthropic/x", wantModel: "openrouter/anthropic/x", wantSource: LayerSourceRepository},
+		{name: "the environment's id", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
+			wantWritten: "other/clef", wantModel: "other/clef", wantSource: LayerSourceEnvironment},
+		{name: "the flag over the file", flag: "lab/other",
+			wantWritten: "lab/other", wantModel: "lab/other", wantSource: ""},
+		{name: "the flag over the environment", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
+			flag: "lab/other", wantWritten: "lab/other", wantModel: "lab/other", wantSource: ""},
+		{name: "no source names one", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" }, wantRefusal: true},
+		{name: "a file value that is no reference", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" }, wantRefusal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := scenario(t)
+			if tc.mutate != nil {
+				tc.mutate(&in)
+			}
+			written, model, source, err := HarnessModel(in, RoleScoring, tc.flag)
+			if tc.wantRefusal {
+				var refusal Refusal
+				if !asRefusal(err, &refusal) || refusal.Key != "models.scoring" {
+					t.Fatalf("= %q, %q, %q, %v; want a refusal naming models.scoring", written, model, source, err)
+				}
+				return
+			}
+			if err != nil || written != tc.wantWritten || model != tc.wantModel || source != tc.wantSource {
+				t.Errorf("= %q, %q, %q, %v; want %q, %q, %q",
+					written, model, source, err, tc.wantWritten, tc.wantModel, tc.wantSource)
+			}
+		})
+	}
+}
+
 // TestHarnessArgv: {model} is filled once and {prompt} is left for the item;
 // a model no element names is refused rather than dropped, and so is one the
 // child would read as an option.

@@ -166,14 +166,14 @@ func TestScoreHarnessModelIsTheRolesOrNull(t *testing.T) {
 func TestScoreHarnessRefusals(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	profiles := config.Harnesses{"mine": shProfile("mine", "printf 'none\\n'")}
-	opts := scoreOptions{Pass: query.PassRigor, Harness: "opencode"}
+	opts := scoreOptions{Pass: query.PassRigor, Harness: "nosuch"}
 	opts.providerOptions = scoreProvider()
 	opts.Harnesses = profiles
 	got := scoreIn(t, repo, state, opts, nil)
 	items := got.doc.items("refusals")
 	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != config.CheckHarness ||
 		items[0]["key"] != "--harness" || !slices.Equal(anyStrings(items[0]["allowed"]), []string{"mine"}) {
-		t.Fatalf("--harness opencode = %s, %v; want a harness refusal listing the loaded profile\n%s",
+		t.Fatalf("--harness nosuch = %s, %v; want a harness refusal listing the loaded profile\n%s",
 			got.doc.Outcome, items, got.stdout)
 	}
 	if _, opened := got.doc.Values["run"]; opened {

@@ -80,6 +80,15 @@ type scoreOptions struct {
 	Logger log.Logger
 }
 
+// callTimeout is one ask's deadline: the --timeout value, or the shared default
+// where it was zero or negative.
+func (o scoreOptions) callTimeout() time.Duration {
+	if o.Timeout > 0 {
+		return o.Timeout
+	}
+	return defaultListTimeout
+}
+
 // runScore runs one score pass, writes its result document, and returns the
 // exit code the outcome maps to.
 func runScore(opts scoreOptions) (int, error) {
@@ -135,6 +144,10 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 		ep      config.Endpoint
 		profile config.Profile
 		hcmd    *harness.Command
+		// itemEnv is the environment each item's process is started with, nil
+		// for the one kbase runs under: a back end that composes one composes
+		// it per item, from the directory the item runs in.
+		itemEnv func(dir string) []string
 		mode    config.Mode
 	)
 	env := config.EnvOverrides(os.Getenv)
@@ -145,12 +158,17 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 			// or a role variable set beside it is neither a mixed mode nor a
 			// refusal (§4.5), and the scoring role resolves from the file's
 			// reference or the environment's id alone.
-			p, items := harnessProfile(opts.Harnesses, opts.Harness)
-			if items != nil {
-				return refused(runKeys(fields, dir, opts.Pass), items...)
+			if opts.Harness == opencodeHarness {
+				profile, ep, hcmd, err = opencodeSetup(ctx, s, opts)
+				itemEnv = opencodeEnv
+			} else {
+				var items []toolresult.Item
+				profile, items = harnessProfile(opts.Harnesses, opts.Harness)
+				if items != nil {
+					return refused(runKeys(fields, dir, opts.Pass), items...)
+				}
+				ep, hcmd, err = harnessBackEnd(s, profile, opts)
 			}
-			profile = p
-			ep, hcmd, err = harnessBackEnd(s, profile, opts)
 			if err != nil {
 				return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
 			}
@@ -275,22 +293,21 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 	// ledger stands.
 	var l *score.Ledger
 
-	// --timeout bounds one call: zero or negative takes the shared default,
-	// as providerOptions states.
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = defaultListTimeout
-	}
+	timeout := opts.callTimeout()
 	// The ask is one tool-less chat call on the role's model, or one process on
-	// the profile's command. Each ask's own text carries the instruction, so the
-	// system prompt is empty and nothing is said twice.
+	// the back end's command. Each ask's own text carries the instruction, so
+	// the system prompt is empty and nothing is said twice.
 	ask := func(ctx context.Context, prompt string) (string, error) {
 		if hcmd != nil {
 			item, err := hcmd.Item(prompt)
 			if err != nil {
 				return "", err
 			}
-			return harnessAsk(ctx, item, filepath.Join(l.Dir(), harnessDirName), timeout)
+			work := filepath.Join(l.Dir(), harnessDirName)
+			if itemEnv != nil {
+				item = item.WithEnv(itemEnv(work))
+			}
+			return harnessAsk(ctx, item, work, timeout)
 		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()

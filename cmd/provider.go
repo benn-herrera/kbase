@@ -287,11 +287,16 @@ func harnessLayerPath(layers []config.Layer, source string) string {
 	return ""
 }
 
-// harnessFields is a harness profile's provenance in §7.1's order, after the
+// harnessFields is a harness back end's provenance in §7.1's order, after the
 // model: the profile that answered the role and the layer whose file supplied
-// it, so a document says which command judged the KB.
+// it, so a document says which command judged the KB. A built-in back end has
+// no layer, and names none.
 func harnessFields(p config.Profile) []toolresult.Field {
-	return []toolresult.Field{{Key: "harness", Value: p.Name}, {Key: "harness-layer", Value: p.Layer}}
+	fields := []toolresult.Field{{Key: "harness", Value: p.Name}}
+	if p.Layer != "" {
+		fields = append(fields, toolresult.Field{Key: "harness-layer", Value: p.Layer})
+	}
+	return fields
 }
 
 // roleRecord is one role's record in a result document, in §7.1's key order:

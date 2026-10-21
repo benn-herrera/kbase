@@ -306,29 +306,48 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 	return ep, nil
 }
 
-// resolveHarness is the model a harness profile is asked for: the
-// environment's id where it names one, else the file's reference model part.
-// No entry is contacted, so neither the provider part nor the pool matters.
+// resolveHarness is the model a harness profile is asked for: the model part of
+// what HarnessModel names. No entry is contacted, so neither the provider part
+// nor the pool matters.
 func resolveHarness(in Inputs, role Role, flagModel string) (Endpoint, error) {
-	model, source := role.fromEnv(in.Env), LayerSourceEnvironment
-	if model == "" {
+	_, model, source, err := HarnessModel(in, role, flagModel)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	return Endpoint{Role: role, Model: model, Flavor: FlavorSystemOne, ModelSource: source}, nil
+}
+
+// HarnessModel is the model a harness back end is handed, in the two forms such
+// a back end reads: written, the source's value as it stands — a file
+// reference's <provider>/<model>, the environment's id, or the flag — which a
+// back end naming models <provider>/<model> needs whole; and model, that
+// value's model part, which a profile's {model} takes. source is the layer that
+// supplied it, "" where the flag did.
+//
+// The environment's id stands where it names one, else the file's reference,
+// overridden by --scoring-model; a role no source configures refuses. No entry
+// is contacted, so the pool matters to neither form.
+func HarnessModel(in Inputs, role Role, flagModel string) (written, model, source string, err error) {
+	written = role.fromEnv(in.Env)
+	model, source = written, LayerSourceEnvironment
+	if written == "" {
 		if value := role.model(in.Cfg.Models); value != "" {
 			ref, err := FileReference(value)
 			if err != nil {
-				return Endpoint{}, Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
+				return "", "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
 					Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model>", role.key(), value)}
 			}
-			model, source = ref.Model, in.Cfg.ModelLayer(role)
+			written, model, source = value, ref.Model, in.Cfg.ModelLayer(role)
 		}
 	}
-	if model == "" {
-		return Endpoint{}, Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
+	if written == "" {
+		return "", "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
 			Detail: fmt.Sprintf("no model is configured for the %s role: set %s, or %s", role, role.key(), role.variable())}
 	}
 	if flagModel != "" {
-		model, source = flagModel, ""
+		written, model, source = flagModel, flagModel, ""
 	}
-	return Endpoint{Role: role, Model: model, Flavor: FlavorSystemOne, ModelSource: source}, nil
+	return written, model, source, nil
 }
 
 // Select is a catalogue verb's choice of which pool entry to dial — not a

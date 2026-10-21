@@ -47,8 +47,8 @@ const tokenPrompt = "{prompt}"
 const waitDelay = 5 * time.Second
 
 // Command is one harness command: the argv a profile states, the program that
-// argv names, and — once the item is known — the prompt, held here when no argv
-// element names it.
+// argv names, the environment it runs in, and — once the item is known — the
+// prompt, held here when no argv element names it.
 //
 // The prompt lives on the command rather than being handed to Ask, so Ask
 // cannot be called with a prompt the argv already carried, and cannot leave one
@@ -56,6 +56,7 @@ const waitDelay = 5 * time.Second
 type Command struct {
 	program string // argv[0] resolved at New: the program every item starts
 	argv    []string
+	env     []string // the child's environment; nil inherits kbase's
 	prompt  string
 	lg      log.Logger
 }
@@ -105,6 +106,15 @@ func New(argv []string, lg log.Logger) (*Command, error) {
 // prompt cannot reach it.
 func (c *Command) Argv() []string { return slices.Clone(c.argv) }
 
+// WithEnv is the command with the environment its process starts in: env is
+// the whole of it, so a caller that composes one composes the base too, and nil
+// leaves the child kbase's own environment. The environment is the caller's to
+// shape — this package reads nothing out of it.
+func (c Command) WithEnv(env []string) Command {
+	c.env = env
+	return c
+}
+
 // Item is one item's command built from the probed argv: {prompt} filled in the
 // one element that names it, or held for stdin where none does. What the token
 // decides is a property of the profile, so it is decided once here and never
@@ -123,26 +133,28 @@ func (c *Command) Item(prompt string) (Command, error) {
 	if len(prompt) > PromptLimit {
 		return Command{}, fmt.Errorf("the prompt is %d bytes, over the %d-byte bound", len(prompt), PromptLimit)
 	}
-	argv := slices.Clone(c.argv)
+	item := *c
+	item.argv = slices.Clone(c.argv)
 	var named []int
-	for i, element := range argv {
+	for i, element := range item.argv {
 		if strings.Contains(element, tokenPrompt) {
 			named = append(named, i)
 		}
 	}
 	switch len(named) {
 	case 0:
-		return Command{program: c.program, argv: argv, prompt: prompt, lg: c.lg}, nil
+		item.prompt = prompt
+		return item, nil
 	case 1:
-		argv[named[0]] = strings.ReplaceAll(argv[named[0]], tokenPrompt, prompt)
-		return Command{program: c.program, argv: argv, lg: c.lg}, nil
+		item.argv[named[0]] = strings.ReplaceAll(item.argv[named[0]], tokenPrompt, prompt)
+		return item, nil
 	}
 	return Command{}, fmt.Errorf("the command names %s in %d elements: the prompt reaches a command once", tokenPrompt, len(named))
 }
 
-// Ask runs the item's command with dir as its working directory and returns its
-// reply: stdout read to EOF, trailing whitespace trimmed. Stdin is the prompt,
-// or empty where the argv carried it.
+// Ask runs the item's command with dir as its working directory and WithEnv's
+// environment, and returns its reply: stdout read to EOF, trailing whitespace
+// trimmed. Stdin is the prompt, or empty where the argv carried it.
 //
 // A non-zero exit, a deadline, a cancellation or a bound passed is the call's
 // failure, and its reason carries the exit code and the captured stderr — the
@@ -157,6 +169,7 @@ func (c *Command) Item(prompt string) (Command, error) {
 func (c Command) Ask(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.program, c.argv[1:]...)
 	cmd.Dir = dir
+	cmd.Env = c.env
 	cmd.Stdin = strings.NewReader(c.prompt)
 	reply, noise := &capture{limit: ReplyLimit}, &capture{limit: StderrLimit}
 	cmd.Stdout, cmd.Stderr = reply, noise
