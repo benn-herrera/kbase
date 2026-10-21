@@ -5,8 +5,9 @@ scoring edge. The answer is a list of **charged occurrences** — one fault id a
 line — and kbase prices the list into the one value the register holds.
 [SPEC.md](SPEC.md) §8 carries the `score` pass, its answer and its ledger, §10 the register's
 spelling, and [STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) the three quantities and the
-walk's arithmetic; that page is the authority for the arithmetic, and the one change this page makes
-to it is stated under [The walk's no-supporter rule](#the-walks-no-supporter-rule).
+walk's arithmetic; that page is the authority for the arithmetic, and this page says of it only what a
+`rigor` value needs, under
+[The strength is the walk's, not the rigor's](#the-strength-is-the-walks-not-the-rigors).
 
 ## The two judgements
 
@@ -25,7 +26,8 @@ the **method vocabulary** asks whether it establishes what it sets out to establ
 as a method when it is judged at all, though no pass asks it. A claim displays no derivation, and that
 is not a defect: a derivation belongs in an analysis, and support reaches a claim through edges. A
 claim's missing method is therefore not a statement fault, and a claim's missing support is not a
-rigor fault at all — it is the walk's `0`, under [The walk's no-supporter rule](#the-walks-no-supporter-rule).
+rigor fault at all — it is the walk's `0`, under
+[The strength is the walk's, not the rigor's](#the-strength-is-the-walks-not-the-rigors).
 
 **`bearing` judges one source's relevance to the target it scores**: how far the source's content
 speaks to the target's assertion. The source is taken as given — true as it states itself — and
@@ -210,70 +212,22 @@ answer that reaches it. A charge list under either rigor table cannot reach `1.0
 the largest value a rigor pass derives and not the largest the register holds: `set-rigor` accepts any
 value in `[0,1]`, `1.0` included. `bearing` has no such reserve, and `none` reaches `1.00`.
 
-## The walk's no-supporter rule
+## The strength is the walk's, not the rigor's
 
-[STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) owns the walk. It is restated here only where
-this change touches it. For a claim or an analysis `n`:
+[STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) owns the walk — the sets, the `⊥` table, the
+empty-`P(n)` rule and its consequences — and this page changes none of it. One consequence bears on a
+reader of a `rigor` value: an empty `P(n)` means no premise carries the node, so a claim's strength is
+`0` however good its statement.
 
-```
-P(n)  = { b(e)·σ(e) : e ∈ supports(n) ∪ founds(n), e contributes }
-D(n)  = 0                      where P(n) = ∅
-D(n)  = min({ r(n) } ∪ P(n))   otherwise
-
-L(n)  = max{ b(e)·σ(e) : e ∈ lifts(n), e contributes }
-C(n)  = min{ 1 − b(e)·σ(e) : e ∈ refutes(n), e contributes }
-σ(n)  = min( max(D(n), L(n)), C(n) )
-```
-
-An empty lift set contributes `−∞` and an empty cap set `+∞`, so neither changes anything; the walk's
-own page states the `⊥` table this page does not repeat.
-
-**An empty `P(n)` now means that no premise carries the node.** Under the old formula the empty set
-left `{r(n)}` alone and the node's own rigor stood as its derivation. It no longer does: `r(n)` is the
-**cap** on what its premises establish — a premise cannot carry a target above the target's own
-statement or method quality — and it is not a substitute for having one. Where `P(n)` is empty, `D(n)`
-is `0`, whether `r(n)` is judged or pending. The rule does not wait for a judgement: support is
-structural, and the walk can see that no premise carries the node without knowing what the node's own
-quality is. Where `P(n)` is not empty and `r(n)` is pending, `D(n)` stays `⊥`, because
-`min(⊥, c) = ⊥`; the asymmetry is the rule's content — an absent cap is unknown, an absent premise is
-nothing.
-
-**An edge that does not contribute is no supporter.** A pending bearing, a pending source strength, an
-edge from a non-`run` experiment, and a premise that has vanished all add no operand. If such an edge
-is the node's only one, `P(n)` is empty and the node reads `0`. This is the sharp end of
-support-through-edges: an unjudged bearing is not support yet, and a target behind one reads
-`unsubstantiated` until that bearing lands, not `*pending*`. `bearing 0.0` also starves the target,
-and the two states remain different in the record — `0.0` is a judgement of irrelevance, an excluded
-edge is the absence of a judgement — even where the target's strength does not distinguish them.
-
-**`lifts` and `refutes` compose exactly as before.** `D(n) = 0` does not suppress a lift: a node whose
-only incoming edge is a lift takes `max(0, L) = L`, because that product is a contribution through an
-edge; a node whose only incoming edge is a refutation takes `min(0, C) = 0`. A node with no incoming
-scoring edge at all has an empty `L` and an empty `C`, and lands `0`.
-
-**What a bare assertion earns.** "Bare" means a claim whose statement fires nothing; its rigor is the
-maximum, and its strength is decided by its edges. Let `c` be a supporting edge's contribution,
-`b(e)·σ(e)`, and `Σ` the weights its statement charges:
-
-| state of a claim | statement rigor | strength |
-|---|---|---|
-| statement fires nothing, no supporting edge | `0.95` | `0.00` |
-| statement fires nothing, one supporting edge with contribution `c` | `0.95` | `min(0.95, c)` |
-| statement fires nothing, one supporting edge `c` and a lift `L` | `0.95` | `min(max(min(0.95, c), L), C)` |
-| statement charges `Σ`, no supporting edge | `0.95 − Σ` | `0.00` |
-| statement charges `Σ`, one supporting edge `c` | `0.95 − Σ` | `min(0.95 − Σ, c)` |
-
-An analysis reads the same, with its method rigor in place of `0.95`. The statement quality is kept in
-every row; what changes between the rows is whether anything carries it. A bare assertion with a
-supporting edge keeps its `0.95` and takes the edge's contribution as its strength, unless the edge's
-product exceeds `0.95`, in which case its own statement quality is the cap.
-
-**Effect on the bands.** The ladder reads `strength`, not `rigor`, so a statement rigor of `0.95` does
-not put a node in a band by itself. Every claim or analysis with `P(n) = ∅` lands `unsubstantiated`
-(`0.00`) unless a lift raises it; the rigor value does not enter the band. The canonical case is
-a claim whose statement is impeccable and which nothing supports: `0.95` rigor, `0.00` strength,
-`unsubstantiated`. With `P(n)` non-empty, `D(n)` is the smaller of the rigor and the weakest
-contribution, and the lift and cap compose over it exactly as the walk states.
+**What a bare assertion earns.** "Bare" means a claim whose statement fires nothing: its rigor is the
+maximum the statement vocabulary reaches, `0.95`, and its strength is decided by its edges. A claim
+whose statement is impeccable and which nothing supports is `0.95` rigor and `0.00` strength; with one
+supporting edge it keeps its `0.95` and takes the edge's contribution as its strength, unless that
+product exceeds `0.95`, in which case its own statement quality is the cap. An analysis reads the same,
+with its method rigor in place of `0.95`. The statement quality is kept in every case; what varies is
+whether anything carries it. The ladder reads `strength` and not `rigor`, so this pair is not a band:
+its strength is `0.00`, and [the band outcomes](#the-band-outcomes) bottom out there unless a lift
+raises it.
 
 ## The band outcomes
 
@@ -413,11 +367,11 @@ guessed are told apart by the record, not by the value, and a smaller model's st
 kept for what they say about the model rather than dropped.
 
 **Against `0.00`.** The two are different states and the walk treats them in opposite directions: a
-pending `rigor` leaves its derivation with no number while a lift over it still publishes the lift's
-product, a pending `bearing` excludes its edge entirely, and a `0.00` is a judgement that
-participates ([STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md), "Pending: an edge either
-participates or does not"). `0.00` is the judgement that the text carries nothing; `*pending*` is the
-absence of a judgement.
+pending `bearing` excludes its edge and a `0.00` bearing is a judgement that participates, while a
+pending `rigor` does not by itself make its node's strength pending, since a node with no premise reads
+`0` on its own account ([STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md), "Pending: an edge
+either participates or does not"). `0.00` is the judgement that the text carries nothing; `*pending*`
+is the absence of a judgement.
 
 ## The answer
 
@@ -557,17 +511,15 @@ is asked twice, no call carries both vocabularies, and a run's call count and mo
 were. The two rigor variants replace the single rigor template; the bearing instruction is untouched,
 and its header entry is the one-element mapping.
 
-**The run's identity does change.** A rigor run now sends two different instructions, so `run.yaml`'s
-`ask_sha256` is a mapping from variant to digest: `{statement: <hex>, method: <hex>}` for a rigor run,
-and `{bearing: <hex>}` for a bearing run. The mapping records the set the pass can send, fixed at the
-run's creation by the pass — not the subset a `--limit` happened to reach, and not a claim about any
-one item. Each attempt's `prompt_sha256` in the ledger is the instruction that item actually
-received, and it is the line, not the header, that answers "which ask judged this item". The
-alternative — no header field, relying on the lines alone — is rejected: the header is what a reader
-reads first to know what a run's values mean, and recovering two digests by scanning a ledger is
-exactly what the header exists to avoid, while a partial or truncated ledger would lose the set
-entirely. The header is still written once and never rewritten; a line written under a changed
-variant carries the new digest, and a resumed run's header keeps the digests it began under.
+**The run's identity is one digest over the set.** A rigor run now sends two different instructions, so
+the header's `ask_sha256` is the digest of every instruction the pass can send, rendered for an empty
+subject, concatenated in a fixed order — statement, then method for a rigor run; bearing alone for a
+bearing run — and hashed once. One field, and it moves if any instruction moves: separate digests
+would agree or differ together, so a set of them carries no more information than the one. The digest
+covers the set the pass can send, fixed at the run's creation — not the subset a `--limit` reached.
+Each attempt's `prompt_sha256` in the ledger is the instruction that item actually received, and it is
+the line that answers "which variant judged this item". The header is written once and never
+rewritten; a resumed run keeps the digest it began under.
 
 ## The ledger
 
@@ -614,11 +566,11 @@ they cannot perturb the arithmetic.
 
 **The run records the ask set, not the table.** What a charge set means is fixed by the instructions
 the model was given — the fault set and the text describing it — and never by the weights, which the
-model is never shown. So the run's header carries `ask_sha256` as the mapping above, each digest
-rendered for an empty subject: rendering substitutes and never inspects the text, so the empty input
-covers every fixed byte of one variant's instruction and nothing that varies, and no size-dependent
-element may enter a rendered prompt. A header written before the split carries one string; a resume
-reads it as the one ask that run began under, and its lines carry their own digests as before.
+model is never shown. So the run's header carries one `ask_sha256` over the pass's rendered
+instructions, each rendered for an empty subject: rendering substitutes and never inspects the text,
+so the empty input covers every fixed byte of an instruction and nothing that varies, and no
+size-dependent element may enter a rendered prompt. A resume reads the digest it began under and its
+lines carry their own digests as before.
 
 - **An update applies its behaviour.** A run resumed under a changed table re-prices every landed
   value from the recorded ids under its item's class, lands the values that moved and continues; one
