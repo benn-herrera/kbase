@@ -49,9 +49,9 @@ file's other two templates stay.
 There are no user-supplied commands. The driver internalises the command lines for the back ends it
 ships.
 
-**With one back end there is no selector**: a run uses the one that can resolve. A second back end
-brings the flag and the refusal naming the set with it, in the same commit — a selector that exists
-before there is a choice is a name a user has to learn to do nothing.
+**`--harness` names the back end kbase ships.** The set is `opencode` today, and any other value is
+refused naming it. The flag survives because the direct provider path still answers a run that names
+no back end; collapsing the two belongs with §8's question of whether that path survives.
 
 What goes with the mechanism:
 
@@ -69,10 +69,11 @@ parses. The support cost is high and recurring. Supported therefore means shippe
 
 The integration suite fakes a back end: an over-limit reply, a non-zero exit, a leftover file, a
 megabyte of stderr. With profiles gone there is no injection point, so one override remains: an
-environment variable naming a command for the duration of the run. It is outside the support surface
-and outside the child's environment, and it is not silent — a run that sees it announces it on stderr
-and records it in the run's header, as a repository-supplied profile is announced today. A stray
-inherited variable must never score a KB with a command nobody chose and nothing to say so.
+environment variable naming a command for the duration of the run — `KBASE_SCORE_BACK_END_COMMAND`,
+parsed and refused in one place. It is outside the support surface and outside the child's
+environment, and it is not silent: a run that sees it announces it once on stderr and records it in
+the run's header as `command_override`. A stray inherited variable must never score a KB with a
+command nobody chose and nothing to say so.
 
 ## 5. opencode: v2 only
 
@@ -121,10 +122,10 @@ rather than the configured provider.
 
 ## 8. Still open
 
-- Which back ends ship in the first cut — opencode alone, or claude alongside it.
+- Whether a second back end ships — claude alongside opencode — and with it the selector that names
+  more than one value.
 - Whether the direct provider path stays beside the adapters, or the adapters are the only way a
   scoring run reaches a model.
-- The name and home of the override in §4.
 
 ## 9. What this supersedes
 
