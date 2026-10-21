@@ -211,11 +211,13 @@ single source. Working habits they impose:
 - **A scoring-model fact lives once, in `internal/kb`.** The fourteen fault ids, `flt-pending`, the
   word `none`, each id's weight per occurrence and each table's maximum live in `faults.go` and
   nowhere else — the statement table, the method table and the bearing one, which a node's class
-  selects among. A template names only the ids its class accepts and carries no digit at all, and
-  `internal/asks` asserts both against `kb`: the `flt-…` tokens it names are exactly its class's set,
-  and its text holds no number — no weight, no maximum, no band. The trap: a weight in a template, or
-  a second copy of the id list in the parser, which is a second home for a fact and drifts where the
-  prompt does not.
+  selects among. A template names only the ids its class accepts, and carries no figure or word a
+  model could read as a judgement on the answer — no decimal in `[0,1]`, no percentage, no weight, no
+  maximum, no band's word — while a quantity of the subject's own, an example's rate or threshold, is
+  the claim's and stays. `internal/asks` asserts both: the `flt-…` tokens it names are exactly its
+  class's set, checked against `kb`, and its text holds none of those spellings. The trap: a weight in
+  a template, or a second copy of the id list in the parser, which is a second home for a fact and
+  drifts where the prompt does not.
 - **A citation is looked up in the closed text the call carried, never in the register.** The parse's
   one job is where a span is, not whether it earns its id: a span is an anchor, and the criteria's
   satisfaction is the model's judgement and a later reader's audit, never a check. The trap: a

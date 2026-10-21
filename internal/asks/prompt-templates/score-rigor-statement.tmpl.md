@@ -69,11 +69,11 @@ A claim displays no derivation, so a step claimed with none shown and a step res
 proposition the text never states are not faults of a statement either: they belong to the method of
 an analysis or an experiment, and this vocabulary holds none of them.
 
-The claim reads *Parisian bleu cheese emits so many scent molecules per gram per degree above a
-stated threshold*: specific, disprovable, and still underspecified, because it fixes no producer or
-brand, no vintage or year, no humidity and no pressure, and the emission rate can turn on each. Four
-free parameters are four charges of `flt-underspecified` — and no charge for the derivation the
-claim does not display.
+The claim reads *Parisian bleu cheese emits 2.8×10⁹ scent molecules per gram per degree above
+270 K*: specific, disprovable, and still underspecified, because it fixes no producer or brand, no
+vintage or year, no humidity and no pressure, and the emission rate can turn on each. Four free
+parameters are four charges of `flt-underspecified` — and no charge for the derivation the claim does
+not display.
 
 ## The answer
 

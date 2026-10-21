@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -115,14 +116,15 @@ func TestScoreAsksRefuseAMissingSlot(t *testing.T) {
 }
 
 // TestScoreAsksNameTheirClasssIDs: each template names exactly its class's closed
-// set — its own ids and the pending id — and carries no digit at all, so the
-// weights, the maximum and the bands stay in `kb` and out of what a model reads.
-// The set is exact, which is also what keeps one class from naming another's ids:
-// a statement id on a method's ask, or a method id on a statement's, is a charge
-// its own parse would refuse.
+// set — its own ids and the pending id — and carries no figure or word that reads
+// as a judgement on the answer, so the weights, the maximum and the bands stay in
+// `kb` and out of what a model reads. A quantity of the subject's own is not a
+// judgement: an example's rate and threshold are what make underspecification
+// concrete. The set is exact, which is also what keeps one class from naming
+// another's ids: a statement id on a method's ask, or a method id on a
+// statement's, is a charge its own parse would refuse.
 func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 	tokenRE := regexp.MustCompile(`flt-[a-z0-9-]+`)
-	digitRE := regexp.MustCompile(`[0-9]`)
 	for _, c := range scoreAsks() {
 		t.Run(c.name, func(t *testing.T) {
 			text, err := c.ask("")
@@ -141,8 +143,8 @@ func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 			if !slices.Equal(set, want) {
 				t.Errorf("%s names %v, and its class accepts %v", c.template, set, want)
 			}
-			if hit := digitRE.FindString(text); hit != "" {
-				t.Errorf("%s carries the digit %q: a template names no number, weight, maximum or band", c.template, hit)
+			if read, hit := scoreJudgement(text); hit != "" {
+				t.Errorf("%s carries %q, read as %s: a template names no score, weight, maximum or band", c.template, hit, read)
 			}
 			if !strings.Contains(text, "`"+kb.ChargeNone+"`") {
 				t.Errorf("%s does not name the answer %s", c.template, kb.ChargeNone)
@@ -157,3 +159,71 @@ func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 // lineFormRE is a charge line as the templates state the answer's form: an id, a
 // colon and a span, in one of their fenced examples.
 var lineFormRE = regexp.MustCompile(`(?m)^flt-[a-z0-9-]+: \S`)
+
+// scoreJudgement returns what a template's first judgement figure or word reads
+// as, and the text carrying it; both empty where the template carries none. A
+// decimal in [0,1] reads as a score, a weight or a threshold, and a percentage
+// the same. A quantity of the subject's own reads as the claim's, not the
+// answer's, however it is spelled — an example's 2.8×10⁹ scent molecules per gram
+// per degree, or its 270 K.
+func scoreJudgement(text string) (read, hit string) {
+	for _, n := range scoreNumberRE.FindAllString(text, -1) {
+		v, err := strconv.ParseFloat(n, 64)
+		if err == nil && strings.Contains(n, ".") && v >= 0 && v <= 1 {
+			return "a decimal in [0,1], which reads as a score, a weight or a threshold", n
+		}
+	}
+	for _, j := range scoreJudgementREs {
+		if m := j.re.FindString(text); m != "" {
+			return j.read, m
+		}
+	}
+	return "", ""
+}
+
+// scoreNumberRE is a number as a template's prose spells one: its digits and,
+// where it has one, its fraction.
+var scoreNumberRE = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?|\.[0-9]+`)
+
+// scoreJudgementREs are the spellings scoreJudgement refuses besides a decimal,
+// each keyed by what it reads as. A band's words are kb.BuildBandLadder's: its
+// slugs spell them hyphenated and its phrases spaced, and a template states
+// neither.
+var scoreJudgementREs = []struct {
+	read string
+	re   *regexp.Regexp
+}{
+	{"a percentage, which reads as a score", regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s?%`)},
+	{"a build band's word, which reads as the outcome", regexp.MustCompile(`(?i)\b(?:ok|caveats|input[ -]only|not[ -]build|unsubstantiated)\b`)},
+	{"a weight or a maximum, which reads as a term of the score", regexp.MustCompile(`(?i)\b(?:weights?|weighted|maximum|max)\b`)},
+}
+
+// TestScoreJudgementTellsAJudgementFromASubjectsOwnQuantity: the scan a template
+// is held to refuses a score however it is spelled and lets pass the figures an
+// example of the subject carries.
+func TestScoreJudgementTellsAJudgementFromASubjectsOwnQuantity(t *testing.T) {
+	for _, c := range []struct {
+		name, text, want string
+	}{
+		{"the statement example's own quantities",
+			"emits 2.8×10⁹ scent molecules per gram per degree above 270 K", ""},
+		{"a decimal score", "a claim that fixes every parameter lands 0.75", "0.75"},
+		{"a score at the top of the range", "a bare assertion keeps 1.0", "1.0"},
+		{"a fraction without a leading digit", "landing .5 on the item", ".5"},
+		{"a percentage", "charges 40% of the item", "40%"},
+		{"a band word", "reply `none` where the strength is ok", "ok"},
+		{"a band's phrase", "ok to build on, see caveats", "ok"},
+		{"a band's hyphenated slug", "the band is do-not-build", "not-build"},
+		{"a weight", "one charge, weight one", "weight"},
+		{"a maximum", "the maximum is reached", "maximum"},
+		{"an integer quantity of the subject's", "above 270 K", ""},
+		{"a word carrying a band's letters", "the source engages the book's subject", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			read, hit := scoreJudgement(c.text)
+			if hit != c.want {
+				t.Errorf("scoreJudgement(%q) = %q, %q; want the hit %q", c.text, read, hit, c.want)
+			}
+		})
+	}
+}
