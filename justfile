@@ -1504,7 +1504,7 @@ _test-integration-results-fixture: build
 # run over a KB. Everything the hermetic legs prove stops at the process
 # contract's edge — a stub is kbase's own script — so this leg is what says the
 # seed's command is a command that answers.
-[doc("LIVE — NEEDS claude installed and authenticated (excluded from test-integration): the harnesses.toml configure --create seeds, its live claude profile run over a staged copy of the results fixture's KB with two claims inserted, one rigor item asked and landed; the roles record, run.yaml and the ledger's line checked for the harness back end, the profile and its command, and the seed's commented opencode entry refused by name with the live profile as allowed; evidence under test-data/transient/test-integration-score-live-harness/")]
+[doc("LIVE — NEEDS claude installed and authenticated (excluded from test-integration): the harnesses.toml configure --create seeds, its live claude profile run over a staged copy of the results fixture's KB with two claims inserted, one rigor item asked and landed; the roles record, run.yaml and the ledger's line checked for the harness back end, the profile and its command, and a profile name no layer supplies refused with the live profile as allowed; evidence under test-data/transient/test-integration-score-live-harness/")]
 test-integration-score-live-harness:
     @mkdir -p "{{HARNESS_LIVE_OUT_DIR}}"
     @{{just_executable()}} _test-integration-score-live-harness 2>&1 | tee "{{HARNESS_LIVE_OUT_DIR}}/log.txt"
@@ -1588,15 +1588,17 @@ _test-integration-score-live-harness: build
     check score "$score_ok" \
         "one item asked by the seeded claude profile; the record and the ledger name it, and the model is null because the seed carries none"
 
-    # The commented seed is a choice that does not stand.
-    capture "${docs}/05-opencode" "${repo}" "${kbase}" score --pass rigor --harness opencode \
+    # A name no loaded layer supplies is a choice that does not stand. The
+    # name is not `opencode`: that one selects the built-in back end, which runs
+    # whatever harnesses.toml says.
+    capture "${docs}/05-nosuch" "${repo}" "${kbase}" score --pass rigor --harness nosuch \
         --config-dir "${cfg}" --state-dir "${state}"
-    opencode_ok=0
-    [[ "$(rc "${docs}/05-opencode")" -eq 1 ]] || opencode_ok=1
-    grep -qx 'outcome: "refused"' "${docs}/05-opencode.out" || opencode_ok=1
-    grep -qF 'check: "harness"' "${docs}/05-opencode.out" || opencode_ok=1
-    grep -qF 'key: "--harness"' "${docs}/05-opencode.out" || opencode_ok=1
-    check opencode "$opencode_ok" "the commented opencode entry refuses by name"
+    nosuch_ok=0
+    [[ "$(rc "${docs}/05-nosuch")" -eq 1 ]] || nosuch_ok=1
+    grep -qx 'outcome: "refused"' "${docs}/05-nosuch.out" || nosuch_ok=1
+    grep -qF 'check: "harness"' "${docs}/05-nosuch.out" || nosuch_ok=1
+    grep -qF 'key: "--harness"' "${docs}/05-nosuch.out" || nosuch_ok=1
+    check nosuch "$nosuch_ok" "a profile no layer supplies refuses by name"
 
     {
         printf -- '- fixture: %s\n  kb: %s\n  config: %s\n  state: %s\n' \
@@ -1604,7 +1606,7 @@ _test-integration-score-live-harness: build
         printf '  outcome: %s\n' "$(yaml_str "$(sed -n 's/^outcome: "\(.*\)"$/\1/p' "${docs}/04-score.out" | head -n 1)")"
     } > "${out}/comparison.yaml"
     {{just_executable()}} _write-evidence "${out}" "test-integration-score-live-harness" \
-      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git); ${kbase} refresh, ${kbase} insert-claim-entry --create --values {{RESULTS_FIXTURE_DIR}}/values/insert.yaml\n${kbase} configure --create --config-dir config --model-map decision=local/d,text=local/t,scoring=local/s: the three seeded files, the live claude profile among them\n(cd repo && ${kbase} score --pass rigor --limit 1 --harness claude --config-dir config --state-dir state) into docs/04-score.*: one item asked on the profile's own model; roles, run.yaml and the ledger line checked for the harness back end and the profile, and its command recorded\n(cd repo && ${kbase} score --pass rigor --harness opencode --config-dir config --state-dir state) into docs/05-opencode.*: refused, naming --harness, the seed's commented entry standing nowhere\ncomparison.yaml: the fixture, the KB, the configuration and the state directory, and the run's outcome"
+      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git); ${kbase} refresh, ${kbase} insert-claim-entry --create --values {{RESULTS_FIXTURE_DIR}}/values/insert.yaml\n${kbase} configure --create --config-dir config --model-map decision=local/d,text=local/t,scoring=local/s: the three seeded files, the live claude profile among them\n(cd repo && ${kbase} score --pass rigor --limit 1 --harness claude --config-dir config --state-dir state) into docs/04-score.*: one item asked on the profile's own model; roles, run.yaml and the ledger line checked for the harness back end and the profile, and its command recorded\n(cd repo && ${kbase} score --pass rigor --harness nosuch --config-dir config --state-dir state) into docs/05-nosuch.*: refused, naming --harness, the loaded profile set; opencode is a built-in back end and is not among them\ncomparison.yaml: the fixture, the KB, the configuration and the state directory, and the run's outcome"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-score-live-harness): a check failed — see comparison.yaml and docs/\n'
         exit 1

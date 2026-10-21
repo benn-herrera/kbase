@@ -661,10 +661,11 @@ the model never saw a weight.
 
 **The verb.** `runScore` is the body: the pass, limit and dry-run/resume checks; the KB root; the
 state directory; the back end and the scoring role resolved before the KB is opened — the mode
-decided, or the profile selected and its command probed — `config.HarnessArgv` refusing there a model
-id beginning with `-`, because the profile's command would read it as an option — so a setup refusal
-writes nothing and mints no run; `openKB` and the migration record; the run id; the run lock; one
-refresh through
+decided, or the profile selected and its command probed, or `--harness opencode`'s built-in back end
+gated by `opencode --version` and composed in `cmd/score_opencode.go` — `config.HarnessArgv` refusing
+there a model id beginning with `-`, because the profile's command would read it as an option — so a
+setup refusal writes nothing and mints no run; `openKB` and the migration record; the run id; the run
+lock; one refresh through
 `holdKB`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
 the set; then either the dry run's records and an inert `Runner`, or the registry's client (none
 under a harness), the one `Ask` the back end needs and the walk; `counts` and `scored`; `resume`
@@ -970,9 +971,10 @@ internal/score            the score passes' closed text, its guard and the passa
                           re-pricing; imports neither model nor harness; imported by cmd
                           alone
 internal/harness          one configured command, one prompt, one reply, one process
-                          group: the setup probe, per-item argv substitution, the two
-                          bounds and the kill on deadline; imports stdlib and `log`
-                          alone of kbase; imported by cmd alone
+                          group: the setup probe, per-item argv substitution, the
+                          environment the caller composed, the two bounds and the kill
+                          on deadline; imports stdlib and `log` alone of kbase;
+                          imported by cmd alone
 internal/statedir         the state directory of one KB: the override, else
                           $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
                           imported by build and cmd
@@ -1082,14 +1084,15 @@ therefore carries a type's meaning and not only a version's, and every parse in 
 - `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the refusal
   where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
-  execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs
-  the program a harness profile names. That fifth owner's binary is the one the exec policy cannot
-  name statically: it is configuration's, chosen by the user's `--harness`, so `cmd/execpolicy_test.go`
-  carries it with a sentinel and exempts its site from the per-binary check. What stays enforced is
-  that no other package execs for this purpose, and that the only way it is reached is `score
-  --harness`. A repository may supply the profile, which is the trust a repository's `providers.toml`
-  already asks for: the source is announced, never silent (SPEC §9.3), and no verb runs a profile it
-  was not told to run.
+  execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs a
+  harness back end's program — the command a profile names, or the built-in opencode back end's
+  `opencode`. A profile's binary is the one the exec policy cannot name statically: it is
+  configuration's, chosen by the user's `--harness`, so `cmd/execpolicy_test.go` carries it with a
+  sentinel and exempts its site from the per-binary check. What stays enforced is that no other
+  package execs for this purpose, and that the only way either is reached is `score --harness`. A
+  repository may supply the profile, which is the trust a repository's `providers.toml` already asks
+  for: the source is announced, never silent (SPEC §9.3), and no verb runs a profile it was not told
+  to run.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB, has `export` write `gen-tex/`'s inputs, makes the one `pandoc.RunDefaults` call, and has
   `export` merge the filter's findings that run wrote into the report.

@@ -21,6 +21,9 @@ hardware.
   `--no-inference` needs none, and so does a `kbase score --dry-run`. A `kbase score --harness` run
   dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model, even where
   the profile's command carries no `{model}`.
+- **opencode v2**, for `--harness opencode` alone: the installed binary, authenticated for the model
+  the scoring role names. kbase passes that model as opencode's own `<provider>/<model>` reference
+  and reads its configuration from nowhere but an empty directory it creates for the run.
 - **Go**, to build kbase from source. `just` runs the project's recipes.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
@@ -305,12 +308,16 @@ start — on an older KB that is the write that converts and saves it — and on
 or the values a resume re-priced, each refresh holding the KB write lock; a dry run does neither.
 
 `--scoring-model` overrides the role for one run: a `<provider>/<model>` reference in file mode, a
-bare id under the environment's endpoint, the harness's own id under `--harness`. `--harness NAME`
+bare id under the environment's endpoint, the harness's own id under `--harness` — which under
+`--harness opencode` must be opencode's `<provider>/<model>`, the form it takes. `--harness NAME`
 runs one process per item instead of asking an endpoint: the profile of that name in
 [`harnesses.toml`](#configuration), with the prompt on its stdin or in the element carrying
-`{prompt}`, its stdout the reply. `configure --create` seeds a working `claude` profile and a
-commented `opencode` one. A harness is a command kbase did not write: it brings its own tools and
-instructions, and kbase cannot remove them — a profile a repository supplied says so once on stderr.
+`{prompt}`, its stdout the reply. `--harness opencode` is the one name that is not a profile: it runs
+an installed opencode v2, with an agent kbase defines for that process alone — no tools, no
+instructions of its own, its configuration sources cut back to an empty directory under the run's own
+records — and needs no `harnesses.toml` entry. Nothing is written to your opencode configuration.
+A profile is a command kbase did not write: it brings its own tools and instructions, and kbase
+cannot remove them — a profile a repository supplied says so once on stderr.
 A run asks a model for minutes, so it is a command line: nothing is offered for it over MCP.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
@@ -466,7 +473,8 @@ read in its place.
   writes it and preserves every other byte of an existing file. Its top-level `provider` key is
   **superseded**: it still loads and nothing chooses by it, and a file-mode run says so once on
   stderr; `kbase configure` removes it.
-- **`harnesses.toml`** holds the harness profiles `--harness` can name: one top-level table per
+- **`harnesses.toml`** holds the harness profiles `--harness` can name — every name but `opencode`,
+  which selects the back end kbase ships and is not a profile: one top-level table per
   profile, with a `command` — an argv array — as its one key. It layers as the pool does, a
   same-named profile replacing the global one whole, and it shares no namespace with `providers.toml`.
   A profile whose command carries `{model}` is handed the scoring model; one that names none runs on

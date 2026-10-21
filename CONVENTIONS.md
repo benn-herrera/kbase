@@ -68,10 +68,11 @@ them. Working rules for packages that carry over:
   seam's re-ask/default path. Either surface is re-issued identically on a transport error or
   retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
   `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference in file mode.
-- **internal/harness**: the user's command, run once per item. It imports stdlib and `log` alone of
-  kbase and knows nothing of kbase — no provider, no endpoint, no KB path, no configuration type.
+- **internal/harness**: the back end's command, run once per item. It imports stdlib and `log` alone
+  of kbase and knows nothing of kbase — no provider, no endpoint, no KB path, no configuration type.
   It receives a prompt and hands it over whole: it composes none, and it is not the place a prompt's
-  text, its slots or its rules live.
+  text, its slots or its rules live. It carries the environment the caller composed and reads nothing
+  out of it: a back end that needs one composes it beside its argv, in `cmd`.
 
 ---
 
@@ -97,10 +98,11 @@ single source. Working habits they impose:
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
   beside it. The one self-exec owner is a file, not a package: `cmd/mcp.go` alone may exec the kbase
   binary, and the test fails on any other file that does. A fifth owner is `internal/harness`, which
-  execs the program a harness profile names — a binary only the user's configuration states, so the
-  policy carries it with a sentinel and exempts its site from the per-static-binary check; what the
-  policy still holds is that no other package execs for that purpose, and that a profile can only be
-  run by `score --harness <name>`. A repository may supply one: the source is announced on stderr,
+  execs a harness back end's program — the command a profile names, or the built-in opencode back
+  end's `opencode`. A profile's binary is one only the user's configuration states, so the policy
+  carries it with a sentinel and exempts its site from the per-static-binary check; what the policy
+  still holds is that no other package execs for that purpose, and that a back end can only be run by
+  `score --harness <name>`. A repository may supply a profile: the source is announced on stderr,
   recorded in the role record and the ledger, and the promise is disclosure and explicit selection,
   never inspection. The policy scans share one module walk
   (`cmd/modulescan_test.go`), so they agree on which files are the module's source. The scan

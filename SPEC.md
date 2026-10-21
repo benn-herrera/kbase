@@ -803,9 +803,10 @@ form: a `<provider>/<model>` reference in file mode, a bare id under the environ
 verbatim under `--harness`. A `--dry-run` resolves no role and refuses nothing for one.
 
 **The harness back end.** `--harness NAME` runs one process per item instead of asking an endpoint:
-the profile that name selects in `harnesses.toml` (§9.3). It consults no mode and no pool — a harness
-chooses no endpoint, so a `KBASE_API_BASE_URL` or a role variable set beside it is neither a mixed
-mode nor a refusal. The prompt goes to the command's stdin, or into the one element carrying
+the profile that name selects in `harnesses.toml` (§9.3), or — where the name is one kbase ships —
+the back end kbase composes itself, below. It consults no mode and no pool — a harness chooses no
+endpoint, so a `KBASE_API_BASE_URL` or a role variable set beside it is neither a mixed mode nor a
+refusal. The prompt goes to the command's stdin, or into the one element carrying
 `{prompt}`; a profile whose command carries no `{prompt}` receives it on stdin, and stdin is closed
 empty where the element carried it. The command's stdout is the reply and is parsed by the same rule a
 provider's reply is; its stderr is captured to a bound and recorded only in a failing attempt's
@@ -829,12 +830,24 @@ that is emptied before each item, so nothing a command wrote is visible to the n
   an argv element of its own, a model beginning `-` is refused there too (`check: harness`,
   `key: --scoring-model`): after substitution the command would read that id as an option, not a
   model id.
-- **What kbase cannot guarantee.** A command is executable code and may bring its own tools, its own
-  system prompt and its own instructions; kbase can remove neither, and does not sandbox a child. The
-  input guard keeps the register's scoring tokens out of the prompt and the parse refuses a reply that
-  is no answer; neither says what a tool-enabled command's own instructions ask for. The profile's
-  name, layer and argv are recorded so a reader knows which command answered, and a profile a
-  repository supplied says so on stderr once per run.
+- **What kbase cannot guarantee.** A profile's command is executable code and may bring its own
+  tools, its own system prompt and its own instructions; kbase can remove neither, and does not
+  sandbox a child. The input guard keeps the register's scoring tokens out of the prompt and the
+  parse refuses a reply that is no answer; neither says what a tool-enabled command's own
+  instructions ask for. The profile's name, layer and argv are recorded so a reader knows which
+  command answered, and a profile a repository supplied says so on stderr once per run.
+
+**The built-in opencode back end.** `--harness opencode` runs opencode v2 rather than a profile, and
+`harnesses.toml` is not consulted: kbase composes the command and the environment, and a profile of
+that name is not run (it is named on stderr once). Each item is one `opencode run --standalone`
+process with the prompt on its stdin, an agent defined inline for that process alone — no tools, no
+system prompt of its own, no instruction file, plugin or skill of the user's — its configuration
+sources restricted to an empty directory under the run's own working directory, and the upward walk
+for project configuration and instruction files closed. The model it is handed is the scoring role's
+value whole — a file reference's `<provider>/<model>`, or the environment's id and `--scoring-model`
+verbatim — because opencode names a model `provider/model`; a model that is not one of those refuses
+the run before the first item, as does an `opencode` whose `--version` is not v2. Nothing is written
+to the user's configuration. Its stdout is the reply and is parsed by the rule a provider's reply is.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,

@@ -182,7 +182,10 @@ work's rigor is never asked — set it by hand.
   under a changed ask continues under the current ask, and neither refuses.
 - `--harness NAME` runs one process per item from the profile of that name in `harnesses.toml`
   instead of asking an endpoint: no endpoint is chosen, the mode is not consulted, and a repository
-  profile says so once on stderr. `--dry-run` lists the set, asks nothing and cannot be resumed.
+  profile says so once on stderr. `--harness opencode` is not a profile: it runs the opencode v2 back
+  end kbase composes itself — no tools, no instructions of its own, its own model naming
+  `<provider>/<model>` — and needs no `harnesses.toml` entry. `--dry-run` lists the set, asks nothing
+  and cannot be resumed.
 - A run holds `<state-dir>/score`, so a second is `retry` (`check: lock`).
 
 Keys: `state-dir`, `pass`, `roles` (one record, `scoring`; absent under `--dry-run`), `run`,
