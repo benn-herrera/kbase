@@ -234,7 +234,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 		return scoring(
 			"none",
 			"flt-overreach: Theorem 1",
-			"flt-claimed-step: Every exchange clears",
+			"flt-underspecified: Every exchange clears",
 			"none")
 	})
 	if rigor.doc.Outcome != "done" || rigor.dialled != 1 {
@@ -258,7 +258,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	rigors := []struct {
 		id   string
 		want float64
-	}{{"ana-aaaaaa", 0.95}, {"clm-aaaaaa", 0.60}, {"clm-bbbbbb", 0.65}, {"exp-aaaaaa", 0.95}}
+	}{{"ana-aaaaaa", 0.95}, {"clm-aaaaaa", 0.60}, {"clm-bbbbbb", 0.90}, {"exp-aaaaaa", 0.95}}
 	if scored := anyStrings(rigor.doc.Values["scored"]); !slices.Equal(scored, []string{"ana-aaaaaa", "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa"}) {
 		t.Errorf("scored %q, want the four nodes in id order", scored)
 	}

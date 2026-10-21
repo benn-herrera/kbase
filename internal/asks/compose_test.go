@@ -68,7 +68,7 @@ func TestFragmentsAreEachRegisteredOnce(t *testing.T) {
 }
 
 func TestSystemPromptsAreTheFragmentsWhole(t *testing.T) {
-	for _, name := range fragmentSlots {
+	for _, name := range systemSlots {
 		got, err := System(name)
 		if err != nil {
 			t.Fatal(err)
@@ -78,8 +78,10 @@ func TestSystemPromptsAreTheFragmentsWhole(t *testing.T) {
 			t.Errorf("System(%s) = %q, want the fragment's bytes", name, got)
 		}
 	}
-	if _, err := System("overview-correction"); err == nil {
-		t.Error("an alternative was served as a system prompt")
+	for _, name := range []string{"overview-correction", scoreAnswerOccurrences, scoreAnswerClose} {
+		if _, err := System(name); err == nil {
+			t.Errorf("%s was served as a system prompt", name)
+		}
 	}
 }
 

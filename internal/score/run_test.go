@@ -10,6 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"kbase/internal/asks"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
@@ -432,7 +433,7 @@ func TestRunContinuesARun(t *testing.T) {
 	// one it records done would fail here.
 	second, prompts := asking(t, []asked{
 		{title: "# Claim A", reply: "flt-overreach: The claim's own paragraph"},
-		{title: "# Claim B", reply: "flt-claimed-step: The quoted claim"},
+		{title: "# Claim B", reply: "flt-underspecified: The quoted claim"},
 	})
 	w2, secondLanded := writing()
 	res, err = (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: second, Write: w2, Ledger: l, Model: "small"}).Run(context.Background())
@@ -445,13 +446,66 @@ func TestRunContinuesARun(t *testing.T) {
 	if len(*prompts) != 2 {
 		t.Errorf("the second run made %d calls, want the two the ledger leaves", len(*prompts))
 	}
-	if want := []landed{{"clm-aaaaaa", "0.6"}, {"clm-bbbbbb", "0.65"}}; !slices.Equal(*secondLanded, want) {
+	if want := []landed{{"clm-aaaaaa", "0.6"}, {"clm-bbbbbb", "0.9"}}; !slices.Equal(*secondLanded, want) {
 		t.Errorf("the write seam was handed %v, want %v", *secondLanded, want)
 	}
 }
 
+// TestRunDigestsTheVariantEachItemReceived: a claim and an analysis are asked
+// different instructions, so each landed line's digest is the instruction that
+// item received — which is what answers "which variant judged this item" — and
+// the two differ.
+func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
+	src, ix, set := runSet(t)
+	var items []query.Item
+	for _, it := range set {
+		if it.Node != nil && (it.Node.ID == "clm-aaaaaa" || it.Node.ID == "ana-aaaaaa") {
+			items = append(items, it)
+		}
+	}
+	if len(items) != 2 {
+		t.Fatalf("the fixture's set names %d of the claim and the analysis, want both", len(items))
+	}
+	l := kept(t, t.TempDir())
+	ask, _ := asking(t, []asked{{title: "# ", reply: "none"}})
+	write, _ := writing()
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, rec := range lines(t, filepath.Join(l.Dir(), linesFile)) {
+		if id, ok := rec["id"].(string); ok {
+			byID[id], _ = rec["prompt_sha256"].(string)
+		}
+	}
+	g := graphOf(ix)
+	for _, c := range []struct {
+		id  string
+		ask func(string) (string, error)
+	}{
+		{"clm-aaaaaa", asks.ScoreRigorStatement},
+		{"ana-aaaaaa", asks.ScoreRigorMethod},
+	} {
+		text, err := rigorText(src, g, c.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, err := c.ask(text.text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := byID[c.id]; got != digestOf(prompt) {
+			t.Errorf("%s's line digests %q, and the instruction it was sent digests %q", c.id, got, digestOf(prompt))
+		}
+	}
+	if byID["clm-aaaaaa"] == byID["ana-aaaaaa"] {
+		t.Error("the claim and the analysis record one digest: the line would not name the variant that judged it")
+	}
+}
+
 // TestRunRecordsChargesTheirIDsPrice: every landed line carries the charges the
-// reply recorded, and its value is the pass's table applied to their ids alone —
+// reply recorded, and its value is its class's table applied to their ids alone —
 // for both passes. A resume then re-derives each value from the ids without
 // asking a model, which is what makes a landing checkable and a run re-scorable.
 func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
@@ -479,7 +533,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	l := kept(t, state)
 	rigorAsk, _ := asking(t, []asked{
 		{title: "# Claim A", reply: "flt-overreach: The claim's own paragraph"},
-		{title: "# Claim B", reply: "flt-bare-measurement: The quoted claim\nflt-bare-measurement: proof follows"},
+		{title: "# Claim B", reply: "flt-underspecified: The quoted claim\nflt-underspecified: proof follows"},
 		{title: "# Claim C", reply: "none"},
 		{title: "# Claim D", reply: "none"},
 		{title: "# Bearing 0.5 In Words", reply: "none"},
@@ -489,7 +543,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: rigorAsk, Write: write, Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	assertDerivable(t, l, kb.RigorFaults)
+	assertDerivable(t, l, rigorTables)
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -512,13 +566,13 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	if _, err := (&Runner{Source: src, Index: ix, Items: bearingSet, Pass: query.PassBearing, Ask: bearingAsk, Write: write, Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	assertDerivable(t, bl, kb.BearingFaults)
+	assertDerivable(t, bl, bearingTables)
 
 	// A resume re-derives every landed value and asks nothing: the ask seam
 	// fails the test on any call, and every item is recorded done.
 	back := reopened(t, state)
 	defer back.Close()
-	assertDerivable(t, back, kb.RigorFaults)
+	assertDerivable(t, back, rigorTables)
 	inert := func(context.Context, string) (string, error) {
 		t.Fatal("a resume asked a model")
 		return "", nil
@@ -532,10 +586,23 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	}
 }
 
-// assertDerivable is what a run's record owes: every landed line's value is the
-// table's output for the ids its line records, and its charge list is present —
-// empty only where the model answered `none`.
-func assertDerivable(t *testing.T, l *Ledger, table kb.FaultTable) {
+// rigorTables is the class mapping as the scheme states it — a claim's statement
+// table, an analysis's and an experiment's method table — and bearingTables is the
+// one table a scoring edge takes. The tests state the mapping here rather than
+// reading the derivation they check.
+var (
+	rigorTables = map[string]kb.FaultTable{
+		kb.NodeKindClaim:      kb.RigorStatement,
+		kb.NodeKindAnalysis:   kb.RigorMethod,
+		kb.NodeKindExperiment: kb.RigorMethod,
+	}
+	bearingTables = map[string]kb.FaultTable{"": kb.BearingFaults}
+)
+
+// assertDerivable is what a run's record owes: every landed line's value is its
+// class's table applied to the ids its line records, and its charge list is
+// present — empty only where the model answered `none`.
+func assertDerivable(t *testing.T, l *Ledger, tableOf map[string]kb.FaultTable) {
 	t.Helper()
 	recs := lines(t, filepath.Join(l.Dir(), linesFile))
 	done := 0
@@ -544,6 +611,12 @@ func assertDerivable(t *testing.T, l *Ledger, table kb.FaultTable) {
 			continue
 		}
 		done++
+		kind, _ := rec["kind"].(string)
+		table, ok := tableOf[kind]
+		if !ok {
+			t.Errorf("the line %v is of kind %q, which the test holds no table for", rec["id"], kind)
+			continue
+		}
 		raw, ok := rec["faults"].([]any)
 		if !ok {
 			t.Errorf("a landed line records no charges: %v", rec)

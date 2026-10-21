@@ -77,9 +77,9 @@ One line per occurrence, in this form:
 flt-transfer: the same holds for
 ```
 
-An id from the list above, a colon, a space, and a span copied out of one of the two texts. Charge
-every occurrence you can point at — not the worst one, and not one per kind. Two lines carrying one id
-need two spans that do not overlap.
+An id from the list above, a colon, a space, and a span copied out of one of the two texts.
+
+@!score-answer-occurrences!@
 
 The evidence for a bearing fault may lie at either end, so the span comes out of the source's title or
 statement or out of the target's, copied exactly as its text writes it and whole within one passage.
@@ -89,5 +89,4 @@ a short span is the honest one — quote the smallest span that carries the faul
 absence, cite the span that carries the obligation: the part of the target the source does not reach.
 A span in the context is refused.
 
-Where nothing is charged, reply `none` alone. Where there is nothing to judge, reply `flt-pending`
-alone.
+@!score-answer-close!@

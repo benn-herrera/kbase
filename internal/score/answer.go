@@ -35,7 +35,7 @@ type Charge struct {
 }
 
 // Answer is a reply read as the charges it records: the charges themselves, the
-// charge lines a pending answer makes moot, and the value the pass's table gives
+// charge lines a pending answer makes moot, and the value the item's class's table gives
 // the answer's ids. The charges are what the ledger keeps beside the reply; the
 // value is what lands.
 type Answer struct {
@@ -65,7 +65,7 @@ type charged struct {
 }
 
 // ParseAnswer reads reply as the answer it records against the closed text the
-// call carried and the pass's table: one charge line per occurrence, `none`
+// call carried and the item's class's table: one charge line per occurrence, `none`
 // alone, or `flt-pending` alone. Blank lines are ignored and any other line that
 // is not a charge line is refused, so nothing is read out of prose. A refused
 // reply is malformed for this attempt — no charges and no judgement, the reason
@@ -185,10 +185,10 @@ func settled(charges []charged) ([]Charge, error) {
 	return faults, nil
 }
 
-// notInSet is a line naming an id the pass does not accept, its refusal stating
-// the id and the pass's ids as the allowed set.
+// notInSet is a line naming an id the call does not accept, its refusal stating
+// the id and the call's own ids as the allowed set.
 func notInSet(line int, id string, table kb.FaultTable) error {
-	return malformedf("line %d names the id %q, which this pass does not accept; allowed: %s",
+	return malformedf("line %d names the id %q, which this call does not accept; allowed: %s",
 		line, id, strings.Join(table.IDs(), ", "))
 }
 

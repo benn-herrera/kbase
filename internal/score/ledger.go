@@ -68,13 +68,17 @@ type RunHeader struct {
 	KBRoot string `yaml:"kb_root"`
 	Format int    `yaml:"format"`
 	Pass   string `yaml:"pass"`
-	// AskSHA256 names the judgement the run's answers belong to: the digest of
-	// its pass's prompt rendered for an empty subject, which is every fixed byte
-	// of the instructions and nothing that varies with an item. The record
-	// carries the ask and not the table, because a changed weight re-prices what
-	// a judgement is worth while a changed ask is a different judgement — which
-	// this records so a corpus can read the two apart. It gates nothing: an
-	// update applies its behaviour.
+	// AskSHA256 names the ask set the run's answers belong to: one digest over
+	// every instruction the pass can send — a rigor run's statement and method
+	// renders, a bearing run's one — each rendered for an empty subject and
+	// concatenated in that fixed order, which is every fixed byte of the
+	// instructions and nothing that varies with an item. The record carries the
+	// ask and not the table, because a changed weight re-prices what a judgement
+	// is worth while a changed ask is a different judgement — which this records
+	// so a corpus can read the two apart. It gates nothing: an update applies its
+	// behaviour. A header written before the rigor pair carries one render's
+	// digest, and is read as the one ask that run began under, which is what it
+	// recorded.
 	AskSHA256    string   `yaml:"ask_sha256"`
 	BackEnd      string   `yaml:"backend,omitempty"`
 	Provider     string   `yaml:"provider"`
@@ -418,41 +422,94 @@ func (a attempt) faults() []Charge {
 	return *a.Faults
 }
 
-// passFacts is one pass's two facts: the ask a call of it carries, and the table
-// its charges are priced under. A pass is read here and nowhere else, so what a
-// pass asks and what it costs cannot come apart — a run handed the wrong pass
-// prices under that pass rather than silently under the item's shape.
-type passFacts struct {
+// class is the pair one item's call is: the instruction it carries and the table
+// its reply is priced under. A node's class fixes both at once, so what an item
+// is asked and what its charges cost cannot come apart, and the composer, the
+// parse's closed set and the price all read this one fact.
+type class struct {
+	// edge is what the class is judged on: a scoring edge's two ends and its
+	// context for a bearing call, a node's own title and statement for either
+	// rigor call.
+	edge  bool
 	ask   func(subject string) (string, error)
 	table kb.FaultTable
 }
 
-// passFactsOf is pass's facts, or an error where no pass is named that.
+// The three classes: a claim's own text is a statement, an analysis's or an
+// experiment's a method, and a scoring edge's link is a bearing whatever its ends
+// are typed.
+var (
+	statementClass = class{ask: asks.ScoreRigorStatement, table: kb.RigorStatement}
+	methodClass    = class{ask: asks.ScoreRigorMethod, table: kb.RigorMethod}
+	bearingClass   = class{edge: true, ask: asks.ScoreBearing, table: kb.BearingFaults}
+)
+
+// passFacts is one pass as a run reads it: which class an item takes, and every
+// class the pass can send, in the fixed order its digest concatenates them. A
+// pass is read here and nowhere else, so a call's instruction and its table are
+// one derivation.
+type passFacts struct {
+	classOf func(it query.Item) (class, error)
+	classes []class
+}
+
+// passFactsOf is pass's facts, or an error where no pass is named that. The
+// class is derived from the item here, once: a rigor call's instruction and its
+// closed set are the node's class's, and an item the pass does not walk gets
+// neither.
 func passFactsOf(pass string) (passFacts, error) {
 	switch pass {
 	case query.PassRigor:
-		return passFacts{ask: asks.ScoreRigor, table: kb.RigorFaults}, nil
+		return passFacts{
+			classOf: func(it query.Item) (class, error) {
+				if it.Node == nil {
+					return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), pass)
+				}
+				switch it.Node.Kind {
+				case kb.NodeKindClaim:
+					return statementClass, nil
+				case kb.NodeKindAnalysis, kb.NodeKindExperiment:
+					return methodClass, nil
+				}
+				return class{}, fmt.Errorf("the node %s is no %s subject: a work's rigor is judged by hand and an axiom's is 1.0 by rule", it.Node.ID, pass)
+			},
+			classes: []class{statementClass, methodClass},
+		}, nil
 	case query.PassBearing:
-		return passFacts{ask: asks.ScoreBearing, table: kb.BearingFaults}, nil
+		return passFacts{
+			classOf: func(it query.Item) (class, error) {
+				if it.Edge == nil {
+					return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), pass)
+				}
+				return bearingClass, nil
+			},
+			classes: []class{bearingClass},
+		}, nil
 	}
 	return passFacts{}, fmt.Errorf("no score pass is named %q", pass)
 }
 
-// askDigest is the digest of a pass's prompt rendered for an empty subject: the
-// ask every judgement in a run of that pass answered. Rendering substitutes and
-// never inspects the text, and no template carries an element keyed on the
-// item's length or shape, so the empty subject is every fixed byte of the
-// instructions and nothing that varies with one.
+// askDigest is the digest of every instruction a pass can send, each rendered for
+// an empty subject and concatenated in the pass's fixed order: the statement ask
+// and then the method ask for a rigor run, the one bearing ask alone for a bearing
+// run. Rendering substitutes and never inspects the text, and no template carries
+// an element keyed on the item's length or shape, so an empty subject covers every
+// fixed byte of the instructions and nothing that varies with one. One field
+// covers the set, because separate digests would agree or differ together.
 func askDigest(pass string) (string, error) {
 	facts, err := passFactsOf(pass)
 	if err != nil {
 		return "", err
 	}
-	prompt, err := facts.ask("")
-	if err != nil {
-		return "", err
+	var b strings.Builder
+	for _, cl := range facts.classes {
+		prompt, err := cl.ask("")
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(prompt)
 	}
-	return digestOf(prompt), nil
+	return digestOf(b.String()), nil
 }
 
 // rePriced is the record the run's directory gains where a resume re-derived a
@@ -477,12 +534,12 @@ type rePricedLine struct {
 const repricedFile = "repriced.yaml"
 
 // reprice re-derives every landed value from the ids its line records, under the
-// running table, lands each value a re-derivation moves through w — the write a
-// landing uses, under the lock that landing holds — and rewrites the lines it
-// moved. It asks no model: the model never saw a weight, the ids are the whole
-// input of the price, and a weight that changed between invocations re-prices a
-// run rather than making it incomparable. A run whose values all stand writes
-// nothing.
+// table the line's own class holds, lands each value a re-derivation moves
+// through w — the write a landing uses, under the lock that landing holds — and
+// rewrites the lines it moved. It asks no model: the model never saw a weight, the
+// ids are the whole input of the price, and a weight that changed between
+// invocations re-prices a run rather than making it incomparable. A run whose
+// values all stand writes nothing.
 //
 // A moved value is landed before its line records it, so the record never claims
 // a value the KB did not take: a refused write fails the resume with the ledger
@@ -502,11 +559,17 @@ func (l *Ledger) reprice(w Write) error {
 			// stands.
 			continue
 		}
+		// The price is the item's class's, derived from the line the way a call's
+		// is: a run landed under one rigor table re-prices under the class's.
+		cl, err := facts.classOf(a.asItem())
+		if err != nil {
+			return fmt.Errorf("re-price %s: %w", a.item(), err)
+		}
 		ids := make([]string, 0, len(a.faults()))
 		for _, c := range a.faults() {
 			ids = append(ids, c.ID)
 		}
-		value := facts.table.Price(ids)
+		value := cl.table.Price(ids)
 		want := kb.BearingText(value)
 		if a.Value == want {
 			continue

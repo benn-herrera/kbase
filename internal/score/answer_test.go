@@ -77,37 +77,37 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 		value   kb.Bearing
 	}{
 		{
-			name: "one charge, priced", text: rigor, table: kb.RigorFaults,
+			name: "one charge, priced", text: rigor, table: kb.RigorStatement,
 			reply:   "flt-overreach: continuous and bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded", Offset: 22}},
 			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
 		},
 		{
-			name: "the reply's own spelling kept, its case folded for the id", text: rigor, table: kb.RigorFaults,
+			name: "the reply's own spelling kept, its case folded for the id", text: rigor, table: kb.RigorStatement,
 			reply:   "FLT-OVERREACH: Continuous and Bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "Continuous and Bounded"}},
 			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
 		},
 		{
-			name: "a re-wrapped citation", text: rigor, table: kb.RigorFaults,
+			name: "a re-wrapped citation", text: rigor, table: kb.RigorMethod,
 			reply:   "flt-claimed-step: bounded. Every",
 			faults:  []Charge{{ID: kb.FaultClaimedStep, Passage: passageStatement, Citation: "bounded. Every"}},
 			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.65},
 		},
 		{
-			name: "the form's brackets stripped", text: rigor, table: kb.RigorFaults,
+			name: "the form's brackets stripped", text: rigor, table: kb.RigorStatement,
 			reply:   "[flt-overreach]: [continuous and bounded]",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"}},
 			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
 		},
 		{
-			name: "a title citation", text: rigor, table: kb.RigorFaults,
+			name: "a title citation", text: rigor, table: kb.RigorMethod,
 			reply:   "flt-unaddressed: A Claim",
 			faults:  []Charge{{ID: kb.FaultUnaddressed, Passage: passageTitle, Citation: "A Claim"}},
 			passage: []string{passageTitle}, value: kb.Bearing{Value: 0.00},
 		},
 		{
-			name: "the same span under two ids, the offset shared", text: rigor, table: kb.RigorFaults,
+			name: "the same span under two ids, the offset shared", text: rigor, table: kb.RigorStatement,
 			reply: "flt-overreach: continuous and bounded\nflt-contradiction: continuous and bounded",
 			faults: []Charge{
 				{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"},
@@ -116,13 +116,13 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.15},
 		},
 		{
-			name: "one occurrence written twice collapses", text: rigor, table: kb.RigorFaults,
+			name: "one occurrence written twice collapses", text: rigor, table: kb.RigorStatement,
 			reply:   "flt-overreach: continuous and bounded\nflt-overreach: continuous and bounded",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "continuous and bounded"}},
 			passage: []string{passageStatement}, value: kb.Bearing{Value: 0.60},
 		},
 		{
-			name: "two disjoint spans of one id are two occurrences", text: rigor, table: kb.RigorFaults,
+			name: "two disjoint spans of one id are two occurrences", text: rigor, table: kb.RigorMethod,
 			reply: "flt-bare-measurement: The map is\nflt-bare-measurement: Every chart",
 			faults: []Charge{
 				{ID: kb.FaultBareMeasurement, Passage: passageStatement, Citation: "The map is"},
@@ -131,11 +131,11 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 			passage: []string{passageStatement, passageStatement}, value: kb.Bearing{Value: 0.35},
 		},
 		{
-			name: "none alone", text: rigor, table: kb.RigorFaults,
+			name: "none alone", text: rigor, table: kb.RigorStatement,
 			reply: "none", faults: []Charge{}, value: kb.Bearing{Value: 0.95},
 		},
 		{
-			name: "none among blank lines", text: rigor, table: kb.RigorFaults,
+			name: "none among blank lines", text: rigor, table: kb.RigorStatement,
 			reply: "\n  none  \n\n", faults: []Charge{}, value: kb.Bearing{Value: 0.95},
 		},
 		{
@@ -162,7 +162,7 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 			passage: []string{passageBoth}, value: kb.Bearing{Value: 0.50},
 		},
 		{
-			name: "a rigor span the title and the statement share is both", text: rigorTextOf(t, "A Claim", "A claim is made here."), table: kb.RigorFaults,
+			name: "a rigor span the title and the statement share is both", text: rigorTextOf(t, "A Claim", "A claim is made here."), table: kb.RigorStatement,
 			reply:   "flt-overreach: a claim",
 			faults:  []Charge{{ID: kb.FaultOverreach, Passage: passageBoth, Citation: "a claim"}},
 			passage: []string{passageBoth}, value: kb.Bearing{Value: 0.60},
@@ -201,7 +201,7 @@ func TestParseAnswerReadsChargeLines(t *testing.T) {
 // at the earlier end's.
 func TestParseAnswerOffsetsAreTheFirstMatch(t *testing.T) {
 	rigor := rigorTextOf(t, "A Claim", "The map is continuous. The map is continuous.")
-	got, err := ParseAnswer("flt-overreach: continuous", rigor, kb.RigorFaults)
+	got, err := ParseAnswer("flt-overreach: continuous", rigor, kb.RigorStatement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,11 +240,11 @@ func TestParseAnswerRecordsTheRigorPassage(t *testing.T) {
 	}
 	for _, c := range []struct{ name, reply, passage string }{
 		{"a span only the statement carries", "flt-overreach: own paragraph", passageStatement},
-		{"a span only the title carries", "flt-unaddressed: Claim A", passageTitle},
+		{"a span only the title carries", "flt-underspecified: Claim A", passageTitle},
 		{"a span both carry", "flt-contradiction: claim", passageBoth},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := ParseAnswer(c.reply, text, kb.RigorFaults)
+			got, err := ParseAnswer(c.reply, text, kb.RigorStatement)
 			if err != nil {
 				t.Fatalf("ParseAnswer(%q): %v", c.reply, err)
 			}
@@ -312,14 +312,14 @@ func TestParseAnswerPending(t *testing.T) {
 		{name: "case folded", reply: "FLT-PENDING", faults: []Charge{{ID: kb.FaultPending}}},
 		{
 			name:     "beside charges, which are moot",
-			reply:    "flt-pending\nflt-overreach: continuous and bounded\nflt-bare-measurement: The map",
+			reply:    "flt-pending\nflt-overreach: continuous and bounded\nflt-underspecified: The map",
 			faults:   []Charge{{ID: kb.FaultPending}},
-			moot:     []string{kb.FaultOverreach, kb.FaultBareMeasurement},
+			moot:     []string{kb.FaultOverreach, kb.FaultUnderspecified},
 			passages: []string{passageStatement, passageStatement},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := ParseAnswer(c.reply, rigor, kb.RigorFaults)
+			got, err := ParseAnswer(c.reply, rigor, kb.RigorStatement)
 			if err != nil {
 				t.Fatalf("ParseAnswer(%q): %v", c.reply, err)
 			}
@@ -348,6 +348,85 @@ func TestParseAnswerPending(t *testing.T) {
 	}
 }
 
+// TestParseAnswerRefusesTheOtherClasssID: the item's class fixes the accepted set
+// before the call, so a statement id on a method's text and a method id on a
+// statement's are each malformed — the refusal naming the id and the call's own
+// ids as allowed — and an id from the retired single vocabulary is no longer
+// allowed anywhere.
+func TestParseAnswerRefusesTheOtherClasssID(t *testing.T) {
+	statement := rigorTextOf(t, "A Claim", "The map is continuous and bounded.")
+	method := rigorTextOf(t, "An Analysis", "The theorem follows from the two lemmas above.")
+	for _, c := range []struct {
+		name  string
+		text  closedText
+		table kb.FaultTable
+		id    string
+	}{
+		{"a statement id on an analysis", method, kb.RigorMethod, kb.FaultUnderspecified},
+		{"a statement id on an experiment's method", method, kb.RigorMethod, kb.FaultEquivocation},
+		{"a method id on a claim", statement, kb.RigorStatement, kb.FaultUnaddressed},
+		{"a method id on a claim, beside a statement one", statement, kb.RigorStatement, kb.FaultClaimedStep},
+		{"a method id no class holds but the method's", statement, kb.RigorStatement, kb.FaultBareMeasurement},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.table.Accepts(c.id) {
+				t.Fatalf("%s is in the call's own set, so the case tests nothing", c.id)
+			}
+			_, err := ParseAnswer(c.id+": The", c.text, c.table)
+			if err == nil {
+				t.Fatalf("the reply charging %s beside a %s call was read", c.id, c.table.IDs()[0])
+			}
+			if !strings.Contains(err.Error(), `"`+c.id+`"`) || !strings.Contains(err.Error(), "allowed:") {
+				t.Errorf("the refusal %q does not name the id and the allowed set", err)
+			}
+			for _, id := range c.table.IDs() {
+				if !strings.Contains(err.Error(), id) {
+					t.Errorf("the refusal %q does not name %s among the call's ids", err, id)
+				}
+			}
+		})
+	}
+}
+
+// TestParseAnswerPricesUnderTheClasssTable: one charge list is priced by the
+// table the item's class holds, so a free parameter costs the statement's step
+// and a claimed step the method's, while an id both rigor vocabularies share
+// costs the same under either.
+func TestParseAnswerPricesUnderTheClasssTable(t *testing.T) {
+	statement := rigorTextOf(t, "A Claim", "The map is continuous and bounded.")
+	method := rigorTextOf(t, "An Analysis", "The map is continuous and bounded.")
+	for _, c := range []struct {
+		name  string
+		text  closedText
+		table kb.FaultTable
+		reply string
+		want  float64
+	}{
+		{"a claim's one free parameter", statement, kb.RigorStatement,
+			"flt-underspecified: continuous", 0.90},
+		{"a claim's four free parameters", statement, kb.RigorStatement,
+			"flt-underspecified: The map\nflt-underspecified: is continuous\nflt-underspecified: and bounded\nflt-underspecified: .", 0.75},
+		{"a method's unaddressed text", method, kb.RigorMethod,
+			"flt-unaddressed: An Analysis", 0.00},
+		{"a method's claimed step", method, kb.RigorMethod,
+			"flt-claimed-step: continuous", 0.65},
+		{"a shared id under the statement table", statement, kb.RigorStatement,
+			"flt-overreach: continuous", 0.60},
+		{"the same id under the method table", method, kb.RigorMethod,
+			"flt-overreach: continuous", 0.60},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseAnswer(c.reply, c.text, c.table)
+			if err != nil {
+				t.Fatalf("ParseAnswer(%q): %v", c.reply, err)
+			}
+			if want := (kb.Bearing{Value: c.want}); got.Value != want {
+				t.Errorf("the value = %+v, want %+v", got.Value, want)
+			}
+		})
+	}
+}
+
 // TestParseAnswerRefusesMalformed: every reply the form does not read is
 // refused, naming the case and — where the case names them — the id and the
 // span, and nothing is recorded of it.
@@ -361,39 +440,39 @@ func TestParseAnswerRefusesMalformed(t *testing.T) {
 		reply string
 		want  []string
 	}{
-		{name: "a decimal", text: rigor, table: kb.RigorFaults, reply: "0.75", want: []string{"number", "0.75"}},
-		{name: "the pending literal as a value", text: rigor, table: kb.RigorFaults, reply: kb.PendingLiteral, want: []string{"number"}},
-		{name: "a percentage", text: rigor, table: kb.RigorFaults, reply: "75%", want: []string{"number"}},
-		{name: "a whole number", text: rigor, table: kb.RigorFaults, reply: "1", want: []string{"number"}},
-		{name: "a fraction", text: rigor, table: kb.RigorFaults, reply: "3/4", want: []string{"number"}},
-		{name: "an empty reply", text: rigor, table: kb.RigorFaults, reply: "", want: []string{"no answer"}},
-		{name: "whitespace only", text: rigor, table: kb.RigorFaults, reply: " \n\t\n ", want: []string{"no answer"}},
-		{name: "an id outside the set", text: rigor, table: kb.RigorFaults, reply: "flt-nonsense: A Claim",
-			want: []string{`"flt-nonsense"`, "allowed:", kb.FaultUnaddressed, kb.FaultPending}},
-		{name: "the other pass's id", text: rigor, table: kb.RigorFaults, reply: "flt-no-engagement: A Claim",
+		{name: "a decimal", text: rigor, table: kb.RigorStatement, reply: "0.75", want: []string{"number", "0.75"}},
+		{name: "the pending literal as a value", text: rigor, table: kb.RigorStatement, reply: kb.PendingLiteral, want: []string{"number"}},
+		{name: "a percentage", text: rigor, table: kb.RigorStatement, reply: "75%", want: []string{"number"}},
+		{name: "a whole number", text: rigor, table: kb.RigorStatement, reply: "1", want: []string{"number"}},
+		{name: "a fraction", text: rigor, table: kb.RigorStatement, reply: "3/4", want: []string{"number"}},
+		{name: "an empty reply", text: rigor, table: kb.RigorStatement, reply: "", want: []string{"no answer"}},
+		{name: "whitespace only", text: rigor, table: kb.RigorStatement, reply: " \n\t\n ", want: []string{"no answer"}},
+		{name: "an id outside the set", text: rigor, table: kb.RigorStatement, reply: "flt-nonsense: A Claim",
+			want: []string{`"flt-nonsense"`, "allowed:", kb.FaultUnderspecified, kb.FaultPending}},
+		{name: "the other pass's id", text: rigor, table: kb.RigorStatement, reply: "flt-no-engagement: A Claim",
 			want: []string{kb.FaultNoEngagement, "allowed:"}},
-		{name: "a line that is not a charge line", text: rigor, table: kb.RigorFaults, reply: "The text is fine.",
+		{name: "a line that is not a charge line", text: rigor, table: kb.RigorStatement, reply: "The text is fine.",
 			want: []string{"not a charge line", "The text is fine."}},
-		{name: "an id with no separator", text: rigor, table: kb.RigorFaults, reply: "flt-overreach",
+		{name: "an id with no separator", text: rigor, table: kb.RigorStatement, reply: "flt-overreach",
 			want: []string{kb.FaultOverreach, "carries no citation"}},
-		{name: "nothing after the colon", text: rigor, table: kb.RigorFaults, reply: "flt-overreach:",
+		{name: "nothing after the colon", text: rigor, table: kb.RigorStatement, reply: "flt-overreach:",
 			want: []string{"carries no citation", kb.FaultOverreach}},
-		{name: "pending with a colon and nothing", text: rigor, table: kb.RigorFaults, reply: kb.FaultPending + ":",
+		{name: "pending with a colon and nothing", text: rigor, table: kb.RigorStatement, reply: kb.FaultPending + ":",
 			want: []string{"carries no citation", kb.FaultPending}},
-		{name: "pending with a citation", text: rigor, table: kb.RigorFaults, reply: kb.FaultPending + ": A Claim",
+		{name: "pending with a citation", text: rigor, table: kb.RigorStatement, reply: kb.FaultPending + ": A Claim",
 			want: []string{kb.FaultPending, "takes no citation", `"A Claim"`}},
-		{name: "a citation not in the text", text: rigor, table: kb.RigorFaults, reply: "flt-overreach: the conclusion follows",
+		{name: "a citation not in the text", text: rigor, table: kb.RigorStatement, reply: "flt-overreach: the conclusion follows",
 			want: []string{kb.FaultOverreach, `"the conclusion follows"`, "not in the text"}},
-		{name: "a citation crossing a passage boundary", text: rigor, table: kb.RigorFaults,
+		{name: "a citation crossing a passage boundary", text: rigor, table: kb.RigorStatement,
 			reply: "flt-overreach: Claim The map", want: []string{"not in the text", `"Claim The map"`}},
 		{name: "a citation in the edge's context", text: bearing, table: kb.BearingFaults,
 			reply: "flt-transfer: a bridge neither text states", want: []string{"not in the text", "a bridge neither text states"}},
-		{name: "none beside a charge", text: rigor, table: kb.RigorFaults, reply: "none\nflt-overreach: A Claim",
+		{name: "none beside a charge", text: rigor, table: kb.RigorStatement, reply: "none\nflt-overreach: A Claim",
 			want: []string{"none", "beside other lines"}},
-		{name: "none beside nothing at all, twice", text: rigor, table: kb.RigorFaults, reply: "none\nnone",
+		{name: "none beside nothing at all, twice", text: rigor, table: kb.RigorStatement, reply: "none\nnone",
 			want: []string{"none", "beside other lines"}},
-		{name: "one id over overlapping spans", text: rigor, table: kb.RigorFaults,
-			reply: "flt-bare-measurement: The map is\nflt-bare-measurement: map is continuous",
+		{name: "one id over overlapping spans", text: rigor, table: kb.RigorStatement,
+			reply: "flt-underspecified: The map is\nflt-underspecified: map is continuous",
 			want:  []string{"overlap", `"The map is"`, `"map is continuous"`}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

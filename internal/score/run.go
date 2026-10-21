@@ -65,8 +65,9 @@ type Runner struct {
 	Index  *query.Index
 	Items  []query.Item
 	// Pass is the pass the run walks, one of query's two pass names. It decides
-	// what an item's call asks and what its charges are priced under, so the
-	// item's own shape chooses neither.
+	// what an item's call asks and what its charges are priced under, and a rigor
+	// run's item decides which of that pass's two classes it takes: no item is
+	// asked or priced as the other pass's subject.
 	Pass   string
 	Ask    Ask
 	Write  Write
@@ -97,8 +98,8 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if r.DryRun {
 		return Result{Outcome: result.Done, Counts: Counts{Total: len(r.Items), Remaining: len(r.Items)}}, nil
 	}
-	// The pass is read once, before the walk: every item of the run asks what it
-	// asks and prices under what it prices.
+	// The pass is read once, before the walk: it is every item of the run's
+	// classes, and an item only selects among them.
 	facts, err := passFactsOf(r.Pass)
 	if err != nil {
 		return Result{Outcome: result.Failed}, err
@@ -150,15 +151,20 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// attempt makes one item's pass: the closed text, the call it is sent as, and
-// either the charges the reply records — priced into the value that lands — or
-// the reason it records none. interrupted reports a context cancelled during the
-// call, which is the run's stop and not the item's outcome: the caller records
-// nothing for it.
+// attempt makes one item's pass: the item's class — the instruction its one call
+// carries and the table its reply is priced under, derived once — the closed text
+// the call is sent with, and either the charges the reply records or the reason it
+// records none. interrupted reports a context cancelled during the call, which is
+// the run's stop and not the item's outcome: the caller records nothing for it.
 func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, interrupted bool) {
 	e = Entry{Model: r.Model, Started: stamp()}
 	defer func() { e.Ended = stamp() }()
-	prompt, digest, closed, err := r.compose(it, facts, g)
+	cl, err := facts.classOf(it)
+	if err != nil {
+		e.Status, e.Reply = StatusFailed, err.Error()
+		return e, false
+	}
+	prompt, digest, closed, err := r.compose(it, cl, g)
 	if err != nil {
 		e.Status, e.Reply = StatusFailed, err.Error()
 		return e, false
@@ -172,7 +178,7 @@ func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g 
 		e.Status, e.Reply = StatusFailed, err.Error()
 		return e, false
 	}
-	answer, err := ParseAnswer(reply, closed, facts.table)
+	answer, err := ParseAnswer(reply, closed, cl.table)
 	if err != nil {
 		// A reply that is no answer fails the attempt: no charges, no judgement,
 		// and the record keeps the reason and not the text — a malformed reply is
@@ -195,26 +201,23 @@ func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g 
 // the closed text the prompt is made of — which a charge's citation is looked up
 // in. A text the guard refuses is composed of nothing and makes no call.
 //
-// The pass and the item's shape are one decision: a rigor run asks a node's text
-// and a bearing run an edge's, and an item the pass does not walk is refused
-// rather than rendered as the other pass's subject.
-func (r *Runner) compose(it query.Item, facts passFacts, g graph) (prompt, digest string, closed closedText, err error) {
-	switch {
-	case r.Pass == query.PassRigor && it.Node != nil:
-		closed, err = rigorText(r.Source, g, it.Node.ID)
-	case r.Pass == query.PassBearing && it.Edge != nil:
+// The item's class has already fixed which pass's subject it is, and the text is
+// the shape that class is judged on: a rigor class asks a node's text, a bearing
+// class an edge's.
+func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest string, closed closedText, err error) {
+	if cl.edge {
 		row, ok := r.Index.Edge(*it.Edge)
 		if !ok {
 			return "", "", closedText{}, fmt.Errorf("the index holds no %s edge %s → %s", it.Edge.Relation, it.Edge.Source, it.Edge.Target)
 		}
 		closed, err = bearingText(r.Source, g, row)
-	default:
-		return "", "", closedText{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), r.Pass)
+	} else {
+		closed, err = rigorText(r.Source, g, it.Node.ID)
 	}
 	if err != nil {
 		return "", "", closedText{}, err
 	}
-	if prompt, err = facts.ask(closed.text); err != nil {
+	if prompt, err = cl.ask(closed.text); err != nil {
 		return "", "", closedText{}, err
 	}
 	return prompt, digestOf(prompt), closed, nil

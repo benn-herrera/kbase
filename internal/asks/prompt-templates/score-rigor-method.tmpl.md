@@ -74,9 +74,9 @@ One line per occurrence, in this form:
 flt-claimed-step: Therefore the result holds
 ```
 
-An id from the list above, a colon, a space, and a span copied out of the node's own text. Charge
-every occurrence you can point at — not the worst one, and not one per kind. Two lines carrying one
-id need two spans that do not overlap.
+An id from the list above, a colon, a space, and a span copied out of the node's own text.
+
+@!score-answer-occurrences!@
 
 Copy the span exactly as the text writes it, out of the node's title or out of its statement: the
 span lies inside one passage and never crosses from the one to the other, and a span the text does
@@ -85,5 +85,4 @@ smallest span that carries the fault. A method fault's anchor is the step, the v
 the passage that carries the gap. Where the fault is an absence, cite the span that carries the
 obligation: the title that asserts, the marker that claims the step, the value reported.
 
-Where nothing is charged, reply `none` alone. Where there is nothing to judge, reply `flt-pending`
-alone.
+@!score-answer-close!@

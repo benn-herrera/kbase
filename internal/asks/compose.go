@@ -39,15 +39,30 @@ var (
 )
 
 // The composer-resolved fragments. A template splices one where its call
-// carries one, and System serves it whole as a call's system prompt: the score
-// asks splice ScoreSystem into their own text, the overview call carries
-// OverviewSystem. A decision call's Decision request has no system prompt.
+// carries one, and System serves a system one whole as a call's system prompt:
+// the score asks splice ScoreSystem into their own text, the overview call
+// carries OverviewSystem. A decision call's Decision request has no system
+// prompt.
 const (
 	OverviewSystem = "overview-system"
 	ScoreSystem    = "score-system"
 )
 
-var fragmentSlots = []string{OverviewSystem, ScoreSystem}
+// The answer section's text every score ask states alike: the occurrence rule
+// the parse enforces across one id's spans, and the two words a clean answer is.
+// A vocabulary's template splices these rather than restating them, so none can
+// drift from the parse or from its siblings.
+const (
+	scoreAnswerOccurrences = "score-answer-occurrences"
+	scoreAnswerClose       = "score-answer-close"
+)
+
+// fragmentSlots is every fragment a template splices; systemSlots is the subset
+// that is a call's system prompt.
+var (
+	fragmentSlots = []string{OverviewSystem, ScoreSystem, scoreAnswerOccurrences, scoreAnswerClose}
+	systemSlots   = []string{OverviewSystem, ScoreSystem}
+)
 
 // alternativeSlots are the caller-chosen pieces, per slot the choices a
 // caller may name; "" is the empty fill, where the slot's absence is itself
@@ -216,7 +231,7 @@ func render(load func(name string) (string, error), name string, slots, constant
 
 // System is the named fragment rendered whole: a call's system prompt.
 func System(name string) (string, error) {
-	if !slices.Contains(fragmentSlots, name) {
+	if !slices.Contains(systemSlots, name) {
 		return "", ComposeError{name, "no fragment of that name is a system prompt"}
 	}
 	return Render(fragmentFile(name), nil, nil, nil)

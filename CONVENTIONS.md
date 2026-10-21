@@ -208,10 +208,11 @@ single source. Working habits they impose:
   spelling. A surface that shows a value to a reader puts it at two decimals — a query result as the
   number, the trace on a `- strength:` line as the spelling — while `verify` quotes the record's
   spelling, because its message is about the record.
-- **A scoring-model fact lives once, in `internal/kb`.** The twelve fault ids, `flt-pending`, the word
-  `none`, each id's weight per occurrence and each pass's maximum live in `faults.go` and nowhere
-  else. A template names only the ids its pass accepts and carries no digit at all, and
-  `internal/asks` asserts both against `kb`: the `flt-…` tokens it names are exactly its pass's set,
+- **A scoring-model fact lives once, in `internal/kb`.** The fourteen fault ids, `flt-pending`, the
+  word `none`, each id's weight per occurrence and each table's maximum live in `faults.go` and
+  nowhere else — the statement table, the method table and the bearing one, which a node's class
+  selects among. A template names only the ids its class accepts and carries no digit at all, and
+  `internal/asks` asserts both against `kb`: the `flt-…` tokens it names are exactly its class's set,
   and its text holds no number — no weight, no maximum, no band. The trap: a weight in a template, or
   a second copy of the id list in the parser, which is a second home for a fact and drifts where the
   prompt does not.

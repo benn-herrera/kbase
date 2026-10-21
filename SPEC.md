@@ -728,21 +728,25 @@ on neither pass either, its rigor being `1.0` by rule; a `founds` edge is a bear
 other.
 
 **One item, one quantity, one call.** A call carries one node's text or one edge's — never two
-subjects, never the other pass's quantity. The text is closed to the subject: a node's title and
-statement, or an edge's two statements, its authored context and the target's passage; the register's
-own score and strength sections are never read. A text carrying a scoring token (`- rigor:`,
-`- strength:`, `(bearing …)`, `(strength …)`) is refused before the call, naming the document and
-line, and that item is `failed` with no call made.
+subjects, never the other pass's quantity. The item's class gates the instruction as it gates the ids:
+a claim is asked whether its statement is fixed, consistent and single-sensed, an analysis or an
+experiment whether its method establishes what it sets out to, and neither is asked the other's
+question. The text is closed to the subject: a node's title and statement, or an edge's two
+statements, its authored context and the target's passage; the register's own score and strength
+sections are never read. A text carrying a scoring token (`- rigor:`, `- strength:`, `(bearing …)`,
+`(strength …)`) is refused before the call, naming the document and line, and that item is `failed`
+with no call made.
 
 **The answer.** A reply is a list of charge lines, each one fault id and the span of the item's own
 text that shows the fault — one line per occurrence, in the order written — or the word `none`,
 alone, or `flt-pending`, alone.
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) states the criteria, the
-two closed sets and the citation rule; this section states what kbase does with a reply.
+three closed sets and the citation rule; this section states what kbase does with a reply.
 
-- **The ids are the pass's.** `rigor` accepts its six and `flt-pending`, `bearing` its six and
-  `flt-pending`, and nothing else; an id outside that set is `malformed`, the refusal naming the id
-  and the pass's ids as `allowed`.
+- **The ids are the item's class's.** `rigor` on a claim accepts the statement vocabulary's four,
+  `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its six, each
+  with `flt-pending` and nothing else; an id outside that set — the other rigor class's among them —
+  is `malformed`, the refusal naming the id and the call's ids as `allowed`.
 - **The citation is looked up in the text the call carried** — never in the register — by collapsed
   whitespace and folded case, whole within one passage: a node's `title` or `statement`, an edge's
   `source` or `target`. An edge's `## Context` is not citable. A span the two ends carry alike is
@@ -755,12 +759,13 @@ two closed sets and the citation rule; this section states what kbase does with 
   that overlap without coinciding is `malformed`, naming both lines; two ids on one span are both
   charged, the offset shared.
 
-**The value.** kbase prices the charge list: the pass's maximum — `0.95` for `rigor`, `1.00` for
-`bearing` — less each id's weight per occurrence, floored at zero and exact at two decimals, summed in
-integer hundredths. `none` is the empty list and reaches the maximum; `flt-pending` is `*pending*`
-whatever the table. The table is `internal/kb`'s and no template carries a weight, a maximum or a
-band: the ids and the criteria are the ask's, the price is kbase's, and nothing else is an input. A
-landing is therefore checkable against its own ledger line without asking a model.
+**The value.** kbase prices the charge list: the item's class's maximum — `0.95` under either rigor
+vocabulary, `1.00` for `bearing` — less each id's weight per occurrence under that class's table,
+floored at zero and exact at two decimals, summed in integer hundredths. `none` is the empty list and
+reaches the maximum; `flt-pending` is `*pending*` whatever the table. The tables are `internal/kb`'s
+and no template carries a weight, a maximum or a band: the ids and the criteria are the ask's, the
+price is kbase's, and nothing else is an input. A landing is therefore checkable against its own
+ledger line without asking a model.
 
 **A refused reply is a failed attempt.** A `malformed` reply writes nothing, and the attempt's line
 records `status: failed` and the reason — the case, and where it names one the id and the span — and
@@ -836,19 +841,24 @@ validation, never before. `faults` is `[]` for one reply alone, the word `none`;
 carries neither `faults` nor text. The state directory is `build`'s:
 `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
 
-**`ask_sha256` records the ask and gates nothing.** It is the digest of the pass's prompt rendered for
-an empty subject — every fixed byte of the instruction and nothing that varies with an item — so one
-digest certifies one instruction. `--resume RUN` continues a run: it refuses a ledger for another KB
-root, format or pass, skips every item the ledger records `done`, and re-asks the `failed` ones. A run
-resumed after an update continues and asks nothing about versions: one whose `ask_sha256` differs, or
+**`ask_sha256` records the ask set and gates nothing.** It is one digest over every instruction the
+pass can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
+statement instruction and then its method one, a bearing run's one — so every fixed byte of a run's
+instructions is certified and nothing that varies with an item is. Each ledger line carries its own
+item's prompt digest beside it, which is what names the variant that judged that item. A header
+written before the rigor pair carries one render's digest and is read as the one ask that run began
+under. `--resume RUN` continues a run: it refuses a ledger for another KB root, format or pass, skips
+every item the ledger records `done`, and re-asks the `failed` ones. A run resumed after an update
+continues and asks nothing about versions: one whose `ask_sha256` differs, or
 which carries none as every run written before the field existed does, is asked under the running
-template's ask, and the header keeps the digest the run began under. Where the running table prices a
-landed line's recorded ids differently, the resume re-derives it, lands the moved value through the
-same write path a landing uses — before the line records it — and leaves `repriced.yaml` in the run's
-directory naming each line that moved, the value it held and the value it took. An id the running
-table no longer holds charges nothing, so a re-price can move a value up. A re-derivation that
-moves nothing records nothing and lands nothing. A run given no `--resume` is a new run that asks
-everything: a value already in the KB is not evidence about the one this run would judge.
+template's ask, and the header keeps the digest the run began under. Where the running table for a
+landed line's class prices its recorded ids differently, the resume re-derives it, lands the moved
+value through the same write path a landing uses — before the line records it — and leaves
+`repriced.yaml` in the run's directory naming each line that moved, the value it held and the value it
+took. An id that line's class's table no longer holds charges nothing, so a re-price can move a value
+up. A re-derivation that moves nothing records nothing and lands nothing. A run given no `--resume`
+is a new run that asks everything: a value already in the KB is not evidence about the one this run
+would judge.
 
 **The run lock.** A run holds `<state-dir>/score` for its length and does not wait: a second run is
 `retry`, `check: lock`, `path` that directory.

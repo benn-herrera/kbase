@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestFaultTablesAreTheSchemes: the two closed sets, their weights and their
-// maxima are the scheme's — six ids each in walk order, the pending id shared,
-// and nothing else either pass accepts.
+// TestFaultTablesAreTheSchemes: the three closed sets, their weights and their
+// maxima are the scheme's — each in walk order, the pending id shared by all
+// three and named by none, and nothing else any of them accepts.
 func TestFaultTablesAreTheSchemes(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -17,7 +17,9 @@ func TestFaultTablesAreTheSchemes(t *testing.T) {
 		ids     []string
 		maximum float64
 	}{
-		{"rigor", RigorFaults, []string{
+		{"statement", RigorStatement, []string{
+			FaultContradiction, FaultOverreach, FaultEquivocation, FaultUnderspecified, FaultPending}, 0.95},
+		{"method", RigorMethod, []string{
 			FaultUnaddressed, FaultContradiction, FaultOverreach,
 			FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement, FaultPending}, 0.95},
 		{"bearing", BearingFaults, []string{
@@ -41,22 +43,48 @@ func TestFaultTablesAreTheSchemes(t *testing.T) {
 			}
 		})
 	}
-	// The sets are disjoint but for the pending id: an id names one fault
-	// wherever it appears.
-	for _, id := range RigorFaults.IDs() {
-		if id != FaultPending && BearingFaults.Accepts(id) {
-			t.Errorf("%s is in both passes' sets", id)
+}
+
+// TestFaultIDsNameOneFaultEach: the bearing set is disjoint from both rigor sets,
+// the two rigor sets meet in the two ids that name one fault at different
+// subjects, and each of those carries one weight — so a ledger line's price does
+// not depend on which rigor vocabulary read it.
+func TestFaultIDsNameOneFaultEach(t *testing.T) {
+	var shared []string
+	for _, id := range RigorStatement.IDs() {
+		if id == FaultPending {
+			continue
+		}
+		if !RigorMethod.Accepts(id) {
+			continue
+		}
+		shared = append(shared, id)
+		if w, other := weightOf(RigorStatement, id), weightOf(RigorMethod, id); w != other {
+			t.Errorf("%s weighs %d in the statement table and %d in the method one", id, w, other)
 		}
 	}
-	for _, id := range BearingFaults.IDs() {
-		if id != FaultPending && RigorFaults.Accepts(id) {
-			t.Errorf("%s is in both passes' sets", id)
+	if want := []string{FaultContradiction, FaultOverreach}; !slices.Equal(shared, want) {
+		t.Errorf("the rigor vocabularies share %v, want %v", shared, want)
+	}
+	for _, id := range append(RigorStatement.IDs(), RigorMethod.IDs()...) {
+		if id != FaultPending && BearingFaults.Accepts(id) {
+			t.Errorf("%s is in a rigor set and the bearing set", id)
 		}
 	}
 }
 
+// weightOf is id's weight in table, and zero where the table does not hold it.
+func weightOf(table FaultTable, id string) int {
+	for _, f := range table.faults {
+		if f.id == id {
+			return f.weight
+		}
+	}
+	return 0
+}
+
 // TestFaultPricesAreTheSchemes: each weight charges per occurrence, the sum is
-// floored at zero, and every value is a multiple of 0.05 — the table's own
+// floored at zero, and every value is a multiple of 0.05 — each table's own
 // arithmetic, on the charge lists the scheme tabulates.
 func TestFaultPricesAreTheSchemes(t *testing.T) {
 	for _, c := range []struct {
@@ -65,18 +93,33 @@ func TestFaultPricesAreTheSchemes(t *testing.T) {
 		ids   []string
 		want  float64
 	}{
-		{"one gap", RigorFaults, []string{FaultClaimedStep}, 0.65},
-		{"one overreach", RigorFaults, []string{FaultOverreach}, 0.60},
-		{"one contradiction", RigorFaults, []string{FaultContradiction}, 0.50},
-		{"two gaps", RigorFaults, []string{FaultClaimedStep, FaultBareMeasurement}, 0.35},
-		{"a gap and an overreach", RigorFaults, []string{FaultUnstatedPremise, FaultOverreach}, 0.30},
-		{"two overreaches", RigorFaults, []string{FaultOverreach, FaultOverreach}, 0.25},
-		{"a gap and a contradiction", RigorFaults, []string{FaultBareMeasurement, FaultContradiction}, 0.20},
-		{"an overreach and a contradiction", RigorFaults, []string{FaultOverreach, FaultContradiction}, 0.15},
-		{"three gaps", RigorFaults, []string{FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement}, 0.05},
-		{"two contradictions", RigorFaults, []string{FaultContradiction, FaultContradiction}, 0.05},
-		{"the unaddressed text", RigorFaults, []string{FaultUnaddressed}, 0.00},
-		{"a sum past the maximum", RigorFaults, []string{FaultUnaddressed, FaultOverreach}, 0.00},
+		{"a bare statement", RigorStatement, nil, 0.95},
+		{"one underspecification", RigorStatement, []string{FaultUnderspecified}, 0.90},
+		{"two underspecifications", RigorStatement, []string{FaultUnderspecified, FaultUnderspecified}, 0.85},
+		{"one equivocation", RigorStatement, []string{FaultEquivocation}, 0.70},
+		{"one statement overreach", RigorStatement, []string{FaultOverreach}, 0.60},
+		{"one statement contradiction", RigorStatement, []string{FaultContradiction}, 0.50},
+		{"a contradiction and an underspecification", RigorStatement, []string{FaultContradiction, FaultUnderspecified}, 0.45},
+		{"two equivocations", RigorStatement, []string{FaultEquivocation, FaultEquivocation}, 0.45},
+		{"an equivocation and an overreach", RigorStatement, []string{FaultEquivocation, FaultOverreach}, 0.35},
+		{"two statement overreaches", RigorStatement, []string{FaultOverreach, FaultOverreach}, 0.25},
+		{"an overreach and a contradiction", RigorStatement, []string{FaultOverreach, FaultContradiction}, 0.15},
+		{"two statement contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction}, 0.05},
+		{"three contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction, FaultContradiction}, 0.00},
+
+		{"no method charge", RigorMethod, nil, 0.95},
+		{"one gap", RigorMethod, []string{FaultClaimedStep}, 0.65},
+		{"one method overreach", RigorMethod, []string{FaultOverreach}, 0.60},
+		{"one method contradiction", RigorMethod, []string{FaultContradiction}, 0.50},
+		{"two gaps", RigorMethod, []string{FaultClaimedStep, FaultBareMeasurement}, 0.35},
+		{"a gap and an overreach", RigorMethod, []string{FaultUnstatedPremise, FaultOverreach}, 0.30},
+		{"two method overreaches", RigorMethod, []string{FaultOverreach, FaultOverreach}, 0.25},
+		{"a gap and a contradiction", RigorMethod, []string{FaultBareMeasurement, FaultContradiction}, 0.20},
+		{"three gaps", RigorMethod, []string{FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement}, 0.05},
+		{"two method contradictions", RigorMethod, []string{FaultContradiction, FaultContradiction}, 0.05},
+		{"the unaddressed text", RigorMethod, []string{FaultUnaddressed}, 0.00},
+		{"a method sum past the maximum", RigorMethod, []string{FaultUnaddressed, FaultOverreach}, 0.00},
+
 		{"one step weight", BearingFaults, []string{FaultTransfer}, 0.65},
 		{"one half weight", BearingFaults, []string{FaultPartial}, 0.50},
 		{"two step weights", BearingFaults, []string{FaultTransfer, FaultConditional}, 0.30},
@@ -93,41 +136,48 @@ func TestFaultPricesAreTheSchemes(t *testing.T) {
 }
 
 // TestFaultPriceReachesOnlyTheSchemesValues: enumerating every charge list up to
-// one charge per id reaches exactly the scheme's eleven rigor values over
-// [0, 0.95] and its six bearing values, and nothing else. A rigor value off that
-// list is a defect of a landing, not a judgement.
+// one charge per id reaches exactly the statement vocabulary's twenty multiples
+// of 0.05, the method vocabulary's eleven values and bearing's six, and nothing
+// else. A statement value is checked by the table's arithmetic rather than
+// membership in a short list, because underspecification stacks; a method value
+// off its eleven is a defect of a landing, not a judgement.
 func TestFaultPriceReachesOnlyTheSchemesValues(t *testing.T) {
+	var statement []float64
+	for i := 0; i <= 19; i++ {
+		statement = append(statement, float64(i)/20)
+	}
 	for _, c := range []struct {
 		name   string
 		table  FaultTable
 		values []float64
 	}{
-		{"rigor", RigorFaults, []float64{0.00, 0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.60, 0.65, 0.95}},
+		{"statement", RigorStatement, statement},
+		{"method", RigorMethod, []float64{0.00, 0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.60, 0.65, 0.95}},
 		{"bearing", BearingFaults, []float64{0.00, 0.15, 0.30, 0.50, 0.65, 1.00}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// Every charge list up to the length at which the heaviest count
 			// saturates the table. A weight is charged per occurrence, so one id
-			// may be charged more than once, and the walk carries every list the
-			// table prices.
+			// may be charged more than once; the sum depends on the multiset
+			// alone, so the walk takes each multiset once, ids non-decreasing.
 			longest := 1
 			for _, f := range c.table.faults {
 				longest = max(longest, (c.table.maximum+f.weight-1)/f.weight)
 			}
 			values := map[float64]bool{}
-			var walk func(ids []string, left int)
-			walk = func(ids []string, left int) {
+			var walk func(ids []string, left, from int)
+			walk = func(ids []string, left, from int) {
 				if got := c.table.Price(ids); !got.Pending {
 					values[got.Value] = true
 				}
 				if left == 0 {
 					return
 				}
-				for _, f := range c.table.faults {
-					walk(append(slices.Clone(ids), f.id), left-1)
+				for i := from; i < len(c.table.faults); i++ {
+					walk(append(slices.Clone(ids), c.table.faults[i].id), left-1, i)
 				}
 			}
-			walk(nil, longest)
+			walk(nil, longest, 0)
 			got := slices.Sorted(maps.Keys(values))
 			if !slices.Equal(got, c.values) {
 				t.Errorf("the table reaches %v, want exactly %v", got, c.values)

@@ -519,20 +519,22 @@ own: every input to the skeleton is kbase's, so a red verify over it is a kbase 
 
 `kbase score` is SPEC §8's; this states the mechanism. Five packages and the verb carry it:
 `internal/score` (the runner, the closed text and its passages, the parse, the run's ledger),
-`internal/kb` (the fault vocabulary, the two weight tables and the price), `internal/asks` (the two
-templates and the check that they name their pass's ids), `internal/query` (the set),
+`internal/kb` (the fault vocabulary, the three weight tables and the price), `internal/asks` (the
+three templates and the check that they name their class's ids), `internal/query` (the set),
 `internal/statedir` (the state directory) and `cmd/score.go`.
 
 **The runner.** `score.Runner` owns the loop and no I/O of its own. It takes the enumerated items, an
 `Ask` seam, a `Write` seam, the ledger, the model name the lines record, `Limit`, `DryRun` and a
 logger — and, because the text is composed in that package, the `kb.Source` and `query.Index` the
-renderers read. Per item it composes the closed text, asks, parses the reply as the charges it
-records against that text, prices them, writes and appends `done`; a text the guard refuses, a reply
-the parse refuses, or a call or write that fails appends `failed` with nothing written, and the loop
-continues. Items are walked one at a time, in the set's order, with no concurrency. `Counts` is
-computed from the ledger's last status per item, not this invocation's attempts, so a resumed run
-reports the whole run. A cancelled context stops before the next ask and records nothing for the item
-in flight.
+renderers read. The pass is read once before the walk into its `class`es; per item one derivation of
+the item's class yields the instruction its one call carries and the table its charges are priced
+under, and the composer, the parse's closed set and the price all read that one fact. Per item it
+composes the closed text, asks, parses the reply as the charges it records against that text, prices
+them, writes and appends `done`; a text the guard refuses, a reply the parse refuses, or a call or
+write that fails appends `failed` with nothing written, and the loop continues. Items are walked one
+at a time, in the set's order, with no concurrency. `Counts` is computed from the ledger's last status
+per item, not this invocation's attempts, so a resumed run reports the whole run. A cancelled context
+stops before the next ask and records nothing for the item in flight.
 
 **The two back ends are one seam.** The runner's `Ask` takes the rendered prompt whole and returns
 the reply, so the runner has no view of a provider and none of a harness: `internal/score` imports
@@ -542,16 +544,21 @@ system prompt, or `(*harness.Command).Ask` on the profile's argv — and the run
 which. Each score template splices the `score-system` fragment into its own text, so the instruction
 is carried once, in the user turn.
 
-**The prompt shelf.** Two templates, `score-rigor.tmpl.md` and `score-bearing.tmpl.md`, each with the
-one `dyn.` slot the runner fills with the assembled text, and one shared fragment,
-`fragments/score-system.tmpl.md`, registered in `fragmentSlots`; `asks.ScoreRigor` and
-`asks.ScoreBearing` render them through `asks.Render`. Provenance is the shelf's rule: embedded in
-the binary, written by kbase, no upstream origin and no version pin to drift. The templates carry the
-criteria and the line form; they carry no id the pass does not accept, no weight, no maximum, no band
+**The prompt shelf.** Three templates, one per class — `score-rigor-statement.tmpl.md`,
+`score-rigor-method.tmpl.md` and `score-bearing.tmpl.md` — each with the one `dyn.` slot the runner
+fills with the assembled text, and three shared fragments in `fragmentSlots`:
+`fragments/score-system.tmpl.md`, the system prompt, and `score-answer-occurrences` and
+`score-answer-close`, the answer section's text all three state alike, so no vocabulary can drift from
+the parse or from its siblings. `asks.ScoreRigorStatement`, `asks.ScoreRigorMethod` and
+`asks.ScoreBearing` render them through `asks.Render`; `asks.System` serves the system fragments alone
+(`systemSlots`), never an answer fragment as a prompt. Provenance is the shelf's rule: embedded in the
+binary, written by kbase, no upstream origin and no version pin to drift. The templates carry the
+criteria and the line form; they carry no id the class does not accept, no weight, no maximum, no band
 and no number — the price is `kb`'s and one fact lives once. A test asserts each template declares
-one `dyn.` slot, fills it with the text the runner composed, splices the shared fragment, and names
-exactly its pass's ids (`flt-[a-z0-9-]+` tokens against `kb.RigorFaults.IDs()` /
-`kb.BearingFaults.IDs()`); the shelf's `asks.Lint` covers both files as it does every template.
+one `dyn.` slot, fills it with the text the runner composed, splices the shared fragments, names
+exactly its class's ids (`flt-[a-z0-9-]+` tokens against `kb.RigorStatement.IDs()`,
+`kb.RigorMethod.IDs()` or `kb.BearingFaults.IDs()`), and holds the instruction fixed around a subject
+of any size; the shelf's `asks.Lint` covers every file as it does every template.
 
 **The closed text and its guard.** `internal/score/text.go`'s two unexported renderers assemble every
 character a call may see. `rigorText` renders a node's title and its statement: a claim's statement
@@ -578,15 +585,15 @@ out-of-scope subject is refused by name and type — a `wrk-` or `axm-` id on `r
 of the passages it is made of*, because a charge's `passage` and its `offset` are facts about that
 text: a `rigor` call's two passages are a node's `title` and `statement`, a `bearing` call's are the
 `source`'s and the `target`'s. `score.ParseAnswer` (`internal/score/answer.go`) reads a reply against
-them and the pass's `kb.FaultTable`: a charge line is looked up by collapsed whitespace and folded
-case, **one passage at a time**, so a span crossing from one to another is unfound and `malformed`,
-and the edge's `## Context` — assembled but not a passage — is citable by no charge. A span the two
-passages carry alike records `both` at its earlier match. The read yields `Answer{Faults, Moot,
-Value}`: the charges, the charge lines a `flt-pending` made moot, and the price `kb` gives the ids.
-Duplicate and overlap collapsing is the parse's; the ids the ledger records are the whole input of
-the price, which is what makes a landing checkable and a run re-scorable without a model. The
-context stays in the assembled text because the ask judges an edge on it; the parse merely refuses to
-anchor a charge there.
+them and the item's class's `kb.FaultTable`: a charge line is looked up by collapsed whitespace and
+folded case, **one passage at a time**, so a span crossing from one to another is unfound and
+`malformed`, and the edge's `## Context` — assembled but not a passage — is citable by no charge. A
+span the two passages carry alike records `both` at its earlier match. The read yields
+`Answer{Faults, Moot, Value}`: the charges, the charge lines a `flt-pending` made moot, and the price
+`kb` gives the ids. Duplicate and overlap collapsing is the parse's; the ids the ledger records are
+the whole input of the price, which is what makes a landing checkable and a run re-scorable without a
+model. The context stays in the assembled text because the ask judges an edge on it; the parse merely
+refuses to anchor a charge there.
 
 **The scoring set.** `query.ScoringSet(ix, pass)` reads the loaded index in-package and returns
 `[]query.Item`, each carrying a `ScoringNode` or a `ScoringEdge` and never both, in the walk's order;
@@ -612,11 +619,14 @@ nowhere; `[]` is written for one reply alone, the word `none`, so an empty list 
 model's positive statement that it found no fault. A failed attempt carries neither, and no text:
 its `reply` is the reason. `backend`, and under a harness `harness` and `harness_layer`, sit on every
 line, because a resumed or mixed run's lines must say what answered each item. `Create` also stamps
-`ask_sha256`, from the header's `Pass`, as it stamps the format — one site, so no caller can open a
-run without the ask its judgements answer, and a render that fails is a defect of the build rather
-than a run written with no digest. `Resume` reads the header's digest and compares nothing against
-it: the digest is a record of which instruction answered which judgement, and an update applies its
-behaviour. `reprice` (below) is `Resume`'s other half.
+`ask_sha256`, from the header's `Pass`, as it stamps the format — one digest over every instruction
+that pass can send, each rendered for an empty subject and concatenated in a fixed order, so a rigor
+run's two variants are covered by the one field and an update to either moves it. It is stamped at
+one site, so no caller can open a run without the ask its judgements answer, and a render that fails
+is a defect of the build rather than a run written with no digest. `Resume` reads the header's digest
+and compares nothing against it: the digest is a record of which instruction answered which judgement,
+and an update applies its behaviour. A header written before the rigor pair carries one render's
+digest, and is read as the one ask that run began under. `reprice` (below) is `Resume`'s other half.
 
 The state directory is `internal/statedir.Dir`'s — the override,
 else `$XDG_STATE_HOME/kbase/<key>`, and never inside `kb-root/` — extracted from
@@ -635,8 +645,9 @@ runs) and the run goes on. The verb refreshes once after the loop where anything
 values are published by that one refresh and no refresh rewrites the KB per item.
 
 **The re-price.** `Resume` takes the same `Write` seam a landing is opened with, and `reprice`
-re-derives every landed line's value from the ids its line records, under the running pass's
-`kb.FaultTable`. A value the running table gives differently is landed through that seam first —
+re-derives every landed line's value from the ids its line records, under the table the line's own
+class holds — a run landed under one rigor table re-prices under the class table, which is intended.
+A value the running table gives differently is landed through that seam first —
 `set-rigor`/`set-bearing`, under the KB lock as a landing holds it — and the line records it after,
 so no line claims a value the KB did not take: a refused write fails the resume with the ledger as it
 stood, and the next resume re-derives the same move, the write being idempotent. Each moved line is
