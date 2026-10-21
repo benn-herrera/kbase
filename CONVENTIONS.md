@@ -280,8 +280,8 @@ file is one power-cycle from gone.
   becomes the active plan, is finished, or is abandoned. A plan there cites only tracked paths.
 - **A plan may name a normative page outside the contract documents, and that page outranks the
   plan.** The contract documents are THESIS.md, SPEC.md, ARCHITECTURE.md and CONVENTIONS.md. A plan
-  may make a page of its own subject normative — as `PLAN_4_INFERENCE.md` does with
-  `RIGOR_AND_BEARING_SCORING_SCHEME.md`, which states the scoring rubric the contract cites — and on
+  may make a page of its own subject normative — `RIGOR_AND_BEARING_SCORING_SCHEME.md` is such a
+  page, stating the scoring rubric the contract cites — and on
   that subject the page is the requirement while the plan is the route. Where a plan row and the
   page disagree, the work implements the page and the plan's line is reported as moved, in the
   commit that lands it; the page is not edited by the landing, and the contract documents cite it

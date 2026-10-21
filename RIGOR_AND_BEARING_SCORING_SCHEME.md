@@ -459,3 +459,9 @@ longer take apart.
 - Whether `0.95` is a discipline of the table alone, or `set-rigor` refuses `1.0` for a claim, an
   analysis and an experiment — and what becomes of the `rigor: 1.0` a conversion writes on every
   experiment.
+- Whether the parse's split is frozen as stated: a one-character floor on a citation, `flt-pending`
+  beside charges read as the judgement with the rest moot, `none` beside charges refused, and one id
+  over overlapping-but-not-identical spans refused.
+- How a change to the table's numbers is decided and announced. A run records the ask, not the table,
+  so a weight change re-prices silently and is visible only in the values it moves; whether that is
+  enough, and who decides a change, is not stated here.

@@ -1,28 +1,25 @@
 # ACTIVE PLAN
 
-**Scope.** The `2.0.0` format (Phase 1) and the scoring loop (Phase 2) are landed. The next landing
-is **Phase 4, the inference asking rework**: how kbase names a model, resolves it to an endpoint, and
-what it asks it through. Phase 3 — the two external hand-offs that consume the format — stands
-beside it, owned elsewhere and landing nothing here.
+**Scope.** Phases 1, 2 and 4 are landed and merged: the `2.0.0` format, the scoring loop, and the
+inference asking rework with the rigour-and-bearing rubric. **Phase 3** — the two external hand-offs
+that consume the format — is what remains, owned elsewhere and landing nothing here.
 
-Phase 4 is planned in two steps. The **design is its first work item**: it settles the endpoint
-resolution, the client lifecycle, the per-role model references, the `scoring` role, the two
-scoring-time flags and the harness back end, and names the work packages afterward. Nothing in Phase 4
-is coded before that design is written and gets its prompt-engineer review — a design is not the
-subject of an intersprint review. The intersprint review follows this rework's landing and covers the
-scoring driver sprint as a whole.
+The scoring driver sprint merged to `main` as one squashed commit; the branches are kept locally, so
+no history was lost. Its plans are retired and git holds them. `RIGOR_AND_BEARING_SCORING_SCHEME.md`
+remains the normative page on its subject: the fault vocabulary, the table, the answer and the ledger.
 
 ## Plan documents
 
 | Phase | Document | Lands | Depends on | Status |
 |---|---|---|---|---|
-| 1 | — | one commit series, merged once | — | **landed**, one squashed commit `07bf4c6` on `main` |
-| 2 | — | one commit series, merged once | Phase 1 | **landed** on `kb-score`, WP1–WP8 and the contract fixes, plus the `test-data/` rename; `just checkpoint` green. **The merge waits on the intersprint review**, which follows Phase 4's landing and covers the scoring driver sprint. |
-| 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2 | ready: both phases are landed; external owners |
-| 4 | [`PLAN_4_INFERENCE.md`](PLAN_4_INFERENCE.md) | one commit series, merged once | Phase 2 landed | **landed** on `kb-score`: `WP1` resolution and the registry, `WP2` the scoring role and the flags, `WP3` the harness back end, `WP4` the rigour-and-bearing rubric — charge lines priced by kbase ([scheme](RIGOR_AND_BEARING_SCORING_SCHEME.md), [design](RIGOR_AND_BEARING_SCORING_DESIGN.md)) — and `WP5` the contract text; **the merge waits on the intersprint review** over the scoring driver sprint |
+| 1 | — | one commit series, merged once | — | **merged**, one squashed commit `07bf4c6` |
+| 2 | — | one commit series, merged once | Phase 1 | **merged** in `65e9b78`: the scoring loop, WP1–WP8, the contract fixes and the `test-data/` rename |
+| 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2, 4 | ready: the consuming formats are landed; external owners |
+| 4 | — | one commit series, merged once | Phase 2 | **merged** in `65e9b78`: resolution and the registry, the `scoring` role and its flags, the harness back end, the rubric's charge-line answer, and the contract text |
 
-`PLAN_2_SCORE.md` is retired with Phase 2 landed; its open issues are carried in this document, and
-git holds the record of what it said. Phase 1's plan was retired the same way.
+`PLAN_1_FORMAT.md`, `PLAN_2_SCORE.md`, `PLAN_4_INFERENCE.md`, `RIGOR_AND_BEARING_SCORING_DESIGN.md`
+and `REVIEW_BURNDOWN.md` are retired. What the rubric's design left open is the scheme's
+`## Not settled`; what the landings left open is carried below.
 
 [`STRENGTH_SCORING_SCHEME.md`](STRENGTH_SCORING_SCHEME.md) states the scoring model — the three
 quantities, the four relations and the walk's arithmetic. The format is [SPEC.md](SPEC.md) §10, the
