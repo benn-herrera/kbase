@@ -186,6 +186,250 @@ Change one bearing and the graph answers differently:
 - every premise excluded (C2, W and S1 all pending) → `P(C1)` is empty and `D(C1) = 0`, so
   `max(D, L) = 0.48` is the lift's product alone; the cap still holds C1 at `0.40`.
 
+## Worked examples: one input set, six shapes
+
+The example above is the diagram's own fragment, so its figures are the diagram's and move with it. This
+set holds the inputs still instead: the same values are authored on every node in every case, and the only
+thing that varies is which edges exist. Nothing requires a KB to author the same values everywhere — the repetition
+is the exercise's, not the format's — and it is what lets each relation be read against the same operands.
+
+| authored input | value | the table it comes from |
+|---|---|---|
+| a work's `rigor` | `0.60` | method vocabulary, one `flt-overreach` |
+| a claim's `rigor` | `0.95` | statement vocabulary, no charge — the table's maximum |
+| an analysis's `rigor` | `0.95` | method vocabulary, no charge — the table's maximum |
+| an experiment's `rigor` | `0.95` | method vocabulary, no charge — the table's maximum |
+| `founds` `bearing` | `1.00` | bearing vocabulary, no charge |
+| `supports` `bearing` | `0.50` | one of `flt-referent`, `flt-partial`, `flt-narrower` |
+| `lifts` `bearing` | `1.00` | bearing vocabulary, no charge |
+| `refutes` `bearing` | `1.00` | bearing vocabulary, no charge |
+
+Every one of these is a value its table reaches, not merely a multiple of `0.05`: the method vocabulary
+reaches eleven of the range's twenty steps and `0.60` is one of them, and the bearing vocabulary reaches
+six — `1.00`, `0.65`, `0.50`, `0.30`, `0.15`, `0.00`
+([RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md), "The method table", "The
+bearing values"). Three of the four bearings are `1.00`, a link with no bearing charge, and those
+contributions are their sources' own values: the sources are what this set holds still. The exception is
+the supporting edge's `0.50` — one bearing fault, `flt-referent`, `flt-partial` or `flt-narrower`, a claim
+speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly moves a
+number.
+
+The four products, one per relation, are therefore:
+
+```
+founds      1.00 x a work's rigor 0.60         = 0.60
+supports    0.50 x a claim's strength 0.60     = 0.30
+lifts       1.00 x an experiment's rigor 0.95  = 0.95
+refutes     cap = 1 - (1.00 x a claim's strength 0.60) = 0.40
+```
+
+The refuter there is a claim like any other: its own strength is `0.60` once the work founds it, and the
+cap multiplies that `0.60` — not the work's rigor.
+
+Bands are `kb.BuildBandLadder`'s, each threshold an inclusive lower bound:
+
+| band | at or above |
+|---|---|
+| `ok-to-build` | `0.85` |
+| `ok-with-caveats` | `0.65` |
+| `input-only` | `0.45` |
+| `do-not-build` | `0.20` |
+| `unsubstantiated` | `0.00` |
+
+Every figure below is exact at two decimals. The record trims a trailing zero — `0.60` is written
+`- strength: 0.6`, `0.30` is `0.3` — while a query and the trace print the two decimals written here.
+
+### 1. A chain: a work founds a claim, the claim supports another
+
+```
+  W  --founds 1.00--> C2  --supports 0.50--> C1
+ 0.60                 0.95                   0.95
+```
+
+```
+founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
+D(C2)                 min(rigor 0.95, W 0.60) = 0.60
+σ(C2)                 min(max(0.60, −∞), +∞) = 0.60
+supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
+D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
+σ(C1)                 min(max(0.30, −∞), +∞) = 0.30
+```
+
+`σ(C1) = 0.30`, band `do-not-build`. At neither node does the `0.95` bind — a rigor caps what the premises
+establish, and at both nodes the premise is the lower operand — while the second hop costs exactly the
+bearing: `0.60` in, `0.30` out. The work is cited at full relevance and `σ(C2)` carries its `0.60`
+unchanged; what puts C1 under the `0.45` cut is the link it stands on, not the work.
+
+### 2. A lift over a weak base
+
+```
+  W  --founds 1.00--> C2  --supports 0.50--> C1
+ 0.60                 0.95                   0.95
+  E  --lifts 1.00-------------------------> C1
+ 0.95   (run)
+```
+
+```
+founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
+supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
+D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
+lifts      E  -> C1   bearing 1.00 x strength 0.95 = 0.95
+L(C1)                 max{ E 0.95 } = 0.95
+C(C1)                 none — no refute edge, so +∞
+σ(C1)                 min(max(0.30, 0.95), +∞) = 0.95
+```
+
+`σ(C1) = 0.95`, band `ok-to-build`. `D(C1)` is case 1's `0.30`, untouched: a lift is not a premise and
+does not enter the min, so the derivation still says the node stands on `0.30`. What `max` does is stand
+the lift's `0.95` beside that derivation and keep the larger — the only station in the walk that can raise
+a value, and here it carries the node from `do-not-build` to `ok-to-build`, three rungs. Take the edge away
+and this is case 1 exactly; that is the case the station exists for.
+
+### 3. A refutation caps — and sometimes does not
+
+One refuter serves both readings: a claim `R` at `rigor 0.95`, founded by the same work, so
+`σ(R) = min(0.95, 1.00 × 0.60) = 0.60`, refuting at `bearing 1.00`. The cap is `0.40` in both.
+
+Binding:
+
+```
+founds     W  -> R    bearing 1.00 x strength 0.60 = 0.60
+D(R)                  min(rigor 0.95, W 0.60) = 0.60
+σ(R)                  min(max(0.60, −∞), +∞) = 0.60
+founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
+D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+lifts                 none, so −∞
+refutes    R  -> C1   cap = 1 - (bearing 1.00 x strength 0.60) = 0.40
+C(C1)                 min{ R 0.40 } = 0.40
+σ(C1)                 min(max(0.60, −∞), 0.40) = 0.40
+```
+
+`σ(C1) = 0.40`, band `do-not-build`. Its base alone was `0.60`, `input-only`: the cap costs the band as
+well as the number, and it is the only station that can put a node below both its derivation and its lift.
+
+Not binding:
+
+```
+founds     W  -> R    bearing 1.00 x strength 0.60 = 0.60; σ(R) = 0.60
+founds     W  -> C2   bearing 1.00 x strength 0.60 = 0.60
+D(C2)                 min(rigor 0.95, W 0.60) = 0.60
+supports   C2 -> C1   bearing 0.50 x strength 0.60 = 0.30
+D(C1)                 min(rigor 0.95, C2 0.30) = 0.30
+refutes    R  -> C1   cap = 1 - (bearing 1.00 x strength 0.60) = 0.40
+C(C1)                 min{ R 0.40 } = 0.40
+σ(C1)                 min(max(0.30, −∞), 0.40) = 0.30
+```
+
+`σ(C1) = 0.30`, band `do-not-build` — case 1's node with an attack on it. The cap participates, is at full
+bearing and full strength, and is not the binding term: `min(0.30, 0.40)` is the premise's number. A
+refutation can be worth a great deal and change nothing, because a cap is a ceiling and this node was
+already under it.
+
+### 4. A claim nothing supports
+
+```
+  C1   rigor 0.95, strength 0.00   — no incoming scoring edge
+```
+
+```
+P(C1)                 empty — no supports edge and no founds edge
+D(C1)                 0
+L(C1)                 −∞      (no lift edge)
+C(C1)                 +∞      (no refute edge)
+σ(C1)                 min(max(0, −∞), +∞) = 0.00
+```
+
+`σ(C1) = 0.00`, band `unsubstantiated`; the record writes `- strength: 0`. Its statement is at the
+vocabulary's maximum — `0.95`, no fault charged: fixed, consistent, single-sensed and fully specified —
+and that number is nowhere in the arithmetic. `r(n)` caps what a premise set establishes and is not a
+premise, and `P(C1)` is empty, so there is nothing for the cap to cap. What the node proves is what its
+text says, and nothing about whether anything carries it: no improvement to the statement could move this
+`0`, and only an edge can.
+
+### 5. Pending: a pending node, and a pending edge
+
+The three states below are the Pending section's, in arithmetic. Two of them are the pair a reader
+conflates — a node whose own judgement is missing, and a node one of whose edges is.
+
+Pending `rigor` over a premise set:
+
+```
+founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
+D(C1)                 min(rigor *pending*, W 0.60) = *pending*
+L(C1)                 −∞      (no lift edge)
+σ(C1)                 *pending*
+```
+
+Strength `*pending*`, band `unknown` — the ladder has no rung for a value that is not a number. The premise
+set is non-empty and judged; the node's own rigor is not, and `min(⊥, c) = ⊥` carries that through.
+
+Pending `bearing` as the node's only edge:
+
+```
+supports   C2 -> C1   bearing *pending* — excluded, adds no operand
+P(C1)                 empty
+D(C1)                 0
+L(C1), C(C1)          −∞, +∞   (no lift edge, no refute edge)
+σ(C1)                 min(max(0, −∞), +∞) = 0.00
+```
+
+Strength `0.00`, band `unsubstantiated`. An unjudged bearing is not support yet, so the edge is no
+supporter; the node's `0.95` does not enter, for case 4's reason.
+
+The same pending bearing beside a premise that participates:
+
+```
+founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
+supports   C2 -> C1   bearing *pending* — excluded, adds no operand
+D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+L(C1), C(C1)          −∞, +∞   (no lift edge, no refute edge)
+σ(C1)                 0.60
+```
+
+Strength `0.60`, band `input-only`. An edge excluded for a pending bearing does not make its target
+`*pending*`: it removes its own operand, and the node reads what the rest of its premise set establishes.
+`*pending*` reaches a node from the node's own `rigor`, and only where the premise set is otherwise
+complete and nothing lifts — a lift would publish its own product instead. It does not reach a node from
+an edge.
+
+### 6. A claim and an analysis on the same number
+
+```
+  W  --founds 1.00--> C1   claim,    rigor 0.95
+  W  --founds 1.00--> A1   analysis, rigor 0.95
+```
+
+```
+founds     W  -> C1   bearing 1.00 x strength 0.60 = 0.60
+D(C1)                 min(rigor 0.95, W 0.60) = 0.60
+σ(C1)                 min(max(0.60, −∞), +∞) = 0.60
+founds     W  -> A1   bearing 1.00 x strength 0.60 = 0.60
+D(A1)                 min(rigor 0.95, W 0.60) = 0.60
+σ(A1)                 min(max(0.60, −∞), +∞) = 0.60
+```
+
+Both `0.60`, both band `input-only`, and the arithmetic is identical term for term. The `0.95` inside each
+min is a different judgement: on C1 it is the statement vocabulary charged nothing — the assertion's text
+is fixed, consistent and single-sensed, and says nothing about an argument, which a claim does not display;
+on A1 it is the method vocabulary charged nothing — the derivation engages what it sets out to establish
+and states its steps. A claim has no method and an analysis no statement quality, so one number stands for
+two different absences of fault; the node's class decides which criteria priced it, and the walk reads only
+the number.
+
+### The six at a glance
+
+| case | the edges | `D` | `L` | `C` | `σ` | band |
+|---|---|---|---|---|---|---|
+| 1 chain | `W→C2` founds, `C2→C1` supports | `0.30` | — | — | `0.30` | `do-not-build` |
+| 2 lift | as 1, plus `E→C1` lifts | `0.30` | `0.95` | — | `0.95` | `ok-to-build` |
+| 3a cap binds | `W→C1` founds, `R→C1` refutes | `0.60` | — | `0.40` | `0.40` | `do-not-build` |
+| 3b cap idle | `W→C2`, `C2→C1`, `R→C1` | `0.30` | — | `0.40` | `0.30` | `do-not-build` |
+| 4 bare | none | `0` | — | — | `0.00` | `unsubstantiated` |
+| 5a pending rigor | `W→C1` founds | `⊥` | — | — | `*pending*` | `unknown` |
+| 5b pending bearing only | `C2→C1`, bearing `*pending*` | `0` | — | — | `0.00` | `unsubstantiated` |
+| 5c pending bearing beside a premise | `W→C1`, `C2→C1` pending | `0.60` | — | — | `0.60` | `input-only` |
+| 6 same rigor | `W→C1` founds, `W→A1` founds | `0.60` | — | — | `0.60` | `input-only` |
+
 ## Pending: an edge either participates or does not
 
 | state | effect |
