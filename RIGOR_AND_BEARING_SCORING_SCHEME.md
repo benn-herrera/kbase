@@ -1,23 +1,31 @@
-# Rigor and bearing: the fault set, the table and the answer
+# Rigor and bearing: the two vocabularies, the table and the answer
 
 The two scoring passes ask a model about one item each: `rigor` on one node, `bearing` on one
 scoring edge. The answer is a list of **charged occurrences** — one fault id and one citation per
 line — and kbase prices the list into the one value the register holds.
 [SPEC.md](SPEC.md) §8 carries the `score` pass, its answer and its ledger, §10 the register's
 spelling, and [STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) the three quantities and the
-walk's arithmetic; that page is the authority for the arithmetic and nothing here restates it.
+walk's arithmetic; that page is the authority for the arithmetic, and the one change this page makes
+to it is stated under [The walk's no-supporter rule](#the-walks-no-supporter-rule).
 
 ## The two judgements
 
 **`rigor` judges one node's own worth**: what the node's text displays, against what the node
 asserts. It is asked of a claim, an analysis and an experiment — never of a work, whose standing is
 judged with the document in hand and written by `set-rigor`, and never of an axiom, whose `rigor` is
-`1.00` by rule. The assertion is the node's title, read together with the statement its text
-displays: where the text says less than the title, the shortfall is a fault and not a redefinition
-of the assertion. Truth is out of scope — a charge is returned on what the text displays,
-never on whether the assertion holds in the world, so a text that reasons impeccably to a false
-conclusion and contradicts itself nowhere returns `none`. A premise the node's edges carry is out of
-scope too: whether it applies to the assertion is that edge's `bearing`.
+`1.00` by rule. Truth is out of scope — a charge is returned on what the text displays, never on
+whether the assertion holds in the world, so a text that reasons impeccably to a false conclusion and
+contradicts itself nowhere returns `none`. A premise the node's edges carry is out of scope too:
+whether it applies to the assertion is that edge's `bearing`.
+
+**The node's class decides what `rigor` asks.** A claim is an assertion: its own text is a
+**statement**, and the **statement vocabulary** asks whether the assertion is fixed, consistent and
+single-sensed. An analysis or an experiment is a method: its text is a derivation or a procedure, and
+the **method vocabulary** asks whether it establishes what it sets out to establish. A work is judged
+as a method when it is judged at all, though no pass asks it. A claim displays no derivation, and that
+is not a defect: a derivation belongs in an analysis, and support reaches a claim through edges. A
+claim's missing method is therefore not a statement fault, and a claim's missing support is not a
+rigor fault at all — it is the walk's `0`, under [The walk's no-supporter rule](#the-walks-no-supporter-rule).
 
 **`bearing` judges one source's relevance to the target it scores**: how far the source's content
 speaks to the target's assertion. The source is taken as given — true as it states itself — and
@@ -29,21 +37,29 @@ judged: the charges measure how much of the target the source touches, and the w
 limit. A source and a target may share subject matter and vocabulary while nothing the source states
 reaches what the target asserts.
 
-The two judgements are orthogonal: one text may be exquisite and bear on nothing, or shoddy and
-exactly on point. Each has its own fault set, its own maximum and its own table, and no mark combines
-them.
+The judgements are orthogonal: one text may be an exquisite statement and bear on nothing, a shoddy
+method and exactly on point, or a claim whose statement is weak and whose support is strong. `rigor`
+and `bearing` have their own sets, and each rigor vocabulary its own table; no mark combines them.
+Which rigor vocabulary applies is fixed by the item's class before the call.
 
 ## The fault vocabulary
 
-Twelve ids name the faults, six to each judgement, and `flt-pending` belongs to both. An id is
-written `flt-[a-z0-9-]+` and spells the criterion it names, so a ledger line needs no table to read.
-The two sets are disjoint: an id names exactly one fault wherever it appears, and a ledger line
-carries its judgement with it. The ids carry no severity and no order — the weight is the table's,
-below — and `none` is a word, not an id: it names the absence of a charge and is not a member of the
-set.
+Sixteen id rows name the faults: four in the statement vocabulary, six in the method vocabulary and
+six in `bearing`, with `flt-contradiction` and `flt-overreach` standing in both rigor vocabularies and
+`flt-pending` standing in all three. Fourteen ids are distinct, and with `flt-pending` a ledger may
+carry fifteen spellings. An id is written `flt-[a-z0-9-]+` and spells the criterion it names, so a
+ledger line needs no table to read.
 
-Rows are in walk order. A criterion is met at each site of the text whose test it satisfies, and
-where one site satisfies two rows the earlier row's id is the charge and the later is not.
+**An id names one fault wherever it appears.** The `bearing` set is disjoint from both rigor sets. The
+two rigor vocabularies share two ids because `flt-contradiction` and `flt-overreach` name the same
+fault at different subjects, and each shared id carries the same weight in both tables, so a ledger
+line's price never depends on which rigor vocabulary read it; only the definition's subject changes.
+The ids carry no severity and no order — the weight is the table's, below — and `none` is a word, not
+an id: it names the absence of a charge and is not a member of any set.
+
+Rows are in walk order within a vocabulary. A criterion is met at each site of the text whose test it
+satisfies, and where one site satisfies two rows of the same vocabulary the earlier row's id is the
+charge and the later is not.
 
 **That precedence binds the judgement, and the parse records what the reply wrote.** It is a rule on
 how the model reads the text, and no check enforces it. The reason is the parse's whole remit: it
@@ -60,32 +76,84 @@ id on a span — is not the choice, because it turns a judgement it cannot check
 discarding both the answer and the evidence for it, and a retry is a fresh guess at the same
 unverifiable question.
 
-### The `rigor` faults
+### The `statement` faults
 
-Six faults, maximum `0.95`. The weight is per occurrence.
+Four faults, maximum `0.95`. The weight is per occurrence. The subject is a claim's title read
+together with the statement under it: the title announces, the statement fixes, and both are the
+claim's own text.
 
 | fault id | the fault | one occurrence is | weight per occurrence |
 |---|---|---|---|
-| `flt-unaddressed` | The text does not address the assertion: no sentence of the text, the assertion itself aside, bears on what the assertion claims. | The text, whose test is universal over it: at most one. | `0.95` |
-| `flt-contradiction` | The text cannot all be true: two statements the text makes cannot both hold and the assertion rests on at least one of them, or the assertion is incompatible with a statement the text makes — while a limitation, counter-case or range the assertion names, and a tension a condition the text states resolves, are not contradictions. | One minimal set of statements that cannot all hold: as many sets. | `0.45` |
-| `flt-overreach` | The assertion claims more than the text shows: the narrowest proposition the text establishes does not entail the assertion — a wider scope, a stronger modality, a value stated for a case the text does not cover — while a restatement that entails nothing more is not overreach. | One respect in which the entailment fails: as many as fail, and at most three, because the respects are a closed list — scope, modality, an uncovered value; a fourth charge repeats one of them. | `0.35` |
+| `flt-contradiction` | The claim cannot all be true: two parts of its title and statement cannot both hold — a value and a range that excludes it, two quantities that cannot coexist, a clause that negates another — while a limitation, counter-case or range the statement names, and a tension a condition it states resolves, are not contradictions. | One minimal set of statements that cannot all hold: as many sets. | `0.45` |
+| `flt-overreach` | The title claims more than the statement fixes: the narrowest proposition the statement settles does not entail the title — a wider scope, a stronger modality, a value stated for a case the statement does not cover — while a title that is a summary entailing nothing more is not overreach. | One respect in which the entailment fails: as many as fail, and at most three, because the respects are a closed list — scope, modality, an uncovered value; a fourth charge repeats one of them. | `0.35` |
+| `flt-equivocation` | A term the claim turns on carries two senses: the title and the statement, or two clauses of either, use one term for different referents or under different definitions, so that substituting one sense for the other leaves the claim saying two things or nothing. | One such term: as many terms. | `0.25` |
+| `flt-underspecified` | The statement leaves free a parameter its truth depends on: a quantity, a condition, a population, a basis or unit, or the criterion by which a predicate is applied, that the assertion does not fix and whose value could change whether it holds. A statement that fixes it, or whose truth does not turn on it, is specified. | One distinct free parameter the assertion's truth depends on: as many parameters. | `0.05` |
+
+**A claim is an assertion, not an argument, and the statement vocabulary is short because of it.** The
+method's `flt-claimed-step`, `flt-unstated-premise` and `flt-bare-measurement` name failures of a
+displayed derivation: a step claimed with none shown, a step resting on an unstated proposition, a
+number reported with no method. A claim displays no derivation, so it can commit none of them. A
+number in a claim is part of the proposition — a value the claim asserts, with the conditions under
+which it holds — not a result whose method is missing; the method is the supporter's, and is judged
+there. This is the whole reason a claim needs no `flt-bare-measurement`: `2.8×10⁹ molecules per gram
+per degree above 270 K` is a statement to be tested, and the experiment that measured it is a
+different node. Neither vocabulary has an `flt-unsupported`: support is the edges' business in both, so
+a node with no supporter is the walk's `0`, never a charge on the text.
+
+**`flt-overreach` survives in the statement vocabulary, and is not the method's overreach.** A claim
+has no derivation, so it cannot draw a conclusion beyond one; but it has two passages, and the title
+can announce more than the statement fixes. The fault is measured there, between the announcement and
+the statement, and it is a statement fault because neither passage is an argument. The old rigor's
+rule stands: where the statement says less than the title, the shortfall is a fault and not a
+redefinition of the assertion. What the fault cannot be is the method's form — a claim is never
+charged for failing to derive its title, because deriving is not what a claim does.
+
+**The owner's worked case.** *"Parisian bleu cheese emits 2.8×10⁹ scent molecules per gram per degree
+above 270 K"* is specific, disprovable and underspecified: it does not fix the producer or brand, the
+vintage or year, the humidity or the pressure, and the emission rate can turn on each. Four free
+parameters charge `0.20` and land `0.75`; naming all four fires nothing and lands `0.95`. The
+statement is not charged for the method it does not display, because that method is its supporter's.
+
+**A bare assertion fires none of the four, and that is the vocabulary working, not a gap.** A claim
+whose title and statement say the same thing, whose parameters are fixed, whose terms carry one sense
+and whose parts are consistent, answers `none` and keeps `0.95`. The value reads *the statement is
+fully specified, consistent and single-sensed*; it never reads *the claim is supported*. Support is
+`strength`, and a claim whose statement is impeccable and which nothing supports earns `0.95` rigor
+and `0.00` strength. The old worry — that a bare assertion and a text that argues impeccably were the
+same value — does not arise for a claim: a claim is not supposed to argue, and the walk states what
+supports it.
+
+**Where the boundary runs.** A condition the assertion leaves free is `flt-underspecified`. A
+condition a displayed step needs and the text does not state is the method's `flt-unstated-premise`. A
+condition a source's bearing depends on is the edge's `flt-conditional`. A term used two ways within
+one claim is `flt-equivocation`; a term two texts use differently, carrying a link, is `bearing`'s
+`flt-referent`.
+
+### The `method` faults
+
+Six faults, maximum `0.95`. The weight is per occurrence. The subject is an analysis's or an
+experiment's text: the derivation or procedure it displays, against what the node sets out to
+establish. A work, judged by `set-rigor` with its document in hand, is judged by this vocabulary; no
+pass asks it, because the document is not in the corpus.
+
+| fault id | the fault | one occurrence is | weight per occurrence |
+|---|---|---|---|
+| `flt-unaddressed` | The method does not address what it sets out to establish: no step, procedure, result or citation the text displays bears on the conclusion the node asserts. | The text, whose test is universal over it: at most one. | `0.95` |
+| `flt-contradiction` | The method's text cannot all be true: two statements it makes cannot both hold and the conclusion rests on at least one of them, or the conclusion is incompatible with a statement the text makes — while a limitation, counter-case or range the conclusion names, and a tension a condition the text states resolves, are not contradictions. | One minimal set of statements that cannot all hold: as many sets. | `0.45` |
+| `flt-overreach` | The conclusion the method draws claims more than its text establishes: the narrowest proposition the text establishes does not entail the conclusion — a wider scope, a stronger modality, a value stated for a case the text does not cover — while a restatement that entails nothing more is not overreach. | One respect in which the entailment fails: as many as fail, and at most three, because the respects are a closed list — scope, modality, an uncovered value; a fourth charge repeats one of them. | `0.35` |
 | `flt-claimed-step` | A step is claimed and none is shown: the text marks an inference — *hence*, *it follows*, *therefore*, *clearly*, *one can show* — and displays no statement from which the asserted conclusion follows; a conclusion claimed with no marker is not this. | One marked inference with no displayed statement the conclusion follows from: as many as the markers so placed. | `0.30` |
 | `flt-unstated-premise` | A displayed step — an inference, or a computation from stated quantities — rests on something the text does not state: it does not follow unless a proposition the text does not state is granted; a premise the text names as a graph node, or one an edge of the node carries, is that edge's `bearing` and never this. | One **distinct** proposition a displayed step needs and the text does not state: as many propositions, not as many steps. | `0.30` |
 | `flt-bare-measurement` | A number is reported and no method is: the text reports a measured or computed value and displays no procedure, sample, instrument, dataset or calculation that yields it; a stated constant, a stipulated parameter, a definition and a reference are not results. | One reported value with no displayed method: as many values — a table of six numbers with no method is six charges. | `0.30` |
 
-**A bare assertion fires none of the six, and that is a known consequence, not a gap in the table.** A
-text that only restates its title displays no step, reports no value, states no premise and widens
-nothing, so it satisfies none of the tests above: `flt-overreach` needs the text to establish less than
-the assertion, and a restatement establishes exactly it. Such a text answers `none` and keeps `0.95`.
-The consequence belongs in the vocabulary because it is what the value can be read to mean: `0.95`
-reads *no charge among the six*, and never *the text displays its reasoning*. A bare assertion and a
-text that argues impeccably are the same value, and only the reply beside the value and the node's own
-text tell them apart. Whether the absence of displayed reasoning becomes a seventh criterion is open
-([Not settled](#not-settled)).
+**A method that displays nothing has not made a claim's mistake.** The old `0.95`-for-a-bare-assertion
+consequence does not exist here: a text that asserts a conclusion and displays nothing bearing on it
+is one `flt-unaddressed` and answers `0.00`; a text that displays a procedure and no reasoning for its
+conclusion is charged where the gap is. `0.95` on a method reads *no charge among the six*, and for an
+analysis or an experiment that is a statement about its method, not about whether anyone supports it.
 
 ### The `bearing` faults
 
-Six faults, maximum `1.00`. The weight is per occurrence.
+Six faults, maximum `1.00`. The weight is per occurrence. This table is unchanged.
 
 | fault id | the fault | one occurrence is | weight per occurrence |
 |---|---|---|---|
@@ -98,15 +166,15 @@ Six faults, maximum `1.00`. The weight is per occurrence.
 
 ### `flt-pending`
 
-The thirteenth id belongs to both judgements and names one fault: the text holds no proposition to
-judge. It takes no citation, because there is no sentence to point at, and it carries no weight: an
-answer of `flt-pending` has the value `*pending*` whatever the table. The
-[`flt-pending`](#flt-pending) section below states when each pass answers it.
+The id belongs to all three vocabularies and names one fault: the text holds no proposition to judge.
+It takes no citation, because there is no sentence to point at, and it carries no weight: an answer of
+`flt-pending` has the value `*pending*` whatever the table. The [`flt-pending`](#flt-pending) section
+below states when each pass answers it.
 
 ## The value
 
-The maximum is per judgement: `M = 0.95` for `rigor` and `M = 1.00` for `bearing`. For a charge list
-`C` under a pass's table:
+The maximum is per vocabulary: `M = 0.95` for the statement faults, `M = 0.95` for the method faults,
+and `M = 1.00` for `bearing`. For a charge list `C` under the table the item's class selects:
 
 ```
 value(C)             = max(0, M − Σ w(id(c)) for c ∈ C)
@@ -117,16 +185,18 @@ value([flt-pending]) = *pending*
 The weight is charged **per occurrence**, each occurrence separately, and the table caps no count: a
 text that commits a fault three times loses three weights. The parse enforces no count at all, and
 the only mechanical pressure on one is that two occurrences of one id need two spans that do not
-coincide.
+coincide. A shared id has the same weight under either rigor vocabulary, so the price of a line that
+carries only shared ids is the same whichever table read it; a line carrying `flt-underspecified`,
+`flt-unaddressed`, `flt-equivocation` or any method-only id is priced by the table that holds it, and
+the item's class fixes which that is.
 
 A count is bounded only where the row's own occurrence unit is an enumeration of a closed set, and
 there the bound is what *one occurrence* means rather than a ceiling the table adds.
-`flt-unaddressed`'s and `flt-no-engagement`'s tests are universal over the text they judge, so each
-has one occurrence. `flt-overreach`'s respects are the closed list of three, so it has three.
-`flt-partial`'s parts are the assertion's own, and a compound assertion fixes how many there are. A
-charge beyond such a bound is not a further occurrence: it is one of them written a second time. The
-parse cannot see that, because no respect and no part is a ledger field; the reader can, holding the
-reply's spans against the text.
+`flt-unaddressed`'s test is universal over the text, so it has one occurrence. `flt-overreach`'s
+respects are the closed list of three, so it has three. `flt-partial`'s parts are the assertion's own,
+and a compound assertion fixes how many there are. A charge beyond such a bound is not a further
+occurrence: it is one of them written a second time. The parse cannot see that, because no respect and
+no part is a ledger field; the reader can, holding the reply's spans against the text.
 
 The floor at zero is the domain's, not a rule of its own: a list whose weights reach `M` is a text
 with nothing left to carry the assertion, and `0` is what the register says for that. Every weight is
@@ -134,13 +204,76 @@ a multiple of `0.05`, so every sum and every value is exact at two decimals and 
 
 **`1.00` is reserved by rule, and the reserve is not a model's answer.** `kb.AxiomRigor` is `1.0`; an
 axiom premise contributes `bearing × 1.0`, and no authored file carries `1.00`. An axiom is asked by
-neither pass — its `rigor` is kbase's rule, not a judgement — so `rigor`'s authored maximum is the
-largest multiple of `0.05` below the reserve, `0.95`, and `none` is the only answer that reaches it.
-What `0.95` certifies is the absence of a charge among the six, not the presence of reasoning: a bare
-assertion reaches it too ([The `rigor` faults](#the-rigor-faults)).
-A charge list under the `rigor` table cannot reach `1.00` at all. `0.95` is the largest value a rigor
-pass derives and not the largest the register holds: `set-rigor` accepts any value in `[0,1]`, `1.0`
-included. `bearing` has no such reserve, and `none` reaches `1.00`.
+neither pass — its `rigor` is kbase's rule, not a judgement — so the authored maximum under either
+rigor vocabulary is the largest multiple of `0.05` below the reserve, `0.95`, and `none` is the only
+answer that reaches it. A charge list under either rigor table cannot reach `1.00` at all. `0.95` is
+the largest value a rigor pass derives and not the largest the register holds: `set-rigor` accepts any
+value in `[0,1]`, `1.0` included. `bearing` has no such reserve, and `none` reaches `1.00`.
+
+## The walk's no-supporter rule
+
+[STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) owns the walk. It is restated here only where
+this change touches it. For a claim or an analysis `n`:
+
+```
+P(n)  = { b(e)·σ(e) : e ∈ supports(n) ∪ founds(n), e contributes }
+D(n)  = 0                      where P(n) = ∅
+D(n)  = min({ r(n) } ∪ P(n))   otherwise
+
+L(n)  = max{ b(e)·σ(e) : e ∈ lifts(n), e contributes }
+C(n)  = min{ 1 − b(e)·σ(e) : e ∈ refutes(n), e contributes }
+σ(n)  = min( max(D(n), L(n)), C(n) )
+```
+
+An empty lift set contributes `−∞` and an empty cap set `+∞`, so neither changes anything; the walk's
+own page states the `⊥` table this page does not repeat.
+
+**An empty `P(n)` now means that no premise carries the node.** Under the old formula the empty set
+left `{r(n)}` alone and the node's own rigor stood as its derivation. It no longer does: `r(n)` is the
+**cap** on what its premises establish — a premise cannot carry a target above the target's own
+statement or method quality — and it is not a substitute for having one. Where `P(n)` is empty, `D(n)`
+is `0`, whether `r(n)` is judged or pending. The rule does not wait for a judgement: support is
+structural, and the walk can see that no premise carries the node without knowing what the node's own
+quality is. Where `P(n)` is not empty and `r(n)` is pending, `D(n)` stays `⊥`, because
+`min(⊥, c) = ⊥`; the asymmetry is the rule's content — an absent cap is unknown, an absent premise is
+nothing.
+
+**An edge that does not contribute is no supporter.** A pending bearing, a pending source strength, an
+edge from a non-`run` experiment, and a premise that has vanished all add no operand. If such an edge
+is the node's only one, `P(n)` is empty and the node reads `0`. This is the sharp end of
+support-through-edges: an unjudged bearing is not support yet, and a target behind one reads
+`unsubstantiated` until that bearing lands, not `*pending*`. `bearing 0.0` also starves the target,
+and the two states remain different in the record — `0.0` is a judgement of irrelevance, an excluded
+edge is the absence of a judgement — even where the target's strength does not distinguish them.
+
+**`lifts` and `refutes` compose exactly as before.** `D(n) = 0` does not suppress a lift: a node whose
+only incoming edge is a lift takes `max(0, L) = L`, because that product is a contribution through an
+edge; a node whose only incoming edge is a refutation takes `min(0, C) = 0`. A node with no incoming
+scoring edge at all has an empty `L` and an empty `C`, and lands `0`.
+
+**What a bare assertion earns.** "Bare" means a claim whose statement fires nothing; its rigor is the
+maximum, and its strength is decided by its edges. Let `c` be a supporting edge's contribution,
+`b(e)·σ(e)`, and `Σ` the weights its statement charges:
+
+| state of a claim | statement rigor | strength |
+|---|---|---|
+| statement fires nothing, no supporting edge | `0.95` | `0.00` |
+| statement fires nothing, one supporting edge with contribution `c` | `0.95` | `min(0.95, c)` |
+| statement fires nothing, one supporting edge `c` and a lift `L` | `0.95` | `min(max(min(0.95, c), L), C)` |
+| statement charges `Σ`, no supporting edge | `0.95 − Σ` | `0.00` |
+| statement charges `Σ`, one supporting edge `c` | `0.95 − Σ` | `min(0.95 − Σ, c)` |
+
+An analysis reads the same, with its method rigor in place of `0.95`. The statement quality is kept in
+every row; what changes between the rows is whether anything carries it. A bare assertion with a
+supporting edge keeps its `0.95` and takes the edge's contribution as its strength, unless the edge's
+product exceeds `0.95`, in which case its own statement quality is the cap.
+
+**Effect on the bands.** The ladder reads `strength`, not `rigor`, so a statement rigor of `0.95` does
+not put a node in a band by itself. Every claim or analysis with `P(n) = ∅` lands `unsubstantiated`
+(`0.00`) unless a lift raises it; the rigor value does not enter the band. The canonical case is
+a claim whose statement is impeccable and which nothing supports: `0.95` rigor, `0.00` strength,
+`unsubstantiated`. With `P(n)` non-empty, `D(n)` is the smaller of the rigor and the weakest
+contribution, and the lift and cap compose over it exactly as the walk states.
 
 ## The band outcomes
 
@@ -148,9 +281,47 @@ The ladder is `kb.BuildBandLadder` (`internal/kb/schema.go`): cuts at `0.85`, `0
 and `0.00`, each an inclusive lower bound. The ladder reads `strength`, not `rigor` — a node's band
 can sit below its rigor because of a premise, and `rigor` is not an upper bound on `strength` because
 a lift station stands above the derivation ([STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md),
-"The walk"). The column below is what a rigor value would read when rigor is what binds.
+"The walk"). The columns below are what a rigor value would read when rigor is what binds — that is,
+when `P(n)` is non-empty and its weakest contribution is at least the rigor. Where `P(n)` is empty no
+row in either rigor table reaches a band: strength is `0`, and the bottom rung is the answer.
 
-| charges | rigor | band it would read, when rigor is what binds |
+### The statement table
+
+The reachable values are **all twenty multiples of `0.05` in `[0, 0.95]`**, because
+`flt-underspecified` weighs one step and its occurrences are not capped: any value is reachable by
+stacking underspecifications. A statement value is therefore checked by the table's arithmetic, not
+by membership in a short list; a value off the multiples is a defect of a landing, and a value on one
+is not evidence that the charges are ordinary.
+
+| charges | statement rigor | band it would read, when rigor is what binds |
+|---|---|---|
+| `none` | `0.95` | ok to build on |
+| one `flt-underspecified` | `0.90` | ok to build on |
+| two `flt-underspecified` | `0.85` | ok to build on — exactly at the cut |
+| one `flt-equivocation` | `0.70` | ok to build on, see caveats |
+| one `flt-overreach` | `0.60` | use as input only |
+| one `flt-contradiction` | `0.50` | use as input only |
+| one `flt-contradiction` and one `flt-underspecified` | `0.45` | use as input only — exactly at the cut |
+| two `flt-equivocation` | `0.45` | use as input only — exactly at the cut |
+| one `flt-equivocation` and one `flt-overreach` | `0.35` | do not build on, rework needed |
+| two `flt-overreach` | `0.25` | do not build on, rework needed |
+| one `flt-overreach` and one `flt-contradiction` | `0.15` | unsubstantiated |
+| two `flt-contradiction` | `0.05` | unsubstantiated |
+| three `flt-contradiction`, or any sum of `0.95` or more | `0.00` | unsubstantiated |
+| `flt-pending` | `*pending*` | no band |
+
+`0.75`, the owner's worked case at four free parameters, is `ok to build on, see caveats`. A statement
+does not reach `unsubstantiated` by ordinary underspecification: four parameters cost `0.20`, and the
+weights are chosen so that the statement vocabulary's own deductions leave the bottom rung to
+contradictions, to stacked defects, and to the walk's empty `P(n)`.
+
+### The method table
+
+The reachable values are the old eleven; nine of the range's twenty multiples are unreachable —
+`0.10`, `0.40`, `0.45`, `0.55`, `0.70`, `0.75`, `0.80`, `0.85`, `0.90` — so a method value off this
+list is a defect of a landing, not a judgement.
+
+| charges | method rigor | band it would read, when rigor is what binds |
 |---|---|---|
 | `none` | `0.95` | ok to build on |
 | one gap id | `0.65` | ok to build on, see caveats — exactly at the cut |
@@ -166,13 +337,12 @@ a lift station stands above the derivation ([STRENGTH_SCORING_SCHEME.md](STRENGT
 | `flt-pending` | `*pending*` | no band |
 
 "Gap id" stands for any of `flt-claimed-step`, `flt-unstated-premise` and `flt-bare-measurement`,
-which carry one weight because each names the same defect at a different site. The eleven values over
-`[0, 0.95]` leave nine of the range's twenty multiples of `0.05` unreachable — `0.10`, `0.40`,
-`0.45`, `0.55`, `0.70`, `0.75`, `0.80`, `0.85`, `0.90` — so a rigor value off this list is a defect
-of a landing, not a judgement.
+which carry one weight because each names the same defect at a different site.
 
-`bearing` reaches six values and no band of its own: it reaches the ladder only through a product in
-the walk.
+### The bearing values
+
+`bearing` is unchanged. It reaches six values and no band of its own: it reaches the ladder only
+through a product in the walk.
 
 | charges | sum | bearing |
 |---|---|---|
@@ -185,14 +355,18 @@ the walk.
 | an `flt-no-engagement`, or any sum of `1.00` or more | `≥ 1.00` | `0.00` |
 | `flt-pending` | — | `*pending*` |
 
-**The bottom rung is `unsubstantiated`, and it states an outcome, not a cause.** Every strength below
-`0.20` lands there from either direction: by a cap, where a refuter's `bearing × strength` exceeds
-`0.80`; or by the minimum, where `flt-unaddressed`, three gap charges, two contradictions, or a
-premise contribution low enough leaves nothing to carry the assertion. What the rung says is
-that nothing a claim built on this would inherit substantiates the claim, and how that state arrived
-is not part of it. A reader who needs the cause has it where it belongs: the fault record names the
-charges, and the derivation trace prints the cap or the station that produced the strength. The rung's
-cut is an inclusive lower bound of `0.00`, and its height is not settled ([Not settled](#not-settled)).
+### The bottom rung
+
+**`unsubstantiated` states an outcome, not a cause.** Every strength below `0.20` lands there from
+either direction: by a cap, where a refuter's `bearing × strength` exceeds `0.80`; or by the minimum,
+where `flt-unaddressed`, three gap charges, two contradictions, a statement's stacked charges, or an
+empty `P(n)` — no contributing supporter — leaves nothing to carry the assertion. What the rung says
+is that nothing a claim built on this would inherit substantiates the claim, and how that state
+arrived is not part of it. The no-supporter case is the one the two-vocabulary split makes ordinary: a
+bare claim is a statement with no premise, and the rung is its exact outcome. A reader who needs the
+cause has it where it belongs: the fault record names the charges, and the derivation trace prints the
+cap, the empty premise set or the station that produced the strength. The rung's cut is an inclusive
+lower bound of `0.00`, and its height is not settled ([Not settled](#not-settled)).
 
 ## `flt-pending`
 
@@ -202,16 +376,18 @@ first, before any criterion: where the pair holds no proposition, the answer is 
 walk stops there. It occupies the answer, it has a table outcome, and its value is `*pending*`. A
 `flt-pending` where a judgement was possible leaves a hole in the graph that no query can see.
 
-**When `rigor` is `flt-pending`.** The title-and-text pair holds no proposition:
+**When `rigor` is `flt-pending`.** The title-and-text pair holds no proposition, under either
+vocabulary:
 
 - a title that names a topic rather than asserting, with no statement under it;
 - a section that is empty, a stub or a placeholder ("TBD", "—", "to be written");
 - a statement that asks a question, lists keywords, or points at material the call does not show,
   where the title names a topic rather than asserting.
 
-Nothing else. A text that holds a proposition and is about another subject is not pending: it is one
-`flt-unaddressed` and answers `0.00`. A text that holds a proposition and argues badly is not pending
-either: it is a charge list against it.
+Nothing else. A text that holds a proposition and is about another subject is one `flt-unaddressed`
+under the method vocabulary and answers `0.00`; under the statement vocabulary a claim cannot be about
+another subject, because its statement is the assertion, and a claim that holds a proposition and is
+badly specified is a charge list against it, not pending.
 
 **When `bearing` is `flt-pending`.** Either end holds no proposition by the test above. A work
 renders its title alone, so a link from a work whose title names no subject is pending; where the
@@ -250,11 +426,11 @@ reads the reply and nothing else.
 
 ### The closed text
 
-Each call carries one item's own text. For `rigor`: the node's title and the statement its own
-document gives it. For `bearing`: both ends' title and statement in that same form, then the edge's
-authored context. A work renders its title alone — its document lies outside the corpus — so a link
-from a work is judged on the title's proposition. SPEC §8 states the closure; the register's own
-scoring tokens are refused before the call, and that item is `failed` with no call made.
+Each call carries one item's own text. For `rigor`, under either vocabulary: the node's title and the
+statement its own document gives it. For `bearing`: both ends' title and statement in that same form,
+then the edge's authored context. A work renders its title alone — its document lies outside the
+corpus — so a link from a work is judged on the title's proposition. SPEC §8 states the closure; the
+register's own scoring tokens are refused before the call, and that item is `failed` with no call made.
 
 ### The form
 
@@ -265,20 +441,27 @@ flt-id: citation
 ```
 
 Leading and trailing whitespace is trimmed. A line is a charge line or it is not: blank lines are
-ignored, and any other line — an explanatory sentence, a heading, a preamble — is `malformed`.
-Nothing is read out of prose. The brackets of the format sketch are delimiters, not characters: a
-line may carry `[…]:` and `[…]` around the two fields or not, a bracket pair around a whole field is
-stripped before the field is read, and a span that itself begins with `[` or ends with `]` is written
+ignored, and any other line — an explanatory sentence, a heading, a preamble — is `malformed`. Nothing
+is read out of prose. The brackets of the format sketch are delimiters, not characters: a line may
+carry `[…]:` and `[…]` around the two fields or not, a bracket pair around a whole field is stripped
+before the field is read, and a span that itself begins with `[` or ends with `]` is written
 unbracketed. Order is free; charges are recorded in the order written, and no arithmetic depends on
 it.
 
 ### The closed set
 
-`rigor` accepts the six `rigor` ids and `flt-pending`; `bearing` accepts the six `bearing` ids and
-`flt-pending`; neither accepts anything else. An id is case-folded before matching and recorded in
-its own lower-case spelling. An id outside the call's set — the other pass's id, a letter from the
-retired alphabet, a misspelling — is `malformed`, and the refusal names the id and the pass's ids as
-`allowed`.
+The item's class fixes the accepted set before the call:
+
+- `rigor` on a claim (`clm-`) accepts the four statement ids and `flt-pending`;
+- `rigor` on an analysis or an experiment (`ana-`, `exp-`) accepts the six method ids and
+  `flt-pending`;
+- `bearing` accepts the six `bearing` ids and `flt-pending`, on any scoring edge.
+
+`flt-contradiction` and `flt-overreach` are accepted by both rigor vocabularies. An id from the other
+rigor vocabulary — `flt-underspecified` on an analysis, `flt-unaddressed` on a claim — is
+`malformed`, and the refusal names the id and the call's ids as `allowed`. So is the other pass's id,
+a letter from the retired alphabet, and a misspelling. An id is case-folded before matching and
+recorded in its own lower-case spelling.
 
 ### `none`
 
@@ -314,15 +497,10 @@ then states exactly what the lookup found, that the two texts carry this span al
 two passages are one node's own text, and a span found in both takes `both` on the same rule. No
 line names its end: the recorded passage carries the attribution wherever the texts make one.
 
-The two alternatives were weighed and are not the choice. **Refusing a shared span** leaves a fault
-with no chargeable citation wherever both ends state the same words — a judgement the criteria make
-available, made unaskable, and a reply right in substance failed and re-asked until the model finds
-words that were never there. **Attributing the span to one end by rule** writes a falsehood into the
-field a reader audits: `passage` states where the citation was found, so recording `source` for words
-the target carries too would assert a fact the lookup contradicts, and per-id rules for which end a
-fault "belongs to" would make one field mean two things. `both` records the finding and lets the
-reader see that this charge's anchor does not distinguish the ends — which is true, and is what a
-reader needs to know to weigh the charge.
+A statement fault's anchor is the passage that carries it: the title phrase that outruns the
+statement, the term, the unfixed quantity, one of the incompatible statements. A method fault's
+anchor is the step, the value, the marker or the passage that carries the gap. The citation proves
+where the span is; it never proves the id.
 
 ### What the check does, and does not do
 
@@ -333,8 +511,8 @@ conclusion, no method yields the number — where no span could be evidence of t
 those the citation anchors the **obligation** (the title that asserts, the marker that claims the
 step, the value reported), and the absence itself is checked by nobody. A span is an anchor, not
 proof. What carries the audit beyond the anchor is the reply kept verbatim beside the parsed charges,
-the offset that locates the span for a later reader, the value's derivability from the ids, and agreement between runs measured on counts
-per id.
+the offset that locates the span for a later reader, the value's derivability from the ids, and
+agreement between runs measured on counts per id.
 
 ### Duplicates, overlaps and shared spans
 
@@ -355,7 +533,7 @@ not proof that it was ([the fault vocabulary](#the-fault-vocabulary)).
 | case | outcome |
 |---|---|
 | a line that is not a charge line | `malformed` |
-| an id outside the call's set | `malformed`, naming the id and the pass's ids as `allowed` |
+| an id outside the call's set — the other rigor vocabulary's, the other pass's, a retired letter, a misspelling | `malformed`, naming the id and the call's ids as `allowed` |
 | an id with no separator, or nothing after the colon | `malformed` — except the bare `flt-pending`, which takes no citation and no colon ([`flt-pending`](#flt-pending), "Its form") |
 | `flt-pending` with a colon and an empty field | `malformed`, naming the id — the shape of a charge line cut short after its colon |
 | `flt-pending` with a citation field | `malformed`, naming the id and the span, and recording the span with it — it takes no citation |
@@ -365,18 +543,39 @@ not proof that it was ([the fault vocabulary](#the-fault-vocabulary)).
 | an empty reply, or whitespace only | `malformed`, nothing written |
 
 A `malformed` reply is the pass's outcome: no charges and no judgement, the item re-asked on
-`--resume` (SPEC §8). The attempt's record carries `status: failed` and the reason — the case from
-the table and, where there is one, the id and span it named — and **not the reply's text**: a
-malformed reply is blank, a truncated fragment or think-lock, and the data point that matters is that
-the attempt failed, not the bytes it failed with.
+`--resume` (SPEC §8). The attempt's record carries `status: failed` and the reason — the case from the
+table and, where there is one, the id and span it named — and **not the reply's text**: a malformed
+reply is blank, a truncated fragment or think-lock, and the data point that matters is that the
+attempt failed, not the bytes it failed with.
+
+## One ask per item
+
+**The class gates the instruction, and nothing else changes.** A claim's rigor call renders the
+**statement** variant; an analysis's or an experiment's renders the **method** variant; an edge's
+bearing call renders the bearing ask as it stands. One item is one call and one instruction: no item
+is asked twice, no call carries both vocabularies, and a run's call count and model cost are what they
+were. The two rigor variants replace the single rigor template; the bearing instruction is untouched,
+and its header entry is the one-element mapping.
+
+**The run's identity does change.** A rigor run now sends two different instructions, so `run.yaml`'s
+`ask_sha256` is a mapping from variant to digest: `{statement: <hex>, method: <hex>}` for a rigor run,
+and `{bearing: <hex>}` for a bearing run. The mapping records the set the pass can send, fixed at the
+run's creation by the pass — not the subset a `--limit` happened to reach, and not a claim about any
+one item. Each attempt's `prompt_sha256` in the ledger is the instruction that item actually
+received, and it is the line, not the header, that answers "which ask judged this item". The
+alternative — no header field, relying on the lines alone — is rejected: the header is what a reader
+reads first to know what a run's values mean, and recovering two digests by scanning a ledger is
+exactly what the header exists to avoid, while a partial or truncated ledger would lose the set
+entirely. The header is still written once and never rewritten; a line written under a changed
+variant carries the new digest, and a resumed run's header keeps the digests it began under.
 
 ## The ledger
 
 Each attempt is one record in the run's `ledger.jsonl`, carrying the item, its status, `faults` as
 parsed, the `reply` verbatim where the reply parsed, the `value` landed, the model, the prompt's
-digest and the attempt's bounds (SPEC §8), or the reason it failed and no text where it did not. `faults` is the effective answer — one record per charge, in the order written
-— and `moot` holds any charge lines a `flt-pending` made moot, parsed the same way and priced
-nowhere:
+digest and the attempt's bounds (SPEC §8), or the reason it failed and no text where it did not.
+`faults` is the effective answer — one record per charge, in the order written — and `moot` holds any
+charge lines a `flt-pending` made moot, parsed the same way and priced nowhere:
 
 | field | holds |
 |---|---|
@@ -385,41 +584,48 @@ nowhere:
 | `citation` | the span as the model wrote it |
 | `offset` | its offset in the closed text, at its first match — for `both`, the earlier of the two passages |
 
-`[]` is written for one reply only — the word `none` — so a record's empty list always carries the
-model's positive statement that it found no fault; an empty or whitespace-only reply is `malformed`,
-so the attempt records `failed` and no charges, and silence is never read as a clean pass. One record carries `id: flt-pending`
-and no citation for a pending item. The reply stands beside the parsed charges, so the parse's reading
-of a line can be held against the line. A `--dry-run` writes no charge record: nothing is asked, so
-nothing is returned.
+A rigor line's item is a `clm-`, `ana-` or `exp-` id; its prefix selects the statement or method table
+a value or a re-price is computed under, so the rigor vocabulary is not a new field. A bearing line's
+table is the pass's own. `[]` is written for one reply only —
+the word `none` — so a record's empty list always carries the model's positive statement that it found
+no fault; an empty or whitespace-only reply is `malformed`, so the attempt records `failed` and no
+charges, and silence is never read as a clean pass. One record carries `id: flt-pending` and no
+citation for a pending item. The reply stands beside the parsed charges, so the parse's reading of a
+line can be held against the line. A `--dry-run` writes no charge record: nothing is asked, so nothing
+is returned.
 
 **The value is a projection of the charge list, and in fact of its ids alone** — `value = table(counts
-by id)`. The spans are not the input, and that is why they are the audit rather than the measure:
-they can be read, checked against the text and argued about, and they cannot perturb the arithmetic.
+by id)`, the table chosen by the item's class. The spans are not the input, and that is why they are
+the audit rather than the measure: they can be read, checked against the text and argued about, and
+they cannot perturb the arithmetic.
 
 - **A landing can be checked without a model.** A value that does not equal the table's output for
   its recorded ids is a defect of the landing or of the table, not a judgement to argue with. Counts
   are integers, so the check is exact.
 - **A run can be re-scored without a model.** Change a weight and re-derive every value in the ledger
-  by counting ids; no call is made and no judgement re-asked. The durable record is the count per id.
+  by counting ids under the line's pass and, for rigor, its item's class; no call is made and no
+  judgement re-asked. The durable record is the count per id.
 - **Two runs are comparable on their fault sets, not their numbers.** Two runs agree on the judgement
   exactly when their counts per id match; their values are comparable only within one table. A value
   agreement is the weaker test: `0.35` is reached by two `flt-bare-measurement` and equally by one
   `flt-claimed-step` and one `flt-unstated-premise`, so a sum hides both the split and the identity.
-  Reproducibility is measured on counts.
+  Reproducibility is measured on counts. A shared id crossing the two rigor vocabularies is one id in
+  the count and one weight in the price, which is what keeps the comparison honest.
 
-**The run records the ask, not the table.** What a charge set means is fixed by the instructions the
-model was given — the fault set and the text describing it — and never by the weights, which the
-model is never shown. So the run's header carries `ask_sha256`, the digest of the prompt rendered
-for an empty node: rendering substitutes and never inspects the text, so the empty input covers every
-fixed byte of instruction and nothing that varies, and no size-dependent element may enter a
-rendered prompt.
+**The run records the ask set, not the table.** What a charge set means is fixed by the instructions
+the model was given — the fault set and the text describing it — and never by the weights, which the
+model is never shown. So the run's header carries `ask_sha256` as the mapping above, each digest
+rendered for an empty subject: rendering substitutes and never inspects the text, so the empty input
+covers every fixed byte of one variant's instruction and nothing that varies, and no size-dependent
+element may enter a rendered prompt. A header written before the split carries one string; a resume
+reads it as the one ask that run began under, and its lines carry their own digests as before.
 
 - **An update applies its behaviour.** A run resumed under a changed table re-prices every landed
-  value from the recorded ids, lands the values that moved and continues; one resumed under a changed
-  ask continues under the new ask. Nothing is refused, and nothing asks the user to choose between
-  versions: they updated, which is the choice.
-- **The digest is a record, not a gate.** `ask_sha256` says which instruction answered which
-  judgement, so a corpus spanning an update can be read honestly. It decides nothing at run time.
+  value from the recorded ids under its item's class, lands the values that moved and continues; one
+  resumed under a changed ask continues under the new ask. Nothing is refused, and nothing asks the
+  user to choose between versions: they updated, which is the choice.
+- **The digests are a record, not a gate.** `ask_sha256` says which instructions answered which
+  class of item, so a corpus spanning an update can be read honestly. It decides nothing at run time.
 
 **A truncated reply.** A reply cut off at the attempt's bound loses the lines it did not reach, and
 where the cut falls between lines the remainder would parse cleanly — a silent under-charge the
@@ -435,11 +641,26 @@ answer — order, spelling, what a model chose to charge — is behaviour worth 
 this section names and no fields that summarize them: no prose description of the judgement, no
 count rolled up at write time, no value stored in place of the charges it came from. A parsed reply
 stands beside its charges; the value stands beside both, derived and checkable; the run's header
-carries the ask's digest once, for every attempt in the run. This is what makes a run
-re-scorable, a landing checkable and two runs comparable, so the format changes only with the
-scheme's version and never as an implementation convenience: a field dropped at write time cannot be
-recovered by a later reader, and a summary written by the writer is a judgement the corpus can no
-longer take apart.
+carries the ask set once, for every attempt in the run. This is what makes a run re-scorable, a
+landing checkable and two runs comparable, so the format changes only with the scheme's version and
+never as an implementation convenience: a field dropped at write time cannot be recovered by a later
+reader, and a summary written by the writer is a judgement the corpus can no longer take apart.
+
+## Frozen rules
+
+These parse rules are settled here and not open:
+
+- **The one-character floor.** A citation carries at least one character of text; empty or
+  whitespace-only is `malformed`.
+- **`flt-pending` beside charges.** The pending id is the judgement and the charges are moot: parsed,
+  recorded, priced nowhere.
+- **`none` beside charges.** Refused as `malformed`; the two halves contradict each other and the
+  parse has no ground to prefer one.
+- **Overlapping spans for one id.** Two spans of one id that overlap without coinciding are
+  `malformed`, naming both lines; one id on one span written twice collapses to one charge.
+
+The pending forms, the `both` rule, the citation lookup in the closed text, the malformed classes and
+the ledger's charge records are settled in the same way.
 
 ## Not settled
 
@@ -447,21 +668,17 @@ longer take apart.
 - The bottom cut's height: the last rung takes every strength under `0.20`, and where the cut belongs
   is open.
 - The occurrence units: the parse enforces no count, and which proposition, which minimal set, which
-  part a second site counts as is the reader's judgement rather than a frozen rule. What a row's unit
-  settles — the universal tests' one, `flt-overreach`'s three — is stated where the row is.
-- Whether the twelve ids are the frozen vocabulary: a rename after a run moves the ledger's record
-  with it.
-- Whether a text that displays no reasoning charges nothing and keeps `0.95`, or the bare assertion
-  becomes a criterion of its own. What is settled is the table's answer today: such a text fires none
-  of the six and keeps `0.95`, stated in [The `rigor` faults](#the-rigor-faults) so that no reader
-  takes `0.95` for evidence of reasoning; what is open is whether a seventh criterion is added and at
-  what weight.
+  part, which free parameter a second site counts as is the reader's judgement rather than a frozen
+  rule. What a row's unit settles — the universal tests' one, `flt-overreach`'s three — is stated
+  where the row is.
+- Whether the two shared rigor ids should have per-vocabulary spellings, so that a ledger line's id
+  names its subject without the item's class.
+- Whether `flt-underspecified`'s one-step weight is the right grain, or a coarser occurrence unit —
+  a family of parameters rather than a parameter — would give the statement table a sparse reachable
+  set like the method table's.
 - Whether `0.95` is a discipline of the table alone, or `set-rigor` refuses `1.0` for a claim, an
   analysis and an experiment — and what becomes of the `rigor: 1.0` a conversion writes on every
   experiment.
-- Whether the parse's split is frozen as stated: a one-character floor on a citation, `flt-pending`
-  beside charges read as the judgement with the rest moot, `none` beside charges refused, and one id
-  over overlapping-but-not-identical spans refused.
-- How a change to the table's numbers is decided and announced. A run records the ask, not the table,
-  so a weight change re-prices silently and is visible only in the values it moves; whether that is
-  enough, and who decides a change, is not stated here.
+- How a change to the table's numbers is decided and announced. A run records the ask set, not the
+  table, so a weight change re-prices silently and is visible only in the values it moves; whether
+  that is enough, and who decides a change, is not stated here.
