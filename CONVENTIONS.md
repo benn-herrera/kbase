@@ -52,14 +52,16 @@ them. Working rules for packages that carry over:
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
   reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
   parses. No site splits an id or concatenates a reference by hand.
-- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Decisions}` is the transport-level slice
-  of a provider — the last saying whether its entry speaks the Decisions shape (`systemone` unless
-  the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
-  lives in `cmd`. The chat asks — the overview and each scoring call — go through `model.Chat`: one
-  tool-less request, re-issued identically on an incomplete stream up to the attempt count
-  (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and the two
-  failures are not interchangeable: an endpoint that answered with a non-2xx status refused the
-  request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey}` is the
+  transport-level slice of a provider — `Protocol` saying which chat surface its entry speaks
+  (`openai` unless the entry says `anthropic`), `Decisions` whether it speaks the Decisions shape
+  (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
+  ask of it carries — and the one mapping from configuration's vocabulary onto `Protocol` and
+  `Decisions` lives in `cmd`. The chat asks — the overview and each scoring call — go through
+  `model.Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
+  attempt count (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and
+  the two failures are not interchangeable: an endpoint that answered with a non-2xx status refused
+  the request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
   body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
   stream that failed with no answer — reading one as the other sends a diagnosis to the path to a
   provider that is answering. The letter asks go through `model.Decision`, one `POST` to whichever

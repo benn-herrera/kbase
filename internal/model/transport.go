@@ -9,6 +9,16 @@ import (
 // userAgent is the User-Agent header value sent with every request.
 const userAgent = "kbase/0.1"
 
+// The wire vocabulary both surfaces share: the catalogue path, which hangs off
+// Endpoint.BaseURL on either protocol, and the media types a request negotiates
+// with. Each protocol's chat path is its own (openai_client.go,
+// anthropic_client.go).
+const (
+	pathModels      = "models"
+	mimeJSON        = "application/json"
+	mimeEventStream = "text/event-stream"
+)
+
 // responseHeaderTimeout bounds the HANDSHAKE alone: request written →
 // response headers received. It lives on the Transport, not on
 // http.Client.Timeout, because the latter also covers reading the body and

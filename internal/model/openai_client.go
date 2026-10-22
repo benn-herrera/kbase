@@ -12,72 +12,10 @@ import (
 	"time"
 )
 
-// The OpenAI-compatible wire surface: the two paths that hang off
-// Endpoint.BaseURL, and the media types the three calls negotiate with.
-const (
-	pathChatCompletions = "chat/completions"
-	pathModels          = "models"
-	mimeJSON            = "application/json"
-	mimeEventStream     = "text/event-stream"
-)
-
-// Protocol names the chat wire protocol a client speaks. The caller resolves
-// the configured `api` value to one of these: this package knows the wire
-// shapes, and the configuration owns the vocabulary that names them, so no
-// third site compares the string.
-type Protocol int
-
-const (
-	// ProtocolOpenAI is the OpenAI-compatible chat-completions surface — the
-	// zero value, and what an endpoint naming no protocol gets.
-	ProtocolOpenAI Protocol = iota
-	// ProtocolAnthropic is the Anthropic Messages surface.
-	ProtocolAnthropic
-)
-
-// Endpoint is what one client is built from: where to reach an inference API,
-// which chat protocol it speaks, how to authenticate to it, and the
-// prompt-cache key its OpenAI-surface requests carry. The provider fields are
-// constructed from the canonical provider config at wiring time, which is what
-// keeps this package independent of the config layer; the key names a run, not
-// a provider.
-//
-// APIKey is secret-bearing. It is never logged, never placed in an error
-// string by this package, and is scrubbed out of provider responses that
-// echo it back (see scrubAuthorization).
-type Endpoint struct {
-	// Name is the pool entry's name, carried for diagnostics only.
-	Name string
-	// BaseURL is the API root; the protocol's paths ("chat/completions" and
-	// "models", or "messages" and "models") hang off it. A trailing slash is
-	// tolerated.
-	BaseURL string
-	// APIKey is the key. It rides the OpenAI surface as a bearer token and
-	// the Messages surface as `x-api-key`. Empty means send no auth header —
-	// several local servers reject an empty bearer value.
-	APIKey string
-	// Protocol is which chat wire protocol this endpoint speaks; the zero
-	// value is ProtocolOpenAI. NewClient dispatches on it.
-	Protocol Protocol
-	// Decisions is whether this server speaks the OpenAI Decisions shape for
-	// the letter asks: true for `POST <base-url>/decisions`, false for the
-	// SystemOne shape kbase's asks have always used. Chat is unaffected: it
-	// stays `chat/completions` under either surface, and Protocol is what
-	// selects chat.
-	//
-	// The configured `decisionsFlavor` value is resolved to this by the caller:
-	// this package knows the two wire shapes, and the configuration owns the
-	// vocabulary that names them, so no third comparison reads the string.
-	Decisions bool
-	// PromptCacheKey is the prompt-cache key every OpenAI-surface request this
-	// client sends carries, in the body's `prompt_cache_key`; empty sends none.
-	// It names a run rather than a provider: every ask of one run carries the
-	// same key, which is what holds that run's asks at one upstream and sharing
-	// one cache entry. The caller sets it, from the run it is opening the
-	// client for. The Messages protocol has no such field, so a client
-	// speaking it sends none of this.
-	PromptCacheKey string
-}
+// The OpenAI-compatible chat path, hanging off Endpoint.BaseURL. The catalogue
+// path and the media types both surfaces negotiate with are shared, and live in
+// transport.go.
+const pathChatCompletions = "chat/completions"
 
 // OpenAIClient is a thin OpenAI-compatible chat-completions client.
 //
