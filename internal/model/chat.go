@@ -53,7 +53,10 @@ type ChatAttempt struct {
 // temperature 0, thinking disabled, the usage chunk requested — re-issued
 // identically while it does not complete, up to ChatAttempts, pausing before
 // each re-issue for the next of backoff, its last repeating; with no backoff
-// it re-issues at once. observe, where set, is handed each attempt as it
+// it re-issues at once. A provider that answered with a status that is not
+// success is re-issued only where the status is retryable (retryableStatus):
+// any other is the request itself being wrong, and the call ends on the one
+// attempt that met it. observe, where set, is handed each attempt as it
 // ends. It returns the completed attempt, or the last one with an error
 // wrapping ErrChatIncomplete; a cancelled ctx returns its error at once.
 func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
@@ -74,7 +77,8 @@ func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 			case <-pause.C:
 			}
 		}
-		last = chatOnce(ctx, c, req)
+		var failure error
+		last, failure = chatOnce(ctx, c, req)
 		last.Attempt = attempt
 		if err := ctx.Err(); err != nil {
 			return last, err
@@ -85,21 +89,41 @@ func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 		if last.Outcome == ChatOK {
 			return last, nil
 		}
+		// A provider that read the request and declined it on a status that
+		// will not change will decline it again.
+		var se StatusError
+		if errors.As(failure, &se) && !retryableStatus(se.Code) {
+			return last, gaveUp(attempt, last)
+		}
 	}
-	if last.Error != "" {
-		return last, fmt.Errorf("%w: %d attempts, the last ending %s: %s", ErrChatIncomplete, ChatAttempts, last.Outcome, last.Error)
-	}
-	return last, fmt.Errorf("%w: %d attempts, the last ending %s", ErrChatIncomplete, ChatAttempts, last.Outcome)
+	return last, gaveUp(ChatAttempts, last)
 }
 
-func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
+// gaveUp is a call none of whose attempts completed, said as one reason: how
+// many attempts it took, and how the last one ended.
+func gaveUp(attempts int, last ChatAttempt) error {
+	count := fmt.Sprintf("%d attempts", attempts)
+	if attempts == 1 {
+		count = "1 attempt"
+	}
+	if last.Error != "" {
+		return fmt.Errorf("%w: %s, the last ending %s: %s", ErrChatIncomplete, count, last.Outcome, last.Error)
+	}
+	return fmt.Errorf("%w: %s, the last ending %s", ErrChatIncomplete, count, last.Outcome)
+}
+
+// chatOnce is one request of the call and how it ended, with the error that
+// ended it where one did: the retry loop above decides which of them deserve
+// a re-issue.
+func chatOnce(ctx context.Context, c Client, req Request) (ChatAttempt, error) {
 	started := time.Now()
 	var a ChatAttempt
+	var failure error
 	sr, err := c.ConsultStream(ctx, req)
 	if err != nil {
 		a.Outcome, a.Error = chatFailure(err)
 		a.Duration = time.Since(started)
-		return a
+		return a, err
 	}
 	defer sr.Close()
 	for {
@@ -109,6 +133,7 @@ func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
 		}
 		if err != nil {
 			a.Outcome, a.Error = chatFailure(err)
+			failure = err
 			break
 		}
 		a.Reasoned = a.Reasoned || chunk.Reasoning != ""
@@ -125,7 +150,7 @@ func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
 		a.Outcome = ChatOK
 	}
 	a.Duration = time.Since(started)
-	return a
+	return a, failure
 }
 
 // chatFailure is the outcome of an attempt err ended, and the text a reason

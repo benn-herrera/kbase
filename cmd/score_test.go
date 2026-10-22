@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -841,5 +844,67 @@ func TestScoreMigratesAnOlderKB(t *testing.T) {
 	}
 	if _, migrated := again.doc.Values["migration"]; migrated {
 		t.Errorf("a run over a current KB carries a migration record:\n%s", again.stdout)
+	}
+}
+
+// statusProvider answers every request with code, counting the requests it
+// read, and serves as the endpoint a score run dials.
+func statusProvider(t *testing.T, code int) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen++
+		mu.Unlock()
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown model: m"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
+	}
+}
+
+// TestScoreAsksOnceOnARefusalAndToTheCountOnARetryableStatus: an item's ask is
+// re-issued only where the status that ended it may change. A 400 is one
+// request and fails its item at once; a 503 is the transport attempt count,
+// with a pause between attempts — the sequence injected short here, so the
+// count is proved without waiting out the 5 s and 30 s the run pauses by.
+func TestScoreAsksOnceOnARefusalAndToTheCountOnARetryableStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		asks int
+	}{
+		{"a refusal", http.StatusBadRequest, 1},
+		{"a retryable status", http.StatusServiceUnavailable, model.ChatAttempts},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, asks := statusProvider(t, tc.code)
+			got := scoreIn(t, scoreRepo(t), t.TempDir(),
+				scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}},
+				func() model.Client { return model.NewHTTPClient(model.Endpoint{BaseURL: srv.URL}) })
+			if n := asks(); n != tc.asks {
+				t.Errorf("%d requests, want %d\n%s", n, tc.asks, got.stdout)
+			}
+			if got.doc.Outcome != "failed" || got.code != exitCodes["failed"] {
+				t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
+			}
+			counts, _ := got.doc.Values["counts"].(map[string]any)
+			if counts["total"] != 1 || counts["failed"] != 1 || counts["done"] != 0 {
+				t.Errorf("counts %v, want the one item failed\n%s", got.doc.Values["counts"], got.stdout)
+			}
+			items := got.doc.items("failures")
+			if len(items) != 1 || items[0]["check"] != checkError {
+				t.Fatalf("failures %v, want the one item's\n%s", items, got.stdout)
+			}
+			detail, _ := items[0]["detail"].(string)
+			if !strings.HasPrefix(detail, "clm-aaaaaa: ") || !strings.Contains(detail, fmt.Sprintf("http %d", tc.code)) {
+				t.Errorf("failure %q, want the item and the status that refused it\n%s", detail, got.stdout)
+			}
+		})
 	}
 }

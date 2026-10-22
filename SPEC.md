@@ -836,9 +836,10 @@ one run. A run records the model as the flag's where the flag named it. A `--dry
 and refuses nothing for one.
 
 **One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint. A call
-that does not complete is re-issued identically, at once, up to the transport attempt count
-(ARCHITECTURE §12); a reply the parse refuses is not re-issued, and `--resume` is how a user asks that
-item again.
+that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
+30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
+it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and
+the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a failed item again.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole

@@ -49,6 +49,11 @@ type scoreOptions struct {
 	// DryRun lists the set and asks nothing.
 	DryRun bool
 
+	// Backoff is the pause before each re-issue of an item's ask, its last
+	// repeating; nil takes scoreBackoff. A test drives the full attempt count
+	// through a short sequence rather than waiting out the real pauses.
+	Backoff []time.Duration
+
 	// ScoringModel is the --scoring-model flag: a reference overriding the
 	// scoring role's model in file mode, a bare id under the environment's
 	// endpoint. It overrides a configured role and never substitutes for one.
@@ -71,6 +76,11 @@ type scoreOptions struct {
 	Stdout io.Writer
 	Logger log.Logger
 }
+
+// scoreBackoff is the pause before each re-issue of an item's ask — the
+// sequence the build's overview call pauses by, and for its reason: a 429 or a
+// 5xx re-issued at once is three attempts inside one outage.
+var scoreBackoff = []time.Duration{5 * time.Second, 30 * time.Second}
 
 // callTimeout is one ask's deadline: the --timeout value, or the shared default
 // where it was zero or negative.
@@ -254,13 +264,17 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	fields = append(fields, rolesField([]toolresult.Record{roleRecord(ep)}))
 
 	timeout := opts.callTimeout()
+	backoff := opts.Backoff
+	if backoff == nil {
+		backoff = scoreBackoff
+	}
 	// The ask is one tool-less chat call on the role's model. Each ask's own
 	// text carries the instruction, so the system prompt is empty and nothing
 	// is said twice.
 	ask := func(ctx context.Context, prompt string) (string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		attempt, err := model.Chat(callCtx, client, modelID, "", prompt, nil, nil)
+		attempt, err := model.Chat(callCtx, client, modelID, "", prompt, backoff, nil)
 		if err != nil {
 			return "", err
 		}

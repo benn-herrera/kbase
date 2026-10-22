@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,27 @@ func sseServer(t *testing.T, bodies ...string) (*httptest.Server, func() [][]byt
 		mu.Lock()
 		defer mu.Unlock()
 		return append([][]byte{}, seen...)
+	}
+}
+
+// statusServer answers every request with code and a provider-shaped error
+// body, counting the requests it read.
+func statusServer(t *testing.T, code int) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen++
+		mu.Unlock()
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown model: m"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
 	}
 }
 
@@ -91,14 +113,10 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 // not success read the request and declined it, which is not the transport
 // failing — so the attempt says it refused, and the reason carries the status
 // and the body's start rather than sending a reader to the path between kbase
-// and a provider that is answering.
+// and a provider that is answering. A 400 will be as wrong on the third
+// attempt as on the first, so the call is put on the wire once.
 func TestChatNamesAProviderRefusal(t *testing.T) {
-	const body = `{"error":{"message":"unknown model: m"}}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
+	srv, requests := statusServer(t, http.StatusBadRequest)
 
 	var observed []string
 	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
@@ -117,13 +135,63 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 			t.Errorf("reason = %q, want no transport failure where the provider answered", reason)
 		}
 	}
-	if len(observed) != ChatAttempts {
-		t.Fatalf("%d attempts observed, want %d", len(observed), ChatAttempts)
+	if !strings.Contains(err.Error(), "1 attempt") {
+		t.Errorf("reason = %q, want the one attempt it took", err)
+	}
+	if n := requests(); n != 1 || len(observed) != 1 {
+		t.Fatalf("%d requests, %d attempts observed; want one: a refusal is not re-issued", n, len(observed))
 	}
 	for _, o := range observed {
 		if o != ChatProviderRefused {
 			t.Errorf("an attempt = %q, want %q", o, ChatProviderRefused)
 		}
+	}
+}
+
+// TestChatReissuesOnlyARetryableStatus: a status that may be the provider's
+// moment — 429 and the 5xx class — is re-issued to the attempt count; every
+// other answered status ends the call on the one attempt that met it.
+func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
+	for _, tc := range []struct {
+		code     int
+		requests int
+	}{
+		{http.StatusBadRequest, 1},
+		{http.StatusUnauthorized, 1},
+		{http.StatusNotFound, 1},
+		{http.StatusTooManyRequests, ChatAttempts},
+		{http.StatusServiceUnavailable, ChatAttempts},
+	} {
+		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
+			srv, requests := statusServer(t, tc.code)
+
+			var observed []ChatAttempt
+			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+				func(a ChatAttempt) { observed = append(observed, a) })
+			if !errors.Is(err, ErrChatIncomplete) {
+				t.Fatalf("Chat = %v, want an incomplete call", err)
+			}
+			if got.Outcome != ChatProviderRefused {
+				t.Errorf("outcome = %q, want %q", got.Outcome, ChatProviderRefused)
+			}
+			for _, reason := range []string{got.Error, err.Error()} {
+				if want := fmt.Sprintf("http %d", tc.code); !strings.Contains(reason, want) {
+					t.Errorf("reason = %q, want it to name %q", reason, want)
+				}
+			}
+			if n := requests(); n != tc.requests || len(observed) != tc.requests {
+				t.Fatalf("%d requests, %d attempts observed; want %d", n, len(observed), tc.requests)
+			}
+			if tc.requests == 1 {
+				if got.Attempt != 1 || !strings.Contains(err.Error(), "1 attempt") {
+					t.Errorf("attempt %d, reason %q; want the one attempt it took", got.Attempt, err)
+				}
+				return
+			}
+			if got.Attempt != ChatAttempts {
+				t.Errorf("attempt = %d, want the last of %d", got.Attempt, ChatAttempts)
+			}
+		})
 	}
 }
 
@@ -148,18 +216,24 @@ func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
 
 // TestChatNamesAnUnreachableEndpoint: nothing answering at all is the
 // transport's failure — the case the refusal above must not be read as, and
-// what a closed port looks like.
+// what a closed port looks like. No status refused it, so it is re-issued to
+// the attempt count like an incomplete stream.
 func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := srv.URL
 	srv.Close()
 
-	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil, nil)
+	var observed []string
+	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
+		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
 	if got.Outcome != ChatTransportFailure {
 		t.Errorf("outcome = %q, want %q", got.Outcome, ChatTransportFailure)
+	}
+	if len(observed) != ChatAttempts {
+		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), ChatAttempts)
 	}
 }
 

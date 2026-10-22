@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kbase/internal/config"
 	"kbase/internal/model"
@@ -67,7 +68,9 @@ func TestScoreRecordNamesWhatAnswered(t *testing.T) {
 // document carrying 64 KiB of one are both what the one channel prevents.
 func TestScoreFailureReasonIsASummary(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
-	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
+	// The stub's failure is the transport's, so it is re-issued; the pause is
+	// injected short because what this test reads is the reason, not the wait.
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}}, func() model.Client {
 		m := model.NewScriptedMock(nil, nil)
 		m.SetError(errors.New("the stub refuses\n\x1b[2J\x1b]0;owned\a" + strings.Repeat("x", 2000)))
 		return m
