@@ -1178,7 +1178,9 @@ declaring `kbase.mcp` = `bound` — `mcp` and `wait` declare `excluded`, the lat
 would spend the turn the build takes, and cobra's own `completion` and `help` declare nothing and
 are skipped with them — plus the one listed tool below. A tool's
 schema is derived from the command's `Use` line positionals and its flags. A command's read-only
-standing is the cobra annotation `kbase.readOnly`, read when the table is built.
+standing is the cobra annotation `kbase.readOnly`, read when the table is built. A flag its verb
+refuses to run without carries `kbase.required`, and its tool's schema lists the flag among
+`required`.
 
 `rewind-build` is the one tool no command stands behind (I9), so it states for itself what the
 derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional), the

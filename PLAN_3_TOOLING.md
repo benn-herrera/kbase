@@ -78,8 +78,9 @@ never waived. Evidence: the command, the comparison output, and the fixture list
    the acceptance grep below can come back empty.
 2. `definitions/kbase.py`: the description becomes "score the KB's rigor and bearings"; the route
    table's grading row becomes `scoring the KB's rigor and bearings → references/scoring.md`; the
-   route names the installed `kbase` binary, not an MCP tool, and says `score` is excluded from the
-   server because it runs for minutes and calls models.
+   route names the installed `kbase` binary. `score` is both a CLI verb and a builtin tool: a tool
+   call starts the run detached and returns its pid and state store, and `wait` reports the outcome
+   when it ends.
 3. `references/scoring.md` carries: what `kbase score --pass rigor|bearing` does; one quantity per
    ask and the two passes; the configured provider and text model (`show-config` reports what
    answers); the two human-scored exceptions (a work's rigor, a `founds` bearing); the ledger, the

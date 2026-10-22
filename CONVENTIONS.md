@@ -152,6 +152,9 @@ single source. Working habits they impose:
   copied into a tool, or a schema typed beside the command's flags. Each command declares its
   binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`; the table binds only
   `bound` commands, and the test derives its expectation from the annotations, never from a list.
+  A flag its verb refuses to run without declares `kbase.required` the same way, and the tool's
+  schema lists it among `required`; the trap is a refusal whose flag carries no mark, so a model
+  reading the schema cannot tell the flag must be given.
   The exception is a tool no command stands behind: listed, and only where the tool-table test
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `toolResult`, so text, structured content and exit code cannot drift from a

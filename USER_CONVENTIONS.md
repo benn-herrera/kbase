@@ -158,11 +158,13 @@ lift stands over it, in which case the lift's product is the published number. A
 `strength` as a number rounded to two decimals, while the register's record carries the value itself;
 the arithmetic always reads the value.
 
-**`score`** runs the scoring pass — a CLI verb, not an MCP tool: `kbase score --pass rigor|bearing`;
-`--help` lists its flags. One item per call, landed through `set-rigor` or `set-bearing` under the KB
-write lock. The call asks for the faults the text commits — one charge line per occurrence, each a
-fault id and a span of the item's own text, or `none`, or `flt-pending` — and kbase prices the list
-into the value: the scheme's criteria, its two id sets and its weights are
+**`score`** runs the scoring pass: `kbase score --pass rigor|bearing`; `--help` lists its flags. At a
+terminal it blocks until the walk ends. Called as a tool, it starts the run detached and returns its
+pid and state store; `status`, `cancel` and `wait` cover a scoring run as they cover a build. One item
+per call, landed through `set-rigor` or `set-bearing` under the KB write lock. The call asks for the
+faults the text commits — one charge line per occurrence, each a fault id and a span of the item's own
+text, or `none`, or `flt-pending` — and kbase prices the list into the value: the scheme's criteria,
+its two id sets and its weights are
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md)'s. `rigor` covers every
 claim, analysis and experiment, `bearing` every `supports`, `founds`, `lifts` and `refutes` edge; a
 work's rigor is never asked — set it by hand.
