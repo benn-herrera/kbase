@@ -18,12 +18,9 @@ hardware.
 - **Graphviz `dot`**, optional, any version, on `PATH`. Draws the [claim-graph
   sheets](#claim-graph-sheets); without it they are not drawn.
 - **A provider configuration**, for builds that spend inference and for scoring runs. A build run with
-  `--no-inference` needs none, and so does a `kbase score --dry-run`. A `kbase score --harness` run
-  dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model: the role is
-  what declares which model judges the KB.
-- **opencode v2**, for `--harness opencode` alone: the installed binary, authenticated for the model
-  the scoring role names. kbase passes that model to opencode as `--model` and its value, unaltered,
-  and reads opencode's configuration from nowhere but an empty directory it creates for the run.
+  `--no-inference` needs none, and so does a `kbase score --dry-run`. A scoring run asks the
+  `scoring` role's endpoint, so `models.scoring` — or `KBASE_SCORING` under the environment's
+  endpoint — must name a model: the role is what declares which model judges the KB.
 - **Go**, to build kbase from source. `just` runs the project's recipes.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
@@ -289,17 +286,17 @@ in hand, through `set-rigor`. The two ask templates, the ids and the weights are
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md); the ledger is where a
 value can be checked against its charges.
 
-Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, the back end,
-the model and the digest of the ask its judgements answer; `ledger.jsonl` holds a line per attempt
-with the faults it recorded, the reply where it parsed, the value it prices to, the model and the
-prompt's digest; and under `--harness` one `harness/` working directory. `--resume <run>` continues a
-run without re-asking what it already landed, while a fresh run asks everything again. Because a
+Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, what answered
+(`backend`: `provider` or `environment`), the model and the digest of the ask its judgements answer;
+`ledger.jsonl` holds a line per attempt with the faults it recorded, the reply where it parsed, the
+value it prices to, the model and the prompt's digest. `--resume <run>` continues a run without
+re-asking what it already landed, while a fresh run asks everything again. Because a
 value is a projection of the line's ids, a resume **re-prices** a run when the table has moved since:
 it lands the values that moved through the same write path and records them in `repriced.yaml`, with
 no model asked. A resume under a changed ask — a run older than kbase's current instructions —
 continues under the current ask: the header keeps the digest the run began under, and nothing refuses
 and nothing asks you to choose. `--limit N` stops after N items, and the result carries the `resume`
-command — flags, back end and, under the environment mode, the variables it read — whenever an item is
+command — its flags and, under the environment mode, the variables it read — whenever an item is
 still not `done`. A failed run lists what failed under `failures` — an item and the reason its ledger
 line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. The
 reason names what ended the item's call: `provider-refused` where the endpoint answered with a status
@@ -313,16 +310,11 @@ or the values a resume re-priced, each refresh holding the KB write lock; a dry 
 
 `--scoring-model` names the model for one run: a `<provider>/<model>` reference in file mode, which
 supplies the role where `models.scoring` names none and overrides it where it does; a bare id under
-the environment's endpoint, where the role's variable must name one too; the role's value whole under
-`--harness`, which under `--harness opencode` is handed to opencode as it stands, so a model opencode
-does not recognise fails that item, in opencode's own words, and the run goes on.
-`--harness opencode` runs one process per item instead of asking an endpoint: an installed opencode
-v2, with an agent kbase defines for that process alone — no tools, no instructions of its own, its
-configuration sources cut back to an empty directory under the run's own records — the prompt on its
-stdin and its stdout the reply. Nothing is written to your opencode configuration. It is the only
-value the flag takes: kbase runs no command a configuration file names, and any other name is
-refused before the KB is opened.
-A run asks a model for minutes, so it is a command line: nothing is offered for it over MCP.
+the environment's endpoint, where the role's variable must name one too. Every ask is one chat call
+on that endpoint, re-issued identically up to the transport attempt count while it does not complete.
+A run asks a model for minutes: at a terminal `kbase score` blocks until the walk ends, and as an
+[MCP](#using-kbase-from-an-agent-harness-mcp) tool it starts a detached child and returns at once with
+the run's identity, `kbase wait` reporting the outcome.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
 A writer that cannot take it within 30 s gets `retry`. While a build runs, these are refused at once
@@ -503,7 +495,7 @@ them only. The environment is `KBASE_API_BASE_URL` plus the role variables `KBAS
 directory at all. A role variable beside a `[models]` value is refused, one item per side, and so is a
 role variable without a base URL or a base URL beside file-supplied models: the environment is the
 whole configuration or nothing. `KBASE_API_KEY_FILE` is not a mode — it replaces the key of whichever
-endpoint is in force, and is optional. A harness consults neither mode: it chooses no endpoint.
+endpoint is in force, and is optional.
 
 Provider selection — `--provider`, else the sole `providers.toml` entry — belongs to `models` and
 `configure` alone: they select an entry to dial, which is not a role. A `--provider` the pool does not

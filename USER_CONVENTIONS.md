@@ -173,8 +173,7 @@ work's rigor is never asked — set it by hand.
   environment's endpoint. A run that names none is refused before the KB is opened, naming that key;
   nothing falls back to the text model. `--scoring-model` names the role's model for one run — a
   `<provider>/<model>` reference in file mode, which supplies the role where the files name none and
-  overrides it where they do; a bare id in environment mode, whose variable must name one too; and the
-  role's value whole under `--harness`.
+  overrides it where they do; a bare id in environment mode, whose variable must name one too.
 - A reply the parse refuses, a call cut off at the completion cap, and a failed call or landing each
   write nothing for that item: the attempt is recorded `failed` with the reason and no text, and the
   run goes on.
@@ -183,19 +182,13 @@ work's rigor is never asked — set it by hand.
   landing. A resume whose landed values the running table now prices differently **re-prices** them —
   through the same write path, no model asked — and records the move in `repriced.yaml`; a resume
   under a changed ask continues under the current ask, and neither refuses.
-- `--harness opencode` runs one opencode v2 process per item instead of asking an endpoint: kbase
-  composes the command and the environment — no tools, no instructions of its own, the scoring
-  model's value passed to opencode as it stands, and nothing written to your configuration — so no
-  endpoint is chosen and the mode is not consulted. A model opencode does not recognise fails that
-  item rather than the run. It is the only value the flag takes; any other name is refused
-  before the KB is opened, because kbase runs no command a user supplies. `--dry-run` lists the set,
-  asks nothing and cannot be resumed.
+- `--dry-run` lists the set, asks nothing and cannot be resumed.
 - A run holds `<state-dir>/score`, so a second is `retry` (`check: lock`).
 
 Keys: `state-dir`, `pass`, `roles` (one record, `scoring`; absent under `--dry-run`), `run`,
 `ledger`, `counts` (`total`, `done`, `malformed`, `failed`, `remaining`), `scored`, `resume` (wherever
-an item is not `done`, ahead of the closing record, carrying the flags, the back end and — in
-environment mode — the variables it read), and last — `failures` on `failed` (`check: error` items:
+an item is not `done`, ahead of the closing record, carrying the flags and — in environment mode —
+the variables it read), and last — `failures` on `failed` (`check: error` items:
 each failed item and its reason, or the error that stopped the run), `cancelled` (`item`, the one it
 stopped before) on `cancelled`, `refusals` on `refused` and `retry`.
 
@@ -207,11 +200,11 @@ render and never reported.
 
 ## Providers
 
-Only a `build` with an inference-spending stage left to walk, `score` (a dry run and a `--harness`
-run excepted), `models` and `configure` use a provider. A build that needs one and has none is
-refused before its first stage; `--no-inference` needs none. A `--harness` run dials no endpoint, but
-`models.scoring` — or `KBASE_SCORING` — must still name a model: the role is the run's declaration
-of which model judges it.
+Only a `build` with an inference-spending stage left to walk, `score` (a dry run excepted), `models`
+and `configure` use a provider. A build that needs one and has none is refused before its first
+stage; `--no-inference` needs none. A scoring run asks the `scoring` role's endpoint, so
+`models.scoring` — or `KBASE_SCORING` — must name a model: the role is the run's declaration of which
+model judges it.
 
 Configuration is read from two layers: `<repository>/.kbase/` over `~/.config/kbase`, a repository
 pool entry replacing a same-named global one whole and a `config.toml` value
@@ -245,7 +238,7 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
   configuration directory at all, and a role variable beside a `[models]` value is refused with one
   item per side rather than merged. A role variable without the base URL, or the base URL beside
   file-supplied models, refuses the same way. `KBASE_API_KEY_FILE` replaces the key of whichever
-  endpoint is in force and is not a mode. A `--harness` run consults neither mode.
+  endpoint is in force and is not a mode.
 - The guidance for choosing those ids is in the files themselves: a `config.toml` kbase creates
   states beside `[models]` what each category wants and example ids, and an MCP client reads the
   same rows at `kbase://model-hints`. The ids are examples, not requirements — match the stated

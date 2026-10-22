@@ -536,13 +536,12 @@ at a time, in the set's order, with no concurrency. `Counts` is computed from th
 per item, not this invocation's attempts, so a resumed run reports the whole run. A cancelled context
 stops before the next ask and records nothing for the item in flight.
 
-**The two back ends are one seam.** The runner's `Ask` takes the rendered prompt whole and returns
-the reply, so the runner has no view of a provider and none of a harness: `internal/score` imports
-`asks`, `kb`, `query`, `result`, `atomicfile` and `log`, and reaches neither `model` nor `harness`.
-`cmd/score.go` fills the seam twice — `model.Chat` on the scoring role's endpoint with an empty
-system prompt, or `(*harness.Command).Ask` on the back end's argv — and the runner learns nothing of
-which. Each score template splices the `score-system` fragment into its own text, so the instruction
-is carried once, in the user turn.
+**The ask is one seam.** The runner's `Ask` takes the rendered prompt whole and returns the reply, so
+the runner has no view of a provider: `internal/score` imports `asks`, `kb`, `query`, `result`,
+`atomicfile` and `log`, and never `model`. `cmd/score.go` fills the seam with `model.Chat` on the
+scoring role's endpoint and an empty system prompt, and the runner learns nothing of what answered.
+Each score template splices the `score-system` fragment into its own text, so the instruction is
+carried once, in the user turn.
 
 **The prompt shelf.** Three templates, one per class — `score-rigor-statement.tmpl.md`,
 `score-rigor-method.tmpl.md` and `score-bearing.tmpl.md` — each with the one `dyn.` slot the runner
@@ -662,18 +661,17 @@ once. `Ledger.Repriced()` says how many values moved, so the verb's closing refr
 re-price as it follows a landing. No model is asked: the ids are the whole input of the price, and
 the model never saw a weight.
 
-**The verb.** `runScore` is the body: the pass, harness value, limit and dry-run/resume checks; the KB
-root; the state directory; the back end and the scoring role resolved before the KB is opened — the
-mode decided, or `--harness opencode`'s built-in back end gated by `opencode --version` and composed
-in `cmd/score_opencode.go` — so a
-setup refusal writes nothing and mints no run; `openKB` and the migration record; the run id; the
-run's locks through
-`build.Hold`, before any record of the run is written; one refresh through
-`holdWriting`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
-the set; then either the dry run's records and an inert `Runner`, or the registry's client (none
-under a harness), the one `Ask` the back end needs and the walk; `counts` and `scored`; `resume`
-where any item is not `done`, ahead of the end refresh and of the record the outcome closes on; then,
-where anything landed or a resume re-priced, the KB re-read and the end refresh
+**The verb.** `runScore` is the body: the pass, limit and dry-run/resume checks; the KB root; the
+state directory; the scoring role resolved before the KB is opened — the mode decided and the role
+resolved through `config.Resolve`, with `--scoring-model` supplying or overriding the model, and both
+skipped under `--dry-run` — so a setup refusal writes nothing and mints no run; `openKB` and the
+migration record; the run id; the
+run's locks through `build.Hold`, before any record of the run is written; one refresh through
+`holdWriting`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load`
+and the set; then either the dry run's records and an inert `Runner`, or the registry's client, its
+`Ask` and the walk; `counts` and `scored`; `resume` where any item is not `done`, ahead of the end
+refresh and of the record the outcome closes on; then, where anything landed or a resume re-priced,
+the KB re-read and the end refresh
 — either refresh ending the run where it cannot take the KB write lock, with `holdWriting`'s own
 outcome and its `lock` item — and last, `failures` on `failed` (one `check: error` item per item the ledger
 records failed, detail its name and its line's reason, or one item naming the error a refresh stopped
@@ -731,8 +729,7 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   value. `config.Resolve` answers one role's `Endpoint` in that mode; it reads no file, opens no
   connection, writes no stderr and names no verb — the
   key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
-  never by resolution. `config.BackEndModel` answers the value a harness back end is handed, which
-  is the same model without an endpoint behind it. `config.Select` is the catalogue verbs' choice of
+  never by resolution. `config.Select` is the catalogue verbs' choice of
   a pool entry to dial — a
   flag, else the pool's only entry — and no role is chosen that way. `config.Refusal` (with
   `Refusals` for a decision that has more than one side to state) is the one typed refusal, and its
@@ -991,13 +988,7 @@ internal/build            stage table, state store, resume, --no-inference,
                           status's state and the MCP watcher both derive from
 internal/score            the score passes' closed text, its guard and the passages it is
                           made of, the parse, the runner, the run's ledger and its
-                          re-pricing; imports neither model nor harness; imported by cmd
-                          alone
-internal/harness          one command, one prompt, one reply, one process
-                          group: the setup probe, per-item argv substitution, the
-                          environment the caller composed, the two bounds and the kill
-                          on deadline; imports stdlib and `log` alone of kbase;
-                          imported by cmd alone
+                          re-pricing; imports not `model`; imported by cmd alone
 internal/statedir         the state directory of one KB: the override, else
                           $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
                           imported by build and cmd
@@ -1092,14 +1083,11 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   nor `asks/call`, transitively. `cmd/provider.go` is the only constructor of a `model.Client`, and
   a verb opens one only where it is about to ask something.
 - `internal/config` imports no kbase package but `atomicfile`: it holds the grammar, the three
-  roles, the two modes, `ModeOf`, `Resolve`, `BackEndModel`, `Select`, the refusals, the loaded files
+  roles, the two modes, `ModeOf`, `Resolve`, `Select`, the refusals, the loaded files
   and the templates, and it never imports `model`, `result` or `log`, opens no client and names no
   verb.
-- `internal/harness` imports stdlib and `log` alone of kbase. It knows no provider, no endpoint, no
-  KB path, no configuration type and no prompt: it receives a prompt and hands it over whole, and
-  composes none.
-- `internal/score` imports neither `model` nor `harness`: the back end is below its `Ask` seam, so
-  the runner, the guard, the parse and the ledger learn nothing of what answered.
+- `internal/score` imports `model` nowhere: the endpoint is below its `Ask` seam, so the runner, the
+  guard, the parse and the ledger learn nothing of what answered.
 - Only `build` and `cmd`'s `init` verb import `ledger`; `ledger` imports `log` and nothing else of
   kbase.
 - Only `build` and `cmd`'s `init` verb stamp readiness documents: within `cmd`, file-level,
@@ -1108,15 +1096,9 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   lock's contention and the holder lock's release; the operation lock's refusal is `build`'s, and the
   held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
-  execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs a
-  harness back end's program: the built-in opencode back end's `opencode`, or the command one run's
-  internal override named in its place. That second program is the one the exec policy cannot name
-  statically — it comes from the environment, never from a configuration file — so
-  `cmd/execpolicy_test.go` carries it with a sentinel and exempts its site from the per-binary
-  check. What stays enforced is that no other package execs for this purpose, and that the only way
-  either is reached is `score --harness`. The override is announced once on stderr and recorded in
-  the run's header, so a command nobody chose is never executed silently, and it is removed from the
-  child's environment.
+  execs `dot`; and only `cmd/mcp.go` (file-level) execs kbase itself. Those four are the exec policy's
+  whole list (`cmd/execpolicy_test.go`): a process started anywhere else, or a listed owner starting
+  a binary other than its own, fails the test.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB, has `export` write `gen-tex/`'s inputs, makes the one `pandoc.RunDefaults` call, and has
   `export` merge the filter's findings that run wrote into the report.
@@ -1136,7 +1118,6 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
 | Model roles | `[models] decision` (the letter asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference; `KBASE_DECISION`/`KBASE_TEXT`/`KBASE_SCORING` name a bare id under the environment's endpoint instead (SPEC §9) |
-| Harness bounds | `harness.ReplyLimit`, `StderrLimit` and `PromptLimit`: 64 KiB each — one item's reply, the stderr kept for a failure's reason, and the prompt one argv element can carry. A reply or stderr past its bound fails that item; a prompt past its bound fails it before a process starts. `harness.waitDelay`: 5 s, how long `Wait` waits on the child's output pipes once the child or its process group is gone — a command that daemonizes leaves a writer behind (§6's Scoring, SPEC §8) |
 | Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion`; the stamp key is `kb-format`. `2.0.1` |
 | Pending literal | `kb.PendingLiteral`: `*pending*`, the format's one no-number literal, written for a value not yet judged and accepted wherever a value is absent (SPEC §10) |
 | Conversion record | `migration`: a result's conditional record after `kb-root`, holding `from`, `to` and `note`, and the one stderr sentence the same call writes (SPEC §7, §10) |

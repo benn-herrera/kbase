@@ -414,7 +414,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `harness`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it |
@@ -459,7 +459,7 @@ omitted where it does not apply:
 | Key | Holds |
 |---|---|
 | `role` | `decision`, `text` or `scoring` |
-| `back-end` | what answered: `provider` (a pool entry), `environment` (the environment's endpoint) or `harness` (the built-in back end `--harness` selects) |
+| `back-end` | what answered: `provider` (a pool entry) or `environment` (the environment's endpoint) |
 | `provider` | the pool entry's name |
 | `provider-rule` | the rule that named it: `flag` (a flag overrode the reference) or `config` (the reference named it) |
 | `provider-layer` | the layer that supplied the entry: `explicit`, `environment`, `repository` or `global` |
@@ -468,13 +468,11 @@ omitted where it does not apply:
 | `detail` | `show-config` alone: why the role does not resolve, where it does not |
 
 `provider`, `provider-rule` and `provider-layer` stand together or not at all: no pool entry supplied
-the endpoint when the environment did, or when a harness did. `back-end` is what tells the three
-cases apart, so a reader never infers the source from an absence.
+the endpoint when the environment did. `back-end` is what tells the two cases apart, so a reader never
+infers the source from an absence.
 
 **The model is the one requested, never one observed.** `model` is the id this invocation asked for,
-and no result document or ledger line states one a server or a command ran. A harness run names the
-role's value whole — a file reference's `<provider>/<model>`, or an environment id — whether or not
-the back end turns out to take it.
+and no result document or ledger line states one a server ran.
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
@@ -734,8 +732,8 @@ keys: §7.
 ### `score`
 
 ```
-kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--harness BACK-END]
-            [--dry-run] [--resume RUN] [--state-dir DIR] [--timeout DURATION]
+kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--dry-run]
+            [--resume RUN] [--state-dir DIR] [--timeout DURATION]
 ```
 
 Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
@@ -834,62 +832,21 @@ flag supplies an unconfigured role and overrides a configured one, its reference
 the pool, and a provider the pool does not hold refuses naming the flag with the pool listed.
 Environment mode supplies every model by its own variable, so a variable the environment leaves unset
 refuses whatever the flag says, and `--scoring-model` there overrides the variable's bare id for the
-one run. Under `--harness` the value is taken verbatim. A run records the model as the flag's where
-the flag named it. A `--dry-run` resolves no role and refuses nothing for one.
+one run. A run records the model as the flag's where the flag named it. A `--dry-run` resolves no role
+and refuses nothing for one.
 
-**The harness back end.** `--harness NAME` runs one process per item instead of asking an endpoint.
-`opencode` is the one back end kbase ships and the only value the flag takes: kbase composes the
-command, no user-supplied command is executed, and any other name is refused before the KB is opened
-(`check: harness`, `key: --harness`, the shipped names as `allowed`). The back end consults no mode
-and no pool — a harness chooses no endpoint, so a `KBASE_API_BASE_URL` or a role variable set beside
-it is neither a mixed mode nor a refusal. The prompt goes to the command's stdin; the command's
-stdout is the reply and is parsed by the same rule a provider's reply is; its stderr is captured to a
-bound and recorded only in a failing attempt's reason, never forwarded. Each item runs in its own
-process, in one directory under the run's records that is emptied before each item, so nothing a
-command wrote is visible to the next.
-
-- **No re-issue.** A provider call is re-issued up to the transport attempt count
-  (ARCHITECTURE §12); a harness call is not. One item is one process and one judgement, and
-  `--resume` is how a user asks again.
-- **A failure is the item's.** A non-zero exit, a deadline, a reply or a stderr past its bound, or a
-  process that cannot be started after the walk began fails that item — the exit code and the bounded
-  stderr tail in the line's `reply` — and the next item is asked. A command that cannot be started at
-  all is a refusal before the walk (`check: harness`, `key: --harness`), because nothing was asked.
-- **The model.** The scoring role resolves before the walk: a configuration that names no scoring
-  model refuses the run as setup, because the role is the run's declaration of which model judges it.
-  The back end is handed that value whole — the environment's id, else the file reference's
-  `<provider>/<model>` — overridden by `--scoring-model`, and the run records the id it passed. kbase
-  does not read the value's shape and refuses nothing for it: a value opencode does not take fails
-  each item, in opencode's own words, in that item's `reply`.
-- **What kbase cannot guarantee.** The back end is a program kbase did not write: kbase removes what
-  it can of the harness's own instructions and tools, and can neither verify what it removed nor
-  undo what a harness adds. The ledger's prompt digest records what kbase sent, not what the harness
-  gave the model.
-
-**The built-in opencode back end.** `--harness opencode` runs opencode v2: kbase composes the command
-and the environment. Each item is one `opencode run --standalone` process with the prompt on its
-stdin, an agent defined inline for that process alone — no tools, no system prompt of its own, no
-instruction file, plugin or skill of the user's — its configuration sources restricted to an empty
-directory under the run's own working directory, and the upward walk for project configuration and
-instruction files closed. The model it is handed is the scoring role's value whole — a file
-reference's `<provider>/<model>`, or the environment's id and `--scoring-model` verbatim — passed as
-the value of `--model` as it stands, one element after the flag. kbase does not check that value:
-opencode's model ids are opencode's to define, so a value it does not recognise is its own refusal at
-the item, in its own words, in that item's `reply`, and the run goes on. An `opencode` whose
-`--version` is not v2 refuses the run before the first item. Nothing is written to the user's
-configuration. Its stdout is the reply and is parsed by the rule a provider's reply is.
+**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint. A call
+that does not complete is re-issued identically, at once, up to the transport attempt count
+(ARCHITECTURE §12); a reply the parse refuses is not re-issued, and `--resume` is how a user asks that
+item again.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
-run), `ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,
-its KB root, the ledger's format, the pass, `backend` (`provider`, `environment` or `harness`; absent
-under `--dry-run`, which resolves no back end because it asks nothing), the provider, the model,
-`ask_sha256`, the start, and — under a harness — the argv that invoked each item (`command`), and,
-where that argv was not one kbase composed, the environment variable that supplied it
-(`command_override`), so a run that executed a command nobody chose says so in its own record. **It
-is written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
-states the first invocation's back end and model, and each ledger line states what answered its own
-item.
+run), and `ledger.jsonl`. `run.yaml` holds the run, its KB root, the ledger's format, the pass,
+`backend` (`provider` or `environment`; absent under `--dry-run`, which resolves no role because it
+asks nothing), the provider, the model, `ask_sha256` and the start. **It is written once, at the
+run's creation, and no resume rewrites it**: a resumed or mixed run's header states the first
+invocation's back end and model, and each ledger line states what answered its own item.
 
 `ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the reply, `faults`
 (the parsed charges: `id`, `passage`, `citation`, `offset`, in the order written), `moot` (the charge
@@ -941,21 +898,20 @@ at an item boundary, with no line recorded for the item in flight and the ledger
 the state store, or where a refresh could not take the KB write lock past the wait; `refused`
 where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
 inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
-a mode whose sources are mixed or whose environment is partial, a `--harness` naming a back end
-kbase does not ship, a command that cannot be started, an index the load cannot answer), a run
-already holding the KB's operation lock (§6), or a KB that no longer opens when the end refresh
+a mode whose sources are mixed or whose environment is partial, an index the load cannot answer), a
+run already holding the KB's operation lock (§6), or a KB that no longer opens when the end refresh
 re-reads it.
 
 **The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
 `check: error` item per item the ledger records `failed`, `detail` the item as the document names it
 and the reason its line recorded — `<node id>: <reason>`, or `<relation> <source> → <target>:
 <reason>` — in the walk's order; the reason is the line's reply as a bounded, control-stripped
-summary, the ledger's line being the one place a harness child's stderr stands whole; a run a
-refresh stopped closes on one `check: error` item naming the
-refresh's own error. A `cancelled` run closes on `cancelled`, whose `item` is the walk's first item
-carrying no attempt, the one it stopped before, and `{}` where every item of the walk carries one. A
-`refused` or `retry` run closes on its `refusals`. A `bounded` run that failed an item carries no
-`failures`: the failure is counted in `counts.failed` and reasoned in the ledger alone.
+summary, the ledger's line being the one place a reply stands whole; a run a refresh stopped closes
+on one `check: error` item naming the refresh's own error. A `cancelled` run closes on `cancelled`,
+whose `item` is the walk's first item carrying no attempt, the one it stopped before, and `{}` where
+every item of the walk carries one. A `refused` or `retry` run closes on its `refusals`. A `bounded`
+run that failed an item carries no `failures`: the failure is counted in `counts.failed` and reasoned
+in the ledger alone.
 
 **`resume`** carries the command that continues the run, present wherever an item is not `done` — one
 `--limit` left, one `failed` — and it stands after `counts` and `scored` and before the closing
@@ -963,12 +919,12 @@ record, so a stop at the end refresh carries it whenever an item is still not `d
 from a dry run and from a stop before the walk: the start refresh's, the dial's, the
 ledger's or the index load's. It carries `--config-dir` wherever the invocation named one — the
 resumed run must read that directory and no other, or the same run id would resolve another
-reference — and it carries `--scoring-model` and `--harness` whenever the invocation
-did — the command must reach the same model on the same back end, or it is a different judgement
-under the same run id — and under the environment mode the settings this invocation read, as
-assignments before the program (`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and
-`KBASE_API_KEY_FILE` where it was set), so re-issuing it in a shell with none of them set asks the
-same endpoint with the same models. The key is named by its path, never printed.
+reference — and it carries `--scoring-model` whenever the invocation did — the command must reach the
+same model, or it is a different judgement under the same run id — and under the environment mode the
+settings this invocation read, as assignments before the program
+(`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and `KBASE_API_KEY_FILE` where it was set), so
+re-issuing it in a shell with none of them set asks the same endpoint with the same models. The key is
+named by its path, never printed.
 
 **`--dry-run`** lists the set and asks nothing. It writes `run.yaml` and `items.jsonl` (one pending
 line per item), dials no provider, resolves no role and runs no mode decision, and writes no KB file:
@@ -1102,7 +1058,7 @@ them.
 **`KBASE_API_KEY_FILE` is not a mode.** It names a file, not a provider and not a model: it overrides
 the key of whichever endpoint is in force — the selected entry's in file mode, the environment's in
 environment mode — and is optional in both: absent everywhere, no key is sent. It alone never flips
-the mode and never makes a mixed source. A harness consults neither mode (§8), choosing no endpoint.
+the mode and never makes a mixed source.
 
 **The preflight.** The inference preflight (§5) names each lacking setting in the mode's own
 spelling: `baseUrl` or `models.<role>` in file mode — `models.decision`, `models.text`,
@@ -1260,8 +1216,7 @@ The sources vocabulary is `layers`': `repository` or `global` for a value a file
 fault, each carrying `path` the `providers.toml` that carries the fault — which need not be the file
 a selection or `configure` names — and one item per role that does not resolve or per side of a mixed
 mode, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
-`config.toml`. It says nothing about the harness back end: that is a flag's choice, not a setting a
-file holds.
+`config.toml`.
 
 **Names and paths, never secrets.** A key is reported by the kind it is — from a file, or none —
 and a key file by the path its entry states, never by its content; an inference variable by its
@@ -1760,12 +1715,10 @@ A charge that means *this leaves nothing* is the table's whole maximum by refere
 weight of its own, so a ceiling change carries it: `flt-unaddressed` weighs `1.00` with the method
 vocabulary's maximum, and `flt-no-engagement` the bearing one's, which is unchanged at `1.00`.
 
-**0.8.0 — no harness profiles, `score` as a tool, and one operation lock.**
+**0.8.0 — `score` as a tool, the provider as its one back end, and one operation lock.**
 
-- **`harnesses.toml` is not read.** `--harness` names a back end kbase ships — `opencode` today, which
-  kbase runs with a tool-less agent it defines for the process itself — and any other value is refused
-  naming the set. A profile file left from an earlier version is ignored, and `configure --create`
-  writes none.
+- **A scoring run reaches its model through the provider.** Every ask is one chat call on the
+  `scoring` role's endpoint, in either mode (§8).
 - **`score` is a builtin tool as well as a CLI verb.** A tool call starts the run detached and returns
   its pid, state store and ledger; `status`, `cancel` and `wait` cover a scoring run as they cover a
   build, and a run at a terminal blocks as before (§11).

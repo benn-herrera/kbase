@@ -51,9 +51,7 @@ them. Working rules for packages that carry over:
   `atomicfile`, never `model`, `result` or `log`. A `[models]` value is parsed by one function,
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
   reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
-  parses. No site splits an id or concatenates a reference by hand. A role under a harness back end
-  resolves through `BackEndModel`, which is the same value without an endpoint behind it: the harness
-  takes the model whole, in whatever form its own CLI names one.
+  parses. No site splits an id or concatenates a reference by hand.
 - **internal/model**: `Endpoint{Name, BaseURL, APIKey, Decisions}` is the transport-level slice
   of a provider — the last saying whether its entry speaks the Decisions shape (`systemone` unless
   the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
@@ -73,11 +71,6 @@ them. Working rules for packages that carry over:
   seam's re-ask/default path. Either surface is re-issued identically on a transport error or
   retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
   `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference in file mode.
-- **internal/harness**: the back end's command, run once per item. It imports stdlib and `log` alone
-  of kbase and knows nothing of kbase — no provider, no endpoint, no KB path, no configuration type.
-  It receives a prompt and hands it over whole: it composes none, and it is not the place a prompt's
-  text, its slots or its rules live. It carries the environment the caller composed and reads nothing
-  out of it: a back end that needs one composes it beside its argv, in `cmd`.
 
 ---
 
@@ -102,14 +95,8 @@ single source. Working habits they impose:
   (`cmd/execpolicy_test.go`), and ARCHITECTURE §11's dependency rules by `cmd/importpolicy_test.go`
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
   beside it. The one self-exec owner is a file, not a package: `cmd/mcp.go` alone may exec the kbase
-  binary, and the test fails on any other file that does. A fifth owner is `internal/harness`, which
-  execs a harness back end's program — the built-in opencode back end's `opencode`, or the command
-  one run's internal override named in its place. That second binary comes from the environment and
-  from nowhere a user configures, so the policy carries it with a sentinel and exempts its site from
-  the per-static-binary check; what the policy still holds is that no other package execs for that
-  purpose, and that a back end can only be run by `score --harness`. The override is announced on
-  stderr and recorded in the run's header, and never reaches the child's environment; kbase runs no
-  command a configuration file names, so the promise is disclosure, never inspection. The policy
+  binary, and the test fails on any other file that does. Four owners are the whole list — pandoc,
+  git, `dot` and that self-exec — and a process started anywhere else fails the test. The policy
   scans share one module walk
   (`cmd/modulescan_test.go`), so they agree on which files are the module's source. The scan
   reads test files as source too — the trap: a package test that compiles its output under

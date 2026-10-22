@@ -15,7 +15,7 @@ remains the normative page on its subject: the fault vocabulary, the table, the 
 | 1 | — | one commit series, merged once | — | **merged**, one squashed commit `07bf4c6` |
 | 2 | — | one commit series, merged once | Phase 1 | **merged** in `65e9b78`: the scoring loop, WP1–WP8, the contract fixes and the `test-data/` rename |
 | 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2, 4 | ready: the consuming formats are landed; external owners |
-| 4 | — | one commit series, merged once | Phase 2 | **merged** in `65e9b78`: resolution and the registry, the `scoring` role and its flags, the harness back end, the rubric's charge-line answer, and the contract text |
+| 4 | — | one commit series, merged once | Phase 2 | **merged** in `65e9b78`: resolution and the registry, the `scoring` role and its flags, the rubric's charge-line answer, and the contract text |
 
 `PLAN_1_FORMAT.md`, `PLAN_2_SCORE.md`, `PLAN_4_INFERENCE.md`, `RIGOR_AND_BEARING_SCORING_DESIGN.md`
 and `REVIEW_BURNDOWN.md` are retired. What the rubric's design left open is the scheme's
@@ -37,16 +37,11 @@ them.
    document reports those per role rather than for the verb. Existing configurations that name a
    provider globally get a stated compatibility path, not a silent reinterpretation.
 3. **A `scoring` role.** `[models] scoring` names the model the scoring asks go to. Absent, it is a
-   refusal — never a fallback to `text` — in provider mode and in harness mode alike.
-4. **Two scoring-time flags.** `--scoring-model` chooses the model at scoring time; `--harness`
-   chooses the back end the asks go to. They compose: `--scoring-model` names the model to use in
-   either back end, a pool reference under provider mode and the harness's own model id under a
-   harness.
-5. **The harness back end.** The scoring runner already reaches a model through one seam. A harness
-   implementation of that seam is the second back end, and the design states what the ledger records
-   when a harness answers, how one item is kept from carrying into the next, whether a harness failure
-   is an item's or the run's, and whether the model a document names is the one requested or the one
-   the harness reports using.
+   refusal — never a fallback to `text` — in either mode.
+4. **A scoring-time flag.** `--scoring-model` chooses the model at scoring time: a pool reference
+   under file mode, the environment's bare id under the environment's endpoint.
+5. **One ask path.** The runner reaches its model through one seam, and the provider fills it: one
+   chat call per item on the `scoring` role's endpoint.
 6. **The contract moves with it.** SPEC §9 for the configuration surface, §7 and §8 for the result
    keys and the scoring flags, and `show-config`, `configure`, README, USER_CONVENTIONS and the MCP
    integration guide for the reader's side.
@@ -65,10 +60,6 @@ Open issues the scoring landing leaves, none of them blocking its merge:
   was cancelled and whose closing refresh was retried reads `retry`. Which of the two a two-half
   failure reports is a contract question, not a code one.
 
-- **A tool-less agent for the ask**, supplied by adjagent and usable from either harness through its
-  own agent configuration, so a harness profile can run an agent that cannot read the KB instead of
-  one that is merely instructed not to. Phase 3's territory; unowned.
-
 ## Order and gates
 
 Phase 4's order is design, then its prompt-engineer review, then work packages, then the contract
@@ -83,9 +74,8 @@ network-dependent target.
 **Seats.** The contract documents (`SPEC.md`, `ARCHITECTURE.md`, `README.md`, `USER_CONVENTIONS.md`,
 `INTEGRATING_KBASE_VIA_MCP.md`) are dual-audience and belong to the tech-writer seat; the coder
 supplies the built behaviour and the acceptance evidence, and the writer lands the prose in the same
-landing. Model-facing text — the two scoring prompt templates, and any the harness back end adds —
-gets prompt-engineer review before its first real run and before merge. The Phase 4 design is the
-architect's.
+landing. Model-facing text — the two scoring prompt templates — gets prompt-engineer review before
+its first real run and before merge. The Phase 4 design is the architect's.
 
 ## What this plan does not do
 
