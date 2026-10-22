@@ -127,6 +127,25 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 	}
 }
 
+// TestChatIncompleteReasonWithoutAttemptText: an attempt can end without an
+// error text of its own — a server that served nothing says so through its
+// usage alone — and the reason then ends on the outcome, with no separator
+// left dangling after it.
+func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
+	srv, _ := sseServer(t, sseServedNothing)
+
+	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+	if !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != ChatServedNothing || got.Error != "" {
+		t.Fatalf("last attempt = %+v, want an outcome of %q and no error text", got, ChatServedNothing)
+	}
+	if want := "the last ending " + got.Outcome; !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("reason = %q, want it to end %q", err, want)
+	}
+}
+
 // TestChatNamesAnUnreachableEndpoint: nothing answering at all is the
 // transport's failure — the case the refusal above must not be read as, and
 // what a closed port looks like.
@@ -174,6 +193,46 @@ func TestChatRequestShape(t *testing.T) {
 	}
 	if body.MaxTokens != nil {
 		t.Errorf("max_tokens %d sent; the request must carry none", *body.MaxTokens)
+	}
+}
+
+// TestChatCarriesAnEmptyMessageContent: a message's content field reaches
+// the wire even when empty — `"content":""`, never an absent field. A
+// provider reads `{"role":"system"}` as a message with no text part and
+// declines the whole request, so this is the shape of kbase's empty system
+// prompt being sent at all.
+func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		system string
+		prompt string
+		want   []string
+	}{
+		{"empty system", "", "the prompt", []string{
+			`{"role":"system","content":""}`,
+			`{"role":"user","content":"the prompt"}`,
+		}},
+		{"empty prompt", "the system", "", []string{
+			`{"role":"system","content":"the system"}`,
+			`{"role":"user","content":""}`,
+		}},
+		{"neither empty", "the system", "the prompt", []string{
+			`{"role":"system","content":"the system"}`,
+			`{"role":"user","content":"the prompt"}`,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := sseServer(t, sseAnswered)
+			if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			raw := string(seen()[0])
+			for _, w := range tc.want {
+				if !strings.Contains(raw, w) {
+					t.Errorf("body = %s, want it to carry %s", raw, w)
+				}
+			}
+		})
 	}
 }
 
