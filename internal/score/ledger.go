@@ -62,18 +62,12 @@ func RunsDir(dir string) string { return filepath.Join(dir, runsDir) }
 // ledger layout's version, and AskSHA256 the ask the run's judgements answered;
 // Create stamps both and no resume rewrites them, so a caller leaves them zero.
 //
-// BackEnd is what answered the run's items — a pool entry, the environment's
-// endpoint or a harness — and every header of a run that asked carries it, so a
-// reader never infers the source from an absence. A dry run asks nothing and
-// resolves no back end, so its header carries none: the empty string is not one
-// of the three, and an absent key is how a reader tells a run that asked nothing
-// from one whose back end was unnamed.
-//
-// Command is present under a harness alone: the argv that invoked it — how the
-// run was invoked, never the text of one item. CommandOverride names the
-// environment variable that supplied that argv where one did, and is empty where
-// kbase composed the command itself, so a run whose command nobody chose says so
-// in its own record.
+// BackEnd is what answered the run's items — a pool entry or the environment's
+// endpoint — and every header of a run that asked carries it, so a reader never
+// infers the source from an absence. A dry run asks nothing and resolves no back
+// end, so its header carries none: the empty string is not one of the two, and
+// an absent key is how a reader tells a run that asked nothing from one whose
+// back end was unnamed.
 type RunHeader struct {
 	Run    string `yaml:"run"`
 	KBRoot string `yaml:"kb_root"`
@@ -90,13 +84,11 @@ type RunHeader struct {
 	// behaviour. A header written before the rigor pair carries one render's
 	// digest, and is read as the one ask that run began under, which is what it
 	// recorded.
-	AskSHA256       string   `yaml:"ask_sha256"`
-	BackEnd         string   `yaml:"backend,omitempty"`
-	Provider        string   `yaml:"provider"`
-	Model           string   `yaml:"model"`
-	Command         []string `yaml:"command,omitempty"`
-	CommandOverride string   `yaml:"command_override,omitempty"`
-	Started         string   `yaml:"started"`
+	AskSHA256 string `yaml:"ask_sha256"`
+	BackEnd   string `yaml:"backend,omitempty"`
+	Provider  string `yaml:"provider"`
+	Model     string `yaml:"model"`
+	Started   string `yaml:"started"`
 }
 
 // Entry is what one attempt at an item records: its status and the evidence

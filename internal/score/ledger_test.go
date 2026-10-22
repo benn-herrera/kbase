@@ -289,25 +289,44 @@ func TestLineRecordsMootBesideAPendingAnswer(t *testing.T) {
 	}
 }
 
-// TestHarnessRunRecordsWhatAnswered: a harness run's header names the argv that
-// invoked it and the variable that supplied it, and every line names the back
-// end. A resumed run on another back end leaves the header's opening alone and
-// stamps each new line with what asked it.
-func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
+// TestResumedRunRecordsWhatAskedEachLine: every line names the back end that
+// asked its item, and a resumed run on the other back end leaves the header's
+// opening alone while the line it appends names the one that asked now.
+func TestResumedRunRecordsWhatAskedEachLine(t *testing.T) {
 	dir := t.TempDir()
-	h := header()
-	h.BackEnd, h.Provider, h.Model = "harness", "", "judge"
-	h.Command, h.CommandOverride = []string{"ask", "--model", "judge", "{prompt}"}, "KBASE_SCORE_BACK_END_COMMAND"
-	l, err := Create(dir, h)
+	l, err := Create(dir, header())
 	if err != nil {
 		t.Fatal(err)
 	}
-	it := node(kb.NodeKindClaim, "clm-1")
-	if err := l.Append(it, Entry{Status: StatusDone, Value: "0.5", Model: "judge"}); err != nil {
+	if err := l.Append(node(kb.NodeKindClaim, "clm-1"), Entry{Status: StatusDone, Value: "0.5", Model: "small"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
+	}
+	first := lines(t, filepath.Join(l.Dir(), linesFile))[0]
+	if first["backend"] != "provider" || first["model"] != "small" {
+		t.Errorf("the line = %v, want the provider that asked it", first)
+	}
+
+	// A resume over the same run on the environment's endpoint: the header
+	// keeps the provider run's opening, and the line this invocation appends
+	// names the environment.
+	env := header()
+	env.BackEnd, env.Provider, env.Model = "environment", "", "judge"
+	back, err := Resume(dir, env, func(query.Item, kb.Bearing) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := back.Append(node(kb.NodeKindClaim, "clm-2"), Entry{Status: StatusDone, Value: "0.6", Model: "judge"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := back.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := lines(t, filepath.Join(l.Dir(), linesFile))[1]
+	if second["backend"] != "environment" || second["model"] != "judge" {
+		t.Errorf("the resumed line = %v, want the back end that asked it", second)
 	}
 	b, err := os.ReadFile(filepath.Join(l.Dir(), runFile))
 	if err != nil {
@@ -317,43 +336,7 @@ func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"run": "run-1", "kb_root": "/repo/kb-root", "format": 1, "pass": query.PassRigor,
-		"ask_sha256": rigorAskDigest(t),
-		"backend":    "harness", "provider": "",
-		"model": "judge", "command": []any{"ask", "--model", "judge", "{prompt}"},
-		"command_override": "KBASE_SCORE_BACK_END_COMMAND",
-		"started":          "2026-10-20T10:00:00Z"}
-	// reflect.DeepEqual rather than maps.Equal: the argv is a list, and a
-	// header carrying one is the one shape maps.Equal cannot compare.
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("run.yaml = %v, want %v", got, want)
-	}
-	line := lines(t, filepath.Join(l.Dir(), linesFile))[0]
-	if line["backend"] != "harness" || line["model"] != "judge" {
-		t.Errorf("the line = %v, want what answered it", line)
-	}
-
-	// A resume on the provider back end: the header keeps the harness run's
-	// opening, and the line this invocation appends names the provider.
-	back := reopened(t, dir)
-	if err := back.Append(node(kb.NodeKindClaim, "clm-2"), Entry{Status: StatusDone, Value: "0.6", Model: "small"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := back.Close(); err != nil {
-		t.Fatal(err)
-	}
-	second := lines(t, filepath.Join(l.Dir(), linesFile))[1]
-	if second["backend"] != "provider" || second["harness"] != nil || second["harness_layer"] != nil {
-		t.Errorf("the resumed line = %v, want the back end that asked it and no harness", second)
-	}
-	b, err = os.ReadFile(filepath.Join(l.Dir(), runFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := yaml.Unmarshal(b, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["command_override"] != "KBASE_SCORE_BACK_END_COMMAND" {
+	if got["backend"] != "provider" || got["provider"] != "local" || got["model"] != "small" {
 		t.Errorf("run.yaml = %v, want the run's opening left as it was written", got)
 	}
 }

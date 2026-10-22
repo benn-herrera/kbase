@@ -20,7 +20,6 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/config"
-	"kbase/internal/harness"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/log"
@@ -52,14 +51,8 @@ type scoreOptions struct {
 
 	// ScoringModel is the --scoring-model flag: a reference overriding the
 	// scoring role's model in file mode, a bare id under the environment's
-	// endpoint, the role's value whole under --harness. It overrides
-	// a configured role and never substitutes for one.
+	// endpoint. It overrides a configured role and never substitutes for one.
 	ScoringModel string
-
-	// Harness is the --harness flag: which back end asks each item, which is
-	// the harness back end and the end of every provider question this run
-	// would otherwise ask. `opencode` is the one value it takes.
-	Harness string
 
 	// Resume is the run to continue; "" starts a fresh one.
 	Resume string
@@ -111,10 +104,6 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	case !slices.Contains(passes, opts.Pass):
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--pass", Allowed: passes,
 			Detail: "--pass is required and names one pass: " + strings.Join(passes, " or ")})
-	case opts.Harness != "" && opts.Harness != opencodeHarness:
-		return refused(nil, toolresult.Item{Check: config.CheckHarness, Key: "--harness", Allowed: []string{opencodeHarness},
-			Detail: fmt.Sprintf("--harness names %q, and kbase runs no harness profile: its one back end is %q, which kbase composes itself",
-				opts.Harness, opencodeHarness)})
 	case opts.Limit < 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	case opts.Resume != "" && !runIDRE.MatchString(opts.Resume):
@@ -142,55 +131,29 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return outcome, f
 	}
 
-	// Which back end asks, decided once with the role, before the KB is opened:
-	// a configuration that names no model for the scoring role, a command that
-	// cannot start or a flag a command cannot carry refuses before the run's
-	// start refresh, with the run's own keys and nothing written. A dry run asks
-	// nothing, so it resolves no role and refuses nothing for one; a --harness
-	// value kbase ships no back end for is refused whatever the run does, ahead
-	// of the KB (§8).
+	// The scoring role, resolved before the KB is opened: a configuration that
+	// names no model for it refuses before the run's start refresh, with the
+	// run's own keys and nothing written. A dry run asks nothing, so it
+	// resolves no role and refuses nothing for one (§8).
 	var (
 		ep   config.Endpoint
-		hcmd *harness.Command
-		// itemEnv is the environment each item's process is started with, nil
-		// for the one kbase runs under: a back end that composes one composes
-		// it per item, from the directory the item runs in.
-		itemEnv func(dir string) []string
-		// override is the argv the back end override named, nil where it named
-		// none: the command a run executes that kbase did not compose.
-		override []string
-		mode     config.Mode
+		mode config.Mode
 	)
 	env := config.EnvOverrides(os.Getenv)
 	if !opts.DryRun {
 		s := opts.inputs(env)
-		if opts.Harness != "" {
-			// A harness chooses no endpoint, so it consults no mode: a base URL
-			// or a role variable set beside it is neither a mixed mode nor a
-			// refusal (§4.5), and the scoring role resolves from the file's
-			// reference or the environment's id alone.
-			override = backEndCommand(os.Getenv)
-			ep, hcmd, itemEnv, err = opencodeSetup(ctx, s, opts, override)
-			if err != nil {
-				return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
-			}
-			if override != nil {
-				announceBackEndCommand(opts.Stderr, override)
-			}
-		} else {
-			if mode, err = config.ModeOf(s); err != nil {
-				return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
-			}
-			if mode == config.ModeFile {
-				// An environment-mode invocation reads no file value, so it
-				// says nothing of the key the files state.
-				supersededProvider(opts.Stderr, opts.Config)
-			}
-			if ep, err = config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel); err != nil {
-				return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
-			}
-			warnFaults(opts.Stderr, opts.Faults)
+		if mode, err = config.ModeOf(s); err != nil {
+			return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
 		}
+		if mode == config.ModeFile {
+			// An environment-mode invocation reads no file value, so it
+			// says nothing of the key the files state.
+			supersededProvider(opts.Stderr, opts.Config)
+		}
+		if ep, err = config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel); err != nil {
+			return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
+		}
+		warnFaults(opts.Stderr, opts.Faults)
 	}
 
 	src, refusals, err := openKB(root)
@@ -270,52 +233,31 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return res.Outcome, append(fields, scoreCounted(res)...)
 	}
 
-	backEnd := config.BackEndProvider
-	if hcmd != nil {
-		backEnd = config.BackEndHarness
-	}
-	// A provider endpoint is dialled and a harness command is not: the registry
-	// is opened for the back end that has an endpoint, and a harness run opens
-	// no client at all.
+	// A provider endpoint is dialled: the registry is opened for the entry the
+	// scoring role named, and its client is what every ask in this run sends
+	// through.
 	reg := newClients(opts.NewClient, opts.Logger)
 	defer reg.closeAll()
-	var client model.Client
-	if hcmd == nil {
-		if client, err = reg.get(ep); err != nil {
-			return refusedOrFailed(fields, err)
-		}
-		// A key bound for a non-loopback http:// endpoint is said on stderr once
-		// and the run proceeds, as `build` says it: the key is what this run
-		// sends, and the registry is what read it. A harness sends no key.
-		if key, err := reg.key(ep); err == nil {
-			if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
-				fmt.Fprintln(opts.Stderr, line)
-			}
+	client, err := reg.get(ep)
+	if outcome, f, stop := refusalOrFailure(fields, err); stop {
+		return outcome, f
+	}
+	// A key bound for a non-loopback http:// endpoint is said on stderr once
+	// and the run proceeds, as `build` says it: the key is what this run
+	// sends, and the registry is what read it.
+	if key, err := reg.key(ep); err == nil {
+		if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
+			fmt.Fprintln(opts.Stderr, line)
 		}
 	}
 	modelID := ep.Model
-	fields = append(fields, rolesField([]toolresult.Record{roleRecord(ep, backEnd)}))
-	// The run's record, opened below and needed above: a harness item runs in
-	// the run's own working directory, so the ask reads the run's path once the
-	// ledger stands.
-	var l *score.Ledger
+	fields = append(fields, rolesField([]toolresult.Record{roleRecord(ep)}))
 
 	timeout := opts.callTimeout()
-	// The ask is one tool-less chat call on the role's model, or one process on
-	// the back end's command. Each ask's own text carries the instruction, so
-	// the system prompt is empty and nothing is said twice.
+	// The ask is one tool-less chat call on the role's model. Each ask's own
+	// text carries the instruction, so the system prompt is empty and nothing
+	// is said twice.
 	ask := func(ctx context.Context, prompt string) (string, error) {
-		if hcmd != nil {
-			item, err := hcmd.Item(prompt)
-			if err != nil {
-				return "", err
-			}
-			work := filepath.Join(l.Dir(), harnessDirName)
-			if itemEnv != nil {
-				item = item.WithEnv(itemEnv(work))
-			}
-			return harnessAsk(ctx, item, work, timeout)
-		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		attempt, err := model.Chat(callCtx, client, modelID, "", prompt, nil, nil)
@@ -331,18 +273,13 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		}
 		return attempt.Reply, nil
 	}
-	header := score.RunHeader{Run: run, KBRoot: root, Pass: opts.Pass, BackEnd: backEndName(ep, backEnd),
+	header := score.RunHeader{Run: run, KBRoot: root, Pass: opts.Pass, BackEnd: backEndName(ep),
 		Provider: ep.Provider, Model: modelID, Started: scoreStamp()}
-	if hcmd != nil {
-		header.Command = hcmd.Argv()
-		if override != nil {
-			header.CommandOverride = backEndCommandEnv
-		}
-	}
 	// One write seam for both: the values the walk lands and the values a resume
 	// re-prices under a changed table take the same path, the KB's lock held as
 	// every write holds it.
 	land := func(it query.Item, value kb.Bearing) error { return landScore(root, it, value, opts.Logger) }
+	var l *score.Ledger
 	if opts.Resume != "" {
 		l, err = score.Resume(dir, header, land)
 	} else {
@@ -404,26 +341,6 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	}
 	return res.Outcome, fields
 }
-
-// harnessAsk is the harness back end's Ask: one item, one process, in the run's
-// own working directory — the same directory for every item, emptied before
-// each so nothing one command wrote is visible to the next. The deadline is the
-// run's per-item one, so a SIGINT cancels the child as it cancels a provider
-// call.
-func harnessAsk(ctx context.Context, item harness.Command, dir string, timeout time.Duration) (string, error) {
-	if err := os.RemoveAll(dir); err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return "", err
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return item.Ask(callCtx, dir)
-}
-
-// harnessDirName is the run's working directory for the commands it runs.
-const harnessDirName = "harness"
 
 // runIDRE is the shape of the run ids kbase mints — kb.MintID's own, the kind
 // then the id body's length of its alphabet, which holds no regular-expression
@@ -514,13 +431,12 @@ func scoreCounted(res score.Result) []toolresult.Field {
 }
 
 // scoreResume is the command that continues the run: the same pass over the
-// same ledger, reaching the model this invocation was told to reach on the back
-// end it was told to use. A scoring-time endpoint is named by --scoring-model,
-// which states the provider and the model in one value; there is no second flag
-// for half of it. A --scoring-model and a --harness the invocation carried are
-// carried on, so the resumed run judges with the model and the command the
-// first one did — one issued without its harness would be a different judgement
-// wearing the same run id.
+// same ledger, reaching the model this invocation was told to reach. A
+// scoring-time endpoint is named by --scoring-model, which states the provider
+// and the model in one value; there is no second flag for half of it. A
+// --scoring-model the invocation carried is carried on, so the resumed run
+// judges with the model the first one did — one issued without it would be a
+// different judgement wearing the same run id.
 //
 // The mode is part of the command too. An environment-mode run has no flag that
 // names its source, so the command carries the mode's settings as assignments
@@ -539,9 +455,6 @@ func scoreResume(opts scoreOptions, run, dir string, mode config.Mode, env confi
 	}
 	if opts.ScoringModel != "" {
 		command = append(command, "--scoring-model", opts.ScoringModel)
-	}
-	if opts.Harness != "" {
-		command = append(command, "--harness", opts.Harness)
 	}
 	if mode == config.ModeEnvironment {
 		command = append(environmentAssignments(env), command...)
@@ -659,7 +572,6 @@ var (
 	scoreFlagLimit        int
 	scoreFlagDryRun       bool
 	scoreFlagScoringModel string
-	scoreFlagHarness      string
 	scoreFlagResume       string
 	scoreFlagStateDir     string
 )
@@ -676,22 +588,13 @@ converted and saved by it — and one more follows the last write.
 
 The scoring role is the KB's declaration of which model judges it: models.scoring
 in config.toml, or KBASE_SCORING with the environment's endpoint. A run whose
-mode names no scoring model and whose command names none is refused, naming that
+mode names no scoring model and whose flags name none is refused, naming that
 key, before the KB is opened; nothing falls back to the text model.
 --scoring-model names the role's model for one run — a <provider>/<model>
 reference in file mode, a bare id under the environment's endpoint — supplying
 the role where the configuration names none and overriding it where it does, and
 is carried by the command that continues a run. --dry-run lists the set, resolves
 no role and refuses nothing for one.
-
---harness NAME runs one process per item instead of asking an endpoint. kbase
-composes the command, and ` + "`opencode`" + ` is the only name it takes: the
-built-in opencode back end, run as one opencode v2 process per item with the
-prompt on its stdin, its stdout the reply and its stderr kept for a failure's
-reason. No endpoint is chosen and the mode is not consulted, so a base URL and
-role variables may be set beside it. Any other name is refused before the KB is
-opened: kbase runs no command a user supplies. --dry-run asks nothing, so it
-makes no difference there.
 
 The passes are rigor — every claim, analysis and experiment, by id — and
 bearing — every scoring edge, by relation, then source, then target. A work's
@@ -727,7 +630,7 @@ is one YAML document on stdout.`,
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		code, err := runScore(scoreOptions{providerOptions: opts, Ctx: ctx, Pass: scoreFlagPass, Limit: scoreFlagLimit,
-			DryRun: scoreFlagDryRun, ScoringModel: scoreFlagScoringModel, Harness: scoreFlagHarness,
+			DryRun: scoreFlagDryRun, ScoringModel: scoreFlagScoringModel,
 			Resume: scoreFlagResume, StateDir: scoreFlagStateDir, ConfigDir: flagConfigDir, WorkDir: wd,
 			Stdout: cmd.OutOrStdout(), Logger: processLog.logger})
 		if err != nil {
@@ -753,9 +656,7 @@ func init() {
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",
-		"model that judges the KB, overriding models.scoring: <provider>/<model> in file mode, a bare id under the environment's endpoint, the role's value whole under --harness")
-	scoreCmd.Flags().StringVar(&scoreFlagHarness, "harness", "",
-		"back end that asks each item, one process per item: "+opencodeHarness+" (no difference under --dry-run, which asks nothing)")
+		"model that judges the KB, overriding models.scoring: <provider>/<model> in file mode, a bare id under the environment's endpoint")
 	scoreCmd.Flags().StringVar(&scoreFlagResume, "resume", "", "continue the run with this id")
 	scoreCmd.Flags().StringVar(&scoreFlagStateDir, "state-dir", "", "the state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	rootCmd.AddCommand(mcpBinding(scoreCmd, mcpBound))

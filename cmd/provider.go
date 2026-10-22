@@ -246,21 +246,18 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 // together or not at all — an environment endpoint has none of them — and
 // back-end is what tells the cases apart, so a reader never infers the source
 // from an absence.
-func roleRecord(ep config.Endpoint, backEnd config.BackEnd) toolresult.Record {
+func roleRecord(ep config.Endpoint) toolresult.Record {
 	record := toolresult.Record{
 		{Key: "role", Value: string(ep.Role)},
-		{Key: "back-end", Value: backEndName(ep, backEnd)},
+		{Key: "back-end", Value: backEndName(ep)},
 	}
 	record = append(record, providerFields(ep.Provider, ep.Rule, ep.Layer)...)
 	return append(record, toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
 }
 
-// backEndName is what answered ep, as a record states it: the harness back end
-// where the run asked a command, else the mode the endpoint came from.
-func backEndName(ep config.Endpoint, backEnd config.BackEnd) string {
-	if backEnd == config.BackEndHarness {
-		return string(config.BackEndHarness)
-	}
+// backEndName is what answered ep, as a record states it: the environment the
+// endpoint came from, or a pool entry's provider.
+func backEndName(ep config.Endpoint) string {
 	if ep.Mode == config.ModeEnvironment {
 		return string(config.ModeEnvironment)
 	}

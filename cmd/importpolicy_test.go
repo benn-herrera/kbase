@@ -113,12 +113,8 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/log"},
 	why:     "the MCP server is framing and dispatch over a table cmd injects: it imports log only, so it reaches no KB package, no model, no caller (I9)",
 }, {
-	from:    []string{"internal/harness"},
-	allowed: []string{"internal/log"},
-	why:     "the harness runs one command and knows nothing of kbase: no provider, no endpoint, no config type, no KB path",
-}, {
 	from:      []string{"internal/score"},
-	forbidden: []string{"internal/model", "internal/harness"},
+	forbidden: []string{"internal/model"},
 	why:       "the back end sits below the score verb's Ask seam: the runner, the guard, the parse and the ledger learn nothing of what answered",
 }, {
 	except:    []string{"cmd", "internal/mcp"},

@@ -197,7 +197,7 @@ func resolvedRoles(reg *clients, s config.Inputs, mode config.Mode, modeErr erro
 			items = append(items, refusalItems(err)...)
 			continue
 		}
-		record := roleRecord(ep, config.BackEndProvider)
+		record := roleRecord(ep)
 		record = append(record, toolresult.Field{Key: "base-url", Value: ep.BaseURL},
 			toolresult.Field{Key: "sources", Value: toolresult.Record{
 				{Key: "base-url", Value: stringOrNull(ep.BaseURLSource)},

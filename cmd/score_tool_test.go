@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,25 +21,42 @@ import (
 	"kbase/internal/score"
 )
 
-// scoreToolHarness writes a harness stub under base and names it through the
-// back end override: slow answers after a pause, fail refuses the item, and
-// value answers at once. The stub is the executable a scoring run's harness back
-// end runs, so a tool call's child is the shipped binary and the run is real.
-func scoreToolHarness(t *testing.T, base, mode string) {
+// scoreToolProvider starts the inference endpoint a tool call's scoring run
+// reaches and names it in the environment: slow holds each request for a moment
+// so the run stays in flight, fail refuses it with a reason of its own, and
+// value answers at once. The tool call's child is the shipped binary and the run
+// is real, so what answers it is an endpoint rather than a stub process.
+func scoreToolProvider(t *testing.T, mode string) {
 	t.Helper()
-	script := filepath.Join(base, "score-stub.sh")
-	body := `#!/usr/bin/env bash
-set -euo pipefail
-case "${1:-value}" in
-slow) sleep 5; printf 'none\n' ;;
-fail) sleep 1; printf 'the stub refuses\n' >&2; exit 3 ;;
-*) printf 'none\n' ;;
-esac
-`
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("KBASE_SCORE_BACK_END_COMMAND", script+" "+mode)
+	unsetInferenceEnv(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch mode {
+		case "slow":
+			select {
+			case <-release:
+			case <-time.After(2 * time.Second):
+			}
+		case "fail":
+			// A moment's pause so the run's ledger and pid stand before the
+			// item fails: the tool call reports the start, and the failure is
+			// read from the run's own record.
+			time.Sleep(time.Second)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"the stub refuses"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"none\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n" +
+			"data: [DONE]\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	// Registered after Close so it runs before it: a request the run left
+	// hanging must wake before the server waits for its handlers.
+	t.Cleanup(func() { close(release) })
+	t.Setenv(config.EnvAPIBaseURL, srv.URL)
 	t.Setenv(config.EnvScoring, "stub/model")
 }
 
@@ -92,10 +111,10 @@ func TestMCPScoreStartsDetached(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolHarness(t, base, "slow")
+	scoreToolProvider(t, "slow")
 	srv := scoreToolServer(t, repo, base)
 
-	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
 	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
 
 	if status, _ := callTool(t, srv, "status", map[string]any{"state-dir": state}); status["state"] != "running" || status["pid"] != float64(pid) {
@@ -137,10 +156,10 @@ func TestMCPScoreWaitReportsFailures(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolHarness(t, base, "fail")
+	scoreToolProvider(t, "fail")
 	srv := scoreToolServer(t, repo, base)
 
-	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
 	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
 	out, code := kbase(t, repo, "wait", "--state-dir", state, "--pid", strconv.Itoa(pid))
 	doc := parseResult(t, out)
@@ -173,10 +192,10 @@ func TestBuildRefusedWhileAScoreRunHoldsTheLock(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolHarness(t, base, "slow")
+	scoreToolProvider(t, "slow")
 	srv := scoreToolServer(t, repo, base)
 
-	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
 	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
 
 	out, code := kbase(t, repo, "build", "paper.tex", "--no-inference", "--state-dir", filepath.Join(base, "build-state"))
@@ -207,10 +226,10 @@ func TestStatusReportsAKilledScoreRun(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolHarness(t, base, "slow")
+	scoreToolProvider(t, "slow")
 	srv := scoreToolServer(t, repo, base)
 
-	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
 	// The set the run enumerated stands beside the ledger, written after the pid
 	// the launch waits on; a killed run's status counts what it left.
 	set := filepath.Join(ledger, "items.jsonl")
@@ -266,8 +285,8 @@ func TestStatusReportsAKilledScoreRun(t *testing.T) {
 }
 
 // TestMCPScoreCancelLeavesResumableLedger: cancel stops the run in flight and
-// leaves its ledger and resume command; re-issuing the resume with a harness
-// that answers finishes the run.
+// leaves its ledger and resume command; re-issuing the resume against an
+// endpoint that answers finishes the run.
 func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -279,10 +298,10 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolHarness(t, base, "slow")
+	scoreToolProvider(t, "slow")
 	srv := scoreToolServer(t, repo, base)
 
-	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
 	cancel, isError := callTool(t, srv, "cancel", map[string]any{"state-dir": state})
 	if isError || cancel["outcome"] != toolresult.Done || cancel["pid"] != float64(pid) {
 		t.Fatalf("cancel: isError %v, %v", isError, cancel)
@@ -297,10 +316,10 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 		t.Errorf("the cancelled run left no result: %v", err)
 	}
 
-	// The cancelled run's ledger continues: a harness that answers lands the
+	// The cancelled run's ledger continues: an endpoint that answers lands the
 	// item the cancellation left unasked.
-	scoreToolHarness(t, base, "value")
-	out, code := kbase(t, repo, "score", "--pass", "rigor", "--resume", run, "--harness", "opencode", "--state-dir", state)
+	scoreToolProvider(t, "value")
+	out, code := kbase(t, repo, "score", "--pass", "rigor", "--resume", run, "--state-dir", state)
 	doc := checkDocument(t, "score", out)
 	if doc.Outcome != toolresult.Done || code != 0 {
 		t.Fatalf("resume: outcome %s, exit %d\n%s", doc.Outcome, code, out)

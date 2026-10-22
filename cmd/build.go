@@ -134,7 +134,7 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 			if err != nil {
 				return nil, "", err
 			}
-			records = append(records, roleRecord(ep, config.BackEndProvider))
+			records = append(records, roleRecord(ep))
 			return client, ep.Model, nil
 		}
 		var provider build.Provider

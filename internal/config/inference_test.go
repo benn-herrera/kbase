@@ -330,51 +330,6 @@ func asRefusal(err error, out *Refusal) bool {
 	return ok
 }
 
-// TestBackEndModel: the value a harness back end is handed is the file
-// reference whole, or the environment's id and the flag verbatim, with the layer
-// that supplied it.
-func TestBackEndModel(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		mutate      func(*Inputs)
-		flag        string
-		wantWritten string
-		wantSource  string
-		wantRefusal bool
-	}{
-		{name: "the file's reference", wantWritten: "cloud/clef", wantSource: LayerSourceRepository},
-		{name: "a model id carrying a slash", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "lab/openrouter/anthropic/x" },
-			wantWritten: "lab/openrouter/anthropic/x", wantSource: LayerSourceRepository},
-		{name: "the environment's id", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
-			wantWritten: "other/clef", wantSource: LayerSourceEnvironment},
-		{name: "the flag over the file", flag: "lab/other",
-			wantWritten: "lab/other", wantSource: ""},
-		{name: "the flag over the environment", mutate: func(in *Inputs) { in.Env = Overrides{Scoring: "other/clef"} },
-			flag: "lab/other", wantWritten: "lab/other", wantSource: ""},
-		{name: "no source names one", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" }, wantRefusal: true},
-		{name: "a file value that is no reference", mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" }, wantRefusal: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			in := scenario(t)
-			if tc.mutate != nil {
-				tc.mutate(&in)
-			}
-			written, source, err := BackEndModel(in, RoleScoring, tc.flag)
-			if tc.wantRefusal {
-				var refusal Refusal
-				if !asRefusal(err, &refusal) || refusal.Key != "models.scoring" {
-					t.Fatalf("= %q, %q, %v; want a refusal naming models.scoring", written, source, err)
-				}
-				return
-			}
-			if err != nil || written != tc.wantWritten || source != tc.wantSource {
-				t.Errorf("= %q, %q, %v; want %q, %q",
-					written, source, err, tc.wantWritten, tc.wantSource)
-			}
-		})
-	}
-}
-
 func TestCleartextWarning(t *testing.T) {
 	for _, tc := range []struct {
 		name, url, key string

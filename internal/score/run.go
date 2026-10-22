@@ -280,15 +280,14 @@ func label(it query.Item) string {
 }
 
 // replySummaryLimit bounds the reason a document or a log line carries of a
-// failed attempt. The ledger's line holds the reply whole; a harness child's
-// stderr is kept to 64 KiB, and none of that belongs in a result's detail or a
-// terminal's log line.
+// failed attempt. The ledger's line holds the reply whole; none of that belongs
+// in a result's detail or a terminal's log line.
 const replySummaryLimit = 512
 
 // ReplySummary is a failed attempt's reply as a document or a log line states
 // it: bounded and stripped of control characters, with a line break read as a
-// space. A harness child's stderr is arbitrary bytes a repository chose, so
-// nothing it wrote reaches a terminal as an instruction. The ledger's line is
+// space. A reply is arbitrary bytes the endpoint's answer carried, so nothing it
+// wrote reaches a terminal as an instruction. The ledger's line is
 // the one place a reply lands whole, and every record and log line that reasons
 // a failure reads it through here.
 func ReplySummary(reply string) string {

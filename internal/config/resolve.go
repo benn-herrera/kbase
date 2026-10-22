@@ -76,9 +76,6 @@ type BackEnd string
 const (
 	// BackEndProvider asks a pool entry, or the environment's endpoint.
 	BackEndProvider BackEnd = "provider"
-	// BackEndHarness asks a command kbase composes: the built-in back end
-	// --harness selects.
-	BackEndHarness BackEnd = "harness"
 )
 
 // The rules that name an endpoint's provider, as a document reports them. A
@@ -303,37 +300,6 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 	return ep, nil
 }
 
-// BackEndModel is the model a harness back end is handed, as that back end
-// names models: the source's value as it stands — a file reference's
-// <provider>/<model>, or the environment's id — overridden by --scoring-model.
-// source is the layer that supplied it, "" where the flag did, so a document
-// naming the model names where it came from.
-//
-// The environment's id stands where it names one, else the file's reference; a
-// role no source configures refuses. No entry is contacted, so the pool matters
-// to nothing here: a harness back end chooses no endpoint.
-func BackEndModel(in Inputs, role Role, flagModel string) (written, source string, err error) {
-	written = role.fromEnv(in.Env)
-	source = LayerSourceEnvironment
-	if written == "" {
-		if value := role.model(in.Cfg.Models); value != "" {
-			if _, err := FileReference(value); err != nil {
-				return "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
-					Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model>", role.key(), value)}
-			}
-			written, source = value, in.Cfg.ModelLayer(role)
-		}
-	}
-	if written == "" {
-		return "", "", Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
-			Detail: fmt.Sprintf("no model is configured for the %s role: set %s, or %s", role, role.key(), role.variable())}
-	}
-	if flagModel != "" {
-		written, source = flagModel, ""
-	}
-	return written, source, nil
-}
-
 // Select is a catalogue verb's choice of which pool entry to dial — not a
 // role: a role is never chosen this way, and config.toml names no entry
 // (its provider key is superseded and inert). The --provider flag answers
@@ -394,14 +360,10 @@ func providerNames(providers Providers) []string {
 	return names
 }
 
-// CheckHarness is the refusal class the built-in harness back end raises where
-// it cannot run what it is given, and CheckUsage a flag value that is not the
-// form the flag takes; a resolution refusal's Check is otherwise empty, which is
-// the provider choice its rows are about.
-const (
-	CheckHarness = "harness"
-	CheckUsage   = "usage"
-)
+// CheckUsage is the refusal class a flag value that is not the form the flag
+// takes raises; a resolution refusal's Check is otherwise empty, which is the
+// provider choice its rows are about.
+const CheckUsage = "usage"
 
 // keyScoringModel is the flag that overrides a role's model, as a refusal names
 // it: a bad value, or a provider the pool lacks, is the flag's fault to state.

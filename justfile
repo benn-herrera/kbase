@@ -26,10 +26,8 @@ UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
 RESULTS_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-results-fixture"
 MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arxiv"
 # The committed KB the hermetic result-contract recipe works over, with the
-# values its write ops take, and the harness stub the back end override names:
-# one command, one mode per behaviour the process contract has.
+# values its write ops take.
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
-HARNESS_STUB := TEST_DATA_FIXTURES_DIR / "harness" / "stub.sh"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
 MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
@@ -1158,7 +1156,7 @@ _test-integration-monitor-arxiv: build
 # each result parsed against its subcommand's documented keys and outcome.
 # It needs only git, which SPEC requires on the host — no pandoc, no
 # provider, no adjagent clone — so it joins the omnibus.
-[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's — and the harness back end over the internal command override: the prompt on argv versus stdin compared with the ledger's digest, one process per item in a directory emptied per item, a non-zero exit and each of the two bounds failing that item alone, the override announced once and recorded in run.yaml, a command that cannot be started and a --harness name kbase ships no back end for refused before the walk, a dry run touching no command, and the environment set beside --harness; evidence under test-data/transient/test-integration-results-fixture/")]
+[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's; evidence under test-data/transient/test-integration-results-fixture/")]
 test-integration-results-fixture:
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"
     @{{just_executable()}} _test-integration-results-fixture 2>&1 | tee "{{RESULTS_FIXTURE_OUT_DIR}}/log.txt"
@@ -1173,9 +1171,8 @@ _test-integration-results-fixture: build
     fixture="${root}/{{RESULTS_FIXTURE_DIR}}"
     # The inference variables are scrubbed for the whole recipe: every leg below
     # reads the staged tree and nothing the host exports, except the one that
-    # sets them to prove the environment supplies a run, and the back end
-    # override, which the harness legs set for themselves.
-    unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR KBASE_SCORE_BACK_END_COMMAND
+    # sets them to prove the environment supplies a run.
+    unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR
     repo="${out}/repo"
     docs="${out}/docs"
     rm -rf "${repo}" "${docs}" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
@@ -1285,146 +1282,6 @@ _test-integration-results-fixture: build
         "$([[ "${env_score_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${env_score}.exit")"
     [[ "${env_score_ok}" -eq 0 ]] || status=1
 
-    # The harness back end: one process per item, its command named by the
-    # back end override — the one way a run's command is chosen from outside
-    # kbase, and the way the suite fakes a back end now that no profile can.
-    # The stub answers each item with one value and leaves, in the run's own
-    # working directory, the digest of the text it was handed — so these legs
-    # say where the prompt reached it, and that it was exactly the prompt the
-    # ledger digested. It never writes a prompt. The variable is set per leg
-    # and unset again, and the announcement every run that saw it writes is
-    # checked with the first.
-    stub="${root}/{{HARNESS_STUB}}"
-    hstate="${root}/${out}/harness-state"
-    # ledger_of <document>: the run directory its ledger field names.
-    ledger_of() { sed -n 's/^ledger: "\(.*\)"$/\1/p' "$1" | head -n 1; }
-    # line_digest <line>: the prompt_sha256 the ledger's line records.
-    line_digest() { sed -n 's/.*"prompt_sha256":"\([0-9a-f]*\)".*/\1/p' <<< "$1"; }
-
-    # 29 (argv): the prompt reaches the one element that names it, and stdin is
-    # closed empty. The stub's digest is the ledger's, so the text the command
-    # was handed is the text the run composed.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} argv {prompt}"
-    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    hline="$(head -n 1 "${hledger}/ledger.jsonl" 2>/dev/null || true)"
-    [[ -f "${hledger}/harness/argv.digest" ]] || { printf '  fail: the argv command left no digest\n'; status=1; }
-    [[ ! -e "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the argv command also received the prompt on stdin\n'; status=1; }
-    [[ -n "${hline}" && "$(cat "${hledger}/harness/argv.digest")" == "$(line_digest "${hline}")" ]] \
-        || { printf '  fail: the argv prompt is not the prompt the ledger digested\n'; status=1; }
-    grep -qx '    - role: "scoring"' "${LAST}" || { printf '  fail: the harness document names no scoring role\n'; status=1; }
-    grep -qx '      back-end: "harness"' "${LAST}" || { printf '  fail: the roles record does not name the harness back end\n'; status=1; }
-    grep -qx '      model: "unreachable/s"' "${LAST}" || { printf '  fail: the roles record does not name the scoring role\x27s model\n'; status=1; }
-    for key in provider provider-rule provider-layer harness harness-layer; do
-        if grep -q "^      ${key}:" "${LAST}"; then printf '  fail: a harness role names %s\n' "${key}"; status=1; fi
-    done
-    grep -qx 'backend: harness' "${hledger}/run.yaml" || { printf '  fail: run.yaml does not name the back end\n'; status=1; }
-    grep -qx 'command_override: KBASE_SCORE_BACK_END_COMMAND' "${hledger}/run.yaml" \
-        || { printf '  fail: run.yaml does not name the variable that supplied the command\n'; status=1; }
-    grep -qx "    - '{prompt}'" "${hledger}/run.yaml" || { printf '  fail: run.yaml does not record the argv with the prompt left as the token\n'; status=1; }
-    if grep -qE '^harness(_layer)?:' "${hledger}/run.yaml"; then printf '  fail: run.yaml names a profile\n'; status=1; fi
-    grep -qF '"backend":"harness"' "${hledger}/ledger.jsonl" || { printf '  fail: the ledger line does not name the back end\n'; status=1; }
-    if grep -qF '"harness":' "${hledger}/ledger.jsonl"; then printf '  fail: the ledger line names a profile\n'; status=1; fi
-    # The announcement: once per run, naming the variable and the argv, so a
-    # command nobody chose is never executed silently.
-    [[ "$(grep -c 'names the command' "${LAST%.out}.log")" -eq 1 ]] \
-        || { printf '  fail: the back end override did not announce itself exactly once\n'; status=1; }
-    grep -qF 'KBASE_SCORE_BACK_END_COMMAND' "${LAST%.out}.log" \
-        || { printf '  fail: the announcement does not name the variable\n'; status=1; }
-    # 43: the header records the run's ask once — the digest of its pass's
-    # prompt rendered for an empty subject — and a landed line records the
-    # charges it was priced from. This run's reply is `none`, so its empty list
-    # is the model's own statement that it found no fault.
-    grep -qE '^ask_sha256: [0-9a-f]{64}$' "${hledger}/run.yaml" || { printf '  fail: run.yaml records no ask digest\n'; status=1; }
-    grep -qF '"faults":[]' "${hledger}/ledger.jsonl" || { printf '  fail: a landed line records no empty charge list for `none`\n'; status=1; }
-
-    # 20/29 (stdin): a command naming no {prompt} receives the prompt there.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} stdin"
-    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    hline="$(head -n 1 "${hledger}/ledger.jsonl" 2>/dev/null || true)"
-    [[ -f "${hledger}/harness/stdin.digest" ]] || { printf '  fail: the stdin command left no digest\n'; status=1; }
-    [[ ! -e "${hledger}/harness/argv.digest" ]] || { printf '  fail: the stdin command also received the prompt in an element\n'; status=1; }
-    [[ -n "${hline}" && "$(cat "${hledger}/harness/stdin.digest")" == "$(line_digest "${hline}")" ]] \
-        || { printf '  fail: the stdin prompt is not the prompt the ledger digested\n'; status=1; }
-
-    # 23: two items, two processes, and nothing one item wrote visible to the
-    # next — the stub fails an item that finds the previous one's file.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} isolate {prompt}"
-    run score done score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    [[ "$(sed -n 's/^    done: //p' "${LAST}")" -eq 2 ]] || { printf '  fail: the isolation command did not answer both items\n'; status=1; }
-    [[ -f "${hledger}/harness/seen" ]] || { printf '  fail: the isolation stub never ran\n'; status=1; }
-
-    # 24: a non-zero exit is that item's failure — the line carries the exit code
-    # and the stderr tail, the next item is asked, and the run closes on failures.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} fail {prompt}"
-    run score failed score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    [[ "$(grep -cF '"status":"failed"' "${hledger}/ledger.jsonl")" -eq 2 ]] \
-        || { printf '  fail: the walk did not carry on past the first failed item\n'; status=1; }
-    grep -qF 'the stub refuses' "${hledger}/ledger.jsonl" || { printf '  fail: the line does not carry the stderr tail\n'; status=1; }
-    grep -qF 'exit status 3' "${LAST}" || { printf '  fail: the failure does not carry the exit code\n'; status=1; }
-    [[ "$(grep -c '^    - check: "error"' "${LAST}")" -eq 2 ]] || { printf '  fail: failures does not name both items\n'; status=1; }
-    # 28: the command that continues the run continues it on the same back end.
-    grep -q '^resume: ".* --harness opencode"$' "${LAST}" || { printf '  fail: the resume command does not carry --harness\n'; status=1; }
-
-    # 25: a command that cannot be started refuses before the walk.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub}-missing value"
-    run score refused score --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    grep -qF 'check: "harness"' "${LAST}" || { printf '  fail: a command that cannot start is not a harness refusal\n'; status=1; }
-    grep -qF 'key: "--harness"' "${LAST}" || { printf '  fail: the refusal does not name --harness\n'; status=1; }
-    unset KBASE_SCORE_BACK_END_COMMAND
-
-    # 27: a dry run asks nothing, so --harness changes nothing.
-    run score done score --dry-run --pass rigor --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    if grep -q '^roles:' "${LAST}"; then printf '  fail: a dry run carries a roles record\n'; status=1; fi
-    [[ ! -e "${hledger}/harness" ]] || { printf '  fail: a dry run left a working directory for a command it never ran\n'; status=1; }
-
-    # 33: both bounds fail the item with the reason that bound produces.
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} big-reply {prompt}"
-    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    grep -q 'the reply is over the' "${hledger}/ledger.jsonl" || { printf '  fail: an over-limit reply is not the item\x27s failure\n'; status=1; }
-    export KBASE_SCORE_BACK_END_COMMAND="${stub} big-stderr {prompt}"
-    run score bounded score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${hstate}"
-    hledger="$(ledger_of "${LAST}")"
-    grep -q 'stderr bound' "${hledger}/ledger.jsonl" || { printf '  fail: over-limit stderr is not the item\x27s failure\n'; status=1; }
-    unset KBASE_SCORE_BACK_END_COMMAND
-
-    # 21: a harness consults no mode, so a base URL and the role variables set
-    # beside it are neither a mixed mode nor a refusal.
-    harness_env="${root}/${out}/harness-env-state"
-    set +e
-    ( cd "${repo}" && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE "HOME=${out}/score-home" \
-        KBASE_API_BASE_URL=http://127.0.0.1:1/v1 KBASE_DECISION=env-decision KBASE_TEXT=env-text KBASE_SCORING=env-scoring \
-        KBASE_SCORE_BACK_END_COMMAND="${stub} argv {prompt}" \
-        "${kbase}" score --pass rigor --limit 1 --harness opencode --config-dir "${score_config}" --state-dir "${harness_env}" ) \
-        > "${out}/harness-env.out" 2> "${out}/harness-env.log"
-    printf '%s\n' "$?" > "${out}/harness-env.exit"
-    set -e
-    harness_env_ok=0
-    [[ "$(cat "${out}/harness-env.exit")" -eq 0 ]] || harness_env_ok=1
-    grep -qx 'outcome: "bounded"' "${out}/harness-env.out" || harness_env_ok=1
-    grep -qx '      back-end: "harness"' "${out}/harness-env.out" || harness_env_ok=1
-    # The environment names the model where it names one.
-    grep -qx '      model: "env-scoring"' "${out}/harness-env.out" || harness_env_ok=1
-    [[ "$(grep -c 'names the command' "${out}/harness-env.log")" -eq 1 ]] || harness_env_ok=1
-    printf 'score --pass rigor --limit 1 --harness opencode (environment set)\tbounded\t%s\t%s\n' \
-        "$([[ "${harness_env_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/harness-env.out" >> "${out}/checks.tsv"
-    printf '  %s score --harness with the environment set: want bounded, exit %s\n' \
-        "$([[ "${harness_env_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/harness-env.exit")"
-    [[ "${harness_env_ok}" -eq 0 ]] || status=1
-
-    # 30: the flag names the back ends kbase ships and no profile, so a name
-    # nothing ships refuses before the KB is opened, listing the one it takes.
-    run score refused score --pass rigor --harness claude --config-dir "${score_config}" --state-dir "${hstate}"
-    grep -qF 'check: "harness"' "${LAST}" || { printf '  fail: a name kbase ships no back end for is not a harness refusal\n'; status=1; }
-    grep -qF 'key: "--harness"' "${LAST}" || { printf '  fail: the refusal does not name --harness\n'; status=1; }
-    [[ "$(sed -n '/^      allowed:/,/^      [a-z]/p' "${LAST}" | sed -n 's/^        - "\(.*\)"$/\1/p' | tr '\n' ' ')" == "opencode " ]] \
-        || { printf '  fail: the refusal does not list the one back end kbase ships\n'; status=1; }
-
     run set-rigor refused set-rigor --values "${fixture}/values/bad-rigor.yaml"
     run render-citation refused render-citation --values "${fixture}/values/cite-nowhere.yaml"
     id="$(sed -n 's/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/06-insert-claim-entry.out" | head -n 1)"
@@ -1446,7 +1303,7 @@ _test-integration-results-fixture: build
     run status done status --state-dir "${root}/${out}/state"
     run cancel refused cancel --state-dir "${root}/${out}/state"
     {{just_executable()}} _write-evidence "${out}" "test-integration-results-fixture" \
-      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nharness: the harness legs run --harness opencode with KBASE_SCORE_BACK_END_COMMAND naming {{HARNESS_STUB}}, one mode per behaviour: argv and stdin (the prompt's two routes, each leaving the digest of what it was handed, compared with the ledger's prompt_sha256), isolate (a second item fails if it can see the first's file), fail (exit 3 with stderr: the item's failure, the walk carrying on), big-reply and big-stderr (each past a bound), and a missing program (refused before the walk); the first leg also checks the override announced once on stderr and recorded as command_override in run.yaml, and that run.yaml and the ledger's lines name the back end and no profile; a --harness name kbase ships no back end for refuses listing opencode; a dry run touches no command, and a run with the environment set beside --harness is bounded and reads its model from KBASE_SCORING\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
+      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'
         exit 1
