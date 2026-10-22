@@ -811,6 +811,13 @@ may be incomplete, and for a call or a write that failed. The run goes on, and `
 item again. Nothing is defaulted or supplied by kbase: `*pending*` is an answer the model may give,
 and a record like any other.
 
+**A provider call's failure names what ended it.** `provider-refused` — the endpoint answered
+with a status that is not success: the request was carried, read and declined, and the reason
+carries that status and the provider's own words beside it. `transport-failure` — the
+connection, the name, the certificate or the stream failed, and no answer of the provider's was
+had. A reason states the one that happened: the first calls for the request to be looked at, the
+second for the path to the provider.
+
 **Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
 `set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. Each op
 runs with `--no-refresh`, under the KB write lock taken and released for that one landing. A write

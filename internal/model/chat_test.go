@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,15 +49,16 @@ const (
 
 func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		bodies   []string
-		requests int
-		ok       bool
+		name        string
+		bodies      []string
+		requests    int
+		ok          bool
+		wantOutcome string
 	}{
-		{"answered at once", []string{sseAnswered}, 1, true},
-		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true},
-		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true},
-		{"never complete", []string{sseShortOfDone}, ChatAttempts, false},
+		{"answered at once", []string{sseAnswered}, 1, true, ChatOK},
+		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true, ChatOK},
+		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true, ChatOK},
+		{"never complete", []string{sseShortOfDone}, ChatAttempts, false, ChatTransportFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.bodies...)
@@ -69,6 +71,9 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 			if tc.ok && (got.Reply != "A" || got.Outcome != ChatOK || got.Usage.PromptTokens != 40) {
 				t.Errorf("Chat = %+v", got)
 			}
+			if got.Outcome != tc.wantOutcome {
+				t.Errorf("outcome = %q, want %q", got.Outcome, tc.wantOutcome)
+			}
 			requests := seen()
 			if len(requests) != tc.requests || len(observed) != tc.requests {
 				t.Fatalf("requests %d, observed %q; want %d", len(requests), observed, tc.requests)
@@ -79,6 +84,63 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestChatNamesAProviderRefusal: a provider that answers with a status that is
+// not success read the request and declined it, which is not the transport
+// failing — so the attempt says it refused, and the reason carries the status
+// and the body's start rather than sending a reader to the path between kbase
+// and a provider that is answering.
+func TestChatNamesAProviderRefusal(t *testing.T) {
+	const body = `{"error":{"message":"unknown model: m"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	var observed []string
+	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
+	if !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != ChatProviderRefused {
+		t.Errorf("outcome = %q, want %q", got.Outcome, ChatProviderRefused)
+	}
+	for _, reason := range []string{got.Error, err.Error()} {
+		if !strings.Contains(reason, "http 400") || !strings.Contains(reason, "unknown model") {
+			t.Errorf("reason = %q, want the status and the provider's own words", reason)
+		}
+		if strings.Contains(reason, ChatTransportFailure) {
+			t.Errorf("reason = %q, want no transport failure where the provider answered", reason)
+		}
+	}
+	if len(observed) != ChatAttempts {
+		t.Fatalf("%d attempts observed, want %d", len(observed), ChatAttempts)
+	}
+	for _, o := range observed {
+		if o != ChatProviderRefused {
+			t.Errorf("an attempt = %q, want %q", o, ChatProviderRefused)
+		}
+	}
+}
+
+// TestChatNamesAnUnreachableEndpoint: nothing answering at all is the
+// transport's failure — the case the refusal above must not be read as, and
+// what a closed port looks like.
+func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil, nil)
+	if !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != ChatTransportFailure {
+		t.Errorf("outcome = %q, want %q", got.Outcome, ChatTransportFailure)
 	}
 }
 

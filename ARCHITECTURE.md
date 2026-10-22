@@ -696,7 +696,11 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   the environment by `KBASE_<ROLE>`; no role falls back to another.
 - Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
   thinking disabled (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a
-  call that does not complete is re-issued identically up to the attempt count (§12).
+  call that does not complete is re-issued identically up to the attempt count (§12). Each attempt's
+  outcome names what ended it — `ok`, `served-nothing`, `provider-refused` where the provider
+  answered with a status that is not success, `transport-failure` where no answer of the provider's
+  was had — and the error a call returns carries the last attempt's outcome and its text, which is
+  what a failed item's reason records (SPEC §8).
   `model` makes it, with a system message. This holds for the overview call; the letter asks take
   the decision surface instead (next item). A build with a calling row left to walk checks a
   provider is configured before its first stage (SPEC §5).

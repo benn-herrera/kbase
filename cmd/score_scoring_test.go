@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +20,49 @@ func scoreWithoutScoring() providerOptions {
 	return providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://solo.example/v1")},
 		Config:    config.Config{Models: config.ModelMap{Decision: "solo/decision-model", Text: "solo/text-model"}},
+	}
+}
+
+// TestScoreRecordsAProviderRefusalAsItsOwnReason: a provider that answers with
+// a status that is not success declined the request, which is not the transport
+// failing: the item's failure states the refusal with the status, in the reason
+// the document and the ledger's line carry alike, and never reads as a
+// transport failure — the reading that sends a diagnosis to the path between
+// kbase and a provider that is answering.
+func TestScoreRecordsAProviderRefusalAsItsOwnReason(t *testing.T) {
+	const body = `{"error":{"message":"unknown model: judge"}}`
+	repo, state := scoreRepo(t), t.TempDir()
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
+		m := model.NewScriptedMock(nil, nil)
+		m.SetError(model.StatusError{Code: http.StatusBadRequest, Body: body})
+		return m
+	})
+	if got.doc.Outcome != "failed" {
+		t.Fatalf("the run = %s, want failed\n%s", got.doc.Outcome, got.stdout)
+	}
+	items := got.doc.items("failures")
+	if len(items) != 1 || items[0]["check"] != checkError {
+		t.Fatalf("failures = %v, want the one item's reason\n%s", items, got.stdout)
+	}
+	detail, _ := items[0]["detail"].(string)
+	if !strings.HasPrefix(detail, "clm-aaaaaa: ") {
+		t.Errorf("detail = %q, want it to name the item", detail)
+	}
+	if !strings.Contains(detail, model.ChatProviderRefused) || !strings.Contains(detail, "http 400") ||
+		!strings.Contains(detail, "unknown model") {
+		t.Errorf("detail = %q, want the refusal, its status and the provider's own words", detail)
+	}
+	if strings.Contains(detail, model.ChatTransportFailure) {
+		t.Errorf("detail = %q, want no transport failure where the provider answered", detail)
+	}
+
+	dir, _ := got.doc.Values["ledger"].(string)
+	ledger, err := os.ReadFile(filepath.Join(dir, "ledger.jsonl"))
+	if err != nil {
+		t.Fatalf("read the ledger: %v", err)
+	}
+	if !strings.Contains(string(ledger), model.ChatProviderRefused) || !strings.Contains(string(ledger), "http 400") {
+		t.Errorf("the ledger's line does not carry the refusal it reasoned:\n%s", ledger)
 	}
 }
 

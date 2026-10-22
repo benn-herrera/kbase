@@ -17,8 +17,14 @@ const (
 	// ChatOK is a stream that reached [DONE] — an empty reply and one cut off
 	// at the completion cap included.
 	ChatOK = "ok"
-	// ChatTransportFailure is a stream that failed before, during or short of
-	// [DONE].
+	// ChatProviderRefused is a request the provider answered with a status that
+	// is not success: it read the request and declined it, so the path to it,
+	// the name and the key all worked, and what ended the attempt is the answer
+	// itself — its status and body.
+	ChatProviderRefused = "provider-refused"
+	// ChatTransportFailure is a call that reached no answer of the provider's —
+	// the connection, the name or the certificate behind it failing — or a
+	// stream that failed during or short of [DONE].
 	ChatTransportFailure = "transport-failure"
 	// ChatServedNothing is a stream whose usage reports no token read and none
 	// written: a server aborting a request answers so, its error message as the
@@ -91,7 +97,7 @@ func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
 	var a ChatAttempt
 	sr, err := c.ConsultStream(ctx, req)
 	if err != nil {
-		a.Outcome, a.Error = ChatTransportFailure, err.Error()
+		a.Outcome, a.Error = chatFailure(err)
 		a.Duration = time.Since(started)
 		return a
 	}
@@ -102,7 +108,7 @@ func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
 			break
 		}
 		if err != nil {
-			a.Outcome, a.Error = ChatTransportFailure, err.Error()
+			a.Outcome, a.Error = chatFailure(err)
 			break
 		}
 		a.Reasoned = a.Reasoned || chunk.Reasoning != ""
@@ -120,4 +126,18 @@ func chatOnce(ctx context.Context, c Client, req Request) ChatAttempt {
 	}
 	a.Duration = time.Since(started)
 	return a
+}
+
+// chatFailure is the outcome of an attempt err ended, and the text a reason
+// carries of it. A provider that answered with a status that is not success
+// refused the request: the connection carried it and the answer says why, so
+// reporting it as the transport's failure sends a reader to the path between
+// kbase and a provider that is working.
+func chatFailure(err error) (string, string) {
+	outcome := ChatTransportFailure
+	var se StatusError
+	if errors.As(err, &se) {
+		outcome = ChatProviderRefused
+	}
+	return outcome, err.Error()
 }

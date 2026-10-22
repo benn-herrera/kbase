@@ -301,7 +301,10 @@ continues under the current ask: the header keeps the digest the run began under
 and nothing asks you to choose. `--limit N` stops after N items, and the result carries the `resume`
 command — flags, back end and, under the environment mode, the variables it read — whenever an item is
 still not `done`. A failed run lists what failed under `failures` — an item and the reason its ledger
-line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. A
+line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. The
+reason names what ended the item's call: `provider-refused` where the endpoint answered with a status
+that is not success, its status and its own words beside it, and `transport-failure` where the
+connection, the name, the certificate or the stream failed and no answer was had. A
 `bounded` run carries no `failures`: its failures are counted in `counts.failed` and reasoned in the
 ledger.
 `--dry-run` lists the set, asks nothing and writes no charge record. A run refreshes once at its

@@ -59,8 +59,13 @@ them. Working rules for packages that carry over:
   the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
   lives in `cmd`. The chat asks — the overview and each scoring call — go through `model.Chat`: one
   tool-less request, re-issued identically on an incomplete stream up to the attempt count
-  (ARCHITECTURE §12). The letter asks go through `model.Decision`, one `POST` to whichever surface
-  the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
+  (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and the two
+  failures are not interchangeable: an endpoint that answered with a non-2xx status refused the
+  request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
+  body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
+  stream that failed with no answer — reading one as the other sends a diagnosis to the path to a
+  provider that is answering. The letter asks go through `model.Decision`, one `POST` to whichever
+  surface the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
   closed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
   `decisions` speaks the OpenAI Decisions shape at `<base-url>/decisions` — the state as `input`,
   questions a named array with a `noul` asked as a `predicate` carrying no choices, its criteria
