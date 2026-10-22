@@ -18,11 +18,10 @@ mad-*/
 
 .DS_Store
 
-.claude/adjagent/
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 .claude-temp/
-
+.mcp.json
+.opencode/
 .opencode-temp/
 
 # scratch KB trees born by a kbase init run in this repository
