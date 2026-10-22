@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -62,6 +63,23 @@ func probeFixture(t *testing.T, baseURL, otherURL string) string {
 	return dir
 }
 
+// probeRolesFixture stages one pool entry per role, each at its own base URL,
+// and config.toml naming each role its own entry and model — the role's name in
+// both — so a request lands on a server, and a document names a selection, that
+// identify the role asked.
+func probeRolesFixture(t *testing.T, urls map[config.Role]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	var providers, models strings.Builder
+	for _, role := range config.Roles {
+		fmt.Fprintf(&providers, "[%s]\nbaseUrl = %q\n\n", role, urls[role])
+		fmt.Fprintf(&models, "%s = \"%s/%s\"\n", role, role, role)
+	}
+	writeValues(t, dir, config.ProvidersFileName, providers.String())
+	writeValues(t, dir, config.ConfigFileName, "[models]\n"+models.String())
+	return dir
+}
+
 // runProbeVerb runs `kbase probe` through the real root command from work and
 // reads the document it wrote, with the verb's streams.
 func runProbeVerb(t *testing.T, work string, args ...string) (doc resultDoc, stdout, stderr string, code int) {
@@ -80,7 +98,7 @@ func runProbeVerb(t *testing.T, work string, args ...string) (doc resultDoc, std
 // field that is missing or of another kind.
 func answeredProbe(t *testing.T, doc resultDoc) (firstToken, wall int, usage map[string]any) {
 	t.Helper()
-	for _, key := range []string{"provider", "provider-rule", "provider-layer", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"} {
+	for _, key := range []string{"provider", "provider-rule", "provider-layer", "selection", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"} {
 		if _, ok := doc.Values[key]; !ok {
 			t.Fatalf("the document carries no %s: %v", key, doc.Values)
 		}
@@ -96,7 +114,8 @@ func answeredProbe(t *testing.T, doc resultDoc) (firstToken, wall int, usage map
 
 // TestProbeReportsTheCall: a probe against a provider that answers writes the
 // selection, the timings, the finish reason, the reply and the usage, and exits
-// 0 — the heartbeat a healthy selection gives.
+// 0 — the heartbeat a healthy selection gives. With none of the four selection
+// flags given, that selection is the scoring role's.
 func TestProbeReportsTheCall(t *testing.T) {
 	unsetInferenceEnv(t)
 	srv, _ := probeWire(t)
@@ -108,8 +127,11 @@ func TestProbeReportsTheCall(t *testing.T) {
 	}
 	if doc.Values["provider"] != "local" || doc.Values["provider-rule"] != config.RuleConfig ||
 		doc.Values["provider-layer"] != config.LayerSourceExplicit || doc.Values["model"] != "judge" {
-		t.Errorf("selection = %v/%v/%v model %v, want the configured scoring reference",
+		t.Errorf("provider/rule/layer %v/%v/%v, model %v; want the configured scoring reference",
 			doc.Values["provider"], doc.Values["provider-rule"], doc.Values["provider-layer"], doc.Values["model"])
+	}
+	if doc.Values["selection"] != string(config.RoleScoring) {
+		t.Errorf("selection = %v, want the scoring role a bare probe asks", doc.Values["selection"])
 	}
 	firstToken, wall, usage := answeredProbe(t, doc)
 	if firstToken <= 0 || firstToken >= wall {
@@ -207,8 +229,13 @@ func TestProbeModelOverridesTheRole(t *testing.T) {
 		t.Fatalf("probe --model: exit %d\n%s", code, stdout)
 	}
 	if doc.Values["provider"] != "other" || doc.Values["provider-rule"] != config.RuleFlag || doc.Values["model"] != "alt" {
-		t.Errorf("selection = %v/%v model %v, want the flag's reference",
+		t.Errorf("provider/rule model = %v/%v %v, want the flag's reference",
 			doc.Values["provider"], doc.Values["provider-rule"], doc.Values["model"])
+	}
+	// The document names the reference the flag gave as the selection that
+	// answered, so a reader does not have to read it out of the model id.
+	if doc.Values["selection"] != "other/alt" {
+		t.Errorf("selection = %v, want the reference --model named", doc.Values["selection"])
 	}
 	if len(otherBodies()) != 1 || len(roleBodies()) != 0 {
 		t.Errorf("%d requests to the flag's entry, %d to the role's; want the flag's alone",
@@ -216,10 +243,97 @@ func TestProbeModelOverridesTheRole(t *testing.T) {
 	}
 }
 
+// TestProbeEachRoleFlagAsksItsOwnRole: --decision, --text and --scoring each
+// probe the selection the configuration resolves for that role, and supply no
+// model of their own. A fixture naming three different entries proves which one
+// is dialled; the document names the role as the selection that answered.
+func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
+	unsetInferenceEnv(t)
+	for _, tc := range []struct {
+		flag string
+		role config.Role
+	}{
+		{"--decision", config.RoleDecision},
+		{"--text", config.RoleText},
+		{"--scoring", config.RoleScoring},
+	} {
+		t.Run(tc.flag, func(t *testing.T) {
+			urls := map[config.Role]string{}
+			bodies := map[config.Role]func() [][]byte{}
+			for _, role := range config.Roles {
+				srv, seen := probeWire(t)
+				urls[role], bodies[role] = srv.URL, seen
+			}
+			dir := probeRolesFixture(t, urls)
+
+			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, tc.flag)
+			if code != 0 || doc.Outcome != toolresult.Done {
+				t.Fatalf("%s: outcome %s, exit %d\n%s", tc.flag, doc.Outcome, code, stdout)
+			}
+			if doc.Values["selection"] != string(tc.role) || doc.Values["provider"] != string(tc.role) ||
+				doc.Values["model"] != string(tc.role) {
+				t.Errorf("%s asked %v on %v/%v, want the %s role's own selection",
+					tc.flag, doc.Values["selection"], doc.Values["provider"], doc.Values["model"], tc.role)
+			}
+			for _, role := range config.Roles {
+				want := 0
+				if role == tc.role {
+					want = 1
+				}
+				if n := len(bodies[role]()); n != want {
+					t.Errorf("%d requests to the %s role's entry, want %d", n, role, want)
+				}
+			}
+		})
+	}
+}
+
+// TestProbeRefusesTwoSelections: a probe asks one selection — one of --model,
+// --decision, --text and --scoring. Two role flags, or a role flag with
+// --model, is a usage refusal naming all four, and nothing is dialled, the
+// roles' own configuration notwithstanding.
+func TestProbeRefusesTwoSelections(t *testing.T) {
+	unsetInferenceEnv(t)
+	srv, bodies := probeWire(t)
+	dir := probeFixture(t, srv.URL, srv.URL)
+	selectionFlags := []string{"--model", "--decision", "--text", "--scoring"}
+
+	for _, tc := range []struct {
+		name  string
+		flags []string
+	}{
+		{"two role flags", []string{"--decision", "--text"}},
+		{"a role flag and a reference", []string{"--text", "--model", "other/alt"}},
+	} {
+		doc, stdout, _, code := runProbeVerb(t, t.TempDir(), append([]string{"--config-dir", dir}, tc.flags...)...)
+		if doc.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] {
+			t.Fatalf("%s: outcome %s, exit %d; want refused, %d\n%s", tc.name, doc.Outcome, code, exitCodes[toolresult.Refused], stdout)
+		}
+		items := doc.items(toolresult.RefusalsKey)
+		if len(items) != 1 || items[0]["check"] != config.CheckUsage {
+			t.Fatalf("%s: refusals = %v, want the one usage item", tc.name, items)
+		}
+		if !slices.Equal(anyStrings(items[0]["allowed"]), selectionFlags) {
+			t.Errorf("%s: allowed = %v, want the four that may be chosen once", tc.name, items[0]["allowed"])
+		}
+		detail, _ := items[0]["detail"].(string)
+		for _, flag := range selectionFlags {
+			if !strings.Contains(detail, flag) {
+				t.Errorf("%s: refusal = %q, want it to name %s", tc.name, detail, flag)
+			}
+		}
+	}
+	if n := len(bodies()); n != 0 {
+		t.Errorf("%d requests, want none: more than one selection is refused before anything dials", n)
+	}
+}
+
 // TestProbeRefusesAModelItCannotResolve: a model the configuration cannot
 // supply — a --model that is no reference, a provider the pool does not hold,
-// or a scoring role the files leave unnamed and the flag too — is a refusal
-// naming the key or the flag and what is missing, before any client is built.
+// or a role the files leave unnamed and no flag too — is a refusal naming the
+// key or the flag and what is missing, before any client is built. A role flag
+// names a role, not a model, so the refusal names the role's own key and never
+// the flag that could have supplied one.
 func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 	unsetInferenceEnv(t)
 	srv, bodies := probeWire(t)
@@ -228,15 +342,19 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 	writeValues(t, unconfigured, config.ProvidersFileName, fmt.Sprintf("[local]\nbaseUrl = %q\n", srv.URL))
 
 	for _, tc := range []struct {
-		name, dir, model, wantKey, want string
+		name, dir, model, roleFlag, wantKey, want string
 	}{
-		{"a bare id is no reference", dir, "judge", "--model", "a model is named <provider>/<model>"},
-		{"a provider the pool does not hold", dir, "absent/judge", "--model", "a provider the pool does not hold"},
-		{"no scoring role and no flag", unconfigured, "", "models.scoring", "--model names no model"},
+		{"a bare id is no reference", dir, "judge", "", "--model", "a model is named <provider>/<model>"},
+		{"a provider the pool does not hold", dir, "absent/judge", "", "--model", "a provider the pool does not hold"},
+		{"no scoring role and no flag", unconfigured, "", "", "models.scoring", "--model names no model"},
+		{"a role flag the files leave unnamed", unconfigured, "", "--text", "models.text", "sets no models.text"},
 	} {
 		args := []string{"--config-dir", tc.dir}
 		if tc.model != "" {
 			args = append(args, "--model", tc.model)
+		}
+		if tc.roleFlag != "" {
+			args = append(args, tc.roleFlag)
 		}
 		doc, stdout, _, code := runProbeVerb(t, t.TempDir(), args...)
 		if doc.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] {
@@ -246,8 +364,12 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 		if len(items) != 1 || items[0]["key"] != tc.wantKey {
 			t.Fatalf("%s: refusals = %v, want one naming %s", tc.name, items, tc.wantKey)
 		}
-		if detail, _ := items[0]["detail"].(string); !strings.Contains(detail, tc.want) {
+		detail, _ := items[0]["detail"].(string)
+		if !strings.Contains(detail, tc.want) {
 			t.Errorf("%s: refusal = %q, want it to name what is missing (%q)", tc.name, detail, tc.want)
+		}
+		if tc.roleFlag != "" && strings.Contains(detail, "--model") {
+			t.Errorf("%s: refusal = %q, want no flag named: a role flag supplies no model", tc.name, detail)
 		}
 	}
 	if n := len(bodies()); n != 0 {

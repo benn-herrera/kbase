@@ -32,7 +32,7 @@ var documentedKeys = map[string][]string{
 	"models":             {"provider", "provider-rule", "provider-layer", "models"},
 	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
 	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "diagnostics"},
-	"probe":              {"provider", "provider-rule", "provider-layer", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
+	"probe":              {"provider", "provider-rule", "provider-layer", "selection", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
 	"export-latex":       {"written", "volumes", "report"},
 	"score":              {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
 }

@@ -697,12 +697,14 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
   names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
   the environment by `KBASE_<ROLE>`; no role falls back to another.
-- **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves the `scoring` role
-  through `config.ModeOf` and `config.ResolveFlag` — the flag `--model` supplying the model and naming
-  itself in a refusal, and an explicit reference resolved in file mode because a reference is a pool
-  reference — then opens the client through `cmd/provider.go`'s registry exactly as `score` does, so
-  it speaks whichever wire shape the entry names and a second wire shape lands without a second
-  client construction. One `model.Chat` call, no backoff, bounded by `--timeout`;
+- **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves one selection through
+  `config.ModeOf` and `config.ResolveFlag` — `--model` supplying a reference and naming itself in a
+  refusal, a role flag (`--decision`, `--text`, `--scoring`) naming the role to resolve and supplying
+  no model, so that role's model comes from the configuration and a refusal names its key alone, and
+  an explicit reference resolved in file mode because a reference is a pool reference — then opens
+  the client through `cmd/provider.go`'s registry exactly as `score` does, so it speaks whichever
+  wire shape the entry names and a second wire shape lands without a second client construction. One
+  `model.Chat` call, no backoff, bounded by `--timeout`;
   the attempt's `FirstToken` — request start to the first non-empty content or reasoning delta,
   measured in `chatOnce`, zero where none arrived — is what the result reports beside the call's
   wall time. It opens no `kb.Source`, resolves no state directory and takes no lock: the verb is
@@ -758,7 +760,9 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
   never by resolution. `config.ResolveFlag` is the same resolution with the flag that supplies a
   role's model spelled by the caller, so `probe`'s `--model` is named in a refusal where
-  `--scoring-model` would be. `config.Select` is the catalogue verbs' choice of
+  `--scoring-model` would be; the caller names no flag where none supplies a model, as `probe`'s role
+  flags supply none, and a role the files leave unnamed then names only its key. `config.Select` is
+  the catalogue verbs' choice of
   a pool entry to dial — a
   flag, else the pool's only entry — and no role is chosen that way. `config.Refusal` (with
   `Refusals` for a decision that has more than one side to state) is the one typed refusal, and its

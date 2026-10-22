@@ -447,7 +447,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
-| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply`; `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
+| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply`; `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 | `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
 
@@ -954,25 +954,33 @@ Result keys: §7.
 ### `probe`
 
 ```
-kbase probe [--model <provider>/<model>] [--prompt TEXT] [--timeout DURATION]
+kbase probe [--model <provider>/<model>] [--decision | --text | --scoring]
+            [--prompt TEXT] [--timeout DURATION]
 ```
 
 One ask, no KB and no state: a diagnostic of a model selection, answered by the selection itself.
-`--model` names a `<provider>/<model>` reference, resolved against the pool as a role's reference is;
-without it the probe asks the `scoring` role — the selection a scoring run would make, in file mode or
-in the environment's — so `kbase probe` with no arguments is the heartbeat of a configuration. A model
-that does not resolve is `refused`, naming the flag or the key and what is missing, before any client
-is opened.
+A probe asks one selection, and its flags name it: `--model` names a `<provider>/<model>` reference,
+resolved against the pool as a role's reference is; `--decision`, `--text` and `--scoring` each ask
+the selection the configuration resolves for that role — in file mode the `models.<role>` reference,
+in environment mode the role's own variable — and supply no model of their own; and with none of the
+four given the probe asks the `scoring` role, the selection a scoring run would make, in file mode or
+in the environment's, so `kbase probe` with no arguments is the heartbeat of a configuration. The
+four are mutually exclusive: more than one is a usage refusal naming all four as what may be chosen
+once, before anything resolves or dials. A selection that does not resolve is `refused`, naming the
+role's own key — `models.<role>`, or the role's variable — or the flag, and what is missing, before
+any client is opened. The document states which selection answered: the role's name where a role flag
+or the default named it, and the reference where `--model` did.
 
 The call is one tool-less chat request through the registry a scoring run's asks take, so an endpoint
 is reached over the wire shape its pool entry names: no tools, no history, an empty system prompt, and
 `--prompt` in place of the default one-word check. `--timeout` bounds the call (default `30s`); a call
 that does not complete is re-issued at once up to the attempt count, so that deadline is spent on
-attempts rather than on pauses (§12). The document reports what a ledger cannot — the provider, the
-model, the time to the first token, the call's wall time, the finish reason, the reply, and the usage
-the provider reported — and its outcome follows the call: `done` where it completed, `failed` where it
-did not, with the attempt's own outcome and the provider's words in the failure. It reads no KB and
-reads or writes no state directory: it prints its document and exits, and no MCP tool binds it (§11).
+attempts rather than on pauses (§12). The document reports what a ledger cannot — the selection, the
+provider, the model, the time to the first token, the call's wall time, the finish reason, the reply,
+and the usage the provider reported — and its outcome follows the call: `done` where it completed,
+`failed` where it did not, with the attempt's own outcome and the provider's words in the failure. It
+reads no KB and reads or writes no state directory: it prints its document and exits, and no MCP tool
+binds it (§11).
 
 Result keys: §7.
 
@@ -1041,9 +1049,10 @@ with the provider's model ids as `allowed` (§7) — except `scoring` where the 
 states one, which is left standing, so `configure --provider P` over a complete file writes no
 scoring value and is `unchanged` where it changes nothing else. A file `configure` writes is never
 left making `kbase score` refuse. `kbase show-config [--provider NAME]` reports how the configuration
-resolves and changes nothing (§9.6). `kbase probe [--model REF] [--prompt TEXT]` asks the `scoring`
-role — or the reference `--model` names — one question and reports the call, reading no KB and
-writing no state (§8). Each writes its result under §7.
+resolves and changes nothing (§9.6). `kbase probe [--model REF] [--decision | --text | --scoring]
+[--prompt TEXT]` asks one selection — a role flag's role, else the `scoring` role, or the reference
+`--model` names — one question and reports the call, reading no KB and writing no state (§8). Each
+writes its result under §7.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
 dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is

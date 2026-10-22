@@ -521,12 +521,16 @@ the selected entry and rule; and one record per role, naming the endpoint, the l
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
 
-`kbase probe [--model <provider>/<model>] [--prompt TEXT]` asks one model one question and reports
-what came back: the provider, the model, the time to the first token, the call's wall time, the
-finish reason, the reply, and the usage the provider reported. Without `--model` it asks the
-`scoring` role — the selection a run would make, in either mode — so `kbase probe` with no arguments
-is the heartbeat of a configuration; `--model` names a reference to reach instead, resolved against
-the same pool. It reads no KB and reads or writes no state directory: one ask, one result document.
+`kbase probe [--model <provider>/<model>] [--decision | --text | --scoring] [--prompt TEXT]` asks
+one model one question and reports what came back: the selection asked, the provider, the model, the
+time to the first token, the call's wall time, the finish reason, the reply, and the usage the
+provider reported. A probe asks one selection: `--decision`, `--text` and `--scoring` each ask the
+selection the configuration resolves for that role — `models.<role>` in the file, or the role's own
+variable (`KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING`) in environment mode — and `--model` names
+a reference to reach instead, resolved against the same pool. The four are exclusive; with none of
+them the probe asks the `scoring` role — the selection a run would make, in either mode — so
+`kbase probe` with no arguments is the heartbeat of a configuration. The document names the selection
+that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`

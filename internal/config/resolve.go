@@ -223,7 +223,9 @@ func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error
 // the caller — flagModel is the flag's value and flagKey its name — so a verb
 // whose flag is not --scoring-model is pointed at its own: a value that is no
 // reference, and a provider the pool does not hold, name the flag they came
-// from.
+// from. flagKey is "" where no flag supplies a role's model — a verb that asks
+// a role by name supplies none — and a role the files leave unnamed then names
+// only its own key.
 func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string) (Endpoint, error) {
 	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
@@ -248,9 +250,15 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string) (Endpoint, err
 		value, rule = flagModel, RuleFlag
 	}
 	if value == "" {
-		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
-			Detail: fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
-				configFile, role.key(), flagKey)}
+		// The key is what a role left unnamed is refused by. Where a flag could
+		// have supplied the value, the refusal says it named none; where no
+		// flag can, the key is the whole of what is wrong.
+		detail := fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
+			configFile, role.key(), flagKey)
+		if flagKey == "" {
+			detail = fmt.Sprintf("%s sets no %s — name one there as <provider>/<model>", configFile, role.key())
+		}
+		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy, Detail: detail}
 	}
 	ref, err := FileReference(value)
 	if err != nil {
