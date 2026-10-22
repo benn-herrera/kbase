@@ -82,7 +82,7 @@ An id from the list above, a colon, a space, and a span copied out of the node's
 
 The span comes out of the node's title or out of its statement, and lies inside one passage: it never
 crosses from the one to the other. A method fault's anchor is the step, the value, the marker or the
-passage that carries the gap. Where the fault is an absence, cite the span that carries the
-obligation: the title that asserts, the marker that claims the step, the value reported.
+passage that carries the gap. An absence's anchor is the title that asserts, the marker that claims the
+step, the value reported.
 
 @!score-answer-close!@

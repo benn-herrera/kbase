@@ -6,6 +6,13 @@ characters the line will write, and where it is not there, shorten it until it i
 usually enough and one character is enough: the smallest span that carries the fault is the honest
 one, and one span the text does not carry costs the whole reply.
 
+A citation marks the site of the fault, never a description of it: the span is where the fault shows
+in the text being judged — the words a reader would look at to see the fault for themselves — and a
+sentence that describes the fault is not that place, however exactly it is copied. Where the fault is
+something the text fails to do, the site is still the text's own words, the ones that carry the
+obligation: the part the missing piece would have had to reach. An edge's note under `## Context`,
+where the call shows one, describes the relation and is never a site.
+
 Markup is copied as the text writes it, neither added nor dropped: `$`, `\(`, `\)`, `\[`, `\]`,
 `\text{}`, backticks and emphasis markers belong to a span exactly where the text itself writes them —
 where the text writes `$M$`, the span is `$M$`, and where it writes `d_n`, the span is `d_n`.
