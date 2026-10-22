@@ -2,46 +2,34 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
-
-	"kbase/internal/config"
 )
 
 // TestOpenCodeArgv: one item's command carries the standalone server, the
-// agent the inline configuration defines, and the model where the run names one
-// — and a model opencode cannot take is refused rather than dropped.
+// agent the inline configuration defines, and — where the run names a model —
+// --model and the value as two elements, the value unaltered.
 func TestOpenCodeArgv(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		model   string
-		want    []string
-		refusal bool
+		name  string
+		model string
+		want  []string
 	}{
 		{name: "a reference", model: "openrouter/deepseek/deepseek-v4.1-flash",
 			want: []string{"opencode", "run", "--standalone", "--agent", opencodeAgent, "--model", "openrouter/deepseek/deepseek-v4.1-flash"}},
 		{name: "a variant", model: "anthropic/claude#high",
 			want: []string{"opencode", "run", "--standalone", "--agent", opencodeAgent, "--model", "anthropic/claude#high"}},
 		{name: "no model", want: []string{"opencode", "run", "--standalone", "--agent", opencodeAgent}},
-		{name: "a bare id", model: "clef", refusal: true},
-		{name: "no model part", model: "openrouter/", refusal: true},
-		{name: "no provider part", model: "/deepseek", refusal: true},
-		{name: "an empty variant", model: "anthropic/claude#", refusal: true},
-		{name: "an id opencode would read as an option", model: "-openrouter/deepseek", refusal: true},
+		{name: "a bare id is handed over whole", model: "clef",
+			want: []string{"opencode", "run", "--standalone", "--agent", opencodeAgent, "--model", "clef"}},
+		{name: "a value beginning with - is handed over as it stands", model: "-openrouter/deepseek",
+			want: []string{"opencode", "run", "--standalone", "--agent", opencodeAgent, "--model", "-openrouter/deepseek"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			argv, err := opencodeArgv(tc.model)
-			if tc.refusal {
-				var refusal config.Refusal
-				if !errors.As(err, &refusal) || refusal.Check != config.CheckHarness || refusal.Key != "--harness" {
-					t.Fatalf("argv = %q, err = %v; want a harness refusal naming --harness", argv, err)
-				}
-				return
-			}
-			if err != nil || !slices.Equal(argv, tc.want) {
-				t.Errorf("= %q, %v; want %q", argv, err, tc.want)
+			argv := opencodeArgv(tc.model)
+			if !slices.Equal(argv, tc.want) {
+				t.Errorf("= %q; want %q", argv, tc.want)
 			}
 		})
 	}

@@ -181,9 +181,10 @@ work's rigor is never asked — set it by hand.
   through the same write path, no model asked — and records the move in `repriced.yaml`; a resume
   under a changed ask continues under the current ask, and neither refuses.
 - `--harness opencode` runs one opencode v2 process per item instead of asking an endpoint: kbase
-  composes the command and the environment — no tools, no instructions of its own, its own model
-  naming `<provider>/<model>`, and nothing written to your configuration — so no endpoint is chosen
-  and the mode is not consulted. It is the only value the flag takes; any other name is refused
+  composes the command and the environment — no tools, no instructions of its own, the scoring
+  model's value passed to opencode as it stands, and nothing written to your configuration — so no
+  endpoint is chosen and the mode is not consulted. A model opencode does not recognise fails that
+  item rather than the run. It is the only value the flag takes; any other name is refused
   before the KB is opened, because kbase runs no command a user supplies. `--dry-run` lists the set,
   asks nothing and cannot be resumed.
 - A run holds `<state-dir>/score`, so a second is `retry` (`check: lock`).

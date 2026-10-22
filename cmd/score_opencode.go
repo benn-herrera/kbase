@@ -49,45 +49,22 @@ func opencodeConfig() string {
 
 // opencodeArgv is the command one item runs. The prompt reaches opencode on
 // stdin — no element carries it — so one item's text is never an argv element,
-// and the model, where the run names one, is opencode's own reference passed as
-// its own element.
+// and the model, where the run names one, follows --model as its own element,
+// unaltered. kbase does not read the value's shape: what an opencode build takes
+// as a model is opencode's, and a value it does not take is its refusal, in its
+// own words, at the item.
 //
 // --standalone is what makes the environment take effect: without it
 // `opencode run` attaches to the background service, whose configuration and
 // agent set were fixed when that service started and whose environment this
 // process's assignments never reach.
-func opencodeArgv(model string) ([]string, error) {
+func opencodeArgv(model string) []string {
 	argv := []string{opencodeHarness, "run", "--standalone", "--agent", opencodeAgent}
-	switch {
-	case model == "":
+	if model == "" {
 		// opencode asks its own configured model; the run names none.
-		return argv, nil
-	case strings.HasPrefix(model, "-"):
-		return nil, config.Refusal{Check: config.CheckHarness, Key: "--harness",
-			Detail: fmt.Sprintf("--harness %s hands opencode its model as an argv element, and %q begins with -: opencode would read it as an option rather than as a model id",
-				opencodeHarness, model)}
-	case !opencodeReference(model):
-		return nil, config.Refusal{Check: config.CheckHarness, Key: "--harness",
-			Detail: fmt.Sprintf("--harness %s runs opencode, which names a model <provider>/<model>: %q is not one",
-				opencodeHarness, model)}
+		return argv
 	}
-	return append(argv, "--model", model), nil
-}
-
-// opencodeReference reports whether model is a reference opencode's own parser
-// takes: <provider>/<model>, split at the first "/", and an optional #variant.
-// A model id may itself contain "/" (openrouter/anthropic/...), a provider may
-// not, and neither an id nor a variant may be empty.
-func opencodeReference(model string) bool {
-	provider, rest, ok := strings.Cut(model, "/")
-	if !ok || provider == "" || rest == "" || strings.Contains(provider, "#") {
-		return false
-	}
-	id, variant, variantGiven := strings.Cut(rest, "#")
-	if id == "" {
-		return false
-	}
-	return !variantGiven || (variant != "" && !strings.Contains(variant, "#"))
+	return append(argv, "--model", model)
 }
 
 // opencodeEnv is the environment one item's process starts with: kbase's own,
@@ -132,8 +109,8 @@ func withEnv(base []string, overrides map[string]string) []string {
 }
 
 // opencodeSetup is --harness opencode's half of the setup: the version gate,
-// the scoring role's model in opencode's form, and the probed command every
-// item starts, with the environment each item's process is started in.
+// the scoring role's model handed over whole, and the probed command every item
+// starts, with the environment each item's process is started in.
 //
 // The back end override replaces the whole of that: where it names a command,
 // that command is what every item runs, there is no version to gate and no argv
@@ -152,9 +129,7 @@ func opencodeSetup(ctx context.Context, in config.Inputs, opts scoreOptions, ove
 	argv, itemEnv := override, func(string) []string { return backEndEnv() }
 	named := backEndCommandEnv + " names a command"
 	if argv == nil {
-		if argv, err = opencodeArgv(written); err != nil {
-			return config.Endpoint{}, nil, nil, err
-		}
+		argv = opencodeArgv(written)
 		itemEnv, named = opencodeEnv, "--harness "+opencodeHarness+" runs the opencode back end"
 	}
 	command, err := harness.New(argv, opts.Logger)

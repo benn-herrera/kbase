@@ -473,8 +473,8 @@ cases apart, so a reader never infers the source from an absence.
 
 **The model is the one requested, never one observed.** `model` is the id this invocation asked for,
 and no result document or ledger line states one a server or a command ran. A harness run names the
-role's value as that back end takes it — a file reference's `<provider>/<model>` whole, or an
-environment id.
+role's value whole — a file reference's `<provider>/<model>`, or an environment id — whether or not
+the back end turns out to take it.
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
@@ -847,8 +847,9 @@ command wrote is visible to the next.
 - **The model.** The scoring role resolves before the walk: a configuration that names no scoring
   model refuses the run as setup, because the role is the run's declaration of which model judges it.
   The back end is handed that value whole — the environment's id, else the file reference's
-  `<provider>/<model>` — overridden by `--scoring-model`, and the run records the id it passed. A
-  model the back end cannot name is refused before the walk, never dropped.
+  `<provider>/<model>` — overridden by `--scoring-model`, and the run records the id it passed. kbase
+  does not read the value's shape and refuses nothing for it: a value opencode does not take fails
+  each item, in opencode's own words, in that item's `reply`.
 - **What kbase cannot guarantee.** The back end is a program kbase did not write: kbase removes what
   it can of the harness's own instructions and tools, and can neither verify what it removed nor
   undo what a harness adds. The ledger's prompt digest records what kbase sent, not what the harness
@@ -860,9 +861,11 @@ stdin, an agent defined inline for that process alone — no tools, no system pr
 instruction file, plugin or skill of the user's — its configuration sources restricted to an empty
 directory under the run's own working directory, and the upward walk for project configuration and
 instruction files closed. The model it is handed is the scoring role's value whole — a file
-reference's `<provider>/<model>`, or the environment's id and `--scoring-model` verbatim — because
-opencode names a model `provider/model`; a model that is not one of those refuses the run before the
-first item, as does an `opencode` whose `--version` is not v2. Nothing is written to the user's
+reference's `<provider>/<model>`, or the environment's id and `--scoring-model` verbatim — passed as
+the value of `--model` as it stands, one element after the flag. kbase does not check that value:
+opencode's model ids are opencode's to define, so a value it does not recognise is its own refusal at
+the item, in its own words, in that item's `reply`, and the run goes on. An `opencode` whose
+`--version` is not v2 refuses the run before the first item. Nothing is written to the user's
 configuration. Its stdout is the reply and is parsed by the rule a provider's reply is.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
@@ -928,9 +931,9 @@ the state store, or where a refresh could not take the KB write lock past the wa
 where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
 inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
 a mode whose sources are mixed or whose environment is partial, a `--harness` naming a back end
-kbase does not ship, a model the back end cannot name, a command that cannot be started, an index the
-load cannot answer), a run already holding the KB's operation lock (§6), or a KB that no longer opens
-when the end refresh re-reads it.
+kbase does not ship, a command that cannot be started, an index the load cannot answer), a run
+already holding the KB's operation lock (§6), or a KB that no longer opens when the end refresh
+re-reads it.
 
 **The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
 `check: error` item per item the ledger records `failed`, `detail` the item as the document names it

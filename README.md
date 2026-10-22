@@ -22,8 +22,8 @@ hardware.
   dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model: the role is
   what declares which model judges the KB.
 - **opencode v2**, for `--harness opencode` alone: the installed binary, authenticated for the model
-  the scoring role names. kbase passes that model as opencode's own `<provider>/<model>` reference
-  and reads its configuration from nowhere but an empty directory it creates for the run.
+  the scoring role names. kbase passes that model to opencode as `--model` and its value, unaltered,
+  and reads opencode's configuration from nowhere but an empty directory it creates for the run.
 - **Go**, to build kbase from source. `just` runs the project's recipes.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
@@ -310,7 +310,8 @@ or the values a resume re-priced, each refresh holding the KB write lock; a dry 
 
 `--scoring-model` overrides the role for one run: a `<provider>/<model>` reference in file mode, a
 bare id under the environment's endpoint, the role's value whole under `--harness` — which under
-`--harness opencode` must be opencode's `<provider>/<model>`, the form it takes. `--harness opencode`
+`--harness opencode` is handed to opencode as it stands, so a model opencode does not recognise
+fails that item, in opencode's own words, and the run goes on. `--harness opencode`
 runs one process per item instead of asking an endpoint: an installed opencode v2, with an agent
 kbase defines for that process alone — no tools, no instructions of its own, its configuration
 sources cut back to an empty directory under the run's own records — the prompt on its stdin and its
