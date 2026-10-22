@@ -308,16 +308,17 @@ ledger.
 start — on an older KB that is the write that converts and saves it — and once after its last value
 or the values a resume re-priced, each refresh holding the KB write lock; a dry run does neither.
 
-`--scoring-model` overrides the role for one run: a `<provider>/<model>` reference in file mode, a
-bare id under the environment's endpoint, the role's value whole under `--harness` — which under
-`--harness opencode` is handed to opencode as it stands, so a model opencode does not recognise
-fails that item, in opencode's own words, and the run goes on. `--harness opencode`
-runs one process per item instead of asking an endpoint: an installed opencode v2, with an agent
-kbase defines for that process alone — no tools, no instructions of its own, its configuration
-sources cut back to an empty directory under the run's own records — the prompt on its stdin and its
-stdout the reply. Nothing is written to your opencode configuration. It is the only value the flag
-takes: kbase runs no command a configuration file names, and any other name is refused before the KB
-is opened.
+`--scoring-model` names the model for one run: a `<provider>/<model>` reference in file mode, which
+supplies the role where `models.scoring` names none and overrides it where it does; a bare id under
+the environment's endpoint, where the role's variable must name one too; the role's value whole under
+`--harness`, which under `--harness opencode` is handed to opencode as it stands, so a model opencode
+does not recognise fails that item, in opencode's own words, and the run goes on.
+`--harness opencode` runs one process per item instead of asking an endpoint: an installed opencode
+v2, with an agent kbase defines for that process alone — no tools, no instructions of its own, its
+configuration sources cut back to an empty directory under the run's own records — the prompt on its
+stdin and its stdout the reply. Nothing is written to your opencode configuration. It is the only
+value the flag takes: kbase runs no command a configuration file names, and any other name is
+refused before the KB is opened.
 A run asks a model for minutes, so it is a command line: nothing is offered for it over MCP.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.

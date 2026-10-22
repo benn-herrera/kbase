@@ -214,9 +214,10 @@ func ModeOf(in Inputs) (Mode, error) {
 // Resolve is one role's endpoint in a mode. It is pure, as ModeOf is: it reads
 // no file, opens no connection, writes nothing and names no verb.
 //
-// The role's configured value is read first and a flag is an override of it,
-// never a substitute for it: a role the source does not configure refuses even
-// where flagModel names a model.
+// A flag names the role's model where the files name none and overrides the
+// value where they name one; environment mode takes its endpoint and every
+// model from its own variables, so a variable it lacks is refused whatever the
+// flag says.
 func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
 	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
@@ -232,15 +233,16 @@ const configureRemedy = "kbase configure --provider <entry> --model-map " + Cate
 func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
 	configured := role.model(in.Cfg.Models)
 	configFile := ConfigPath(in.WriteDir)
-	if configured == "" {
-		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
-			Detail: fmt.Sprintf("%s sets no %s", configFile, role.key())}
-	}
-	// The flag overrides the configured value and never substitutes for it: a
-	// role the files do not configure is refused above, whatever the flag says.
+	// The flag names the role's model where the files name none, and overrides
+	// the file's value where they name one.
 	value, rule := configured, RuleConfig
 	if flagModel != "" {
 		value, rule = flagModel, RuleFlag
+	}
+	if value == "" {
+		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
+			Detail: fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
+				configFile, role.key(), keyScoringModel)}
 	}
 	ref, err := FileReference(value)
 	if err != nil {

@@ -229,6 +229,13 @@ func TestResolveFileMode(t *testing.T) {
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
 		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
 	}
+	// The flag supplies the role the files name no model for: the entry is the
+	// flag's, no layer named the model, and the rule is the flag's.
+	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "", ""
+	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/clef")
+	if err != nil || ep.Provider != "lab" || ep.Model != "clef" || ep.Rule != RuleFlag || ep.ModelSource != "" {
+		t.Errorf("= %+v, %v; want the flag to supply lab/clef under its own rule", ep, err)
+	}
 }
 
 // TestResolveEnvironmentMode: the environment's endpoint, its role's bare id,
@@ -267,9 +274,9 @@ func TestResolveRefusals(t *testing.T) {
 		allowed []string
 		detail  string
 	}{
-		{name: "no value in the file", role: RoleScoring, mode: ModeFile,
+		{name: "no value in the file, and no flag", role: RoleScoring, mode: ModeFile,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
-			key:    "models.scoring", path: configFile, detail: "sets no models.scoring"},
+			key:    "models.scoring", path: configFile, detail: "and --scoring-model names no model"},
 		{name: "a bare id", role: RoleScoring, mode: ModeFile,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" },
 			key:    "models.scoring", path: configFile, detail: "<provider>/<model>"},
@@ -283,8 +290,10 @@ func TestResolveRefusals(t *testing.T) {
 			key:    EnvScoring},
 		{name: "the flag is not a reference", role: RoleScoring, mode: ModeFile, flag: "clef",
 			key: keyScoringModel, check: CheckUsage, detail: "<provider>/<model>"},
-		{name: "the flag names a provider the pool does not hold", role: RoleScoring, mode: ModeFile,
-			flag: "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"}},
+		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring, mode: ModeFile,
+			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
+			flag:   "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"},
+			detail: "--scoring-model names a provider the pool does not hold"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := scenario(t)
@@ -319,16 +328,6 @@ func asRefusal(err error, out *Refusal) bool {
 		*out = one
 	}
 	return ok
-}
-
-// TestResolveNeverFallsBack: a role the source does not configure refuses even
-// where another role has an endpoint and even where the flag names a model.
-func TestResolveNeverFallsBack(t *testing.T) {
-	in := scenario(t)
-	in.Cfg.Models.Scoring = ""
-	if _, err := Resolve(in, ModeFile, RoleScoring, "lab/clef"); err == nil {
-		t.Error("the scoring role resolved from another role's endpoint, or from the flag")
-	}
 }
 
 // TestBackEndModel: the value a harness back end is handed is the file

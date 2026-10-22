@@ -676,12 +676,13 @@ converted and saved by it — and one more follows the last write.
 
 The scoring role is the KB's declaration of which model judges it: models.scoring
 in config.toml, or KBASE_SCORING with the environment's endpoint. A run whose
-mode names no scoring model is refused, naming that key, before the KB is
-opened; nothing falls back to the text model. --scoring-model overrides a
-configured role for one run — a <provider>/<model> reference in file mode, a
-bare id under the environment's endpoint — and is carried by the command that
-continues a run. --dry-run lists the set, resolves no role and refuses nothing
-for one.
+mode names no scoring model and whose command names none is refused, naming that
+key, before the KB is opened; nothing falls back to the text model.
+--scoring-model names the role's model for one run — a <provider>/<model>
+reference in file mode, a bare id under the environment's endpoint — supplying
+the role where the configuration names none and overriding it where it does, and
+is carried by the command that continues a run. --dry-run lists the set, resolves
+no role and refuses nothing for one.
 
 --harness NAME runs one process per item instead of asking an endpoint. kbase
 composes the command, and ` + "`opencode`" + ` is the only name it takes: the

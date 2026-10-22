@@ -23,10 +23,10 @@ func scoreWithoutScoring() providerOptions {
 }
 
 // TestScoreRefusesWithoutAScoringRole: a run whose mode names no scoring model
-// refuses naming that key before anything is asked, in file mode and in
-// environment mode; --scoring-model overrides a configured role and never
-// substitutes for one; and a dry run lists the set, resolves no role and
-// refuses nothing for one.
+// and no flag refuses naming that key before anything is asked, in file mode
+// and in environment mode; --scoring-model supplies the role the files leave
+// unset; and a dry run lists the set, resolves no role and refuses nothing for
+// one.
 func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	fileMode := scoreOptions{Pass: query.PassRigor, providerOptions: scoreWithoutScoring()}
@@ -44,12 +44,17 @@ func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 		t.Errorf("the refusal left a score directory: %v", err)
 	}
 
-	// The flag names a model, and the role is still unset: the flag is an
-	// override, never the role itself.
+	// The flag names a model and the files name none for the role: the flag
+	// supplies it, and the roles record says the flag named the model.
 	fileMode.ScoringModel = "solo/judge"
-	got = scoreIn(t, repo, t.TempDir(), fileMode, nil)
-	if items := got.doc.items("refusals"); got.doc.Outcome != "refused" || len(items) != 1 || items[0]["key"] != "models.scoring" {
-		t.Errorf("--scoring-model substituted for an unset role: %s, %v\n%s", got.doc.Outcome, items, got.stdout)
+	got = scoreIn(t, repo, t.TempDir(), fileMode, func() model.Client { return scoring("none") })
+	if got.doc.Outcome != "done" || got.dialled != 1 {
+		t.Fatalf("--scoring-model over an unset role = %s, %d dials; want the run\n%s",
+			got.doc.Outcome, got.dialled, got.stdout)
+	}
+	if role := roleOf(got.doc, "scoring"); role == nil || role["provider"] != "solo" ||
+		role["provider-rule"] != config.RuleFlag || role["model"] != "judge" {
+		t.Errorf("roles = %v, want the flag supplying solo/judge\n%s", got.doc.Values["roles"], got.stdout)
 	}
 
 	dry := scoreIn(t, repo, t.TempDir(), scoreOptions{Pass: query.PassRigor, DryRun: true,

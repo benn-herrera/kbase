@@ -170,10 +170,11 @@ claim, analysis and experiment, `bearing` every `supports`, `founds`, `lifts` an
 work's rigor is never asked — set it by hand.
 
 - The model is the `scoring` role: `models.scoring` in `config.toml`, or `KBASE_SCORING` under the
-  environment's endpoint. A run whose mode names none is refused before the KB is opened, naming that
-  key; nothing falls back to the text model. `--scoring-model` overrides the role for one run — a
-  `<provider>/<model>` reference in file mode, a bare id in environment mode, and the role's value
-  whole under `--harness` — and never substitutes for one.
+  environment's endpoint. A run that names none is refused before the KB is opened, naming that key;
+  nothing falls back to the text model. `--scoring-model` names the role's model for one run — a
+  `<provider>/<model>` reference in file mode, which supplies the role where the files name none and
+  overrides it where they do; a bare id in environment mode, whose variable must name one too; and the
+  role's value whole under `--harness`.
 - A reply the parse refuses, a call cut off at the completion cap, and a failed call or landing each
   write nothing for that item: the attempt is recorded `failed` with the reason and no text, and the
   run goes on.

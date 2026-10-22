@@ -820,11 +820,15 @@ the run goes on.
 
 **The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
 `KBASE_SCORING` in environment mode. The role is the KB's declaration of which model judges it, so a
-mode that names none refuses the run as setup — naming that key, before the KB is opened and before
-the run's start refresh — and nothing falls back to the text role. `--scoring-model` **overrides** a
-configured role for one run and never substitutes for one, and the value is read in the mode's own
-form: a `<provider>/<model>` reference in file mode, a bare id under the environment's endpoint,
-verbatim under `--harness`. A `--dry-run` resolves no role and refuses nothing for one.
+run that names none refuses as setup — naming that key, before the KB is opened and before the run's
+start refresh — and nothing falls back to the text role. In file mode the role's model is the file's
+`<provider>/<model>` reference or, where the files name none, the one `--scoring-model` names: the
+flag supplies an unconfigured role and overrides a configured one, its reference is resolved against
+the pool, and a provider the pool does not hold refuses naming the flag with the pool listed.
+Environment mode supplies every model by its own variable, so a variable the environment leaves unset
+refuses whatever the flag says, and `--scoring-model` there overrides the variable's bare id for the
+one run. Under `--harness` the value is taken verbatim. A run records the model as the flag's where
+the flag named it. A `--dry-run` resolves no role and refuses nothing for one.
 
 **The harness back end.** `--harness NAME` runs one process per item instead of asking an endpoint.
 `opencode` is the one back end kbase ships and the only value the flag takes: kbase composes the
