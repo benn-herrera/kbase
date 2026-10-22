@@ -448,7 +448,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
-| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass`; `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
+| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
 
 A `status` read over a score run reports §6's score shape in place of the build keys above.
 
@@ -732,13 +732,14 @@ keys: §7.
 ### `score`
 
 ```
-kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--dry-run]
+kbase score [--pass rigor|bearing|both] [--limit N] [--scoring-model MODEL] [--dry-run]
             [--resume RUN] [--state-dir DIR] [--timeout DURATION]
 ```
 
 Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
-call, each value landed through the write API and recorded in a ledger. `--pass` is required and names
-one of the two; `--timeout` is the deadline for one item's call (default `30s`). A run asks one call
+call, each value landed through the write API and recorded in a ledger. `--pass` names the set to walk
+— `rigor`, `bearing`, or `both`, which is the default — and `--timeout` is the deadline for one item's
+call (default `30s`). A run asks one call
 per item and takes minutes: at a terminal `kbase score` blocks until the walk ends, and as an MCP tool
 (§11) it starts a detached child and returns at once with the run's identity, while `kbase wait`
 reports its outcome when it ends. A harness that runs `kbase score` at a shell gets the blocking
@@ -748,9 +749,14 @@ is a usage refusal.
 
 **The two passes.** `rigor` walks every claim, analysis and experiment, by id — a node's own value.
 `bearing` walks every scoring edge — `supports`, `founds`, `lifts` and `refutes` — by relation in
-that order, then source, then target. The set is read from the index once, at the run's start, and
-does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a run
-walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
+that order, then source, then target. A run walks both, the node set and then the edge set, unless
+`--pass` names one: a text edit moves a node's rigor and the bearing of every edge that touches it, so
+a run scoped to one pass leaves the other stale against that edit, and scoping is for the case with a
+reason — one edited subtree, or isolating a pass that is failing. A both-pass run is one run: one
+lock, one `run.yaml`, one `items.jsonl`, one `ledger.jsonl` and one `resume` command, and its
+`run.yaml` names the set it walks (`both`). The set is read from the index once, at the run's start,
+and does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a
+run walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
 work's standing is judged with the document in hand, and `set-rigor` is what writes it. An axiom is
 on neither pass either, its rigor being `1.0` by rule; a `founds` edge is a bearing subject like any
 other.
@@ -843,11 +849,12 @@ the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
-run), and `ledger.jsonl`. `run.yaml` holds the run, its KB root, the ledger's format, the pass,
-`backend` (`provider` or `environment`; absent under `--dry-run`, which resolves no role because it
-asks nothing), the provider, the model, `ask_sha256` and the start. **It is written once, at the
-run's creation, and no resume rewrites it**: a resumed or mixed run's header states the first
-invocation's back end and model, and each ledger line states what answered its own item.
+run), and `ledger.jsonl`. `run.yaml` holds the run, its KB root, the ledger's format, the set it walks
+(one pass, or `both`), `backend` (`provider` or `environment`; absent under `--dry-run`, which
+resolves no role because it asks nothing), the provider, the model, `ask_sha256` and the start. **It is
+written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
+states the first invocation's back end and model, and each ledger line states its own item's pass and
+what answered it.
 
 `ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the reply, `faults`
 (the parsed charges: `id`, `passage`, `citation`, `offset`, in the order written), `moot` (the charge
@@ -858,8 +865,9 @@ alone, the word `none`; a failed attempt carries neither `faults` nor text. The 
 `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
 
 **`ask_sha256` records the ask set and gates nothing.** It is one digest over every instruction the
-pass can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
-statement instruction and then its method one, a bearing run's one — so every fixed byte of a run's
+run can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
+statement instruction and then its method one, a bearing run's one, a both-pass run's statement, method
+and then bearing instruction — so every fixed byte of a run's
 instructions is certified and nothing that varies with an item is. Each ledger line carries its own
 item's prompt digest beside it, which is what names the variant that judged that item. A header
 written before the rigor pair carries one render's digest and is read as the one ask that run began
@@ -897,7 +905,7 @@ stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or
 at an item boundary, with no line recorded for the item in flight and the ledger standing as it was;
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
 the state store, or where a refresh could not take the KB write lock past the wait; `refused`
-where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
+where the run cannot go on — setup (a pass outside the three, a negative `--limit`, a `--state-dir`
 inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
 a mode whose sources are mixed or whose environment is partial, an index the load cannot answer), a
 run already holding the KB's operation lock (§6), or a KB that no longer opens when the end refresh
@@ -918,7 +926,9 @@ in the ledger alone.
 `--limit` left, one `failed` — and it stands after `counts` and `scored` and before the closing
 record, so a stop at the end refresh carries it whenever an item is still not `done`. It is absent
 from a dry run and from a stop before the walk: the start refresh's, the dial's, the
-ledger's or the index load's. It carries `--config-dir` wherever the invocation named one — the
+ledger's or the index load's. It carries `--pass` wherever the invocation named one, and names none
+where it did not: a run that walked both by default is continued the same way, its header being what
+says which set it walks. It carries `--config-dir` wherever the invocation named one — the
 resumed run must read that directory and no other, or the same run id would resolve another
 reference — and it carries `--scoring-model` whenever the invocation did — the command must reach the
 same model, or it is a different judgement under the same run id — and under the environment mode the

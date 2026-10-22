@@ -172,8 +172,9 @@ func TestCreateWritesTheRunHeader(t *testing.T) {
 
 // TestAskDigestCoversEveryInstructionOfThePass: a rigor run sends two
 // instructions, so its header is one digest over both — an update to either moves
-// it, and neither instruction's own digest is the header's — while a bearing run's
-// is its one render.
+// it, and neither instruction's own digest is the header's — a bearing run's is
+// its one render, and a both-pass run's is one digest over the three, in the
+// order its walk takes them.
 func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 	statement, err := asks.ScoreRigorStatement("")
 	if err != nil {
@@ -203,12 +204,21 @@ func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 	if got, err := askDigest(query.PassBearing); err != nil || got != digestOf(bearing) {
 		t.Errorf("the bearing run's ask = %q, %v; want the digest of its one instruction", got, err)
 	}
+
+	// A run walking both sends all three: the statement, the method and then
+	// the bearing instruction, each rendered once.
+	both, err := askDigest(query.PassBoth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := digestOf(statement + method + bearing); both != want {
+		t.Errorf("the both-pass run's ask = %q, want one digest over the three instructions in order %q", both, want)
+	}
 }
 
 // TestLineCarriesTheAttempt: one attempt is one line, its identity from the
-// item, its run and pass from the header, and its outcome and evidence from the
-// attempt. An edge's line belongs to a bearing run's ledger and a node's to a
-// rigor run's, because a run records one pass and its lines are that pass's.
+// item, its run and pass from the item's own class, and its outcome and evidence
+// from the attempt.
 func TestLineCarriesTheAttempt(t *testing.T) {
 	dir := t.TempDir()
 	bh := header()

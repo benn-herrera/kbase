@@ -72,10 +72,15 @@ type RunHeader struct {
 	Run    string `yaml:"run"`
 	KBRoot string `yaml:"kb_root"`
 	Format int    `yaml:"format"`
-	Pass   string `yaml:"pass"`
+	// Pass names the set the run walks: one pass, or PassBoth where the walk
+	// covers the node set and then the edge set. A ledger line names its own
+	// item's pass, so a both-pass run's lines say which class each judgement
+	// came from.
+	Pass string `yaml:"pass"`
 	// AskSHA256 names the ask set the run's answers belong to: one digest over
-	// every instruction the pass can send — a rigor run's statement and method
-	// renders, a bearing run's one — each rendered for an empty subject and
+	// every instruction the run can send — a rigor run's statement and method
+	// renders, a bearing run's one, a both-pass run's statement, method and
+	// bearing renders in that order — each rendered for an empty subject and
 	// concatenated in that fixed order, which is every fixed byte of the
 	// instructions and nothing that varies with an item. The record carries the
 	// ask and not the table, because a changed weight re-prices what a judgement
@@ -147,8 +152,10 @@ type attempt struct {
 // header names the first invocation's back end while each line names the one
 // that asked it.
 type Ledger struct {
-	dir  string
-	run  string
+	dir string
+	run string
+	// pass is the set the header names. A re-price reads its classes from it;
+	// a line records its own item's pass instead.
 	pass string
 	// backEnd is what answers this invocation's items: the back end each line
 	// it appends records.
@@ -171,7 +178,7 @@ type Ledger struct {
 // directory that already stands is not reused, so a fresh run never appends
 // behind a recorded one.
 //
-// The header's format and ask are stamped here, from the pass it names, so no
+// The header's format and ask are stamped here, from the set it names, so no
 // caller can open a run without the ask its judgements answer. The templates are
 // embedded, so a render that fails is a defect of the build and not a user's
 // refusal: the error is returned rather than a run written with no digest.
@@ -201,7 +208,7 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 
 // Resume opens the ledger of an existing run in the state directory dir for
 // appending, its last status per item read back. It refuses a run.yaml naming
-// another KB root or pass, or a ledger format this kbase does not read. A run
+// another KB root or set, or a ledger format this kbase does not read. A run
 // the update came between — a changed ask, a changed weight, a header written
 // before the ask was recorded — is continued rather than refused: the values a
 // changed weight moves are re-derived from the recorded ids and landed through w,
@@ -239,7 +246,7 @@ func Resume(dir string, h RunHeader, w Write) (*Ledger, error) {
 }
 
 // refusalFor is what a run standing here cannot be resumed as, or nil where it
-// can: the run must ask over this KB, at this ledger format, in this pass. A
+// can: the run must ask over this KB, at this ledger format, over this set. A
 // header recording another ask is not one of them, nor is one recording none:
 // the digest says which instruction answered which judgement, so a corpus
 // spanning an update can be read honestly, and a resume continues under this
@@ -510,7 +517,7 @@ func (l *Ledger) readBack() error {
 // charges are a landed line's alone: a failed attempt records the reason it
 // failed and keeps no text of the reply, so it carries neither faults nor moot.
 func (l *Ledger) line(it query.Item, e Entry) attempt {
-	a := attempt{Run: l.run, Pass: l.pass, Backend: l.backEnd, Status: e.Status,
+	a := attempt{Run: l.run, Pass: passOf(it), Backend: l.backEnd, Status: e.Status,
 		Value: e.Value, Reply: e.Reply, Model: e.Model, PromptSHA256: e.PromptSHA256,
 		Started: e.Started, Ended: e.Ended}
 	if e.Status == StatusDone {
@@ -527,6 +534,20 @@ func (l *Ledger) line(it query.Item, e Entry) attempt {
 		a.Source, a.Target, a.Relation = it.Edge.Source, it.Edge.Target, it.Edge.Relation
 	}
 	return a
+}
+
+// passOf is the pass an item is a subject of: a node's is rigor, an edge's
+// bearing. A line records its own item's rather than the run's set, so one
+// walk over both says which class each judgement came from; a single-pass
+// run's lines all name the run's pass, every item being its subject.
+func passOf(it query.Item) string {
+	switch {
+	case it.Node != nil:
+		return query.PassRigor
+	case it.Edge != nil:
+		return query.PassBearing
+	}
+	return ""
 }
 
 // itemKey is it as the ledger names it.
@@ -586,58 +607,75 @@ var (
 	bearingClass   = class{edge: true, ask: asks.ScoreBearing, table: kb.BearingFaults}
 )
 
-// passFacts is one pass as a run reads it: which class an item takes, and every
-// class the pass can send, in the fixed order its digest concatenates them. A
+// passFacts is a run's set as it reads it: which class an item takes, and every
+// class the set can send, in the fixed order its digest concatenates them. A
 // pass is read here and nowhere else, so a call's instruction and its table are
-// one derivation.
+// one derivation. A both-pass run sends all three classes, each item taking the
+// one its own set gives it.
 type passFacts struct {
 	classOf func(it query.Item) (class, error)
 	classes []class
 }
 
+// rigorClassOf is the class a rigor item takes: a claim's own statement, an
+// analysis's or an experiment's method. A work's rigor is judged by hand and an
+// axiom's is 1.0 by rule, so neither is a subject, and an edge is no rigor item.
+func rigorClassOf(it query.Item) (class, error) {
+	if it.Node == nil {
+		return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), query.PassRigor)
+	}
+	switch it.Node.Kind {
+	case kb.NodeKindClaim:
+		return statementClass, nil
+	case kb.NodeKindAnalysis, kb.NodeKindExperiment:
+		return methodClass, nil
+	}
+	return class{}, fmt.Errorf("the node %s is no %s subject: a work's rigor is judged by hand and an axiom's is 1.0 by rule", it.Node.ID, query.PassRigor)
+}
+
+// bearingClassOf is the class a bearing item takes: a scoring edge's link is
+// judged on the edge itself, whatever its ends are typed, and a node is no
+// bearing item.
+func bearingClassOf(it query.Item) (class, error) {
+	if it.Edge == nil {
+		return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), query.PassBearing)
+	}
+	return bearingClass, nil
+}
+
 // passFactsOf is pass's facts, or an error where no pass is named that. The
 // class is derived from the item here, once: a rigor call's instruction and its
-// closed set are the node's class's, and an item the pass does not walk gets
-// neither.
+// closed set are the node's class's, a bearing call's the edge's, and an item
+// the pass does not walk gets neither.
 func passFactsOf(pass string) (passFacts, error) {
 	switch pass {
 	case query.PassRigor:
-		return passFacts{
-			classOf: func(it query.Item) (class, error) {
-				if it.Node == nil {
-					return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), pass)
-				}
-				switch it.Node.Kind {
-				case kb.NodeKindClaim:
-					return statementClass, nil
-				case kb.NodeKindAnalysis, kb.NodeKindExperiment:
-					return methodClass, nil
-				}
-				return class{}, fmt.Errorf("the node %s is no %s subject: a work's rigor is judged by hand and an axiom's is 1.0 by rule", it.Node.ID, pass)
-			},
-			classes: []class{statementClass, methodClass},
-		}, nil
+		return passFacts{classOf: rigorClassOf, classes: []class{statementClass, methodClass}}, nil
 	case query.PassBearing:
+		return passFacts{classOf: bearingClassOf, classes: []class{bearingClass}}, nil
+	case query.PassBoth:
 		return passFacts{
 			classOf: func(it query.Item) (class, error) {
-				if it.Edge == nil {
-					return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), pass)
+				if it.Edge != nil {
+					return bearingClassOf(it)
 				}
-				return bearingClass, nil
+				return rigorClassOf(it)
 			},
-			classes: []class{bearingClass},
+			classes: []class{statementClass, methodClass, bearingClass},
 		}, nil
 	}
 	return passFacts{}, fmt.Errorf("no score pass is named %q", pass)
 }
 
-// askDigest is the digest of every instruction a pass can send, each rendered for
-// an empty subject and concatenated in the pass's fixed order: the statement ask
-// and then the method ask for a rigor run, the one bearing ask alone for a bearing
-// run. Rendering substitutes and never inspects the text, and no template carries
-// an element keyed on the item's length or shape, so an empty subject covers every
-// fixed byte of the instructions and nothing that varies with one. One field
-// covers the set, because separate digests would agree or differ together.
+// askDigest is the digest of every instruction a run can send, each rendered for
+// an empty subject and concatenated in the run's fixed order: the statement ask
+// and then the method ask for a rigor run, the one bearing ask alone for a
+// bearing run, and the statement, the method and then the bearing ask for a
+// both-pass run. Rendering substitutes and never inspects the text, and no
+// template carries an element keyed on the item's length or shape, so an empty
+// subject covers every fixed byte of the instructions and nothing that varies
+// with one. One field covers the set, because separate digests would agree or
+// differ together.
 func askDigest(pass string) (string, error) {
 	facts, err := passFactsOf(pass)
 	if err != nil {

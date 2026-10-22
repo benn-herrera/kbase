@@ -64,10 +64,11 @@ type Runner struct {
 	Source *kb.Source
 	Index  *query.Index
 	Items  []query.Item
-	// Pass is the pass the run walks, one of query's two pass names. It decides
-	// what an item's call asks and what its charges are priced under, and a rigor
-	// run's item decides which of that pass's two classes it takes: no item is
-	// asked or priced as the other pass's subject.
+	// Pass names the set the run walks: one pass, or query.PassBoth for the
+	// node set and then the edge set. It decides what an item's call asks and
+	// what its charges are priced under, and a rigor item decides which of that
+	// pass's two classes it takes: no item is asked or priced as another class's
+	// subject.
 	Pass   string
 	Ask    Ask
 	Write  Write

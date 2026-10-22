@@ -158,7 +158,8 @@ lift stands over it, in which case the lift's product is the published number. A
 `strength` as a number rounded to two decimals, while the register's record carries the value itself;
 the arithmetic always reads the value.
 
-**`score`** runs the scoring pass: `kbase score --pass rigor|bearing`; `--help` lists its flags. At a
+**`score`** runs the scoring passes: `kbase score` walks both, the node set and then the edge set, and
+`--pass rigor` or `--pass bearing` scopes it to one; `--help` lists its flags. At a
 terminal it blocks until the walk ends. Called as a tool, it starts the run detached and returns its
 pid and state store; `status`, `cancel` and `wait` cover a scoring run as they cover a build. One item
 per call, landed through `set-rigor` or `set-bearing` under the KB write lock. The call asks for the

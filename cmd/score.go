@@ -32,7 +32,7 @@ import (
 )
 
 // scoreOptions is the score verb's input: the shared provider-reaching options,
-// and the pass, the run records and the streams the verb adds.
+// and the set, the run records and the streams the verb adds.
 type scoreOptions struct {
 	providerOptions
 
@@ -40,7 +40,8 @@ type scoreOptions struct {
 	// boundary.
 	Ctx context.Context
 
-	// Pass is which pass to walk, one of query's two pass names.
+	// Pass is the set to walk: one of query's pass names, or empty where the
+	// invocation named none, which walks both. scoreWalkSet resolves it.
 	Pass string
 
 	// Limit bounds the items walked; 0 walks every one.
@@ -91,8 +92,8 @@ func (o scoreOptions) callTimeout() time.Duration {
 	return defaultListTimeout
 }
 
-// runScore runs one score pass, writes its result document, and returns the
-// exit code the outcome maps to.
+// runScore runs one score run, writes its result document, and returns the exit
+// code the outcome maps to.
 func runScore(opts scoreOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "score"); err != nil {
 		return 0, err
@@ -109,11 +110,11 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()
 	}
-	passes := []string{query.PassRigor, query.PassBearing}
+	passes := []string{query.PassRigor, query.PassBearing, query.PassBoth}
 	switch {
-	case !slices.Contains(passes, opts.Pass):
+	case opts.Pass != "" && !slices.Contains(passes, opts.Pass):
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--pass", Allowed: passes,
-			Detail: "--pass is required and names one pass: " + strings.Join(passes, " or ")})
+			Detail: "--pass names " + strings.Join(passes, ", ") + "; absent, a run walks both"})
 	case opts.Limit < 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	case opts.Resume != "" && !runIDRE.MatchString(opts.Resume):
@@ -124,6 +125,9 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
 			Detail: "a dry run asks nothing and records nothing to resume: drop --resume, or drop --dry-run to continue run " + opts.Resume})
 	}
+	// The set the run's walk and its records both take: both where the flag
+	// named none, so a default run is one run over both sets.
+	pass := scoreWalkSet(opts.Pass)
 	ctx := opts.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -153,7 +157,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if !opts.DryRun {
 		s := opts.inputs(env)
 		if mode, err = config.ModeOf(s); err != nil {
-			return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
+			return refusedOrFailed(runKeys(fields, dir, pass), err)
 		}
 		if mode == config.ModeFile {
 			// An environment-mode invocation reads no file value, so it
@@ -161,7 +165,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 			supersededProvider(opts.Stderr, opts.Config)
 		}
 		if ep, err = config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel); err != nil {
-			return refusedOrFailed(runKeys(fields, dir, opts.Pass), err)
+			return refusedOrFailed(runKeys(fields, dir, pass), err)
 		}
 		warnFaults(opts.Stderr, opts.Faults)
 	}
@@ -174,7 +178,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return refused(fields, refusals...)
 	}
 	fields = withMigration(fields, src, "score", opts.Stderr)
-	fields = append(fields, toolresult.Field{Key: "state-dir", Value: dir}, toolresult.Field{Key: "pass", Value: opts.Pass})
+	fields = append(fields, toolresult.Field{Key: "state-dir", Value: dir}, toolresult.Field{Key: "pass", Value: pass})
 
 	if err := os.MkdirAll(score.RunsDir(dir), 0o777); err != nil {
 		return failed(fields, err)
@@ -214,13 +218,13 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
 	}
-	items, err := query.ScoringSet(ix, opts.Pass)
+	items, err := query.ScoringSet(ix, pass)
 	if err != nil {
 		return failed(fields, err)
 	}
 
 	if opts.DryRun {
-		l, err := score.Create(dir, score.RunHeader{Run: run, KBRoot: root, Pass: opts.Pass, Started: scoreStamp()})
+		l, err := score.Create(dir, score.RunHeader{Run: run, KBRoot: root, Pass: pass, Started: scoreStamp()})
 		if err != nil {
 			return failed(fields, err)
 		}
@@ -287,7 +291,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		}
 		return attempt.Reply, nil
 	}
-	header := score.RunHeader{Run: run, KBRoot: root, Pass: opts.Pass, BackEnd: backEndName(ep),
+	header := score.RunHeader{Run: run, KBRoot: root, Pass: pass, BackEnd: backEndName(ep),
 		Provider: ep.Provider, Model: modelID, Started: scoreStamp()}
 	// One write seam for both: the values the walk lands and the values a resume
 	// re-prices under a changed table take the same path, the KB's lock held as
@@ -317,7 +321,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	defer func() { persistScoreResult(fields, outcome) }()
 	fields = append(fields, toolresult.Field{Key: "run", Value: run}, toolresult.Field{Key: "ledger", Value: l.Dir()})
 
-	res, err := (&score.Runner{Source: src, Index: ix, Items: items, Pass: opts.Pass, Ask: ask,
+	res, err := (&score.Runner{Source: src, Index: ix, Items: items, Pass: pass, Ask: ask,
 		Write: land, Ledger: l, Model: modelID, Limit: opts.Limit, Log: opts.Logger}).Run(ctx)
 	if err != nil {
 		return failed(fields, err)
@@ -364,10 +368,20 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 // reaches it too. TestScoreResumeRefusesAPath holds this to what MintID mints.
 var runIDRE = regexp.MustCompile(`^run-[` + kb.HashAlphabet + `]{` + strconv.Itoa(kb.HashLen) + `}$`)
 
+// scoreWalkSet is the set a run walks: the --pass value, or both where the flag
+// named none. A default run and one naming both are the same run, its header
+// and its walk both taking this.
+func scoreWalkSet(pass string) string {
+	if pass == "" {
+		return query.PassBoth
+	}
+	return pass
+}
+
 // runKeys is the fields a setup refusal states before the KB is opened: the
-// root this invocation found, the store it would use, and the pass it was
-// asked for. The successful path states the same three around the migration
-// record, which only a KB this run opened can carry.
+// root this invocation found, the store it would use, and the set it walks. The
+// successful path states the same three around the migration record, which only
+// a KB this run opened can carry.
 func runKeys(fields []toolresult.Field, dir, pass string) []toolresult.Field {
 	return append(slices.Clone(fields),
 		toolresult.Field{Key: "state-dir", Value: dir}, toolresult.Field{Key: "pass", Value: pass})
@@ -444,13 +458,17 @@ func scoreCounted(res score.Result) []toolresult.Field {
 	}
 }
 
-// scoreResume is the command that continues the run: the same pass over the
-// same ledger, reaching the model this invocation was told to reach. A
+// scoreResume is the command that continues the run: the set its header records
+// over the same ledger, reaching the model this invocation was told to reach. A
 // scoring-time endpoint is named by --scoring-model, which states the provider
 // and the model in one value; there is no second flag for half of it. A
 // --scoring-model the invocation carried is carried on, so the resumed run
 // judges with the model the first one did — one issued without it would be a
 // different judgement wearing the same run id.
+//
+// --pass is carried only where this invocation gave it: a run that walked both
+// by default is continued the same way without the flag, its header being what
+// says which set it walks.
 //
 // The mode is part of the command too. An environment-mode run has no flag that
 // names its source, so the command carries the mode's settings as assignments
@@ -463,7 +481,11 @@ func scoreCounted(res score.Result) []toolresult.Field {
 // and no other, so without it the same run id could resolve another reference
 // and ask a different judge under the same records.
 func scoreResume(opts scoreOptions, run, dir string, mode config.Mode, env config.Overrides) string {
-	command := []string{"kbase", "score", "--pass", opts.Pass, "--resume", run, "--state-dir", dir}
+	command := []string{"kbase", "score"}
+	if opts.Pass != "" {
+		command = append(command, "--pass", opts.Pass)
+	}
+	command = append(command, "--resume", run, "--state-dir", dir)
 	if opts.ConfigDir != "" {
 		command = append(command, "--config-dir", opts.ConfigDir)
 	}
@@ -611,20 +633,24 @@ is carried by the command that continues a run. --dry-run lists the set, resolve
 no role and refuses nothing for one.
 
 The passes are rigor — every claim, analysis and experiment, by id — and
-bearing — every scoring edge, by relation, then source, then target. A work's
-rigor is the one value neither pass asks: it is the work's own standing, judged
-by hand with the document in hand, and set-rigor is what writes it. An axiom's
-is 1.0 by rule.
+bearing — every scoring edge, by relation, then source, then target. A run walks
+both unless --pass names one, over the node set and then the edge set. A text
+edit moves a node's rigor and the bearing of every edge that touches it, so a
+run scoped to one pass leaves the other stale against the same edit: scope it
+where there is a reason — one edited subtree, or isolating a pass that is
+failing. A work's rigor is the one value neither pass asks: it is the work's own
+standing, judged by hand with the document in hand, and set-rigor is what writes
+it. An axiom's is 1.0 by rule.
 
 Every attempt is recorded under <state-dir>/score/<run>/: run.yaml names the
-run and the digest of the ask its judgements answer, ledger.jsonl holds a line
-per attempt with the charges a reply recorded, the reply itself where it parsed,
-the value it prices to, the model and the prompt's digest, and items.jsonl lists
-the set. --dry-run writes those records of the set, asks nothing, writes no KB
-and cannot be resumed. --resume continues a run, skipping every item it already
-landed and re-asking the ones it did not; a fresh run asks everything again.
---limit stops after that many items, and the result carries the command that
-continues the run.
+run, the set it walks and the digest of the ask its judgements answer,
+ledger.jsonl holds a line per attempt with the charges a reply recorded, the
+reply itself where it parsed, the value it prices to, the model and the prompt's
+digest, and items.jsonl lists the set. --dry-run writes those records of the
+set, asks nothing, writes no KB and cannot be resumed. --resume continues a run,
+skipping every item it already landed and re-asking the ones it did not; a fresh
+run asks everything again. --limit stops after that many items, and the result
+carries the command that continues the run.
 
 A run holds the repository's operation lock and <state-dir> for its length, so
 a second run over the KB — a build or a scoring run — is refused, naming the
@@ -663,10 +689,7 @@ func init() {
 	// --scoring-model, which states the provider and the model together.
 	registerTimeoutFlag(scoreCmd, &scoreFlagTimeout, "deadline for one item's call")
 	scoreCmd.Flags().StringVar(&scoreFlagPass, "pass", "",
-		"the pass to walk (required): "+query.PassRigor+" for a node's own value, "+query.PassBearing+" for an edge's")
-	// scoreRun refuses a run with no --pass; the mark is how the tool binding
-	// this verb says so before the call.
-	markRequired(scoreCmd, "pass")
+		"the set to walk: "+query.PassRigor+" for a node's own value, "+query.PassBearing+" for an edge's; absent or "+query.PassBoth+" walks the node set and then the edge set, because one edit moves a node's rigor and the bearings of the edges that touch it")
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",

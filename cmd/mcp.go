@@ -39,22 +39,6 @@ const readOnlyAnnotation = "kbase.readOnly"
 
 func readOnly(cmd *cobra.Command) *cobra.Command { return annotate(cmd, readOnlyAnnotation, "true") }
 
-// requiredAnnotation marks a flag its verb refuses to run without; the tool
-// binding the verb lists the flag in its schema's required.
-const requiredAnnotation = "kbase.required"
-
-// markRequired marks cmd's --name as a flag the verb refuses to run without.
-func markRequired(cmd *cobra.Command, name string) {
-	f := cmd.Flags().Lookup(name)
-	if f.Annotations == nil {
-		f.Annotations = map[string][]string{}
-	}
-	f.Annotations[requiredAnnotation] = []string{"true"}
-}
-
-// flagRequired is whether the verb refuses to run without f.
-func flagRequired(f *pflag.Flag) bool { return len(f.Annotations[requiredAnnotation]) != 0 }
-
 // mcpAnnotation is a command's MCP binding, declared where the command is
 // built: mcpBound where a tool binds it, mcpExcluded where none does. A
 // command declaring neither is bound by no tool.
@@ -208,8 +192,7 @@ func writeOpTool(op string, fields []write.OpField, create bool, dir string, std
 }
 
 // commandSchema is cmd's positionals and its tool's input schema: the
-// positionals required, then its own flags, those the verb refuses to run
-// without among the required.
+// positionals required, then its own flags, every one of them optional.
 func commandSchema(cmd *cobra.Command) ([]positional, mcp.Schema, error) {
 	positionals, err := declaredPositionals(cmd)
 	if err != nil {
@@ -238,9 +221,6 @@ func commandSchema(cmd *cobra.Command) ([]positional, mcp.Schema, error) {
 		default:
 			property.Description = f.Usage
 			schema.Properties[f.Name] = property
-			if flagRequired(f) {
-				schema.Required = append(schema.Required, f.Name)
-			}
 		}
 	})
 	return positionals, schema, err

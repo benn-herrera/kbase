@@ -598,7 +598,8 @@ refuses to anchor a charge there.
 
 **The scoring set.** `query.ScoringSet(ix, pass)` reads the loaded index in-package and returns
 `[]query.Item`, each carrying a `ScoringNode` or a `ScoringEdge` and never both, in the walk's order;
-`query.PassRigor` and `query.PassBearing` are the two spellings the set and the `--pass` flag share.
+`query.PassRigor`, `query.PassBearing` and `query.PassBoth` are the three spellings the set and the
+`--pass` flag share, `PassBoth` the node set and then the edge set, each in its own order.
 An item carries identity only, so an edge's row comes from `Index.Edge` and no caller builds a
 `kb.EdgeRow` by hand. The set has no verb: it is consumed in-process, and `--dry-run` is the
 inspection surface. Which nodes and edges are in it, and which are excluded, is SPEC §8's.
@@ -620,10 +621,13 @@ written — and `moot`, the charge lines a `flt-pending` made moot, parsed the s
 nowhere; `[]` is written for one reply alone, the word `none`, so an empty list always carries the
 model's positive statement that it found no fault. A failed attempt carries neither, and no text:
 its `reply` is the reason. `backend` sits on every
-line, because a resumed or mixed run's lines must say what answered each item. `Create` also stamps
+line, because a resumed or mixed run's lines must say what answered each item. `pass` sits on every
+line beside it, naming its own item's class: the header states the set the run walks, and a `both`
+run's lines say which class each judgement came from. `Create` also stamps
 `ask_sha256`, from the header's `Pass`, as it stamps the format — one digest over every instruction
-that pass can send, each rendered for an empty subject and concatenated in a fixed order, so a rigor
-run's two variants are covered by the one field and an update to either moves it. It is stamped at
+the run can send, each rendered for an empty subject and concatenated in a fixed order, so a rigor
+run's two variants are covered by the one field and an update to either moves it, and a `both` run's
+carries the statement, the method and the bearing renders in that order. It is stamped at
 one site, so no caller can open a run without the ask its judgements answer, and a render that fails
 is a defect of the build rather than a run written with no digest. `Resume` reads the header's digest
 and compares nothing against it: the digest is a record of which instruction answered which judgement,
@@ -1165,9 +1169,9 @@ declaring `kbase.mcp` = `bound` — `mcp` and `wait` declare `excluded`, the lat
 would spend the turn the build takes, and cobra's own `completion` and `help` declare nothing and
 are skipped with them — plus the one listed tool below. A tool's
 schema is derived from the command's `Use` line positionals and its flags. A command's read-only
-standing is the cobra annotation `kbase.readOnly`, read when the table is built. A flag its verb
-refuses to run without carries `kbase.required`, and its tool's schema lists the flag among
-`required`.
+standing is the cobra annotation `kbase.readOnly`, read when the table is built. A command tool's
+`required` is its positionals alone: no flag is required, `score`'s `--pass` among them, a run walking
+both passes unless it is told otherwise.
 
 `rewind-build` is the one tool no command stands behind (I9), so it states for itself what the
 derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional), the

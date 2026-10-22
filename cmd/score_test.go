@@ -378,6 +378,175 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	}
 }
 
+// jsonLines is one of a run's JSONL files as its records, in file order.
+func jsonLines(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("%s: %q does not parse: %v", path, line, err)
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// linePasses is the pass each line of a run's JSONL file records, in file order.
+func linePasses(t *testing.T, path string) []string {
+	t.Helper()
+	var out []string
+	for _, rec := range jsonLines(t, path) {
+		pass, _ := rec["pass"].(string)
+		out = append(out, pass)
+	}
+	return out
+}
+
+// scoreFixturePasses is the pass every item of scoreFixture's two sets records,
+// in the walk's order: the four rigor items by id, then the six scoring edges.
+var scoreFixturePasses = []string{query.PassRigor, query.PassRigor, query.PassRigor, query.PassRigor,
+	query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing}
+
+// TestScoreWalksBothPassesByDefault: a run naming no pass walks the node set and
+// then the edge set in one run — one run id, one run.yaml, one items.jsonl and
+// one ledger.jsonl — landing a node's value and an edge's, the header naming the
+// mixed set and each line naming its own item's pass.
+func TestScoreWalksBothPassesByDefault(t *testing.T) {
+	repo, state := scoreFixture(t), t.TempDir()
+	got := scoreIn(t, repo, state, scoreOptions{}, func() model.Client {
+		// One reply per item, in the walk's order: the four rigor items by id,
+		// then the six scoring edges.
+		return scoring("none", "flt-overreach: Theorem 1", "flt-underspecified: Every exchange clears", "none",
+			"flt-transfer: The First Result", "none", "none", "none", "none", "none")
+	})
+	if got.doc.Outcome != "done" || got.dialled != 1 {
+		t.Fatalf("the run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
+	}
+	if got.doc.Values["pass"] != query.PassBoth {
+		t.Errorf("the document's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassBoth)
+	}
+	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 10 || counts["remaining"] != 0 {
+		t.Errorf("counts %v, want the ten items of both sets done\n%s", got.doc.Values["counts"], got.stdout)
+	}
+	want := []string{"ana-aaaaaa", "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa",
+		"supports clm-aaaaaa → clm-bbbbbb", "supports exp-aaaaaa → clm-bbbbbb",
+		"founds axm-S1 → ana-aaaaaa", "founds wrk-aaaaaa → clm-bbbbbb",
+		"lifts ana-aaaaaa → clm-bbbbbb", "refutes ana-aaaaaa → clm-aaaaaa"}
+	if scored := anyStrings(got.doc.Values["scored"]); !slices.Equal(scored, want) {
+		t.Errorf("scored %q, want the node set and then the edge set %q", scored, want)
+	}
+	// One run lands both a node's value and an edge's.
+	if v := rigorOf(t, repo, "clm-aaaaaa"); v != 0.65 {
+		t.Errorf("the claim's rigor = %v, want the reply's 0.65", v)
+	}
+	edge := query.ScoringEdge{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationSupports}
+	if v := bearingOf(t, repo, edge); v != "0.65" {
+		t.Errorf("the %s edge %s → %s bears %q, want the reply's 0.65", edge.Relation, edge.Source, edge.Target, v)
+	}
+	dir, _ := got.doc.Values["ledger"].(string)
+	header, err := os.ReadFile(filepath.Join(dir, "run.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"pass: " + query.PassBoth, "ask_sha256: "} {
+		if !strings.Contains(string(header), key) {
+			t.Errorf("run.yaml does not carry %q:\n%s", key, header)
+		}
+	}
+	// The header names the set; every line names its own item's pass.
+	if passes := linePasses(t, filepath.Join(dir, "ledger.jsonl")); !slices.Equal(passes, scoreFixturePasses) {
+		t.Errorf("ledger passes %q, want each item's own %q", passes, scoreFixturePasses)
+	}
+	if passes := linePasses(t, filepath.Join(dir, "items.jsonl")); !slices.Equal(passes, scoreFixturePasses) {
+		t.Errorf("item-list passes %q, want each item's own %q", passes, scoreFixturePasses)
+	}
+	// One item list for one run: a reader counts the whole of both sets from it.
+	if lines := jsonLines(t, filepath.Join(dir, "items.jsonl")); len(lines) != 10 {
+		t.Errorf("items.jsonl holds %d lines, want one per item of both sets", len(lines))
+	}
+	if _, resumes := got.doc.Values["resume"]; resumes {
+		t.Errorf("a finished run carries resume:\n%s", got.stdout)
+	}
+}
+
+// TestScoreDryRunListsBothSets: a dry run naming no pass lists the node set and
+// the edge set, asks nothing, and records the mixed set in its header.
+func TestScoreDryRunListsBothSets(t *testing.T) {
+	repo, state := scoreFixture(t), t.TempDir()
+	got := scoreIn(t, repo, state, scoreOptions{DryRun: true}, nil)
+	if got.doc.Outcome != "done" || got.dialled != 0 {
+		t.Fatalf("the dry run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
+	}
+	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["remaining"] != 10 {
+		t.Errorf("counts %v, want both sets listed and none asked\n%s", got.doc.Values["counts"], got.stdout)
+	}
+	dir, _ := got.doc.Values["ledger"].(string)
+	if passes := linePasses(t, filepath.Join(dir, "items.jsonl")); !slices.Equal(passes, scoreFixturePasses) {
+		t.Errorf("the dry run's item list %q, want both sets %q", passes, scoreFixturePasses)
+	}
+	header, err := os.ReadFile(filepath.Join(dir, "run.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(header), "pass: "+query.PassBoth) {
+		t.Errorf("the dry run's header does not record the mixed set:\n%s", header)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ledger.jsonl")); err == nil {
+		t.Error("a dry run wrote a ledger line: it asked nothing")
+	}
+}
+
+// TestScoreResumesAMixedRun: a run bounded inside the node set leaves the rest
+// for the command that continues it, and that command carries no --pass — the
+// header is what says which set the run walks — so resuming continues the mixed
+// set; a resume naming one pass against a both-pass header is refused.
+func TestScoreResumesAMixedRun(t *testing.T) {
+	repo, state := scoreFixture(t), t.TempDir()
+	bounded := scoreIn(t, repo, state, scoreOptions{Limit: 5}, func() model.Client {
+		return scoring("none", "none", "none", "none", "none")
+	})
+	if bounded.doc.Outcome != "bounded" {
+		t.Fatalf("the bounded run: outcome %s\n%s", bounded.doc.Outcome, bounded.stdout)
+	}
+	if counts, _ := bounded.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 5 || counts["remaining"] != 5 {
+		t.Errorf("counts %v, want five of the ten items done\n%s", bounded.doc.Values["counts"], bounded.stdout)
+	}
+	run, _ := bounded.doc.Values["run"].(string)
+	resume, _ := bounded.doc.Values["resume"].(string)
+	if strings.Contains(resume, "--pass") || !strings.Contains(resume, "--resume "+run) {
+		t.Errorf("resume %q, want the same set continued with no --pass", resume)
+	}
+	again := scoreIn(t, repo, state, scoreOptions{Resume: run}, func() model.Client {
+		return scoring("none", "none", "none", "none", "none")
+	})
+	if again.doc.Outcome != "done" || again.doc.Values["pass"] != query.PassBoth {
+		t.Fatalf("the resumed run: outcome %s, pass %v\n%s", again.doc.Outcome, again.doc.Values["pass"], again.stdout)
+	}
+	if counts, _ := again.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 10 || counts["remaining"] != 0 {
+		t.Errorf("the resumed run: counts %v, want the whole mixed set done\n%s", counts, again.stdout)
+	}
+	// The header gates the set: a resume naming one pass over a both-pass run is
+	// refused, as one over another KB root is, before the walk asks anything.
+	unreachable := model.NewScriptedMockPerConsult(nil)
+	unreachable.SetError(errors.New("the refused resume asked a provider"))
+	unreachable.RecordCalls = true
+	refused := scoreIn(t, repo, state, scoreOptions{Resume: run, Pass: query.PassRigor}, func() model.Client { return unreachable })
+	if refused.doc.Outcome != "refused" {
+		t.Fatalf("a rigor resume over a mixed run: outcome %s\n%s", refused.doc.Outcome, refused.stdout)
+	}
+	if calls := unreachable.Calls(); len(calls) != 0 {
+		t.Errorf("the refused resume asked %d time(s), want none", len(calls))
+	}
+	if items := refused.doc.items("refusals"); len(items) != 1 || items[0]["key"] != "--resume" {
+		t.Errorf("refusals %v, want one naming --resume\n%s", items, refused.stdout)
+	}
+}
+
 // TestScoreResumeAppliesAnUpdate: a resume after the software changed continues
 // rather than refusing. The value the running table moves is re-derived from the
 // ledger's ids and lands through the write a landing uses, so the KB's stored
@@ -733,7 +902,7 @@ func TestScoreResumeRefusesAPath(t *testing.T) {
 	}
 }
 
-// TestScoreRefusals: a pass no document names is a usage refusal, naming both
+// TestScoreRefusals: a pass no document names is a usage refusal, naming the
 // passes the flag takes; a run that meets the lock another run holds is retry,
 // naming the directory held rather than a file that is not there.
 func TestScoreRefusals(t *testing.T) {
@@ -744,8 +913,8 @@ func TestScoreRefusals(t *testing.T) {
 	}
 	items := got.doc.items("refusals")
 	if len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--pass" ||
-		!slices.Equal(anyStrings(items[0]["allowed"]), []string{query.PassRigor, query.PassBearing}) {
-		t.Errorf("refusals %v, want one usage refusal naming both passes\n%s", items, got.stdout)
+		!slices.Equal(anyStrings(items[0]["allowed"]), []string{query.PassRigor, query.PassBearing, query.PassBoth}) {
+		t.Errorf("refusals %v, want one usage refusal naming the passes the flag takes\n%s", items, got.stdout)
 	}
 
 	runs := filepath.Join(state, "score")

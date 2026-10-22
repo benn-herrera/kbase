@@ -27,6 +27,7 @@ import (
 	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
+	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 	"kbase/internal/write"
@@ -316,9 +317,10 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 	}
 }
 
-// TestMCPRequiredFlags: a flag its verb refuses to run without is required in
-// the tool's schema, required stays the positionals alone where no flag
-// carries the mark, and the mark changes nothing else about the schema.
+// TestMCPRequiredFlags: a tool's schema requires its positionals and no flag —
+// score's --pass among them, a run walking both passes unless it is told
+// otherwise — and every flag still stands as an optional property carrying its
+// usage as its description.
 func TestMCPRequiredFlags(t *testing.T) {
 	tools := map[string]listedTool{}
 	for _, tool := range listTools(t) {
@@ -336,9 +338,9 @@ func TestMCPRequiredFlags(t *testing.T) {
 		name, tool string
 		want       []string
 	}{
-		{"a marked flag and no positional", "score", []string{"pass"}},
-		{"unmarked flags and a positional", "find", []string{"query"}},
-		{"unmarked flags and no positional", "status", nil},
+		{"flags alone, none of them required", "score", nil},
+		{"flags and a positional", "find", []string{"query"}},
+		{"flags and no positional", "status", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := required(t, c.tool); !slices.Equal(got, c.want) {
@@ -346,13 +348,23 @@ func TestMCPRequiredFlags(t *testing.T) {
 			}
 		})
 	}
-	t.Run("the marked flag's property stands", func(t *testing.T) {
+	t.Run("--pass is an optional property stating the default", func(t *testing.T) {
 		properties := tools["score"].InputSchema.Properties
+		property, ok := properties["pass"]
+		if !ok {
+			t.Fatalf("score: no pass property: %v", properties)
+		}
 		want := map[string]any{"type": "string", "description": scoreCmd.Flags().Lookup("pass").Usage}
 		for key, value := range want {
-			if got := properties["pass"][key]; got != value {
+			if got := property[key]; got != value {
 				t.Errorf("score: --pass %s %v, want %v", key, got, value)
 			}
+		}
+		if description, _ := property["description"].(string); !strings.Contains(description, query.PassBoth) {
+			t.Errorf("score: --pass description %q does not state the default %q", description, query.PassBoth)
+		}
+		if slices.Contains(tools["score"].InputSchema.Required, "pass") {
+			t.Error("score: --pass is required, which its verb does not refuse a run without")
 		}
 	})
 	t.Run("every flag still derives", func(t *testing.T) {

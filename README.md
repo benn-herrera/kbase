@@ -275,20 +275,23 @@ for each one.
   supports the other end), `target`, `bearing` and `context`.
 - Maintenance never requires git.
 
-**Scoring.** `kbase score --pass rigor|bearing` asks the configured scoring model — `models.scoring`,
+**Scoring.** `kbase score` asks the configured scoring model — `models.scoring`,
 or `KBASE_SCORING` under the environment's endpoint — one item at a time, and asks it for the
 **faults the text commits**, not for a number: a list of charge lines, each a fault id and the span
 of the item's own text that shows it, or `none`, or `flt-pending`. kbase prices the list with the
 pass's table and writes the result through `set-rigor` or `set-bearing`. The `rigor` pass covers
 every claim, analysis and experiment; the `bearing` pass every `supports`, `founds`, `lifts` and
-`refutes` edge. A work's rigor is not asked: it is the one value you judge by hand, with the document
-in hand, through `set-rigor`. The two ask templates, the ids and the weights are stated once, in
+`refutes` edge. A run walks both, the node set and then the edge set, because one text edit moves a
+node's rigor and the bearing of every edge that touches it: `--pass rigor` or `--pass bearing` scopes
+a run to one set, for one edited subtree or a pass that is failing. A work's rigor is not asked: it is
+the one value you judge by hand, with the document in hand, through `set-rigor`. The two ask templates, the ids and the weights are stated once, in
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md); the ledger is where a
 value can be checked against its charges.
 
-Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, what answered
-(`backend`: `provider` or `environment`), the model and the digest of the ask its judgements answer;
-`ledger.jsonl` holds a line per attempt with the faults it recorded, the reply where it parsed, the
+Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, the set it walks
+(one pass, or `both`), what answered (`backend`: `provider` or `environment`), the model and the digest
+of the ask its judgements answer; `ledger.jsonl` holds a line per attempt with its own item's pass, the
+faults it recorded, the reply where it parsed, the
 value it prices to, the model and the prompt's digest. `--resume <run>` continues a run without
 re-asking what it already landed, while a fresh run asks everything again. Because a
 value is a projection of the line's ids, a resume **re-prices** a run when the table has moved since:
