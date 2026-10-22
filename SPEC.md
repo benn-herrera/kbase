@@ -1745,3 +1745,17 @@ nothing prices at `1.00` (§8), and an authored `rigor: 1.0` is in domain and re
 A charge that means *this leaves nothing* is the table's whole maximum by reference rather than a
 weight of its own, so a ceiling change carries it: `flt-unaddressed` weighs `1.00` with the method
 vocabulary's maximum, and `flt-no-engagement` the bearing one's, which is unchanged at `1.00`.
+
+**0.8.0 — no harness profiles, `score` as a tool, and one operation lock.**
+
+- **`harnesses.toml` is not read.** `--harness` names a back end kbase ships — `opencode` today, which
+  kbase runs with a tool-less agent it defines for the process itself — and any other value is refused
+  naming the set. A profile file left from an earlier version is ignored, and `configure --create`
+  writes none.
+- **`score` is a builtin tool as well as a CLI verb.** A tool call starts the run detached and returns
+  its pid, state store and ledger; `status`, `cancel` and `wait` cover a scoring run as they cover a
+  build, and a run at a terminal blocks as before (§11).
+- **One operation lock.** `kbase-operation.lock` in the repository's git directory is held by a build
+  or by a scoring run, so the two never write the same KB at once. A write op or `refresh` is refused
+  while either holds it, and the refusal names which run and its pid (§6).
+
