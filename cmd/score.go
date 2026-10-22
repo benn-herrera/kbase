@@ -746,6 +746,9 @@ func init() {
 	registerTimeoutFlag(scoreCmd, &scoreFlagTimeout, "deadline for one item's call")
 	scoreCmd.Flags().StringVar(&scoreFlagPass, "pass", "",
 		"the pass to walk (required): "+query.PassRigor+" for a node's own value, "+query.PassBearing+" for an edge's")
+	// scoreRun refuses a run with no --pass; the mark is how the tool binding
+	// this verb says so before the call.
+	markRequired(scoreCmd, "pass")
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",

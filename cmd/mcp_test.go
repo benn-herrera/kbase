@@ -17,6 +17,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/build"
@@ -313,6 +314,64 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 	if !slices.Equal(gotReadOnly, readOnly) {
 		t.Errorf("read-only tools %v, want the commands declaring %s: %v", gotReadOnly, readOnlyAnnotation, readOnly)
 	}
+}
+
+// TestMCPRequiredFlags: a flag its verb refuses to run without is required in
+// the tool's schema, required stays the positionals alone where no flag
+// carries the mark, and the mark changes nothing else about the schema.
+func TestMCPRequiredFlags(t *testing.T) {
+	tools := map[string]listedTool{}
+	for _, tool := range listTools(t) {
+		tools[tool.Name] = tool
+	}
+	required := func(t *testing.T, tool string) []string {
+		t.Helper()
+		listed, ok := tools[tool]
+		if !ok {
+			t.Fatalf("no %s tool", tool)
+		}
+		return slices.Sorted(slices.Values(listed.InputSchema.Required))
+	}
+	for _, c := range []struct {
+		name, tool string
+		want       []string
+	}{
+		{"a marked flag and no positional", "score", []string{"pass"}},
+		{"unmarked flags and a positional", "find", []string{"query"}},
+		{"unmarked flags and no positional", "status", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := required(t, c.tool); !slices.Equal(got, c.want) {
+				t.Errorf("%s: required %v, want %v", c.tool, got, c.want)
+			}
+		})
+	}
+	t.Run("the marked flag's property stands", func(t *testing.T) {
+		properties := tools["score"].InputSchema.Properties
+		want := map[string]any{"type": "string", "description": scoreCmd.Flags().Lookup("pass").Usage}
+		for key, value := range want {
+			if got := properties["pass"][key]; got != value {
+				t.Errorf("score: --pass %s %v, want %v", key, got, value)
+			}
+		}
+	})
+	t.Run("every flag still derives", func(t *testing.T) {
+		properties := tools["score"].InputSchema.Properties
+		var flags []string
+		scoreCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+			if f.Name == "help" {
+				return
+			}
+			flags = append(flags, f.Name)
+			if got := properties[f.Name]["description"]; got != f.Usage {
+				t.Errorf("score: --%s description %v, want its usage %q", f.Name, got, f.Usage)
+			}
+		})
+		slices.Sort(flags)
+		if got := slices.Sorted(maps.Keys(properties)); !slices.Equal(got, flags) {
+			t.Errorf("score: properties %v, want its flags %v", got, flags)
+		}
+	})
 }
 
 // TestMCPWriteOpSchemas reads each write op's vocabulary off its own
