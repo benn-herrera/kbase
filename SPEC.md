@@ -356,8 +356,13 @@ or `retry`); `pid`;
 `items.jsonl` and the status `ledger.jsonl` last records for each); `scored` (the items whose value
 landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
 continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
-document: `wait` prints the result document the run wrote beside its ledger. A store whose holder
-record names a build, or which stands with no record at all, reports the build as above.
+document: `wait` prints the result document the run wrote beside its ledger. A store no live run
+holds, and whose record names no score run, reports its newest run, whichever verb it was: the later
+of the newest score run's start, read from its `run.yaml`, and the newest build invocation's, read
+from the progress record — each the record the run already wrote. A run directory whose `run.yaml` is
+absent or unreadable left no record of when it started and is skipped. Where the store records
+neither run, or the two starts cannot be compared — a missing or unparsable stamp on either side — it
+reports the build as above.
 
 ### `kbase cancel`
 

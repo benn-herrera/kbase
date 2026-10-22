@@ -932,7 +932,11 @@ and `cmd`'s `init` verb import `ledger`.
 - **Status, progress, cancel, wait.** `status` reads the holder lock and its record, `progress.jsonl`
   and the commit trail and returns the YAML snapshot in SPEC §6; a record naming `score` is reported
   in the score run's own shape (`cmd/score_status.go`), read from the run's ledger and result
-  document. `cancel` signals the holder the record names, a build's or a scoring run's; the holder
+  document. Where no live run holds the store and its record names no score run, `status` reports the
+  store's newest run, comparing the start the newest run directory's `run.yaml` records
+  (`score.NewestRun`) with the newest build invocation's in `progress.jsonl` (`build.ReadState`), and
+  reports the build where neither stands or the two do not order. `cancel` signals the holder the
+  record names, a build's or a scoring run's; the holder
   abandons the in-flight call with nothing written for it, logs the event, releases the locks and
   exits `cancelled`. `wait` polls `build.ReadState` — the store alone, as the watcher does — until
   the run it names is superseded or has ended, then renders `status`'s document through the same

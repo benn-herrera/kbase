@@ -375,6 +375,43 @@ func RunByPID(dir string, pid int) (string, error) {
 	return "", os.ErrNotExist
 }
 
+// NewestRun is the run in the state directory dir whose header records the
+// latest start, and that stamp. A run directory whose run.yaml is absent, does
+// not read as a header, or records a start this kbase cannot read is skipped:
+// it left no record of when it started, and is no error. No run standing is ""
+// and "".
+func NewestRun(dir string) (run, started string, err error) {
+	entries, err := os.ReadDir(RunsDir(dir))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	var newest time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(RunsDir(dir), e.Name(), runFile))
+		if err != nil {
+			continue
+		}
+		var h RunHeader
+		if yaml.Unmarshal(b, &h) != nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, h.Started)
+		if err != nil {
+			continue
+		}
+		if run == "" || at.After(newest) {
+			run, started, newest = e.Name(), h.Started, at
+		}
+	}
+	return run, started, nil
+}
+
 // RunStatus is a run read back from its records: the items by the status the
 // ledger last records for each, the items whose value landed, and the items
 // that failed with the reason their line recorded.

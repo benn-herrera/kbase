@@ -136,20 +136,66 @@ func nullableString(s string) any {
 	return s
 }
 
-// scoreStatusDocument reports a score run's status for the state store at dir,
-// as the status command reads it: the state from the store's holder record and
-// the run's result, the counts from its ledger, and the command that continues
-// it where the run has not finished. A store whose holder record names a build
-// is the build's, and reports as the build does.
+// scoreStatusDocument reports the state of the run the store at stateDir stands
+// at, as the status command reads it: the run the holder record names, else —
+// where no run holds the store — whichever of its newest runs started later, a
+// score run or a build invocation, and the build's own document where the store
+// records neither or the two starts cannot be ordered. It reads the store's
+// records alone.
 func scoreStatusDocument(opts build.MonitorOptions, stateDir string) (string, []toolresult.Field) {
 	placement := []toolresult.Field{{Key: "state-dir", Value: stateDir}}
 	live, h, err := build.HolderOf(stateDir)
 	if err != nil {
 		return monitorFailure(placement, err)
 	}
-	if h.Kind != build.KindScore {
+	if h.Kind == build.KindScore {
+		return scoreRunDocument(stateDir, h, live)
+	}
+	if live {
 		return build.Status(opts)
 	}
+	run, started, err := score.NewestRun(stateDir)
+	if err != nil {
+		return monitorFailure(placement, err)
+	}
+	if run == "" {
+		return build.Status(opts)
+	}
+	buildState, err := build.ReadState(stateDir)
+	if err != nil {
+		return monitorFailure(placement, err)
+	}
+	if scoreRunIsLater(started, buildState.Started) {
+		return scoreRunDocument(stateDir, build.Holder{Run: run, Started: started}, false)
+	}
+	return build.Status(opts)
+}
+
+// scoreRunIsLater reports whether a score run's start stamp is later than the
+// build's last invocation's. Two starts that do not parse cannot be ordered, so
+// a missing or unreadable stamp on either side leaves the build the one
+// reported.
+func scoreRunIsLater(scoreStart, buildStart string) bool {
+	score, err := time.Parse(time.RFC3339, scoreStart)
+	if err != nil {
+		return false
+	}
+	build, err := time.Parse(time.RFC3339, buildStart)
+	if err != nil {
+		return false
+	}
+	return score.After(build)
+}
+
+// scoreRunDocument reports the score run the holder record h names in the state
+// store at stateDir: the state from the run's result document, else running
+// while a process holds the store and interrupted where none does; the counts
+// from its ledger; and the command that continues it where the run has not
+// finished. h is the store's own record where one names the run, and where the
+// store names none and the run is reported as its newest, a record carrying the
+// run and the start its header records, with no process.
+func scoreRunDocument(stateDir string, h build.Holder, live bool) (string, []toolresult.Field) {
+	placement := []toolresult.Field{{Key: "state-dir", Value: stateDir}}
 	run := h.Run
 	st, err := score.ReadRun(stateDir, run)
 	if errors.Is(err, os.ErrNotExist) {
@@ -216,8 +262,8 @@ func resumeFromResult(stateDir, run string) any {
 	return doc["resume"]
 }
 
-// scoreOrBuildStatus is the status command's verb: the score run the store's
-// holder record names, else the build's status.
+// scoreOrBuildStatus is the status command's verb: the run the state store
+// stands at — the holder's, else its newest — else the build's status.
 func scoreOrBuildStatus(opts build.MonitorOptions) (string, []toolresult.Field) {
 	_, dir, outcome, fields := build.Locate(opts)
 	if outcome != "" {
