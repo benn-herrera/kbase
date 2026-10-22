@@ -340,6 +340,17 @@ is the one state the build never writes: it is derived from a run event with no 
 holder that is not live.
 Progress is persisted to a file so a late or reconnecting monitor catches up.
 
+**A score run's status.** Where a score run holds the runs directory, `status` reports that run in
+its own shape instead of the build's: `state-dir`; `state` (`running` while it holds the directory,
+else the outcome its result document records — `done`, `bounded`, `cancelled`, `failed`, `refused`
+or `retry`); `pid`;
+`started`; `run`; `pass`; `counts` (`total`, `done`, `failed`, `remaining`, read from the run's
+`items.jsonl` and the status `ledger.jsonl` last records for each); `scored` (the items whose value
+landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
+continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
+document: `wait` prints the result document the run wrote beside its ledger. A store no score run
+holds reports the build as above.
+
 ### `kbase cancel`
 
 Signals the lock holder. The in-flight call is abandoned with nothing written for it; the event is
@@ -429,6 +440,8 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 | `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass`; `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
 
+A `status` read over a score run reports §6's score shape in place of the build keys above.
+
 **The role record.** A verb whose endpoints are per role states them in `roles`, one record per role
 it resolved, in role order — `decision`, `text`, `scoring` — with these keys in this order, each
 omitted where it does not apply:
@@ -472,9 +485,9 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 
 ## 8. Maintenance subcommands
 
-Every subcommand below but `score` is a builtin tool an agent harness can call; `score` drives one
-model call per item and runs as the binary, excluded from the server (§11). The rules in this
-section govern each.
+Every subcommand below is a builtin tool an agent harness can call; `score` starts a detached child
+that asks one model call per item and returns at once with the run's identity, so the turn is not held
+for the walk's duration (§11). The rules in this section govern each.
 
 **Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary is closed,
 and stated once, in kbase's write package; it is not copied into prose. A refusal names the key, its
@@ -716,9 +729,11 @@ kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--harness 
 
 Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
 call, each value landed through the write API and recorded in a ledger. `--pass` is required and names
-one of the two; `--timeout` is the deadline for one item's call (default `30s`). It is a CLI verb and
-not a tool (§11): a run asks one call per item and takes minutes, so a harness runs `kbase score` at a
-shell rather than holding a tool call open. There is no `--provider`: a scoring-time endpoint is named
+one of the two; `--timeout` is the deadline for one item's call (default `30s`). A run asks one call
+per item and takes minutes: at a terminal `kbase score` blocks until the walk ends, and as an MCP tool
+(§11) it starts a detached child and returns at once with the run's identity, while `kbase wait`
+reports its outcome when it ends. A harness that runs `kbase score` at a shell gets the blocking
+behaviour a terminal gets. There is no `--provider`: a scoring-time endpoint is named
 by `--scoring-model`, which states the provider and the model in one value, and passing `--provider`
 is a usage refusal.
 
@@ -840,7 +855,8 @@ first item, as does an `opencode` whose `--version` is not v2. Nothing is writte
 configuration. Its stdout is the reply and is parsed by the rule a provider's reply is.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
-`ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,
+`items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
+run), `ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,
 its KB root, the ledger's format, the pass, `backend` (`provider`, `environment` or `harness`; absent
 under `--dry-run`, which resolves no back end because it asks nothing), the provider, the model,
 `ask_sha256`, the start, and — under a harness — the argv that invoked each item (`command`), and,
@@ -1561,9 +1577,8 @@ The exception is `rewind-build`, the one listed tool — it has no subcommand be
 position that `status` and the commit trail already state, and changes nothing.
 
 - **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself and
-  `wait` — a tool call would hold the turn for the build's duration — and `score`, whose run asks one
-  call per item for minutes and runs as the binary; plus `rewind-build`, which no subcommand stands
-  behind. A tool's input schema is derived from its command's arguments and flags (the global flags
+  `wait` — a tool call would hold the turn for the build's or score run's duration — plus
+  `rewind-build`, which no subcommand stands behind. A tool's input schema is derived from its command's arguments and flags (the global flags
   excluded; the server carries its own), and a duration flag's argument is the Go duration string
   the command line spells (`30s`). A write op's schema is one entry: the op's closed vocabulary (§8)
   as properties, no others allowed, plus `create` where the CLI offers `--create`; a call writes that
@@ -1599,6 +1614,27 @@ position that `status` and the commit trail already state, and changes nothing.
   - *exited* — the build's own document, `isError` set by its outcome (§7);
   - *still starting at the bound* — outcome `failed`, with an item naming the state directory and
     saying the build is still starting; the build keeps running, and `status` reports it once it has
+    begun.
+
+  A relative `state-dir` argument resolves against the repository root; the server's own
+  `--config-dir` and `--log-file` stay relative to the server's working directory. Where `status`
+  would refuse (no git worktree, or a `--state-dir` inside `kb-root/`), the tool returns that
+  refusal and starts no process. The capture files are not removed.
+- **`score` is detached.** The tool starts `kbase score` as its own process, from the repository
+  root, in its own process group, with no stdin, configured as the server is (the environment,
+  `--config-dir`, `--log-level` and `--log-file`, §9). The run's stdout and stderr are captured as
+  files in the state store's `reports/` (§6). The tool waits until the run's ledger and pid stand,
+  or until it exits, for at most 40 s, and returns by what happened first. The bound is the KB
+  write-lock wait (30 s, §8) plus 10 s, because a run starting during a write waits that write out
+  before its first refresh; the run is visible to `status` while it waits:
+  - *started* — outcome `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait`.
+    `wait` is the exact shell command `kbase wait --state-dir <store> --pid <pid>`, shell-joined as
+    `status` joins its `resume` (§6): it returns when the run is over and prints that run's
+    document, so a session whose client does not subscribe to a run's progress runs it in the
+    background and is woken when it exits. `status` and `cancel` follow it;
+  - *exited* — the run's own document, `isError` set by its outcome (§7);
+  - *still starting at the bound* — outcome `failed`, with an item naming the state directory and
+    saying the run is still starting; the run keeps running, and `status` reports it once it has
     begun.
 
   A relative `state-dir` argument resolves against the repository root; the server's own
@@ -1664,15 +1700,16 @@ position that `status` and the commit trail already state, and changes nothing.
   `initialize` advertises the `resources` capability, its `subscribe` among the ones it carries.
   Nothing else is served: the KB's documents are the harness's own files.
 - **What the server never does.** It sends no sampling request and offers no prompts; no inference
-  runs from any tool but `build`, and `build`'s inference is the build's own. `models` reads the
+  runs from any tool but `build` and `score`, and each tool's inference is its own — the build's
+  decision and text calls, the score run's scoring calls. `models` reads the
   selected provider's model catalogue; `configure` reads that catalogue before it writes the model
   map, refusing a category `--model-map` leaves unassigned — `scoring` alone excepted where the
   target file already states one — and naming the catalogue as the ids to choose from, except under
   `--create` with no `--provider`, where it dials nothing and says the ids are unchecked. Neither
   asks a model anything. It writes nothing but JSON-RPC frames to stdout; diagnostics go to stderr
   and `--log-file`. It loads no configuration itself — the verbs it exposes load their own on each
-  call (§9.3) — and runs no harness: no tool asks one, and `score` is not a tool. The `build` child
-  it starts inherits the server's environment and `--config-dir`.
+  call (§9.3). The `build` and `score` children it starts inherit the server's environment and
+  `--config-dir`.
 - **Protocol.** One MCP revision, the one the server implements, pinned as one constant
   (ARCHITECTURE §12); an initialise naming another revision is answered with the server's for the
   client to decide; calls are answered one at a time, in order; EOF on stdin ends the server.

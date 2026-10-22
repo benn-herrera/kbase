@@ -37,8 +37,7 @@ Read in this order:
    announces over a subscription, the probe sending nothing) needs pandoc, so it runs by name rather
    than inside the hermetic suite. All of them should be green on a fresh clone.
 3. **Configuration** is read from `providers.toml` and `config.toml` by the verbs that load it —
-   SPEC §9 names them — while `build` and `score` spend inference, and `score` is a
-   command line rather than a tool. Each role — `decision`, `text`, `scoring` — names its own
+   SPEC §9 names them — while `build` and `score` spend inference. Each role — `decision`, `text`, `scoring` — names its own
    endpoint and model in `[models]` as a `<provider>/<model>` reference, or in the environment as
    `KBASE_<ROLE>` beside `KBASE_API_BASE_URL`; the two sources are modes and never merge. The server
    passes its own environment and `--config-dir` to the build it starts (README "Configuration";
@@ -121,11 +120,9 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
   `insert-analysis-entry`, `set-rigor`, `set-bearing`, `add-rests-on`, `resolve-demoted`, …),
   `render-citation`, the queries (`find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`,
   `strength-below`, `subtree`, `weak-points`, `stats`), `show-config`, `models`, `configure`,
-  `refresh`, `verify`, `render-claim-graph`, `export-latex`, `status`, `cancel` and `build`. Not
-  offered: `completion`, `help`, `mcp` — and `wait`, which a tool call would hold for the build's
-  duration; the `build` tool returns its command instead. `score` is not offered either: a scoring
-  run asks one model call per item and takes minutes, so it runs as `kbase score` at a shell
-  (SPEC §8). Each tool's input schema is derived from
+  `refresh`, `verify`, `render-claim-graph`, `export-latex`, `status`, `cancel`, `build` and `score`. Not
+  offered: `completion`, `help`, `mcp` — and `wait`, which a tool call would hold for the build's or
+  score run's duration; the `build` and `score` tools return that command instead. Each tool's input schema is derived from
   its command's arguments and flags; a write op's schema is one entry with the op's closed set of
   value keys and no others. The queries, `verify`, `status`, `render-citation`, `show`,
   `show-config`, `models` and `rewind-build` carry the read-only annotation. `models` reads the
@@ -174,13 +171,22 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
   client that subscribes to `kbase://build` needs no `wait`: the server sends the notification
   instead. The build's output is captured under the state store's `reports/`. Its stage boundaries
   are commits in the user's repository — say so before starting one.
+- **`score` is detached.** The tool starts a scoring run as its own process and returns once the
+  run's ledger and pid stand or it has exited, waiting at most 40 s; at the bound the result is
+  `failed`, naming the state directory, and the run keeps running. Its result carries `run`, `ledger`
+  and `wait`, the exact command to run in the background — `<kbase> wait --state-dir <store> --pid
+  <pid>` — which returns when the run is over and prints that run's document: run it in the
+  background and your harness wakes the session when it exits, the outcome already in its output.
+  Follow the run with `status`, stop it with `cancel`, resume it by calling `score` again with
+  `--resume <run>` and the same arguments. The run's output is captured under the state store's
+  `reports/`. Its document carries the counts by ledger status, the items whose values landed and
+  the ones that failed with their reasons; `status` reports the same while the run is in flight.
 - **Protocol.** The server implements one MCP revision, pinned as a constant (ARCHITECTURE §12,
   currently `2025-11-25`); an `initialize` naming another revision is answered with the server's
   for the client to decide. Calls are answered one at a time, in order. EOF on stdin ends the
   server. The server sends no sampling request and offers no prompts. It loads no configuration itself:
-  the verbs it exposes load their own on each call (SPEC §9), and no tool asks a harness — `score`,
-  the one verb that can run a back end, is not a tool. The `build` child it
-  starts inherits the server's environment and `--config-dir`.
+  the verbs it exposes load their own on each call (SPEC §9). The `build` and `score` children it
+  starts inherit the server's environment and `--config-dir`.
 
 ## Checking the integration
 

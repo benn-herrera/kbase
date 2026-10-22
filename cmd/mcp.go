@@ -28,6 +28,7 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
+	"kbase/internal/score"
 	"kbase/internal/version"
 	"kbase/internal/write"
 )
@@ -136,6 +137,8 @@ func mcpTools(root *cobra.Command, dir string, stderr io.Writer, lg log.Logger, 
 			tool, err = writeOpTool(cmd.Name(), fields, create, dir, stderr, lg)
 		} else if cmd == buildCmd {
 			tool, err = detachedBuildTool(cmd, dir, lg, launch)
+		} else if cmd == scoreCmd {
+			tool, err = detachedScoreTool(cmd, dir, lg)
 		} else {
 			tool, err = commandTool(cmd, dir, stderr)
 		}
@@ -578,6 +581,130 @@ func startDetachedBuild(verb string, positionals []positional, args map[string]a
 					Value: build.ShellJoin([]string{exe, "wait", "--state-dir", stateDir, "--pid", strconv.Itoa(pid)})})
 				return toolresult.Emit(out, toolresult.Done, fields...)
 			}
+		}
+	}
+}
+
+// detachedScoreTool is cmd run as this executable in a process of its own,
+// returning once the score run's ledger and pid stand or it has exited.
+func detachedScoreTool(cmd *cobra.Command, dir string, lg log.Logger) (mcp.Tool, error) {
+	positionals, schema, err := commandSchema(cmd)
+	if err != nil {
+		return mcp.Tool{}, err
+	}
+	call := func(args map[string]any) (string, map[string]any, int, error) {
+		var out bytes.Buffer
+		if err := startDetachedScore(cmd.Name(), positionals, args, dir, &out, lg); err != nil {
+			return "", nil, 0, err
+		}
+		return toolResult(out.Bytes())
+	}
+	return mcp.Tool{Name: cmd.Name(), InputSchema: schema, Call: call}, nil
+}
+
+// startDetachedScore starts `<this executable> score <args>` from the repository
+// dir is in — in its own process group, stdin closed, stdout and stderr captured
+// under the state store's reports, the environment, --config-dir, --log-level and
+// --log-file inherited — and writes on out the start document once the run's
+// ledger and pid stand, the run's own document where it exits first, or a
+// failure naming the state store where it does neither within build.StartWait.
+func startDetachedScore(verb string, positionals []positional, args map[string]any, dir string, out io.Writer, lg log.Logger) error {
+	args = maps.Clone(args)
+	stateFlag, _ := args[stateDirFlag].(string)
+	kbRoot, stateDir, outcome, fields := build.Locate(build.MonitorOptions{StateDir: stateFlag, WorkDir: dir, Logger: lg})
+	if outcome != "" {
+		return toolresult.Emit(out, outcome, fields...)
+	}
+	if stateFlag != "" {
+		args[stateDirFlag] = stateDir
+	}
+	positionalArgv, flags := commandLine(positionals, args)
+	argv := []string{verb}
+	for _, f := range flags {
+		argv = append(argv, "--"+f.name+"="+f.value)
+	}
+	for _, global := range []struct {
+		name, value string
+		path        bool
+	}{{"config-dir", strings.TrimSpace(flagConfigDir), true}, {"log-level", flagLogLevel, false}, {"log-file", flagLogFile, true}} {
+		if global.value == "" {
+			continue
+		}
+		if global.path {
+			abs, err := filepath.Abs(global.value)
+			if err != nil {
+				return err
+			}
+			global.value = abs
+		}
+		argv = append(argv, "--"+global.name+"="+global.value)
+	}
+	argv = append(append(argv, "--"), positionalArgv...)
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	reports := filepath.Join(stateDir, build.ReportsDir)
+	if err := os.MkdirAll(reports, 0o777); err != nil {
+		return err
+	}
+	stdout, err := os.CreateTemp(reports, "score-"+time.Now().UTC().Format("20060102T150405Z")+"-*.stdout.yaml")
+	if err != nil {
+		return err
+	}
+	defer stdout.Close()
+	stderrPath := strings.TrimSuffix(stdout.Name(), ".stdout.yaml") + ".stderr.log"
+	stderr, err := os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return err
+	}
+	defer stderr.Close()
+
+	child := exec.Command(exe, argv...)
+	child.Dir = filepath.Dir(kbRoot)
+	child.Stdout, child.Stderr = stdout, stderr
+	child.SysProcAttr = detachedProcess()
+	if err := child.Start(); err != nil {
+		return fmt.Errorf("starting the score run: %w", err)
+	}
+	pid := child.Process.Pid
+	lg.Info("mcp: score started", "pid", pid, "stdout", stdout.Name(), "stderr", stderrPath)
+	// Waiting reaps the child; the goroutine ends when it exits, whether or
+	// not this call is still listening.
+	exited := make(chan error, 1)
+	go func() { exited <- child.Wait() }()
+
+	placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: stateDir}, {Key: "pid", Value: pid}}
+	deadline := time.NewTimer(build.StartWait)
+	defer deadline.Stop()
+	poll := time.NewTicker(buildStartPoll)
+	defer poll.Stop()
+	for {
+		select {
+		case waitErr := <-exited:
+			doc, err := os.ReadFile(stdout.Name())
+			if err != nil {
+				return err
+			}
+			if len(bytes.TrimSpace(doc)) == 0 {
+				return fmt.Errorf("the score run (pid %d) exited (%v) with no result document; its stderr is %s", pid, waitErr, stderrPath)
+			}
+			_, err = out.Write(doc)
+			return err
+		case <-deadline.C:
+			return toolresult.Emit(out, toolresult.Failed, append(placement, toolresult.Field{Key: toolresult.FailuresKey,
+				Value: []toolresult.Item{{Check: checkError, Path: stateDir,
+					Detail: fmt.Sprintf("the score run (pid %d) is still starting: it has neither taken the runs directory nor exited within %v; follow it with status", pid, build.StartWait)}}})...)
+		case <-poll.C:
+			run, err := score.RunByPID(stateDir, pid)
+			if err != nil {
+				continue
+			}
+			fields := append(placement, toolresult.Field{Key: "run", Value: run},
+				toolresult.Field{Key: "ledger", Value: filepath.Join(score.RunsDir(stateDir), run)})
+			fields = append(fields, toolresult.Field{Key: "wait",
+				Value: build.ShellJoin([]string{exe, "wait", "--state-dir", stateDir, "--pid", strconv.Itoa(pid)})})
+			return toolresult.Emit(out, toolresult.Done, fields...)
 		}
 	}
 }

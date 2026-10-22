@@ -100,8 +100,10 @@ func runScore(opts scoreOptions) (int, error) {
 }
 
 // scoreRun is the verb's body: the KB, the run's ledger and the walk over the
-// scoring set.
-func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
+// scoring set. Its result document is written beside the ledger before the run
+// lets go of the runs directory, so a waiter reads the same document the verb
+// reported without racing the lock's release.
+func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	passes := []string{query.PassRigor, query.PassBearing}
 	switch {
 	case !slices.Contains(passes, opts.Pass):
@@ -132,7 +134,7 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(nil, refusals...)
 	}
-	fields := []toolresult.Field{{Key: "kb-root", Value: root}}
+	fields = []toolresult.Field{{Key: "kb-root", Value: root}}
 	dir, err := statedir.Dir(opts.StateDir, root)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
@@ -223,6 +225,10 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 		return failed(fields, err)
 	}
 	defer lock.Release()
+	if err := writeScoreHolder(dir, run); err != nil {
+		return failed(fields, err)
+	}
+	defer removeScoreHolder(dir)
 
 	// The run's start refresh: the set is enumerated from an index that is
 	// current, and on a KB in an older metadata format this is the write that
@@ -249,6 +255,13 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 			return failed(fields, err)
 		}
 		defer l.Close()
+		if err := l.ClearResult(); err != nil {
+			return failed(fields, err)
+		}
+		if err := l.WritePID(os.Getpid()); err != nil {
+			return failed(fields, err)
+		}
+		defer func() { persistScoreResult(fields, outcome) }()
 		if err := l.WriteItems(items); err != nil {
 			return failed(fields, err)
 		}
@@ -342,6 +355,18 @@ func scoreRun(opts scoreOptions) (string, []toolresult.Field) {
 		return outcome, f
 	}
 	defer l.Close()
+	if err := l.ClearResult(); err != nil {
+		return failed(fields, err)
+	}
+	if err := l.WritePID(os.Getpid()); err != nil {
+		return failed(fields, err)
+	}
+	// The set the run enumerates stands beside its ledger, so status and a
+	// waiter count the whole run rather than the attempts made so far.
+	if err := l.WriteItems(items); err != nil {
+		return failed(fields, err)
+	}
+	defer func() { persistScoreResult(fields, outcome) }()
 	fields = append(fields, toolresult.Field{Key: "run", Value: run}, toolresult.Field{Key: "ledger", Value: l.Dir()})
 
 	res, err := (&score.Runner{Source: src, Index: ix, Items: items, Pass: opts.Pass, Ask: ask,
@@ -722,5 +747,5 @@ func init() {
 		"back end that asks each item, one process per item: "+opencodeHarness+" (no difference under --dry-run, which asks nothing)")
 	scoreCmd.Flags().StringVar(&scoreFlagResume, "resume", "", "continue the run with this id")
 	scoreCmd.Flags().StringVar(&scoreFlagStateDir, "state-dir", "", "the state store (default: $XDG_STATE_HOME/kbase/<key>)")
-	rootCmd.AddCommand(mcpBinding(scoreCmd, mcpExcluded))
+	rootCmd.AddCommand(mcpBinding(scoreCmd, mcpBound))
 }

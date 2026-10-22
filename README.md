@@ -397,12 +397,12 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
 
 - **Tools.** The subcommands: `init`, the write ops, `render-citation`, the queries (including `show`
   and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
-  `export-latex`, `status`, `cancel` and `build`. `completion`, `help` and `mcp` are not offered,
-  and neither is `wait`: a held call would spend the turn the build takes, so the `build` tool hands
-  you its command to run in the background instead. `score` is not offered either — a scoring run
-  asks a model for minutes, so it runs as the command line (SPEC §8). `models` reads a
-  provider's model catalogue and `configure` writes `config.toml`; neither performs inference —
-  `build` is the one tool that does. A write-op tool takes one entry and offers no `--no-refresh`.
+  `export-latex`, `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not
+  offered, and neither is `wait`: a held call would spend the turn the build or score run takes, so
+  the `build` and `score` tools hand you their command to run in the background instead. `models`
+  reads a provider's model catalogue and `configure` writes `config.toml`; neither performs
+  inference — `build` and `score` are the tools that do. A write-op tool takes one entry and offers
+  no `--no-refresh`.
   `rewind-build` is the exception to one tool per subcommand: it lists the build's boundaries,
   oldest first, and for a `target` you name — a stage id or display name — returns the
   `git reset --hard` and the recorded re-issue command, with `discards` counting the boundaries the
@@ -417,6 +417,15 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
   build's output is captured under the state store's `reports/`. A client that subscribes to
   `kbase://build` needs no `wait`: the server sends one notification when the build stops
   progressing.
+- **`score` is detached.** It starts a scoring run as its own process and returns once the run's
+  ledger and pid stand or it has exited, waiting at most 40 s. On a started run it returns `run`,
+  `ledger`, `pid` and `wait`, the exact background command that returns when the run is over and
+  prints the run's document — the counts by ledger status, the items whose values landed and the
+  ones that failed with their reasons. Run `wait` in the background and your harness wakes the
+  session when it exits. Follow the run with `status`, stop it with `cancel`, and continue it by
+  calling `score` again with `--resume <run>` and the same arguments. At the bound the result is
+  `failed`, naming the state directory, and the run keeps running. The run's output is captured
+  under the state store's `reports/`.
 - **Resources.** The claim-graph sheets are resources, `kbase://sheet/<path under kb-root>`, read as
   SVG. `kbase://model-hints` is the model guidance as markdown — the same rows a created
   `config.toml` states — and needs no KB. `kbase://build-trail` is the `rewind-build` document as

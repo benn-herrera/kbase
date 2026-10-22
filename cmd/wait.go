@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -8,6 +11,7 @@ import (
 
 	"kbase/internal/build"
 	toolresult "kbase/internal/result"
+	"kbase/internal/score"
 )
 
 // waitPoll is how often wait reads the state store.
@@ -59,6 +63,25 @@ lock and reads no commit trail until that final document.`,
 				return emit(outcome, fields)
 			}
 			placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
+			// A score run's pid is recorded in its run directory; where the pid
+			// names one, wait polls that run and reports the document it wrote.
+			_, err = score.RunByPID(dir, pid)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return emit(failed(placement, err))
+			}
+			if err == nil {
+				doc, code, err := waitScore(dir, pid, waitPoll)
+				if err != nil {
+					return emit(failed(placement, err))
+				}
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), doc); err != nil {
+					return err
+				}
+				if code != 0 {
+					return exitCode(code)
+				}
+				return nil
+			}
 			if _, err := build.WaitState(dir, pid, waitPoll); err != nil {
 				return emit(failed(placement, err))
 			}

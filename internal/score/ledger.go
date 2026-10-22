@@ -1,12 +1,14 @@
 package score
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,15 +35,23 @@ const (
 // The ledger's layout: one directory per run under the state directory, the
 // run.yaml that names it, and the lines its attempts append.
 const (
-	runsDir      = "score"
-	runFile      = "run.yaml"
-	linesFile    = "ledger.jsonl"
-	itemsFile    = "items.jsonl"
+	runsDir   = "score"
+	runFile   = "run.yaml"
+	linesFile = "ledger.jsonl"
+	itemsFile = "items.jsonl"
+	pidFile   = "pid"
+	// ResultFile is the name of the run's result document, written beside its
+	// ledger so a waiter reads the same document the run reported.
+	ResultFile   = "result.yaml"
 	ledgerFormat = 1
 )
 
 // checkUsage is the check a refusal names where the request itself is wrong.
 const checkUsage = "usage"
+
+// checkError names a failure kbase has no narrower class for, as a run read
+// back from its ledger reports a failed item.
+const checkError = "error"
 
 // RunsDir is where the runs of the state directory dir stand: score/, one
 // directory per run, and the run lock beside them.
@@ -298,7 +308,8 @@ func (l *Ledger) Append(it query.Item, e Entry) error {
 }
 
 // WriteItems writes the run's item list, items.jsonl: one pending line per
-// item, which is all a dry run leaves beside run.yaml.
+// item of the set the run enumerated, so a reader counts the whole run —
+// status and a waiter read it — rather than only the attempts made so far.
 func (l *Ledger) WriteItems(items []query.Item) error {
 	var b bytes.Buffer
 	for _, it := range items {
@@ -309,6 +320,157 @@ func (l *Ledger) WriteItems(items []query.Item) error {
 		b.Write(append(a, '\n'))
 	}
 	return atomicfile.Write(filepath.Join(l.dir, itemsFile), b.Bytes(), nil)
+}
+
+// WritePID records the process walking this run, so a waiter can find the run
+// by the pid it was given. A resumed run overwrites the record with its own
+// process: the pid names the invocation in flight, not the run's first.
+func (l *Ledger) WritePID(pid int) error {
+	return atomicfile.Write(filepath.Join(l.dir, pidFile), []byte(strconv.Itoa(pid)), nil)
+}
+
+// ClearResult removes a result an earlier invocation left: a run in progress is
+// not finished, and a stale result would report an outcome that has not happened.
+func (l *Ledger) ClearResult() error {
+	err := os.Remove(filepath.Join(l.dir, ResultFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// WriteResultDocument writes the run's result document, its outcome and fields
+// as the verb emits them, to the run directory dir so a waiter reads the same
+// document the run reported.
+func WriteResultDocument(dir, outcome string, fields []result.Field) error {
+	var b bytes.Buffer
+	if err := result.Emit(&b, outcome, fields...); err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(dir, ResultFile), b.Bytes(), nil)
+}
+
+// RunByPID is the run in the state directory dir whose process is pid, or
+// os.ErrNotExist where no run names it.
+func RunByPID(dir string, pid int) (string, error) {
+	entries, err := os.ReadDir(RunsDir(dir))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", os.ErrNotExist
+	}
+	if err != nil {
+		return "", err
+	}
+	want := strconv.Itoa(pid)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(RunsDir(dir), e.Name(), pidFile))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(b)) == want {
+			return e.Name(), nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
+// RunStatus is a run read back from its records: the items by the status the
+// ledger last records for each, the items whose value landed, and the items
+// that failed with the reason their line recorded.
+type RunStatus struct {
+	Run      string
+	Pass     string
+	Counts   Counts
+	Scored   []string
+	Failures []result.Item
+}
+
+// ReadRun reads the run in the state directory dir without opening it for
+// appending: its header, its item list and its ledger lines. The item list is
+// the set the run enumerated; a line the list does not carry is an item a
+// resume asked outside it, and is counted too, the ledger being the record.
+func ReadRun(dir, run string) (RunStatus, error) {
+	runDir := filepath.Join(RunsDir(dir), run)
+	var h RunHeader
+	b, err := os.ReadFile(filepath.Join(runDir, runFile))
+	if err != nil {
+		return RunStatus{}, err
+	}
+	if err := yaml.Unmarshal(b, &h); err != nil {
+		return RunStatus{}, err
+	}
+	items, err := readAttempts(filepath.Join(runDir, itemsFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return RunStatus{}, err
+	}
+	lines, err := readAttempts(filepath.Join(runDir, linesFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return RunStatus{}, err
+	}
+	last := make(map[string]attempt, len(lines))
+	for _, a := range lines {
+		last[a.lineKey()] = a
+	}
+	st := RunStatus{Run: h.Run, Pass: h.Pass}
+	seen := make(map[string]bool, len(items))
+	count := func(a attempt, ok bool) {
+		st.Counts.Total++
+		if !ok {
+			st.Counts.Remaining++
+			return
+		}
+		switch a.Status {
+		case StatusDone:
+			st.Counts.Done++
+			st.Scored = append(st.Scored, a.item())
+		case StatusFailed:
+			st.Counts.Failed++
+			st.Failures = append(st.Failures, result.Item{Check: checkError,
+				Detail: a.item() + ": " + ReplySummary(a.Reply)})
+		default:
+			st.Counts.Remaining++
+		}
+	}
+	for _, it := range items {
+		key := it.lineKey()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		a, ok := last[key]
+		count(a, ok)
+	}
+	for _, a := range lines {
+		key := a.lineKey()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		count(a, true)
+	}
+	return st, nil
+}
+
+// readAttempts reads one JSONL file of attempts; a line no attempt reads as is
+// dropped.
+func readAttempts(path string) ([]attempt, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []attempt
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<16), 1<<24)
+	for sc.Scan() {
+		var a attempt
+		if json.Unmarshal(sc.Bytes(), &a) == nil {
+			out = append(out, a)
+		}
+	}
+	return out, sc.Err()
 }
 
 // Close releases the line file, where the run appended one.

@@ -393,7 +393,7 @@ exists, a line naming it as the author's. `WriteReport` reads the filter's findi
 | **Sheet**: DOT emitter and `dot` invocation; index, build records and repository name in, SVGs out | `internal/sheet` | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
 | **Readiness stamping and README assembly** | `internal/kbdocs` | Landed: the stamp (only if absent), the overview excerpts, the passage structure check, the README assembly; the templates under `internal/kbdocs/templates/` |
 | **Scratch creation (`init`)**: the zero-case KB — entry point, `.index/`, readiness stamps, refresh over the skeleton, the plain-subject birth commit | `cmd` (the verb), reusing `kb`'s renderers, `atomicfile`, `kbdocs.Stamp`, `index.RefreshReporting`, `write.LockKB` and `ledger` | Landed: refuses a multi-line `--title`, outside a worktree and at any existing `kb-root/` before any write; the spine bytes come from the canonical frontmatter renderers; the entry point is stamped before the loader opens it and refresh re-stamps at its save (§10); `verify` over the born KB is `test-integration-init`'s, not the verb's; the birth commit's subject is outside `ledger.Prefix`, so §5's fresh-vs-resume reads the trail as empty |
-| **Scoring (`kbase score`)**: the closed text one call carries and its guard, the runner, the run's ledger | `internal/score` | Landed: the set is `query.ScoringSet`'s, the ledger stands under the build's state directory (`internal/statedir`, extracted from `internal/build`), and the verb is `cmd/score.go`, excluded from MCP |
+| **Scoring (`kbase score`)**: the closed text one call carries and its guard, the runner, the run's ledger | `internal/score` | Landed: the set is `query.ScoringSet`'s, the ledger stands under the build's state directory (`internal/statedir`, extracted from `internal/build`), and the verb is `cmd/score.go`, bound as a detached tool in MCP |
 
 **Write API.** `render` composes every metadata byte, so no op accepts a preformatted heading,
 marker or bullet, and no op renders a scoring bullet without its `(bearing …)`: the token is
@@ -612,8 +612,9 @@ write and validation, never before: a crash between the two re-asks a write that
 the reverse would skip a value that never landed. `Create` never reuses a run directory: the run id
 is minted past any that stands, and a directory that appears under it fails the call. `Resume`
 refuses a `run.yaml` naming another KB root, format or pass, and drops a tail torn after its last
-newline so the item it names is asked again. `items.jsonl` holds the run's set, which is all a dry
-run writes beside `run.yaml`.
+newline so the item it names is asked again. `items.jsonl` holds the set the run enumerated — one
+pending line per item, written when the run opens its ledger, so status and a waiter count the whole
+run rather than the attempts made so far; it is all a dry run writes beside `run.yaml`.
 
 A line carries `faults` — the parsed charges, `id`, `passage`, `citation`, `offset`, in the order
 written — and `moot`, the charge lines a `flt-pending` made moot, parsed the same way and priced
@@ -675,8 +676,9 @@ and its `lock` item — and last, `failures` on `failed` (one `check: error` ite
 records failed, detail its name and its line's reason, or one item naming the error a refresh stopped
 on) or `cancelled` on `cancelled` (the walk's first item with no attempt, `{}` where every one has
 one). The refresh cadence, the closing records and `resume`'s reach are SPEC §8's. Registration is
-`mcpBinding(scoreCmd, mcpExcluded)` (SPEC §11): the command is bound with the excluded annotation, so
-it appears in no `tools/list` and carries no read-only annotation.
+`mcpBinding(scoreCmd, mcpBound)` (SPEC §11): the command is bound and appears in `tools/list`, but the
+MCP server starts it as a detached child — as it starts `build` — returning the run's identity and a
+`wait` command instead of holding the turn for the walk's duration.
 
 ---
 
@@ -1123,6 +1125,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
 | Run lock path | `<git dir>/kbase-build.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
+| Detached-score start wait | `build.StartWait` (40 s) again: how long the `score` tool waits for the child's ledger and pid to stand, or for the child to exit, before returning (SPEC §11) |
 | MCP build watcher interval | `buildWatchInterval` in `cmd/mcp.go`: 1 s, how often the watcher reads the state store while `kbase://build` is subscribed, after the reading the subscription itself makes (SPEC §11) |
 | `wait` poll interval | `waitPoll` in `cmd/wait.go`: 1 s, how often `kbase wait` reads the state store while the run it names progresses (SPEC §6) |
 | Sheet render concurrency | `sheet.renderConcurrency`: 4, the most `dot` processes at once; output order is kept (§6) |
@@ -1221,6 +1224,26 @@ and emits its first progress event before it waits out a write, §8):
 
 Before starting, the tool runs `status`'s preconditions: no worktree, or a `--state-dir` inside
 `kb-root/`, returns the refusal `status` gives and starts no process.
+
+The `score` tool re-executes the kbase binary as `kbase score …` by the same detachment: the child
+runs from the repository root, in its own process group, with the server's environment,
+`--config-dir`, `--log-level` and `--log-file`, and its stdout and stderr are files in the state
+store's `reports/`, `score-<UTC timestamp>-<random>.stdout.yaml` and `.stderr.log`. It waits on the
+run's records and returns when the run's ledger and pid stand (the lock on `<state-dir>/score` taken,
+the run's directory written) or the child exits, bounded by `build.StartWait` (40 s):
+
+| Child, within `build.StartWait` | Result |
+|---|---|
+| Ledger and pid stand | `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait` (`wait` the run's background command, `build.ShellJoin` of the executable with `wait --state-dir <store> --pid <pid>`) |
+| Exited first | The child's own document; `isError` from its outcome |
+| Neither | `failed`, an item naming the state directory and that the run is still starting |
+
+A score run's result document is written beside its ledger before the run lets go of the runs
+directory, so `wait` reads the same document the run reported rather than racing the lock's release.
+`wait` locates the run by the pid the launch named — `score.RunByPID` reads the run's `pid` file —
+and reports the run's outcome; a run whose process ended without writing a result reports the
+failure its ledger supports. `status` and `cancel` read the runs directory's holder record (the
+pid, the run and the start stamp), so a run in flight is visible under the pid the tool returned.
 
 `kbase://build` (SPEC §11) is the build's state as the `status` tool reports it, for the store the
 tool last launched: `cmd/mcp.go` records the store `build.Locate` resolved and the pid the launch

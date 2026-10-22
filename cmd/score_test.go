@@ -299,11 +299,10 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 			t.Errorf("the %s edge %s → %s bears %q, want the reply's %q", tc.edge.Relation, tc.edge.Source, tc.edge.Target, got, tc.want)
 		}
 	}
-	// The run's records stand beside each other: the run.yaml that names it and
-	// the line per attempt. A real run writes no items.jsonl — its lines are the
-	// list — which a dry run alone leaves.
+	// The run's records stand beside each other: the run.yaml that names it, the
+	// item list it enumerated and the line per attempt.
 	dir, _ := bearing.doc.Values["ledger"].(string)
-	for _, name := range []string{"run.yaml", "ledger.jsonl"} {
+	for _, name := range []string{"run.yaml", "items.jsonl", "ledger.jsonl"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("the run left no %s: %v", name, err)
 		}

@@ -48,6 +48,7 @@ var fileOpenOwners = map[string]string{
 	"cmd/provider.go":                   "the key file $KBASE_API_KEY_FILE names, read at the dial",
 	"internal/export/write.go":          "the export's gen-tex/: its manifest, each file's bytes and pandoc's outputs, compared so an unchanged file is not rewritten or reported, and the filter's findings; never the author's preamble.tex",
 	"cmd/mcp.go":                        "the detached build's captured output in the state store",
+	"cmd/score_status.go":               "a scoring run's holder record, its ledger and its result document in the state store",
 }
 
 // onDiskOwners are the production files that read a KB with no stamp check:
