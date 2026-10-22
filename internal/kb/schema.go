@@ -249,6 +249,18 @@ var ScoringRelations = []string{RelationSupports, RelationFounds, RelationLifts,
 // lifts and refutes do; references and demoted stand outside the walk.
 func Scoring(relation string) bool { return slices.Contains(ScoringRelations, relation) }
 
+// BearingWalkRelations is the relations a score run's bearing pass asks about,
+// in listing order: the edges a model may judge from the KB itself.
+var BearingWalkRelations = []string{RelationSupports, RelationLifts, RelationRefutes}
+
+// BearingWalk is whether a score run's bearing pass asks about an edge of
+// relation: supports, lifts and refutes do. A founds edge carries a bearing —
+// Scoring says so, and the values table prices it — but its source is a work or
+// an axiom lying outside the corpus, so a model shown only the KB cannot judge
+// the link: that bearing is the user's, written by hand through set-bearing, as
+// a work's rigor is through set-rigor.
+func BearingWalk(relation string) bool { return slices.Contains(BearingWalkRelations, relation) }
+
 // BearingLegal is whether an edge of relation from a source of sourceKind to a
 // target of targetKind may carry a bearing: a number in [0, 1] or pending. It
 // answers that question only — a pairing it refuses may still be a legal edge

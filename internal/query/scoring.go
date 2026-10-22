@@ -41,8 +41,10 @@ type Item struct {
 // ScoringSet is the items a score run walks, in the order it walks them. A
 // rigor pass is every claim, analysis and experiment, by id: a work's rigor is
 // judged by hand and an axiom's is 1.0 by rule, so neither is a subject. A
-// bearing pass is every scoring edge, by relation in kb.ScoringRelations order,
-// then source, then target: a reference or a demoted row carries no bearing.
+// bearing pass is every edge the walk asks about — supports, lifts and refutes,
+// by relation in kb.BearingWalkRelations order, then source, then target. A
+// founds edge is no item: its bearing is the user's, written by hand through
+// set-bearing, and a reference or a demoted row carries no bearing at all.
 // PassBoth is the node set and then the edge set, each in its own order, so one
 // walk covers both and neither set's order depends on the other's. An unknown
 // pass is an error.
@@ -76,16 +78,17 @@ func rigorItems(ix *Index) []Item {
 	return out
 }
 
-// bearingItems is every scoring edge, by relation, then source, then target.
+// bearingItems is every edge the walk asks about, by relation, then source,
+// then target.
 func bearingItems(ix *Index) []Item {
 	var edges []ScoringEdge
 	for _, e := range ix.edges {
-		if kb.Scoring(e.Relation) {
+		if kb.BearingWalk(e.Relation) {
 			edges = append(edges, ScoringEdge{Source: e.Source, Target: e.Target, Relation: e.Relation})
 		}
 	}
 	slices.SortStableFunc(edges, func(a, b ScoringEdge) int {
-		return cmp.Or(slices.Index(kb.ScoringRelations, a.Relation)-slices.Index(kb.ScoringRelations, b.Relation),
+		return cmp.Or(slices.Index(kb.BearingWalkRelations, a.Relation)-slices.Index(kb.BearingWalkRelations, b.Relation),
 			strings.Compare(a.Source, b.Source), strings.Compare(a.Target, b.Target))
 	})
 	out := make([]Item, len(edges))

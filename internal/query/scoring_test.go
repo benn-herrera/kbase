@@ -19,7 +19,8 @@ func scoringFixtureNodes() []map[string]any {
 }
 
 // scoringFixtureEdges is one edge of every relation — the scoring ones from
-// each source kind that carries them — in no order the set keeps.
+// each source kind that carries them — in no order the set keeps. Its two
+// founds edges are what the bearing set must leave out.
 func scoringFixtureEdges() []map[string]any {
 	supports := edge("clm-aaaaaa", "ana-aaaaaa", kb.RelationSupports, kb.NodeKindAnalysis, "1.0")
 	supports["context"] = "the sentence that marks the dependency"
@@ -96,13 +97,11 @@ func TestScoringSet(t *testing.T) {
 		}
 	})
 
-	t.Run("bearing is every scoring edge, ordered", func(t *testing.T) {
+	t.Run("bearing is every edge the walk asks, ordered", func(t *testing.T) {
 		nodes, edges := splitItems(t, scoringItems(t, ix, PassBearing))
 		want := []ScoringEdge{
 			{Source: "clm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationSupports},
 			{Source: "exp-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationSupports},
-			{Source: "axm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationFounds},
-			{Source: "wrk-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationFounds},
 			{Source: "ana-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationLifts},
 			{Source: "exp-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationRefutes},
 		}
@@ -123,6 +122,26 @@ func TestScoringSet(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestScoringSetExcludesFounds: a founds edge carries a bearing — kb.Scoring
+// says so, and set-bearing writes it — but no pass walks it. Its source is a
+// work or an axiom outside the corpus, so the model has only a title to judge
+// the link by, and the value is the user's. The bearing set leaves it out, and
+// so does the both set, from the edge side and from the node side alike: a work
+// and an axiom are no rigor subject either.
+func TestScoringSetExcludesFounds(t *testing.T) {
+	ix := load(t, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
+	for _, pass := range []string{PassBearing, PassBoth} {
+		for _, it := range scoringItems(t, ix, pass) {
+			switch {
+			case it.Edge != nil && it.Edge.Relation == kb.RelationFounds:
+				t.Errorf("%s walks the founds edge %s → %s", pass, it.Edge.Source, it.Edge.Target)
+			case it.Node != nil && (it.Node.Kind == kb.NodeKindWork || it.Node.Kind == kb.NodeKindAxiom):
+				t.Errorf("%s walks the %s %s, which is no rigor subject", pass, it.Node.Kind, it.Node.ID)
+			}
+		}
+	}
 }
 
 // TestScoringSetRigorByID: the rigor set is ordered by id, not by the kind-major

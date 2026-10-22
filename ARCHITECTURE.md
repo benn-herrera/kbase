@@ -604,6 +604,14 @@ An item carries identity only, so an edge's row comes from `Index.Edge` and no c
 `kb.EdgeRow` by hand. The set has no verb: it is consumed in-process, and `--dry-run` is the
 inspection surface. Which nodes and edges are in it, and which are excluded, is SPEC §8's.
 
+Two predicates in `internal/kb` answer whether an edge carries a bearing, and they are not the same
+question. `kb.Scoring` — the four relations in `kb.ScoringRelations` — is whether an edge carries a
+bearing at all, and every reader of a stored bearing uses it: the values' relation check, the strength
+walk, the records, `deps`, a node's payload, the index's load and the bearing text. `kb.BearingWalk` —
+the three in `kb.BearingWalkRelations` — is whether a score run asks for that bearing, and the bearing
+pass is its only reader: a `founds` edge carries a bearing and is never an item, its source lying
+outside the corpus, so `set-bearing` alone writes it.
+
 **The ledger and the state directory.** `score.Ledger` opens `<state-dir>/score/<run>/`, writes
 `run.yaml` through `atomicfile.Write`, appends each attempt as one JSON line with `O_APPEND` and
 `Sync`, and reads back the last entry per item — its status and the evidence behind it — so `--resume`

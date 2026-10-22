@@ -635,14 +635,16 @@ is carried by the command that continues a run. --dry-run lists the set, resolve
 no role and refuses nothing for one.
 
 The passes are rigor — every claim, analysis and experiment, by id — and
-bearing — every scoring edge, by relation, then source, then target. A run walks
-both unless --pass names one, over the node set and then the edge set. A text
-edit moves a node's rigor and the bearing of every edge that touches it, so a
-run scoped to one pass leaves the other stale against the same edit: scope it
-where there is a reason — one edited subtree, or isolating a pass that is
-failing. A work's rigor is the one value neither pass asks: it is the work's own
-standing, judged by hand with the document in hand, and set-rigor is what writes
-it. An axiom's is 1.0 by rule.
+bearing — every supports, lifts and refutes edge, by relation, then source,
+then target. A run walks both unless --pass names one, over the node set and
+then the edge set. A text edit moves a node's rigor and the bearing of every
+edge that touches it, so a run scoped to one pass leaves the other stale against
+the same edit: scope it where there is a reason — one edited subtree, or
+isolating a pass that is failing. A work's rigor is the one value neither pass
+asks: it is the work's own standing, judged by hand with the document in hand,
+and set-rigor is what writes it. An axiom's is 1.0 by rule. A founds edge's
+bearing is the other: the work or axiom it rests on lies outside the corpus, so
+no pass reaches it either, and set-bearing writes it.
 
 Every attempt is recorded under <state-dir>/score/<run>/: run.yaml names the
 run, the set it walks and the digest of the ask its judgements answer,
@@ -691,7 +693,7 @@ func init() {
 	// --scoring-model, which states the provider and the model together.
 	registerTimeoutFlag(scoreCmd, &scoreFlagTimeout, "deadline for one item's call")
 	scoreCmd.Flags().StringVar(&scoreFlagPass, "pass", "",
-		"the set to walk: "+query.PassRigor+" for a node's own value, "+query.PassBearing+" for an edge's; absent or "+query.PassBoth+" walks the node set and then the edge set, because one edit moves a node's rigor and the bearings of the edges that touch it")
+		"the set to walk: "+query.PassRigor+" for a node's own value, "+query.PassBearing+" for the value on a supports, lifts or refutes edge; absent or "+query.PassBoth+" walks the node set and then the edge set, because one edit moves a node's rigor and the bearings of the edges that touch it")
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",

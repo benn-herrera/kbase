@@ -280,11 +280,13 @@ or `KBASE_SCORING` under the environment's endpoint — one item at a time, and 
 **faults the text commits**, not for a number: a list of charge lines, each a fault id and the span
 of the item's own text that shows it, or `none`, or `flt-pending`. kbase prices the list with the
 pass's table and writes the result through `set-rigor` or `set-bearing`. The `rigor` pass covers
-every claim, analysis and experiment; the `bearing` pass every `supports`, `founds`, `lifts` and
-`refutes` edge. A run walks both, the node set and then the edge set, because one text edit moves a
-node's rigor and the bearing of every edge that touches it: `--pass rigor` or `--pass bearing` scopes
-a run to one set, for one edited subtree or a pass that is failing. A work's rigor is not asked: it is
-the one value you judge by hand, with the document in hand, through `set-rigor`. The two ask templates, the ids and the weights are stated once, in
+every claim, analysis and experiment; the `bearing` pass every `supports`, `lifts` and `refutes` edge.
+A run walks both, the node set and then the edge set, because one text edit moves a node's rigor and
+the bearing of every edge that touches it: `--pass rigor` or `--pass bearing` scopes a run to one set,
+for one edited subtree or a pass that is failing. Two values are never asked, both because the
+document they rest on lies outside the corpus: a work's rigor, and a `founds` edge's bearing. Judge
+each by hand, with the document in hand, through `set-rigor` and `set-bearing`. The two ask templates,
+the ids and the weights are stated once, in
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md); the ledger is where a
 value can be checked against its charges.
 

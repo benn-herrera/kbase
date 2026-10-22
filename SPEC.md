@@ -750,18 +750,21 @@ by `--scoring-model`, which states the provider and the model in one value, and 
 is a usage refusal.
 
 **The two passes.** `rigor` walks every claim, analysis and experiment, by id — a node's own value.
-`bearing` walks every scoring edge — `supports`, `founds`, `lifts` and `refutes` — by relation in
-that order, then source, then target. A run walks both, the node set and then the edge set, unless
-`--pass` names one: a text edit moves a node's rigor and the bearing of every edge that touches it, so
-a run scoped to one pass leaves the other stale against that edit, and scoping is for the case with a
-reason — one edited subtree, or isolating a pass that is failing. A both-pass run is one run: one
-lock, one `run.yaml`, one `items.jsonl`, one `ledger.jsonl` and one `resume` command, and its
+`bearing` walks every `supports`, `lifts` and `refutes` edge, by relation in that order, then source,
+then target. A run walks both, the node set and then the edge set, unless `--pass` names one: a text
+edit moves a node's rigor and the bearing of every edge that touches it, so a run scoped to one pass
+leaves the other stale against that edit, and scoping is for the case with a reason — one edited
+subtree, or isolating a pass that is failing. A both-pass run is one run: one lock, one
+`run.yaml`, one `items.jsonl`, one `ledger.jsonl` and one `resume` command, and its
 `run.yaml` names the set it walks (`both`). The set is read from the index once, at the run's start,
 and does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a
 run walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
 work's standing is judged with the document in hand, and `set-rigor` is what writes it. An axiom is
-on neither pass either, its rigor being `1.0` by rule; a `founds` edge is a bearing subject like any
-other.
+on neither pass either, its rigor being `1.0` by rule. **A `founds` edge's bearing is the second such
+value:** the work or axiom it rests on lies outside the corpus, so a model shown only the KB has the
+work's title and nothing to judge the link by, and the bearing is the reader's, made with the work in
+hand. `set-bearing` is what writes it, as `set-rigor` writes a work's rigor. The edge carries a bearing
+like any other — the values table prices it `bearing × the source's rigor` — and no pass reaches it.
 
 **One item, one quantity, one call.** A call carries one node's text or one edge's — never two
 subjects, never the other pass's quantity. The item's class gates the instruction as it gates the ids:

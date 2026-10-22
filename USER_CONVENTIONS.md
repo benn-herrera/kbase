@@ -167,8 +167,9 @@ faults the text commits — one charge line per occurrence, each a fault id and 
 text, or `none`, or `flt-pending` — and kbase prices the list into the value: the scheme's criteria,
 its two id sets and its weights are
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md)'s. `rigor` covers every
-claim, analysis and experiment, `bearing` every `supports`, `founds`, `lifts` and `refutes` edge; a
-work's rigor is never asked — set it by hand.
+claim, analysis and experiment, `bearing` every `supports`, `lifts` and `refutes` edge. Two values are
+never asked, both resting on a document outside the corpus: a work's rigor, and a `founds` edge's
+bearing — set each by hand, through `set-rigor` and `set-bearing`.
 
 - The model is the `scoring` role: `models.scoring` in `config.toml`, or `KBASE_SCORING` under the
   environment's endpoint. A run that names none is refused before the KB is opened, naming that key;

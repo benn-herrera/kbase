@@ -240,10 +240,11 @@ func scoreFixture(t *testing.T) string {
 }
 
 // TestScoreRunLandsAndResumes: a rigor run asks one item per claim, analysis and
-// experiment, and a bearing run one per scoring edge, each landing the reply's
-// value through the write API; both founds bearings land, a work's own rigor is
-// no item and stays as authored; a --resume of a finished run lands nothing and
-// asks nothing; a malformed reply lands nothing for its item and is counted.
+// experiment, and a bearing run one per supports, lifts and refutes edge, each
+// landing the reply's value through the write API; a work's own rigor and a
+// founds edge's bearing are no item and stay as authored; a --resume of a
+// finished run lands nothing and asks nothing; a malformed reply lands nothing
+// for its item and is counted.
 func TestScoreRunLandsAndResumes(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
 
@@ -293,13 +294,13 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 
 	// The bearing pass, by relation, then source, then target.
 	bearing := scoreIn(t, repo, state, scoreOptions{Pass: query.PassBearing}, func() model.Client {
-		return scoring("flt-transfer: The First Result", "none", "none", "none", "none", "none")
+		return scoring("flt-transfer: The First Result", "none", "none", "none")
 	})
 	if bearing.doc.Outcome != "done" || bearing.dialled != 1 {
 		t.Fatalf("the bearing run: outcome %s, %d dials\n%s", bearing.doc.Outcome, bearing.dialled, bearing.stdout)
 	}
-	if counts, _ := bearing.doc.Values["counts"].(map[string]any); counts["total"] != 6 || counts["done"] != 6 || counts["remaining"] != 0 {
-		t.Errorf("counts %v, want the six edges done\n%s", bearing.doc.Values["counts"], bearing.stdout)
+	if counts, _ := bearing.doc.Values["counts"].(map[string]any); counts["total"] != 4 || counts["done"] != 4 || counts["remaining"] != 0 {
+		t.Errorf("counts %v, want the four edges done\n%s", bearing.doc.Values["counts"], bearing.stdout)
 	}
 	bearings := []struct {
 		edge query.ScoringEdge
@@ -307,14 +308,23 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	}{
 		{query.ScoringEdge{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationSupports}, "0.65"},
 		{query.ScoringEdge{Source: "exp-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationSupports}, "1.0"},
-		{query.ScoringEdge{Source: "axm-S1", Target: "ana-aaaaaa", Relation: kb.RelationFounds}, "1.0"},
-		{query.ScoringEdge{Source: "wrk-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationFounds}, "1.0"},
 		{query.ScoringEdge{Source: "ana-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationLifts}, "1.0"},
 		{query.ScoringEdge{Source: "ana-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationRefutes}, "1.0"},
 	}
 	for _, tc := range bearings {
 		if got := bearingOf(t, repo, tc.edge); got != tc.want {
 			t.Errorf("the %s edge %s → %s bears %q, want the reply's %q", tc.edge.Relation, tc.edge.Source, tc.edge.Target, got, tc.want)
+		}
+	}
+	// A founds edge's bearing is the user's, and the walk neither asks it nor
+	// leaves it stale: set-bearing stays the one writer of the value.
+	for _, edge := range []query.ScoringEdge{
+		{Source: "axm-S1", Target: "ana-aaaaaa", Relation: kb.RelationFounds},
+		{Source: "wrk-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationFounds},
+	} {
+		if got := bearingOf(t, repo, edge); got != kb.PendingLiteral {
+			t.Errorf("the %s edge %s → %s bears %q, want the authored %s: no pass asks it",
+				edge.Relation, edge.Source, edge.Target, got, kb.PendingLiteral)
 		}
 	}
 	// The run's records stand beside each other: the run.yaml that names it, the
@@ -334,6 +344,9 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	if !strings.Contains(string(ledger), `"model":"scoring-model"`) || strings.Contains(string(ledger), "text-model") {
 		t.Errorf("the ledger's lines do not name the scoring model alone:\n%s", ledger)
 	}
+	if strings.Contains(string(ledger), kb.RelationFounds) {
+		t.Errorf("the ledger names a founds edge, which no pass asks:\n%s", ledger)
+	}
 
 	// A resume of a finished run asks nothing: the client errors on any call,
 	// and the run reports done with no call made.
@@ -348,8 +361,8 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	if again.doc.Outcome != "done" || again.doc.Values["run"] != run {
 		t.Fatalf("the resumed run: outcome %s, run %v\n%s", again.doc.Outcome, again.doc.Values["run"], again.stdout)
 	}
-	if counts, _ := again.doc.Values["counts"].(map[string]any); counts["done"] != 6 || counts["failed"] != 0 {
-		t.Errorf("the resumed run: counts %v, want the six items already done", counts)
+	if counts, _ := again.doc.Values["counts"].(map[string]any); counts["done"] != 4 || counts["failed"] != 0 {
+		t.Errorf("the resumed run: counts %v, want the four items already done", counts)
 	}
 	if scored := anyStrings(again.doc.Values["scored"]); len(scored) != 0 {
 		t.Errorf("the resumed run landed %q", scored)
@@ -420,9 +433,10 @@ func linePasses(t *testing.T, path string) []string {
 }
 
 // scoreFixturePasses is the pass every item of scoreFixture's two sets records,
-// in the walk's order: the four rigor items by id, then the six scoring edges.
+// in the walk's order: the four rigor items by id, then the four edges the
+// bearing pass asks.
 var scoreFixturePasses = []string{query.PassRigor, query.PassRigor, query.PassRigor, query.PassRigor,
-	query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing}
+	query.PassBearing, query.PassBearing, query.PassBearing, query.PassBearing}
 
 // TestScoreWalksBothPassesByDefault: a run naming no pass walks the node set and
 // then the edge set in one run — one run id, one run.yaml, one items.jsonl and
@@ -432,9 +446,9 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{}, func() model.Client {
 		// One reply per item, in the walk's order: the four rigor items by id,
-		// then the six scoring edges.
+		// then the edges the bearing pass asks.
 		return scoring("none", "flt-overreach: Theorem 1", "flt-underspecified: Every exchange clears", "none",
-			"flt-transfer: The First Result", "none", "none", "none", "none", "none")
+			"flt-transfer: The First Result", "none", "none", "none")
 	})
 	if got.doc.Outcome != "done" || got.dialled != 1 {
 		t.Fatalf("the run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
@@ -442,15 +456,24 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 	if got.doc.Values["pass"] != query.PassBoth {
 		t.Errorf("the document's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassBoth)
 	}
-	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 10 || counts["remaining"] != 0 {
-		t.Errorf("counts %v, want the ten items of both sets done\n%s", got.doc.Values["counts"], got.stdout)
+	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 8 || counts["done"] != 8 || counts["remaining"] != 0 {
+		t.Errorf("counts %v, want the eight items of both sets done\n%s", got.doc.Values["counts"], got.stdout)
 	}
 	want := []string{"ana-aaaaaa", "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa",
 		"supports clm-aaaaaa → clm-bbbbbb", "supports exp-aaaaaa → clm-bbbbbb",
-		"founds axm-S1 → ana-aaaaaa", "founds wrk-aaaaaa → clm-bbbbbb",
 		"lifts ana-aaaaaa → clm-bbbbbb", "refutes ana-aaaaaa → clm-aaaaaa"}
 	if scored := anyStrings(got.doc.Values["scored"]); !slices.Equal(scored, want) {
 		t.Errorf("scored %q, want the node set and then the edge set %q", scored, want)
+	}
+	// A founds edge is in neither set: the walk leaves its bearing as authored.
+	for _, edge := range []query.ScoringEdge{
+		{Source: "axm-S1", Target: "ana-aaaaaa", Relation: kb.RelationFounds},
+		{Source: "wrk-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationFounds},
+	} {
+		if got := bearingOf(t, repo, edge); got != kb.PendingLiteral {
+			t.Errorf("the %s edge %s → %s bears %q, want the authored %s: neither pass asks it",
+				edge.Relation, edge.Source, edge.Target, got, kb.PendingLiteral)
+		}
 	}
 	// One run lands both a node's value and an edge's.
 	if v := rigorOf(t, repo, "clm-aaaaaa"); v != 0.65 {
@@ -478,7 +501,7 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 		t.Errorf("item-list passes %q, want each item's own %q", passes, scoreFixturePasses)
 	}
 	// One item list for one run: a reader counts the whole of both sets from it.
-	if lines := jsonLines(t, filepath.Join(dir, "items.jsonl")); len(lines) != 10 {
+	if lines := jsonLines(t, filepath.Join(dir, "items.jsonl")); len(lines) != 8 {
 		t.Errorf("items.jsonl holds %d lines, want one per item of both sets", len(lines))
 	}
 	if _, resumes := got.doc.Values["resume"]; resumes {
@@ -494,7 +517,7 @@ func TestScoreDryRunListsBothSets(t *testing.T) {
 	if got.doc.Outcome != "done" || got.dialled != 0 {
 		t.Fatalf("the dry run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
 	}
-	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["remaining"] != 10 {
+	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 8 || counts["remaining"] != 8 {
 		t.Errorf("counts %v, want both sets listed and none asked\n%s", got.doc.Values["counts"], got.stdout)
 	}
 	dir, _ := got.doc.Values["ledger"].(string)
@@ -525,8 +548,8 @@ func TestScoreResumesAMixedRun(t *testing.T) {
 	if bounded.doc.Outcome != "bounded" {
 		t.Fatalf("the bounded run: outcome %s\n%s", bounded.doc.Outcome, bounded.stdout)
 	}
-	if counts, _ := bounded.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 5 || counts["remaining"] != 5 {
-		t.Errorf("counts %v, want five of the ten items done\n%s", bounded.doc.Values["counts"], bounded.stdout)
+	if counts, _ := bounded.doc.Values["counts"].(map[string]any); counts["total"] != 8 || counts["done"] != 5 || counts["remaining"] != 3 {
+		t.Errorf("counts %v, want five of the eight items done\n%s", bounded.doc.Values["counts"], bounded.stdout)
 	}
 	run, _ := bounded.doc.Values["run"].(string)
 	resume, _ := bounded.doc.Values["resume"].(string)
@@ -539,7 +562,7 @@ func TestScoreResumesAMixedRun(t *testing.T) {
 	if again.doc.Outcome != "done" || again.doc.Values["pass"] != query.PassBoth {
 		t.Fatalf("the resumed run: outcome %s, pass %v\n%s", again.doc.Outcome, again.doc.Values["pass"], again.stdout)
 	}
-	if counts, _ := again.doc.Values["counts"].(map[string]any); counts["total"] != 10 || counts["done"] != 10 || counts["remaining"] != 0 {
+	if counts, _ := again.doc.Values["counts"].(map[string]any); counts["total"] != 8 || counts["done"] != 8 || counts["remaining"] != 0 {
 		t.Errorf("the resumed run: counts %v, want the whole mixed set done\n%s", counts, again.stdout)
 	}
 	// The header gates the set: a resume naming one pass over a both-pass run is

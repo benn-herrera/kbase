@@ -225,6 +225,26 @@ func TestScoring(t *testing.T) {
 	}
 }
 
+// TestBearingWalk: the score run's bearing pass asks about three relations and
+// no more, a founds edge's bearing being the user's rather than a model's.
+func TestBearingWalk(t *testing.T) {
+	for _, tc := range []struct {
+		relation string
+		want     bool
+	}{
+		{RelationSupports, true},
+		{RelationFounds, false},
+		{RelationLifts, true},
+		{RelationRefutes, true},
+		{RelationReferences, false},
+		{RelationDemoted, false},
+	} {
+		if got := BearingWalk(tc.relation); got != tc.want {
+			t.Errorf("BearingWalk(%s) = %t, want %t", tc.relation, got, tc.want)
+		}
+	}
+}
+
 func TestFrontmatterListShapes(t *testing.T) {
 	for _, body := range []string{
 		"kind: leaf\nclaims: [clm-aaaaaa, clm-bbbbbb]",

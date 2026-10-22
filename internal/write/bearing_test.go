@@ -37,7 +37,8 @@ func premiseOf(t *testing.T, text, entryID, source string) (kb.Edge, bool) {
 
 // TestSetBearingOnEveryRelation lands a bearing on a claim premise, a founds
 // edge, a lift and a refutation, on an experiment's support and on a claim's
-// own refutation list, and reads each back as the same state.
+// own refutation list, and reads each back as the same state. The founds case is
+// the user's only path to that value: no score pass asks it.
 func TestSetBearingOnEveryRelation(t *testing.T) {
 	root := seedKB(t)
 	unrelated := insertClaim(t, root, "Unrelated Result", "")
