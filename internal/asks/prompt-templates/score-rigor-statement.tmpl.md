@@ -87,10 +87,8 @@ An id from the list above, a colon, a space, and a span copied out of the claim'
 
 @!score-answer-occurrences!@
 
-Copy the span exactly as the text writes it, out of the node's title or out of its statement: the
-span lies inside one passage and never crosses from the one to the other, and a span the text does
-not carry is refused. One character is enough, and a short span is the honest one — quote the
-smallest span that carries the fault. A statement fault's anchor is the passage that carries it: the
+The span comes out of the node's title or out of its statement, and lies inside one passage: it never
+crosses from the one to the other. A statement fault's anchor is the passage that carries it: the
 title phrase that outruns the statement, the term, the unfixed quantity, one of the incompatible
 statements. Where the fault is an absence — a parameter the statement never fixes — cite the phrase
 whose truth turns on it.

@@ -82,11 +82,14 @@ An id from the list above, a colon, a space, and a span copied out of one of the
 @!score-answer-occurrences!@
 
 The evidence for a bearing fault may lie at either end, so the span comes out of the source's title or
-statement or out of the target's, copied exactly as its text writes it and whole within one passage.
-Quote a span long enough to be found at one end only, where the words allow it: where the ends carry
-the same words and no longer span is unique to one, quote it as it stands. One character is enough, and
-a short span is the honest one — quote the smallest span that carries the fault. Where the fault is an
-absence, cite the span that carries the obligation: the part of the target the source does not reach.
-A span in the context is refused.
+statement or out of the target's, whole within one passage; a span in the context is refused. Quote a
+span long enough to be found at one end only, where the words allow it: where the ends carry the same
+words and no longer span is unique to one, quote it as it stands.
+
+Every charge cites, the one whose test is universal over the target included: `flt-no-engagement`
+quotes the target's own title, or the part of the target the source never reaches. Where the fault is
+an absence — the bridge `flt-transfer` finds missing, the condition `flt-conditional` does not state —
+cite the span that carries the obligation: the part of the target the missing piece would have to
+reach.
 
 @!score-answer-close!@

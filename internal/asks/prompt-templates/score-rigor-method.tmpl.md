@@ -78,11 +78,9 @@ An id from the list above, a colon, a space, and a span copied out of the node's
 
 @!score-answer-occurrences!@
 
-Copy the span exactly as the text writes it, out of the node's title or out of its statement: the
-span lies inside one passage and never crosses from the one to the other, and a span the text does
-not carry is refused. One character is enough, and a short span is the honest one — quote the
-smallest span that carries the fault. A method fault's anchor is the step, the value, the marker or
-the passage that carries the gap. Where the fault is an absence, cite the span that carries the
+The span comes out of the node's title or out of its statement, and lies inside one passage: it never
+crosses from the one to the other. A method fault's anchor is the step, the value, the marker or the
+passage that carries the gap. Where the fault is an absence, cite the span that carries the
 obligation: the title that asserts, the marker that claims the step, the value reported.
 
 @!score-answer-close!@
