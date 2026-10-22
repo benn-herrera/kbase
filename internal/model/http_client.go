@@ -320,6 +320,7 @@ type wireRequest struct {
 	Messages           []wireMessage      `json:"messages"`
 	Temperature        float64            `json:"temperature"`
 	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"`
+	Reasoning          *Reasoning         `json:"reasoning,omitempty"`
 	PromptCacheKey     string             `json:"prompt_cache_key,omitempty"`
 	Stream             bool               `json:"stream,omitempty"`
 	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
@@ -452,6 +453,7 @@ func encodeRequest(req Request, stream bool) ([]byte, error) {
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
 		Temperature:        req.Temperature,
 		ChatTemplateKwargs: req.ChatTemplateKwargs,
+		Reasoning:          req.Reasoning,
 		PromptCacheKey:     req.PromptCacheKey,
 		Stream:             stream,
 	}

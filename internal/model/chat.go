@@ -44,13 +44,19 @@ type ChatAttempt struct {
 	FinishReason  string
 	Usage         Usage
 	UsageReported bool
-	// Reasoned is whether the stream carried reasoning.
+	// Reasoned is whether the call reasoned, from either source the wire
+	// offers: a reasoning delta on the stream, or a usage block reporting
+	// reasoning tokens spent. The second catches a provider that thinks
+	// without streaming the thought — a call whose thinking is invisible in
+	// the deltas but measured in the tokens.
 	Reasoned bool
 	Duration time.Duration
 }
 
 // Chat puts prompt to modelID under system as one tool-less chat request —
-// temperature 0, thinking disabled, the usage chunk requested — re-issued
+// temperature 0, thinking disabled by the provider's own `reasoning` control
+// (with `chat_template_kwargs` sent beside it for servers that speak the
+// tokenizer extension), the usage chunk requested — re-issued
 // identically while it does not complete, up to ChatAttempts, pausing before
 // each re-issue for the next of backoff, its last repeating; with no backoff
 // it re-issues at once. A provider that answered with a status that is not
@@ -65,6 +71,7 @@ func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 		Messages:           []Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}},
 		Temperature:        0,
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+		Reasoning:          &Reasoning{Enabled: false},
 	}
 	var last ChatAttempt
 	for attempt := 1; attempt <= ChatAttempts; attempt++ {
@@ -139,6 +146,7 @@ func chatOnce(ctx context.Context, c Client, req Request) (ChatAttempt, error) {
 		a.Reasoned = a.Reasoned || chunk.Reasoning != ""
 	}
 	resp := sr.Final()
+	a.Reasoned = a.Reasoned || resp.Usage.ReasoningTokens > 0
 	a.Reply, a.FinishReason, a.Usage, a.UsageReported = resp.Content, resp.FinishReason, resp.Usage, resp.UsageReported
 	switch {
 	case a.Outcome != "":

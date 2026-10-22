@@ -86,17 +86,35 @@ type Request struct {
 	Temperature float64
 
 	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
-	// chat-template-level kwargs through to the underlying tokenizer.
-	// Most commonly used for thinking-mode toggles on locally served
-	// models. Encoded as `chat_template_kwargs` in the JSON wire format.
-	// Empty/nil → field omitted entirely.
+	// chat-template-level kwargs through to the underlying tokenizer. It is
+	// sent beside Reasoning, for servers that speak the tokenizer extension;
+	// a provider that ignores it is not a reason to shape a request
+	// differently, because Reasoning covers that case. Encoded as
+	// `chat_template_kwargs` in the JSON wire format. Empty/nil → field
+	// omitted entirely.
 	ChatTemplateKwargs map[string]any
+
+	// Reasoning is the provider's own reasoning control, encoded as the
+	// `reasoning` object. It is what disables thinking on a provider that
+	// ignores chat-template-level toggles — OpenRouter, for one — and a
+	// server that speaks only the tokenizer extension ignores it. Every chat
+	// request carries it; there is no per-provider selection. Nil → field
+	// omitted entirely.
+	Reasoning *Reasoning
 
 	// PromptCacheKey is sent as `prompt_cache_key`, and omitted entirely
 	// where empty. The client is what sets it, from the key it was built
 	// with: one client serves one run, and every ask that run makes carries
 	// the same key. A caller does not set it.
 	PromptCacheKey string
+}
+
+// Reasoning is the `reasoning` request object: the provider's own control
+// over thinking, as the OpenAI-compatible surfaces that support it take it.
+// Only the one switch kbase sets is represented — kbase always asks for
+// thinking off.
+type Reasoning struct {
+	Enabled bool `json:"enabled"`
 }
 
 // FinishLength is the finish_reason an OpenAI-compatible provider reports when

@@ -248,6 +248,7 @@ func TestChatRequestShape(t *testing.T) {
 		Messages    []map[string]any `json:"messages"`
 		Temperature *float64         `json:"temperature"`
 		Kwargs      map[string]any   `json:"chat_template_kwargs"`
+		Reasoning   map[string]any   `json:"reasoning"`
 		Stream      bool             `json:"stream"`
 		Options     map[string]any   `json:"stream_options"`
 		Tools       any              `json:"tools"`
@@ -262,11 +263,53 @@ func TestChatRequestShape(t *testing.T) {
 	if body.Temperature == nil || *body.Temperature != 0 || body.Kwargs["enable_thinking"] != false || len(body.Kwargs) != 1 {
 		t.Errorf("temperature %v, chat_template_kwargs %v", body.Temperature, body.Kwargs)
 	}
+	if len(body.Reasoning) != 1 || body.Reasoning["enabled"] != false {
+		t.Errorf("reasoning = %v, want the provider's control with enabled false", body.Reasoning)
+	}
 	if !body.Stream || body.Options["include_usage"] != true || body.Tools != nil {
 		t.Errorf("stream %t, stream_options %v, tools %v", body.Stream, body.Options, body.Tools)
 	}
 	if body.MaxTokens != nil {
 		t.Errorf("max_tokens %d sent; the request must carry none", *body.MaxTokens)
+	}
+}
+
+// TestChatRecordsReasoned: a call's attempt says it reasoned from either
+// source the wire offers — a reasoning delta on the stream, or a usage block
+// reporting reasoning tokens spent. The second is what makes a call that
+// thought silently visible: no delta carried the thought, and the token count
+// is the only trace of it. A call with neither source did not reason.
+func TestChatRecordsReasoned(t *testing.T) {
+	const answered = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+	usage := func(reasoningTokens int) string {
+		return fmt.Sprintf("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":900,\"total_tokens\":940,\"completion_tokens_details\":{\"reasoning_tokens\":%d}}}\n\n", reasoningTokens)
+	}
+	const (
+		thought = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"weighing it\"}}]}\n\n"
+		done    = "data: [DONE]\n\n"
+	)
+	for _, tc := range []struct {
+		name string
+		sse  string
+		want bool
+	}{
+		{"usage reports reasoning tokens, no delta", answered + usage(880) + done, true},
+		{"neither a delta nor reasoning tokens", answered + usage(0) + done, false},
+		{"a reasoning delta, usage reports none", thought + answered + usage(0) + done, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := sseServer(t, tc.sse)
+			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if n := len(seen()); n != 1 {
+				t.Fatalf("%d requests; want the one it took", n)
+			}
+			if got.Reasoned != tc.want {
+				t.Errorf("Reasoned = %t, want %t (usage %+v)", got.Reasoned, tc.want, got.Usage)
+			}
+		})
 	}
 }
 

@@ -391,7 +391,8 @@ func TestHTTPClientWiresTheChatShape(t *testing.T) {
 // chatRequest is the request Chat makes, with one user turn.
 func chatRequest(modelID string) Request {
 	return Request{Model: modelID, Messages: []Message{{Role: "user", Content: "hi"}},
-		ChatTemplateKwargs: map[string]any{"enable_thinking": false}}
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+		Reasoning:          &Reasoning{Enabled: false}}
 }
 
 // TestHTTPClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
@@ -413,6 +414,45 @@ func TestHTTPClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(rawBody), "chat_template_kwargs") {
 		t.Errorf("chat_template_kwargs should be omitted when empty; got body: %s", rawBody)
+	}
+}
+
+// TestEncodeRequestReasoning: the provider's own thinking control rides every
+// chat body in one spelling — `{"enabled":false}` — and the blocking and
+// streaming encodings carry it identically. A request carrying none omits the
+// field rather than sending a null or an empty object: the control is the
+// caller's, and a server that does not know the field must not be handed one.
+func TestEncodeRequestReasoning(t *testing.T) {
+	req := chatRequest("m")
+	const want = `{"enabled":false}`
+	var encoded []string
+	for _, stream := range []bool{false, true} {
+		body, err := encodeRequest(req, stream)
+		if err != nil {
+			t.Fatalf("encodeRequest(stream=%t): %v", stream, err)
+		}
+		var wire map[string]json.RawMessage
+		if err := json.Unmarshal(body, &wire); err != nil {
+			t.Fatalf("unmarshal %s: %v", body, err)
+		}
+		got, present := wire["reasoning"]
+		if !present || string(got) != want {
+			t.Errorf("stream=%t: reasoning = %s (present %t), want %s", stream, got, present, want)
+		}
+		encoded = append(encoded, string(got))
+	}
+	if encoded[0] != encoded[1] {
+		t.Errorf("reasoning differs between the blocking and streaming encodings: %q vs %q", encoded[0], encoded[1])
+	}
+
+	bare := req
+	bare.Reasoning = nil
+	body, err := encodeRequest(bare, false)
+	if err != nil {
+		t.Fatalf("encodeRequest with no reasoning: %v", err)
+	}
+	if strings.Contains(string(body), "reasoning") {
+		t.Errorf("reasoning should be omitted when unset; got body: %s", body)
 	}
 }
 

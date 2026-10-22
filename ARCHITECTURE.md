@@ -697,7 +697,10 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
   the environment by `KBASE_<ROLE>`; no role falls back to another.
 - Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
-  thinking disabled (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a
+  thinking disabled by the provider's own `reasoning: {enabled: false}` control, with
+  `chat_template_kwargs.enable_thinking: false` sent beside it for servers that speak the
+  tokenizer extension — one body for every provider, never one shaped by host or provider name,
+  since a provider that ignores one control reads the other — the usage chunk requested; a
   call that does not complete is re-issued identically up to the attempt count, pausing where its
   caller's backoff says (§12); a provider's non-2xx status ends it on the attempt that met it unless
   the status is a 429 or a 5xx (§12). A scoring run's clients are built with the run's id, which the
@@ -706,8 +709,10 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   the field is then omitted from the body rather than sent empty. Each
   attempt's outcome names what ended it — `ok`, `served-nothing`, `provider-refused` where the
   provider answered with a status that is not success, `transport-failure` where no answer of the
-  provider's was had — and the error a call returns carries the last attempt's outcome and its text,
-  which is what a failed item's reason records (SPEC §8).
+  provider's was had — and records whether the call reasoned, from a reasoning delta on the stream
+  or from a usage block reporting reasoning tokens spent, so a call that thought without streaming
+  the thought is recorded as having reasoned; the error a call returns carries the last attempt's
+  outcome and its text, which is what a failed item's reason records (SPEC §8).
   `model` makes it, with a system message. This holds for the overview call; the letter asks take
   the decision surface instead (next item). A build with a calling row left to walk checks a
   provider is configured before its first stage (SPEC §5).
