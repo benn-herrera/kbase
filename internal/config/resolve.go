@@ -216,18 +216,29 @@ func ModeOf(in Inputs) (Mode, error) {
 // model from its own variables, so a variable it lacks is refused whatever the
 // flag says.
 func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
+	return ResolveFlag(in, mode, role, flagModel, keyScoringModel)
+}
+
+// ResolveFlag is Resolve with the flag that supplies a role's model spelled by
+// the caller — flagModel is the flag's value and flagKey its name — so a verb
+// whose flag is not --scoring-model is pointed at its own: a value that is no
+// reference, and a provider the pool does not hold, name the flag they came
+// from.
+func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string) (Endpoint, error) {
 	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
 	}
-	return resolveFile(in, role, flagModel)
+	return resolveFile(in, role, flagModel, flagKey)
 }
 
 // configureRemedy is the command that rewrites a config.toml still naming a
 // bare model id into the reference form.
 const configureRemedy = "kbase configure --provider <entry> --model-map " + CategoryDecision + "=<entry>/<id>," + CategoryText + "=<entry>/<id>," + string(RoleScoring) + "=<entry>/<id>"
 
-// resolveFile is a role's endpoint from the pool entry its reference names.
-func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
+// resolveFile is a role's endpoint from the pool entry its reference names;
+// flagKey is the flag a refusal names where it was the flag that supplied the
+// value, so a verb whose flag is not --scoring-model is pointed at its own.
+func resolveFile(in Inputs, role Role, flagModel, flagKey string) (Endpoint, error) {
 	configured := role.model(in.Cfg.Models)
 	configFile := ConfigPath(in.WriteDir)
 	// The flag names the role's model where the files name none, and overrides
@@ -239,14 +250,14 @@ func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
 	if value == "" {
 		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
 			Detail: fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
-				configFile, role.key(), keyScoringModel)}
+				configFile, role.key(), flagKey)}
 	}
 	ref, err := FileReference(value)
 	if err != nil {
 		if rule == RuleFlag {
-			return Endpoint{}, Refusal{Check: CheckUsage, Key: keyScoringModel,
+			return Endpoint{}, Refusal{Check: CheckUsage, Key: flagKey,
 				Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
-					keyScoringModel, value, ProvidersFileName)}
+					flagKey, value, ProvidersFileName)}
 		}
 		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
 			Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
@@ -259,8 +270,8 @@ func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
 		// the pool's entries as the names that would work.
 		refusal := unresolvedProvider(ref.Provider, in)
 		if rule == RuleFlag {
-			refusal.Key = keyScoringModel
-			refusal.Detail = fmt.Sprintf("%s names a provider the pool does not hold: %s", keyScoringModel, refusal.Detail)
+			refusal.Key = flagKey
+			refusal.Detail = fmt.Sprintf("%s names a provider the pool does not hold: %s", flagKey, refusal.Detail)
 		} else {
 			refusal.Key = role.key()
 		}

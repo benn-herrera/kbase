@@ -51,6 +51,11 @@ type ChatAttempt struct {
 	// the deltas but measured in the tokens.
 	Reasoned bool
 	Duration time.Duration
+	// FirstToken is when the first non-empty content or reasoning delta
+	// arrived, measured from the request's start; zero where the stream
+	// carried neither — a failed call, an empty reply, an attempt that
+	// reached no stream at all.
+	FirstToken time.Duration
 }
 
 // Chat puts prompt to modelID under system as one tool-less chat request —
@@ -59,12 +64,14 @@ type ChatAttempt struct {
 // tokenizer extension), the usage chunk requested — re-issued
 // identically while it does not complete, up to ChatAttempts, pausing before
 // each re-issue for the next of backoff, its last repeating; with no backoff
-// it re-issues at once. A provider that answered with a status that is not
-// success is re-issued only where the status is retryable (retryableStatus):
-// any other is the request itself being wrong, and the call ends on the one
-// attempt that met it. observe, where set, is handed each attempt as it
-// ends. It returns the completed attempt, or the last one with an error
-// wrapping ErrChatIncomplete; a cancelled ctx returns its error at once.
+// it re-issues at once, and a pause the context's deadline cannot cover ends
+// the call at once with no further attempt. A provider that answered with a
+// status that is not success is re-issued only where the status is retryable
+// (retryableStatus): any other is the request itself being wrong, and the call
+// ends on the one attempt that met it. observe, where set, is handed each
+// attempt as it ends. It returns the completed attempt, or the last one with
+// an error wrapping ErrChatIncomplete; a cancelled ctx returns its error at
+// once.
 func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
 	req := Request{
 		Model:              modelID,
@@ -76,12 +83,20 @@ func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 	var last ChatAttempt
 	for attempt := 1; attempt <= ChatAttempts; attempt++ {
 		if attempt > 1 && len(backoff) > 0 {
-			pause := time.NewTimer(backoff[min(attempt-2, len(backoff)-1)])
+			pause := backoff[min(attempt-2, len(backoff)-1)]
+			// A pause the deadline cannot cover leaves no attempt to spend it
+			// on: the wait would end the call on the deadline rather than on
+			// its attempts, so the call gives up now and says how many it
+			// made. A context with no deadline never refuses a pause.
+			if deadline, ok := ctx.Deadline(); ok && pause >= time.Until(deadline) {
+				return last, gaveUp(attempt-1, last)
+			}
+			timer := time.NewTimer(pause)
 			select {
 			case <-ctx.Done():
-				pause.Stop()
+				timer.Stop()
 				return last, ctx.Err()
-			case <-pause.C:
+			case <-timer.C:
 			}
 		}
 		var failure error
@@ -144,6 +159,9 @@ func chatOnce(ctx context.Context, c Client, req Request) (ChatAttempt, error) {
 			break
 		}
 		a.Reasoned = a.Reasoned || chunk.Reasoning != ""
+		if a.FirstToken == 0 && (chunk.Content != "" || chunk.Reasoning != "") {
+			a.FirstToken = time.Since(started)
+		}
 	}
 	resp := sr.Final()
 	a.Reasoned = a.Reasoned || resp.Usage.ReasoningTokens > 0

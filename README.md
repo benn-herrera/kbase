@@ -315,7 +315,9 @@ or the values a resume re-priced, each refresh holding the KB write lock; a dry 
 supplies the role where `models.scoring` names none and overrides it where it does; a bare id under
 the environment's endpoint, where the role's variable must name one too. Every ask is one chat call
 on that endpoint, re-issued identically up to the transport attempt count while it does not complete,
-pausing 5 s then 30 s between attempts; a status that is not retryable — any non-2xx other than 429
+pausing 5 s then 30 s between attempts — as long as the item's deadline covers the pause: a pause it
+cannot cover is not waited out, and the item fails at once naming the attempts it made. A status that
+is not retryable — any non-2xx other than 429
 or a 5xx — fails the item at once. Every ask of a run carries the run's id as its
 `prompt_cache_key`, so a run's asks reach one provider and share one cache entry.
 A run asks a model for minutes: at a terminal `kbase score` blocks until the walk ends, and as an
@@ -518,6 +520,13 @@ inference variables this process sets; the mode;
 the selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
+
+`kbase probe [--model <provider>/<model>] [--prompt TEXT]` asks one model one question and reports
+what came back: the provider, the model, the time to the first token, the call's wall time, the
+finish reason, the reply, and the usage the provider reported. Without `--model` it asks the
+`scoring` role — the selection a run would make, in either mode — so `kbase probe` with no arguments
+is the heartbeat of a configuration; `--model` names a reference to reach instead, resolved against
+the same pool. It reads no KB and reads or writes no state directory: one ask, one result document.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`

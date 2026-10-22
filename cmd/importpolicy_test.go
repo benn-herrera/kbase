@@ -221,9 +221,9 @@ func TestDependencyRules(t *testing.T) {
 // level, the production files of cmd that may import it — the file-level
 // read of a rule whose package form exempts all of cmd.
 var cmdFileImporters = map[string][]string{
-	// the build verb, the provider dial the models and configure verbs share, and
-	// the score verb's ask
-	"internal/model": {"cmd/build.go", "cmd/provider.go", "cmd/score.go"},
+	// the build verb, the provider dial the models and configure verbs share, the
+	// score verb's ask, and the probe's one call
+	"internal/model": {"cmd/build.go", "cmd/provider.go", "cmd/score.go", "cmd/probe.go"},
 	// the init verb, the only cmd path that commits
 	"internal/ledger": {"cmd/init.go"},
 	// the init verb, the only cmd path that stamps readiness documents

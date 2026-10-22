@@ -373,9 +373,127 @@ func TestChatBacksOffBetweenReissues(t *testing.T) {
 	if took := time.Since(started); len(seen()) != ChatAttempts || took < time.Duration(ChatAttempts-1)*30*time.Millisecond {
 		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, ChatAttempts)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	// The pause fits the budget (there is none), so a cancel arriving during
+	// it is what ends the call.
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
 	defer cancel()
-	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat cancelled in its pause = %v", err)
+	}
+}
+
+// TestChatGivesUpWhereThePauseOutlivesTheDeadline: a pause the deadline cannot
+// cover is not taken. The attempt after it is impossible, and waiting it out
+// would spend the whole budget dying on the deadline instead of on the attempt
+// it made — the caller's real scoring backoff, 5 s then 30 s, inside a 2 s
+// deadline.
+func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	got, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{5 * time.Second, 30 * time.Second}, nil)
+	if !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("reason = %q, want the attempts it made rather than the deadline", err)
+	}
+	if !strings.Contains(err.Error(), "1 attempt") || !strings.Contains(err.Error(), ChatProviderRefused) {
+		t.Errorf("reason = %q, want the one attempt it made and how it ended", err)
+	}
+	if got.Attempt != 1 {
+		t.Errorf("attempt = %d, want the one it made", got.Attempt)
+	}
+	if n := requests(); n != 1 {
+		t.Errorf("%d requests, want the one attempt", n)
+	}
+	if took := time.Since(started); took >= 2*time.Second {
+		t.Errorf("gave up after %v, want well inside the 2s deadline", took)
+	}
+}
+
+// TestChatSpendsItsBudgetOnAttempts: a deadline the pauses fit is spent on
+// attempts, not on giving up early. A 30 s deadline with a short injected
+// backoff still puts the call on the wire ChatAttempts times.
+func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{time.Millisecond, time.Millisecond}, nil)
+	if !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Attempt != ChatAttempts {
+		t.Errorf("attempt = %d, want the last of %d", got.Attempt, ChatAttempts)
+	}
+	if n := requests(); n != ChatAttempts {
+		t.Errorf("%d requests, want %d", n, ChatAttempts)
+	}
+}
+
+// TestChatTakesAPauseTheDeadlineCovers: a deadline longer than the whole
+// sequence leaves it unaffected — every attempt is made and every pause is
+// waited out rather than cut short.
+func TestChatTakesAPauseTheDeadlineCovers(t *testing.T) {
+	const pause = 30 * time.Millisecond
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	started := time.Now()
+	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{pause}, nil); !errors.Is(err, ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	took := time.Since(started)
+	if n := requests(); n != ChatAttempts {
+		t.Errorf("%d requests, want %d", n, ChatAttempts)
+	}
+	if want := time.Duration(ChatAttempts-1) * pause; took < want || took >= time.Second {
+		t.Errorf("took %v, want the %d pauses it waited out inside the deadline", took, ChatAttempts-1)
+	}
+}
+
+// TestChatRecordsWhenTheFirstDeltaArrived: first-token time is the moment the
+// first non-empty content or reasoning delta arrived, and zero where the stream
+// carried neither — a reasoning delta counts, an empty one does not.
+func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
+	const (
+		thought = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"weighing it\"}}]}\n\n"
+		empty   = "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+		done    = "data: [DONE]\n\n"
+		usage   = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n"
+	)
+	for _, tc := range []struct {
+		name     string
+		sse      string
+		answered bool
+	}{
+		{"content", sseAnswered, true},
+		{"reasoning alone", thought + sseAnswered, true},
+		{"empty deltas only", empty + usage + done, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := sseServer(t, tc.sse)
+			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if !tc.answered {
+				if got.FirstToken != 0 {
+					t.Errorf("FirstToken = %v, want zero: the stream carried no delta", got.FirstToken)
+				}
+				return
+			}
+			if got.FirstToken <= 0 || got.FirstToken > got.Duration {
+				t.Errorf("FirstToken = %v over a call of %v, want a moment inside it", got.FirstToken, got.Duration)
+			}
+		})
 	}
 }

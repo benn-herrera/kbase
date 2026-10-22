@@ -32,6 +32,7 @@ var documentedKeys = map[string][]string{
 	"models":             {"provider", "provider-rule", "provider-layer", "models"},
 	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
 	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "diagnostics"},
+	"probe":              {"provider", "provider-rule", "provider-layer", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
 	"export-latex":       {"written", "volumes", "report"},
 	"score":              {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
 }
@@ -45,6 +46,7 @@ var documentedSubKeys = map[string][]string{
 	"resolve-demoted.resolved": {"source", "target", "action"},
 	"configure.models":         {"decision", "text", "scoring"},
 	"score.counts":             {"total", "done", "failed", "remaining"},
+	"probe.usage":              {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
 	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
 	"show-config.providers":    {"name", "base-url", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
 	"show-config.config":       {"models"},
@@ -161,7 +163,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		t.Fatalf("%s: keys %q, want outcome first", verb, keys)
 	}
 	keys = keys[1:]
-	if verb != "models" && verb != "configure" && verb != "show-config" && len(keys) > 0 && keys[0] == "kb-root" {
+	if verb != "models" && verb != "configure" && verb != "show-config" && verb != "probe" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 		// A migrated KB's record is conditional: present after kb-root and
 		// nowhere else, so a document carrying one is checked without it.

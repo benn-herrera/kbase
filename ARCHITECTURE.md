@@ -690,19 +690,32 @@ MCP server starts it as a detached child — as it starts `build` — returning 
 ## 7. Inference seams
 
 - Kept from kbase: provider management (`internal/config`) and the client (`internal/model`). The
-  call path is `model.Chat` for the overview call and for each scoring call, and `model.Decision`
+  call path is `model.Chat` for the overview call, for each scoring call and for `kbase probe`'s one
+  ask, and `model.Decision`
   for the letter asks; the decision role's model is an id on whichever surface its entry speaks
   (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter asks go to the `decision`
   role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
   names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
   the environment by `KBASE_<ROLE>`; no role falls back to another.
+- **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves the `scoring` role
+  through `config.ModeOf` and `config.ResolveFlag` — the flag `--model` supplying the model and naming
+  itself in a refusal, and an explicit reference resolved in file mode because a reference is a pool
+  reference — then opens the client through `cmd/provider.go`'s registry exactly as `score` does, so
+  it speaks whichever wire shape the entry names and a second wire shape lands without a second
+  client construction. One `model.Chat` call, no backoff, bounded by `--timeout`;
+  the attempt's `FirstToken` — request start to the first non-empty content or reasoning delta,
+  measured in `chatOnce`, zero where none arrived — is what the result reports beside the call's
+  wall time. It opens no `kb.Source`, resolves no state directory and takes no lock: the verb is
+  `probeEndpoint` → `clients.get` → `model.Chat` → the result document (SPEC §8).
 - Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
   thinking disabled by the provider's own `reasoning: {enabled: false}` control, with
   `chat_template_kwargs.enable_thinking: false` sent beside it for servers that speak the
   tokenizer extension — one body for every provider, never one shaped by host or provider name,
   since a provider that ignores one control reads the other — the usage chunk requested; a
   call that does not complete is re-issued identically up to the attempt count, pausing where its
-  caller's backoff says (§12); a provider's non-2xx status ends it on the attempt that met it unless
+  caller's backoff says (§12), and a pause the call's context cannot cover is not waited out — the
+  call gives up at once, its reason naming the attempts it made; a provider's non-2xx status ends it
+  on the attempt that met it unless
   the status is a 429 or a 5xx (§12). A scoring run's clients are built with the run's id, which the
   client stamps on every request it sends as `prompt_cache_key` — one key per run, so its asks reach
   one upstream and share one cache entry; a verb that names no run builds its clients with none, and
@@ -743,7 +756,9 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   value. `config.Resolve` answers one role's `Endpoint` in that mode; it reads no file, opens no
   connection, writes no stderr and names no verb — the
   key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
-  never by resolution. `config.Select` is the catalogue verbs' choice of
+  never by resolution. `config.ResolveFlag` is the same resolution with the flag that supplies a
+  role's model spelled by the caller, so `probe`'s `--model` is named in a refusal where
+  `--scoring-model` would be. `config.Select` is the catalogue verbs' choice of
   a pool entry to dial — a
   flag, else the pool's only entry — and no role is chosen that way. `config.Refusal` (with
   `Refusals` for a decision that has more than one side to state) is the one typed refusal, and its
@@ -1091,9 +1106,10 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   stays free of `kbload`.
 - `mcp` is imported by `cmd` alone and reaches no `model` or `asks/call` (I9); it imports `log`
   only.
-- Only `asks/call`, `build` and `cmd`'s `build`, `models`, `configure` and `score` verbs import
-  `model`: within `cmd`, file-level, `cmd/build.go`, the client registry the other three share,
-  `cmd/provider.go`, and the score verb's ask, `cmd/score.go`. `claimgraph` reaches neither `model`
+- Only `asks/call`, `build` and `cmd`'s `build`, `models`, `configure`, `score` and `probe` verbs
+  import `model`: within `cmd`, file-level, `cmd/build.go`, the client registry the others share,
+  `cmd/provider.go`, the score verb's ask, `cmd/score.go`, and the probe's one call,
+  `cmd/probe.go`. `claimgraph` reaches neither `model`
   nor `asks/call`, transitively. `cmd/provider.go` is the only constructor of a `model.Client`, and
   a verb opens one only where it is about to ask something.
 - `internal/config` imports no kbase package but `atomicfile`: it holds the grammar, the three
@@ -1128,7 +1144,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 |---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6) |
 | Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures, asserted by a test |
-| Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, and every transport failure and incomplete stream is re-issued; the build's letter asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts |
+| Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, and every transport failure and incomplete stream is re-issued; the build's letter asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts, and a pause the call's deadline cannot cover is not waited out — the call gives up at once, naming the attempts it made |
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
 | Model roles | `[models] decision` (the letter asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference; `KBASE_DECISION`/`KBASE_TEXT`/`KBASE_SCORING` name a bare id under the environment's endpoint instead (SPEC §9) |
