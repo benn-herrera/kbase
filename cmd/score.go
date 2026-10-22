@@ -20,7 +20,6 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/config"
-	"kbase/internal/filelock"
 	"kbase/internal/harness"
 	"kbase/internal/index"
 	"kbase/internal/kb"
@@ -101,9 +100,12 @@ func runScore(opts scoreOptions) (int, error) {
 
 // scoreRun is the verb's body: the KB, the run's ledger and the walk over the
 // scoring set. Its result document is written beside the ledger before the run
-// lets go of the runs directory, so a waiter reads the same document the verb
-// reported without racing the lock's release.
+// lets go of the store's holder lock, so a waiter reads the same document the
+// verb reported without racing the lock's release.
 func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
+	if opts.Logger == nil {
+		opts.Logger = log.Discard()
+	}
 	passes := []string{query.PassRigor, query.PassBearing}
 	switch {
 	case !slices.Contains(passes, opts.Pass):
@@ -211,24 +213,19 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 			return err == nil
 		})
 	}
-	// A run asks its questions over minutes, so a second run is turned away at
-	// once rather than held through a wait the first will outlast. The lock is
-	// the runs' own directory: it stands before any run does, and it names the
-	// place a reader inspecting the contention looks.
-	lock, err := filelock.Acquire(score.RunsDir(dir), 0)
-	if errors.Is(err, filelock.ErrHeld) {
-		return toolresult.Retry, append(fields, toolresult.Field{Key: toolresult.RefusalsKey, Value: []toolresult.Item{{
-			Check: checkLock, Path: score.RunsDir(dir), Remedy: "re-run kbase score when the run holding it has ended",
-			Detail: "another score run holds " + score.RunsDir(dir) + "; nothing was asked or written"}}})
+	// The run's locks, in the order a build takes them: the KB's operation
+	// lock, so a second run over the repository — a build or a scoring run — is
+	// turned away at once, then the state store's holder lock, whose record
+	// names this run for status and cancel.
+	release, err := build.Hold(root, dir, build.KindScore, run, time.Now())
+	if outcome, f, stop := refusalOrFailure(fields, err); stop {
+		return outcome, f
 	}
-	if err != nil {
-		return failed(fields, err)
-	}
-	defer lock.Release()
-	if err := writeScoreHolder(dir, run); err != nil {
-		return failed(fields, err)
-	}
-	defer removeScoreHolder(dir)
+	defer func() {
+		if err := release(); err != nil {
+			opts.Logger.Error("the run's locks were released and their files not removed", "error", err)
+		}
+	}()
 
 	// The run's start refresh: the set is enumerated from an index that is
 	// current, and on a KB in an older metadata format this is the write that
@@ -477,12 +474,13 @@ func scoreFailures(walked []query.Item, l *score.Ledger) []toolresult.Item {
 
 // scoreRefresh is the run's refresh over src, its outcome and fields where it
 // refuses or fails, and ok false where it wrote what it could. The refresh
-// writes the KB, so it holds the KB's write lock; a lock it cannot take is the
+// writes the KB, so it holds the KB's write lock; the run holds the operation
+// lock itself, so no run can be holding it out. A lock it cannot take is the
 // run's own answer, and the document's resume field carries the command that
 // continues the run. A machine with no Graphviz dot draws no sheet, and says
 // so.
 func scoreRefresh(root string, src *kb.Source, fields []toolresult.Field, opts scoreOptions) (outcome string, out []toolresult.Field, stop bool) {
-	release, outcome, items, err := holdKB(root, "re-run kbase score")
+	release, outcome, items, err := holdWriting(root, "re-run kbase score", false)
 	if err != nil {
 		outcome, out = failed(fields, err)
 		return outcome, out, true
@@ -575,7 +573,8 @@ func scoreStamp() string { return time.Now().UTC().Format(time.RFC3339) }
 // landScore lands one answer on one item through the write API — a node's rigor
 // through set-rigor, an edge's bearing through set-bearing — and lands nothing
 // else: the run refreshes once when its writes are in. The write holds the KB's
-// write lock, as every writer of the KB does, and a lock it cannot take is the
+// write lock, as every writer of the KB does; the run holds the operation lock
+// itself, so no run is holding it out. A lock the write cannot take is the
 // item's failure. A value the KB already holds is no failure; a refusal or a
 // failure is the item's, and the run goes on.
 func landScore(root string, it query.Item, value kb.Bearing, lg log.Logger) error {
@@ -594,7 +593,7 @@ func landScore(root string, it query.Item, value kb.Bearing, lg log.Logger) erro
 	if err != nil {
 		return err
 	}
-	release, outcome, items, err := holdKB(root, write.RetryRemedy(op))
+	release, outcome, items, err := holdWriting(root, write.RetryRemedy(op), false)
 	if err != nil {
 		return fmt.Errorf("the KB's write lock: %w", err)
 	}
@@ -633,15 +632,22 @@ func scoreValue(v kb.Bearing) any {
 }
 
 // refusalOrFailure is err as a verb's stop: a refusal's own items where err is
-// one, a failure otherwise. stop is false where err is nil.
+// one, a retry's where a live run holds what the verb needs, a failure
+// otherwise. stop is false where err is nil.
 func refusalOrFailure(fields []toolresult.Field, err error) (outcome string, out []toolresult.Field, stop bool) {
 	if err == nil {
 		return "", nil, false
 	}
-	var refusal toolresult.Refusal
-	if errors.As(err, &refusal) {
+	var (
+		refusal toolresult.Refusal
+		live    build.Retry
+	)
+	switch {
+	case errors.As(err, &refusal):
 		outcome, out = refused(fields, refusal...)
 		return outcome, out, true
+	case errors.As(err, &live):
+		return toolresult.Retry, append(fields, toolresult.Field{Key: toolresult.RefusalsKey, Value: []toolresult.Item(live)}), true
 	}
 	outcome, out = failed(fields, err)
 	return outcome, out, true
@@ -702,9 +708,10 @@ landed and re-asking the ones it did not; a fresh run asks everything again.
 --limit stops after that many items, and the result carries the command that
 continues the run.
 
-A run holds <state-dir>/score for its length, so a second run is turned away
-with retry. SIGINT or SIGTERM stops it at an item boundary. Its result is one
-YAML document on stdout.`,
+A run holds the repository's operation lock and <state-dir> for its length, so
+a second run over the KB — a build or a scoring run — is refused, naming the
+holder and its pid. SIGINT or SIGTERM stops it at an item boundary. Its result
+is one YAML document on stdout.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)

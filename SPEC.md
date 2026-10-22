@@ -292,22 +292,29 @@ kbase-owned paths to the last stage commit and re-runs the stage. **A build in f
 `kb-root/`:** a resume restores every path under it to the last boundary, whatever was done to it
 since, and nothing vets what it finds there. An edit made while a build is interrupted is the
 editor's to carry in git, by waiting for the build or by reverting the commit that reset it; a write
-op, `refresh` or `render-claim-graph` attempted while a build runs is refused (§8). Commits are
-scoped by pathspec to kbase-owned paths.
+op, `refresh` or `render-claim-graph` attempted while a build or a scoring run runs is refused (§8).
+Commits are scoped by pathspec to kbase-owned paths.
 
-**The state store holds what does not belong in the repository** — the pid and the holder lock
-`status` and `cancel` read, `progress.jsonl`, per-call evidence, the docgraph records (§5), a
+**The state store holds what does not belong in the repository** — the holder lock and the record
+the holder writes, which `status` and `cancel` read: the holder's pid, its start, the verb that owns
+the run (`build` or `score`) and, for a scoring run, its run id — `progress.jsonl`, per-call
+evidence, the docgraph records (§5), a
 per-unit answer cache keyed by input hash, and the captured output of a build the MCP server starts
 (§11). Nothing in it is authoritative for position. A clean exit removes the holder lock's file,
-cancel included, so a file standing in the store is never evidence of a live holder. The store
+cancel included, so a file standing in the store is never evidence of a live holder. The kind is
+required of the record: one naming neither verb is a store another version wrote, `refused` with
+`check: state-dir`, `path` the record, and never read as a build's. The store
 lives at `$XDG_STATE_HOME/kbase/<key>/`, where `<key>` is the first 16 hex digits of the SHA-256 of
 the absolute, symlink-resolved `kb-root/` path, overridable with `--state-dir`; it holds paid-for
-inference and survives `git clean`. **The run lock is in the repository's git directory**,
-`kbase-build.lock`, recording the state-dir: one build runs on a repository at a time, whatever
-`--state-dir` each names. A second build is `refused` with `check: lock`, `path` the running build's
-state-dir, and no remedy; where the run lock is held but names no state-dir yet (the build is
-starting), the second build gets `retry`. Every lock is advisory and exists on Unix only; on Windows
-`status` cannot see a running build and no lock-based refusal or `retry` is given.
+inference and survives `git clean`. **The operation lock is in the repository's git directory**,
+`kbase-operation.lock`, recording the state-dir: a repository carries one run at a time — a build or
+a scoring run, never both — whatever `--state-dir` each names. A second run is `refused` with `check: lock`,
+`path` the running run's state-dir, and no remedy, its `detail` naming the holder's verb and pid: "a
+build (pid 4321) is running; its state-dir is …", or "a score run (pid 4321) is running; …". Where
+the operation lock is held but names no state-dir yet, the second run gets `retry`; where it names
+one whose holder record is not yet written, the refusal says a run is starting. Every lock is
+advisory and exists on Unix only; on Windows `status` cannot see a running run and no lock-based
+refusal or `retry` is given.
 
 **The state store is versioned.** `<state-dir>/format` holds one integer, currently `1`, written
 when a build first holds the store; a store with no `format` file is version 1. `build`, `status`,
@@ -340,22 +347,25 @@ is the one state the build never writes: it is derived from a run event with no 
 holder that is not live.
 Progress is persisted to a file so a late or reconnecting monitor catches up.
 
-**A score run's status.** Where a score run holds the runs directory, `status` reports that run in
-its own shape instead of the build's: `state-dir`; `state` (`running` while it holds the directory,
-else the outcome its result document records — `done`, `bounded`, `cancelled`, `failed`, `refused`
+**A score run's status.** Where the store's holder record names a score run, `status` reports that run
+in its own shape instead of the build's: `state-dir`; `state` (`running` while the record holds the
+store, else `interrupted` where the run left no result document, or the outcome
+its result document records — `done`, `bounded`, `cancelled`, `failed`, `refused`
 or `retry`); `pid`;
 `started`; `run`; `pass`; `counts` (`total`, `done`, `failed`, `remaining`, read from the run's
 `items.jsonl` and the status `ledger.jsonl` last records for each); `scored` (the items whose value
 landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
 continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
-document: `wait` prints the result document the run wrote beside its ledger. A store no score run
-holds reports the build as above.
+document: `wait` prints the result document the run wrote beside its ledger. A store whose holder
+record names a build, or which stands with no record at all, reports the build as above.
 
 ### `kbase cancel`
 
-Signals the lock holder. The in-flight call is abandoned with nothing written for it; the event is
-logged, the lock is released, and the build process exits `cancelled`. Cancel costs only the
-in-flight unit; the build is resumable.
+Signals the store's holder, a build or a scoring run as the holder record names it. The in-flight
+call is abandoned with nothing written for it; the event is logged, the lock is released, and the run
+process exits `cancelled`. Cancel costs only the in-flight unit or item; the run is resumable, and a
+cancelled score run's `resume` is the command read from its result document. A store no run holds is
+`refused`: `check: lock`, `path` the store's holder lock, detail "no run holds the state store".
 
 ### `kbase wait`
 
@@ -477,7 +487,7 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 |---|---|---|
 | `done`, `unchanged`, `bounded` | 0 | Success, including a `--through`-bounded run |
 | `refused` (including verify faults and usage errors) | 1 | Wrong input or KB state; nothing written past the last checkpoint |
-| `retry` | 2 | Another writer holds the KB write lock past the wait (`check: lock`, `path` the repository root), or another build holds the state store (its holder lock, §6); re-issue identically later. A running build is not `retry`: it is `refused` with the `lock` item (§6) |
+| `retry` | 2 | Another writer holds the KB write lock past the wait (`check: lock`, `path` the repository root), or another run holds the state store (its holder lock, §6); re-issue identically later. A run holding the operation lock is not `retry`: it is `refused` with the `lock` item (§6) |
 | `failed` | 3 | Defect in the tool, its input or the environment; re-issuing will not fix it |
 | `cancelled` | 4 | Stopped on request; resumable |
 
@@ -509,12 +519,13 @@ holds it from before `kb-root/` exists — the lock sits on the directory `kb-ro
 is available at birth — through the skeleton, the trailing refresh and the birth commit to the
 result. `score` takes it around each landing and around each of its two refreshes, never across the
 run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
-repository root, and the remedy. A write verb probes for a running build (§6) before it waits on the
-write lock and again after taking it: where a build runs it is `refused` with the `lock` item at
-once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes
-(`retry` if it cannot); its own writes take no lock. `render-citation`, `verify` and the queries take
+repository root, and the remedy. A write verb probes for a run holding the operation lock (§6) before
+it waits on the write lock and again after taking it: where one runs it is `refused` with the `lock`
+item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it
+writes (`retry` if it cannot); its own writes take no lock, and neither do a scoring run's landings
+and refreshes, which write as the run that holds the operation lock. `render-citation`, `verify` and the queries take
 no lock. On Windows no
-advisory lock exists (§6): neither the `retry` nor the build-running refusal is available there, and
+advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and
 one writer at a time is the operator's to keep.
 
 **Batches** are all-or-nothing.
@@ -804,7 +815,7 @@ and a record like any other.
 `set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. Each op
 runs with `--no-refresh`, under the KB write lock taken and released for that one landing. A write
 refusal is that item's `failed`, and so is a landing that cannot take the lock: the item's line
-carries the lock item's `detail` — another writer held it past the wait, or a build is running — and
+carries the lock item's `detail` — another writer held it past the wait — and
 the run goes on.
 
 **The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
@@ -893,8 +904,12 @@ up. A re-derivation that moves nothing records nothing and lands nothing. A run 
 is a new run that asks everything: a value already in the KB is not evidence about the one this run
 would judge.
 
-**The run lock.** A run holds `<state-dir>/score` for its length and does not wait: a second run is
-`retry`, `check: lock`, `path` that directory.
+**The run's locks.** A scoring run takes the KB's operation lock and the state store's holder lock
+for its length, in the order a build takes them, before it writes anything and before its start
+refresh: a second run over the KB — a build or a scoring run — is `refused` at once, `check: lock`,
+`path` the holder's state-dir, its `detail` naming the holder's verb and pid (§6), never held through
+a wait the first run will outlast. Its holder record names `kind: score` and the run id, which is
+what `status`, `cancel` and `wait` read (§6).
 
 **Refresh and format.** Both refreshes hold the KB write lock for the refresh and release it before
 the run continues. One `refresh` opens a run, before the index is read, so the set comes from a
@@ -902,21 +917,20 @@ current index; on an older KB it is the natural write that converts and stamps t
 scoring run is the call that saves a conversion, and its document carries `migration`. One more
 `refresh` follows the last write — on completion, on `--limit` and on cancellation. A refresh that
 cannot take the lock ends the run there, with the lock's own outcome — `retry` where another writer
-held it past the wait, `refused` at once where a build is running — and the `lock` item, whose remedy
-is `re-run kbase score`. A crash after a write leaves a stale index, which `verify` reports and the
-next run's start refresh repairs.
+held it past the wait — and the `lock` item, whose remedy is `re-run kbase score`. A crash after a
+write leaves a stale index, which `verify` reports and the next run's start refresh repairs.
 
 **Outcomes.** `done` when the run finished; `bounded` when `--limit` stopped it, and a run that both
 stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or SIGTERM stopped it
 at an item boundary, with no line recorded for the item in flight and the ledger standing as it was;
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
-`<state-dir>/score`, or where a refresh could not take the KB write lock past the wait; `refused`
+the state store, or where a refresh could not take the KB write lock past the wait; `refused`
 where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
 inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
 a mode whose sources are mixed or whose environment is partial, a `--harness` naming a back end
 kbase does not ship, a model the back end cannot name, a command that cannot be started, an index the
-load cannot answer), a refresh that found
-a build running, or a KB that no longer opens when the end refresh re-reads it.
+load cannot answer), a run already holding the KB's operation lock (§6), or a KB that no longer opens
+when the end refresh re-reads it.
 
 **The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
 `check: error` item per item the ledger records `failed`, `detail` the item as the document names it

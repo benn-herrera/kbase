@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"kbase/internal/build"
 	"kbase/internal/config"
 	"kbase/internal/filelock"
 	"kbase/internal/index"
@@ -746,18 +749,64 @@ func TestScoreRefusals(t *testing.T) {
 	if err := os.MkdirAll(runs, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	held, err := filelock.Acquire(runs, 0)
+	// A build holds the KB: the operation lock and the store behind it. The run
+	// is refused at once, naming the holder's verb and its pid, before it asks
+	// anything.
+	buildState := t.TempDir()
+	release, err := build.Hold(filepath.Join(repo, kb.KBDir), buildState, build.KindBuild, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	got = scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, nil)
+	if got.doc.Outcome != "refused" || got.code != exitCodes["refused"] {
+		t.Fatalf("a run over a KB a build holds: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	items = got.doc.items("refusals")
+	want := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), buildState)
+	if len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != buildState || items[0]["detail"] != want {
+		t.Errorf("refusals %v, want one lock refusal naming %q\n%s", items, want, got.stdout)
+	}
+	if got.dialled != 0 {
+		t.Errorf("a refused run dialled %d clients", got.dialled)
+	}
+	if live, h, err := build.HolderOf(state); err != nil || live || h.Kind != "" {
+		t.Errorf("the refused run took the store: live %v, record %+v, %v", live, h, err)
+	}
+}
+
+// TestScoreRetriesWhileAnotherRunHoldsTheStore: a store another run holds is a
+// retry naming it — the run takes the operation lock first and lets it go on
+// the way out.
+func TestScoreRetriesWhileAnotherRunHoldsTheStore(t *testing.T) {
+	repo, state := scoreRepo(t), t.TempDir()
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	held, err := filelock.Acquire(build.HolderPath(state), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
-	got = scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, nil)
-	if got.doc.Outcome != "retry" || got.code != exitCodes["retry"] {
-		t.Fatalf("a run behind a held lock: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	record, err := json.Marshal(build.Holder{PID: 1 << 30, Started: "2026-01-01T00:00:00Z", Kind: build.KindBuild})
+	if err != nil {
+		t.Fatal(err)
 	}
-	items = got.doc.items("refusals")
-	if len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != runs {
-		t.Errorf("refusals %v, want one lock refusal naming %s\n%s", items, runs, got.stdout)
+	if err := held.Write(record); err != nil {
+		t.Fatal(err)
+	}
+
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, nil)
+	if got.doc.Outcome != "retry" || got.code != exitCodes["retry"] {
+		t.Fatalf("a run behind a held store: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	items := got.doc.items("refusals")
+	if len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != build.HolderPath(state) ||
+		items[0]["detail"] != "another build (pid 1073741824, started 2026-01-01T00:00:00Z) holds the state store" {
+		t.Errorf("refusals %v, want one lock retry naming the store's holder\n%s", items, got.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "kbase-operation.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the operation lock the retried run took stands: %v", err)
 	}
 }
 

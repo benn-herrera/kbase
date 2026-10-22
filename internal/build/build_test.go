@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -423,12 +424,18 @@ func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
 	}
 }
 
+// holderOf is the record a run of kind writes when it takes the store: this
+// process, at its start.
+func holderOf(kind Kind) Holder {
+	return Holder{PID: os.Getpid(), Started: stamp(time.Now()), Kind: kind}
+}
+
 func TestLockRefusesASecondBuilder(t *testing.T) {
 	f := newFixture(t)
 	if err := os.MkdirAll(f.state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	held, err := takeLock(f.state, time.Now())
+	held, err := takeLock(f.state, holderOf(KindBuild))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,19 +449,28 @@ func TestLockRefusesASecondBuilder(t *testing.T) {
 	}
 }
 
-func TestRunLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
+func TestOperationLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
 	f := newFixture(t)
 	other := filepath.Join(filepath.Dir(f.state), "other-state")
-	held, err := takeRunLock(filepath.Join(f.repo, kb.KBDir), other)
+	held, err := takeOperationLock(filepath.Join(f.repo, kb.KBDir), other)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := takeLock(other, holderOf(KindBuild))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Release()
 	outcome, fields := f.build(t, f.options())
 	items, _ := field(fields, "refusals").([]result.Item)
+	want := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), other)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkLock || items[0].Path != other ||
-		items[0].Remedy != "" || items[0].Detail != "a build is running; its state-dir is "+other {
-		t.Errorf("a second build through another state-dir = %s %v, want refused naming %s", outcome, fields, other)
+		items[0].Remedy != "" || items[0].Detail != want {
+		t.Errorf("a second build through another state-dir = %s %v, want refused naming %s", outcome, fields, want)
 	}
 	if events, _ := readProgress(f.state); len(events) != 0 {
 		t.Errorf("the refused build wrote %d progress events", len(events))
@@ -464,29 +480,57 @@ func TestRunLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
 	}
 }
 
-// TestRunLockHeldBeforeItsStateDirIsWritten: a run lock taken and not yet
-// holding its state directory is a build starting — a retry for a second
-// build, no refusal for a writer — never a refusal naming an empty path.
-func TestRunLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
+// TestOperationLockRefusesABuildNamingAScoreRun: the lock's holder is named
+// by the verb its record carries, so a build turned away by a scoring run is
+// told a score run holds the KB, and under which pid.
+func TestOperationLockRefusesABuildNamingAScoreRun(t *testing.T) {
+	const scorePID = 1<<30 + 7 // larger than any pid a running process holds
+	f := newFixture(t)
+	other := filepath.Join(filepath.Dir(f.state), "score-state")
+	held, err := takeOperationLock(filepath.Join(f.repo, kb.KBDir), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	record, err := json.Marshal(Holder{PID: scorePID, Started: stamp(time.Now()), Kind: KindScore, Run: "run-abcdefgh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, HolderPath(other), string(record))
+	outcome, fields := f.build(t, f.options())
+	items, _ := field(fields, "refusals").([]result.Item)
+	want := fmt.Sprintf("a score run (pid %d) is running; its state-dir is %s", scorePID, other)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkLock || items[0].Path != other || items[0].Detail != want {
+		t.Errorf("a build under a scoring run = %s %v, want refused naming %q", outcome, fields, want)
+	}
+}
+
+// TestOperationLockHeldBeforeItsStateDirIsWritten: an operation lock taken and
+// not yet holding its state directory is a run starting — a retry for a second
+// run, no refusal for a writer — never a refusal naming an empty path.
+func TestOperationLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
-	held, err := filelock.Acquire(runLockPath(kbRoot), 0)
+	held, err := filelock.Acquire(operationLockPath(kbRoot), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
-	var r retry
-	if l, err := takeRunLock(kbRoot, t.TempDir()); !errors.As(err, &r) {
+	var r Retry
+	if l, err := takeOperationLock(kbRoot, t.TempDir()); !errors.As(err, &r) {
 		if l != nil {
 			l.Release()
 		}
-		t.Errorf("a second build against a starting one: %v, want retry", err)
+		t.Errorf("a second run against a starting one: %v, want retry", err)
 	}
-	if items, err := RunningBuild(kbRoot); items != nil || err != nil {
-		t.Errorf("a writer against a starting build: %v, %v; want neither refusal nor error", items, err)
+	if items, err := RunningOperation(kbRoot); items != nil || err != nil {
+		t.Errorf("a writer against a starting run: %v, %v; want neither refusal nor error", items, err)
 	}
 }
 
@@ -521,14 +565,14 @@ func TestStatusSeesABuildWaitingOutAWriter(t *testing.T) {
 	}
 }
 
-func TestRunLockPathFollowsAGitFile(t *testing.T) {
+func TestOperationLockPathFollowsAGitFile(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "wt")
 	gitdir := filepath.Join(base, "main", ".git", "worktrees", "wt")
 	for _, tc := range []struct{ name, dotGit, want string }{
-		{"a .git directory", "", filepath.Join(repo, ".git", runLockFile)},
-		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, runLockFile)},
-		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, runLockFile)},
+		{"a .git directory", "", filepath.Join(repo, ".git", operationLockFile)},
+		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, operationLockFile)},
+		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, operationLockFile)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := os.RemoveAll(repo); err != nil {
@@ -541,8 +585,8 @@ func TestRunLockPathFollowsAGitFile(t *testing.T) {
 			} else {
 				writeFile(t, filepath.Join(repo, ".git"), tc.dotGit)
 			}
-			if got := runLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
-				t.Errorf("runLockPath = %s, want %s", got, tc.want)
+			if got := operationLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
+				t.Errorf("operationLockPath = %s, want %s", got, tc.want)
 			}
 		})
 	}
@@ -678,8 +722,8 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.state, lockFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the holder lock file stands after the cancel: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.repo, ".git", runLockFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the repository's run lock stands after the cancel: %v", err)
+	if _, err := os.Stat(filepath.Join(f.repo, ".git", operationLockFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the repository's operation lock stands after the cancel: %v", err)
 	}
 	if s := statusOf(t, f); s.state != stateCancelled || s.current != "claims-declared" || s.done != 0 || s.resume == "" {
 		t.Errorf("status after the cancel = %+v", s)
@@ -1127,7 +1171,7 @@ func TestStatusAtEveryState(t *testing.T) {
 	if err := os.MkdirAll(f.state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	held, err := takeLock(f.state, time.Now())
+	held, err := takeLock(f.state, holderOf(KindBuild))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1165,6 +1209,24 @@ func TestStatusAtEveryState(t *testing.T) {
 	}
 }
 
+// TestHolderRecordWithoutAKindIsRefused: the kind is what says which verb owns
+// the run, so a record naming none is a store another version left — refused,
+// never read as a build's.
+func TestHolderRecordWithoutAKindIsRefused(t *testing.T) {
+	f := newFixture(t)
+	record := `{"pid": 4000, "started": "2026-01-01T00:00:00Z"}`
+	writeFile(t, HolderPath(f.state), record)
+	outcome, fields := Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+	items, _ := field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkStateDir ||
+		items[0].Path != HolderPath(f.state) || !strings.Contains(items[0].Detail, `names kind ""`) {
+		t.Errorf("status over a holder record naming no verb = %s %v, want refused naming the record", outcome, fields)
+	}
+	if _, err := ReadState(f.state); err == nil {
+		t.Error("ReadState read a holder record naming no verb")
+	}
+}
+
 // TestStatusReportsAKilledBuild: a build killed inside a stage leaves the
 // state store's holder record naming a process that is gone and a progress
 // record that never ended. status reports interrupted, naming the stage, its
@@ -1182,7 +1244,7 @@ func TestStatusReportsAKilledBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	resume := []string{"kbase", "build", "/papers/paper.tex", "--state-dir", f.state}
-	b, err := json.Marshal(holder{PID: deadPID, Started: "2026-01-01T00:00:00Z"})
+	b, err := json.Marshal(Holder{PID: deadPID, Started: "2026-01-01T00:00:00Z", Kind: KindBuild})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1223,7 +1285,7 @@ func TestReadStateNamesTheRun(t *testing.T) {
 	if got, err := ReadState(state); err != nil || got != (State{State: stateNone}) {
 		t.Fatalf("a store never written: %+v, %v; want state none and no run", got, err)
 	}
-	held, err := takeLock(state, time.Now())
+	held, err := takeLock(state, holderOf(KindBuild))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1278,7 +1340,7 @@ func TestWaitState(t *testing.T) {
 	started := func(t *testing.T, pid int) (string, *filelock.Lock, *progress) {
 		t.Helper()
 		dir := t.TempDir()
-		held, err := takeLock(dir, time.Now())
+		held, err := takeLock(dir, holderOf(KindBuild))
 		if err != nil {
 			t.Fatal(err)
 		}

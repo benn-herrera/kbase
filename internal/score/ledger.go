@@ -54,7 +54,7 @@ const checkUsage = "usage"
 const checkError = "error"
 
 // RunsDir is where the runs of the state directory dir stand: score/, one
-// directory per run, and the run lock beside them.
+// directory per run.
 func RunsDir(dir string) string { return filepath.Join(dir, runsDir) }
 
 // RunHeader is what run.yaml records of a run: which run over which KB asks
@@ -482,8 +482,8 @@ func (l *Ledger) Close() error {
 }
 
 // readBack reads the lines a resume continues: the last status per item. The
-// caller holds the run lock, so nothing else appends while a torn tail is
-// dropped.
+// caller holds the operation lock and the store's holder lock, so no other run
+// appends while a torn tail is dropped.
 func (l *Ledger) readBack() error {
 	path := filepath.Join(l.dir, linesFile)
 	b, err := os.ReadFile(path)

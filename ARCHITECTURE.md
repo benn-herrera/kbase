@@ -61,7 +61,7 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 
 | Stage | Does |
 |---|---|
-| `start` | pandoc and git preflight; populated-`kb-root/` refusal; run lock |
+| `start` | pandoc and git preflight; populated-`kb-root/` refusal; operation lock |
 | `document-graph` | The tree from the volume roots |
 | `spine-seed` | Seeds `.index/` over that tree |
 | `claims-declared` | Claim-graph pass over author-declared claims |
@@ -634,18 +634,20 @@ digest, and is read as the one ask that run began under. `reprice` (below) is `R
 The state directory is `internal/statedir.Dir`'s — the override,
 else `$XDG_STATE_HOME/kbase/<key>`, and never inside `kb-root/` — extracted from
 `internal/build/store.go` so that a run and a build agree on what the state directory for a KB is;
-the build store's own format stamp stays in `internal/build` (§8). The run lock is
-`filelock.Acquire` on `<state-dir>/score` with no wait — the runs' directory stands before any run
-does — so a second run is `retry`, `check: lock`, `path` that directory.
+the build store's own format stamp stays in `internal/build` (§8). The run's locks are `build.Hold`'s
+(§8): the operation lock in the repository's git directory, then the state store's holder lock at
+`<state-dir>`, its record naming `kind: score` and the run id.
 
 **The one-op landing.** `landScore` calls `write.Run` with `set-rigor` for a node and `set-bearing`
 for an edge — values `id` and `rigor`, or `id` (the source), `target`, `relation` and `bearing` — and
-`NoRefresh: true`, under the KB write lock, which `holdKB` takes for the landing and releases before
-the next item. A `done` or `unchanged` write lands; a refusal or a failure is returned as the item's
-error and recorded `failed`, and so is a lock `holdKB` could not take — the item's line carries the
-detail of the item `holdKB` answered with (`retry` past the wait, `refused` at once while a build
-runs) and the run goes on. The verb refreshes once after the loop where anything landed, so a run's
-values are published by that one refresh and no refresh rewrites the KB per item.
+`NoRefresh: true`, under the KB write lock, which `holdWriting` takes for the landing and releases
+before the next item. A `done` or `unchanged` write lands; a refusal or a failure is returned as the
+item's error and recorded `failed`, and so is a lock `holdWriting` could not take — the item's line
+carries the detail of the item it answered with (`retry` past the wait) and the run goes on. The
+landing probes for no operation lock: it writes as the run holding that lock, so `holdWriting` is
+called with `probe` false and no run can be holding the KB out. The verb refreshes once after the
+loop where anything landed, so a run's values are published by that one refresh and no refresh
+rewrites the KB per item.
 
 **The re-price.** `Resume` takes the same `Write` seam a landing is opened with, and `reprice`
 re-derives every landed line's value from the ids its line records, under the table the line's own
@@ -664,15 +666,16 @@ the model never saw a weight.
 root; the state directory; the back end and the scoring role resolved before the KB is opened — the
 mode decided, or `--harness opencode`'s built-in back end gated by `opencode --version` and composed
 in `cmd/score_opencode.go` — so a
-setup refusal writes nothing and mints no run; `openKB` and the migration record; the run id; the run
-lock; one refresh through
-`holdKB`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
+setup refusal writes nothing and mints no run; `openKB` and the migration record; the run id; the
+run's locks through
+`build.Hold`, before any record of the run is written; one refresh through
+`holdWriting`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load` and
 the set; then either the dry run's records and an inert `Runner`, or the registry's client (none
 under a harness), the one `Ask` the back end needs and the walk; `counts` and `scored`; `resume`
 where any item is not `done`, ahead of the end refresh and of the record the outcome closes on; then,
 where anything landed or a resume re-priced, the KB re-read and the end refresh
-— either refresh ending the run where it cannot take the KB write lock, with `holdKB`'s own outcome
-and its `lock` item — and last, `failures` on `failed` (one `check: error` item per item the ledger
+— either refresh ending the run where it cannot take the KB write lock, with `holdWriting`'s own
+outcome and its `lock` item — and last, `failures` on `failed` (one `check: error` item per item the ledger
 records failed, detail its name and its line's reason, or one item naming the error a refresh stopped
 on) or `cancelled` on `cancelled` (the walk's first item with no attempt, `{}` where every one has
 one). The refresh cadence, the closing records and `resume`'s reach are SPEC §8's. Registration is
@@ -813,27 +816,36 @@ and `cmd`'s `init` verb import `ledger`.
   them absent regenerates them by re-running the document-graph stage into scratch and requires its
   tree byte-identical to the committed `kb-root/` (SPEC §5, determinism); a difference is `failed`,
   naming the first differing path.
-- **Two locks, both `internal/filelock` advisory locks.** The *run lock* is `<git
-  dir>/kbase-build.lock`, recording the state-dir; the build takes it after it opens and holds it
-  for the whole run, and removes it on release. Because it is per repository, a second build through
-  any `--state-dir` is `refused` (`check: lock`, `path` the state-dir, detail "a build is running;
-  its state-dir is …", no remedy). A write op, `refresh` or `render-claim-graph` that finds it held
-  is refused with the same item; a write verb probes for it before waiting on the write lock and
-  again after taking it. An empty lock file is the window between acquiring the lock and writing the
-  state-dir: it reads as "starting", so a second build gets `retry` and a writer proceeds. The
-  build's order is: the run lock; the state store's holder lock; its first progress event; and only
+- **Two locks, both `internal/filelock` advisory locks, and both a run's — a build's or a scoring
+  run's.** The *operation lock* is `<git dir>/kbase-operation.lock`, recording the state-dir; a run
+  takes it after it opens and holds it for the whole run, and removes it on release. Because it is
+  per repository, a second run through any `--state-dir` is `refused` (`check: lock`, `path` the
+  state-dir, no remedy) with a detail naming the holder — "a build (pid 1) is running; its state-dir
+  is …" or "a score run (pid 1) is running; …", both read from the store the lock names. A write op,
+  `refresh` or `render-claim-graph` that finds it held is refused with the same item; a write verb
+  probes for it before waiting on the write lock and again after taking it, and a scoring run's own
+  landings and refreshes probe for it not at all: they write as the run that holds it. An empty
+  lock file is the window between acquiring the lock and writing the state-dir: it reads as
+  "starting", so a second run gets `retry` and a writer proceeds. A state-dir written before its
+  store's holder record is the other window, and reads as "a run is starting". The build's order
+  is: the operation lock; the state store's holder lock; its first progress event; and only
   then the wait for a write in progress, by taking and releasing the KB write lock (§6; the same
   wait, `retry` if it cannot). `status` therefore sees a waiting build, and a build that gives up
-  waiting ends `retry`. The full order of a build is: refuse a newer store at open; the run lock;
+  waiting ends `retry`. The full order of a build is: refuse a newer store at open; the operation lock;
   the holder lock; ready the store (upgrade, stamp); the run event; prune captures; wait out
   writers. Its own writes and its seed and gate refreshes take no write lock, so it cannot refuse
-  itself. The *holder lock* is in the state store, carrying the holder's pid and start time;
-  `status` reads liveness from it and the progress record, and `cancel` signals its holder. A clean
-  exit removes the file, cancel included, so a standing lock file is not by itself evidence of a
-  live holder. A second builder on the same state-dir is `refused`; where only the holder lock is
-  held the result is `retry`. User-facing text calls it "holds the state store"; "run lock" names
-  only `<git dir>/kbase-build.lock`. On Windows, where no advisory lock exists, `status` cannot see
-  a running build.
+  itself. A scoring run takes the same two locks, in the same order, through `build.Hold`: the
+  operation lock first, then the holder lock, before it writes the first record of its run or its
+  start refresh. The *holder lock* is in the state store, its record carrying the holder's pid, its
+  start, the verb that owns the run (`Kind`) and, for a scoring run, the run id; `status` reads
+  liveness from it and the run it names, `wait` reads whether the run it waits for still holds it,
+  and `cancel` signals its holder. A clean exit removes the file, cancel included, so a standing lock
+  file is not by itself evidence of a live holder. A record naming no known `kind` is a store another
+  version wrote: `readHolder` refuses it (`check: state-dir`, `path` the record), and nothing reads
+  it as a build's. A second builder on the same state-dir is `refused`; where only the holder lock is
+  held the result is `retry`. User-facing text calls it "holds the state store"; "operation lock"
+  names only `<git dir>/kbase-operation.lock`. On Windows, where no advisory lock exists, `status`
+  cannot see a running run.
 - **State store version.** `<state-dir>/format` is one integer, `storeFormat` (§12), written when a
   build first holds the store; an absent file reads as 1. `build`, `status`, `wait`, `cancel` and the
   MCP build tool read it at open, and a store newer than `storeFormat` is refused (`check: state-dir`,
@@ -875,12 +887,16 @@ and `cmd`'s `init` verb import `ledger`.
   `claimgraph`'s to read and write, as YAML `kb-build-*.yaml`
   (SPEC §6, §10). `build` commits them.
 - **State store.** Contents and path are SPEC §6; the key form is §12; the layout is above.
-- **Status, progress, cancel, wait.** `status` reads the holder lock, `progress.jsonl` and the commit
-  trail and returns the YAML snapshot in SPEC §6. `cancel` signals the lock holder; the holder
-  abandons the in-flight call with nothing written for it, logs the event, releases the lock and
+- **Status, progress, cancel, wait.** `status` reads the holder lock and its record, `progress.jsonl`
+  and the commit trail and returns the YAML snapshot in SPEC §6; a record naming `score` is reported
+  in the score run's own shape (`cmd/score_status.go`), read from the run's ledger and result
+  document. `cancel` signals the holder the record names, a build's or a scoring run's; the holder
+  abandons the in-flight call with nothing written for it, logs the event, releases the locks and
   exits `cancelled`. `wait` polls `build.ReadState` — the store alone, as the watcher does — until
   the run it names is superseded or has ended, then renders `status`'s document through the same
-  `build.Status`: it takes no lock and reads no commit trail until that final document.
+  `build.Status`: it takes no lock and reads no commit trail until that final document. A score
+  run's pid is waited for through `score.RunByPID` and the store's holder record instead
+  (`cmd/score_status.go`), so `wait` returns the run's own result document.
 
 ## 9. Result emitter
 
@@ -963,7 +979,7 @@ internal/asks             embedded templates + fragments, composer, caller
                           templates' line form, and the test that asserts the ids
                           each names against `kb`'s pass set
 internal/ledger           git checkpoint seam (I1), by exec
-internal/filelock         the one advisory file lock (the KB write lock, the build's run
+internal/filelock         the one advisory file lock (the KB write lock, the operation
                           lock in the git directory, the state store's holder lock)
 internal/build            stage table, state store, resume, --no-inference,
                           --through, status/progress/cancel, and the store reading
@@ -1084,8 +1100,9 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   kbase.
 - Only `build` and `cmd`'s `init` verb stamp readiness documents: within `cmd`, file-level,
   `cmd/init.go` alone imports `kbdocs`.
-- `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the refusal
-  where the run lock is held; the held-around-the-run write lock is `write.LockKB`).
+- `build` imports `write` (the write-lock wait); `cmd` imports `build` and `filelock` (the write
+  lock's contention and the holder lock's release; the operation lock's refusal is `build`'s, and the
+  held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/ledger` execs git; only `internal/sheet`
   execs `dot`; only `cmd/mcp.go` (file-level) execs kbase itself; and only `internal/harness` execs a
   harness back end's program: the built-in opencode back end's `opencode`, or the command one run's
@@ -1123,7 +1140,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `storeFormat` in `internal/build`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
-| Run lock path | `<git dir>/kbase-build.lock` (SPEC §6, ARCHITECTURE §8) |
+| Operation lock path | `<git dir>/kbase-operation.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
 | Detached-score start wait | `build.StartWait` (40 s) again: how long the `score` tool waits for the child's ledger and pid to stand, or for the child to exit, before returning (SPEC §11) |
 | MCP build watcher interval | `buildWatchInterval` in `cmd/mcp.go`: 1 s, how often the watcher reads the state store while `kbase://build` is subscribed, after the reading the subscription itself makes (SPEC §11) |
@@ -1213,8 +1230,8 @@ resolved against the repository root, while the server's `--config-dir` and `--l
 relative to the server's working directory. Its stdout and stderr are files in the state store's
 `reports/`, `build-<UTC timestamp>-<random>.stdout.yaml` and `.stderr.log`; they are not cleaned up.
 The tool waits on the child's progress record and returns when the record shows a stage entered or
-the child exits, bounded by `build.StartWait` (40 s, §12; the child takes the run and holder locks
-and emits its first progress event before it waits out a write, §8):
+the child exits, bounded by `build.StartWait` (40 s, §12; the child takes the operation and holder
+locks and emits its first progress event before it waits out a write, §8):
 
 | Child, within `build.StartWait` | Result |
 |---|---|
@@ -1229,21 +1246,22 @@ The `score` tool re-executes the kbase binary as `kbase score …` by the same d
 runs from the repository root, in its own process group, with the server's environment,
 `--config-dir`, `--log-level` and `--log-file`, and its stdout and stderr are files in the state
 store's `reports/`, `score-<UTC timestamp>-<random>.stdout.yaml` and `.stderr.log`. It waits on the
-run's records and returns when the run's ledger and pid stand (the lock on `<state-dir>/score` taken,
-the run's directory written) or the child exits, bounded by `build.StartWait` (40 s):
+run's records and returns when the run's ledger and pid stand (the run's directory written, its pid
+file reading back) or the child exits, bounded by `build.StartWait` (40 s):
 
 | Child, within `build.StartWait` | Result |
 |---|---|
 | Ledger and pid stand | `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait` (`wait` the run's background command, `build.ShellJoin` of the executable with `wait --state-dir <store> --pid <pid>`) |
 | Exited first | The child's own document; `isError` from its outcome |
-| Neither | `failed`, an item naming the state directory and that the run is still starting |
+| Neither | `failed`, an item naming the state directory and that the run has neither opened its ledger nor exited |
 
-A score run's result document is written beside its ledger before the run lets go of the runs
-directory, so `wait` reads the same document the run reported rather than racing the lock's release.
+A score run's result document is written beside its ledger before the run lets go of the store's
+holder lock, so `wait` reads the same document the run reported rather than racing the lock's release.
 `wait` locates the run by the pid the launch named — `score.RunByPID` reads the run's `pid` file —
 and reports the run's outcome; a run whose process ended without writing a result reports the
-failure its ledger supports. `status` and `cancel` read the runs directory's holder record (the
-pid, the run and the start stamp), so a run in flight is visible under the pid the tool returned.
+failure its ledger supports. `status` and `cancel` read the state store's holder record (the
+pid, the run, the start stamp and the kind `score`), so a run in flight is visible under the pid the
+tool returned.
 
 `kbase://build` (SPEC §11) is the build's state as the `status` tool reports it, for the store the
 tool last launched: `cmd/mcp.go` records the store `build.Locate` resolved and the pid the launch

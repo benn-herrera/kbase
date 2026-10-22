@@ -36,8 +36,8 @@ const (
 	// regenerateDir, under scratch, is where a resume rebuilds the document
 	// graph to regenerate missing records; it is removed once read.
 	regenerateDir = "regenerate"
-	// lockWait bounds the wait for the run lock and the holder lock, so a
-	// monitor probing one does not turn a starting build away.
+	// lockWait bounds the wait for the operation lock and the holder lock, so
+	// a monitor probing one does not turn a starting run away.
 	lockWait = 2 * time.Second
 )
 
@@ -56,32 +56,86 @@ func writeReport(path string, report result.Record) error {
 	return atomicfile.Write(path, b.Bytes(), nil)
 }
 
-// holder is what the holder lock says about the build holding it.
-type holder struct {
+// Kind is the verb that owns a run: what the holder record names, and what
+// both runs' refusals call their holder.
+type Kind string
+
+const (
+	KindBuild Kind = "build"
+	KindScore Kind = "score"
+)
+
+// noun is the run as a refusal and a document name it: "a build", "a score
+// run".
+func (k Kind) noun() string {
+	if k == KindScore {
+		return "score run"
+	}
+	return "build"
+}
+
+// Holder is what the store's holder lock says about the run holding it: the
+// process, its start, the verb that owns it, and the id of the score run where
+// one holds it.
+type Holder struct {
 	PID     int    `json:"pid"`
 	Started string `json:"started"`
+	Kind    Kind   `json:"kind"`
+	Run     string `json:"run,omitempty"`
 }
 
-func readHolder(dir string) (holder, error) {
-	var h holder
-	b, err := os.ReadFile(filepath.Join(dir, lockFile))
-	if err != nil || len(b) == 0 {
-		return h, err
+// HolderPath is the state store's holder lock at dir.
+func HolderPath(dir string) string { return filepath.Join(dir, lockFile) }
+
+// readHolder is the holder record in the store at dir; the zero record where
+// none stands. The kind is required: it says which verb owns the run, and a
+// record without one this version writes is a store another version left,
+// refused rather than read as a build.
+func readHolder(dir string) (Holder, error) {
+	var h Holder
+	path := HolderPath(dir)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) || err == nil && len(b) == 0 {
+		return h, nil
 	}
-	return h, json.Unmarshal(b, &h)
+	if err != nil {
+		return Holder{}, err
+	}
+	if err := json.Unmarshal(b, &h); err != nil {
+		return Holder{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if h.Kind != KindBuild && h.Kind != KindScore {
+		return Holder{}, result.Refusal{{Check: checkStateDir, Path: path, Key: "--state-dir",
+			Remedy: "update kbase, or use another --state-dir",
+			Detail: fmt.Sprintf("the holder record names kind %q; this kbase writes %q or %q", h.Kind, KindBuild, KindScore)}}
+	}
+	return h, nil
 }
 
-// runLockFile is the run lock in the repository's git directory, so two
-// builds over one KB exclude each other whatever their state directories and
-// the working tree gains no file. It records the holder's state directory;
-// the state store's lock still carries the pid and start time status and
-// cancel read.
-const runLockFile = "kbase-build.lock"
+// HolderOf is the state store's holder lock at dir read: whether a run holds
+// it, and the record that run wrote — the zero record where no run is
+// recorded, and a record this version did not write refused.
+func HolderOf(dir string) (live bool, h Holder, err error) {
+	if h, err = readHolder(dir); err != nil {
+		return false, Holder{}, err
+	}
+	if live, err = filelock.Held(HolderPath(dir)); err != nil {
+		return false, Holder{}, err
+	}
+	return live, h, nil
+}
 
-// runLockPath is the run lock of the KB at kbRoot. A .git file is followed to
-// the worktree's own git directory, read rather than asked of git, since a
-// maintenance verb that checks the lock never requires git.
-func runLockPath(kbRoot string) string {
+// operationLockFile is the operation lock in the repository's git directory,
+// so a build and a scoring run over one KB exclude each other whatever their
+// state directories and the working tree gains no file. It records the
+// holder's state directory; the store's holder record carries the pid, the
+// start and the verb status and cancel read.
+const operationLockFile = "kbase-operation.lock"
+
+// operationLockPath is the operation lock of the KB at kbRoot. A .git file is
+// followed to the worktree's own git directory, read rather than asked of git,
+// since a maintenance verb that checks the lock never requires git.
+func operationLockPath(kbRoot string) string {
 	repo := filepath.Dir(kbRoot)
 	dir := filepath.Join(repo, ".git")
 	if text, err := os.ReadFile(dir); err == nil {
@@ -92,13 +146,13 @@ func runLockPath(kbRoot string) string {
 			}
 		}
 	}
-	return filepath.Join(dir, runLockFile)
+	return filepath.Join(dir, operationLockFile)
 }
 
-// takeRunLock is the repository's run lock, recording stateDir; a live
-// holder is refused, naming its state directory.
-func takeRunLock(kbRoot, stateDir string) (*filelock.Lock, error) {
-	path := runLockPath(kbRoot)
+// takeOperationLock is the repository's operation lock, recording stateDir; a
+// live holder is refused, naming the run and its state directory.
+func takeOperationLock(kbRoot, stateDir string) (*filelock.Lock, error) {
+	path := operationLockPath(kbRoot)
 	l, err := filelock.Acquire(path, lockWait)
 	if errors.Is(err, filelock.ErrHeld) {
 		items, err := runningRefusal(path)
@@ -106,7 +160,7 @@ func takeRunLock(kbRoot, stateDir string) (*filelock.Lock, error) {
 			return nil, err
 		}
 		if items == nil {
-			return nil, retry{{Check: checkLock, Path: path, Detail: "another build held the run lock through the wait and is starting or has just released it"}}
+			return nil, Retry{{Check: checkLock, Path: path, Detail: "another run held the operation lock through the wait and is starting or has just released it"}}
 		}
 		return nil, result.Refusal(items)
 	}
@@ -119,11 +173,28 @@ func takeRunLock(kbRoot, stateDir string) (*filelock.Lock, error) {
 	return l, nil
 }
 
-// RunningBuild is the refusal a verb that writes the KB at kbRoot meets
-// while a build holds the run lock — the build writes kb-root/ without the
-// write lock; nil where no build does.
-func RunningBuild(kbRoot string) ([]result.Item, error) {
-	path := runLockPath(kbRoot)
+// Hold takes the locks one run holds for its length: the KB's operation lock
+// at kbRoot, recording stateDir, then the state store's holder lock at
+// stateDir, recording the run — the score run named run, the build naming
+// none. A live holder of either is the run's refusal, in that order, as a
+// build's. What Hold returns releases both, the store's holder lock first.
+func Hold(kbRoot, stateDir string, kind Kind, run string, now time.Time) (func() error, error) {
+	op, err := takeOperationLock(kbRoot, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	l, err := takeLock(stateDir, Holder{PID: os.Getpid(), Started: stamp(now), Kind: kind, Run: run})
+	if err != nil {
+		return nil, errors.Join(err, op.ReleaseRemoving())
+	}
+	return func() error { return errors.Join(l.ReleaseRemoving(), op.ReleaseRemoving()) }, nil
+}
+
+// RunningOperation is the refusal a verb that writes the KB at kbRoot meets
+// while a run — a build or a score run — holds the operation lock: the run
+// writes kb-root/ without the write lock; nil where none does.
+func RunningOperation(kbRoot string) ([]result.Item, error) {
+	path := operationLockPath(kbRoot)
 	held, err := filelock.Held(path)
 	if err != nil || !held {
 		return nil, err
@@ -131,10 +202,12 @@ func RunningBuild(kbRoot string) ([]result.Item, error) {
 	return runningRefusal(path)
 }
 
-// runningRefusal is the refusal naming the run lock's holder; nil where the
-// holder has removed the lock on its way out, or has taken it and not yet
+// runningRefusal is the refusal naming the operation lock's holder; nil where
+// the holder has removed the lock on its way out, or has taken it and not yet
 // written its state directory. A holder that has not written it has not yet
-// waited out the KB's writers, so a writer may go ahead.
+// waited out the KB's writers, so a writer may go ahead. The holder's record
+// in that store says which verb holds the lock and which process; one taken
+// and not yet recorded is a run starting.
 func runningRefusal(path string) ([]result.Item, error) {
 	dir, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) || err == nil && len(dir) == 0 {
@@ -143,15 +216,23 @@ func runningRefusal(path string) ([]result.Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []result.Item{{Check: checkLock, Path: string(dir), Detail: "a build is running; its state-dir is " + string(dir)}}, nil
+	h, err := readHolder(string(dir))
+	if err != nil {
+		return nil, err
+	}
+	if h.PID == 0 {
+		return []result.Item{{Check: checkLock, Path: string(dir), Detail: "a run is starting; its state-dir is " + string(dir)}}, nil
+	}
+	return []result.Item{{Check: checkLock, Path: string(dir),
+		Detail: fmt.Sprintf("a %s (pid %d) is running; its state-dir is %s", h.Kind.noun(), h.PID, dir)}}, nil
 }
 
 // awaitWriters waits out a write op or refresh already holding the KB's
-// write lock; one that takes it later finds the run lock and refuses.
+// write lock; one that takes it later finds the operation lock and refuses.
 func awaitWriters(kbRoot string) error {
 	release, err := write.LockKB(kbRoot)
 	if errors.Is(err, filelock.ErrHeld) {
-		return retry{{Check: checkLock, Path: filepath.Dir(kbRoot), Detail: "a write op or refresh holds the KB's write lock"}}
+		return Retry{{Check: checkLock, Path: filepath.Dir(kbRoot), Detail: "a write op or refresh holds the KB's write lock"}}
 	}
 	if err != nil {
 		return err
@@ -160,21 +241,21 @@ func awaitWriters(kbRoot string) error {
 	return nil
 }
 
-// takeLock is the state store's lock, its holder record written; a live
-// holder is a retry naming it.
-func takeLock(dir string, now time.Time) (*filelock.Lock, error) {
-	l, err := filelock.Acquire(filepath.Join(dir, lockFile), lockWait)
+// takeLock is the state store's holder lock, its holder record written; a
+// live holder is a retry naming it.
+func takeLock(dir string, h Holder) (*filelock.Lock, error) {
+	l, err := filelock.Acquire(HolderPath(dir), lockWait)
 	if errors.Is(err, filelock.ErrHeld) {
-		who := "another build"
-		if h, err := readHolder(dir); err == nil && h.PID != 0 {
-			who = fmt.Sprintf("another build (pid %d, started %s)", h.PID, h.Started)
+		who := "another run"
+		if held, err := readHolder(dir); err == nil && held.PID != 0 {
+			who = fmt.Sprintf("another %s (pid %d, started %s)", held.Kind.noun(), held.PID, held.Started)
 		}
-		return nil, retry{{Check: checkLock, Path: filepath.Join(dir, lockFile), Detail: who + " holds the state store"}}
+		return nil, Retry{{Check: checkLock, Path: HolderPath(dir), Detail: who + " holds the state store"}}
 	}
 	if err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(holder{PID: os.Getpid(), Started: stamp(now)})
+	b, err := json.Marshal(h)
 	if err == nil {
 		err = l.Write(b)
 	}

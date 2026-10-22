@@ -694,7 +694,7 @@ func startDetachedScore(verb string, positionals []positional, args map[string]a
 		case <-deadline.C:
 			return toolresult.Emit(out, toolresult.Failed, append(placement, toolresult.Field{Key: toolresult.FailuresKey,
 				Value: []toolresult.Item{{Check: checkError, Path: stateDir,
-					Detail: fmt.Sprintf("the score run (pid %d) is still starting: it has neither taken the runs directory nor exited within %v; follow it with status", pid, build.StartWait)}}})...)
+					Detail: fmt.Sprintf("the score run (pid %d) is still starting: it has neither opened its ledger nor exited within %v; follow it with status", pid, build.StartWait)}}})...)
 		case <-poll.C:
 			run, err := score.RunByPID(stateDir, pid)
 			if err != nil {

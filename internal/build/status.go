@@ -113,8 +113,8 @@ func Ended(state string) bool {
 	return false
 }
 
-// storeReading is what the state store at dir records of the build: whether a
-// build holds it, the run the build stands at, the holder's record, and every
+// storeReading is what the state store at dir records of the run: whether one
+// holds it, the run the store stands at, the holder's record, and every
 // invocation the progress record holds. status's state and the MCP watcher's
 // both derive from it; the commit trail, which costs a git log against the
 // repository the build commits to, is status's alone.
@@ -122,7 +122,7 @@ type storeReading struct {
 	live   bool
 	last   invocation
 	all    []invocation
-	holder holder
+	holder Holder
 }
 
 // readStore is the state store at dir read: its progress record, its holder
@@ -132,7 +132,7 @@ func readStore(dir string) (storeReading, error) {
 	if err != nil {
 		return storeReading{}, err
 	}
-	live, err := filelock.Held(filepath.Join(dir, lockFile))
+	live, h, err := HolderOf(dir)
 	if err != nil {
 		return storeReading{}, err
 	}
@@ -145,10 +145,6 @@ func readStore(dir string) (storeReading, error) {
 			last = all[i]
 			break
 		}
-	}
-	h, err := readHolder(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return storeReading{}, err
 	}
 	return storeReading{live: live, last: last, all: all, holder: h}, nil
 }
@@ -175,7 +171,7 @@ func (r storeReading) state() string {
 	return stateNone
 }
 
-// pid is the run's process: the holder's while a build holds the store, else
+// pid is the run's process: the holder's while a run holds the store, else
 // the run's own; zero where the store records no run.
 func (r storeReading) pid() int {
 	if r.live {
@@ -399,15 +395,15 @@ func Launched(dir string, pid int) (entered bool, resume string, err error) {
 
 // StartWait bounds how long the starter of a build in its own process waits
 // for it to enter its first stage or exit: past the build's own waits for
-// the run lock, the holder lock and a writer in progress, and its launch
+// the operation lock, the holder lock and a writer in progress, and its launch
 // checks.
 const StartWait = write.LockWait + 2*lockWait + 6*time.Second
 
 // cancelWait bounds how long cancel waits for the holder to let the lock go.
 const cancelWait = 20 * time.Second
 
-// Cancel signals the build holding the state store and waits for it to stop:
-// the unit in flight is abandoned with nothing written for it, and the build
+// Cancel signals the run holding the state store and waits for it to stop:
+// the unit in flight is abandoned with nothing written for it, and the run
 // stays resumable.
 func Cancel(opts MonitorOptions) (string, []result.Field) {
 	_, kbRoot, dir, err := opts.open()
@@ -415,17 +411,20 @@ func Cancel(opts MonitorOptions) (string, []result.Field) {
 		return monitorEnd(nil, err)
 	}
 	fields := []result.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
-	lock := filepath.Join(dir, lockFile)
+	lock := HolderPath(dir)
 	live, err := filelock.Held(lock)
 	if err != nil {
 		return monitorEnd(fields, err)
 	}
 	if !live {
-		return monitorEnd(fields, result.Refusal{{Check: checkLock, Path: lock, Detail: "no build holds the state store"}})
+		return monitorEnd(fields, result.Refusal{{Check: checkLock, Path: lock, Detail: "no run holds the state store"}})
 	}
 	h, err := readHolder(dir)
 	if err != nil {
 		return monitorEnd(fields, err)
+	}
+	if h.PID == 0 {
+		return monitorEnd(fields, Retry{{Check: checkLock, Path: lock, Detail: "a run holds the state store and has not written its record yet"}})
 	}
 	fields = append(fields, result.Field{Key: "pid", Value: h.PID})
 	p, err := os.FindProcess(h.PID)
@@ -444,7 +443,7 @@ func Cancel(opts MonitorOptions) (string, []result.Field) {
 		return monitorEnd(fields, err)
 	}
 	if live {
-		return monitorEnd(fields, retry{{Check: checkLock, Path: lock,
+		return monitorEnd(fields, Retry{{Check: checkLock, Path: lock,
 			Detail: fmt.Sprintf("pid %d was signalled and has not let go of the state store within %v", h.PID, cancelWait)}})
 	}
 	resume, err := lastResume(dir)

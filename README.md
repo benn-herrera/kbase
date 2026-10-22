@@ -230,8 +230,9 @@ prunes `reports/build-*` and `scratch/captures/` older than the fifth-latest end
 the answer cache. `status` reports `cache-entries` and `cache-bytes`. Deleting the store is safe but
 forfeits the cache.
 
-The run lock is not in the store: it is `kbase-build.lock` in the repository's git directory, so one
-build runs per repository whatever `--state-dir` each names.
+The operation lock is not in the store: it is `kbase-operation.lock` in the repository's git
+directory, so one run — a build or a scoring run, never both — runs per repository whatever
+`--state-dir` each names.
 
 The build records are tracked at the repository root, as YAML: `kb-build-node-pass.yaml`,
 `kb-build-unmarked.yaml`, `kb-build-classification.yaml` and `kb-build-cull.yaml`.

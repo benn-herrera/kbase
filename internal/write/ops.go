@@ -190,7 +190,7 @@ type readbackFailed struct {
 func (e *readbackFailed) Error() string { return e.subject }
 
 // Run executes one op over the values in opts. It takes no lock: a caller
-// other than the build, which holds the run lock, holds LockKB across it.
+// other than the build, which holds the operation lock, holds LockKB across it.
 func Run(op string, opts Options) Result {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()

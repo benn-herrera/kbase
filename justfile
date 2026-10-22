@@ -1122,7 +1122,7 @@ _test-integration-monitor-arxiv: build
     check stage-unrecorded "$([[ -n "${stage}" && -z "$(git -C "${repo}" log --format=%s --grep="^kb-build: ${stage} ")" ]] && echo 0 || echo 1)" \
         "the stage in flight, ${stage:-none}, has no boundary commit" "${repo}/.git"
     capture "${out}/cancel-again" "${kbase}" cancel --state-dir "${state}"
-    check lock-released "$([[ "$(cat "${out}/cancel-again.exit")" -eq 1 ]] && grep -q 'no build holds the state store' "${out}/cancel-again.out" && echo 0 || echo 1)" \
+    check lock-released "$([[ "$(cat "${out}/cancel-again.exit")" -eq 1 ]] && grep -q 'no run holds the state store' "${out}/cancel-again.out" && echo 0 || echo 1)" \
         "a second cancel exit $(cat "${out}/cancel-again.exit"), finding no holder" "${out}/cancel-again.out"
     keys "${out}/cancel-again" cancel refused
     check lock-absent "$([[ ! -e "${state}/lock" ]] && echo 0 || echo 1)" \

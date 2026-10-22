@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"kbase/internal/build"
 	"kbase/internal/config"
@@ -154,6 +156,112 @@ func TestMCPScoreWaitReportsFailures(t *testing.T) {
 		!strings.HasPrefix(items[0]["detail"].(string), "clm-aaaaaa: ") ||
 		!strings.Contains(items[0]["detail"].(string), "the stub refuses") {
 		t.Errorf("failures %v, want the item's name and the reason its line recorded\n%s", items, out)
+	}
+}
+
+// TestBuildRefusedWhileAScoreRunHoldsTheLock: a scoring run holds the KB's
+// operation lock while it walks, so a build over the same repository is
+// refused at once, naming the score run and its pid.
+func TestBuildRefusedWhileAScoreRunHoldsTheLock(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(scoreRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, repo)
+	state := filepath.Join(base, "state")
+	scoreToolHarness(t, base, "slow")
+	srv := scoreToolServer(t, repo, base)
+
+	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
+
+	out, code := kbase(t, repo, "build", "paper.tex", "--no-inference", "--state-dir", filepath.Join(base, "build-state"))
+	doc := parseResult(t, out)
+	items := doc.items(toolresult.RefusalsKey)
+	want := fmt.Sprintf("a score run (pid %d) is running; its state-dir is %s", pid, state)
+	if doc.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] || len(items) != 1 ||
+		items[0]["check"] != checkLock || items[0]["path"] != state || items[0]["detail"] != want {
+		t.Errorf("a build under a score run: outcome %s, exit %d, refusals %v; want one lock refusal %q\n%s",
+			doc.Outcome, code, items, want, out)
+	}
+	if _, err := os.Stat(filepath.Join(base, "build-state", "progress.jsonl")); err == nil {
+		t.Error("the refused build wrote a progress record")
+	}
+}
+
+// TestStatusReportsAKilledScoreRun: a score run killed in flight leaves the
+// store's holder record naming it, and status reports it interrupted under its
+// own run id and counts rather than falling back to the build.
+func TestStatusReportsAKilledScoreRun(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(scoreRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, repo)
+	state := filepath.Join(base, "state")
+	scoreToolHarness(t, base, "slow")
+	srv := scoreToolServer(t, repo, base)
+
+	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor", "harness": "opencode"})
+	// The set the run enumerated stands beside the ledger, written after the pid
+	// the launch waits on; a killed run's status counts what it left.
+	set := filepath.Join(ledger, "items.jsonl")
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(set); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the run wrote no items.jsonl")
+		}
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	// The record stands until a clean exit removes it, so a killed run's is
+	// read: the pid is gone and the lock is no longer held.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		live, h, err := build.HolderOf(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !live && h.PID == pid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the killed run's record: live %v, %+v", live, h)
+		}
+	}
+	status, isError := callTool(t, srv, "status", map[string]any{"state-dir": state})
+	if isError || status["state"] != "interrupted" || status["run"] != run || status["pid"] != float64(pid) {
+		t.Fatalf("status of a killed score run = %v, want interrupted, run %s, pid %d", status, run, pid)
+	}
+	if counts, _ := status["counts"].(map[string]any); counts["total"] != float64(1) || counts["done"] != float64(0) {
+		t.Errorf("counts %v, want the run's one item unlanded", status["counts"])
+	}
+	if _, err := os.Stat(filepath.Join(ledger, "run.yaml")); err != nil {
+		t.Errorf("the killed run left no run.yaml: %v", err)
+	}
+	// The record names a run that is gone, so nothing holds the store: cancel
+	// finds no holder to signal.
+	cancel, _ := callTool(t, srv, "cancel", map[string]any{"state-dir": state})
+	items, _ := cancel[toolresult.RefusalsKey].([]any)
+	if cancel["outcome"] != toolresult.Refused || len(items) != 1 {
+		t.Fatalf("cancel of a killed score run = %v, want one refusal", cancel)
+	}
+	if item, _ := items[0].(map[string]any); item["check"] != checkLock || item["detail"] != "no run holds the state store" {
+		t.Errorf("cancel's refusal = %v, want the lock check naming no holder", items[0])
 	}
 }
 

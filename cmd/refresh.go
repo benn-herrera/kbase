@@ -55,13 +55,38 @@ func kbRootFrom(dir string) (string, []toolresult.Item, error) {
 }
 
 // holdKB takes the write lock of the KB at root for a verb that writes it,
-// refusing while a build runs: at once, and again once the lock is taken, for
-// a build that started during the wait. Where release is nil, outcome and
-// items are the verb's answer.
+// refusing while a run — a build or a scoring run — holds the operation lock:
+// at once, and again once the lock is taken, for a run that started during the
+// wait. Where release is nil, outcome and items are the verb's answer.
 func holdKB(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
-	if running, err := build.RunningBuild(root); err != nil || running != nil {
-		return nil, toolresult.Refused, running, err
+	return holdWriting(root, remedy, true)
+}
+
+// holdWriting is holdKB for a verb that writes the KB at root. probe is
+// whether to refuse while a run holds the operation lock: a scoring run's own
+// landing and refresh clear it, the run that holds that lock being the writer.
+func holdWriting(root, remedy string, probe bool) (release func(), outcome string, items []toolresult.Item, err error) {
+	if probe {
+		if running, err := build.RunningOperation(root); err != nil || running != nil {
+			return nil, toolresult.Refused, running, err
+		}
 	}
+	release, outcome, items, err = holdWrite(root, remedy)
+	if release == nil || err != nil {
+		return release, outcome, items, err
+	}
+	if probe {
+		if running, err := build.RunningOperation(root); err != nil || running != nil {
+			release()
+			return nil, toolresult.Refused, running, err
+		}
+	}
+	return release, "", nil, nil
+}
+
+// holdWrite takes the KB write lock at root, waiting out a writer in progress;
+// where release is nil, outcome and items are the verb's answer.
+func holdWrite(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
 	release, err = write.LockKB(root)
 	if errors.Is(err, filelock.ErrHeld) {
 		return nil, toolresult.Retry, []toolresult.Item{{Check: checkLock, Path: filepath.Dir(root), Remedy: remedy,
@@ -69,11 +94,6 @@ func holdKB(root, remedy string) (release func(), outcome string, items []toolre
 	}
 	if err != nil {
 		return nil, "", nil, err
-	}
-	running, err := build.RunningBuild(root)
-	if err != nil || running != nil {
-		release()
-		return nil, toolresult.Refused, running, err
 	}
 	return release, "", nil, nil
 }

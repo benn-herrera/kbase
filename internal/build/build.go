@@ -237,10 +237,11 @@ type walk struct {
 	roles []result.Record
 }
 
-// retry is a live holder of what the build needs.
-type retry []result.Item
+// Retry is a live holder of what the run needs: the next invocation may find
+// it gone, and is told to re-issue.
+type Retry []result.Item
 
-func (r retry) Error() string { return result.Items(r).Error() }
+func (r Retry) Error() string { return result.Items(r).Error() }
 
 // failure is a row whose own checks found its products disagreeing, or a
 // product a later step found wrong, every finding named. A row that leaves it
@@ -271,7 +272,7 @@ type ending struct {
 func ended(success string, err error) ending {
 	var (
 		r result.Refusal
-		t retry
+		t Retry
 		f failure
 		c cancelled
 	)
@@ -330,22 +331,15 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if err := w.open(); err != nil {
 		return w.result(ended("", err))
 	}
-	runLock, err := takeRunLock(w.kbRoot, w.stateDir)
+	// The run's locks, in the order every run takes them: the KB's operation
+	// lock, then the state store's holder lock, whose record names this run.
+	release, err := Hold(w.kbRoot, w.stateDir, KindBuild, "", opts.now())
 	if err != nil {
 		return w.result(ended("", err))
 	}
 	defer func() {
-		if err := runLock.ReleaseRemoving(); err != nil {
-			opts.Logger.Error("the run lock was released and its file not removed", "error", err)
-		}
-	}()
-	lock, err := takeLock(w.stateDir, opts.now())
-	if err != nil {
-		return w.result(ended("", err))
-	}
-	defer func() {
-		if err := lock.ReleaseRemoving(); err != nil {
-			opts.Logger.Error("the state store's holder lock was released and its file not removed", "error", err)
+		if err := release(); err != nil {
+			opts.Logger.Error("the run's locks were released and their files not removed", "error", err)
 		}
 	}()
 	if err := readyStore(w.stateDir); err != nil {

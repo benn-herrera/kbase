@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/build"
 	"kbase/internal/filelock"
 	"kbase/internal/log"
 	"kbase/internal/write"
@@ -128,7 +130,10 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := filepath.Join(t.TempDir(), "state")
-	held, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-build.lock"), 0)
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	held, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-operation.lock"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +141,18 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	if err := held.Write([]byte(state)); err != nil {
 		t.Fatal(err)
 	}
+	record, err := json.Marshal(build.Holder{PID: os.Getpid(), Started: time.Now().UTC().Format(time.RFC3339), Kind: build.KindBuild})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(build.HolderPath(state), record, 0o666); err != nil {
+		t.Fatal(err)
+	}
 
 	insert, insertErr := insertClaim(repo, "Blocked")
 	refreshed, refreshErr := runQuiet(runRefresh, repo)
 	rendered, renderErr := runQuiet(runRenderClaimGraph, repo)
+	detail := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), state)
 	for _, c := range []struct {
 		verb, out string
 		err       error
@@ -150,7 +163,7 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		d := checkDocument(t, c.verb, c.out)
 		items := d.items("refusals")
 		if d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != state ||
-			items[0]["detail"] != "a build is running; its state-dir is "+state || items[0]["remedy"] != nil {
+			items[0]["detail"] != detail || items[0]["remedy"] != nil {
 			t.Errorf("%s under a running build:\n%s", c.verb, c.out)
 		}
 	}
@@ -165,12 +178,12 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	}
 }
 
-// TestWriterRefusedAtOnceWhileABuildWaitsOutAnother: with a build holding the
-// run lock and another writer holding the write lock, a writer is refused
-// without waiting for the write lock.
+// TestWriterRefusedAtOnceWhileABuildWaitsOutAnother: with a run holding the
+// operation lock and another writer holding the write lock, a writer is
+// refused without waiting for the write lock.
 func TestWriterRefusedAtOnceWhileABuildWaitsOutAnother(t *testing.T) {
 	repo := lockedRepo(t)
-	run, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-build.lock"), 0)
+	run, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-operation.lock"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
