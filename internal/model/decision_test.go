@@ -120,7 +120,7 @@ func TestDecisionSurfacePath(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := NewHTTPClient(Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: testAPIKey, Decisions: tc.decisions})
+			c := NewOpenAIClient(Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: testAPIKey, Decisions: tc.decisions})
 			if _, err := c.Decision(context.Background(), decisionRequest()); err != nil {
 				t.Fatalf("Decision: %v", err)
 			}
@@ -133,7 +133,7 @@ func TestDecisionSurfacePath(t *testing.T) {
 
 func TestSystemOnePayloadShape(t *testing.T) {
 	s := newDecisionServer(t, `{"model":"clef","answers":{},"usage":{}}`)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	if _, err := c.Decision(context.Background(), decisionRequest()); err != nil {
 		t.Fatalf("Decision: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSystemOneAnswerDecoding(t *testing.T) {
 		"usage": {"input_tokens": 100, "output_tokens": 5}
 	}`
 	s := newDecisionServer(t, body)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	req := DecisionRequest{
 		Model: "clef",
 		State: "the composed state",
@@ -240,7 +240,7 @@ func TestSystemOneAnswerDecoding(t *testing.T) {
 
 func TestSystemOneRetryTransportErrorThenSuccess(t *testing.T) {
 	s := newDecisionServer(t, decisionNilBody, `{"model":"clef","answers":{"q1":{"type":"choice","choice":"A"}},"usage":{"input_tokens":1,"output_tokens":1}}`)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	resp, err := c.Decision(context.Background(), decisionRequest())
 	if err != nil {
 		t.Fatalf("Decision: %v", err)
@@ -255,7 +255,7 @@ func TestSystemOneRetryTransportErrorThenSuccess(t *testing.T) {
 
 func TestSystemOneRetry500ThenSuccess(t *testing.T) {
 	s := newDecisionServer(t, decisionStatus(500), `{"model":"clef","answers":{},"usage":{"input_tokens":7,"output_tokens":2}}`)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	resp, err := c.Decision(context.Background(), decisionRequest())
 	if err != nil {
 		t.Fatalf("Decision: %v", err)
@@ -270,7 +270,7 @@ func TestSystemOneRetry500ThenSuccess(t *testing.T) {
 
 func TestSystemOne4xxNoRetry(t *testing.T) {
 	s := newDecisionServer(t, decisionStatus(400))
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	_, err := c.Decision(context.Background(), decisionRequest())
 	if err == nil {
 		t.Fatal("expected error from 400, got nil")
@@ -289,7 +289,7 @@ func TestSystemOne4xxNoRetry(t *testing.T) {
 
 func TestSystemOneAttemptsExhausted(t *testing.T) {
 	s := newDecisionServer(t, decisionNilBody, decisionNilBody, decisionNilBody)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	_, err := c.Decision(context.Background(), decisionRequest())
 	if err == nil {
 		t.Fatal("expected error after exhausted attempts, got nil")
@@ -315,7 +315,7 @@ func TestSystemOneContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-time.After(50 * time.Millisecond); cancel() }()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.Decision(ctx, decisionRequest())
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
@@ -370,7 +370,7 @@ func TestSystemOneUnaskedKeyRefused(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newDecisionServer(t, `{"model":"clef","answers":`+tc.answers+`,"usage":{"input_tokens":1,"output_tokens":1}}`)
-			c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+			c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 			_, err := c.Decision(context.Background(), decisionRequest())
 			if err == nil {
 				t.Fatal("expected error for the unasked key, got nil")
@@ -393,7 +393,7 @@ func TestSystemOneUnaskedKeyRefused(t *testing.T) {
 // transport returns what arrived, whatever keys went unanswered.
 func TestSystemOneMissingAnswerTolerated(t *testing.T) {
 	s := newDecisionServer(t, `{"model":"clef","answers":{"q2":{"type":"noul","noul":0.9}},"usage":{}}`)
-	c := NewHTTPClient(newTestEndpoint(s.srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(s.srv.URL))
 	req := DecisionRequest{
 		Model: "clef",
 		State: "state",
@@ -452,7 +452,7 @@ func TestDecisionsRequestShape(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newDecisionServer(t, `{"model":"clef","answers":[]}`)
-			c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+			c := NewOpenAIClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
 			req := DecisionRequest{Model: "clef", State: "the composed state", Questions: []DecisionQuestion{tc.question}}
 			if _, err := c.Decision(context.Background(), req); err != nil {
 				t.Fatalf("Decision: %v", err)
@@ -526,7 +526,7 @@ func TestDecisionsAnswerDecoding(t *testing.T) {
 		"usage": {"input_tokens": 100, "output_tokens": 5}
 	}`
 	s := newDecisionServer(t, body)
-	c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	c := NewOpenAIClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
 	req := DecisionRequest{Model: "clef", State: "the composed state", Questions: []DecisionQuestion{
 		{Key: "q1", Type: "noul"}, {Key: "q2", Type: "choice"}, {Key: "q3", Type: "choice"}, {Key: "q4", Type: "score"},
 	}}
@@ -563,7 +563,7 @@ func TestDecisionsAnswerDecoding(t *testing.T) {
 // not ask is refused on this surface too, by the name it echoes back.
 func TestDecisionsUnaskedNameRefused(t *testing.T) {
 	s := newDecisionServer(t, `{"model":"clef","answers":[{"type":"predicate","name":"sneaky","probability":0.5}]}`)
-	c := NewHTTPClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	c := NewOpenAIClient(Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
 	_, err := c.Decision(context.Background(), decisionRequest())
 	if err == nil {
 		t.Fatal("expected error for the unasked name, got nil")

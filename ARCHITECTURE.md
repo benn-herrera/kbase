@@ -719,7 +719,7 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   `probeEndpoint` → `clients.get` → `model.Chat` → the result document (SPEC §8).
 - Every model call is one tool-less chat request answered from its prompt alone. `internal/model`
   holds two implementations of that request, and the endpoint entry's `api` selects which one the
-  registry builds: `model.HTTPClient` (`http_client.go`) speaks the OpenAI-compatible
+  registry builds: `model.OpenAIClient` (`openai_client.go`) speaks the OpenAI-compatible
   `chat/completions` surface and is what an entry silent on `api` gets, and `model.AnthropicClient`
   (`anthropic_client.go`) speaks the Anthropic Messages surface — `POST <baseUrl>/messages`, with
   its own event sequence, its `x-api-key`/`anthropic-version` headers and its catalogue shape.

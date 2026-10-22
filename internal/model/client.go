@@ -1,7 +1,7 @@
 // Package model is the LLM client surface.
 //
-// Three implementations satisfy the same Client interface: HTTPClient
-// (http_client.go), targeting any OpenAI-compatible chat-completions endpoint;
+// Three implementations satisfy the same Client interface: OpenAIClient
+// (openai_client.go), targeting any OpenAI-compatible chat-completions endpoint;
 // AnthropicClient (anthropic_client.go), targeting the Anthropic Messages
 // protocol; and MockClient (mockllm.go), the test substrate. NewClient is what
 // picks between the two wire implementations, from the protocol the caller
@@ -34,6 +34,20 @@ type Client interface {
 	ConsultStream(ctx context.Context, req Request) (StreamReader, error)
 	Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
 	ListModels(ctx context.Context) ([]ModelInfo, error)
+}
+
+// NewClient constructs the chat client the endpoint's protocol names: the
+// OpenAI-compatible surface by default, and the Anthropic Messages surface
+// where the caller resolved that. This is the one place the protocol value
+// selects an implementation; each constructor it names always builds the
+// protocol it is named for. The protocol value is the caller's — the
+// configuration owns the vocabulary that names it — so nothing here reads a
+// configuration string.
+func NewClient(e Endpoint) Client {
+	if e.Protocol == ProtocolAnthropic {
+		return NewAnthropicClient(e)
+	}
+	return NewOpenAIClient(e)
 }
 
 // ConsultDrained performs a consult with blocking semantics over the

@@ -48,7 +48,7 @@ const maxTokensFloor = 256
 
 // AnthropicClient is a thin client for the Anthropic Messages protocol.
 //
-// Construction is intentionally cheap, as HTTPClient's is: the underlying
+// Construction is intentionally cheap, as OpenAIClient's is: the underlying
 // http.Client is reused across calls so connection pooling works.
 type AnthropicClient struct {
 	endpoint Endpoint
@@ -63,7 +63,7 @@ func NewAnthropicClient(e Endpoint) *AnthropicClient {
 	return &AnthropicClient{endpoint: e, http: newHTTPTransport()}
 }
 
-// Close releases the client's idle connections, as HTTPClient.Close does.
+// Close releases the client's idle connections, as OpenAIClient.Close does.
 func (c *AnthropicClient) Close() error {
 	return closeIdleConnections(c.http)
 }
@@ -194,7 +194,7 @@ func (c *AnthropicClient) Decision(ctx context.Context, req DecisionRequest) (De
 }
 
 // do builds a request to <BaseURL>/<path>, sets the protocol's headers and
-// performs it. It is the Messages counterpart of HTTPClient.doRequest: the
+// performs it. It is the Messages counterpart of OpenAIClient.doRequest: the
 // authentication header is the one thing the two surfaces do not share — this
 // one takes the key in `x-api-key` and names its protocol version — while the
 // status handling below it is the same code, so a non-2xx is the same
@@ -536,7 +536,7 @@ func (r *anthropicStreamReader) Next() (Chunk, error) {
 
 // Final returns the accumulated Response after iteration; Reasoning is
 // delivered per-Chunk only, as on the OpenAI surface (see
-// httpStreamReader.Final).
+// openaiStreamReader.Final).
 func (r *anthropicStreamReader) Final() Response {
 	return Response{
 		Content:       r.content.String(),

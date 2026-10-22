@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// userAgent is the User-Agent header value sent with every request.
-const userAgent = "kbase/0.1"
-
 // The OpenAI-compatible wire surface: the two paths that hang off
 // Endpoint.BaseURL, and the media types the three calls negotiate with.
 const (
@@ -23,21 +20,6 @@ const (
 	mimeJSON            = "application/json"
 	mimeEventStream     = "text/event-stream"
 )
-
-// responseHeaderTimeout bounds the HANDSHAKE alone: request written →
-// response headers received. It lives on the Transport, not on
-// http.Client.Timeout, because the latter also covers reading the body and
-// so would cap a streamed generation at a wall clock the generation has no
-// reason to respect. A server that withholds its headers until the first
-// token pays prefill time against this bound, hence the generous value; the
-// gap between chunks is bounded separately (streamIdleTimeout).
-const responseHeaderTimeout = 2 * time.Minute
-
-// errorBodyLimit caps how much of a non-2xx body is echoed into the
-// returned error. A provider that answers with an HTML error page — or a
-// runaway one — must not turn a single failed request into a megabyte of
-// error string.
-const errorBodyLimit = 8 << 10
 
 // Protocol names the chat wire protocol a client speaks. The caller resolves
 // the configured `api` value to one of these: this package knows the wire
@@ -97,11 +79,11 @@ type Endpoint struct {
 	PromptCacheKey string
 }
 
-// HTTPClient is a thin OpenAI-compatible chat-completions client.
+// OpenAIClient is a thin OpenAI-compatible chat-completions client.
 //
 // Construction is intentionally cheap: the underlying http.Client is
 // reused across calls so connection pooling works.
-type HTTPClient struct {
+type OpenAIClient struct {
 	endpoint Endpoint
 	http     *http.Client
 	// promptCacheKey is the key every request this client sends carries,
@@ -113,60 +95,23 @@ type HTTPClient struct {
 // The constructor returns the concrete type (nil-interface traps stay out
 // of the wiring), so the interface it is meant to satisfy is asserted here
 // rather than discovered by a caller.
-var _ Client = (*HTTPClient)(nil)
+var _ Client = (*OpenAIClient)(nil)
 
-// NewHTTPClient constructs an HTTPClient for the given endpoint, always
+// NewOpenAIClient constructs an OpenAIClient for the given endpoint, always
 // speaking the OpenAI surface whatever protocol the endpoint names: tests
 // construct the two wire clients directly, and NewClient is what dispatches. A
 // zero Endpoint yields a client whose first call produces a clear error.
-func NewHTTPClient(e Endpoint) *HTTPClient {
-	return &HTTPClient{
+func NewOpenAIClient(e Endpoint) *OpenAIClient {
+	return &OpenAIClient{
 		endpoint:       e,
 		http:           newHTTPTransport(),
 		promptCacheKey: e.PromptCacheKey,
 	}
 }
 
-// NewClient constructs the chat client the endpoint's protocol names: the
-// OpenAI-compatible surface by default, and the Anthropic Messages surface
-// where the caller resolved that. The protocol value is the caller's — the
-// configuration owns the vocabulary that names it — so nothing here reads a
-// configuration string.
-func NewClient(e Endpoint) Client {
-	if e.Protocol == ProtocolAnthropic {
-		return NewAnthropicClient(e)
-	}
-	return NewHTTPClient(e)
-}
-
-// newHTTPTransport is the transport both wire clients carry: the process's
-// default transport cloned, with a handshake bound.
-//
-// The shared http.Client carries NO Timeout, deliberately: that field is a
-// total round-trip bound including the body read, which would kill exactly
-// the long streamed generations this package exists to carry. Bounds are
-// placed where they mean something instead — a call-site context deadline
-// for a blocking Consult, responseHeaderTimeout for the handshake, and
-// streamIdleTimeout for the gap between chunks of a stream.
-func newHTTPTransport() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.ResponseHeaderTimeout = responseHeaderTimeout
-	return &http.Client{Transport: tr}
-}
-
-// closeIdleConnections releases h's pooled connections. A verb that opened a
-// client calls it before it returns, on every outcome: the pooled connections
-// would otherwise outlive the invocation that made them.
-func closeIdleConnections(h *http.Client) error {
-	if tr, ok := h.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
-	return nil
-}
-
 // Close releases the client's idle connections. A verb that opened a client
 // calls it before it returns, on every outcome.
-func (c *HTTPClient) Close() error {
+func (c *OpenAIClient) Close() error {
 	return closeIdleConnections(c.http)
 }
 
@@ -176,7 +121,7 @@ func (c *HTTPClient) Close() error {
 // scrubbed of any Authorization header value the server might have
 // echoed back. The APIKey itself is never written into an error string
 // constructed by this client.
-func (c *HTTPClient) Consult(ctx context.Context, req Request) (Response, error) {
+func (c *OpenAIClient) Consult(ctx context.Context, req Request) (Response, error) {
 	if c.endpoint.BaseURL == "" {
 		return Response{}, fmt.Errorf("endpoint BaseURL is empty")
 	}
@@ -220,7 +165,7 @@ func (c *HTTPClient) Consult(ctx context.Context, req Request) (Response, error)
 // live *http.Response is returned with its Body unread; the caller owns
 // reading and closing it (the streaming caller hands the Body off to a
 // StreamReader instead of reading it here).
-func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string, body []byte) (*http.Response, error) {
+func (c *OpenAIClient) doRequest(ctx context.Context, method, path, accept string, body []byte) (*http.Response, error) {
 	url := joinURL(c.endpoint.BaseURL, path)
 	var rdr io.Reader
 	if body != nil {
@@ -252,19 +197,6 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string,
 	return resp, nil
 }
 
-// statusError is a non-2xx response as both clients return it: the body read
-// (so the connection can be reused) and capped at errorBodyLimit (so a
-// provider's HTML error page cannot become a megabyte of error string), with
-// any key the server echoed scrubbed out. It takes ownership of resp.Body.
-func statusError(resp *http.Response, apiKey string) error {
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
-	_ = resp.Body.Close()
-	return StatusError{
-		Code: resp.StatusCode,
-		Body: scrubAuthorization(string(respBody), apiKey),
-	}
-}
-
 // ConsultStream performs one streaming chat-completions round-trip,
 // returning a StreamReader that yields chunks as they arrive.
 //
@@ -280,7 +212,7 @@ func statusError(resp *http.Response, apiKey string) error {
 // error returned (matching Consult's shape, with the API key scrubbed).
 // On 2xx the response body is owned by the returned StreamReader; the
 // caller MUST Close it.
-func (c *HTTPClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
+func (c *OpenAIClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
 	if c.endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}
@@ -302,13 +234,13 @@ func (c *HTTPClient) ConsultStream(ctx context.Context, req Request) (StreamRead
 	}
 	// On 2xx the response body is owned by the StreamReader, which the
 	// caller must Close; doRequest leaves it unread for exactly this.
-	return newHTTPStreamReader(streamCtx, cancel, resp.Body, streamIdleTimeout), nil
+	return newOpenAIStreamReader(streamCtx, cancel, resp.Body, streamIdleTimeout), nil
 }
 
 // ListModels performs a GET against <base>/models and returns the model
 // list in the order the server provided. Errors are wrapped with status +
 // body, with the API key scrubbed.
-func (c *HTTPClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
+func (c *OpenAIClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if c.endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}

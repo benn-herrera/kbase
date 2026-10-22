@@ -103,7 +103,7 @@ data: [DONE]
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	got, err := ConsultDrained(context.Background(), c, chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultDrained: %v", err)
@@ -140,7 +140,7 @@ func TestConsultDrainedContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	got, err := ConsultDrained(ctx, c, chatRequest("m"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error: got %v, want context.Canceled", err)

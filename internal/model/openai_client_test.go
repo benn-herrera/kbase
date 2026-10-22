@@ -36,7 +36,7 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
@@ -56,9 +56,9 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	return chunks, sr.Final(), termErr
 }
 
-// TestHTTPClientHappyPath: verify the request body shape, the auth header,
+// TestOpenAIClientHappyPath: verify the request body shape, the auth header,
 // the User-Agent header, and the response decode round-trip.
-func TestHTTPClientHappyPath(t *testing.T) {
+func TestOpenAIClientHappyPath(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotUA string
 	var gotBody map[string]any
 
@@ -82,7 +82,7 @@ func TestHTTPClientHappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	resp, err := c.Consult(context.Background(), Request{
 		Model: "test-model",
 		Messages: []Message{
@@ -125,9 +125,9 @@ func TestHTTPClientHappyPath(t *testing.T) {
 	}
 }
 
-// TestHTTPClientBaseURLTrailingSlash: a base URL ending in "/" must produce
+// TestOpenAIClientBaseURLTrailingSlash: a base URL ending in "/" must produce
 // "<base>chat/completions", not "<base>/chat/completions".
-func TestHTTPClientBaseURLTrailingSlash(t *testing.T) {
+func TestOpenAIClientBaseURLTrailingSlash(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -135,7 +135,7 @@ func TestHTTPClientBaseURLTrailingSlash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL + "/"))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL + "/"))
 	if _, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
@@ -144,9 +144,9 @@ func TestHTTPClientBaseURLTrailingSlash(t *testing.T) {
 	}
 }
 
-// TestHTTPClientNoAPIKeyOmitsAuthHeader: an empty APIKey must not produce a
+// TestOpenAIClientNoAPIKeyOmitsAuthHeader: an empty APIKey must not produce a
 // "Bearer " header (some local servers reject empty bearer tokens).
-func TestHTTPClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
+func TestOpenAIClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
 	var sawAuth bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, sawAuth = r.Header["Authorization"]
@@ -154,7 +154,7 @@ func TestHTTPClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(Endpoint{Name: "nokey", BaseURL: srv.URL})
+	c := NewOpenAIClient(Endpoint{Name: "nokey", BaseURL: srv.URL})
 	if _, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
@@ -163,10 +163,10 @@ func TestHTTPClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
 	}
 }
 
-// TestHTTPClientHTTPErrorWraps: a 5xx response is surfaced as a wrapped
+// TestOpenAIClientHTTPErrorWraps: a 5xx response is surfaced as a wrapped
 // error, and the API key never appears in the error string even when the
 // server echoes the Authorization header back.
-func TestHTTPClientHTTPErrorWraps(t *testing.T) {
+func TestOpenAIClientHTTPErrorWraps(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Echo what we got, including the Authorization header (this is the
 		// scenario the scrubber exists to defend against).
@@ -175,7 +175,7 @@ func TestHTTPClientHTTPErrorWraps(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
@@ -188,9 +188,9 @@ func TestHTTPClientHTTPErrorWraps(t *testing.T) {
 	}
 }
 
-// TestHTTPClientContextCancellation: a cancelled context must propagate
+// TestOpenAIClientContextCancellation: a cancelled context must propagate
 // through Do() and be reachable via errors.Is(err, context.Canceled).
-func TestHTTPClientContextCancellation(t *testing.T) {
+func TestOpenAIClientContextCancellation(t *testing.T) {
 	// Server holds the response until either the request context fires
 	// or the test signals the stop channel. The stop channel is closed
 	// before srv.Close so the handler returns and srv.Close's
@@ -213,7 +213,7 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.Consult(ctx, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from cancellation, got nil")
@@ -223,10 +223,10 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 	}
 }
 
-// TestHTTPClientErrorBodyIsBounded: a provider that answers a failed call
+// TestOpenAIClientErrorBodyIsBounded: a provider that answers a failed call
 // with an enormous body (an HTML error page, a runaway log dump) must not
 // turn one request into an unbounded error string.
-func TestHTTPClientErrorBodyIsBounded(t *testing.T) {
+func TestOpenAIClientErrorBodyIsBounded(t *testing.T) {
 	const bodyBytes = 4 * errorBodyLimit
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -234,7 +234,7 @@ func TestHTTPClientErrorBodyIsBounded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 502, got nil")
@@ -244,9 +244,9 @@ func TestHTTPClientErrorBodyIsBounded(t *testing.T) {
 	}
 }
 
-// TestHTTPClientErrorScrubsAPIKey: smoke-test the scrubber against a
+// TestOpenAIClientErrorScrubsAPIKey: smoke-test the scrubber against a
 // pathological payload that intentionally embeds the key in the body.
-func TestHTTPClientErrorScrubsAPIKey(t *testing.T) {
+func TestOpenAIClientErrorScrubsAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		// Worst case: server reflects the key into the error body.
@@ -254,7 +254,7 @@ func TestHTTPClientErrorScrubsAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -267,11 +267,11 @@ func TestHTTPClientErrorScrubsAPIKey(t *testing.T) {
 	}
 }
 
-// TestHTTPClientEmptyBaseURLErrors: an empty BaseURL must produce a clear
+// TestOpenAIClientEmptyBaseURLErrors: an empty BaseURL must produce a clear
 // error rather than an HTTP attempt against a malformed URL — on every
 // method, since a misconfigured endpoint reaches all three.
-func TestHTTPClientEmptyBaseURLErrors(t *testing.T) {
-	c := NewHTTPClient(Endpoint{Name: "x"})
+func TestOpenAIClientEmptyBaseURLErrors(t *testing.T) {
+	c := NewOpenAIClient(Endpoint{Name: "x"})
 	ctx := context.Background()
 	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}
 
@@ -293,9 +293,9 @@ func TestHTTPClientEmptyBaseURLErrors(t *testing.T) {
 	}
 }
 
-// TestHTTPClientListModels: the /models GET carries no body, and the
+// TestOpenAIClientListModels: the /models GET carries no body, and the
 // listing comes back in the server's order.
-func TestHTTPClientListModels(t *testing.T) {
+func TestOpenAIClientListModels(t *testing.T) {
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
@@ -306,7 +306,7 @@ func TestHTTPClientListModels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	models, err := c.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -331,16 +331,16 @@ func TestHTTPClientListModels(t *testing.T) {
 	}
 }
 
-// TestHTTPClientListModelsErrorScrubs: a failing /models call surfaces the
+// TestOpenAIClientListModelsErrorScrubs: a failing /models call surfaces the
 // status without leaking the key.
-func TestHTTPClientListModelsErrorScrubs(t *testing.T) {
+func TestOpenAIClientListModelsErrorScrubs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte("no: token=" + testAPIKey))
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.ListModels(context.Background())
 	if err == nil {
 		t.Fatal("expected error from 401, got nil")
@@ -353,10 +353,10 @@ func TestHTTPClientListModelsErrorScrubs(t *testing.T) {
 	}
 }
 
-// TestHTTPClientWiresTheChatShape: the request Chat makes reaches the wire in
+// TestOpenAIClientWiresTheChatShape: the request Chat makes reaches the wire in
 // the call shape — `temperature: 0` PRESENT, not omitted as it would be
 // with `omitempty`; thinking disabled; no completion cap.
-func TestHTTPClientWiresTheChatShape(t *testing.T) {
+func TestOpenAIClientWiresTheChatShape(t *testing.T) {
 	var rawBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawBody, _ = io.ReadAll(r.Body)
@@ -364,7 +364,7 @@ func TestHTTPClientWiresTheChatShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	if _, err := c.Consult(context.Background(), chatRequest("test-model")); err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
@@ -395,10 +395,10 @@ func chatRequest(modelID string) Request {
 		Reasoning:          &Reasoning{Enabled: false}}
 }
 
-// TestHTTPClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
+// TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
 // not emit a `chat_template_kwargs: null` or `: {}` field on the wire —
 // some providers reject the field's mere presence.
-func TestHTTPClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
+func TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	var rawBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawBody, _ = io.ReadAll(r.Body)
@@ -406,7 +406,7 @@ func TestHTTPClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	// Built bare so ChatTemplateKwargs stays nil.
 	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
 	if _, err := c.Consult(context.Background(), req); err != nil {
@@ -456,11 +456,11 @@ func TestEncodeRequestReasoning(t *testing.T) {
 	}
 }
 
-// TestHTTPClientPromptCacheKey: a client built with a prompt-cache key stamps it
+// TestOpenAIClientPromptCacheKey: a client built with a prompt-cache key stamps it
 // on every request it sends, on both the blocking and the streaming path; one
 // built with no key sends no such field at all — an omitted field, never an
 // empty one.
-func TestHTTPClientPromptCacheKey(t *testing.T) {
+func TestOpenAIClientPromptCacheKey(t *testing.T) {
 	const key = "run-abcdefgh"
 	var mu sync.Mutex
 	var bodies [][]byte
@@ -479,7 +479,7 @@ func TestHTTPClientPromptCacheKey(t *testing.T) {
 	defer srv.Close()
 
 	// sent sends one request each way and returns the bodies it carried.
-	sent := func(t *testing.T, c *HTTPClient) [][]byte {
+	sent := func(t *testing.T, c *OpenAIClient) [][]byte {
 		t.Helper()
 		mu.Lock()
 		from := len(bodies)
@@ -512,7 +512,7 @@ func TestHTTPClientPromptCacheKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ep := newTestEndpoint(srv.URL)
 			ep.PromptCacheKey = tc.key
-			for _, body := range sent(t, NewHTTPClient(ep)) {
+			for _, body := range sent(t, NewOpenAIClient(ep)) {
 				var wire map[string]json.RawMessage
 				if err := json.Unmarshal(body, &wire); err != nil {
 					t.Fatalf("unmarshal %s: %v", body, err)
@@ -535,11 +535,11 @@ func TestHTTPClientPromptCacheKey(t *testing.T) {
 	}
 }
 
-// TestHTTPClientStreamHappyPath: SSE round-trip. Verify chunks come out in
+// TestOpenAIClientStreamHappyPath: SSE round-trip. Verify chunks come out in
 // order, Final() concat matches the underlying body, finish_reason and
 // usage populate, the wire body has stream: true, and the Accept header
 // is text/event-stream.
-func TestHTTPClientStreamHappyPath(t *testing.T) {
+func TestOpenAIClientStreamHappyPath(t *testing.T) {
 	var gotAccept string
 	var rawBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -563,7 +563,7 @@ data: [DONE]
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	req := chatRequest("test-model")
 	sr, err := c.ConsultStream(context.Background(), req)
 	if err != nil {
@@ -611,16 +611,16 @@ data: [DONE]
 	}
 }
 
-// TestHTTPClientStreamErrorWraps: a 5xx during stream initiation is
+// TestOpenAIClientStreamErrorWraps: a 5xx during stream initiation is
 // surfaced as a wrapped error, with the API key scrubbed.
-func TestHTTPClientStreamErrorWraps(t *testing.T) {
+func TestOpenAIClientStreamErrorWraps(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("bad: token=" + testAPIKey))
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	_, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
@@ -633,10 +633,10 @@ func TestHTTPClientStreamErrorWraps(t *testing.T) {
 	}
 }
 
-// TestHTTPClientStreamCloseBeforeEOF: closing the reader before exhausting
+// TestOpenAIClientStreamCloseBeforeEOF: closing the reader before exhausting
 // it should release the body without leaking. Subsequent Next() returns
 // io.EOF.
-func TestHTTPClientStreamCloseBeforeEOF(t *testing.T) {
+func TestOpenAIClientStreamCloseBeforeEOF(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"a"}}]}
@@ -653,7 +653,7 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
@@ -678,9 +678,9 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 	}
 }
 
-// TestHTTPClientStreamCtxCancellation: a cancelled context mid-stream
+// TestOpenAIClientStreamCtxCancellation: a cancelled context mid-stream
 // should surface via Next().
-func TestHTTPClientStreamCtxCancellation(t *testing.T) {
+func TestOpenAIClientStreamCtxCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"))
@@ -692,7 +692,7 @@ func TestHTTPClientStreamCtxCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
+	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
 	sr, err := c.ConsultStream(ctx, chatRequest("m"))
 	if err != nil {
@@ -721,7 +721,7 @@ func TestHTTPClientStreamCtxCancellation(t *testing.T) {
 // a stall without pinning the suite to the real bound. The returned reader
 // owns the body; the caller must Close it (which also releases the request
 // context, letting a blocked handler return before the server shuts down).
-func openStream(t *testing.T, idle time.Duration, handler http.HandlerFunc) *httpStreamReader {
+func openStream(t *testing.T, idle time.Duration, handler http.HandlerFunc) *openaiStreamReader {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -737,7 +737,7 @@ func openStream(t *testing.T, idle time.Duration, handler http.HandlerFunc) *htt
 		cancel(nil)
 		t.Fatalf("open stream: %v", err)
 	}
-	return newHTTPStreamReader(ctx, cancel, resp.Body, idle)
+	return newOpenAIStreamReader(ctx, cancel, resp.Body, idle)
 }
 
 // sseContentDelta is one content-carrying SSE event, terminated by the
@@ -897,7 +897,7 @@ func TestStreamDecodeErrorUnderStallNamesTheStall(t *testing.T) {
 		payload: strings.NewReader("data: {\"choices\":[\n\n"),
 		stall:   func() { cancel(fmt.Errorf("%w after %v", errStreamIdle, idle)) },
 	}
-	sr := newHTTPStreamReader(ctx, cancel, body, idle)
+	sr := newOpenAIStreamReader(ctx, cancel, body, idle)
 	defer sr.Close()
 
 	if _, err := sr.Next(); !errors.Is(err, errStreamIdle) {

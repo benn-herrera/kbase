@@ -1146,7 +1146,7 @@ func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
 	defer srv.Close()
 
 	got := scoreDrive(t, repo, t.TempDir(), scoreOptions{Pass: query.PassRigor, providerOptions: scoreProviderAt(srv.URL)},
-		func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) })
+		func(e model.Endpoint) model.Client { return model.NewOpenAIClient(e) })
 	if got.doc.Outcome != "done" {
 		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
@@ -1177,7 +1177,7 @@ func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
 	wire := &scoringWire{}
 	srv := httptest.NewServer(wire.handler())
 	defer srv.Close()
-	overHTTP := func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) }
+	overHTTP := func(e model.Endpoint) model.Client { return model.NewOpenAIClient(e) }
 
 	first := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, Limit: 1, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
 	run, _ := first.doc.Values["run"].(string)
@@ -1226,7 +1226,7 @@ func TestScoreAsksOnceOnARefusalAndToTheCountOnARetryableStatus(t *testing.T) {
 			srv, asks := statusProvider(t, tc.code)
 			got := scoreIn(t, scoreRepo(t), t.TempDir(),
 				scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}},
-				func() model.Client { return model.NewHTTPClient(model.Endpoint{BaseURL: srv.URL}) })
+				func() model.Client { return model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}) })
 			if n := asks(); n != tc.asks {
 				t.Errorf("%d requests, want %d\n%s", n, tc.asks, got.stdout)
 			}

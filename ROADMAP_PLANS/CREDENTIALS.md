@@ -27,7 +27,7 @@ configured, and putting the key in a transcript.
    is curious and a file is exactly right.
 4. **No key means no header.** A provider configured with a base URL and no credential sends no
    `Authorization` header — already true: `model.APIKey` empty sends none
-   (`internal/model/http_client.go:56`). That is what makes a loopback credential proxy possible later
+   (`internal/model/openai_client.go:55`). That is what makes a loopback credential proxy possible later
    without a code change.
 5. **The skill asks; the agent does not.** adjagent's reference says: if a verb refuses naming a
    missing key, ask the user to run `kbase auth add <provider>` in their own terminal. Do not run it

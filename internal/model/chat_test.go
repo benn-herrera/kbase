@@ -85,7 +85,7 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.bodies...)
 			var observed []string
-			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
 				func(a ChatAttempt) { observed = append(observed, a.Outcome) })
 			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrChatIncomplete)) {
 				t.Fatalf("Chat = %+v, %v; want ok %t", got, err, tc.ok)
@@ -119,7 +119,7 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusBadRequest)
 
 	var observed []string
-	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
 		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -166,7 +166,7 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 			srv, requests := statusServer(t, tc.code)
 
 			var observed []ChatAttempt
-			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
 				func(a ChatAttempt) { observed = append(observed, a) })
 			if !errors.Is(err, ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -202,7 +202,7 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
 	srv, _ := sseServer(t, sseServedNothing)
 
-	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
@@ -224,7 +224,7 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	srv.Close()
 
 	var observed []string
-	got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
+	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
 		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -239,7 +239,7 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 
 func TestChatRequestShape(t *testing.T) {
 	srv, seen := sseServer(t, sseAnswered)
-	if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
+	if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var body struct {
@@ -299,7 +299,7 @@ func TestChatRecordsReasoned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.sse)
-			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
@@ -340,7 +340,7 @@ func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, sseAnswered)
-			if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
+			if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			raw := string(seen()[0])
@@ -366,7 +366,7 @@ func TestChatStopsOnCancel(t *testing.T) {
 func TestChatBacksOffBetweenReissues(t *testing.T) {
 	srv, seen := sseServer(t, sseShortOfDone)
 	started := time.Now()
-	if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p",
+	if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p",
 		[]time.Duration{30 * time.Millisecond}, nil); !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want incomplete", err)
 	}
@@ -378,7 +378,7 @@ func TestChatBacksOffBetweenReissues(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	defer cancel()
-	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat cancelled in its pause = %v", err)
 	}
 }
@@ -394,7 +394,7 @@ func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	got, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+	got, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
 		[]time.Duration{5 * time.Second, 30 * time.Second}, nil)
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -424,7 +424,7 @@ func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+	got, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
 		[]time.Duration{time.Millisecond, time.Millisecond}, nil)
 	if !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -447,7 +447,7 @@ func TestChatTakesAPauseTheDeadlineCovers(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+	if _, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
 		[]time.Duration{pause}, nil); !errors.Is(err, ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
@@ -481,7 +481,7 @@ func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, _ := sseServer(t, tc.sse)
-			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
