@@ -118,6 +118,9 @@ func providerRecords(entries []config.Entry) []toolresult.Record {
 		if e.BaseURL != "" {
 			record = append(record, toolresult.Field{Key: "base-url", Value: e.BaseURL})
 		}
+		if e.Protocol != "" {
+			record = append(record, toolresult.Field{Key: "api", Value: e.Protocol})
+		}
 		if e.DecisionsFlavor != "" {
 			record = append(record, toolresult.Field{Key: "decisions-flavor", Value: e.DecisionsFlavor})
 		}
@@ -243,7 +246,8 @@ Configuration is read from layers: <repository>/` + config.RepositoryDirName + `
 which isolates the run from any repository's own. The document names every
 layer read, in precedence order, with whether its directory and each of its
 files stand; every pool entry the merge produced with the layer it came from,
-the kind of key it supplies and why any faulted; the merged role values; the
+the chat protocol and decision surface it speaks, the kind of key it supplies
+and why any faulted; the merged role values; the
 names of the inference variables this process sets; which pool entry the
 selection rules name and which rule named it; which source supplies inference
 and, for each role, what answers it, the endpoint and the layer that supplied

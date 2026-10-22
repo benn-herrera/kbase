@@ -71,9 +71,9 @@ func TestReport(t *testing.T) {
 				Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"},
 				Entries: []Entry{
 					{Name: "broken", Layer: LayerSourceRepository, Fault: "no baseUrl declared"},
-					{Name: "nokey", BaseURL: "https://nokey.example/v1", DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},
-					{Name: "reaper", BaseURL: "https://reaper.example/v1", DecisionsFlavor: FlavorDecisions, Key: KeyKindFile, KeyFile: "keys/reaper.txt", Layer: LayerSourceRepository, Usable: true},
-					{Name: "warned", BaseURL: "https://warned.example/v1", DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "keys/warned.txt", Layer: LayerSourceGlobal, Usable: true,
+					{Name: "nokey", BaseURL: "https://nokey.example/v1", Protocol: ProviderAPIOpenAI, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},
+					{Name: "reaper", BaseURL: "https://reaper.example/v1", Protocol: ProviderAPIOpenAI, DecisionsFlavor: FlavorDecisions, Key: KeyKindFile, KeyFile: "keys/reaper.txt", Layer: LayerSourceRepository, Usable: true},
+					{Name: "warned", BaseURL: "https://warned.example/v1", Protocol: ProviderAPIOpenAI, DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "keys/warned.txt", Layer: LayerSourceGlobal, Usable: true,
 						Fault: "apiKeyFile /k/warned.txt is readable beyond its owner (mode 0644) — chmod 600 it"},
 				},
 				Environment: []string{EnvAPIBaseURL, EnvText},

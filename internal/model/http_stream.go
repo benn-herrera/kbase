@@ -28,7 +28,7 @@ const sseInitialBufferBytes = 64 << 10
 // keeps delivering is healthy however long it runs, and a stream that has
 // gone silent is dead however recently it opened. A total-duration cap
 // (http.Client.Timeout) answers the wrong question and kills the first
-// kind — see NewHTTPClient.
+// kind — see newHTTPTransport.
 //
 // The clock is reset by ANY line off the wire, not only by a content chunk.
 // SSE comment lines (`: ping`) are how a gateway signals liveness across a
@@ -43,56 +43,49 @@ const streamIdleTimeout = 2 * time.Minute
 // stop?". Match with errors.Is.
 var errStreamIdle = errors.New("model: stream idle; provider stopped sending")
 
-// httpStreamReader is the production StreamReader, backed by an HTTP
-// response body delivering SSE-encoded chunks.
+// sseScanner is the machinery both protocols' stream readers share: the line
+// scanner over the response body, the idle watchdog, the terminal paths and the
+// close. What one EVENT means is each reader's own — the two protocols deliver
+// different event sequences, and neither reader is the other's special case.
 //
-// Single-goroutine, per the StreamReader contract: no field here is
-// guarded. The idle watchdog is the one thing that touches the reader from
-// another goroutine, and it touches only context cancellation — which is
-// exactly why cancellation, not a flag, is the abort mechanism.
-type httpStreamReader struct {
+// Single-goroutine, per the StreamReader contract: no field here is guarded.
+// The idle watchdog is the one thing that touches the scanner from another
+// goroutine, and it touches only context cancellation — which is exactly why
+// cancellation, not a flag, is the abort mechanism.
+type sseScanner struct {
 	ctx     context.Context
 	cancel  context.CancelCauseFunc
 	body    io.ReadCloser
 	scanner *bufio.Scanner
 
-	// idle is the watchdog timer, nil until the first Next arms it — see
+	// idle is the watchdog timer, nil until the first read arms it — see
 	// armIdle. idleWindow is the window it is armed with.
 	idle       *time.Timer
 	idleWindow time.Duration
 
-	// done is set once the stream has been fully drained (either [DONE]
-	// observed, EOF on the body, or a hard error). Subsequent Next()
-	// calls return io.EOF.
+	// done is set once the stream has been fully drained (the protocol's
+	// closing event, EOF on the body, or a hard error). Subsequent reads
+	// return io.EOF.
 	done bool
 	// closed makes Close idempotent.
 	closed bool
 
-	// content is the accumulator for the final Response. Each chunk's
-	// Content is appended in order.
-	content       strings.Builder
-	finishReason  string
-	usage         Usage
-	usageReported bool
-	// sawDone is set when the provider's closing [DONE] arrived.
-	sawDone bool
-
 	closeErr error
 }
 
-// newHTTPStreamReader takes ownership of body and of cancel. ctx MUST be the
-// context the in-flight request was issued with: cancelling it is what
-// interrupts a read blocked on bytes that are never coming, and that is the
-// whole mechanism behind the idle watchdog.
+// newSSEScanner takes ownership of body and of cancel. ctx MUST be the context
+// the in-flight request was issued with: cancelling it is what interrupts a
+// read blocked on bytes that are never coming, and that is the whole mechanism
+// behind the idle watchdog.
 //
 // idle is the watchdog's window. Production passes streamIdleTimeout; it is
 // a parameter so a test can trip the watchdog in milliseconds rather than
 // pinning the suite to the real bound. The watchdog is not started here —
-// the first Next arms it.
-func newHTTPStreamReader(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration) *httpStreamReader {
+// the first read arms it.
+func newSSEScanner(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration) sseScanner {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, sseInitialBufferBytes), sseMaxLineBytes)
-	return &httpStreamReader{ctx: ctx, cancel: cancel, body: body, scanner: sc, idleWindow: idle}
+	return sseScanner{ctx: ctx, cancel: cancel, body: body, scanner: sc, idleWindow: idle}
 }
 
 // armIdle starts the watchdog, or restarts it if it is already running.
@@ -102,7 +95,7 @@ func newHTTPStreamReader(ctx context.Context, cancel context.CancelCauseFunc, bo
 // caller that does other work between ConsultStream and its first Next has
 // kept nobody waiting. Arming at construction would charge that work to the
 // provider and abort a stream that never misbehaved.
-func (r *httpStreamReader) armIdle() {
+func (r *sseScanner) armIdle() {
 	if r.idle == nil {
 		r.idle = time.AfterFunc(r.idleWindow, func() {
 			r.cancel(fmt.Errorf("%w after %v", errStreamIdle, r.idleWindow))
@@ -112,28 +105,30 @@ func (r *httpStreamReader) armIdle() {
 	r.idle.Reset(r.idleWindow)
 }
 
-// Next returns the next chunk in the stream, or io.EOF when the stream has
-// been drained. Context cancellation surfaces as the ctx error; a stream
-// that goes quiet for streamIdleTimeout surfaces as errStreamIdle.
-func (r *httpStreamReader) Next() (Chunk, error) {
-	if r.done {
-		return Chunk{}, io.EOF
-	}
+// nextData returns the payload of the next `data:` line, skipping the blank
+// separators, comment lines and `event:`/`id:` headers an SSE body carries
+// around them. The returned slice aliases the scanner's buffer and is valid
+// only until the next call.
+//
+// io.EOF is the body's end and nothing more: whether that end COMPLETES the
+// stream is the reader's question, because the two protocols say so
+// differently — `[DONE]` on one, `message_stop` on the other.
+func (r *sseScanner) nextData() ([]byte, error) {
 	// The read starts here, so the window the provider has to answer in
-	// starts here too — on the first Next and on every one after it.
+	// starts here too — on the first read and on every one after it.
 	r.armIdle()
 	for {
 		// Honor context first so a slow server can't outlast a deadline.
 		if err := r.ctx.Err(); err != nil {
 			r.finish()
-			return Chunk{}, r.terminalErr(err)
+			return nil, r.terminalErr(err)
 		}
 		if !r.scanner.Scan() {
 			r.finish()
 			if err := r.scanner.Err(); err != nil {
-				return Chunk{}, r.terminalErr(fmt.Errorf("stream read: %w", err))
+				return nil, r.terminalErr(fmt.Errorf("stream read: %w", err))
 			}
-			return Chunk{}, io.EOF
+			return nil, io.EOF
 		}
 		// A line arrived, so the provider is alive — including the blank
 		// separators and comment lines skipped just below.
@@ -152,6 +147,78 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 		payload := bytes.TrimSpace(line[len("data:"):])
 		if len(payload) == 0 {
 			continue
+		}
+		return payload, nil
+	}
+}
+
+// finish marks the stream drained and retires the watchdog. Every terminal
+// path runs through it, so no timer outlives the stream it was guarding — a
+// stream closed before its first read has no timer to retire.
+func (r *sseScanner) finish() {
+	r.done = true
+	if r.idle != nil {
+		r.idle.Stop()
+	}
+}
+
+// terminalErr names the stall instead of the symptom when the watchdog is
+// what ended the stream. The watchdog interrupts a blocked read by
+// cancelling the request, so the error in hand at that point is a flavor of
+// "context canceled" and points at the wrong cause.
+func (r *sseScanner) terminalErr(err error) error {
+	if cause := context.Cause(r.ctx); errors.Is(cause, errStreamIdle) {
+		return cause
+	}
+	return err
+}
+
+// Close releases the underlying body and retires the watchdog. Idempotent —
+// and, like the rest of the scanner, the owning goroutine's to call.
+func (r *sseScanner) Close() error {
+	if !r.closed {
+		r.closed = true
+		r.finish()
+		r.closeErr = r.body.Close()
+		// Release the request context last: the body is already closed, so
+		// this only frees the transport's bookkeeping.
+		r.cancel(nil)
+	}
+	return r.closeErr
+}
+
+// httpStreamReader is the OpenAI-compatible StreamReader, backed by an HTTP
+// response body delivering SSE-encoded chunks.
+type httpStreamReader struct {
+	sseScanner
+
+	// content is the accumulator for the final Response. Each chunk's
+	// Content is appended in order.
+	content       strings.Builder
+	finishReason  string
+	usage         Usage
+	usageReported bool
+	// sawDone is set when the provider's closing [DONE] arrived.
+	sawDone bool
+}
+
+// newHTTPStreamReader takes ownership of body and of cancel, and reads it as
+// the OpenAI-compatible event stream.
+func newHTTPStreamReader(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration) *httpStreamReader {
+	return &httpStreamReader{sseScanner: newSSEScanner(ctx, cancel, body, idle)}
+}
+
+// Next returns the next chunk in the stream, or io.EOF when the stream has
+// been drained. Context cancellation surfaces as the ctx error; a stream
+// that goes quiet for streamIdleTimeout surfaces as errStreamIdle.
+func (r *httpStreamReader) Next() (Chunk, error) {
+	if r.done {
+		return Chunk{}, io.EOF
+	}
+	for {
+		payload, err := r.nextData()
+		if err != nil {
+			return Chunk{}, err
 		}
 		if bytes.Equal(payload, []byte("[DONE]")) {
 			r.sawDone = true
@@ -185,27 +252,6 @@ func (r *httpStreamReader) Next() (Chunk, error) {
 	}
 }
 
-// finish marks the stream drained and retires the watchdog. Every terminal
-// path runs through it, so no timer outlives the stream it was guarding — a
-// stream closed before its first Next has no timer to retire.
-func (r *httpStreamReader) finish() {
-	r.done = true
-	if r.idle != nil {
-		r.idle.Stop()
-	}
-}
-
-// terminalErr names the stall instead of the symptom when the watchdog is
-// what ended the stream. The watchdog interrupts a blocked read by
-// cancelling the request, so the error in hand at that point is a flavor of
-// "context canceled" and points at the wrong cause.
-func (r *httpStreamReader) terminalErr(err error) error {
-	if cause := context.Cause(r.ctx); errors.Is(cause, errStreamIdle) {
-		return cause
-	}
-	return err
-}
-
 // Final returns the accumulated Response after iteration. Safe to call
 // before EOF, though the resulting Content/Usage/FinishReason will only
 // reflect what has been observed so far.
@@ -228,20 +274,6 @@ func (r *httpStreamReader) Final() Response {
 		StreamDone:    r.sawDone,
 		UsageReported: r.usageReported,
 	}
-}
-
-// Close releases the underlying body and retires the watchdog. Idempotent —
-// and, like the rest of the reader, the owning goroutine's to call.
-func (r *httpStreamReader) Close() error {
-	if !r.closed {
-		r.closed = true
-		r.finish()
-		r.closeErr = r.body.Close()
-		// Release the request context last: the body is already closed, so
-		// this only frees the transport's bookkeeping.
-		r.cancel(nil)
-	}
-	return r.closeErr
 }
 
 // --- SSE wire decoding ---

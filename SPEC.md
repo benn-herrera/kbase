@@ -851,9 +851,16 @@ refuses whatever the flag says, and `--scoring-model` there overrides the variab
 one run. A run records the model as the flag's where the flag named it. A `--dry-run` resolves no role
 and refuses nothing for one.
 
-**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint. Every
-ask a run sends carries the run's id as its `prompt_cache_key`, so a run's asks reach one provider
-and share one cache entry. A call
+**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint, over the
+chat protocol that endpoint's entry names (§9.1): `openai` speaks `chat/completions` and `anthropic`
+speaks the Messages protocol. Every ask a run sends to an `openai` endpoint carries the run's id as
+its `prompt_cache_key`, so a run's asks reach one provider and share one cache entry; the Messages
+protocol has no such field, so a run whose endpoint speaks it sends no key. Messages requires a
+completion cap, and no other request is capped: the cap is `max(256, ceil(characters / 4))` over the
+characters of the ask's messages and system text — four characters per token because the ask is plain
+prose and no LaTeX is ever sent. Thinking is off on a Messages endpoint by the absence of the
+protocol's thinking field, kbase's `reasoning` control being OpenAI-surface only, and thinking text
+is never part of a reply on either protocol. A call
 that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
 30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
 it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and
@@ -1146,20 +1153,34 @@ baseUrl = "..."        # required
 apiKeyFile = "..."     # path to a key file, resolved relative to this file's
                         # own directory if relative; an entry's only key field
 type = "inference"     # optional; the only accepted value, also the default
-api = "openai"         # optional; the only accepted value, also the default
+api = "openai"         # optional; "openai" (also the default) or "anthropic" —
+                       # the chat protocol this server speaks
 decisionsFlavor = "systemone"  # optional; "systemone" (also the default) or
                                # "decisions" — the decision surface this
                                # server speaks
 ```
 
 No other key is recognized inside an entry. An entry that fails validation (empty `baseUrl`, or
-`type`/`api`/`decisionsFlavor` set to anything but its accepted value) is **dropped** with a warning
-naming the entry and the reason (never key material); the rest of the pool still loads. A key-file
-read failure faults just that entry the same way. An absent `providers.toml` is an empty pool, not a
-load error.
+`type`/`api`/`decisionsFlavor` set to anything but its accepted values) is **dropped** with a
+warning naming the entry and the reason (never key material); the rest of the pool still loads. A
+key-file read failure faults just that entry the same way. An absent `providers.toml` is an empty
+pool, not a load error.
+
+**The chat protocol.** `api` names the wire protocol chat uses, chosen per server; it is a two-value
+field. `openai` is the OpenAI-compatible `chat/completions` surface — what an entry silent on `api`
+gets — and `anthropic` is the Anthropic Messages surface, `POST <baseUrl>/messages`. The two differ
+in more than a path. Messages requires a `max_tokens` cap, which kbase estimates as
+`max(256, ceil(characters / 4))` over the ask's messages and system text (§8). It takes the system
+prompt as a top-level `system` string rather than a turn, so a system message is lifted out of
+`messages`. It accepts `temperature` only in [0,1], so a value outside that range is omitted rather
+than clamped. It has no `prompt_cache_key`, `chat_template_kwargs` or `reasoning` field: none is
+sent, and thinking is off by the thinking field's absence. Its catalogue is `GET <baseUrl>/models`,
+whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected by `api`, and the decision surfaces
+are OpenAI-shaped: the `decision` role's entry must speak `openai`, and a Messages endpoint asked for
+a letter ask refuses, naming the provider and the role.
 
 **The decision surface.** `decisionsFlavor` names the wire shape the decision call uses, chosen per
-server: it changes nothing about chat, which is `chat/completions` under either shape, and it binds
+server: it changes nothing about chat, which `api` alone decides, and it binds
 no model id — the decision category's id stays in `config.toml` (§9.2). An entry silent on it speaks
 `systemone`, the shape kbase's letter asks were written against. `systemone`: `POST
 <baseUrl>/systemone`, body `model`, `state` and `questions` — an object keyed by each question's own
@@ -1767,6 +1788,14 @@ position that `status` and the commit trail already state, and changes nothing.
 ---
 
 ## 12. Interim releases
+
+**0.8.0 — a second chat protocol: the Anthropic Messages API.** A `providers.toml` entry may state
+`api = "anthropic"` to reach an Anthropic Messages endpoint directly, with `api = "openai"` (the
+default) behaving as before (§9.1). `models`, `configure`, `kbase probe`, a build's overview call and
+a scoring run's asks all reach it; the `decision` role's letter asks do not, because the decision
+surfaces are OpenAI-shaped, and a Messages endpoint asked for one refuses naming the provider and the
+role (§8). Messages requires a completion cap, sent as `max(256, ceil(characters / 4))` over the
+ask's text, and has no prompt-cache key, so a scoring run against such an endpoint sends none (§8).
 
 **0.8.0 — the rigor ceiling is `1.00`.** The rigor tables' maximum, the most a write carries, and
 an axiom's rule value are one number: a rigor pass's maximum is `1.00`, so a text charged with

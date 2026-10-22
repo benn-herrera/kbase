@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -389,6 +390,119 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 	}
 	if n := len(bodies()); n != 0 {
 		t.Errorf("%d requests, want none: a model that does not resolve is never dialled", n)
+	}
+}
+
+// anthropicProbeRequest is what one request carried, as the Messages fixture
+// records it.
+type anthropicProbeRequest struct {
+	path, apiKey, version string
+	body                  []byte
+}
+
+// anthropicProbeWire answers each request as a Messages event stream — usage on
+// message_start, one text delta, the stop reason and message_stop — and records
+// what the request carried. It is the Messages counterpart of probeWire.
+func anthropicProbeWire(t *testing.T) (*httptest.Server, func() []anthropicProbeRequest) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []anthropicProbeRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		seen = append(seen, anthropicProbeRequest{
+			path:    r.URL.Path,
+			apiKey:  r.Header.Get("x-api-key"),
+			version: r.Header.Get("anthropic-version"),
+			body:    body,
+		})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":30,"cache_read_input_tokens":4}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []anthropicProbeRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
+// TestProbeReachesAMessagesProvider: a pool entry stating `api = "anthropic"`
+// reaches the ask. The probe's one call lands on `POST <base>/messages` with
+// that protocol's headers and body, and the reply, stop reason and usage come
+// back in the document — so the whole route, from providers.toml to the wire,
+// is exercised.
+func TestProbeReachesAMessagesProvider(t *testing.T) {
+	unsetInferenceEnv(t)
+	srv, requests := anthropicProbeWire(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claude.key"), []byte(testAPIKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf(`[claude]
+baseUrl = %q
+api = "anthropic"
+apiKeyFile = "claude.key"
+`, srv.URL))
+	writeValues(t, dir, config.ConfigFileName, "[models]\nscoring = \"claude/claude-x\"\n")
+
+	doc, stdout, stderr, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s%s", doc.Outcome, code, stdout, stderr)
+	}
+	if doc.Values["provider"] != "claude" || doc.Values["model"] != "claude-x" {
+		t.Errorf("provider/model = %v/%v, want the Messages entry it resolved",
+			doc.Values["provider"], doc.Values["model"])
+	}
+	if doc.Values["reply"] != "ok" || doc.Values["finish-reason"] != "end_turn" {
+		t.Errorf("reply %v, finish reason %v; want the event stream's text and stop reason",
+			doc.Values["reply"], doc.Values["finish-reason"])
+	}
+	usage, _ := doc.Values["usage"].(map[string]any)
+	if usage["reported"] != true || usage["prompt-tokens"] != 30 || usage["completion-tokens"] != 1 ||
+		usage["cached-tokens"] != 4 {
+		t.Errorf("usage = %v, want the message_start and message_delta figures", usage)
+	}
+
+	seen := requests()
+	if len(seen) != 1 {
+		t.Fatalf("%d requests, want the one turn it took", len(seen))
+	}
+	if seen[0].path != "/messages" {
+		t.Errorf("path = %q, want /messages", seen[0].path)
+	}
+	if seen[0].apiKey != testAPIKey || seen[0].version != "2023-06-01" {
+		t.Errorf("auth headers: x-api-key %q, anthropic-version %q; want the entry's key and the protocol version",
+			seen[0].apiKey, seen[0].version)
+	}
+	var body struct {
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+		Stream    bool   `json:"stream"`
+		Messages  []struct{ Role, Content string }
+	}
+	if err := json.Unmarshal(seen[0].body, &body); err != nil {
+		t.Fatalf("the request is no JSON body: %v\n%s", err, seen[0].body)
+	}
+	if body.Model != "claude-x" || !body.Stream || body.MaxTokens < 256 ||
+		len(body.Messages) != 1 || body.Messages[0].Role != "user" || body.Messages[0].Content != probePrompt {
+		t.Errorf("body = %+v, want the probe's one streamed user turn under a completion cap", body)
+	}
+	if strings.Contains(string(seen[0].body), "prompt_cache_key") {
+		t.Errorf("the request carries a prompt-cache key, which the protocol has no field for: %s", seen[0].body)
 	}
 }
 

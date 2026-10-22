@@ -44,7 +44,8 @@ const providersTemplate = `# Each provider is one top-level table. The names are
 baseUrl = "http://lab-server.local:8000/v1"
 # apiKeyFile = "~/.api_keys/lab-server.txt"  # relative paths resolve beside this file
 # type = "inference"  # optional; the only kind kbase can use
-# api = "openai"      # optional; the only protocol it speaks
+# api = "openai"      # optional; the chat protocol: "openai" (the default) or
+#                     # "anthropic", the Messages API
 # decisionsFlavor = "systemone"  # optional; which decision surface this server
 #                                # speaks: "systemone" (the default) or
 #                                # "decisions"

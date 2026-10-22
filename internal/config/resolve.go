@@ -144,7 +144,12 @@ type Endpoint struct {
 	BaseURL    string
 	APIKeyFile string
 	Flavor     string
-	APIKey     string
+	// Protocol is the chat wire protocol the entry speaks, its default filled
+	// in — `openai` where the entry states none; an environment endpoint is
+	// OpenAI. The vocabulary is this package's, and the model package is handed
+	// the resolved fact rather than the string.
+	Protocol string
+	APIKey   string
 
 	BaseURLSource, ModelSource, KeySource string
 }
@@ -303,6 +308,7 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 	}
 	ep := Endpoint{Role: role, Mode: ModeFile, Provider: ref.Provider, Model: ref.Model, Rule: rule,
 		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor(),
+		Protocol:      entry.Protocol(),
 		BaseURLSource: entry.Layer, ModelSource: in.Cfg.ModelLayer(role)}
 	if keyKind(entry) == KeyKindFile {
 		ep.KeySource = entry.Layer
@@ -324,7 +330,8 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 			Detail: fmt.Sprintf("%s is unset, and the environment mode supplies every model by its own variable", role.variable())}
 	}
 	ep := Endpoint{Role: role, Mode: ModeEnvironment, Model: configured, BaseURL: in.Env.BaseURL,
-		Flavor: FlavorSystemOne, BaseURLSource: LayerSourceEnvironment, ModelSource: LayerSourceEnvironment}
+		Flavor: FlavorSystemOne, Protocol: ProviderAPIOpenAI,
+		BaseURLSource: LayerSourceEnvironment, ModelSource: LayerSourceEnvironment}
 	if flagModel != "" {
 		// The flag is the whole of what named the model, and no layer did.
 		ep.Model, ep.ModelSource = flagModel, ""

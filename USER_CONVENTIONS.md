@@ -216,7 +216,8 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
 `config.toml`.
 
 - An entry's keys are `baseUrl` (required), `apiKeyFile` (the only way an entry supplies a key),
-  `type` (`inference` where unstated), `api` (`openai` where unstated) and `decisionsFlavor` (the
+  `type` (`inference` where unstated), `api` (the chat protocol: `openai` where unstated, or
+  `anthropic` for the Messages API) and `decisionsFlavor` (the
   decision surface, `systemone` where silent).
 - `config.toml`'s `[models]` holds `decision`, `text` and `scoring`, and each value is a
   **reference**: a `providers.toml` entry name, then the model id that entry serves, split at the
@@ -265,7 +266,9 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
   `$KBASE_API_KEY_FILE`. Never echo key material.
 - An entry's `decisionsFlavor` says which decision surface its server speaks: `systemone` (the
   default) or `decisions`. It names a wire shape, not a model — the decision category's id stays in
-  `config.toml` — and chat is `chat/completions` either way. Any other value drops the entry the way
-  a wrong `type` or `api` does.
-- `kbase show-config` states each entry's effective `decisions-flavor`, so an entry silent on it
-  reads `systemone`.
+  `config.toml` — and chat is the entry's `api`'s, which the flavour does not touch. Any other value
+  drops the entry the way a wrong `type` or `api` does. The decision surfaces are OpenAI-shaped, so
+  the `decision` role's entry must speak `api = "openai"`: a Messages endpoint asked for a letter ask
+  refuses, naming the provider and the role.
+- `kbase show-config` states each entry's effective `api` and `decisions-flavor`, so an entry silent
+  on either reads `openai` and `systemone`.

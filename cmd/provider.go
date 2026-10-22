@@ -25,7 +25,7 @@ const defaultListTimeout = 30 * time.Second
 
 // newClientFunc constructs the model client for an endpoint. It is the seam
 // that lets a verb be exercised without a network — production passes
-// model.NewHTTPClient, tests pass a factory returning a model.MockClient.
+// model.NewClient, tests pass a factory returning a model.MockClient.
 type newClientFunc func(model.Endpoint) model.Client
 
 // providerOptions is the input every provider-reaching verb shares: the
@@ -71,7 +71,7 @@ type providerOptions struct {
 	// everything that is not the verb's actual output.
 	Stderr io.Writer
 
-	// NewClient is the client seam; nil means model.NewHTTPClient.
+	// NewClient is the client seam; nil means model.NewClient.
 	NewClient newClientFunc
 }
 
@@ -98,13 +98,12 @@ type clients struct {
 	lg log.Logger
 }
 
-// newClients is a registry over seam, nil taking the HTTP client, whose close
-// failures go to lg and whose every client carries promptCacheKey.
+// newClients is a registry over seam, nil taking model.NewClient — which builds
+// the wire client the endpoint's protocol names — whose close failures go to lg
+// and whose every client carries promptCacheKey.
 func newClients(seam newClientFunc, lg log.Logger, promptCacheKey string) *clients {
 	if seam == nil {
-		// Wrapped rather than referenced directly so the seam does not
-		// depend on NewHTTPClient's exact return type.
-		seam = func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) }
+		seam = model.NewClient
 	}
 	if lg == nil {
 		lg = log.Discard()
@@ -128,7 +127,7 @@ func (c *clients) get(ep config.Endpoint) (model.Client, error) {
 		return nil, err
 	}
 	client := c.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
-		Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: c.promptCacheKey})
+		Protocol: chatProtocol(ep.Protocol), Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: c.promptCacheKey})
 	c.opened[key] = client
 	return client, nil
 }
@@ -175,7 +174,8 @@ func (c *clients) closeAll() {
 // the entry it selected to read that entry's catalogue: no role, no model, and
 // nothing the registry does not read.
 func entryEndpoint(entry config.Provider) config.Endpoint {
-	return config.Endpoint{Provider: entry.Name, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor()}
+	return config.Endpoint{Provider: entry.Name, BaseURL: entry.BaseURL, APIKey: entry.APIKey,
+		Protocol: entry.Protocol(), Flavor: entry.Flavor()}
 }
 
 // catalogueIDs fetches the provider's catalogue and returns the model ids in
@@ -198,6 +198,18 @@ func catalogueIDs(ctx context.Context, client model.Client) ([]string, error) {
 // refuses a value it does not know at load — and the wire shapes are model's,
 // so the one mapping between the two lives here.
 func decisionsSurface(flavor string) bool { return flavor == config.FlavorDecisions }
+
+// chatProtocol is the chat wire protocol a configured `api` names, in the model
+// package's vocabulary. As decisionsSurface is for the decision surfaces: the
+// configured value is configuration's — it refuses one it does not know at load
+// — and the wire shapes are model's, so the one mapping between the two lives
+// here.
+func chatProtocol(api string) model.Protocol {
+	if api == config.ProviderAPIAnthropic {
+		return model.ProtocolAnthropic
+	}
+	return model.ProtocolOpenAI
+}
 
 // warnFaults says what the pool's faults were, one line each. A provider
 // dropped from the pool is a warning, not a failure: the one being asked for

@@ -207,8 +207,8 @@ func TestResolveFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Endpoint{Role: RoleDecision, Mode: ModeFile, Provider: "lab", Model: "d3", Rule: RuleConfig,
-		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, APIKey: "lab-key",
-		BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
+		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIOpenAI,
+		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
 		t.Errorf("= %+v, want %+v", ep, want)
 	}

@@ -711,24 +711,40 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   no model, so that role's model comes from the configuration and a refusal names its key alone, and
   an explicit reference resolved in file mode because a reference is a pool reference — then opens
   the client through `cmd/provider.go`'s registry exactly as `score` does, so it speaks whichever
-  wire shape the entry names and a second wire shape lands without a second client construction. One
-  `model.Chat` call, no backoff, bounded by `--timeout`;
+  chat protocol the entry's `api` names, and the registry is the only site that builds a wire client.
+  One `model.Chat` call, no backoff, bounded by `--timeout`;
   the attempt's `FirstToken` — request start to the first non-empty content or reasoning delta,
   measured in `chatOnce`, zero where none arrived — is what the result reports beside the call's
   wall time. It opens no `kb.Source`, resolves no state directory and takes no lock: the verb is
   `probeEndpoint` → `clients.get` → `model.Chat` → the result document (SPEC §8).
-- Every model call is one tool-less chat request answered from its prompt alone: temperature 0,
-  thinking disabled by the provider's own `reasoning: {enabled: false}` control, with
+- Every model call is one tool-less chat request answered from its prompt alone. `internal/model`
+  holds two implementations of that request, and the endpoint entry's `api` selects which one the
+  registry builds: `model.HTTPClient` (`http_client.go`) speaks the OpenAI-compatible
+  `chat/completions` surface and is what an entry silent on `api` gets, and `model.AnthropicClient`
+  (`anthropic_client.go`) speaks the Anthropic Messages surface — `POST <baseUrl>/messages`, with
+  its own event sequence, its `x-api-key`/`anthropic-version` headers and its catalogue shape.
+  `model.NewClient` is the dispatch, and the protocol reaches it as a value the caller resolved onto
+  `model.Endpoint` from `config.Endpoint.Protocol`, which the configuration fills from the entry
+  (environment mode is `openai`). The body each client sends is its protocol's, never one shaped by
+  host or provider name. On the OpenAI surface: temperature 0 always; thinking disabled by the
+  provider's own `reasoning: {enabled: false}` control, with
   `chat_template_kwargs.enable_thinking: false` sent beside it for servers that speak the
-  tokenizer extension — one body for every provider, never one shaped by host or provider name,
-  since a provider that ignores one control reads the other — the usage chunk requested; a
-  call that does not complete is re-issued identically up to the attempt count, pausing where its
+  tokenizer extension, since a provider that ignores one control reads the other; the usage chunk
+  requested; and no completion cap, the server's own applying. On the Messages surface: no
+  `reasoning`, `chat_template_kwargs` or `prompt_cache_key` field exists, so thinking is off by the
+  thinking field's absence and a run's cache key has no home; `temperature` is sent only inside that
+  protocol's [0,1]; the system turn is lifted to the top-level `system` string; and the protocol's
+  required `max_tokens` is `max(256, ceil(characters / 4))` over the ask's messages and system text.
+  A call that does not complete is re-issued identically up to the attempt count, pausing where its
   caller's backoff says (§12), and a pause the call's context cannot cover is not waited out — the
   call gives up at once, its reason naming the attempts it made; a provider's non-2xx status ends it
   on the attempt that met it unless
-  the status is a 429 or a 5xx (§12). A scoring run's clients are built with the run's id, which the
-  client stamps on every request it sends as `prompt_cache_key` — one key per run, so its asks reach
-  one upstream and share one cache entry; a verb that names no run builds its clients with none, and
+  the status is a 429 or a 5xx (§12); both wire clients report a non-2xx as the same
+  `model.StatusError`, so that classification is shared rather than re-decided per protocol. A
+  scoring run's clients are built with the run's id, which the OpenAI client stamps on every
+  request it sends as
+  `prompt_cache_key` — one key per run, so its asks reach one upstream and share one cache entry; a
+  verb that names no run builds its clients with none, and
   the field is then omitted from the body rather than sent empty. Each
   attempt's outcome names what ended it — `ok`, `served-nothing`, `provider-refused` where the
   provider answered with a status that is not success, `transport-failure` where no answer of the
@@ -794,8 +810,10 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   value and so takes the seam's re-ask-then-default path. Under either surface an answer naming a
   question kbase did not ask is refused. The request is re-issued identically up to the chat attempt
   count on a transport error or retry-class 5xx, with no streaming and no incomplete-stream path.
-  The system-prompt sentence above is scoped to the overview call; a decision call has no system
-  message.
+  Both surfaces are OpenAI-shaped, so an endpoint whose `api` is `anthropic` has none: asked for a
+  letter ask it refuses, naming the provider and the role, rather than answering in a shape it never
+  spoke. The system-prompt sentence above is scoped to the overview call; a decision call has no
+  system message.
 - Each inference pass is built as plumbing reaching the model only through `internal/asks`' letter
   seam, injected — nothing in `claimgraph` knows a network exists. `internal/asks` holds the embedded
   templates and fragments, the composer, the caller (system fragment, per-call captures and the

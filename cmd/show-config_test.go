@@ -472,3 +472,41 @@ decisionsFlavor = "decisions"
 		t.Errorf("the dropped entry states a decision surface (%v): %v", got, entries["broken"])
 	}
 }
+
+// TestShowConfigReportsTheProtocol: every usable entry states the chat protocol
+// it resolves to — `openai` where the entry is silent, `anthropic` where it names
+// the Messages protocol — and a dropped provider, which has no entry to
+// describe, states none.
+func TestShowConfigReportsTheProtocol(t *testing.T) {
+	unsetInferenceEnv(t)
+	dir := t.TempDir()
+	writeValues(t, dir, config.ProvidersFileName, `[silent]
+baseUrl = "http://silent.example/v1"
+
+[messages]
+baseUrl = "http://messages.example/v1"
+api = "anthropic"
+
+[broken]
+`)
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"silent/dec-1\"\ntext = \"messages/text-1\"\nscoring = \"silent/score-1\"\n")
+
+	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
+	}
+	entries := map[string]map[string]any{}
+	for _, p := range doc.items("providers") {
+		name, _ := p["name"].(string)
+		entries[name] = p
+	}
+	if got := entries["silent"]["api"]; got != config.ProviderAPIOpenAI {
+		t.Errorf("an entry silent on the protocol reports %v, want %s", got, config.ProviderAPIOpenAI)
+	}
+	if got := entries["messages"]["api"]; got != config.ProviderAPIAnthropic {
+		t.Errorf("an entry naming anthropic reports %v, want %s", got, config.ProviderAPIAnthropic)
+	}
+	if got, ok := entries["broken"]["api"]; ok {
+		t.Errorf("the dropped entry states a protocol (%v): %v", got, entries["broken"])
+	}
+}

@@ -32,7 +32,7 @@ type buildOptions struct {
 	// closes when the build returns.
 	Provider func(reg *clients) (build.Provider, error)
 	// NewClient is the client seam the registry opens its clients through;
-	// nil means model.NewHTTPClient.
+	// nil means model.NewClient.
 	NewClient newClientFunc
 	Stdout    io.Writer
 	Stderr    io.Writer

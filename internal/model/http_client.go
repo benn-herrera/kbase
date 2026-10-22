@@ -39,11 +39,26 @@ const responseHeaderTimeout = 2 * time.Minute
 // error string.
 const errorBodyLimit = 8 << 10
 
-// Endpoint is what one client is built from: where to reach an
-// OpenAI-compatible inference API, how to authenticate to it, and the
-// prompt-cache key its requests carry. The provider fields are constructed from
-// the canonical provider config at wiring time, which is what keeps this
-// package independent of the config layer; the key names a run, not a provider.
+// Protocol names the chat wire protocol a client speaks. The caller resolves
+// the configured `api` value to one of these: this package knows the wire
+// shapes, and the configuration owns the vocabulary that names them, so no
+// third site compares the string.
+type Protocol int
+
+const (
+	// ProtocolOpenAI is the OpenAI-compatible chat-completions surface — the
+	// zero value, and what an endpoint naming no protocol gets.
+	ProtocolOpenAI Protocol = iota
+	// ProtocolAnthropic is the Anthropic Messages surface.
+	ProtocolAnthropic
+)
+
+// Endpoint is what one client is built from: where to reach an inference API,
+// which chat protocol it speaks, how to authenticate to it, and the
+// prompt-cache key its OpenAI-surface requests carry. The provider fields are
+// constructed from the canonical provider config at wiring time, which is what
+// keeps this package independent of the config layer; the key names a run, not
+// a provider.
 //
 // APIKey is secret-bearing. It is never logged, never placed in an error
 // string by this package, and is scrubbed out of provider responses that
@@ -51,27 +66,34 @@ const errorBodyLimit = 8 << 10
 type Endpoint struct {
 	// Name is the pool entry's name, carried for diagnostics only.
 	Name string
-	// BaseURL is the API root; "chat/completions" and "models" hang off
-	// it. A trailing slash is tolerated.
+	// BaseURL is the API root; the protocol's paths ("chat/completions" and
+	// "models", or "messages" and "models") hang off it. A trailing slash is
+	// tolerated.
 	BaseURL string
-	// APIKey is the bearer token. Empty means send no Authorization
-	// header — several local servers reject an empty bearer value.
+	// APIKey is the key. It rides the OpenAI surface as a bearer token and
+	// the Messages surface as `x-api-key`. Empty means send no auth header —
+	// several local servers reject an empty bearer value.
 	APIKey string
+	// Protocol is which chat wire protocol this endpoint speaks; the zero
+	// value is ProtocolOpenAI. NewClient dispatches on it.
+	Protocol Protocol
 	// Decisions is whether this server speaks the OpenAI Decisions shape for
 	// the letter asks: true for `POST <base-url>/decisions`, false for the
 	// SystemOne shape kbase's asks have always used. Chat is unaffected: it
-	// stays `chat/completions` on both.
+	// stays `chat/completions` under either surface, and Protocol is what
+	// selects chat.
 	//
 	// The configured `decisionsFlavor` value is resolved to this by the caller:
 	// this package knows the two wire shapes, and the configuration owns the
 	// vocabulary that names them, so no third comparison reads the string.
 	Decisions bool
-	// PromptCacheKey is the prompt-cache key every request this client sends
-	// carries, in the body's `prompt_cache_key`; empty sends none. It names a
-	// run rather than a provider: every ask of one run carries the same key,
-	// which is what holds that run's asks at one upstream and sharing one
-	// cache entry. The caller sets it, from the run it is opening the client
-	// for.
+	// PromptCacheKey is the prompt-cache key every OpenAI-surface request this
+	// client sends carries, in the body's `prompt_cache_key`; empty sends none.
+	// It names a run rather than a provider: every ask of one run carries the
+	// same key, which is what holds that run's asks at one upstream and sharing
+	// one cache entry. The caller sets it, from the run it is opening the
+	// client for. The Messages protocol has no such field, so a client
+	// speaking it sends none of this.
 	PromptCacheKey string
 }
 
@@ -93,8 +115,32 @@ type HTTPClient struct {
 // rather than discovered by a caller.
 var _ Client = (*HTTPClient)(nil)
 
-// NewHTTPClient constructs an HTTPClient for the given endpoint. A zero
-// Endpoint yields a client whose first call produces a clear error.
+// NewHTTPClient constructs an HTTPClient for the given endpoint, always
+// speaking the OpenAI surface whatever protocol the endpoint names: tests
+// construct the two wire clients directly, and NewClient is what dispatches. A
+// zero Endpoint yields a client whose first call produces a clear error.
+func NewHTTPClient(e Endpoint) *HTTPClient {
+	return &HTTPClient{
+		endpoint:       e,
+		http:           newHTTPTransport(),
+		promptCacheKey: e.PromptCacheKey,
+	}
+}
+
+// NewClient constructs the chat client the endpoint's protocol names: the
+// OpenAI-compatible surface by default, and the Anthropic Messages surface
+// where the caller resolved that. The protocol value is the caller's — the
+// configuration owns the vocabulary that names it — so nothing here reads a
+// configuration string.
+func NewClient(e Endpoint) Client {
+	if e.Protocol == ProtocolAnthropic {
+		return NewAnthropicClient(e)
+	}
+	return NewHTTPClient(e)
+}
+
+// newHTTPTransport is the transport both wire clients carry: the process's
+// default transport cloned, with a handshake bound.
 //
 // The shared http.Client carries NO Timeout, deliberately: that field is a
 // total round-trip bound including the body read, which would kill exactly
@@ -102,24 +148,26 @@ var _ Client = (*HTTPClient)(nil)
 // placed where they mean something instead — a call-site context deadline
 // for a blocking Consult, responseHeaderTimeout for the handshake, and
 // streamIdleTimeout for the gap between chunks of a stream.
-func NewHTTPClient(e Endpoint) *HTTPClient {
+func newHTTPTransport() *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
-	return &HTTPClient{
-		endpoint:       e,
-		http:           &http.Client{Transport: tr},
-		promptCacheKey: e.PromptCacheKey,
-	}
+	return &http.Client{Transport: tr}
 }
 
-// Close releases the client's idle connections. A verb that opened a client
-// calls it before it returns, on every outcome: the pooled connections would
-// otherwise outlive the invocation that made them.
-func (c *HTTPClient) Close() error {
-	if tr, ok := c.http.Transport.(*http.Transport); ok {
+// closeIdleConnections releases h's pooled connections. A verb that opened a
+// client calls it before it returns, on every outcome: the pooled connections
+// would otherwise outlive the invocation that made them.
+func closeIdleConnections(h *http.Client) error {
+	if tr, ok := h.Transport.(*http.Transport); ok {
 		tr.CloseIdleConnections()
 	}
 	return nil
+}
+
+// Close releases the client's idle connections. A verb that opened a client
+// calls it before it returns, on every outcome.
+func (c *HTTPClient) Close() error {
+	return closeIdleConnections(c.http)
 }
 
 // Consult performs one chat-completions round-trip.
@@ -199,16 +247,22 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, path, accept string,
 		return nil, fmt.Errorf("http: %w", err)
 	}
 	if resp.StatusCode/100 != 2 {
-		// Read and discard so the connection can be reused; surface the
-		// body in the error after scrubbing, capped at errorBodyLimit.
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
-		_ = resp.Body.Close()
-		return nil, StatusError{
-			Code: resp.StatusCode,
-			Body: scrubAuthorization(string(respBody), c.endpoint.APIKey),
-		}
+		return nil, statusError(resp, c.endpoint.APIKey)
 	}
 	return resp, nil
+}
+
+// statusError is a non-2xx response as both clients return it: the body read
+// (so the connection can be reused) and capped at errorBodyLimit (so a
+// provider's HTML error page cannot become a megabyte of error string), with
+// any key the server echoed scrubbed out. It takes ownership of resp.Body.
+func statusError(resp *http.Response, apiKey string) error {
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+	_ = resp.Body.Close()
+	return StatusError{
+		Code: resp.StatusCode,
+		Body: scrubAuthorization(string(respBody), apiKey),
+	}
 }
 
 // ConsultStream performs one streaming chat-completions round-trip,

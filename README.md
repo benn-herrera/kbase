@@ -475,9 +475,12 @@ read in its place.
   — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
   `~` in `apiKeyFile`, `--config-dir`, `$KBASE_CONFIG_DIR` or `$KBASE_API_KEY_FILE` expands from your
   home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
-  `chmod 600` it. An entry's `decisionsFlavor` names which decision surface its server speaks —
-  `systemone` (the default) or `decisions` — and changes nothing else: chat stays
-  `chat/completions`, and the decision model is still `config.toml`'s `models.decision`.
+  `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `openai` (the
+  default, the OpenAI-compatible `chat/completions` surface) or `anthropic` (the Anthropic Messages
+  protocol); a Messages endpoint has no decision surface, so the `decision` role's entry must be an
+  OpenAI one. An entry's `decisionsFlavor` names which decision surface its server speaks —
+  `systemone` (the default) or `decisions` — and changes nothing about chat, which `api` decides, and
+  nothing about the model, which is still `config.toml`'s `models.decision`.
 - **`config.toml`** holds the choices: `[models]` `decision`, `text` and `scoring`, each a
   `<provider>/<model>` reference — the entry that supplies the endpoint, then the model id it serves,
   split at the first `/` (a model id may contain one, a provider name may not). A bare model id there

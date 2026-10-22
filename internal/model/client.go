@@ -1,10 +1,12 @@
 // Package model is the LLM client surface.
 //
-// Two implementations satisfy the same Client interface: HTTPClient
-// (http_client.go), targeting any OpenAI-compatible chat-completions
-// endpoint, and MockClient (mockllm.go), the test substrate. Both consume
-// the same Request/Response shape, so tests and the production pipeline
-// exercise the same code paths.
+// Three implementations satisfy the same Client interface: HTTPClient
+// (http_client.go), targeting any OpenAI-compatible chat-completions endpoint;
+// AnthropicClient (anthropic_client.go), targeting the Anthropic Messages
+// protocol; and MockClient (mockllm.go), the test substrate. NewClient is what
+// picks between the two wire implementations, from the protocol the caller
+// resolved onto the Endpoint. All three consume the same Request/Response
+// shape, so tests and the production pipeline exercise the same code paths.
 package model
 
 import (
@@ -66,23 +68,29 @@ func ConsultDrained(ctx context.Context, c Client, req Request) (Response, error
 	}
 }
 
-// ModelInfo describes a single model exposed by a provider, mirroring the
-// shape OpenAI-compatible /models endpoints return.
+// ModelInfo describes a single model exposed by a provider, mapped from
+// whichever catalogue shape the endpoint's protocol returns: the two protocols
+// spell the listing differently and both land here.
 type ModelInfo struct {
 	ID      string // provider-specific model identifier
 	Created int64  // unix seconds; 0 if provider didn't supply
 	OwnedBy string // free-form ownership string; "" if absent
 }
 
-// Request is one chat-completions invocation. No completion cap is sent: the
-// server's own applies.
+// Request is one chat invocation, as the pipeline's asks shape it. The two
+// protocols read different halves of it: the OpenAI client sends no completion
+// cap (the server's own applies) and reads ChatTemplateKwargs, Reasoning and
+// PromptCacheKey; the Messages client derives its required cap from the text
+// (maxTokensFor) and sends none of those three, which that protocol has no
+// field for.
 type Request struct {
 	Model    string
 	Messages []Message
 
-	// Temperature is the sampling temperature, always wired on the wire.
-	// 0 means deterministic (greedy decode); it is NOT a "use server
-	// default" sentinel.
+	// Temperature is the sampling temperature, wired on the wire by the
+	// OpenAI client always. 0 means deterministic (greedy decode); it is NOT
+	// a "use server default" sentinel. The Messages client sends it only
+	// inside that protocol's [0,1] range — see encodeAnthropicRequest.
 	Temperature float64
 
 	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
@@ -117,8 +125,9 @@ type Reasoning struct {
 	Enabled bool `json:"enabled"`
 }
 
-// FinishLength is the finish_reason an OpenAI-compatible provider reports when
-// a generation hit its completion cap instead of finishing. It is the one
+// FinishLength is the finish reason that says a generation hit its completion
+// cap instead of finishing — `length` on the OpenAI-compatible surface, and the
+// Messages protocol's `max_tokens` translated to it at decode. It is the one
 // finish reason that says the response is INCOMPLETE rather than wrong.
 const FinishLength = "length"
 
@@ -136,8 +145,9 @@ type Response struct {
 	FinishReason string
 
 	// StreamDone is whether a streamed response reached the provider's
-	// closing `[DONE]`: a stream whose body ended short of it did not
-	// complete, whatever content arrived first. False on a blocking Consult.
+	// closing event — `[DONE]` on the OpenAI surface, `message_stop` on the
+	// Messages one: a stream whose body ended short of it did not complete,
+	// whatever content arrived first. False on a blocking Consult.
 	StreamDone bool
 	// UsageReported is whether a streamed response carried a usage block at
 	// all, which an all-zero Usage cannot say.
@@ -220,11 +230,12 @@ type StreamReader interface {
 // reported. It is standard OpenAI accounting — a token count, hence its
 // place beside the others and NOT inside Telemetry.
 //
-// On a STREAMED response every figure here is zero unless the request
-// carried `stream_options.include_usage` (encodeRequest sends it on the
-// streaming path). An all-zero Usage therefore means "not reported", not
-// "no tokens", and anything gated on a token count must treat it as an
-// unevaluable input rather than a passing one.
+// On a STREAMED response every figure here is zero unless the request carried
+// `stream_options.include_usage` (the OpenAI client sends it on the streaming
+// path); the Messages client's streams report usage on every stream, so this
+// caveat is the OpenAI surface's alone. An all-zero Usage therefore means "not
+// reported", not "no tokens", and anything gated on a token count must treat it
+// as an unevaluable input rather than a passing one.
 type Usage struct {
 	PromptTokens       int
 	CompletionTokens   int
