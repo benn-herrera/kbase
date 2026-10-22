@@ -45,7 +45,7 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
 		return 0, err
 	}
-	reg := newClients(opts.NewClient, opts.Logger)
+	reg := newClients(opts.NewClient, opts.Logger, "")
 	defer reg.closeAll()
 	outcome, fields := build.Run(ctx, build.Options{
 		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,

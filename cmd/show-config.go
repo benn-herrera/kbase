@@ -63,7 +63,7 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 		// as it is by any other verb that resolves from it.
 		supersededProvider(opts.Stderr, opts.Config)
 	}
-	reg := newClients(opts.NewClient, opts.Logger)
+	reg := newClients(opts.NewClient, opts.Logger, "")
 	roles, roleItems := resolvedRoles(reg, s, mode, modeErr)
 	return []toolresult.Field{
 		{Key: "layers", Value: layerRecords(facts.Layers)},

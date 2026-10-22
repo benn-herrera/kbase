@@ -39,10 +39,11 @@ const responseHeaderTimeout = 2 * time.Minute
 // error string.
 const errorBodyLimit = 8 << 10
 
-// Endpoint is the transport-level slice of a configured provider: where to
-// reach an OpenAI-compatible inference API and how to authenticate to it.
-// It is constructed from the canonical provider config at wiring time, which
-// is what keeps this package independent of the config layer.
+// Endpoint is what one client is built from: where to reach an
+// OpenAI-compatible inference API, how to authenticate to it, and the
+// prompt-cache key its requests carry. The provider fields are constructed from
+// the canonical provider config at wiring time, which is what keeps this
+// package independent of the config layer; the key names a run, not a provider.
 //
 // APIKey is secret-bearing. It is never logged, never placed in an error
 // string by this package, and is scrubbed out of provider responses that
@@ -65,6 +66,13 @@ type Endpoint struct {
 	// this package knows the two wire shapes, and the configuration owns the
 	// vocabulary that names them, so no third comparison reads the string.
 	Decisions bool
+	// PromptCacheKey is the prompt-cache key every request this client sends
+	// carries, in the body's `prompt_cache_key`; empty sends none. It names a
+	// run rather than a provider: every ask of one run carries the same key,
+	// which is what holds that run's asks at one upstream and sharing one
+	// cache entry. The caller sets it, from the run it is opening the client
+	// for.
+	PromptCacheKey string
 }
 
 // HTTPClient is a thin OpenAI-compatible chat-completions client.
@@ -74,6 +82,10 @@ type Endpoint struct {
 type HTTPClient struct {
 	endpoint Endpoint
 	http     *http.Client
+	// promptCacheKey is the key every request this client sends carries,
+	// stamped onto the Request in Consult and ConsultStream. It is the
+	// client's alone: a request cannot name a key of its own.
+	promptCacheKey string
 }
 
 // The constructor returns the concrete type (nil-interface traps stay out
@@ -94,8 +106,9 @@ func NewHTTPClient(e Endpoint) *HTTPClient {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
 	return &HTTPClient{
-		endpoint: e,
-		http:     &http.Client{Transport: tr},
+		endpoint:       e,
+		http:           &http.Client{Transport: tr},
+		promptCacheKey: e.PromptCacheKey,
 	}
 }
 
@@ -119,6 +132,7 @@ func (c *HTTPClient) Consult(ctx context.Context, req Request) (Response, error)
 	if c.endpoint.BaseURL == "" {
 		return Response{}, fmt.Errorf("endpoint BaseURL is empty")
 	}
+	req.PromptCacheKey = c.promptCacheKey
 
 	body, err := encodeRequest(req, false)
 	if err != nil {
@@ -216,6 +230,7 @@ func (c *HTTPClient) ConsultStream(ctx context.Context, req Request) (StreamRead
 	if c.endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}
+	req.PromptCacheKey = c.promptCacheKey
 
 	body, err := encodeRequest(req, true)
 	if err != nil {
@@ -305,6 +320,7 @@ type wireRequest struct {
 	Messages           []wireMessage      `json:"messages"`
 	Temperature        float64            `json:"temperature"`
 	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"`
+	PromptCacheKey     string             `json:"prompt_cache_key,omitempty"`
 	Stream             bool               `json:"stream,omitempty"`
 	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
 }
@@ -427,13 +443,16 @@ type wireModel struct {
 // `stream_options.include_usage` (see wireStreamOptions — usage is not
 // reported on a streamed response without it, and the field is a protocol
 // error on a blocking one); the encoding is otherwise identical across the
-// blocking and streaming paths.
+// blocking and streaming paths. `prompt_cache_key` is written where the
+// request carries one and omitted otherwise: a server that rejects the field
+// must not receive an empty one from a caller sending no key.
 func encodeRequest(req Request, stream bool) ([]byte, error) {
 	wr := wireRequest{
 		Model:              req.Model,
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
 		Temperature:        req.Temperature,
 		ChatTemplateKwargs: req.ChatTemplateKwargs,
+		PromptCacheKey:     req.PromptCacheKey,
 		Stream:             stream,
 	}
 	if stream {

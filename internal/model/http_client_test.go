@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -411,6 +413,85 @@ func TestHTTPClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(rawBody), "chat_template_kwargs") {
 		t.Errorf("chat_template_kwargs should be omitted when empty; got body: %s", rawBody)
+	}
+}
+
+// TestHTTPClientPromptCacheKey: a client built with a prompt-cache key stamps it
+// on every request it sends, on both the blocking and the streaming path; one
+// built with no key sends no such field at all — an omitted field, never an
+// empty one.
+func TestHTTPClientPromptCacheKey(t *testing.T) {
+	const key = "run-abcdefgh"
+	var mu sync.Mutex
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		if r.Header.Get("Accept") == mimeEventStream {
+			w.Header().Set("Content-Type", mimeEventStream)
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	// sent sends one request each way and returns the bodies it carried.
+	sent := func(t *testing.T, c *HTTPClient) [][]byte {
+		t.Helper()
+		mu.Lock()
+		from := len(bodies)
+		mu.Unlock()
+		if _, err := c.Consult(context.Background(), chatRequest("m")); err != nil {
+			t.Fatalf("Consult: %v", err)
+		}
+		sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
+		if err != nil {
+			t.Fatalf("ConsultStream: %v", err)
+		}
+		defer sr.Close()
+		for {
+			if _, err := sr.Next(); err != nil {
+				if !errors.Is(err, io.EOF) {
+					t.Fatalf("Next: %v", err)
+				}
+				break
+			}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(bodies[from:])
+	}
+
+	for _, tc := range []struct{ name, key string }{
+		{"with a key", key},
+		{"with no key", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := newTestEndpoint(srv.URL)
+			ep.PromptCacheKey = tc.key
+			for _, body := range sent(t, NewHTTPClient(ep)) {
+				var wire map[string]json.RawMessage
+				if err := json.Unmarshal(body, &wire); err != nil {
+					t.Fatalf("unmarshal %s: %v", body, err)
+				}
+				got, present := wire["prompt_cache_key"]
+				if tc.key == "" {
+					if present {
+						t.Errorf("prompt_cache_key sent with no key configured: %s", body)
+					}
+					continue
+				}
+				if !present {
+					t.Fatalf("prompt_cache_key absent from a request the client was keyed for: %s", body)
+				}
+				if string(got) != `"`+tc.key+`"` {
+					t.Errorf("prompt_cache_key = %s, want %q", got, tc.key)
+				}
+			}
+		})
 	}
 }
 

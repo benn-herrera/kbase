@@ -46,7 +46,7 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
-	reg := newClients(opts.NewClient, opts.Logger)
+	reg := newClients(opts.NewClient, opts.Logger, "")
 	defer reg.closeAll()
 	entry := opts.Providers[name]
 	client, err := reg.get(entryEndpoint(entry))

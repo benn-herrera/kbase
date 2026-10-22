@@ -54,7 +54,7 @@ func TestRegistryOpensEachEndpointOnce(t *testing.T) {
 	reg := newClients(func(model.Endpoint) model.Client {
 		opened++
 		return closer{model.NewScriptedMock(nil, nil), &log}
-	}, nil)
+	}, nil, "")
 	lab := config.Endpoint{Mode: config.ModeFile, Provider: "lab", BaseURL: "http://lab.example/v1"}
 	first, err := reg.get(lab)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestRegistryPreflightReadsTheKeyFile(t *testing.T) {
 	reg := newClients(func(model.Endpoint) model.Client {
 		opened++
 		return model.NewScriptedMock(nil, nil)
-	}, nil)
+	}, nil, "")
 	_, err := reg.get(config.Endpoint{Provider: "lab", BaseURL: "http://lab.example/v1", APIKeyFile: "/absent/key.txt"})
 	var refusal config.Refusal
 	if !errors.As(err, &refusal) || refusal.Key != config.EnvAPIKeyFile || refusal.Path != "/absent/key.txt" {

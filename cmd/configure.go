@@ -205,7 +205,7 @@ func configureDialed(ctx context.Context, opts configureOptions, manual map[stri
 		}
 	}
 
-	reg := newClients(opts.NewClient, opts.Logger)
+	reg := newClients(opts.NewClient, opts.Logger, "")
 	defer reg.closeAll()
 	fields := configureProviderFields(name, rule, s.Providers[name].Layer)
 	catalogues := make(map[string][]string, len(targets))

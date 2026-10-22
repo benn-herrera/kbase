@@ -249,8 +249,10 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 
 	// A provider endpoint is dialled: the registry is opened for the entry the
 	// scoring role named, and its client is what every ask in this run sends
-	// through.
-	reg := newClients(opts.NewClient, opts.Logger)
+	// through. The run's id is the key the registry gives every client it
+	// opens, so every ask of this run carries it — a resumed run re-derives
+	// the same id from its ledger, and so sends the same key.
+	reg := newClients(opts.NewClient, opts.Logger, run)
 	defer reg.closeAll()
 	client, err := reg.get(ep)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {

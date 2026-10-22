@@ -91,6 +91,12 @@ type Request struct {
 	// models. Encoded as `chat_template_kwargs` in the JSON wire format.
 	// Empty/nil → field omitted entirely.
 	ChatTemplateKwargs map[string]any
+
+	// PromptCacheKey is sent as `prompt_cache_key`, and omitted entirely
+	// where empty. The client is what sets it, from the key it was built
+	// with: one client serves one run, and every ask that run makes carries
+	// the same key. A caller does not set it.
+	PromptCacheKey string
 }
 
 // FinishLength is the finish_reason an OpenAI-compatible provider reports when

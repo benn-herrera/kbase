@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,6 +105,20 @@ type scoreResult struct {
 // caller's own Ctx drives the run, and its absence runs it uncancelled.
 func scoreIn(t *testing.T, repo, state string, opts scoreOptions, client func() model.Client) scoreResult {
 	t.Helper()
+	return scoreDrive(t, repo, state, opts, func(model.Endpoint) model.Client {
+		if client == nil {
+			t.Fatal("the run dialled a provider")
+		}
+		return client()
+	})
+}
+
+// scoreDrive drives one score invocation over repo with its state under state,
+// newClient being the registry's client seam. It is scoreIn's body for a test
+// that reads the endpoint the verb built — what the registry put on it is what
+// the wire carries.
+func scoreDrive(t *testing.T, repo, state string, opts scoreOptions, newClient newClientFunc) scoreResult {
+	t.Helper()
 	if opts.Providers == nil {
 		opts.providerOptions = scoreProvider()
 	}
@@ -118,10 +133,7 @@ func scoreIn(t *testing.T, repo, state string, opts scoreOptions, client func() 
 	opts.NewClient = func(e model.Endpoint) model.Client {
 		dialled++
 		endpoints = append(endpoints, e)
-		if client == nil {
-			t.Fatal("the run dialled a provider")
-		}
-		return client()
+		return newClient(e)
 	}
 	code, err := runScore(opts)
 	if err != nil {
@@ -1034,6 +1046,142 @@ func statusProvider(t *testing.T, code int) (*httptest.Server, func() int) {
 		mu.Lock()
 		defer mu.Unlock()
 		return seen
+	}
+}
+
+// scoreProviderAt is scoreProvider with its pool entry's base URL at baseURL:
+// the one entry a scoring run resolves its role to, dialling a test server.
+func scoreProviderAt(baseURL string) providerOptions {
+	p := scoreProvider()
+	p.Providers["solo"] = provider("solo", baseURL)
+	return p
+}
+
+// scoringWire is the endpoint a scoring run's asks reach: every request body it
+// read, in the order it read them, each answered with the charge list `none`.
+type scoringWire struct {
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+// handler reads each request's body and answers it with the charge list `none`
+// as a stream: the reply a run prices to the maximum, so every item lands.
+func (w *scoringWire) handler() http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.mu.Lock()
+		w.bodies = append(w.bodies, body)
+		w.mu.Unlock()
+		rw.Header().Set("Content-Type", "text/event-stream")
+		_, _ = rw.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"none\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n" +
+			"data: [DONE]\n\n"))
+	}
+}
+
+// promptCacheField is one body's `prompt_cache_key`, and whether the body
+// carried the field at all: absent and empty are different requests, and only
+// the first is "sends no key".
+type promptCacheField struct {
+	key     string
+	present bool
+}
+
+// promptCacheFields is what every body the endpoint read carried, in the order
+// it read them.
+func (w *scoringWire) promptCacheFields(t *testing.T) []promptCacheField {
+	t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]promptCacheField, 0, len(w.bodies))
+	for _, body := range w.bodies {
+		var wire struct {
+			Key *string `json:"prompt_cache_key"`
+		}
+		if err := json.Unmarshal(body, &wire); err != nil {
+			t.Fatalf("unmarshal %s: %v", body, err)
+		}
+		f := promptCacheField{present: wire.Key != nil}
+		if wire.Key != nil {
+			f.key = *wire.Key
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// TestScoreSendsTheRunAsThePromptCacheKey: every ask of a scoring run carries
+// the run's id as `prompt_cache_key`, so a run's asks reach one upstream and
+// share one cache entry. Two items of one run, one server, one key — the id the
+// result document names.
+func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
+	unsetInferenceEnv(t)
+	repo := fixtureRepo(t, "score-kb")
+	wire := &scoringWire{}
+	srv := httptest.NewServer(wire.handler())
+	defer srv.Close()
+
+	got := scoreDrive(t, repo, t.TempDir(), scoreOptions{Pass: query.PassRigor, providerOptions: scoreProviderAt(srv.URL)},
+		func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) })
+	if got.doc.Outcome != "done" {
+		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	run, _ := got.doc.Values["run"].(string)
+	if run == "" {
+		t.Fatalf("the document names no run: %v", got.doc.Values)
+	}
+	fields := wire.promptCacheFields(t)
+	counts, _ := got.doc.Values["counts"].(map[string]any)
+	total, _ := counts["total"].(int)
+	if total < 2 || len(fields) != total {
+		t.Fatalf("%d asks for %v items, want one per item and at least two\n%s", len(fields), counts["total"], got.stdout)
+	}
+	for i, f := range fields {
+		if !f.present || f.key != run {
+			t.Errorf("ask %d carried prompt_cache_key %q (present %v), want the run id %q", i+1, f.key, f.present, run)
+		}
+	}
+}
+
+// TestScoreResumeSendsTheSamePromptCacheKey: a resumed run continues the id it
+// was given rather than minting one, so its asks carry the key the first
+// invocation's did — one provider and one cache entry for the run, across
+// processes.
+func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
+	unsetInferenceEnv(t)
+	repo, state := fixtureRepo(t, "score-kb"), t.TempDir()
+	wire := &scoringWire{}
+	srv := httptest.NewServer(wire.handler())
+	defer srv.Close()
+	overHTTP := func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) }
+
+	first := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, Limit: 1, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
+	run, _ := first.doc.Values["run"].(string)
+	if run == "" {
+		t.Fatalf("the document names no run: %v", first.doc.Values)
+	}
+	firstAsks := wire.promptCacheFields(t)
+	if len(firstAsks) != 1 {
+		t.Fatalf("%d asks for the one item --limit named\n%s", len(firstAsks), first.stdout)
+	}
+	if !firstAsks[0].present || firstAsks[0].key != run {
+		t.Errorf("the first invocation's ask carried prompt_cache_key %q (present %v), want the run id %q",
+			firstAsks[0].key, firstAsks[0].present, run)
+	}
+
+	resumed := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: run, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
+	if got := resumed.doc.Values["run"]; got != run {
+		t.Fatalf("the resumed run's document names %v, want %q", got, run)
+	}
+	all := wire.promptCacheFields(t)
+	if len(all) <= len(firstAsks) {
+		t.Fatalf("the resumed run asked nothing: %d asks over both invocations\n%s", len(all), resumed.stdout)
+	}
+	for i, f := range all {
+		if !f.present || f.key != run {
+			t.Errorf("ask %d carried prompt_cache_key %q (present %v), want the run id %q", i+1, f.key, f.present, run)
+		}
 	}
 }
 

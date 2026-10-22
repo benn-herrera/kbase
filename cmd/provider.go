@@ -87,15 +87,20 @@ func (o providerOptions) inputs(env config.Overrides) config.Inputs {
 // deadline — each caller bounds its own call.
 type clients struct {
 	newClient func(model.Endpoint) model.Client
-	opened    map[string]model.Client
+	// promptCacheKey is what every client the registry opens stamps on the
+	// requests it sends, "" for none: a scoring run passes its run id, so
+	// every ask of the run carries one key; every other verb names no run and
+	// passes nothing.
+	promptCacheKey string
+	opened         map[string]model.Client
 	// lg takes a close that failed. A close error is never raised: the verb
 	// has usually written its result by then.
 	lg log.Logger
 }
 
 // newClients is a registry over seam, nil taking the HTTP client, whose close
-// failures go to lg.
-func newClients(seam newClientFunc, lg log.Logger) *clients {
+// failures go to lg and whose every client carries promptCacheKey.
+func newClients(seam newClientFunc, lg log.Logger, promptCacheKey string) *clients {
 	if seam == nil {
 		// Wrapped rather than referenced directly so the seam does not
 		// depend on NewHTTPClient's exact return type.
@@ -104,7 +109,7 @@ func newClients(seam newClientFunc, lg log.Logger) *clients {
 	if lg == nil {
 		lg = log.Discard()
 	}
-	return &clients{newClient: seam, opened: map[string]model.Client{}, lg: lg}
+	return &clients{newClient: seam, promptCacheKey: promptCacheKey, opened: map[string]model.Client{}, lg: lg}
 }
 
 // get is the client for ep, opened on first use: two roles naming one pool
@@ -123,7 +128,7 @@ func (c *clients) get(ep config.Endpoint) (model.Client, error) {
 		return nil, err
 	}
 	client := c.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
-		Decisions: decisionsSurface(ep.Flavor)})
+		Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: c.promptCacheKey})
 	c.opened[key] = client
 	return client, nil
 }

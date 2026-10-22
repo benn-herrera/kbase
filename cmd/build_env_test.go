@@ -38,7 +38,7 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 		dialled = append(dialled, e)
 		return model.NewScriptedMock(nil, nil)
 	}
-	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(newClients(providers.NewClient, nil))
+	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(newClients(providers.NewClient, nil, ""))
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}

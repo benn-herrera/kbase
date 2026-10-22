@@ -700,7 +700,10 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   thinking disabled (`chat_template_kwargs.enable_thinking: false`), the usage chunk requested; a
   call that does not complete is re-issued identically up to the attempt count, pausing where its
   caller's backoff says (§12); a provider's non-2xx status ends it on the attempt that met it unless
-  the status is a 429 or a 5xx (§12). Each
+  the status is a 429 or a 5xx (§12). A scoring run's clients are built with the run's id, which the
+  client stamps on every request it sends as `prompt_cache_key` — one key per run, so its asks reach
+  one upstream and share one cache entry; a verb that names no run builds its clients with none, and
+  the field is then omitted from the body rather than sent empty. Each
   attempt's outcome names what ended it — `ok`, `served-nothing`, `provider-refused` where the
   provider answered with a status that is not success, `transport-failure` where no answer of the
   provider's was had — and the error a call returns carries the last attempt's outcome and its text,

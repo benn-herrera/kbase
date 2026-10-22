@@ -841,7 +841,9 @@ refuses whatever the flag says, and `--scoring-model` there overrides the variab
 one run. A run records the model as the flag's where the flag named it. A `--dry-run` resolves no role
 and refuses nothing for one.
 
-**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint. A call
+**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint. Every
+ask a run sends carries the run's id as its `prompt_cache_key`, so a run's asks reach one provider
+and share one cache entry. A call
 that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
 30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
 it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and

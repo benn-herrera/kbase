@@ -316,7 +316,8 @@ supplies the role where `models.scoring` names none and overrides it where it do
 the environment's endpoint, where the role's variable must name one too. Every ask is one chat call
 on that endpoint, re-issued identically up to the transport attempt count while it does not complete,
 pausing 5 s then 30 s between attempts; a status that is not retryable — any non-2xx other than 429
-or a 5xx — fails the item at once.
+or a 5xx — fails the item at once. Every ask of a run carries the run's id as its
+`prompt_cache_key`, so a run's asks reach one provider and share one cache entry.
 A run asks a model for minutes: at a terminal `kbase score` blocks until the walk ends, and as an
 [MCP](#using-kbase-from-an-agent-harness-mcp) tool it starts a detached child and returns at once with
 the run's identity, `kbase wait` reporting the outcome.

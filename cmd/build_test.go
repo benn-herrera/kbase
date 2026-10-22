@@ -116,10 +116,14 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 		}
 	}
 
-	// One client per provider, each dialled on the entry its own role named.
+	// One client per provider, each dialled on the entry its own role named,
+	// and no prompt-cache key on any of them: only a scoring run carries one.
 	var urls []string
 	for _, e := range dialled {
 		urls = append(urls, e.Name+" "+e.BaseURL)
+		if e.PromptCacheKey != "" {
+			t.Errorf("the build's client for %s carries the prompt-cache key %q; a build sends none", e.Name, e.PromptCacheKey)
+		}
 	}
 	slices.Sort(urls)
 	if want := []string{"cloud http://cloud.example/v1", "lab http://lab.example/v1"}; !slices.Equal(urls, want) {
@@ -144,7 +148,7 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 			Config:    config.Config{Models: models},
 			Stderr:    &stderr,
 		}
-		_, err := buildProvider(providers, config.Overrides{}, &stderr)(newClients(nil, nil))
+		_, err := buildProvider(providers, config.Overrides{}, &stderr)(newClients(nil, nil, ""))
 		var refusal config.Refusal
 		if !errors.As(err, &refusal) || refusal.Key != "models."+string(role) || !strings.Contains(refusal.Detail, `provider "absent"`) {
 			t.Errorf("%s's absent provider = %v, want a refusal keyed models.%s naming %q", role, err, role, "absent")
