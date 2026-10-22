@@ -6,9 +6,9 @@ characters the line will write, and where it is not there, shorten it until it i
 usually enough and one character is enough: the smallest span that carries the fault is the honest
 one, and one span the text does not carry costs the whole reply.
 
-Markup is not copied in. `$`, `\(`, `\)`, `\[`, `\]`, `\text{}`, backticks and emphasis markers
-belong to a span only where the text itself writes them: where the text writes `d_n` and the habit
-is `$d_n$`, the span is `d_n`.
+Markup is copied as the text writes it, neither added nor dropped: `$`, `\(`, `\)`, `\[`, `\]`,
+`\text{}`, backticks and emphasis markers belong to a span exactly where the text itself writes them —
+where the text writes `$M$`, the span is `$M$`, and where it writes `d_n`, the span is `d_n`.
 
 A passage is one of the texts the call shows, whole — a title, a statement, a source's text, a
 target's — and the citation is looked for in one passage at a time, so a span that begins in the one
