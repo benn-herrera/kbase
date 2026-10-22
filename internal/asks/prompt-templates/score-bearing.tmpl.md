@@ -74,10 +74,12 @@ later is not.
 One line per occurrence, in this form:
 
 ```
-flt-transfer: the same holds for
+flt-transfer: the same pattern in the cortex
 ```
 
-An id from the list above, a colon, a space, and a span copied out of one of the two texts.
+An id from the list above, a colon, a space, and a span copied out of one of the two texts. The span is
+never the bridge phrase itself — that phrase is what neither text carries, and quoting it is a citation
+the reply cannot survive.
 
 @!score-answer-occurrences!@
 
