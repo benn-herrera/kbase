@@ -321,6 +321,32 @@ func TestResolveRefusals(t *testing.T) {
 	}
 }
 
+// TestResolveDefaultRefusalNamesTheRoleFirst: a verb whose role is its own
+// default — nothing named a selection — is refused by the role's key as the
+// first remedy and by the flag as the other, and never as though the flag had
+// been passed.
+func TestResolveDefaultRefusalNamesTheRoleFirst(t *testing.T) {
+	in := scenario(t)
+	in.Cfg.Models.Scoring = ""
+	_, err := ResolveFlag(in, ModeFile, RoleScoring, "", keyScoringModel, true)
+	var refusal Refusal
+	if !asRefusal(err, &refusal) {
+		t.Fatalf("err = %v, want one refusal", err)
+	}
+	if refusal.Key != "models.scoring" || refusal.Path != ConfigPath(in.WriteDir) || refusal.Remedy != configureRemedy {
+		t.Errorf("named %s in %s, remedy %q; want the role's key and file", refusal.Key, refusal.Path, refusal.Remedy)
+	}
+	for _, want := range []string{"sets no models.scoring", "nothing named a selection",
+		"the scoring role is the default", keyScoringModel} {
+		if !strings.Contains(refusal.Detail, want) {
+			t.Errorf("detail = %q, want %q", refusal.Detail, want)
+		}
+	}
+	if strings.Contains(refusal.Detail, "names no model") {
+		t.Errorf("detail = %q reads as though the flag had been passed", refusal.Detail)
+	}
+}
+
 // asRefusal reports whether err is exactly one refusal.
 func asRefusal(err error, out *Refusal) bool {
 	one, ok := err.(Refusal)

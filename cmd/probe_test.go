@@ -330,10 +330,12 @@ func TestProbeRefusesTwoSelections(t *testing.T) {
 
 // TestProbeRefusesAModelItCannotResolve: a model the configuration cannot
 // supply — a --model that is no reference, a provider the pool does not hold,
-// or a role the files leave unnamed and no flag too — is a refusal naming the
-// key or the flag and what is missing, before any client is built. A role flag
-// names a role, not a model, so the refusal names the role's own key and never
-// the flag that could have supplied one.
+// or a role the files leave unnamed — is a refusal naming the key or the flag
+// and what is missing, before any client is built. A role flag names a role,
+// not a model, so the refusal names the role's own key and never the flag that
+// could have supplied one; a probe naming no selection at all is refused by the
+// scoring role's key first, the role being the default rather than a flag's,
+// and names --model only as the other way to ask.
 func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 	unsetInferenceEnv(t)
 	srv, bodies := probeWire(t)
@@ -342,12 +344,23 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 	writeValues(t, unconfigured, config.ProvidersFileName, fmt.Sprintf("[local]\nbaseUrl = %q\n", srv.URL))
 
 	for _, tc := range []struct {
-		name, dir, model, roleFlag, wantKey, want string
+		name, dir, model, roleFlag, wantKey string
+		// want is what the refusal must say, and absent what it must not: no
+		// case reads as though a flag it never carried had been passed.
+		want   []string
+		absent string
 	}{
-		{"a bare id is no reference", dir, "judge", "", "--model", "a model is named <provider>/<model>"},
-		{"a provider the pool does not hold", dir, "absent/judge", "", "--model", "a provider the pool does not hold"},
-		{"no scoring role and no flag", unconfigured, "", "", "models.scoring", "--model names no model"},
-		{"a role flag the files leave unnamed", unconfigured, "", "--text", "models.text", "sets no models.text"},
+		{"a bare id is no reference", dir, "judge", "", "--model",
+			[]string{"a model is named <provider>/<model>"}, ""},
+		{"a provider the pool does not hold", dir, "absent/judge", "", "--model",
+			[]string{"a provider the pool does not hold"}, ""},
+		{"nothing named a selection", unconfigured, "", "", "models.scoring",
+			[]string{"sets no models.scoring", "nothing named a selection",
+				"the scoring role is the default", "--model"}, "names no model"},
+		{"a role flag the files leave unnamed", unconfigured, "", "--text", "models.text",
+			[]string{"sets no models.text"}, "--model"},
+		{"the scoring role named by its own flag", unconfigured, "", "--scoring", "models.scoring",
+			[]string{"sets no models.scoring"}, "--model"},
 	} {
 		args := []string{"--config-dir", tc.dir}
 		if tc.model != "" {
@@ -365,11 +378,13 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 			t.Fatalf("%s: refusals = %v, want one naming %s", tc.name, items, tc.wantKey)
 		}
 		detail, _ := items[0]["detail"].(string)
-		if !strings.Contains(detail, tc.want) {
-			t.Errorf("%s: refusal = %q, want it to name what is missing (%q)", tc.name, detail, tc.want)
+		for _, want := range tc.want {
+			if !strings.Contains(detail, want) {
+				t.Errorf("%s: refusal = %q, want it to say %q", tc.name, detail, want)
+			}
 		}
-		if tc.roleFlag != "" && strings.Contains(detail, "--model") {
-			t.Errorf("%s: refusal = %q, want no flag named: a role flag supplies no model", tc.name, detail)
+		if tc.absent != "" && strings.Contains(detail, tc.absent) {
+			t.Errorf("%s: refusal = %q, want no %q", tc.name, detail, tc.absent)
 		}
 	}
 	if n := len(bodies()); n != 0 {

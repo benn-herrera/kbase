@@ -216,7 +216,7 @@ func ModeOf(in Inputs) (Mode, error) {
 // model from its own variables, so a variable it lacks is refused whatever the
 // flag says.
 func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
-	return ResolveFlag(in, mode, role, flagModel, keyScoringModel)
+	return ResolveFlag(in, mode, role, flagModel, keyScoringModel, false)
 }
 
 // ResolveFlag is Resolve with the flag that supplies a role's model spelled by
@@ -226,11 +226,17 @@ func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error
 // from. flagKey is "" where no flag supplies a role's model — a verb that asks
 // a role by name supplies none — and a role the files leave unnamed then names
 // only its own key.
-func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string) (Endpoint, error) {
+//
+// defaulted states that the role is the caller's own default, nothing having
+// named a selection, rather than one a flag named. It is consulted only where
+// flagKey names a flag: the role the files leave unnamed is then refused by its
+// key as the first remedy and that flag as the other, and never as though the
+// flag had been passed.
+func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
 	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
 	}
-	return resolveFile(in, role, flagModel, flagKey)
+	return resolveFile(in, role, flagModel, flagKey, defaulted)
 }
 
 // configureRemedy is the command that rewrites a config.toml still naming a
@@ -239,8 +245,9 @@ const configureRemedy = "kbase configure --provider <entry> --model-map " + Cate
 
 // resolveFile is a role's endpoint from the pool entry its reference names;
 // flagKey is the flag a refusal names where it was the flag that supplied the
-// value, so a verb whose flag is not --scoring-model is pointed at its own.
-func resolveFile(in Inputs, role Role, flagModel, flagKey string) (Endpoint, error) {
+// value, so a verb whose flag is not --scoring-model is pointed at its own, and
+// defaulted says the role is the caller's default rather than one a flag named.
+func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
 	configured := role.model(in.Cfg.Models)
 	configFile := ConfigPath(in.WriteDir)
 	// The flag names the role's model where the files name none, and overrides
@@ -250,13 +257,22 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string) (Endpoint, err
 		value, rule = flagModel, RuleFlag
 	}
 	if value == "" {
-		// The key is what a role left unnamed is refused by. Where a flag could
-		// have supplied the value, the refusal says it named none; where no
-		// flag can, the key is the whole of what is wrong.
-		detail := fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
-			configFile, role.key(), flagKey)
-		if flagKey == "" {
+		// The key is what a role left unnamed is refused by, and the three ways
+		// nothing supplied a value read differently: a role flag named the role
+		// and supplies no model, so the key is the whole of what is wrong;
+		// nothing named a selection, so the role is the caller's default and
+		// the key is the first remedy, the flag the other; else a flag could
+		// have supplied the value and named none.
+		var detail string
+		switch {
+		case flagKey == "":
 			detail = fmt.Sprintf("%s sets no %s — name one there as <provider>/<model>", configFile, role.key())
+		case defaulted:
+			detail = fmt.Sprintf("%s sets no %s — nothing named a selection, so the %s role is the default; name one there as <provider>/<model>, or pass %s to name a reference instead",
+				configFile, role.key(), role, flagKey)
+		default:
+			detail = fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
+				configFile, role.key(), flagKey)
 		}
 		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy, Detail: detail}
 	}

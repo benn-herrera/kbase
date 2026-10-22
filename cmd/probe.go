@@ -126,14 +126,17 @@ func probeEndpoint(opts probeOptions) (config.Endpoint, error) {
 		resolution = config.ModeFile
 	}
 	// The flag a refusal names where a flag supplied the model: --model where
-	// the probe asks a reference or nothing named one, and none where a role
-	// flag named the role — a role flag supplies no model, so the role resolves
-	// from the configuration alone.
+	// the probe asks a reference, and none where a role flag named the role — a
+	// role flag supplies no model, so the role resolves from the configuration
+	// alone. defaulted is the case neither names: nothing named a selection, so
+	// the probe asks the scoring role because that is the selection a run would
+	// make, and its refusal says so rather than naming a flag nobody passed.
+	defaulted := roleFlag == "" && opts.Model == ""
 	flagKey := "--model"
 	if roleFlag != "" {
 		flagKey = ""
 	}
-	ep, err := config.ResolveFlag(s, resolution, role, opts.Model, flagKey)
+	ep, err := config.ResolveFlag(s, resolution, role, opts.Model, flagKey, defaulted)
 	if err != nil {
 		return config.Endpoint{}, err
 	}
