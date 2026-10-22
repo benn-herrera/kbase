@@ -80,6 +80,9 @@ func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 			return last, nil
 		}
 	}
+	if last.Error != "" {
+		return last, fmt.Errorf("%w: %d attempts, the last ending %s: %s", ErrChatIncomplete, ChatAttempts, last.Outcome, last.Error)
+	}
 	return last, fmt.Errorf("%w: %d attempts, the last ending %s", ErrChatIncomplete, ChatAttempts, last.Outcome)
 }
 

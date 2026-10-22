@@ -294,7 +294,7 @@ func scrubAuthorization(s, apiKey string) string {
 
 type wireMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content,omitempty"`
+	Content string `json:"content"`
 }
 
 // wireRequest is the chat-completions request body. Temperature is always
