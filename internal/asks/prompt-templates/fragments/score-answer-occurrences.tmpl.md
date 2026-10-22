@@ -10,6 +10,8 @@ Markup is not copied in. `$`, `\(`, `\)`, `\[`, `\]`, `\text{}`, backticks and e
 belong to a span only where the text itself writes them: where the text writes `d_n` and the habit
 is `$d_n$`, the span is `d_n`.
 
-A charge is one line: no display formula, no fenced block, and no span reaching across a line break —
-where the span would cross one, shorten it to the words on one side. Where the fault concerns
-mathematics, quote the words around the formula.
+A passage is one of the texts the call shows, whole — a title, a statement, a source's text, a
+target's — and the citation is looked for in one passage at a time, so a span that begins in the one
+and ends in the other is a span the text does not carry. A line holds no display formula and no
+fenced block, and its span stops at a line break: where it would cross one, shorten it to the words
+on one side. Where the fault concerns mathematics, quote the words around the formula.

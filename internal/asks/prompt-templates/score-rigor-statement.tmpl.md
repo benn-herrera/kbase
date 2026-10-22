@@ -2,11 +2,11 @@
 
 ## What you are judging
 
-One claim of a knowledge base's claim graph, on its own terms: the assertion its text makes. A claim
-is a statement shorn of supporting argument, so it displays no derivation and none is missing. The
-assertion is the node's title, read together with the statement under it: the title announces, the
-statement fixes, and both are the claim's own text. Where the statement says less than the title,
-the shortfall is a fault and never a redefinition of the assertion.
+You are judging one claim, on its own terms: the assertion its text makes, taken as it stands. A
+claim is a statement shorn of supporting argument, so it displays no derivation and none is
+missing. The assertion is the node's title, read together with the statement under it: the title
+announces, the statement fixes, and both are the claim's own text. Where the statement says less
+than the title, the shortfall is a fault and never a redefinition of the assertion.
 
 Judge the claim alone. Whether the assertion holds in the world is out of scope: a claim that is
 false, and contradicts itself nowhere, charges nothing. Every premise the node's edges carry is out
@@ -17,6 +17,8 @@ nothing supports, whose text is fixed, consistent and single-sensed, charges not
 A number in the claim is part of the proposition — a value asserted, with the conditions it holds
 under — not a result whose method is missing. The method behind it belongs to the experiment or the
 analysis that measured it, and is judged there.
+
+@!score-disposition!@
 
 ## The node
 

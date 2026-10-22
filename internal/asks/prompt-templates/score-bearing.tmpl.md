@@ -2,8 +2,8 @@
 
 ## What you are judging
 
-One link in a knowledge base's claim graph: how far the source's content speaks to what the target
-asserts — how much of the target the source touches.
+You are judging one citation: a text points at a source, and bearing is how far what the source
+states speaks to what that text asserts — how much of the target the source touches.
 
 The source is taken as given, true as it states itself. Neither whether the source is sound, nor
 whether the target is wise to rely on it, is part of this answer: bearing weighs the source's
@@ -14,6 +14,8 @@ and vocabulary while nothing the source states reaches what the target asserts: 
 is not engagement.
 
 Judge the two texts as shown.
+
+@!score-disposition!@
 
 ## The link
 

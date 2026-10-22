@@ -2,16 +2,18 @@
 
 ## What you are judging
 
-One node of a knowledge base's claim graph, on its own terms: the method its text displays — an
-analysis's derivation or an experiment's procedure — judged against what the node sets out to
-establish. The title announces the conclusion; the statement under it carries the method that must
-reach it, and both are the node's own text. Where the method establishes less than the title, the
-shortfall is a fault and never a redefinition of the conclusion.
+You are judging one node, on its own terms: the method its text displays — an analysis's derivation
+or an experiment's procedure — judged against what the node sets out to establish. The title
+announces the conclusion; the statement under it carries the method that must reach it, and both are
+the node's own text. Where the method establishes less than the title, the shortfall is a fault and
+never a redefinition of the conclusion.
 
 Judge the node alone. Whether the conclusion holds in the world is out of scope: a text that reasons
 impeccably to a false conclusion, and contradicts itself nowhere, charges nothing. Every premise the
 node's edges carry is out of scope too — whether a premise applies to the conclusion is that edge's
 bearing — and nothing the text does not display counts as displayed.
+
+@!score-disposition!@
 
 ## The node
 

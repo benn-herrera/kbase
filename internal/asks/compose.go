@@ -57,10 +57,15 @@ const (
 	scoreAnswerClose       = "score-answer-close"
 )
 
+// scoreDisposition is the standard every score ask judges by, stated once: the
+// class-neutral dispositions the three fault tables are instances of. It names
+// no id, so all three classes can splice it.
+const scoreDisposition = "score-disposition"
+
 // fragmentSlots is every fragment a template splices; systemSlots is the subset
 // that is a call's system prompt.
 var (
-	fragmentSlots = []string{OverviewSystem, ScoreSystem, scoreAnswerOccurrences, scoreAnswerClose}
+	fragmentSlots = []string{OverviewSystem, ScoreSystem, scoreDisposition, scoreAnswerOccurrences, scoreAnswerClose}
 	systemSlots   = []string{OverviewSystem, ScoreSystem}
 )
 
