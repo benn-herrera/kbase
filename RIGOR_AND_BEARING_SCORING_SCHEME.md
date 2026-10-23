@@ -66,17 +66,17 @@ charge and the later is not.
 **That precedence binds the judgement, and the parse records what the reply wrote.** It is a rule on
 how the model reads the text, and no check enforces it. The reason is the parse's whole remit: it
 cannot rule on whether two criteria were met at one site, which is the same question as whether a
-span earns an id, and it never asks that ([What the check does, and does not
-do](#what-the-check-does-and-does-not-do)). A shared span is also not the same fact as a shared
+line earns an id, and it never asks that ([What the check does, and does not
+do](#what-the-check-does-and-does-not-do)). A shared line is also not the same fact as a shared
 site: two rows whose tests are met at different occurrence units — a minimal set, a respect, a
-distinct proposition — may anchor at one sentence, so a parse that refused the second id on a span
-would refuse defensible answers. Two ids on one span are therefore accepted and both charged, and
-the shared offset beside the verbatim reply is what lets a later reader hold the line against the
-precedence and see whether the walk's order was missed. The cost is stated rather than hidden: a
-departure from the precedence is priced, not refused. The alternative — the parse refusing a second
-id on a span — is not the choice, because it turns a judgement it cannot check into `malformed`,
-discarding both the answer and the evidence for it, and a retry is a fresh guess at the same
-unverifiable question.
+distinct proposition — may anchor at one line, so a parse that refused the second id on a line set
+would refuse defensible answers. Two ids on one line set are therefore accepted and both charged, and
+the shared quote and offset beside the verbatim reply are what let a later reader hold the line
+against the precedence and see whether the walk's order was missed. The cost is stated rather than
+hidden: a departure from the precedence is priced, not refused. The alternative — the parse refusing a
+second id on a line set — is not the choice, because it turns a judgement it cannot check into
+`malformed`, discarding both the answer and the evidence for it, and a retry is a fresh guess at the
+same unverifiable question.
 
 ### The `statement` faults
 
@@ -172,8 +172,8 @@ Six faults, maximum `1.00`. The weight is per occurrence. This table is unchange
 ### `flt-pending`
 
 The id belongs to all three vocabularies and names one fault: the text holds no proposition to judge.
-It takes no citation, because there is no sentence to point at, and it carries no weight: an answer of
-`flt-pending` has the value `*pending*` whatever the table. The [`flt-pending`](#flt-pending) section
+It takes no citation field, because there is no line to point at, and it carries no weight: an answer
+of `flt-pending` has the value `*pending*` whatever the table. The [`flt-pending`](#flt-pending) section
 below states when each pass answers it.
 
 ## The value
@@ -189,7 +189,7 @@ value([flt-pending]) = *pending*
 
 The weight is charged **per occurrence**, each occurrence separately, and the table caps no count: a
 text that commits a fault three times loses three weights. The parse enforces no count at all, and
-the only mechanical pressure on one is that two occurrences of one id need two spans that do not
+the only mechanical pressure on one is that two occurrences of one id need two line sets that do not
 coincide. A shared id has the same weight under either rigor vocabulary, so the price of a line that
 carries only shared ids is the same whichever table read it; a line carrying `flt-underspecified`,
 `flt-unaddressed`, `flt-equivocation` or any method-only id is priced by the table that holds it, and
@@ -201,7 +201,7 @@ there the bound is what *one occurrence* means rather than a ceiling the table a
 respects are the closed list of three, so it has three. `flt-partial`'s parts are the assertion's own,
 and a compound assertion fixes how many there are. A charge beyond such a bound is not a further
 occurrence: it is one of them written a second time. The parse cannot see that, because no respect and
-no part is a ledger field; the reader can, holding the reply's spans against the text.
+no part is a ledger field; the reader can, holding the reply's line sets against the text.
 
 The floor at zero is the domain's, not a rule of its own: a list whose weights reach `M` is a text
 with nothing left to carry the assertion, and `0` is what the register says for that. Every weight is
@@ -367,15 +367,15 @@ link whose two ends both hold propositions is never pending: an irrelevant link 
 `flt-no-engagement` and answers `0.00`, and a hedge on a link that can be judged removes the edge from
 the graph silently.
 
-**Its form.** `flt-pending` takes no citation, and it has exactly two accepted spellings, each the
-whole of its line: the bare id, and the bare id inside one bracket pair (`[flt-pending]`), which the
-form's bracket rule strips as it strips any field's. The id is case-folded like any other. Everything
-else is `malformed`, and three cases are named because they are the ones a reply will produce:
-`flt-pending:` with nothing after the colon or with whitespace only; `flt-pending: <span>` with any
-span, since it takes none; and the id carrying trailing letters, which is an id outside the set. The
-empty-field form is refused rather than read as the bare id because an empty citation field is
-exactly the shape of a charge line cut off after its colon, and a truncated reply must fail rather
-than land as a judgement.
+**Its form.** `flt-pending` cites no line, and it has exactly two accepted spellings, each the whole
+of its line: the bare id, and the bare id inside one bracket pair (`[flt-pending]`), which the form's
+bracket rule strips as it strips any field's. The id is case-folded like any other. Everything else is
+`malformed`, and three cases are named because they are the ones a reply will produce:
+`flt-pending:` with nothing after the colon or with whitespace only; `flt-pending: <lines>` with any
+line field, since it cites none; and the id carrying trailing letters, which is an id outside the set.
+The empty-field form is refused rather than read as the bare id because an empty field is exactly the
+shape of a charge line cut off after its colon, and a truncated reply must fail rather than land as a
+judgement.
 
 It occupies the answer: a reply carrying it beside charge lines is read with `flt-pending` as the
 judgement and the charges as **moot** — parsed and recorded, priced nowhere. There is no proposition
@@ -399,25 +399,31 @@ reads the reply and nothing else.
 
 Each call carries one item's own text. For `rigor`, under either vocabulary: the node's title and the
 statement its own document gives it. For `bearing`: both ends' title and statement in that same form,
-then the edge's authored context. A work renders its title alone — its document lies outside the
-corpus — so a link from a work is judged on the title's proposition. SPEC §8 states the closure; the
-register's own scoring tokens are refused before the call, and that item is `failed` with no call made.
+then the edge's authored context. The text is carried wrapped at word boundaries to at most 100
+columns, its own line breaks kept and nothing rewritten, and the lines lying in a passage under
+judgement are numbered from 1 over the whole text, `N| ` before each. The call's own labels carry no
+number, and neither does the edge's context: an unnumbered line is no site a charge can cite. A work
+renders its title alone — its document lies outside the corpus — so a link from a work is judged on
+the title's proposition. SPEC §8 states the closure; the register's own scoring tokens are refused
+before the call, and that item is `failed` with no call made.
 
 ### The form
 
 One line per occurrence:
 
 ```
-flt-id: citation
+flt-id: 12
 ```
 
-Leading and trailing whitespace is trimmed. A line is a charge line or it is not: blank lines are
+An id, a colon, and the number of the line where the fault shows; or a range of lines within one
+passage, `flt-id: 12-14`. Leading and trailing whitespace is trimmed, and the field after the colon is
+trimmed. The number before the bar is the frame's, not the text's: `N| ` is a gutter the call writes,
+and the words behind it are the text's own. A line is a charge line or it is not: blank lines are
 ignored, and any other line — an explanatory sentence, a heading, a preamble — is `malformed`. Nothing
 is read out of prose. The brackets of the format sketch are delimiters, not characters: a line may
-carry `[…]:` and `[…]` around the two fields or not, a bracket pair around a whole field is stripped
-before the field is read, and a span that itself begins with `[` or ends with `]` is written
-unbracketed. Order is free; charges are recorded in the order written, and no arithmetic depends on
-it.
+carry `[…]:` and `[…]` around the two fields or not, and a bracket pair around a whole field is
+stripped before the field is read. Order is free; charges are recorded in the order written, and no
+arithmetic depends on it.
 
 ### The closed set
 
@@ -444,60 +450,61 @@ not answers either: `malformed`, nothing written.
 
 ### The citation
 
-A citation is a verbatim span of the closed text. Its floor is **one character of text**: a span
-that carries none — empty, or whitespace only — is `malformed`, and a single character is enough,
-because the citations most worth having are often tiny (`0.42` for a bare measurement, a symbol, a
-term the link turns on). The lookup collapses runs of whitespace to one space and folds case, so a
-re-wrapped or re-capitalised quotation is found; the citation is recorded as the model wrote it, with
-the offset of its first match. The span must lie whole inside a passage and never cross from one to
-another:
+A citation is a numbered line of the closed text, or a contiguous range of its lines:
+`flt-partial: 12`, `flt-transfer: 12-14`. Its floor is **one valid line number** — a number the call
+shows, lying in a passage a charge may cite — and a charge naming none is `malformed`. The dash of a
+range may be a hyphen, an en dash, an em dash or a minus sign, with or without spaces around it; the
+ask shows `12-14` and nothing else. Every number of a range lies in the same passage, and the range is
+contiguous: lines sitting together with nothing between them, since a blank line, a label or a heading
+ends it.
 
 | judgement | a citation lies in |
 |---|---|
 | `rigor` | the node's title, or its statement |
 | `bearing` | the source's title or statement, or the target's |
 
-A span in the edge's `## Context` is not a citation for a charge: the context states bridges and
-excuses, and a charge is about what the two texts do and do not do. A `bearing` citation may come
-from either end, because the evidence for a bearing fault can lie at either — `flt-referent` needs
-the term as one text uses it, `flt-partial` the part the source leaves alone, `flt-transfer` the two
-subjects — and the ask directs the model to quote a span unique to its end wherever the words allow
-one. **Where the ends carry the same words and no longer span separates them, the citation is
-recorded as `both`**, at the first match in the closed text's order, and the charge stands: `passage`
-then states exactly what the lookup found, that the two texts carry this span alike. For `rigor` the
-two passages are one node's own text, and a span found in both takes `both` on the same rule. No
-line names its end: the recorded passage carries the attribution wherever the texts make one.
+kbase resolves the field against the rendering the call carried and quotes the cited lines into the
+ledger as it carried them, without the gutter, joined by newlines; `lines` records the numbers the
+answer named, `citation` the quote, and `offset` the quote's byte offset in the closed text.
 
-A statement fault's anchor is the passage that carries it: the title phrase that outruns the
-statement, the term, the unfixed quantity, one of the incompatible statements. A method fault's
-anchor is the step, the value, the marker or the passage that carries the gap. The citation proves
-where the span is; it never proves the id.
+A line in the edge's `## Context` carries no number and is no citation for a charge: the context states
+bridges and excuses, and a charge is about what the two texts do and do not do. A `bearing` citation
+may come from either end, because the evidence for a bearing fault can lie at either — `flt-referent`
+needs the term as one text uses it, `flt-partial` the part the source leaves alone, `flt-transfer` the
+two subjects. No line names its end: the recorded `passage` carries the attribution. A numbered line
+lies in one passage, so no charge is recorded `both`; a ledger line written before line citation may
+carry it, and keeps the meaning it was written with.
+
+A statement fault's anchor is the line that carries it: the title phrase that outruns the statement,
+the term, the unfixed quantity, one of the incompatible statements. A method fault's anchor is the
+step, the value, the marker or the line that carries the gap. The citation proves where the line is; it
+never proves the id.
 
 ### What the check does, and does not do
 
-kbase checks that the span **exists**; it never checks that the span **earns** the id. An irrelevant
-sentence is a legal citation, and nothing in the parse reads the sentence against the criterion. Half
-these faults are absences — no sentence bears on the assertion, no displayed step carries the
-conclusion, no method yields the number — where no span could be evidence of the fault at all; for
-those the citation anchors the **obligation** (the title that asserts, the marker that claims the
-step, the value reported), and the absence itself is checked by nobody. A span is an anchor, not
-proof. What carries the audit beyond the anchor is the reply kept verbatim beside the parsed charges,
-the offset that locates the span for a later reader, the value's derivability from the ids, and
-agreement between runs measured on counts per id.
+kbase checks that the line **exists**; it never checks that the line **earns** the id. An irrelevant
+line is a legal citation, and nothing in the parse reads the line against the criterion. Half these
+faults are absences — no line bears on the assertion, no displayed step carries the conclusion, no
+method yields the number — where no line could be evidence of the fault at all; for those the citation
+anchors the **obligation** (the title line that asserts, the line that claims the step, the line
+reporting the value), and the absence itself is checked by nobody. A line is an anchor, not proof.
+What carries the audit beyond the anchor is the reply kept verbatim beside the parsed charges, the
+quote and its offset that locate the line for a later reader, the value's derivability from the ids,
+and agreement between runs measured on counts per id.
 
-### Duplicates, overlaps and shared spans
+### Duplicates, overlaps and shared lines
 
 | case | outcome |
 |---|---|
-| one id, one span, written twice | one occurrence written twice: the pair collapses to one charge |
-| one id, two spans that overlap without coinciding | `malformed`, naming both lines — the reply asserts two occurrences and supplies one site |
-| two ids, one span | accepted, both charged, the offset shared in the ledger |
+| one id, one line set, written twice | one occurrence written twice: the pair collapses to one charge |
+| one id, two line sets that overlap without coinciding | `malformed`, naming both lines — the reply asserts two occurrences and supplies one site |
+| two ids, one line set | accepted, both charged, the quote and its offset shared in the ledger |
 
 The duplicate collapses because the answer's own evidence cannot tell the two lines apart. The overlap
 is refused because the count cannot be read from it, and a retry settles it, where reading it as one
-would write a confidently high value. Two distinct faults may share a sentence: the one-defect rule
-is the walk's, not the parser's, and the shared offset is the signal that the precedence was missed —
-not proof that it was ([the fault vocabulary](#the-fault-vocabulary)).
+would write a confidently high value. Two distinct faults may be cited at one line: the one-defect
+rule is the walk's, not the parser's, and the shared offset is the signal that the precedence was
+missed — not proof that it was ([the fault vocabulary](#the-fault-vocabulary)).
 
 ### Malformed replies
 
@@ -505,19 +512,22 @@ not proof that it was ([the fault vocabulary](#the-fault-vocabulary)).
 |---|---|
 | a line that is not a charge line | `malformed` |
 | an id outside the call's set — the other rigor vocabulary's, the other pass's, a retired letter, a misspelling | `malformed`, naming the id and the call's ids as `allowed` |
-| an id with no separator, or nothing after the colon | `malformed` — except the bare `flt-pending`, which takes no citation and no colon ([`flt-pending`](#flt-pending), "Its form") |
+| an id with no separator, or nothing after the colon | `malformed` — except the bare `flt-pending`, which takes no line and no colon ([`flt-pending`](#flt-pending), "Its form") |
 | `flt-pending` with a colon and an empty field | `malformed`, naming the id — the shape of a charge line cut short after its colon |
-| `flt-pending` with a citation field | `malformed`, naming the id and the span, and recording the span with it — it takes no citation |
-| a citation not found in the closed text, including one that crosses a passage boundary, one in the context, and one cut short by a truncated reply | `malformed`, naming the id and the span, and recording the span with it |
-| a number — a decimal, a fraction, `0`/`1`, or a `*pending*` literal | `malformed`: a bare number has no id and no citation, and a reply offering one answers a question no longer asked |
+| `flt-pending` with a line field | `malformed`, naming the id and the field — it cites no line |
+| a field that names no line — words, a quotation, a line of the context or of a label | `malformed`, naming the id and the field |
+| a line number the call does not show, a reply cut short before it wrote one included | `malformed`, naming the id and the number |
+| a range written backwards | `malformed`, naming the id and the range |
+| a range crossing from one passage to another, or over a gap — a blank line, a label or a heading between its lines | `malformed`, naming the id and the range |
+| a number — a decimal, a fraction, `0`/`1`, or a `*pending*` literal | `malformed`: a number standing alone names no id, and a number in a charge's field is a line of the text, so a reply offering the first answers a question no longer asked |
 | `none` beside charges | `malformed` |
 | an empty reply, or whitespace only | `malformed`, nothing written |
 
 A `malformed` reply is the pass's outcome: no charges and no judgement, the item re-asked on
 `--resume` (SPEC §8). The attempt's record carries `status: failed` and the reason — the case from the
-table and, where there is one, the id and span it named — and **not the reply's text**: a malformed
-reply is blank, a truncated fragment or think-lock, and the data point that matters is that the
-attempt failed, not the bytes it failed with.
+table and, where there is one, the id and the lines it named — and **not the reply's text**: a
+malformed reply is blank, a truncated fragment or think-lock, and the data point that matters is that
+the attempt failed, not the bytes it failed with.
 
 ## One ask per item
 
@@ -549,24 +559,25 @@ charge lines a `flt-pending` made moot, parsed the same way and priced nowhere:
 | field | holds |
 |---|---|
 | `id` | the fault id, in its lower-case spelling |
-| `passage` | where the citation was found: `title`, `statement` or `both` for `rigor`; `source`, `target` or `both` for `bearing` |
-| `citation` | the span as the model wrote it |
-| `offset` | its offset in the closed text, at its first match — for `both`, the earlier of the two passages |
+| `passage` | where the cited lines lie: `title` or `statement` for `rigor`; `source` or `target` for `bearing` |
+| `lines` | the answer's own numbers: `12`, or `12-14` |
+| `citation` | the cited lines as the call carried them, without the gutter, joined by newlines |
+| `offset` | the quote's byte offset in the closed text |
 
 A rigor line's item is a `clm-`, `ana-` or `exp-` id; its prefix selects the statement or method table
 a value or a re-price is computed under, so the rigor vocabulary is not a new field. A bearing line's
 table is the pass's own. `[]` is written for one reply only —
 the word `none` — so a record's empty list always carries the model's positive statement that it found
 no fault; an empty or whitespace-only reply is `malformed`, so the attempt records `failed` and no
-charges, and silence is never read as a clean pass. One record carries `id: flt-pending` and no
-citation for a pending item. The reply stands beside the parsed charges, so the parse's reading of a
-line can be held against the line. A `--dry-run` writes no charge record: nothing is asked, so nothing
-is returned.
+charges, and silence is never read as a clean pass. One record carries `id: flt-pending` and no lines
+and no citation for a pending item. The reply stands beside the parsed charges, so the parse's reading
+of a line can be held against the line. A `--dry-run` writes no charge record: nothing is asked, so
+nothing is returned.
 
 **The value is a projection of the charge list, and in fact of its ids alone** — `value = table(counts
-by id)`, the table chosen by the item's class. The spans are not the input, and that is why they are
-the audit rather than the measure: they can be read, checked against the text and argued about, and
-they cannot perturb the arithmetic.
+by id)`, the table chosen by the item's class. The citations are not the input, and that is why they
+are the audit rather than the measure: they can be read, checked against the text and argued about,
+and they cannot perturb the arithmetic.
 
 - **A landing can be checked without a model.** A value that does not equal the table's output for
   its recorded ids is a defect of the landing or of the table, not a judgement to argue with. Counts
@@ -619,17 +630,18 @@ reader, and a summary written by the writer is a judgement the corpus can no lon
 
 These parse rules are settled here and not open:
 
-- **The one-character floor.** A citation carries at least one character of text; empty or
-  whitespace-only is `malformed`.
+- **The floor of one valid line number.** A citation names at least one line the call shows, lying in
+  a passage a charge may cite; a charge naming none is `malformed`.
 - **`flt-pending` beside charges.** The pending id is the judgement and the charges are moot: parsed,
   recorded, priced nowhere.
 - **`none` beside charges.** Refused as `malformed`; the two halves contradict each other and the
   parse has no ground to prefer one.
-- **Overlapping spans for one id.** Two spans of one id that overlap without coinciding are
-  `malformed`, naming both lines; one id on one span written twice collapses to one charge.
+- **Overlapping line sets for one id.** Two line sets of one id that overlap without coinciding are
+  `malformed`, naming both lines; one id on one line set written twice collapses to one charge.
 
-The pending forms, the `both` rule, the citation lookup in the closed text, the malformed classes and
-the ledger's charge records are settled in the same way.
+The pending forms, the selection of a line in the closed text, the retirement of the `both` value and
+the meaning of a line already written with it, the malformed classes and the ledger's charge records
+are settled in the same way.
 
 ## Not settled
 

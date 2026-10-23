@@ -149,16 +149,9 @@ func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 			if !strings.Contains(text, "`"+kb.ChargeNone+"`") {
 				t.Errorf("%s does not name the answer %s", c.template, kb.ChargeNone)
 			}
-			if !lineFormRE.MatchString(text) {
-				t.Errorf("%s states no charge line of the form `flt-id: citation`", c.template)
-			}
 		})
 	}
 }
-
-// lineFormRE is a charge line as the templates state the answer's form: an id, a
-// colon and a span, in one of their fenced examples.
-var lineFormRE = regexp.MustCompile(`(?m)^flt-[a-z0-9-]+: \S`)
 
 // scoreJudgement returns what a template's first judgement figure or word reads
 // as, and the text carrying it; both empty where the template carries none. A

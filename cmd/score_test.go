@@ -252,8 +252,8 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 	rigor := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
 		return scoring(
 			"none",
-			"flt-overreach: Theorem 1",
-			"flt-underspecified: Every exchange clears",
+			"flt-overreach: 2",
+			"flt-underspecified: 2",
 			"none")
 	})
 	if rigor.doc.Outcome != "done" || rigor.dialled != 1 {
@@ -294,7 +294,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 
 	// The bearing pass, by relation, then source, then target.
 	bearing := scoreIn(t, repo, state, scoreOptions{Pass: query.PassBearing}, func() model.Client {
-		return scoring("flt-transfer: The First Result", "none", "none", "none")
+		return scoring("flt-transfer: 1", "none", "none", "none")
 	})
 	if bearing.doc.Outcome != "done" || bearing.dialled != 1 {
 		t.Fatalf("the bearing run: outcome %s, %d dials\n%s", bearing.doc.Outcome, bearing.dialled, bearing.stdout)
@@ -447,8 +447,8 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 	got := scoreIn(t, repo, state, scoreOptions{}, func() model.Client {
 		// One reply per item, in the walk's order: the four rigor items by id,
 		// then the edges the bearing pass asks.
-		return scoring("none", "flt-overreach: Theorem 1", "flt-underspecified: Every exchange clears", "none",
-			"flt-transfer: The First Result", "none", "none", "none")
+		return scoring("none", "flt-overreach: 2", "flt-underspecified: 2", "none",
+			"flt-transfer: 1", "none", "none", "none")
 	})
 	if got.doc.Outcome != "done" || got.dialled != 1 {
 		t.Fatalf("the run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
@@ -591,7 +591,7 @@ func TestScoreResumesAMixedRun(t *testing.T) {
 func TestScoreResumeAppliesAnUpdate(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	first := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
-		return scoring("flt-overreach: The claim's own paragraph.")
+		return scoring("flt-overreach: 2")
 	})
 	if first.doc.Outcome != "done" {
 		t.Fatalf("the run: outcome %s\n%s", first.doc.Outcome, first.stdout)

@@ -153,7 +153,7 @@ func TestRunReadsTheIndexBeforeTheWalkAndNotDuringIt(t *testing.T) {
 	write, landed := writing()
 
 	l := kept(t, t.TempDir())
-	ask, prompts := asking(t, []asked{{title: "# ", reply: "none"}})
+	ask, prompts := asking(t, []asked{{title: "markdown", reply: "none"}})
 	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
@@ -173,7 +173,7 @@ func TestRunReadsTheIndexBeforeTheWalkAndNotDuringIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bl.Close()
-	bask, bprompts := asking(t, []asked{{title: "## Source: ", reply: "none"}})
+	bask, bprompts := asking(t, []asked{{title: "## Source:", reply: "none"}})
 	if _, err := (&Runner{Source: src, Index: ix, Items: bearing, Pass: query.PassBearing, Ask: bask, Write: write,
 		Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -233,10 +233,10 @@ func TestRunWalksTheSet(t *testing.T) {
 			items: set[:6],
 			limit: 4,
 			answer: []asked{
-				{title: "# An Analysis", reply: "none"},
-				{title: "# Claim A", reply: "0.5, roughly — the paragraph is thin."},
-				{title: "# Claim B", err: errors.New("the provider closed the connection")},
-				{title: "# Claim C", reply: "flt-overreach: A premise of the quoted claim.\n"},
+				{title: "1| An Analysis", reply: "none"},
+				{title: "1| Claim A", reply: "0.5, roughly — the paragraph is thin."},
+				{title: "1| Claim B", err: errors.New("the provider closed the connection")},
+				{title: "1| Claim C", reply: "flt-overreach: 2\n"},
 			},
 			want:   Counts{Total: 6, Done: 2, Failed: 2, Remaining: 2},
 			landed: []landed{{"ana-aaaaaa", "1.0"}, {"clm-cccccc", "0.65"}},
@@ -245,7 +245,7 @@ func TestRunWalksTheSet(t *testing.T) {
 			name:   "a limit of one",
 			items:  set[:3],
 			limit:  1,
-			answer: []asked{{title: "# An Analysis", reply: "none"}},
+			answer: []asked{{title: "1| An Analysis", reply: "none"}},
 			want:   Counts{Total: 3, Done: 1, Remaining: 2},
 			landed: []landed{{"ana-aaaaaa", "1.0"}},
 		},
@@ -350,7 +350,7 @@ func TestRunRecordsARefusedTextWithoutACall(t *testing.T) {
 func TestRunRecordsAWriteRefusal(t *testing.T) {
 	src, ix, set := runSet(t)
 	l := kept(t, t.TempDir())
-	ask, _ := asking(t, []asked{{title: "# An Analysis", reply: "none"}})
+	ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
 	refuse := errors.New("the register changed under the write")
 	write := func(query.Item, kb.Bearing) error { return refuse }
 	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write, Ledger: l, Model: "small"}).Run(context.Background())
@@ -419,7 +419,7 @@ func TestRunContinuesARun(t *testing.T) {
 	src, ix, set := runSet(t)
 	set = set[:3]
 	l := kept(t, t.TempDir())
-	first, _ := asking(t, []asked{{title: "# An Analysis", reply: "none"}})
+	first, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
 	w, _ := writing()
 	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: first, Write: w, Ledger: l, Model: "small", Limit: 1}).Run(context.Background())
 	if err != nil {
@@ -432,8 +432,8 @@ func TestRunContinuesARun(t *testing.T) {
 	// The second run is scripted for the two items the ledger leaves; asking the
 	// one it records done would fail here.
 	second, prompts := asking(t, []asked{
-		{title: "# Claim A", reply: "flt-overreach: The claim's own paragraph"},
-		{title: "# Claim B", reply: "flt-underspecified: The quoted claim"},
+		{title: "1| Claim A", reply: "flt-overreach: 2"},
+		{title: "1| Claim B", reply: "flt-underspecified: 2"},
 	})
 	w2, secondLanded := writing()
 	res, err = (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: second, Write: w2, Ledger: l, Model: "small"}).Run(context.Background())
@@ -467,7 +467,7 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 		t.Fatalf("the fixture's set names %d of the claim and the analysis, want both", len(items))
 	}
 	l := kept(t, t.TempDir())
-	ask, _ := asking(t, []asked{{title: "# ", reply: "none"}})
+	ask, _ := asking(t, []asked{{title: "markdown", reply: "none"}})
 	write, _ := writing()
 	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
@@ -491,7 +491,7 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		prompt, err := c.ask(text.text)
+		prompt, err := c.ask(text.numbered())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -532,13 +532,13 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	state := t.TempDir()
 	l := kept(t, state)
 	rigorAsk, _ := asking(t, []asked{
-		{title: "# Claim A", reply: "flt-overreach: The claim's own paragraph"},
-		{title: "# Claim B", reply: "flt-underspecified: The quoted claim\nflt-underspecified: proof follows"},
-		{title: "# Claim C", reply: "none"},
-		{title: "# Claim D", reply: "none"},
-		{title: "# Bearing 0.5 In Words", reply: "none"},
-		{title: "# An Analysis", reply: "none"},
-		{title: "# An Experiment", reply: "none"},
+		{title: "1| Claim A", reply: "flt-overreach: 2"},
+		{title: "1| Claim B", reply: "flt-underspecified: 2\nflt-underspecified: 4"},
+		{title: "1| Claim C", reply: "none"},
+		{title: "1| Claim D", reply: "none"},
+		{title: "1| Bearing 0.5 In Words", reply: "none"},
+		{title: "1| An Analysis", reply: "none"},
+		{title: "1| An Experiment", reply: "none"},
 	})
 	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: rigorAsk, Write: write, Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -559,9 +559,9 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	}
 	defer bl.Close()
 	bearingAsk, _ := asking(t, []asked{
-		{title: "## Source: A Cited Work", reply: "flt-transfer: A Cited Work"},
-		{title: "## Source: The design rule", reply: "none"},
-		{title: "## Source: An Analysis", reply: "none"},
+		{title: "1| A Cited Work", reply: "flt-transfer: 1"},
+		{title: "1| The design rule", reply: "none"},
+		{title: "1| An Analysis", reply: "none"},
 	})
 	if _, err := (&Runner{Source: src, Index: ix, Items: bearingSet, Pass: query.PassBearing, Ask: bearingAsk, Write: write, Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -583,6 +583,80 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	}
 	if res.Outcome != result.Done || res.Counts.Done != len(items) {
 		t.Errorf("the resumed run: outcome %q, counts %+v; want every item done and no call", res.Outcome, res.Counts)
+	}
+}
+
+// TestRunLandsALineCitationAndReAsksAnAbsentNumber: a run over two fixture items
+// lands the value whose charge names a line the call shows — recording the number
+// and the line the tool quotes — and fails the one whose charge names a line it
+// does not, recording the case and no charge; the resume asks that item again and
+// lands it.
+func TestRunLandsALineCitationAndReAsksAnAbsentNumber(t *testing.T) {
+	src, ix, set := runSet(t)
+	var items []query.Item
+	for _, it := range set {
+		if it.Node != nil && (it.Node.ID == "clm-aaaaaa" || it.Node.ID == "clm-bbbbbb") {
+			items = append(items, it)
+		}
+	}
+	if len(items) != 2 {
+		t.Fatalf("the fixture's set names %d of the two claims, want both", len(items))
+	}
+	state := t.TempDir()
+	l := kept(t, state)
+	ask, _ := asking(t, []asked{
+		{title: "1| Claim A", reply: "flt-overreach: 2"},
+		{title: "1| Claim B", reply: "flt-overreach: 9"},
+	})
+	write, wrote := writing()
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != result.Failed || res.Counts != (Counts{Total: 2, Done: 1, Failed: 1}) {
+		t.Errorf("outcome %q, counts %+v; want one item landed and one failed", res.Outcome, res.Counts)
+	}
+	if want := []landed{{"clm-aaaaaa", "0.65"}}; !slices.Equal(*wrote, want) {
+		t.Errorf("the write seam was handed %v, want %v", *wrote, want)
+	}
+	byID := map[string]map[string]any{}
+	for _, rec := range lines(t, filepath.Join(l.Dir(), linesFile)) {
+		byID[rec["id"].(string)] = rec
+	}
+	faults, ok := byID["clm-aaaaaa"]["faults"].([]any)
+	if !ok || len(faults) != 1 {
+		t.Fatalf("the landed line records %v, want one charge", byID["clm-aaaaaa"]["faults"])
+	}
+	charge := faults[0].(map[string]any)
+	if charge["lines"] != "2" || charge["passage"] != passageStatement {
+		t.Errorf("the charge is %v, want line 2 of the statement", charge)
+	}
+	quote, _ := charge["citation"].(string)
+	if !strings.HasPrefix(quote, "The claim's own paragraph, stated mid-section.") {
+		t.Errorf("the charge quotes %q, want the line's own words", quote)
+	}
+	if _, withQuote := byID["clm-bbbbbb"]["faults"]; withQuote {
+		t.Errorf("the failed line carries charges: %v", byID["clm-bbbbbb"])
+	}
+	reason, _ := byID["clm-bbbbbb"]["reply"].(string)
+	if !strings.Contains(reason, "line 9 is not one the call shows") {
+		t.Errorf("the failed line's reason = %q, want the absent number named", reason)
+	}
+
+	// The resume asks only the item the ledger records failed, and lands it.
+	back := resumed(t, state, write)
+	again, prompts := asking(t, []asked{{title: "1| Claim B", reply: "flt-underspecified: 2"}})
+	res, err = (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: again, Write: write,
+		Ledger: back, Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != result.Done || res.Counts != (Counts{Total: 2, Done: 2}) {
+		t.Errorf("the resumed run: outcome %q, counts %+v; want both items done", res.Outcome, res.Counts)
+	}
+	if len(*prompts) != 1 || !strings.Contains((*prompts)[0], "1| Claim B") {
+		t.Errorf("the resume made %d calls, want the one item the ledger left", len(*prompts))
 	}
 }
 

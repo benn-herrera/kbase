@@ -5,6 +5,7 @@ package score
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"kbase/internal/kb"
@@ -64,32 +65,35 @@ func (e outOfScopeError) Error() string {
 }
 
 // passage is one piece of assembled text and where the KB holds it: end is the
-// passage a citation here is recorded as, "" where none may lie; path is the
+// passage a charge's lines are recorded as, "" where none may lie; path is the
 // document's absolute path, line the 1-based line the passage opens on, or 0
 // where the reader does not locate it; text is the passage as the call carries
-// it, opening with label's own bytes. label is the length of the prefix the frame
-// writes at the passage's head — a bearing end's label, or a rigor title's "# " —
-// which is carried, is no citation's home, and is no part of the corpus the guard
-// reads.
+// it. label is whether the passage is one of the frame's own lines — the label
+// that opens a bearing end, the heading mark a rigor title carries — which is
+// carried on a line of its own, holds no number, and is read by no guard.
 type passage struct {
 	end   string
 	path  string
 	line  int
-	label int
+	label bool
 	text  string
 }
 
-// closedText is the text one call carries and the passages it is made of: each
-// citable passage's end and its half-open range in the text, which is what a
-// charge's citation is looked up in and where its offset is counted from. A
-// passage with no end contributes text that is carried and never cited.
+// closedText is the text one call carries and the lines it numbers: text is the
+// carried text, each passage wrapped at word boundaries with its own breaks kept,
+// and the gutter the rendering writes before a numbered line is no part of it;
+// lines is one entry per line of it, in its order.
 type closedText struct {
-	text     string
-	passages []extent
+	text  string
+	lines []line
 }
 
-// extent is one passage's place in the closed text.
-type extent struct {
+// line is one line of the carried text: no is the number the call writes before
+// it, 0 where it carries none; end is the passage its bytes lie in, "" where it
+// is no site a charge may cite; from and to are its bytes in the carried text,
+// the newline that follows it excluded.
+type line struct {
+	no       int
 	end      string
 	from, to int
 }
@@ -113,7 +117,7 @@ func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
 	if row.NodeType == kb.NodeKindWork || row.NodeType == kb.NodeKindAxiom {
 		return closedText{}, outOfScopeError{Kind: row.NodeType, ID: id}
 	}
-	passages, err := endPassages(src, g, row, "# ", nodeEnds{title: passageTitle, statement: passageStatement})
+	passages, err := endPassages(src, g, row, titleLabel, nodeEnds{title: passageTitle, statement: passageStatement})
 	if err != nil {
 		return closedText{}, err
 	}
@@ -121,11 +125,14 @@ func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
 }
 
 // The labels a bearing call writes: above each end's title, and the line above
-// the edge's own note. They are the frame's own — carried, and no citation's home.
+// the edge's own note. They are the frame's own — carried on a line of their own,
+// holding no number, and no citation's home.
 const (
-	sourceLabel  = "## Source: "
-	targetLabel  = "## Target: "
+	sourceLabel  = "## Source:"
+	targetLabel  = "## Target:"
 	contextLabel = "## Context"
+	// titleLabel is what a rigor call writes above the node's title.
+	titleLabel = "#"
 )
 
 // bearingText is the closed text one bearing call carries: the source's
@@ -155,7 +162,7 @@ func bearingText(src *kb.Source, g graph, e kb.EdgeRow) (closedText, error) {
 	}
 	passages := append(sourcePassages, targetPassages...)
 	if e.Context != nil {
-		passages = append(passages, passage{label: len(contextLabel), text: contextLabel}, passage{text: *e.Context})
+		passages = append(passages, passage{label: true, text: contextLabel}, passage{text: *e.Context})
 	}
 	return assemble(passages)
 }
@@ -165,8 +172,9 @@ func bearingText(src *kb.Source, g graph, e kb.EdgeRow) (closedText, error) {
 // they belong to.
 type nodeEnds struct{ title, statement string }
 
-// endPassages is one node's title under label, then its statement, each recorded
-// as ends names.
+// endPassages is one node's label line, then its title and its statement, each
+// recorded as ends names. The label is the frame's own and is carried on a line
+// of its own, so no numbered line begins with frame text.
 func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nodeEnds) ([]passage, error) {
 	statement, err := statementPassages(src, g, row)
 	if err != nil {
@@ -175,7 +183,8 @@ func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nod
 	for i := range statement {
 		statement[i].end = ends.statement
 	}
-	return append([]passage{titlePassage(src, row, label, ends.title)}, statement...), nil
+	title := passage{end: ends.title, path: src.KBPath(row.CanonicalPath), text: row.Title}
+	return append([]passage{{label: true, text: label}, title}, statement...), nil
 }
 
 // statementPassages is the statement the node's own document gives it: for a
@@ -285,54 +294,266 @@ func declaringLeaf(g graph, id string) (string, bool) {
 	return "", false
 }
 
-// titlePassage is the node's title under prefix: "# " for a rigor call, and the
-// end's label for a bearing call. It is citable as end's, from after the prefix.
-func titlePassage(src *kb.Source, row kb.NodeRow, prefix, end string) passage {
-	return passage{end: end, path: src.KBPath(row.CanonicalPath), label: len(prefix), text: prefix + row.Title}
-}
+// wrapWidth is the column a passage's lines are wrapped to. Wrapping adds breaks
+// and rewrites nothing, so a line of the carried text stays a verbatim slice of
+// the passage it came from.
+const wrapWidth = 100
 
-// assemble is the passages as one text and the extents of the ones a citation
-// may lie in, refusing the text where a token the frame cannot hold reaches it. No
-// token spans the blank line between two passages, so each passage scans as the
-// whole text would, and the hit names the document and line it came from. A
-// passage's label is the frame's own and is read by neither the guard nor a
-// citation.
+// assemble is the passages as one text, wrapped and numbered, refusing the text
+// where a token the frame cannot hold reaches it. A passage with an end is a site
+// and its lines are numbered; a label line and the edge's note are carried and
+// hold no number. Every break wrapping adds falls at a space, and neither token
+// the guard reads spans one, so a wrapped line is refused as the passage would be;
+// the hit names the document and the line it came from, which a break never moves.
 func assemble(passages []passage) (closedText, error) {
-	var ct closedText
+	var (
+		ct closedText
+		no int // the last number written
+	)
 	for _, p := range passages {
 		text := strings.TrimSpace(p.text)
 		if text == "" {
 			continue
 		}
-		label := min(p.label, len(text))
-		if at, kind, token, ok := refused(text[label:]); ok {
-			line := p.line
-			if line > 0 {
-				line += strings.Count(text[:label+at], "\n")
-			}
-			return closedText{}, scoreTokenError{Path: p.path, Line: line, Token: token, Kind: kind}
+		wrapped, hit := wrapPassage(p, text)
+		if hit != nil {
+			return closedText{}, *hit
 		}
 		if ct.text != "" {
 			ct.text += "\n\n"
+			ct.lines = append(ct.lines, line{from: len(ct.text), to: len(ct.text)})
 		}
-		from := len(ct.text) + label
-		ct.text += text
-		if p.end != "" {
-			ct.passages = append(ct.passages, extent{end: p.end, from: from, to: len(ct.text)})
+		for i, w := range wrapped {
+			if i > 0 {
+				ct.text += "\n"
+			}
+			l := line{end: p.end, from: len(ct.text), to: len(ct.text) + len(w)}
+			if p.end != "" && strings.TrimSpace(w) != "" {
+				no++
+				l.no = no
+			}
+			ct.text += w
+			ct.lines = append(ct.lines, l)
 		}
 	}
 	return ct, nil
 }
 
-// refused is text's first token that may not reach a prompt — a scoring token or
-// the frame's own structure — with its byte offset and which of the two it is. A
-// passage carrying both is refused on the scoring token.
-func refused(text string) (at int, kind, token string, ok bool) {
+// wrapPassage is one passage's lines as the call carries them, and the token the
+// guard found in it: a scoring token refuses the passage at once, and the frame's
+// own structure is held until the passage has been read whole, so a passage
+// carrying both is refused on the scoring token.
+func wrapPassage(p passage, text string) (wrapped []string, hit *scoreTokenError) {
+	for i, src := range strings.Split(text, "\n") {
+		for _, w := range wrapLine(src) {
+			if !p.label {
+				kind, token, ok := refused(w)
+				switch {
+				case ok && kind == kindScoringToken:
+					return nil, &scoreTokenError{Path: p.path, Line: p.sourceLine(i), Token: token, Kind: kind}
+				case ok && hit == nil:
+					hit = &scoreTokenError{Path: p.path, Line: p.sourceLine(i), Token: token, Kind: kind}
+				}
+			}
+			wrapped = append(wrapped, w)
+		}
+	}
+	return wrapped, hit
+}
+
+// wrapLine breaks one source line at its spaces so that no line it returns runs
+// past wrapWidth, inserting breaks and removing nothing: the lines joined by
+// newlines are the line's own bytes. A word wider than the width stands whole on
+// a line of its own rather than being cut, and no break falls inside a `$…$` or
+// `$$…$$` span, whose spaces belong to the formula.
+func wrapLine(s string) []string {
+	breaks := breakPoints(s)
+	var out []string
+	from := 0
+	for len(s)-from > wrapWidth {
+		// The last break this line may end after and still fit, else the first
+		// break past it, so a word too wide for the line is not cut.
+		cut := -1
+		for _, i := range breaks {
+			if i < from {
+				continue
+			}
+			if i+1-from > wrapWidth {
+				if cut < 0 {
+					cut = i
+				}
+				break
+			}
+			cut = i
+		}
+		if cut < 0 {
+			break
+		}
+		out = append(out, s[from:cut+1])
+		from = cut + 1
+	}
+	return append(out, s[from:])
+}
+
+// breakPoints is the indices of the spaces a wrapped line may end after: every
+// space no formula holds. A run of dollars opens a span only where a run of the
+// same length closes it further on in the line — a lone `$`, as in a price,
+// opens none — and a backslash escapes the character after it, `\$` among them.
+func breakPoints(s string) []int {
+	var (
+		out  []int
+		open int // the dollar run that opened the span; 0 where none stands open
+	)
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '$':
+			run := 1
+			for i+run < len(s) && s[i+run] == '$' {
+				run++
+			}
+			switch {
+			case open == run:
+				open = 0
+			case open == 0 && strings.Contains(s[i+run:], s[i:i+run]):
+				open = run
+			}
+			i += run - 1
+		case ' ':
+			if open == 0 {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
+}
+
+// sourceLine is the document line the passage's i'th line came from, 0 where the
+// reader does not locate the passage.
+func (p passage) sourceLine(i int) int {
+	if p.line == 0 {
+		return 0
+	}
+	return p.line + i
+}
+
+// numbered is the text as the call carries it: each numbered line behind its
+// number and the gutter, `N| `, numbered from 1 over the whole text. A line the
+// gutter does not reach — a label, a blank line, the edge's note — is carried as
+// it stands: a line with no number is no site.
+func (ct closedText) numbered() string {
+	var b strings.Builder
+	for i, l := range ct.lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if l.no > 0 {
+			b.WriteString(strconv.Itoa(l.no))
+			b.WriteString("| ")
+		}
+		b.WriteString(ct.text[l.from:l.to])
+	}
+	return b.String()
+}
+
+// at is the entry of the carried text's lines the number no is written on, ok
+// false where the call shows no such number.
+func (ct closedText) at(no int) (int, bool) {
+	if no < 1 {
+		return 0, false
+	}
+	for i, l := range ct.lines {
+		if l.no == no {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// linesRE is the shape of a charge's line field: one line number, or a range of
+// two, joined by a hyphen, an en dash, an em dash or a minus sign, spaces around
+// the dash allowed.
+var linesRE = regexp.MustCompile(`^([0-9]+)\s*(?:[-–—−]\s*([0-9]+))?$`)
+
+// cite is a charge's line field resolved: the passage its lines lie in, the
+// numbers as the ledger records them, the span of the carried text they quote and
+// that span's offset in it, and the numbers themselves, which is what two charges'
+// line sets are compared by.
+type cite struct {
+	end      string
+	lines    string
+	citation string
+	offset   int
+	lo, hi   int
+}
+
+// look resolves field as a charge's line field against the text the call carried:
+// one number, or a range N-M with N at most M, every number one the call shows,
+// all of them in one passage and with nothing between them — a blank line, a label
+// or a heading ends a range. Where it names no such lines it returns the case,
+// which the caller's refusal names.
+func (ct closedText) look(field string) (cite, string) {
+	m := linesRE.FindStringSubmatch(field)
+	if m == nil {
+		return cite{}, fmt.Sprintf("field %q names no line: a charge names one line number or a range N-M", field)
+	}
+	lo, err := strconv.Atoi(m[1])
+	if err != nil {
+		return cite{}, fmt.Sprintf("line %s is not one the call shows", m[1])
+	}
+	hi := lo
+	if m[2] != "" {
+		if hi, err = strconv.Atoi(m[2]); err != nil {
+			return cite{}, fmt.Sprintf("line %s is not one the call shows", m[2])
+		}
+	}
+	if hi < lo {
+		return cite{}, fmt.Sprintf("range %d-%d runs backwards: a range is written N-M with N at most M", lo, hi)
+	}
+	i, ok := ct.at(lo)
+	if !ok {
+		return cite{}, fmt.Sprintf("line %d is not one the call shows", lo)
+	}
+	j, ok := ct.at(hi)
+	if !ok {
+		return cite{}, fmt.Sprintf("line %d is not one the call shows", hi)
+	}
+	first, last := ct.lines[i], ct.lines[j]
+	if first.end != last.end {
+		return cite{}, fmt.Sprintf("range %d-%d crosses from one passage to another", lo, hi)
+	}
+	if j-i != hi-lo || ct.crossesHeading(i, j) {
+		return cite{}, fmt.Sprintf("range %d-%d crosses a gap: a blank line, a label or a heading lies between its lines", lo, hi)
+	}
+	lines := strconv.Itoa(lo)
+	if hi != lo {
+		lines += "-" + strconv.Itoa(hi)
+	}
+	return cite{end: first.end, lines: lines, citation: ct.text[first.from:last.to], offset: first.from, lo: lo, hi: hi}, ""
+}
+
+// crossesHeading is whether a heading lies between the lines i and j, which ends
+// a range: the lines either side of a heading are two parts of the text and no one
+// site. A heading a charge names as an end of its range is not between them.
+func (ct closedText) crossesHeading(i, j int) bool {
+	for k := i + 1; k < j; k++ {
+		l := ct.lines[k]
+		if headingRE.MatchString(ct.text[l.from:l.to]) {
+			return true
+		}
+	}
+	return false
+}
+
+// refused is one line's first token that may not reach a prompt — a scoring token
+// or the frame's own structure — and which of the two it is.
+func refused(text string) (kind, token string, ok bool) {
 	if loc := scoreTokenRE.FindStringIndex(text); loc != nil {
-		return loc[0], kindScoringToken, text[loc[0]:loc[1]], true
+		return kindScoringToken, text[loc[0]:loc[1]], true
 	}
 	if loc := frameRE.FindStringIndex(text); loc != nil {
-		return loc[0], kindFrame, text[loc[0]:loc[1]], true
+		return kindFrame, text[loc[0]:loc[1]], true
 	}
-	return 0, "", "", false
+	return "", "", false
 }

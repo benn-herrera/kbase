@@ -199,12 +199,13 @@ func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g 
 }
 
 // compose is the prompt one item's call carries, the digest of exactly it, and
-// the closed text the prompt is made of — which a charge's citation is looked up
-// in. A text the guard refuses is composed of nothing and makes no call.
+// the closed text the prompt is made of — whose numbered lines are what a charge
+// cites. A text the guard refuses is composed of nothing and makes no call.
 //
 // The item's class has already fixed which pass's subject it is, and the text is
 // the shape that class is judged on: a rigor class asks a node's text, a bearing
-// class an edge's.
+// class an edge's. The call carries the text numbered, so what it judges and the
+// lines a charge names are one rendering.
 func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest string, closed closedText, err error) {
 	if cl.edge {
 		row, ok := r.Index.Edge(*it.Edge)
@@ -218,7 +219,7 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 	if err != nil {
 		return "", "", closedText{}, err
 	}
-	if prompt, err = cl.ask(closed.text); err != nil {
+	if prompt, err = cl.ask(closed.numbered()); err != nil {
 		return "", "", closedText{}, err
 	}
 	return prompt, digestOf(prompt), closed, nil

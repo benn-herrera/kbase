@@ -229,8 +229,8 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	}
 	it := edge("clm-1", "clm-2", kb.RelationSupports)
 	entry := Entry{Status: StatusDone, Value: "0.65",
-		Faults: []Charge{{ID: kb.FaultTransfer, Passage: passageSource, Citation: "A span", Offset: 9}},
-		Reply:  "flt-transfer: A span\n", Model: "small",
+		Faults: []Charge{{ID: kb.FaultTransfer, Passage: passageSource, Lines: "12", Citation: "A span", Offset: 9}},
+		Reply:  "flt-transfer: 12\n", Model: "small",
 		PromptSHA256: "deadbeef", Started: "2026-10-20T10:00:01Z", Ended: "2026-10-20T10:00:02Z"}
 	if err := l.Append(it, entry); err != nil {
 		t.Fatal(err)
@@ -242,8 +242,8 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	want := []map[string]any{{
 		"run": "run-1", "pass": query.PassBearing, "backend": "provider", "source": "clm-1", "target": "clm-2",
 		"relation": kb.RelationSupports, "status": "done",
-		"faults": []any{map[string]any{"id": kb.FaultTransfer, "passage": passageSource, "citation": "A span", "offset": float64(9)}},
-		"value":  "0.65", "reply": "flt-transfer: A span\n",
+		"faults": []any{map[string]any{"id": kb.FaultTransfer, "passage": passageSource, "lines": "12", "citation": "A span", "offset": float64(9)}},
+		"value":  "0.65", "reply": "flt-transfer: 12\n",
 		"model": "small", "prompt_sha256": "deadbeef",
 		"started": "2026-10-20T10:00:01Z", "ended": "2026-10-20T10:00:02Z",
 	}}

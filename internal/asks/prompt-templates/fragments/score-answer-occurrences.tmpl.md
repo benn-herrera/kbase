@@ -1,24 +1,7 @@
 Charge every occurrence you can point at — not the worst one, and not one per kind. Two lines
-carrying one id need two spans that do not overlap.
+carrying one id need two charges, citing lines that do not overlap.
 
-A citation is checked before its line is written: look for the span in the text above, in the very
-characters the line will write, and where it is not there, shorten it until it is. A few words is
-usually enough and one character is enough: the smallest span that carries the fault is the honest
-one, and one span the text does not carry costs the whole reply.
-
-A citation marks the site of the fault, never a description of it: the span is where the fault shows
-in the text being judged — the words a reader would look at to see the fault for themselves — and a
-sentence that describes the fault is not that place, however exactly it is copied. Where the fault is
-something the text fails to do, the site is still the text's own words, the ones that carry the
-obligation: the part the missing piece would have had to reach. An edge's note under `## Context`,
-where the call shows one, describes the relation and is never a site.
-
-Markup is copied as the text writes it, neither added nor dropped: `$`, `\(`, `\)`, `\[`, `\]`,
-`\text{}`, backticks and emphasis markers belong to a span exactly where the text itself writes them —
-where the text writes `$M$`, the span is `$M$`, and where it writes `d_n`, the span is `d_n`.
-
-A passage is one of the texts the call shows, whole — a title, a statement, a source's text, a
-target's — and the citation is looked for in one passage at a time, so a span that begins in the one
-and ends in the other is a span the text does not carry. A line holds no display formula and no
-fenced block, and its span stops at a line break: where it would cross one, shorten it to the words
-on one side. Where the fault concerns mathematics, quote the words around the formula.
+A charge names its site by a line. The number before the bar is the frame's, not the text's: it
+counts the text's lines and is no part of what they say. Cite one line of a text, or a contiguous
+range of its lines — a blank line, a label or a heading ends a range. The line cited is where the
+fault shows, not a line that describes it.

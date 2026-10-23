@@ -569,7 +569,13 @@ claim no leaf marks renders its title alone, and a work renders its title alone 
 entry's body is its `### Rigor` subsection, which the guard would refuse, and its `- rationale:` is
 never sent. A claim's `CanonicalPath` names the register, which is never opened. `bearingText`
 renders the source's and the target's statements by that same rule, then the edge's authored
-`[context]` from the row `Index.Edge(ScoringEdge)` answers. `scoreTokenRE` and `frameRE` scan each
+`[context]` from the row `Index.Edge(ScoringEdge)` answers. Each end's label opens a line of its own, and
+so does the context's, so no numbered line begins with frame text. `assemble` wraps every passage at
+word boundaries to `wrapWidth` — 100 columns — keeping the passage's own line breaks and rewriting
+nothing, and numbers the lines lying in a passage with an `end`, from 1 over the whole text;
+`closedText.numbered` writes `N| ` before a numbered line, which is the frame's gutter and no part of
+the carried text, and carries a label line, a blank separator line and the edge's context bare — a line
+with no number is no site. `scoreTokenRE` and `frameRE` scan each
 assembled passage — no guard pattern spans the blank line between two — and a hit is
 `scoreTokenError`, naming the document and line, with the item `failed` and no call made: the guard
 refuses, it never strips. The four scoring tokens are half of what it refuses; `frameRE` adds the
@@ -582,19 +588,26 @@ refused rather than escaped. An
 out-of-scope subject is refused by name and type — a `wrk-` or `axm-` id on `rigorText`, a
 `references` or `demoted` relation on `bearingText`.
 
-**The parse reads the closed text's passages.** `assemble` returns the closed text *and the extents
-of the passages it is made of*, because a charge's `passage` and its `offset` are facts about that
-text: a `rigor` call's two passages are a node's `title` and `statement`, a `bearing` call's are the
-`source`'s and the `target`'s. `score.ParseAnswer` (`internal/score/answer.go`) reads a reply against
-them and the item's class's `kb.FaultTable`: a charge line is looked up by collapsed whitespace and
-folded case, **one passage at a time**, so a span crossing from one to another is unfound and
-`malformed`, and the edge's `## Context` — assembled but not a passage — is citable by no charge. A
-span the two passages carry alike records `both` at its earlier match. The read yields
-`Answer{Faults, Moot, Value}`: the charges, the charge lines a `flt-pending` made moot, and the price
-`kb` gives the ids. Duplicate and overlap collapsing is the parse's; the ids the ledger records are
-the whole input of the price, which is what makes a landing checkable and a run re-scorable without a
-model. The context stays in the assembled text because the ask judges an edge on it; the parse merely
-refuses to anchor a charge there.
+**The parse resolves the numbered lines.** `assemble` returns the closed text and a line per line of
+it — the number the call writes, the passage its bytes lie in, and its byte range — because a charge's
+`passage`, `lines` and `offset` are facts about that rendering: a `rigor` call's two passages are a
+node's `title` and `statement`, a `bearing` call's are the `source`'s and the `target`'s.
+`score.ParseAnswer` (`internal/score/answer.go`) reads a reply against them and the item's class's
+`kb.FaultTable`: a charge line's field is one number or a range `N-M`, which `closedText.look`
+resolves — every number one the call shows, all of them in one passage, and nothing between them — so
+a range crossing from one passage to another, or over a blank line, a label or a heading, is
+`malformed`. The recorded `citation` is the cited lines as the call carried them, without the gutter,
+joined by newlines, and `offset` is that quote's byte offset in the closed text. The edge's
+`## Context` — assembled but carrying no number — is a site for no charge; a numbered line lies in one
+passage, so `both` is no longer produced, and a line written earlier may carry it and keeps the
+meaning it was written with. The read yields `Answer{Faults, Moot, Value}`: the charges, the charge
+lines a `flt-pending` made moot, and the price `kb` gives the ids. The parse also refuses a charge
+naming no line, a `flt-pending` carrying one, and a number the call does not show. Duplicate and
+overlap collapsing is the parse's, over cited line sets: an identical set written twice collapses to
+one charge, and two sets of one id that overlap without coinciding are refused. The ids the ledger
+records are the whole input of the price, which is what makes a landing checkable and a run
+re-scorable without a model. The context stays in the assembled text because the ask judges an edge
+on it; the parse merely refuses to anchor a charge there.
 
 **The scoring set.** `query.ScoringSet(ix, pass)` reads the loaded index in-package and returns
 `[]query.Item`, each carrying a `ScoringNode` or a `ScoringEdge` and never both, in the walk's order;
@@ -624,8 +637,8 @@ newline so the item it names is asked again. `items.jsonl` holds the set the run
 pending line per item, written when the run opens its ledger, so status and a waiter count the whole
 run rather than the attempts made so far; it is all a dry run writes beside `run.yaml`.
 
-A line carries `faults` — the parsed charges, `id`, `passage`, `citation`, `offset`, in the order
-written — and `moot`, the charge lines a `flt-pending` made moot, parsed the same way and priced
+A line carries `faults` — the parsed charges, `id`, `passage`, `lines`, `citation`, `offset`, in the
+order written — and `moot`, the charge lines a `flt-pending` made moot, parsed the same way and priced
 nowhere; `[]` is written for one reply alone, the word `none`, so an empty list always carries the
 model's positive statement that it found no fault. A failed attempt carries neither, and no text:
 its `reply` is the reason. `backend` sits on every
@@ -1189,6 +1202,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `storeFormat` in `internal/build`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
+| Scoring wrap width | `wrapWidth` in `internal/score/text.go`: 100 columns, the width each passage of the closed text is wrapped to before its lines are numbered (§6, Scoring) |
 | Operation lock path | `<git dir>/kbase-operation.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
 | Detached-score start wait | `build.StartWait` (40 s) again: how long the `score` tool waits for the child's ledger and pid to stand, or for the child to exit, before returning (SPEC §11) |

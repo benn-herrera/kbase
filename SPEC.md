@@ -781,9 +781,13 @@ sections are never read. A text carrying a scoring token (`- rigor:`, `- strengt
 `(strength …)`) is refused before the call, naming the document and line, and that item is `failed`
 with no call made.
 
-**The answer.** A reply is a list of charge lines, each one fault id and the span of the item's own
-text that shows the fault — one line per occurrence, in the order written — or the word `none`,
-alone, or `flt-pending` — alone, or beside charge lines, which it moots.
+**The answer.** A reply is a list of charge lines, each one fault id and the numbered line of the item's
+own text where the fault shows — one line per occurrence, in the order written — or the word `none`,
+alone, or `flt-pending` — alone, or beside charge lines, which it moots. The call carries the text
+wrapped at word boundaries to at most 100 columns, its own line breaks kept and nothing rewritten, and
+writes `N| ` before each line lying inside a passage a charge may cite, numbering from 1: a numbered
+line is a verbatim slice of that text. A frame label and an edge's `## Context` carry no number, and a
+line with no number is no site.
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) states the criteria, the
 three closed sets and the citation rule; this section states what kbase does with a reply.
 
@@ -791,24 +795,33 @@ three closed sets and the citation rule; this section states what kbase does wit
   `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its six, each
   with `flt-pending` and nothing else; an id outside that set — the other rigor class's among them —
   is `malformed`, the refusal naming the id and the call's ids as `allowed`.
-- **The citation is looked up in the text the call carried** — never in the register — by collapsed
-  whitespace and folded case, whole within one passage: a node's `title` or `statement`, an edge's
-  `source` or `target`. An edge's `## Context` is not citable. A span the two ends carry alike is
-  recorded as `both`, at its earlier match. A citation not found is `malformed`, naming the id and the
-  span; so is an empty or whitespace-only span.
+- **The citation is the numbered line where the fault shows.** One number, `flt-partial: 12`, or a
+  contiguous range within one passage, `flt-transfer: 12-14`; the dash may be a hyphen, an en dash, an
+  em dash or a minus sign, with or without spaces, and the ask shows the hyphen. kbase resolves the
+  field against the rendering the call carried — never the register — and records three facts beside
+  the `passage` the lines lie in: `lines`, the answer's own numbers; `citation`, the quoted lines
+  without the gutter; and `offset`, the quote's byte offset in the carried text. A charge naming no
+  line, one naming a line the call does not show, and a range crossing from one passage to another or
+  over a gap — a blank line, a label or a heading between its lines — are `malformed`, naming the id
+  and the lines. A numbered line lies in one passage, so the `both` value — a span the two ends
+  carried alike — is no longer produced; a ledger line already recorded with it keeps the meaning it
+  was written with.
 - **Nothing is read out of prose.** Blank lines are ignored and any other line that is not a charge
   line is `malformed`. So is `none` beside any other line, a bare number — a decimal, a percentage, a
-  fraction, a `*pending*` written as a value — and an empty reply: silence is never a clean pass.
-- **Duplicates and overlaps.** One id on one span, written twice, is one charge; two spans of one id
-  that overlap without coinciding is `malformed`, naming both lines; two ids on one span are both
-  charged, the offset shared.
+  fraction, a `*pending*` written as a value — since a number standing alone names no fault id, and an
+  empty reply: silence is never a clean pass.
+- **Duplicates and overlaps.** One id on one line set, written twice, is one charge; two line sets of
+  one id that overlap without coinciding is `malformed`, naming both lines; two ids on one line set
+  are both charged, the quote and its offset shared.
 
-**The four parse rules are frozen for the life of the format version.** The citation's one-character
-floor, `flt-pending` beside charges read as the judgement with the rest moot, `none` beside charges
-refused, and one id over two spans that overlap without coinciding refused — fixed while the ledger's
-format version stands, and what moves one is a new version, which `--resume` reads by its own rules.
-A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written under
-a new grammar.
+**The four parse rules are frozen for the life of the format version.** The citation's floor of at
+least one valid line number, `flt-pending` beside charges read as the judgement with the rest moot,
+`none` beside charges refused, and one id over two line sets that overlap without coinciding refused —
+fixed while the ledger's format version stands, and what moves one is a new version, which `--resume`
+reads by its own rules. A valid line number is one the call shows, lying in a passage a charge may
+cite. A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written
+under a new grammar. This change moves no version: `citation` is still a span of the carried text, so
+a line written before it reads as it did.
 
 **The value.** kbase prices the charge list: the item's class's maximum — `1.00` under each of the
 three tables — less each id's weight per occurrence under that class's table, floored at zero and
@@ -819,7 +832,7 @@ price is kbase's, and nothing else is an input. A landing is therefore checkable
 ledger line without asking a model.
 
 **A refused reply is a failed attempt.** A `malformed` reply writes nothing, and the attempt's line
-records `status: failed` and the reason — the case, and where it names one the id and the span — and
+records `status: failed` and the reason — the case, and where it names one the id and the lines — and
 **no text of the reply**. The same holds for a reply cut off at the completion cap, whose charge list
 may be incomplete, and for a call or a write that failed. The run goes on, and `--resume` asks the
 item again. Nothing is defaulted or supplied by kbase: `*pending*` is an answer the model may give,
@@ -876,7 +889,7 @@ states the first invocation's back end and model, and each ledger line states it
 what answered it.
 
 `ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the reply, `faults`
-(the parsed charges: `id`, `passage`, `citation`, `offset`, in the order written), `moot` (the charge
+(the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
 lines a `flt-pending` made moot), `backend`, the model, the prompt's digest and the attempt's bounds —
 appended after the item's write and its validation, never before. `faults` is `[]` for one reply
 alone, the word `none`; a failed attempt carries neither `faults` nor text. The state directory is
@@ -1448,7 +1461,7 @@ and its `supports` edge is excluded like any unjudged premise.
 **A value is derived from a charge list, not composed from the interior of the scale.** Each of the
 two scoring passes asks a model for the faults the text commits — the ids
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) defines, each with the
-span that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
+line that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
 occurrence, floored at zero and exact at two decimals (§8). A written `rigor` is a value in
 `[0, 1]` or `*pending*`, and a bearing's the same; what changed is who chooses a number. A pass
 derives it, `1.00` is the rigor tables' maximum — the largest a `rigor` pass derives, which reads *no
@@ -1814,4 +1827,21 @@ vocabulary's maximum, and `flt-no-engagement` the bearing one's, which is unchan
 - **One operation lock.** `kbase-operation.lock` in the repository's git directory is held by a build
   or by a scoring run, so the two never write the same KB at once. A write op or `refresh` is refused
   while either holds it, and the refusal names which run and its pid (§6).
+
+**0.8.0 — a scoring charge cites line numbers.** A call numbers the lines of the text it carries, and
+a charge names the line where the fault shows instead of reproducing a span of it: selecting a
+numbered line is a capability a model has, and reproducing a span byte for byte is not (§8).
+
+- **The call numbers its lines.** Each passage is wrapped at word boundaries to at most 100 columns,
+  its own line breaks kept and nothing rewritten, so a numbered line is a verbatim slice of the
+  passage it came from and one paragraph still charges once per occurrence. `N| ` before a numbered
+  line is the frame's gutter and no part of the text. The frame's labels and an edge's `## Context`
+  carry no number, so the note is no site a charge can cite.
+- **A charge names one line or a contiguous range within one passage**: `flt-partial: 12`,
+  `flt-transfer: 12-14`. A charge naming no line, or a line the call does not show, fails the attempt
+  as a malformed reply does, and so does a range crossing a passage or a gap.
+- **The ledger records the quote and the numbers.** `faults` keeps `citation` a span of the carried
+  text, now quoted by kbase, and gains `lines`, the answer's own numbers. The `both` passage value is
+  no longer produced — a numbered line lies in one passage — while a line already written with it
+  keeps the meaning it was written with, so the format version does not move.
 
