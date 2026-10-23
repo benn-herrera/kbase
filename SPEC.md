@@ -69,7 +69,10 @@ filter.
 | The claim-graph sheets' DOT, against the DOT goldens (`internal/sheet/testdata/`) | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, `refresh` and `render-claim-graph` leave an unchanged sheet's bytes as they are |
 
 **Stamped documents.** `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands:
-kbase's subcommands.
+kbase's subcommands. They point a reader at kbase's tools, never at its derived files: `AGENTS.md`
+forbids reading `.index/`, the claim-graph sheets and frontmatter as metadata, as the MCP server's
+instructions do (§11), and `CONVENTIONS.md` states that metadata, frontmatter included, is written
+only by a write op, never by hand.
 
 **Formats.** A new KB is written in the current metadata format, `2.0.1` (§10). A KB in a superseded
 form — `0.9.0` or `1.0.0` (§10) — is read through migration.
@@ -1822,7 +1825,13 @@ changes nothing.
   what carries a session on from there. Over a repository whose `kb-root/` stands it names the KB's
   path; over one whose `kb-root/` is yet to be made it names the repository's and says the KB can be
   built; where no repository holds the served directory the field is absent. Either path is
-  absolute, the `kbase` skill is named as the workflow, and `show-config` is the one tool it names.
+  absolute, the `kbase` skill is named as the workflow, and `show-config` as the tool reporting
+  configuration. It forbids a session to read or write kbase's derived files — anything under
+  `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path exists, and
+  to take metadata from a frontmatter block or edit one by hand; it names the query tools as what
+  reports those files' content and the write tools as what changes them. Reading a document's prose
+  stays open, and so does reading a sheet as an MCP resource. Every tool it names is one the server
+  serves. The text is an embedded file of the binary.
 - **Registration** is the external agent harness's: one server entry naming the command
   `kbase mcp --kb-root <absolute path>`. README gives the entry for two external agent harnesses as
   examples.

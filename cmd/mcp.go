@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -424,14 +425,16 @@ func serveMCP(cmd *cobra.Command, dir string) error {
 		buildSubscription(launch, processLog.logger), processLog.logger)
 }
 
-// The instructions initialize carries: which of the three states the served
-// directory is in, where the two forms name their path, and the two names a
-// session needs to go on — the skill carrying the workflow and the tool
-// reporting configuration. Plain text: no Markdown reaches the wire.
+// The instructions initialize carries: an opening sentence naming the served
+// path, in one of two forms, followed by the guidance text embedded from
+// mcp_instructions.txt. Plain text: no Markdown reaches the wire.
+//
+//go:embed mcp_instructions.txt
+var instructionsGuidance string
+
 const (
-	instructionsWorkflow = " The kbase skill carries the workflow; show-config reports how provider and model configuration resolves."
-	instructionsServing  = "kbase serves the knowledge base at %s." + instructionsWorkflow
-	instructionsBuilding = "kbase is registered for %s and can build its knowledge base; kb-root/ does not exist yet." + instructionsWorkflow
+	instructionsServing  = "kbase serves the knowledge base at %s."
+	instructionsBuilding = "kbase is registered for %s and can build its knowledge base; kb-root/ does not exist yet."
 )
 
 // servedInstructions is what the server tells a session at initialize, from
@@ -446,9 +449,9 @@ func servedInstructions(dir string) (string, error) {
 	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
 	if info, err := os.Stat(kbRoot); err == nil && info.IsDir() {
-		return fmt.Sprintf(instructionsServing, kbRoot), nil
+		return fmt.Sprintf(instructionsServing, kbRoot) + " " + strings.TrimSpace(instructionsGuidance), nil
 	}
-	return fmt.Sprintf(instructionsBuilding, repo), nil
+	return fmt.Sprintf(instructionsBuilding, repo) + " " + strings.TrimSpace(instructionsGuidance), nil
 }
 
 // servedResources is what the server offers as resources: the served KB's

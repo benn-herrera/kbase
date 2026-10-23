@@ -70,8 +70,8 @@ parenthetical `(strength …)` annotations, subtree aggregates, the `Leaf refere
 register entry, the `claim-graph.svg` and `claim-graph-digest.svg` sheets, and everything under `.index/`. **A hand-edited derived
 field is a verifier failure**, not a shortcut — the value is overwritten and the drift is reported.
 
-Authored does not mean typed. Everything authored except leaf prose is metadata, and metadata is
-written only by a write op: you supply values, the op composes the format, proves what it wrote by
+Authored does not mean typed. Everything authored except leaf prose is metadata, leaf frontmatter
+among it, and metadata is written only by a write op, never by hand: you supply values, the op composes the format, proves what it wrote by
 reading it back, and refuses rather than writing what it cannot prove. It mints an entry's id itself
 and reports it, so no id is ever chosen. A values file carrying a key its op does not take is refused
 with the offending key, its position, and the complete set the op does take, so the call you would

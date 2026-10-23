@@ -937,10 +937,18 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 	for _, tool := range listTools(t) {
 		bound[tool.Name] = true
 	}
-	// Both names the strings use and the invariant exempts must be tools the
-	// table really holds, or the check below proves nothing.
-	if !bound["show-config"] || !bound["build"] {
-		t.Fatalf("the tool table holds neither build nor show-config: %v", bound)
+	// The instructions may name only what the server serves: a command the
+	// tree holds but the tool table does not is refused by name.
+	unserved := map[string]bool{}
+	for _, c := range rootCmd.Commands() {
+		if !bound[c.Name()] {
+			unserved[c.Name()] = true
+		}
+	}
+	// "build" is counted separately below, so it must be a served tool, and
+	// the table must be non-empty, or the check proves nothing.
+	if !bound["build"] || len(unserved) == 0 {
+		t.Fatalf("the tool table lacks build, or the tree holds no unserved command: bound %v unserved %v", bound, unserved)
 	}
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n"
 
@@ -1006,8 +1014,8 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 					builds++
 					continue
 				}
-				if bound[token] && token != "show-config" {
-					t.Errorf("instructions %q name the tool %q", text, token)
+				if unserved[token] {
+					t.Errorf("instructions %q name the command %q, which the server does not serve", text, token)
 				}
 			}
 			if builds != tc.builds {

@@ -15,6 +15,13 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
 - **Do not edit files here directly.** Every structured field was written by a tool from supplied
   values, and much of what looks editable is derived and regenerated. An edit made outside the
   maintainer is either overwritten or caught as drift.
+- **Do not read kbase's derived files.** Everything under `.index/`, the `claim-graph.svg` and
+  `claim-graph-digest.svg` sheets, a volume's `claim-graph.svg` and any `.dot` file are kbase's
+  alone: the query tools — `show`, `deps`, `find`, `stats` and the rest — report what they hold, and
+  `refresh` and `render-claim-graph` write them. Testing that such a path exists (`test -d`, a stat)
+  is allowed; listing, globbing or opening anything inside it is reading it. Never take metadata
+  from a frontmatter block: get it from the tool that reports it. Reading a document's prose, which
+  brings its frontmatter along, is how this KB is read.
 
 ## What this tree holds
 

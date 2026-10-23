@@ -12,8 +12,8 @@ is navigation the build wrote: the `entry-point` at the root, and an `index` in 
 holds documents beneath it. An index carries no translated source of its own — a section's own prose
 is a leaf beneath it. Those three kinds are the documents, and nothing else is one: no
 `claim-rigor.md` register, no `axioms.md`, not this file, `AGENTS.md` or `CONVENTIONS.md`, and
-none of the images under `assets/` that leaves embed. Every document names its kind in the `kind`
-field of its frontmatter. Reading order is what the indexes themselves carry.
+none of the images under `assets/` that leaves embed. Reading order is what the indexes themselves
+carry.
 
 ## The Claim Graph Over It
 
@@ -41,14 +41,15 @@ claim, an analysis or an experiment and caps the claim it attacks. Each of the f
 rests on it. A `demoted` edge is a `supports` edge the build's cycle breaking cut because it closed a
 circle; it keeps its origin, cited or inferred, and nothing rests on it either.
 
-[`claim-graph.svg`](claim-graph.svg) beside this file is rendered from `.index/` by refresh and
-authored by nobody — read it, never edit it. It draws every volume as a cluster.
+[`claim-graph.svg`](claim-graph.svg) beside this file is drawn by `refresh` and `render-claim-graph`
+and authored by nobody — a picture for a person to view; a session neither opens nor edits it, and
+takes the graph from the query tools. It draws every volume as a cluster.
 {digest-chunk}`<volume>/claim-graph.svg` beside each volume's `index.md` shows that volume and every
 node one edge from it.
 A sheet draws the four scoring relations and no `references` edge, and every `demoted` one as a cut;
 every arrow points from the supporter to what it supports. Of the drawn `supports` edges only the
-transitive reduction appears, so a missing stroke is not a missing edge — `.index/` carries every
-edge. A `supports` edge is black solid where cited (the paper's text marks the dependency) and blue
+transitive reduction appears, so a missing stroke is not a missing edge — `deps` reports every edge
+at a node. A `supports` edge is black solid where cited (the paper's text marks the dependency) and blue
 dashed where inferred (the build found it with no mark in the text); `founds`, `lifts` and `refutes`
 each have a stroke of their own; and a cut is red dotted, heavier where the cut edge was cited,
 lighter where inferred. A node's shape gives its kind — a labelled block with a bold frame, an
@@ -71,9 +72,8 @@ This file states no counts, because the KB changes after it is written. The curr
 per band are under `strength_bands`: the {pending-literal} band holds the unscored claims, and every
 other band holds scored ones.
 
-It does not split the edges by class. Each edge is one line of `.index/edges.yaml`, `--- ` then the
-edge as a JSON object, and the object's `relation` field names its class and its `bearing` field its
-scalar — a number written as text, or {pending-literal}, null where the relation carries none.
+It does not split the edges by class. `deps` reports each edge at a node with its `relation`, its
+class, and its `bearing`.
 
 No command counts the documents: `stats` counts the claim graph and `verify` reports faults.
 

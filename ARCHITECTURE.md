@@ -1388,7 +1388,8 @@ never `os.Getwd()`, or `--kb-root` is ignored.
 `method`, known tool, object arguments). Arguments failing the schema (missing, wrong type, unknown
 key) are JSON-RPC `-32602` errors, not refusal documents. `Serve` takes the server version, the
 instructions `initialize` reports, the tool table and the resources from its caller, and imports
-`log` only. `resources/list` and `resources/read` serve the resources cmd/mcp.go supplies: the
+`log` only. The instructions are `servedInstructions`' opening sentence for the served directory's
+state, followed by the embedded `cmd/mcp_instructions.txt`, the text a session reads. `resources/list` and `resources/read` serve the resources cmd/mcp.go supplies: the
 sheets, under `kbase://sheet/<kb-root-relative path>`, and the model guidance, at
 `kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB.
 Beside them `kbase://build-trail` is `internal/build`'s `Rewind` document (`rewind.go`) for the

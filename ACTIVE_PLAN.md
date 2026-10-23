@@ -261,6 +261,9 @@ Declined:
 
 - The first live use (Gates): a captured run over the fixture KB and an unchanged-build replay whose
   comparison shows `prompt_changed` false throughout. The owner's; needs a provider.
+- A call that ends at the completion cap or the deadline is captured with `reply` `""` and no finish
+  reason or usage: the `Ask` seam returns only the reply text or an error, so a capture cannot tell
+  a reasoning-exhausted reply from an empty one.
 - `NewestRun` reads only `run.yaml`'s `started`, so a `run.yaml` with another malformed field
   counts toward `status`'s newest run where it was once skipped.
 - CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.
