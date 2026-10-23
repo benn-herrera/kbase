@@ -88,7 +88,7 @@ back end* is the contract text; this is its checklist:
 
 adjagent retires `definitions/kb_claim_scorer.py` and the agent definition it renders. The scoring
 prompt carries the whole instruction set now, so an agent definition left in place adds instructions
-the run cannot account for. `PLAN_3_TOOLING.md` B.1 already requires the retirement.
+the run cannot account for. `ROADMAP_PLANS/PLAN_3_TOOLING.md` B.1 already requires the retirement.
 
 Its `scoring` reference also carries facts that are false or about to be: the ledger records `done`,
 `failed` and `pending` (not `malformed`); the answer comes through the provider API, not a back end;
@@ -111,4 +111,4 @@ Text that already carries an obligation this page voids or restates, and must mo
 - `CONVENTIONS.md`'s `internal/harness` paragraph and its exec-owner list.
 - `USER_CONVENTIONS.md`'s `harnesses.toml` paragraph and its opencode bullet; `README.md`'s harness and
   opencode passages; `ROADMAP.md`'s *Configuration* bullet.
-- `PLAN_3_TOOLING.md` B.1 and B.3.
+- `ROADMAP_PLANS/PLAN_3_TOOLING.md` B.1 and B.3.

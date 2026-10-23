@@ -1,6 +1,6 @@
 # Phase 3 — the consumers (named, not done)
 
-Status: blocked on Phases 1 and 2; external owners. **Nothing in this repository lands in this
+Status: ready — the formats it consumes are landed; external owners. **Nothing in this repository lands in this
 phase.** It is the hand-off checklist for the two repositories that must follow the format and the
 scoring command.
 

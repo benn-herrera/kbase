@@ -840,7 +840,7 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   inference is one decision answered by one letter from a closed set the build offers, an unreadable
   reply asked once more and then defaulted to the item's mechanical draft, recorded as defaulted.
   Templates (`*.tmpl.md`) and fragments are embedded files (I7). A template change is an experiment
-  with a measured result (ACTIVE_PLAN).
+  with a measured result.
 - Prompts are `@!slot!@` templates; a call's system prompt is the fragment named for it
   (`overview-system` — the one surviving system fragment, the overview call's), never an agent
   definition; a letter ask carries no system message. `asks.Render` builds the one user turn. No test

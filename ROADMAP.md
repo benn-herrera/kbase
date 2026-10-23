@@ -10,6 +10,13 @@ deleted, not archived.
   hit list returns when a scoring pass has run on the fixture and a ranking signal puts the
   author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
   plan's record is `ACTIVE_PLAN.md` at commit `34b956e`). Never an all-pairs check.
+- The consumers of the `2.0` format and `kbase score`: the reference toolchain reads `2.0.0`, and
+  adjagent retires its scorer for `kbase score`. External owners; nothing lands here
+  (`ROADMAP_PLANS/PLAN_3_TOOLING.md`).
+- **No test drives a scoring landing against a held KB write lock.** A landing denied the lock is
+  that item's `failed`, covered by code reading alone: `write.LockWait` is a fixed constant, so no
+  test can hold the lock without paying the full wait. A wait seam for `holdKB` would cover every
+  writer, not only scoring.
 
 ## Reader fidelity
 
