@@ -2,8 +2,8 @@
 
 **Status.** A capture of work in progress, not a contract. It records what the system now does, what
 is proposed and not yet built, and what is still open. Where it disagrees with
-[STRENGTH_SCORING_SCHEME.md](STRENGTH_SCORING_SCHEME.md) or
-[RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md), those pages describe the
+[STRENGTH_SCORING_SCHEME.md](../STRENGTH_SCORING_SCHEME.md) or
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](../RIGOR_AND_BEARING_SCORING_SCHEME.md), those pages describe the
 code today and this page describes where it is heading.
 
 Sections marked **landed** are in `main`. Sections marked **proposed** are not in the code.

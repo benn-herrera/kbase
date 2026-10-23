@@ -377,8 +377,7 @@ reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 
 `kbase mcp` serves one KB to any agent harness that speaks the Model Context Protocol, over stdio.
 Every tool is one subcommand, with the same arguments and the same result — except `rewind-build`,
-which reports the build's commit trail and has no subcommand behind it. Wiring it into a harness is
-covered in [INTEGRATING_KBASE_VIA_MCP.md](INTEGRATING_KBASE_VIA_MCP.md).
+which reports the build's commit trail and has no subcommand behind it.
 
 The server entry is the same for every harness: command `kbase`, arguments:
 
