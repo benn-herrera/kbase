@@ -1335,6 +1335,8 @@ _test-integration-results-fixture: build
     run show done show "${id}"
     run show refused show clm-zzzzzz
     run stats done stats
+    run edge-census done edge-census
+    run edges done edges
     run status done status --state-dir "${root}/${out}/state"
     run cancel refused cancel --state-dir "${root}/${out}/state"
     {{just_executable()}} _write-evidence "${out}" "test-integration-results-fixture" \

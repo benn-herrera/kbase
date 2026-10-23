@@ -85,6 +85,7 @@ var queryCases = [][]string{
 	{"find", ""}, {"find", "result"}, {"deps", "clm-0dtsyu"}, {"deps", "clm-0dtsyu", "-i"}, {"gated-on", "clm-2h6i01"},
 	{"cited-by", "clm-0dtsyu"}, {"referenced-by", "clm-0dtsyu"}, {"strength-below", "--max-strength", "0.9"}, {"subtree", ""},
 	{"subtree", "b"}, {"weak-points"}, {"show", "clm-0dtsyu"}, {"show", "exp-k3m9q2"}, {"stats"},
+	{"edge-census"}, {"edges"},
 }
 
 // TestQueriesReadAnOlderKBAsItsConversion: a query over a KB loaded at an

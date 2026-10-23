@@ -540,6 +540,129 @@ func TestStatsCountsDemotedEdges(t *testing.T) {
 	}
 }
 
+// edgeCensusIndex holds every bearing class on supports — a number whose text
+// sorts after another's (1e-05 after 0.5), pending, and a pairing that carries
+// none — one row each on founds, lifts and references, and none on refutes or
+// demoted. Two supports rows share their ends and differ by context.
+func edgeCensusIndex(t *testing.T) *Index {
+	t.Helper()
+	withContext := edge("clm-bbbbbb", "clm-aaaaaa", kb.RelationSupports, "claim", "0.5")
+	withContext["context"] = "step 2"
+	return load(t, map[string][]map[string]any{
+		"claims": {claim("clm-aaaaaa", "A", nil, "unknown"), claim("clm-bbbbbb", "B", nil, "unknown"),
+			claim("clm-cccccc", "C", nil, "unknown"),
+			{"node_type": "analysis", "id": "ana-aaaaaa", "title": "S", "canonical_path": "p", "canonical_anchor": "s", "rigor": 0.8, "strength": 0.8},
+			{"node_type": "work", "id": "wrk-B", "title": "B", "canonical_path": "p", "canonical_anchor": "b"}},
+		"edges": {
+			edge("clm-cccccc", "clm-bbbbbb", kb.RelationSupports, "claim", "0.5"),
+			edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationReferences, "claim", nil),
+			withContext,
+			edge("clm-cccccc", "clm-aaaaaa", kb.RelationSupports, "claim", "1e-05"),
+			edge("ana-aaaaaa", "clm-aaaaaa", kb.RelationLifts, "claim", "0.8"),
+			edge("clm-aaaaaa", "wrk-B", kb.RelationSupports, "work", nil),
+			edge("wrk-B", "clm-aaaaaa", kb.RelationFounds, "claim", "0.5"),
+			edge("clm-bbbbbb", "clm-aaaaaa", kb.RelationSupports, "claim", "0.5"),
+			edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationSupports, "claim", kb.PendingLiteral),
+		},
+	})
+}
+
+func bearingCounts(pairs ...any) []result.Record {
+	out := []result.Record{}
+	for i := 0; i < len(pairs); i += 2 {
+		out = append(out, result.Record{{Key: "bearing", Value: pairs[i]}, {Key: "edges", Value: pairs[i+1]}})
+	}
+	return out
+}
+
+func TestEdgeCensus(t *testing.T) {
+	ix := edgeCensusIndex(t)
+	got := EdgeCensusPayload(ix)
+	want := result.Record{
+		{Key: kb.RelationSupports, Value: result.Record{{Key: "edges", Value: 6}, {Key: "walked", Value: true},
+			{Key: "bearings", Value: bearingCounts("1e-05", 1, "0.5", 3, kb.PendingLiteral, 1, nil, 1)}}},
+		{Key: kb.RelationFounds, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false},
+			{Key: "bearings", Value: bearingCounts("0.5", 1)}}},
+		{Key: kb.RelationLifts, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: true},
+			{Key: "bearings", Value: bearingCounts("0.8", 1)}}},
+		{Key: kb.RelationRefutes, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: true},
+			{Key: "bearings", Value: []result.Record{}}}},
+		{Key: kb.RelationReferences, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false}}},
+		{Key: kb.RelationDemoted, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: false}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("edge-census = %v, want %v", got, want)
+	}
+	total := 0
+	for _, field := range got {
+		rec := field.Value.(result.Record)
+		edges := rec[0].Value.(int)
+		total += edges
+		if len(rec) < 3 {
+			continue
+		}
+		sum := 0
+		for _, b := range rec[2].Value.([]result.Record) {
+			sum += b[1].Value.(int)
+		}
+		if sum != edges {
+			t.Errorf("%s: bearings sum to %d, want its %d edges", field.Key, sum, edges)
+		}
+	}
+	if total != len(ix.edges) {
+		t.Errorf("relations' edges sum to %d, want %d", total, len(ix.edges))
+	}
+}
+
+// edgeRows is an edges answer as "source relation target=bearing context
+// walked" lines.
+func edgeRows(t *testing.T, records []result.Record) []string {
+	t.Helper()
+	var out []string
+	for _, r := range records {
+		var keys []string
+		for _, f := range r {
+			keys = append(keys, f.Key)
+		}
+		if want := []string{"source", "relation", "target", "bearing", "context", "walked"}; !slices.Equal(keys, want) {
+			t.Fatalf("edges record keys %q, want %q", keys, want)
+		}
+		out = append(out, fmt.Sprintf("%v %v %v=%v %v %v", r[0].Value, r[1].Value, r[2].Value, r[3].Value, r[4].Value, r[5].Value))
+	}
+	return out
+}
+
+func TestEdges(t *testing.T) {
+	ix := edgeCensusIndex(t)
+	every := []string{
+		"clm-aaaaaa supports clm-bbbbbb=*pending* <nil> true",
+		"clm-aaaaaa supports wrk-B=<nil> <nil> true",
+		"clm-bbbbbb supports clm-aaaaaa=0.5 <nil> true",
+		"clm-bbbbbb supports clm-aaaaaa=0.5 step 2 true",
+		"clm-cccccc supports clm-aaaaaa=1e-05 <nil> true",
+		"clm-cccccc supports clm-bbbbbb=0.5 <nil> true",
+		"wrk-B founds clm-aaaaaa=0.5 <nil> false",
+		"ana-aaaaaa lifts clm-aaaaaa=0.8 <nil> true",
+		"clm-aaaaaa references clm-bbbbbb=<nil> <nil> false",
+	}
+	for _, tc := range []struct {
+		name      string
+		relations []string
+		want      []string
+	}{
+		{"every relation", nil, every},
+		{"founds", []string{kb.RelationFounds}, every[6:7]},
+		{"two relations", []string{kb.RelationReferences, kb.RelationLifts}, every[7:]},
+		{"a relation with no rows", []string{kb.RelationRefutes}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := edgeRows(t, EdgesPayload(ix, tc.relations)); !slices.Equal(got, tc.want) {
+				t.Errorf("edges %v = %q, want %q", tc.relations, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadRefusals(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, len(requiredFiles)) {

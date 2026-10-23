@@ -144,10 +144,11 @@ Maintenance never requires git.
 citation string per entry.
 
 **Queries** read `kb-root/.index/` and write nothing; `results` keeps the query's own key names.
-`show <id>` and `stats` return a mapping. The list queries — `deps`, `gated-on`, `cited-by`, `find`,
-`referenced-by`, `strength-below`, `subtree`, `weak-points` — return at most `--limit` results
-(default 50; `0` for all) from `--offset`, with `count`, `offset` and `truncated`. While `truncated`
-is true, re-issue with `--offset` set to `offset` plus the number of `results` returned.
+`show <id>`, `stats` and `edge-census` return a mapping. The list queries — `deps`, `gated-on`,
+`cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points`, `edges` — return
+at most `--limit` results (default 50; `0` for all) from `--offset`, with `count`, `offset` and
+`truncated`. While `truncated` is true, re-issue with `--offset` set to `offset` plus the number of
+`results` returned.
 
 **Scores.** A node's own value is `rigor`, a scoring edge's is `bearing`, and a claim's or an
 analysis's derived value is `strength`; `set-rigor` and `set-bearing` are the two ops that write a

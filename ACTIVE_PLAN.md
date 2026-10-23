@@ -67,7 +67,7 @@ Two read-only queries over the index's edge rows, so "where do each relation's b
 
 | WP | Rating | Seat / model | Status |
 |---|---|---|---|
-| WP1 | expert (small) | go-coder (definition's pin) | pending |
+| WP1 | expert (small) | go-coder (definition's pin) | landed |
 
 Rated expert: the refusal item and list-payload return follow precedents the coder must locate.
 

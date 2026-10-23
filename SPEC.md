@@ -461,8 +461,8 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (paths this call wrote); `refreshed` (paths; null under `--no-refresh`); `removed` (the trailing refresh's, as `refresh`'s; `[]` under `--no-refresh`) |
 | `resolve-demoted` | as every write op; `resolved` (list of `source`, `target`, `action`: `removed` or `restored`) |
 | `render-citation` | `citations` (one per entry, in entry order) |
-| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; the context null where the edge has none) |
-| `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
+| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points`, `edges` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; the context null where the edge has none; `edges`' records are `source`, `relation`, `target`, `bearing` (as `deps`' bearing), `context` and `walked` (bool)) |
+| `show`, `stats`, `edge-census` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none); `edge-census`' mapping carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`, numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
@@ -497,8 +497,9 @@ and no result document or ledger line states one a server ran.
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
-`offset + len(results)`. `stats`' ranked sections stay at 10. No other subcommand's result
-grows with the KB; `build`'s per-stage detail goes to the `report` file, not stdout.
+`offset + len(results)`. `stats`' ranked sections stay at 10. `edge-census`' `bearings` hold one
+record per distinct bearing value. No other subcommand's result grows with the KB; `build`'s
+per-stage detail goes to the `report` file, not stdout.
 
 **Exit codes** derive from `outcome`:
 
@@ -680,6 +681,8 @@ and §7 gives its result keys.
 ### `show`
 ### `weak-points`
 ### `stats`
+### `edge-census`
+### `edges`
 
 `weak-points` orders and thresholds on the derived value: its rows read each claim's `strength`, so a
 bearing that moves a claim moves the list. Its `dependents` count and `show`'s `premise_count` are
@@ -687,6 +690,12 @@ structural — counts of edges, which no bearing changes.
 
 `stats` reads the derivation in `strength_bands`, `highest_leverage` and `weakest`, and is
 structural in its per-kind counts, `edges`, `demoted_edges` and `strengthen_by_items`.
+
+`edge-census` and `edges` read the index's edge rows and no derivation: their edge counts are
+structural, and the bearings they report are the values the rows hold, which `set-bearing` moves.
+Each reports, per relation, `walked`: whether a score run's bearing pass asks about that
+relation's edges — `supports`, `lifts` and `refutes` — where a `founds` bearing is the user's,
+written by `set-bearing`.
 
 ### `render-claim-graph`
 

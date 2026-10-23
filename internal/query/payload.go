@@ -3,6 +3,7 @@ package query
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ import (
 )
 
 // Each *Payload function is one query's answer: a list, or one mapping for
-// show and stats.
+// show, stats and edge-census.
 
 // ResultsKey holds a query's answer in its result document.
 const ResultsKey = "results"
@@ -323,3 +324,72 @@ func StatsPayload(ix *Index) result.Record {
 }
 
 func first[T any](s []T, n int) []T { return s[:min(n, len(s))] }
+
+// EdgeCensusPayload is, for each relation in kb.Relations order, its edge
+// rows' count, whether the bearing pass walks it, and on a scoring relation
+// the rows at each bearing they carry: numbers ascending, then pending, then
+// null. A row of a relation outside kb.Relations is counted nowhere.
+func EdgeCensusPayload(ix *Index) result.Record {
+	out := result.Record{}
+	for _, relation := range kb.Relations {
+		count := 0
+		atBearing := map[any]int{}
+		for _, e := range ix.edges {
+			if e.Relation == relation {
+				count++
+				atBearing[e.Bearing]++
+			}
+		}
+		rec := result.Record{{Key: "edges", Value: count}, {Key: "walked", Value: kb.BearingWalk(relation)}}
+		if kb.Scoring(relation) {
+			bearings := slices.SortedFunc(maps.Keys(atBearing), compareBearings)
+			records := []result.Record{}
+			for _, b := range bearings {
+				records = append(records, result.Record{{Key: "bearing", Value: b}, {Key: "edges", Value: atBearing[b]}})
+			}
+			rec = append(rec, result.Field{Key: "bearings", Value: records})
+		}
+		out = append(out, result.Field{Key: relation, Value: rec})
+	}
+	return out
+}
+
+// compareBearings orders index bearings numerically where their text reads as
+// a number — the text's own order is not numeric — then pending, then null.
+func compareBearings(a, b any) int {
+	rank := func(v any) (int, float64) {
+		s, _ := v.(string)
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			return 0, n
+		}
+		if v == nil {
+			return 2, 0
+		}
+		return 1, 0
+	}
+	ra, na := rank(a)
+	rb, nb := rank(b)
+	return cmp.Or(cmp.Compare(ra, rb), cmp.Compare(na, nb), strings.Compare(fmt.Sprint(a), fmt.Sprint(b)))
+}
+
+// EdgesPayload is the index's edge rows of relations, of every relation where
+// relations is empty, each as its source, relation, target, bearing as the
+// index writes it, context and whether the bearing pass walks it. Rows are in
+// relation order, then by source, target and context. A row of a relation
+// outside kb.Relations is left out.
+func EdgesPayload(ix *Index, relations []string) []result.Record {
+	rows := slices.DeleteFunc(slices.Clone(ix.edges), func(e kb.EdgeRow) bool {
+		return !slices.Contains(kb.Relations, e.Relation) || len(relations) > 0 && !slices.Contains(relations, e.Relation)
+	})
+	slices.SortStableFunc(rows, func(a, b kb.EdgeRow) int {
+		return cmp.Or(cmp.Compare(relationRank(a.Relation), relationRank(b.Relation)), strings.Compare(a.Source, b.Source),
+			strings.Compare(a.Target, b.Target), strings.Compare(deref(a.Context), deref(b.Context)))
+	})
+	out := []result.Record{}
+	for _, e := range rows {
+		out = append(out, result.Record{{Key: "source", Value: e.Source}, {Key: "relation", Value: e.Relation},
+			{Key: "target", Value: e.Target}, {Key: "bearing", Value: e.Bearing}, {Key: "context", Value: optString(e.Context)},
+			{Key: "walked", Value: kb.BearingWalk(e.Relation)}})
+	}
+	return out
+}

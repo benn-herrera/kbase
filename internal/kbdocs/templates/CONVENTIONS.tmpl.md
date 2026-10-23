@@ -48,6 +48,8 @@ kbase, a single binary run from the project root, maintains this KB.
 | Regenerate derived state | `kbase refresh` |
 | The read-only gate | `kbase verify` |
 | Claim-graph counts | `kbase stats` |
+| Edge counts by relation and bearing | `kbase edge-census` |
+| The edges of a relation | `kbase edges --relation <relation>` |
 
 Every subcommand but `help`, `completion` and `mcp` writes one YAML document to stdout, its
 `outcome` key the result: `refused` exits 1, `retry` exits 2, and `kbase --help` states the whole

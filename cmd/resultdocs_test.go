@@ -91,12 +91,17 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	for _, args := range [][]string{
 		{"deps", ids[0]}, {"deps", ids[0], "-i"}, {"gated-on", ids[0]}, {"cited-by", ids[0]}, {"find", ""},
 		{"referenced-by", ids[0]}, {"strength-below", "--max-strength", "0.5"}, {"subtree", ""}, {"weak-points"},
-		{"show", ids[0]}, {"stats"},
+		{"show", ids[0]}, {"stats"}, {"edge-census"}, {"edges"}, {"edges", "--relation", kb.RelationFounds},
 	} {
 		run("done", args...)
 	}
 	run("refused", "show", "clm-zzzzzz")
 	run("refused", "strength-below", "--max-strength", "half")
+	unknown := run("refused", "edges", "--relation", "nope")
+	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
+		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {
+		t.Errorf("edges --relation nope refusal: %v", items)
+	}
 	page := run("done", "find", "", "--limit", "1", "--offset", "1")
 	if page.Values["count"] != 2 || page.Values["offset"] != 1 || page.Values["truncated"] != false || len(page.Values["results"].([]any)) != 1 {
 		t.Errorf("find --limit 1 --offset 1 = %v, want the second of two, nothing past it", page.Values)
