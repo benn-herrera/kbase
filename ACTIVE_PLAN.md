@@ -102,7 +102,4 @@ fell between landings.
 
 ### Post-sprint cleanup burndown
 
-- `model.MockClient` is test support sitting in `internal/model`'s production API, beside the two wire
-  clients the package doc introduces; the conventional home for a fake that other packages' tests
-  import is a sibling package named for the job (`internal/model/modeltest`, as `net/http/httptest`
-  is to `net/http`).
+None outstanding.
