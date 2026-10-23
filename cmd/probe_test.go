@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"kbase/internal/config"
+	"kbase/internal/model"
 	toolresult "kbase/internal/result"
 )
 
@@ -178,39 +179,53 @@ func TestProbeReportsTheCall(t *testing.T) {
 	}
 }
 
-// TestProbeAsksOneBareTurn: the probe is a diagnostic, not a chat. It sends the
-// default one-word check as the one user turn, no system text, no history and
-// no tools.
+// TestProbeAsksOneBareTurn: the probe is a diagnostic, not a chat. It sends one
+// user turn — the default one-word check, or the check --prompt names — as the
+// only turn, no system text, no history and no tools.
 func TestProbeAsksOneBareTurn(t *testing.T) {
 	unsetInferenceEnv(t)
-	srv, bodies := probeWire(t)
-	dir := probeFixture(t, srv.URL, srv.URL)
+	for _, tc := range []struct {
+		name, prompt, want string
+	}{
+		{"the default check", "", probePrompt},
+		{"the check --prompt names", "Is this selection serving?", "Is this selection serving?"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bodies := probeWire(t)
+			dir := probeFixture(t, srv.URL, srv.URL)
+			args := []string{"--config-dir", dir}
+			if tc.prompt != "" {
+				args = append(args, "--prompt", tc.prompt)
+			}
 
-	if _, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir); code != 0 {
-		t.Fatalf("probe: exit %d\n%s", code, stdout)
-	}
-	seen := bodies()
-	if len(seen) != 1 {
-		t.Fatalf("%d requests, want the one turn it took", len(seen))
-	}
-	var body struct {
-		Model    string           `json:"model"`
-		Messages []map[string]any `json:"messages"`
-		Tools    any              `json:"tools"`
-		Stream   bool             `json:"stream"`
-	}
-	if err := json.Unmarshal(seen[0], &body); err != nil {
-		t.Fatalf("the request is no JSON body: %v\n%s", err, seen[0])
-	}
-	if body.Model != "judge" {
-		t.Errorf("model = %q, want the scoring role's", body.Model)
-	}
-	if len(body.Messages) != 2 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "" ||
-		body.Messages[1]["role"] != "user" || body.Messages[1]["content"] != probePrompt {
-		t.Errorf("messages = %v, want an empty system message and the default check as the one user turn", body.Messages)
-	}
-	if body.Tools != nil || !body.Stream {
-		t.Errorf("tools %v, stream %t; want no tools and a streamed call", body.Tools, body.Stream)
+			if _, stdout, _, code := runProbeVerb(t, t.TempDir(), args...); code != 0 {
+				t.Fatalf("probe: exit %d\n%s", code, stdout)
+			}
+			seen := bodies()
+			if len(seen) != 1 {
+				t.Fatalf("%d requests, want the one turn it took", len(seen))
+			}
+			var body struct {
+				Model    string           `json:"model"`
+				Messages []map[string]any `json:"messages"`
+				Tools    any              `json:"tools"`
+				Stream   bool             `json:"stream"`
+			}
+			if err := json.Unmarshal(seen[0], &body); err != nil {
+				t.Fatalf("the request is no JSON body: %v\n%s", err, seen[0])
+			}
+			if body.Model != "judge" {
+				t.Errorf("model = %q, want the scoring role's", body.Model)
+			}
+			if len(body.Messages) != 2 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "" ||
+				body.Messages[1]["role"] != "user" || body.Messages[1]["content"] != tc.want {
+				t.Errorf("messages = %v, want an empty system message and %q as the one user turn",
+					body.Messages, tc.want)
+			}
+			if body.Tools != nil || !body.Stream {
+				t.Errorf("tools %v, stream %t; want no tools and a streamed call", body.Tools, body.Stream)
+			}
+		})
 	}
 }
 
@@ -539,16 +554,19 @@ apiKeyFile = "claude.key"
 // probeDecisionWire answers the decision surface at path — the SystemOne
 // object or the Decisions array, by which path it is — and answers any other
 // path the way a provider refuses a decision model on a chat call. It records
-// every path it served, so a probe that took the chat request is visible as a
-// 400 and as the wrong path.
-func probeDecisionWire(t *testing.T, path string) (*httptest.Server, func() []string) {
+// every path it served and the body it read there, so a probe that took the
+// chat request is visible as a 400 and as the wrong path, and a test reads the
+// ask the probe sent.
+func probeDecisionWire(t *testing.T, path string) (*httptest.Server, func() ([]string, [][]byte)) {
 	t.Helper()
 	var mu sync.Mutex
 	var paths []string
+	var bodies [][]byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
+		bodies = append(bodies, body)
 		mu.Unlock()
 		if r.URL.Path != path {
 			w.WriteHeader(http.StatusBadRequest)
@@ -563,10 +581,10 @@ func probeDecisionWire(t *testing.T, path string) (*httptest.Server, func() []st
 		_, _ = w.Write([]byte(`{"model":"d","answers":{"probe":{"type":"noul","noul":0.96}},"usage":{"input_tokens":12,"output_tokens":1}}`))
 	}))
 	t.Cleanup(srv.Close)
-	return srv, func() []string {
+	return srv, func() ([]string, [][]byte) {
 		mu.Lock()
 		defer mu.Unlock()
-		return slices.Clone(paths)
+		return slices.Clone(paths), append([][]byte{}, bodies...)
 	}
 }
 
@@ -581,25 +599,81 @@ func probeDecisionConfig(t *testing.T, baseURL, keys string) string {
 	return dir
 }
 
+// probeAskedQuestion reads the one question a decision request carried, in the
+// shape the surface's wire format gives it: the SystemOne object keyed by the
+// question's key, the Decisions array whose entry names it. It returns the
+// model dialled and the question's key, type and instructions — the fields a
+// reader of either surface needs — and fails on a request that asks any number
+// of questions but one.
+func probeAskedQuestion(t *testing.T, body []byte) (modelID, key, typ, instructions string) {
+	t.Helper()
+	var req struct {
+		Model     string          `json:"model"`
+		Questions json.RawMessage `json:"questions"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("the decision request is no JSON body: %v\n%s", err, body)
+	}
+	questions := strings.TrimSpace(string(req.Questions))
+	if questions == "" {
+		t.Fatalf("the request carries no questions: %s", body)
+	}
+	if questions[0] == '{' {
+		var asked map[string]struct {
+			Type         string `json:"type"`
+			Instructions string `json:"instructions"`
+		}
+		if err := json.Unmarshal(req.Questions, &asked); err != nil {
+			t.Fatalf("the request's questions are no keyed object: %v\n%s", err, questions)
+		}
+		if len(asked) != 1 {
+			t.Fatalf("%d questions, want the probe's one\n%s", len(asked), questions)
+		}
+		for k, q := range asked {
+			return req.Model, k, q.Type, q.Instructions
+		}
+	}
+	var asked []struct {
+		Type         string `json:"type"`
+		Name         string `json:"name"`
+		Instructions string `json:"instructions"`
+	}
+	if err := json.Unmarshal(req.Questions, &asked); err != nil {
+		t.Fatalf("the request's questions are neither a keyed object nor an array: %v\n%s", err, questions)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("%d questions, want the probe's one\n%s", len(asked), questions)
+	}
+	return req.Model, asked[0].Name, asked[0].Type, asked[0].Instructions
+}
+
 // TestProbeDecisionAsksTheDecisionSurface: --decision asks a decision model on
 // the surface its entry declares, not on the chat path — one request, on
-// /systemone or on /decisions as the entry's decisionsFlavor names, and a
-// document whose reply is the answer. The surface blocks, so no first token
-// arrived and no finish reason came back; the row states those as zero and
+// /systemone or on /decisions as the entry's decisionsFlavor names, asking the
+// probe's one question: the model dialled, the key the answer comes back under,
+// the type that surface names a noul question, and the check as its
+// instructions — the probe's own predicate by default, or the one --prompt
+// names. A document whose reply is the answer. The surface blocks, so no first
+// token arrived and no finish reason came back; the row states those as zero and
 // null. A probe that took the chat path would be answered 400 and fail.
 func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 	unsetInferenceEnv(t)
 	for _, tc := range []struct {
-		name, keys, path string
+		name, keys, path, prompt, wantType, wantInstructions string
 	}{
-		{"the SystemOne surface, an entry silent on the flavour", "", "/systemone"},
-		{"the Decisions surface", "decisionsFlavor = \"decisions\"\n", "/decisions"},
+		{"the SystemOne surface, an entry silent on the flavour", "", "/systemone", "", "noul", probeDecisionPrompt},
+		{"the Decisions surface", "decisionsFlavor = \"decisions\"\n", "/decisions", "", "predicate", probeDecisionPrompt},
+		{"the SystemOne surface, --prompt naming the predicate", "", "/systemone", "Is this selection answering?", "noul", "Is this selection answering?"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, paths := probeDecisionWire(t, tc.path)
+			srv, served := probeDecisionWire(t, tc.path)
 			dir := probeDecisionConfig(t, srv.URL, tc.keys)
+			args := []string{"--config-dir", dir, "--decision"}
+			if tc.prompt != "" {
+				args = append(args, "--prompt", tc.prompt)
+			}
 
-			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--decision")
+			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), args...)
 			if code != 0 || doc.Outcome != toolresult.Done {
 				t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 			}
@@ -620,8 +694,18 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 				usage["prompt-tokens"] != 12 || usage["completion-tokens"] != 1 {
 				t.Errorf("usage = %v, want the answer's own accounting", doc.Values["usage"])
 			}
-			if seen := paths(); !slices.Equal(seen, []string{tc.path}) {
-				t.Errorf("requests %v, want the one decision call on %s", seen, tc.path)
+			seen, sent := served()
+			if !slices.Equal(seen, []string{tc.path}) {
+				t.Fatalf("requests %v, want the one decision call on %s", seen, tc.path)
+			}
+			if len(sent) != 1 {
+				t.Fatalf("%d request bodies, want the one ask", len(sent))
+			}
+			modelID, key, typ, instructions := probeAskedQuestion(t, sent[0])
+			if modelID != "d" || key != probeDecisionQuestion || typ != tc.wantType ||
+				instructions != tc.wantInstructions {
+				t.Errorf("the ask = model %q, question %q of type %q with instructions %q; want model d, question %s of type %s with instructions %q",
+					modelID, key, typ, instructions, probeDecisionQuestion, tc.wantType, tc.wantInstructions)
 			}
 		})
 	}
@@ -655,6 +739,27 @@ func TestProbeDecisionRefusesAProviderThatSpeaksNoDecisionSurface(t *testing.T) 
 	if seen := requests(); len(seen) != 0 {
 		t.Errorf("%d requests reached the Messages endpoint, want none: the refusal is the client's",
 			len(seen))
+	}
+}
+
+// TestProbeDecisionReplyStatesTheAnswer: the reply is the answer's own — a
+// predicate's probability, the letter a choice picked, and the type alone where
+// the answer decided nothing, which is what a refusal carries.
+func TestProbeDecisionReplyStatesTheAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer model.DecisionAnswer
+		want   string
+	}{
+		{"a predicate's probability", model.DecisionAnswer{Key: probeDecisionQuestion, Type: "noul", Noul: 0.96}, "0.96"},
+		{"a chosen letter", model.DecisionAnswer{Key: probeDecisionQuestion, Type: "choice", Choice: "b"}, "b"},
+		{"an answer carrying only its type", model.DecisionAnswer{Key: probeDecisionQuestion, Type: "refusal"}, "refusal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := probeDecisionReply(tc.answer); got != tc.want {
+				t.Errorf("reply = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

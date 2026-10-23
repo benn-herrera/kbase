@@ -1,6 +1,7 @@
 # Burndown plan — the probe, the score status, and drift
 
-Status: landed in `6e84c13`; post-sprint review and remediation in `8dc9488`. The open items follow.
+Status: landed in `6e84c13`; post-sprint review and remediation in `8dc9488`; the burndown closed in
+the landing commit on `release-0.8.0`.
 
 ## Post-sprint review
 
@@ -29,14 +30,4 @@ Declined:
 
 ### Burndown
 
-- The probe's decision request contents are unasserted: both stubs discard the body, so a regression
-  sending the chat default passes. One assertion over the request and the stub's captured body.
-- `waitScore`'s two branches and its `interruptedScoreDocument` fallback are untested.
-- `probeDecisionReply`'s letter and type branches are untested; only a predicate figure is.
-- `internal/model/mockllm_test.go` still tests `modeltest.MockClient` from `internal/model`'s test
-  binary; a `modeltest_test` package would exercise the same API without importing production `model`
-  beside it.
-- `ARCHITECTURE.md:1089`'s `kept:` parenthetical names `model.Chat` for the overview call and
-  `model.Decision` for the letter asks only; scoring's asks and the probe's two calls are absent.
-- The probe's routing is stated at `ARCHITECTURE.md:715-716` and again at `:731-732`; one should cite
-  the other.
+None outstanding.

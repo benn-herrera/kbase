@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,11 +71,10 @@ func buildRan(t *testing.T, state, at string) {
 	}
 }
 
-// scoreRan records a score run in the store: its header started at, its two
-// items, the line the first landed and — where outcome is not "" — the result
-// document the verb writes beside them. A run left with no result document is
-// one whose process ended before writing it.
-func scoreRan(t *testing.T, state, kbRoot, run, started, outcome string) {
+// scoreLedger opens a run in the store at state, records its two items and the
+// line the first landed, and returns the closed ledger — the run a waiter finds
+// a result document for, or finds abandoned.
+func scoreLedger(t *testing.T, state, kbRoot, run, started string) *score.Ledger {
 	t.Helper()
 	l, err := score.Create(state, score.RunHeader{Run: run, KBRoot: kbRoot, Pass: query.PassRigor, Started: started})
 	if err != nil {
@@ -93,11 +94,193 @@ func scoreRan(t *testing.T, state, kbRoot, run, started, outcome string) {
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
 	}
+	return l
+}
+
+// scoreRan records a score run in the store: its header started at, its two
+// items, the line the first landed and — where outcome is not "" — the result
+// document the verb writes beside them. A run left with no result document is
+// one whose process ended before writing it.
+func scoreRan(t *testing.T, state, kbRoot, run, started, outcome string) {
+	t.Helper()
+	l := scoreLedger(t, state, kbRoot, run, started)
 	if outcome == "" {
 		return
 	}
 	if err := score.WriteResultDocument(l.Dir(), outcome, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// scoreHeld is a run of the store at state whose process is pid: the record a
+// waiter finds its run by.
+func scoreHeld(t *testing.T, state, run string, pid int) *score.Ledger {
+	t.Helper()
+	l := scoreLedger(t, state, t.TempDir(), run, statusEarlier)
+	if err := l.WritePID(pid); err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// TestWaitScoreReturnsTheRunsDocument: the run wrote its result document, so the
+// waiter reads that document rather than inventing one, and exits on the outcome
+// it names — cancelled here, so the code 4 is the document's own.
+func TestWaitScoreReturnsTheRunsDocument(t *testing.T) {
+	state, pid := t.TempDir(), os.Getpid()
+	l := scoreHeld(t, state, "run-cancelled", pid)
+	if err := score.WriteResultDocument(l.Dir(), toolresult.Cancelled, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, code, err := waitScore(state, pid, time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join(l.Dir(), score.ResultFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc != string(want) {
+		t.Errorf("wait reported\n%s\nwant the run's own document\n%s", doc, want)
+	}
+	if code != exitCodes[toolresult.Cancelled] {
+		t.Errorf("exit %d, want the cancelled outcome's %d", code, exitCodes[toolresult.Cancelled])
+	}
+}
+
+// holdScoreRun takes the store at state for the run named, its holder record
+// naming this process, and returns the release. The returned function releases
+// once however often it is called, so a test that must let a polling waiter
+// unwind can release it itself and still register it for cleanup.
+func holdScoreRun(t *testing.T, repo, state, run string) func() {
+	t.Helper()
+	release, err := build.Hold(filepath.Join(repo, kb.KBDir), state, build.KindScore, run, time.Now())
+	if err != nil {
+		t.Fatalf("hold the store for a score run: %v", err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if err := release(); err != nil {
+				t.Errorf("release the store: %v", err)
+			}
+		})
+	}
+}
+
+// TestWaitScoreWaitsWhileTheRunHoldsTheStore: a holder record naming the run's
+// own process is a run still in flight, so the waiter polls rather than
+// reporting the fallback, and returns the document the run writes while it
+// waits — a document that did not stand when the first pass read there.
+func TestWaitScoreWaitsWhileTheRunHoldsTheStore(t *testing.T) {
+	repo, state := statusStore(t)
+	l := scoreHeld(t, state, "run-live", os.Getpid())
+	t.Cleanup(holdScoreRun(t, repo, state, "run-live"))
+
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		written <- score.WriteResultDocument(l.Dir(), toolresult.Cancelled, nil)
+	}()
+
+	doc, code, err := waitScore(state, os.Getpid(), time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := <-written; err != nil {
+		t.Fatalf("the run's document: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join(l.Dir(), score.ResultFile))
+	if err != nil {
+		t.Fatalf("reading the document the run wrote: %v", err)
+	}
+	if doc != string(want) {
+		t.Errorf("wait reported\n%s\nwant the document the run wrote\n%s", doc, want)
+	}
+	if code != exitCodes[toolresult.Cancelled] {
+		t.Errorf("exit %d, want the cancelled outcome's %d", code, exitCodes[toolresult.Cancelled])
+	}
+}
+
+// TestWaitScoreStopsBehindAnotherProcessHolder: a holder record naming a
+// process other than the run's is a later run holding the store — a build
+// started after this one ended — and is no reason to wait, so the waiter
+// reports the run's end at once. A waiter that polled behind it would never
+// return, so the watchdog turns that into a failure rather than a hung suite,
+// releasing the store first so the polling goroutine unwinds.
+func TestWaitScoreStopsBehindAnotherProcessHolder(t *testing.T) {
+	repo, state := statusStore(t)
+	release := holdScoreRun(t, repo, state, "run-live")
+	t.Cleanup(release)
+	mine := os.Getpid() + 1
+	scoreHeld(t, state, "run-superseded", mine)
+
+	type waited struct {
+		doc  string
+		code int
+		err  error
+	}
+	got := make(chan waited, 1)
+	go func() {
+		doc, code, err := waitScore(state, mine, time.Millisecond)
+		got <- waited{doc, code, err}
+	}()
+
+	var res waited
+	select {
+	case res = <-got:
+	case <-time.After(2 * time.Second):
+		release()
+		t.Fatalf("waitScore is still polling behind a holder of another process")
+	}
+	if res.err != nil {
+		t.Fatalf("wait: %v", res.err)
+	}
+	if res.code != exitCodes[toolresult.Failed] || res.code != 3 {
+		t.Errorf("exit %d, want the run's end, which is failed's %d (3)", res.code, exitCodes[toolresult.Failed])
+	}
+	if d := parseResult(t, res.doc); d.Outcome != toolresult.Failed || d.Values["run"] != "run-superseded" {
+		t.Errorf("document names outcome %v, run %v; want failed, run-superseded\n%s",
+			d.Outcome, d.Values["run"], res.doc)
+	}
+}
+
+// TestWaitScoreReportsARunItsProcessLeft: no document and no live holder is a
+// run whose process ended without writing its result. The waiter reports it from
+// the run's own ledger — the counts and the one item that landed — with the
+// failure naming the end, and exits on failed, which is 3.
+func TestWaitScoreReportsARunItsProcessLeft(t *testing.T) {
+	state, pid := t.TempDir(), os.Getpid()
+	scoreHeld(t, state, "run-abandoned", pid)
+
+	doc, code, err := waitScore(state, pid, time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if code != exitCodes[toolresult.Failed] || code != 3 {
+		t.Errorf("exit %d, want failed's %d (3)", code, exitCodes[toolresult.Failed])
+	}
+	d := parseResult(t, doc)
+	if d.Outcome != toolresult.Failed || d.Values["run"] != "run-abandoned" ||
+		d.Values["state-dir"] != state || d.Values["pass"] != query.PassRigor {
+		t.Errorf("document names outcome %v, run %v, state-dir %v, pass %v; want failed, run-abandoned, %s, %s\n%s",
+			d.Outcome, d.Values["run"], d.Values["state-dir"], d.Values["pass"], state, query.PassRigor, doc)
+	}
+	counts, _ := d.Values["counts"].(map[string]any)
+	if counts["total"] != 2 || counts["done"] != 1 || counts["failed"] != 0 || counts["remaining"] != 1 {
+		t.Errorf("counts = %v, want the two items with one landed\n%s", d.Values["counts"], doc)
+	}
+	if scored := anyStrings(d.Values["scored"]); !slices.Equal(scored, []string{"clm-aaaaaa"}) {
+		t.Errorf("scored = %q, want the one item whose value landed", scored)
+	}
+	items := d.items(toolresult.FailuresKey)
+	if len(items) != 1 {
+		t.Fatalf("failures = %v, want the one item naming the process's end\n%s", items, doc)
+	}
+	detail, _ := items[0]["detail"].(string)
+	if !strings.Contains(detail, "ended without writing its result") {
+		t.Errorf("failure = %q, want it to name the process's end", detail)
 	}
 }
 
@@ -231,18 +414,9 @@ func TestStatusReportsTheHolderWhicheverRunIsNewer(t *testing.T) {
 
 	t.Run("a live score run over a newer build invocation", func(t *testing.T) {
 		repo, state := statusStore(t)
-		kbRoot := filepath.Join(repo, kb.KBDir)
-		scoreRan(t, state, kbRoot, "run-live", statusEarlier, "")
+		scoreRan(t, state, filepath.Join(repo, kb.KBDir), "run-live", statusEarlier, "")
 		buildRan(t, state, statusLater)
-		release, err := build.Hold(kbRoot, state, build.KindScore, "run-live", time.Now())
-		if err != nil {
-			t.Fatalf("hold the store for a score run: %v", err)
-		}
-		t.Cleanup(func() {
-			if err := release(); err != nil {
-				t.Errorf("release the store: %v", err)
-			}
-		})
+		t.Cleanup(holdScoreRun(t, repo, state, "run-live"))
 
 		d := statusOf(t, repo, state)
 		// The run holds the store and has written no result document, so it is

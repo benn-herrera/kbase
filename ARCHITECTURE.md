@@ -711,12 +711,11 @@ MCP server starts it as a detached child — as it starts `build` — returning 
 ## 7. Inference seams
 
 - Kept from kbase: provider management (`internal/config`) and the client (`internal/model`). The
-  call path is `model.Chat` for the overview call, for each scoring call and for `kbase probe`'s
-  one-word check (`probePrompt`, or `--prompt`), and `model.Decision` for the letter asks and
-  `kbase probe`'s one decision ask (`--decision`); the decision role's model is an id on whichever
-  surface its entry speaks (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter
-  asks go to the `decision` role, the overview call to `text`, and `kbase score`'s asks to
-  `scoring` (SPEC §9). Each role
+  call path is `model.Chat` for the overview call and for each scoring call, and `model.Decision`
+  for the letter asks; `kbase probe` takes one call on one of the two by its selection, which the
+  next item states; the decision role's model is an id on whichever surface its entry speaks
+  (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter asks go to the `decision`
+  role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
   names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
   the environment by `KBASE_<ROLE>`; no role falls back to another.
 - **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves one selection through
@@ -726,11 +725,14 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   an explicit reference resolved in file mode because a reference is a pool reference — then opens
   the client through `cmd/provider.go`'s registry exactly as `score` does, so the chat path speaks
   whichever chat protocol the entry's `api` names, and the registry is the only site that builds a
-  wire client. One call, no backoff, bounded by `--timeout`: a `--decision` selection makes one
-  `model.Decision` call on the surface its entry's `decisionsFlavor` names, every other selection
-  the one `model.Chat` call. The chat attempt's `FirstToken` — request start to the first non-empty
-  content or reasoning delta, measured in `chatOnce`, zero where none arrived — is what the result
-  reports beside the call's wall time; the decision surface streams nothing, so the document reports
+  wire client. One call, no backoff, bounded by `--timeout`, and the selection's own surface is
+  what answers it: a `--decision` selection makes one `model.Decision` call on the surface its
+  entry's `decisionsFlavor` names, every other selection the one `model.Chat` call; `--prompt`
+  replaces either path's default check — `probeDecisionPrompt` on the decision one, `probePrompt`
+  on chat — and a chat request to a decision selection is the mismatch a probe exists to find.
+  The chat attempt's `FirstToken` — request start to the first non-empty content
+  or reasoning delta, measured in `chatOnce`, zero where none arrived — is what the result reports
+  beside the call's wall time; the decision surface streams nothing, so the document reports
   `first-token-ms` zero and `finish-reason` null. It opens no `kb.Source`, resolves no state
   directory and takes no lock: the decision path is `probeEndpoint` → `clients.get` →
   `model.Decision` → the result document, the chat path the same through `model.Chat` (SPEC §8).
@@ -1086,7 +1088,8 @@ internal/mcp              (SPEC §11) JSON-RPC framing, dispatch, the Tool, Sche
                           cmd/mcp.go through Serve(in, out, version, instructions, tools,
                           resources, subscription, lg); cmd/mcp.go is the one self-exec
                           owner (I1)
-kept: config, model (model.Chat the overview call, model.Decision the letter asks), log, version
+kept: config, model (model.Chat the overview call, kbase score's asks and the probe's chat
+      check, model.Decision the letter asks and the probe's --decision ask), log, version
 ```
 
 **Loading.** Every KB file is read through `kb.Source`, built by `kbload.Open` (I8), so an older KB

@@ -353,6 +353,11 @@ not cross between `package p` and `package p_test`, and a test-support package t
 be imported by `p`'s in-package tests — the cycle is refused. Where the two need the same fixture,
 each package keeps one copy and the pair states why.
 
+**Where a directory holds both an in-package test file and an external `p_test` one for the same
+production file, the external file is `<file>_external_test.go`.** The two cannot share a file name,
+and the in-package file keeps the name that matches the production file —
+`internal/model/modeltest/` holds `mockllm_test.go` and `mockllm_external_test.go` for `mockllm.go`.
+
 **A test harness selects its inputs by content the KB contract fixes, never by presentation.** A
 choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
 another's.
