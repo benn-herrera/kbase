@@ -809,9 +809,10 @@ three closed sets and the citation rule; this section states what kbase does wit
   `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its six, each
   with `flt-pending` and nothing else; an id outside that set — the other rigor class's among them —
   is `malformed`, the refusal naming the id and the call's ids as `allowed`.
-- **The citation is the numbered line where the fault shows.** One number, `flt-partial: 12`, or a
-  contiguous range within one passage, `flt-transfer: 12-14`; the dash may be a hyphen, an en dash, an
-  em dash or a minus sign, with or without spaces, and the ask shows the hyphen. kbase resolves the
+- **The citation is the numbered line where the fault shows.** The ask asks for one number, the line
+  where the fault first shows, `flt-partial: 12`, and never a range. The parse still reads a
+  contiguous range within one passage, `flt-transfer: 12-14`; its dash may be a hyphen, an en dash, an
+  em dash or a minus sign, with or without spaces. kbase resolves the
   field against the rendering the call carried — never the register — and records three facts beside
   the `passage` the lines lie in: `lines`, the answer's own numbers; `citation`, the quoted lines
   without the gutter; and `offset`, the quote's byte offset in the carried text. A charge naming no
@@ -885,9 +886,9 @@ its `prompt_cache_key`, so a run's asks reach one provider and share one cache e
 protocol has no such field, so a run whose endpoint speaks it sends no key. Messages requires a
 completion cap, and no other request is capped: the cap is `max(256, ceil(characters / 4))` over the
 characters of the ask's messages and system text — four characters per token because the ask is plain
-prose and no LaTeX is ever sent. Thinking is off on a Messages endpoint by the absence of the
-protocol's thinking field, kbase's `reasoning` control being OpenAI-surface only, and thinking text
-is never part of a reply on either protocol. A call
+prose and no LaTeX is ever sent. Thinking is disabled on a Messages endpoint by sending the
+protocol's thinking field as disabled (`thinking: {type: disabled}`), kbase's `reasoning` control
+being OpenAI-surface only, and thinking text is never part of a reply on either protocol. A call
 that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
 30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
 it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and
@@ -1217,10 +1218,10 @@ in more than a path. Messages requires a `max_tokens` cap, which kbase estimates
 prompt as a top-level `system` string rather than a turn, so a system message is lifted out of
 `messages`. It accepts `temperature` only in [0,1], so a value outside that range is omitted rather
 than clamped. It has no `prompt_cache_key`, `chat_template_kwargs` or `reasoning` field: none is
-sent, and thinking is off by the thinking field's absence. Its catalogue is `GET <baseUrl>/models`,
-whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected by `api`, and the decision surfaces
-are OpenAI-shaped: the `decision` role's entry must speak `openai`, and a Messages endpoint asked for
-a letter ask refuses, naming the provider and the role.
+sent, and thinking is disabled by sending the protocol's thinking field as `{type: disabled}`. Its
+catalogue is `GET <baseUrl>/models`, whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected
+by `api`, and the decision surfaces are OpenAI-shaped: the `decision` role's entry must speak
+`openai`, and a Messages endpoint asked for a letter ask refuses, naming the provider and the role.
 
 **The decision surface.** `decisionsFlavor` names the wire shape the decision call uses, chosen per
 server: it changes nothing about chat, which `api` alone decides, and it binds

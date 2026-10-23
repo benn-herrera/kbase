@@ -205,6 +205,11 @@ func TestAnthropicConsultSendsTheMessagesRequest(t *testing.T) {
 			if v, ok := wire["stream"]; ok && string(v) != "false" {
 				t.Errorf("stream: got %s, want absent or false", v)
 			}
+			// Thinking is disabled explicitly: omitting the field leaves it
+			// at the server's default.
+			if v := wire["thinking"]; string(v) != `{"type":"disabled"}` {
+				t.Errorf("thinking = %s, want {\"type\":\"disabled\"}", v)
+			}
 			// Temperature 0 is inside the protocol's range, so it is sent.
 			if v, ok := wire["temperature"]; !ok || string(v) != "0" {
 				t.Errorf("temperature = %s (present %t), want 0", v, ok)

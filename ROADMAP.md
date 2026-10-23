@@ -44,6 +44,12 @@ derived value.
   reader-facing examples, `USER_CONVENTIONS.md` and adjagent's `references/scoring.md` have moved off
   it; until then strict load keeps modelling the key so the file a user has stays loadable and
   `kbase configure` can rewrite it.
+- **Let an ask carry its own common call parameters: thinking, temperature and the completion
+  cap.** Today all three are fixed below the ask: thinking is disabled on both surfaces
+  (`model.Chat`, `encodeAnthropicRequest`), temperature is fixed, and only a Messages request is
+  capped, by `maxTokensFor`'s characters-per-token estimate. An ask, or the configuration behind
+  its role, should be able to set each, and each surface should send the value in its own
+  protocol's field.
 
 ## Scoring rubric
 

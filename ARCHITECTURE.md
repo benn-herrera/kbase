@@ -851,8 +851,9 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `chat_template_kwargs.enable_thinking: false` sent beside it for servers that speak the
   tokenizer extension, since a provider that ignores one control reads the other; the usage chunk
   requested; and no completion cap, the server's own applying. On the Messages surface: no
-  `reasoning`, `chat_template_kwargs` or `prompt_cache_key` field exists, so thinking is off by the
-  thinking field's absence and a run's cache key has no home; `temperature` is sent only inside that
+  `reasoning`, `chat_template_kwargs` or `prompt_cache_key` field exists, so thinking is disabled by
+  sending the protocol's own `thinking: {type: disabled}`, the field's absence leaving it at the
+  server's default, and a run's cache key has no home; `temperature` is sent only inside that
   protocol's [0,1]; the system turn is lifted to the top-level `system` string; and the protocol's
   required `max_tokens` is `max(256, ceil(characters / 4))` over the ask's messages and system text.
   A call that does not complete is re-issued identically up to the attempt count, pausing where its

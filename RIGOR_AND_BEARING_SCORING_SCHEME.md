@@ -415,9 +415,9 @@ One line per occurrence:
 flt-id: 12
 ```
 
-An id, a colon, and the number of the line where the fault shows; or a range of lines within one
-passage, `flt-id: 12-14`. Leading and trailing whitespace is trimmed, and the field after the colon is
-trimmed. The number before the bar is the frame's, not the text's: `N| ` is a gutter the call writes,
+An id, a colon, and the number of the line where the fault first shows. The ask asks for that one
+line and never a range; the parse still reads a range of lines within one passage, `flt-id: 12-14`.
+Leading and trailing whitespace is trimmed, and the field after the colon is trimmed. The number before the bar is the frame's, not the text's: `N| ` is a gutter the call writes,
 and the words behind it are the text's own. A line is a charge line or it is not: blank lines are
 ignored, and any other line — an explanatory sentence, a heading, a preamble — is `malformed`. Nothing
 is read out of prose. The brackets of the format sketch are delimiters, not characters: a line may
@@ -450,11 +450,12 @@ not answers either: `malformed`, nothing written.
 
 ### The citation
 
-A citation is a numbered line of the closed text, or a contiguous range of its lines:
-`flt-partial: 12`, `flt-transfer: 12-14`. Its floor is **one valid line number** — a number the call
-shows, lying in a passage a charge may cite — and a charge naming none is `malformed`. The dash of a
-range may be a hyphen, an en dash, an em dash or a minus sign, with or without spaces around it; the
-ask shows `12-14` and nothing else. Every number of a range lies in the same passage, and the range is
+A citation is a numbered line of the closed text: `flt-partial: 12`, the line where the fault first
+shows. A fault running over several lines is one charge, at its first line. The ask asks for one line
+and never a range, and the parse still reads a contiguous range of lines, `flt-transfer: 12-14`. Its
+floor is **one valid line number** — a number the call shows, lying in a passage a charge may cite —
+and a charge naming none is `malformed`. The dash of a range may be a hyphen, an en dash, an em dash
+or a minus sign, with or without spaces around it. Every number of a range lies in the same passage, and the range is
 contiguous: lines sitting together with nothing between them, since a blank line, a label or a heading
 ends it.
 

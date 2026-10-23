@@ -251,6 +251,13 @@ type wireAnthropicRequest struct {
 	Messages    []wireAnthropicMessage `json:"messages"`
 	Temperature *float64               `json:"temperature,omitempty"`
 	Stream      bool                   `json:"stream,omitempty"`
+	Thinking    wireAnthropicThinking  `json:"thinking"`
+}
+
+// wireAnthropicThinking is the protocol's thinking control; kbase only ever
+// sends type "disabled".
+type wireAnthropicThinking struct {
+	Type string `json:"type"`
 }
 
 // encodeAnthropicRequest serializes a Request to the Messages wire format.
@@ -271,13 +278,15 @@ type wireAnthropicRequest struct {
 //
 // Nothing else from the Request is sent. `prompt_cache_key`,
 // `chat_template_kwargs` and `reasoning` are OpenAI-surface fields with no
-// Messages equivalent: the absence of the protocol's thinking field is the
-// whole of kbase's reasoning control here, which is how thinking is off.
+// Messages equivalent. Thinking is disabled by sending the protocol's own
+// thinking field as `{"type":"disabled"}`: the field's absence would leave it at
+// the server's default, which is not off on every server behind this protocol.
 func encodeAnthropicRequest(req Request, stream bool) ([]byte, error) {
 	wr := wireAnthropicRequest{
 		Model:     req.Model,
 		MaxTokens: maxTokensFor(req),
 		Stream:    stream,
+		Thinking:  wireAnthropicThinking{Type: "disabled"},
 		// An empty array, never null: the protocol requires the list, and a
 		// request carrying no turns at all should be refused by the server
 		// as an empty conversation rather than as a malformed body.
