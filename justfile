@@ -143,6 +143,7 @@ test-export-forms:
 # Cheap gate: run after every change.
 edit-gate: fmt-check
     go vet ./...
+    go vet -tags kbasedist ./...
 
 # this project is developed in tandem with adjagent
 AGENTS_DIR := "../adjagent"
@@ -2290,6 +2291,7 @@ _test-integration-config: build
 test-dist:
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist"
     @tools/scripts/test-build-dist.sh 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist/log.txt"
+    @go test -count=1 -tags kbasedist -run '^TestDistBuildHasNoReplay$' ./cmd 2>&1 | tee -a "{{TEST_DATA_TRANSIENT_DIR}}/test-dist/log.txt"
 
 # The omnibus composes the HERMETIC recipes and writes no log of its own: each
 # already preserves its full output under its own name, and a second copy of

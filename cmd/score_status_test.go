@@ -377,6 +377,35 @@ func TestStatusReportsTheNewestScoreRun(t *testing.T) {
 	}
 }
 
+// TestStatusAndWaitReportADryRun: a dry run's dry- id names a run directory as
+// a real run's does, so wait finds it by its process and returns the document it
+// wrote, and status reports it as the store's newest run.
+func TestStatusAndWaitReportADryRun(t *testing.T) {
+	repo, state := scoreRepo(t), t.TempDir()
+	gitRepo(t, repo)
+	buildRan(t, state, statusEarlier)
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, DryRun: true}, nil)
+	run, _ := got.doc.Values["run"].(string)
+	if got.doc.Outcome != toolresult.Done || !strings.HasPrefix(run, "dry-") {
+		t.Fatalf("the dry run: outcome %s, run %q\n%s", got.doc.Outcome, run, got.stdout)
+	}
+
+	doc, code, err := waitScore(state, os.Getpid(), time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if d := parseResult(t, doc); d.Outcome != toolresult.Done || d.Values["run"] != run || code != exitCodes[toolresult.Done] {
+		t.Errorf("wait reported outcome %s, run %v, exit %d; want done, %s, %d\n%s",
+			d.Outcome, d.Values["run"], code, run, exitCodes[toolresult.Done], doc)
+	}
+
+	d := statusOf(t, repo, state)
+	if d.Outcome != toolresult.Done || d.Values["run"] != run || d.Values["state"] != toolresult.Done {
+		t.Errorf("status reported outcome %s, run %v, state %v; want done, %s, done\n%v",
+			d.Outcome, d.Values["run"], d.Values["state"], run, d.Values)
+	}
+}
+
 // TestStatusReportsTheBuildNewerThanTheNewestScoreRun: a build invocation that
 // started after the store's newest score run is the newer run, so status
 // reports the build as it did before any score run stood there.

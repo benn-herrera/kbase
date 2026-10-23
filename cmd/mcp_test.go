@@ -367,11 +367,16 @@ func TestMCPRequiredFlags(t *testing.T) {
 			t.Error("score: --pass is required, which its verb does not refuse a run without")
 		}
 	})
-	t.Run("every flag still derives", func(t *testing.T) {
+	t.Run("every flag not excluded from MCP derives", func(t *testing.T) {
 		properties := tools["score"].InputSchema.Properties
+		for _, name := range []string{"replay", "failed"} {
+			if _, ok := properties[name]; ok {
+				t.Errorf("score: the development flag --%s is a property of the tool", name)
+			}
+		}
 		var flags []string
 		scoreCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
-			if f.Name == "help" {
+			if f.Name == "help" || slices.Equal(f.Annotations[mcpAnnotation], []string{mcpExcluded}) {
 				return
 			}
 			flags = append(flags, f.Name)

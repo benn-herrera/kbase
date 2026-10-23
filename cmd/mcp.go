@@ -53,6 +53,21 @@ func mcpBinding(cmd *cobra.Command, binding string) *cobra.Command {
 	return annotate(cmd, mcpAnnotation, binding)
 }
 
+// mcpExcludeFlag declares that f is no argument of its command's tool: its
+// kbase.mcp annotation is excluded, and the tool's schema does not derive it.
+func mcpExcludeFlag(f *pflag.Flag) {
+	if f.Annotations == nil {
+		f.Annotations = map[string][]string{}
+	}
+	f.Annotations[mcpAnnotation] = []string{mcpExcluded}
+}
+
+// mcpExcludedFlag is whether f declares itself no argument of its command's
+// tool.
+func mcpExcludedFlag(f *pflag.Flag) bool {
+	return slices.Equal(f.Annotations[mcpAnnotation], []string{mcpExcluded})
+}
+
 func annotate(cmd *cobra.Command, key, value string) *cobra.Command {
 	if cmd.Annotations == nil {
 		cmd.Annotations = map[string]string{}
@@ -193,7 +208,7 @@ func writeOpTool(op string, fields []write.OpField, create bool, dir string, std
 
 // commandSchema is cmd's positionals and its tool's input schema: the
 // positionals are the required arguments, and each of the command's own flags
-// follows as a property the schema does not require.
+// not excluded from MCP follows as a property the schema does not require.
 func commandSchema(cmd *cobra.Command) ([]positional, mcp.Schema, error) {
 	positionals, err := declaredPositionals(cmd)
 	if err != nil {
@@ -209,7 +224,7 @@ func commandSchema(cmd *cobra.Command) ([]positional, mcp.Schema, error) {
 		schema.Required = append(schema.Required, p.name)
 	}
 	cmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
-		if err != nil || f.Name == "help" {
+		if err != nil || f.Name == "help" || mcpExcludedFlag(f) {
 			return
 		}
 		property, ok := flagSchemaTypes[f.Value.Type()]

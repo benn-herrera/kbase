@@ -154,8 +154,17 @@ single source. Working habits they impose:
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `toolResult`, so text, structured content and exit code cannot drift from a
   command's. `rewind-build` in `cmd/mcp.go` is the only one: read-only, schema and description its
-  own. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings
-  asserted in code.
+  own. A flag annotated `kbase.mcp` = `excluded` (`mcpExcludeFlag`) is not part of its command's
+  tool schema: `commandSchema` skips it. Protocol tests are transcript fixtures under
+  `test-data/fixtures/mcp/`, never strings asserted in code.
+- **Dev-only diagnostics are compiled out of the shipped binary.** A diagnostic for developing kbase
+  itself — today `score --replay` — lives in files carrying `//go:build !kbasedist`, code and tests
+  alike; `just dist` builds with `-tags kbasedist`, so the release binary does not contain it. The
+  untagged code reaches it only through a hook its tagged file sets. Its flags carry the flag-level
+  `kbase.mcp` = `excluded` annotation, so dev and dist builds serve one MCP tool table. SPEC states
+  nothing of it; ARCHITECTURE does. The trap: an untagged reference to tagged code, which builds by
+  default and breaks only the dist build — `edit-gate` vets with the tag for that reason, and
+  `test-dist` runs `TestDistBuildHasNoReplay` (`cmd/dist_test.go`, tagged `kbasedist`).
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
   outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores `kbase mcp
   --kb-root`, so the tool reads the server's directory instead of the served KB.
@@ -318,7 +327,8 @@ accepting — the report is an index, the diff is the evidence. Check the diff a
 violation classes:
 
 - integration tests invoke the app binary; no dev-only entry points, verbs, or test scaffolds around
-  the real surface
+  the real surface — save a diagnostic the shipped binary does not contain (see "Dev-only
+  diagnostics")
 - verifications are repeatable invocations; evidence lands in inspectable artifacts, never only in
   the report
 - no special-case file lifecycles: every path kbase writes belongs to a location SPEC or

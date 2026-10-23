@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -719,5 +721,115 @@ func TestDryRunWritesTheItemList(t *testing.T) {
 	if len(got) != 2 || got[0]["id"] != "clm-1" || got[1]["relation"] != kb.RelationSupports ||
 		got[0]["status"] != StatusPending || got[1]["status"] != StatusPending {
 		t.Errorf("items.jsonl = %v, want one pending line per item in set order", got)
+	}
+}
+
+// standing is one run directory a retention case stands before the prune: its
+// name, and its run.yaml's start — "" for a directory with no run.yaml,
+// "garbage" for one that does not read as a header.
+type standing struct{ name, started string }
+
+// series is n runs of kind, named in order and each started a minute after the
+// last from the minute at.
+func series(kind string, n, at int) []standing {
+	out := make([]standing, n)
+	for i := range out {
+		out[i] = standing{name: fmt.Sprintf("%s-%06d", kind, i), started: minute(at + i)}
+	}
+	return out
+}
+
+// minute is a start stamp m minutes into a fixed hour.
+func minute(m int) string {
+	return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC).Add(time.Duration(m) * time.Minute).Format(time.RFC3339)
+}
+
+// TestPruneRunsKeepsTheNewestOfEachKind: an invocation keeps the run it names and
+// the newest keptRuns-1 others of its own kind, by run.yaml's start with equal
+// starts ordered by name, and removes the rest of that kind; another kind's runs
+// and a directory with no readable start stand.
+func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
+	tied := series("run", keptRuns, 10)
+	tied[1].started = tied[0].started
+	for _, tc := range []struct {
+		name     string
+		standing []standing
+		keep     string
+		removed  []string
+	}{
+		{
+			name:     "a seventeenth real run removes the oldest real run",
+			standing: series("run", keptRuns, 0),
+			keep:     "run-new",
+			removed:  []string{"run-000000"},
+		},
+		{
+			name:     "a seventeenth dry run removes the oldest dry run and no real run",
+			standing: append(series("run", keptRuns, 0), series("dry", keptRuns, 100)...),
+			keep:     "dry-new",
+			removed:  []string{"dry-000000"},
+		},
+		{
+			name:     "a seventeenth real run removes the oldest real run and no dry run",
+			standing: append(series("dry", keptRuns, 0), series("run", keptRuns, 100)...),
+			keep:     "run-new",
+			removed:  []string{"run-000000"},
+		},
+		{
+			name:     "resuming the oldest of seventeen keeps it and removes the second-oldest",
+			standing: series("run", keptRuns+1, 0),
+			keep:     "run-000000",
+			removed:  []string{"run-000001"},
+		},
+		{
+			name:     "equal starts prune the earlier name",
+			standing: tied,
+			keep:     "run-new",
+			removed:  []string{"run-000000"},
+		},
+		{
+			name: "a directory without a readable run.yaml stands",
+			standing: append(series("run", keptRuns, 10),
+				standing{name: "run-absent"}, standing{name: "run-garbage", started: "garbage"}),
+			keep:    "run-new",
+			removed: []string{"run-000000"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, s := range tc.standing {
+				run := filepath.Join(RunsDir(dir), s.name)
+				switch s.started {
+				case "":
+					if err := os.MkdirAll(run, 0o777); err != nil {
+						t.Fatal(err)
+					}
+				case "garbage":
+					if err := os.MkdirAll(run, 0o777); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(run, runFile), []byte("started: [not a stamp\n"), 0o666); err != nil {
+						t.Fatal(err)
+					}
+				default:
+					h := header()
+					h.Run, h.Started = s.name, s.started
+					l, err := Create(dir, h)
+					if err != nil {
+						t.Fatal(err)
+					}
+					l.Close()
+				}
+			}
+			if err := PruneRuns(dir, tc.keep); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tc.standing {
+				_, err := os.Stat(filepath.Join(RunsDir(dir), s.name))
+				if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(tc.removed, s.name) {
+					t.Errorf("%s removed %v, want %v", s.name, gone, !gone)
+				}
+			}
+		})
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
+	"kbase/internal/score"
 )
 
 // scoreRepo is a KB the score verb can walk: one claim declared in a leaf and
@@ -935,6 +936,96 @@ func TestScoreResumeRefusesAPath(t *testing.T) {
 		if id := kb.MintID("run", func(string) bool { return false }); !runIDRE.MatchString(id) {
 			t.Fatalf("MintID minted %q, which --resume refuses", id)
 		}
+	}
+}
+
+// standRuns stands n runs of kind in the store at state, named kind-000000 on
+// and started a minute apart from the minute at in January, so every run a test
+// invocation starts is newer. It returns their ids, the oldest first.
+func standRuns(t *testing.T, state, kind string, n, at int) []string {
+	t.Helper()
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%s-%06d", kind, i)
+		started := time.Date(2026, 1, 1, 0, at+i, 0, 0, time.UTC).Format(time.RFC3339)
+		l, err := score.Create(state, score.RunHeader{Run: ids[i], KBRoot: "/repo/kb-root", Pass: query.PassRigor, Started: started})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ids
+}
+
+// standingRuns is the run ids standing in the store at state.
+func standingRuns(t *testing.T, state string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(score.RunsDir(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// TestScoreDryRunCountsAgainstDryRunsAlone: a dry run mints a dry- id and keeps
+// the newest runs of its own kind, so over sixteen dry runs and sixteen older
+// real ones it removes the oldest dry run and no real run.
+func TestScoreDryRunCountsAgainstDryRunsAlone(t *testing.T) {
+	repo, state := scoreRepo(t), t.TempDir()
+	reals := standRuns(t, state, "run", 16, 0)
+	dry := standRuns(t, state, "dry", 16, 100)
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, DryRun: true}, nil)
+	run, _ := got.doc.Values["run"].(string)
+	if got.doc.Outcome != "done" || !strings.HasPrefix(run, "dry-") {
+		t.Fatalf("the dry run: outcome %s, run %q; want done under a dry- id\n%s", got.doc.Outcome, run, got.stdout)
+	}
+	want := slices.Concat(dry[1:], []string{run}, reals)
+	slices.Sort(want)
+	if have := standingRuns(t, state); !slices.Equal(have, want) {
+		t.Errorf("the store holds %q, want every real run, the dry run and the newest fifteen dry runs before it: %q", have, want)
+	}
+}
+
+// TestScoreResumeRefusesADryOrAPrunedRun: a real run over sixteen standing ones
+// removes the oldest; --resume naming that run is refused as a run with no
+// run.yaml is, and --resume naming a dry run's id by the id-shape check, which
+// says it takes a real run's.
+func TestScoreResumeRefusesADryOrAPrunedRun(t *testing.T) {
+	repo, state := scoreRepo(t), t.TempDir()
+	stood := standRuns(t, state, "run", 16, 0)
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })
+	run, _ := got.doc.Values["run"].(string)
+	if got.doc.Outcome != "done" {
+		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	want := append(slices.Clone(stood[1:]), run)
+	slices.Sort(want)
+	if have := standingRuns(t, state); !slices.Equal(have, want) {
+		t.Fatalf("the store holds %q, want the run and the newest fifteen before it: %q", have, want)
+	}
+
+	got = scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: stood[0]}, func() model.Client { return scoring() })
+	items := got.doc.items("refusals")
+	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--resume" ||
+		items[0]["detail"] != "no run stands here: run.yaml is missing" {
+		t.Errorf("--resume of the pruned %s = %s, %v; want the missing run.yaml's refusal\n%s", stood[0], got.doc.Outcome, items, got.stdout)
+	}
+
+	got = scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: "dry-aaaaaa"}, nil)
+	items = got.doc.items("refusals")
+	var detail string
+	if len(items) == 1 {
+		detail, _ = items[0]["detail"].(string)
+	}
+	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["key"] != "--resume" ||
+		!strings.HasPrefix(detail, "--resume names a real run's id (run-<") {
+		t.Errorf("--resume dry-aaaaaa = %s, %v; want the id-shape refusal naming a real run's id\n%s", got.doc.Outcome, items, got.stdout)
 	}
 }
 

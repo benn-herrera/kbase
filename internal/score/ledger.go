@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,13 +34,18 @@ const (
 )
 
 // The ledger's layout: one directory per run under the state directory, the
-// run.yaml that names it, and the lines its attempts append.
+// run.yaml that names it, the lines its attempts append, and the calls they
+// made.
 const (
-	runsDir   = "score"
-	runFile   = "run.yaml"
-	linesFile = "ledger.jsonl"
-	itemsFile = "items.jsonl"
-	pidFile   = "pid"
+	runsDir = "score"
+	// keptRuns is how many runs of each kind — real or dry — the state
+	// directory keeps: the run an invocation names and the newest others.
+	keptRuns     = 16
+	runFile      = "run.yaml"
+	linesFile    = "ledger.jsonl"
+	capturesFile = "captures.jsonl"
+	itemsFile    = "items.jsonl"
+	pidFile      = "pid"
 	// ResultFile is the name of the run's result document, written beside its
 	// ledger so a waiter reads the same document the run reported.
 	ResultFile   = "result.yaml"
@@ -124,14 +130,10 @@ type Entry struct {
 // carries the charges it records, and `[]` is the model's answer that it found
 // no fault. A failed line carries neither faults nor text.
 type attempt struct {
-	Run          string    `json:"run"`
-	Pass         string    `json:"pass"`
-	Backend      string    `json:"backend"`
-	Kind         string    `json:"kind,omitempty"`
-	ID           string    `json:"id,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	Target       string    `json:"target,omitempty"`
-	Relation     string    `json:"relation,omitempty"`
+	Run     string `json:"run"`
+	Pass    string `json:"pass"`
+	Backend string `json:"backend"`
+	identity
 	Status       string    `json:"status"`
 	Faults       *[]Charge `json:"faults,omitempty"`
 	Moot         []Charge  `json:"moot,omitempty"`
@@ -160,8 +162,11 @@ type Ledger struct {
 	// backEnd is what answers this invocation's items: the back end each line
 	// it appends records.
 	backEnd string
-	f       *os.File
-	lines   map[string]Entry
+	// f is the line file and captures the capture file, each opened by the
+	// first line appended to it.
+	f        *os.File
+	captures *os.File
+	lines    map[string]Entry
 	// order is every complete line a resume read back, in the file's order: a
 	// re-derivation rewrites the file, and the last status per item does not say
 	// where a line stands.
@@ -284,26 +289,143 @@ func (l *Ledger) Last(it query.Item) (Entry, bool) {
 // validation, never before: a crash between the two re-asks an item whose
 // write is idempotent, where the reverse would skip a value that never landed.
 func (l *Ledger) Append(it query.Item, e Entry) error {
-	if l.f == nil {
-		f, err := os.OpenFile(filepath.Join(l.dir, linesFile), os.O_WRONLY|os.O_APPEND|os.O_CREATE, atomicfile.CreateMode)
-		if err != nil {
-			return err
-		}
-		l.f = f
-	}
 	a := l.line(it, e)
-	b, err := json.Marshal(a)
-	if err != nil {
-		return err
-	}
-	if _, err := l.f.Write(append(b, '\n')); err != nil {
-		return err
-	}
-	if err := l.f.Sync(); err != nil {
+	if err := l.appendLine(&l.f, linesFile, a); err != nil {
 		return err
 	}
 	l.lines[a.lineKey()] = a.entry()
 	return nil
+}
+
+// capture records the call one attempt at it made, in captures.jsonl: the closed
+// text whole, the prompt sent and the reply returned, beside e's outcome. It is
+// written before the attempt's ledger line, and only for an attempt that reached
+// the Ask seam. A failed attempt's reason is the capture's error, where the
+// ledger line carries it as its reply and keeps no text of the model's.
+func (l *Ledger) capture(it query.Item, e Entry, c call) error {
+	rec := captureRecord{Run: l.run, Pass: passOf(it), identity: identityOf(it), Class: c.class.name,
+		Text: c.closed.text, Lines: capturedLines(c.closed.lines), Prompt: c.prompt, PromptSHA256: e.PromptSHA256,
+		Reply: c.reply, Model: e.Model, Backend: l.backEnd, Started: e.Started, Ended: e.Ended}
+	if e.Status != StatusDone {
+		rec.Error = e.Reply
+	}
+	return l.appendLine(&l.captures, capturesFile, rec)
+}
+
+// captureRecord is one line of a run's captures.jsonl: the call one attempt
+// made, whole enough to ask it again — the item and its class, the closed text
+// and its lines as the call numbered them, the prompt sent, and what the Ask
+// seam returned. Reply is "" where the call failed, and Error is the call's, the
+// parse's or the write's failure, absent on a landing.
+type captureRecord struct {
+	Run  string `json:"run"`
+	Pass string `json:"pass"`
+	identity
+	Class        string         `json:"class"`
+	Text         string         `json:"text"`
+	Lines        []capturedLine `json:"lines"`
+	Prompt       string         `json:"prompt"`
+	PromptSHA256 string         `json:"prompt_sha256"`
+	Reply        string         `json:"reply"`
+	Error        string         `json:"error,omitempty"`
+	Model        string         `json:"model"`
+	Backend      string         `json:"backend"`
+	Started      string         `json:"started"`
+	Ended        string         `json:"ended"`
+}
+
+// capturedLine is one line of a closed text as a capture records it: the fields
+// of line, under the names the record spells.
+type capturedLine struct {
+	No   int    `json:"no"`
+	End  string `json:"end"`
+	From int    `json:"from"`
+	To   int    `json:"to"`
+}
+
+// capturedLines is a closed text's lines as a capture records them.
+func capturedLines(lines []line) []capturedLine {
+	out := make([]capturedLine, len(lines))
+	for i, l := range lines {
+		out[i] = capturedLine{No: l.no, End: l.end, From: l.from, To: l.to}
+	}
+	return out
+}
+
+// capturedCall is one capture read back: the record, the class it names, and
+// the closed text it carried, which a reply is parsed against.
+type capturedCall struct {
+	captureRecord
+	class  class
+	closed closedText
+}
+
+// readLastCaptures is, per item, the last call the captures.jsonl in the run
+// directory runDir records, keyed as the ledger keys an item. The file is read to
+// its last complete line, so a run still appending is read as far as it has
+// landed. A complete line that does not read as a capture, names no class, or
+// numbers bytes its text does not hold is an error: the record is what a reply
+// is parsed against, and no part of it is guessed.
+func readLastCaptures(runDir string) (map[string]capturedCall, error) {
+	path := filepath.Join(runDir, capturesFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	b = b[:bytes.LastIndexByte(b, '\n')+1]
+	out := map[string]capturedCall{}
+	for i, raw := range bytes.Split(b, []byte{'\n'}) {
+		if len(raw) == 0 {
+			continue
+		}
+		var rec captureRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		cl, ok := classNamed(rec.Class)
+		if !ok {
+			return nil, fmt.Errorf("%s line %d: no class is named %q", path, i+1, rec.Class)
+		}
+		closed, err := rec.closedText()
+		if err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		out[rec.lineKey()] = capturedCall{captureRecord: rec, class: cl, closed: closed}
+	}
+	return out, nil
+}
+
+// closedText is the closed text the record carries, refused where a line names
+// bytes outside the text.
+func (rec captureRecord) closedText() (closedText, error) {
+	ct := closedText{text: rec.Text, lines: make([]line, len(rec.Lines))}
+	for i, l := range rec.Lines {
+		if l.From < 0 || l.From > l.To || l.To > len(rec.Text) {
+			return closedText{}, fmt.Errorf("line %d names bytes %d-%d of a %d-byte text", i+1, l.From, l.To, len(rec.Text))
+		}
+		ct.lines[i] = line{no: l.No, end: l.End, from: l.From, to: l.To}
+	}
+	return ct, nil
+}
+
+// appendLine appends v as one JSON line to the run directory's file name,
+// opening it into *f on first use, and syncs it: a line that returns has landed.
+func (l *Ledger) appendLine(f **os.File, name string, v any) error {
+	if *f == nil {
+		opened, err := os.OpenFile(filepath.Join(l.dir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, atomicfile.CreateMode)
+		if err != nil {
+			return err
+		}
+		*f = opened
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if _, err := (*f).Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return (*f).Sync()
 }
 
 // WriteItems writes the run's item list, items.jsonl: one pending line per
@@ -381,23 +503,50 @@ func RunByPID(dir string, pid int) (string, error) {
 // it left no record of when it started, and is no error. No run standing is ""
 // and "".
 func NewestRun(dir string) (run, started string, err error) {
-	entries, err := os.ReadDir(RunsDir(dir))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", "", nil
-	}
+	starts, err := dirStarts(RunsDir(dir), runFile)
 	if err != nil {
 		return "", "", err
 	}
 	var newest time.Time
+	for _, s := range starts {
+		if run == "" || s.at.After(newest) {
+			run, started, newest = s.name, s.started, s.at
+		}
+	}
+	return run, started, nil
+}
+
+// dirStart is one directory under a parent and the start its header records.
+type dirStart struct {
+	name, started string
+	at            time.Time
+}
+
+// dirStarts is every directory under parent whose header — the file of that name
+// inside it — records a start this kbase reads, in the parent's listing order. A
+// directory whose header is absent, does not read as YAML, or records a start
+// that does not parse left no record of when it started and is left out. No
+// parent standing is no directory.
+func dirStarts(parent, header string) ([]dirStart, error) {
+	entries, err := os.ReadDir(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []dirStart
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(RunsDir(dir), e.Name(), runFile))
+		b, err := os.ReadFile(filepath.Join(parent, e.Name(), header))
 		if err != nil {
 			continue
 		}
-		var h RunHeader
+		var h struct {
+			Started string `yaml:"started"`
+		}
 		if yaml.Unmarshal(b, &h) != nil {
 			continue
 		}
@@ -405,11 +554,53 @@ func NewestRun(dir string) (run, started string, err error) {
 		if err != nil {
 			continue
 		}
-		if run == "" || at.After(newest) {
-			run, started, newest = e.Name(), h.Started, at
+		out = append(out, dirStart{name: e.Name(), started: h.Started, at: at})
+	}
+	return out, nil
+}
+
+// PruneRuns keeps, of the runs in the state directory dir, the run keep names —
+// created or resumed, standing yet or not — and the newest keptRuns-1 others of
+// its kind, and removes the rest of that kind whole. A run's kind is its id's
+// prefix, so a dry run never removes a real run nor a real run a dry one.
+func PruneRuns(dir, keep string) error {
+	return pruneByStart(RunsDir(dir), runFile, keep)
+}
+
+// pruneByStart keeps, of the directories under parent of keep's kind, keep and
+// the newest keptRuns-1 others by the start their header records — equal starts
+// ordered by name, the later name newer — and removes the rest whole. A
+// directory dirStarts leaves out has no start to order by, and stands.
+func pruneByStart(parent, header, keep string) error {
+	starts, err := dirStarts(parent, header)
+	if err != nil {
+		return err
+	}
+	kind := runKind(keep)
+	var others []dirStart
+	for _, s := range starts {
+		if s.name != keep && runKind(s.name) == kind {
+			others = append(others, s)
 		}
 	}
-	return run, started, nil
+	slices.SortFunc(others, func(a, b dirStart) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return strings.Compare(a.name, b.name)
+	})
+	for _, s := range others[:max(0, len(others)-(keptRuns-1))] {
+		if err := os.RemoveAll(filepath.Join(parent, s.name)); err != nil {
+			return fmt.Errorf("remove run %s: %w", s.name, err)
+		}
+	}
+	return nil
+}
+
+// runKind is a run directory's kind: its name's prefix, before the first hyphen.
+func runKind(name string) string {
+	kind, _, _ := strings.Cut(name, "-")
+	return kind
 }
 
 // RunStatus is a run read back from its records: the items by the status the
@@ -429,12 +620,8 @@ type RunStatus struct {
 // resume asked outside it, and is counted too, the ledger being the record.
 func ReadRun(dir, run string) (RunStatus, error) {
 	runDir := filepath.Join(RunsDir(dir), run)
-	var h RunHeader
-	b, err := os.ReadFile(filepath.Join(runDir, runFile))
+	h, err := readHeader(runDir)
 	if err != nil {
-		return RunStatus{}, err
-	}
-	if err := yaml.Unmarshal(b, &h); err != nil {
 		return RunStatus{}, err
 	}
 	items, err := readAttempts(filepath.Join(runDir, itemsFile))
@@ -489,6 +676,16 @@ func ReadRun(dir, run string) (RunStatus, error) {
 	return st, nil
 }
 
+// readHeader is the run.yaml in the run directory runDir.
+func readHeader(runDir string) (RunHeader, error) {
+	var h RunHeader
+	b, err := os.ReadFile(filepath.Join(runDir, runFile))
+	if err != nil {
+		return h, err
+	}
+	return h, yaml.Unmarshal(b, &h)
+}
+
 // readAttempts reads one JSONL file of attempts; a line no attempt reads as is
 // dropped.
 func readAttempts(path string) ([]attempt, error) {
@@ -509,12 +706,16 @@ func readAttempts(path string) ([]attempt, error) {
 	return out, sc.Err()
 }
 
-// Close releases the line file, where the run appended one.
+// Close releases the line file and the capture file, where the run appended
+// to either.
 func (l *Ledger) Close() error {
-	if l.f == nil {
-		return nil
+	var errs []error
+	for _, f := range []*os.File{l.f, l.captures} {
+		if f != nil {
+			errs = append(errs, f.Close())
+		}
 	}
-	return l.f.Close()
+	return errors.Join(errs...)
 }
 
 // readBack reads the lines a resume continues: the last status per item. The
@@ -554,7 +755,7 @@ func (l *Ledger) readBack() error {
 // charges are a landed line's alone: a failed attempt records the reason it
 // failed and keeps no text of the reply, so it carries neither faults nor moot.
 func (l *Ledger) line(it query.Item, e Entry) attempt {
-	a := attempt{Run: l.run, Pass: passOf(it), Backend: l.backEnd, Status: e.Status,
+	a := attempt{Run: l.run, Pass: passOf(it), Backend: l.backEnd, identity: identityOf(it), Status: e.Status,
 		Value: e.Value, Reply: e.Reply, Model: e.Model, PromptSHA256: e.PromptSHA256,
 		Started: e.Started, Ended: e.Ended}
 	if e.Status == StatusDone {
@@ -564,13 +765,29 @@ func (l *Ledger) line(it query.Item, e Entry) attempt {
 		}
 		a.Faults, a.Moot = &faults, e.Moot
 	}
+	return a
+}
+
+// identity is an item as a record's line names it: a node's kind and id, or an
+// edge's source, target and relation, the other's keys omitted. The ledger's
+// lines and the captures carry the one shape, so a capture joins to its line.
+type identity struct {
+	Kind     string `json:"kind,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Relation string `json:"relation,omitempty"`
+}
+
+// identityOf is it as a line names it.
+func identityOf(it query.Item) identity {
 	switch {
 	case it.Node != nil:
-		a.Kind, a.ID = it.Node.Kind, it.Node.ID
+		return identity{Kind: it.Node.Kind, ID: it.Node.ID}
 	case it.Edge != nil:
-		a.Source, a.Target, a.Relation = it.Edge.Source, it.Edge.Target, it.Edge.Relation
+		return identity{Source: it.Edge.Source, Target: it.Edge.Target, Relation: it.Edge.Relation}
 	}
-	return a
+	return identity{}
 }
 
 // passOf is the pass an item is a subject of: a node's is rigor, an edge's
@@ -588,23 +805,13 @@ func passOf(it query.Item) string {
 }
 
 // itemKey is it as the ledger names it.
-func itemKey(it query.Item) string {
-	switch {
-	case it.Node != nil:
-		return lineKey(it.Node.Kind, it.Node.ID, "", "", "")
-	case it.Edge != nil:
-		return lineKey("", "", it.Edge.Source, it.Edge.Target, it.Edge.Relation)
-	}
-	return ""
-}
+func itemKey(it query.Item) string { return identityOf(it).lineKey() }
 
 // lineKey is an item's identity joined so no two items share one: a node's
 // kind and id, then an edge's source, target and relation.
-func lineKey(kind, id, source, target, relation string) string {
-	return strings.Join([]string{kind, id, source, target, relation}, "\x00")
+func (id identity) lineKey() string {
+	return strings.Join([]string{id.Kind, id.ID, id.Source, id.Target, id.Relation}, "\x00")
 }
-
-func (a attempt) lineKey() string { return lineKey(a.Kind, a.ID, a.Source, a.Target, a.Relation) }
 
 // entry is the line as the ledger hands it back: its status and the evidence
 // behind it, which is what Append stored and what a resume reads.
@@ -627,6 +834,8 @@ func (a attempt) faults() []Charge {
 // is asked and what its charges cost cannot come apart, and the composer, the
 // parse's closed set and the price all read this one fact.
 type class struct {
+	// name is the class as a capture records it.
+	name string
 	// edge is what the class is judged on: a scoring edge's two ends and its
 	// context for a bearing call, a node's own title and statement for either
 	// rigor call.
@@ -639,10 +848,20 @@ type class struct {
 // experiment's a method, and a scoring edge's link is a bearing whatever its ends
 // are typed.
 var (
-	statementClass = class{ask: asks.ScoreRigorStatement, table: kb.RigorStatement}
-	methodClass    = class{ask: asks.ScoreRigorMethod, table: kb.RigorMethod}
-	bearingClass   = class{edge: true, ask: asks.ScoreBearing, table: kb.BearingFaults}
+	statementClass = class{name: "statement", ask: asks.ScoreRigorStatement, table: kb.RigorStatement}
+	methodClass    = class{name: "method", ask: asks.ScoreRigorMethod, table: kb.RigorMethod}
+	bearingClass   = class{name: "bearing", edge: true, ask: asks.ScoreBearing, table: kb.BearingFaults}
 )
+
+// classNamed is the class a capture's name records, ok false where none is.
+func classNamed(name string) (class, bool) {
+	for _, cl := range []class{statementClass, methodClass, bearingClass} {
+		if cl.name == name {
+			return cl, true
+		}
+	}
+	return class{}, false
+}
 
 // passFacts is a run's set as it reads it: which class an item takes, and every
 // class the set can send, in the fixed order its digest concatenates them. A
@@ -822,12 +1041,12 @@ func (l *Ledger) reprice(w Write) error {
 
 // item is the item as the ledger names it in prose: the documents' own spelling,
 // so a `repriced.yaml` line joins to the result's `scored` without a translation.
-func (a attempt) item() string { return ItemName(a.asItem()) }
+func (id identity) item() string { return ItemName(id.asItem()) }
 
 // asItem is the line's identity as the item a re-priced value lands on.
-func (a attempt) asItem() query.Item {
-	if a.ID != "" {
-		return query.Item{Node: &query.ScoringNode{Kind: a.Kind, ID: a.ID}}
+func (id identity) asItem() query.Item {
+	if id.ID != "" {
+		return query.Item{Node: &query.ScoringNode{Kind: id.Kind, ID: id.ID}}
 	}
-	return query.Item{Edge: &query.ScoringEdge{Source: a.Source, Target: a.Target, Relation: a.Relation}}
+	return query.Item{Edge: &query.ScoringEdge{Source: id.Source, Target: id.Target, Relation: id.Relation}}
 }

@@ -106,12 +106,14 @@ Re-run each before acting on it; the answer given is what it returned when this 
 
 ## Work packages
 
-| WP | Rating | Seat / model | Lands |
-|---|---|---|---|
-| 1 | expert | go-coder, inherits | capture |
-| 2 | expert | go-coder, inherits | replay and the MCP flag exclusion |
-| 3 | mechanical | shell-dsl-coder, `reaper/Qwen3.8-Flash-Next` | dist tag and recipes |
-| 4 | expert | tech-writer, inherits | contract text |
+| WP | Rating | Seat / model | Lands | Status |
+|---|---|---|---|---|
+| 1 | expert | go-coder, inherits | capture | landed |
+| 2 | expert | go-coder, inherits | replay and the MCP flag exclusion | landed |
+| 3 | mechanical | shell-dsl-coder, `reaper/Qwen3.8-Flash-Next` | dist tag and recipes | landed (coordinator, direct) |
+| 4 | expert | tech-writer, inherits | contract text | landed |
+
+Next: the post-sprint review below.
 
 One landing, WP1 → WP2 → WP3 → WP4, each package's diff audited before the next starts, committed
 once after WP4. Before WP2 is dispatched the coordinator lands WP4's CONVENTIONS exception, so WP2's
@@ -183,6 +185,8 @@ diff is audited against a written rule. WP3 runs on local inference, so it runs 
   rule (Settled shape 3) stated beside the build's; §8's `--dry-run` paragraph states the `dry-`
   id and that a dry run counts only against dry runs; §8 *Outcomes*' refusal list reads "a
   `--resume` naming no real run kbase minted". SPEC says nothing of `--replay`.
+- `scoreCmd`'s help text in `cmd/score.go` (the run-records paragraph): `captures.jsonl`, the `dry-`
+  id and the newest-16-of-each-kind retention, matching SPEC §8; nothing of `--replay`.
 - ARCHITECTURE §12 gains `keptRuns` beside "Builds kept"; §8 *Retention* names the scoring run's
   prune; §6 *The verb* gains the prune step after `build.Hold`.
 - ARCHITECTURE §2 gains an invariant: every ask a build or a scoring run makes leaves, for as long

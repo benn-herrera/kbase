@@ -122,10 +122,16 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			res.Outcome = result.Cancelled
 			break
 		}
-		e, interrupted := r.attempt(ctx, it, facts, g)
+		e, c, interrupted := r.attempt(ctx, it, facts, g)
 		if interrupted {
 			res.Outcome = result.Cancelled
 			break
+		}
+		if c != nil {
+			if err := r.Ledger.capture(it, e, *c); err != nil {
+				res.Outcome, res.Counts = result.Failed, r.counts()
+				return res, fmt.Errorf("capture %s: %w", ItemName(it), err)
+			}
 		}
 		if err := r.Ledger.Append(it, e); err != nil {
 			res.Outcome, res.Counts = result.Failed, r.counts()
@@ -155,47 +161,76 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 // attempt makes one item's pass: the item's class — the instruction its one call
 // carries and the table its reply is priced under, derived once — the closed text
 // the call is sent with, and either the charges the reply records or the reason it
-// records none. interrupted reports a context cancelled during the call, which is
-// the run's stop and not the item's outcome: the caller records nothing for it.
-func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, interrupted bool) {
+// records none — and the call it made, nil where it made none. interrupted
+// reports a context cancelled during the call, which is the run's stop and not
+// the item's outcome: the caller records nothing for it.
+func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, c *call, interrupted bool) {
 	e = Entry{Model: r.Model, Started: stamp()}
 	defer func() { e.Ended = stamp() }()
 	cl, err := facts.classOf(it)
 	if err != nil {
 		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+		return e, nil, false
 	}
 	prompt, digest, closed, err := r.compose(it, cl, g)
 	if err != nil {
 		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+		return e, nil, false
 	}
 	e.PromptSHA256 = digest
-	reply, err := r.Ask(ctx, prompt)
-	if err != nil {
-		if ctx.Err() != nil {
-			return Entry{}, true
-		}
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+	c = &call{class: cl, closed: closed, prompt: prompt}
+	answer, ok, interrupted := c.put(ctx, r.Ask, &e)
+	if interrupted {
+		return Entry{}, nil, true
 	}
-	answer, err := ParseAnswer(reply, closed, cl.table)
-	if err != nil {
-		// A reply that is no answer fails the attempt: no charges, no judgement,
-		// and the record keeps the reason and not the text — a malformed reply is
-		// blank, cut short or think-lock, and what matters is that it failed.
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+	if !ok {
+		return e, c, false
 	}
-	e.Reply, e.Faults, e.Moot = reply, answer.Faults, answer.Moot
 	if err := r.Write(it, answer.Value); err != nil {
 		// The write's refusal is what the line records: no value landed, and the
 		// charges were a judgement the KB did not take.
 		e.Status, e.Reply, e.Faults, e.Moot = StatusFailed, err.Error(), nil, nil
-		return e, false
+		return e, c, false
 	}
 	e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
-	return e, false
+	return e, c, false
+}
+
+// call is what one attempt's call carried and returned: the class it asked
+// under, the closed text and the prompt rendered from it, and the reply the Ask
+// seam returned, "" where the call failed.
+type call struct {
+	class  class
+	closed closedText
+	prompt string
+	reply  string
+}
+
+// put sends the call's prompt through ask and reads the reply against its closed
+// text under its class's table: the answer, e carrying the reply and its charges,
+// or ok false and e failed with the reason. interrupted reports ctx cancelled
+// during the call, which is the walk's stop: nothing of it is recorded.
+func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, interrupted bool) {
+	reply, err := ask(ctx, c.prompt)
+	if err != nil {
+		if ctx.Err() != nil {
+			return Answer{}, false, true
+		}
+		e.Status, e.Reply = StatusFailed, err.Error()
+		return Answer{}, false, false
+	}
+	c.reply = reply
+	answer, err = ParseAnswer(reply, c.closed, c.class.table)
+	if err != nil {
+		// A reply that is no answer fails the attempt: no charges, no judgement,
+		// and the line keeps the reason and not the text — a malformed reply is
+		// blank, cut short or think-lock, and what matters is that it failed. The
+		// capture keeps the text.
+		e.Status, e.Reply = StatusFailed, err.Error()
+		return Answer{}, false, false
+	}
+	e.Reply, e.Faults, e.Moot = reply, answer.Faults, answer.Moot
+	return answer, true, false
 }
 
 // compose is the prompt one item's call carries, the digest of exactly it, and
@@ -219,11 +254,15 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 	if err != nil {
 		return "", "", closedText{}, err
 	}
-	if prompt, err = cl.ask(closed.numbered()); err != nil {
+	if prompt, err = cl.render(closed); err != nil {
 		return "", "", closedText{}, err
 	}
 	return prompt, digestOf(prompt), closed, nil
 }
+
+// render is the prompt cl's call carries over closed: its instruction around the
+// text as the call numbers it.
+func (cl class) render(closed closedText) (string, error) { return cl.ask(closed.numbered()) }
 
 // graphOf is the loaded index as the run's passages read it: every node by id,
 // and the citations in the order the index holds them.

@@ -30,6 +30,7 @@ Violating any is a blocking defect.
 | I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate`, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O, no import of a kbase package — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
 | I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. |
+| I10 | Every ask a build or a scoring run makes leaves, for as long as its records are retained, what re-asking it under the binary's embedded templates and re-reading its reply as the run read it needs. A build leaves it through its commit trail, its records and the answer cache's keying on the composed ask, so re-running a stage from its boundary re-renders every ask; a scoring run leaves it through its `captures.jsonl` (§6, Scoring). `probe` is a diagnostic and outside it. |
 
 Deliberately unspecified: the internal AST representation, record field encoding, and layout
 algorithms.
@@ -518,7 +519,8 @@ own: every input to the skeleton is kbase's, so a red verify over it is a kbase 
 ### Scoring
 
 `kbase score` is SPEC §8's; this states the mechanism. Five packages and the verb carry it:
-`internal/score` (the runner, the closed text and its passages, the parse, the run's ledger),
+`internal/score` (the runner, the closed text and its passages, the parse, the run's ledger and
+captures, run retention, the development replay),
 `internal/kb` (the fault vocabulary, the three weight tables and the price), `internal/asks` (the
 three templates and the check that they name their class's ids), `internal/query` (the set),
 `internal/statedir` (the state directory) and `cmd/score.go`.
@@ -531,15 +533,19 @@ the item's class yields the instruction its one call carries and the table its c
 under, and the composer, the parse's closed set and the price all read that one fact. Per item it
 composes the closed text, asks, parses the reply as the charges it records against that text, prices
 them, writes and appends `done`; a text the guard refuses, a reply the parse refuses, or a call or
-write that fails appends `failed` with nothing written, and the loop continues. Items are walked one
+write that fails appends `failed` with nothing written, and the loop continues. `attempt` returns,
+beside the entry, the `call` it made — class, closed text, prompt and reply, nil where it made none —
+and `Run` hands it to `Ledger.capture` before `Ledger.Append` (below). Items are walked one
 at a time, in the set's order, with no concurrency. `Counts` is computed from the ledger's last status
 per item, not this invocation's attempts, so a resumed run reports the whole run. A cancelled context
 stops before the next ask and records nothing for the item in flight.
 
 **The ask is one seam.** The runner's `Ask` takes the rendered prompt whole and returns the reply, so
 the runner has no view of a provider: `internal/score` imports `asks`, `kb`, `query`, `result`,
-`atomicfile` and `log`, and never `model`. `cmd/score.go` fills the seam with `model.Chat` on the
-scoring role's endpoint and an empty system prompt, and the runner learns nothing of what answered.
+`atomicfile` and `log`, and never `model`. `scoringAsk` in `cmd/score.go` fills the seam with
+`model.Chat` on the scoring role's endpoint and an empty system prompt, and the runner learns nothing
+of what answered; the development replay fills its seam through the same function, so a replayed call
+carries the run's endpoint, timeout and completion-cap check.
 Each score template splices the `score-system` fragment into its own text, so the instruction is
 carried once, in the user turn.
 
@@ -655,12 +661,48 @@ and compares nothing against it: the digest is a record of which instruction ans
 and an update applies its behaviour. A header written before the rigor pair carries one render's
 digest, and is read as the one ask that run began under. `reprice` (below) is `Resume`'s other half.
 
+**The captures.** `Ledger.capture` appends one line to `captures.jsonl` beside the ledger, through
+`appendLine`, which takes the `O_APPEND` and `Sync` the ledger's own lines take. A capture is written
+for each attempt that returns a `call`: `attempt` returns none where the class cannot be derived or
+the guard refuses the text, and a call the context cancelled returns nothing, so none of the three
+leaves a capture. `Run` writes the capture before the item's ledger line, and a capture that cannot
+be written ends the run `failed` as a ledger line that cannot be written does. A line's keys, in
+order: `run`, `pass`, the item's identity as the ledger line spells it (`identity`: `kind` and `id`,
+or `source`, `target` and `relation`, the other's omitted), `class` (`statement`, `method` or
+`bearing`, `class.name`), `text` and `lines` (the closed text whole, each line `{no, end, from, to}` as
+`closedText` holds it), `prompt` (the bytes sent), `prompt_sha256`, `reply` (what the `Ask` seam
+returned, `""` where the call errored), `error` (the call's, the parse's or the write's error text,
+absent on a landing), `model`, `backend`, `started` and `ended`. The ledger is unchanged: its failed
+line carries the reason and no reply text, and the capture is where the reply stands. A capture is
+self-sufficient for a replay: `readLastCaptures` returns, per item, its last capture with the closed
+text rebuilt, reads the file to its last complete line so a run still appending is readable, and
+refuses a line that names no class or whose line ranges fall outside its text. **The fidelity rule:**
+`class.render` is the one site that renders a closed text into a prompt, shared by `compose` and the
+replay, so rendering a capture's closed text through an unchanged template reproduces its
+`prompt_sha256` byte for byte; `TestCapturesReRenderToTheirDigest` asserts it over captures the runner
+wrote.
+
 The state directory is `internal/statedir.Dir`'s — the override,
 else `$XDG_STATE_HOME/kbase/<key>`, and never inside `kb-root/` — extracted from
 `internal/build/store.go` so that a run and a build agree on what the state directory for a KB is;
 the build store's own format stamp stays in `internal/build` (§8). The run's locks are `build.Hold`'s
 (§8): the operation lock in the repository's git directory, then the state store's holder lock at
 `<state-dir>`, its record naming `kind: score` and the run id.
+
+**Run retention.** `keptRuns` (§12) runs of each kind stand under `score/`. A real run's id is minted
+`run-<id>` and a dry run's `dry-<id>` (`kb.MintID`'s prefix), and a directory's kind is its name's
+prefix (`runKind`), so the two are counted apart; a dry run an earlier kbase minted as `run-…` is
+named, and counted, as a real run. `score.PruneRuns(dir, run)` keeps the run the invocation names —
+created or resumed — and the newest `keptRuns-1` other directories of its kind, ordered by the `started`
+each `run.yaml` records, equal starts by name with the later name newer, and removes the rest of that
+kind whole with `os.RemoveAll`, captures and replays with them. `dirStarts` is the one per-directory
+read of that start, shared with `NewestRun`; a directory whose `run.yaml` is absent or unreadable
+yields none and stands. `runScore` calls the prune immediately after `build.Hold` returns, so it runs
+under the holder lock and no other run is writing a directory it could remove; a prune error ends the
+invocation `failed`. An invocation refused after that point has pruned already, which only ever
+removes directories beyond the kept count. `runIDRE` accepts a `run-` id alone, so `--resume` of a
+`dry-` id is refused by the id-shape check, whose detail names a real run's id; `status`, `wait` and
+`RunByPID` find a run by its directory, whatever the prefix.
 
 **The one-op landing.** `landScore` calls `write.Run` with `set-rigor` for a node and `set-bearing`
 for an edge — values `id` and `rigor`, or `id` (the source), `target`, `relation` and `bearing` — and
@@ -687,14 +729,15 @@ re-price as it follows a landing. No model is asked: the ids are the whole input
 the model never saw a weight.
 
 **The verb.** `runScore` is the body: the pass, limit and dry-run/resume checks; the KB root; the
-state directory; the scoring role resolved before the KB is opened — the mode decided and the role
-resolved through `config.Resolve`, with `--scoring-model` supplying or overriding the model, and both
-skipped under `--dry-run` — so a setup refusal writes nothing and mints no run; `openKB` and the
-migration record; the run id; the
-run's locks through `build.Hold`, before any record of the run is written; one refresh through
+state directory; the scoring role resolved before the KB is opened — `scoringRole`: the mode decided
+and the role resolved through `config.Resolve`, with `--scoring-model` supplying or overriding the
+model, and both skipped under `--dry-run` — so a setup refusal writes nothing and mints no run;
+`openKB` and the migration record; the run id (`run-<id>`, or `dry-<id>` under `--dry-run`); the
+run's locks through `build.Hold`, before any record of the run is written; the run prune,
+`score.PruneRuns`, as `build.Hold` returns; one refresh through
 `holdWriting`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load`
-and the set; then either the dry run's records and an inert `Runner`, or the registry's client, its
-`Ask` and the walk; `counts` and `scored`; `resume` where any item is not `done`, ahead of the end
+and the set; then either the dry run's records and an inert `Runner`, or the `Ask` from `scoringAsk`
+over the registry's client, and the walk; `counts` and `scored`; `resume` where any item is not `done`, ahead of the end
 refresh and of the record the outcome closes on; then, where anything landed or a resume re-priced,
 the KB re-read and the end refresh
 — either refresh ending the run where it cannot take the KB write lock, with `holdWriting`'s own
@@ -705,6 +748,53 @@ one). The refresh cadence, the closing records and `resume`'s reach are SPEC §8
 `mcpBinding(scoreCmd, mcpBound)` (SPEC §11): the command is bound and appears in `tools/list`, but the
 MCP server starts it as a detached child — as it starts `build` — returning the run's identity and a
 `wait` command instead of holding the turn for the walk's duration.
+
+**The development replay.** `kbase score --replay RUN` re-asks a run's captured subjects under the
+binary's embedded templates and reports what the runtime would have done, so a change to a scoring
+template is `edit → just build → replay` over the items that failed. SPEC states nothing of it.
+Its code and tests are `cmd/score_replay.go` and `internal/score/replay.go` with their test files,
+each carrying `//go:build !kbasedist`. `cmd/score.go` reaches it only through the package-level
+`scoreReplay` hook, which the tagged file's `init` sets and which is nil under `kbasedist`; that
+`init` also declares `--replay` and `--failed`, each annotated `kbase.mcp` = `excluded` through
+`mcpExcludeFlag` (§12), so dev and dist builds serve one tool table. The dist build passes
+`-tags kbasedist` (`tools/scripts/build-dist.sh`); default builds and `go test ./...` include the
+replay, `edit-gate` vets with the tag, and `test-dist` runs `TestDistBuildHasNoReplay`
+(`cmd/dist_test.go`), which asserts both flags absent.
+
+`scoreReplayRun` takes `--failed`, `--limit`, `--scoring-model`, `--state-dir`, `--timeout` and
+`--config-dir` beside `--replay`. Any other score flag with it is a usage refusal naming `--replay`,
+`--failed` without `--replay` one naming `--failed`, and a `--replay` value outside
+`^(run|dry)-<id>$` (the alphabet and length `runIDRE` uses) one naming `--replay`. It opens no KB and
+takes no KB, operation or holder lock; a run in progress may be replayed. `score.OpenReplay` selects
+every item with a capture, in the order of the run's `items.jsonl`, each by its last capture;
+`--failed` narrows the selection to items whose last ledger status is `failed`, and `--limit N` takes
+the first N. A run with no `captures.jsonl` — a dry run, one pruned, one that asked nothing — is
+`refused`, `check: usage`, `key: --replay`. The scoring role is resolved by `scoringRole` and the
+`Ask` built by `scoringAsk`, the functions `runScore` uses.
+
+`Replay.Walk` renders each captured closed text through `class.render` — the binary's embedded
+template for the capture's class — sends it through `Ask`, and reads the reply with `call.put`, the
+runner's own parse against the captured closed text under the class's table, then prices it. It lands
+nothing, and a per-item failure is counted, not the replay's outcome. It writes only under
+`score/<run>/replays/<replay-id>/`, the id minted `replay-<id>` as a run's is:
+
+- `replay.yaml`: `replay`, `run`, `backend`, `provider`, `model`, `ask_sha256` (computed as `Create`
+  computes it for the run's pass) and `started`.
+- `ledger.jsonl`: one line per item asked, in the run ledger's shape, its `run` the replay id.
+- `captures.jsonl`: the replay's own captures, in the captures' shape, `run` the replay id.
+- `comparison.jsonl`: per item, `item` (`ItemName`), `original` and `replay` (each `status`, `value`
+  and `faults`, the fault ids in order, `[]` for `none`) and `prompt_changed` (the replayed prompt's
+  digest differs from the captured `prompt_sha256`).
+
+After writing `replay.yaml`, `Walk` keeps itself and the newest `keptRuns-1` other replays of the
+run's `replays/` by `replay.yaml`'s `started`, through the `pruneByStart` the run prune uses.
+
+The result document is one SPEC §7 YAML document with the keys `outcome`, `kb-root`, `state-dir`,
+`run`, `replay`, `dir` (the replay directory, absolute), `counts` (`total`, `done`, `failed`) and
+`changed` (an integer: the items whose status or value differs from the original's), then the closing
+record the outcome names. The outcome is `done` when every selected item was asked, `cancelled` when
+the context stopped the walk — its `cancelled` record naming the first item it did not ask — and
+`failed` for a fault of the replay itself, an unreadable capture file or a store write.
 
 ---
 
@@ -937,7 +1027,10 @@ and `cmd`'s `init` verb import `ledger`.
   `scratch/captures/` entries last modified before the start of the `keptBuilds`-th (§12) latest
   build that ended, counted from `progress.jsonl`; a build that ended `refused` or `retry` is not
   counted. `scratch/answers/` and the stage reports are never pruned, and `status` and `cancel`
-  remove nothing. `status` computes `cache-entries` and `cache-bytes` from `scratch/answers/`.
+  remove nothing. `status` computes `cache-entries` and `cache-bytes` from `scratch/answers/`. A
+  scoring run prunes `score/` as `build.Hold` returns, before it writes any record of its own: of
+  its kind (`run-` or `dry-`) it keeps the run it names and the newest `keptRuns-1` (§12) others by
+  `run.yaml`'s start, and removes the rest whole (§6, Scoring).
 - **State store layout:** `format`, the holder lock, `progress.jsonl`, `records/` (the docgraph
   records and pre-pass census), `reports/<stage-id>.yaml` (each stage's row records and findings,
   named by the result's `stages[].report`; also the captures of a build the MCP server starts,
@@ -945,7 +1038,8 @@ and `cmd`'s `init` verb import `ledger`.
   call's request, reply and usage), `answers/` (the answer cache, content-addressed by model, system
   prompt and prompt, written through `atomicfile`; an ask's attempt ordinal is part of the key so a
   re-ask reaches the model), `asks/` (composed prompts), `regenerate/` (the records regeneration on
-  resume).
+  resume), `score/<run>/` (a scoring run's `run.yaml`, `items.jsonl`, `ledger.jsonl` and
+  `captures.jsonl`, and a development replay's `replays/<replay-id>/`; §6, Scoring).
 - **Progress units** are leaves for the node pass, source groups for `references-found`, the ask
   groups of each of its two passes for `claims-culled` (each pass announcing its own total), ask
   groups for classification, so `status` moves during an inference stage; a defaulted item is a
@@ -1069,8 +1163,9 @@ internal/build            stage table, state store, resume, --no-inference,
                           (holder lock, progress record, the run it stands at) that
                           status's state and the MCP watcher both derive from
 internal/score            the score passes' closed text, its guard and the passages it is
-                          made of, the parse, the runner, the run's ledger and its
-                          re-pricing; imports not `model`; imported by cmd alone
+                          made of, the parse, the runner, the run's ledger, its captures,
+                          its re-pricing and the retention of runs, and the development
+                          replay (`!kbasedist`); imports not `model`; imported by cmd alone
 internal/statedir         the state directory of one KB: the override, else
                           $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
                           imported by build and cmd
@@ -1210,6 +1305,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `storeFormat` in `internal/build`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
+| Runs kept | `keptRuns` in `internal/score/ledger.go`: 16, the scoring runs of each kind (`run-`, `dry-`) that survive pruning, and the replays of a run's `replays/` (§6, Scoring; §8) |
 | Scoring wrap width | `wrapWidth` in `internal/score/text.go`: 100 columns, the width each passage of the closed text is wrapped to before its lines are numbered (§6, Scoring) |
 | Operation lock path | `<git dir>/kbase-operation.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
@@ -1248,7 +1344,10 @@ test code only, and asserts the migrated KB reads to the same values as the orig
 declaring `kbase.mcp` = `bound` — `mcp`, `wait` and `probe` declare `excluded`, the second because a
 held call would spend the turn the build takes, and cobra's own `completion` and `help` declare
 nothing and are skipped with them — plus the one listed tool below. A tool's
-schema is derived from the command's `Use` line positionals and its flags. A command's read-only
+schema is derived from the command's `Use` line positionals and its flags, `commandSchema` skipping
+a flag annotated `kbase.mcp` = `excluded` (set by `mcpExcludeFlag`), which is no argument of the
+tool; `score`'s `--replay` and `--failed` are such flags, and an argument naming one is refused by
+`internal/mcp` as outside the schema. A command's read-only
 standing is the cobra annotation `kbase.readOnly`, read when the table is built. A command tool's
 `required` is its positionals alone: no bound flag is required today, `score`'s `--pass` among them, a
 run walking both passes unless it is told otherwise. A flag that becomes required declares

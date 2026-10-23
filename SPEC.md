@@ -298,7 +298,8 @@ Commits are scoped by pathspec to kbase-owned paths.
 **The state store holds what does not belong in the repository** — the holder lock and the record
 the holder writes, which `status` and `cancel` read: the holder's pid, its start, the verb that owns
 the run (`build` or `score`) and, for a scoring run, its run id — `progress.jsonl`, per-call
-evidence, the docgraph records (§5), a
+evidence, the docgraph records (§5), the scoring runs under `score/` (each with its ledger and
+`captures.jsonl`, every call's closed text, prompt and reply, failures included; §8), a
 per-unit answer cache keyed by input hash, and the captured output of a build the MCP server starts
 (§11). Nothing in it is authoritative for position. A clean exit removes the holder lock's file,
 cancel included, so a file standing in the store is never evidence of a live holder. The kind is
@@ -324,10 +325,19 @@ when a build first holds the store; a store with no `format` file is version 1. 
 stepwise and resumes if interrupted. The store's version is independent of the KB format version
 (§10).
 
-**The state store is pruned only by a build.** At a build's start, the captured output of earlier
-builds (`reports/build-*`) and the call captures (`scratch/captures/`) last modified before the
-start of the fifth-latest build that ended are removed; a build that ended `refused` or `retry` does
-not count. The answer cache and the stage reports are kept. `status` and `cancel` remove nothing.
+**The state store is pruned only by a build or a scoring run.** At a build's start, the captured
+output of earlier builds (`reports/build-*`) and the call captures (`scratch/captures/`) last
+modified before the start of the fifth-latest build that ended are removed; a build that ended
+`refused` or `retry` does not count. At a scoring run's start, once it holds the store, the run
+directories under `score/` are pruned by kind: a real run's id is `run-<id>` and a dry run's
+`dry-<id>` (§8), a directory's kind is its name's prefix, and the invocation keeps, of its own kind,
+16 runs — the run it names, created or resumed, and the newest 15 others by the start their
+`run.yaml` records, equal starts ordered by name with the later name newer — and removes the rest of
+that kind whole, captures included. A dry run never removes a real run, nor a real run a dry one,
+and a dry run an earlier kbase minted as `run-…` counts as real. A directory whose `run.yaml` is
+absent or unreadable has no start to order by and is left. An invocation refused once it holds the
+store has pruned already. The answer cache and the stage reports are kept. `status` and `cancel`
+remove nothing.
 Deleting the store is always safe, but it forfeits the answer cache, whose entries were paid for in
 inference; `status` reports its size.
 
@@ -880,7 +890,8 @@ the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
-run), and `ledger.jsonl`. `run.yaml` holds the run, its KB root, the ledger's format, the set it walks
+run), `ledger.jsonl`, and `captures.jsonl`. A real run's id is `run-<id>`; the runs kept are §6's.
+`run.yaml` holds the run, its KB root, the ledger's format, the set it walks
 (one pass, or `both`), `backend` (`provider` or `environment`; absent under `--dry-run`, which
 resolves no role because it asks nothing), the provider, the model, `ask_sha256` and the start. **It is
 written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
@@ -894,6 +905,17 @@ appended after the item's write and its validation, never before. `faults` is `[
 alone, the word `none`; a failed attempt carries neither `faults` nor text. The state directory is
 `build`'s:
 `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
+
+`captures.jsonl` is one JSON object per call made — the item, its class (`statement`, `method` or
+`bearing`), the closed text whole with the line each number names, the prompt sent and its digest,
+the reply the call returned (`""` where the call failed), the error that failed the attempt where
+one did — the call's, the parse's or the write's — the model, the back end and the call's bounds.
+Every attempt that makes a call has one, whatever its outcome: a landing, a refused reply, a failed
+call or a refused write. A failed attempt's reply therefore stands whole there, where its ledger
+line keeps no text of it. An item the guard refuses makes no call and has no capture, and a call
+cancelled in flight leaves no capture and no ledger line. A capture is appended before the item's
+ledger line, a resume appends to the same file, and a capture that cannot be written fails the run
+as a ledger line that cannot be does.
 
 **`ask_sha256` records the ask set and gates nothing.** It is one digest over every instruction the
 run can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
@@ -937,7 +959,7 @@ at an item boundary, with no line recorded for the item in flight and the ledger
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
 the state store, or where a refresh could not take the KB write lock past the wait; `refused`
 where the run cannot go on — setup (a pass outside the three, a negative `--limit`, a `--state-dir`
-inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
+inside `kb-root/`, a `--resume` naming no real run kbase minted, no scoring model in the mode's source,
 a mode whose sources are mixed or whose environment is partial, an index the load cannot answer), a
 run already holding the KB's operation lock (§6), or a KB that no longer opens when the end refresh
 re-reads it.
@@ -971,8 +993,10 @@ named by its path, never printed.
 **`--dry-run`** lists the set and asks nothing. It writes `run.yaml` and `items.jsonl` (one pending
 line per item), dials no provider, resolves no role and runs no mode decision, and writes no KB file:
 its `counts.done` is `0`, its `scored` is `[]`, it carries no `resume` and no `roles`, and its outcome
-is `done`. It writes no charge record. It cannot
-be resumed — `--resume` with `--dry-run` is a usage refusal naming `--resume`. Because the refresh
+is `done`. It writes no charge record and no capture. Its run id is `dry-<id>`, and the runs kept
+are counted by kind (§6), so a dry run counts only against dry runs. It cannot
+be resumed — `--resume` with `--dry-run` is a usage refusal naming `--resume`, and `--resume` naming
+a `dry-` id is refused as no real run's id. Because the refresh
 that would save a conversion is a write, a dry run on an older KB is refused by the load
 (`check: index`, remedy `kbase refresh`), and a real run on the same KB then migrates and saves.
 

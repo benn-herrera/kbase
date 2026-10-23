@@ -187,7 +187,7 @@ function case_build_invocations() {
   fi
   for spec in "darwin arm64 kbase-darwin-arm64" "linux amd64 kbase-linux-amd64" "windows amd64 kbase-windows-amd64.exe"; do
     read -r os arch name <<< "${spec}"
-    line="GOOS=${os} GOARCH=${arch} go build -trimpath -ldflags=-s -w -o ${bin}/${name} ./cmd"
+    line="GOOS=${os} GOARCH=${arch} go build -trimpath -tags kbasedist -ldflags=-s -w -o ${bin}/${name} ./cmd"
     if ! grep -qxF "${line}" "${log}"; then
       printf 'missing invocation: %s\n' "${line}"
       cat "${log}"

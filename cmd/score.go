@@ -119,7 +119,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	case opts.Resume != "" && !runIDRE.MatchString(opts.Resume):
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
-			Detail: fmt.Sprintf("--resume names a run id kbase minted (run-<%d characters of a-z0-9>), not a path: %s",
+			Detail: fmt.Sprintf("--resume names a real run's id (run-<%d characters of a-z0-9>), not a path: %s",
 				kb.HashLen, opts.Resume)})
 	case opts.DryRun && opts.Resume != "":
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
@@ -155,19 +155,9 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	)
 	env := config.EnvOverrides(os.Getenv)
 	if !opts.DryRun {
-		s := opts.inputs(env)
-		if mode, err = config.ModeOf(s); err != nil {
+		if ep, mode, err = scoringRole(opts, env); err != nil {
 			return refusedOrFailed(runKeys(fields, dir, pass), err)
 		}
-		if mode == config.ModeFile {
-			// An environment-mode invocation reads no file value, so it
-			// says nothing of the key the files state.
-			supersededProvider(opts.Stderr, opts.Config)
-		}
-		if ep, err = config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel); err != nil {
-			return refusedOrFailed(runKeys(fields, dir, pass), err)
-		}
-		warnFaults(opts.Stderr, opts.Faults)
 	}
 
 	src, refusals, err := openKB(root)
@@ -185,7 +175,13 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	}
 	run := opts.Resume
 	if run == "" {
-		run = kb.MintID("run", func(id string) bool {
+		// A dry run's id carries its own prefix, so the runs kept of each kind
+		// are counted apart and a dry run never removes a real one.
+		kind := "run"
+		if opts.DryRun {
+			kind = "dry"
+		}
+		run = kb.MintID(kind, func(id string) bool {
 			_, err := os.Stat(filepath.Join(score.RunsDir(dir), id))
 			return err == nil
 		})
@@ -203,6 +199,11 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 			opts.Logger.Error("the run's locks were released and their files not removed", "error", err)
 		}
 	}()
+	// Retention runs under the store's holder lock, so no other run is
+	// writing a directory it could remove.
+	if err := score.PruneRuns(dir, run); err != nil {
+		return failed(fields, fmt.Errorf("prune the score runs: %w", err))
+	}
 
 	// The run's start refresh: the set is enumerated from an index that is
 	// current, and on a KB in an older metadata format this is the write that
@@ -254,45 +255,13 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	// the same id from its ledger, and so sends the same key.
 	reg := newClients(opts.NewClient, opts.Logger, run)
 	defer reg.closeAll()
-	client, err := reg.get(ep)
+	ask, err := scoringAsk(opts, reg, ep)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
-	}
-	// A key bound for a non-loopback http:// endpoint is said on stderr once
-	// and the run proceeds, as `build` says it: the key is what this run
-	// sends, and the registry is what read it.
-	if key, err := reg.key(ep); err == nil {
-		if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
-			fmt.Fprintln(opts.Stderr, line)
-		}
 	}
 	modelID := ep.Model
 	fields = append(fields, rolesField([]toolresult.Record{roleRecord(ep)}))
 
-	timeout := opts.callTimeout()
-	backoff := opts.Backoff
-	if backoff == nil {
-		backoff = scoreBackoff
-	}
-	// The ask is one tool-less chat call on the role's model. Each ask's own
-	// text carries the instruction, so the system prompt is empty and nothing
-	// is said twice.
-	ask := func(ctx context.Context, prompt string) (string, error) {
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		attempt, err := model.Chat(callCtx, client, modelID, "", prompt, backoff, nil)
-		if err != nil {
-			return "", err
-		}
-		// A reply cut off at the completion cap loses the lines it did not
-		// reach, and where the cut falls between lines the rest would parse as a
-		// clean under-charge. It fails the item for what it is: the charge list
-		// is incomplete, and an incomplete answer is never a judgement.
-		if attempt.FinishReason == model.FinishLength {
-			return "", errors.New("the reply reached the completion cap before it finished, so its charge list is incomplete")
-		}
-		return attempt.Reply, nil
-	}
 	header := score.RunHeader{Run: run, KBRoot: root, Pass: pass, BackEnd: backEndName(ep),
 		Provider: ep.Provider, Model: modelID, Started: scoreStamp()}
 	// One write seam for both: the values the walk lands and the values a resume
@@ -362,13 +331,79 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	return res.Outcome, fields
 }
 
-// runIDRE is the shape of the run ids kbase mints — kb.MintID's own, the kind
-// then the id body's length of its alphabet, which holds no regular-expression
-// metacharacter. --resume takes one of these and never a path: the value is
+// scoringRole is the scoring role this invocation's settings resolve, and the
+// mode they resolved it under: --scoring-model supplying or overriding the
+// model, nothing falling back to another role.
+func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, config.Mode, error) {
+	s := opts.inputs(env)
+	mode, err := config.ModeOf(s)
+	if err != nil {
+		return config.Endpoint{}, mode, err
+	}
+	if mode == config.ModeFile {
+		// An environment-mode invocation reads no file value, so it says
+		// nothing of the key the files state.
+		supersededProvider(opts.Stderr, opts.Config)
+	}
+	ep, err := config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel)
+	if err != nil {
+		return config.Endpoint{}, mode, err
+	}
+	warnFaults(opts.Stderr, opts.Faults)
+	return ep, mode, nil
+}
+
+// scoringAsk is the Ask seam every scoring call goes through: one tool-less
+// chat call on ep's model, through the client reg opens for it. Each ask's own
+// text carries the instruction, so the system prompt is empty and nothing is
+// said twice.
+func scoringAsk(opts scoreOptions, reg *clients, ep config.Endpoint) (score.Ask, error) {
+	client, err := reg.get(ep)
+	if err != nil {
+		return nil, err
+	}
+	// A key bound for a non-loopback http:// endpoint is said on stderr once
+	// and the call proceeds, as `build` says it: the key is what this
+	// invocation sends, and the registry is what read it.
+	if key, err := reg.key(ep); err == nil {
+		if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
+			fmt.Fprintln(opts.Stderr, line)
+		}
+	}
+	timeout := opts.callTimeout()
+	backoff := opts.Backoff
+	if backoff == nil {
+		backoff = scoreBackoff
+	}
+	return func(ctx context.Context, prompt string) (string, error) {
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		attempt, err := model.Chat(callCtx, client, ep.Model, "", prompt, backoff, nil)
+		if err != nil {
+			return "", err
+		}
+		// A reply cut off at the completion cap loses the lines it did not
+		// reach, and where the cut falls between lines the rest would parse as a
+		// clean under-charge. It fails the item for what it is: the charge list
+		// is incomplete, and an incomplete answer is never a judgement.
+		if attempt.FinishReason == model.FinishLength {
+			return "", errors.New("the reply reached the completion cap before it finished, so its charge list is incomplete")
+		}
+		return attempt.Reply, nil
+	}, nil
+}
+
+// runIDBody is the body of an id kb.MintID mints: the id body's length of its
+// alphabet, which holds no regular-expression metacharacter.
+var runIDBody = `[` + kb.HashAlphabet + `]{` + strconv.Itoa(kb.HashLen) + `}`
+
+// runIDRE is the shape of a real run's id — kb.MintID's own, the kind run then
+// the id body; a dry run's dry- id is not one, having nothing to resume.
+// --resume takes one of these and never a path: the value is
 // joined into the runs directory, and a directory under it is removed
 // recursively, so a name that reaches further than a run's own directory
 // reaches it too. TestScoreResumeRefusesAPath holds this to what MintID mints.
-var runIDRE = regexp.MustCompile(`^run-[` + kb.HashAlphabet + `]{` + strconv.Itoa(kb.HashLen) + `}$`)
+var runIDRE = regexp.MustCompile(`^run-` + runIDBody + `$`)
 
 // scoreWalkSet is the set a run walks: the --pass value, or both where the flag
 // named none. A default run and one naming both are the same run, its header
@@ -614,6 +649,11 @@ var (
 	scoreFlagStateDir     string
 )
 
+// scoreReplay is the development replay's entry: given the invoked command, the
+// verb its flags select in place of a run, or nil where they select none. It is
+// nil in a build that carries no replay.
+var scoreReplay func(cmd *cobra.Command) func(scoreOptions) (int, error)
+
 var scoreCmd = &cobra.Command{
 	Use:   "score",
 	Short: "ask the scoring model for the KB's rigor and bearing values, one item per call",
@@ -650,8 +690,12 @@ Every attempt is recorded under <state-dir>/score/<run>/: run.yaml names the
 run, the set it walks and the digest of the ask its judgements answer,
 ledger.jsonl holds a line per attempt with the charges a reply recorded, the
 reply itself where it parsed, the value it prices to, the model and the prompt's
-digest, and items.jsonl lists the set. --dry-run writes those records of the
-set, asks nothing, writes no KB and cannot be resumed. --resume continues a run,
+digest, captures.jsonl holds each call made — the closed text, the prompt sent
+and the reply returned, a failed attempt's included — and items.jsonl lists the
+set. A run's id is run-<id>, a --dry-run's dry-<id>; the newest 16 runs of each
+kind are kept, and a run's start removes the older ones of its kind whole.
+--dry-run writes the run's records of the set, asks nothing, writes no KB and
+cannot be resumed. --resume continues a real run,
 skipping every item it already landed and re-asking the ones it did not; a fresh
 run asks everything again. --limit stops after that many items, and the result
 carries the command that continues the run.
@@ -673,7 +717,13 @@ is one YAML document on stdout.`,
 		opts.Timeout = scoreFlagTimeout
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		code, err := runScore(scoreOptions{providerOptions: opts, Ctx: ctx, Pass: scoreFlagPass, Limit: scoreFlagLimit,
+		verb := runScore
+		if scoreReplay != nil {
+			if replay := scoreReplay(cmd); replay != nil {
+				verb = replay
+			}
+		}
+		code, err := verb(scoreOptions{providerOptions: opts, Ctx: ctx, Pass: scoreFlagPass, Limit: scoreFlagLimit,
 			DryRun: scoreFlagDryRun, ScoringModel: scoreFlagScoringModel,
 			Resume: scoreFlagResume, StateDir: scoreFlagStateDir, ConfigDir: flagConfigDir, WorkDir: wd,
 			Stdout: cmd.OutOrStdout(), Logger: processLog.logger})
