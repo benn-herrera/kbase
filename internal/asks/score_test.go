@@ -153,6 +153,44 @@ func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 	}
 }
 
+// TestScoreSystemStatesTheChargeLineForm: the shared system fragment states the
+// answer's form once — an id field, the colon score's parse cuts on, and a line
+// number or a range of them — so a model is told the shape every ask's parse
+// accepts. The id is a placeholder and never a sample: which ids a class takes
+// is TestScoreAsksNameTheirClasssIDs' claim, and the number is a line of the
+// text, not a charge.
+func TestScoreSystemStatesTheChargeLineForm(t *testing.T) {
+	text, err := load(fragmentFile(ScoreSystem))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var single, span int
+	matches := chargeLineRE.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		id, lines := m[1], m[2]
+		if !strings.HasPrefix(id, "<") || !strings.HasSuffix(id, ">") || strings.HasPrefix(id, "flt-") {
+			t.Errorf("the stated form names the id %q, want the placeholder an id stands in", id)
+		}
+		if strings.ContainsAny(lines, "-–—−") {
+			span++
+			continue
+		}
+		single++
+	}
+	if len(matches) == 0 || single == 0 {
+		t.Errorf("%s states no charge line `<id>: <line>`:\n%s", ScoreSystem, text)
+	}
+	if span == 0 {
+		t.Errorf("%s states no range `<id>: <line>-<line>`:\n%s", ScoreSystem, text)
+	}
+}
+
+// chargeLineRE is a charge line as a template states one: the id field, the
+// colon the parse cuts on, and one line number or a range of two — the shape
+// score.linesRE accepts, with the backticks the prose wraps an example in kept
+// out of the id field.
+var chargeLineRE = regexp.MustCompile("([^\\s`]+): ([0-9]+(?:[-–—−][0-9]+)?)")
+
 // scoreJudgement returns what a template's first judgement figure or word reads
 // as, and the text carrying it; both empty where the template carries none. A
 // decimal in [0,1] reads as a score, a weight or a threshold, and a percentage

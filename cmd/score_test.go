@@ -25,6 +25,7 @@ import (
 	"kbase/internal/kbload"
 	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
 )
 
@@ -148,19 +149,19 @@ func scoreDrive(t *testing.T, repo, state string, opts scoreOptions, newClient n
 }
 
 // scoring is a scripted provider serving one reply per call, in order.
-func scoring(replies ...string) *model.MockClient {
+func scoring(replies ...string) *modeltest.MockClient {
 	responses := make([]model.Response, len(replies))
 	for i, reply := range replies {
 		responses[i] = model.Response{Content: reply}
 	}
-	return model.NewScriptedMockPerConsult(responses)
+	return modeltest.NewScriptedMockPerConsult(responses)
 }
 
 // cancelOnSecond is a provider that cancels the run's context as the second
 // call arrives: the first item's question is answered and lands, and the item
 // after it meets a cancelled context, which is where the walk stops.
 type cancelOnSecond struct {
-	*model.MockClient
+	*modeltest.MockClient
 	cancel context.CancelFunc
 	calls  int
 }
@@ -350,7 +351,7 @@ func TestScoreRunLandsAndResumes(t *testing.T) {
 
 	// A resume of a finished run asks nothing: the client errors on any call,
 	// and the run reports done with no call made.
-	unreachable := model.NewScriptedMockPerConsult(nil)
+	unreachable := modeltest.NewScriptedMockPerConsult(nil)
 	unreachable.SetError(errors.New("the run asked a provider it was told is unreachable"))
 	unreachable.RecordCalls = true
 	run, _ := bearing.doc.Values["run"].(string)
@@ -567,7 +568,7 @@ func TestScoreResumesAMixedRun(t *testing.T) {
 	}
 	// The header gates the set: a resume naming one pass over a both-pass run is
 	// refused, as one over another KB root is, before the walk asks anything.
-	unreachable := model.NewScriptedMockPerConsult(nil)
+	unreachable := modeltest.NewScriptedMockPerConsult(nil)
 	unreachable.SetError(errors.New("the refused resume asked a provider"))
 	unreachable.RecordCalls = true
 	refused := scoreIn(t, repo, state, scoreOptions{Resume: run, Pass: query.PassRigor}, func() model.Client { return unreachable })
@@ -618,7 +619,7 @@ func TestScoreResumeAppliesAnUpdate(t *testing.T) {
 	rewriteLine(t, filepath.Join(dir, "ledger.jsonl"), func(rec map[string]any) { rec["value"] = "0.30" })
 	header := moveTheAsk(t, filepath.Join(dir, "run.yaml"))
 
-	unreachable := model.NewScriptedMockPerConsult(nil)
+	unreachable := modeltest.NewScriptedMockPerConsult(nil)
 	unreachable.SetError(errors.New("the resumed run asked a provider"))
 	unreachable.RecordCalls = true
 	again := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: run}, func() model.Client { return unreachable })

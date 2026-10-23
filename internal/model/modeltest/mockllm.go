@@ -1,23 +1,38 @@
-package model
+// Package modeltest is the test substrate every stage that consults a model
+// runs against: a client that answers from a script, injects a failure, and
+// simulates a stream whose chunk boundaries the test chooses.
+//
+// It is its own package because it is test support: nothing the appliance
+// ships imports it, and keeping it out of model is what keeps the production
+// API free of a type no product code may name.
+package modeltest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
 	"time"
+
+	"kbase/internal/model"
 )
 
-// MockClient implements Client without crossing the network. It is the test
-// substrate for every stage that consults a model: scripted responses,
+// ErrMockExhausted is returned by a scripted MockClient when its response
+// queue has been drained. Tests check for this with errors.Is.
+var ErrMockExhausted = errors.New("modeltest: mock client exhausted")
+
+// MockClient implements model.Client without crossing the network. It is the
+// test substrate for every stage that consults a model: scripted responses,
 // injected failures, and a streaming simulation whose chunk boundaries the
 // test chooses.
 //
 // MockClient's own methods are safe for concurrent use, so a fan-out stage
 // under test may share one MockClient across worker goroutines. The
 // StreamReader a ConsultStream returns is NOT: like the production reader
-// it belongs to one goroutine (see StreamReader). Each worker gets its own.
+// it belongs to one goroutine (see model.StreamReader). Each worker gets its
+// own.
 type MockClient struct {
 	mu sync.Mutex
 
@@ -34,10 +49,10 @@ type MockClient struct {
 	// tests that must observe two *distinct* consults, e.g. a
 	// reject-and-retry path where the retry must see a different
 	// response. A Consult past the queue end returns ErrMockExhausted.
-	scripted   bool     // true once the mock is in scripted mode
-	current    Response // single-slot mode: the response every Consult serves
-	hasCurrent bool     // single-slot mode: SetResponse (or ctor) installed a response
-	queue      []Response
+	scripted   bool           // true once the mock is in scripted mode
+	current    model.Response // single-slot mode: the response every Consult serves
+	hasCurrent bool           // single-slot mode: SetResponse (or ctor) installed a response
+	queue      []model.Response
 	step       int
 	perConsult bool
 
@@ -48,7 +63,7 @@ type MockClient struct {
 	// Models is returned verbatim from ListModels. Settable at
 	// construction or directly on the returned *MockClient. nil →
 	// ListModels returns an empty slice.
-	Models []ModelInfo
+	Models []model.ModelInfo
 
 	calls []MockCall
 
@@ -66,7 +81,7 @@ type MockClient struct {
 	// DecisionAnswers scripts Decision: served in order, one per call,
 	// ErrMockExhausted past the end. Settable directly or via
 	// NewScriptedMockWithDecisions.
-	decisionAnswers []DecisionAnswer
+	decisionAnswers []model.DecisionAnswer
 	decisionStep    int
 }
 
@@ -74,8 +89,8 @@ type MockClient struct {
 // `answers` in order, one per call; a call past the end yields
 // ErrMockExhausted. The consult scripting of the other constructors is
 // unaffected.
-func NewScriptedMockWithDecisions(answers []DecisionAnswer) *MockClient {
-	q := make([]DecisionAnswer, len(answers))
+func NewScriptedMockWithDecisions(answers []model.DecisionAnswer) *MockClient {
+	q := make([]model.DecisionAnswer, len(answers))
 	copy(q, answers)
 	return &MockClient{scripted: true, decisionAnswers: q}
 }
@@ -86,8 +101,8 @@ const DefaultMockChunks = 8
 
 // MockCall records one Consult invocation for test assertions.
 type MockCall struct {
-	Request  Request
-	Response Response
+	Request  model.Request
+	Response model.Response
 	Err      error
 	At       time.Time
 }
@@ -104,14 +119,14 @@ type MockCall struct {
 // any SetResponse yields ErrMockExhausted.
 //
 // models is returned verbatim from ListModels; nil yields an empty list.
-func NewScriptedMock(responses []Response, models []ModelInfo) *MockClient {
+func NewScriptedMock(responses []model.Response, models []model.ModelInfo) *MockClient {
 	m := &MockClient{scripted: true}
 	if len(responses) > 0 {
 		m.current = responses[0]
 		m.hasCurrent = true
 	}
 	if models != nil {
-		m.Models = make([]ModelInfo, len(models))
+		m.Models = make([]model.ModelInfo, len(models))
 		copy(m.Models, models)
 	}
 	return m
@@ -122,23 +137,23 @@ func NewScriptedMock(responses []Response, models []ModelInfo) *MockClient {
 // for tests that must observe two distinct consults — a reject-and-retry
 // path, where the retry must see a different response than the rejected
 // first one. A Consult past the end yields ErrMockExhausted.
-func NewScriptedMockPerConsult(responses []Response) *MockClient {
-	q := make([]Response, len(responses))
+func NewScriptedMockPerConsult(responses []model.Response) *MockClient {
+	q := make([]model.Response, len(responses))
 	copy(q, responses)
 	return &MockClient{scripted: true, queue: q, perConsult: true}
 }
 
 // Consult returns the next response from this mock, or the error installed
 // by SetError.
-func (m *MockClient) Consult(ctx context.Context, req Request) (Response, error) {
+func (m *MockClient) Consult(ctx context.Context, req model.Request) (model.Response, error) {
 	if err := ctx.Err(); err != nil {
-		return Response{}, err
+		return model.Response{}, err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var resp Response
+	var resp model.Response
 	var err error
 	switch {
 	case m.err != nil:
@@ -157,7 +172,7 @@ func (m *MockClient) Consult(ctx context.Context, req Request) (Response, error)
 			err = ErrMockExhausted
 		}
 	default:
-		err = fmt.Errorf("model: MockClient constructed without a mode")
+		err = fmt.Errorf("modeltest: MockClient constructed without a mode")
 	}
 
 	if m.RecordCalls {
@@ -179,7 +194,7 @@ func (m *MockClient) Consult(ctx context.Context, req Request) (Response, error)
 //
 // All non-content fields (FinishReason, Usage) attach to the final chunk
 // so iteration order matches a real provider.
-func (m *MockClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
+func (m *MockClient) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	resp, err := m.Consult(ctx, req)
 	if err != nil {
 		return nil, err
@@ -205,7 +220,7 @@ func (m *MockClient) SetMockChunks(n int) {
 // SetResponse installs the current response a single-slot scripted mock
 // serves; every subsequent Consult returns it. Has no effect on a
 // per-consult-queue mock.
-func (m *MockClient) SetResponse(resp Response) {
+func (m *MockClient) SetResponse(resp model.Response) {
 	m.mu.Lock()
 	if m.scripted && !m.perConsult {
 		m.current = resp
@@ -227,7 +242,7 @@ func (m *MockClient) SetError(err error) {
 
 // ListModels returns a copy of the Models field, or an empty slice if
 // none are configured. ctx is honored for cancellation.
-func (m *MockClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
+func (m *MockClient) ListModels(ctx context.Context) ([]model.ModelInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -237,9 +252,9 @@ func (m *MockClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, m.err
 	}
 	if m.Models == nil {
-		return []ModelInfo{}, nil
+		return []model.ModelInfo{}, nil
 	}
-	out := make([]ModelInfo, len(m.Models))
+	out := make([]model.ModelInfo, len(m.Models))
 	copy(out, m.Models)
 	return out, nil
 }
@@ -258,21 +273,21 @@ func (m *MockClient) Calls() []MockCall {
 // one per Decision call. The injected error of SetError pre-empts it;
 // a call past the answers' end yields ErrMockExhausted, matching the
 // per-consult queue's semantics.
-func (m *MockClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (m *MockClient) Decision(ctx context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
 	if err := ctx.Err(); err != nil {
-		return DecisionResponse{}, err
+		return model.DecisionResponse{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
-		return DecisionResponse{}, m.err
+		return model.DecisionResponse{}, m.err
 	}
 	if m.decisionStep >= len(m.decisionAnswers) {
-		return DecisionResponse{}, ErrMockExhausted
+		return model.DecisionResponse{}, ErrMockExhausted
 	}
-	resp := DecisionResponse{
-		Answers: []DecisionAnswer{m.decisionAnswers[m.decisionStep]},
-		Usage:   Usage{PromptTokens: 10, CompletionTokens: 1},
+	resp := model.DecisionResponse{
+		Answers: []model.DecisionAnswer{m.decisionAnswers[m.decisionStep]},
+		Usage:   model.Usage{PromptTokens: 10, CompletionTokens: 1},
 	}
 	m.decisionStep++
 	return resp, nil
@@ -288,11 +303,11 @@ type mockStreamReader struct {
 	ctx    context.Context
 	pieces []string
 	idx    int
-	full   Response
+	full   model.Response
 	closed bool
 }
 
-func newMockStreamReader(ctx context.Context, resp Response, chunks int) *mockStreamReader {
+func newMockStreamReader(ctx context.Context, resp model.Response, chunks int) *mockStreamReader {
 	if chunks < 1 {
 		chunks = 1
 	}
@@ -303,17 +318,17 @@ func newMockStreamReader(ctx context.Context, resp Response, chunks int) *mockSt
 	}
 }
 
-func (r *mockStreamReader) Next() (Chunk, error) {
+func (r *mockStreamReader) Next() (model.Chunk, error) {
 	if r.closed {
-		return Chunk{}, io.EOF
+		return model.Chunk{}, io.EOF
 	}
 	if err := r.ctx.Err(); err != nil {
-		return Chunk{}, err
+		return model.Chunk{}, err
 	}
 	if r.idx >= len(r.pieces) {
-		return Chunk{}, io.EOF
+		return model.Chunk{}, io.EOF
 	}
-	chunk := Chunk{Content: r.pieces[r.idx]}
+	chunk := model.Chunk{Content: r.pieces[r.idx]}
 	r.idx++
 	if r.idx == len(r.pieces) {
 		// Final chunk carries the non-content fields.
@@ -323,15 +338,15 @@ func (r *mockStreamReader) Next() (Chunk, error) {
 	return chunk, nil
 }
 
-func (r *mockStreamReader) Final() Response {
+func (r *mockStreamReader) Final() model.Response {
 	// The mock knows the full response from the start; expose only what
 	// has been consumed. (Real providers compute Final() from observed
 	// deltas; the mock cheats but the contract is the same.)
 	if r.idx == 0 {
-		return Response{}
+		return model.Response{}
 	}
 	consumed := strings.Join(r.pieces[:r.idx], "")
-	out := Response{Content: consumed}
+	out := model.Response{Content: consumed}
 	if r.idx == len(r.pieces) {
 		out.FinishReason = r.full.FinishReason
 		out.Usage = r.full.Usage

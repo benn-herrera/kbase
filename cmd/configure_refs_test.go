@@ -8,6 +8,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // TestRunConfigureRewritesAnOldGrammarFile is criterion 9: one dialed call
@@ -44,7 +45,7 @@ readerConcurrency = 2
 	opts.WriteDir = dir
 	opts.Provider = "solo"
 	opts.ModelMap = refs(decisionID, textID, scoringID)
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
+	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
 	if got.code != 0 || got.doc.Outcome != "done" {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
@@ -80,7 +81,7 @@ scoring = "solo/clef-scoring"
 	opts := soloOpts()
 	opts.WriteDir = dir
 	opts.ModelMap = []string{"decision=" + ref(decisionID) + ",text=" + ref(textID)}
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
+	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
 	if got.code != 0 || got.doc.Outcome != "unchanged" || len(anyStrings(got.doc.Values["written"])) != 0 {
 		t.Fatalf("a run that leaves scoring standing = %s, written %v; want unchanged, nothing written",
 			got.doc.Outcome, got.doc.Values["written"])
@@ -103,7 +104,7 @@ scoring = "solo/clef-scoring"
 	refuse := soloOpts()
 	refuse.WriteDir = bare
 	refuse.ModelMap = opts.ModelMap
-	got = runConfig(t, refuse, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
+	got = runConfig(t, refuse, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
 	items := got.doc.items("refusals")
 	if got.code != 1 || got.doc.Outcome != "refused" || len(items) != 1 ||
 		items[0]["key"] != "models.scoring" || items[0]["check"] != checkDetect {
@@ -130,7 +131,7 @@ func TestRunConfigureDialsEachProviderItsReferencesName(t *testing.T) {
 	var dialled []string
 	opts.NewClient = func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e.BaseURL)
-		return model.NewScriptedMock(nil, catalogue("d", "t", "s"))
+		return modeltest.NewScriptedMock(nil, catalogue("d", "t", "s"))
 	}
 	got := runConfig(t, opts, nil)
 	if got.code != 0 || got.doc.Outcome != "done" {

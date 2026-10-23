@@ -13,6 +13,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // Model ids the fixtures configure with — one per category, in the provider
@@ -73,7 +74,7 @@ func (r configureResult) config(t *testing.T) (config.Config, bool) {
 // runConfig invokes runConfigure against a fresh temp configuration directory,
 // substituting a client factory that serves ids from a MockClient — no
 // test reaches the network, a real home, or the process streams.
-func runConfig(t *testing.T, opts configureOptions, client *model.MockClient) configureResult {
+func runConfig(t *testing.T, opts configureOptions, client *modeltest.MockClient) configureResult {
 	t.Helper()
 	if opts.WriteDir == "" {
 		opts.WriteDir = t.TempDir()
@@ -120,7 +121,7 @@ func anyStrings(v any) []string {
 func TestRunConfigureRefusesUnassignedCategories(t *testing.T) {
 	ids := []string{"text-embedding-3-large", decisionID, textID, "mistral-small-3"}
 
-	got := runConfig(t, soloOpts(), model.NewScriptedMock(nil, catalogue(ids...)))
+	got := runConfig(t, soloOpts(), modeltest.NewScriptedMock(nil, catalogue(ids...)))
 	items := got.doc.items("refusals")
 	if got.code != 1 || len(items) != len(modelCategories) {
 		t.Fatalf("no --model-map: exit %d, refusals %v: want one item per category", got.code, items)
@@ -138,7 +139,7 @@ func TestRunConfigureRefusesUnassignedCategories(t *testing.T) {
 
 	opts := soloOpts()
 	opts.ModelMap = []string{"decision=" + ref(decisionID)}
-	partial := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(ids...)))
+	partial := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(ids...)))
 	items = partial.doc.items("refusals")
 	if len(items) != 2 || items[0]["key"] != "models.text" || items[1]["key"] != "models.scoring" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), sortedStrings(ids)) {
@@ -182,7 +183,7 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := soloOpts()
 			opts.ModelMap = tt.modelMap
-			got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(tt.ids...)))
+			got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(tt.ids...)))
 
 			if got.code != 0 || got.doc.Outcome != "done" {
 				t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
@@ -217,7 +218,7 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 				t.Error("API key leaked into stderr")
 			}
 			again := runConfig(t, configureOptions{providerOptions: providerOptions{Providers: soloPool(), WriteDir: got.dir}, ModelMap: tt.modelMap},
-				model.NewScriptedMock(nil, catalogue(tt.ids...)))
+				modeltest.NewScriptedMock(nil, catalogue(tt.ids...)))
 			if again.code != 0 || again.doc.Outcome != "unchanged" || len(anyStrings(again.doc.Values["written"])) != 0 {
 				t.Errorf("a second configure to the same values = %s, written %v; want unchanged with nothing written", again.doc.Outcome, again.doc.Values["written"])
 			}
@@ -232,7 +233,7 @@ func TestRunConfigureModelMapAssignsBoth(t *testing.T) {
 func TestRunConfigureUnlistedMappedIDWarns(t *testing.T) {
 	opts := soloOpts()
 	opts.ModelMap = []string{"decision=" + ref("clef-preview"), "text=" + ref(textID), "scoring=" + ref(scoringID)}
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(textID, scoringID)))
+	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(textID, scoringID)))
 
 	if got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
@@ -249,7 +250,7 @@ func TestRunConfigureCreatesConfigDir(t *testing.T) {
 	opts := soloOpts()
 	opts.WriteDir = dir
 	opts.ModelMap = refs(decisionID, textID, scoringID)
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
+	if got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 	if _, err := os.Stat(config.ConfigPath(dir)); err != nil {
@@ -271,7 +272,7 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 	opts := soloOpts()
 	opts.WriteDir = dir
 	opts.ModelMap = refs(decisionID, textID, scoringID)
-	if got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
+	if got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))); got.code != 0 {
 		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
 	}
 
@@ -298,7 +299,7 @@ func TestRunConfigureKeepsHandEdits(t *testing.T) {
 // previous configuration outliving a failed run is the whole reason the
 // write is the last step.
 func TestRunConfigureListFailure(t *testing.T) {
-	client := model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+	client := modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
 	client.SetError(errors.New("http 503: service unavailable"))
 
 	opts := soloOpts()
@@ -323,7 +324,7 @@ func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
 		opts.ModelMap = []string{value}
 		opts.NewClient = func(model.Endpoint) model.Client {
 			t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
-			return model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+			return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
 		}
 
 		got := runConfig(t, opts, nil)
@@ -423,7 +424,7 @@ func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
 	opts.ModelMap = refs(decisionID, textID, scoringID)
 	opts.NewClient = func(model.Endpoint) model.Client {
 		dialed = true
-		return model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
 	}
 	got := runConfig(t, opts, nil)
 
@@ -492,7 +493,7 @@ func TestRunConfigureCreateDialedRefusalWritesNothing(t *testing.T) {
 	opts.Provider = "typo"
 	opts.ModelMap = refs(decisionID, textID, scoringID)
 
-	got := runConfig(t, opts, model.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
+	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
 	item := got.refusal(t)
 	if item["check"] != checkProvider || item["key"] != "--provider" || item["path"] != config.ProvidersPath(dir) ||
 		item["remedy"] != "kbase configure --create" {

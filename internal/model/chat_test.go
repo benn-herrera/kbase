@@ -1,4 +1,4 @@
-package model
+package model_test
 
 import (
 	"context"
@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // sseServer answers each request with the next body of bodies, the last one
@@ -77,20 +80,20 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 		ok          bool
 		wantOutcome string
 	}{
-		{"answered at once", []string{sseAnswered}, 1, true, ChatOK},
-		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true, ChatOK},
-		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true, ChatOK},
-		{"never complete", []string{sseShortOfDone}, ChatAttempts, false, ChatTransportFailure},
+		{"answered at once", []string{sseAnswered}, 1, true, model.ChatOK},
+		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true, model.ChatOK},
+		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true, model.ChatOK},
+		{"never complete", []string{sseShortOfDone}, model.ChatAttempts, false, model.ChatTransportFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.bodies...)
 			var observed []string
-			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
-				func(a ChatAttempt) { observed = append(observed, a.Outcome) })
-			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrChatIncomplete)) {
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+				func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, model.ErrChatIncomplete)) {
 				t.Fatalf("Chat = %+v, %v; want ok %t", got, err, tc.ok)
 			}
-			if tc.ok && (got.Reply != "A" || got.Outcome != ChatOK || got.Usage.PromptTokens != 40) {
+			if tc.ok && (got.Reply != "A" || got.Outcome != model.ChatOK || got.Usage.PromptTokens != 40) {
 				t.Errorf("Chat = %+v", got)
 			}
 			if got.Outcome != tc.wantOutcome {
@@ -119,19 +122,19 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusBadRequest)
 
 	var observed []string
-	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
-		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
-	if !errors.Is(err, ErrChatIncomplete) {
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+		func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
-	if got.Outcome != ChatProviderRefused {
-		t.Errorf("outcome = %q, want %q", got.Outcome, ChatProviderRefused)
+	if got.Outcome != model.ChatProviderRefused {
+		t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatProviderRefused)
 	}
 	for _, reason := range []string{got.Error, err.Error()} {
 		if !strings.Contains(reason, "http 400") || !strings.Contains(reason, "unknown model") {
 			t.Errorf("reason = %q, want the status and the provider's own words", reason)
 		}
-		if strings.Contains(reason, ChatTransportFailure) {
+		if strings.Contains(reason, model.ChatTransportFailure) {
 			t.Errorf("reason = %q, want no transport failure where the provider answered", reason)
 		}
 	}
@@ -142,8 +145,8 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 		t.Fatalf("%d requests, %d attempts observed; want one: a refusal is not re-issued", n, len(observed))
 	}
 	for _, o := range observed {
-		if o != ChatProviderRefused {
-			t.Errorf("an attempt = %q, want %q", o, ChatProviderRefused)
+		if o != model.ChatProviderRefused {
+			t.Errorf("an attempt = %q, want %q", o, model.ChatProviderRefused)
 		}
 	}
 }
@@ -159,20 +162,20 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 		{http.StatusBadRequest, 1},
 		{http.StatusUnauthorized, 1},
 		{http.StatusNotFound, 1},
-		{http.StatusTooManyRequests, ChatAttempts},
-		{http.StatusServiceUnavailable, ChatAttempts},
+		{http.StatusTooManyRequests, model.ChatAttempts},
+		{http.StatusServiceUnavailable, model.ChatAttempts},
 	} {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			srv, requests := statusServer(t, tc.code)
 
-			var observed []ChatAttempt
-			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
-				func(a ChatAttempt) { observed = append(observed, a) })
-			if !errors.Is(err, ErrChatIncomplete) {
+			var observed []model.ChatAttempt
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+				func(a model.ChatAttempt) { observed = append(observed, a) })
+			if !errors.Is(err, model.ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
 			}
-			if got.Outcome != ChatProviderRefused {
-				t.Errorf("outcome = %q, want %q", got.Outcome, ChatProviderRefused)
+			if got.Outcome != model.ChatProviderRefused {
+				t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatProviderRefused)
 			}
 			for _, reason := range []string{got.Error, err.Error()} {
 				if want := fmt.Sprintf("http %d", tc.code); !strings.Contains(reason, want) {
@@ -188,8 +191,8 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 				}
 				return
 			}
-			if got.Attempt != ChatAttempts {
-				t.Errorf("attempt = %d, want the last of %d", got.Attempt, ChatAttempts)
+			if got.Attempt != model.ChatAttempts {
+				t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
 			}
 		})
 	}
@@ -202,12 +205,12 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
 	srv, _ := sseServer(t, sseServedNothing)
 
-	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
-	if !errors.Is(err, ErrChatIncomplete) {
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
-	if got.Outcome != ChatServedNothing || got.Error != "" {
-		t.Fatalf("last attempt = %+v, want an outcome of %q and no error text", got, ChatServedNothing)
+	if got.Outcome != model.ChatServedNothing || got.Error != "" {
+		t.Fatalf("last attempt = %+v, want an outcome of %q and no error text", got, model.ChatServedNothing)
 	}
 	if want := "the last ending " + got.Outcome; !strings.HasSuffix(err.Error(), want) {
 		t.Errorf("reason = %q, want it to end %q", err, want)
@@ -224,22 +227,22 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	srv.Close()
 
 	var observed []string
-	got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
-		func(a ChatAttempt) { observed = append(observed, a.Outcome) })
-	if !errors.Is(err, ErrChatIncomplete) {
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
+		func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
-	if got.Outcome != ChatTransportFailure {
-		t.Errorf("outcome = %q, want %q", got.Outcome, ChatTransportFailure)
+	if got.Outcome != model.ChatTransportFailure {
+		t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatTransportFailure)
 	}
-	if len(observed) != ChatAttempts {
-		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), ChatAttempts)
+	if len(observed) != model.ChatAttempts {
+		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), model.ChatAttempts)
 	}
 }
 
 func TestChatRequestShape(t *testing.T) {
 	srv, seen := sseServer(t, sseAnswered)
-	if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
+	if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var body struct {
@@ -299,7 +302,7 @@ func TestChatRecordsReasoned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.sse)
-			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
@@ -340,7 +343,7 @@ func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, sseAnswered)
-			if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
+			if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			raw := string(seen()[0])
@@ -356,7 +359,7 @@ func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
 func TestChatStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Chat(ctx, NewScriptedMock([]Response{{Content: "A"}}, nil), "m", "s", "p", nil, nil); !errors.Is(err, context.Canceled) {
+	if _, err := model.Chat(ctx, modeltest.NewScriptedMock([]model.Response{{Content: "A"}}, nil), "m", "s", "p", nil, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat on a cancelled context = %v", err)
 	}
 }
@@ -366,19 +369,19 @@ func TestChatStopsOnCancel(t *testing.T) {
 func TestChatBacksOffBetweenReissues(t *testing.T) {
 	srv, seen := sseServer(t, sseShortOfDone)
 	started := time.Now()
-	if _, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p",
-		[]time.Duration{30 * time.Millisecond}, nil); !errors.Is(err, ErrChatIncomplete) {
+	if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "s", "p",
+		[]time.Duration{30 * time.Millisecond}, nil); !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want incomplete", err)
 	}
-	if took := time.Since(started); len(seen()) != ChatAttempts || took < time.Duration(ChatAttempts-1)*30*time.Millisecond {
-		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, ChatAttempts)
+	if took := time.Since(started); len(seen()) != model.ChatAttempts || took < time.Duration(model.ChatAttempts-1)*30*time.Millisecond {
+		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, model.ChatAttempts)
 	}
 	// The pause fits the budget (there is none), so a cancel arriving during
 	// it is what ends the call.
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	defer cancel()
-	if _, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat cancelled in its pause = %v", err)
 	}
 }
@@ -394,15 +397,15 @@ func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	got, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+	got, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
 		[]time.Duration{5 * time.Second, 30 * time.Second}, nil)
-	if !errors.Is(err, ErrChatIncomplete) {
+	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("reason = %q, want the attempts it made rather than the deadline", err)
 	}
-	if !strings.Contains(err.Error(), "1 attempt") || !strings.Contains(err.Error(), ChatProviderRefused) {
+	if !strings.Contains(err.Error(), "1 attempt") || !strings.Contains(err.Error(), model.ChatProviderRefused) {
 		t.Errorf("reason = %q, want the one attempt it made and how it ended", err)
 	}
 	if got.Attempt != 1 {
@@ -418,22 +421,22 @@ func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
 
 // TestChatSpendsItsBudgetOnAttempts: a deadline the pauses fit is spent on
 // attempts, not on giving up early. A 30 s deadline with a short injected
-// backoff still puts the call on the wire ChatAttempts times.
+// backoff still puts the call on the wire model.ChatAttempts times.
 func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusServiceUnavailable)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	got, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+	got, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
 		[]time.Duration{time.Millisecond, time.Millisecond}, nil)
-	if !errors.Is(err, ErrChatIncomplete) {
+	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
-	if got.Attempt != ChatAttempts {
-		t.Errorf("attempt = %d, want the last of %d", got.Attempt, ChatAttempts)
+	if got.Attempt != model.ChatAttempts {
+		t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
 	}
-	if n := requests(); n != ChatAttempts {
-		t.Errorf("%d requests, want %d", n, ChatAttempts)
+	if n := requests(); n != model.ChatAttempts {
+		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
 	}
 }
 
@@ -447,16 +450,16 @@ func TestChatTakesAPauseTheDeadlineCovers(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	if _, err := Chat(ctx, NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
-		[]time.Duration{pause}, nil); !errors.Is(err, ErrChatIncomplete) {
+	if _, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{pause}, nil); !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
 	took := time.Since(started)
-	if n := requests(); n != ChatAttempts {
-		t.Errorf("%d requests, want %d", n, ChatAttempts)
+	if n := requests(); n != model.ChatAttempts {
+		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
 	}
-	if want := time.Duration(ChatAttempts-1) * pause; took < want || took >= time.Second {
-		t.Errorf("took %v, want the %d pauses it waited out inside the deadline", took, ChatAttempts-1)
+	if want := time.Duration(model.ChatAttempts-1) * pause; took < want || took >= time.Second {
+		t.Errorf("took %v, want the %d pauses it waited out inside the deadline", took, model.ChatAttempts-1)
 	}
 }
 
@@ -481,7 +484,7 @@ func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, _ := sseServer(t, tc.sse)
-			got, err := Chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}

@@ -1,4 +1,4 @@
-package model
+package model_test
 
 import (
 	"context"
@@ -6,21 +6,24 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // TestMockScriptedServesCurrentResponse: a single-slot scripted mock
 // serves whatever response SetResponse last installed.
 func TestMockScriptedServesCurrentResponse(t *testing.T) {
-	scripted := []Response{
+	scripted := []model.Response{
 		{Content: "first", FinishReason: "stop"},
 		{Content: "second", FinishReason: "stop"},
 		{Content: "third", FinishReason: "stop"},
 	}
-	m := NewScriptedMock(nil, nil)
+	m := modeltest.NewScriptedMock(nil, nil)
 
 	for i, want := range scripted {
 		m.SetResponse(want)
-		got, err := m.Consult(context.Background(), Request{})
+		got, err := m.Consult(context.Background(), model.Request{})
 		if err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}
@@ -33,10 +36,10 @@ func TestMockScriptedServesCurrentResponse(t *testing.T) {
 // TestMockScriptedReServesWithinStep: every consult after one SetResponse
 // serves that one installed response — the retry case.
 func TestMockScriptedReServesWithinStep(t *testing.T) {
-	m := NewScriptedMock(nil, nil)
-	m.SetResponse(Response{Content: "step1"})
+	m := modeltest.NewScriptedMock(nil, nil)
+	m.SetResponse(model.Response{Content: "step1"})
 	for c := 0; c < 3; c++ {
-		got, err := m.Consult(context.Background(), Request{})
+		got, err := m.Consult(context.Background(), model.Request{})
 		if err != nil {
 			t.Fatalf("consult %d: %v", c, err)
 		}
@@ -48,12 +51,12 @@ func TestMockScriptedReServesWithinStep(t *testing.T) {
 
 // TestMockScriptedExhausted: a single-slot scripted mock with no
 // response installed (neither via the constructor nor SetResponse)
-// yields ErrMockExhausted on Consult.
+// yields modeltest.ErrMockExhausted on Consult.
 func TestMockScriptedExhausted(t *testing.T) {
-	m := NewScriptedMock(nil, nil)
-	_, err := m.Consult(context.Background(), Request{})
-	if !errors.Is(err, ErrMockExhausted) {
-		t.Fatalf("expected ErrMockExhausted with no response installed, got %v", err)
+	m := modeltest.NewScriptedMock(nil, nil)
+	_, err := m.Consult(context.Background(), model.Request{})
+	if !errors.Is(err, modeltest.ErrMockExhausted) {
+		t.Fatalf("expected modeltest.ErrMockExhausted with no response installed, got %v", err)
 	}
 }
 
@@ -61,9 +64,9 @@ func TestMockScriptedExhausted(t *testing.T) {
 // Consult and reports exhaustion past the end — the shape a
 // reject-and-retry test needs (the retry must see a different response).
 func TestMockPerConsultWalksQueue(t *testing.T) {
-	m := NewScriptedMockPerConsult([]Response{{Content: "a"}, {Content: "b"}})
+	m := modeltest.NewScriptedMockPerConsult([]model.Response{{Content: "a"}, {Content: "b"}})
 	for _, want := range []string{"a", "b"} {
-		got, err := m.Consult(context.Background(), Request{})
+		got, err := m.Consult(context.Background(), model.Request{})
 		if err != nil {
 			t.Fatalf("consult: %v", err)
 		}
@@ -71,8 +74,8 @@ func TestMockPerConsultWalksQueue(t *testing.T) {
 			t.Errorf("content: got %q, want %q", got.Content, want)
 		}
 	}
-	if _, err := m.Consult(context.Background(), Request{}); !errors.Is(err, ErrMockExhausted) {
-		t.Errorf("past queue end: got %v, want ErrMockExhausted", err)
+	if _, err := m.Consult(context.Background(), model.Request{}); !errors.Is(err, modeltest.ErrMockExhausted) {
+		t.Errorf("past queue end: got %v, want modeltest.ErrMockExhausted", err)
 	}
 }
 
@@ -80,14 +83,14 @@ func TestMockPerConsultWalksQueue(t *testing.T) {
 // response on every entry point, and clearing it restores service.
 func TestMockErrorInjection(t *testing.T) {
 	injected := errors.New("provider unavailable")
-	m := NewScriptedMock([]Response{{Content: "ok"}}, []ModelInfo{{ID: "m"}})
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "ok"}}, []model.ModelInfo{{ID: "m"}})
 	m.SetError(injected)
 
 	ctx := context.Background()
-	if _, err := m.Consult(ctx, Request{}); !errors.Is(err, injected) {
+	if _, err := m.Consult(ctx, model.Request{}); !errors.Is(err, injected) {
 		t.Errorf("Consult: got %v, want the injected error", err)
 	}
-	if _, err := m.ConsultStream(ctx, Request{}); !errors.Is(err, injected) {
+	if _, err := m.ConsultStream(ctx, model.Request{}); !errors.Is(err, injected) {
 		t.Errorf("ConsultStream: got %v, want the injected error", err)
 	}
 	if _, err := m.ListModels(ctx); !errors.Is(err, injected) {
@@ -95,7 +98,7 @@ func TestMockErrorInjection(t *testing.T) {
 	}
 
 	m.SetError(nil)
-	got, err := m.Consult(ctx, Request{})
+	got, err := m.Consult(ctx, model.Request{})
 	if err != nil {
 		t.Fatalf("after clearing: %v", err)
 	}
@@ -105,18 +108,18 @@ func TestMockErrorInjection(t *testing.T) {
 }
 
 // TestMockCallsAccumulates: every Consult invocation is recorded,
-// including a call past the queue end that yields ErrMockExhausted. A
+// including a call past the queue end that yields modeltest.ErrMockExhausted. A
 // per-consult-queue mock has queue-exhaustion semantics, so it is the
 // natural vehicle for this assertion.
 func TestMockCallsAccumulates(t *testing.T) {
-	m := NewScriptedMockPerConsult([]Response{
+	m := modeltest.NewScriptedMockPerConsult([]model.Response{
 		{Content: "a"},
 		{Content: "b"},
 		{Content: "c"},
 	})
 	m.RecordCalls = true
 	for i := 0; i < 4; i++ {
-		_, _ = m.Consult(context.Background(), Request{Model: "test"})
+		_, _ = m.Consult(context.Background(), model.Request{Model: "test"})
 	}
 	calls := m.Calls()
 	if len(calls) != 4 {
@@ -128,16 +131,16 @@ func TestMockCallsAccumulates(t *testing.T) {
 	if calls[0].Request.Model != "test" {
 		t.Errorf("first call request model: got %q, want test", calls[0].Request.Model)
 	}
-	if !errors.Is(calls[3].Err, ErrMockExhausted) {
-		t.Errorf("fourth call err: got %v, want ErrMockExhausted", calls[3].Err)
+	if !errors.Is(calls[3].Err, modeltest.ErrMockExhausted) {
+		t.Errorf("fourth call err: got %v, want modeltest.ErrMockExhausted", calls[3].Err)
 	}
 }
 
 // TestMockListModels: the configured listing comes back by value, and an
 // unconfigured mock reports an empty list rather than nil.
 func TestMockListModels(t *testing.T) {
-	want := []ModelInfo{{ID: "gemma-4-31b-it"}, {ID: "gemma-4-26b-a4b-it"}}
-	m := NewScriptedMock(nil, want)
+	want := []model.ModelInfo{{ID: "gemma-4-31b-it"}, {ID: "gemma-4-26b-a4b-it"}}
+	m := modeltest.NewScriptedMock(nil, want)
 	got, err := m.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
@@ -151,13 +154,13 @@ func TestMockListModels(t *testing.T) {
 		}
 	}
 	// Mutating the returned slice must not reach the mock's copy.
-	got[0] = ModelInfo{ID: "tampered"}
+	got[0] = model.ModelInfo{ID: "tampered"}
 	again, _ := m.ListModels(context.Background())
 	if again[0] != want[0] {
 		t.Errorf("ListModels returned an aliased slice: %+v", again[0])
 	}
 
-	empty, err := NewScriptedMock(nil, nil).ListModels(context.Background())
+	empty, err := modeltest.NewScriptedMock(nil, nil).ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels (no models): %v", err)
 	}
@@ -168,33 +171,33 @@ func TestMockListModels(t *testing.T) {
 
 // TestMockContextCancellation: a cancelled ctx short-circuits Consult.
 func TestMockContextCancellation(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: "ok"}}, nil)
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "ok"}}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := m.Consult(ctx, Request{})
+	_, err := m.Consult(ctx, model.Request{})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
 
-// TestMockNoModeErrors: a zero MockClient (constructed without going
+// TestMockNoModeErrors: a zero modeltest.MockClient (constructed without going
 // through New*) errors out instead of silently returning empty responses.
 func TestMockNoModeErrors(t *testing.T) {
-	m := &MockClient{}
-	_, err := m.Consult(context.Background(), Request{})
+	m := &modeltest.MockClient{}
+	_, err := m.Consult(context.Background(), model.Request{})
 	if err == nil {
 		t.Fatal("expected error from mode-less mock, got nil")
 	}
 }
 
 func TestMockScriptedStreamSplitsResponse(t *testing.T) {
-	scripted := []Response{
-		{Content: "abcdefghijklmnop", FinishReason: "stop", Usage: Usage{TotalTokens: 99}},
+	scripted := []model.Response{
+		{Content: "abcdefghijklmnop", FinishReason: "stop", Usage: model.Usage{TotalTokens: 99}},
 	}
-	m := NewScriptedMock(scripted, nil)
+	m := modeltest.NewScriptedMock(scripted, nil)
 	m.SetMockChunks(4)
 
-	sr, err := m.ConsultStream(context.Background(), Request{})
+	sr, err := m.ConsultStream(context.Background(), model.Request{})
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -202,7 +205,7 @@ func TestMockScriptedStreamSplitsResponse(t *testing.T) {
 
 	var got strings.Builder
 	chunks := 0
-	var lastChunk Chunk
+	var lastChunk model.Chunk
 	for {
 		chunk, err := sr.Next()
 		if errors.Is(err, io.EOF) {
@@ -239,8 +242,8 @@ func TestMockScriptedStreamSplitsResponse(t *testing.T) {
 }
 
 func TestMockStreamCloseIdempotent(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: "x"}}, nil)
-	sr, err := m.ConsultStream(context.Background(), Request{})
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "x"}}, nil)
+	sr, err := m.ConsultStream(context.Background(), model.Request{})
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -256,10 +259,10 @@ func TestMockStreamCloseIdempotent(t *testing.T) {
 }
 
 func TestMockStreamCtxCancelBetweenChunks(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: "abcdefgh"}}, nil)
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "abcdefgh"}}, nil)
 	m.SetMockChunks(4)
 	ctx, cancel := context.WithCancel(context.Background())
-	sr, err := m.ConsultStream(ctx, Request{})
+	sr, err := m.ConsultStream(ctx, model.Request{})
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -276,9 +279,9 @@ func TestMockStreamCtxCancelBetweenChunks(t *testing.T) {
 }
 
 func TestMockStreamDefaultChunkCount(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: strings.Repeat("a", 64)}}, nil)
-	// No SetMockChunks call → DefaultMockChunks.
-	sr, err := m.ConsultStream(context.Background(), Request{})
+	m := modeltest.NewScriptedMock([]model.Response{{Content: strings.Repeat("a", 64)}}, nil)
+	// No SetMockChunks call → modeltest.DefaultMockChunks.
+	sr, err := m.ConsultStream(context.Background(), model.Request{})
 	if err != nil {
 		t.Fatalf("ConsultStream: %v", err)
 	}
@@ -294,25 +297,7 @@ func TestMockStreamDefaultChunkCount(t *testing.T) {
 		}
 		chunks++
 	}
-	if chunks != DefaultMockChunks {
-		t.Errorf("chunk count: got %d, want %d", chunks, DefaultMockChunks)
-	}
-}
-
-// TestMockStreamSplitPreservesContent: whatever the chunk count, the
-// concatenated pieces reconstruct the response exactly — including the
-// degenerate cases (empty body, more chunks than runes, multi-byte runes,
-// n ≤ 0).
-func TestMockStreamSplitPreservesContent(t *testing.T) {
-	for _, content := range []string{"", "a", "abcdefghij", "héllo wörld ✓"} {
-		for _, n := range []int{-1, 0, 1, 3, 8, 64} {
-			pieces := splitForChunks(content, n)
-			if got := strings.Join(pieces, ""); got != content {
-				t.Errorf("splitForChunks(%q, %d) concat = %q", content, n, got)
-			}
-			if len(pieces) == 0 {
-				t.Errorf("splitForChunks(%q, %d) produced no pieces", content, n)
-			}
-		}
+	if chunks != modeltest.DefaultMockChunks {
+		t.Errorf("chunk count: got %d, want %d", chunks, modeltest.DefaultMockChunks)
 	}
 }

@@ -192,7 +192,8 @@ func writeOpTool(op string, fields []write.OpField, create bool, dir string, std
 }
 
 // commandSchema is cmd's positionals and its tool's input schema: the
-// positionals required, then its own flags, every one of them optional.
+// positionals are the required arguments, and each of the command's own flags
+// follows as a property the schema does not require.
 func commandSchema(cmd *cobra.Command) ([]positional, mcp.Schema, error) {
 	positionals, err := declaredPositionals(cmd)
 	if err != nil {

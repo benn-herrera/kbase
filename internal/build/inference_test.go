@@ -19,6 +19,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/result"
 )
 
@@ -82,7 +83,7 @@ func (a *answering) ConsultStream(ctx context.Context, req model.Request) (model
 func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	reply := model.Response{Content: a.answer(req.Messages[0].Content, req.Messages[1].Content),
 		Usage: model.Usage{PromptTokens: 100, CompletionTokens: 1}, UsageReported: true}
-	return model.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
+	return modeltest.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
 }
 
 func (a *answering) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
@@ -433,7 +434,7 @@ func TestNoInferenceCutsTheSettledRing(t *testing.T) {
 func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	f := newFixture(t)
 	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	mock := model.NewScriptedMockPerConsult(nil)
+	mock := modeltest.NewScriptedMockPerConsult(nil)
 	mock.SetError(errors.New("connection refused"))
 	outcome, fields := f.build(t, f.asking(mock))
 	if outcome != result.Failed {

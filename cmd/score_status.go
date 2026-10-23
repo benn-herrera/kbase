@@ -12,14 +12,17 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/filelock"
+	"kbase/internal/log"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
 )
 
 // persistScoreResult writes the run's result document beside its ledger, so a
 // waiter reads the document the verb reported. A run that named no ledger
-// writes nothing.
-func persistScoreResult(fields []toolresult.Field, outcome string) {
+// writes nothing. It runs on the way out of a verb that cannot report an error
+// there and that has already built the document it emits, so a write that fails
+// is recorded against the run rather than lost.
+func persistScoreResult(lg log.Logger, fields []toolresult.Field, outcome string) {
 	var dir string
 	for _, f := range fields {
 		if f.Key == "ledger" {
@@ -30,7 +33,9 @@ func persistScoreResult(fields []toolresult.Field, outcome string) {
 	if dir == "" {
 		return
 	}
-	_ = score.WriteResultDocument(dir, outcome, fields)
+	if err := score.WriteResultDocument(dir, outcome, fields); err != nil {
+		lg.Error("the run's result document was not written", "ledger", dir, "error", err)
+	}
 }
 
 // waitScore polls the score run named by pid until it ends, and returns the

@@ -146,9 +146,9 @@ single source. Working habits they impose:
   copied into a tool, or a schema typed beside the command's flags. Each command declares its
   binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`; the table binds only
   `bound` commands, and the test derives its expectation from the annotations, never from a list.
-  A flag its verb refuses to run without declares `kbase.required` the same way, and the tool's
-  schema lists it among `required`; the trap is a refusal whose flag carries no mark, so a model
-  reading the schema cannot tell the flag must be given.
+  A bound command's flag that its verb refuses to run without declares `kbase.required` the same
+  way, and the tool's schema lists it among `required`; the trap is a refusal whose flag carries no
+  mark, so a model reading the schema cannot tell the flag must be given.
   The exception is a tool no command stands behind: listed, and only where the tool-table test
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `toolResult`, so text, structured content and exit code cannot drift from a
@@ -301,6 +301,12 @@ file is one power-cycle from gone.
   rather than restate it. A plan that needs such a page names it in the plan, so a reader knows which
   source settles a disagreement.
 - Working drafts and half-formed notes are scratch (`.claude-temp/`), not plans.
+- Any plan that is activated, regardless of its location, gets a post-sprint review section
+  at the end. That section contains the review, remediation, and burndown steps. Unless otherwise
+  specified the reviewers are an architect and a coder reviewing with THESIS.md, SPEC.md,
+  ARCHITECTURE.md, and CONVENTIONS.md as their pre-task reading list. They do NOT get the plan
+  doc. Their job is to review the changes against standards and suitability for purpose, not
+  rehash the implementation. Their review brief includes reviewing the tests.
 
 ## Coordinator Policy
 

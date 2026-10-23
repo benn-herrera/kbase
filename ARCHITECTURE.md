@@ -21,7 +21,7 @@ Violating any is a blocking defect.
 
 | # | Invariant |
 |---|---|
-| I1 | Exactly one package execs pandoc (checks version and `pandoc-api-version`, with named errors); exactly one execs git; exactly one execs Graphviz `dot`; exactly one execs kbase itself (the MCP server's detached build, `cmd/mcp.go`). The exec-policy test names each owner. |
+| I1 | Exactly one package execs pandoc (checks version and `pandoc-api-version`, with named errors); exactly one execs git; exactly one execs Graphviz `dot`; exactly one execs kbase itself (the MCP server's detached build and detached score runs, `cmd/mcp.go`). The exec-policy test names each owner. |
 | I2 | The claim-graph inventory's reader and placement facts come from records, never recovered from leaf markup; its page-defined readings (§5.5) come from the leaf through the page readers; otherwise only stage-A conformance (the link relation, through `kb`), the prose and the marker machinery, and the sheet (a claim's kind, at its marker) read leaf lines, and maintenance ops read only the metadata layer. |
 | I3 | There are two pre-passes, in one registry, each naming the reader-level hole it fills and emitting a census. |
 | I4 | System compatibility per SPEC §3; byte equality only where a named reader needs it; presentation is untested. |
@@ -29,7 +29,7 @@ Violating any is a blocking defect.
 | I6 | Every mutating op is idempotent under re-issue; `init`'s creation is birth-once (SPEC §8). |
 | I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate`, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O, no import of a kbase package — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
-| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool but `build` performs inference, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` through it is the detached subcommand. |
+| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. |
 
 Deliberately unspecified: the internal AST representation, record field encoding, and layout
 algorithms.
@@ -711,11 +711,12 @@ MCP server starts it as a detached child — as it starts `build` — returning 
 ## 7. Inference seams
 
 - Kept from kbase: provider management (`internal/config`) and the client (`internal/model`). The
-  call path is `model.Chat` for the overview call, for each scoring call and for `kbase probe`'s one
-  ask, and `model.Decision`
-  for the letter asks; the decision role's model is an id on whichever surface its entry speaks
-  (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter asks go to the `decision`
-  role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
+  call path is `model.Chat` for the overview call, for each scoring call and for `kbase probe`'s
+  one-word check (`probePrompt`, or `--prompt`), and `model.Decision` for the letter asks and
+  `kbase probe`'s one decision ask (`--decision`); the decision role's model is an id on whichever
+  surface its entry speaks (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — letter
+  asks go to the `decision` role, the overview call to `text`, and `kbase score`'s asks to
+  `scoring` (SPEC §9). Each role
   names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
   the environment by `KBASE_<ROLE>`; no role falls back to another.
 - **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves one selection through
@@ -723,14 +724,17 @@ MCP server starts it as a detached child — as it starts `build` — returning 
   refusal, a role flag (`--decision`, `--text`, `--scoring`) naming the role to resolve and supplying
   no model, so that role's model comes from the configuration and a refusal names its key alone, and
   an explicit reference resolved in file mode because a reference is a pool reference — then opens
-  the client through `cmd/provider.go`'s registry exactly as `score` does, so it speaks whichever
-  chat protocol the entry's `api` names, and the registry is the only site that builds a wire client.
-  One `model.Chat` call, no backoff, bounded by `--timeout`;
-  the attempt's `FirstToken` — request start to the first non-empty content or reasoning delta,
-  measured in `chatOnce`, zero where none arrived — is what the result reports beside the call's
-  wall time. It opens no `kb.Source`, resolves no state directory and takes no lock: the verb is
-  `probeEndpoint` → `clients.get` → `model.Chat` → the result document (SPEC §8).
-- Every model call is one tool-less chat request answered from its prompt alone. `internal/model`
+  the client through `cmd/provider.go`'s registry exactly as `score` does, so the chat path speaks
+  whichever chat protocol the entry's `api` names, and the registry is the only site that builds a
+  wire client. One call, no backoff, bounded by `--timeout`: a `--decision` selection makes one
+  `model.Decision` call on the surface its entry's `decisionsFlavor` names, every other selection
+  the one `model.Chat` call. The chat attempt's `FirstToken` — request start to the first non-empty
+  content or reasoning delta, measured in `chatOnce`, zero where none arrived — is what the result
+  reports beside the call's wall time; the decision surface streams nothing, so the document reports
+  `first-token-ms` zero and `finish-reason` null. It opens no `kb.Source`, resolves no state
+  directory and takes no lock: the decision path is `probeEndpoint` → `clients.get` →
+  `model.Decision` → the result document, the chat path the same through `model.Chat` (SPEC §8).
+- Every chat call is one tool-less chat request answered from its prompt alone. `internal/model`
   holds two implementations of that request, and the endpoint entry's `api` selects which one the
   registry builds: `model.OpenAIClient` (`openai_client.go`) speaks the OpenAI-compatible
   `chat/completions` surface and is what an entry silent on `api` gets, and `model.AnthropicClient`
@@ -1237,13 +1241,15 @@ test code only, and asserts the migrated KB reads to the same values as the orig
 `0.9.0` KBs.
 
 **MCP server (SPEC §11).** `cmd/mcp.go` builds the tool table from `rootCmd`: one Tool per command
-declaring `kbase.mcp` = `bound` — `mcp` and `wait` declare `excluded`, the latter because a held call
-would spend the turn the build takes, and cobra's own `completion` and `help` declare nothing and
-are skipped with them — plus the one listed tool below. A tool's
+declaring `kbase.mcp` = `bound` — `mcp`, `wait` and `probe` declare `excluded`, the second because a
+held call would spend the turn the build takes, and cobra's own `completion` and `help` declare
+nothing and are skipped with them — plus the one listed tool below. A tool's
 schema is derived from the command's `Use` line positionals and its flags. A command's read-only
 standing is the cobra annotation `kbase.readOnly`, read when the table is built. A command tool's
-`required` is its positionals alone: no flag is required, `score`'s `--pass` among them, a run walking
-both passes unless it is told otherwise.
+`required` is its positionals alone: no bound flag is required today, `score`'s `--pass` among them, a
+run walking both passes unless it is told otherwise. A flag that becomes required declares
+`kbase.required`, and the derivation lists it among `required` (CONVENTIONS); `wait`'s `--pid` is
+outside the derivation, `wait` declaring `excluded` (§11).
 
 `rewind-build` is the one tool no command stands behind (I9), so it states for itself what the
 derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional), the

@@ -53,6 +53,36 @@ func probeWire(t *testing.T) (*httptest.Server, func() [][]byte) {
 	}
 }
 
+// probeRoleWire is the endpoint one role's asks reach — the decision surface for
+// the decision role, whose asks are decision calls, and a chat stream for the
+// two chat roles — recording each request's path so a test counts what landed
+// where.
+func probeRoleWire(t *testing.T, role config.Role) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if role == config.RoleDecision {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"decision","answers":{"probe":{"type":"noul","noul":0.96}},"usage":{"input_tokens":12,"output_tokens":1}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: [DONE]\n\n"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(paths)
+	}
+}
+
 // probeFixture stages a configuration directory naming one pool entry at
 // baseURL and the scoring role's reference to it, plus a second entry a
 // --model can name instead.
@@ -260,10 +290,10 @@ func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
 			urls := map[config.Role]string{}
-			bodies := map[config.Role]func() [][]byte{}
+			asked := map[config.Role]func() []string{}
 			for _, role := range config.Roles {
-				srv, seen := probeWire(t)
-				urls[role], bodies[role] = srv.URL, seen
+				srv, seen := probeRoleWire(t, role)
+				urls[role], asked[role] = srv.URL, seen
 			}
 			dir := probeRolesFixture(t, urls)
 
@@ -281,7 +311,7 @@ func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
 				if role == tc.role {
 					want = 1
 				}
-				if n := len(bodies[role]()); n != want {
+				if n := len(asked[role]()); n != want {
 					t.Errorf("%d requests to the %s role's entry, want %d", n, role, want)
 				}
 			}
@@ -503,6 +533,128 @@ apiKeyFile = "claude.key"
 	}
 	if strings.Contains(string(seen[0].body), "prompt_cache_key") {
 		t.Errorf("the request carries a prompt-cache key, which the protocol has no field for: %s", seen[0].body)
+	}
+}
+
+// probeDecisionWire answers the decision surface at path — the SystemOne
+// object or the Decisions array, by which path it is — and answers any other
+// path the way a provider refuses a decision model on a chat call. It records
+// every path it served, so a probe that took the chat request is visible as a
+// 400 and as the wrong path.
+func probeDecisionWire(t *testing.T, path string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path != path {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"this model is not an LLM / chat model"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if path == "/decisions" {
+			_, _ = w.Write([]byte(`{"model":"d","answers":[{"type":"predicate","name":"probe","probability":0.96}],"usage":{"input_tokens":12,"output_tokens":1}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"model":"d","answers":{"probe":{"type":"noul","noul":0.96}},"usage":{"input_tokens":12,"output_tokens":1}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(paths)
+	}
+}
+
+// probeDecisionConfig stages a configuration directory naming one pool entry at
+// baseURL for the decision role, the entry carrying keys where the test gives
+// some.
+func probeDecisionConfig(t *testing.T, baseURL, keys string) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[local]\nbaseUrl = %q\n%s", baseURL, keys))
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"local/d\"\n")
+	return dir
+}
+
+// TestProbeDecisionAsksTheDecisionSurface: --decision asks a decision model on
+// the surface its entry declares, not on the chat path — one request, on
+// /systemone or on /decisions as the entry's decisionsFlavor names, and a
+// document whose reply is the answer. The surface blocks, so no first token
+// arrived and no finish reason came back; the row states those as zero and
+// null. A probe that took the chat path would be answered 400 and fail.
+func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
+	unsetInferenceEnv(t)
+	for _, tc := range []struct {
+		name, keys, path string
+	}{
+		{"the SystemOne surface, an entry silent on the flavour", "", "/systemone"},
+		{"the Decisions surface", "decisionsFlavor = \"decisions\"\n", "/decisions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, paths := probeDecisionWire(t, tc.path)
+			dir := probeDecisionConfig(t, srv.URL, tc.keys)
+
+			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--decision")
+			if code != 0 || doc.Outcome != toolresult.Done {
+				t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
+			}
+			if doc.Values["selection"] != string(config.RoleDecision) || doc.Values["model"] != "d" {
+				t.Errorf("selection/model = %v/%v, want the decision role's selection",
+					doc.Values["selection"], doc.Values["model"])
+			}
+			if got := doc.Values["first-token-ms"]; got != 0 {
+				t.Errorf("first-token-ms = %v, want 0: the decision surface streams nothing", got)
+			}
+			if v, ok := doc.Values["finish-reason"]; !ok || v != nil {
+				t.Errorf("finish-reason = %v (present %t), want null: the surface reports none", v, ok)
+			}
+			if doc.Values["reply"] != "0.96" {
+				t.Errorf("reply = %v, want the predicate's probability", doc.Values["reply"])
+			}
+			if usage, _ := doc.Values["usage"].(map[string]any); usage["reported"] != true ||
+				usage["prompt-tokens"] != 12 || usage["completion-tokens"] != 1 {
+				t.Errorf("usage = %v, want the answer's own accounting", doc.Values["usage"])
+			}
+			if seen := paths(); !slices.Equal(seen, []string{tc.path}) {
+				t.Errorf("requests %v, want the one decision call on %s", seen, tc.path)
+			}
+		})
+	}
+}
+
+// TestProbeDecisionRefusesAProviderThatSpeaksNoDecisionSurface: --decision on an
+// entry whose api is anthropic meets the client's refusal — the Messages
+// protocol has no decision surface, and the remedy is an entry whose api is
+// openai — instead of a chat request the server would answer with its own 400.
+func TestProbeDecisionRefusesAProviderThatSpeaksNoDecisionSurface(t *testing.T) {
+	unsetInferenceEnv(t)
+	srv, requests := anthropicProbeWire(t)
+	dir := t.TempDir()
+	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[claude]\nbaseUrl = %q\napi = \"anthropic\"\n", srv.URL))
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"claude/d3\"\n")
+
+	doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--decision")
+	if doc.Outcome != toolresult.Failed || code != exitCodes[toolresult.Failed] {
+		t.Fatalf("outcome %s, exit %d; want failed, %d\n%s", doc.Outcome, code, exitCodes[toolresult.Failed], stdout)
+	}
+	items := doc.items(toolresult.FailuresKey)
+	if len(items) != 1 {
+		t.Fatalf("failures = %v, want the one item", items)
+	}
+	detail, _ := items[0]["detail"].(string)
+	for _, want := range []string{"Anthropic Messages protocol", "no decision surface", "entry whose api is openai"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("failure = %q, want it to carry %q", detail, want)
+		}
+	}
+	if seen := requests(); len(seen) != 0 {
+		t.Errorf("%d requests reached the Messages endpoint, want none: the refusal is the client's",
+			len(seen))
 	}
 }
 

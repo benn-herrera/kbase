@@ -25,7 +25,7 @@ const defaultListTimeout = 30 * time.Second
 
 // newClientFunc constructs the model client for an endpoint. It is the seam
 // that lets a verb be exercised without a network — production passes
-// model.NewClient, tests pass a factory returning a model.MockClient.
+// model.NewClient, tests pass a factory returning a modeltest.MockClient.
 type newClientFunc func(model.Endpoint) model.Client
 
 // providerOptions is the input every provider-reaching verb shares: the

@@ -147,6 +147,12 @@ edit-gate: fmt-check
 # this project is developed in tandem with adjagent
 AGENTS_DIR := "../adjagent"
 agents:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -f "{{AGENTS_DIR}}/justfile" ]]; then
+      printf 'agents: no justfile at %s/justfile — kbase is developed in tandem with adjagent, so AGENTS_DIR must name a sibling clone\n' "{{AGENTS_DIR}}" >&2
+      exit 1
+  fi
   just --justfile "{{AGENTS_DIR}}/justfile" install-with-kb "$(pwd)" --harness=claude
   just --justfile "{{AGENTS_DIR}}/justfile" install-with-kb "$(pwd)" --harness=opencode --model-tier-map=default
 
@@ -1151,10 +1157,12 @@ _test-integration-monitor-arxiv: build
 
 # The result contract over the delivered binary: every maintenance subcommand,
 # status and cancel run by ./bin/kbase over a copy of a committed fixture KB,
-# each result parsed against its subcommand's documented keys and outcome.
+# each result parsed against its subcommand's documented keys and outcome, and
+# probe's decision selection run against a Go stub that answers the decision
+# surface and refuses the chat path.
 # It needs only git, which SPEC requires on the host — no pandoc, no
 # provider, no adjagent clone — so it joins the omnibus.
-[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's; evidence under test-data/transient/test-integration-results-fixture/")]
+[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's; plus probe --decision against a Go stub answering only the SystemOne decision surface, its document parsed against the probe keys with no first token and no finish reason; evidence under test-data/transient/test-integration-results-fixture/")]
 test-integration-results-fixture:
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"
     @{{just_executable()}} _test-integration-results-fixture 2>&1 | tee "{{RESULTS_FIXTURE_OUT_DIR}}/log.txt"
@@ -1174,7 +1182,8 @@ _test-integration-results-fixture: build
     repo="${out}/repo"
     docs="${out}/docs"
     rm -rf "${repo}" "${docs}" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
-        "${out}/score-state" "${out}/score-env-state"
+        "${out}/score-state" "${out}/score-env-state" "${out}/probe-config" "${out}/probestub" \
+        "${out}/probestub.url" "${out}/probestub.log"
     mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}"
     printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
     cp -R "${fixture}/kb-root" "${repo}/"
@@ -1280,6 +1289,33 @@ _test-integration-results-fixture: build
         "$([[ "${env_score_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${env_score}.exit")"
     [[ "${env_score_ok}" -eq 0 ]] || status=1
 
+    # Probe's decision selection asks the surface its entry declares. The stub
+    # answers /systemone and refuses every other path, so a probe that took the
+    # chat path is answered 400 and its leg fails; the document is parsed
+    # against the probe keys, and a surface that streams nothing reports no
+    # first token and no finish reason.
+    go build -o "${out}/probestub" ./tools/probestub
+    "${out}/probestub" > "${out}/probestub.url" 2> "${out}/probestub.log" &
+    stub_pid=$!
+    trap 'kill "${stub_pid}" 2>/dev/null || true' EXIT
+    for _ in $(seq 1 100); do
+        [[ -s "${out}/probestub.url" ]] && break
+        sleep 0.05
+    done
+    probe_url="$(head -n 1 "${out}/probestub.url")"
+    [[ -n "${probe_url}" ]] || { printf '  fail: the probe stub printed no base URL\n'; status=1; }
+    probe_config="${root}/${out}/probe-config"
+    mkdir -p "${probe_config}"
+    printf '%s\n' '[stub]' "baseUrl = \"${probe_url}\"" > "${probe_config}/providers.toml"
+    printf '%s\n' '[models]' 'decision = "stub/d"' > "${probe_config}/config.toml"
+    run probe done probe --config-dir "${probe_config}" --decision
+    grep -qx 'selection: "decision"' "${LAST}" || { printf '  fail: the probe did not ask the decision selection\n'; status=1; }
+    grep -qx 'first-token-ms: 0' "${LAST}" || { printf '  fail: a decision surface reports no first token\n'; status=1; }
+    grep -qx 'finish-reason: null' "${LAST}" || { printf '  fail: a decision surface reports no finish reason\n'; status=1; }
+    kill "${stub_pid}" 2>/dev/null || true
+    wait "${stub_pid}" 2>/dev/null || true
+    trap - EXIT
+
     run set-rigor refused set-rigor --values "${fixture}/values/bad-rigor.yaml"
     run render-citation refused render-citation --values "${fixture}/values/cite-nowhere.yaml"
     id="$(sed -n 's/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/06-insert-claim-entry.out" | head -n 1)"
@@ -1301,7 +1337,7 @@ _test-integration-results-fixture: build
     run status done status --state-dir "${root}/${out}/state"
     run cancel refused cancel --state-dir "${root}/${out}/state"
     {{just_executable()}} _write-evidence "${out}" "test-integration-results-fixture" \
-      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
+      "cp -R {{RESULTS_FIXTURE_DIR}}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document"
     if [[ "${status}" -ne 0 ]]; then
         printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'
         exit 1

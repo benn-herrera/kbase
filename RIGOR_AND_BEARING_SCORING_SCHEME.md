@@ -226,8 +226,8 @@ value, and is never clamped. `bearing` has no such reserve, and `none` reaches `
 > maximum is the same number as an axiom's rule value, and a text charged with nothing prices at
 > `1.00` — so an authored `1.0` is in domain and reads as itself, and only a value above `1.00` is
 > read at the ceiling. The reasoning stays as the ruling that produced it; the figures in this
-> paragraph are the earlier ones, while the tables and values this page states elsewhere carry the
-> current ceiling.
+> paragraph are the earlier ones. The three tables below are priced at the ceiling stated here, and a
+> value one shows is its own arithmetic under that ceiling.
 
 ## The strength is the walk's, not the rigor's
 

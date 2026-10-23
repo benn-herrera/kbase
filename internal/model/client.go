@@ -1,12 +1,12 @@
 // Package model is the LLM client surface.
 //
-// Three implementations satisfy the same Client interface: OpenAIClient
+// Two implementations satisfy the same Client interface: OpenAIClient
 // (openai_client.go), targeting any OpenAI-compatible chat-completions endpoint;
-// AnthropicClient (anthropic_client.go), targeting the Anthropic Messages
-// protocol; and MockClient (mockllm.go), the test substrate. NewClient is what
-// picks between the two wire implementations, from the protocol the caller
-// resolved onto the Endpoint. All three consume the same Request/Response
-// shape, so tests and the production pipeline exercise the same code paths.
+// and AnthropicClient (anthropic_client.go), targeting the Anthropic Messages
+// protocol. NewClient is what picks between the two, from the protocol the
+// caller resolved onto the Endpoint. Both consume the same Request/Response
+// shape, so tests and the production pipeline exercise the same code paths. The
+// test substrate lives in internal/model/modeltest, out of this package's API.
 package model
 
 import (
@@ -18,8 +18,8 @@ import (
 )
 
 // Client is the abstraction the pipeline depends on for an LLM round-trip.
-// Defined here so test code can swap in MockClient without depending on
-// the HTTP transport.
+// Defined here so a test can substitute an implementation of its own without
+// depending on the HTTP transport.
 //
 // Two consult flavors are provided:
 //   - Consult: blocking, returns the full Response. Right for short calls.
@@ -388,7 +388,3 @@ type StatusError struct {
 }
 
 func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }
-
-// ErrMockExhausted is returned by a scripted MockClient when its response
-// queue has been drained. Tests check for this with errors.Is.
-var ErrMockExhausted = errors.New("model: mock client exhausted")

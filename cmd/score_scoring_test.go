@@ -10,6 +10,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
 )
 
@@ -33,7 +34,7 @@ func TestScoreRecordsAProviderRefusalAsItsOwnReason(t *testing.T) {
 	const body = `{"error":{"message":"unknown model: judge"}}`
 	repo, state := scoreRepo(t), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
-		m := model.NewScriptedMock(nil, nil)
+		m := modeltest.NewScriptedMock(nil, nil)
 		m.SetError(model.StatusError{Code: http.StatusBadRequest, Body: body})
 		return m
 	})

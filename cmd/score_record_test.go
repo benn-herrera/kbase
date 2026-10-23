@@ -10,6 +10,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
 )
 
@@ -71,7 +72,7 @@ func TestScoreFailureReasonIsASummary(t *testing.T) {
 	// The stub's failure is the transport's, so it is re-issued; the pause is
 	// injected short because what this test reads is the reason, not the wait.
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}}, func() model.Client {
-		m := model.NewScriptedMock(nil, nil)
+		m := modeltest.NewScriptedMock(nil, nil)
 		m.SetError(errors.New("the stub refuses\n\x1b[2J\x1b]0;owned\a" + strings.Repeat("x", 2000)))
 		return m
 	})

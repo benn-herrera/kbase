@@ -235,7 +235,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		if err := l.WritePID(os.Getpid()); err != nil {
 			return failed(fields, err)
 		}
-		defer func() { persistScoreResult(fields, outcome) }()
+		defer func() { persistScoreResult(opts.Logger, fields, outcome) }()
 		if err := l.WriteItems(items); err != nil {
 			return failed(fields, err)
 		}
@@ -320,7 +320,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if err := l.WriteItems(items); err != nil {
 		return failed(fields, err)
 	}
-	defer func() { persistScoreResult(fields, outcome) }()
+	defer func() { persistScoreResult(opts.Logger, fields, outcome) }()
 	fields = append(fields, toolresult.Field{Key: "run", Value: run}, toolresult.Field{Key: "ledger", Value: l.Dir()})
 
 	res, err := (&score.Runner{Source: src, Index: ix, Items: items, Pass: pass, Ask: ask,

@@ -129,7 +129,7 @@ through `find`, `show` and `deps`, with no command line invoked and no index fil
   selected provider's model catalogue. `configure` writes `config.toml` — and, under `--create`,
   creates `providers.toml` where none stands — dialling the provider for that
   catalogue except on its `--create` path with no `--provider`, which dials nothing. Neither
-  performs inference, which stays with `build`.
+  performs inference, which stays with the detached `build` and `score` runs.
 - **`rewind-build` is the one listed tool.** No subcommand stands behind it: its schema is written by
   hand (`target` and `state-dir`, both optional), and a refusal from it is keyed by the schema
   property name rather than a flag spelling. It lists the build's stage boundaries, oldest first,

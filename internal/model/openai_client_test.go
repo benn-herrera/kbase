@@ -25,6 +25,29 @@ func newTestEndpoint(baseURL string) Endpoint {
 	}
 }
 
+// statusServer answers every request with code and a provider-shaped error
+// body, counting the requests it read. The external tests keep their own copy
+// in chat_test.go: an unexported helper does not cross the package boundary
+// between the in-package tests and package model_test.
+func statusServer(t *testing.T, code int) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen++
+		mu.Unlock()
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown model: m"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
+	}
+}
+
 // runStream serves the given SSE body from a test server, drains the
 // stream, and returns every chunk observed, the accumulated Final(), and
 // the TERMINAL error from Next (io.EOF on a clean stream).

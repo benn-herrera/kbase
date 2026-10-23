@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/kb"
+	"kbase/internal/log/logtest"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
@@ -138,6 +140,38 @@ func checkBuildDocument(t *testing.T, d resultDoc, wantState string) {
 	}
 	if run, ok := d.Values["run"]; ok {
 		t.Errorf("the build's document names a run: %v", run)
+	}
+}
+
+// TestPersistScoreResultLogsAWriteItCannotMake: the result document is written
+// on the way out of a verb that cannot return an error there, so a run
+// directory that refuses the write leaves the failure in the run's log, naming
+// the ledger, and no document.
+func TestPersistScoreResultLogsAWriteItCannotMake(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	capture := &logtest.Capture{}
+
+	persistScoreResult(capture, []toolresult.Field{{Key: "ledger", Value: dir}}, toolresult.Done)
+
+	if !capture.Has(t, "error", "ledger", dir) {
+		t.Errorf("the failed write was not logged against the ledger: %+v", capture.Snapshot())
+	}
+	if _, err := os.Stat(filepath.Join(dir, score.ResultFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run directory holds a result document: %v", err)
+	}
+}
+
+// TestPersistScoreResultWritesNothingWithoutALedger: a run that named no
+// ledger has nowhere to write its document, and no failure to report.
+func TestPersistScoreResultWritesNothingWithoutALedger(t *testing.T) {
+	capture := &logtest.Capture{}
+	persistScoreResult(capture, []toolresult.Field{{Key: "kb-root", Value: t.TempDir()}}, toolresult.Done)
+	if records := capture.Snapshot(); len(records) != 0 {
+		t.Errorf("a run without a ledger logged %+v", records)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // testAPIKey is the credential every fixture provider carries. Tests assert
@@ -51,7 +52,7 @@ func (r result) ids() []string { return anyStrings(r.doc.Values["models"]) }
 // factory that records its endpoint and serves ids from a MockClient. Any
 // Stdout/Stderr/NewClient already set on opts is overwritten — the point of
 // the helper is that no test reaches the network or the process streams.
-func run(t *testing.T, opts modelsOptions, client *model.MockClient) result {
+func run(t *testing.T, opts modelsOptions, client *modeltest.MockClient) result {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	var seen []model.Endpoint
@@ -108,7 +109,7 @@ func TestRunModelsSortedOutput(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
-	}}, model.NewScriptedMock(nil, catalogue("zeta", "alpha", "mu")))
+	}}, modeltest.NewScriptedMock(nil, catalogue("zeta", "alpha", "mu")))
 
 	if got.code != 0 || got.doc.Values["provider"] != "solo" {
 		t.Fatalf("models: exit %d, %v", got.code, got.doc.Values)
@@ -145,7 +146,7 @@ func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"deciding": onDecisions},
 		Provider:  "deciding",
-	}}, model.NewScriptedMock(nil, catalogue("only")))
+	}}, modeltest.NewScriptedMock(nil, catalogue("only")))
 
 	if len(got.endpoints) != 1 || !got.endpoints[0].Decisions {
 		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", got.endpoints)
@@ -158,7 +159,7 @@ func TestRunModelsEmptyCatalogue(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Provider:  "solo",
-	}}, model.NewScriptedMock(nil, nil))
+	}}, modeltest.NewScriptedMock(nil, nil))
 
 	if got.code != 0 || len(got.ids()) != 0 {
 		t.Errorf("models: exit %d, ids %q; want done and none", got.code, got.ids())
@@ -176,7 +177,7 @@ func TestRunModelsFaultsAreWarnings(t *testing.T) {
 		Providers: config.Providers{"good": provider("good", "http://provider.example/v1")},
 		Faults:    []config.ProviderFault{{Name: "bad", Reason: "read apiKeyFile: open missing.key: no such file or directory"}},
 		Provider:  "good",
-	}}, model.NewScriptedMock(nil, catalogue("m1")))
+	}}, modeltest.NewScriptedMock(nil, catalogue("m1")))
 
 	if !strings.Contains(got.stderr, `provider "bad" unavailable: read apiKeyFile:`) {
 		t.Errorf("stderr should warn about the faulted provider; got %q", got.stderr)
@@ -194,7 +195,7 @@ func TestRunModelsWarningFaultKeepsProvider(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
 		Faults:    []config.ProviderFault{{Name: "solo", Reason: reason, Warning: true}},
-	}}, model.NewScriptedMock(nil, catalogue("m1")))
+	}}, modeltest.NewScriptedMock(nil, catalogue("m1")))
 
 	if !strings.Contains(got.stderr, `provider "solo": `+reason) {
 		t.Errorf("stderr should carry the warning; got %q", got.stderr)
@@ -263,7 +264,7 @@ func TestRunModelsProviderSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := run(t, tt.opts, model.NewScriptedMock(nil, catalogue("m1")))
+			got := run(t, tt.opts, modeltest.NewScriptedMock(nil, catalogue("m1")))
 			if tt.wantErr != "" {
 				items := got.doc.items("refusals")
 				if got.code != 1 || len(items) != 1 {
@@ -299,7 +300,7 @@ func TestRunModelsSelectionErrorListsCandidates(t *testing.T) {
 			"beta":  provider("beta", "http://beta.example/v1"),
 			"alpha": provider("alpha", "http://alpha.example/v1"),
 		},
-	}}, model.NewScriptedMock(nil, nil))
+	}}, modeltest.NewScriptedMock(nil, nil))
 
 	items := got.doc.items("refusals")
 	if got.code != 1 || len(items) != 1 {
@@ -313,7 +314,7 @@ func TestRunModelsSelectionErrorListsCandidates(t *testing.T) {
 // TestRunModelsListErrorPropagates: a provider-side failure is reported
 // failed, not swallowed into an empty-but-successful listing.
 func TestRunModelsListErrorPropagates(t *testing.T) {
-	client := model.NewScriptedMock(nil, catalogue("m1"))
+	client := modeltest.NewScriptedMock(nil, catalogue("m1"))
 	client.SetError(errors.New("http 503: service unavailable"))
 
 	got := run(t, modelsOptions{providerOptions: providerOptions{

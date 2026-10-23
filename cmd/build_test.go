@@ -12,6 +12,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	toolresult "kbase/internal/result"
 )
 
@@ -65,7 +66,7 @@ decisionsFlavor = "decisions"
 	// test reads is the document the run wrote anyway.
 	newClient := func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e)
-		return model.NewScriptedMock(nil, nil)
+		return modeltest.NewScriptedMock(nil, nil)
 	}
 	var stdout, stderr bytes.Buffer
 	opts.Stderr = &stderr

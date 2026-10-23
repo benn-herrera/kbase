@@ -12,10 +12,10 @@ Every statement here is decided; where a point was once left open, its ruling is
 
 kbase is a Go binary that builds and maintains a knowledge base (KB) from LaTeX. One or more volume
 roots go in, one KB comes out — its entry point listing every volume — and a set of maintenance
-subcommands then operates on the living KB, at a shell or, through `kbase mcp` (§11), from any agent
-harness that speaks MCP. A KB can also be created empty by `init` (§8) and filled by authoring with
-those same subcommands — no volume, no LaTeX, no build: LaTeX stays the only input format of
-`build`, and `init` is the zero case of the tree, not another input.
+subcommands then operates on the living KB, at a shell or, through `kbase mcp` (§11), from any
+external agent harness that speaks MCP. A KB can also be created empty by `init` (§8) and filled by
+authoring with those same subcommands — no volume, no LaTeX, no build: LaTeX stays the only input
+format of `build`, and `init` is the zero case of the tree, not another input.
 
 - A **volume root** is the top `.tex` file of a paper: the file `00README.json`'s `toplevel` entry
   names, else the sole file containing `\documentclass`.
@@ -213,8 +213,8 @@ and reports the file.
 **Under `--no-inference`** no `README.md` is written: the overview call is the dropped row, and the
 README is assembled around its passage.
 
-**Monitoring.** `build` runs in the foreground; an agent harness backgrounds it. `kbase status` and
-`kbase cancel` (§6) observe and stop it.
+**Monitoring.** `build` runs in the foreground; an external agent harness backgrounds it. `kbase
+status` and `kbase cancel` (§6) observe and stop it.
 
 **What a build produces**: Markdown leaves; the index, up-link and cross-reference structure;
 load-bearing forms; claim-graph registers and nodes; the derived index. The build's stages and what
@@ -452,7 +452,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
-| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply`; `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
+| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 | `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
 
@@ -499,10 +499,10 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 
 ## 8. Maintenance subcommands
 
-Every subcommand below is a builtin tool an agent harness can call, `probe` excepted — a tool would
-let an agent poll a model, which no KB operation asks for (§11); `score` starts a detached child that
-asks one model call per item and returns at once with the run's identity, so the turn is not held for
-the walk's duration (§11). The rules in this section govern each.
+Every subcommand below is a builtin tool an external agent harness can call, `probe` excepted — a
+tool would let an agent poll a model, which no KB operation asks for (§11); `score` starts a detached
+child that asks one model call per item and returns at once with the run's identity, so the turn is
+not held for the walk's duration (§11). The rules in this section govern each.
 
 **Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary is closed,
 and stated once, in kbase's write package; it is not copied into prose. A refusal names the key, its
@@ -749,10 +749,9 @@ call, each value landed through the write API and recorded in a ledger. `--pass`
 call (default `30s`). A run asks one call
 per item and takes minutes: at a terminal `kbase score` blocks until the walk ends, and as an MCP tool
 (§11) it starts a detached child and returns at once with the run's identity, while `kbase wait`
-reports its outcome when it ends. A harness that runs `kbase score` at a shell gets the blocking
-behaviour a terminal gets. There is no `--provider`: a scoring-time endpoint is named
-by `--scoring-model`, which states the provider and the model in one value, and passing `--provider`
-is a usage refusal.
+reports its outcome when it ends. A shell caller gets the blocking behaviour a terminal gets.
+There is no `--provider`: a scoring-time endpoint is named by `--scoring-model`, which states the
+provider and the model in one value, and passing `--provider` is a usage refusal.
 
 **The two passes.** `rigor` walks every claim, analysis and experiment, by id — a node's own value.
 `bearing` walks every `supports`, `lifts` and `refutes` edge, by relation in that order, then source,
@@ -999,16 +998,18 @@ role's own key — `models.<role>`, or the role's variable — or the flag, and 
 any client is opened. The document states which selection answered: the role's name where a role flag
 or the default named it, and the reference where `--model` did.
 
-The call is one tool-less chat request through the registry a scoring run's asks take, so an endpoint
-is reached over the wire shape its pool entry names: no tools, no history, an empty system prompt, and
-`--prompt` in place of the default one-word check. `--timeout` bounds the call (default `30s`); a call
-that does not complete is re-issued at once up to the attempt count, so that deadline is spent on
-attempts rather than on pauses (§12). The document reports what a ledger cannot — the selection, the
-provider, the model, the time to the first token, the call's wall time, the finish reason, the reply,
-and the usage the provider reported — and its outcome follows the call: `done` where it completed,
-`failed` where it did not, with the attempt's own outcome and the provider's words in the failure. It
-reads no KB and reads or writes no state directory: it prints its document and exits, and no MCP tool
-binds it (§11).
+A chat selection is one tool-less chat request through the registry a scoring run's asks take, so
+an endpoint is reached over the wire shape its pool entry names: no tools, no history, an empty
+system prompt, and `--prompt` in place of the default one-word check. A `--decision` selection is
+one decision call on the surface its entry's `decisionsFlavor` names, with no system message, and
+its `--prompt` in place of the default predicate. `--timeout` bounds the call (default `30s`); a
+call that does not complete is re-issued at once up to the attempt count, so that deadline is spent
+on attempts rather than on pauses (§12). The document reports what a ledger cannot — the selection,
+the provider, the model, the time to the first token, the call's wall time, the finish reason, the
+reply, and the usage the provider reported — and its outcome follows the call: `done` where it
+completed, `failed` where it did not, with the attempt's own outcome and the provider's words in the
+failure. It reads no KB and reads or writes no state directory: it prints its document and exits,
+and no MCP tool binds it (§11).
 
 Result keys: §7.
 
@@ -1646,11 +1647,12 @@ tooltip (§3); `stats` counts them as `demoted_edges`, after `edges`, which coun
 
 ## 11. The MCP server
 
-`kbase mcp --kb-root <path>` serves one KB to any agent harness that speaks the Model Context
-Protocol, over stdio JSON-RPC. It is the subcommands, bound: every tool but one is one subcommand,
-with the same arguments and the same result, so a harness without MCP loses nothing but convenience.
-The exception is `rewind-build`, the one listed tool — it has no subcommand behind it, reports
-position that `status` and the commit trail already state, and changes nothing.
+`kbase mcp --kb-root <path>` serves one KB to any external agent harness that speaks the Model
+Context Protocol, over stdio JSON-RPC. It is the subcommands, bound: every tool but one is one
+subcommand, with the same arguments and the same result, so an external agent harness without MCP
+loses nothing but convenience. The exception is `rewind-build`, the one listed tool — it has no
+subcommand behind it, reports position that `status` and the commit trail already state, and
+changes nothing.
 
 - **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself and
   `wait` — a tool call would hold the turn for the build's or score run's duration — and less
@@ -1775,7 +1777,7 @@ position that `status` and the commit trail already state, and changes nothing.
   when the run ends, and nothing here makes it promise the session is at a turn when it arrives. An
   unknown URI is JSON-RPC `-32002` (resource not found); a missing `uri` is `-32602`.
   `initialize` advertises the `resources` capability, its `subscribe` among the ones it carries.
-  Nothing else is served: the KB's documents are the harness's own files.
+  Nothing else is served: the KB's documents are the external agent harness's own files.
 - **What the server never does.** It sends no sampling request and offers no prompts; no inference
   runs from any tool but `build` and `score`, and each tool's inference is its own — the build's
   decision and text calls, the score run's scoring calls. `models` reads the
@@ -1795,8 +1797,9 @@ position that `status` and the commit trail already state, and changes nothing.
   path; over one whose `kb-root/` is yet to be made it names the repository's and says the KB can be
   built; where no repository holds the served directory the field is absent. Either path is
   absolute, the `kbase` skill is named as the workflow, and `show-config` is the one tool it names.
-- **Registration** is the harness's: one server entry naming the command `kbase mcp --kb-root
-  <absolute path>`. README gives the entry for two harnesses as examples.
+- **Registration** is the external agent harness's: one server entry naming the command
+  `kbase mcp --kb-root <absolute path>`. README gives the entry for two external agent harnesses as
+  examples.
 
 ---
 
@@ -1804,11 +1807,12 @@ position that `status` and the commit trail already state, and changes nothing.
 
 **0.8.0 — a second chat protocol: the Anthropic Messages API.** A `providers.toml` entry may state
 `api = "anthropic"` to reach an Anthropic Messages endpoint directly, with `api = "openai"` (the
-default) behaving as before (§9.1). `models`, `configure`, `kbase probe`, a build's overview call and
-a scoring run's asks all reach it; the `decision` role's letter asks do not, because the decision
-surfaces are OpenAI-shaped, and a Messages endpoint asked for one refuses naming the provider and the
-role (§8). Messages requires a completion cap, sent as `max(256, ceil(characters / 4))` over the
-ask's text, and has no prompt-cache key, so a scoring run against such an endpoint sends none (§8).
+default) behaving as before (§9.1). `models`, `configure`, `kbase probe`'s chat selections, a build's
+overview call and a scoring run's asks all reach it; the `decision` role's letter asks and
+`kbase probe --decision` do not, because the decision surfaces are OpenAI-shaped, and a Messages
+endpoint asked for either refuses naming the provider and the role (§8). Messages requires a
+completion cap, sent as `max(256, ceil(characters / 4))` over the ask's text, and has no
+prompt-cache key, so a scoring run against such an endpoint sends none (§8).
 
 **0.8.0 — the rigor ceiling is `1.00`.** The rigor tables' maximum, the most a write carries, and
 an axiom's rule value are one number: a rigor pass's maximum is `1.00`, so a text charged with

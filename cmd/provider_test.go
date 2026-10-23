@@ -9,6 +9,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
@@ -19,7 +20,7 @@ type closeLog struct{ n int }
 // closer is a mock client that records its Close — the release the registry
 // owes every client it opened.
 type closer struct {
-	*model.MockClient
+	*modeltest.MockClient
 	log *closeLog
 }
 
@@ -28,7 +29,7 @@ func (c closer) Close() error { c.log.n++; return nil }
 // cancellingCloser is the score run's client: it cancels the run as the second
 // call arrives, and records its Close.
 type cancellingCloser struct {
-	*model.MockClient
+	*modeltest.MockClient
 	cancel context.CancelFunc
 	calls  int
 	log    *closeLog
@@ -53,7 +54,7 @@ func TestRegistryOpensEachEndpointOnce(t *testing.T) {
 	var opened int
 	reg := newClients(func(model.Endpoint) model.Client {
 		opened++
-		return closer{model.NewScriptedMock(nil, nil), &log}
+		return closer{modeltest.NewScriptedMock(nil, nil), &log}
 	}, nil, "")
 	lab := config.Endpoint{Mode: config.ModeFile, Provider: "lab", BaseURL: "http://lab.example/v1"}
 	first, err := reg.get(lab)
@@ -90,7 +91,7 @@ func TestRegistryPreflightReadsTheKeyFile(t *testing.T) {
 	var opened int
 	reg := newClients(func(model.Endpoint) model.Client {
 		opened++
-		return model.NewScriptedMock(nil, nil)
+		return modeltest.NewScriptedMock(nil, nil)
 	}, nil, "")
 	_, err := reg.get(config.Endpoint{Provider: "lab", BaseURL: "http://lab.example/v1", APIKeyFile: "/absent/key.txt"})
 	var refusal config.Refusal
@@ -117,7 +118,9 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 	}
 	var log closeLog
 	newClient := func() newClientFunc {
-		return func(model.Endpoint) model.Client { return closer{model.NewScriptedMock(nil, catalogue("m1")), &log} }
+		return func(model.Endpoint) model.Client {
+			return closer{modeltest.NewScriptedMock(nil, catalogue("m1")), &log}
+		}
 	}
 
 	t.Run("models, done", func(t *testing.T) {
@@ -136,7 +139,7 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 	t.Run("models, failed", func(t *testing.T) {
 		log.n = 0
 		var stdout, stderr bytes.Buffer
-		unreachable := model.NewScriptedMock(nil, nil)
+		unreachable := modeltest.NewScriptedMock(nil, nil)
 		unreachable.SetError(errors.New("http 503: service unavailable"))
 		code, err := runModels(context.Background(), modelsOptions{
 			providerOptions: providerOptions{Providers: pool(), Stderr: &stderr,
