@@ -23,6 +23,23 @@ deleted, not archived.
 - **AGENTS.md routes mechanical dispatches to `reaper/Qwen3.8-Flash-Next`, which the Claude Code
   agent tool cannot select.**
 
+## The command surface
+
+- **`cmd/` surfaces `internal/` capabilities and implements none.** A verb file is its flags, an
+  options struct, one call into `internal/`, and the result it emits. The server's capabilities in
+  `cmd/mcp.go` (detached launches, resources, subscriptions), scoring-run orchestration in
+  `cmd/score.go`, configuration logic in `cmd/configure.go` and the client registry in
+  `cmd/provider.go` move to their packages; tool derivation from cobra stays.
+- **One registration file states the whole surface.** Each verb file exports a constructor; one file
+  registers every verb, one `AddCommand` per family (queries, write ops, KB maintenance, runs,
+  configuration, server), each wrapped `readOnlyTool`, `readWriteTool` or `cliOnly`, so the binding
+  and the read-only hint live on the registration line and nowhere else. A test refuses a command
+  reaching the tree without them. MCP-only surfaces (the rewind tool, the resource families, the
+  detached launches) are listed in the same file.
+- **Policy: a verb that reads or writes KB content or metadata is a tool.** Only process control
+  and environment diagnostics are `cliOnly` (`mcp`, `wait`, `probe`). It lands in ARCHITECTURE
+  beside I9.
+
 ## Reader fidelity
 
 - Display names from `\input`-ed preambles.
