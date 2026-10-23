@@ -1,197 +1,183 @@
-# ACTIVE PLAN — the edge census
+# ACTIVE PLAN — KB format 3.0.0: authored data in two files, everything else derived
 
-Two read-only queries over the index's edge rows, so "where do each relation's bearings sit" and
-"which edges are they" are one call each instead of a `deps` walk of every node:
+The KB's metadata moves out of the prose and into two authored YAML files under `kb-root/.index/`:
+`nodes.yaml` and `edges.yaml`. They are the only metadata kbase parses. Every derived value is
+computed at load. The registers (`claim-rigor.md`) become generated pages for people, as the
+claim-graph sheets are. Leaves become prose and statement markers. Scores gain `manually-scored`,
+and `score` leaves manually scored values alone by default.
 
-- `edge-census`: per relation, the edge count, whether the score run's bearing pass asks about it,
-  and on a scoring relation the edges at each bearing;
-- `edges`: the edge rows themselves, optionally narrowed to named relations, paged like every list
-  query.
+## Terms
+
+- **Authored:** a value only a write op or `build` sets, held in `nodes.yaml` or `edges.yaml`.
+- **Derived:** computed at load from authored data and the prose, and never stored as data.
+- **Generated page:** a file kbase writes for reading and never reads back — the claim-graph sheets
+  today, the registers under this plan.
+- **Edge identity:** (`relation`, `source`, `target`).
+- **Statement marker:** today's Tier-2 marker `<!-- claim-rigor: <id> -->` in a leaf's prose (SPEC
+  §10, "The register's vocabulary"), which anchors the node's statement.
+- **The ModernCorp KB:** `/Users/agent-user/projects/adjagent/.claude-temp/mc-fixture/kb-root`, a
+  2.0.1 KB of 157 documents. It is another project's scratch copy: facts below were read from it,
+  and nothing in this repo may depend on it.
 
 ## Settled shape
 
-1. **`edge-census`** is a mapping query registered like `stats`: `queryCommand(…, false, …)`,
-   `cobra.NoArgs`, no flags of its own. `results` is a mapping with one key per relation, in
-   `kb.Relations` order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — every
-   relation present at zero. Each value is a record, keys in this order:
-   - `edges`: the number of index edge rows of that relation;
-   - `walked`: `kb.BearingWalk(relation)` — whether a score run's bearing pass asks about the
-     relation's edges (the same predicate `bearingItems` in `internal/query/scoring.go` selects by);
-   - on a scoring relation (`kb.Scoring`) only, `bearings`: a list with one record per distinct
-     bearing the relation's rows carry, each `bearing` then `edges` (how many rows carry it).
-     `bearing` is emitted as the index's text, unchanged, as `deps` emits it. Order: numeric values
-     ascending by `strconv.ParseFloat` of the text, then the `*pending*` record, then a
-     `bearing: null` record for rows whose bearing is null. The `edges` of the `bearings` records
-     sum to the relation's `edges`. A relation with no rows has `bearings: []`
-     (`[]result.Record{}`, as `StatsPayload` builds its empty lists). A non-scoring relation
-     carries no `bearings` key.
-   - A row whose relation is not in `kb.Relations` is counted nowhere.
-2. **`edges`** is a list query: `queryCommand(…, true, …)` (it gains `--limit`/`--offset` and the
-   list result keys), `cobra.NoArgs`, one flag of its own: `--relation`, a string slice
-   (`StringSliceVar`, repeatable and comma-separated), default empty meaning every relation. A value
-   not in `kb.Relations` is refused as usage, writing nothing: check `usage`, key `--relation`, the
-   value in `detail`, `allowed` naming `kb.Relations` — the same item shape the query verbs already
-   use for a bad flag value (find it with `git grep -n 'checkUsage' cmd/*.go internal/query/*.go`
-   and follow the nearest query precedent). Each result record, keys in this order: `source`,
-   `relation`, `target`, `bearing` (the index's text or null, as `deps`), `context` (null where
-   none), `walked` (`kb.BearingWalk(relation)`). Order: relation in `kb.Relations` order, then
-   `source`, then `target`, then `context` (null first) — the same tie-breaks `deps` sorts by.
-   Rows of a relation outside `kb.Relations` are left out.
-3. **Both read the index's edge rows (`Index.edges`) and nothing else**: no derivation, no state
-   store, no score ledger. Their `edges` counts are structural; the bearings they report are the
-   values the rows hold, which `set-bearing` moves and no derived value does.
-4. **Placement.** Payloads `EdgeCensusPayload(ix *Index) result.Record` and
-   `EdgesPayload(ix *Index, relations []string) …` in `internal/query/payload.go`, beside
-   `StatsPayload`; the list payload returns what the other list payloads return to
-   `queryCommand(…, true, …)` — copy `StrengthBelowPayload`'s signature shape. Verbs in
-   `cmd/edge-census.go` and `cmd/edges.go` (verb files are hyphen-named, as `cmd/strength-below.go`).
+1. **`.index/` is kbase-owned.** Sessions never read or write it (the MCP instructions' prohibition),
+   git tracks it, and the tools are the only access. It holds exactly two files, `nodes.yaml` and
+   `edges.yaml`, both authored. Strength, bands, roll-ups, citation edges, target kinds and every
+   other derived value are computed at load and stored nowhere.
+2. **Edge records, one type per relation group, one record per edge identity in `edges.yaml`:**
+   - `UnscoredEdge` — `references`: `relation`, `source`, `target`, `context`;
+   - `DemotedEdge` — `demoted`: those, plus `origin` (`cited` or `inferred`);
+   - `BearingEdge` — `founds`: those of `UnscoredEdge`, plus `bearing`;
+   - `ScorableEdge` — `supports`, `lifts`, `refutes` (`kb.BearingWalkRelations`): those of
+     `UnscoredEdge`, plus `bearing` and `manually-scored`.
+   A field is required where its type has it and refused where it does not. `context` is required
+   and may be `""`.
+3. **Node records, one type per kind, one record per node in `nodes.yaml`,** under the same
+   required/refused rule. Phase A names each type's fields, title and an experiment's status among
+   them. A claim, an analysis and an experiment (the kinds `rigorItems` walks) carry `rigor` and
+   `manually-scored`; a work carries `rigor` and no `manually-scored`; an axiom carries no `rigor`,
+   its `1.0` being by rule. The analysis and experiment records leaf frontmatter holds today move
+   here. A node's host document is the leaf holding its statement marker.
+4. **`manually-scored`:**
+   - a public write op, called through the CLI or MCP, writes `true` beside each rigor or bearing
+     its caller supplied, `*pending*` included, on a record whose type carries the field;
+   - a value a public write op creates without the caller supplying it (a defaulted `*pending*`),
+     and every value `build` writes, is written `false`;
+   - a value the call does not write keeps its flag;
+   - a `score` landing writes `false`, through an internal provenance parameter that is never a
+     flag and never in a tool schema;
+   - re-asserting the current value on a record whose `manually-scored` is `false` sets it `true`
+     and is `done`, not `unchanged`.
+5. **`score --rescore-manual none|rigor|bearing|both`**, default `none`: a value whose
+   `manually-scored` is `true` is skipped unless the flag names its pass's kind, and the ledger
+   records the skip.
+6. **Visibility.** `show`, `deps` and `edges` report `manually-scored` beside each value that has
+   one; `stats` counts manual against model per score kind; `edge-census` splits its bearing counts
+   by it.
+7. **Leaves are prose and statement markers.** Leaf frontmatter is removed once each key it carries
+   has a home; the entry point keeps its `kb-format` stamp.
+8. **Registers are generated pages**, written by kbase for reading and never read back.
+9. **`refresh` regenerates the generated pages; `verify` checks the authored data and the prose.**
+10. **KB format 3.0.0**, a major: a converter step from 2.0.x lifts register entries, `rests-on`,
+    `references:` and `demoted` lists, pair lines and frontmatter node records into the two files,
+    every `manually-scored` written `false`, and the registers re-render as generated pages.
+11. **The session rule**, one source text placed in `cmd/mcp_instructions.txt` (plain text) and
+    `internal/kbdocs/templates/AGENTS.tmpl.md` (Markdown), a test holding both to it: a rigor or
+    bearing is changed only when the user directs that change; a session never sets one on its own
+    judgement, and `score` is the only way to re-judge.
+12. **A benchmark `just` target** times load plus full derivation on an in-repo fixture; its number is
+    reported with the landing.
+
+## Open questions for ratification
+
+Phase A recommends an answer to each; the owner rules in Phase B.
+
+1. **An edge identity authored at more than one site in a 2.0.x KB.** Today the load accepts it and
+   the last in load order answers (`Index.Edge`, `internal/query/scoring.go`). The converter
+   refuses, merges where bearing and context agree, or keeps the last.
+2. **Register text that fits no field** — intro paragraphs, legend tables, `> **Leaf references:**`
+   lines (ModernCorp: `part2/claim-rigor.md`). The converter drops it, refuses with `check:
+   conversion` (SPEC §10), or carries it somewhere.
+3. **A stale generated page:** `verify` reports it as a fault, as a finding, or not at all.
+4. **Session access to generated pages:** whether a session may read a generated `claim-rigor.md`.
+5. **The version number.** ROADMAP assigns `3.0.0` to "the derived index as one file" (which this
+   plan supersedes) and to jointly established units; units move to the next major.
 
 ## Established facts
 
 | Fact | Command | Answer |
 |---|---|---|
-| Relations and their order | `git grep -n 'var Relations\b' internal/kb/schema.go` | supports, founds, lifts, refutes, references, demoted |
-| Which relations carry a bearing; which the bearing pass walks | `git grep -n 'var ScoringRelations\|var BearingWalkRelations' internal/kb/schema.go` | scoring: the first four; walked: supports, lifts, refutes (`founds` carries a bearing set by hand and is not walked) |
-| The index's bearing is text | `git grep -n -A7 'func bearingValue' internal/index/records.go`; `git grep -n -A6 'func BearingText' internal/kb/render.go` | a loaded `EdgeRow.Bearing` is a Go `string` (`"0.5"`, `"*pending*"`) or nil (a pairing `kb.BearingLegal` refuses) — never a number. Text order is not numeric order (`*` sorts before digits; `1e-05` after `0.5`) |
-| How `deps` emits a bearing and sorts rows | `internal/query/payload.go` around `bearing: e.Bearing` and its `slices.SortStableFunc` | emits the row's value unchanged; sorts by `relationRank`, then other end, direction, context |
-| The walk's edge selection | `git grep -n -A6 'func bearingItems' internal/query/scoring.go` | `kb.BearingWalk(e.Relation)` |
-| Where the index's edges are held | `git grep -n 'edges  *\[\]kb.EdgeRow' internal/query/load.go` | `Index.edges` |
-| Mapping-query pattern | `cmd/stats.go`; `StatsPayload` in `internal/query/payload.go` | `queryCommand(&cobra.Command{…}, false, func(ix, args) { return answered(query.StatsPayload(ix)) })` |
-| List-query-with-flag pattern | `cmd/strength-below.go` | `queryCommand(…, true, …)` then `cmd.Flags()…`, then `rootCmd.AddCommand(cmd)` |
-| MCP tool description is `Short` | `git grep -n 'tool.Description = cmd.Short' cmd/mcp.go` | the `Short` string is all an MCP client sees |
-| MCP tools derive from the command tree | `git grep -n 'func TestMCPToolsAreTheCommandTree' cmd/mcp_test.go` | no MCP transcript fixture is added |
-| Compat comparison | `git grep -n 'comparedQueries\|stageCases' internal/query/compat_test.go` | runs cases through a reference toolchain that has neither verb: both stay out of `comparedQueries` and `stageCases` |
-| SPEC location of the query headings | `grep -n '^### Queries\|^### `stats`' SPEC.md` | §8 Maintenance subcommands, `### Queries` (~668), `### \`stats\`` (~682) |
+| Current format version | `git grep -n 'FormatVersion *=' internal/kb/format.go` | `2.0.1` |
+| Format version rules | SPEC.md §10 "The stamp", "One version read and written" | major: an old reader misreads; a newer major or minor is refused by every KB-reading verb; migration at load, landing on the next write |
+| Today's `.index/` files | `ls /Users/agent-user/projects/adjagent/.claude-temp/mc-fixture/kb-root/.index/` | `cites.yaml`, `claims.yaml`, `edges.yaml`, `strengthen-by.yaml`, `subtree-aggregates.yaml` — all derived |
+| `.index/` is git-tracked | `git ls-files kb-root/.index` in `/Users/agent-user/projects/adjagent/.claude-temp/mc-fixture` | yes |
+| Registers in the ModernCorp KB | `find /Users/agent-user/projects/adjagent/.claude-temp/mc-fixture/kb-root -name claim-rigor.md` | 7: the root and per-volume sidecars |
+| Edge authoring sites today | SPEC.md "Edge direction and authoring" (~1536) | `rests-on` bullets in a register (pull); a register's `references:` and `- demoted:` lists (`demoted` written by the build only); an analysis's and an experiment's pair lists in leaf frontmatter (push); a claim's `refutes:` list (push) |
+| Frontmatter keys read by name | `git grep -n -E '(Get\|ListOrEmpty\|Str)\("[a-z-]+"' -- internal cmd ':!*_test.go'` | `claims`, `experiments`, `kind`, `no-claim`, `subtree-claims`, `subtree-experiments`; plus `analysis-nodes`, `experiment-nodes` (`*NodesKey`, `internal/kb/frontmatter.go`) and `kb-format` (SPEC §10) |
+| Which kinds and relations `score` walks | `rigorItems`, `bearingItems` in `internal/query/scoring.go` | rigor: every kind but work and axiom; bearing: `supports`, `lifts`, `refutes` |
+| A score landing goes through the write ops | SPEC.md §8 "Landing" | a rigor answer becomes `set-rigor`, a bearing answer `set-bearing` |
+| The ledger's statuses | `internal/score/ledger.go` status constants | `done`, `failed`, `pending` |
+| `mcp_instructions.txt` is plain text | `cmd/mcp.go` near `servedInstructions` | no Markdown reaches the wire |
+| Full verification time today | `/usr/bin/time -p kbase verify`, ten runs, from `/Users/agent-user/projects/adjagent/.claude-temp/mc-fixture` | ~0.10 s each |
 
-## Work package
+## Phases
 
-| WP | Rating | Seat / model | Status |
+| Phase | Rating | Seat | Status |
 |---|---|---|---|
-| WP1 | expert (small) | go-coder (definition's pin) | landed |
+| A — inventory and design | expert | architect | pending |
+| B — design review and ratification | expert | go-coder, prompt-engineer; then the owner | pending |
+| C — implementation | planned from the ratified design | — | not yet planned |
 
-Rated expert: the refusal item and list-payload return follow precedents the coder must locate.
+### Phase A — inventory and design
 
-### WP1 — the two verbs, their tests and the contract text
+The architect writes `ROADMAP_PLANS/KB_3_DATA_MODEL.md`, its own design artifact, holding:
 
-Help text (wrap the raw strings at the width `cmd/stats.go` uses):
-- `edge-census` `Short`: `the edge count per relation, and per bearing on the scoring relations`.
-  `Long`: `edge-census counts the index's edges of each relation, says whether a score run's bearing
-  pass asks about that relation, and for each scoring relation — supports, founds, lifts and
-  refutes — counts the edges at each bearing, ascending, then the pending ones. The edge counts are
-  structural; the bearing counts read the bearings the index holds; neither reads the derivation.`
-- `edges` `Short`: `the edges of the named relations, or of every relation, with their bearings`.
-  `Long`: `edges lists the index's edge rows — source, relation, target, bearing, context, and
-  whether a score run's bearing pass asks about the edge — ordered by relation, source and target.
-  --relation narrows the list to the named relations; it repeats or takes a comma-separated list.`
-  `--relation` usage string: `only edges of this relation (supports, founds, lifts, refutes,
-  references, demoted); repeatable`.
+- **The inventory:** every frontmatter key, register line and `.index/` file; for each, every reader
+  and writer in the code (package and function — `internal/claimgraph` and `internal/index/verify.go`
+  included), and its home: a field of a node or edge record, derived at load, a generated page, kept
+  in the entry point's frontmatter (the `kb-format` stamp only), or removed with the reason.
+  `claims`, `no-claim`, `experiments`, `kind`, `subtree-claims` and `subtree-experiments` each get an
+  explicit home.
+- **The two schemas:** each record type's field names, types and order under Settled 2–3's
+  required/refused rule, the YAML form, and a worked example of each type; whether `axioms.md` or
+  `nodes.yaml` declares an axiom; what `show`'s `canonical_path` becomes.
+- **The statement markers:** whether the marker keeps its register-derived name; how an analysis or
+  an experiment finds its statement once `CanonicalPath` names no register (ARCHITECTURE, "The closed
+  text and its guard"); what a node with no marker reads as.
+- **The generated register page:** its path (one per volume, as today), its anchor rule (each
+  entry's anchor unchanged from 2.0.x, so prose links and the dead-link check keep working), whether
+  git tracks it, what it shows and in what order.
+- **The converter:** each 2.0.x source form to its 3.0.0 record, with a recommendation on open
+  questions 1 and 2.
+- **Every verb's change:** each query, write op, `build` stage, `refresh`, `verify`, `score`,
+  `render-claim-graph` and `export-latex`, and the MCP resources.
+- **`score`'s skip:** the ledger's new status, whether `--resume` retries a skipped item, and how a
+  run's counts report it.
+- **The session rule's single source:** where the text lives and how the plain-text and Markdown
+  surfaces both take it.
+- **The benchmark:** its in-repo fixture and its target's name.
+- **The contract:** for each of the following, whether it is kept, amended or retired, with the new
+  wording — SPEC §3's byte-equal rows (metadata rendering, the `.index/*.yaml` freshness gate);
+  SPEC §3's placeholder `index sha256`; SPEC §3's stamped-documents rule and §11's prohibition,
+  both of which call `.index/` derived (`cmd/mcp_instructions.txt`, `AGENTS.tmpl.md`); SPEC §10's
+  YAML dialect (one JSON object per index line); the one loader, `internal/kbload`; migration at
+  load, landing on the next write; the converter's refusal to make invalid bytes valid, and
+  `check: conversion`; `set-bearing` never inserting a token; `refresh` never rewriting a rigor it
+  found. Then each other SPEC, ARCHITECTURE and CONVENTIONS section that moves, named.
+- **The compat harness** in `internal/query/compat_test.go`, which compares the derived index with
+  the reference run: what becomes of it.
+- **Recommendations** on open questions 3–5.
 
-Tests:
-- `internal/query` unit tests over a constructed index:
-  - census: every relation present, in order; `walked` per relation; a non-scoring relation has no
-    `bearings`; a value whose text order differs from its numeric order (`"1e-05"` vs `"0.5"`) sorts
-    numerically; `*pending*` after the numbers; a null-bearing scoring row a `bearing: null` record
-    last; each relation's `bearings` `edges` sum to its `edges`; the relations' `edges` sum to
-    `len(ix.edges)`; a relation with no rows has `edges: 0`, `bearings: []`.
-  - edges: unfiltered returns every row in the stated order with the stated keys; `--relation
-    founds` returns only founds rows with `walked: false`; two relations return both; an unknown
-    relation is the usage refusal.
-- `cmd/resultkeys_test.go` `keysFor`: `edge-census` → `mapping-query`; `edges` → `list-query`.
-- `cmd/resultdocs_test.go` done-sweep: add `{"edge-census"}`, `{"edges"}`,
-  `{"edges", "--relation", "founds"}`; refused sweep: add `run("refused", "edges", "--relation",
-  "nope")`.
-- `cmd/format_test.go` `queryCases` ("every query"): add `{"edge-census"}` and `{"edges"}`.
-- `justfile`, the results-fixture run list: after `run stats done stats` add `run edge-census done
-  edge-census` and `run edges done edges`.
+Done when every Settled item maps to a named section of the design and every open question carries a
+recommendation.
 
-Contract text (exact):
-- SPEC.md §8 `### Queries`: after `### \`stats\`` add the headings `### \`edge-census\`` and
-  `### \`edges\``; after the `stats` paragraph (the one beginning "`stats` reads the derivation")
-  add: "`edge-census` and `edges` read the index's edge rows and no derivation: their edge counts are
-  structural, and the bearings they report are the values the rows hold, which `set-bearing` moves.
-  Each reports, per relation, `walked`: whether a score run's bearing pass asks about that
-  relation's edges — `supports`, `lifts` and `refutes` — where a `founds` bearing is the user's,
-  written by `set-bearing`."
-- SPEC.md "Bounded results" paragraph: after "`stats`' ranked sections stay at 10." insert
-  "`edge-census`' `bearings` hold one record per distinct bearing value."
-- SPEC.md §7 result-keys table:
-  - the list-query row: add `edges` to its first cell's verb list, and inside its `results`
-    parenthetical, after the `deps` sentence, add "; `edges`' records are `source`, `relation`,
-    `target`, `bearing` (as `deps`' bearing), `context` and `walked` (bool)";
-  - the `show`, `stats` row: first cell `` `show`, `stats`, `edge-census` ``; append before the
-    closing parenthesis: "; `edge-census`' mapping carries one record per relation in this order —
-    `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's
-    row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct
-    bearing its rows carry, `bearing`, as the index writes it, and `edges`, numbers ascending, then
-    `*pending*`, then null, `[]` where the relation has no rows".
-- `USER_CONVENTIONS.md` (~147): "`show <id>` and `stats` return a mapping." → "`show <id>`, `stats`
-  and `edge-census` return a mapping."; and add `edges` to the list queries enumerated right after
-  it, after `weak-points`.
-- `README.md` (~249): the query list ends "…, `weak-points`, `stats`, `edge-census` and `edges`."
-- `internal/kbdocs/templates/README.tmpl.md` "Current Figures":
-  - "The current ones come from `kbase stats`, run from the project root that holds this KB." →
-    "The current ones come from `kbase stats` and `kbase edge-census`, run from the project root
-    that holds this KB."
-  - "It does not split the edges by class. `deps` reports each edge at a node with its
-    `relation`, its class, and its `bearing`." → "`kbase edge-census` splits the edges by relation
-    and counts the edges at each bearing; `kbase edges --relation <relation>` lists them. `deps`
-    reports each edge at a node with its `relation` and its `bearing`."
-- `internal/kbdocs/templates/CONVENTIONS.tmpl.md` operations table, after the `Claim-graph counts`
-  row: `| Edge counts by relation and bearing | \`kbase edge-census\` |` and
-  `| The edges of a relation | \`kbase edges --relation <relation>\` |`.
-- ARCHITECTURE.md: no change (it lists no query verbs).
+### Phase B — review and ratification
+
+A go-coder reviews the design for feasibility and missing consumers; a prompt-engineer reviews it as
+the brief Phase C's coders will execute. The architect folds the findings in. The owner rules on the
+open questions and ratifies; Phase C's work packages are then planned here from the ratified design.
 
 ## Gates
 
-`just edit-gate`, `just test`; before the landing `just test-integration` and `just checkpoint`.
+Phase C, per package: `just edit-gate`, `just test`; before each landing `just test-integration`
+and `just checkpoint`.
 
 ## Not in this plan
 
-- Fault-id counts per edge: the index holds a bearing, not the charges that priced it.
-- A `--bearing` filter on `edges`.
-- The adjagent skill's references to the query set (the sibling project's change).
+- The build gap that leaves claims with no statement marker (ModernCorp: 10 claims, among them
+  `clm-uu11c9` and `clm-fsig2a`).
+- The ModernCorp KB's dead links to `../part2/claim-quality.md`.
+- The bearing ask's lone `flt-no-engagement` answers on edges whose source supplies what the
+  context claims.
 
 ## Post-sprint review
 
-Once the landing is committed, one pass reviews the changes since the plan was activated. The
-reviewers are an architect and a coder; before they start they read THESIS.md, SPEC.md,
-ARCHITECTURE.md and CONVENTIONS.md, and they do not read this plan. Their subject is the changes
-against those standards and whether the result is fit for its purpose, and their brief includes the
-tests.
+Once the sprint's last landing is committed, one pass reviews the changes since the plan was
+activated. The reviewers are an architect and a coder; before they start they read THESIS.md,
+SPEC.md, ARCHITECTURE.md and CONVENTIONS.md, and they do not read this plan. Their subject is the
+changes against those standards and whether the result is fit for its purpose, and their brief
+includes the tests.
 
 **Review**: findings against the four documents. **Remediation**: each finding landed in a follow-up
 commit or declined with the reason recorded. **Burndown**: what remains, one fact to an item, below.
-
-### Review (over `5448097..d7f41c2`)
-
-Remediated in a follow-up commit:
-
-- `--relation ""` listed every edge: the flag was a comma-splitting string slice, which reads an
-  empty value as no value. It is a repeatable string array now, so an empty value is refused as
-  unknown; the slice's MCP schema type goes with it, and a repeated unknown value is one refusal.
-- An index edge of an unknown relation was dropped silently by both payloads, so `edge-census`
-  totals could differ from `stats`' `edges`; a non-text bearing panicked the census. Load refuses
-  both, with the refresh remedy.
-- `AGENTS.tmpl.md` sent agents to `stats` for edge counts; it names `edge-census` and `edges`. The
-  README template qualifies per-bearing counts to scoring relations.
-- `edge-census`' help spelled the scoring relations and left out the null group.
-- `compareBearings` re-implemented `kb.BearingFromValue`; `depsRelationOrder` aliased
-  `kb.Relations`; `cmd/query.go`'s comment named the mapping queries one by one.
-- Two `TestEdgeCensus` checks could not fail apart from the `DeepEqual` before them.
-- No test sent `--relation` through MCP: a transcript does, across three calls in one session.
-- SPEC said `edges` reports `walked` per relation (it is per row) and did not give `edges`'
-  `context` as nullable.
-
-Declined:
-
-- Checking `--relation` before the index loads, as `--limit` is: the refusal is correct either way,
-  and against a missing index the only difference is which refusal is reported first.
-
-### Burndown
-
-- The adjagent skill's `references/reading.md` lists the query verbs without `edge-census` and
-  `edges` (the sibling project's change).
-- The MCP and results fixtures carry no edges, so the binary-level runs of both verbs answer empty;
-  grouping and ordering are pinned by the `internal/query` unit tests alone.
-- `checkEdges` does not refuse text bearings that are neither a number nor `*pending*`; the census
-  ranks such text with pending.

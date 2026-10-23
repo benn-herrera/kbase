@@ -22,6 +22,12 @@ deleted, not archived.
 - **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
 - **AGENTS.md routes mechanical dispatches to `reaper/Qwen3.8-Flash-Next`, which the Claude Code
   agent tool cannot select.**
+- **The adjagent skill's `references/reading.md` lists the query verbs without `edge-census` and
+  `edges`** (the sibling project's change).
+- **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
+  `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
+- **The index load does not refuse a text bearing that is neither a number nor `*pending*`**;
+  `edge-census` ranks such text with pending.
 
 ## The command surface
 
