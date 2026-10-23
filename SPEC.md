@@ -1810,7 +1810,7 @@ changes nothing.
 default) behaving as before (§9.1). `models`, `configure`, `kbase probe`'s chat selections, a build's
 overview call and a scoring run's asks all reach it; the `decision` role's letter asks and
 `kbase probe --decision` do not, because the decision surfaces are OpenAI-shaped, and a Messages
-endpoint asked for either refuses naming the provider and the role (§8). Messages requires a
+endpoint asked for either fails naming the provider and the role (§8). Messages requires a
 completion cap, sent as `max(256, ceil(characters / 4))` over the ask's text, and has no
 prompt-cache key, so a scoring run against such an endpoint sends none (§8).
 

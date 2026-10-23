@@ -91,7 +91,7 @@ LIVE_CONFIG_DIR := TEST_DATA_FIXTURES_DIR / "config"
 EXPORT_CHECK_DIR := "tools/export"
 
 GOPKGS := "./..."
-GOSRCDIRS := "cmd internal"
+GOSRCDIRS := "cmd internal tools"
 
 default:
     @just --list
@@ -1160,8 +1160,8 @@ _test-integration-monitor-arxiv: build
 # each result parsed against its subcommand's documented keys and outcome, and
 # probe's decision selection run against a Go stub that answers the decision
 # surface and refuses the chat path.
-# It needs only git, which SPEC requires on the host — no pandoc, no
-# provider, no adjagent clone — so it joins the omnibus.
+# It needs git and the Go toolchain, which the build already uses — no pandoc,
+# no provider, no adjagent clone — so it joins the omnibus.
 [doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's; plus probe --decision against a Go stub answering only the SystemOne decision surface, its document parsed against the probe keys with no first token and no finish reason; evidence under test-data/transient/test-integration-results-fixture/")]
 test-integration-results-fixture:
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"

@@ -1160,9 +1160,10 @@ therefore carries a type's meaning and not only a version's, and every parse in 
 - Only `asks/call`, `build` and `cmd`'s `build`, `models`, `configure`, `score` and `probe` verbs
   import `model`: within `cmd`, file-level, `cmd/build.go`, the client registry the others share,
   `cmd/provider.go`, the score verb's ask, `cmd/score.go`, and the probe's one call,
-  `cmd/probe.go`. `claimgraph` reaches neither `model`
-  nor `asks/call`, transitively. `cmd/provider.go` is the only constructor of a `model.Client`, and
-  a verb opens one only where it is about to ask something.
+  `cmd/probe.go`. `internal/model/modeltest` imports it as test support, which nothing shipped
+  imports. `claimgraph` reaches neither `model` nor `asks/call`, transitively. `cmd/provider.go` is
+  the only constructor of a `model.Client`, and a verb opens one only where it is about to ask
+  something.
 - `internal/config` imports no kbase package but `atomicfile`: it holds the grammar, the three
   roles, the two modes, `ModeOf`, `Resolve`, `Select`, the refusals, the loaded files
   and the templates, and it never imports `model`, `result` or `log`, opens no client and names no

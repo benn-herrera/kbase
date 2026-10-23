@@ -161,13 +161,42 @@ brief includes reviewing the tests.
 - **Remediation** — each finding lands in a follow-up commit or is declined with the reason recorded.
 - **Burndown** — what remains, one fact per item, below.
 
+### Remediation
+
+Landed in the follow-up commit:
+
+- `tools/probestub` joins the formatter's roots: `GOSRCDIRS` names `tools`, so `just fmt` and
+  `fmt-check` reach the stub.
+- `CONVENTIONS.md` §Testing states the helper rule the `model`/`model_test` split forced: an
+  unexported name does not cross the package boundary, and a test-support package importing `p`
+  cannot be imported by `p`'s in-package tests; the pair keeps one copy per package and states why.
+- `SPEC.md` §12's 0.8.0 bullet says a Messages endpoint asked for a decision fails, not refuses: the
+  verb reports `failed` with the client's error.
+- `cmd/probe.go`'s decision-answer comment no longer claims a keyed lookup the response does not have.
+- `ARCHITECTURE.md`'s model-importer inventory names `internal/model/modeltest`.
+- The results-fixture recipe's dependency sentence names git and the Go toolchain, not git alone.
+
+Declined:
+
+- **The charge-line prose test.** `TestScoreSystemStatesTheChargeLineForm` and its `chargeLineRE` are
+  removed. "No test asserts a prompt's prose" governs; the fragment's form is carried by the parser's
+  refusal and the prompt-engineer review. Residual: no test fails when the form sentence is dropped.
+- **The four fixtures' second home.** `testAPIKey`, `newTestEndpoint`, `chatRequest` and `statusServer`
+  stay one copy per package. A shared home needs a test-support package importing `model`, which
+  `model`'s in-package tests cannot import without an import cycle; the Testing rule states it.
+- **`usage.reported` as `PromptTokens > 0`.** The convention's read for a surface that sends no usage
+  block; an explicit field would touch five sites for one return. Note only.
+
 ### Burndown
 
-- `justfile:94` sets `GOSRCDIRS := "cmd internal"`, so `tools/probestub` is outside `fmt-check` while
-  `go vet ./...` covers it.
-- `CONVENTIONS.md` §Module Structure states no home for a helper an external test package needs; the
-  `internal/model` move split `statusServer`, `testEndpoint` and `chatRequest` across `model_test.go`
-  and `openai_client_test.go` to keep one copy per package.
+- The probe's decision request contents are unasserted: both stubs discard the body, so a regression
+  sending the chat default passes. One assertion over the request and the stub's captured body.
+- `waitScore`'s two branches and its `interruptedScoreDocument` fallback are untested.
+- `probeDecisionReply`'s letter and type branches are untested; only a predicate figure is.
+- `internal/model/mockllm_test.go` still tests `modeltest.MockClient` from `internal/model`'s test
+  binary; a `modeltest_test` package would exercise the same API without importing production `model`
+  beside it.
+- No test fails when the system fragment's charge-line form sentence is dropped.
 - A move has no stated form for a dispatch: `internal/model/mockllm.go` was removed with
   `command rm`, because `git rm` stages and the tool set carries no delete verb.
 - `ARCHITECTURE.md:1088`'s `kept:` parenthetical names `model.Chat` for the overview call and

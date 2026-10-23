@@ -346,6 +346,11 @@ integration tests.
 
 **Results are part of the test.** Results that cannot be examined are not results.
 
+**A test helper an external test package needs is defined in that package.** An unexported name does
+not cross between `package p` and `package p_test`, and a test-support package that imports `p` cannot
+be imported by `p`'s in-package tests — the cycle is refused. Where the two need the same fixture,
+each package keeps one copy and the pair states why.
+
 **A test harness selects its inputs by content the KB contract fixes, never by presentation.** A
 choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
 another's.

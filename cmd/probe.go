@@ -247,9 +247,9 @@ func probeAnswer(a model.ChatAttempt, wall time.Duration) []toolresult.Field {
 
 // probeDecisionAnswer is what one answered decision call reports: the surface
 // streams nothing, so no first token arrived and no finish reason came back,
-// and the reply is the answer itself. A response carrying no answer under the
-// probe's own key reports an empty reply: what arrived is what is stated, and
-// nothing is invented for a surface that said nothing.
+// and the reply is the answer itself. A response carrying no answer reports an
+// empty reply: what arrived is what is stated, and nothing is invented for a
+// surface that said nothing.
 func probeDecisionAnswer(resp model.DecisionResponse, wall time.Duration) []toolresult.Field {
 	var reply string
 	if len(resp.Answers) > 0 {
