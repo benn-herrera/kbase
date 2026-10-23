@@ -29,8 +29,11 @@ claim's missing method is therefore not a statement fault, and a claim's missing
 rigor fault at all — it is the walk's `0`, under
 [The strength is the walk's, not the rigor's](#the-strength-is-the-walks-not-the-rigors).
 
-**`bearing` judges one source's relevance to the target it scores**: how far the source's content
-speaks to the target's assertion. The source is taken as given — true as it states itself — and
+**`bearing` judges one source's relevance to the target it scores**: whether the source's content
+supplies what the link claims the target takes from it — the edge's context states that claim — and
+how much of the target's assertion that reaches. A premise need not share the conclusion's content:
+what it supplies is judged, not how far the two statements overlap. The context is the claim under
+test, never evidence that the claim holds. The source is taken as given — true as it states itself — and
 neither its soundness nor the target's wisdom in citing it is judged; bearing weights the source's
 contribution and never modifies the source's value. A part of the target's assertion is *engaged*
 when, taking the source as given, believing it would change what one should think about that part, in
@@ -158,11 +161,11 @@ analysis or an experiment that is a statement about its method, not about whethe
 
 ### The `bearing` faults
 
-Six faults, maximum `1.00`. The weight is per occurrence. This table is unchanged.
+Six faults, maximum `1.00`. The weight is per occurrence. This table's weights are unchanged.
 
 | fault id | the fault | one occurrence is | weight per occurrence |
 |---|---|---|---|
-| `flt-no-engagement` | Nothing in the source speaks to the assertion: for every part of the target's assertion the source states nothing that would change what one should think of that part, in either direction; a shared vocabulary is not engagement. | The link, whose test is universal over the target: at most one. | `1.00` |
+| `flt-no-engagement` | The source supplies nothing the link needs: nothing it states is what the edge's context says the target takes, and for every part of the target's assertion the source states nothing else that would change what one should think of that part, in either direction; a shared vocabulary is not engagement. | The link, whose test is universal over the target: at most one. | `1.00` |
 | `flt-referent` | The link rests on a term the two statements use differently: source and target share a term that carries the link and use it for different referents or under different definitions; where nothing survives substituting the target's sense for the source's, the fault is `flt-no-engagement`. | One shared term the two texts use differently and that carries the link: as many terms. | `0.50` |
 | `flt-partial` | The source engages part of a compound assertion: the target's assertion names more than one part — a conjunction, a list of conditions, two quantities asserted together — and the source engages at least one part and not all. | One part of a compound assertion left unengaged: as many parts. | `0.50` |
 | `flt-narrower` | The source reaches the assertion only within a narrower scope: the assertion quantifies over a class, a range, a population or a set of conditions, and the source's content holds for part of it — one member, one regime, one value of a parameter; an assertion scoped to that part, and a source general where the assertion is the case, are not narrower. | One dimension in which the source's scope is narrower: as many dimensions. | `0.50` |
@@ -469,7 +472,8 @@ ledger as it carried them, without the gutter, joined by newlines; `lines` recor
 answer named, `citation` the quote, and `offset` the quote's byte offset in the closed text.
 
 A line in the edge's `## Context` carries no number and is no citation for a charge: the context states
-bridges and excuses, and a charge is about what the two texts do and do not do. A `bearing` citation
+what the link claims and the bridges it runs through, and a charge is about what the two texts do and
+do not do. A `bearing` citation
 may come from either end, because the evidence for a bearing fault can lie at either — `flt-referent`
 needs the term as one text uses it, `flt-partial` the part the source leaves alone, `flt-transfer` the
 two subjects. No line names its end: the recorded `passage` carries the attribution. A numbered line
