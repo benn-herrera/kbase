@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path"
 	"path/filepath"
@@ -111,6 +112,46 @@ func TestScoreReplayReproducesTheRun(t *testing.T) {
 	}
 }
 
+// TestScoreReplayCountsAChangedItem: an endpoint answering one item otherwise
+// than the run's did is one item changed, and that item's comparison line alone
+// differs between the original and the replay.
+func TestScoreReplayCountsAChangedItem(t *testing.T) {
+	repo, state, run := replayedRun(t)
+	replies := slices.Clone(replayedReplies)
+	replies[2] = "none"
+	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run}, func() model.Client { return scoring(replies...) })
+	if doc.Outcome != toolresult.Done || doc.Values["changed"] != 1 {
+		t.Fatalf("the replay: outcome %s, changed %v; want done with one item changed\n%s", doc.Outcome, doc.Values["changed"], stdout)
+	}
+	for _, c := range comparisons(t, doc) {
+		original, _ := c["original"].(map[string]any)
+		replay, _ := c["replay"].(map[string]any)
+		differs := original["value"] != replay["value"] || !slices.Equal(anyStrings(original["faults"]), anyStrings(replay["faults"]))
+		if want := c["item"] == "clm-bbbbbb"; differs != want {
+			t.Errorf("%v: differs %v, want %v", c, differs, want)
+		}
+	}
+}
+
+// TestScoreReplayCancelledNamesTheFirstItemNotAsked: a replay whose context is
+// cancelled as its second call arrives ends cancelled, naming that item, with
+// only the first item compared.
+func TestScoreReplayCancelledNamesTheFirstItemNotAsked(t *testing.T) {
+	repo, state, run := replayedRun(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, scoreOptions: scoreOptions{Ctx: ctx}}, func() model.Client {
+		return &cancelOnSecond{MockClient: scoring(replayedReplies...), cancel: cancel}
+	})
+	stopped, _ := doc.Values[toolresult.CancelledKey].(map[string]any)
+	if doc.Outcome != toolresult.Cancelled || stopped["item"] != "clm-aaaaaa" {
+		t.Fatalf("the replay: outcome %s, cancelled %v; want cancelled before clm-aaaaaa\n%s", doc.Outcome, stopped, stdout)
+	}
+	if items := comparedItems(t, doc); !slices.Equal(items, []string{"ana-aaaaaa"}) {
+		t.Errorf("the comparison names %q, want the one item asked before the cancellation", items)
+	}
+}
+
 // TestScoreReplayDocumentKeys: the replay's result document carries its keys in
 // their order, the closing record its outcome names last.
 func TestScoreReplayDocumentKeys(t *testing.T) {
@@ -196,17 +237,15 @@ func TestScoreReplayLimitCutsInItemOrder(t *testing.T) {
 }
 
 // TestScoreReplayRefusals: --replay takes a run's id and no path; a run with no
-// captures — one pruned, a dry run, one that asked nothing — is refused naming
-// --replay; a run's own flag beside --replay is refused naming --replay, and
-// --failed without --replay naming --failed. The accepted flags pass.
+// captures — one standing no longer, a dry run, one that asked nothing — is
+// refused naming --replay; a run's own flag beside --replay is refused naming
+// --replay, and --failed without --replay naming --failed. The accepted flags
+// pass.
 func TestScoreReplayRefusals(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
-	stood := standRuns(t, state, "run", 16, 0)
-	if got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") }); got.doc.Outcome != toolresult.Done {
-		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
-	}
-	if _, err := os.Stat(filepath.Join(state, "score", stood[0])); !os.IsNotExist(err) {
-		t.Fatalf("the run did not prune %s: %v", stood[0], err)
+	stood := standRuns(t, state, "run", 2, 0)
+	if err := os.RemoveAll(filepath.Join(state, "score", stood[0])); err != nil {
+		t.Fatal(err)
 	}
 	dry := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, DryRun: true}, nil)
 	dryRun, _ := dry.doc.Values["run"].(string)
@@ -217,7 +256,7 @@ func TestScoreReplayRefusals(t *testing.T) {
 	}{
 		{"a path", "--replay", "not a path", []string{"--replay", "../../run-aaaaaa"}},
 		{"a malformed id", "--replay", "not a path", []string{"--replay", "run-1"}},
-		{"a pruned run", "--replay", "captures.jsonl", []string{"--replay", stood[0]}},
+		{"a run standing no longer", "--replay", "captures.jsonl", []string{"--replay", stood[0]}},
 		{"a dry run", "--replay", "captures.jsonl", []string{"--replay", dryRun}},
 		{"a run that asked nothing, beside every flag a replay takes", "--replay", "captures.jsonl",
 			[]string{"--replay", stood[1], "--failed", "--limit", "1", "--timeout", "5s", "--scoring-model", "solo/other"}},

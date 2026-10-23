@@ -994,8 +994,9 @@ func TestScoreDryRunCountsAgainstDryRunsAlone(t *testing.T) {
 
 // TestScoreResumeRefusesADryOrAPrunedRun: a real run over sixteen standing ones
 // removes the oldest; --resume naming that run is refused as a run with no
-// run.yaml is, and --resume naming a dry run's id by the id-shape check, which
-// says it takes a real run's.
+// run.yaml is, and prunes nothing, the sixteen runs standing as they stood; and
+// --resume naming a dry run's id is refused by the id-shape check, which says it
+// takes a real run's.
 func TestScoreResumeRefusesADryOrAPrunedRun(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	stood := standRuns(t, state, "run", 16, 0)
@@ -1015,6 +1016,9 @@ func TestScoreResumeRefusesADryOrAPrunedRun(t *testing.T) {
 	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--resume" ||
 		items[0]["detail"] != "no run stands here: run.yaml is missing" {
 		t.Errorf("--resume of the pruned %s = %s, %v; want the missing run.yaml's refusal\n%s", stood[0], got.doc.Outcome, items, got.stdout)
+	}
+	if have := standingRuns(t, state); !slices.Equal(have, want) {
+		t.Errorf("the refused resume left %q standing, want the sixteen it found: %q", have, want)
 	}
 
 	got = scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: "dry-aaaaaa"}, nil)

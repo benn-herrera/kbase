@@ -119,8 +119,8 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	case opts.Resume != "" && !runIDRE.MatchString(opts.Resume):
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
-			Detail: fmt.Sprintf("--resume names a real run's id (run-<%d characters of a-z0-9>), not a path: %s",
-				kb.HashLen, opts.Resume)})
+			Detail: fmt.Sprintf("--resume names a real run's id (%s-<%d characters of a-z0-9>), not a path: %s",
+				score.RunKindReal, kb.HashLen, opts.Resume)})
 	case opts.DryRun && opts.Resume != "":
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
 			Detail: "a dry run asks nothing and records nothing to resume: drop --resume, or drop --dry-run to continue run " + opts.Resume})
@@ -177,9 +177,9 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if run == "" {
 		// A dry run's id carries its own prefix, so the runs kept of each kind
 		// are counted apart and a dry run never removes a real one.
-		kind := "run"
+		kind := score.RunKindReal
 		if opts.DryRun {
-			kind = "dry"
+			kind = score.RunKindDry
 		}
 		run = kb.MintID(kind, func(id string) bool {
 			_, err := os.Stat(filepath.Join(score.RunsDir(dir), id))
@@ -199,11 +199,6 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 			opts.Logger.Error("the run's locks were released and their files not removed", "error", err)
 		}
 	}()
-	// Retention runs under the store's holder lock, so no other run is
-	// writing a directory it could remove.
-	if err := score.PruneRuns(dir, run); err != nil {
-		return failed(fields, fmt.Errorf("prune the score runs: %w", err))
-	}
 
 	// The run's start refresh: the set is enumerated from an index that is
 	// current, and on a KB in an older metadata format this is the write that
@@ -230,6 +225,9 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 			return failed(fields, err)
 		}
 		defer l.Close()
+		if err := score.PruneRuns(dir, run); err != nil {
+			return failed(fields, fmt.Errorf("prune the score runs: %w", err))
+		}
 		if err := l.ClearResult(); err != nil {
 			return failed(fields, err)
 		}
@@ -278,6 +276,12 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		return outcome, f
 	}
 	defer l.Close()
+	// Retention runs under the store's holder lock, so no other run is writing
+	// a directory it could remove, and only once the run's ledger stands, so an
+	// invocation refused before it opens prunes nothing.
+	if err := score.PruneRuns(dir, run); err != nil {
+		return failed(fields, fmt.Errorf("prune the score runs: %w", err))
+	}
 	if err := l.ClearResult(); err != nil {
 		return failed(fields, err)
 	}
@@ -403,7 +407,7 @@ var runIDBody = `[` + kb.HashAlphabet + `]{` + strconv.Itoa(kb.HashLen) + `}`
 // joined into the runs directory, and a directory under it is removed
 // recursively, so a name that reaches further than a run's own directory
 // reaches it too. TestScoreResumeRefusesAPath holds this to what MintID mints.
-var runIDRE = regexp.MustCompile(`^run-` + runIDBody + `$`)
+var runIDRE = regexp.MustCompile(`^` + score.RunKindReal + `-` + runIDBody + `$`)
 
 // scoreWalkSet is the set a run walks: the --pass value, or both where the flag
 // named none. A default run and one naming both are the same run, its header
@@ -692,7 +696,7 @@ ledger.jsonl holds a line per attempt with the charges a reply recorded, the
 reply itself where it parsed, the value it prices to, the model and the prompt's
 digest, captures.jsonl holds each call made — the closed text, the prompt sent
 and the reply returned, a failed attempt's included — and items.jsonl lists the
-set. A run's id is run-<id>, a --dry-run's dry-<id>; the newest 16 runs of each
+set. A run's id is run-<id>, a --dry-run's dry-<id>; the newest ` + strconv.Itoa(score.KeptRuns) + ` runs of each
 kind are kept, and a run's start removes the older ones of its kind whole.
 --dry-run writes the run's records of the set, asks nothing, writes no KB and
 cannot be resumed. --resume continues a real run,

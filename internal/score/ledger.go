@@ -37,10 +37,7 @@ const (
 // run.yaml that names it, the lines its attempts append, and the calls they
 // made.
 const (
-	runsDir = "score"
-	// keptRuns is how many runs of each kind — real or dry — the state
-	// directory keeps: the run an invocation names and the newest others.
-	keptRuns     = 16
+	runsDir      = "score"
 	runFile      = "run.yaml"
 	linesFile    = "ledger.jsonl"
 	capturesFile = "captures.jsonl"
@@ -50,6 +47,19 @@ const (
 	// ledger so a waiter reads the same document the run reported.
 	ResultFile   = "result.yaml"
 	ledgerFormat = 1
+)
+
+// KeptRuns is how many runs of each kind — real or dry — the state directory
+// keeps: the run an invocation names and the newest others.
+const KeptRuns = 16
+
+// The kinds of run: the prefix kb.MintID gives a run's id, which is the kind a
+// run directory is counted under.
+const (
+	// RunKindReal is a run that asks and lands.
+	RunKindReal = "run"
+	// RunKindDry is a --dry-run's listing, which asks nothing.
+	RunKindDry = "dry"
 )
 
 // checkUsage is the check a refusal names where the request itself is wrong.
@@ -219,21 +229,17 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 // changed weight moves are re-derived from the recorded ids and landed through w,
 // the write a landing uses, and the items after them are asked under this
 // kbase's ask. A line a killed process left torn did not land: it is dropped,
-// and the item it names is asked again.
+// and the item it names is asked again; a capture it left torn is dropped too,
+// so this run's first capture is not appended behind it.
 func Resume(dir string, h RunHeader, w Write) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), lines: map[string]Entry{}}
-	path := filepath.Join(l.dir, runFile)
-	b, err := os.ReadFile(path)
+	have, err := readHeader(l.dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, result.Refusal{{Check: checkUsage, Path: l.dir, Key: "--resume",
 			Remedy: "start a new run without --resume", Detail: "no run stands here: " + runFile + " is missing"}}
 	}
 	if err != nil {
-		return nil, err
-	}
-	var have RunHeader
-	if err := yaml.Unmarshal(b, &have); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", filepath.Join(l.dir, runFile), err)
 	}
 	if refusal := l.refusalFor(have, h); refusal != nil {
 		return nil, refusal
@@ -242,6 +248,9 @@ func Resume(dir string, h RunHeader, w Write) (*Ledger, error) {
 	// opening, and this invocation's lines name what asks now.
 	l.run, l.pass, l.backEnd = have.Run, have.Pass, h.BackEnd
 	if err := l.readBack(); err != nil {
+		return nil, err
+	}
+	if _, err := trimTorn(filepath.Join(l.dir, capturesFile)); err != nil {
 		return nil, err
 	}
 	if err := l.reprice(w); err != nil {
@@ -352,60 +361,35 @@ func capturedLines(lines []line) []capturedLine {
 	return out
 }
 
-// capturedCall is one capture read back: the record, the class it names, and
-// the closed text it carried, which a reply is parsed against.
-type capturedCall struct {
-	captureRecord
-	class  class
-	closed closedText
+// readComplete is the JSONL file at path to its last newline, and the file's
+// whole size. A line is complete once its newline landed; what a killed process
+// left after the last one never became a record.
+func readComplete(path string) (complete []byte, size int, err error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	return b[:bytes.LastIndexByte(b, '\n')+1], len(b), nil
 }
 
-// readLastCaptures is, per item, the last call the captures.jsonl in the run
-// directory runDir records, keyed as the ledger keys an item. The file is read to
-// its last complete line, so a run still appending is read as far as it has
-// landed. A complete line that does not read as a capture, names no class, or
-// numbers bytes its text does not hold is an error: the record is what a reply
-// is parsed against, and no part of it is guessed.
-func readLastCaptures(runDir string) (map[string]capturedCall, error) {
-	path := filepath.Join(runDir, capturesFile)
-	b, err := os.ReadFile(path)
+// trimTorn is the JSONL file at path to its last newline, and drops what follows
+// it from the file, so the next line appended is not joined to a torn one. No
+// file standing is none. The caller holds the store's holder lock, so no run
+// appends while the tail is dropped.
+func trimTorn(path string) ([]byte, error) {
+	b, size, err := readComplete(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	b = b[:bytes.LastIndexByte(b, '\n')+1]
-	out := map[string]capturedCall{}
-	for i, raw := range bytes.Split(b, []byte{'\n'}) {
-		if len(raw) == 0 {
-			continue
+	if len(b) < size {
+		if err := os.Truncate(path, int64(len(b))); err != nil {
+			return nil, err
 		}
-		var rec captureRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
-		}
-		cl, ok := classNamed(rec.Class)
-		if !ok {
-			return nil, fmt.Errorf("%s line %d: no class is named %q", path, i+1, rec.Class)
-		}
-		closed, err := rec.closedText()
-		if err != nil {
-			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
-		}
-		out[rec.lineKey()] = capturedCall{captureRecord: rec, class: cl, closed: closed}
 	}
-	return out, nil
-}
-
-// closedText is the closed text the record carries, refused where a line names
-// bytes outside the text.
-func (rec captureRecord) closedText() (closedText, error) {
-	ct := closedText{text: rec.Text, lines: make([]line, len(rec.Lines))}
-	for i, l := range rec.Lines {
-		if l.From < 0 || l.From > l.To || l.To > len(rec.Text) {
-			return closedText{}, fmt.Errorf("line %d names bytes %d-%d of a %d-byte text", i+1, l.From, l.To, len(rec.Text))
-		}
-		ct.lines[i] = line{no: l.No, end: l.End, from: l.From, to: l.To}
-	}
-	return ct, nil
+	return b, nil
 }
 
 // appendLine appends v as one JSON line to the run directory's file name,
@@ -498,28 +482,32 @@ func RunByPID(dir string, pid int) (string, error) {
 }
 
 // NewestRun is the run in the state directory dir whose header records the
-// latest start, and that stamp. A run directory whose run.yaml is absent, does
-// not read as a header, or records a start this kbase cannot read is skipped:
-// it left no record of when it started, and is no error. No run standing is ""
-// and "".
+// latest start, equal starts ordered as the prune orders them, and that stamp.
+// A run directory whose run.yaml is absent, does not read as a header, or
+// records a start this kbase cannot read is skipped: it left no record of when
+// it started, and is no error. No run standing is "" and "".
 func NewestRun(dir string) (run, started string, err error) {
 	starts, err := dirStarts(RunsDir(dir), runFile)
-	if err != nil {
+	if err != nil || len(starts) == 0 {
 		return "", "", err
 	}
-	var newest time.Time
-	for _, s := range starts {
-		if run == "" || s.at.After(newest) {
-			run, started, newest = s.name, s.started, s.at
-		}
-	}
-	return run, started, nil
+	newest := slices.MaxFunc(starts, compareStarts)
+	return newest.name, newest.started, nil
 }
 
 // dirStart is one directory under a parent and the start its header records.
 type dirStart struct {
 	name, started string
 	at            time.Time
+}
+
+// compareStarts orders two directories oldest first: by start, and equal starts
+// by name, the later name newer.
+func compareStarts(a, b dirStart) int {
+	if c := a.at.Compare(b.at); c != 0 {
+		return c
+	}
+	return strings.Compare(a.name, b.name)
 }
 
 // dirStarts is every directory under parent whose header — the file of that name
@@ -560,17 +548,16 @@ func dirStarts(parent, header string) ([]dirStart, error) {
 }
 
 // PruneRuns keeps, of the runs in the state directory dir, the run keep names —
-// created or resumed, standing yet or not — and the newest keptRuns-1 others of
-// its kind, and removes the rest of that kind whole. A run's kind is its id's
-// prefix, so a dry run never removes a real run nor a real run a dry one.
+// created or resumed — and the newest KeptRuns-1 others of its kind, and
+// removes the rest of that kind whole. A run's kind is its id's prefix, so a
+// dry run never removes a real run nor a real run a dry one.
 func PruneRuns(dir, keep string) error {
 	return pruneByStart(RunsDir(dir), runFile, keep)
 }
 
 // pruneByStart keeps, of the directories under parent of keep's kind, keep and
-// the newest keptRuns-1 others by the start their header records — equal starts
-// ordered by name, the later name newer — and removes the rest whole. A
-// directory dirStarts leaves out has no start to order by, and stands.
+// the newest KeptRuns-1 others in compareStarts' order, and removes the rest
+// whole. A directory dirStarts leaves out has no start to order by, and stands.
 func pruneByStart(parent, header, keep string) error {
 	starts, err := dirStarts(parent, header)
 	if err != nil {
@@ -583,13 +570,8 @@ func pruneByStart(parent, header, keep string) error {
 			others = append(others, s)
 		}
 	}
-	slices.SortFunc(others, func(a, b dirStart) int {
-		if c := a.at.Compare(b.at); c != 0 {
-			return c
-		}
-		return strings.Compare(a.name, b.name)
-	})
-	for _, s := range others[:max(0, len(others)-(keptRuns-1))] {
+	slices.SortFunc(others, compareStarts)
+	for _, s := range others[:max(0, len(others)-(KeptRuns-1))] {
 		if err := os.RemoveAll(filepath.Join(parent, s.name)); err != nil {
 			return fmt.Errorf("remove run %s: %w", s.name, err)
 		}
@@ -718,28 +700,14 @@ func (l *Ledger) Close() error {
 	return errors.Join(errs...)
 }
 
-// readBack reads the lines a resume continues: the last status per item. The
-// caller holds the operation lock and the store's holder lock, so no other run
-// appends while a torn tail is dropped.
+// readBack reads the lines a resume continues: the last status per item, a torn
+// tail dropped.
 func (l *Ledger) readBack() error {
-	path := filepath.Join(l.dir, linesFile)
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	b, err := trimTorn(filepath.Join(l.dir, linesFile))
 	if err != nil {
 		return err
 	}
-	// A line is complete once its newline landed. What a killed process left
-	// after the last newline never became a record, and is dropped here so this
-	// run's first line is not appended behind it.
-	complete := int64(bytes.LastIndexByte(b, '\n')) + 1
-	if complete < int64(len(b)) {
-		if err := os.Truncate(path, complete); err != nil {
-			return err
-		}
-	}
-	for _, line := range bytes.Split(b[:complete], []byte{'\n'}) {
+	for _, line := range bytes.Split(b, []byte{'\n'}) {
 		var a attempt
 		if json.Unmarshal(line, &a) != nil {
 			continue
@@ -852,16 +820,6 @@ var (
 	methodClass    = class{name: "method", ask: asks.ScoreRigorMethod, table: kb.RigorMethod}
 	bearingClass   = class{name: "bearing", edge: true, ask: asks.ScoreBearing, table: kb.BearingFaults}
 )
-
-// classNamed is the class a capture's name records, ok false where none is.
-func classNamed(name string) (class, bool) {
-	for _, cl := range []class{statementClass, methodClass, bearingClass} {
-		if cl.name == name {
-			return cl, true
-		}
-	}
-	return class{}, false
-}
 
 // passFacts is a run's set as it reads it: which class an item takes, and every
 // class the set can send, in the fixed order its digest concatenates them. A

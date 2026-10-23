@@ -328,15 +328,17 @@ stepwise and resumes if interrupted. The store's version is independent of the K
 **The state store is pruned only by a build or a scoring run.** At a build's start, the captured
 output of earlier builds (`reports/build-*`) and the call captures (`scratch/captures/`) last
 modified before the start of the fifth-latest build that ended are removed; a build that ended
-`refused` or `retry` does not count. At a scoring run's start, once it holds the store, the run
-directories under `score/` are pruned by kind: a real run's id is `run-<id>` and a dry run's
+`refused` or `retry` does not count. At a scoring run's start, once its own run directory stands,
+the run directories under `score/` are pruned by kind: a real run's id is `run-<id>` and a dry run's
 `dry-<id>` (§8), a directory's kind is its name's prefix, and the invocation keeps, of its own kind,
 16 runs — the run it names, created or resumed, and the newest 15 others by the start their
 `run.yaml` records, equal starts ordered by name with the later name newer — and removes the rest of
 that kind whole, captures included. A dry run never removes a real run, nor a real run a dry one,
 and a dry run an earlier kbase minted as `run-…` counts as real. A directory whose `run.yaml` is
-absent or unreadable has no start to order by and is left. An invocation refused once it holds the
-store has pruned already. The answer cache and the stage reports are kept. `status` and `cancel`
+absent or unreadable has no start to order by and is left. An invocation refused before its run
+directory stands — a `--resume` naming a run no longer standing among them — removes nothing. A
+resumed run's `captures.jsonl` loses a torn last line before anything appends to it, as its ledger
+does. The answer cache and the stage reports are kept. `status` and `cancel`
 remove nothing.
 Deleting the store is always safe, but it forfeits the answer cache, whose entries were paid for in
 inference; `status` reports its size.

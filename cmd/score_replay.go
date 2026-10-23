@@ -42,7 +42,20 @@ var replayFlags = []string{"replay", "failed", "limit", "scoring-model", "state-
 
 // replayRunRE is the shape of the run --replay names: a real or a dry run's id
 // as kb.MintID mints it, never a path.
-var replayRunRE = regexp.MustCompile(`^(run|dry)-` + runIDBody + `$`)
+var replayRunRE = regexp.MustCompile(`^(` + score.RunKindReal + `|` + score.RunKindDry + `)-` + runIDBody + `$`)
+
+// replayTakes is the flags a replay takes beside --replay as its refusal names
+// them: replayFlags, and the persistent --config-dir.
+func replayTakes() string {
+	var names []string
+	for _, name := range replayFlags {
+		if name != "replay" {
+			names = append(names, "--"+name)
+		}
+	}
+	names = append(names, "--config-dir")
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
 
 var (
 	scoreFlagReplay string
@@ -100,11 +113,10 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 			Detail: "--failed narrows a replay and is given with --replay"})
 	case !replayRunRE.MatchString(opts.Run):
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--replay",
-			Detail: "--replay names a run's id (run-<…> or dry-<…>), not a path: " + opts.Run})
+			Detail: "--replay names a run's id (" + score.RunKindReal + "-<…> or " + score.RunKindDry + "-<…>), not a path: " + opts.Run})
 	case len(others) > 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--replay",
-			Detail: "--replay takes --failed, --limit, --scoring-model, --state-dir, --timeout and --config-dir; " +
-				strings.Join(others, ", ") + " is a run's"})
+			Detail: "--replay takes " + replayTakes() + "; " + strings.Join(others, ", ") + " is a run's"})
 	case opts.Limit < 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	}

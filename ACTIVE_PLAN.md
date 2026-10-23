@@ -231,6 +231,38 @@ its purpose — not a rehash of how it was implemented — and their brief inclu
 necessary, landed in a follow-up commit or declined with the reason recorded. **Burndown**: what
 remains, one fact to an item, below.
 
+### Review (over `6adf95a..2361ad5`)
+
+Remediated in a follow-up commit:
+
+- The run prune ran before the run's directory existed, so a refused `--resume` of a pruned id
+  removed the 16th-newest real run. The prune moves to after the ledger opens.
+- A resume left a torn `captures.jsonl` tail, which the next capture joined into one malformed line
+  that refused the whole file to a replay (I10). A resume trims it.
+- Replay-only capture reading shipped untagged; it moves into the `!kbasedist` files.
+- The capture reader's two refusals had no test.
+- The kept count (help text), the replay's accepted flags (refusal detail) and the run-kind
+  prefixes (mint and both id patterns) each had a second home.
+- `NewestRun` and the prune broke equal starts in opposite directions; one comparator serves both.
+- The replay could recreate a pruned run's directory and race the prune unnoticed; it creates only
+  `replays/`, fails where its run is gone, and computes its header before creating anything.
+- A capture with no original ledger line counted as changed.
+- `changed` and replay cancellation had no test; the fidelity test copied `class.render`.
+- `Resume` read `run.yaml` beside `readHeader`; two retention tests duplicated others.
+
+Declined:
+
+- The MCP exclusion test restates `mcpExcludedFlag`'s predicate: an independent statement of the
+  truth the test pins is what a test is for.
+- Replacing the replay hook with a build-tagged file pair: the hook is the mechanism CONVENTIONS
+  names, and changing it is a convention change outside this plan.
+
 ### Post-sprint cleanup burndown
 
-Not started.
+- The first live use (Gates): a captured run over the fixture KB and an unchanged-build replay whose
+  comparison shows `prompt_changed` false throughout. The owner's; needs a provider.
+- `NewestRun` reads only `run.yaml`'s `started`, so a `run.yaml` with another malformed field
+  counts toward `status`'s newest run where it was once skipped.
+- CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.
+- AGENTS.md routes mechanical dispatches to `reaper/Qwen3.8-Flash-Next`, which the Claude Code agent
+  tool cannot select.

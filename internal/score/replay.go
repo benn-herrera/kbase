@@ -3,9 +3,12 @@
 package score
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -115,6 +118,71 @@ func OpenReplay(dir, run string, failedOnly bool, limit int) (*Replay, error) {
 	return rp, nil
 }
 
+// capturedCall is one capture read back: the record, the class it names, and
+// the closed text it carried, which a reply is parsed against.
+type capturedCall struct {
+	captureRecord
+	class  class
+	closed closedText
+}
+
+// readLastCaptures is, per item, the last call the captures.jsonl in the run
+// directory runDir records, keyed as the ledger keys an item. The file is read to
+// its last complete line, so a run still appending is read as far as it has
+// landed. A complete line that does not read as a capture, names no class, or
+// numbers bytes its text does not hold is an error: the record is what a reply
+// is parsed against, and no part of it is guessed.
+func readLastCaptures(runDir string) (map[string]capturedCall, error) {
+	path := filepath.Join(runDir, capturesFile)
+	b, _, err := readComplete(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]capturedCall{}
+	for i, raw := range bytes.Split(b, []byte{'\n'}) {
+		if len(raw) == 0 {
+			continue
+		}
+		var rec captureRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		cl, ok := classNamed(rec.Class)
+		if !ok {
+			return nil, fmt.Errorf("%s line %d: no class is named %q", path, i+1, rec.Class)
+		}
+		closed, err := rec.closedText()
+		if err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		out[rec.lineKey()] = capturedCall{captureRecord: rec, class: cl, closed: closed}
+	}
+	return out, nil
+}
+
+// closedText is the closed text the record carries, refused where a line names
+// bytes outside the text.
+func (rec captureRecord) closedText() (closedText, error) {
+	ct := closedText{text: rec.Text, lines: make([]line, len(rec.Lines))}
+	for i, l := range rec.Lines {
+		if l.From < 0 || l.From > l.To || l.To > len(rec.Text) {
+			return closedText{}, fmt.Errorf("line %d names bytes %d-%d of a %d-byte text", i+1, l.From, l.To, len(rec.Text))
+		}
+		ct.lines[i] = line{no: l.No, end: l.End, from: l.From, to: l.To}
+	}
+	return ct, nil
+}
+
+// classNamed is the class a capture's name records, ok false where none is.
+func classNamed(name string) (class, bool) {
+	for _, cl := range []class{statementClass, methodClass, bearingClass} {
+		if cl.name == name {
+			return cl, true
+		}
+	}
+	return class{}, false
+}
+
 // ID is the replay's id, minted as a run's is.
 func (rp *Replay) ID() string { return rp.id }
 
@@ -153,16 +221,12 @@ func judgementOf(e Entry) judgement {
 // run's own shapes, its run the replay's id, and a comparison line per item.
 // Each call renders its captured closed text through this binary's template for
 // the capture's class and is parsed against that closed text, priced, and landed
-// nowhere. At its start the replay keeps itself and the newest keptRuns-1 others
+// nowhere. At its start the replay keeps itself and the newest KeptRuns-1 others
 // of its run's replays/, as a run keeps runs. A per-item failure is counted, not
-// returned: the error is a fault of the replay itself.
+// returned: the error is a fault of the replay itself — among them a run
+// directory that no longer stands, which the replay never recreates, and a
+// replay directory removed under the walk.
 func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResult, error) {
-	if err := os.MkdirAll(filepath.Dir(rp.dir), 0o777); err != nil {
-		return ReplayResult{}, err
-	}
-	if err := os.Mkdir(rp.dir, 0o777); err != nil {
-		return ReplayResult{}, fmt.Errorf("start replay %s: %w", rp.id, err)
-	}
 	digest, err := askDigest(rp.pass)
 	if err != nil {
 		return ReplayResult{}, err
@@ -171,6 +235,14 @@ func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResu
 	b, err := yaml.Marshal(h)
 	if err != nil {
 		return ReplayResult{}, err
+	}
+	// Mkdir and never MkdirAll: a run the prune removed fails here rather than
+	// standing again as a directory no run.yaml names, which no prune removes.
+	if err := os.Mkdir(filepath.Dir(rp.dir), 0o777); err != nil && !errors.Is(err, fs.ErrExist) {
+		return ReplayResult{}, fmt.Errorf("start replay %s: %w", rp.id, err)
+	}
+	if err := os.Mkdir(rp.dir, 0o777); err != nil {
+		return ReplayResult{}, fmt.Errorf("start replay %s: %w", rp.id, err)
 	}
 	if err := atomicfile.Write(filepath.Join(rp.dir, replayFile), b, nil); err != nil {
 		return ReplayResult{}, err
@@ -215,7 +287,8 @@ func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResu
 		if err := l.Append(it, e); err != nil {
 			return res, fmt.Errorf("record %s: %w", ItemName(it), err)
 		}
-		original := rp.original[captured.lineKey()].entry()
+		recorded, hasLine := rp.original[captured.lineKey()]
+		original := recorded.entry()
 		cmp := comparisonLine{Item: ItemName(it), Original: judgementOf(original), Replay: judgementOf(e),
 			PromptChanged: e.PromptSHA256 != captured.PromptSHA256}
 		if err := l.appendLine(&comparisons, comparisonFile, cmp); err != nil {
@@ -227,10 +300,15 @@ func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResu
 		default:
 			res.Counts.Failed++
 		}
-		if e.Status != original.Status || e.Value != original.Value {
+		// A capture with no ledger line behind it records no outcome to differ
+		// from.
+		if hasLine && (e.Status != original.Status || e.Value != original.Value) {
 			res.Changed++
 		}
 	}
 	res.Counts.Remaining = res.Counts.Total - res.Counts.Done - res.Counts.Failed
+	if _, err := os.Stat(rp.dir); err != nil {
+		return res, fmt.Errorf("the replay directory %s no longer stands: %w", rp.dir, err)
+	}
 	return res, nil
 }

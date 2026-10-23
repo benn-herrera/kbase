@@ -673,10 +673,13 @@ or `source`, `target` and `relation`, the other's omitted), `class` (`statement`
 `closedText` holds it), `prompt` (the bytes sent), `prompt_sha256`, `reply` (what the `Ask` seam
 returned, `""` where the call errored), `error` (the call's, the parse's or the write's error text,
 absent on a landing), `model`, `backend`, `started` and `ended`. The ledger is unchanged: its failed
-line carries the reason and no reply text, and the capture is where the reply stands. A capture is
-self-sufficient for a replay: `readLastCaptures` returns, per item, its last capture with the closed
-text rebuilt, reads the file to its last complete line so a run still appending is readable, and
-refuses a line that names no class or whose line ranges fall outside its text. **The fidelity rule:**
+line carries the reason and no reply text, and the capture is where the reply stands. `Resume` cuts
+a torn last line from `captures.jsonl`, as from `ledger.jsonl`, through the one `trimTorn`, before
+anything appends, so a crash mid-capture never joins two captures into one malformed line. A capture
+is self-sufficient for a replay: `readLastCaptures` (in the replay's tagged `replay.go`; the raw read
+is `ledger.go`'s untagged `readComplete`) returns, per item, its last capture with the closed text
+rebuilt, reads the file to its last complete line so a run still appending is readable, and refuses
+a line that names no class or whose line ranges fall outside its text. **The fidelity rule:**
 `class.render` is the one site that renders a closed text into a prompt, shared by `compose` and the
 replay, so rendering a capture's closed text through an unchanged template reproduces its
 `prompt_sha256` byte for byte; `TestCapturesReRenderToTheirDigest` asserts it over captures the runner
@@ -689,18 +692,21 @@ the build store's own format stamp stays in `internal/build` (§8). The run's lo
 (§8): the operation lock in the repository's git directory, then the state store's holder lock at
 `<state-dir>`, its record naming `kind: score` and the run id.
 
-**Run retention.** `keptRuns` (§12) runs of each kind stand under `score/`. A real run's id is minted
-`run-<id>` and a dry run's `dry-<id>` (`kb.MintID`'s prefix), and a directory's kind is its name's
-prefix (`runKind`), so the two are counted apart; a dry run an earlier kbase minted as `run-…` is
+**Run retention.** `KeptRuns` (§12) runs of each kind stand under `score/`. A real run's id is minted
+`run-<id>` and a dry run's `dry-<id>` (`kb.MintID`'s prefix, `RunKindReal` and `RunKindDry`), and a
+directory's kind is its name's prefix (`runKind`), so the two are counted apart; a dry run an earlier kbase minted as `run-…` is
 named, and counted, as a real run. `score.PruneRuns(dir, run)` keeps the run the invocation names —
-created or resumed — and the newest `keptRuns-1` other directories of its kind, ordered by the `started`
-each `run.yaml` records, equal starts by name with the later name newer, and removes the rest of that
-kind whole with `os.RemoveAll`, captures and replays with them. `dirStarts` is the one per-directory
-read of that start, shared with `NewestRun`; a directory whose `run.yaml` is absent or unreadable
-yields none and stands. `runScore` calls the prune immediately after `build.Hold` returns, so it runs
-under the holder lock and no other run is writing a directory it could remove; a prune error ends the
-invocation `failed`. An invocation refused after that point has pruned already, which only ever
-removes directories beyond the kept count. `runIDRE` accepts a `run-` id alone, so `--resume` of a
+created or resumed — and the newest `KeptRuns-1` other directories of its kind, ordered by the
+`started` each `run.yaml` records, equal starts by name with the later name newer, and removes the
+rest of that kind whole with `os.RemoveAll`, captures and replays with them. `dirStarts` is the one
+per-directory read of that start and `compareStarts` the one ordering, both shared with `NewestRun`,
+so `status`'s newest run and the prune's agree; a directory whose `run.yaml` is absent or unreadable
+yields none and stands. `runScore` calls the prune once the run's ledger has opened — after `Create`
+on the dry path, after `Create` or `Resume` on the real one — so the run it keeps stands, and an
+invocation refused before then removes nothing; it runs under the holder lock, and a prune error ends
+the invocation `failed`. The one writer under `score/` the holder lock does not exclude is a replay,
+which takes no lock: a prune may remove the run a replay is walking, and the replay then fails
+rather than writing into a removed directory (below). `runIDRE` accepts a `run-` id alone, so `--resume` of a
 `dry-` id is refused by the id-shape check, whose detail names a real run's id; `status`, `wait` and
 `RunByPID` find a run by its directory, whatever the prefix.
 
@@ -734,7 +740,7 @@ and the role resolved through `config.Resolve`, with `--scoring-model` supplying
 model, and both skipped under `--dry-run` — so a setup refusal writes nothing and mints no run;
 `openKB` and the migration record; the run id (`run-<id>`, or `dry-<id>` under `--dry-run`); the
 run's locks through `build.Hold`, before any record of the run is written; the run prune,
-`score.PruneRuns`, as `build.Hold` returns; one refresh through
+`score.PruneRuns`, once the run's ledger has opened; one refresh through
 `holdWriting`, skipped under `--dry-run`, which releases the write lock before the walk; `query.Load`
 and the set; then either the dry run's records and an inert `Runner`, or the `Ask` from `scoringAsk`
 over the registry's client, and the walk; `counts` and `scored`; `resume` where any item is not `done`, ahead of the end
@@ -786,8 +792,13 @@ nothing, and a per-item failure is counted, not the replay's outcome. It writes 
   and `faults`, the fault ids in order, `[]` for `none`) and `prompt_changed` (the replayed prompt's
   digest differs from the captured `prompt_sha256`).
 
-After writing `replay.yaml`, `Walk` keeps itself and the newest `keptRuns-1` other replays of the
-run's `replays/` by `replay.yaml`'s `started`, through the `pruneByStart` the run prune uses.
+Setup computes the digest and `replay.yaml` before creating anything, and creates `replays/` and the
+replay's directory with `os.Mkdir`, never `MkdirAll`: a run the prune removed fails the replay rather
+than being recreated without a `run.yaml`, which no prune would ever remove. After writing
+`replay.yaml`, `Walk` keeps itself and the newest `KeptRuns-1` other replays of the run's `replays/`
+by `replay.yaml`'s `started`, through the `pruneByStart` the run prune uses, and after the walk a
+replay whose directory no longer stands ends `failed` naming it. An item whose run records no ledger
+line compares against an `original` with status `""` and is not counted in `changed`.
 
 The result document is one SPEC §7 YAML document with the keys `outcome`, `kb-root`, `state-dir`,
 `run`, `replay`, `dir` (the replay directory, absolute), `counts` (`total`, `done`, `failed`) and
@@ -1028,9 +1039,9 @@ and `cmd`'s `init` verb import `ledger`.
   build that ended, counted from `progress.jsonl`; a build that ended `refused` or `retry` is not
   counted. `scratch/answers/` and the stage reports are never pruned, and `status` and `cancel`
   remove nothing. `status` computes `cache-entries` and `cache-bytes` from `scratch/answers/`. A
-  scoring run prunes `score/` as `build.Hold` returns, before it writes any record of its own: of
-  its kind (`run-` or `dry-`) it keeps the run it names and the newest `keptRuns-1` (§12) others by
-  `run.yaml`'s start, and removes the rest whole (§6, Scoring).
+  scoring run prunes `score/` once its run's ledger has opened: of its kind (`run-` or `dry-`) it
+  keeps the run it names and the newest `KeptRuns-1` (§12) others by `run.yaml`'s start, and removes
+  the rest whole (§6, Scoring).
 - **State store layout:** `format`, the holder lock, `progress.jsonl`, `records/` (the docgraph
   records and pre-pass census), `reports/<stage-id>.yaml` (each stage's row records and findings,
   named by the result's `stages[].report`; also the captures of a build the MCP server starts,
@@ -1305,7 +1316,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `storeFormat` in `internal/build`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
 | Builds kept | `keptBuilds` in `internal/build`: 5, the ended builds whose captured output and call captures survive pruning (§8) |
-| Runs kept | `keptRuns` in `internal/score/ledger.go`: 16, the scoring runs of each kind (`run-`, `dry-`) that survive pruning, and the replays of a run's `replays/` (§6, Scoring; §8) |
+| Runs kept | `KeptRuns` in `internal/score/ledger.go`: 16, the scoring runs of each kind (`run-`, `dry-`) that survive pruning, and the replays of a run's `replays/` (§6, Scoring; §8) |
 | Scoring wrap width | `wrapWidth` in `internal/score/text.go`: 100 columns, the width each passage of the closed text is wrapped to before its lines are numbered (§6, Scoring) |
 | Operation lock path | `<git dir>/kbase-operation.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `build.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |

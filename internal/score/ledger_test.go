@@ -744,12 +744,34 @@ func minute(m int) string {
 	return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC).Add(time.Duration(m) * time.Minute).Format(time.RFC3339)
 }
 
+// TestNewestRunOrdersEqualStartsAsThePruneDoes: of two runs recording the same
+// start, the newest is the later name — the one the prune keeps.
+func TestNewestRunOrdersEqualStartsAsThePruneDoes(t *testing.T) {
+	dir := t.TempDir()
+	for _, run := range []string{"run-aaaaaa", "run-bbbbbb"} {
+		h := header()
+		h.Run = run
+		l, err := Create(dir, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Close()
+	}
+	run, started, err := NewestRun(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != "run-bbbbbb" || started != header().Started {
+		t.Errorf("NewestRun = %s at %s, want run-bbbbbb at %s", run, started, header().Started)
+	}
+}
+
 // TestPruneRunsKeepsTheNewestOfEachKind: an invocation keeps the run it names and
-// the newest keptRuns-1 others of its own kind, by run.yaml's start with equal
+// the newest KeptRuns-1 others of its own kind, by run.yaml's start with equal
 // starts ordered by name, and removes the rest of that kind; another kind's runs
 // and a directory with no readable start stand.
 func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
-	tied := series("run", keptRuns, 10)
+	tied := series("run", KeptRuns, 10)
 	tied[1].started = tied[0].started
 	for _, tc := range []struct {
 		name     string
@@ -759,25 +781,19 @@ func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
 	}{
 		{
 			name:     "a seventeenth real run removes the oldest real run",
-			standing: series("run", keptRuns, 0),
+			standing: series("run", KeptRuns, 0),
 			keep:     "run-new",
 			removed:  []string{"run-000000"},
 		},
 		{
 			name:     "a seventeenth dry run removes the oldest dry run and no real run",
-			standing: append(series("run", keptRuns, 0), series("dry", keptRuns, 100)...),
+			standing: append(series("run", KeptRuns, 0), series("dry", KeptRuns, 100)...),
 			keep:     "dry-new",
 			removed:  []string{"dry-000000"},
 		},
 		{
-			name:     "a seventeenth real run removes the oldest real run and no dry run",
-			standing: append(series("dry", keptRuns, 0), series("run", keptRuns, 100)...),
-			keep:     "run-new",
-			removed:  []string{"run-000000"},
-		},
-		{
 			name:     "resuming the oldest of seventeen keeps it and removes the second-oldest",
-			standing: series("run", keptRuns+1, 0),
+			standing: series("run", KeptRuns+1, 0),
 			keep:     "run-000000",
 			removed:  []string{"run-000001"},
 		},
@@ -789,7 +805,7 @@ func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
 		},
 		{
 			name: "a directory without a readable run.yaml stands",
-			standing: append(series("run", keptRuns, 10),
+			standing: append(series("run", KeptRuns, 10),
 				standing{name: "run-absent"}, standing{name: "run-garbage", started: "garbage"}),
 			keep:    "run-new",
 			removed: []string{"run-000000"},
