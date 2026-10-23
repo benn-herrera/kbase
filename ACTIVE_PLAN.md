@@ -84,3 +84,25 @@ its first real run and before merge. The Phase 4 design is the architect's.
 - It does not let a pass read the other pass's answer, and it does not make a scoring run's judgement
   a verdict.
 - It does not take up Phase 3's hand-offs, and it does not merge Phase 2 ahead of the review.
+
+## Post-sprint review
+
+Once the sprint's last landing is committed, one pass reviews the changes since the branch was cut
+rather than the individual changes. The reviewers are an architect and a coder; before they start
+they read THESIS.md, SPEC.md, ARCHITECTURE.md and CONVENTIONS.md, and they do not read this plan.
+Their subject is the changes against those standards and whether the result is fit for its
+purpose — not a rehash of how it was implemented.
+
+The section has three parts. **Review**: findings against the four documents — where the landed work
+departs from a stated requirement, a stated architecture, or a house rule, and where it is right but
+poorly suited to what it is for. **Remediation**: what each finding makes necessary, landed in a
+follow-up commit or declined with the reason recorded. **Burndown**: what remains, one fact to an
+item, on the list below. Each change has already had its own seat's review; this pass is for what
+fell between landings.
+
+### Post-sprint cleanup burndown
+
+- `model.MockClient` is test support sitting in `internal/model`'s production API, beside the two wire
+  clients the package doc introduces; the conventional home for a fake that other packages' tests
+  import is a sibling package named for the job (`internal/model/modeltest`, as `net/http/httptest`
+  is to `net/http`).
