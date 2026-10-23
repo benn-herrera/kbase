@@ -142,6 +142,8 @@ single source. Working habits they impose:
 - **A result field's integer is `int`, never `int64`.** `result.Write` refuses `int64`.
 - **`just fmt` is the sanctioned formatter.** Running it to clear a gofmt alignment finding is not
   an edit outside the tools.
+- **The edit and write tools govern text changes, not filesystem operations.** A move is `git mv`, a
+  deletion `git rm`, and staging either is part of the landing's set; the landing commits once.
 - **An MCP tool is a subcommand's binding** (I9). The trap: a tool listed by hand, a description
   copied into a tool, or a schema typed beside the command's flags. Each command declares its
   binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`; the table binds only

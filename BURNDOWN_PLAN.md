@@ -36,8 +36,6 @@ Declined:
 - `internal/model/mockllm_test.go` still tests `modeltest.MockClient` from `internal/model`'s test
   binary; a `modeltest_test` package would exercise the same API without importing production `model`
   beside it.
-- A move has no stated form for a dispatch: `internal/model/mockllm.go` was removed with
-  `command rm`, because `git rm` stages and the tool set carries no delete verb.
 - `ARCHITECTURE.md:1089`'s `kept:` parenthetical names `model.Chat` for the overview call and
   `model.Decision` for the letter asks only; scoring's asks and the probe's two calls are absent.
 - The probe's routing is stated at `ARCHITECTURE.md:715-716` and again at `:731-732`; one should cite
