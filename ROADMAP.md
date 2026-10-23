@@ -14,6 +14,14 @@ deleted, not archived.
   that item's `failed`, covered by code reading alone: `write.LockWait` is a fixed constant, so no
   test can hold the lock without paying the full wait. A wait seam for `holdKB` would cover every
   writer, not only scoring.
+- **A scoring call that ends at the completion cap or the deadline is captured with `reply` `""`
+  and no finish reason or usage.** The `score.Ask` seam returns only the reply text or an error, so
+  a capture cannot tell a reasoning-exhausted reply from an empty one.
+- **`score.NewestRun` reads only `run.yaml`'s `started`**, so a `run.yaml` with another malformed
+  field counts toward `status`'s newest run where it was once skipped.
+- **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
+- **AGENTS.md routes mechanical dispatches to `reaper/Qwen3.8-Flash-Next`, which the Claude Code
+  agent tool cannot select.**
 
 ## Reader fidelity
 
