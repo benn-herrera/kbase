@@ -116,15 +116,7 @@ func weakPointRecord(wp WeakPoint) result.Record {
 		{Key: "build_band", Value: wp.Claim.BuildBand}, {Key: "dependents", Value: wp.Dependents}, {Key: "title", Value: wp.Claim.Title}}
 }
 
-// depsRelationOrder is the fixed order a deps answer lists relations in.
-var depsRelationOrder = kb.Relations
-
-func relationRank(relation string) int {
-	if i := slices.Index(depsRelationOrder, relation); i >= 0 {
-		return i
-	}
-	return len(depsRelationOrder)
-}
+func relationRank(relation string) int { return slices.Index(kb.Relations, relation) }
 
 // DepsPayload is every edge incident at id — each scoring edge in either
 // direction, and id's own outgoing references and demoted edges — as the
@@ -328,7 +320,7 @@ func first[T any](s []T, n int) []T { return s[:min(n, len(s))] }
 // EdgeCensusPayload is, for each relation in kb.Relations order, its edge
 // rows' count, whether the bearing pass walks it, and on a scoring relation
 // the rows at each bearing they carry: numbers ascending, then pending, then
-// null. A row of a relation outside kb.Relations is counted nowhere.
+// null.
 func EdgeCensusPayload(ix *Index) result.Record {
 	out := result.Record{}
 	for _, relation := range kb.Relations {
@@ -354,32 +346,32 @@ func EdgeCensusPayload(ix *Index) result.Record {
 	return out
 }
 
-// compareBearings orders index bearings numerically where their text reads as
-// a number — the text's own order is not numeric — then pending, then null.
+// compareBearings orders index bearings, text or null, numerically where the
+// text reads as a bearing's number — the text's own order is not numeric —
+// then pending, then null. Distinct texts that tie fall back to text order.
 func compareBearings(a, b any) int {
-	rank := func(v any) (int, float64) {
-		s, _ := v.(string)
-		if n, err := strconv.ParseFloat(s, 64); err == nil {
-			return 0, n
+	rank := func(v any) (int, float64, string) {
+		s, text := v.(string)
+		if !text {
+			return 2, 0, ""
 		}
-		if v == nil {
-			return 2, 0
+		if bearing, ok := kb.BearingFromValue(s); ok && !bearing.Pending {
+			return 0, bearing.Value, s
 		}
-		return 1, 0
+		return 1, 0, s
 	}
-	ra, na := rank(a)
-	rb, nb := rank(b)
-	return cmp.Or(cmp.Compare(ra, rb), cmp.Compare(na, nb), strings.Compare(fmt.Sprint(a), fmt.Sprint(b)))
+	ra, na, sa := rank(a)
+	rb, nb, sb := rank(b)
+	return cmp.Or(cmp.Compare(ra, rb), cmp.Compare(na, nb), strings.Compare(sa, sb))
 }
 
 // EdgesPayload is the index's edge rows of relations, of every relation where
 // relations is empty, each as its source, relation, target, bearing as the
 // index writes it, context and whether the bearing pass walks it. Rows are in
-// relation order, then by source, target and context. A row of a relation
-// outside kb.Relations is left out.
+// relation order, then by source, target and context.
 func EdgesPayload(ix *Index, relations []string) []result.Record {
 	rows := slices.DeleteFunc(slices.Clone(ix.edges), func(e kb.EdgeRow) bool {
-		return !slices.Contains(kb.Relations, e.Relation) || len(relations) > 0 && !slices.Contains(relations, e.Relation)
+		return len(relations) > 0 && !slices.Contains(relations, e.Relation)
 	})
 	slices.SortStableFunc(rows, func(a, b kb.EdgeRow) int {
 		return cmp.Or(cmp.Compare(relationRank(a.Relation), relationRank(b.Relation)), strings.Compare(a.Source, b.Source),

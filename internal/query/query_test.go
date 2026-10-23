@@ -576,8 +576,7 @@ func bearingCounts(pairs ...any) []result.Record {
 }
 
 func TestEdgeCensus(t *testing.T) {
-	ix := edgeCensusIndex(t)
-	got := EdgeCensusPayload(ix)
+	got := EdgeCensusPayload(edgeCensusIndex(t))
 	want := result.Record{
 		{Key: kb.RelationSupports, Value: result.Record{{Key: "edges", Value: 6}, {Key: "walked", Value: true},
 			{Key: "bearings", Value: bearingCounts("1e-05", 1, "0.5", 3, kb.PendingLiteral, 1, nil, 1)}}},
@@ -591,26 +590,7 @@ func TestEdgeCensus(t *testing.T) {
 		{Key: kb.RelationDemoted, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: false}}},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("edge-census = %v, want %v", got, want)
-	}
-	total := 0
-	for _, field := range got {
-		rec := field.Value.(result.Record)
-		edges := rec[0].Value.(int)
-		total += edges
-		if len(rec) < 3 {
-			continue
-		}
-		sum := 0
-		for _, b := range rec[2].Value.([]result.Record) {
-			sum += b[1].Value.(int)
-		}
-		if sum != edges {
-			t.Errorf("%s: bearings sum to %d, want its %d edges", field.Key, sum, edges)
-		}
-	}
-	if total != len(ix.edges) {
-		t.Errorf("relations' edges sum to %d, want %d", total, len(ix.edges))
+		t.Errorf("edge-census = %v, want %v", got, want)
 	}
 }
 
@@ -672,6 +652,26 @@ func TestLoadRefusals(t *testing.T) {
 	writeFile(t, filepath.Join(root, kb.IndexDir, kb.IndexFileName("cites")), "--- [1]\n\n{\"claim_id\": \"unmarked\"}\n--- not json\n")
 	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, 4) {
 		t.Errorf("bad lines: %v, want a refusal naming 4", err)
+	}
+	for _, tc := range []struct {
+		name string
+		edge map[string]any
+	}{
+		{"unknown relation", edge("clm-aaaaaa", "clm-bbbbbb", "nope", kb.NodeKindClaim, "0.5")},
+		{"bearing as a number", edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationSupports, kb.NodeKindClaim, 0.5)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeIndex(t, root, map[string][]map[string]any{
+				"claims": {claim("clm-aaaaaa", "A", f(0.5), "input-only"), claim("clm-bbbbbb", "B", f(0.5), "input-only")},
+				"edges":  {tc.edge},
+			})
+			_, err := Load(kb.OnDisk(root))
+			var r result.Refusal
+			if !errors.As(err, &r) || len(r) != 1 || r[0].Check != index.CheckIndex || r[0].Remedy != index.RefreshRemedy {
+				t.Errorf("Load = %v, want one %s refusal", err, index.CheckIndex)
+			}
+		})
 	}
 }
 

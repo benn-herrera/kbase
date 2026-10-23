@@ -11,7 +11,7 @@ import (
 )
 
 // queryAnswer is one query's answer over the loaded index and its positional
-// arguments — a list, or show's and stats' one mapping — or the items it
+// arguments — a list or a mapping — or the items it
 // refuses.
 type queryAnswer func(ix *query.Index, args []string) (answer any, refusals []toolresult.Item, err error)
 

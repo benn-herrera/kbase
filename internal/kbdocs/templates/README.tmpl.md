@@ -72,8 +72,8 @@ This file states no counts, because the KB changes after it is written. The curr
 per band are under `strength_bands`: the {pending-literal} band holds the unscored claims, and every
 other band holds scored ones.
 
-`kbase edge-census` splits the edges by relation and counts the edges at each bearing;
-`kbase edges --relation <relation>` lists them. `deps` reports each edge at a node with its
+`kbase edge-census` splits the edges by relation and, on a scoring relation, counts the edges at
+each bearing; `kbase edges --relation <relation>` lists them. `deps` reports each edge at a node with its
 `relation` and its `bearing`.
 
 No command counts the documents: `stats` counts the claim graph and `verify` reports faults.

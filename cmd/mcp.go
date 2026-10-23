@@ -133,7 +133,6 @@ func declaredPositionals(cmd *cobra.Command) ([]positional, error) {
 var flagSchemaTypes = map[string]mcp.Property{
 	"bool": {Type: "boolean"}, "string": {Type: "string"}, "int": {Type: "integer"}, "float64": {Type: "number"},
 	"stringArray": {Type: "array", Items: &mcp.Property{Type: "string"}},
-	"stringSlice": {Type: "array", Items: &mcp.Property{Type: "string"}},
 	// A duration flag's argument is a Go duration string, as the command
 	// line spells it ("30s").
 	"duration": {Type: "string"},

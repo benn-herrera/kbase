@@ -33,8 +33,10 @@ Text a maintainer adds directly — a summary, a rationale, a note — lives in 
 the tree; it was never a distillation of a corpus, so it is the KB's own word, not a claim about
 what any corpus says. Its nodes are `claim`, `analysis`, `experiment`, `work` and `axiom`, its
 scoring edges `supports`, `founds`, `lifts` and `refutes` — each from what bears on the argument to
-what it supports — and its unscored edges `references` and `demoted`. For live node and edge counts
-— what is in the graph right now — run `kbase stats`.
+what it supports — and its unscored edges `references` and `demoted`. For live counts — what is in
+the graph right now — run `kbase stats` for nodes and strength bands, and `kbase edge-census` for
+each relation's edges and, on a scoring relation, how many stand at each bearing;
+`kbase edges --relation <relation>` lists them.
 
 Corpus axioms — notation and cross-cutting definitions — are declared in `axioms.md` beside this
 file, one `### Axiom <label>: Title` heading each; prose may call one an invariant or a framework

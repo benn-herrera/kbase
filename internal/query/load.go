@@ -29,8 +29,9 @@ type Index struct {
 
 // Load reads the derived index of the KB src reads. A missing or unreadable
 // file, a line that is not a record of the file's shape, a node of no known
-// kind, and an index that would answer a legal edge with no bearing token are
-// a result.Refusal naming each one. A KB loaded at an older format is refused
+// kind, an edge of no known relation or with a bearing neither text nor null,
+// and an index that would answer a legal edge with no bearing token are a
+// result.Refusal naming each one. A KB loaded at an older format is refused
 // once: its index is derived, and the refresh that rewrites the KB writes it.
 func Load(src *kb.Source) (*Index, error) {
 	if src.Migrated() {
@@ -65,7 +66,7 @@ func Load(src *kb.Source) (*Index, error) {
 	if bad != nil {
 		return nil, result.Refusal(bad)
 	}
-	if err := ix.checkBearings(); err != nil {
+	if err := ix.checkEdges(); err != nil {
 		return nil, err
 	}
 	slices.SortStableFunc(ix.nodes, func(a, b kb.NodeRow) int {
@@ -77,18 +78,29 @@ func Load(src *kb.Source) (*Index, error) {
 	return ix, nil
 }
 
-// checkBearings refuses an index whose legal scoring edge carries no bearing
-// token, and one whose scoring edge leaves its source kind unknown: the column
-// is derived, so a hole in it is an index a refresh must rewrite, never a state
-// to answer from.
-func (ix *Index) checkBearings() error {
+// checkEdges refuses an index with an edge of no known relation, an edge whose
+// bearing is neither text nor null, a legal scoring edge that carries no
+// bearing token, and a scoring edge that leaves its source kind unknown: the
+// rows are derived, so any of these is an index a refresh must rewrite, never
+// a state to answer from.
+func (ix *Index) checkEdges() error {
 	kinds := ix.kinds()
 	var bad []result.Item
 	for _, e := range ix.edges {
+		key := e.Source + " → " + e.Target
+		if !slices.Contains(kb.Relations, e.Relation) {
+			bad = append(bad, result.Item{Check: index.CheckIndex, Key: key, Remedy: index.RefreshRemedy,
+				Detail: fmt.Sprintf("the edge from %s to %s has relation %q; known relations: %v", e.Source, e.Target, e.Relation, kb.Relations)})
+			continue
+		}
+		if _, text := e.Bearing.(string); e.Bearing != nil && !text {
+			bad = append(bad, result.Item{Check: index.CheckIndex, Key: key, Remedy: index.RefreshRemedy,
+				Detail: fmt.Sprintf("the %s edge from %s to %s has bearing %v, which is neither text nor null", e.Relation, e.Source, e.Target, e.Bearing)})
+			continue
+		}
 		if !kb.Scoring(e.Relation) {
 			continue
 		}
-		key := e.Source + " → " + e.Target
 		if kinds[e.Source] == "" {
 			bad = append(bad, result.Item{Check: index.CheckIndex, Key: key, Remedy: index.RefreshRemedy,
 				Detail: fmt.Sprintf("the %s edge from %s to %s has a source id the index does not hold", e.Relation, e.Source, e.Target)})

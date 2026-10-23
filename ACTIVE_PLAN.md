@@ -161,3 +161,37 @@ tests.
 
 **Review**: findings against the four documents. **Remediation**: each finding landed in a follow-up
 commit or declined with the reason recorded. **Burndown**: what remains, one fact to an item, below.
+
+### Review (over `5448097..d7f41c2`)
+
+Remediated in a follow-up commit:
+
+- `--relation ""` listed every edge: the flag was a comma-splitting string slice, which reads an
+  empty value as no value. It is a repeatable string array now, so an empty value is refused as
+  unknown; the slice's MCP schema type goes with it, and a repeated unknown value is one refusal.
+- An index edge of an unknown relation was dropped silently by both payloads, so `edge-census`
+  totals could differ from `stats`' `edges`; a non-text bearing panicked the census. Load refuses
+  both, with the refresh remedy.
+- `AGENTS.tmpl.md` sent agents to `stats` for edge counts; it names `edge-census` and `edges`. The
+  README template qualifies per-bearing counts to scoring relations.
+- `edge-census`' help spelled the scoring relations and left out the null group.
+- `compareBearings` re-implemented `kb.BearingFromValue`; `depsRelationOrder` aliased
+  `kb.Relations`; `cmd/query.go`'s comment named the mapping queries one by one.
+- Two `TestEdgeCensus` checks could not fail apart from the `DeepEqual` before them.
+- No test sent `--relation` through MCP: a transcript does, across three calls in one session.
+- SPEC said `edges` reports `walked` per relation (it is per row) and did not give `edges`'
+  `context` as nullable.
+
+Declined:
+
+- Checking `--relation` before the index loads, as `--limit` is: the refusal is correct either way,
+  and against a missing index the only difference is which refusal is reported first.
+
+### Burndown
+
+- The adjagent skill's `references/reading.md` lists the query verbs without `edge-census` and
+  `edges` (the sibling project's change).
+- The MCP and results fixtures carry no edges, so the binary-level runs of both verbs answer empty;
+  grouping and ordering are pinned by the `internal/query` unit tests alone.
+- `checkEdges` does not refuse text bearings that are neither a number nor `*pending*`; the census
+  ranks such text with pending.

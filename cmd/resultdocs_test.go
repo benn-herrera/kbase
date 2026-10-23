@@ -97,10 +97,13 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	}
 	run("refused", "show", "clm-zzzzzz")
 	run("refused", "strength-below", "--max-strength", "half")
-	unknown := run("refused", "edges", "--relation", "nope")
+	unknown := run("refused", "edges", "--relation", "nope", "--relation", "nope")
 	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {
-		t.Errorf("edges --relation nope refusal: %v", items)
+		t.Errorf("edges --relation nope --relation nope refusal: %v, want one item", items)
+	}
+	if items := run("refused", "edges", "--relation", "").items("refusals"); len(items) != 1 || items[0]["key"] != "--relation" {
+		t.Errorf("edges --relation \"\" refusal: %v", items)
 	}
 	page := run("done", "find", "", "--limit", "1", "--offset", "1")
 	if page.Values["count"] != 2 || page.Values["offset"] != 1 || page.Values["truncated"] != false || len(page.Values["results"].([]any)) != 1 {
