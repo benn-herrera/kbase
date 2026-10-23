@@ -110,10 +110,9 @@ single source. Working habits they impose:
   plan cites keeps its command in the commit message, so a later reader can re-run it.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
-- **The installed agent set is a pinned artifact, never edited here.** `.claude/agents/` and
-  `.claude/commands/` are tracked so a checkout pins them; a finding that needs an agent change
-  goes to the upstream project, adjagent, as a hand-off, the fix lands there, and the set is
-  updated from it.
+- **The agent set is adjagent's, never edited here.** Definitions are installed from the sibling
+  `../adjagent` checkout and are not tracked in this repository; a finding that needs an agent
+  change lands in adjagent, and the set is reinstalled from it.
 - **File formats follow personant's CONVENTIONS "Serialization format" rule:** JSONL for flat
   records, YAML for documents, TOML for flat configuration — with one named departure from `1.0.0`
   (SPEC §10): the KB's index is a YAML stream in flow style, one `--- {…}` record per line, so the

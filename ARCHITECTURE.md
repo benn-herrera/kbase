@@ -1421,11 +1421,10 @@ refuses a step no converter leads, so a KB stamped `1.1.0` is refused at load ra
 `1.1.0` converter exists and none is reachable.
 
 **The reference comparison is flag-gated and partial.** `internal/index/compat_test.go`'s
-comparisons run only when their `reference.*` flags are set, and they cannot run at all until the
-reference toolchain reads `2.0.0`. The `0.9.0` parity cases in `internal/kbload/parity_test.go` are
-three committed KBs plus whatever local reference clone lies under `test-data/transient`; none of the
-committed ones carries a register, so a `0.9.0` register is compared by the converter's golden pairs
-alone.
+comparisons run only when their `reference.*` flags are set, so no gate runs them. The `0.9.0`
+parity cases in `internal/kbload/parity_test.go` are three committed KBs plus whatever local
+reference clone lies under `test-data/transient`; none of the committed ones carries a register, so a
+`0.9.0` register is compared by the converter's golden pairs alone.
 
 **No refresh moves a value.** `refresh` asks no model, so a derived value changes only when an
 authored one does — `set-rigor`, `set-bearing`, or a hand edit. `verify`'s drift is between a record
