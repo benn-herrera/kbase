@@ -12,8 +12,5 @@ var (
 	StrengthAnnRE = regexp.MustCompile(`\(strength\s+[^()]*\)`)
 )
 
-// The register file's basename.
-const Register200Name = "claim-rigor.md"
-
 // The one document the 2.0.0 form declares its axioms in.
 const AxiomsPath = "kb-root/axioms.md"

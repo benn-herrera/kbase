@@ -74,7 +74,7 @@ func registerPath200(p string) string {
 	if path.Base(p) != format_1_0_0.Register100Name {
 		return p
 	}
-	return path.Join(path.Dir(p), format_2_0_0.Register200Name)
+	return path.Join(path.Dir(p), format_2_0_0.RegisterFile)
 }
 
 // document100To200 is one document in the 2.0.0 form: the frontmatter's node

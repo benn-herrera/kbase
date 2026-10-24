@@ -314,7 +314,12 @@ other:
 
 A file the scope names is copied whole: every declaration in it, reachable or not, its helpers
 included, except one edit 3 excludes. Every `kb` identifier the copy references is copied too,
-transitively, until the package builds. The copy is frozen and carries everything it runs on: it
+transitively, until the package builds; such a declaration, from a file the scope does not name, is
+copied alone into a `format_2_0_0` file named for its source file, without the siblings in its
+group the closure does not reach, the group's comment kept as written. gofmt's realignment of a
+copied group is the formatter's, not an edit. Under edit 2 a discarding logger (`log.Discard()`)
+becomes a sink that drops, and a logged value that is not a string is spelled in `detail` as
+`strconv` writes it. The copy is frozen and carries everything it runs on: it
 shares no helper with `common` or an earlier format package, even one with an identical body, and
 takes from `common` only `Files`. Where `format_2_0_0` already holds a declaration whose value or
 body is identical, token for token, to one the copy brings in, under the same name or another
