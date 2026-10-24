@@ -120,6 +120,18 @@ and `score` leaves manually scored values alone by default.
     host leaf lies in; no record carries a register. The converter drops 2.0.x placement silently;
     a node printed in another volume's 2.0.x register moves to its host's page, and a prose link to
     its old anchor is reported by the dead-link check.
+22. **0.9.0 does not exist.** Its removal is `KB_3_WORK_PACKAGES.md` C2.0a.
+23. **`internal/migrate` is a tree of packages**, one per superseded format and one per converter,
+    frozen, importing nothing of kbase outside the tree. The statement is `KB_3_WORK_PACKAGES.md`,
+    "The migrate tree".
+
+## Open questions
+
+1. **Where the 3.0.0 record shape is defined for the 2→3 emitter.** The emitter in
+   `from_2_0_0_to_3_0_0` writes 3.0.0 records; the 3.0.0 types live in `kb`, which the tree may not
+   import, and `KB_3_WORK_PACKAGES.md` "The migrate tree" defines a format's shape once. Candidates: the 3.0.0 types in
+   `internal/migrate/format_3_0_0`, imported by `kb`; or a package outside both that each imports.
+   Blocks C3c.1; nothing before it.
 
 ## Established facts
 
@@ -212,8 +224,8 @@ committed and that share no file may run in parallel, each audited and committed
 
 | WP | Rating | Seat | Lands | Design | Status |
 |---|---|---|---|---|---|
-| C1 | expert | go-coder, coordinator's model | In-memory derivation under 2.0.1, behaviour-neutral | §3.6 (the `.index/` rows only), §9.1's first sentence, §12 | pending |
-| C2 | mechanical | go-coder, sonnet | The converter's 2.0.x readers, golden-tested and not yet wired | §8's copy list; §2 as the source inventory | pending |
+| C1 | expert | go-coder, coordinator's model | In-memory derivation under 2.0.1, behaviour-neutral | §3.6 (the `.index/` rows only), §9.1's first sentence, §12 | C1.1 landed |
+| C2 | per sub-package, as `KB_3_WORK_PACKAGES.md` rates it | go-coder; an expert sub-package at the coordinator's model, a mechanical one at sonnet | 0.9.0 removed; the migrate tree; the 2.0.x readers, golden-tested and not yet wired | §8's copy list; §2 as the source inventory | pending |
 | C3a–e | expert, except a sub-package `KB_3_WORK_PACKAGES.md` rates mechanical (settled by quoted text) | go-coder, coordinator's model; a mechanical sub-package go-coder, sonnet | The format flip, one landing | below | pending |
 
 **C1 — in-memory derivation.** `index.Derive` computes from the 2.0.1 sources what `.index/` holds.
@@ -229,10 +241,12 @@ Done: the gates green; `git diff --stat` touches no `testdata/` or `test-data/fi
 `git grep -n 'ReadIndex(' -- internal cmd ':!*_test.go'` returns no `query` line; the report gives
 `just bench-load`'s ns/op and allocs at both sizes.
 
-**C2 — the 2.0.x readers.** `internal/migrate` gains §8's copy list except the records emitter, which
-is C3c's: the 2.0.x register reader, `ParseLeaf`, `parseExperimentLeaf`, `parseAnalysisLeaf`,
-`ParseAxioms`, the legacy readers, the slug and id rules and the unknown-id filter. `migrate`
-imports nothing of kbase (`cmd/importpolicy_test.go`). Nothing calls the copy yet.
+**C2 — the migrate tree and the 2.0.x readers.** 0.9.0 is removed (Ruling 22), and
+`internal/migrate` becomes the tree of Ruling 23, behaviour-neutral. Then `format_2_0_0` gains §8's
+copy list, under its `kb` names: the 2.0.x register reader, `ParseLeaf`, `parseExperimentLeaf`,
+`parseAnalysisLeaf`, `ParseAxioms`, the legacy readers, the slug and id rules and the unknown-id
+filter. The records emitter is C3c's. The tree imports nothing of kbase outside itself
+(`cmd/importpolicy_test.go`). Nothing calls the copy yet.
 Done: for each `internal/migrate/testdata/*-2.0.0` fixture, a committed golden of the copied readers'
 parse (a refusal golden where the 2.0.x load refuses it); the gates green. C2 also records, in the
 shared tree with the 2.0.1 binary, the 2.0.1 query goldens §14's parity case compares against.

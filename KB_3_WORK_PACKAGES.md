@@ -43,17 +43,22 @@ nothing.
 ## All packages
 
 The one home of each package's rating, predecessors, tree and parallelism. "Parallel with" names the
-packages it may run beside once both sets of predecessors are committed: they share no file.
+packages it may run beside once both sets of predecessors are committed: they share no file,
+neither package's tests import the other's package, and neither's Done runs a target that builds
+or tests the other's package (`just edit-gate`, `just checkpoint`, `just test`, or a `test-pkg`
+over a package importing it) while the other is uncommitted.
 
 | ID | Title | Rating | Predecessors | Tree | Parallel with |
 |---|---|---|---|---|---|
-| C1.1 | `index.Derive`: the index rows in memory | expert | — | shared | C2.1, C2.2, C2.3 |
-| C1.2 | `query.Load` from `Derive` | expert | C1.1 | shared | C1.3, C2.1–C2.3 |
-| C1.3 | the sheet and the overview take the rows | expert | C1.1 | shared | C1.2, C2.1–C2.3 |
-| C1.4 | `just bench-load` and `BenchmarkLoadDerive` | expert | C1.2, C1.3 | shared | C2.1–C2.3 |
-| C2.1 | text primitives, shared types and the 2.0.x register reader | mechanical | — | shared | C1.1–C1.4 |
-| C2.2 | the 2.0.x leaf, node and axiom readers | mechanical | C2.1 | shared | C1.1–C1.4 |
-| C2.3 | parse goldens and the agreement test | mechanical | C2.2 | shared | C1.1–C1.4 |
+| C1.1 | `index.Derive`: the index rows in memory | expert | — | shared | — |
+| C1.2 | `query.Load` from `Derive` | expert | C1.1 | shared | — |
+| C1.3 | the sheet and the overview take the rows | expert | C1.1 | shared | — |
+| C1.4 | `just bench-load` and `BenchmarkLoadDerive` | expert | C1.2, C1.3 | shared | — |
+| C2.0a | 0.9.0 removed | expert | — | shared | — |
+| C2.0b | the migrate tree | expert | C2.0a | shared | — |
+| C2.1 | text primitives, shared types and the 2.0.x register reader | expert | C2.0b | shared | — |
+| C2.2 | the 2.0.x leaf, node and axiom readers | expert | C2.1 | shared | — |
+| C2.3 | parse goldens and the agreement test | mechanical | C2.2 | shared | — |
 | C2.4 | the 2.0.1 parity query goldens | expert | C2.3, C1.4 | shared | — (shares `justfile` with C1.4) |
 | C3a.1 | record types, encode/decode, the strict load, `3.0.0` | expert | C1, C2, worktree | kb3 | — |
 | C3a.2 | markers, document kind, hosts | expert | C3a.1 | kb3 | — |
@@ -66,11 +71,11 @@ packages it may run beside once both sets of predecessors are committed: they sh
 | C3b.2 | the inserts | expert | C3b.1 | kb3 | — |
 | C3b.3 | edge ops and markers | expert | C3b.2 | kb3 | — |
 | C3b.4 | op help, flags and MCP schema | expert | C3b.3 | kb3 | — |
-| C3d.1 | the queries | expert | C3b.4 | kb3 | C3d.3, C3d.4 |
-| C3d.2 | `score`'s skip | expert | C3d.1 | kb3 | C3d.3, C3d.4, C3d.5a |
-| C3d.3 | the sheet | expert | C3b.4 | kb3 | C3d.1, C3d.2, C3d.4, C3d.5a, C3d.5b |
-| C3d.4 | `claimgraph` and `buildrecords` | expert | C3b.4 | kb3 | C3d.1, C3d.2, C3d.3, C3d.5b |
-| C3d.5a | `build` and `export` | expert | C3d.4 | kb3 | C3d.2, C3d.3, C3d.5b |
+| C3d.1 | the queries | expert | C3b.4 | kb3 | — |
+| C3d.2 | `score`'s skip | expert | C3d.1 | kb3 | C3d.5a |
+| C3d.3 | the sheet | expert | C3b.4 | kb3 | C3d.5b |
+| C3d.4 | `claimgraph` and `buildrecords` | expert | C3b.4 | kb3 | C3d.5b |
+| C3d.5a | `build` and `export` | expert | C3d.4 | kb3 | C3d.2, C3d.5b |
 | C3d.5b | the `cmd`-side fixtures | mechanical | C3b.4 | kb3 | C3d.3, C3d.4, C3d.5a |
 | C3d.5c | the `cmd` verbs | expert | C3d.1, C3d.2, C3d.3, C3d.5a, C3d.5b | kb3 | — |
 | C3d.6 | the model-facing texts | mechanical | C3d.5c | kb3 | — |
@@ -105,7 +110,7 @@ needs a 2→3 converter (`migrate.Chain` refuses "no converter leads from 2.0.0"
 | `cmd` | C3a.1 | C3d.5c |
 | `internal/kbdocs` | C3a.1 | C3d.6 |
 | `internal/migrate`, `internal/kbload` | C3a.1 | C3c.4 |
-| tests opening a pre-2.0.1 KB through `kbload`: `internal/index/migration_test.go` (`TestRefreshFinishesAStoppedSave`), `internal/index/index_test.go:459`, `internal/claimgraph/buildrecords_test.go:45`, `cmd/format_test.go` (`kb090Dir`, `kb100Dir`), `cmd/score_test.go`'s `score-kb-1.0.0` cases (:860, :1121) | C3a.1 | C3c.4 |
+| tests opening a pre-2.0.1 KB through `kbload`: `internal/index/migration_test.go` (`TestRefreshFinishesAStoppedSave`), `cmd/format_test.go` (`kb100Dir`), `cmd/score_test.go`'s `score-kb-1.0.0` cases (:860, :1121) | C3a.1 | C3c.4 |
 
 ## The import graph
 
@@ -145,7 +150,7 @@ calls `AuthoredIDs`, `ParseLeaf`, `LocateRegisterEntries`, `ParseAnalysisEntries
 | `ReplaceOrInsertFrontmatterField`, `LocateEntries`, `ParseExperimentLeaf`, `ParseAnalysisLeaf`, `FrontmatterKeySpan` | `index` (C3a.6), `write` (C3b.3) | — | C3b.3 |
 | `ReadIndex`, `IndexRowType` | `query` (C1.2), `sheet` (C1.3), `kb.SheetDigestDrawnOf` (C1.3) | `internal/index/rows_test.go:42, 46`, `refresh_test.go:97` (C3a.3); `internal/write/bearing_test.go:523, 562` (C3b.3); `internal/score/text_test.go:140` (C3d.2); `cmd/demoted_test.go:24`, `cmd/resultdocs_test.go:259` (C3d.5c) | C3d.5c |
 | `IndexFiles` | `index` (C3a.7) | `internal/index/rows_test.go:71` (C3a.7); `internal/score/run_test.go:132` (C3d.2); `cmd/format_test.go:164`, `cmd/init_test.go:185` (C3d.5c) | C3d.5c |
-| `Discover`, the 2.0.x `kb.State`, `AuthoredIDs`, `ParseLeaf`, `LocateRegisterEntries`, `ParseAnalysisEntries`, `ParseClaimEntries`, `Registers`, `ParseWorkEntries`, `KnownClaimIDs`, `ParseAxioms`, `CanonicalClaimIDs` | `index` (C3a.6, C3a.7), `write` (C3b.3), `claimgraph` (C3d.4), `export` (C3d.5a) | `internal/index/index_test.go:334, 515`, `migration_test.go:60` (C3a.7); `internal/write/bearing_test.go:227, 490`, `experiment_test.go:28`, `opscript_test.go:67`, `regression_test.go:63, 66, 156` (C3b.3); `internal/claimgraph/depends_stage_test.go:100` (C3d.4); `internal/build/inference_test.go:404` (C3d.5a); C2.3's agreement test (C3d.5a removes it); `internal/migrate/from_1_0_0_test.go:282` (the `discover` helper, C3c.1); `internal/kbload/parity_test.go:366, 386, 387, 555` (C3c.4) | C3d.5a |
+| `Discover`, the 2.0.x `kb.State`, `AuthoredIDs`, `ParseLeaf`, `LocateRegisterEntries`, `ParseAnalysisEntries`, `ParseClaimEntries`, `Registers`, `ParseWorkEntries`, `KnownClaimIDs`, `ParseAxioms`, `CanonicalClaimIDs` | `index` (C3a.6, C3a.7), `write` (C3b.3), `claimgraph` (C3d.4), `export` (C3d.5a) | `internal/index/index_test.go:334, 515`, `migration_test.go:60` (C3a.7); `internal/write/bearing_test.go:227, 490`, `experiment_test.go:28`, `opscript_test.go:67`, `regression_test.go:63, 66, 156` (C3b.3); `internal/claimgraph/depends_stage_test.go:100` (C3d.4); `internal/build/inference_test.go:404` (C3d.5a); C2.3's agreement test (C3d.5a removes it); the `discover` test helper, `from_1_0_0_test.go:275` at `e95e735` and in `internal/migrate/from_1_0_0_to_2_0_0` after C2.0b (C3c.1) | C3d.5a |
 
 **Rule.** A package going green leaves none of its tests calling a symbol this table retires later;
 the retiring package's report runs the test-caller grep and finds only packages still red.
@@ -250,26 +255,179 @@ returns no `query` line; the report gives `just bench-load`'s ns/op and allocs a
 
 ---
 
-## C2 — the converter's 2.0.x readers (shared tree)
+## C2 — the migrate tree and the 2.0.x readers (shared tree)
 
-C2's Done (the plan's): a committed golden of the copied readers' parse per
-`internal/migrate/testdata/*-2.0.0` fixture (a refusal golden where the 2.0.x load refuses it); the
-2.0.1 parity goldens; `just checkpoint`, `just test-integration`.
+C2's Done (the plan's): 0.9.0 gone and `internal/migrate` a tree of packages (C2.0a, C2.0b); a
+committed golden of the copied readers' parse per `internal/migrate/testdata/*-2.0.0` fixture (a
+refusal golden where the 2.0.x load refuses it); the 2.0.1 parity goldens; `just checkpoint`,
+`just test-integration`.
 
-**Copy rules (C2.1, C2.2).** Each `*kb.Source` parameter becomes `migrate.Files`. Each `log.Logger`
-becomes a drop sink, `func(path string, line int, detail string)`, called where the original logged.
-Every `kb` identifier the copy references is copied, transitively, until the package builds;
-unexported, renamed only where a name collides with `migrate`'s. Nothing calls the copy yet.
+**The migrate tree.** Each package of the tree is its own namespace, so a name in one never
+collides with a name in another. A declaration another package of the tree uses is exported by
+capitalising its first letter; a name copied from `kb` keeps its `kb` spelling.
 
-Shared facts: `sed -n 94,97p cmd/importpolicy_test.go` → `from: internal/migrate`, `forbidden: cmd,
-internal`; `migrate` has its own `splitLines`, `strip`, `rstrip` (`from_0_9_0.go:693, 732, 733`);
-`migrate`'s tests may import `kb` (`from_1_0_0_test.go:14`, `scalars_test.go:17`).
+- `internal/migrate` — `Chain`, the `converters` list and the version arithmetic. It is the only
+  package of the tree imported from outside it, and it keeps every exported name it has after
+  C2.0a, so no importer outside the tree changes: a type moved elsewhere is kept as an alias of its
+  new home (`type Files = common.Files`, `type ConversionError = common.ConversionError`).
+- `internal/migrate/common` — a declaration with no format content that two or more packages of the
+  tree use: `Files`, `ConversionError` (every converter returns it, and `kbload` matches it), and
+  helpers such as line splitting. This is the one test for what belongs here. Nothing in it changes
+  behaviour once a package uses it: a helper that would have to change for one format was that
+  format's all along, and the new behaviour is declared in that format's package under its own
+  name, the `common` one left as it is.
+- `internal/migrate/format_<major>_<minor>_<patch>` (`format_1_0_0`, `format_2_0_0`) — one
+  superseded format's frozen definition: its stamp, field names, token patterns, vocabulary
+  (`PendingLiteral`), record shapes, and its reader where one exists. Each is defined once, there,
+  and the converters on either side import it. A format that carries a predecessor's declaration
+  unchanged imports it from the predecessor's package rather than restating it — except the
+  frozen copy of `kb`'s reader (C2.1, C2.2), which carries its own. `format_2_0_0`
+  covers every 2.0 patch.
+- `internal/migrate/from_<from>_to_<to>` (`from_1_0_0_to_2_0_0`; C3c adds `from_2_0_0_to_3_0_0`) —
+  one converter's transformation, importing `common` and the format packages of its two sides.
+- Imports run one way: `common` imports nothing of the tree; a format package imports `common` and
+  earlier format packages; a converter imports `common` and format packages; the root imports the
+  converters, `common`, and the format packages for their stamps (`converters` names each step's
+  versions). No package imports a converter but the root, and none imports a later format.
+- The tree imports nothing of kbase outside `internal/migrate` (I8), and only `kbload` imports into
+  it from outside (tests aside).
+- `internal/migrate/testdata` stays where it is, read by relative path. A test moves with the
+  declarations it tests.
+
+**Copy rules (C2.1, C2.2).** The copy lands in `internal/migrate/format_2_0_0`, and every identifier
+keeps its `kb` name, exported or not. A copied body takes exactly three kinds of edit, and no
+other:
+
+1. Each `*kb.Source` parameter becomes `common.Files`.
+2. Each `log.Logger` becomes a drop sink, `func(path string, line int, detail string)`, called where
+   the original logged: `path` the reader's `path` field (`""` where it has none), `line` its `at`
+   field (`0` where it has none), `detail` the message followed by each key and value in order,
+   space-separated.
+3. A call that reads through `kb.Source` or touches the disk (`walk`, `IsFile`, `Root`, `KBPath`,
+   `ReadText`, `os.Stat`, `isSymlink`) becomes the narrowest stand-in over the `common.Files` in
+   reach that yields the same paths in the same order and the same text — `ReadText`'s UTF-8 check
+   and newline translation included. A declaration that touches the disk with no `common.Files` in
+   reach is not copied, and the report names it. The report lists every stand-in; C2.3's agreement
+   test checks them.
+
+A file the scope names is copied whole: every declaration in it, reachable or not, its helpers
+included, except one edit 3 excludes. Every `kb` identifier the copy references is copied too,
+transitively, until the package builds. The copy is frozen and carries everything it runs on: it
+shares no helper with `common` or an earlier format package, even one with an identical body, and
+takes from `common` only `Files`. Where `format_2_0_0` already holds a declaration whose value or
+body is identical, token for token, to one the copy brings in, under the same name or another
+(`Register200Name` beside `kb.RegisterFile`, `PendingLiteral` beside `kb.PendingLiteral`), the
+copy's survives, the other is deleted, and its users in `format_2_0_0` and `from_1_0_0_to_2_0_0`
+switch to the copy's; a pair that differs in any token (a pattern spelled with `\s` beside one
+built through `PyRE`) is not identical, and both stay. The copy imports only the standard library,
+the modules CONVENTIONS.md "Dependency Policy" sanctions, and `common`. Nothing calls the copy yet.
+
+Shared facts: the tree's tests may import `kb` (`internal/migrate/from_1_0_0_test.go:14` at
+`e95e735`, in `from_1_0_0_to_2_0_0` after C2.0b).
+
+### C2.0a — 0.9.0 removed
+
+0.9.0 does not exist: no KB in that form is read, converted, tested or described. This is a
+removal, not a migration: nothing replaces what goes, and no text says 0.9.0 is gone.
+
+- **Design:** none.
+- **Scope:**
+  - `internal/migrate`: `from_0_9_0.go`, its `converters` entry, `testdata/0.9.0`,
+    `SupersededStamp`, `SupersededRecordPaths`. Every declaration of `from_0_9_0.go` that a surviving
+    file uses moves unchanged to the file that uses it (`pendingLiteral`, `strip`, `isSpace`,
+    `indexDir` to `from_1_0_0.go`; `version100` to `migrate.go`; `entryPointPath` to
+    `from_1_0_0_test.go`); the rest goes. `scalars_test.go` and `export_test.go` pin the 0.9.0
+    converter's writers (`yamlFrontmatter`, `stringNode`, `numberTag`, `encodeYAML`) and go with
+    them. `migrate_test.go`'s 0.9.0 cases go; `TestChainRefusesAGap` keeps its subject over versions
+    that still exist.
+  - `internal/kb/format.go`: `UnstampedFormatVersion` and the no-stamp branch of `FormatStamp`. An
+    entry point with no `kb-format` stamp then takes the path an unreadable stamp takes, refused
+    `check: kb-format`; `FormatStamp`'s signature changes only as far as that needs.
+  - `internal/kbload`: the unstamped and comment-block branches (`kbload.go:110–111`), the
+    `SupersededRecordPaths` term in `RecordFiles()` (`:36`, which also shrinks `build.ownedPaths`,
+    `internal/build/build.go:60`), the `.jsonl` term of `inIndex` (`:154`), `testdata/0.9.0`,
+    `testdata/loose-0.9.0`, and `parity_test.go` (every case it holds is 0.9.0).
+  - The flag-gated reference harnesses, which nothing has run since `bedc61b` removed the
+    comparison toolchain: `internal/claimgraph/compat_test.go`, `internal/query/compat_test.go`'s
+    `TestStageQueryScores`, `cmd/resultdocs_test.go`'s `-query.fixtures` cases.
+    `internal/query/compat_test.go`'s `TestStageQueryCases` and `comparedQueries` stay (C2.4 uses
+    them).
+  - Every other test naming 0.9.0, `UnstampedFormatVersion` or the comment block: one asserting
+    only 0.9.0 behaviour is deleted (`index_test.go`'s `TestSerializeAsTheMigrationWrites`,
+    `claimgraph/buildrecords_test.go`'s `TestEncodeRecordAsTheMigrationWrites`); one using 0.9.0 as
+    any older version is re-pointed at `1.0.0` (`kb.FormatStamp`'s and `kb.MigratedSource`'s tests,
+    `refresh_test.go:348`); one whose fixture is a 0.9.0 KB for another subject gets a stamped
+    fixture (`cmd/maintenance_test.go`'s `TestRefreshAndVerifyVerbs`); a case whose subject is a
+    shape keeps the case and drops 0.9.0 from its name (`export/assemble_test.go:199`,
+    `write/ops_test.go:286`).
+  - `cmd/format_test.go`'s `kb090Dir` cases, each by name: `TestQueriesReadAnOlderKBAsItsConversion`
+    and `TestRefreshMigratesAnOlderKB` are deleted (each compares 0.9.0 against 1.0.0;
+    `TestA100KBRefreshesTo200` covers the 1.0.0 refresh); `TestNewerFormatRefusedByEveryReader`'s
+    "a newer patch" subtest and `TestNoRefreshRefusedOnAnOlderKB` stage `kb100Dir` instead, their
+    expected `from` version `1.0.0`.
+  - The contract, each passage losing what it says of 0.9.0 and keeping the rest: SPEC.md §3
+    (`:78`); §10 "Reading the stamp" ("either frontmatter form", `:1374`), the `1.0.0` paragraph's
+    "in place of the comment block" and "in place of `.jsonl`" (`:1410–1417`), and `:1367–1369`,
+    `:1428–1431`, `:1643–1644`; ARCHITECTURE.md "**Format migration (SPEC §10).**" ("either
+    frontmatter form", `:1337`; the parity-test sentences, `:1351–1353`) and "**The reference
+    comparison is flag-gated and partial.**"; CONVENTIONS.md's superseded-parser rule, its
+    parity-test exception sentence.
+- **Facts:**
+  - `git grep -n -e '0\.9\.0' -e 'UnstampedFormatVersion' -e 'SupersededStamp' -e 'SupersededRecordPaths' -e 'kb-frontmatter' -e 'old090\|is090\|kb090' -- internal cmd justfile SPEC.md ARCHITECTURE.md CONVENTIONS.md ':!internal/migrate'`
+    → ARCHITECTURE.md 5, SPEC.md 7, `cmd/format_test.go` 23, `cmd/maintenance_test.go` 3,
+    `cmd/resultdocs_test.go` 1, `internal/build/ownedpaths_test.go` 1,
+    `internal/claimgraph/buildrecords_test.go` 2, `internal/claimgraph/compat_test.go` 16,
+    `internal/export/assemble_test.go` 1, `internal/index/index_test.go` 2,
+    `internal/index/refresh_test.go` 1, `internal/kb/format.go` 4, `internal/kb/format_test.go` 3,
+    `internal/kb/source_test.go` 2, `internal/kbload/kbload.go` 3, `internal/kbload/kbload_test.go` 7,
+    `internal/kbload/parity_test.go` 91, `internal/query/compat_test.go` 1,
+    `internal/write/ops_test.go` 1, and five files under `internal/kbload/testdata/*0.9.0`.
+  - `git grep -n 'migrate\.SupersededRecordPaths\|migrate\.SupersededStamp' -- internal cmd` →
+    `internal/kbload/kbload.go:36, 111`, `internal/build/ownedpaths_test.go:15`.
+  - `grep -n -e 'claimgraph.reference' -e 'query.fixtures' -e 'TestStageQueryScores' justfile` →
+    nothing;
+    `git log -1 --format=%s bedc61b` → "… and the end of the comparison toolchain".
+- **Done:** `just fmt-check`; `just test` green; the Facts' first grep, run with
+  `-e 'comment-block frontmatter' -e 'either frontmatter'` added and `internal/migrate` included, returns
+  nothing; the scope's passages that grep cannot see (the `.jsonl` term of `inIndex`, SPEC's
+  "in place of `.jsonl`", ARCHITECTURE's "either frontmatter" where a line break splits it) are
+  checked by reading them.
+
+### C2.0b — the migrate tree
+
+- **Design:** none; "The migrate tree" above.
+- **Scope:** `internal/migrate` split into `common`, `format_1_0_0`, `format_2_0_0`,
+  `from_1_0_0_to_2_0_0` and the root, each declaration placed by one rule: a declaration that says
+  what a format's bytes are goes to that format's package; one that transforms goes to the
+  converter; one with no format content that two or more packages of the tree use goes to
+  `common`; `Chain` and its arithmetic stay in the root. Behaviour-neutral: no converter's output changes. Also
+  `cmd/importpolicy_test.go`'s two `migrate` rules, worded so a reader cannot take them to forbid
+  the tree's packages importing each other: the tree may import within itself and nothing else of
+  kbase; outside the tree only `kbload` imports it. ARCHITECTURE.md I8, the package map's
+  `internal/migrate` entry, the dependency-rules bullet and the migration section describe the
+  tree as above, and state the reason for the import rule: so maintenance of the live packages can
+  never change what an old KB converts to. The policy rules' `why` strings carry the same reason.
+- **Facts:**
+  - `git ls-files internal/migrate | grep -v testdata/` → `from_1_0_0.go`, `from_1_0_0_test.go`,
+    `migrate.go`, `migrate_test.go` (after C2.0a).
+  - `git grep -n -o 'migrate\.[A-Z][A-Za-z]*' -- internal cmd ':!internal/migrate'` → `Chain`,
+    `Files`, `ConversionError` (`kbload.go`; `ConversionError` is declared at `from_1_0_0.go:499`)
+    after C2.0a.
+  - `sed -n 94,102p cmd/importpolicy_test.go` → the rules `from: internal/migrate, forbidden: cmd,
+    internal` and `except: internal/kbload, forbidden: internal/migrate, direct`; `under`
+    (`:144`) matches a prefix and every path beneath it.
+- **Tests:** the existing converter tests and goldens pass unchanged; one `cmd/importpolicy_test.go`
+  case over a synthetic graph shows a tree package importing another passes and a tree package
+  importing `internal/kb` fails.
+- **Done:** `just fmt-check`; `just test-pkg ./internal/migrate`, `./internal/kbload`, `./cmd`
+  green; `git diff --stat` touches no `testdata/` file.
 
 ### C2.1 — text primitives, shared types and the 2.0.x register reader
 
 - **Design:** §8 (the copy list); §2.2.
-- **Scope:** new files in `internal/migrate`: `kb.PyRE` and its helpers (`internal/kb/pytext.go`:
-  `PyRE :24`, `NormalizeSpace :115`, `Slugify :176`), `Strip`, `StripCodeFences`, `SplitLines`,
+- **Scope:** new files in `internal/migrate/format_2_0_0`, and the edits the copy rules' identical-
+  declaration clause makes in `format_2_0_0` and `from_1_0_0_to_2_0_0`: `internal/kb/pytext.go` whole (`PyRE :24`,
+  `NormalizeSpace :115`, `Slugify :176` among it), `Strip`, `StripCodeFences`, `SplitLines`,
   `IDBody`, `WorkIDPattern`, `AxiomLabel`; the shared types `AnnotationFault`, `AnnotationError`,
   `IDRecord`, `MalformedError`, `Bearing`, `Edge`; `internal/kb/register.go` whole (the bullet reader
   with its `known`/`axioms`/`authored` filters, `LocateRegisterEntries`, `ParseClaimEntries`,
@@ -280,10 +438,12 @@ internal`; `migrate` has its own `splitLines`, `strip`, `rstrip` (`from_0_9_0.go
 ### C2.2 — the 2.0.x leaf, node and axiom readers
 
 - **Design:** §8; §2.1, §2.4.
-- **Scope:** `internal/migrate`: `kb.ParseFrontmatter`, `ParseLeaf`, `parseExperimentLeaf`,
-  `parseAnalysisLeaf`, `scorePairs`, `declarations`, `MarkerLines`, `ParseAxioms`,
-  `parseAxiomsDocument`, `parseLegacyAxioms`, `AuthoredIDs`, and `kb.Discover`'s join (the 2.0.x
-  `State`, `known` filter, `unionPairs`, hosted-analysis join).
+- **Scope:** `internal/migrate/format_2_0_0`, and the edits the copy rules' identical-declaration
+  clause makes in `format_2_0_0` and `from_1_0_0_to_2_0_0`: `kb.ParseFrontmatter`, `ParseLeaf`,
+  `parseExperimentLeaf`, `parseAnalysisLeaf`, `scorePairs`, `declarations`, `MarkerLines`,
+  `ParseAxioms`, `parseAxiomsDocument`, `parseLegacyAxioms`, `AuthoredIDs`, and `kb.Discover`'s join
+  (the 2.0.x `State`, `known` filter, `unionPairs`, hosted-analysis join), under the copy rules'
+  stand-in edit for every `kb.Source` and disk call.
 - **Facts:** `wc -l internal/kb/leaf.go internal/kb/discover.go internal/kb/frontmatter.go` → 526,
   551, 314; `sed -n 213,221p internal/kb/discover.go` → only hosted analyses join.
 - **Done:** `just fmt-check`; `just test-pkg ./internal/migrate` green; `just edit-gate`.
@@ -291,14 +451,23 @@ internal`; `migrate` has its own `splitLines`, `strip`, `rstrip` (`from_0_9_0.go
 ### C2.3 — parse goldens and the agreement test
 
 - **Design:** C2's Done.
-- **Scope:** an `internal/migrate` test parsing each `*-2.0.0` fixture with the copy: `register-2.0.0`
+- **Scope:** a `format_2_0_0` test parsing each `*-2.0.0` fixture with the copy: `register-2.0.0`
   against a golden of the copied `State` marshalled by `yaml.v3` (fields as copied), and
-  `bad-token-2.0.0` against a refusal golden (the copied `AnnotationError`'s faults). An agreement
-  test in package `migrate`, reusing the `discover` helper (`from_1_0_0_test.go:275`): the two
-  states' `yaml.v3` marshals are byte-equal. C3d.5a removes the agreement test (no `kb.Discover`
-  left); C3c.1 ports the `discover` helper to C2's copy.
-- **Facts:** `command ls internal/migrate/testdata` → `0.9.0`, `1.0.0`, `bad-token-1.0.0`,
-  `bad-token-2.0.0`, `register-1.0.0`, `register-2.0.0`.
+  `bad-token-2.0.0` against a refusal golden (the copied `AnnotationError`'s faults, marshalled the
+  same way). The goldens are committed files beside their fixtures,
+  `internal/migrate/testdata/register-2.0.0.state.yaml` and `bad-token-2.0.0.faults.yaml`. On a
+  mismatch the test writes what it got, each file under its golden's name, to
+  `test-data/transient/unit_tests/migrate/got/` (from `format_2_0_0`'s directory,
+  `../../../test-data/transient/unit_tests/migrate/got/`), and fails; a golden is written by copying
+  that output in. An agreement test in `format_2_0_0`'s tests compares, over each fixture, `kb.Discover`
+  with the copy: for `register-2.0.0` their states' `yaml.v3` marshals, for `bad-token-2.0.0` their
+  faults' marshals, byte-equal. It takes its own `discover` and `fixtureTree` helpers, copies of
+  `from_1_0_0_to_2_0_0`'s with the stamp `"2.0.0"`; each of the two `discover` helpers carries a
+  one-line comment that a test helper does not cross packages. C3d.5a removes the agreement test
+  (no `kb.Discover` left); C3c.1 ports `from_1_0_0_to_2_0_0`'s helper to C2's copy. If the agreement
+  test fails, stop and report the differing fields; diagnosing the difference is not this package's.
+- **Facts:** `command ls internal/migrate/testdata` → `1.0.0`, `bad-token-1.0.0`, `bad-token-2.0.0`,
+  `register-1.0.0`, `register-2.0.0` (after C2.0a).
 - **Done:** `just fmt-check`; `just test-pkg ./internal/migrate` green.
 
 ### C2.4 — the 2.0.1 parity query goldens
@@ -325,8 +494,7 @@ internal`; `migrate` has its own `splitLines`, `strip`, `rstrip` (`from_0_9_0.go
 
 Each package converts the fixtures and goldens its own tests read (design §15), by hand to the
 design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older than 2.0.1
-(`cmd/testdata/score-kb-1.0.0`, `internal/kbload/testdata/0.9.0`,
-`internal/kbload/testdata/loose-0.9.0`, `internal/migrate/testdata/*`) are never converted.
+(`cmd/testdata/score-kb-1.0.0`, `internal/migrate/testdata/*`) are never converted.
 
 ### C3a — records, the load and `index`'s own consumers
 
@@ -586,7 +754,8 @@ design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older 
   `test-data/fixtures/results/values/insert.yaml` (drop `register`), `test-data/fixtures/mcp/seed.yaml`
   (drop `register`), `cmd/testdata/score-kb`; `test-data/fixtures/init/skeleton` re-pinned to the new
   `init`'s output (entry point, two empty files). Every conversion follows the design's record forms and
-  §8's mapping; a case they do not settle is reported, not decided.
+  §8's mapping; a case they do not settle is reported, not decided. A generated page is not written:
+  `cmd/testdata/score-kb/kb-root/claim-rigor.md` is removed (`git rm`), and C3d.5c generates it.
 - **Facts:** `git ls-files test-data/fixtures | grep -E 'seed.yaml|insert.yaml'` →
   `test-data/fixtures/mcp/seed.yaml`, `test-data/fixtures/results/values/insert.yaml`;
   `git ls-files cmd/testdata/score-kb` lists the score fixture's files.
@@ -601,7 +770,9 @@ design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older 
   `cmd/render-claim-graph.go` (degraded refusal; its `.index/` check folds into the load). Ports
   `cmd`'s tests off `kb.ReadIndex` (`demoted_test.go:24`, `resultdocs_test.go:259`) and `kb.IndexFiles`
   (`format_test.go:164`, `init_test.go:185`), which then retire. Observes in `cmd` §6.2's test that no
-  flag or tool property names the provenance, and that no tool carries `create`.
+  flag or tool property names the provenance, and that no tool carries `create`. Generates
+  `cmd/testdata/score-kb/kb-root/claim-rigor.md` with the built binary's `refresh` over the fixture
+  and commits it; the page is never written by hand.
 - **Facts:** `sed -n 160,171p cmd/init.go` → `skeletonEntryPoint` writes `kind` and the stamp;
   `sed -n 50,54p cmd/render-claim-graph.go` → the `.index/` refusal.
 - **Done:** `just fmt-check`; `just test-pkg ./cmd` green; the Allowed-red runs.
@@ -622,18 +793,21 @@ design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older 
 #### C3c.1 — the 2→3 mapping, emitter and chain step
 
 - **Design:** §8's intro; §8.1 but its marker and stamped-document rows; §8.3, §8.4, §8.5.
-- **Scope:** `internal/migrate`: `convert200To300` over C2's readers, the records emitter, the
-  frontmatter strip, the warnings, the `converters` entry; `internal/kb/source.go` (`Migration` gains
-  `Warnings`; the new `MigrationNote`); `internal/kbload/kbload.go` (the 2→3 step through
-  `migrate.Chain`, its only caller, `:78`; `MigratedSource`, `:87`); `cmd/refresh.go`
-  `migrationNotice` prints the warnings. Ports `migrate`'s `discover` test helper
-  (`from_1_0_0_test.go:275`, calling `kb.Discover` at `:282`) to C2's copy.
+- **Scope:** `internal/migrate/from_2_0_0_to_3_0_0` (new): `convert200To300` over `format_2_0_0`'s
+  readers, the records emitter, the frontmatter strip, the warnings; the root's `converters` entry;
+  `internal/kb/source.go` (`Migration` gains `Warnings`; the new `MigrationNote`);
+  `internal/kbload/kbload.go` (the 2→3 step through `migrate.Chain`, its only caller, `:78`;
+  `MigratedSource`, `:87`); `cmd/refresh.go` `migrationNotice` prints the warnings. Ports
+  `from_1_0_0_to_2_0_0`'s `discover` test helper (calling `kb.Discover`) to `format_2_0_0`'s
+  reader.
+- **Blocked on Open question 1** (`ACTIVE_PLAN.md`): where the 3.0.0 record shape the emitter
+  writes is defined. Not dispatchable until it is ruled.
 - **Facts:** `git grep -n 'var converters\|func Chain' internal/migrate/migrate.go` → `:27`, `:38`;
   `git grep -n 'MigrationNote =' internal/kb/source.go` → `:23`; `git grep -n 'func migrationNotice' cmd`
   → `cmd/refresh.go:123`.
 - **Done:** `just fmt-check`; `just test-pkg ./internal/kb` green (edited after going green); the
   Allowed-red runs (`internal/migrate`'s new tests pass by name; `internal/kbload` stays red until
-  C3c.4: `parity_test.go:366–437, 555` call retired readers, and C2's copies are unexported).
+  C3c.4, its owner in the Allowed-red table).
 
 #### C3c.2 — markers from `claims:` listings
 
@@ -658,10 +832,9 @@ design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older 
 - **Scope:** `internal/index/refresh.go` (save order: authored files, leaves, stamped documents,
   pages, sheets, removals, stamp); `internal/kbload`; `cmd/render-claim-graph.go` (draws from the
   in-memory conversion, writes sheets only); `cmd/score.go` (a KB still unmigrated after the start
-  refresh is refused); `internal/migrate` golden pairs: `register-2.0.0` and `bad-token-2.0.0` as 2→3
-  pairs, and `adjagent-sheet` at `release-0.8.0` (`git show release-0.8.0:<path>` per file) against
-  C3a.3's hand conversion; `internal/kbload/parity_test.go`'s 0.9.0 part, now ending at 3.0.0, off
-  the retired readers (`:366–437`, `:555`).
+  refresh is refused); `from_2_0_0_to_3_0_0` golden pairs: `register-2.0.0` and `bad-token-2.0.0` as
+  2→3 pairs, and `adjagent-sheet` at `release-0.8.0` (`git show release-0.8.0:<path>` per file)
+  against C3a.3's hand conversion.
 - **Facts:** `sed -n 140,160p internal/kbload/kbload.go` → `.index/*.yaml` files enter the
   conversion's file set (`inIndex`, `:154`).
 - **Tests:** every §8.5 warning class; the §8.6 unmigrated write order (`edges.yaml` before
@@ -700,7 +873,7 @@ design's 3.0.0 form, stamped `3.0.0`, until C3c. Migration-input fixtures older 
 
 - **Design:** §14; §12's rerun.
 - **Scope:** `internal/query/compat_test.go` (kept, §14's expected differences);
-  `internal/index/compat_test.go` (retired); `internal/kbload/parity_test.go`'s 2.0.1 part, comparing
+  `internal/index/compat_test.go` (retired); a new `internal/kbload/parity_test.go` holding the 2.0.1 case, comparing
   against C2.4's goldens with the same `kb-root:` placeholder applied to 3.0.0's answers.
 - **Facts:** `git ls-files | grep compat_test` → `internal/claimgraph/`, `internal/index/`,
   `internal/query/compat_test.go`.
@@ -755,6 +928,6 @@ adjagent or was settled.
 | §12 | C1.4, C3a.3, C3e.3 |
 | §13 | C3e.1 |
 | §13.1 | C3d.6, C3c.3 |
-| §14 | C2.4 (goldens), C3c.4 (0.9.0 parity), C3e.3 |
+| §14 | C2.4 (goldens), C3e.3 |
 | §15 | each package's fixtures; C3b.4 (help); C3e.2 |
 | §16 | release gate |

@@ -447,12 +447,14 @@ and the re-price `Write` seam. A test asserts no command flag and no tool proper
 
 ## 8. The converter, 2.0.x → 3.0.0
 
-`internal/migrate`: bytes in, bytes out, obsolete paths, no kbase import (`cmd/importpolicy_test.go`).
-It copies, as superseded parsers, the 2.0.x register reader (`internal/kb/register.go`'s bullet
+`internal/migrate`: bytes in, bytes out, obsolete paths, no import of kbase outside
+`internal/migrate` (`cmd/importpolicy_test.go`);
+a tree of packages, one per superseded format and one per converter (`KB_3_WORK_PACKAGES.md`, "The
+migrate tree"). `format_2_0_0` copies, as superseded parsers, the 2.0.x register reader (`internal/kb/register.go`'s bullet
 reader with its `known`/`axioms`/`authored` filters), `kb.ParseLeaf`, `parseExperimentLeaf`,
 `parseAnalysisLeaf`, `ParseAxioms` and the legacy readers, `kb.Slugify`, the id and token patterns
-they use, and a records emitter. Its output need only load: the save re-renders both files through
-the record writer.
+they use; `from_2_0_0_to_3_0_0` holds the transformation and a records emitter. Its output need only
+load: the save re-renders both files through the record writer.
 
 Its input is a KB the 2.0.x load accepts; a KB the 2.0.x load refuses is refused with the 2.0.x
 load's own item, and the owner repairs it as a 2.0.x KB. Otherwise an upgrade never refuses.
@@ -830,8 +832,8 @@ These are the 3.0.0 paragraphs the converter's restamp writes (§8.1) and its te
   2.0.x KB against `./bin/kbase` over the same unsaved KB (§9.1). Expected differences: §9.1's
   counts, §6.3's keys, §8.3's merges. Flag-gated as now.
 - `internal/index/compat_test.go`: retired; it compares outputs 3.0.0 no longer produces.
-- `internal/kbload/parity_test.go`: keeps the 0.9.0 chain; gains a committed 2.0.1 case whose query
-  goldens, recorded once under 2.0.1, equal its converted form's modulo the same differences.
+- `internal/kbload/parity_test.go`: a committed 2.0.1 case whose query goldens, recorded once under
+  2.0.1, equal its converted form's modulo the same differences.
 
 ---
 
@@ -846,7 +848,6 @@ These are the 3.0.0 paragraphs the converter's restamp writes (§8.1) and its te
 - `cmd/testdata/score-kb`, `score-kb-1.0.0`.
 - `internal/sheet/testdata/adjagent-sheet` and its DOT goldens (one style per relation, §8.3 merge).
 - `internal/migrate/testdata/register-2.0.0`, `bad-token-2.0.0`: become 2→3 golden pairs.
-- `internal/kbload` 0.9.0 chain parity (now ends at 3.0.0).
 - About 40 `*_test.go` files carrying 2.0.x shapes (`git grep -ln 'claim-rigor\|kind: leaf\|set-frontmatter' -- '*_test.go'`).
 - The `Short` of eleven existing ops, each op's `Long` moving with it (help is MCP tool description text):
 

@@ -343,7 +343,9 @@ violation classes:
 - no second home for a value, string, or mechanism that has one
 - nothing beyond the dispatched scope, even improvements
 
-Violations block acceptance: fix (redispatch or direct) before commit. Style and judgment calls
+Violations block acceptance: fix (redispatch or direct) before commit. A report that flags a
+departure from the package's scope text is redispatched or escalated, never accepted on the
+coordinator's reading of what the scope meant. Style and judgment calls
 outside these classes: flag only if egregious.
 
 **Direct coding at the session level**: permitted, but read the topic-specific coder agent
