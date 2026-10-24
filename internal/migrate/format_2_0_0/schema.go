@@ -38,6 +38,14 @@ func IDBody(kinds ...string) string {
 	return prefix + "-[a-z0-9]{6}"
 }
 
+// The document kinds a frontmatter block's kind: names, by path shape alone:
+// the entry point, a document with children, one without.
+const (
+	DocumentEntryPoint = "entry-point"
+	DocumentIndex      = "index"
+	DocumentLeaf       = "leaf"
+)
+
 // WorkPrefix opens every external-work id; the rest of the id is the
 // citation key.
 const WorkPrefix = "wrk"

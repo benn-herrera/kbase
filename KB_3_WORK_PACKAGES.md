@@ -308,7 +308,8 @@ other:
 3. A call that reads through `kb.Source` or touches the disk (`walk`, `IsFile`, `Root`, `KBPath`,
    `ReadText`, `os.Stat`, `isSymlink`) becomes the narrowest stand-in over the `common.Files` in
    reach that yields the same paths in the same order and the same text — `ReadText`'s UTF-8 check
-   and newline translation included. A declaration that touches the disk with no `common.Files` in
+   and newline translation included; a stand-in used at more than one site may be one helper of
+   the copy's, named for what it stands in for. A declaration that touches the disk with no `common.Files` in
    reach is not copied, and the report names it. The report lists every stand-in; C2.3's agreement
    test checks them.
 
@@ -321,8 +322,9 @@ copied group is the formatter's, not an edit. Under edit 2 a discarding logger (
 becomes a sink that drops, and a logged value that is not a string is spelled in `detail` as
 `strconv` writes it. The copy is frozen and carries everything it runs on: it
 shares no helper with `common` or an earlier format package, even one with an identical body, and
-takes from `common` only `Files`. Where `format_2_0_0` already holds a declaration whose value or
-body is identical, token for token, to one the copy brings in, under the same name or another
+takes from `common` only `Files`. Where `format_2_0_0` already holds a declaration of its own —
+not one copied from `kb`, whose pairs the copy keeps as `kb` has them — whose value or body is
+identical, token for token, to one the copy brings in, under the same name or another
 (`Register200Name` beside `kb.RegisterFile`), the
 copy's survives, the other is deleted, and its users in `format_2_0_0` and `from_1_0_0_to_2_0_0`
 switch to the copy's; a pair that differs in any token (a pattern spelled with `\s` beside one
