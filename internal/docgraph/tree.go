@@ -571,7 +571,7 @@ func render(n *document) string {
 }
 
 // writeTrees writes each volume's tree and the entry point listing every
-// volume, in order.
+// volume, in order, stamped with the format version.
 func writeTrees(trees []*volumeTree, kbRoot string) error {
 	listing := make([]string, len(trees))
 	for i, t := range trees {
@@ -580,7 +580,10 @@ func writeTrees(trees []*volumeTree, kbRoot string) error {
 		}
 		listing[i] = fmt.Sprintf("- [%s](%s)", t.title, t.index.path)
 	}
-	entry := fmt.Sprintf("# %s\n\n%s\n", entryPointTitle, strings.Join(listing, "\n"))
+	entry, err := kb.StampFormat(fmt.Sprintf("# %s\n\n%s\n", entryPointTitle, strings.Join(listing, "\n")), kb.FormatVersion)
+	if err != nil {
+		return err
+	}
 	return writeFile(filepath.Join(kbRoot, kb.EntryPointFile), []byte(entry))
 }
 

@@ -9,7 +9,13 @@ import (
 	"strings"
 )
 
-const version200 = "2.0.0"
+const (
+	version200 = "2.0.0"
+
+	indexDir = "kb-root/.index"
+)
+
+const pendingLiteral = "*pending*"
 
 // The 1.0.0 register keys the 2.0.0 form renames, by the kind of entry that
 // authors them: the entry's marker decides, so a key of another kind is
@@ -617,3 +623,15 @@ func trimBlankLines(lines []string) []string {
 	}
 	return lines[start:end]
 }
+
+// isSpace is Python's str.isspace() for one character.
+func isSpace(r rune) bool {
+	switch {
+	case r >= '\t' && r <= '\r', r >= 0x1c && r <= ' ', r == 0x85, r == 0xa0, r == 0x1680,
+		r >= 0x2000 && r <= 0x200a, r == 0x2028, r == 0x2029, r == 0x202f, r == 0x205f, r == 0x3000:
+		return true
+	}
+	return false
+}
+
+func strip(s string) string { return strings.TrimFunc(s, isSpace) }

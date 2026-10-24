@@ -3,19 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
-	"flag"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"go.yaml.in/yaml/v3"
-
 	"kbase/internal/kb"
-	"kbase/internal/kbload"
 	"kbase/internal/latex/pandoc"
-	"kbase/internal/query"
 )
 
 // kbase runs one invocation of the real root command from dir, as the binary
@@ -195,74 +190,4 @@ func TestBuildResultsParse(t *testing.T) {
 			t.Errorf("stage report %s: %v", report, err)
 		}
 	}
-}
-
-var queryFixtures = flag.String("query.fixtures", "", "space-separated 0.9.0-built fixture repositories, each with kb-root/ beside its root")
-
-// toolResultCap is the most bytes personant takes back from one tool call.
-const toolResultCap = 8 << 10
-
-// TestDefaultLimitFitsTheToolResultCap runs every list query, at its default
-// limit, over each node and index path of each fixture, and fails where a
-// result document passes the tool-result cap; test-integration-query-arxiv
-// names the fixtures.
-func TestDefaultLimitFitsTheToolResultCap(t *testing.T) {
-	if *queryFixtures == "" {
-		t.Skip("no fixtures named; test-integration-query-arxiv names them")
-	}
-	largest := map[string]int{}
-	for _, repo := range strings.Fields(*queryFixtures) {
-		kbRoot := filepath.Join(repo, kb.KBDir)
-		var cases [][]string
-		for _, id := range indexIDs(t, kbRoot) {
-			cases = append(cases, []string{"deps", id}, []string{"deps", id, "-i"}, []string{"gated-on", id},
-				[]string{"cited-by", id}, []string{"referenced-by", id})
-		}
-		src, err := kbload.Open(kbRoot)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ix, err := query.Load(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range append(query.SubtreePayload(ix, ""), "", ".") {
-			cases = append(cases, []string{"subtree", p})
-		}
-		cases = append(cases, []string{"find", ""}, []string{"strength-below", "--max-strength", "1.1"}, []string{"weak-points", "--max-strength", "1.1", "--min-dependents", "0"})
-		for _, c := range cases {
-			out, code := kbase(t, repo, c...)
-			if code != 0 {
-				continue
-			}
-			checkDocument(t, c[0], out)
-			largest[c[0]] = max(largest[c[0]], len(out))
-			if len(out) > toolResultCap {
-				t.Errorf("%s %q in %s: %d bytes at the default limit, over the %d-byte cap", c[0], c[1:], repo, len(out), toolResultCap)
-			}
-		}
-	}
-	b, err := yaml.Marshal(largest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("largest default-limit result per list query, in bytes:\n%s", b)
-}
-
-// indexIDs is every node id the claims index records.
-func indexIDs(t *testing.T, kbRoot string) []string {
-	t.Helper()
-	src, err := kbload.Open(kbRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rows, problems, err := kb.ReadIndex[kb.NodeRow](src, nil)
-	if err != nil || problems != nil {
-		t.Fatal(kbRoot, err, problems)
-	}
-	var ids []string
-	for _, r := range rows {
-		ids = append(ids, r.ID)
-	}
-	return ids
 }

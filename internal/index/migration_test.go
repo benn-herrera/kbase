@@ -63,7 +63,7 @@ func TestRefreshFinishesAStoppedSave(t *testing.T) {
 			if _, err := Refresh(reopened, log.Discard()); err != nil {
 				t.Fatalf("refreshing a KB whose save stopped before the stamp: %v", err)
 			}
-			if stamp, _, _ := kb.FormatStamp(read(t, filepath.Join(root, kb.EntryPointFile))); stamp != kb.FormatVersion {
+			if stamp, _ := kb.FormatStamp(read(t, filepath.Join(root, kb.EntryPointFile))); stamp != kb.FormatVersion {
 				t.Errorf("the refresh left the stamp at %q, want %s", stamp, kb.FormatVersion)
 			}
 		})

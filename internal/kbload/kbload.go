@@ -31,9 +31,9 @@ const (
 )
 
 // RecordFiles is every repository-relative path a build of this kbase commits
-// a record at, and every superseded spelling a migration drains.
+// a record at.
 func RecordFiles() []string {
-	return slices.Concat(buildrecords.RecordFiles, migrate.SupersededRecordPaths())
+	return slices.Clone(buildrecords.RecordFiles)
 }
 
 // Open is the KB at kbRoot as this kbase reads it. A KB stamped at the
@@ -91,8 +91,7 @@ func formatRefusal(kbRoot, remedy, detail string) error {
 	return result.Refusal{{Check: CheckFormat, Path: filepath.Join(kbRoot, kb.EntryPointFile), Remedy: remedy, Detail: detail}}
 }
 
-// formatStamp is the entry point's stamp, in whichever frontmatter form it
-// opens with.
+// formatStamp is the entry point's stamp.
 func formatStamp(kbRoot string) (string, error) {
 	entry := filepath.Join(kbRoot, kb.EntryPointFile)
 	data, err := os.ReadFile(entry)
@@ -102,22 +101,16 @@ func formatStamp(kbRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	stamp, yamlForm, err := kb.FormatStamp(string(data))
+	stamp, err := kb.FormatStamp(string(data))
 	if err != nil {
 		return "", formatRefusal(kbRoot, "", err.Error())
-	}
-	if !yamlForm {
-		stamp = kb.UnstampedFormatVersion
-		if s, ok := migrate.SupersededStamp(data); ok {
-			stamp = s
-		}
 	}
 	return stamp, nil
 }
 
 // coveredFiles is every file a format covers, under its repository-relative
-// slash path: kb-root's documents, its index in either spelling, and the
-// build records beside it in either spelling. It is the reader's file set: a
+// slash path: kb-root's documents, its index, and the build records beside
+// it. It is the reader's file set: a
 // directory leaf discovery never descends into holds no document the
 // conversion reads or makes obsolete, and the index is the one excluded
 // directory a format covers, since a migration drains and rewrites it.
@@ -151,7 +144,7 @@ func coveredFiles(kbRoot string) (migrate.Files, error) {
 			}
 			return nil
 		}
-		inIndex := path.Dir(rel) == kb.IndexDir && (strings.HasSuffix(rel, ".jsonl") || strings.HasSuffix(rel, ".yaml"))
+		inIndex := path.Dir(rel) == kb.IndexDir && strings.HasSuffix(rel, ".yaml")
 		if !strings.HasSuffix(rel, ".md") && !inIndex {
 			return nil
 		}

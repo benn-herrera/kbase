@@ -196,7 +196,7 @@ func TestFrontMatter(t *testing.T) {
 		name, text, prose, title string
 	}{
 		{
-			"0.9.0-built: title over the list",
+			"title over the list",
 			"---\nkind: entry-point\n---\n# Knowledge Base\n\n- [A Paper](a-paper/index.md)\n",
 			"", "Knowledge Base",
 		},

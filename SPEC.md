@@ -74,8 +74,8 @@ forbids reading `.index/`, the claim-graph sheets and frontmatter as metadata, a
 instructions do (§11), and `CONVENTIONS.md` states that metadata, frontmatter included, is written
 only by a write op, never by hand.
 
-**Formats.** A new KB is written in the current metadata format, `2.0.1` (§10). A KB in a superseded
-form — `0.9.0` or `1.0.0` (§10) — is read through migration.
+**Formats.** A new KB is written in the current metadata format, `2.0.1` (§10). A KB in the superseded
+form, `1.0.0` (§10), is read through migration.
 
 **Theorem numbering** is whatever pandoc prints.
 
@@ -1364,14 +1364,12 @@ process.
 ## 10. Metadata format version
 
 **The stamp.** A KB declares its metadata format as `kb-format: <major>.<minor>.<patch>` in the
-entry point's frontmatter, semver. Two forms are superseded: `0.9.0` — the comment-block
-frontmatter, the JSON build records, the JSONL index — and `1.0.0`, which `2.0.0` replaces; a KB
-with no stamp is `0.9.0`. Major: a reader built for the old major misreads the KB (a renamed field,
+entry point's frontmatter, semver. One form is superseded: `1.0.0`, which `2.0.0` replaces. Major: a reader built for the old major misreads the KB (a renamed field,
 changed semantics, a changed anchor rule). Minor: additive; an old reader ignores the addition
 safely. Patch: the bytes a writer produces changed, their meaning did not.
 
 **Reading the stamp.** Before any other read, kbase reads `kb-format` alone from
-`kb-root/entry-point.md`, recognising either frontmatter form; a KB with no entry point is refused
+`kb-root/entry-point.md`; a KB with no entry point is refused
 (`check: kb-root`) as it is today. Every producer of a KB stamps it: the build's spine, `init`'s
 entry point at birth, and every save (below). A stamp at the current major and minor with another patch is read as current and
 rewritten on the next save.
@@ -1408,13 +1406,13 @@ migration. On an unmigrated KB `verify` reports the index stale with remedy `kba
 is the migration.
 
 **`1.0.0`**, the first major bump, is one change of serialisation: standard YAML frontmatter (`---`
-fenced, the same keys and values) in place of the comment block, with one change of shape — a leaf's
+fenced, the same keys and values), with one change of shape — a leaf's
 repeated per-node key groups (`exp-id`, `status`, `strengthens`; `sup-id`, `supports`) become one
 mapping each in a top-level `experiment-nodes:` or `support-nodes:` list, keys and order kept, a
 one-node leaf a one-element list; the build records as YAML (`kb-build-*.yaml`); `.index/*.yaml` as
 YAML streams, one document per line, each the record as a JSON object after the `--- ` marker — a
-valid YAML flow mapping that a reader holding only a JSON parser reads by stripping the marker — in
-place of `.jsonl`; a writer never folds a record across lines. The YAML frontmatter stands at the
+valid YAML flow mapping that a reader holding only a JSON parser reads by stripping the marker; a
+writer never folds a record across lines. The YAML frontmatter stands at the
 top of the file, so the up-link line (§3) is the first line after its closing `---`. **Recognising
 frontmatter.** A document's leading `---` block is frontmatter only when its first non-empty line is
 key-shaped: `name:` with a kebab-case name. Such a block that does not parse as a YAML mapping is
@@ -1425,11 +1423,9 @@ mappings and block lists, lists of flat mappings, plain or double-quoted scalars
 folded or multi-line scalars; flow style only for a list of scalars (`[clm-a, clm-b]`), an empty
 list or mapping (`[]`, `{}`), and the JSON object of an index line; a scalar is never wrapped. A
 reader of the dialect, in any language, is conformant when it reads the `1.0.0` golden pairs
-(ARCHITECTURE §12) to the same values. The `0.9.0 → 1.0.0` migration converts the record and index
-files under their new names and leaves nothing of the old form behind. Elsewhere this document
-describes the `2.0.0` form, which keeps this serialisation; `1.0.0` is the form `2.0.0` supersedes,
-and its names appear here and in the migration below. `.jsonl` and the comment block are `0.9.0`,
-the oldest superseded form, named only here.
+(ARCHITECTURE §12) to the same values. Elsewhere this document describes the `2.0.0` form, which
+keeps this serialisation; `1.0.0` is the form `2.0.0` supersedes, and its names appear here and in
+the migration below.
 
 **`2.0.0`**, the second major bump, is the scoring vocabulary: three quantities named, five node
 types in place of six, and one scalar on every scoring edge. It keeps the serialisation above and
@@ -1640,8 +1636,7 @@ invents neither a finding nor a context where a migrated work bullet's context n
 writes one sentence to stderr and carries one `migration` record — `from`, `to`, `note` — after
 `kb-root` (§7), on every such call until the call whose save stamps `2.0.1`; `note` states the three
 value changes in one sentence. §7 names the verbs. Over MCP the document is the channel and stderr
-is the server's log; `status` and `cancel` load no KB and never carry it. A `0.9.0` KB yields one
-record for the whole chain, `0.9.0` to `2.0.1`.
+is the server's log; `status` and `cancel` load no KB and never carry it.
 
 **A converted but unsaved KB answers no query.** A query is refused with remedy `kbase refresh`: the
 index predates the columns, and a legal edge must never be reported without a token. `verify` reports

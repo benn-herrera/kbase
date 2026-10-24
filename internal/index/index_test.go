@@ -13,7 +13,6 @@ import (
 
 	"kbase/internal/kb"
 	"kbase/internal/log"
-	"kbase/internal/migrate"
 	"kbase/internal/result"
 )
 
@@ -438,30 +437,6 @@ func TestSerialize(t *testing.T) {
 	}
 	if got := Serialize(nil); got != "" {
 		t.Errorf("Serialize(nil) = %q", got)
-	}
-}
-
-// TestSerializeAsTheMigrationWrites: an index the 0.9.0 → 1.0.0 migration
-// converts reads back byte for byte as refresh writes it, so a migrated KB's
-// index is the writer's own.
-func TestSerializeAsTheMigrationWrites(t *testing.T) {
-	recs := []record{
-		{{Key: "node_type", Value: "claim"}, {Key: "id", Value: "clm-aaaaaa"}, {Key: "title", Value: "A — \"quoted\" <b> & ü x"},
-			{Key: "rigor", Value: 0.5}, {Key: "strength"}, {Key: "n", Value: 2}},
-		{{Key: "claim_id", Value: "clm-aaaaaa"}, {Key: "mentioned_ids", Value: []string{"exp-bbbbbb"}}, {Key: "tier2_marked", Value: false}, {Key: "text", Value: "tab\tff\fbs\bc1\u0085"}},
-	}
-	stream := Serialize(recs)
-	var jsonl strings.Builder
-	for _, line := range strings.SplitAfter(stream, "\n") {
-		record, _ := strings.CutPrefix(line, kb.IndexRecordMarker)
-		jsonl.WriteString(record)
-	}
-	out, _, err := migrate.Chain(kb.UnstampedFormatVersion, kb.FormatVersion, migrate.Files{"kb-root/.index/claims.jsonl": []byte(jsonl.String())})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(out["kb-root/.index/claims.yaml"]); got != stream {
-		t.Errorf("the migration writes\n%s\nrefresh writes\n%s", got, stream)
 	}
 }
 

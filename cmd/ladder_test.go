@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kbase/internal/kb"
 )
 
 // TestRefreshRewritesTheBottomRungsWords: the ladder's last rung reads
@@ -17,7 +19,7 @@ func TestRefreshRewritesTheBottomRungsWords(t *testing.T) {
 	repo := t.TempDir()
 	writeRepo(t, repo, map[string]string{
 		".git/HEAD":              "ref: refs/heads/main\n",
-		"kb-root/entry-point.md": "---\nkind: entry-point\n---\n\n# KB\n\n- [a](a.md)\n",
+		"kb-root/entry-point.md": "---\nkind: entry-point\nkb-format: \"" + kb.FormatVersion + "\"\n---\n\n# KB\n\n- [a](a.md)\n",
 		"kb-root/a.md": "---\nkind: leaf\nclaims: [clm-aaaaaa]\n---\n[↑ KB](entry-point.md)\n\n# A\n\n" +
 			"An assertion nothing carries. <!-- claim-rigor: clm-aaaaaa -->\n",
 		"kb-root/claim-rigor.md": "# Register\n\n## A Claim\n<!-- id: clm-aaaaaa -->\n\n### Rigor\n" +

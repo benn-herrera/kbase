@@ -283,7 +283,7 @@ func TestSpliceLines(t *testing.T) {
 }
 
 func TestExcerptLines(t *testing.T) {
-	doc := "<!-- kb-frontmatter\nkind: leaf\n-->\n\n# Title\n\n> **Theorem 1.** The *bound* holds\n> for every $n$.\n\nSee [the proof](p.md#x) of the bound holds.\n"
+	doc := "---\nkind: leaf\n---\n\n# Title\n\n> **Theorem 1.** The *bound* holds\n> for every $n$.\n\nSee [the proof](p.md#x) of the bound holds.\n"
 	for _, tc := range []struct {
 		excerpt string
 		want    []int

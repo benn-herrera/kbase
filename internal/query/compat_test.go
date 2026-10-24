@@ -15,18 +15,15 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"kbase/internal/kb"
 	"kbase/internal/kbload"
 )
 
-// The query comparison: cases staged from a KB's index with TestStageQueryCases
-// (and, on a clone, the scores of TestStageQueryScores), each run through
-// ./bin/kbase and through the reference run, and the answers compared with
-// TestCompareQueries. Without their flags all three skip.
+// The query comparison: cases staged from a KB's index with TestStageQueryCases,
+// each run through ./bin/kbase and through the reference run, and the answers
+// compared with TestCompareQueries. Without their flags both skip.
 var (
-	queryKBRoot     = flag.String("query.kbroot", "", "the kb-root cases or scores are chosen from")
+	queryKBRoot     = flag.String("query.kbroot", "", "the kb-root cases are chosen from")
 	queryCases      = flag.String("query.cases", "", "where the staged cases are written, one NNN.args file each")
-	queryValues     = flag.String("query.values", "", "where the scoring values documents are written")
 	queryDirs       = flag.String("query.dirs", "", "space-separated case directories, each holding run outputs")
 	queryComparison = flag.String("query.comparison", "", "where the comparison is written")
 )
@@ -98,86 +95,6 @@ func TestStageQueryCases(t *testing.T) {
 	for i, c := range stageCases(ix) {
 		name := filepath.Join(*queryCases, fmt.Sprintf("%03d.args", i+1))
 		if err := os.WriteFile(name, []byte(strings.Join(c, "\n")+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// TestStageQueryScores prepares a clone of a 0.9.0-built KB, whose claims
-// are all pending and whose leaves cross-reference only through HTML anchors,
-// for the queries those leave empty. It appends to one leaf a body link to
-// another claim's originating leaf, as a maintainer would write one, and
-// writes the values that put scores and a strengthen-by mention into the
-// index: rigor on the first claim that something depends on and that gates
-// on nothing, and a new low-rigor claim in its register whose strengthen-by
-// item names it. Where no claim qualifies it writes no values.
-func TestStageQueryScores(t *testing.T) {
-	if *queryKBRoot == "" || *queryValues == "" {
-		t.Skip("staged by test-integration-query-arxiv")
-	}
-	ix, err := loadOpened(*queryKBRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ix.cites) > 0 {
-		origin := ix.CitedBy(ix.cites[0].ClaimID)[0].LeafPath
-		for _, c := range ix.cites {
-			if c.LeafPath == origin {
-				continue
-			}
-			link, err := filepath.Rel(path.Dir(c.LeafPath), origin)
-			if err != nil {
-				t.Fatal(err)
-			}
-			citing := filepath.Join(*queryKBRoot, filepath.FromSlash(c.LeafPath))
-			text, err := os.ReadFile(citing)
-			if err != nil {
-				t.Fatal(err)
-			}
-			text = append(text, fmt.Sprintf("\nSee [the origin](%s#probe) of the probe.\n", filepath.ToSlash(link))...)
-			if err := os.WriteFile(citing, text, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			break
-		}
-	}
-	var target *kb.NodeRow
-	for _, c := range ix.claims() {
-		// c gates on nothing: no scoring edge supports it. Something depends
-		// on c: c supports another node.
-		gates := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool {
-			return e.Target == c.ID && (e.Relation == kb.RelationSupports || e.Relation == kb.RelationFounds)
-		})
-		held := slices.ContainsFunc(ix.edges, func(e kb.EdgeRow) bool {
-			return e.Source == c.ID && (e.Relation == kb.RelationSupports || e.Relation == kb.RelationFounds)
-		})
-		if held && !gates {
-			target = &c
-			break
-		}
-	}
-	if target == nil {
-		return
-	}
-	if err := os.MkdirAll(*queryValues, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	docs := map[string]any{
-		"set-rigor": map[string]any{"entry": []any{map[string]any{"id": target.ID, "rigor": 0.5}}},
-		"insert-claim-entry": map[string]any{"entry": []any{map[string]any{
-			"register":      target.CanonicalPath,
-			"title":         "Query Probe Gated On " + target.ID,
-			"rigor":         0.3,
-			"rationale":     "Written by the query comparison so the index carries a low score and a strengthen-by mention.",
-			"strengthen-by": []any{"Tighten the bound " + target.ID + " gives."},
-		}}},
-	}
-	for op, doc := range docs {
-		data, err := yaml.Marshal(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(*queryValues, op+".yaml"), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+const version100 = "1.0.0"
+
 // Files is a KB's metadata files by repository-relative slash path: kb-root/…
 // and the build records beside it.
 type Files map[string][]byte
@@ -25,7 +27,6 @@ type converter struct {
 }
 
 var converters = []converter{
-	{From: version090, To: version100, Convert: convert090To100},
 	{From: version100, To: version200, Convert: convert100To200},
 }
 

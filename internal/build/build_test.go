@@ -629,7 +629,7 @@ func TestSpineStampsTheFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stamp, _, err := kb.FormatStamp(string(b)); err != nil || stamp != kb.FormatVersion {
+	if stamp, err := kb.FormatStamp(string(b)); err != nil || stamp != kb.FormatVersion {
 		t.Errorf("the spine left the entry point stamped %q (%v), want %s:\n%s", stamp, err, kb.FormatVersion, b)
 	}
 	if dirty, err := f.ledger(t).Dirty(); err != nil || len(dirty) > 0 {
@@ -1451,7 +1451,7 @@ func TestProgressRecordIsJSONLines(t *testing.T) {
 
 func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 	kbRoot := filepath.Join(t.TempDir(), "proj", kb.KBDir)
-	writeFile(t, filepath.Join(kbRoot, kb.EntryPointFile), "# Knowledge Base\n\n- [Volume](vol/index.md)\n")
+	writeFile(t, filepath.Join(kbRoot, kb.EntryPointFile), "---\nkb-format: \""+kb.FormatVersion+"\"\n---\n# Knowledge Base\n\n- [Volume](vol/index.md)\n")
 	writeFile(t, filepath.Join(kbRoot, "vol", "index.md"), "[↑ Knowledge Base](../entry-point.md)\n\n# Volume\n")
 	for _, tc := range []struct {
 		name    string

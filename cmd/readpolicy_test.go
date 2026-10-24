@@ -55,7 +55,7 @@ var fileOpenOwners = map[string]string{
 // the loader, and the build's own stages over the tree they are writing.
 var onDiskOwners = map[string]string{
 	"internal/kbload/kbload.go":     "the loader, at the current version",
-	"internal/docgraph/validate.go": "the tree the document graph has just written, before any stamp",
+	"internal/docgraph/validate.go": "the tree the document graph has just written, at the current version",
 	"internal/claimgraph/tree.go":   "the KB the build is writing, whose format its start saved",
 }
 

@@ -345,7 +345,7 @@ func TestSaveDrainsTheObsoleteButWhatItSaves(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	src := kb.MigratedSource(root, kb.UnstampedFormatVersion, map[string][]byte{"kb-root/vol/a.md": []byte(leaf)},
+	src := kb.MigratedSource(root, "1.0.0", map[string][]byte{"kb-root/vol/a.md": []byte(leaf)},
 		[]string{"kb-root/.index/claims.jsonl", "kb-root/vol/a.md", "kb-root/vol/old.md"})
 	_, removed, _, err := RefreshReporting(src, log.Discard())
 	if err != nil {
@@ -363,7 +363,7 @@ func TestSaveDrainsTheObsoleteButWhatItSaves(t *testing.T) {
 			t.Errorf("%s still stands", rel)
 		}
 	}
-	if stamp, _, _ := kb.FormatStamp(read(t, filepath.Join(root, kb.EntryPointFile))); stamp != kb.FormatVersion {
+	if stamp, _ := kb.FormatStamp(read(t, filepath.Join(root, kb.EntryPointFile))); stamp != kb.FormatVersion {
 		t.Errorf("the save did not stamp the entry point: %q", stamp)
 	}
 	if src.Migrated() {

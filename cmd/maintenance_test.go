@@ -16,8 +16,8 @@ func maintenanceRepo(t *testing.T) string {
 	repo := t.TempDir()
 	files := map[string]string{
 		".git/HEAD":              "ref: refs/heads/main\n",
-		"kb-root/entry-point.md": "<!-- kb-frontmatter\nkind: entry-point\n-->\n\n# KB\n\n- [a](a.md)\n",
-		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n<!-- kb-frontmatter\nkind: leaf\nno-claim: \"prose\"\n-->\n\n# A\n",
+		"kb-root/entry-point.md": "---\nkind: entry-point\nkb-format: \"" + kb.FormatVersion + "\"\n---\n\n# KB\n\n- [a](a.md)\n",
+		"kb-root/a.md":           "---\nkind: leaf\nno-claim: prose\n---\n[↑ KB](entry-point.md)\n\n# A\n",
 	}
 	for rel, text := range files {
 		p := filepath.Join(repo, rel)
@@ -133,8 +133,7 @@ func TestRefreshAndVerifyVerbs(t *testing.T) {
 	repo := maintenanceRepo(t)
 	sub := filepath.Join(repo, "kb-root")
 
-	if code, out := runMaintenance(t, runVerify, repo); code != 1 || !strings.Contains(out, `outcome: "refused"`) || !strings.Contains(out, "claims.yaml is missing") ||
-		!strings.Contains(out, "metadata format is 0.9.0") {
+	if code, out := runMaintenance(t, runVerify, repo); code != 1 || !strings.Contains(out, `outcome: "refused"`) || !strings.Contains(out, "claims.yaml is missing") {
 		t.Errorf("verify before refresh: exit %d\n%s", code, out)
 	}
 	if code, out := runMaintenance(t, runRefresh, sub); code != 0 || !strings.Contains(out, `outcome: "done"`) || !strings.Contains(out, `- ".index/claims.yaml"`) {

@@ -1156,8 +1156,7 @@ internal/buildrecords     the four build records' readers (node-pass, unmarked,
                           classification, cull) and their paths
                           (`RecordFiles`), imported by claimgraph and sheet, and by
                           kbload for the record paths (the ledger's owned paths derive
-                          from them; `migrate.SupersededRecordPaths()` names the old
-                          spellings)
+                          from them)
 internal/kbdocs           readiness stamp, README assembly
 internal/claimgraph       conform, inventory (records + page-defined readings),
                           identify, attribute, shortlist, unmarked, order, cull,
@@ -1306,7 +1305,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Constant | Value |
 |---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6) |
-| Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures, asserted by a test |
+| Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures |
 | Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, and every transport failure and incomplete stream is re-issued; the build's letter asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts, and a pause the call's deadline cannot cover is not waited out — the call gives up at once, naming the attempts it made |
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
 | Reader concurrency | `[asks] readerConcurrency` in `config.toml` (SPEC §9), default 4 |
@@ -1335,9 +1334,8 @@ stage-commit subject is SPEC §6.
 **Format migration (SPEC §10).** Every verb that reads a KB — `refresh`, `verify`,
 `render-claim-graph`, the queries, the write ops, `export-latex`, and the build's spine-seed, phase-3a, readiness
 stamp, overview and resume — calls `kbload.Open(kbRoot)`; `status` and `cancel` do not load the KB.
-`Open` reads `kb-format` alone from the entry point (`kb.FormatStamp`, either frontmatter
-form) before anything else. A stamp at the current major and minor builds a `kb.Source` that reads
-disk. An older stamp reads every file the format covers (`kb-root/` and the build records beside it)
+`Open` reads `kb-format` alone from the entry point (`kb.FormatStamp`) before anything else. A
+stamp at the current major and minor builds a `kb.Source` that reads disk. An older stamp reads every file the format covers (`kb-root/` and the build records beside it)
 into a map of repository-relative paths to bytes and hands it to `migrate.Chain(from, to)`, which
 applies each converter in turn and returns the current form's files plus the union of the obsolete
 paths; the `Source` serves the returned bytes and reads an obsolete path as absent. A newer or
@@ -1349,9 +1347,7 @@ this order: every migrated file, atomically; then the obsolete paths minus what 
 then the stamped entry point, once and last, so the stamp marks a completed migration. The removals
 are reported as `removed` by `refresh`, every write op and `render-claim-graph`. A converter is a
 pure function with a golden pair as its test; the chain's order is the version order and a gap in it
-is a test failure. `internal/kbload/parity_test.go` holds a frozen copy of the `0.9.0` readers, in
-test code only, and asserts the migrated KB reads to the same values as the original, over committed
-`0.9.0` KBs.
+is a test failure.
 
 **MCP server (SPEC §11).** `cmd/mcp.go` builds the tool table from `rootCmd`: one Tool per command
 declaring `kbase.mcp` = `bound` — `mcp`, `wait` and `probe` declare `excluded`, the second because a
@@ -1534,10 +1530,7 @@ refuses a step no converter leads, so a KB stamped `1.1.0` is refused at load ra
 `1.1.0` converter exists and none is reachable.
 
 **The reference comparison is flag-gated and partial.** `internal/index/compat_test.go`'s
-comparisons run only when their `reference.*` flags are set, so no gate runs them. The `0.9.0`
-parity cases in `internal/kbload/parity_test.go` are three committed KBs plus whatever local
-reference clone lies under `test-data/transient`; none of the committed ones carries a register, so a
-`0.9.0` register is compared by the converter's golden pairs alone.
+comparisons run only when their `reference.*` flags are set, so no gate runs them.
 
 **No refresh moves a value.** `refresh` asks no model, so a derived value changes only when an
 authored one does — `set-rigor`, `set-bearing`, or a hand edit. `verify`'s drift is between a record

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/log"
 	"kbase/internal/records"
@@ -93,7 +94,7 @@ func TestBuildTwoVolumesIntoOneTree(t *testing.T) {
 		t.Errorf("the build's checks failed: %+v", report.Findings)
 	}
 	entry, err := os.ReadFile(filepath.Join(kbRoot, "entry-point.md"))
-	if want := "# Knowledge Base\n\n- [First Paper](first-paper/index.md)\n- [Second Paper](second-paper/index.md)\n"; err != nil || string(entry) != want {
+	if want := "---\nkb-format: \"" + kb.FormatVersion + "\"\n---\n# Knowledge Base\n\n- [First Paper](first-paper/index.md)\n- [Second Paper](second-paper/index.md)\n"; err != nil || string(entry) != want {
 		t.Errorf("entry-point.md = %q, %v; want every volume listed in the order given, %q", entry, err, want)
 	}
 

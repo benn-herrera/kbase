@@ -54,9 +54,8 @@ const (
 	stageSpineSeed     = "spine-seed"
 )
 
-// ownedPaths are the root-relative paths a build commits and restores: the
-// build records under every spelling, so a migration's removal of the old
-// one is committed with the stage that saved it.
+// ownedPaths are the root-relative paths a build commits and restores:
+// kb-root and the build records beside it.
 var ownedPaths = append([]string{kb.KBDir}, kbload.RecordFiles()...)
 
 // Every boundary's body ends with the build's inputs, one line per path.

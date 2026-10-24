@@ -121,8 +121,7 @@ single source. Working habits they impose:
 - **A superseded format's parser lives in `internal/migrate` and nowhere else** (I8). The trap:
   keeping a reader for the old form "for compatibility" in `kb` or `index`, which is the
   multi-version reader the design forbids. A converter's test is a golden pair, old bytes in and new
-  bytes out. The one permitted exception is a frozen copy of the superseded readers in test code
-  only, for the parity test (`internal/kbload/parity_test.go`).
+  bytes out.
 - **A `kb-format` patch bump moves the stamp and every fixture that pins its bytes, and stops the
   chain where its last converter does.** Two halves, both load-bearing. `kb.FormatVersion` moves, and
   every fixture whose bytes carry the stamp — or a derived line the change rewrote — is rewritten in

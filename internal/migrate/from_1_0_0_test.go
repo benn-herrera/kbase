@@ -20,6 +20,8 @@ const (
 	register200Dir = "testdata/register-2.0.0"
 	badToken100Dir = "testdata/bad-token-1.0.0"
 	badToken200Dir = "testdata/bad-token-2.0.0"
+
+	entryPointPath = "kb-root/entry-point.md"
 )
 
 // TestConvert100To200Goldens: the register fixture converts to its 2.0.0
@@ -35,7 +37,7 @@ func TestConvert100To200Goldens(t *testing.T) {
 		t.Errorf("obsolete %q, want %q", obsolete, want)
 	}
 	compareFiles(t, got, fixtureTree(t, register200Dir))
-	if stamp, _, err := kb.FormatStamp(string(got[entryPointPath])); err != nil || stamp != version100 {
+	if stamp, err := kb.FormatStamp(string(got[entryPointPath])); err != nil || stamp != version100 {
 		t.Errorf("the converted entry point is stamped %q (%v), want %s", stamp, err, version100)
 	}
 }
