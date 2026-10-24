@@ -298,6 +298,11 @@ file is one power-cycle from gone.
   updates as work packages land. It carries outcomes, their consequences and the principles still
   steering open choices — not decision history, which lives in commits. When the work lands, its
   outcomes move into the contract documents and the file is replaced by the next plan.
+- **A work package is dispatchable only when it names its scope in files, packages or symbols —
+  never a span of design sections — carries the command and its answer, or the quoted line, for
+  each fact it acts on, and states its done-line in runner targets.** A plan whose packages lack
+  these is an outline: it is not offered for approval as a dispatch plan, and none of its packages
+  is dispatched.
 - **`ROADMAP_PLANS/`** holds partly-planned work that is not under way: a plan with enough design
   done that someone could pick it up, usually behind a ROADMAP.md item. A plan leaves when it
   becomes the active plan, is finished, or is abandoned. A plan there cites only tracked paths.

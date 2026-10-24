@@ -27,7 +27,8 @@ and `score` leaves manually scored values alone by default.
    other derived value are computed at load and stored nowhere.
 2. **Edge records, one type per relation group, one record per edge identity in `edges.yaml`:**
    - `UnscoredEdge` — `references`: `relation`, `source`, `target`, `context`;
-   - `DemotedEdge` — `demoted`: those, plus `origin` (`cited` or `inferred`);
+   - `DemotedEdge` — `demoted`: those, plus the edge it replaced — its former `relation`, and
+     that relation's `bearing` and `manually-scored` where its type carries them (Ruling 17);
    - `BearingEdge` — `founds`: those of `UnscoredEdge`, plus `bearing`;
    - `ScorableEdge` — `supports`, `lifts`, `refutes` (`kb.BearingWalkRelations`): those of
      `UnscoredEdge`, plus `bearing` and `manually-scored`.
@@ -69,20 +70,56 @@ and `score` leaves manually scored values alone by default.
 12. **A benchmark `just` target** times load plus full derivation on an in-repo fixture; its number is
     reported with the landing.
 
-## Open questions for ratification
+## Rulings
 
-Phase A recommends an answer to each; the owner rules in Phase B.
-
-1. **An edge identity authored at more than one site in a 2.0.x KB.** Today the load accepts it and
-   the last in load order answers (`Index.Edge`, `internal/query/scoring.go`). The converter
-   refuses, merges where bearing and context agree, or keeps the last.
-2. **Register text that fits no field** — intro paragraphs, legend tables, `> **Leaf references:**`
-   lines (ModernCorp: `part2/claim-rigor.md`). The converter drops it, refuses with `check:
-   conversion` (SPEC §10), or carries it somewhere.
-3. **A stale generated page:** `verify` reports it as a fault, as a finding, or not at all.
-4. **Session access to generated pages:** whether a session may read a generated `claim-rigor.md`.
-5. **The version number.** ROADMAP assigns `3.0.0` to "the derived index as one file" (which this
-   plan supersedes) and to jointly established units; units move to the next major.
+13. **An upgrade never refuses.** Every converter step that loses or invents data picks a defined
+    outcome and warns, naming file and line; a step with no data consequence does not warn. SPEC
+    §10's `check: conversion` refusal and "never makes invalid bytes valid" are amended to this.
+    - An edge identity authored at more than one site: equal bearings make one record with the
+      contexts joined, silently; different bearings keep the higher, with a warning.
+    - Register text outside every entry is dropped silently; text inside an entry that fits no field
+      is dropped with a warning quoting it; an unrecognised frontmatter key is dropped with a
+      warning.
+    - A 2.0.x KB the 2.0.x load refuses is not the converter's input.
+14. **No host field.** A hosted node's host is the leaf holding its statement marker, derived at
+    load; nothing about hosting is stored. Every hosted node has exactly one statement marker: the
+    build always writes it, single-claim leaves included; the converter inserts a marker where a
+    2.0.x `claims:` listing implies one and none stands, and where a claim carries markers in more
+    than one leaf it keeps the one in the leaf that lists the claim, removes the others and warns.
+    A leaf that lists a claim without its marker is a mention. A hosted node with no statement
+    marker is an ordinary `verify` fault and does not make a load degraded.
+15. **`rigor` and `bearing` are optional on inserts and `add-rests-on`;** an omitted value is
+    written `*pending*` with `manually-scored: false`.
+16. **Degraded load.** The load is strict about syntax — a file that does not parse refuses, naming
+    file and line — and lenient about integrity: a duplicate edge identity, a dangling edge and a
+    cycle load, resolved for the walk, and mark the load degraded. Degraded is computed on every
+    load and never stored. While degraded: `verify` works and reports the degraded state, each fault
+    and its remedy; every query, `score`, a `build` resuming a trail and every write op is refused,
+    naming the state and `refresh`; `refresh` repairs — a duplicate identity keeps the higher bearing,
+    a dangling edge is dropped, a cycle is broken — warns of each loss, and writes clean files.
+    Merging metadata across branches is unsupported; this is how a merge's damage is dug out of.
+17. **Cycle breaking cuts as the walk finds cycles, never the whole ring.** In `build` and in
+    `refresh` alike: walk the graph depth-first in edge-identity order; each time the walk closes a
+    cycle, demote one edge of it — a `supports` edge on the cycle going into an analysis where one
+    stands, the first in identity order, else the edge the walk is on — and continue until no cycle
+    remains. A merge may leave many cycles; each cut warns, naming the edge and the cycle it broke.
+    A demoted edge keeps the edge it replaced (Settled 2), so `resolve-demoted` restores it exactly
+    — its relation, bearing and `manually-scored` — and the repair of one cycle is at most two
+    edits: restore the demoted edge, re-author another edge of the cycle.
+18. **Stale generated pages** are a fault `refresh` fixes. **Sessions** may read a generated
+    `claim-rigor.md` as prose, take no value from it, and never edit it.
+19. **No origin.** Whether the build found an edge unmarked has no effect on the KB, so no record
+    carries it and no surface reports it: the sheet draws one style for `supports` and one for a
+    demoted edge, with no cited or inferred variant in its strokes, tooltips, legend or digest, and
+    no longer reads the build records; `verify`'s `demoted` finding names the edge alone. The
+    converter drops 2.0.x's `(origin …)` annotations without a warning. The build records keep what
+    they hold for the build's own stages; a later report could reconstruct the fact from them.
+20. **KB format 3.0.0, two authored files.** ROADMAP's "the derived index as one file" retires;
+    jointly established units move to the next major.
+21. **Register page placement is derived.** A node is rendered on the register page of the volume its
+    host leaf lies in; no record carries a register. The converter drops 2.0.x placement silently;
+    a node printed in another volume's 2.0.x register moves to its host's page, and a prose link to
+    its old anchor is reported by the dead-link check.
 
 ## Established facts
 
@@ -105,13 +142,13 @@ Phase A recommends an answer to each; the owner rules in Phase B.
 
 | Phase | Rating | Seat | Status |
 |---|---|---|---|
-| A — inventory and design | expert | architect | pending |
-| B — design review and ratification | expert | go-coder, prompt-engineer; then the owner | pending |
-| C — implementation | planned from the ratified design | — | not yet planned |
+| A — inventory and design | expert | architect | landed |
+| B — design review and ratification | expert | go-coder, prompt-engineer; then the owner | reviewed, ruled and folded; awaits ratification |
+| C — implementation | per package | per package (below) | planned below; awaits ratification |
 
 ### Phase A — inventory and design
 
-The architect writes `ROADMAP_PLANS/KB_3_DATA_MODEL.md`, its own design artifact, holding:
+The architect writes `KB_3_DATA_MODEL.md` (project root, beside this plan), its own design artifact, holding:
 
 - **The inventory:** every frontmatter key, register line and `.index/` file; for each, every reader
   and writer in the code (package and function — `internal/claimgraph` and `internal/index/verify.go`
@@ -155,13 +192,102 @@ recommendation.
 ### Phase B — review and ratification
 
 A go-coder reviews the design for feasibility and missing consumers; a prompt-engineer reviews it as
-the brief Phase C's coders will execute. The architect folds the findings in. The owner rules on the
-open questions and ratifies; Phase C's work packages are then planned here from the ratified design.
+the brief Phase C's coders will execute. The architect folds the findings and Rulings 13–21 into the
+design, the body stating each ruling as a rule and the design's open-question and "does not hold"
+sections retired into it. The owner ratifies; Phase C's work packages are then planned here from the
+ratified design.
+
+### Phase C — implementation
+
+`KB_3_DATA_MODEL.md` is the design and `KB_3_WORK_PACKAGES.md` the dispatch plan: one package per
+dispatch, refining C1–C3 below. Each dispatch prompt quotes verbatim, from those two reviewed files:
+the work-packages preamble, the package's own section, the rows of the package table, Allowed-red
+and retirement tables that name the package, and the design sections the package cites. It names
+the four contract documents by path for the coder to read. The coder reads neither file whole; it
+follows a cross-reference only where the quoted text does not settle the point, reads only that
+section, and names it in its report. A section followed repeatedly is quoted from then on. Where the design
+and this plan differ, this plan governs; a coder that finds the design unworkable stops and reports
+rather than redesigning. Packages run in dependency order; packages whose predecessors are all
+committed and that share no file may run in parallel, each audited and committed on its own.
+
+| WP | Rating | Seat | Lands | Design | Status |
+|---|---|---|---|---|---|
+| C1 | expert | go-coder, coordinator's model | In-memory derivation under 2.0.1, behaviour-neutral | §3.6 (the `.index/` rows only), §9.1's first sentence, §12 | pending |
+| C2 | mechanical | go-coder, sonnet | The converter's 2.0.x readers, golden-tested and not yet wired | §8's copy list; §2 as the source inventory | pending |
+| C3a–e | expert, except a sub-package `KB_3_WORK_PACKAGES.md` rates mechanical (settled by quoted text) | go-coder, coordinator's model; a mechanical sub-package go-coder, sonnet | The format flip, one landing | below | pending |
+
+**C1 — in-memory derivation.** `index.Derive` computes from the 2.0.1 sources what `.index/` holds.
+`query.Load`, `score`'s scoring set and `kb.SheetDigestDrawnOf` (`internal/build/rows.go`) read it
+instead of the files; the sheet receives the rows through `index.WriteSheet` (§9.7), since `index`
+imports `sheet`. `refresh` still writes the 2.0.1 index files, and C1 retires nothing §3.6 lists:
+`refresh` and `verify` keep the coverage check and the cycle refusal, whose retirement is C3a's.
+`just bench-load`, a recipe C1 creates, and `BenchmarkLoadDerive` land here; on 2.0.1 they time the
+source parse plus `index.Derive`. The load's leniency (§3.7) is not part of C1. A query over a KB
+whose sources `refresh` refuses (a cycle, a coverage fault) now carries that refusal instead of
+answering from the last `.index/` written; that is intended, not a regression.
+Done: the gates green; `git diff --stat` touches no `testdata/` or `test-data/fixtures/` file;
+`git grep -n 'ReadIndex(' -- internal cmd ':!*_test.go'` returns no `query` line; the report gives
+`just bench-load`'s ns/op and allocs at both sizes.
+
+**C2 — the 2.0.x readers.** `internal/migrate` gains §8's copy list except the records emitter, which
+is C3c's: the 2.0.x register reader, `ParseLeaf`, `parseExperimentLeaf`, `parseAnalysisLeaf`,
+`ParseAxioms`, the legacy readers, the slug and id rules and the unknown-id filter. `migrate`
+imports nothing of kbase (`cmd/importpolicy_test.go`). Nothing calls the copy yet.
+Done: for each `internal/migrate/testdata/*-2.0.0` fixture, a committed golden of the copied readers'
+parse (a refusal golden where the 2.0.x load refuses it); the gates green. C2 also records, in the
+shared tree with the 2.0.1 binary, the 2.0.1 query goldens §14's parity case compares against.
+
+**C3 — the format flip**, one landing, built in a git worktree. Once C1 and C2 are committed, and the
+plan, the design and `KB_3_WORK_PACKAGES.md` are committed, the coordinator runs
+`git worktree add .claude-temp/kb3 -b kb-3.0.0 release-0.8.0` and creates
+`.claude-temp/kb3/.claude-temp/`. Every C3 dispatch names the absolute worktree path and runs each
+command from it (`cd <path> && just …`); the coordinator audits and commits each dispatch on
+`kb-3.0.0`. Nothing else lands on `release-0.8.0` while C3 is open. The landing,
+`git merge --ff-only kb-3.0.0` in the shared tree, is the owner's act, or the coordinator's under the
+owner's go, with no agent dispatched and `git status` clean.
+
+The dispatches run in this order; each converts the fixtures and goldens its packages' tests read
+(§15's row for that package), and its report names every package still failing to build.
+
+- **C3a — records, the load and `index`'s own consumers:** `kb.FormatVersion` set to `3.0.0`, and
+  every fixture a package converts by hand stamped `3.0.0`; the two schemas, their bytes encoder in
+  `kb` and their file write in `index` (§3.1–§3.5); the strict and lenient load and the degraded
+  state (§3.7); `index.Derive` over records and markers, and §3.6's retirements (§3.6, §4); register
+  page placement and rendering (§5); `index.BreakCycles` (§10); `index`'s `refresh` (non-migration
+  path, §9.3) and `verify` (§9.4), since `write` refreshes after every op. A 2.0.x reader in `kb`
+  retires with its last caller.
+  Done: `internal/kb` and `internal/index` green, with a round-trip test for each §3.2/§3.3 type, one
+  test per §3.7 refusal class and degraded row, and §10's walk cutting a fixed multi-cycle graph to
+  a stated edge set.
+- **C3b — write ops:** every op over records and markers (§9.2); `manually-scored` and its provenance
+  (§6.1–§6.2); the new ops; `set-frontmatter` retired; `resolve-demoted`'s exact restore; the ops'
+  `Short` and `Long` help (§15). Help text the design does not quote lands after prompt-engineer
+  review.
+  Done: `internal/write` green, with one test per §6.1 row and §6.2's test that no flag or tool
+  property names the provenance.
+- **C3d — the remaining consumers:** the `refresh` and `verify` verbs in `cmd` over C3a's `index`;
+  `build`'s stages (§9.5); `score`'s skip and `--rescore-manual` (§7, §9.6); the
+  queries' 3.0.0 behaviour (§9.1) and §6.3's keys; the sheet, `export-latex`, `init`, `status`
+  (§9.7); the MCP instructions (§9.8); the session rule and its test (§11); the stamped templates'
+  text (§13.1).
+  Done: `cmd`, `query`, `score`, `sheet`, `claimgraph`, `build` and `kbdocs` green, with §11's test.
+- **C3c — the converter:** C2 wired in; the mapping, marker placement, merges and warnings (§8); the
+  migration save, `refresh`'s migration path included (§8.6, §9.3); the 2→3 step in `migrate.Chain`
+  and `kbload`.
+  Done: `internal/migrate` and `internal/kbload` green, `register-2.0.0` and `bad-token-2.0.0` as
+  2→3 golden pairs, every §8.5 warning class asserted.
+- **C3e — the contract and the remaining fixtures:** SPEC, ARCHITECTURE, CONVENTIONS,
+  `USER_CONVENTIONS.md`, README and ROADMAP per §13 except §13.1; `test-data/fixtures/*`, §14's
+  harnesses and any `cmd/testdata` no earlier dispatch took.
+  Done: the gates green; `just bench-load` rerun on the converted fixture, its numbers in the report.
+
+**Release gate:** before a 3.0.0 binary ships (`just dist`), the owner confirms each §16 item landed
+in adjagent, or was settled for the `path-stable` question.
 
 ## Gates
 
-Phase C, per package: `just edit-gate`, `just test`; before each landing `just test-integration`
-and `just checkpoint`.
+C1, C2 and C3e: `just checkpoint` and `just test-integration`. Between C3 dispatches: `just fmt-check`
+and `just test-pkg <pkg>` for each package the dispatch names green.
 
 ## Not in this plan
 
