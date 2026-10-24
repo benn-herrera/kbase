@@ -23,6 +23,7 @@ TEST_DATA_TRANSIENT_DIR := TEST_DATA_DIR / "transient"
 # result, its stats and artifacts — somewhere they can be read afterwards.
 # One directory per test name, all under the gitignored transient tree.
 UNIT_TEST_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "unit_tests"
+BENCH_LOAD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "bench-load"
 RESULTS_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-results-fixture"
 MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arxiv"
 # The committed KB the hermetic result-contract recipe works over, with the
@@ -134,6 +135,11 @@ test-pkg pkg:
     fi
     mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test ${VERBOSE:+-v} "./${pkg}/..." 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-pkg_${pkg//\//-}_log.txt"
+
+[doc("benchmark the index derivation: BenchmarkLoadDerive in internal/index times index.Derive over the claim-graph sheet fixture's KB as committed (x1) and replicated x40 in memory, reporting ns/op and allocs/op at each size; log under test-data/transient/bench-load/")]
+bench-load:
+    @mkdir -p "{{BENCH_LOAD_OUT_DIR}}"
+    go test -run '^$' -bench '^BenchmarkLoadDerive$' -benchmem ./internal/index 2>&1 | tee "{{BENCH_LOAD_OUT_DIR}}/log.txt"
 
 [doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the export contract checker's own; log in the unit-test output directory")]
 test-export-forms:
