@@ -204,7 +204,8 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	// current, and on a KB in an older metadata format this is the write that
 	// saves the conversion. It holds the KB's write lock as every write does,
 	// and releases it before the walk asks anything. A dry run writes nothing,
-	// so it reads the index as it stands and refuses one the load cannot answer.
+	// so it derives the index from the sources as they stand and refuses a KB
+	// the load cannot answer.
 	if !opts.DryRun {
 		if outcome, f, stop := scoreRefresh(root, src, fields, opts); stop {
 			return outcome, f

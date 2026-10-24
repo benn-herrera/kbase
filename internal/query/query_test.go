@@ -13,6 +13,7 @@ import (
 
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/result"
 )
 
@@ -35,36 +36,39 @@ func cite(id, leaf string) map[string]any {
 
 func f(v float64) *float64 { return &v }
 
-// writeIndex writes kbRoot/.index with the given records per file; files not
-// named are written empty.
-func writeIndex(t *testing.T, kbRoot string, files map[string][]map[string]any) {
+// indexRows is the index rows of the given records per file, each record
+// decoded into its file's row type; files not named hold no rows.
+func indexRows(t *testing.T, files map[string][]map[string]any) index.Rows {
 	t.Helper()
-	dir := filepath.Join(kbRoot, kb.IndexDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
+	return index.Rows{
+		Nodes:        decodeRows[kb.NodeRow](t, files[kb.IndexClaims]),
+		Edges:        decodeRows[kb.EdgeRow](t, files[kb.IndexEdges]),
+		StrengthenBy: decodeRows[kb.StrengthenByRow](t, files[kb.IndexStrengthenBy]),
+		Cites:        decodeRows[kb.CiteRow](t, files[kb.IndexCites]),
+		Aggregates:   decodeRows[kb.AggregateRow](t, files[kb.IndexSubtreeAggregates]),
 	}
-	for _, name := range requiredFiles {
-		var b strings.Builder
-		for _, rec := range files[name] {
-			line, err := json.Marshal(rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			b.WriteString(kb.IndexRecordMarker)
-			b.Write(line)
-			b.WriteByte('\n')
-		}
-		if err := os.WriteFile(filepath.Join(dir, kb.IndexFileName(name)), []byte(b.String()), 0o644); err != nil {
+}
+
+func decodeRows[T kb.IndexRowType](t *testing.T, recs []map[string]any) []T {
+	t.Helper()
+	var out []T
+	for _, rec := range recs {
+		b, err := json.Marshal(rec)
+		if err != nil {
 			t.Fatal(err)
 		}
+		var row T
+		if err := json.Unmarshal(b, &row); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
 	}
+	return out
 }
 
 func load(t *testing.T, files map[string][]map[string]any) *Index {
 	t.Helper()
-	root := t.TempDir()
-	writeIndex(t, root, files)
-	ix, err := Load(kb.OnDisk(root))
+	ix, err := fromRows(kb.OnDisk(t.TempDir()), indexRows(t, files))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,16 +125,15 @@ func leaf(front, body string) string {
 
 func TestReferencedBy(t *testing.T) {
 	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{
-		"claims": {claim("clm-aaaaaa", "Origin Claim", f(0.5), "input-only")},
-		"cites":  {cite("clm-aaaaaa", "main/origin.md")},
-	})
 	writeFile(t, filepath.Join(root, "main/origin.md"), leaf("claims: [clm-aaaaaa]", "Self link [here](origin.md)."))
 	writeFile(t, filepath.Join(root, "main/citing.md"), leaf(`no-claim: "links"`, "See [the origin](origin.md#sec) for it."))
 	writeFile(t, filepath.Join(root, "other/deep.md"), leaf(`no-claim: "links"`, "Back [up](../main/origin.md)."))
 	writeFile(t, filepath.Join(root, "main/coded.md"), leaf(`no-claim: "code"`, "Only `[x](origin.md)` in code."))
 	writeFile(t, filepath.Join(root, "main/index.md"), "---\nkind: index\n---\n\n# Index\n\n[origin](origin.md)\n")
-	ix, err := Load(kb.OnDisk(root))
+	ix, err := fromRows(kb.OnDisk(root), indexRows(t, map[string][]map[string]any{
+		"claims": {claim("clm-aaaaaa", "Origin Claim", f(0.5), "input-only")},
+		"cites":  {cite("clm-aaaaaa", "main/origin.md")},
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,15 +647,6 @@ func TestEdges(t *testing.T) {
 }
 
 func TestLoadRefusals(t *testing.T) {
-	root := t.TempDir()
-	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, len(requiredFiles)) {
-		t.Errorf("empty kb-root: %v, want a refusal naming all %d files", err, len(requiredFiles))
-	}
-	writeIndex(t, root, map[string][]map[string]any{"claims": {{"node_type": "gadget", "id": "x"}}})
-	writeFile(t, filepath.Join(root, kb.IndexDir, kb.IndexFileName("cites")), "--- [1]\n\n{\"claim_id\": \"unmarked\"}\n--- not json\n")
-	if _, err := Load(kb.OnDisk(root)); !isRefusal(err, 4) {
-		t.Errorf("bad lines: %v, want a refusal naming 4", err)
-	}
 	for _, tc := range []struct {
 		name string
 		edge map[string]any
@@ -661,12 +655,10 @@ func TestLoadRefusals(t *testing.T) {
 		{"bearing as a number", edge("clm-aaaaaa", "clm-bbbbbb", kb.RelationSupports, kb.NodeKindClaim, 0.5)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeIndex(t, root, map[string][]map[string]any{
+			_, err := fromRows(kb.OnDisk(t.TempDir()), indexRows(t, map[string][]map[string]any{
 				"claims": {claim("clm-aaaaaa", "A", f(0.5), "input-only"), claim("clm-bbbbbb", "B", f(0.5), "input-only")},
 				"edges":  {tc.edge},
-			})
-			_, err := Load(kb.OnDisk(root))
+			}))
 			var r result.Refusal
 			if !errors.As(err, &r) || len(r) != 1 || r[0].Check != index.CheckIndex || r[0].Remedy != index.RefreshRemedy {
 				t.Errorf("Load = %v, want one %s refusal", err, index.CheckIndex)
@@ -679,12 +671,10 @@ func TestLoadRefusals(t *testing.T) {
 // no node is refused, rather than passing as a row whose pairing carries no
 // bearing.
 func TestLoadRefusesAnOrphanScoringRow(t *testing.T) {
-	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{
+	_, err := fromRows(kb.OnDisk(t.TempDir()), indexRows(t, map[string][]map[string]any{
 		"claims": {claim("clm-aaaaaa", "A", f(0.5), "input-only"), claim("clm-bbbbbb", "B", f(0.5), "input-only")},
 		"edges":  {edge("clm-ffffff", "clm-bbbbbb", kb.RelationSupports, kb.NodeKindClaim, "0.5")},
-	})
-	_, err := Load(kb.OnDisk(root))
+	}))
 	var r result.Refusal
 	if !errors.As(err, &r) || len(r) != 1 || r[0].Check != index.CheckIndex || r[0].Key != "clm-ffffff → clm-bbbbbb" ||
 		!strings.Contains(r[0].Detail, "source id the index does not hold") {
@@ -692,7 +682,32 @@ func TestLoadRefusesAnOrphanScoringRow(t *testing.T) {
 	}
 }
 
-func isRefusal(err error, items int) bool {
-	var r result.Refusal
-	return errors.As(err, &r) && len(r) == items
+// TestLoadReadsNoIndexFile: a KB with no .index/ on disk answers from its
+// sources, holding the nodes the committed index records.
+func TestLoadReadsNoIndexFile(t *testing.T) {
+	fixture := filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
+	_, committed, problems, err := kb.ReadIndex[kb.NodeRow](kb.OnDisk(fixture), nil)
+	if err != nil || problems != nil {
+		t.Fatalf("committed claims: %v %v", err, problems)
+	}
+	want := ids(committed)
+	slices.Sort(want)
+	root := filepath.Join(t.TempDir(), "kb-root")
+	if err := os.CopyFS(root, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, kb.IndexDir)); err != nil {
+		t.Fatal(err)
+	}
+	src, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load with no .index/: %v", err)
+	}
+	if got := ids(ix.Nodes()); len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("Load with no .index/ holds %v, want the committed index's %v", got, want)
+	}
 }

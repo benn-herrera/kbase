@@ -298,15 +298,19 @@ type Rows struct {
 	Aggregates   []kb.AggregateRow
 }
 
-// Derive is the index rows of the KB src holds. A KB state the walk refuses
-// is a result.Refusal; a coverage gap returns as a CoverageError and a premise
-// cycle as a CycleError, unmapped.
+// Derive is the index rows of the KB src holds. A KB state refresh would
+// refuse — metadata no reader takes, a coverage gap, a premise cycle — is the
+// result.Refusal refresh gives for it.
 func Derive(src *kb.Source) (Rows, error) {
 	st, err := kb.Discover(src, log.Discard())
 	if err != nil {
 		return Rows{}, refusal(src, err)
 	}
-	return deriveRows(st)
+	rows, err := deriveRows(st)
+	if err != nil {
+		return Rows{}, refusal(src, err)
+	}
+	return rows, nil
 }
 
 func deriveRows(st kb.State) (Rows, error) {

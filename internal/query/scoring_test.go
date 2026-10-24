@@ -70,11 +70,9 @@ func splitItems(t *testing.T, items []Item) ([]ScoringNode, []ScoringEdge) {
 }
 
 func TestScoringSet(t *testing.T) {
-	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
 	reload := func() *Index {
 		t.Helper()
-		ix, err := Load(kb.OnDisk(root))
+		ix, err := fromRows(kb.OnDisk(t.TempDir()), indexRows(t, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,12 +169,7 @@ func TestScoringSetRigorByID(t *testing.T) {
 }
 
 func TestIndexEdge(t *testing.T) {
-	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
-	ix, err := Load(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ix := load(t, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
 	supports := ScoringEdge{Source: "clm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationSupports}
 	row, ok := ix.Edge(supports)
 	if !ok {

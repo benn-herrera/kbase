@@ -668,7 +668,7 @@ spelled relative to the citing document: `["<excerpt>"](<path>#<anchor>)`.
 
 ### Queries
 
-Each query reads `kb-root/.index/` and writes nothing; `kbase <query> --help` states its arguments,
+Each query derives its answer from the KB's sources and writes nothing; `kbase <query> --help` states its arguments,
 and §7 gives its result keys.
 
 ### `deps`

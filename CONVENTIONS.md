@@ -188,7 +188,7 @@ single source. Working habits they impose:
   something else.
 - **Read an index line only through `kb.ReadIndex`.** The row types (one per index file), the file
   inventory and the reader `kb.ReadIndex[T]` live in `internal/kb/indexstream.go`; `index` writes
-  from them, `query`, `sheet` and the tests read through them. The trap: a second row struct or an
+  from them, `sheet` and the tests read through them. The trap: a second row struct or an
   untyped decode beside it. The exception is `verify` and `citations`, which read untyped on purpose
   to see malformed shapes.
 - **Keep no prose copy of an op's key vocabulary.** The vocabulary is closed, total and per-op,

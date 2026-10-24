@@ -95,7 +95,7 @@ func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, 
 const checkUsage = "usage"
 
 const queryHelp = `
-It reads kb-root/.index/ beside the repository's .git and writes nothing; a KB
+It reads the KB under kb-root/ beside the repository's .git and writes nothing; a KB
 in an older metadata format is refused, the index being derived, with
 "kbase refresh" as the remedy. Its result is one YAML
 document on stdout, the answer under "` + query.ResultsKey + `".`
