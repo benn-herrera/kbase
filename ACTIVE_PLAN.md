@@ -224,7 +224,7 @@ committed and that share no file may run in parallel, each audited and committed
 
 | WP | Rating | Seat | Lands | Design | Status |
 |---|---|---|---|---|---|
-| C1 | expert | go-coder, coordinator's model | In-memory derivation under 2.0.1, behaviour-neutral | §3.6 (the `.index/` rows only), §9.1's first sentence, §12 | C1.1 landed |
+| C1 | expert | go-coder, coordinator's model | In-memory derivation under 2.0.1, behaviour-neutral | §3.6 (the `.index/` rows only), §9.1's first sentence, §12 | landed (`8e3a65c`–`f9f12d4`) |
 | C2 | per sub-package, as `KB_3_WORK_PACKAGES.md` rates it | go-coder; an expert sub-package at the coordinator's model, a mechanical one at sonnet | 0.9.0 removed; the migrate tree; the 2.0.x readers, golden-tested and not yet wired | §8's copy list; §2 as the source inventory | pending |
 | C3a–e | expert, except a sub-package `KB_3_WORK_PACKAGES.md` rates mechanical (settled by quoted text) | go-coder, coordinator's model; a mechanical sub-package go-coder, sonnet | The format flip, one landing | below | pending |
 
