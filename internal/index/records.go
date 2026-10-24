@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"kbase/internal/kb"
+	"kbase/internal/log"
 )
 
 // record is one index record, its keys in written order.
@@ -287,21 +288,54 @@ func coverageAt(src *kb.Source, cov CoverageError) CoverageError {
 	return cov
 }
 
+// Rows is the KB's index rows, one set per index file, each in its file's
+// order.
+type Rows struct {
+	Nodes        []kb.NodeRow
+	Edges        []kb.EdgeRow
+	StrengthenBy []kb.StrengthenByRow
+	Cites        []kb.CiteRow
+	Aggregates   []kb.AggregateRow
+}
+
+// Derive is the index rows of the KB src holds. A KB state the walk refuses
+// is a result.Refusal; a coverage gap returns as a CoverageError and a premise
+// cycle as a CycleError, unmapped.
+func Derive(src *kb.Source) (Rows, error) {
+	st, err := kb.Discover(src, log.Discard())
+	if err != nil {
+		return Rows{}, refusal(src, err)
+	}
+	return deriveRows(st)
+}
+
+func deriveRows(st kb.State) (Rows, error) {
+	strength, err := ComputeStrength(st)
+	if err != nil {
+		return Rows{}, err
+	}
+	nodes := buildClaims(st, strength)
+	if err := checkCoverage(st, nodes); err != nil {
+		return Rows{}, err
+	}
+	return Rows{Nodes: nodes, Edges: buildEdges(st), StrengthenBy: buildStrengthenBy(st),
+		Cites: buildCites(st), Aggregates: buildSubtreeAggregates(st)}, nil
+}
+
+func (r Rows) records() Records {
+	return Records{
+		kb.IndexClaims: fieldsOf(r.Nodes), kb.IndexEdges: fieldsOf(r.Edges), kb.IndexStrengthenBy: fieldsOf(r.StrengthenBy),
+		kb.IndexCites: fieldsOf(r.Cites), kb.IndexSubtreeAggregates: fieldsOf(r.Aggregates),
+	}
+}
+
 // BuildRecords is every index file's records for st.
 func BuildRecords(st kb.State) (Records, error) {
-	strength, err := ComputeStrength(st)
+	rows, err := deriveRows(st)
 	if err != nil {
 		return nil, err
 	}
-	claims := buildClaims(st, strength)
-	edges := buildEdges(st)
-	if err := checkCoverage(st, claims); err != nil {
-		return nil, err
-	}
-	return Records{
-		kb.IndexClaims: fieldsOf(claims), kb.IndexEdges: fieldsOf(edges), kb.IndexStrengthenBy: fieldsOf(buildStrengthenBy(st)),
-		kb.IndexCites: fieldsOf(buildCites(st)), kb.IndexSubtreeAggregates: fieldsOf(buildSubtreeAggregates(st)),
-	}, nil
+	return rows.records(), nil
 }
 
 // Serialize is a file's text as a YAML stream: per record one line, the

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 )
 
 // roundTripState holds a record of every index file, every node kind and
@@ -79,4 +80,28 @@ func TestIndexReadsBackAsWritten(t *testing.T) {
 	roundTrip[kb.StrengthenByRow](t, src, recs)
 	roundTrip[kb.CiteRow](t, src, recs)
 	roundTrip[kb.AggregateRow](t, src, recs)
+}
+
+// TestDeriveWritesTheCommittedIndex: the rows Derive yields for a KB whose
+// .index/ refresh wrote serialise to that .index/'s bytes, file by file.
+func TestDeriveWritesTheCommittedIndex(t *testing.T) {
+	root := filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
+	src, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := Derive(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := rows.records()
+	for _, name := range kb.IndexFiles {
+		want, err := src.ReadText(src.KBPath(kb.IndexDir + "/" + kb.IndexFileName(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Serialize(recs[name]); got != want {
+			t.Errorf("%s: derived\n%s\ncommitted\n%s", name, got, want)
+		}
+	}
 }
