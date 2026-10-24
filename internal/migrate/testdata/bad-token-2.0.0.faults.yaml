@@ -1,0 +1,6 @@
+- field: rests-on
+  path: claim-rigor.md
+  line: 13
+  allowed: '[0, 1] or *pending*'
+  remedy: write a number in [0, 1] or *pending*
+  detail: (bearing sometimes)

@@ -1,0 +1,285 @@
+claimentries:
+    - id: clm-aaaaaa
+      title: Regime Conservation Laws
+      canonicalpath: claim-rigor.md
+      canonicalanchor: regime-conservation-laws
+      rigor: 0.85
+      strength: 0.62
+      buildstatus: use as input only
+      rationale: CES asymptotics applied with an explicit exponent formula.
+      premises:
+        - source: clm-bbbbbb
+          target: clm-aaaaaa
+          relation: supports
+          targetkind: claim
+          sourcestrengthrecorded: 0.9
+          context: builds directly on the anchor claim
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+        - source: wrk-smith2020
+          target: clm-aaaaaa
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: Theorem 3
+          bearing:
+            value: 0.8
+            pending: false
+          origin: ""
+        - source: axm-S3
+          target: clm-aaaaaa
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: a labelling convention
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+      strengthenby: []
+      refutes: []
+      references: []
+      demoted: []
+      strengthtrace: ' [= min(0.85, 0.62)]'
+    - id: clm-bbbbbb
+      title: Foundation Claim B
+      canonicalpath: claim-rigor.md
+      canonicalanchor: foundation-claim-b
+      rigor: 0.9
+      strength: 0.9
+      buildstatus: null
+      rationale: One bullet names two claims; the next a claim and a work.
+      premises:
+        - source: clm-aaaaaa
+          target: clm-bbbbbb
+          relation: supports
+          targetkind: claim
+          sourcestrengthrecorded: 0.85
+          context: null
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+        - source: clm-cccccc
+          target: clm-bbbbbb
+          relation: supports
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+        - source: clm-cccccc
+          target: clm-bbbbbb
+          relation: supports
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.5
+            pending: false
+          origin: ""
+        - source: wrk-smith2020
+          target: clm-bbbbbb
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.5
+            pending: false
+          origin: ""
+        - source: axm-S3
+          target: clm-bbbbbb
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.5
+            pending: false
+          origin: ""
+      strengthenby: []
+      refutes: []
+      references: []
+      demoted: []
+      strengthtrace: ""
+    - id: clm-cccccc
+      title: A Second Claim
+      canonicalpath: claim-rigor.md
+      canonicalanchor: a-second-claim
+      rigor: 0.6
+      strength: 0.6
+      buildstatus: null
+      rationale: An indented score line and a key of another kind.
+      premises:
+        - source: wrk-smith2020
+          target: clm-cccccc
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+        - source: axm-1
+          target: clm-cccccc
+          relation: founds
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: the substrate assumption
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+      strengthenby: []
+      refutes: []
+      references: []
+      demoted: []
+      strengthtrace: ""
+leaves:
+    - path: leaf.md
+      kind: leaf
+      claims:
+        - clm-aaaaaa
+        - clm-bbbbbb
+        - clm-cccccc
+      tier2marked:
+        clm-aaaaaa: true
+      noclaimreason: ""
+      experimentrefs: []
+indexes:
+    - path: entry-point.md
+      kind: entry-point
+      declaredsubtreeclaims:
+        - clm-aaaaaa
+        - clm-bbbbbb
+        - clm-cccccc
+      declaredsubtreeexperiments:
+        - exp-aaaaaa
+        - exp-bbbbbb
+axioms:
+    - nodetype: axiom
+      id: axm-S3
+      title: A labelling convention
+      canonicalpath: axioms.md
+      canonicalanchor: axiom-s3-a-labelling-convention
+    - nodetype: axiom
+      id: axm-1
+      title: Substrate Topology
+      canonicalpath: axioms.md
+      canonicalanchor: axiom-1-substrate-topology
+experiments:
+    - id: exp-aaaaaa
+      title: A Leaf
+      canonicalpath: leaf.md
+      canonicalanchor: a-leaf
+      status: run
+      rigor: 1
+      supports: []
+      lifts:
+        - source: exp-aaaaaa
+          target: clm-aaaaaa
+          relation: lifts
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.8
+            pending: false
+          origin: ""
+        - source: exp-aaaaaa
+          target: clm-bbbbbb
+          relation: lifts
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0
+            pending: true
+          origin: ""
+      refutes: []
+    - id: exp-bbbbbb
+      title: A Leaf
+      canonicalpath: leaf.md
+      canonicalanchor: a-leaf
+      status: pending
+      rigor: 1
+      supports: []
+      lifts: []
+      refutes: []
+analyses:
+    - id: ana-aaaaaa
+      title: A Leaf
+      canonicalpath: leaf.md
+      canonicalanchor: a-leaf
+      rigor: 0.8
+      premises:
+        - source: clm-aaaaaa
+          target: ana-aaaaaa
+          relation: supports
+          targetkind: analysis
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 1
+            pending: false
+          origin: ""
+      lifts:
+        - source: ana-aaaaaa
+          target: clm-bbbbbb
+          relation: lifts
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.5
+            pending: false
+          origin: ""
+        - source: ana-aaaaaa
+          target: clm-cccccc
+          relation: lifts
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0
+            pending: true
+          origin: ""
+      refutes: []
+      rationale: Derives the beneficiary result in full.
+      strength: null
+      strengthtrace: ""
+    - id: ana-bbbbbb
+      title: A Leaf
+      canonicalpath: leaf.md
+      canonicalanchor: a-leaf
+      rigor: null
+      premises: []
+      lifts:
+        - source: ana-bbbbbb
+          target: clm-cccccc
+          relation: lifts
+          targetkind: claim
+          sourcestrengthrecorded: null
+          context: null
+          bearing:
+            value: 0.7
+            pending: false
+          origin: ""
+      refutes: []
+      rationale: ""
+      strength: null
+      strengthtrace: ""
+works:
+    - id: wrk-smith2020
+      key: smith2020
+      title: Smith, A. 2020. *Markets*, on bearing 0.5
+      canonicalpath: claim-rigor.md
+      canonicalanchor: smith-a-2020-markets-on-bearing-05
+      rigor: 0.9
+      rationale: Fixture Press.

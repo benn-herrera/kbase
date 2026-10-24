@@ -299,6 +299,7 @@ func number(v *float64) string {
 }
 
 // discover loads the converted files as a KB's authoring layer.
+// A test helper does not cross packages: format_2_0_0's tests keep their own copy.
 func discover(t *testing.T, files migrate.Files) (kb.State, error) {
 	t.Helper()
 	repo := t.TempDir()
