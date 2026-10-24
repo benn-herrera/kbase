@@ -318,7 +318,7 @@ transitively, until the package builds. The copy is frozen and carries everythin
 shares no helper with `common` or an earlier format package, even one with an identical body, and
 takes from `common` only `Files`. Where `format_2_0_0` already holds a declaration whose value or
 body is identical, token for token, to one the copy brings in, under the same name or another
-(`Register200Name` beside `kb.RegisterFile`, `PendingLiteral` beside `kb.PendingLiteral`), the
+(`Register200Name` beside `kb.RegisterFile`), the
 copy's survives, the other is deleted, and its users in `format_2_0_0` and `from_1_0_0_to_2_0_0`
 switch to the copy's; a pair that differs in any token (a pattern spelled with `\s` beside one
 built through `PyRE`) is not identical, and both stay. The copy imports only the standard library,
