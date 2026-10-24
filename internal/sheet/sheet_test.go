@@ -31,6 +31,36 @@ func openAdjagentFixture(t *testing.T) *kb.Source {
 	return src
 }
 
+// committedRows is every row of T's index file as src's committed .index/
+// holds it.
+func committedRows[T kb.IndexRowType](t *testing.T, src *kb.Source) []T {
+	t.Helper()
+	path, rows, problems, err := kb.ReadIndex[T](src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) > 0 {
+		t.Fatalf("%s:%d: %v", path, problems[0].Line, problems[0].Err)
+	}
+	return rows
+}
+
+// renderCommitted is Render over src's committed .index/.
+func renderCommitted(t *testing.T, src *kb.Source) ([]Sheet, error) {
+	t.Helper()
+	return Render(src, committedRows[kb.NodeRow](t, src), committedRows[kb.EdgeRow](t, src), committedRows[kb.CiteRow](t, src))
+}
+
+// loadCommitted is load over src's committed .index/.
+func loadCommitted(t *testing.T, src *kb.Source) *graph {
+	t.Helper()
+	g, err := load(src, committedRows[kb.NodeRow](t, src), committedRows[kb.EdgeRow](t, src), committedRows[kb.CiteRow](t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
 // fixtureFiles is every file under dir, by slash path relative to it.
 func fixtureFiles(t *testing.T, dir string) map[string][]byte {
 	t.Helper()
@@ -57,10 +87,7 @@ func fixtureFiles(t *testing.T, dir string) map[string][]byte {
 // the digest and the sheets of the two volumes holding nodes — none for
 // gamma, which holds none — and its sheets are the goldens' DOT, byte for byte.
 func TestAdjagentSheetGoldens(t *testing.T) {
-	g, err := load(openAdjagentFixture(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := loadCommitted(t, openAdjagentFixture(t))
 	drawn := map[string]string{}
 	var paths []string
 	for _, s := range g.sheets() {
@@ -330,10 +357,7 @@ func TestVolumeCountRule(t *testing.T) {
 // lacking splines=line: the first rung fails and the emitter's retry DOT
 // renders; where the retry fails too, the first error comes back.
 func TestLadderThroughFakeDot(t *testing.T) {
-	g, err := load(openAdjagentFixture(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := loadCommitted(t, openAdjagentFixture(t))
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "dot")
 	script := "#!/bin/sh\ninput=$(cat)\nif printf '%s' \"$input\" | grep -q 'splines=line'; then echo '<svg/>'; exit 0; fi\necho 'routesplines failed' >&2\nexit 1\n"
@@ -377,10 +401,7 @@ func fullSheetEdge(t *testing.T, root, source, target string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := load(src)
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := loadCommitted(t, src)
 	edgeLine := `"` + source + `" -> "` + target + `" [`
 	for line := range strings.SplitSeq(g.full(false), "\n") {
 		if strings.Contains(line, edgeLine) {
@@ -411,13 +432,13 @@ func TestCullLinkDrawsInferredEitherWay(t *testing.T) {
 func TestRenderWithoutDot(t *testing.T) {
 	src := openAdjagentFixture(t)
 	t.Setenv("PATH", "")
-	if _, err := Render(src); !errors.Is(err, ErrNoDot) {
+	if _, err := renderCommitted(t, src); !errors.Is(err, ErrNoDot) {
 		t.Errorf("Render with no PATH = %v, want ErrNoDot", err)
 	}
 }
 
 func TestRenderDraws(t *testing.T) {
-	sheets, err := Render(openAdjagentFixture(t))
+	sheets, err := renderCommitted(t, openAdjagentFixture(t))
 	if errors.Is(err, ErrNoDot) {
 		t.Skip("no Graphviz dot on PATH")
 	}

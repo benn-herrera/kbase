@@ -502,15 +502,20 @@ func (r *refresher) reported(p string, removal bool) string {
 	return p
 }
 
-// WriteSheet draws the KB's claim-graph sheets and writes each whose bytes
-// change, then removes the digest and every volume's sheet the drawing no
-// longer calls for. It returns the kb-root-relative paths it wrote and
+// WriteSheet draws the KB's claim-graph sheets from the rows Derive yields and
+// writes each whose bytes change, then removes the digest and every volume's
+// sheet the drawing no longer calls for. A KB state Derive refuses is its
+// refusal, dot or no dot. It returns the kb-root-relative paths it wrote and
 // removed and whether the sheets were drawn. Without Graphviz dot on PATH
 // nothing is drawn: every sheet standing is left as it is, the placeholder is
 // written only where kb-root has no claim-graph.svg, and nothing is removed.
 func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err error) {
 	kbRoot := src.Root()
-	sheets, err := sheet.Render(src)
+	rows, err := Derive(src)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	sheets, err := sheet.Render(src, rows.Nodes, rows.Edges, rows.Cites)
 	if errors.Is(err, sheet.ErrNoDot) {
 		target := filepath.Join(kbRoot, kb.ClaimGraphFile)
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {

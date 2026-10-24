@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,10 @@ func renderClaimGraph(opts maintenanceOptions) (string, []toolresult.Field) {
 			Detail: fmt.Sprintf("%s has no %s/ to render from; refresh derives it", root, kb.IndexDir)})
 	}
 	written, removed, drawn, err := index.WriteSheet(src)
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return refused(fields, refusal...)
+	}
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -79,8 +84,8 @@ const (
 
 func init() {
 	rootCmd.AddCommand(maintenanceCommand("render-claim-graph",
-		"render the claim-graph sheets from .index/",
-		`render-claim-graph draws the KB's claim-graph sheets from kb-root/.index/ and
+		"render the claim-graph sheets from the KB's sources",
+		`render-claim-graph draws the KB's claim-graph sheets from the KB's sources and
 the build records beside kb-root/, through Graphviz dot: kb-root/claim-graph.svg,
 every claim with each volume a cluster, always; and, where two or more volumes
 hold nodes, kb-root/claim-graph-digest.svg, one box per volume linking its

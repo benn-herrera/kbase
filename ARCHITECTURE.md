@@ -481,7 +481,8 @@ SVG's bytes are Graphviz's, so the goldens pin the DOT, and a test that renders 
 without it and asserts only that the DOT parses and the root fits the viewer. The goldens are a
 fixture and its three DOT files under `internal/sheet/testdata/adjagent-sheet/`, copied as they
 stand: a `2.0.0` KB, its unmarked build record, and the DOT the sheet composes for it. The emitted
-DOT matches them byte for byte. Its inputs are the index (claims, edges, strength bands); the build
+DOT matches them byte for byte. Its inputs are the index rows (claims, edges, strength bands, cites)
+`index.WriteSheet` hands it from `index.Derive`, never a read of `.index/`; the build
 records beside `kb-root/`, read through `internal/buildrecords`
 that `claimgraph` and `sheet` both import — only the unmarked record and the cull record's `links`,
 for each edge's provenance (marked, or inferred by SPEC §3's rule), through

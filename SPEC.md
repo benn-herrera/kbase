@@ -699,7 +699,7 @@ bearing is the user's, written by `set-bearing`.
 
 ### `render-claim-graph`
 
-Renders every claim-graph sheet (§3) from the index and the build records, writing those whose bytes
+Renders every claim-graph sheet (§3) from the KB's sources and the build records, writing those whose bytes
 change. Without `dot`, §3's rule, and the result names
 the lack. Result keys: §7.
 

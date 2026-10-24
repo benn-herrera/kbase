@@ -3,7 +3,6 @@ package sheet
 import (
 	"cmp"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"regexp"
@@ -74,33 +73,9 @@ type graph struct {
 	edges []edge
 }
 
-// readIndex is every row of T's index file; a line that is not one is an
-// error naming the first.
-func readIndex[T kb.IndexRowType](src *kb.Source) ([]T, error) {
-	path, rows, problems, err := kb.ReadIndex[T](src, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(problems) > 0 {
-		return nil, fmt.Errorf("%s:%d: %w", path, problems[0].Line, problems[0].Err)
-	}
-	return rows, nil
-}
-
-// load reads the graph of the KB src reads.
-func load(src *kb.Source) (*graph, error) {
-	claims, err := readIndex[kb.NodeRow](src)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := readIndex[kb.EdgeRow](src)
-	if err != nil {
-		return nil, err
-	}
-	cites, err := readIndex[kb.CiteRow](src)
-	if err != nil {
-		return nil, err
-	}
+// load reads the graph of the KB src reads, its nodes, edges and citations
+// those rows.
+func load(src *kb.Source, claims []kb.NodeRow, rows []kb.EdgeRow, cites []kb.CiteRow) (*graph, error) {
 	unmarked, _, err := buildrecords.ReadUnmarked(src)
 	if err != nil {
 		return nil, err
