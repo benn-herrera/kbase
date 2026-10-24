@@ -91,14 +91,14 @@ var dependencyRules = []dependencyRule{{
 	direct:    true,
 	why:       "only the caller, build, and cmd's provider verbs import model",
 }, {
-	from:      []string{"internal/migrate"},
-	forbidden: []string{"cmd", "internal"},
-	why:       "migrate imports nothing of kbase: files as bytes in and out, every superseded parser its own (I8)",
+	from:    []string{"internal/migrate"},
+	allowed: []string{"internal/migrate"},
+	why:     "the migrate tree may import its own packages and nothing else of kbase, so maintaining a live package never changes what an old KB converts to (I8)",
 }, {
-	except:    []string{"internal/kbload"},
+	except:    []string{"internal/kbload", "internal/migrate"},
 	forbidden: []string{"internal/migrate"},
 	direct:    true,
-	why:       "only the loader imports migrate: an older KB is converted where it is opened, and nowhere else (I8)",
+	why:       "outside the migrate tree only the loader imports it: an older KB is converted where it is opened, and nowhere else, and no live package reaches a frozen format (I8)",
 }, {
 	except:    []string{"cmd", "internal/build", "internal/write", "internal/kbload"},
 	forbidden: []string{"internal/kbload"},
@@ -185,17 +185,18 @@ func reach(graph map[string][]string, pkg string) map[string]bool {
 	return seen
 }
 
-func TestDependencyRules(t *testing.T) {
-	graph := importGraph(t)
-	if len(graph[path.Join("internal", "kb")]) == 0 && len(graph["cmd"]) == 0 {
-		t.Fatal("no module packages read; the walk found nothing to check")
-	}
-	pkgs := make([]string, 0, len(graph))
-	for p := range graph {
-		pkgs = append(pkgs, p)
-	}
-	slices.Sort(pkgs)
-	for _, rule := range dependencyRules {
+// dependencyViolation is one package reaching a dependency a rule refuses it.
+type dependencyViolation struct {
+	pkg, dep string
+	rule     dependencyRule
+}
+
+// dependencyViolations is every package of graph that reaches a dependency one
+// of rules refuses it, in package order.
+func dependencyViolations(graph map[string][]string, rules []dependencyRule) []dependencyViolation {
+	pkgs := slices.Sorted(maps.Keys(graph))
+	var out []dependencyViolation
+	for _, rule := range rules {
 		for _, pkg := range pkgs {
 			if !rule.binds(pkg) {
 				continue
@@ -208,12 +209,53 @@ func TestDependencyRules(t *testing.T) {
 			} else {
 				reached = reach(graph, pkg)
 			}
-			for dep := range reached {
+			for _, dep := range slices.Sorted(maps.Keys(reached)) {
 				if rule.refuses(dep) {
-					t.Errorf("%s reaches %s — %s", pkg, dep, rule.why)
+					out = append(out, dependencyViolation{pkg: pkg, dep: dep, rule: rule})
 				}
 			}
 		}
+	}
+	return out
+}
+
+func TestDependencyRules(t *testing.T) {
+	graph := importGraph(t)
+	if len(graph[path.Join("internal", "kb")]) == 0 && len(graph["cmd"]) == 0 {
+		t.Fatal("no module packages read; the walk found nothing to check")
+	}
+	for _, v := range dependencyViolations(graph, dependencyRules) {
+		t.Errorf("%s reaches %s — %s", v.pkg, v.dep, v.rule.why)
+	}
+}
+
+// TestMigrateTreeRules: over a synthetic graph, a package of the migrate tree
+// importing another passes the rules, and one importing internal/kb fails
+// them, at itself and at every tree package that reaches it.
+func TestMigrateTreeRules(t *testing.T) {
+	graph := map[string][]string{
+		"internal/kbload":                      {"internal/migrate"},
+		"internal/migrate":                     {"internal/migrate/common", "internal/migrate/format_1_0_0", "internal/migrate/from_1_0_0_to_2_0_0"},
+		"internal/migrate/common":              nil,
+		"internal/migrate/format_1_0_0":        {"internal/migrate/common"},
+		"internal/migrate/from_1_0_0_to_2_0_0": {"internal/migrate/common", "internal/migrate/format_1_0_0"},
+		"internal/kb":                          nil,
+	}
+	if got := dependencyViolations(graph, dependencyRules); len(got) != 0 {
+		t.Errorf("the tree importing within itself breaks %v, want no rule broken", got)
+	}
+	graph["internal/migrate/format_1_0_0"] = append(graph["internal/migrate/format_1_0_0"], "internal/kb")
+	var got []string
+	for _, v := range dependencyViolations(graph, dependencyRules) {
+		got = append(got, v.pkg+" → "+v.dep)
+	}
+	want := []string{
+		"internal/migrate → internal/kb",
+		"internal/migrate/format_1_0_0 → internal/kb",
+		"internal/migrate/from_1_0_0_to_2_0_0 → internal/kb",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("a tree package importing internal/kb breaks %q, want %q", got, want)
 	}
 }
 

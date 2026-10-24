@@ -1,7 +1,9 @@
 // Package migrate converts a KB's metadata files from an older format version
 // to the current one in memory: the files as bytes in, the next form's files
-// as bytes out, plus the paths the conversion made obsolete. It touches no file
-// and imports nothing of kbase; every superseded form's parser lives here.
+// as bytes out, plus the paths the conversion made obsolete. It touches no file.
+// Each superseded format and each conversion step is a package beneath it, and
+// the tree imports nothing of kbase outside itself, so maintaining a live
+// package never changes what an old KB converts to.
 package migrate
 
 import (
@@ -10,13 +12,17 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"kbase/internal/migrate/common"
+	"kbase/internal/migrate/format_1_0_0"
+	"kbase/internal/migrate/format_2_0_0"
+	"kbase/internal/migrate/from_1_0_0_to_2_0_0"
 )
 
-const version100 = "1.0.0"
-
-// Files is a KB's metadata files by repository-relative slash path: kb-root/…
-// and the build records beside it.
-type Files map[string][]byte
+type (
+	Files           = common.Files
+	ConversionError = from_1_0_0_to_2_0_0.ConversionError
+)
 
 // converter is one step from format version From to To. Convert returns the
 // files in To's form — a file the step renames appears under its new path
@@ -27,7 +33,7 @@ type converter struct {
 }
 
 var converters = []converter{
-	{From: version100, To: version200, Convert: convert100To200},
+	{From: format_1_0_0.Version100, To: format_2_0_0.Version200, Convert: from_1_0_0_to_2_0_0.Convert100To200},
 }
 
 // Chain converts files from version from to version to through the

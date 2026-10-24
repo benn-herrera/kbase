@@ -1,11 +1,13 @@
-package migrate
+package from_1_0_0_to_2_0_0_test
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,32 +15,55 @@ import (
 
 	"kbase/internal/kb"
 	"kbase/internal/log"
+	"kbase/internal/migrate"
+	"kbase/internal/migrate/format_1_0_0"
+	"kbase/internal/migrate/format_2_0_0"
 )
 
 const (
-	register100Dir = "testdata/register-1.0.0"
-	register200Dir = "testdata/register-2.0.0"
-	badToken100Dir = "testdata/bad-token-1.0.0"
-	badToken200Dir = "testdata/bad-token-2.0.0"
+	register100Dir = "../testdata/register-1.0.0"
+	register200Dir = "../testdata/register-2.0.0"
+	badToken100Dir = "../testdata/bad-token-1.0.0"
+	badToken200Dir = "../testdata/bad-token-2.0.0"
 
 	entryPointPath = "kb-root/entry-point.md"
 )
+
+// readTree is every file under dir by slash path relative to dir, prefixed.
+func readTree(t *testing.T, dir, prefix string, into migrate.Files) {
+	t.Helper()
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		into[path.Join(prefix, filepath.ToSlash(rel))] = b
+		return err
+	})
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+}
 
 // TestConvert100To200Goldens: the register fixture converts to its 2.0.0
 // golden file for file and byte for byte, its legacy declaration document the
 // one path it makes obsolete, and its entry point left stamped 1.0.0: a
 // conversion writes no stamp.
 func TestConvert100To200Goldens(t *testing.T) {
-	got, obsolete, err := Chain(version100, version200, fixtureTree(t, register100Dir))
+	got, obsolete, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, fixtureTree(t, register100Dir))
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}
-	if want := []string{"kb-root/" + register100Name, invariantsPath}; !slices.Equal(obsolete, want) {
+	if want := []string{"kb-root/" + format_1_0_0.Register100Name, format_1_0_0.InvariantsPath}; !slices.Equal(obsolete, want) {
 		t.Errorf("obsolete %q, want %q", obsolete, want)
 	}
 	compareFiles(t, got, fixtureTree(t, register200Dir))
-	if stamp, err := kb.FormatStamp(string(got[entryPointPath])); err != nil || stamp != version100 {
-		t.Errorf("the converted entry point is stamped %q (%v), want %s", stamp, err, version100)
+	if stamp, err := kb.FormatStamp(string(got[entryPointPath])); err != nil || stamp != format_1_0_0.Version100 {
+		t.Errorf("the converted entry point is stamped %q (%v), want %s", stamp, err, format_1_0_0.Version100)
 	}
 }
 
@@ -48,7 +73,7 @@ func TestConvert100To200Goldens(t *testing.T) {
 // reads.
 func TestConvert100To200IsAFixedPoint(t *testing.T) {
 	want := fixtureTree(t, register200Dir)
-	got, obsolete, err := Chain(version100, version200, want)
+	got, obsolete, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, want)
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}
@@ -63,11 +88,11 @@ func TestConvert100To200IsAFixedPoint(t *testing.T) {
 // content, and nothing converts.
 func TestConvert100To200RefusesContentBesideTheDeclarations(t *testing.T) {
 	files := fixtureTree(t, register100Dir)
-	files[invariantsPath] = []byte("# Invariants\n\n## Notes\n\nRead this first.\n\n### INVARIANT-S3: A labelling convention\n\nBody.\n")
-	got, _, err := Chain(version100, version200, files)
-	var surplus *ConversionError
-	if !errors.As(err, &surplus) || surplus.Path != invariantsPath || surplus.Line != 5 || surplus.Text != "Read this first." {
-		t.Fatalf("Chain = %v, want a ConversionError at %s line 5", err, invariantsPath)
+	files[format_1_0_0.InvariantsPath] = []byte("# Invariants\n\n## Notes\n\nRead this first.\n\n### INVARIANT-S3: A labelling convention\n\nBody.\n")
+	got, _, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, files)
+	var surplus *migrate.ConversionError
+	if !errors.As(err, &surplus) || surplus.Path != format_1_0_0.InvariantsPath || surplus.Line != 5 || surplus.Text != "Read this first." {
+		t.Fatalf("Chain = %v, want a ConversionError at %s line 5", err, format_1_0_0.InvariantsPath)
 	}
 	if got != nil {
 		t.Errorf("the refused conversion produced %d files, want none", len(got))
@@ -80,11 +105,11 @@ func TestConvert100To200RefusesContentBesideTheDeclarations(t *testing.T) {
 // converts.
 func TestConvert100To200RefusesProseAfterAnAxiomBullet(t *testing.T) {
 	files := fixtureTree(t, register100Dir)
-	files[invariantsPath] = []byte("# Invariants\n\n### INVARIANT-S3: A labelling convention\n\nLabelled as authored.\n\n- Axiom 1: **Substrate Topology** — the vacuum is a chiral lattice.\n\nProse that follows the axiom bullet.\n")
-	got, _, err := Chain(version100, version200, files)
-	var surplus *ConversionError
-	if !errors.As(err, &surplus) || surplus.Path != invariantsPath || surplus.Line != 9 || surplus.Text != "Prose that follows the axiom bullet." {
-		t.Fatalf("Chain = %v, want a ConversionError at %s line 9", err, invariantsPath)
+	files[format_1_0_0.InvariantsPath] = []byte("# Invariants\n\n### INVARIANT-S3: A labelling convention\n\nLabelled as authored.\n\n- Axiom 1: **Substrate Topology** — the vacuum is a chiral lattice.\n\nProse that follows the axiom bullet.\n")
+	got, _, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, files)
+	var surplus *migrate.ConversionError
+	if !errors.As(err, &surplus) || surplus.Path != format_1_0_0.InvariantsPath || surplus.Line != 9 || surplus.Text != "Prose that follows the axiom bullet." {
+		t.Fatalf("Chain = %v, want a ConversionError at %s line 9", err, format_1_0_0.InvariantsPath)
 	}
 	if got != nil {
 		t.Errorf("the refused conversion produced %d files, want none", len(got))
@@ -96,17 +121,17 @@ func TestConvert100To200RefusesProseAfterAnAxiomBullet(t *testing.T) {
 // the axioms.md holds the declarations alone.
 func TestConvert100To200ConvertsHeadingsAroundDeclarations(t *testing.T) {
 	files := fixtureTree(t, register100Dir)
-	files[invariantsPath] = []byte("# Invariants\n\n## Structural Conventions\n\n### INVARIANT-S3: A labelling convention\n\nLabels are written as authored.\n\n## Topology\n\n- Axiom 1: **Substrate Topology** — the vacuum is a chiral lattice.\n\n### Reference\n")
-	got, obsolete, err := Chain(version100, version200, files)
+	files[format_1_0_0.InvariantsPath] = []byte("# Invariants\n\n## Structural Conventions\n\n### INVARIANT-S3: A labelling convention\n\nLabels are written as authored.\n\n## Topology\n\n- Axiom 1: **Substrate Topology** — the vacuum is a chiral lattice.\n\n### Reference\n")
+	got, obsolete, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, files)
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}
 	want := "### Axiom S3: A labelling convention\n\nLabels are written as authored.\n\n### Axiom 1: Substrate Topology\n\nthe vacuum is a chiral lattice.\n"
-	if string(got[axiomsPath]) != want {
-		t.Errorf("%s = %q, want %q", axiomsPath, got[axiomsPath], want)
+	if string(got[format_2_0_0.AxiomsPath]) != want {
+		t.Errorf("%s = %q, want %q", format_2_0_0.AxiomsPath, got[format_2_0_0.AxiomsPath], want)
 	}
-	if !slices.Contains(obsolete, invariantsPath) {
-		t.Errorf("obsolete %q, want %s among them", obsolete, invariantsPath)
+	if !slices.Contains(obsolete, format_1_0_0.InvariantsPath) {
+		t.Errorf("obsolete %q, want %s among them", obsolete, format_1_0_0.InvariantsPath)
 	}
 }
 
@@ -116,25 +141,25 @@ func TestConvert100To200ConvertsHeadingsAroundDeclarations(t *testing.T) {
 func TestConvert100To200LeavesADeclarationlessDocumentAlone(t *testing.T) {
 	doc := "# Notes\n\nNothing here declares an axiom.\n"
 	files := fixtureTree(t, register100Dir)
-	files[invariantsPath] = []byte(doc)
-	got, obsolete, err := Chain(version100, version200, files)
+	files[format_1_0_0.InvariantsPath] = []byte(doc)
+	got, obsolete, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, files)
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}
-	if _, ok := got[axiomsPath]; ok {
-		t.Errorf("the conversion invented %s, want none", axiomsPath)
+	if _, ok := got[format_2_0_0.AxiomsPath]; ok {
+		t.Errorf("the conversion invented %s, want none", format_2_0_0.AxiomsPath)
 	}
-	if slices.Contains(obsolete, invariantsPath) {
-		t.Errorf("the conversion made %s obsolete, want it left where it stands", invariantsPath)
+	if slices.Contains(obsolete, format_1_0_0.InvariantsPath) {
+		t.Errorf("the conversion made %s obsolete, want it left where it stands", format_1_0_0.InvariantsPath)
 	}
-	if string(got[invariantsPath]) != doc {
-		t.Errorf("%s = %q, want it as written", invariantsPath, got[invariantsPath])
+	if string(got[format_1_0_0.InvariantsPath]) != doc {
+		t.Errorf("%s = %q, want it as written", format_1_0_0.InvariantsPath, got[format_1_0_0.InvariantsPath])
 	}
 }
 
 // compareFiles: got and want hold the same paths, and each path the same
 // bytes.
-func compareFiles(t *testing.T, got, want Files) {
+func compareFiles(t *testing.T, got, want migrate.Files) {
 	t.Helper()
 	if paths, wantPaths := slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)); !slices.Equal(paths, wantPaths) {
 		t.Fatalf("converted paths %q, goldens %q", paths, wantPaths)
@@ -146,9 +171,9 @@ func compareFiles(t *testing.T, got, want Files) {
 	}
 }
 
-func fixtureTree(t *testing.T, dir string) Files {
+func fixtureTree(t *testing.T, dir string) migrate.Files {
 	t.Helper()
-	files := Files{}
+	files := migrate.Files{}
 	readTree(t, dir, "", files)
 	return files
 }
@@ -158,7 +183,7 @@ func fixtureTree(t *testing.T, dir string) Files {
 // the recorded strength, the applicability turned bearing, a split bullet's
 // pending strengths and the lifts a support and an experiment author.
 func TestConvert100To200Edges(t *testing.T) {
-	got, _, err := Chain(version100, version200, fixtureTree(t, register100Dir))
+	got, _, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, fixtureTree(t, register100Dir))
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}
@@ -274,21 +299,21 @@ func number(v *float64) string {
 }
 
 // discover loads the converted files as a KB's authoring layer.
-func discover(t *testing.T, files Files) (kb.State, error) {
+func discover(t *testing.T, files migrate.Files) (kb.State, error) {
 	t.Helper()
 	repo := t.TempDir()
 	kbRoot := filepath.Join(repo, kb.KBDir)
 	if err := os.MkdirAll(kbRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return kb.Discover(kb.MigratedSource(kbRoot, version100, files, nil), log.Discard())
+	return kb.Discover(kb.MigratedSource(kbRoot, format_1_0_0.Version100, files, nil), log.Discard())
 }
 
 // TestConvert100To200CarriesAnUnreadableBearing: the value the converter
 // cannot judge is carried as text, and the 2.0.0 reader refuses it by field
 // and line — the converter never repairs what it does not understand.
 func TestConvert100To200CarriesAnUnreadableBearing(t *testing.T) {
-	got, _, err := Chain(version100, version200, fixtureTree(t, badToken100Dir))
+	got, _, err := migrate.Chain(format_1_0_0.Version100, format_2_0_0.Version200, fixtureTree(t, badToken100Dir))
 	if err != nil {
 		t.Fatalf("Chain: %v", err)
 	}

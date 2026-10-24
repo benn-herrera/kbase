@@ -1,34 +1,13 @@
 package migrate
 
 import (
-	"io/fs"
 	"maps"
-	"os"
-	"path"
-	"path/filepath"
 	"slices"
 	"testing"
-)
 
-// readTree is every file under dir by slash path relative to dir, prefixed.
-func readTree(t *testing.T, dir, prefix string, into Files) {
-	t.Helper()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		b, err := os.ReadFile(p)
-		into[path.Join(prefix, filepath.ToSlash(rel))] = b
-		return err
-	})
-	if err != nil {
-		t.Fatalf("reading %s: %v", dir, err)
-	}
-}
+	"kbase/internal/migrate/format_1_0_0"
+	"kbase/internal/migrate/format_2_0_0"
+)
 
 // TestChainReachesAPatchBeyondTheLastConverter: a patch above the form the last
 // converter produces converts nothing — a patch changes the bytes a writer
@@ -36,7 +15,7 @@ func readTree(t *testing.T, dir, prefix string, into Files) {
 // step left them rather than naming a gap.
 func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 	files := Files{"kb-root/a.md": []byte("prose")}
-	out, obsolete, err := Chain(version100, "2.0.1", files)
+	out, obsolete, err := Chain(format_1_0_0.Version100, "2.0.1", files)
 	if err != nil {
 		t.Fatalf("Chain(1.0.0, 2.0.1): %v", err)
 	}
@@ -48,7 +27,7 @@ func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 	}
 	// The same target one step short: the same files, so a patch above the form
 	// changes no file's form.
-	short, _, err := Chain(version100, version200, files)
+	short, _, err := Chain(format_1_0_0.Version100, format_2_0_0.Version200, files)
 	if err != nil {
 		t.Fatalf("Chain(1.0.0, 2.0.0): %v", err)
 	}
@@ -62,7 +41,7 @@ func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 func TestChainRefusesAGap(t *testing.T) {
 	identity := func(f Files) (Files, []string, error) { return f, nil, nil }
 	steps := append(slices.Clone(converters), converter{From: "1.0.0", To: "1.1.0", Convert: identity})
-	_, _, err := chain(steps, version100, "1.2.0", Files{})
+	_, _, err := chain(steps, format_1_0_0.Version100, "1.2.0", Files{})
 	if err == nil || err.Error() != "migrate: no converter leads from 1.1.0 toward 1.2.0" {
 		t.Errorf("err = %v, want the gap at 1.1.0 named", err)
 	}

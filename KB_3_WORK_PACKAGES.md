@@ -269,10 +269,11 @@ capitalising its first letter; a name copied from `kb` keeps its `kb` spelling.
 - `internal/migrate` — `Chain`, the `converters` list and the version arithmetic. It is the only
   package of the tree imported from outside it, and it keeps every exported name it has after
   C2.0a, so no importer outside the tree changes: a type moved elsewhere is kept as an alias of its
-  new home (`type Files = common.Files`, `type ConversionError = common.ConversionError`).
+  new home (`type Files = common.Files`, `type ConversionError =
+  from_1_0_0_to_2_0_0.ConversionError`).
 - `internal/migrate/common` — a declaration with no format content that two or more packages of the
-  tree use: `Files`, `ConversionError` (every converter returns it, and `kbload` matches it), and
-  helpers such as line splitting. This is the one test for what belongs here. Nothing in it changes
+  tree use: `Files`, and helpers such as line splitting. This is the one test for what belongs
+  here. Nothing in it changes
   behaviour once a package uses it: a helper that would have to change for one format was that
   format's all along, and the new behaviour is declared in that format's package under its own
   name, the `common` one left as it is.
@@ -281,8 +282,9 @@ capitalising its first letter; a name copied from `kb` keeps its `kb` spelling.
   (`PendingLiteral`), record shapes, and its reader where one exists. Each is defined once, there,
   and the converters on either side import it. A format that carries a predecessor's declaration
   unchanged imports it from the predecessor's package rather than restating it — except the
-  frozen copy of `kb`'s reader (C2.1, C2.2), which carries its own. `format_2_0_0`
-  covers every 2.0 patch.
+  frozen copy of `kb`'s reader (C2.1, C2.2), which carries its own. A format's reader is a function
+  another package calls to read that format; a parse only a conversion performs is the converter's.
+  `format_2_0_0` covers every 2.0 patch.
 - `internal/migrate/from_<from>_to_<to>` (`from_1_0_0_to_2_0_0`; C3c adds `from_2_0_0_to_3_0_0`) —
   one converter's transformation, importing `common` and the format packages of its two sides.
 - Imports run one way: `common` imports nothing of the tree; a format package imports `common` and

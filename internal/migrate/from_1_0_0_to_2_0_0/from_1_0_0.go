@@ -1,4 +1,7 @@
-package migrate
+// Package from_1_0_0_to_2_0_0 is the 1.0.0 → 2.0.0 conversion step: a 1.0.0
+// KB's files as bytes in, the 2.0.0 form's files as bytes out, plus the paths
+// that form no longer has.
+package from_1_0_0_to_2_0_0
 
 import (
 	"fmt"
@@ -7,15 +10,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"kbase/internal/migrate/common"
+	"kbase/internal/migrate/format_1_0_0"
+	"kbase/internal/migrate/format_2_0_0"
 )
-
-const (
-	version200 = "2.0.0"
-
-	indexDir = "kb-root/.index"
-)
-
-const pendingLiteral = "*pending*"
 
 // The 1.0.0 register keys the 2.0.0 form renames, by the kind of entry that
 // authors them: the entry's marker decides, so a key of another kind is
@@ -26,65 +25,18 @@ var renamedFields = map[string]map[string]string{
 	"work": {"strength": "rigor"},
 }
 
-// The 1.0.0 forms the 2.0.0 reader no longer spells: a premise bullet's
-// scoring target and its two annotations, the pair list an experiment
-// declares, and a register field line.
-var (
-	entryMarkerRE = regexp.MustCompile(`^<!--\s*id:\s*((?:clm|sup)-[a-z0-9]{6}|` + workIDPattern + `)\s*-->$`)
-	fieldLineRE   = regexp.MustCompile(`^(\s*)- ([a-z][a-z-]*):(.*)$`)
-	nodeKeyRE     = regexp.MustCompile(`^(\s*)(strengthens|supports):(.*)$`)
-	analysisIDRE  = regexp.MustCompile(`^(\s*)- sup-id:\s*(sup-[a-z0-9]{6})\s*$`)
+// annotationTokenRE is a trailing parenthetical that is an annotation of
+// either form, and so no context.
+var annotationTokenRE = regexp.MustCompile(`^\((?:strength|solidity|bearing|applicability|origin)\b[^()]*\)$`)
 
-	claimTokenRE = regexp.MustCompile(`\bclm-[a-z0-9]{6}\b`)
-	workTokenRE  = regexp.MustCompile(`\b` + workIDPattern)
-	axiomTokenRE = regexp.MustCompile(`\bAxiom [A-Za-z0-9][A-Za-z0-9._-]*`)
-	citationRE   = regexp.MustCompile(`\bINVARIANT-([A-Z]+[0-9]+)\b`)
-
-	solidityAnnRE      = regexp.MustCompile(`\(solidity\s+([^()]*)\)`)
-	applicabilityAnnRE = regexp.MustCompile(`\(applicability\s+([^()]*)\)`)
-	bearingAnnRE       = regexp.MustCompile(`\(bearing\s+[^()]*\)`)
-	strengthAnnRE      = regexp.MustCompile(`\(strength\s+[^()]*\)`)
-	tier2Marker100RE   = regexp.MustCompile(`<!--(\s*)claim-quality(\s*:)`)
-	contextRE          = regexp.MustCompile(`\[[^\[\]]*\]\s*$`)
-	trailingParenRE    = regexp.MustCompile(`\(([^()]*)\)$`)
-	annotationTokenRE  = regexp.MustCompile(`^\((?:strength|solidity|bearing|applicability|origin)\b[^()]*\)$`)
-)
-
-// The register file's basename in each form; a 1.0.0 register is renamed on
-// that exact basename, at every volume's depth, and its old path is made
-// obsolete so a saving refresh removes it.
-const (
-	register100Name = "claim-quality.md"
-	register200Name = "claim-rigor.md"
-)
-
-// The files a 1.0.0 KB declares its axioms in, and the one the 2.0.0 form
-// declares them in; a declaration document the converter replaces is listed
-// obsolete, and AGENTS.md, which also carries instructions, is left as it is.
-const (
-	axiomsPath     = "kb-root/axioms.md"
-	invariantsPath = "kb-root/invariants.md"
-	agentsPath     = "kb-root/AGENTS.md"
-)
-
-var (
-	legacyInvariantHeadingRE = regexp.MustCompile(`^### INVARIANT-([A-Z]+[0-9]+):\s*(.*)$`)
-	legacyAxiomBulletRE      = regexp.MustCompile(`^- Axiom ([0-9]+):\s*\*\*(.+?)\*\*\s*(.*)$`)
-	sectionEndRE             = regexp.MustCompile(`^#{1,3}\s`)
-)
-
-// workIDPattern is an external work's id as the 1.0.0 reader took it: the
-// prefix and a citation key whose ends are alphanumeric.
-const workIDPattern = `work-[A-Za-z0-9](?:[A-Za-z0-9_.:+/-]*[A-Za-z0-9])?`
-
-// convert100To200 is the 1.0.0 → 2.0.0 step: the register's score lines and
+// Convert100To200 is the 1.0.0 → 2.0.0 step: the register's score lines and
 // premise bullets in the three quantities' names, every scoring edge carrying
 // a bearing, the register file under the name the 2.0.0 form reads, the axiom
 // declarations in the document the 2.0.0 form reads, and the derived index
 // files the 2.0.0 form no longer has declared obsolete — the index is derived,
 // and a refresh writes it.
-func convert100To200(in Files) (Files, []string, error) {
-	out := make(Files, len(in))
+func Convert100To200(in common.Files) (common.Files, []string, error) {
+	out := make(common.Files, len(in))
 	axioms, obsolete, err := axioms100To200(in)
 	if err != nil {
 		return nil, nil, err
@@ -95,7 +47,7 @@ func convert100To200(in Files) (Files, []string, error) {
 		}
 		b := in[p]
 		switch {
-		case p == agentsPath:
+		case p == format_1_0_0.AgentsPath:
 			out[p] = b
 		case path.Ext(p) == ".md":
 			renamed := registerPath200(p)
@@ -103,14 +55,14 @@ func convert100To200(in Files) (Files, []string, error) {
 			if renamed != p {
 				obsolete = append(obsolete, p)
 			}
-		case p == indexDir+"/depends-on.yaml" || p == indexDir+"/supported-by.yaml":
+		case p == format_1_0_0.IndexDir+"/depends-on.yaml" || p == format_1_0_0.IndexDir+"/supported-by.yaml":
 			obsolete = append(obsolete, p)
 		default:
 			out[p] = b
 		}
 	}
 	if axioms != nil {
-		out[axiomsPath] = axioms
+		out[format_2_0_0.AxiomsPath] = axioms
 	}
 	return out, obsolete, nil
 }
@@ -119,10 +71,10 @@ func convert100To200(in Files) (Files, []string, error) {
 // form; every other path stands. The match is the basename alone, so a
 // document merely naming "claim-quality" is untouched.
 func registerPath200(p string) string {
-	if path.Base(p) != register100Name {
+	if path.Base(p) != format_1_0_0.Register100Name {
 		return p
 	}
-	return path.Join(path.Dir(p), register200Name)
+	return path.Join(path.Dir(p), format_2_0_0.Register200Name)
 }
 
 // document100To200 is one document in the 2.0.0 form: the frontmatter's node
@@ -133,8 +85,8 @@ func document100To200(text string) []byte {
 	lines := strings.Split(text, "\n")
 	lines = frontmatter100To200(lines)
 	lines = entries100To200(lines)
-	joined := tier2Marker100RE.ReplaceAllString(strings.Join(lines, "\n"), "<!--${1}claim-rigor${2}")
-	return []byte(workTokenRE.ReplaceAllStringFunc(joined, func(id string) string {
+	joined := format_1_0_0.Tier2Marker100RE.ReplaceAllString(strings.Join(lines, "\n"), "<!--${1}claim-rigor${2}")
+	return []byte(format_1_0_0.WorkTokenRE.ReplaceAllStringFunc(joined, func(id string) string {
 		return "wrk-" + strings.TrimPrefix(id, "work-")
 	}))
 }
@@ -198,10 +150,10 @@ func convertNode(block []string, section string) []string {
 	out := make([]string, 0, len(block)+1)
 	rigor := slices.ContainsFunc(block, func(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "rigor:") })
 	for _, line := range block {
-		if m := analysisIDRE.FindStringSubmatch(line); m != nil {
+		if m := format_1_0_0.AnalysisIDRE.FindStringSubmatch(line); m != nil {
 			line = m[1] + "- ana-id: ana-" + strings.TrimPrefix(m[2], "sup-")
 		}
-		if m := nodeKeyRE.FindStringSubmatch(line); m != nil {
+		if m := format_1_0_0.NodeKeyRE.FindStringSubmatch(line); m != nil {
 			key := m[2]
 			if section == "experiment-nodes" && key == "strengthens" || section == "support-nodes" && key == "supports" {
 				line = m[1] + "lifts:" + m[3]
@@ -233,8 +185,8 @@ func entries100To200(lines []string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case entryMarkerRE.MatchString(trimmed):
-			id := entryMarkerRE.FindStringSubmatch(trimmed)[1]
+		case format_1_0_0.EntryMarkerRE.MatchString(trimmed):
+			id := format_1_0_0.EntryMarkerRE.FindStringSubmatch(trimmed)[1]
 			if strings.HasPrefix(id, "sup-") {
 				line = strings.Replace(line, id, "ana-"+strings.TrimPrefix(id, "sup-"), 1)
 			}
@@ -249,7 +201,7 @@ func entries100To200(lines []string) []string {
 					line = "### Strength"
 				}
 			}
-			if m := fieldLineRE.FindStringSubmatch(line); m != nil {
+			if m := format_1_0_0.FieldLineRE.FindStringSubmatch(line); m != nil {
 				key := m[2]
 				if renamed, ok := renamedFields[kind][key]; ok {
 					line = m[1] + "- " + renamed + ":" + m[3]
@@ -282,10 +234,10 @@ func isSubBullet(line string) bool {
 // form writes it in.
 func axiomContext100To200(line string) string {
 	content := strings.TrimRight(line, " \t")
-	if !citationRE.MatchString(content) && !axiomTokenRE.MatchString(content) {
+	if !format_1_0_0.CitationRE.MatchString(content) && !format_1_0_0.AxiomTokenRE.MatchString(content) {
 		return line
 	}
-	m := trailingParenRE.FindStringSubmatch(content)
+	m := format_1_0_0.TrailingParenRE.FindStringSubmatch(content)
 	if m == nil || annotationTokenRE.MatchString(m[0]) {
 		return line
 	}
@@ -295,7 +247,7 @@ func axiomContext100To200(line string) string {
 // citation100To200 rewrites a legacy invariant citation to the axiom token
 // the 2.0.0 register reads.
 func citation100To200(line string) string {
-	return citationRE.ReplaceAllString(line, "Axiom $1")
+	return format_1_0_0.CitationRE.ReplaceAllString(line, "Axiom $1")
 }
 
 // premise100To200 is one premise bullet in the 2.0.0 form: one bullet per
@@ -314,9 +266,9 @@ func premise100To200(line string) []string {
 	if len(targets) < 2 {
 		return []string{indent + "- " + simplePremise(content, targets)}
 	}
-	recorded := solidityAnnRE.FindStringSubmatch(content)
-	bearing := applicabilityAnnRE.FindStringSubmatch(content)
-	context := contextRE.FindString(content)
+	recorded := format_1_0_0.SolidityAnnRE.FindStringSubmatch(content)
+	bearing := format_1_0_0.ApplicabilityAnnRE.FindStringSubmatch(content)
+	context := format_1_0_0.ContextRE.FindString(content)
 	title := bulletTitle(content, targets)
 	var out []string
 	for i, t := range targets {
@@ -341,9 +293,9 @@ func premise100To200(line string) []string {
 // a bullet naming a scoring target the bearing 1.0.0 left unrecorded. A bullet
 // already carrying a bearing is a 2.0.0 bullet and is left as it stands.
 func simplePremise(content string, targets []scoringToken) string {
-	out := applicabilityAnnRE.ReplaceAllString(content, "(bearing $1)")
-	out = solidityAnnRE.ReplaceAllString(out, "(strength $1)")
-	if len(targets) == 0 || bearingAnnRE.MatchString(out) {
+	out := format_1_0_0.ApplicabilityAnnRE.ReplaceAllString(content, "(bearing $1)")
+	out = format_1_0_0.SolidityAnnRE.ReplaceAllString(out, "(strength $1)")
+	if len(targets) == 0 || format_2_0_0.BearingAnnRE.MatchString(out) {
 		return out
 	}
 	return insertBearing(out)
@@ -352,10 +304,10 @@ func simplePremise(content string, targets []scoringToken) string {
 // insertBearing puts "(bearing 1.0)" after the strength annotation, else
 // before the trailing context, else at the end of the line.
 func insertBearing(s string) string {
-	if m := strengthAnnRE.FindStringIndex(s); m != nil {
+	if m := format_2_0_0.StrengthAnnRE.FindStringIndex(s); m != nil {
 		return s[:m[1]] + " (bearing 1.0)" + s[m[1]:]
 	}
-	if m := contextRE.FindStringIndex(s); m != nil {
+	if m := format_1_0_0.ContextRE.FindStringIndex(s); m != nil {
 		return strings.TrimRight(s[:m[0]], " \t") + " (bearing 1.0) " + s[m[0]:]
 	}
 	return s + " (bearing 1.0)"
@@ -372,7 +324,7 @@ func strengthAnnotation(i int, targets []scoringToken, recorded []string) string
 	if i == first && recorded != nil {
 		return "(strength " + strings.TrimSpace(recorded[1]) + ")"
 	}
-	return "(strength " + pendingLiteral + ")"
+	return "(strength " + format_1_0_0.PendingLiteral + ")"
 }
 
 // bearingAnnotation is a split bullet's bearing: the applicability the 1.0.0
@@ -389,13 +341,13 @@ func bearingAnnotation(applicability []string) string {
 // order they appear, each once.
 func scoringTargets(head string) []scoringToken {
 	var out []scoringToken
-	for _, m := range claimTokenRE.FindAllStringIndex(head, -1) {
+	for _, m := range format_1_0_0.ClaimTokenRE.FindAllStringIndex(head, -1) {
 		out = append(out, scoringToken{at: m[0], end: m[1], text: head[m[0]:m[1]]})
 	}
-	for _, m := range workTokenRE.FindAllStringIndex(head, -1) {
+	for _, m := range format_1_0_0.WorkTokenRE.FindAllStringIndex(head, -1) {
 		out = append(out, scoringToken{at: m[0], end: m[1], text: head[m[0]:m[1]], work: true})
 	}
-	for _, re := range []*regexp.Regexp{citationRE, axiomTokenRE} {
+	for _, re := range []*regexp.Regexp{format_1_0_0.CitationRE, format_1_0_0.AxiomTokenRE} {
 		for _, m := range re.FindAllStringIndex(head, -1) {
 			out = append(out, scoringToken{at: m[0], end: m[1], text: head[m[0]:m[1]], axiom: true})
 		}
@@ -519,22 +471,22 @@ func (e *ConversionError) Error() string {
 // is not obsolete. invariants.md is a declaration document and nothing else:
 // content beside its declarations is a ConversionError, where AGENTS.md's
 // instructions are simply not converted.
-func axioms100To200(in Files) ([]byte, []string, error) {
-	if _, ok := in[axiomsPath]; ok {
+func axioms100To200(in common.Files) ([]byte, []string, error) {
+	if _, ok := in[format_2_0_0.AxiomsPath]; ok {
 		return nil, nil, nil
 	}
-	if b, ok := in[invariantsPath]; ok {
-		doc, found, surplus := axiomsDocument(string(b), invariantsPath)
+	if b, ok := in[format_1_0_0.InvariantsPath]; ok {
+		doc, found, surplus := axiomsDocument(string(b), format_1_0_0.InvariantsPath)
 		if !found {
 			return nil, nil, nil
 		}
 		if surplus != nil {
 			return nil, nil, surplus
 		}
-		return doc, []string{invariantsPath}, nil
+		return doc, []string{format_1_0_0.InvariantsPath}, nil
 	}
-	if b, ok := in[agentsPath]; ok {
-		if doc, found, _ := axiomsDocument(string(b), agentsPath); found {
+	if b, ok := in[format_1_0_0.AgentsPath]; ok {
+		if doc, found, _ := axiomsDocument(string(b), format_1_0_0.AgentsPath); found {
 			return doc, nil, nil
 		}
 	}
@@ -561,15 +513,15 @@ func axiomsDocument(text, rel string) ([]byte, bool, *ConversionError) {
 	inDeclaration := false
 	for i, line := range lines {
 		switch {
-		case legacyInvariantHeadingRE.MatchString(line):
-			m := legacyInvariantHeadingRE.FindStringSubmatch(line)
+		case format_1_0_0.LegacyInvariantHeadingRE.MatchString(line):
+			m := format_1_0_0.LegacyInvariantHeadingRE.FindStringSubmatch(line)
 			decls = append(decls, axiomDeclaration{heading: "### Axiom " + m[1] + ": " + strip(m[2])})
 			inDeclaration = true
-		case legacyAxiomBulletRE.MatchString(line):
-			m := legacyAxiomBulletRE.FindStringSubmatch(line)
+		case format_1_0_0.LegacyAxiomBulletRE.MatchString(line):
+			m := format_1_0_0.LegacyAxiomBulletRE.FindStringSubmatch(line)
 			decls = append(decls, axiomDeclaration{heading: "### Axiom " + m[1] + ": " + strip(m[2]), body: []string{bulletBody(m[3])}})
 			inDeclaration = false
-		case sectionEndRE.MatchString(line):
+		case format_1_0_0.SectionEndRE.MatchString(line):
 			inDeclaration = false
 		case inDeclaration:
 			decls[len(decls)-1].body = append(decls[len(decls)-1].body, line)

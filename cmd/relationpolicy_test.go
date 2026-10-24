@@ -28,7 +28,8 @@ var relationHomonyms = map[string][]string{
 }
 
 // TestNoRelationSpelledOutsideKB: a relation is named through kb's constants.
-// internal/migrate is outside the rule: it imports nothing of kbase (I8).
+// The migrate tree is outside the rule: it imports nothing of kbase outside
+// itself (I8).
 func TestNoRelationSpelledOutsideKB(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string][]string{}

@@ -28,7 +28,7 @@ Violating any is a blocking defect.
 | I5 | One result emitter owns stdout. |
 | I6 | Every mutating op is idempotent under re-issue; `init`'s creation is birth-once (SPEC §8). |
 | I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
-| I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate`, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O, no import of a kbase package — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
+| I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built by `internal/kbload` alone; `kbload` is the one importer of `internal/migrate` from outside it, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O; a tree of packages that import each other and no kbase package outside it, so maintenance of the live packages can never change what an old KB converts to — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. |
 | I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. |
 | I10 | Every ask a build or a scoring run makes leaves, for as long as its records are retained, what re-asking it under the binary's embedded templates and re-reading its reply as the run read it needs. A build leaves it through its commit trail, its records and the answer cache's keying on the composed ask, so re-running a stage from its boundary re-renders every ask; a scoring run leaves it through its `captures.jsonl` (§6, Scoring). `probe` is a diagnostic and outside it. |
 
@@ -1184,9 +1184,18 @@ internal/statedir         the state directory of one KB: the override, else
 internal/asks/call        the caller: the letter asks through model.Decision behind the letter
                           seam, the overview call through model.Chat; captures, answer
                           cache; imported by build alone
-internal/migrate          (SPEC §10) the N→N+1 converters over the loose
-                          representation and the chain; each converter returns the
-                          next form plus the paths it made obsolete; no file I/O
+internal/migrate          (SPEC §10) a tree of packages; no file I/O. The root:
+                          `Chain`, the `converters` list and the version arithmetic,
+                          the tree's only package imported from outside it.
+                          `common`: what two or more of its packages use and no
+                          format defines (`Files`).
+                          `format_<major>_<minor>_<patch>`: one superseded format's
+                          frozen definition — stamp, field names, token patterns,
+                          vocabulary, record shapes, its reader where one exists —
+                          defined once there (`format_2_0_0` covers every 2.0 patch).
+                          `from_<from>_to_<to>`: one N→N+1 converter over the loose
+                          representation, returning the next form plus the paths it
+                          made obsolete
 internal/mcp              (SPEC §11) JSON-RPC framing, dispatch, the Tool, Schema and
                           Property types, the frame checks, and the one subscription the
                           caller allows, whose frames it writes under the same mutex as
@@ -1256,9 +1265,14 @@ therefore carries a type's meaning and not only a version's, and every parse in 
   link relation a third way, `kb.ChildList`: an index's child-list lines only, so a body link is
   never a spine edge.
 - `write`, `index`, `query`, `sheet` and `kbdocs` never import `docgraph`, `claimgraph` or `build`.
-- `migrate` imports nothing of kbase (I8): it takes and returns files as bytes, and owns the parsers
-  of every superseded form; `kbload` is its only importer and the write side drains its delete set —
-  `migrate` touches no file.
+- The `migrate` tree imports nothing of kbase outside itself (I8), so maintenance of the live
+  packages can never change what an old KB converts to: it takes and returns files as bytes, and
+  owns the parsers of every superseded form; `kbload` is its only importer from outside it and the
+  write side drains its delete set — `migrate` touches no file. Within the tree imports run one
+  way: `common` imports nothing of the tree; a format package imports `common` and earlier format
+  packages; a converter imports `common` and format packages; the root imports the converters,
+  `common` and the format packages. No package but the root imports a converter, and none imports a
+  later format.
 - No package but `kbload`, `atomicfile` and the build's stage machinery opens a KB file; every other
   read goes through the `kb.Source` from `kbload.Open`. Enforced by `cmd/readpolicy_test.go`, which
   fails on any direct KB file read outside an allowlist.
@@ -1340,8 +1354,11 @@ into a map of repository-relative paths to bytes and hands it to `migrate.Chain(
 applies each converter in turn and returns the current form's files plus the union of the obsolete
 paths; the `Source` serves the returned bytes and reads an obsolete path as absent. A newer or
 unreadable stamp is refused `check: kb-format`; no entry point is refused `check: kb-root`. Each
-converter parses its own superseded form and emits the next; `migrate` is the only home of a
-superseded parser, and `kbload` its only importer (import-policy test). The pending obsolete set
+converter (`internal/migrate/from_<from>_to_<to>`) parses its own superseded form and emits the
+next, reading each side's definition from its format package (`internal/migrate/format_<version>`);
+the `migrate` tree is the only home of a superseded parser, it imports nothing of kbase outside
+itself so maintenance of the live packages can never change what an old KB converts to, and
+`kbload` is its only importer from outside it (import-policy test). The pending obsolete set
 lives in the `Source` and reaches the write side only through `index.RefreshReporting`'s save, in
 this order: every migrated file, atomically; then the obsolete paths minus what this save covered;
 then the stamped entry point, once and last, so the stamp marks a completed migration. The removals
