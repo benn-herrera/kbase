@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"kbase/internal/kb"
-	"kbase/internal/write"
 )
 
 const orderLeaf = "v/leaf.md"
@@ -16,7 +15,7 @@ const orderLeaf = "v/leaf.md"
 // paragraph, a non-claim paragraph follows, then clm-a, then the fence of
 // equation node clm-e, then clm-c. Id order differs from line order.
 func orderFixture(ids ...string) (*Tree, *AuthoredGraph, *Inventory) {
-	m := write.Tier2Marker
+	m := kb.StatementMarker
 	leaf := strings.Join([]string{
 		"[up](index.md)",
 		"# Leaf",

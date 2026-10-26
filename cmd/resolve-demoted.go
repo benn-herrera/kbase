@@ -1,13 +1,19 @@
 package main
 
-import "kbase/internal/write"
+import (
+	"github.com/spf13/cobra"
 
-func init() {
-	rootCmd.AddCommand(writeOpCommand(write.ResolveDemoted,
-		"remove a demoted edge, or restore it to supports",
-		`resolve-demoted resolves a demoted edge, one the build's cycle breaking cut
-from supports: remove deletes it; restore rewrites it as a supports edge,
-refused where that would close a cycle, the refusal naming the cycle's path.
-A pair already resolved as asked is left as it stands. A refresh follows
-unless --no-refresh.`))
+	"kbase/internal/write"
+)
+
+func resolveDemotedCommand() *cobra.Command {
+	return writeOpCommand(write.ResolveDemoted,
+		"remove a demoted edge, or restore the edge it replaced",
+		`resolve-demoted resolves the demoted record of the edge from target into id —
+the record the build writes in place of a scoring edge it cut to break a cycle.
+remove deletes the record, leaving the edge cut; restore puts back the edge it
+replaced, bearing included, refused where that would close a cycle (the refusal
+names the path) and where no demoted record or standing edge joins the two. An
+edge already resolved as asked is left as it stands. A refresh follows unless
+--no-refresh.`)
 }

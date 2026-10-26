@@ -26,13 +26,15 @@ func exportDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"entry-point.md": "---\nkind: entry-point\nkb-format: \"" + kb.FormatVersion + "\"\n---\n\n# Sample KB\n\nProse.\n\n## Volumes\n\n" +
+		"entry-point.md": "---\nkb-format: \"" + kb.FormatVersion + "\"\n---\n\n# Sample KB\n\nProse.\n\n## Volumes\n\n" +
 			"- [First](vol1/index.md) — the first volume\n- [Second](vol2/index.md) — the second volume\n",
-		"vol1/index.md": "---\nkind: index\n---\n[↑ Sample KB](../entry-point.md)\n\n# First Volume\n\n" +
+		"vol1/index.md": "[↑ Sample KB](../entry-point.md)\n\n# First Volume\n\n" +
 			"- [The Leaf](leaf.md) — a leaf\n- [Missing](missing.md) — names no file\n",
-		"vol1/leaf.md": "---\nkind: leaf\nno-claim: true\n---\n[↑ First Volume](index.md)\n\n# The Leaf\n\n" +
+		"vol1/leaf.md": "[↑ First Volume](index.md)\n\n# The Leaf\n\n" +
 			"Citing <span class=\"citation\" data-cites=\"nokey\">(Nobody 1999)</span> and [a dead link](gone.md).\n",
-		"vol2/index.md": "---\nkind: index\n---\n[↑ Sample KB](../entry-point.md)\n\n# Second Volume\n\nProse alone.\n",
+		"vol2/index.md":   "[↑ Sample KB](../entry-point.md)\n\n# Second Volume\n\nProse alone.\n",
+		kb.GraphNodesFile: string(kb.EncodeNodes(kb.Graph{})),
+		kb.GraphEdgesFile: string(kb.EncodeEdges(kb.Graph{})),
 	}
 	for rel, text := range files {
 		writeFileAt(t, filepath.Join(dir, kb.KBDir), rel, text)

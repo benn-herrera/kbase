@@ -37,23 +37,23 @@ func TestResolveTargetRefusesASymlink(t *testing.T) {
 // keeps its bytes.
 func TestAnOpOverASymlinkedDocumentRefuses(t *testing.T) {
 	root := seedKB(t)
-	register := snapshot(t, root)[kb.RegisterFile]
-	outside := filepath.Join(t.TempDir(), kb.RegisterFile)
-	if err := os.WriteFile(outside, []byte(register), 0o644); err != nil {
+	leaf := snapshot(t, root)["leaf.md"]
+	outside := filepath.Join(t.TempDir(), "leaf.md")
+	if err := os.WriteFile(outside, []byte(leaf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(root, kb.RegisterFile)
+	link := filepath.Join(root, "leaf.md")
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	res := run(t, root, "set-rigor", "entry:\n- id: "+seedClaim+"\n  rigor: 0.5\n", false)
+	res := run(t, root, "mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: "+seedClaim+"\n  locator: a second paragraph names a bound\n")
 	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Check != kb.CheckSymlink {
-		t.Fatalf("set-rigor over a symlinked register: %+v", res)
+		t.Fatalf("mark-claim-in-leaf over a symlinked leaf: %+v", res)
 	}
-	if data, _ := os.ReadFile(outside); string(data) != register {
+	if data, _ := os.ReadFile(outside); string(data) != leaf {
 		t.Error("the refused op reached the file the link names")
 	}
 }

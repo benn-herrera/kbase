@@ -1,0 +1,10 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - id: "clm-aaa006"
+      title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+      strength: 0.0
+      build_band: "unsubstantiated"

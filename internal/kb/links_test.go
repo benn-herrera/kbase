@@ -160,3 +160,51 @@ func TestDeadLinks(t *testing.T) {
 		t.Errorf("DeadLinks =\n%q\nwant\n%q", got, want)
 	}
 }
+
+// TestDeadLinksInChecksARegisterPageFragment: a link into a register page
+// holds where its fragment is one of the slugs derived for that page, and is
+// broken fragment where it is not — a page no longer called for holding none —
+// while a link with no fragment, a fragment into any other file, and a page
+// whose file is gone are judged by the file check alone.
+func TestDeadLinksInChecksARegisterPageFragment(t *testing.T) {
+	root := t.TempDir()
+	for rel, text := range map[string]string{
+		"a/claim-rigor.md": "", "b/claim-rigor.md": "", "d/claim-rigor.md": "", "a/leaf.md": "# Leaf\n",
+		"a/prose.md": strings.Join([]string{
+			"[held](claim-rigor.md#theorem-1)",
+			"[moved](claim-rigor.md#lemma-2)",
+			"[encoded](<../b/claim-rigor.md#lemma%2D2>)",
+			"[not on that page](../b/claim-rigor.md#theorem-1)",
+			"[bare](claim-rigor.md)",
+			"[other file](leaf.md#nowhere)",
+			"[gone page](../c/claim-rigor.md#x)",
+			"[uncalled page](../d/claim-rigor.md#theorem-1)",
+		}, "\n"),
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pages := map[string][]string{"a/claim-rigor.md": {"theorem-1"}, "b/claim-rigor.md": {"lemma-2"}, "c/claim-rigor.md": nil, "d/claim-rigor.md": nil}
+	dead, err := DeadLinksIn(OnDisk(root), root, pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, d := range dead {
+		got = append(got, d.String())
+	}
+	want := []string{
+		`a/prose.md:2 broken fragment "claim-rigor.md#lemma-2"`,
+		`a/prose.md:4 broken fragment "../b/claim-rigor.md#theorem-1"`,
+		`a/prose.md:7 broken intra "../c/claim-rigor.md#x"`,
+		`a/prose.md:8 broken fragment "../d/claim-rigor.md#theorem-1"`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("DeadLinksIn =\n%q\nwant\n%q", got, want)
+	}
+}

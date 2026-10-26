@@ -36,7 +36,6 @@ type Layer struct {
 	Exists          bool
 	ProvidersExists bool
 	ConfigExists    bool
-	HarnessesExists bool
 }
 
 // Layers returns the directories this invocation reads, in precedence order.
@@ -92,42 +91,19 @@ func WriteTarget(layers []Layer, projectRoot string) string {
 }
 
 // Loaded is everything one configuration load produced: the merged pool with
-// the entries that dropped out of it, the merged config.toml choices, and the
-// harness profiles the layers supply — one per profile, the highest layer's
-// entry whole.
+// the entries that dropped out of it, and the merged config.toml choices.
 type Loaded struct {
 	Providers Providers
 	Faults    []ProviderFault
 	Cfg       Config
-	// Harnesses holds the profiles the loader read, and is empty where none
-	// was read.
-	Harnesses Harnesses
 }
 
-// Profile is one harness profile: the command a run executes for one item, and
-// the layer whose file supplied it. Its command is the user's argv, verbatim,
-// with {model} and {prompt} as its only tokens. ReplacedLayer names the lower
-// layer whose same-named profile this entry displaced, and is empty where no
-// lower layer supplied the name: the merge resolves the same profile either
-// way, so the fact rides along for the announcement to say or stay silent about.
-type Profile struct {
-	Name          string
-	Command       []string
-	Layer         string
-	ReplacedLayer string
-}
-
-// Harnesses is the loaded profiles by name.
-type Harnesses map[string]Profile
-
-// Load reads all three files of every layer — providers.toml, config.toml and
-// harnesses.toml — highest precedence first, and merges them into one
-// configuration: the pool is the union, a repository entry replacing a
-// same-named global one whole, config.toml's fields overlay one by one, and a
-// harness profile is replaced whole by a higher layer's profile of the same
-// name. Each pooled provider, model id and profile names the layer it came
-// from; each fault names the providers.toml that carries it. Every verb loads
-// the profiles and one verb — score — uses one (§4.6, §9.4).
+// Load reads both files of every layer — providers.toml and config.toml —
+// highest precedence first, and merges them into one configuration: the pool is
+// the union, a repository entry replacing a same-named global one whole, and
+// config.toml's fields overlay one by one. Each pooled provider and model id
+// names the layer it came from; each fault names the providers.toml that
+// carries it.
 //
 // A fault naming an entry a higher layer already supplies is dropped: the
 // pool's entry is the higher one, so the lower entry is a value nobody reads.
@@ -140,17 +116,13 @@ type Harnesses map[string]Profile
 // would leave the user's edit doing nothing with nothing said.
 func Load(layers []Layer) (Loaded, error) {
 	var loaded Loaded
-	pool, harnesses := Providers{}, Harnesses{}
+	pool := Providers{}
 	for _, layer := range layers {
 		providers, layerFaults, err := LoadProviders(ProvidersPath(layer.Path))
 		if err != nil {
 			return Loaded{}, err
 		}
 		layerCfg, err := LoadConfig(ConfigPath(layer.Path))
-		if err != nil {
-			return Loaded{}, err
-		}
-		layerHarnesses, err := LoadHarnesses(HarnessesPath(layer.Path))
 		if err != nil {
 			return Loaded{}, err
 		}
@@ -163,10 +135,9 @@ func Load(layers []Layer) (Loaded, error) {
 			loaded.Faults = append(loaded.Faults, fault)
 		}
 		takeProviders(pool, providers, layer.Source)
-		takeHarnesses(harnesses, layerHarnesses, layer.Source)
 		takeConfig(&loaded.Cfg, layerCfg, layer.Source)
 	}
-	loaded.Providers, loaded.Harnesses = pool, harnesses
+	loaded.Providers = pool
 	return loaded, nil
 }
 

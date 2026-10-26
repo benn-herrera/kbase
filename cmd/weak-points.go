@@ -7,7 +7,7 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
+func weakPointsCommand() *cobra.Command {
 	var maxStrength float64
 	var minDependents int
 	cmd := queryCommand(&cobra.Command{
@@ -23,5 +23,5 @@ of its outgoing scoring edge. Pending claims are left out.`,
 	})
 	cmd.Flags().Float64Var(&maxStrength, "max-strength", query.DefaultMaxStrength, "only claims with strength strictly below this count as shaky")
 	cmd.Flags().IntVar(&minDependents, "min-dependents", query.DefaultMinDependents, "only claims with at least this many dependents count")
-	rootCmd.AddCommand(cmd)
+	return cmd
 }

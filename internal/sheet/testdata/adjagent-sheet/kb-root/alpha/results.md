@@ -1,9 +1,5 @@
----
-kind: leaf
-claims: [clm-aaa001, clm-aaa002, clm-aaa003, clm-aaa004]
----
 
-# Results
+# Results <!-- claim-rigor: clm-aaa002 -->
 
 > **Theorem 1.** Every flow conserves stock. <!-- claim-rigor: clm-aaa001 -->
 >

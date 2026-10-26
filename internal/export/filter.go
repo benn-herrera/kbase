@@ -13,7 +13,7 @@ var LuaFilter []byte
 //go:embed kbase-export.latex
 var LaTeXTemplate []byte
 
-// preambleStarter is the commented preamble.tex WriteOut writes where the
+// preambleStarter is the commented preamble.tex writeOut writes where the
 // author has none; it loads nothing.
 //
 //go:embed preamble.tex

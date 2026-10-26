@@ -1,7 +1,7 @@
 package asks
 
 // The score asks: one call carries one node or one edge, and answers the faults
-// its text commits — one charge line each, or `none`, or `flt-pending`. The
+// its text commits — one charge line each, or `none`. The
 // caller assembles the closed text of that one subject — the renderers that do so
 // live with the runner — and hands it in whole, so each template's one dyn. slot
 // is all it needs. A node's class decides which rigor template its call renders:

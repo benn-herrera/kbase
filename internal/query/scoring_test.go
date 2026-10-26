@@ -7,33 +7,29 @@ import (
 	"kbase/internal/kb"
 )
 
-// scoringFixtureNodes is one node of every kind, in no kind order.
-func scoringFixtureNodes() []map[string]any {
-	return []map[string]any{
-		{"node_type": kb.NodeKindWork, "id": "wrk-aaaaaa", "title": "A Work"},
-		{"node_type": kb.NodeKindClaim, "id": "clm-aaaaaa", "title": "A Claim"},
-		{"node_type": kb.NodeKindAxiom, "id": "axm-aaaaaa", "title": "An Axiom"},
-		{"node_type": kb.NodeKindExperiment, "id": "exp-aaaaaa", "title": "An Experiment"},
-		{"node_type": kb.NodeKindAnalysis, "id": "ana-aaaaaa", "title": "An Analysis"},
-	}
-}
-
-// scoringFixtureEdges is one edge of every relation — the scoring ones from
-// each source kind that carries them — in no order the set keeps.
-func scoringFixtureEdges() []map[string]any {
-	supports := edge("clm-aaaaaa", "ana-aaaaaa", kb.RelationSupports, kb.NodeKindAnalysis, "1.0")
-	supports["context"] = "the sentence that marks the dependency"
-	demoted := edge("clm-aaaaaa", "ana-aaaaaa", kb.RelationDemoted, kb.NodeKindAnalysis, nil)
-	demoted["origin"] = kb.OriginCited
-	return []map[string]any{
-		edge("exp-aaaaaa", "clm-aaaaaa", kb.RelationRefutes, kb.NodeKindClaim, "1.0"),
-		edge("wrk-aaaaaa", "clm-aaaaaa", kb.RelationFounds, kb.NodeKindClaim, "1.0"),
-		supports,
-		edge("ana-aaaaaa", "clm-aaaaaa", kb.RelationLifts, kb.NodeKindClaim, "1.0"),
-		edge("axm-aaaaaa", "ana-aaaaaa", kb.RelationFounds, kb.NodeKindAnalysis, "1.0"),
-		edge("exp-aaaaaa", "clm-aaaaaa", kb.RelationSupports, kb.NodeKindClaim, "1.0"),
-		edge("clm-aaaaaa", "ana-aaaaaa", kb.RelationReferences, kb.NodeKindAnalysis, nil),
-		demoted,
+// scoringFixture is one node of every kind and one edge record of every
+// relation, in no order the set keeps. Its two founds edges are what the
+// bearing set must leave out.
+func scoringFixture() kb.Graph {
+	supports := scorable(kb.RelationSupports, "clm-aaaaaa", "ana-aaaaaa", 1)
+	supports.Context = "the sentence that marks the dependency"
+	return kb.Graph{
+		Works:       []kb.WorkNode{{ID: "wrk-aaaaaa", Title: "A Work"}},
+		Claims:      []kb.ClaimNode{claim("clm-aaaaaa", "A Claim")},
+		Axioms:      []kb.AxiomNode{{ID: "axm-aaaaaa", Title: "An Axiom"}},
+		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "An Experiment", Status: kb.ExperimentRun}},
+		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "An Analysis"}},
+		Scorable: []kb.ScorableEdge{
+			scorable(kb.RelationRefutes, "exp-aaaaaa", "clm-aaaaaa", 1),
+			supports,
+			scorable(kb.RelationLifts, "exp-aaaaaa", "ana-aaaaaa", 1),
+			scorable(kb.RelationSupports, "exp-aaaaaa", "clm-aaaaaa", 1),
+		},
+		Founds: []kb.BearingEdge{{Source: "wrk-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 1}},
+			{Source: "axm-aaaaaa", Target: "ana-aaaaaa", Bearing: kb.Bearing{Value: 1}}},
+		References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "ana-aaaaaa"}},
+		Demoted: []kb.DemotedEdge{{Source: "clm-aaaaaa", Target: "ana-aaaaaa", ReplacedRelation: kb.RelationSupports,
+			Bearing: kb.Bearing{Pending: true}}},
 	}
 }
 
@@ -69,15 +65,9 @@ func splitItems(t *testing.T, items []Item) ([]ScoringNode, []ScoringEdge) {
 }
 
 func TestScoringSet(t *testing.T) {
-	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
 	reload := func() *Index {
 		t.Helper()
-		ix, err := Load(kb.OnDisk(root))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ix
+		return load(t, scoringFixture())
 	}
 	ix := reload()
 
@@ -96,14 +86,12 @@ func TestScoringSet(t *testing.T) {
 		}
 	})
 
-	t.Run("bearing is every scoring edge, ordered", func(t *testing.T) {
+	t.Run("bearing is every edge the walk asks, ordered", func(t *testing.T) {
 		nodes, edges := splitItems(t, scoringItems(t, ix, PassBearing))
 		want := []ScoringEdge{
 			{Source: "clm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationSupports},
 			{Source: "exp-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationSupports},
-			{Source: "axm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationFounds},
-			{Source: "wrk-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationFounds},
-			{Source: "ana-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationLifts},
+			{Source: "exp-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationLifts},
 			{Source: "exp-aaaaaa", Target: "clm-aaaaaa", Relation: kb.RelationRefutes},
 		}
 		if !slices.Equal(edges, want) {
@@ -123,6 +111,26 @@ func TestScoringSet(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestScoringSetExcludesFounds: a founds edge carries a bearing — kb.Scoring
+// says so, and set-bearing writes it — but no pass walks it. Its source is a
+// work or an axiom outside the corpus, so the model has only a title to judge
+// the link by, and the value is the user's. The bearing set leaves it out, and
+// so does the both set, from the edge side and from the node side alike: a work
+// and an axiom are no rigor subject either.
+func TestScoringSetExcludesFounds(t *testing.T) {
+	ix := load(t, scoringFixture())
+	for _, pass := range []string{PassBearing, PassBoth} {
+		for _, it := range scoringItems(t, ix, pass) {
+			switch {
+			case it.Edge != nil && it.Edge.Relation == kb.RelationFounds:
+				t.Errorf("%s walks the founds edge %s → %s", pass, it.Edge.Source, it.Edge.Target)
+			case it.Node != nil && (it.Node.Kind == kb.NodeKindWork || it.Node.Kind == kb.NodeKindAxiom):
+				t.Errorf("%s walks the %s %s, which is no rigor subject", pass, it.Node.Kind, it.Node.ID)
+			}
+		}
+	}
 }
 
 // TestScoringSetRigorByID: the rigor set is ordered by id, not by the kind-major
@@ -152,12 +160,7 @@ func TestScoringSetRigorByID(t *testing.T) {
 }
 
 func TestIndexEdge(t *testing.T) {
-	root := t.TempDir()
-	writeIndex(t, root, map[string][]map[string]any{"claims": scoringFixtureNodes(), "edges": scoringFixtureEdges()})
-	ix, err := Load(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ix := load(t, scoringFixture())
 	supports := ScoringEdge{Source: "clm-aaaaaa", Target: "ana-aaaaaa", Relation: kb.RelationSupports}
 	row, ok := ix.Edge(supports)
 	if !ok {
@@ -172,7 +175,7 @@ func TestIndexEdge(t *testing.T) {
 }
 
 func TestScoringSetUnknownPass(t *testing.T) {
-	ix := load(t, nil)
+	ix := load(t, kb.Graph{})
 	for _, tc := range []struct{ name, pass string }{
 		{"empty", ""},
 		{"another quantity", "strength"},

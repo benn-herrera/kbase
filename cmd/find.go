@@ -7,8 +7,8 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
-	rootCmd.AddCommand(queryCommand(&cobra.Command{
+func findCommand() *cobra.Command {
+	return queryCommand(&cobra.Command{
 		Use:   "find <query>",
 		Short: "the claims whose title or anchor contains a string",
 		Long: `find lists, by id, the claims whose title or canonical anchor contains
@@ -17,5 +17,5 @@ empty <query> matches every claim.`,
 		Args: cobra.ExactArgs(1),
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.FindPayload(ix, args[0]))
-	}))
+	})
 }

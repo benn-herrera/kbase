@@ -15,11 +15,8 @@ import (
 // literals spell a relation's word as a name of another vocabulary, by the
 // words each spells.
 var relationHomonyms = map[string][]string{
-	// write's per-op value keys, and the register fields its renderers and
-	// readback name.
+	// write's per-op value keys.
 	"internal/write/values.go": {kb.RelationReferences},
-	"internal/write/ops.go":    {kb.RelationReferences},
-	"internal/write/store.go":  {kb.RelationReferences},
 	// a write op's value key, and the claim graph's report fact names.
 	"internal/claimgraph/write.go":  {kb.RelationReferences},
 	"internal/claimgraph/stages.go": {kb.RelationReferences, kb.RelationDemoted},
@@ -28,12 +25,13 @@ var relationHomonyms = map[string][]string{
 }
 
 // TestNoRelationSpelledOutsideKB: a relation is named through kb's constants.
-// internal/migrate is outside the rule: it imports nothing of kbase (I8).
+// The formats tree is outside the rule: it imports nothing of kbase outside
+// itself (I8), and format300 is where the live format defines the relations.
 func TestNoRelationSpelledOutsideKB(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string][]string{}
 	for _, m := range moduleGoFiles(t, fset) {
-		if !m.production() || under(path.Dir(m.rel), "internal/kb") || under(path.Dir(m.rel), "internal/migrate") {
+		if !m.production() || under(path.Dir(m.rel), "internal/kb") || under(path.Dir(m.rel), "internal/formats") {
 			continue
 		}
 		rel := m.rel

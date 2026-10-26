@@ -1,0 +1,9 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "work"
+    id: "wrk-smith2020"
+    title: "Smith, A. 2020. *Markets*. Fixture Press."
+    canonical_path: "claim-rigor.md"
+    canonical_anchor: "smith-a-2020-markets-fixture-press"
+    rigor: 0.9

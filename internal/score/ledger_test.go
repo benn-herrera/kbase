@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -79,7 +81,7 @@ func reopened(t *testing.T, dir string) *Ledger {
 // resumed is reopened with w as the write a re-priced value lands through.
 func resumed(t *testing.T, dir string, w Write) *Ledger {
 	t.Helper()
-	l, err := Resume(dir, header(), w)
+	l, err := Resume(dir, header(), w, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +174,9 @@ func TestCreateWritesTheRunHeader(t *testing.T) {
 
 // TestAskDigestCoversEveryInstructionOfThePass: a rigor run sends two
 // instructions, so its header is one digest over both — an update to either moves
-// it, and neither instruction's own digest is the header's — while a bearing run's
-// is its one render.
+// it, and neither instruction's own digest is the header's — a bearing run's is
+// its one render, and a both-pass run's is one digest over the three, in the
+// order its walk takes them.
 func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 	statement, err := asks.ScoreRigorStatement("")
 	if err != nil {
@@ -203,12 +206,21 @@ func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 	if got, err := askDigest(query.PassBearing); err != nil || got != digestOf(bearing) {
 		t.Errorf("the bearing run's ask = %q, %v; want the digest of its one instruction", got, err)
 	}
+
+	// A run walking both sends all three: the statement, the method and then
+	// the bearing instruction, each rendered once.
+	both, err := askDigest(query.PassBoth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := digestOf(statement + method + bearing); both != want {
+		t.Errorf("the both-pass run's ask = %q, want one digest over the three instructions in order %q", both, want)
+	}
 }
 
 // TestLineCarriesTheAttempt: one attempt is one line, its identity from the
-// item, its run and pass from the header, and its outcome and evidence from the
-// attempt. An edge's line belongs to a bearing run's ledger and a node's to a
-// rigor run's, because a run records one pass and its lines are that pass's.
+// item, its run and pass from the item's own class, and its outcome and evidence
+// from the attempt.
 func TestLineCarriesTheAttempt(t *testing.T) {
 	dir := t.TempDir()
 	bh := header()
@@ -219,8 +231,8 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	}
 	it := edge("clm-1", "clm-2", kb.RelationSupports)
 	entry := Entry{Status: StatusDone, Value: "0.65",
-		Faults: []Charge{{ID: kb.FaultTransfer, Passage: passageSource, Citation: "A span", Offset: 9}},
-		Reply:  "flt-transfer: A span\n", Model: "small",
+		Faults: []Charge{{ID: kb.FaultTransfer, Passage: passageSource, Lines: "12", Citation: "A span", Offset: 9}},
+		Reply:  "flt-transfer: 12\n", Model: "small",
 		PromptSHA256: "deadbeef", Started: "2026-10-20T10:00:01Z", Ended: "2026-10-20T10:00:02Z"}
 	if err := l.Append(it, entry); err != nil {
 		t.Fatal(err)
@@ -232,8 +244,8 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	want := []map[string]any{{
 		"run": "run-1", "pass": query.PassBearing, "backend": "provider", "source": "clm-1", "target": "clm-2",
 		"relation": kb.RelationSupports, "status": "done",
-		"faults": []any{map[string]any{"id": kb.FaultTransfer, "passage": passageSource, "citation": "A span", "offset": float64(9)}},
-		"value":  "0.65", "reply": "flt-transfer: A span\n",
+		"faults": []any{map[string]any{"id": kb.FaultTransfer, "passage": passageSource, "lines": "12", "citation": "A span", "offset": float64(9)}},
+		"value":  "0.65", "reply": "flt-transfer: 12\n",
 		"model": "small", "prompt_sha256": "deadbeef",
 		"started": "2026-10-20T10:00:01Z", "ended": "2026-10-20T10:00:02Z",
 	}}
@@ -244,7 +256,7 @@ func TestLineCarriesTheAttempt(t *testing.T) {
 	// model's positive statement that it found no fault; a failed attempt
 	// writes no faults at all and no text.
 	nl := kept(t, t.TempDir())
-	if err := nl.Append(node(kb.NodeKindClaim, "clm-3"), Entry{Status: StatusDone, Value: "0.95", Reply: "none"}); err != nil {
+	if err := nl.Append(node(kb.NodeKindClaim, "clm-3"), Entry{Status: StatusDone, Value: "1.0", Reply: "none"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := nl.Append(node(kb.NodeKindClaim, "clm-4"), Entry{Status: StatusFailed, Reply: "line 1 is not a charge line"}); err != nil {
@@ -289,27 +301,44 @@ func TestLineRecordsMootBesideAPendingAnswer(t *testing.T) {
 	}
 }
 
-// TestHarnessRunRecordsWhatAnswered: a harness run's header names the profile,
-// its layer and the argv — the model substituted, the prompt left as the token
-// — and every line names the back end, the profile and the layer. A resumed run
-// on another back end leaves the header's opening alone and stamps each new
-// line with what asked it.
-func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
+// TestResumedRunRecordsWhatAskedEachLine: every line names the back end that
+// asked its item, and a resumed run on the other back end leaves the header's
+// opening alone while the line it appends names the one that asked now.
+func TestResumedRunRecordsWhatAskedEachLine(t *testing.T) {
 	dir := t.TempDir()
-	h := header()
-	h.BackEnd, h.Provider, h.Model = "harness", "", "judge"
-	h.Harness, h.HarnessLayer = "mine", "repository"
-	h.Command = []string{"ask", "--model", "judge", "{prompt}"}
-	l, err := Create(dir, h)
+	l, err := Create(dir, header())
 	if err != nil {
 		t.Fatal(err)
 	}
-	it := node(kb.NodeKindClaim, "clm-1")
-	if err := l.Append(it, Entry{Status: StatusDone, Value: "0.5", Model: "judge"}); err != nil {
+	if err := l.Append(node(kb.NodeKindClaim, "clm-1"), Entry{Status: StatusDone, Value: "0.5", Model: "small"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
+	}
+	first := lines(t, filepath.Join(l.Dir(), linesFile))[0]
+	if first["backend"] != "provider" || first["model"] != "small" {
+		t.Errorf("the line = %v, want the provider that asked it", first)
+	}
+
+	// A resume over the same run on the environment's endpoint: the header
+	// keeps the provider run's opening, and the line this invocation appends
+	// names the environment.
+	env := header()
+	env.BackEnd, env.Provider, env.Model = "environment", "", "judge"
+	back, err := Resume(dir, env, func(query.Item, kb.Bearing) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := back.Append(node(kb.NodeKindClaim, "clm-2"), Entry{Status: StatusDone, Value: "0.6", Model: "judge"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := back.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := lines(t, filepath.Join(l.Dir(), linesFile))[1]
+	if second["backend"] != "environment" || second["model"] != "judge" {
+		t.Errorf("the resumed line = %v, want the back end that asked it", second)
 	}
 	b, err := os.ReadFile(filepath.Join(l.Dir(), runFile))
 	if err != nil {
@@ -319,42 +348,7 @@ func TestHarnessRunRecordsWhatAnswered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"run": "run-1", "kb_root": "/repo/kb-root", "format": 1, "pass": query.PassRigor,
-		"ask_sha256": rigorAskDigest(t),
-		"backend":    "harness", "provider": "", "harness": "mine", "harness_layer": "repository",
-		"model": "judge", "command": []any{"ask", "--model", "judge", "{prompt}"},
-		"started": "2026-10-20T10:00:00Z"}
-	// reflect.DeepEqual rather than maps.Equal: the argv is a list, and a
-	// header carrying one is the one shape maps.Equal cannot compare.
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("run.yaml = %v, want %v", got, want)
-	}
-	line := lines(t, filepath.Join(l.Dir(), linesFile))[0]
-	if line["backend"] != "harness" || line["harness"] != "mine" || line["harness_layer"] != "repository" || line["model"] != "judge" {
-		t.Errorf("the line = %v, want what answered it", line)
-	}
-
-	// A resume on the provider back end: the header keeps the harness run's
-	// opening, and the line this invocation appends names the provider.
-	back := reopened(t, dir)
-	if err := back.Append(node(kb.NodeKindClaim, "clm-2"), Entry{Status: StatusDone, Value: "0.6", Model: "small"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := back.Close(); err != nil {
-		t.Fatal(err)
-	}
-	second := lines(t, filepath.Join(l.Dir(), linesFile))[1]
-	if second["backend"] != "provider" || second["harness"] != nil || second["harness_layer"] != nil {
-		t.Errorf("the resumed line = %v, want the back end that asked it and no harness", second)
-	}
-	b, err = os.ReadFile(filepath.Join(l.Dir(), runFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := yaml.Unmarshal(b, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["harness"] != "mine" {
+	if got["backend"] != "provider" || got["provider"] != "local" || got["model"] != "small" {
 		t.Errorf("run.yaml = %v, want the run's opening left as it was written", got)
 	}
 }
@@ -369,7 +363,7 @@ func TestResumeReadsTheLastStatusPerItem(t *testing.T) {
 	if err := l.Append(claim, failed); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Append(claim, Entry{Status: StatusDone, Value: "0.75"}); err != nil {
+	if err := l.Append(claim, Entry{Status: StatusDone, Value: "0.85"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Close(); err != nil {
@@ -396,7 +390,7 @@ func TestLastIsTheLastLinesEntry(t *testing.T) {
 	if err := l.Append(claim, Entry{Status: StatusFailed, Reply: "the register refused it", Model: "small", PromptSHA256: "aa"}); err != nil {
 		t.Fatal(err)
 	}
-	want := Entry{Status: StatusDone, Value: "0.6", Faults: []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "A span", Offset: 4}},
+	want := Entry{Status: StatusDone, Value: "0.85", Faults: []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "A span", Offset: 4}},
 		Reply: "flt-overreach: A span", Model: "small", PromptSHA256: "bb"}
 	if err := l.Append(claim, want); err != nil {
 		t.Fatal(err)
@@ -432,10 +426,10 @@ func TestResumeAfterAnUpdateContinues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			l := kept(t, dir)
-			// One overreach is what the running table gives 0.6, so the resume
+			// One overreach is what the running table gives 0.85, so the resume
 			// moves no value: this case is the ask alone.
 			first := node(kb.NodeKindClaim, "clm-1")
-			if err := l.Append(first, landedEntry("0.6", kb.FaultOverreach)); err != nil {
+			if err := l.Append(first, landedEntry("0.85", kb.FaultOverreach)); err != nil {
 				t.Fatal(err)
 			}
 			if err := l.Close(); err != nil {
@@ -463,14 +457,14 @@ func TestResumeAfterAnUpdateContinues(t *testing.T) {
 				t.Errorf("the landed item = %q, want %q: the resume read the run back", got, StatusDone)
 			}
 			next := node(kb.NodeKindClaim, "clm-2")
-			if err := back.Append(next, Entry{Status: StatusDone, Value: "0.95", Reply: "none"}); err != nil {
+			if err := back.Append(next, Entry{Status: StatusDone, Value: "1.0", Reply: "none"}); err != nil {
 				t.Fatalf("the resumed run does not go on: %v", err)
 			}
 			if err := back.Close(); err != nil {
 				t.Fatal(err)
 			}
 			lines := lines(t, filepath.Join(l.Dir(), linesFile))
-			if len(lines) != 2 || lines[1]["value"] != "0.95" {
+			if len(lines) != 2 || lines[1]["value"] != "1.0" {
 				t.Errorf("the ledger = %v, want the resumed item recorded behind the run's own", lines)
 			}
 			// The digest is the record of what the run's judgements answered:
@@ -511,7 +505,7 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	if err := l.Append(stale, moved); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Append(node(kb.NodeKindClaim, "clm-2"), landedEntry("0.7", kb.FaultEquivocation)); err != nil {
+	if err := l.Append(node(kb.NodeKindClaim, "clm-2"), landedEntry("0.85", kb.FaultEquivocation)); err != nil {
 		t.Fatal(err)
 	}
 	oldTable := node(kb.NodeKindClaim, "clm-3")
@@ -529,20 +523,20 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	landed, land := landingOn(nil)
 	back := resumed(t, dir, land)
 	defer back.Close()
-	if got, _ := back.Last(stale); got.Value != "0.6" {
-		t.Errorf("the re-derived value = %q, want the table's 0.6 for one overreach", got.Value)
+	if got, _ := back.Last(stale); got.Value != "0.85" {
+		t.Errorf("the re-derived value = %q, want the table's 0.85 for one overreach", got.Value)
 	}
-	if got, _ := back.Last(node(kb.NodeKindClaim, "clm-2")); got.Value != "0.7" {
-		t.Errorf("a line whose value stood = %q, want 0.7", got.Value)
+	if got, _ := back.Last(node(kb.NodeKindClaim, "clm-2")); got.Value != "0.85" {
+		t.Errorf("a line whose value stood = %q, want 0.85", got.Value)
 	}
-	if got, _ := back.Last(oldTable); got.Value != "0.95" {
-		t.Errorf("the line the old table priced = %q, want the claim's own table's 0.95", got.Value)
+	if got, _ := back.Last(oldTable); got.Value != "1.0" {
+		t.Errorf("the line the old table priced = %q, want the claim's own table's 1.0", got.Value)
 	}
 	// The values the tables moved reached the write the run lands through, in
 	// the order the lines stand.
 	wantLandings := []landing{
-		{item: node(kb.NodeKindClaim, "clm-1"), value: "0.6"},
-		{item: node(kb.NodeKindClaim, "clm-3"), value: "0.95"},
+		{item: node(kb.NodeKindClaim, "clm-1"), value: "0.85"},
+		{item: node(kb.NodeKindClaim, "clm-3"), value: "1.0"},
 	}
 	if !reflect.DeepEqual(*landed, wantLandings) {
 		t.Errorf("the re-pricing landed %+v, want %+v", *landed, wantLandings)
@@ -566,8 +560,8 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []rePricedLine{
-		{Item: "clm-1", From: "0.30", To: "0.6"},
-		{Item: "clm-3", From: "0.65", To: "0.95"},
+		{Item: "clm-1", From: "0.30", To: "0.85"},
+		{Item: "clm-3", From: "0.65", To: "1.0"},
 	}
 	if got.Run != "run-1" || !slices.Equal(got.Moved, want) {
 		t.Errorf("the record = %+v, want run-1 with %+v", got, want)
@@ -605,7 +599,7 @@ func TestResumeRepriceFailsWhereTheWriteIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, refused := landingOn(errors.New("the register is read-only"))
-	_, err := Resume(dir, header(), refused)
+	_, err := Resume(dir, header(), refused, nil)
 	if err == nil || !strings.Contains(err.Error(), "re-price clm-1") || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("Resume over a refused re-price = %v, want the item and the write's reason", err)
 	}
@@ -615,6 +609,36 @@ func TestResumeRepriceFailsWhereTheWriteIsRefused(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(l.Dir(), repricedFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a failed re-price recorded a move: %v", err)
+	}
+}
+
+// TestResumeLeavesASkippedItemUnrepriced: a landed line whose item the resume
+// skips — its value marked manually scored since it landed — is not re-derived:
+// nothing lands on it and its line keeps its value, while a line beside it the
+// table contradicts still moves.
+func TestResumeLeavesASkippedItemUnrepriced(t *testing.T) {
+	dir := t.TempDir()
+	l := kept(t, dir)
+	manual, model := node(kb.NodeKindClaim, "clm-1"), node(kb.NodeKindClaim, "clm-2")
+	for _, it := range []query.Item{manual, model} {
+		if err := l.Append(it, landedEntry("0.30", kb.FaultOverreach)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	landed, land := landingOn(nil)
+	back, err := Resume(dir, header(), land, func(it query.Item) bool { return itemKey(it) == itemKey(manual) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	if want := []landing{{item: model, value: "0.85"}}; !reflect.DeepEqual(*landed, want) {
+		t.Errorf("the re-pricing landed %+v, want %+v alone", *landed, want)
+	}
+	if got, _ := back.Last(manual); got.Value != "0.30" {
+		t.Errorf("the skipped item's line = %q, want the 0.30 it landed", got.Value)
 	}
 }
 
@@ -696,7 +720,7 @@ func TestResumeRefusesAnotherRun(t *testing.T) {
 		{"no run", RunHeader{Run: "run-9", KBRoot: "/repo/kb-root", Pass: query.PassRigor}, "is missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Resume(dir, tc.h, func(query.Item, kb.Bearing) error { return nil })
+			_, err := Resume(dir, tc.h, func(query.Item, kb.Bearing) error { return nil }, nil)
 			var ref result.Refusal
 			if !errors.As(err, &ref) {
 				t.Fatalf("Resume(%s) = %v, want a refusal", tc.name, err)
@@ -727,5 +751,131 @@ func TestDryRunWritesTheItemList(t *testing.T) {
 	if len(got) != 2 || got[0]["id"] != "clm-1" || got[1]["relation"] != kb.RelationSupports ||
 		got[0]["status"] != StatusPending || got[1]["status"] != StatusPending {
 		t.Errorf("items.jsonl = %v, want one pending line per item in set order", got)
+	}
+}
+
+// standing is one run directory a retention case stands before the prune: its
+// name, and its run.yaml's start — "" for a directory with no run.yaml,
+// "garbage" for one that does not read as a header.
+type standing struct{ name, started string }
+
+// series is n runs of kind, named in order and each started a minute after the
+// last from the minute at.
+func series(kind string, n, at int) []standing {
+	out := make([]standing, n)
+	for i := range out {
+		out[i] = standing{name: fmt.Sprintf("%s-%06d", kind, i), started: minute(at + i)}
+	}
+	return out
+}
+
+// minute is a start stamp m minutes into a fixed hour.
+func minute(m int) string {
+	return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC).Add(time.Duration(m) * time.Minute).Format(time.RFC3339)
+}
+
+// TestNewestRunOrdersEqualStartsAsThePruneDoes: of two runs recording the same
+// start, the newest is the later name — the one the prune keeps.
+func TestNewestRunOrdersEqualStartsAsThePruneDoes(t *testing.T) {
+	dir := t.TempDir()
+	for _, run := range []string{"run-aaaaaa", "run-bbbbbb"} {
+		h := header()
+		h.Run = run
+		l, err := Create(dir, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Close()
+	}
+	run, started, err := NewestRun(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != "run-bbbbbb" || started != header().Started {
+		t.Errorf("NewestRun = %s at %s, want run-bbbbbb at %s", run, started, header().Started)
+	}
+}
+
+// TestPruneRunsKeepsTheNewestOfEachKind: an invocation keeps the run it names and
+// the newest KeptRuns-1 others of its own kind, by run.yaml's start with equal
+// starts ordered by name, and removes the rest of that kind; another kind's runs
+// and a directory with no readable start stand.
+func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
+	tied := series("run", KeptRuns, 10)
+	tied[1].started = tied[0].started
+	for _, tc := range []struct {
+		name     string
+		standing []standing
+		keep     string
+		removed  []string
+	}{
+		{
+			name:     "a seventeenth real run removes the oldest real run",
+			standing: series("run", KeptRuns, 0),
+			keep:     "run-new",
+			removed:  []string{"run-000000"},
+		},
+		{
+			name:     "a seventeenth dry run removes the oldest dry run and no real run",
+			standing: append(series("run", KeptRuns, 0), series("dry", KeptRuns, 100)...),
+			keep:     "dry-new",
+			removed:  []string{"dry-000000"},
+		},
+		{
+			name:     "resuming the oldest of seventeen keeps it and removes the second-oldest",
+			standing: series("run", KeptRuns+1, 0),
+			keep:     "run-000000",
+			removed:  []string{"run-000001"},
+		},
+		{
+			name:     "equal starts prune the earlier name",
+			standing: tied,
+			keep:     "run-new",
+			removed:  []string{"run-000000"},
+		},
+		{
+			name: "a directory without a readable run.yaml stands",
+			standing: append(series("run", KeptRuns, 10),
+				standing{name: "run-absent"}, standing{name: "run-garbage", started: "garbage"}),
+			keep:    "run-new",
+			removed: []string{"run-000000"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, s := range tc.standing {
+				run := filepath.Join(RunsDir(dir), s.name)
+				switch s.started {
+				case "":
+					if err := os.MkdirAll(run, 0o777); err != nil {
+						t.Fatal(err)
+					}
+				case "garbage":
+					if err := os.MkdirAll(run, 0o777); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(run, runFile), []byte("started: [not a stamp\n"), 0o666); err != nil {
+						t.Fatal(err)
+					}
+				default:
+					h := header()
+					h.Run, h.Started = s.name, s.started
+					l, err := Create(dir, h)
+					if err != nil {
+						t.Fatal(err)
+					}
+					l.Close()
+				}
+			}
+			if err := PruneRuns(dir, tc.keep); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tc.standing {
+				_, err := os.Stat(filepath.Join(RunsDir(dir), s.name))
+				if gone := errors.Is(err, os.ErrNotExist); gone != slices.Contains(tc.removed, s.name) {
+					t.Errorf("%s removed %v, want %v", s.name, gone, !gone)
+				}
+			}
+		})
 	}
 }

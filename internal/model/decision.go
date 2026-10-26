@@ -64,7 +64,7 @@ type DecisionResponse struct {
 // StatusError. There is no streaming and no ErrChatIncomplete path — the
 // re-issue loop is this method's own, not Chat's. A cancelled ctx returns its
 // error at once.
-func (c *HTTPClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (c *OpenAIClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
 	if c.endpoint.BaseURL == "" {
 		return DecisionResponse{}, fmt.Errorf("endpoint BaseURL is empty")
 	}
@@ -100,7 +100,7 @@ func (c *HTTPClient) Decision(ctx context.Context, req DecisionRequest) (Decisio
 // decisionOnce is one POST of the pre-encoded body to the surface's path. A
 // transport failure, an undecodable body and a non-2xx all surface as errors;
 // the retry loop above decides which of them deserve a re-issue.
-func (c *HTTPClient) decisionOnce(ctx context.Context, surface decisionSurface, body []byte) (DecisionResponse, error) {
+func (c *OpenAIClient) decisionOnce(ctx context.Context, surface decisionSurface, body []byte) (DecisionResponse, error) {
 	resp, err := c.doRequest(ctx, http.MethodPost, surface.path, mimeJSON, body)
 	if err != nil {
 		return DecisionResponse{}, err

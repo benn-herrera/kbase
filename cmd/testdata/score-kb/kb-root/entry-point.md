@@ -1,8 +1,3 @@
----
-kind: entry-point
-kb-format: "2.0.0"
----
-
 # KB
 
 - [The First Result](a.md)

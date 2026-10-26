@@ -100,7 +100,7 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs := map[string]string{OverviewFile: readme}
-	for _, name := range readinessDocs {
+	for _, name := range kb.StampedFiles {
 		docs[name] = readFile(t, filepath.Join(root, name))
 	}
 	for name, text := range docs {
@@ -113,6 +113,15 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 	}
 	if !strings.Contains(docs[ConventionsFile], "`claim`, `analysis`") {
 		t.Error("CONVENTIONS.md does not name the node kinds")
+	}
+}
+
+// The session rule reaches a session as plain text on the MCP wire, so it
+// holds no Markdown.
+func TestSessionRuleHoldsNoMarkdown(t *testing.T) {
+	rule := SessionRule()
+	if i := strings.IndexAny(rule, "`*_[#"); i >= 0 {
+		t.Errorf("the session rule holds the Markdown character %q", rule[i])
 	}
 }
 

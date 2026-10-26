@@ -4,20 +4,25 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 )
 
-// Kinds of dead link: a target inside the repository, or one that escapes it.
+// Kinds of dead link: a target inside the repository, one that escapes it, and
+// a register page's fragment naming no entry derived for that page.
 const (
-	BrokenIntra = "broken intra"
-	BrokenInter = "broken inter"
+	BrokenIntra    = "broken intra"
+	BrokenInter    = "broken inter"
+	BrokenFragment = "broken fragment"
 )
 
-// DeadLink is one link whose target names no file.
+// DeadLink is one link whose target names no file, or no entry of the register
+// page it names.
 type DeadLink struct {
 	// File is the document holding the link, relative to the scanned root.
 	File   string
@@ -42,14 +47,17 @@ var schemeRE = regexp.MustCompile(`(?i)^(?:[a-z][a-z0-9+.\-]*:)?//|^(?:https?|ma
 // code and maths spans and fenced blocks are not links. kb-root is its own
 // repository: a target escaping it is broken inter.
 func DeadLinks(src *Source) ([]DeadLink, error) {
-	return DeadLinksIn(src, src.Root())
+	return DeadLinksIn(src, src.Root(), nil)
 }
 
 // DeadLinksIn is DeadLinks over the KB's files, each target judged against
 // repo, a directory at or above kb-root: broken intra where it lies under
 // repo, broken inter only where it escapes it, and spelled as written below
-// repo.
-func DeadLinksIn(src *Source, repo string) ([]DeadLink, error) {
+// repo. pages, where it is not nil, is every register page by kb-root-relative
+// slash path and the slugs of the entries derived for it, none for a page no
+// longer called for: a link that reaches a page's file and carries a fragment
+// none of its slugs is, is broken fragment.
+func DeadLinksIn(src *Source, repo string, pages map[string][]string) ([]DeadLink, error) {
 	root := src.Root()
 	repo, err := filepath.Abs(repo)
 	if err != nil {
@@ -87,11 +95,13 @@ func DeadLinksIn(src *Source, repo string) ([]DeadLink, error) {
 				if err != nil {
 					return nil, err
 				}
-				if found {
-					continue
-				}
 				kind := BrokenIntra
-				if !Within(repo, resolved) {
+				switch {
+				case found && !brokenFragment(raw, resolved, root, pages):
+					continue
+				case found:
+					kind = BrokenFragment
+				case !Within(repo, resolved):
 					kind = BrokenInter
 				}
 				dead = append(dead, DeadLink{File: filepath.ToSlash(rel), Line: n + 1, Kind: kind, Target: raw, Resolved: resolved})
@@ -99,6 +109,25 @@ func DeadLinksIn(src *Source, repo string) ([]DeadLink, error) {
 		}
 	}
 	return dead, nil
+}
+
+// brokenFragment is whether the link raw, its file resolved under kb-root at
+// root, reaches a page of pages through a fragment that names none of its
+// slugs.
+func brokenFragment(raw, resolved, root string, pages map[string][]string) bool {
+	_, fragment, ok := strings.Cut(unwrapTarget(raw), "#")
+	if !ok || !Within(root, resolved) {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return false
+	}
+	slugs, isPage := pages[filepath.ToSlash(rel)]
+	if decoded, err := url.PathUnescape(fragment); err == nil {
+		fragment = decoded
+	}
+	return isPage && !slices.Contains(slugs, fragment)
 }
 
 // rawTargets are the destinations a line declares, inline and by definition.

@@ -1,0 +1,31 @@
+- id: "ana-aaaaaa"
+  title: "A Supporting Argument"
+  rigor: 0.65
+  manually-scored: false
+  rationale: "The argument carries the trial's result to the second result."
+  no-edge: ""
+- id: "axm-S1"
+  title: "Conservation Of Stock"
+- id: "clm-aaaaaa"
+  title: "The First Result"
+  rigor: 0.6
+  manually-scored: false
+  rationale: "Read off the leaf's own statement."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbbbbb"
+  title: "The Second Result"
+  rigor: 0.55
+  manually-scored: false
+  rationale: "Clears where the first result holds and the cited work applies."
+  no-edge: ""
+  strengthen-by: []
+- id: "exp-aaaaaa"
+  title: "A Trial Run"
+  status: "run"
+  rigor: 0.8
+  manually-scored: false
+- id: "wrk-aaaaaa"
+  title: "Smith, A. 2020. *Markets and Clearing*"
+  rigor: 0.9
+  rationale: "Fixture Press."

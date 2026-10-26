@@ -31,13 +31,12 @@ const (
 func seedCullStage(t *testing.T, reader asks.LetterReader) (string, string, Options) {
 	t.Helper()
 	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
-	root, repo, opts := seedTheoremLeaf(t, []string{cullA, cullB, cullD},
+	root, repo, opts := seedTheoremLeaf(t, map[string]string{cullA: "Result A", cullB: "Result B", cullD: "Theorem 1"},
 		"Alpha holds here."+m(cullA)+"\n\nAlpha holds here, said again."+m(cullB)+"\n\n"+
-			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(cullD)+"\n",
-		registerQuality(cullA, "Result A")+registerQuality(cullB, "Result B")+registerQuality(cullD, "Theorem 1"))
+			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(cullD)+"\n")
 	yes := asks.LetterPoints
 	if err := WriteUnmarked(repo, buildrecords.UnmarkedRecord{Pairs: []buildrecords.CandidateEntry{
-		{Source: cullB, Target: cullD, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: ClassifyAnswered},
+		{Source: cullB, Target: cullD, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: string(asks.Answered)},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,40 +44,32 @@ func seedCullStage(t *testing.T, reader asks.LetterReader) (string, string, Opti
 	return root, repo, opts
 }
 
-// seedTheoremLeaf writes a KB whose one leaf, cullLeaf, hosts claims and
-// holds body, its one block a Theorem, beside a register holding register, a
-// docgraph record of that block and the node pass landed. It returns the
-// kb-root, the repository root and the stage's options with no reader.
-func seedTheoremLeaf(t *testing.T, claims []string, body, register string) (string, string, Options) {
+// seedTheoremLeaf writes a KB whose one leaf, cullLeaf, holds body, its one
+// block a Theorem, beside a claim record per id of titles, a docgraph record
+// of that block — and of each further record extra names — and the node pass
+// landed. It returns the kb-root, the repository root and the stage's options
+// with no reader.
+func seedTheoremLeaf(t *testing.T, titles map[string]string, body string, extra ...records.Record) (string, string, Options) {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), kb.KBDir)
+	root := seedKB(t, "# Entry\n\n- [V](v/index.md)\n", map[string]string{
+		"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [Leaf](leaf.md)\n",
+		cullLeaf:     "[↑ V](index.md)\n\n# Leaf\n\n" + body,
+	}, kb.Graph{Claims: claimRecords(titles)})
 	repo := filepath.Dir(root)
-	for rel, text := range map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
-		"v/index.md":      "---\nkind: index\n---\n[↑ Entry](../entry-point.md)\n\n# V\n\n- [Leaf](leaf.md)\n",
-		cullLeaf:          "---\nkind: leaf\nclaims: [" + strings.Join(claims, ", ") + "]\n---\n[↑ V](index.md)\n\n# Leaf\n\n" + body,
-		kb.RegisterFile:   "# Register\n\n" + register,
-	} {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, rel), []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Join(root, kb.IndexDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	state := t.TempDir()
 	recordsPath := filepath.Join(state, "records", "docgraph.jsonl")
 	if err := os.MkdirAll(filepath.Dir(recordsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	block, err := json.Marshal(records.Record{Kind: records.KindBlock, Order: 1, Document: cullLeaf, Name: "Theorem"})
-	if err != nil {
-		t.Fatal(err)
+	var lines []byte
+	for _, r := range append([]records.Record{{Kind: records.KindBlock, Order: 1, Document: cullLeaf, Name: "Theorem"}}, extra...) {
+		line, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(append(lines, line...), '\n')
 	}
-	if err := os.WriteFile(recordsPath, append(block, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(recordsPath, lines, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteNodePass(repo, buildrecords.NodePassRecord{Leaves: map[string]buildrecords.LeafEntry{cullLeaf: {State: ReadLanded}}}); err != nil {
@@ -120,15 +111,15 @@ func readCullRecord(t *testing.T, repo string) buildrecords.CullRecord {
 }
 
 // TestCulledCullsAndRepoints: B, shown second, adds nothing to A, so B is
-// culled into A — its entry, marker and claims id gone — and its unmarked
-// link to D is re-pointed onto A in the record, with no edge written.
+// culled into A — its record and its marker gone — and its unmarked link to D
+// is re-pointed onto A in the record, with no edge written.
 func TestCulledCullsAndRepoints(t *testing.T) {
 	root, repo, opts := seedCullStage(t, answeringItem(cullB, asks.LetterSecondAddsNothing))
 	report, err := Culled(context.Background(), opts)
 	requireStagePassed(t, report, err)
 
-	for _, rel := range []string{kb.RegisterFile, cullLeaf} {
-		text, err := kb.OnDisk(root).ReadText(filepath.Join(root, rel))
+	for _, rel := range []string{kb.GraphNodesFile, cullLeaf} {
+		text, err := kb.OnDisk(root).ReadText(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,12 +127,8 @@ func TestCulledCullsAndRepoints(t *testing.T) {
 			t.Errorf("%s still names B:\n%s", rel, text)
 		}
 	}
-	edges, err := capturedEdges(root, log.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(edges) != 0 {
-		t.Errorf("the cull wrote depends edges %v, want none", edges)
+	if g := loadRecords(t, root); len(g.Scorable)+len(g.References) != 0 {
+		t.Errorf("the cull wrote edges %+v %+v, want none", g.Scorable, g.References)
 	}
 
 	rec := readCullRecord(t, repo)
@@ -169,12 +156,8 @@ func TestCulledDefaultedAskKeeps(t *testing.T) {
 	report, err := Culled(context.Background(), opts)
 	requireStagePassed(t, report, err)
 
-	register, err := kb.OnDisk(root).ReadText(filepath.Join(root, kb.RegisterFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(register, "<!-- id: "+cullB+" -->") {
-		t.Errorf("B's entry did not stand:\n%s", register)
+	if g := loadRecords(t, root); !slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == cullB }) {
+		t.Errorf("B's record did not stand: %+v", g.Claims)
 	}
 	rec := readCullRecord(t, repo)
 	want := buildrecords.CullEntry{A: cullA, B: cullB, Pass: 1, Verdict: buildrecords.VerdictDistinct, Outcome: string(asks.Defaulted)}

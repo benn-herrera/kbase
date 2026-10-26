@@ -1,0 +1,10 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "experiment"
+    id: "exp-aaa008"
+    title: "Flow simulation"
+    canonical_path: "alpha/experiments/flow.md"
+    canonical_anchor: "flow-simulation"
+    status: "run"
+    rigor: 0.8

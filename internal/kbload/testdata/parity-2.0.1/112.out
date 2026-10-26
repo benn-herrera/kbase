@@ -1,0 +1,46 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    claims: 9
+    analyses: 1
+    experiments: 1
+    axioms: 2
+    works: 1
+    edges: 18
+    demoted_edges: 2
+    strengthen_by_items: 0
+    citation_edges: 5
+    subtree_aggregates: 4
+    strength_bands:
+        ok to build on: 3
+        ok to build on, see caveats: 1
+        use as input only: 1
+        do not build on, rework needed: 1
+        unsubstantiated: 2
+        '*pending*': 1
+    highest_leverage: []
+    weakest:
+        - id: "clm-aaa005"
+          strength: 0.0
+          title: "An isolated $`\\Gamma`$-observation nothing cites"
+        - id: "clm-aaa006"
+          strength: 0.0
+          title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+        - id: "clm-aaa004"
+          strength: 0.4
+          title: "A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut"
+        - id: "clm-aaa003"
+          strength: 0.6
+          title: "The gradient $`\\nabla f`$ is \"bounded\" when a < b & c"
+        - id: "clm-bbb002"
+          strength: 0.66
+          title: "The governance bifurcation"
+        - id: "clm-bbb001"
+          strength: 0.88
+          title: "Test example 2"
+        - id: "clm-aaa001"
+          strength: 0.9
+          title: "Theorem 1"
+        - id: "clm-aaa002"
+          strength: 0.95
+          title: "Equation (`eq:flow`) — Flow Dynamics"

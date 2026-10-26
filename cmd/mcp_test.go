@@ -17,15 +17,19 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
 
-	"kbase/internal/build"
+	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
+	"kbase/internal/mcp/protocol"
+	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 	"kbase/internal/write"
@@ -79,22 +83,13 @@ func gitRepo(t *testing.T, repo string) {
 	writeValues(t, filepath.Join(repo, ".git"), "HEAD", "ref: refs/heads/main\n")
 }
 
-// testServer is a server a test drives: the tool table, the resources, the
-// subscription, and the instructions the server reports at initialize.
-type testServer struct {
-	tools        []mcp.Tool
-	resources    mcp.Resources
-	subscription *mcp.Subscription
-	instructions string
-}
-
 // mcpServer stages the results fixture KB with the transcripts' seed values
 // written — two claims alike but for their ids, so a page of them reads the
 // same whichever id is minted lower — and returns the server over it and the
 // transcripts' placeholders: ${KB_ROOT}, ${REPO} (the repository holding it),
 // ${STATE_DIR} (an empty state store beside it), ${VERSION}, and ${ID1},
 // ${ID2} for the seeded claims' ids, in id order.
-func mcpServer(t *testing.T) (testServer, *strings.Replacer) {
+func mcpServer(t *testing.T) (mcp.Server, *strings.Replacer) {
 	t.Helper()
 	repo, err := filepath.EvalSymlinks(stageRepo(t, resultsFixture))
 	if err != nil {
@@ -111,7 +106,7 @@ func mcpServer(t *testing.T) (testServer, *strings.Replacer) {
 	}
 	var out bytes.Buffer
 	code, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: filepath.Join(mcpTranscriptDir, "seed.yaml"),
-		Create: true, Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
+		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
 	var inserted struct {
 		KBRoot string   `yaml:"kb-root"`
 		IDs    []string `yaml:"ids"`
@@ -120,27 +115,21 @@ func mcpServer(t *testing.T) (testServer, *strings.Replacer) {
 		t.Fatalf("staging insert: exit %d, %v\n%s", code, err, out.String())
 	}
 	kbRoot := filepath.Join(repo, "kb-root")
-	launch := &buildLaunch{served: kbRoot}
-	tools, err := mcpTools(rootCmd, kbRoot, &bytes.Buffer{}, log.Discard(), launch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	instructions, err := servedInstructions(kbRoot)
-	if err != nil {
+	srv := servedServer(rootCmd, kbRoot, &bytes.Buffer{}, log.Discard())
+	if srv.Instructions, err = mcp.ServedInstructions(kbRoot); err != nil {
 		t.Fatal(err)
 	}
 	slices.Sort(inserted.IDs)
-	return testServer{tools: tools, resources: servedResources(kbRoot, launch), instructions: instructions,
-			subscription: buildSubscription(launch, log.Discard())},
+	return srv,
 		strings.NewReplacer("${KB_ROOT}", jsonText(t, inserted.KBRoot), "${REPO}", jsonText(t, repo),
 			"${STATE_DIR}", jsonText(t, filepath.Join(base, "state")), "${VERSION}", jsonText(t, version.Current),
 			"${ID1}", inserted.IDs[0], "${ID2}", inserted.IDs[1])
 }
 
-func serveLines(t *testing.T, srv testServer, requests []string) []string {
+func serveLines(t *testing.T, srv mcp.Server, requests []string) []string {
 	t.Helper()
 	var out bytes.Buffer
-	if err := mcp.Serve(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out, version.Current, srv.instructions, srv.tools, srv.resources, srv.subscription, log.Discard()); err != nil {
+	if err := srv.Serve(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out); err != nil {
 		t.Fatal(err)
 	}
 	var lines []string
@@ -247,15 +236,22 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 	// command.
 	want := []string{listedToolName}
 	readOnly := []string{listedToolName}
+	// The tree is walked as Execute leaves it, so the commands cobra adds of
+	// its own are held to the same declaration as the rest.
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.InitDefaultCompletionCmd()
 	for _, c := range rootCmd.Commands() {
-		switch binding := c.Annotations[mcpAnnotation]; {
-		case binding == mcpBound:
+		switch c.Annotations[mcp.BindingAnnotation] {
+		case mcp.Bound:
 			want = append(want, c.Name())
-		case binding == mcpExcluded, c.Name() == "help", c.Name() == "completion":
+		case mcp.Excluded:
+			if strings.TrimSpace(c.Annotations[mcp.ExclusionReasonAnnotation]) == "" {
+				t.Errorf("%s is excluded with no reason: give cliOnly its reason where %s adds it", c.Name(), registrationFile)
+			}
 		default:
-			t.Errorf("%s declares no MCP binding: mcpBinding it %s or %s where it is added", c.Name(), mcpBound, mcpExcluded)
+			t.Errorf("%s declares no MCP binding: wrap it readOnlyTool, readWriteTool or cliOnly where %s adds it", c.Name(), registrationFile)
 		}
-		if c.Annotations[readOnlyAnnotation] == "true" {
+		if c.Annotations[mcp.ReadOnlyAnnotation] == "true" {
 			readOnly = append(readOnly, c.Name())
 		}
 	}
@@ -286,19 +282,19 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 			if !strings.Contains(tool.Description, "read-only") {
 				t.Errorf("%s: description %q does not state that it is read-only", tool.Name, tool.Description)
 			}
-			if keys := slices.Sorted(maps.Keys(s.Properties)); !slices.Equal(keys, []string{stateDirFlag, "target"}) {
-				t.Errorf("%s: takes %v, want %s and target", tool.Name, keys, stateDirFlag)
+			if keys := slices.Sorted(maps.Keys(s.Properties)); !slices.Equal(keys, []string{"state-dir", "target"}) {
+				t.Errorf("%s: takes %v, want state-dir and target", tool.Name, keys)
 			}
 			continue
 		}
 		if cmd, _, err := rootCmd.Find([]string{tool.Name}); err != nil || tool.Description != cmd.Short {
 			t.Errorf("%s: description %q is not the command's Short", tool.Name, tool.Description)
-		} else if declared, err := declaredPositionals(cmd); err != nil {
+		} else if declared, err := mcp.DeclaredPositionals(cmd); err != nil {
 			t.Error(err)
 		} else {
 			for _, p := range declared {
-				if !slices.Contains(s.Required, p.name) {
-					t.Errorf("%s: positional %q is not required", tool.Name, p.name)
+				if !slices.Contains(s.Required, p.Name) {
+					t.Errorf("%s: positional %q is not required", tool.Name, p.Name)
 				}
 			}
 		}
@@ -306,24 +302,97 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 	slices.Sort(want)
 	slices.Sort(names)
 	if !slices.Equal(names, want) {
-		t.Errorf("tools %v, want the commands declared %s: %v", names, mcpBound, want)
+		t.Errorf("tools %v, want the commands declared %s: %v", names, mcp.Bound, want)
 	}
 	slices.Sort(gotReadOnly)
 	slices.Sort(readOnly)
 	if !slices.Equal(gotReadOnly, readOnly) {
-		t.Errorf("read-only tools %v, want the commands declaring %s: %v", gotReadOnly, readOnlyAnnotation, readOnly)
+		t.Errorf("read-only tools %v, want the commands declaring %s: %v", gotReadOnly, mcp.ReadOnlyAnnotation, readOnly)
 	}
+}
+
+// TestMCPRequiredFlags: a tool's schema requires its positionals and no flag —
+// score's --pass among them, a run walking both passes unless it is told
+// otherwise — and every flag still stands as an optional property carrying its
+// usage as its description.
+func TestMCPRequiredFlags(t *testing.T) {
+	tools := map[string]listedTool{}
+	for _, tool := range listTools(t) {
+		tools[tool.Name] = tool
+	}
+	required := func(t *testing.T, tool string) []string {
+		t.Helper()
+		listed, ok := tools[tool]
+		if !ok {
+			t.Fatalf("no %s tool", tool)
+		}
+		return slices.Sorted(slices.Values(listed.InputSchema.Required))
+	}
+	for _, c := range []struct {
+		name, tool string
+		want       []string
+	}{
+		{"flags alone, none of them required", "score", nil},
+		{"flags and a positional", "find", []string{"query"}},
+		{"flags and no positional", "status", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := required(t, c.tool); !slices.Equal(got, c.want) {
+				t.Errorf("%s: required %v, want %v", c.tool, got, c.want)
+			}
+		})
+	}
+	t.Run("--pass is an optional property stating the default", func(t *testing.T) {
+		properties := tools["score"].InputSchema.Properties
+		property, ok := properties["pass"]
+		if !ok {
+			t.Fatalf("score: no pass property: %v", properties)
+		}
+		want := map[string]any{"type": "string", "description": scoreCmd.Flags().Lookup("pass").Usage}
+		for key, value := range want {
+			if got := property[key]; got != value {
+				t.Errorf("score: --pass %s %v, want %v", key, got, value)
+			}
+		}
+		if description, _ := property["description"].(string); !strings.Contains(description, query.PassBoth) {
+			t.Errorf("score: --pass description %q does not state the default %q", description, query.PassBoth)
+		}
+		if slices.Contains(tools["score"].InputSchema.Required, "pass") {
+			t.Error("score: --pass is required, which its verb does not refuse a run without")
+		}
+	})
+	t.Run("every flag not excluded from MCP derives", func(t *testing.T) {
+		properties := tools["score"].InputSchema.Properties
+		for _, name := range []string{"replay", "failed"} {
+			if _, ok := properties[name]; ok {
+				t.Errorf("score: the development flag --%s is a property of the tool", name)
+			}
+		}
+		var flags []string
+		scoreCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+			if f.Name == "help" || mcp.ExcludedFlag(f) {
+				return
+			}
+			flags = append(flags, f.Name)
+			if got := properties[f.Name]["description"]; got != f.Usage {
+				t.Errorf("score: --%s description %v, want its usage %q", f.Name, got, f.Usage)
+			}
+		})
+		slices.Sort(flags)
+		if got := slices.Sorted(maps.Keys(properties)); !slices.Equal(got, flags) {
+			t.Errorf("score: properties %v, want its flags %v", got, flags)
+		}
+	})
 }
 
 // TestMCPWriteOpSchemas reads each write op's vocabulary off its own
 // refusal — every key it allows, every required key it misses — and
-// requires the tool's schema to be exactly that, plus create where the op
-// takes --create.
+// requires the tool's schema to be exactly that.
 func TestMCPWriteOpSchemas(t *testing.T) {
 	const unknown = "not-a-values-key"
 	seen := 0
 	for _, tool := range listTools(t) {
-		if _, _, ok := write.OpVocabulary(tool.Name); !ok {
+		if _, ok := write.OpVocabulary(tool.Name); !ok {
 			continue
 		}
 		seen++
@@ -335,9 +404,6 @@ func TestMCPWriteOpSchemas(t *testing.T) {
 			} else {
 				required = append(required, r.Key)
 			}
-		}
-		if write.CreatesRegister(tool.Name) {
-			allowed = append(allowed, createArgument)
 		}
 		var keys []string
 		for k := range tool.InputSchema.Properties {
@@ -359,6 +425,41 @@ func TestMCPWriteOpSchemas(t *testing.T) {
 	}
 }
 
+// TestNoSurfaceNamesTheProvenanceOrCreate: who supplied a write's values is
+// write.Options.Provenance, set by kbase's own callers and never by a caller of
+// the surface, so no command flag and no tool property names it; and no write
+// op offers --create, as a flag or as its tool's create property.
+func TestNoSurfaceNamesTheProvenanceOrCreate(t *testing.T) {
+	const provenance, create = "provenance", "create"
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, fs := range []*pflag.FlagSet{c.Flags(), c.PersistentFlags()} {
+			fs.VisitAll(func(f *pflag.Flag) {
+				if strings.Contains(strings.ToLower(f.Name), provenance) {
+					t.Errorf("%s: flag --%s names the provenance", c.CommandPath(), f.Name)
+				}
+				if _, op := write.OpVocabulary(c.Name()); op && f.Name == create {
+					t.Errorf("%s: the write op offers --%s", c.CommandPath(), f.Name)
+				}
+			})
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
+	for _, tool := range listTools(t) {
+		for p := range tool.InputSchema.Properties {
+			if strings.Contains(strings.ToLower(p), provenance) {
+				t.Errorf("%s: tool property %s names the provenance", tool.Name, p)
+			}
+			if _, op := write.OpVocabulary(tool.Name); op && p == create {
+				t.Errorf("%s: the write op's tool carries %s", tool.Name, p)
+			}
+		}
+	}
+}
+
 // TestCommandsDeclarePositionals requires every command's usage line to
 // name exactly the positionals its argument check accepts.
 func TestCommandsDeclarePositionals(t *testing.T) {
@@ -366,12 +467,12 @@ func TestCommandsDeclarePositionals(t *testing.T) {
 		if c.Name() == "help" || c.Name() == "completion" {
 			continue
 		}
-		declared, err := declaredPositionals(c)
+		declared, err := mcp.DeclaredPositionals(c)
 		if err != nil {
 			t.Error(err)
 			continue
 		}
-		variadic := len(declared) > 0 && declared[len(declared)-1].variadic
+		variadic := len(declared) > 0 && declared[len(declared)-1].Variadic
 		for k := range len(declared) + 3 {
 			accepted := c.ValidateArgs(make([]string, k)) == nil
 			if want := k == len(declared) || variadic && k > len(declared); accepted != want {
@@ -383,7 +484,7 @@ func TestCommandsDeclarePositionals(t *testing.T) {
 
 // serveOne sends one request through the server and decodes its response's
 // result into result.
-func serveOne(t *testing.T, srv testServer, method string, params map[string]any, result any) {
+func serveOne(t *testing.T, srv mcp.Server, method string, params map[string]any, result any) {
 	t.Helper()
 	req, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
@@ -401,7 +502,7 @@ func serveOne(t *testing.T, srv testServer, method string, params map[string]any
 
 // callTool is one tools/call through the server: its structured content and
 // whether it is an error.
-func callTool(t *testing.T, srv testServer, name string, args map[string]any) (map[string]any, bool) {
+func callTool(t *testing.T, srv mcp.Server, name string, args map[string]any) (map[string]any, bool) {
 	t.Helper()
 	_, structured, isError := callToolResult(t, srv, name, args)
 	return structured, isError
@@ -409,7 +510,7 @@ func callTool(t *testing.T, srv testServer, name string, args map[string]any) (m
 
 // callToolResult is one tools/call through the server: the result's text, its
 // structured content and whether it is an error.
-func callToolResult(t *testing.T, srv testServer, name string, args map[string]any) (string, map[string]any, bool) {
+func callToolResult(t *testing.T, srv mcp.Server, name string, args map[string]any) (string, map[string]any, bool) {
 	t.Helper()
 	var result struct {
 		Content []struct {
@@ -465,12 +566,7 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	savedLevel, savedFile := flagLogLevel, flagLogFile
 	t.Cleanup(func() { flagLogLevel, flagLogFile = savedLevel, savedFile })
 	flagLogLevel, flagLogFile = "debug", filepath.Join(base, "build.log")
-	launch := &buildLaunch{served: repo}
-	tools, err := mcpTools(rootCmd, repo, &bytes.Buffer{}, log.Discard(), launch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := testServer{tools: tools}
+	srv := servedServer(rootCmd, repo, &bytes.Buffer{}, log.Discard())
 	state := filepath.Join(base, "state")
 	monitor := map[string]any{"state-dir": state}
 
@@ -485,7 +581,7 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantWait := build.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
+	wantWait := buildstore.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
 	if wait, _ := start["wait"].(string); wait != wantWait {
 		t.Errorf("build: wait = %q, want the exact command %q", wait, wantWait)
 	}
@@ -518,7 +614,7 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 	srv, _ := mcpServer(t)
 	// The server offers the sheets and the model guidance; this test is the
 	// sheets, which the guidance's own test leaves alone.
-	kbRoot := srv.resources.(resourceFamilies)[0].source.(sheetResources).dir
+	kbRoot := srv.Dir
 	var want []string
 	for _, pattern := range []string{"*.svg", "*/claim-graph.svg"} {
 		matches, err := filepath.Glob(filepath.Join(kbRoot, pattern))
@@ -538,12 +634,12 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 	}
 	slices.Sort(want)
 	var listed struct {
-		Resources []mcp.Resource `json:"resources"`
+		Resources []protocol.Resource `json:"resources"`
 	}
 	serveOne(t, srv, "resources/list", nil, &listed)
 	var got []string
 	for _, r := range listed.Resources {
-		if !strings.HasPrefix(r.URI, sheetURIPrefix) {
+		if !strings.HasPrefix(r.URI, mcp.SheetURIPrefix) {
 			continue
 		}
 		got = append(got, r.Name)
@@ -575,15 +671,18 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 // guidance readable.
 func TestMCPModelHintsResource(t *testing.T) {
 	srv, _ := mcpServer(t)
-	sheets := srv.resources.(resourceFamilies)[0].source.(sheetResources)
 
 	var listed struct {
-		Resources []mcp.Resource `json:"resources"`
+		Resources []protocol.Resource `json:"resources"`
 	}
 	serveOne(t, srv, "resources/list", nil, &listed)
-	onDisk, err := sheets.List()
-	if err != nil {
-		t.Fatal(err)
+	// The sheets listed, wherever they stand in the list; which sheets they
+	// are is TestMCPResourcesAreTheSheetsOnDisk's.
+	var onDisk []protocol.Resource
+	for _, r := range listed.Resources {
+		if strings.HasPrefix(r.URI, mcp.SheetURIPrefix) {
+			onDisk = append(onDisk, r)
+		}
 	}
 	if len(listed.Resources) != len(onDisk)+3 {
 		t.Fatalf("resources/list is %+v, want the %d sheets, the guidance, the trail and the build state", listed.Resources, len(onDisk))
@@ -591,13 +690,13 @@ func TestMCPModelHintsResource(t *testing.T) {
 	if !slices.Equal(listed.Resources[:len(onDisk)], onDisk) {
 		t.Errorf("the sheets list as %+v, want %+v", listed.Resources[:len(onDisk)], onDisk)
 	}
-	if got := listed.Resources[len(onDisk)]; got.URI != modelHintsURI || got.Name != "Model hints" || got.MimeType != "text/markdown" {
+	if got := listed.Resources[len(onDisk)]; got.URI != mcp.ModelHintsURI || got.Name != "Model hints" || got.MimeType != "text/markdown" {
 		t.Errorf("the guidance lists as %+v", got)
 	}
-	if got := listed.Resources[len(onDisk)+1]; got.URI != buildTrailURI || got.Name != "Build trail" || got.MimeType != "application/yaml" {
+	if got := listed.Resources[len(onDisk)+1]; got.URI != mcp.BuildTrailURI || got.Name != "Build trail" || got.MimeType != "application/yaml" {
 		t.Errorf("the build trail lists as %+v", got)
 	}
-	if got := listed.Resources[len(onDisk)+2]; got.URI != buildURI || got.Name != "Build state" || got.MimeType != "application/yaml" {
+	if got := listed.Resources[len(onDisk)+2]; got.URI != mcp.BuildURI || got.Name != "Build state" || got.MimeType != "application/yaml" {
 		t.Errorf("the build state lists as %+v", got)
 	}
 
@@ -606,10 +705,10 @@ func TestMCPModelHintsResource(t *testing.T) {
 			URI, MimeType, Text string
 		} `json:"contents"`
 	}
-	serveOne(t, srv, "resources/read", map[string]any{"uri": modelHintsURI}, &read)
-	if len(read.Contents) != 1 || read.Contents[0].URI != modelHintsURI ||
+	serveOne(t, srv, "resources/read", map[string]any{"uri": mcp.ModelHintsURI}, &read)
+	if len(read.Contents) != 1 || read.Contents[0].URI != mcp.ModelHintsURI ||
 		read.Contents[0].MimeType != "text/markdown" || read.Contents[0].Text != config.ModelHintsMarkdown() {
-		t.Errorf("%s reads back %+v", modelHintsURI, read.Contents)
+		t.Errorf("%s reads back %+v", mcp.ModelHintsURI, read.Contents)
 	}
 
 	var resp struct {
@@ -624,9 +723,18 @@ func TestMCPModelHintsResource(t *testing.T) {
 
 	// What a list holds where it lists no sheet: the guidance, then the trail,
 	// which reports the repository it cannot read, then the build's state.
-	want := []mcp.Resource{{URI: modelHintsURI, Name: "Model hints", MimeType: "text/markdown"},
-		{URI: buildTrailURI, Name: "Build trail", MimeType: "application/yaml"},
-		{URI: buildURI, Name: "Build state", MimeType: "application/yaml"}}
+	want := []protocol.Resource{{URI: mcp.ModelHintsURI, Name: "Model hints", MimeType: "text/markdown"},
+		{URI: mcp.BuildTrailURI, Name: "Build trail", MimeType: "application/yaml"},
+		{URI: mcp.BuildURI, Name: "Build state", MimeType: "application/yaml"}}
+	// listedBy is what a server's resources/list answers; a fault in the list
+	// is an error response, which fails the test.
+	listedBy := func(srv mcp.Server) []protocol.Resource {
+		var listed struct {
+			Resources []protocol.Resource `json:"resources"`
+		}
+		serveOne(t, srv, "resources/list", nil, &listed)
+		return listed.Resources
+	}
 
 	// A KB that exists but will not open: the sheet family refuses it, so that
 	// family lists nothing, while the composite lists around it rather than
@@ -636,12 +744,13 @@ func TestMCPModelHintsResource(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(broken, "kb-root"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if sheets, err := (sheetResources{broken}).List(); err == nil || sheets != nil {
-		t.Errorf("a KB that will not open: the sheet family listed %v, %v; want its refusal", sheets, err)
+	var refusal toolresult.Refusal
+	if src, err := servedKB(broken); !errors.As(err, &refusal) || src != nil {
+		t.Errorf("a KB that will not open: the sheet family opened %v, %v; want its refusal", src, err)
 	}
-	apart := servedResources(broken, &buildLaunch{served: broken})
-	if together, err := apart.List(); err != nil || !slices.Equal(together, want) {
-		t.Errorf("a KB that will not open: the composite listed %v, %v; want %v", together, err, want)
+	apart := servedServer(rootCmd, broken, &bytes.Buffer{}, log.Discard())
+	if together := listedBy(apart); !slices.Equal(together, want) {
+		t.Errorf("a KB that will not open: the composite listed %v; want %v", together, want)
 	}
 
 	// The guidance is still readable there: what it states needs no KB.
@@ -650,44 +759,17 @@ func TestMCPModelHintsResource(t *testing.T) {
 			URI, MimeType, Text string
 		} `json:"contents"`
 	}
-	serveOne(t, testServer{resources: apart}, "resources/read", map[string]any{"uri": modelHintsURI}, &guidance)
+	serveOne(t, apart, "resources/read", map[string]any{"uri": mcp.ModelHintsURI}, &guidance)
 	if len(guidance.Contents) != 1 || guidance.Contents[0].Text != config.ModelHintsMarkdown() {
-		t.Errorf("with a KB that will not open, %s reads back %+v", modelHintsURI, guidance.Contents)
+		t.Errorf("with a KB that will not open, %s reads back %+v", mcp.ModelHintsURI, guidance.Contents)
 	}
 
 	// A directory holding no KB lists no sheet and raises no fault: the
 	// guidance, and the trail, which reports the repository it cannot find,
 	// are what it lists.
 	nowhere := t.TempDir()
-	if together, err := servedResources(nowhere, &buildLaunch{served: nowhere}).List(); err != nil || !slices.Equal(together, want) {
-		t.Errorf("outside a KB the composite answered %v, %v; want %v", together, err, want)
-	}
-}
-
-// stubResources answers List with what a test supplies and reads nothing.
-type stubResources struct {
-	listed []mcp.Resource
-	err    error
-}
-
-func (s stubResources) List() ([]mcp.Resource, error) { return s.listed, s.err }
-
-func (s stubResources) Read(mcp.Resource) (string, error) { return "", nil }
-
-// TestResourceFamiliesListSkipsOnlyRefusals: a family refusing what it lists
-// from contributes no entries and leaves the rest listing, while any other
-// error is the list's and stops it.
-func TestResourceFamiliesListSkipsOnlyRefusals(t *testing.T) {
-	hints := []mcp.Resource{{URI: modelHintsURI}}
-	refusing := stubResources{err: toolresult.Refusal{{Check: checkKBRoot, Path: "kb-root"}}}
-	families := resourceFamilies{{source: refusing}, {source: stubResources{listed: hints}}}
-	if listed, err := families.List(); err != nil || !slices.Equal(listed, hints) {
-		t.Errorf("a refusing family: listed %v, %v; want %v", listed, err, hints)
-	}
-	failing := stubResources{err: errors.New("the KB's index is unreadable")}
-	families = resourceFamilies{{source: stubResources{listed: hints}}, {source: failing}}
-	if listed, err := families.List(); !errors.Is(err, failing.err) || listed != nil {
-		t.Errorf("a failing family: listed %v, %v; want its error and no list", listed, err)
+	if together := listedBy(servedServer(rootCmd, nowhere, &bytes.Buffer{}, log.Discard())); !slices.Equal(together, want) {
+		t.Errorf("outside a KB the composite answered %v; want %v", together, want)
 	}
 }
 
@@ -715,7 +797,7 @@ func trailRepo(t *testing.T) (string, string) {
 	}
 	var commit string
 	for _, id := range []string{"start", "document-graph"} {
-		s, ok := build.ResolveStage(id)
+		s, ok := buildstore.ResolveStage(id)
 		if !ok {
 			t.Fatalf("%q names no stage", id)
 		}
@@ -733,12 +815,7 @@ func trailRepo(t *testing.T) (string, string) {
 // refusal, and a dirty tree is reported rather than refused.
 func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 	repo, last := trailRepo(t)
-	launch := &buildLaunch{served: repo}
-	tools, err := mcpTools(rootCmd, repo, &bytes.Buffer{}, log.Discard(), launch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := testServer{tools: tools, resources: servedResources(repo, launch)}
+	srv := servedServer(rootCmd, repo, &bytes.Buffer{}, log.Discard())
 
 	doc, structured, isError := callToolResult(t, srv, listedToolName, map[string]any{})
 	if isError || structured["outcome"] != "done" || structured["head"] != last {
@@ -757,17 +834,17 @@ func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 			URI, MimeType, Text string
 		} `json:"contents"`
 	}
-	serveOne(t, srv, "resources/read", map[string]any{"uri": buildTrailURI}, &read)
-	if len(read.Contents) != 1 || read.Contents[0].URI != buildTrailURI ||
+	serveOne(t, srv, "resources/read", map[string]any{"uri": mcp.BuildTrailURI}, &read)
+	if len(read.Contents) != 1 || read.Contents[0].URI != mcp.BuildTrailURI ||
 		read.Contents[0].MimeType != "application/yaml" || read.Contents[0].Text != doc {
-		t.Errorf("%s reads back %+v, want the tool's document byte for byte", buildTrailURI, read.Contents)
+		t.Errorf("%s reads back %+v, want the tool's document byte for byte", mcp.BuildTrailURI, read.Contents)
 	}
 
 	var listed struct {
-		Resources []mcp.Resource `json:"resources"`
+		Resources []protocol.Resource `json:"resources"`
 	}
 	serveOne(t, srv, "resources/list", nil, &listed)
-	if len(listed.Resources) != 3 || listed.Resources[1].URI != buildTrailURI {
+	if len(listed.Resources) != 3 || listed.Resources[1].URI != mcp.BuildTrailURI {
 		t.Fatalf("resources/list is %+v, want the guidance, the build trail and the build state", listed.Resources)
 	}
 	if trail := listed.Resources[1]; trail.Name != "Build trail" || trail.MimeType != "application/yaml" {
@@ -861,10 +938,18 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 	for _, tool := range listTools(t) {
 		bound[tool.Name] = true
 	}
-	// Both names the strings use and the invariant exempts must be tools the
-	// table really holds, or the check below proves nothing.
-	if !bound["show-config"] || !bound["build"] {
-		t.Fatalf("the tool table holds neither build nor show-config: %v", bound)
+	// The instructions may name only what the server serves: a command the
+	// tree holds but the tool table does not is refused by name.
+	unserved := map[string]bool{}
+	for _, c := range rootCmd.Commands() {
+		if !bound[c.Name()] {
+			unserved[c.Name()] = true
+		}
+	}
+	// "build" is counted separately below, so it must be a served tool, and
+	// the table must be non-empty, or the check proves nothing.
+	if !bound["build"] || len(unserved) == 0 {
+		t.Fatalf("the tool table lacks build, or the tree holds no unserved command: bound %v unserved %v", bound, unserved)
 	}
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n"
 
@@ -930,8 +1015,8 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 					builds++
 					continue
 				}
-				if bound[token] && token != "show-config" {
-					t.Errorf("instructions %q name the tool %q", text, token)
+				if unserved[token] {
+					t.Errorf("instructions %q name the command %q, which the server does not serve", text, token)
 				}
 			}
 			if builds != tc.builds {

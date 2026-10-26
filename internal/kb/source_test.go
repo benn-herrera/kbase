@@ -26,7 +26,7 @@ func TestMigratedSourceReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	src := MigratedSource(root, UnstampedFormatVersion, map[string][]byte{
+	src := MigratedSource(root, "1.0.0", map[string][]byte{
 		"kb-root/a.md": []byte("---\nkind: leaf\n---\n"), "kb-root/.index/claims.yaml": []byte("--- {}\n"), "kb-build-node-pass.yaml": []byte("about: x\n"),
 	}, []string{"kb-root/.index/claims.jsonl", "kb-build-node-pass.json"})
 	for p, want := range map[string]string{
@@ -56,7 +56,7 @@ func TestMigratedSourceReads(t *testing.T) {
 	if got, _ := src.ReadText(filepath.Join(root, "b.md")); got != "put\n" {
 		t.Errorf("a Put file reads back as %q", got)
 	}
-	if !src.Migrated() || src.Version() != UnstampedFormatVersion {
+	if !src.Migrated() || src.Version() != "1.0.0" {
 		t.Errorf("Migrated %t at %s", src.Migrated(), src.Version())
 	}
 	src.Saved()

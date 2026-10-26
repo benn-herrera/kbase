@@ -462,3 +462,56 @@ apiKeyFile = "not-here.key"
 		}
 	}
 }
+
+// TestProviderValidateProtocols: `api` is a two-value field — openai, the
+// default, and anthropic, the Messages protocol — and an entry naming anything
+// else is refused listing both.
+func TestProviderValidateProtocols(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		api    string
+		wantOK bool
+	}{
+		{"openai", ProviderAPIOpenAI, true},
+		{"anthropic", ProviderAPIAnthropic, true},
+		{"normalized spelling", " Anthropic ", true},
+		{"neither", "grpc", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Provider{BaseURL: "http://x/v1", API: tc.api}
+			err := p.Validate()
+			if gotOK := err == nil; gotOK != tc.wantOK {
+				t.Fatalf("Validate() = %v, want ok = %t", err, tc.wantOK)
+			}
+			if !tc.wantOK {
+				for _, want := range []string{"grpc", ProviderAPIOpenAI, ProviderAPIAnthropic} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("refusal %q does not name %q", err, want)
+					}
+				}
+				return
+			}
+			if got, want := p.Protocol(), strings.ToLower(strings.TrimSpace(tc.api)); got != want {
+				t.Errorf("Protocol() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestLoadProvidersAdmitsAMessagesEntry: an `api = "anthropic"` entry is a
+// usable pool entry, not a value the loader drops.
+func TestLoadProvidersAdmitsAMessagesEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := writeProviders(t, dir, `
+[claude]
+baseUrl = "https://api.anthropic.example/v1"
+api = "anthropic"
+`)
+	got, faults, err := LoadProviders(path)
+	if err != nil || len(faults) != 0 {
+		t.Fatalf("LoadProviders = %v, %v; want the entry loaded", faults, err)
+	}
+	if entry, ok := got["claude"]; !ok || entry.Protocol() != ProviderAPIAnthropic {
+		t.Errorf("pool = %+v, want the anthropic entry", got)
+	}
+}

@@ -3,15 +3,12 @@ package sheet
 import (
 	"cmp"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 
-	"kbase/internal/asks"
-	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 )
 
@@ -26,7 +23,7 @@ const (
 )
 
 // mathInfo is the info string of a displayed equation's fence.
-const mathInfo = "math"
+const mathInfo = kb.DisplayMathInfo
 
 // rootTitleDefault is the root bucket's name where the entry point carries
 // no H1.
@@ -74,41 +71,9 @@ type graph struct {
 	edges []edge
 }
 
-// readIndex is every row of T's index file; a line that is not one is an
-// error naming the first.
-func readIndex[T kb.IndexRowType](src *kb.Source) ([]T, error) {
-	path, rows, problems, err := kb.ReadIndex[T](src, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(problems) > 0 {
-		return nil, fmt.Errorf("%s:%d: %w", path, problems[0].Line, problems[0].Err)
-	}
-	return rows, nil
-}
-
-// load reads the graph of the KB src reads.
-func load(src *kb.Source) (*graph, error) {
-	claims, err := readIndex[kb.NodeRow](src)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := readIndex[kb.EdgeRow](src)
-	if err != nil {
-		return nil, err
-	}
-	cites, err := readIndex[kb.CiteRow](src)
-	if err != nil {
-		return nil, err
-	}
-	unmarked, _, err := buildrecords.ReadUnmarked(src)
-	if err != nil {
-		return nil, err
-	}
-	cull, _, err := buildrecords.ReadCull(src)
-	if err != nil {
-		return nil, err
-	}
+// load reads the graph of the KB src reads, its nodes, edges and citations
+// those rows.
+func load(src *kb.Source, claims []kb.NodeRow, rows []kb.EdgeRow, cites []kb.CiteRow) (*graph, error) {
 	kbTitle, err := h1(src, kb.EntryPointFile)
 	if err != nil {
 		return nil, err
@@ -147,7 +112,7 @@ func load(src *kb.Source) (*graph, error) {
 		}
 		byID[c.ID] = n
 	}
-	g.edges = drawnEdges(rows, buildrecords.InferredLinks(unmarked, cull, asks.LetterPoints))
+	g.edges = drawnEdges(rows)
 	for _, e := range g.edges {
 		for _, end := range []string{e.source, e.target} {
 			if _, ok := byID[end]; !ok {
@@ -198,28 +163,15 @@ func h1(src *kb.Source, rel string) (string, error) {
 	return "", nil
 }
 
-// drawnEdges is the edge rows the sheet draws, one per source, target,
-// relation and origin whatever their context, ordered by those. A relation
-// with no stroke — references — is not drawn; a supports row is inferred where
-// inferred holds for it — the build found it with no mark — and a demoted row
-// where its origin says so.
-func drawnEdges(rows []kb.EdgeRow, inferred func(source, target string) bool) []edge {
-	seen := map[[4]string]bool{}
+// drawnEdges is the edge rows the sheet draws, one per source, target and
+// relation whatever their context, ordered by those. A relation with no
+// stroke — references — is not drawn.
+func drawnEdges(rows []kb.EdgeRow) []edge {
+	seen := map[[3]string]bool{}
 	var out []edge
 	for _, r := range rows {
-		origin := ""
-		if r.Origin != nil {
-			origin = *r.Origin
-		}
-		// The unmarked asks record the pair in the authored direction — the
-		// entry holding the bullet, then the premise it names — while a
-		// drawn edge runs supporter to supported.
-		found := inferred(r.Target, r.Source)
-		if r.Relation == kb.RelationDemoted {
-			found = origin == kb.OriginInferred
-		}
-		s := strokeFor(r.Relation, found)
-		key := [4]string{r.Source, r.Target, r.Relation, origin}
+		s := strokeFor(r.Relation)
+		key := [3]string{r.Source, r.Target, r.Relation}
 		if s == nil || seen[key] {
 			continue
 		}
@@ -231,8 +183,7 @@ func drawnEdges(rows []kb.EdgeRow, inferred func(source, target string) bool) []
 }
 
 func compareEdges(a, b edge) int {
-	return cmp.Or(strings.Compare(a.source, b.source), strings.Compare(a.target, b.target), strings.Compare(a.stroke.relation, b.stroke.relation),
-		strings.Compare(a.stroke.provenance, b.stroke.provenance))
+	return cmp.Or(strings.Compare(a.source, b.source), strings.Compare(a.target, b.target), strings.Compare(a.stroke.relation, b.stroke.relation))
 }
 
 // reduce is edges, ordered by compareEdges, less each supports edge whose

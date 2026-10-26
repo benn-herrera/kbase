@@ -3,19 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
-	"flag"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"go.yaml.in/yaml/v3"
-
 	"kbase/internal/kb"
-	"kbase/internal/kbload"
 	"kbase/internal/latex/pandoc"
-	"kbase/internal/query"
+	"kbase/internal/mcp"
+	toolresult "kbase/internal/result"
 )
 
 // kbase runs one invocation of the real root command from dir, as the binary
@@ -27,7 +24,7 @@ func kbase(t *testing.T, dir string, args ...string) (string, int) {
 	stdout, _, err := executeRoot(t, args...)
 	code := exitStatus(err, stdout, &bytes.Buffer{})
 	if sub, _, ferr := rootCmd.Find(args); ferr == nil {
-		if err := resetFlags(sub); err != nil {
+		if err := mcp.ResetFlags(sub); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -52,26 +49,26 @@ func TestMaintenanceResultsParse(t *testing.T) {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
 		d := checkDocument(t, args[0], out)
-		if d.Outcome != want || code != exitCodes[want] {
+		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Errorf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}
 		return d
 	}
 
-	run("refused", "verify")
+	run("done", "verify")
 	run("done", "refresh")
 	run("unchanged", "refresh")
 	run("done", "verify")
 	run("unchanged", "render-claim-graph")
 
-	insert := writeValues(t, values, "insert.yaml", "entry:\n- register: claim-rigor.md\n  title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
-		"- register: claim-rigor.md\n  title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")
-	first := run("done", "insert-claim-entry", "--create", "--values", insert)
+	insert := writeValues(t, values, "insert.yaml", "entry:\n- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
+		"- title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")
+	first := run("done", "insert-claim-entry", "--values", insert)
 	ids := anyStrings(first.Values["ids"])
 	if len(ids) != 2 || !slices.Equal(anyStrings(first.Values["minted"]), ids) || first.Values["refreshed"] == nil {
 		t.Fatalf("insert: %v", first.Values)
 	}
-	differ := writeValues(t, values, "differ.yaml", "entry:\n- register: claim-rigor.md\n  title: A Result\n  rigor: 0.9\n  rationale: Shown.\n")
+	differ := writeValues(t, values, "differ.yaml", "entry:\n- title: A Result\n  rigor: 0.9\n  rationale: Shown.\n")
 	again := run("unchanged", "insert-claim-entry", "--no-refresh", "--values", differ)
 	adopted, _ := again.Values["adopted"].([]any)
 	if a, _ := adopted[0].(map[string]any); len(adopted) != 1 || a["entry"] != 1 || a["id"] != ids[0] || !slices.Equal(anyStrings(a["differs"]), []string{"rigor"}) {
@@ -91,12 +88,20 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	for _, args := range [][]string{
 		{"deps", ids[0]}, {"deps", ids[0], "-i"}, {"gated-on", ids[0]}, {"cited-by", ids[0]}, {"find", ""},
 		{"referenced-by", ids[0]}, {"strength-below", "--max-strength", "0.5"}, {"subtree", ""}, {"weak-points"},
-		{"show", ids[0]}, {"stats"},
+		{"show", ids[0]}, {"stats"}, {"edge-census"}, {"edges"}, {"edges", "--relation", kb.RelationFounds},
 	} {
 		run("done", args...)
 	}
 	run("refused", "show", "clm-zzzzzz")
 	run("refused", "strength-below", "--max-strength", "half")
+	unknown := run("refused", "edges", "--relation", "nope", "--relation", "nope")
+	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
+		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {
+		t.Errorf("edges --relation nope --relation nope refusal: %v, want one item", items)
+	}
+	if items := run("refused", "edges", "--relation", "").items("refusals"); len(items) != 1 || items[0]["key"] != "--relation" {
+		t.Errorf("edges --relation \"\" refusal: %v", items)
+	}
 	page := run("done", "find", "", "--limit", "1", "--offset", "1")
 	if page.Values["count"] != 2 || page.Values["offset"] != 1 || page.Values["truncated"] != false || len(page.Values["results"].([]any)) != 1 {
 		t.Errorf("find --limit 1 --offset 1 = %v, want the second of two, nothing past it", page.Values)
@@ -153,7 +158,7 @@ func TestBuildResultsParse(t *testing.T) {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
 		d := checkDocument(t, args[0], out)
-		if d.Outcome != want || code != exitCodes[want] {
+		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Errorf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}
 		return d
@@ -181,80 +186,14 @@ func TestBuildResultsParse(t *testing.T) {
 	if _, ok := done.Values["resume"]; ok {
 		t.Errorf("a finished build carries resume: %v", done.Values)
 	}
-	for _, s := range done.Values["stages"].([]any) {
+	stages, ok := done.Values["stages"].([]any)
+	if !ok {
+		t.Fatalf("the finished build carries no stages: %v", done.Values)
+	}
+	for _, s := range stages {
 		report, _ := s.(map[string]any)["report"].(string)
 		if b, err := os.ReadFile(report); err != nil || !bytes.HasPrefix(b, []byte("stage: ")) {
 			t.Errorf("stage report %s: %v", report, err)
 		}
 	}
-}
-
-var queryFixtures = flag.String("query.fixtures", "", "space-separated 0.9.0-built fixture repositories, each with kb-root/ beside its root")
-
-// toolResultCap is the most bytes personant takes back from one tool call.
-const toolResultCap = 8 << 10
-
-// TestDefaultLimitFitsTheToolResultCap runs every list query, at its default
-// limit, over each node and index path of each fixture, and fails where a
-// result document passes the tool-result cap; test-integration-query-arxiv
-// names the fixtures.
-func TestDefaultLimitFitsTheToolResultCap(t *testing.T) {
-	if *queryFixtures == "" {
-		t.Skip("no fixtures named; test-integration-query-arxiv names them")
-	}
-	largest := map[string]int{}
-	for _, repo := range strings.Fields(*queryFixtures) {
-		kbRoot := filepath.Join(repo, kb.KBDir)
-		var cases [][]string
-		for _, id := range indexIDs(t, kbRoot) {
-			cases = append(cases, []string{"deps", id}, []string{"deps", id, "-i"}, []string{"gated-on", id},
-				[]string{"cited-by", id}, []string{"referenced-by", id})
-		}
-		src, err := kbload.Open(kbRoot)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ix, err := query.Load(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range append(query.SubtreePayload(ix, ""), "", ".") {
-			cases = append(cases, []string{"subtree", p})
-		}
-		cases = append(cases, []string{"find", ""}, []string{"strength-below", "--max-strength", "1.1"}, []string{"weak-points", "--max-strength", "1.1", "--min-dependents", "0"})
-		for _, c := range cases {
-			out, code := kbase(t, repo, c...)
-			if code != 0 {
-				continue
-			}
-			checkDocument(t, c[0], out)
-			largest[c[0]] = max(largest[c[0]], len(out))
-			if len(out) > toolResultCap {
-				t.Errorf("%s %q in %s: %d bytes at the default limit, over the %d-byte cap", c[0], c[1:], repo, len(out), toolResultCap)
-			}
-		}
-	}
-	b, err := yaml.Marshal(largest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("largest default-limit result per list query, in bytes:\n%s", b)
-}
-
-// indexIDs is every node id the claims index records.
-func indexIDs(t *testing.T, kbRoot string) []string {
-	t.Helper()
-	src, err := kbload.Open(kbRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rows, problems, err := kb.ReadIndex[kb.NodeRow](src, nil)
-	if err != nil || problems != nil {
-		t.Fatal(kbRoot, err, problems)
-	}
-	var ids []string
-	for _, r := range rows {
-		ids = append(ids, r.ID)
-	}
-	return ids
 }

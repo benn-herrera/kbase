@@ -11,9 +11,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/build"
+	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 )
 
@@ -30,10 +32,10 @@ type buildOptions struct {
 	// Provider builds where the build's model calls go, or what the
 	// configuration lacks for them, over the registry the verb opened and
 	// closes when the build returns.
-	Provider func(reg *clients) (build.Provider, error)
+	Provider func(reg *modelclient.Registry) (build.Provider, error)
 	// NewClient is the client seam the registry opens its clients through;
-	// nil means model.NewHTTPClient.
-	NewClient newClientFunc
+	// nil means model.NewClient.
+	NewClient modelclient.NewClientFunc
 	Stdout    io.Writer
 	Stderr    io.Writer
 	Logger    log.Logger
@@ -45,8 +47,8 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
 		return 0, err
 	}
-	reg := newClients(opts.NewClient, opts.Logger)
-	defer reg.closeAll()
+	reg := modelclient.New(opts.NewClient, opts.Logger, "")
+	defer reg.CloseAll()
 	outcome, fields := build.Run(ctx, build.Options{
 		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
 		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, WorkDir: opts.WorkDir, Provider: providerFor(opts, reg),
@@ -55,13 +57,13 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := toolresult.Emit(opts.Stdout, outcome, fields...); err != nil {
 		return 0, fmt.Errorf("build: writing the result: %w", err)
 	}
-	return exitCodes[outcome], nil
+	return toolresult.ExitCode(outcome), nil
 }
 
 // providerFor is the build's Provider seam over the registry the verb opened.
 // A run that names no Provider — a caller with nothing to hand it — resolves
 // none, and the walk's launch refuses a model call it cannot make.
-func providerFor(opts buildOptions, reg *clients) func() (build.Provider, error) {
+func providerFor(opts buildOptions, reg *modelclient.Registry) func() (build.Provider, error) {
 	if opts.Provider == nil {
 		return nil
 	}
@@ -74,7 +76,7 @@ func refused(fields []toolresult.Field, items ...toolresult.Item) (string, []too
 }
 
 // checkError names a failure kbase has no narrower class for.
-const checkError = "error"
+const checkError = buildstore.CheckError
 
 // failed is a failure of err, after fields.
 func failed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
@@ -100,8 +102,8 @@ var (
 // asks on the decision role, the overview passage on the text role — or what
 // it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
 // and the build proceeds.
-func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func(reg *clients) (build.Provider, error) {
-	return func(reg *clients) (build.Provider, error) {
+func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
+	return func(reg *modelclient.Registry) (build.Provider, error) {
 		s := p.inputs(env)
 		mode, err := config.ModeOf(s)
 		if err != nil {
@@ -116,25 +118,20 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		var records []toolresult.Record
 		warned := map[string]bool{}
 		role := func(r config.Role) (model.Client, string, error) {
-			ep, err := config.Resolve(s, mode, r, config.BackEndProvider, "")
+			ep, err := config.Resolve(s, mode, r, "")
 			if err != nil {
 				return nil, "", err
 			}
 			// One line per endpoint, however many roles reach it: the key is
 			// what the run sends, and the registry is what read it.
 			if !warned[ep.BaseURL] {
-				if key, err := reg.key(ep); err == nil {
-					if line := config.CleartextWarning(ep.BaseURL, key); line != "" {
-						fmt.Fprintln(stderr, line)
-						warned[ep.BaseURL] = true
-					}
-				}
+				warned[ep.BaseURL] = warnCleartextKey(stderr, reg, ep)
 			}
-			client, err := reg.get(ep)
+			client, err := reg.Get(ep)
 			if err != nil {
 				return nil, "", err
 			}
-			records = append(records, roleRecord(ep, config.BackEndProvider))
+			records = append(records, roleRecord(ep))
 			return client, ep.Model, nil
 		}
 		var provider build.Provider
@@ -224,5 +221,4 @@ func init() {
 	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id or display name (default: every stage)")
 	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "drop every row that spends inference and walk the rest")
-	rootCmd.AddCommand(mcpBinding(buildCmd, mcpBound))
 }

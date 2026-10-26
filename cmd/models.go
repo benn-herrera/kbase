@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 )
 
@@ -46,13 +48,9 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
-	reg := newClients(opts.NewClient, opts.Logger)
-	defer reg.closeAll()
+	reg := modelclient.New(opts.NewClient, opts.Logger, "")
+	defer reg.CloseAll()
 	entry := opts.Providers[name]
-	client, err := reg.get(entryEndpoint(entry))
-	if err != nil {
-		return refusedOrFailed(nil, err)
-	}
 	fields := providerFields(name, rule, entry.Layer)
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -61,7 +59,11 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
-	ids, err := catalogueIDs(callCtx, client)
+	ids, err := reg.Catalogue(callCtx, entry)
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return refused(nil, refusal...)
+	}
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -116,5 +118,4 @@ entries that failed to load are reported as warnings, and a summary line
 
 func init() {
 	registerProviderFlags(modelsCmd, &modelsFlagProvider, &modelsFlagTimeout, "query")
-	rootCmd.AddCommand(mcpBinding(readOnly(modelsCmd), mcpBound))
 }

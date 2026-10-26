@@ -7,38 +7,6 @@ import (
 	"kbase/internal/kb"
 )
 
-// LeafReferences is, for every node a leaf hosts or references, the sorted
-// leaf paths that do: a claim's citing leaves, an experiment's home and its
-// referencing leaves, an analysis's home.
-func LeafReferences(st kb.State) map[string][]string {
-	refs := map[string]map[string]bool{}
-	add := func(id, leaf string) {
-		if refs[id] == nil {
-			refs[id] = map[string]bool{}
-		}
-		refs[id][leaf] = true
-	}
-	for _, leaf := range st.Leaves {
-		for _, c := range leaf.Claims {
-			add(c, leaf.Path)
-		}
-		for _, x := range leaf.ExperimentRefs {
-			add(x, leaf.Path)
-		}
-	}
-	for _, x := range st.Experiments {
-		add(x.ID, x.CanonicalPath)
-	}
-	for _, s := range st.Analyses {
-		add(s.ID, s.CanonicalPath)
-	}
-	out := map[string][]string{}
-	for id, set := range refs {
-		out[id] = sortedSet(set)
-	}
-	return out
-}
-
 // RenderLeafReferences is a register entry's footer: each citing leaf as a
 // link relative to the register's directory, named by its stem.
 func RenderLeafReferences(registerPath string, leaves []string) string {

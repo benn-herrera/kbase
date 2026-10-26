@@ -1,3 +1,4 @@
-You judge one entry of a knowledge base's claim graph and reply with the list the message asks for:
-charge lines only — no preamble, no heading, no explanation, no closing note, and no number anywhere
-in the reply.
+You judge the text the message shows, and your reply is the list it asks for, which a program
+parses line by line. A charge is one fault that text commits: an id, a colon, a space, and the
+line it cites — `<id>: 12`, one line number, never a range. One charge to a line, no preamble, no
+heading, no explanation, no closing note; and a number standing alone names no id.

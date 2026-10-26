@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-bbb002"
+    title: "The governance bifurcation"
+    canonical_path: "beta/claim-rigor.md"
+    canonical_anchor: "the-governance-bifurcation"
+    rigor: 0.66
+    strength: 0.66
+    build_status: "ok to build on, see caveats"
+    build_band: "ok-with-caveats"
+    rationale: "Fixture."
+    premise_count: 2
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 1

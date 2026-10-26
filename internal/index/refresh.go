@@ -18,8 +18,8 @@ import (
 
 // The refusal classes refresh and verify raise.
 const (
-	checkMetadata = "metadata"
-	checkKBRoot   = "kb-root"
+	checkMetadata = kb.CheckMetadata
+	checkKBRoot   = kb.CheckKBRoot
 )
 
 // symlinkRefusal is err as the KB's symlink refusal, and false where err is
@@ -33,30 +33,25 @@ func symlinkRefusal(err error) (result.Refusal, bool) {
 }
 
 // refusal turns an input-caused error into a result.Refusal and passes any other
-// through; src is what locates a coverage refusal at the bullet that wrote it.
-func refusal(src *kb.Source, err error) error {
+// through.
+func refusal(err error) error {
 	var m kb.MalformedError
-	var c CycleError
-	var cov CoverageError
-	var ann *kb.AnnotationError
+	var graph *kb.GraphLoadError
 	if r, ok := symlinkRefusal(err); ok {
 		return r
 	}
 	switch {
-	case errors.As(err, &ann):
-		return result.Refusal(AnnotationItems(ann))
-	case errors.As(err, &cov):
-		cov = coverageAt(src, cov)
-		return result.Refusal{{Check: checkMetadata, Key: cov.Key, Path: cov.Path, Line: cov.Line, Detail: cov.Msg}}
-	case errors.As(err, &m) || errors.As(err, &c):
+	case errors.As(err, &graph):
+		return result.Refusal(graphItems(graph))
+	case errors.As(err, &m):
 		return result.Refusal{{Check: checkMetadata, Detail: err.Error()}}
 	}
 	return err
 }
 
-// precheck refuses a kb-root that is not a directory or whose CLAUDE.md is
-// not the redirect.
-func precheck(src *kb.Source) error {
+// Precheck is what refresh refuses before it writes: a kb-root that is not a
+// directory or whose CLAUDE.md is not the redirect.
+func Precheck(src *kb.Source) error {
 	kbRoot := src.Root()
 	if info, err := os.Stat(kbRoot); err != nil || !info.IsDir() {
 		return result.Refusal{{Check: checkKBRoot, Path: kbRoot, Detail: fmt.Sprintf("KB directory %s not found", kbRoot)}}
@@ -71,84 +66,174 @@ func precheck(src *kb.Source) error {
 	return nil
 }
 
-var (
-	strengthLineRE = kb.PyRE(`^(\s*)-\s*strength:`)
-	annotationRE   = kb.PyRE(`\(strength\s+(?:-?\d+(?:\.\d+)?|\*pending\*)\)`)
-)
-
-// Refresh derives every derived field of the KB src reads and writes it: the
-// subtree aggregates of every index node, every register entry's strength
-// line, premise annotations and leaf-references footer, the .index/*.yaml
-// files and the claim-graph sheets. It then saves: every file the format
-// covers that src holds in a form the disk does not — the whole KB, where src
-// was migrated — then removes the paths the migration made obsolete, less
-// those the save wrote, then writes the entry point, stamped, last. It writes
-// only files whose bytes change and returns their paths, kb-root-relative
-// inside kb-root and absolute beside it. A KB state it refuses is a result.Refusal;
-// earlier phases' writes stand, and a migrated KB is left unstamped.
+// Refresh renders the KB src reads: where its load is degraded it first
+// writes the records as the walk resolves them. Where src was migrated it then
+// saves every file the conversion produced, and every file put in src since,
+// that the disk does not hold as src does: the edge records, the node records,
+// every other file but the stamped documents and the entry point, then the
+// stamped documents. It then writes every register page the KB calls for and
+// the claim-graph sheets, removing a page no longer called for; writes the
+// format stamp file at the version the KB is still at; removes the paths the
+// migration made obsolete, less those it wrote; writes the entry point; and
+// last rewrites the stamp file at kb.FormatVersion. It writes only files whose
+// bytes change and returns their paths, kb-root-relative inside kb-root and
+// absolute beside it. A KB state it refuses is a result.Refusal; earlier
+// phases' writes stand, and a save that stops part-way leaves the KB stamped
+// at the version it converts from, which the next refresh completes.
 func Refresh(src *kb.Source, lg log.Logger) ([]string, error) {
 	written, _, _, err := RefreshReporting(src, lg)
 	return written, err
 }
 
-// RefreshReporting is Refresh, and also what it removed — the sheets its
-// sheet phase no longer drew and the obsolete paths it drained,
+// RefreshReporting is Refresh, and also what it removed — the register pages
+// and sheets no longer called for and the obsolete paths it drained,
 // kb-root-relative inside kb-root and repository-relative beside it — and
 // whether it ran with no Graphviz dot on PATH, drawing nothing.
 func RefreshReporting(src *kb.Source, lg log.Logger) (written, removed []string, noDot bool, err error) {
-	if err := precheck(src); err != nil {
-		return nil, nil, false, err
+	r, err := RefreshWithWarnings(src, lg)
+	return r.Written, r.Removed, r.NoDot, err
+}
+
+// Refreshed is what one refresh did: the paths it wrote and removed, as
+// RefreshReporting names them, whether it drew nothing for want of Graphviz
+// dot, and a warning per record its repair of a degraded load dropped or edge
+// it cut.
+type Refreshed struct {
+	Written, Removed []string
+	NoDot            bool
+	Warnings         []result.Item
+}
+
+// RefreshWithWarnings is RefreshReporting, and also the repair's warnings.
+func RefreshWithWarnings(src *kb.Source, lg log.Logger) (Refreshed, error) {
+	if err := Precheck(src); err != nil {
+		return Refreshed{}, err
 	}
 	r := refresher{src: src}
-	for _, phase := range []func() error{r.aggregates, r.strength, r.leafReferences, func() error { return r.emit(lg) }, r.sheet, r.save} {
+	for _, phase := range []func() error{r.repair, r.saveConverted, r.pages, r.sheet, r.save} {
 		if err := phase(); err != nil {
-			return r.written, r.removed, r.noDot, refusal(src, err)
+			return r.Refreshed, refusal(err)
 		}
 	}
-	return r.written, r.removed, r.noDot, nil
+	return r.Refreshed, nil
 }
 
 type refresher struct {
-	src     *kb.Source
-	written []string
-	// removed is what the sheet phase and the drain removed; noDot is whether
-	// the sheet phase found no Graphviz dot to draw with.
-	removed []string
-	noDot   bool
+	src *kb.Source
+	Refreshed
 }
 
 func (r *refresher) path(rel string) string { return r.src.KBPath(rel) }
 
-// write replaces a document's text, keeping its mode. The entry point is
-// held for the save, which writes it once, stamped, last.
-func (r *refresher) write(rel, text string) error {
-	p := r.path(rel)
-	if rel == kb.EntryPointFile {
-		r.src.Put(p, []byte(text))
-		return nil
-	}
-	if err := WriteKBFile(r.src, p, []byte(text)); err != nil {
+// repair writes the records as the walk resolves them where the load is
+// degraded, keeping its warnings; a load that is not writes nothing. The
+// records written are the authored ones under the same resolution, so a rigor
+// the walk reads clamped keeps its value in the file. The repair runs first so
+// the pages and the sheets are drawn from the records as they then stand.
+func (r *refresher) repair() error {
+	rows, err := Derive(r.src)
+	if err != nil {
 		return err
 	}
-	r.written = append(r.written, rel)
+	if len(rows.Degraded) == 0 {
+		return nil
+	}
+	authored, err := kb.LoadAuthoredGraph(r.src)
+	if err != nil {
+		return err
+	}
+	hosted, err := HostedOrder(r.src, authored)
+	if err != nil {
+		return err
+	}
+	resolved, _ := resolveGraph(authored, GraphKinds(authored), hosted)
+	written, err := WriteGraph(r.src, resolved)
+	r.Written = append(r.Written, written...)
+	if err != nil {
+		return err
+	}
+	r.Warnings = rows.Degraded
+	return nil
+}
+
+// pages writes every register page the KB calls for whose bytes on disk
+// differ, and removes each page standing at a page position that is no longer
+// called for.
+func (r *refresher) pages() error {
+	x, err := loadDerivation(r.src)
+	if err != nil {
+		return err
+	}
+	pages := x.registerPages()
+	for _, rel := range x.pagePositions() {
+		p := r.path(rel)
+		data, called := pages[rel]
+		if !called {
+			if !r.src.IsFile(p) {
+				continue
+			}
+			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			r.src.Removed(p)
+			r.Removed = append(r.Removed, rel)
+			continue
+		}
+		if current, err := r.src.DiskFile(p); err == nil && bytes.Equal(current, data) {
+			r.src.Put(p, current)
+			continue
+		}
+		if err := WriteKBFile(r.src, p, data); err != nil {
+			return err
+		}
+		r.Written = append(r.Written, rel)
+	}
 	return nil
 }
 
 // WriteKBFile replaces the KB file at p with data, atomically and keeping
-// its mode, and records the bytes in src so later reads see them. A file
-// beside kb-root — a build record — is written under the repository; every
-// other is written under kb-root, and a symbolic link at p or a target
-// outside either tree is refused.
+// its mode, making its directory where none stands, and records the bytes in
+// src so later reads see them. A file beside kb-root — a build record — is
+// written under the repository; every other is written under kb-root, and a
+// symbolic link at p or a target outside either tree is refused.
 func WriteKBFile(src *kb.Source, p string, data []byte) error {
 	root := src.Root()
 	if !kb.Within(root, p) {
 		root = src.Repo()
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
 	}
 	if err := writeInside(root, p, data); err != nil {
 		return err
 	}
 	src.Put(p, data)
 	return nil
+}
+
+// WriteGraph writes g's record files through WriteKBFile — the edge file, then
+// the node file — each only where its bytes change, and is the kb-root-relative
+// paths it wrote.
+func WriteGraph(src *kb.Source, g kb.Graph) ([]string, error) {
+	var written []string
+	for _, f := range []struct {
+		rel  string
+		data []byte
+	}{{kb.GraphEdgesFile, kb.EncodeEdges(g)}, {kb.GraphNodesFile, kb.EncodeNodes(g)}} {
+		p := src.KBPath(f.rel)
+		old, err := src.ReadFile(p)
+		if err != nil && !kb.ErrNotExist(err) {
+			return written, err
+		}
+		if err == nil && bytes.Equal(old, f.data) {
+			continue
+		}
+		if err := WriteKBFile(src, p, f.data); err != nil {
+			return written, err
+		}
+		written = append(written, f.rel)
+	}
+	return written, nil
 }
 
 // writeInside replaces p with data atomically, refusing a path that is a
@@ -162,168 +247,6 @@ func writeInside(root, p string, data []byte) error {
 	return err
 }
 
-func (r *refresher) aggregates() error {
-	st, err := kb.Discover(r.src, log.Discard())
-	if err != nil {
-		return err
-	}
-	agg := SubtreeAggregates(st)
-	for _, idx := range st.Indexes {
-		text, err := r.src.ReadText(r.path(idx.Path))
-		if err != nil {
-			return err
-		}
-		a := agg[idx.Path]
-		next := kb.ReplaceOrInsertFrontmatterField(text, "subtree-claims", a.Claims, "kind:")
-		anchor := "subtree-claims:"
-		if !strings.Contains(next, anchor) {
-			anchor = "kind:"
-		}
-		next = kb.ReplaceOrInsertFrontmatterField(next, "subtree-experiments", a.Experiments, anchor)
-		if next != text {
-			if err := r.write(idx.Path, next); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// editableLines is a file's text split on \n, less the empty piece a final
-// newline leaves, and whether it had one.
-func editableLines(text string) ([]string, bool) {
-	lines := strings.Split(text, "\n")
-	final := strings.HasSuffix(text, "\n")
-	if final {
-		lines = lines[:len(lines)-1]
-	}
-	return lines, final
-}
-
-func joinLines(lines []string, final bool) string {
-	text := strings.Join(lines, "\n")
-	if final {
-		text += "\n"
-	}
-	return text
-}
-
-func lineAt(lines []string, i int, rel string) (string, error) {
-	if i < 0 || i >= len(lines) {
-		return "", fmt.Errorf("%s: line %d is past the register's %d lines", rel, i+1, len(lines))
-	}
-	return lines[i], nil
-}
-
-func (r *refresher) strength() error {
-	st, err := kb.Discover(r.src, log.Discard())
-	if err != nil {
-		return err
-	}
-	strength, err := ComputeStrength(st)
-	if err != nil {
-		return err
-	}
-	byFile := map[string][]kb.ClaimEntry{}
-	for _, e := range st.ClaimEntries {
-		byFile[e.CanonicalPath] = append(byFile[e.CanonicalPath], e)
-	}
-	regs, err := kb.Registers(r.src)
-	if err != nil {
-		return err
-	}
-	for _, rel := range regs {
-		if _, ok := byFile[rel]; !ok {
-			byFile[rel] = nil
-		}
-	}
-	files := make([]string, 0, len(byFile))
-	for rel := range byFile {
-		files = append(files, rel)
-	}
-	slices.Sort(files)
-	for _, rel := range files {
-		if err := r.rewriteStrength(rel, byFile[rel], st.Analyses, strength); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *refresher) rewriteStrength(rel string, entries []kb.ClaimEntry, analyses []kb.AnalysisNode, strength Strength) error {
-	text, err := r.src.ReadText(r.path(rel))
-	if err != nil {
-		return err
-	}
-	lines, final := editableLines(text)
-	joined := strings.Join(lines, "\n")
-	finals := strength.Finals()
-	analysisResults := strength.AnalysisResults
-	byID := map[string]kb.ClaimEntry{}
-	for _, e := range entries {
-		byID[e.ID] = e
-	}
-	analysisByID := map[string]kb.AnalysisNode{}
-	for _, s := range analyses {
-		analysisByID[s.ID] = s
-	}
-	var order []string
-	ranges := map[string][2]int{}
-	for _, loc := range kb.LocateEntries(joined) {
-		if loc.RigorStart < 0 {
-			continue
-		}
-		if _, ok := ranges[loc.NodeID]; !ok {
-			order = append(order, loc.NodeID)
-		}
-		ranges[loc.NodeID] = [2]int{loc.RigorStart, loc.RigorEnd}
-	}
-	scrubbed := kb.SplitLines(kb.StripCodeFences(joined))
-	for _, id := range order {
-		entry, isClaim := byID[id]
-		_, isAnalysis := analysisByID[id]
-		if !isClaim && !isAnalysis {
-			continue
-		}
-		var res Result
-		if isClaim {
-			res = strength.Results[entry.ID]
-		} else {
-			res = analysisResults[id]
-		}
-		span := ranges[id]
-		for idx := span[0]; idx < span[1]; idx++ {
-			line, err := lineAt(lines, idx, rel)
-			if err != nil {
-				return err
-			}
-			probe := scrubbed[idx]
-			if strengthLineRE.MatchString(probe) {
-				lines[idx] = strengthLine(res.Final, RenderStrengthTrace(res))
-				continue
-			}
-			if !strings.Contains(probe, "(strength") {
-				continue
-			}
-			targets := kb.ClaimIDs(kb.BulletHead(kb.TrimBulletLead(kb.Strip(probe))))
-			if len(targets) == 0 {
-				continue
-			}
-			var source *float64
-			if v, ok := finals[targets[0]]; ok {
-				source = ptr(v)
-			}
-			if loc := annotationRE.FindStringIndex(line); loc != nil {
-				lines[idx] = line[:loc[0]] + kb.RenderStrengthAnnotation(FormatStrengthRecord(source)) + line[loc[1]:]
-			}
-		}
-	}
-	if next := joinLines(lines, final); next != text {
-		return r.write(rel, next)
-	}
-	return nil
-}
-
 func strengthLine(v *float64, trace string) string {
 	if v == nil {
 		return kb.RenderStrengthLine(nil, "", "")
@@ -332,99 +255,67 @@ func strengthLine(v *float64, trace string) string {
 	return kb.RenderStrengthLine(&value, *BuildStatusPhrase(v), trace)
 }
 
-func (r *refresher) leafReferences() error {
-	st, err := kb.Discover(r.src, log.Discard())
-	if err != nil {
-		return err
-	}
-	refs := LeafReferences(st)
-	regs, err := kb.Registers(r.src)
-	if err != nil {
-		return err
-	}
-	for _, rel := range regs {
-		text, err := r.src.ReadText(r.path(rel))
-		if err != nil {
-			return err
-		}
-		lines, final := editableLines(text)
-		bands := kb.LocateLeafReferenceFooters(text)
-		slices.SortFunc(bands, func(a, b kb.FooterBand) int { return b.BodyStart - a.BodyStart })
-		for _, band := range bands {
-			footer := RenderLeafReferences(rel, refs[band.NodeID])
-			if band.FooterLine >= 0 {
-				if _, err := lineAt(lines, band.FooterLine, rel); err != nil {
-					return err
-				}
-				lines[band.FooterLine] = footer
-				continue
-			}
-			at := band.RigorStart
-			block := []string{footer, ""}
-			if at > band.BodyStart {
-				prev, err := lineAt(lines, at-1, rel)
-				if err != nil {
-					return err
-				}
-				if kb.Strip(prev) != "" {
-					block = []string{"", footer, ""}
-				}
-			}
-			lines = slices.Insert(lines, min(at, len(lines)), block...)
-		}
-		if next := joinLines(lines, final); next != text {
-			if err := r.write(rel, next); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (r *refresher) emit(lg log.Logger) error {
-	dir := r.path(kb.IndexDir)
-	if err := os.Mkdir(dir, 0o777); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	st, err := kb.Discover(r.src, lg)
-	if err != nil {
-		return err
-	}
-	records, err := BuildRecords(st)
-	if err != nil {
-		return err
-	}
-	for _, name := range kb.IndexFiles {
-		body := Serialize(records[name])
-		rel := kb.IndexDir + "/" + kb.IndexFileName(name)
-		target := r.path(rel)
-		if current, err := r.src.DiskFile(target); err == nil && string(current) == body {
-			r.src.Put(target, current)
-			continue
-		}
-		if err := WriteKBFile(r.src, target, []byte(body)); err != nil {
-			return err
-		}
-		r.written = append(r.written, rel)
-	}
-	return nil
-}
-
 func (r *refresher) sheet() error {
 	written, removed, drawn, err := WriteSheet(r.src)
-	r.written = append(r.written, written...)
-	r.removed = append(r.removed, removed...)
-	r.noDot = err == nil && !drawn
+	r.Written = append(r.Written, written...)
+	r.Removed = append(r.Removed, removed...)
+	r.NoDot = err == nil && !drawn
 	return err
 }
 
-// save writes every migrated file the disk does not hold as the source does,
-// but the entry point; removes the obsolete paths, less those it or an
-// earlier phase wrote; then stamps the entry point and writes it, last.
+// saveConverted writes every file a migrated source holds that the disk does
+// not hold as it does, but the entry point, in the order a stopped save is
+// resumed from: the edge records, the node records, every other file, then
+// the readiness-stamped documents. The entry point waits for save, where it is
+// written after the stamp file stands at the version the tree is still at. A
+// source read at the current format has none.
+func (r *refresher) saveConverted() error {
+	entry := r.path(kb.EntryPointFile)
+	rank := func(p string) int {
+		switch {
+		case p == r.path(kb.GraphEdgesFile):
+			return 0
+		case p == r.path(kb.GraphNodesFile):
+			return 1
+		case filepath.Dir(p) == r.src.Root() && slices.Contains(kb.StampedFiles, filepath.Base(p)):
+			return 3
+		}
+		return 2
+	}
+	var paths []string
+	for _, rel := range r.src.MigratedFiles() {
+		if p := r.src.Path(rel); p != entry {
+			paths = append(paths, p)
+		}
+	}
+	slices.SortStableFunc(paths, func(a, b string) int { return rank(a) - rank(b) })
+	for _, p := range paths {
+		if err := r.saveFile(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// save stamps a migrated KB at the version it is still at, removes the
+// obsolete paths, less every migrated file and every path an earlier phase
+// wrote, writes the entry point, and last rewrites the stamp file at
+// kb.FormatVersion. The stamp file stands throughout and always names the
+// version the tree is at, and a save that stops part-way leaves a KB the
+// loader reads at its old version — the stamp file, or the entry point's
+// frontmatter until the stamp file is written, saying so — which the converter
+// resumes and the next refresh completes.
 func (r *refresher) save() error {
 	entry := r.path(kb.EntryPointFile)
+	format := r.path(kb.FormatFile)
+	if m, ok := r.src.Migration(); ok {
+		r.src.Put(format, kb.EncodeFormatStamp(m.From))
+		if _, err := r.writeChanged(format); err != nil {
+			return err
+		}
+	}
 	saved := map[string]bool{}
-	for _, w := range r.written {
+	for _, w := range r.Written {
 		if filepath.IsAbs(w) {
 			saved[w] = true
 		} else {
@@ -432,14 +323,7 @@ func (r *refresher) save() error {
 		}
 	}
 	for _, rel := range r.src.MigratedFiles() {
-		p := r.src.Path(rel)
-		if p == entry {
-			continue
-		}
-		saved[p] = true
-		if err := r.saveFile(p); err != nil {
-			return err
-		}
+		saved[r.src.Path(rel)] = true
 	}
 	for _, rel := range r.src.Obsolete() {
 		p := r.src.Path(rel)
@@ -452,42 +336,49 @@ func (r *refresher) save() error {
 			}
 			return err
 		}
-		r.removed = append(r.removed, r.reported(p, true))
+		r.Removed = append(r.Removed, r.reported(p, true))
 	}
-	text, err := r.src.ReadText(entry)
-	if errors.Is(err, os.ErrNotExist) {
+	if _, err := r.src.ReadText(entry); errors.Is(err, os.ErrNotExist) {
 		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return err
 	}
-	stamped, err := kb.StampFormat(text, kb.FormatVersion)
-	if err != nil {
-		return err
-	}
-	r.src.Put(entry, []byte(stamped))
 	if err := r.saveFile(entry); err != nil {
+		return err
+	}
+	r.src.Put(format, kb.EncodeFormatStamp(kb.FormatVersion))
+	if err := r.saveFile(format); err != nil {
 		return err
 	}
 	r.src.Saved()
 	return nil
 }
 
-// saveFile writes p as the source holds it, where the disk holds other
-// bytes.
+// saveFile writes p as the source holds it, where the disk holds other bytes,
+// and reports it among what this refresh wrote.
 func (r *refresher) saveFile(p string) error {
+	wrote, err := r.writeChanged(p)
+	if err != nil || !wrote {
+		return err
+	}
+	r.Written = append(r.Written, r.reported(p, false))
+	return nil
+}
+
+// writeChanged writes p as the source holds it, where the disk holds other
+// bytes, and is whether it wrote.
+func (r *refresher) writeChanged(p string) (bool, error) {
 	data, err := r.src.ReadFile(p)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if current, err := r.src.DiskFile(p); err == nil && bytes.Equal(current, data) {
-		return nil
+		return false, nil
 	}
 	if err := WriteKBFile(r.src, p, data); err != nil {
-		return err
+		return false, err
 	}
-	r.written = append(r.written, r.reported(p, false))
-	return nil
+	return true, nil
 }
 
 // reported is p as a result names it: kb-root-relative inside kb-root;
@@ -502,15 +393,20 @@ func (r *refresher) reported(p string, removal bool) string {
 	return p
 }
 
-// WriteSheet draws the KB's claim-graph sheets and writes each whose bytes
-// change, then removes the digest and every volume's sheet the drawing no
-// longer calls for. It returns the kb-root-relative paths it wrote and
+// WriteSheet draws the KB's claim-graph sheets from the rows Derive yields and
+// writes each whose bytes change, then removes the digest and every volume's
+// sheet the drawing no longer calls for. A KB state Derive refuses is its
+// refusal, dot or no dot. It returns the kb-root-relative paths it wrote and
 // removed and whether the sheets were drawn. Without Graphviz dot on PATH
 // nothing is drawn: every sheet standing is left as it is, the placeholder is
 // written only where kb-root has no claim-graph.svg, and nothing is removed.
 func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err error) {
 	kbRoot := src.Root()
-	sheets, err := sheet.Render(src)
+	rows, err := Derive(src)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	sheets, err := sheet.Render(src, rows.Nodes, rows.Edges, rows.Cites)
 	if errors.Is(err, sheet.ErrNoDot) {
 		target := filepath.Join(kbRoot, kb.ClaimGraphFile)
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {

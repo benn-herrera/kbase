@@ -1,0 +1,9 @@
+obsolete:
+    - kb-root/.index/cites.yaml
+    - kb-root/.index/claims.yaml
+    - kb-root/.index/strengthen-by.yaml
+    - kb-root/.index/subtree-aggregates.yaml
+warnings:
+    - path: kb-root/alpha/results.md
+      line: 3
+      detail: clm-aaa002's marker is appended to the first heading; the section under it is its statement

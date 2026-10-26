@@ -1,15 +1,20 @@
-package model
+package model_test
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // sseServer answers each request with the next body of bodies, the last one
@@ -35,6 +40,27 @@ func sseServer(t *testing.T, bodies ...string) (*httptest.Server, func() [][]byt
 	}
 }
 
+// statusServer answers every request with code and a provider-shaped error
+// body, counting the requests it read.
+func statusServer(t *testing.T, code int) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen++
+		mu.Unlock()
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown model: m"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
+	}
+}
+
 const (
 	sseAnswered = "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n" +
 		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
@@ -48,26 +74,30 @@ const (
 
 func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		bodies   []string
-		requests int
-		ok       bool
+		name        string
+		bodies      []string
+		requests    int
+		ok          bool
+		wantOutcome string
 	}{
-		{"answered at once", []string{sseAnswered}, 1, true},
-		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true},
-		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true},
-		{"never complete", []string{sseShortOfDone}, ChatAttempts, false},
+		{"answered at once", []string{sseAnswered}, 1, true, model.ChatOK},
+		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true, model.ChatOK},
+		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true, model.ChatOK},
+		{"never complete", []string{sseShortOfDone}, model.ChatAttempts, false, model.ChatTransportFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.bodies...)
 			var observed []string
-			got, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
-				func(a ChatAttempt) { observed = append(observed, a.Outcome) })
-			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrChatIncomplete)) {
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+				func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, model.ErrChatIncomplete)) {
 				t.Fatalf("Chat = %+v, %v; want ok %t", got, err, tc.ok)
 			}
-			if tc.ok && (got.Reply != "A" || got.Outcome != ChatOK || got.Usage.PromptTokens != 40) {
+			if tc.ok && (got.Reply != "A" || got.Outcome != model.ChatOK || got.Usage.PromptTokens != 40) {
 				t.Errorf("Chat = %+v", got)
+			}
+			if got.Outcome != tc.wantOutcome {
+				t.Errorf("outcome = %q, want %q", got.Outcome, tc.wantOutcome)
 			}
 			requests := seen()
 			if len(requests) != tc.requests || len(observed) != tc.requests {
@@ -82,9 +112,137 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 	}
 }
 
+// TestChatNamesAProviderRefusal: a provider that answers with a status that is
+// not success read the request and declined it, which is not the transport
+// failing — so the attempt says it refused, and the reason carries the status
+// and the body's start rather than sending a reader to the path between kbase
+// and a provider that is answering. A 400 will be as wrong on the third
+// attempt as on the first, so the call is put on the wire once.
+func TestChatNamesAProviderRefusal(t *testing.T) {
+	srv, requests := statusServer(t, http.StatusBadRequest)
+
+	var observed []string
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+		func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+	if !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != model.ChatProviderRefused {
+		t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatProviderRefused)
+	}
+	for _, reason := range []string{got.Error, err.Error()} {
+		if !strings.Contains(reason, "http 400") || !strings.Contains(reason, "unknown model") {
+			t.Errorf("reason = %q, want the status and the provider's own words", reason)
+		}
+		if strings.Contains(reason, model.ChatTransportFailure) {
+			t.Errorf("reason = %q, want no transport failure where the provider answered", reason)
+		}
+	}
+	if !strings.Contains(err.Error(), "1 attempt") {
+		t.Errorf("reason = %q, want the one attempt it took", err)
+	}
+	if n := requests(); n != 1 || len(observed) != 1 {
+		t.Fatalf("%d requests, %d attempts observed; want one: a refusal is not re-issued", n, len(observed))
+	}
+	for _, o := range observed {
+		if o != model.ChatProviderRefused {
+			t.Errorf("an attempt = %q, want %q", o, model.ChatProviderRefused)
+		}
+	}
+}
+
+// TestChatReissuesOnlyARetryableStatus: a status that may be the provider's
+// moment — 429 and the 5xx class — is re-issued to the attempt count; every
+// other answered status ends the call on the one attempt that met it.
+func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
+	for _, tc := range []struct {
+		code     int
+		requests int
+	}{
+		{http.StatusBadRequest, 1},
+		{http.StatusUnauthorized, 1},
+		{http.StatusNotFound, 1},
+		{http.StatusTooManyRequests, model.ChatAttempts},
+		{http.StatusServiceUnavailable, model.ChatAttempts},
+	} {
+		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
+			srv, requests := statusServer(t, tc.code)
+
+			var observed []model.ChatAttempt
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil,
+				func(a model.ChatAttempt) { observed = append(observed, a) })
+			if !errors.Is(err, model.ErrChatIncomplete) {
+				t.Fatalf("Chat = %v, want an incomplete call", err)
+			}
+			if got.Outcome != model.ChatProviderRefused {
+				t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatProviderRefused)
+			}
+			for _, reason := range []string{got.Error, err.Error()} {
+				if want := fmt.Sprintf("http %d", tc.code); !strings.Contains(reason, want) {
+					t.Errorf("reason = %q, want it to name %q", reason, want)
+				}
+			}
+			if n := requests(); n != tc.requests || len(observed) != tc.requests {
+				t.Fatalf("%d requests, %d attempts observed; want %d", n, len(observed), tc.requests)
+			}
+			if tc.requests == 1 {
+				if got.Attempt != 1 || !strings.Contains(err.Error(), "1 attempt") {
+					t.Errorf("attempt %d, reason %q; want the one attempt it took", got.Attempt, err)
+				}
+				return
+			}
+			if got.Attempt != model.ChatAttempts {
+				t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
+			}
+		})
+	}
+}
+
+// TestChatIncompleteReasonWithoutAttemptText: an attempt can end without an
+// error text of its own — a server that served nothing says so through its
+// usage alone — and the reason then ends on the outcome, with no separator
+// left dangling after it.
+func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
+	srv, _ := sseServer(t, sseServedNothing)
+
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+	if !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != model.ChatServedNothing || got.Error != "" {
+		t.Fatalf("last attempt = %+v, want an outcome of %q and no error text", got, model.ChatServedNothing)
+	}
+	if want := "the last ending " + got.Outcome; !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("reason = %q, want it to end %q", err, want)
+	}
+}
+
+// TestChatNamesAnUnreachableEndpoint: nothing answering at all is the
+// transport's failure — the case the refusal above must not be read as, and
+// what a closed port looks like. No status refused it, so it is re-issued to
+// the attempt count like an incomplete stream.
+func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	var observed []string
+	got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: url}), "m", "the system", "the prompt", nil,
+		func(a model.ChatAttempt) { observed = append(observed, a.Outcome) })
+	if !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Outcome != model.ChatTransportFailure {
+		t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatTransportFailure)
+	}
+	if len(observed) != model.ChatAttempts {
+		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), model.ChatAttempts)
+	}
+}
+
 func TestChatRequestShape(t *testing.T) {
 	srv, seen := sseServer(t, sseAnswered)
-	if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
+	if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var body struct {
@@ -93,6 +251,7 @@ func TestChatRequestShape(t *testing.T) {
 		Messages    []map[string]any `json:"messages"`
 		Temperature *float64         `json:"temperature"`
 		Kwargs      map[string]any   `json:"chat_template_kwargs"`
+		Reasoning   map[string]any   `json:"reasoning"`
 		Stream      bool             `json:"stream"`
 		Options     map[string]any   `json:"stream_options"`
 		Tools       any              `json:"tools"`
@@ -107,6 +266,9 @@ func TestChatRequestShape(t *testing.T) {
 	if body.Temperature == nil || *body.Temperature != 0 || body.Kwargs["enable_thinking"] != false || len(body.Kwargs) != 1 {
 		t.Errorf("temperature %v, chat_template_kwargs %v", body.Temperature, body.Kwargs)
 	}
+	if len(body.Reasoning) != 1 || body.Reasoning["enabled"] != false {
+		t.Errorf("reasoning = %v, want the provider's control with enabled false", body.Reasoning)
+	}
 	if !body.Stream || body.Options["include_usage"] != true || body.Tools != nil {
 		t.Errorf("stream %t, stream_options %v, tools %v", body.Stream, body.Options, body.Tools)
 	}
@@ -115,10 +277,89 @@ func TestChatRequestShape(t *testing.T) {
 	}
 }
 
+// TestChatRecordsReasoned: a call's attempt says it reasoned from either
+// source the wire offers — a reasoning delta on the stream, or a usage block
+// reporting reasoning tokens spent. The second is what makes a call that
+// thought silently visible: no delta carried the thought, and the token count
+// is the only trace of it. A call with neither source did not reason.
+func TestChatRecordsReasoned(t *testing.T) {
+	const answered = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+	usage := func(reasoningTokens int) string {
+		return fmt.Sprintf("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":900,\"total_tokens\":940,\"completion_tokens_details\":{\"reasoning_tokens\":%d}}}\n\n", reasoningTokens)
+	}
+	const (
+		thought = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"weighing it\"}}]}\n\n"
+		done    = "data: [DONE]\n\n"
+	)
+	for _, tc := range []struct {
+		name string
+		sse  string
+		want bool
+	}{
+		{"usage reports reasoning tokens, no delta", answered + usage(880) + done, true},
+		{"neither a delta nor reasoning tokens", answered + usage(0) + done, false},
+		{"a reasoning delta, usage reports none", thought + answered + usage(0) + done, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := sseServer(t, tc.sse)
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if n := len(seen()); n != 1 {
+				t.Fatalf("%d requests; want the one it took", n)
+			}
+			if got.Reasoned != tc.want {
+				t.Errorf("Reasoned = %t, want %t (usage %+v)", got.Reasoned, tc.want, got.Usage)
+			}
+		})
+	}
+}
+
+// TestChatCarriesAnEmptyMessageContent: a message's content field reaches
+// the wire even when empty — `"content":""`, never an absent field. A
+// provider reads `{"role":"system"}` as a message with no text part and
+// declines the whole request, so this is the shape of kbase's empty system
+// prompt being sent at all.
+func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		system string
+		prompt string
+		want   []string
+	}{
+		{"empty system", "", "the prompt", []string{
+			`{"role":"system","content":""}`,
+			`{"role":"user","content":"the prompt"}`,
+		}},
+		{"empty prompt", "the system", "", []string{
+			`{"role":"system","content":"the system"}`,
+			`{"role":"user","content":""}`,
+		}},
+		{"neither empty", "the system", "the prompt", []string{
+			`{"role":"system","content":"the system"}`,
+			`{"role":"user","content":"the prompt"}`,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := sseServer(t, sseAnswered)
+			if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", tc.system, tc.prompt, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			raw := string(seen()[0])
+			for _, w := range tc.want {
+				if !strings.Contains(raw, w) {
+					t.Errorf("body = %s, want it to carry %s", raw, w)
+				}
+			}
+		})
+	}
+}
+
 func TestChatStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Chat(ctx, NewScriptedMock([]Response{{Content: "A"}}, nil), "m", "s", "p", nil, nil); !errors.Is(err, context.Canceled) {
+	if _, err := model.Chat(ctx, modeltest.NewScriptedMock([]model.Response{{Content: "A"}}, nil), "m", "s", "p", nil, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat on a cancelled context = %v", err)
 	}
 }
@@ -128,16 +369,134 @@ func TestChatStopsOnCancel(t *testing.T) {
 func TestChatBacksOffBetweenReissues(t *testing.T) {
 	srv, seen := sseServer(t, sseShortOfDone)
 	started := time.Now()
-	if _, err := Chat(context.Background(), NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p",
-		[]time.Duration{30 * time.Millisecond}, nil); !errors.Is(err, ErrChatIncomplete) {
+	if _, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "s", "p",
+		[]time.Duration{30 * time.Millisecond}, nil); !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want incomplete", err)
 	}
-	if took := time.Since(started); len(seen()) != ChatAttempts || took < time.Duration(ChatAttempts-1)*30*time.Millisecond {
-		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, ChatAttempts)
+	if took := time.Since(started); len(seen()) != model.ChatAttempts || took < time.Duration(model.ChatAttempts-1)*30*time.Millisecond {
+		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, model.ChatAttempts)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	// The pause fits the budget (there is none), so a cancel arriving during
+	// it is what ends the call.
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
 	defer cancel()
-	if _, err := Chat(ctx, NewHTTPClient(Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "s", "p", []time.Duration{time.Hour}, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat cancelled in its pause = %v", err)
+	}
+}
+
+// TestChatGivesUpWhereThePauseOutlivesTheDeadline: a pause the deadline cannot
+// cover is not taken. The attempt after it is impossible, and waiting it out
+// would spend the whole budget dying on the deadline instead of on the attempt
+// it made — the caller's real scoring backoff, 5 s then 30 s, inside a 2 s
+// deadline.
+func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	got, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{5 * time.Second, 30 * time.Second}, nil)
+	if !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("reason = %q, want the attempts it made rather than the deadline", err)
+	}
+	if !strings.Contains(err.Error(), "1 attempt") || !strings.Contains(err.Error(), model.ChatProviderRefused) {
+		t.Errorf("reason = %q, want the one attempt it made and how it ended", err)
+	}
+	if got.Attempt != 1 {
+		t.Errorf("attempt = %d, want the one it made", got.Attempt)
+	}
+	if n := requests(); n != 1 {
+		t.Errorf("%d requests, want the one attempt", n)
+	}
+	if took := time.Since(started); took >= 2*time.Second {
+		t.Errorf("gave up after %v, want well inside the 2s deadline", took)
+	}
+}
+
+// TestChatSpendsItsBudgetOnAttempts: a deadline the pauses fit is spent on
+// attempts, not on giving up early. A 30 s deadline with a short injected
+// backoff still puts the call on the wire model.ChatAttempts times.
+func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{time.Millisecond, time.Millisecond}, nil)
+	if !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	if got.Attempt != model.ChatAttempts {
+		t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
+	}
+	if n := requests(); n != model.ChatAttempts {
+		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
+	}
+}
+
+// TestChatTakesAPauseTheDeadlineCovers: a deadline longer than the whole
+// sequence leaves it unaffected — every attempt is made and every pause is
+// waited out rather than cut short.
+func TestChatTakesAPauseTheDeadlineCovers(t *testing.T) {
+	const pause = 30 * time.Millisecond
+	srv, requests := statusServer(t, http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	started := time.Now()
+	if _, err := model.Chat(ctx, model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt",
+		[]time.Duration{pause}, nil); !errors.Is(err, model.ErrChatIncomplete) {
+		t.Fatalf("Chat = %v, want an incomplete call", err)
+	}
+	took := time.Since(started)
+	if n := requests(); n != model.ChatAttempts {
+		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
+	}
+	if want := time.Duration(model.ChatAttempts-1) * pause; took < want || took >= time.Second {
+		t.Errorf("took %v, want the %d pauses it waited out inside the deadline", took, model.ChatAttempts-1)
+	}
+}
+
+// TestChatRecordsWhenTheFirstDeltaArrived: first-token time is the moment the
+// first non-empty content or reasoning delta arrived, and zero where the stream
+// carried neither — a reasoning delta counts, an empty one does not.
+func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
+	const (
+		thought = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"weighing it\"}}]}\n\n"
+		empty   = "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+		done    = "data: [DONE]\n\n"
+		usage   = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n"
+	)
+	for _, tc := range []struct {
+		name     string
+		sse      string
+		answered bool
+	}{
+		{"content", sseAnswered, true},
+		{"reasoning alone", thought + sseAnswered, true},
+		{"empty deltas only", empty + usage + done, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := sseServer(t, tc.sse)
+			got, err := model.Chat(context.Background(), model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil)
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if !tc.answered {
+				if got.FirstToken != 0 {
+					t.Errorf("FirstToken = %v, want zero: the stream carried no delta", got.FirstToken)
+				}
+				return
+			}
+			if got.FirstToken <= 0 || got.FirstToken > got.Duration {
+				t.Errorf("FirstToken = %v over a call of %v, want a moment inside it", got.FirstToken, got.Duration)
+			}
+		})
 	}
 }

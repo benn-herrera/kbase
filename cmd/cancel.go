@@ -1,11 +1,11 @@
 package main
 
-import "kbase/internal/build"
+import "github.com/spf13/cobra"
 
-func init() {
-	rootCmd.AddCommand(monitorCommand("cancel", "stop the running build, resumably",
-		`cancel signals the build holding the state store and waits for it to let
-go: the unit in flight is abandoned with nothing written for it, the
-build exits cancelled, and the next build invocation resumes it. Its result
-is one YAML document on stdout.`, build.Cancel))
+func cancelCommand() *cobra.Command {
+	return monitorCommand("cancel", "stop the running build or score run, resumably",
+		`cancel signals the build or score run holding the state store and waits for
+it to let go: the unit or item in flight is abandoned with nothing written for
+it, the run exits cancelled, and the next invocation resumes it. Its result is
+one YAML document on stdout.`, cancelScore)
 }

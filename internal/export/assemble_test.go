@@ -16,6 +16,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/log"
 )
@@ -29,24 +30,25 @@ const testVersion = "9.9.9-test"
 
 // exportKB is smallKB with what the export reads beyond the walk: a theorem
 // and a lemma block, a label line inside a code fence, citations, vol1's
-// references.md entries, the root register's work entry, a document with no
+// references.md entries, a work record, a document with no
 // heading, and assets inside and outside the volumes.
 func exportKB() map[string]string {
 	files := smallKB()
-	files["vol1/v1-leaf.md"] = "---\nkind: leaf\nno-claim: true\n---\n[↑ First Volume](index.md)\n\n# §1 The Leaf\n\n" +
+	files["vol1/v1-leaf.md"] = "[↑ First Volume](index.md)\n\n# §1 The Leaf\n\n" +
 		"Body text with a cross-reference to [the other leaf](../vol2/v2-leaf.md), citing " +
 		"<span class=\"citation\" data-cites=\"k1\">(Author 2001)</span>.\n\n" +
 		"> <span id=\"thm:a\">**Theorem**</span>\n>\n> **Theorem 1**. Every leaf is a leaf.\n\n" +
 		"```\n> **Fenced**\n```\n"
-	files["vol1/references.md"] = "---\nkind: leaf\n---\n[↑ First Volume](index.md)\n\n# References\n\n" +
+	files["vol1/references.md"] = "[↑ First Volume](index.md)\n\n# References\n\n" +
 		"<div id=\"refs\" class=\"references csl-bib-body hanging-indent\">\n\n" +
 		"<div id=\"ref-k1\" class=\"csl-entry\">\n\nAuthor, A. 2001. *Title One*.\n\n</div>\n\n</div>\n"
-	files["vol2/index.md"] = "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n# Second Volume\n\n" +
+	files["vol2/index.md"] = "[↑ A KB](../entry-point.md)\n\n# Second Volume\n\n" +
 		"- [The Second Leaf](v2-leaf.md) — a leaf\n- [No Heading](v2-noheading.md) — a leaf with no heading\n"
-	files["vol2/v2-leaf.md"] = "---\nkind: leaf\n---\n[↑ Second Volume](index.md)\n\n# §1 The Second Leaf\n\n" +
+	files["vol2/v2-leaf.md"] = "[↑ Second Volume](index.md)\n\n# §1 The Second Leaf\n\n" +
 		"> **Lemma**\n>\n> **Lemma 1**. Body cites <span class=\"citation\" data-cites=\"smith2020\">(Smith)</span>.\n"
-	files["vol2/v2-noheading.md"] = "---\nkind: leaf\n---\n[↑ Second Volume](index.md)\n\nJust prose.\n"
-	files["claim-rigor.md"] = "# Register\n\n## Smith, *A Work*\n<!-- id: wrk-smith2020 -->\n\n### Rigor\n- rigor: 0.70\n- rationale: sound.\n"
+	files["vol2/v2-noheading.md"] = "[↑ Second Volume](index.md)\n\nJust prose.\n"
+	rigor := 0.70
+	files[kb.GraphNodesFile] = string(kb.EncodeNodes(kb.Graph{Works: []kb.WorkNode{{ID: "wrk-smith2020", Title: "Smith, *A Work*", Rigor: &rigor, Rationale: "sound."}}}))
 	files["vol1/fig.png"] = string(fig)
 	files["vol1/nested/data.csv"] = "a,b\n"
 	files["logo.png"] = "outside every volume"
@@ -65,19 +67,19 @@ func assembleKB(t *testing.T, files map[string]string, volumes ...string) map[st
 	t.Helper()
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if !rep.Empty() {
-		t.Fatalf("Walk reported %v over a clean tree", rep.Findings())
+		t.Fatalf("walk reported %v over a clean tree", rep.Findings())
 	}
-	if tree, err = SelectVolumes(tree, volumes); err != nil {
-		t.Fatalf("SelectVolumes: %v", err)
+	if tree, err = selectVolumes(tree, volumes); err != nil {
+		t.Fatalf("selectVolumes: %v", err)
 	}
-	out, err := Assemble(src, tree, testVersion)
+	out, err := assemble(src, tree, testVersion)
 	if err != nil {
-		t.Fatalf("Assemble: %v", err)
+		t.Fatalf("assemble: %v", err)
 	}
 	return out
 }
@@ -196,13 +198,13 @@ func TestFrontMatter(t *testing.T) {
 		name, text, prose, title string
 	}{
 		{
-			"0.9.0-built: title over the list",
-			"---\nkind: entry-point\n---\n# Knowledge Base\n\n- [A Paper](a-paper/index.md)\n",
+			"title over the list",
+			"---\nkb-format: \"3.0.0\"\n---\n# Knowledge Base\n\n- [A Paper](a-paper/index.md)\n",
 			"", "Knowledge Base",
 		},
 		{
 			"overview-drafted: a Volumes section",
-			"---\nkind: entry-point\n---\n# A KB\n\nBlurb.\n\n## Key Results\n\nResult.\n\n## Volumes\n\n- [First](vol1/index.md) — the first volume\n- [Second](vol2/index.md) — the second volume\n",
+			"---\nkb-format: \"3.0.0\"\n---\n# A KB\n\nBlurb.\n\n## Key Results\n\nResult.\n\n## Volumes\n\n- [First](vol1/index.md) — the first volume\n- [Second](vol2/index.md) — the second volume\n",
 			"\nBlurb.\n\n## Key Results {.unnumbered}\n\nResult.\n\n", "A KB",
 		},
 		{
@@ -281,8 +283,8 @@ func TestAssembleTables(t *testing.T) {
 // carries every table, each empty rather than null.
 func TestAssembleTablesEmpty(t *testing.T) {
 	files := assembleKB(t, map[string]string{
-		"entry-point.md": "---\nkind: entry-point\n---\n# Empty\n\n- [V](v/index.md) — the volume\n",
-		"v/index.md":     "---\nkind: index\n---\n[↑ Empty](../entry-point.md)\n\n# V\n",
+		"entry-point.md": "# Empty\n\n- [V](v/index.md) — the volume\n",
+		"v/index.md":     "[↑ Empty](../entry-point.md)\n\n# V\n",
 	})
 	s := string(files[xrefFile])
 	for _, want := range []string{`"theorems": []`, `"bibliography": {}`, `"assets": {}`} {
@@ -293,14 +295,14 @@ func TestAssembleTablesEmpty(t *testing.T) {
 }
 
 // TestAssembleBibliographySources: with every exported volume carrying
-// references.md entries, the register's works do not join the bibliography;
-// with one that carries none, they do.
+// references.md entries, the work records do not join the bibliography; with
+// one that carries none, they do.
 func TestAssembleBibliographySources(t *testing.T) {
 	if got := tablesOf(t, assembleKB(t, exportKB(), "vol1")).Bibliography; !reflect.DeepEqual(got, map[string]string{"k1": "Author, A. 2001. *Title One*."}) {
 		t.Errorf("vol1 alone: bibliography %v, want its references.md entry only", got)
 	}
 	if got := tablesOf(t, assembleKB(t, exportKB(), "vol2")).Bibliography; !reflect.DeepEqual(got, map[string]string{"smith2020": "Smith, *A Work*"}) {
-		t.Errorf("vol2 alone: bibliography %v, want the register's work only", got)
+		t.Errorf("vol2 alone: bibliography %v, want the work record only", got)
 	}
 }
 
@@ -330,14 +332,14 @@ func TestAssembleVolumeSelection(t *testing.T) {
 	}
 
 	src := writeKB(t, exportKB())
-	tree, err := Walk(src, &Report{})
+	tree, err := walk(src, &Report{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = SelectVolumes(tree, []string{"vol2", "nope", "vol9"})
+	_, err = selectVolumes(tree, []string{"vol2", "nope", "vol9"})
 	var unknown UnknownVolumesError
 	if !errors.As(err, &unknown) || !slices.Equal(unknown.Names, []string{"nope", "vol9"}) {
-		t.Errorf("SelectVolumes with unknown volumes = %v, want UnknownVolumesError naming nope and vol9", err)
+		t.Errorf("selectVolumes with unknown volumes = %v, want UnknownVolumesError naming nope and vol9", err)
 	}
 }
 
@@ -421,10 +423,10 @@ func writeFile(t *testing.T, dir, rel, data string) {
 func TestWriteOutRefusesForeignGenTex(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, GenTexDir+"/notes.txt", "mine")
-	_, _, _, err := WriteOut(dir, map[string][]byte{"a.txt": []byte("a")})
+	_, _, _, err := writeOut(dir, map[string][]byte{"a.txt": []byte("a")})
 	var refusal ExportDirError
 	if !errors.As(err, &refusal) || refusal.Dir != filepath.Join(dir, GenTexDir) {
-		t.Fatalf("WriteOut over a foreign gen-tex/ = %v, want ExportDirError naming it", err)
+		t.Fatalf("writeOut over a foreign gen-tex/ = %v, want ExportDirError naming it", err)
 	}
 	if got := slices.Sorted(maps.Keys(snapshot(t, dir))); !slices.Equal(got, []string{GenTexDir + "/notes.txt"}) {
 		t.Errorf("the refused directory holds %q, want gen-tex/notes.txt alone", got)
@@ -446,9 +448,9 @@ func TestWriteOutBesideAuthorFiles(t *testing.T) {
 		writeFile(t, dir, rel, data)
 	}
 	before := snapshot(t, dir)
-	written, preamble, _, err := WriteOut(dir, assembleKB(t, exportKB()))
+	written, preamble, _, err := writeOut(dir, assembleKB(t, exportKB()))
 	if err != nil {
-		t.Fatalf("WriteOut beside the author's files: %v", err)
+		t.Fatalf("writeOut beside the author's files: %v", err)
 	}
 	gen := filepath.Join(dir, GenTexDir) + string(filepath.Separator)
 	for _, p := range written {
@@ -462,7 +464,7 @@ func TestWriteOutBesideAuthorFiles(t *testing.T) {
 			t.Errorf("the author's %s changed", rel)
 		}
 	}
-	if _, _, _, err := WriteOut(dir, map[string][]byte{"a.txt": []byte("a")}); err != nil {
+	if _, _, _, err := writeOut(dir, map[string][]byte{"a.txt": []byte("a")}); err != nil {
 		t.Fatalf("reduced re-issue: %v", err)
 	}
 	after = snapshot(t, dir)
@@ -485,7 +487,7 @@ func TestWriteOutReissue(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "out")
 	gen := filepath.Join(dir, GenTexDir)
 	files := assembleKB(t, exportKB())
-	written, preamble, changed, err := WriteOut(dir, files)
+	written, preamble, changed, err := writeOut(dir, files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +522,7 @@ func TestWriteOutReissue(t *testing.T) {
 	}
 	writeFile(t, dir, PreambleFile, "\\newcommand{\\R}{\\mathbb{R}}\n")
 	before := snapshot(t, dir)
-	written, preamble, changed, err = WriteOut(dir, assembleKB(t, exportKB()))
+	written, preamble, changed, err = writeOut(dir, assembleKB(t, exportKB()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +535,7 @@ func TestWriteOutReissue(t *testing.T) {
 
 	reduced := maps.Clone(files)
 	delete(reduced, "assets/vol1/fig.png")
-	written, _, changed, err = WriteOut(dir, reduced)
+	written, _, changed, err = writeOut(dir, reduced)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,11 +568,11 @@ func TestWriteOutRemovesEmptiedDirs(t *testing.T) {
 		"assets/a/two.bin":   []byte("2"),
 		"assets/b/three.bin": []byte("3"),
 	}
-	if _, _, _, err := WriteOut(dir, first); err != nil {
+	if _, _, _, err := writeOut(dir, first); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, gen, "assets/b/mine.txt", "mine")
-	if _, _, _, err := WriteOut(dir, map[string][]byte{"keep.txt": []byte("k")}); err != nil {
+	if _, _, _, err := writeOut(dir, map[string][]byte{"keep.txt": []byte("k")}); err != nil {
 		t.Fatal(err)
 	}
 	for _, gone := range []string{"assets/a/x", "assets/a"} {
@@ -591,11 +593,11 @@ func TestWriteOutRemovesEmptiedDirs(t *testing.T) {
 // files have replaced, removes it and writes the files that replace it.
 func TestWriteOutRemovesTheSingleStream(t *testing.T) {
 	dir := t.TempDir()
-	if _, _, _, err := WriteOut(dir, map[string][]byte{"kbase-export.md": []byte("# Old\n")}); err != nil {
+	if _, _, _, err := writeOut(dir, map[string][]byte{"kbase-export.md": []byte("# Old\n")}); err != nil {
 		t.Fatal(err)
 	}
 	files := assembleKB(t, exportKB())
-	if _, _, _, err := WriteOut(dir, files); err != nil {
+	if _, _, _, err := writeOut(dir, files); err != nil {
 		t.Fatal(err)
 	}
 	after := snapshot(t, dir)
@@ -620,8 +622,8 @@ func unmarshalYAML(p string, v any) error {
 func TestWriteOutRefusesEscapingManifest(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, GenTexDir+"/"+ManifestFile, "files:\n  - ../outside.txt\n")
-	if _, _, _, err := WriteOut(dir, map[string][]byte{"a.txt": []byte("a")}); err == nil || !strings.Contains(err.Error(), "../outside.txt") {
-		t.Errorf("WriteOut over a manifest naming ../outside.txt = %v, want an error naming it", err)
+	if _, _, _, err := writeOut(dir, map[string][]byte{"a.txt": []byte("a")}); err == nil || !strings.Contains(err.Error(), "../outside.txt") {
+		t.Errorf("writeOut over a manifest naming ../outside.txt = %v, want an error naming it", err)
 	}
 }
 
@@ -715,7 +717,7 @@ func convertKB(t *testing.T, dir string, files map[string]string) (string, []map
 	if _, err := pandoc.Preflight(ctx); err != nil {
 		t.Skipf("pandoc is unusable here: %v", err)
 	}
-	if _, _, _, err := WriteOut(dir, assembleKB(t, files)); err != nil {
+	if _, _, _, err := writeOut(dir, assembleKB(t, files)); err != nil {
 		t.Fatal(err)
 	}
 	gen := filepath.Join(dir, GenTexDir)

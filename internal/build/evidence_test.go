@@ -7,6 +7,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/result"
 )
 
@@ -52,13 +53,13 @@ func TestStatusDocument(t *testing.T) {
 	if doc.PID == nil || doc.Started == nil || !doc.NoInference {
 		t.Errorf("pid %v, started %v, no-inference %t: want the build's pid and start, and the flag it ran under", doc.PID, doc.Started, doc.NoInference)
 	}
-	if len(doc.Stages) != len(Stages) {
-		t.Fatalf("%d stages listed, want %d", len(doc.Stages), len(Stages))
+	if len(doc.Stages) != len(buildstore.Stages) {
+		t.Fatalf("%d stages listed, want %d", len(doc.Stages), len(buildstore.Stages))
 	}
 	unrecorded := ""
 	for i, s := range doc.Stages {
-		if s.Stage != Stages[i].ID {
-			t.Errorf("stage %d = %+v, want %s", i, s, Stages[i].ID)
+		if s.Stage != buildstore.Stages[i].ID {
+			t.Errorf("stage %d = %+v, want %s", i, s, buildstore.Stages[i].ID)
 		}
 		if s.Commit == nil && unrecorded == "" {
 			unrecorded = s.Stage

@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"kbase/internal/asks/call"
+	"kbase/internal/asks"
+	"kbase/internal/buildstore"
+	"kbase/internal/buildstore/storetest"
 	"kbase/internal/result"
 )
 
@@ -23,11 +25,11 @@ func TestStoreAtFormat1Opens(t *testing.T) {
 	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
 		t.Fatalf("build over an unstamped store = %s %v", outcome, fields)
 	}
-	b, err := os.ReadFile(filepath.Join(f.state, storeFormatFile))
+	b, err := os.ReadFile(filepath.Join(f.state, buildstore.StoreFormatFile))
 	if err != nil || string(b) != "1\n" {
 		t.Fatalf("the store's stamp = %q, %v; want \"1\\n\"", b, err)
 	}
-	if outcome, fields := Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo}); outcome != result.Done {
+	if outcome, fields := buildstore.Status(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo}); outcome != result.Done {
 		t.Errorf("status over a store at format 1 = %s %v", outcome, fields)
 	}
 }
@@ -37,20 +39,24 @@ func TestStoreAtFormat1Opens(t *testing.T) {
 // both versions, and none of them writes into it.
 func TestNewerStoreRefusedByEveryVerb(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.state, storeFormatFile), "2\n")
+	storetest.WriteFile(t, filepath.Join(f.state, buildstore.StoreFormatFile), "2\n")
 	locate := func() (string, []result.Field) {
-		_, _, outcome, fields := Locate(MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+		_, _, outcome, fields := buildstore.Locate(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
 		return outcome, fields
 	}
 	for verb, run := range map[string]func() (string, []result.Field){
-		"build":  func() (string, []result.Field) { return f.build(t, f.options()) },
-		"status": func() (string, []result.Field) { return Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo}) },
-		"cancel": func() (string, []result.Field) { return Cancel(MonitorOptions{StateDir: f.state, WorkDir: f.repo}) },
-		"mcp":    locate,
+		"build": func() (string, []result.Field) { return f.build(t, f.options()) },
+		"status": func() (string, []result.Field) {
+			return buildstore.Status(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+		},
+		"cancel": func() (string, []result.Field) {
+			return Cancel(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+		},
+		"mcp": locate,
 	} {
 		outcome, fields := run()
-		items, _ := field(fields, result.RefusalsKey).([]result.Item)
-		if outcome != result.Refused || len(items) != 1 || items[0].Check != checkStateDir ||
+		items, _ := storetest.Field(fields, result.RefusalsKey).([]result.Item)
+		if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckStateDir ||
 			items[0].Remedy != "update kbase, or use another --state-dir" ||
 			!strings.Contains(items[0].Detail, "format 2") || !strings.Contains(items[0].Detail, "format 1") {
 			t.Errorf("%s over a store at format 2 = %s %v; want refused, check state-dir, both versions named", verb, outcome, fields)
@@ -74,7 +80,7 @@ func TestStoreUpgradeRefusesAGap(t *testing.T) {
 	if err == nil || err.Error() != "state store: no upgrade leads from format 2 toward 3" {
 		t.Errorf("err = %v, want the gap at 2 named", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, storeFormatFile)); string(b) != "2\n" {
+	if b, _ := os.ReadFile(filepath.Join(dir, buildstore.StoreFormatFile)); string(b) != "2\n" {
 		t.Errorf("stamp after the step that ran = %q, want \"2\\n\"", b)
 	}
 }
@@ -99,7 +105,7 @@ func TestPruneCapturesKeepsTheLatestBuilds(t *testing.T) {
 			if outcome == result.Refused {
 				clock = clock.Add(30 * time.Minute)
 			}
-			for _, e := range []event{{Event: eventRun}, {Event: eventEnd, Outcome: outcome}} {
+			for _, e := range []buildstore.Event{{Event: buildstore.EventRun}, {Event: buildstore.EventEnd, Outcome: outcome}} {
 				if err := p.emit(e); err != nil {
 					t.Fatal(err)
 				}
@@ -109,11 +115,11 @@ func TestPruneCapturesKeepsTheLatestBuilds(t *testing.T) {
 	if err := p.close(); err != nil {
 		t.Fatal(err)
 	}
-	captures := filepath.Join(dir, scratchDir, call.CapturesDir)
-	reports := filepath.Join(dir, ReportsDir)
-	answers := filepath.Join(dir, scratchDir, call.AnswersDir)
+	captures := filepath.Join(dir, buildstore.ScratchDir, asks.CapturesDir)
+	reports := filepath.Join(dir, buildstore.ReportsDir)
+	answers := filepath.Join(dir, buildstore.ScratchDir, asks.AnswersDir)
 	written := func(path string, when time.Time) {
-		writeFile(t, path, "x")
+		storetest.WriteFile(t, path, "x")
 		if err := os.Chtimes(path, when, when); err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +127,7 @@ func TestPruneCapturesKeepsTheLatestBuilds(t *testing.T) {
 	for i := range builds {
 		when := at(i).Add(10 * time.Minute)
 		written(filepath.Join(captures, "ask-"+string(rune('a'+i))+".capture.jsonl"), when)
-		written(filepath.Join(reports, CapturePrefix+string(rune('a'+i))+".stdout.yaml"), when)
+		written(filepath.Join(reports, buildstore.CapturePrefix+string(rune('a'+i))+".stdout.yaml"), when)
 		written(filepath.Join(answers, string(rune('a'+i))+".txt"), when)
 	}
 	written(filepath.Join(reports, "start.yaml"), at(0))
@@ -149,18 +155,14 @@ func TestPruneCapturesKeepsTheLatestBuilds(t *testing.T) {
 	if got := names(answers); len(got) != builds {
 		t.Errorf("answer cache holds %q, want all %d answers", got, builds)
 	}
-	entries, size, err := answerCache(dir)
-	if err != nil || entries != builds || size != builds {
-		t.Errorf("answerCache = %d entries, %d bytes, %v; want %d, %d", entries, size, err, builds, builds)
-	}
 }
 
 // TestPruneCapturesBelowTheLimitKeepsAll: fewer builds than keptBuilds remove
 // nothing, and a store with no progress record is no error.
 func TestPruneCapturesBelowTheLimitKeepsAll(t *testing.T) {
 	dir := t.TempDir()
-	capture := filepath.Join(dir, scratchDir, call.CapturesDir, "old.capture.jsonl")
-	writeFile(t, capture, "x")
+	capture := filepath.Join(dir, buildstore.ScratchDir, asks.CapturesDir, "old.capture.jsonl")
+	storetest.WriteFile(t, capture, "x")
 	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(capture, old, old); err != nil {
 		t.Fatal(err)

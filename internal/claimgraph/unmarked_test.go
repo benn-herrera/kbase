@@ -162,8 +162,8 @@ func TestUnmarkedRecordRoundTrip(t *testing.T) {
 	a, b2 := asks.LetterPoints, asks.LetterDoesNotPoint
 	plan := []buildrecords.PlannedPair{{"clm-b", "clm-c"}, {"clm-a", "clm-c"}}
 	rec := buildrecords.UnmarkedRecord{Planned: &plan, Pairs: []buildrecords.CandidateEntry{
-		{Source: "clm-b", Target: "clm-c", Offered: []string{a, b2}, Letter: &b2, Outcome: ClassifyReasked},
-		{Source: "clm-a", Target: "clm-c", Offered: []string{a, b2}, Letter: &a, Outcome: ClassifyAnswered},
+		{Source: "clm-b", Target: "clm-c", Offered: []string{a, b2}, Letter: &b2, Outcome: string(asks.Reasked)},
+		{Source: "clm-a", Target: "clm-c", Offered: []string{a, b2}, Letter: &a, Outcome: string(asks.Answered)},
 	}}
 	if err := WriteUnmarked(repo, rec); err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestUnmarkedRecordRoundTrip(t *testing.T) {
 	}
 	got, _, err := buildrecords.ReadUnmarked(recordsAt(repo))
 	if err != nil || got.Planned == nil || !slices.Equal(*got.Planned, plan) || len(got.Pairs) != 2 ||
-		got.Pairs[0].Source != "clm-a" || *got.Pairs[0].Letter != a || got.Pairs[1].Outcome != ClassifyReasked {
+		got.Pairs[0].Source != "clm-a" || *got.Pairs[0].Letter != a || got.Pairs[1].Outcome != string(asks.Reasked) {
 		t.Errorf("read back = %+v, %v; want the plan as written and the pairs sorted", got, err)
 	}
 	if len(unanswered(got)) != 0 || !slices.Equal(unmarkedFound(got), []pair{{"clm-a", "clm-c"}}) {
@@ -346,7 +346,7 @@ func TestAnInferredLinkIsAskedThreeWay(t *testing.T) {
 		reader.by[p.source+"->"+p.target] = mention
 	}
 	for p, e := range run(reader) {
-		if e.Letter == nil || *e.Letter != mention || len(e.Offered) != len(all) || e.Outcome != ClassifyAnswered {
+		if e.Letter == nil || *e.Letter != mention || len(e.Offered) != len(all) || e.Outcome != string(asks.Answered) {
 			t.Errorf("%v records %+v, want asked three letters and answered C", p, e)
 		}
 	}

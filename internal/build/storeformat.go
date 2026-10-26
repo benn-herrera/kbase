@@ -6,60 +6,29 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"kbase/internal/atomicfile"
-	"kbase/internal/result"
+	"kbase/internal/buildstore"
 )
-
-// storeFormatFile, at the state store's root, holds the store's layout
-// version: the names of its files and the shapes of the records in them. A
-// store without one is version 1.
-const storeFormatFile = "format"
-
-// storeFormat is the layout version this kbase reads and writes.
-const storeFormat = 1
 
 // storeUpgrades converts a store in place from the version it is keyed by to
 // the next.
 var storeUpgrades = map[int]func(dir string) error{}
 
-// storeVersion is the layout version of the store at dir; one newer than
-// this kbase's is refused.
-func storeVersion(dir string) (int, error) {
-	path := filepath.Join(dir, storeFormatFile)
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 1, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	v, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return 0, fmt.Errorf("the state store's %s holds %q, not a format version", path, b)
-	}
-	if v > storeFormat {
-		return 0, result.Refusal{{Check: checkStateDir, Path: dir, Key: "--state-dir", Remedy: "update kbase, or use another --state-dir",
-			Detail: fmt.Sprintf("the state store %s is at format %d, and this kbase knows format %d and older", dir, v, storeFormat)}}
-	}
-	return v, nil
-}
-
-// readyStore brings the store at dir to storeFormat and stamps it; its
-// holder lock is held.
+// readyStore brings the store at dir to buildstore.StoreFormat and stamps it;
+// its holder lock is held.
 func readyStore(dir string) error {
-	v, err := storeVersion(dir)
+	v, err := buildstore.StoreVersion(dir)
 	if err != nil {
 		return err
 	}
-	if err := upgradeStore(storeUpgrades, dir, v, storeFormat); err != nil {
+	if err := upgradeStore(storeUpgrades, dir, v, buildstore.StoreFormat); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(dir, storeFormatFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, buildstore.StoreFormatFile)); !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return writeStoreFormat(dir, storeFormat)
+	return writeStoreFormat(dir, buildstore.StoreFormat)
 }
 
 // upgradeStore converts the store at dir from version from to version to
@@ -83,5 +52,5 @@ func upgradeStore(steps map[int]func(dir string) error, dir string, from, to int
 }
 
 func writeStoreFormat(dir string, v int) error {
-	return atomicfile.Write(filepath.Join(dir, storeFormatFile), []byte(strconv.Itoa(v)+"\n"), nil)
+	return atomicfile.Write(filepath.Join(dir, buildstore.StoreFormatFile), []byte(strconv.Itoa(v)+"\n"), nil)
 }

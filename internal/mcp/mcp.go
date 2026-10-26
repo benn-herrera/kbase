@@ -1,518 +1,342 @@
-// Package mcp serves a table of tools over the Model Context Protocol:
-// newline-delimited JSON-RPC 2.0, one request answered at a time, in order.
-// The table is the caller's; this package knows no tool by name.
+// Package mcp is the MCP server over the command tree: the kbase.mcp and
+// kbase.readOnly annotations a command and a flag declare, the tool table
+// derived from the bound commands, a call run as its command's RunE, the
+// invocation directory a call names, the resources, the build watcher, and the
+// detached build and score launches. What a call reaches beyond the command
+// tree is the caller's, handed in as function values.
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"math"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
-	"sync"
 
-	"kbase/internal/log"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"go.yaml.in/yaml/v3"
+
+	"kbase/internal/mcp/protocol"
+	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
-// ProtocolVersion is the MCP specification revision the server implements.
-const ProtocolVersion = "2025-11-25"
+// ReadOnlyAnnotation marks a command that writes nothing; its MCP tool
+// carries the mark as its read-only hint.
+const ReadOnlyAnnotation = "kbase.readOnly"
 
-// Tool is one callable tool. Call returns the tool's result text, the same
-// result as structured content, and the exit code the result stands for; an
-// error is a fault of the tool itself, not a result.
-type Tool struct {
-	Name        string
-	Description string
-	InputSchema Schema
-	ReadOnly    bool
-	Call        func(args map[string]any) (text string, structured map[string]any, exitCode int, err error)
+// ReadOnly declares cmd read-only.
+func ReadOnly(cmd *cobra.Command) *cobra.Command { return annotate(cmd, ReadOnlyAnnotation, "true") }
+
+// BindingAnnotation is a command's MCP binding, declared where the command is
+// built: Bound where a tool binds it, by Bind, and Excluded where none does,
+// by Exclude. A command declaring neither is bound by no tool.
+const (
+	BindingAnnotation = "kbase.mcp"
+	Bound             = "bound"
+	Excluded          = "excluded"
+)
+
+// Bind declares cmd bound: a tool binds it.
+func Bind(cmd *cobra.Command) *cobra.Command { return annotate(cmd, BindingAnnotation, Bound) }
+
+// ExclusionReasonAnnotation is an excluded command's reason for being bound
+// by no tool, as Exclude records it.
+const ExclusionReasonAnnotation = "kbase.mcp.reason"
+
+// Exclude declares cmd excluded: no tool binds it, for reason. The reason is
+// recorded under ExclusionReasonAnnotation for the tool table's test to read;
+// no tool, help text or result carries it.
+func Exclude(cmd *cobra.Command, reason string) *cobra.Command {
+	return annotate(annotate(cmd, ExclusionReasonAnnotation, reason), BindingAnnotation, Excluded)
 }
 
-// Schema is a tool's input: an object of Properties, the Required ones
-// present, no other key allowed.
-type Schema struct {
-	Properties map[string]Property
-	Required   []string
-}
-
-// Property is one input key: Type is its JSON Schema type, "" admitting any
-// value; Items is the element schema where Type is "array".
-type Property struct {
-	Type        string    `json:"type,omitempty"`
-	Items       *Property `json:"items,omitempty"`
-	Description string    `json:"description,omitempty"`
-}
-
-// Resource is one resource the server offers.
-type Resource struct {
-	URI      string `json:"uri"`
-	Name     string `json:"name"`
-	MimeType string `json:"mimeType"`
-}
-
-// Resources is what the server offers as resources: List is every one
-// present now, Read the text of one List returned.
-type Resources interface {
-	List() ([]Resource, error)
-	Read(Resource) (string, error)
-}
-
-// Subscription is the one resource a client may subscribe to: its URI, and
-// Watch, which follows that resource for the connection and calls updated once
-// for each change a client should hear about. Watch runs until ctx ends; the
-// URI is the only one a subscription is accepted for, so every other listed
-// resource is refused as not subscribable.
-type Subscription struct {
-	URI   string
-	Watch func(ctx context.Context, updated func())
-}
-
-func (s Schema) MarshalJSON() ([]byte, error) {
-	properties := s.Properties
-	if properties == nil {
-		properties = map[string]Property{}
+// ExcludeFlag declares that f is no argument of its command's tool: its
+// kbase.mcp annotation is excluded, and the tool's schema does not derive it.
+func ExcludeFlag(f *pflag.Flag) {
+	if f.Annotations == nil {
+		f.Annotations = map[string][]string{}
 	}
-	required := s.Required
-	if required == nil {
-		required = []string{}
-	}
-	return json.Marshal(struct {
-		Type                 string              `json:"type"`
-		Properties           map[string]Property `json:"properties"`
-		Required             []string            `json:"required"`
-		AdditionalProperties bool                `json:"additionalProperties"`
-	}{"object", properties, required, false})
+	f.Annotations[BindingAnnotation] = []string{Excluded}
 }
 
-func (p Property) admits(v any) bool {
-	switch p.Type {
-	case "":
-		return true
-	case "string":
-		_, ok := v.(string)
-		return ok
-	case "boolean":
-		_, ok := v.(bool)
-		return ok
-	case "number":
-		_, ok := v.(float64)
-		return ok
-	case "integer":
-		f, ok := v.(float64)
-		return ok && f == math.Trunc(f)
-	case "array":
-		items, ok := v.([]any)
-		if !ok {
-			return false
+// ExcludedFlag is whether f declares itself no argument of its command's
+// tool.
+func ExcludedFlag(f *pflag.Flag) bool {
+	return slices.Equal(f.Annotations[BindingAnnotation], []string{Excluded})
+}
+
+func annotate(cmd *cobra.Command, key, value string) *cobra.Command {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[key] = value
+	return cmd
+}
+
+type invocationDirKey struct{}
+
+// InvocationDir is the directory the tool call ctx belongs to names for its
+// command to start from, and whether ctx is a tool call's.
+func InvocationDir(ctx context.Context) (string, bool) {
+	dir, ok := ctx.Value(invocationDirKey{}).(string)
+	return dir, ok
+}
+
+// ResetFlags puts cmd's own flags back to their defaults, as a new process
+// would find them; the global flags it inherits are the server's and stay.
+func ResetFlags(cmd *cobra.Command) error {
+	var err error
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		var ferr error
+		if sv, ok := f.Value.(pflag.SliceValue); ok {
+			ferr = sv.Replace(nil)
+		} else {
+			ferr = f.Value.Set(f.DefValue)
 		}
-		return p.Items == nil || !slices.ContainsFunc(items, func(item any) bool { return !p.Items.admits(item) })
-	}
-	return false
+		if ferr != nil && err == nil {
+			err = fmt.Errorf("resetting --%s: %w", f.Name, ferr)
+		}
+		f.Changed = false
+	})
+	return err
 }
 
-// check is every way args fail s, in key order; "" where none.
-func (s Schema) check(args map[string]any) string {
-	var faults []string
-	for _, key := range s.Required {
-		if _, ok := args[key]; !ok {
-			faults = append(faults, fmt.Sprintf("argument %q is required", key))
+// Positional is one positional argument a command declares in its Use line:
+// <Name>, or <Name>... where it repeats.
+type Positional struct {
+	Name     string
+	Variadic bool
+}
+
+// DeclaredPositionals is the positionals cmd's Use line declares, in order.
+func DeclaredPositionals(cmd *cobra.Command) ([]Positional, error) {
+	words := strings.Fields(cmd.Use)[1:]
+	declared := make([]Positional, 0, len(words))
+	for i, w := range words {
+		name, variadic := strings.CutSuffix(w, "...")
+		if !strings.HasPrefix(name, "<") || !strings.HasSuffix(name, ">") || variadic && i != len(words)-1 {
+			return nil, fmt.Errorf("%s: %q in its usage line is not a positional <name>", cmd.Name(), w)
+		}
+		declared = append(declared, Positional{strings.Trim(name, "<>"), variadic})
+	}
+	return declared, nil
+}
+
+// flagSchemaTypes is the JSON Schema of each flag type a tool takes.
+var flagSchemaTypes = map[string]protocol.Property{
+	"bool": {Type: "boolean"}, "string": {Type: "string"}, "int": {Type: "integer"}, "float64": {Type: "number"},
+	"stringArray": {Type: "array", Items: &protocol.Property{Type: "string"}},
+	// A duration flag's argument is a Go duration string, as the command
+	// line spells it ("30s").
+	"duration": {Type: "string"},
+}
+
+// Calls is what a tool call reaches beyond the command tree, supplied by the
+// caller of Tools.
+type Calls struct {
+	// WriteOp runs the write op op over the values document values, writing
+	// its result document on out.
+	WriteOp func(op string, values []byte, out io.Writer) error
+	// RenderError writes on out the result document for err, an error a
+	// command's RunE returned without writing one, and on stderr its line.
+	RenderError func(err error, out, stderr io.Writer)
+	// Detached is the tool of each command it keys, in place of one that runs
+	// the command's RunE.
+	Detached map[*cobra.Command]func(*cobra.Command) (protocol.Tool, error)
+	// Listed is the tools no command stands behind, after the derived ones.
+	Listed []protocol.Tool
+}
+
+// Tools is the tool table: one tool per command under root its binding
+// declares bound, each resolving its KB from dir, and after them calls.Listed.
+func Tools(root *cobra.Command, dir string, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
+	var tools []protocol.Tool
+	for _, cmd := range root.Commands() {
+		if cmd.Annotations[BindingAnnotation] != Bound {
+			continue
+		}
+		var tool protocol.Tool
+		var err error
+		if fields, ok := write.OpVocabulary(cmd.Name()); ok {
+			tool = writeOpTool(cmd.Name(), fields, calls.WriteOp)
+		} else if detached, ok := calls.Detached[cmd]; ok {
+			tool, err = detached(cmd)
+		} else {
+			tool, err = commandTool(cmd, dir, stderr, calls.RenderError)
+		}
+		if err != nil {
+			return nil, err
+		}
+		tool.Description = cmd.Short
+		tool.ReadOnly = cmd.Annotations[ReadOnlyAnnotation] == "true"
+		tools = append(tools, tool)
+	}
+	return append(tools, calls.Listed...), nil
+}
+
+// writeOpTool is op over one entry: the arguments are the entry.
+func writeOpTool(op string, fields []write.OpField, run func(op string, values []byte, out io.Writer) error) protocol.Tool {
+	schema := protocol.Schema{Properties: map[string]protocol.Property{}, Required: []string{}}
+	for _, f := range fields {
+		schema.Properties[f.Name] = protocol.Property{}
+		if f.Required {
+			schema.Required = append(schema.Required, f.Name)
 		}
 	}
-	keys := make([]string, 0, len(args))
-	for key := range args {
-		keys = append(keys, key)
+	call := func(args map[string]any) (string, map[string]any, bool, error) {
+		values, err := json.Marshal(map[string]any{"entry": []any{args}})
+		if err != nil {
+			return "", nil, false, err
+		}
+		var out bytes.Buffer
+		if err := run(op, values, &out); err != nil {
+			return "", nil, false, err
+		}
+		return ToolResult(out.Bytes())
 	}
-	slices.Sort(keys)
-	for _, key := range keys {
-		p, ok := s.Properties[key]
+	return protocol.Tool{Name: op, InputSchema: schema, Call: call}
+}
+
+// CommandSchema is cmd's positionals and its tool's input schema: the
+// positionals are the required arguments, and each of the command's own flags
+// not excluded from MCP follows as a property the schema does not require.
+func CommandSchema(cmd *cobra.Command) ([]Positional, protocol.Schema, error) {
+	positionals, err := DeclaredPositionals(cmd)
+	if err != nil {
+		return nil, protocol.Schema{}, err
+	}
+	schema := protocol.Schema{Properties: map[string]protocol.Property{}, Required: []string{}}
+	for _, p := range positionals {
+		property := protocol.Property{Type: "string"}
+		if p.Variadic {
+			property = protocol.Property{Type: "array", Items: &protocol.Property{Type: "string"}}
+		}
+		schema.Properties[p.Name] = property
+		schema.Required = append(schema.Required, p.Name)
+	}
+	cmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
+		if err != nil || f.Name == "help" || ExcludedFlag(f) {
+			return
+		}
+		property, ok := flagSchemaTypes[f.Value.Type()]
+		_, clash := schema.Properties[f.Name]
 		switch {
 		case !ok:
-			allowed := make([]string, 0, len(s.Properties))
-			for name := range s.Properties {
-				allowed = append(allowed, name)
-			}
-			slices.Sort(allowed)
-			faults = append(faults, fmt.Sprintf("argument %q is not one this tool takes (it takes %s)", key, strings.Join(allowed, ", ")))
-		case !p.admits(args[key]):
-			faults = append(faults, fmt.Sprintf("argument %q must be of type %s", key, p.Type))
-		}
-	}
-	return strings.Join(faults, "; ")
-}
-
-// JSON-RPC error codes.
-const (
-	codeParse          = -32700
-	codeInvalidRequest = -32600
-	codeMethodNotFound = -32601
-	codeInvalidParams  = -32602
-	codeInternal       = -32603
-	// codeResourceNotFound is MCP's own code for a resources/read naming no
-	// resource.
-	codeResourceNotFound = -32002
-)
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-}
-
-var nullID = json.RawMessage("null")
-
-// Serve answers the requests on in with frames on out until in ends. version
-// is the server's own version, reported at initialize; instructions is what
-// initialize tells the session the server serves, absent where it is "";
-// subscription is the resource a client may subscribe to, absent where the
-// server holds none.
-func Serve(in io.Reader, out io.Writer, version, instructions string, tools []Tool, resources Resources, subscription *Subscription, lg log.Logger) error {
-	s := server{version: version, instructions: instructions, tools: map[string]Tool{}, resources: resources,
-		subscription: subscription, lg: lg}
-	for _, t := range tools {
-		s.tools[t.Name] = t
-		s.order = append(s.order, t.Name)
-	}
-	enc := json.NewEncoder(out)
-	enc.SetEscapeHTML(false)
-	s.enc = enc
-	defer s.stopWatch()
-	r := bufio.NewReader(in)
-	for {
-		line, err := r.ReadBytes('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("reading a request: %w", err)
-		}
-		if frame := bytes.TrimRight(line, "\r\n"); len(frame) > 0 {
-			if resp := s.handle(frame); resp != nil {
-				if werr := s.write(resp); werr != nil {
-					return fmt.Errorf("writing a response: %w", werr)
-				}
-			}
-			if after := s.pending; after != nil {
-				s.pending = nil
-				after()
-			}
-		}
-		if err != nil {
-			return nil
-		}
-	}
-}
-
-// write is one frame on out. The watcher and the request loop both write, so
-// every frame goes through here and the mutex is what keeps them whole.
-func (s *server) write(frame any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.enc.Encode(frame)
-}
-
-// notify is the watcher's frame: the resource a client holds a subscription to
-// has changed, and the client reads it again. It carries the URI alone, so it
-// cannot carry a stale document.
-func (s *server) notify() {
-	params := updatedParams{URI: s.subscription.URI}
-	if err := s.write(notification{JSONRPC: "2.0", Method: "notifications/resources/updated", Params: params}); err != nil {
-		s.lg.Error("mcp: writing a notification failed", "uri", params.URI, "err", err)
-	}
-}
-
-// startWatch runs the subscription's watcher for the connection. The watcher
-// outlives the request that started it and is stopped by the unsubscribe or by
-// Serve's return.
-func (s *server) startWatch() {
-	if s.watch != nil || s.subscription == nil {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	w := &watch{subscription: s.subscription, cancel: cancel, done: make(chan struct{})}
-	s.watch = w
-	go func() {
-		defer close(w.done)
-		w.subscription.Watch(ctx, s.notify)
-	}()
-}
-
-// stopWatch ends the watcher and waits for it, so no frame is written after the
-// caller stops listening.
-func (s *server) stopWatch() {
-	w := s.watch
-	if w == nil {
-		return
-	}
-	s.watch = nil
-	w.cancel()
-	<-w.done
-}
-
-// watch is the running subscription watcher; the request loop alone reads and
-// writes the server's field holding it, so it needs no lock of its own.
-type watch struct {
-	subscription *Subscription
-	cancel       context.CancelFunc
-	done         chan struct{}
-}
-
-type server struct {
-	version      string
-	instructions string
-	tools        map[string]Tool
-	order        []string
-	resources    Resources
-	subscription *Subscription
-	lg           log.Logger
-	enc          *json.Encoder
-	watch        *watch
-	// pending is what a request asked to happen once its response is written:
-	// a subscription started, or stopped, so a frame the watcher raises at once
-	// follows the answer the client is waiting for.
-	pending func()
-	// mu serializes the frames written on out: the request loop's responses
-	// and the watcher's notifications alike.
-	mu sync.Mutex
-}
-
-func failure(id json.RawMessage, code int, message string) *response {
-	return &response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}}
-}
-
-// handle is the response to one frame, nil where none is owed.
-func (s *server) handle(frame []byte) *response {
-	var raw any
-	if err := json.Unmarshal(frame, &raw); err != nil {
-		s.lg.Debug("mcp: unparseable frame", "err", err)
-		return failure(nullID, codeParse, "the line is not JSON")
-	}
-	members, ok := raw.(map[string]any)
-	if !ok {
-		return failure(nullID, codeInvalidRequest, "a request is one JSON object; batches are not accepted")
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(frame, &fields); err != nil {
-		return failure(nullID, codeParse, "the line is not JSON")
-	}
-	id, hasID := fields["id"]
-	if hasID {
-		switch members["id"].(type) {
-		case string, float64, nil:
+			err = fmt.Errorf("%s: --%s is a %s, which no tool argument carries", cmd.Name(), f.Name, f.Value.Type())
+		case clash:
+			err = fmt.Errorf("%s: --%s shares its name with a positional", cmd.Name(), f.Name)
 		default:
-			return failure(nullID, codeInvalidRequest, "id must be a string, a number or null")
+			property.Description = f.Usage
+			schema.Properties[f.Name] = property
 		}
-	} else {
-		id = nullID
+	})
+	return positionals, schema, err
+}
+
+// commandTool is cmd run as its RunE runs it, its positionals and flags
+// taken from the arguments.
+func commandTool(cmd *cobra.Command, dir string, stderr io.Writer, renderError func(err error, out, stderr io.Writer)) (protocol.Tool, error) {
+	positionals, schema, err := CommandSchema(cmd)
+	if err != nil {
+		return protocol.Tool{}, err
 	}
-	if members["jsonrpc"] != "2.0" {
-		return s.unlessNotification(hasID, failure(id, codeInvalidRequest, `jsonrpc must be "2.0"`))
+	call := func(args map[string]any) (string, map[string]any, bool, error) {
+		var out bytes.Buffer
+		if err := runCommandTool(cmd, positionals, args, dir, &out, stderr, renderError); err != nil {
+			return "", nil, false, err
+		}
+		return ToolResult(out.Bytes())
 	}
-	method, ok := members["method"].(string)
-	if !ok {
-		return s.unlessNotification(hasID, failure(id, codeInvalidRequest, "method must be a string"))
+	return protocol.Tool{Name: cmd.Name(), InputSchema: schema, Call: call}, nil
+}
+
+// runCommandTool runs cmd over args from dir, its result document on out,
+// and leaves cmd's streams and context as it found them and its flags at
+// their defaults.
+func runCommandTool(cmd *cobra.Command, positionals []Positional, args map[string]any, dir string, out, stderr io.Writer, renderError func(err error, out, stderr io.Writer)) error {
+	if err := ResetFlags(cmd); err != nil {
+		return err
 	}
-	if !hasID {
-		s.lg.Debug("mcp: notification", "method", method)
-		return nil
-	}
-	s.lg.Debug("mcp: request", "method", method)
-	switch method {
-	case "initialize":
-		return &response{JSONRPC: "2.0", ID: id, Result: initializeResult{
-			ProtocolVersion: ProtocolVersion,
-			Capabilities: map[string]any{
-				"tools":     map[string]bool{"listChanged": false},
-				"resources": map[string]bool{"subscribe": s.subscription != nil, "listChanged": false},
-			},
-			ServerInfo:   serverInfo{Name: "kbase", Version: s.version},
-			Instructions: s.instructions,
-		}}
-	case "ping":
-		return &response{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
-	case "tools/list":
-		return &response{JSONRPC: "2.0", ID: id, Result: map[string]any{"tools": s.list()}}
-	case "tools/call":
-		return s.call(id, members["params"])
-	case "resources/list":
-		listed, err := s.resources.List()
+	prev := cmd.Context()
+	cmd.SetContext(context.WithValue(context.Background(), invocationDirKey{}, dir))
+	cmd.SetOut(out)
+	cmd.SetErr(stderr)
+	defer func() {
+		cmd.SetContext(prev)
+		cmd.SetOut(nil)
+		cmd.SetErr(nil)
+	}()
+	argv, flags := CommandLine(positionals, args)
+	err := cmd.ValidateArgs(argv)
+	for _, f := range flags {
 		if err != nil {
-			s.lg.Error("mcp: listing resources failed", "err", err)
-			return failure(id, codeInternal, "listing resources: "+err.Error())
+			break
 		}
-		return &response{JSONRPC: "2.0", ID: id, Result: map[string]any{"resources": append([]Resource{}, listed...)}}
-	case "resources/read":
-		return s.read(id, members["params"])
-	case "resources/subscribe":
-		return s.subscriptionRequest(id, members["params"], true)
-	case "resources/unsubscribe":
-		return s.subscriptionRequest(id, members["params"], false)
+		err = cmd.Flags().Set(f.Name, f.Value)
 	}
-	return failure(id, codeMethodNotFound, fmt.Sprintf("method %q is not one this server answers", method))
+	if err == nil {
+		err = cmd.RunE(cmd, argv)
+	}
+	if err != nil {
+		renderError(err, out, stderr)
+	}
+	return ResetFlags(cmd)
 }
 
-// unlessNotification is resp where the frame carried an id; a frame without
-// one is a notification, owed no response even when malformed.
-func (s *server) unlessNotification(hasID bool, resp *response) *response {
-	if !hasID {
-		s.lg.Debug("mcp: malformed notification dropped", "detail", resp.Error.Message)
+// FlagArgument is one flag setting: --Name Value.
+type FlagArgument struct{ Name, Value string }
+
+// CommandLine is args as the command line spells them: the positionals in
+// their declared order, then a setting per flag value in name order, one for
+// each item of an array.
+func CommandLine(positionals []Positional, args map[string]any) (argv []string, flags []FlagArgument) {
+	for _, p := range positionals {
+		argv = append(argv, argumentTexts(args[p.Name])...)
+	}
+	for _, name := range slices.Sorted(maps.Keys(args)) {
+		if slices.ContainsFunc(positionals, func(p Positional) bool { return p.Name == name }) {
+			continue
+		}
+		for _, v := range argumentTexts(args[name]) {
+			flags = append(flags, FlagArgument{name, v})
+		}
+	}
+	return argv, flags
+}
+
+// argumentTexts spells an argument the schema admitted as command-line
+// words: one, or one per item of an array; none for an absent one.
+func argumentTexts(v any) []string {
+	switch x := v.(type) {
+	case nil:
 		return nil
-	}
-	return resp
-}
-
-type listedTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema Schema          `json:"inputSchema"`
-	Annotations map[string]bool `json:"annotations"`
-}
-
-func (s *server) list() []listedTool {
-	listed := make([]listedTool, 0, len(s.order))
-	for _, name := range s.order {
-		t := s.tools[name]
-		listed = append(listed, listedTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema,
-			Annotations: map[string]bool{"readOnlyHint": t.ReadOnly}})
-	}
-	return listed
-}
-
-func (s *server) call(id json.RawMessage, params any) *response {
-	p, ok := params.(map[string]any)
-	if !ok {
-		return failure(id, codeInvalidParams, "tools/call takes an object of params")
-	}
-	name, ok := p["name"].(string)
-	if !ok {
-		return failure(id, codeInvalidParams, "params.name must be a tool's name")
-	}
-	tool, ok := s.tools[name]
-	if !ok {
-		return failure(id, codeInvalidParams, fmt.Sprintf("no tool is named %q", name))
-	}
-	args := map[string]any{}
-	if a, present := p["arguments"]; present {
-		if args, ok = a.(map[string]any); !ok {
-			return failure(id, codeInvalidParams, "params.arguments must be an object")
+	case []any:
+		var out []string
+		for _, item := range x {
+			out = append(out, argumentTexts(item)...)
 		}
+		return out
+	case bool:
+		return []string{strconv.FormatBool(x)}
+	case float64:
+		return []string{strconv.FormatFloat(x, 'f', -1, 64)}
 	}
-	if fault := tool.InputSchema.check(args); fault != "" {
-		return failure(id, codeInvalidParams, name+": "+fault)
-	}
-	text, structured, exitCode, err := tool.Call(args)
-	if err != nil {
-		s.lg.Error("mcp: tool failed", "tool", name, "err", err)
-		return failure(id, codeInternal, name+": "+err.Error())
-	}
-	return &response{JSONRPC: "2.0", ID: id, Result: callResult{
-		Content:           []textContent{{Type: "text", Text: text}},
-		StructuredContent: structured,
-		IsError:           exitCode != 0,
-	}}
+	return []string{fmt.Sprint(v)}
 }
 
-func (s *server) read(id json.RawMessage, params any) *response {
-	p, _ := params.(map[string]any)
-	uri, ok := p["uri"].(string)
-	if !ok {
-		return failure(id, codeInvalidParams, "params.uri must be a resource's URI")
+// ToolResult is a result document as an MCP tool's result: the document,
+// the document decoded, and whether its outcome is an error.
+func ToolResult(doc []byte) (string, map[string]any, bool, error) {
+	var structured map[string]any
+	if err := yaml.Unmarshal(doc, &structured); err != nil {
+		return "", nil, false, fmt.Errorf("decoding the result document: %w", err)
 	}
-	listed, err := s.resources.List()
-	if err != nil {
-		s.lg.Error("mcp: listing resources failed", "err", err)
-		return failure(id, codeInternal, "listing resources: "+err.Error())
-	}
-	i := slices.IndexFunc(listed, func(r Resource) bool { return r.URI == uri })
-	if i < 0 {
-		return failure(id, codeResourceNotFound, fmt.Sprintf("Resource not found: no resource has the URI %q", uri))
-	}
-	text, err := s.resources.Read(listed[i])
-	if err != nil {
-		s.lg.Error("mcp: reading a resource failed", "uri", uri, "err", err)
-		return failure(id, codeInternal, "reading "+uri+": "+err.Error())
-	}
-	return &response{JSONRPC: "2.0", ID: id, Result: map[string]any{"contents": []resourceText{{listed[i].URI, listed[i].MimeType, text}}}}
-}
-
-type resourceText struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType"`
-	Text     string `json:"text"`
-}
-
-// subscriptionRequest takes or drops the connection's subscription to the one
-// resource the server lets a client subscribe to. A URI it lists but does not
-// let a client subscribe to is invalid params, and a URI it does not list is
-// resource not found; taking a subscription already held and dropping one not
-// held change nothing.
-func (s *server) subscriptionRequest(id json.RawMessage, params any, hold bool) *response {
-	p, _ := params.(map[string]any)
-	uri, ok := p["uri"].(string)
-	if !ok {
-		return failure(id, codeInvalidParams, "params.uri must be a resource's URI")
-	}
-	if s.subscription == nil || uri != s.subscription.URI {
-		listed, err := s.resources.List()
-		if err != nil {
-			s.lg.Error("mcp: listing resources failed", "err", err)
-			return failure(id, codeInternal, "listing resources: "+err.Error())
-		}
-		if !slices.ContainsFunc(listed, func(r Resource) bool { return r.URI == uri }) {
-			return failure(id, codeResourceNotFound, fmt.Sprintf("Resource not found: no resource has the URI %q", uri))
-		}
-		return failure(id, codeInvalidParams, fmt.Sprintf("%q is not a resource a client may subscribe to", uri))
-	}
-	held := s.watch != nil
-	switch {
-	case hold && !held:
-		s.pending = s.startWatch
-	case !hold && held:
-		s.pending = s.stopWatch
-	}
-	return &response{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
-}
-
-// notification is a frame the server sends a client that owed it no request.
-type notification struct {
-	JSONRPC string        `json:"jsonrpc"`
-	Method  string        `json:"method"`
-	Params  updatedParams `json:"params"`
-}
-
-// updatedParams is a resources/updated notification's params: the URI to read
-// again, and nothing else. The document is read, never carried, so the frame
-// cannot go stale.
-type updatedParams struct {
-	URI string `json:"uri"`
-}
-
-type initializeResult struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    map[string]any `json:"capabilities"`
-	ServerInfo      serverInfo     `json:"serverInfo"`
-	Instructions    string         `json:"instructions,omitempty"`
-}
-
-type serverInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type textContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type callResult struct {
-	Content           []textContent  `json:"content"`
-	StructuredContent map[string]any `json:"structuredContent"`
-	IsError           bool           `json:"isError"`
+	outcome, _ := structured["outcome"].(string)
+	return string(doc), structured, result.IsError(outcome), nil
 }

@@ -1,0 +1,14 @@
+obsolete: []
+warnings:
+    - path: kb-root/claim-rigor.md
+      line: 40
+      detail: supports clm-cccccc → ana-bbbbbc is authored with bearing 1.0 at kb-root/claim-rigor.md:40 and 0.5 at kb-root/claim-rigor.md:40; 1.0 is kept
+    - path: kb-root/claim-rigor.md
+      line: 62
+      detail: 'register text dropped: "- quality: 0.4"'
+    - path: kb-root/leaf.md
+      line: 3
+      detail: clm-bbbbbb's marker is appended to the first heading; the section under it is its statement
+    - path: kb-root/leaf.md
+      line: 3
+      detail: clm-cccccc's marker is appended to the first heading; the section under it is its statement

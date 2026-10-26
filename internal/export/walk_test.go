@@ -1,6 +1,7 @@
 package export
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,11 +14,18 @@ import (
 // writeKB authors a KB tree under a fresh temp dir: a map of kb-root-relative
 // slash paths to their text, opened as the source under test. The tree is
 // hand-authored so the walk's own contract — not one build's output — is what
-// the test asserts.
+// the test asserts. A record file the map does not name is written holding no
+// record, as every KB at the format carries both.
 func writeKB(t *testing.T, files map[string]string) *kb.Source {
 	t.Helper()
 	repo := t.TempDir()
 	root := filepath.Join(repo, kb.KBDir)
+	files = maps.Clone(files)
+	for rel, data := range map[string][]byte{kb.GraphNodesFile: kb.EncodeNodes(kb.Graph{}), kb.GraphEdgesFile: kb.EncodeEdges(kb.Graph{})} {
+		if _, named := files[rel]; !named {
+			files[rel] = string(data)
+		}
+	}
 	for rel, text := range files {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -31,14 +39,11 @@ func writeKB(t *testing.T, files map[string]string) *kb.Source {
 }
 
 // smallKB is the fixture the walk and strip tests share: an entry point
-// naming two volumes, each index carrying a spine, a nested index, a no-claim
-// leaf, an overview.md, a references.md and a cross-linking leaf.
+// naming two volumes, each index carrying a spine, a nested index, a leaf, an
+// overview.md, a references.md and a cross-linking leaf.
 func smallKB() map[string]string {
 	return map[string]string{
-		"entry-point.md": `---
-kind: entry-point
----
-[↑ Entry Point](entry-point.md)
+		"entry-point.md": `[↑ Entry Point](entry-point.md)
 
 # A KB
 
@@ -57,10 +62,7 @@ Another authored section.
 - [First](vol1/index.md) — the first volume
 - [Second](vol2/index.md) — the second volume
 `,
-		"vol1/index.md": `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+		"vol1/index.md": `[↑ A KB](../entry-point.md)
 
 # First Volume
 
@@ -75,65 +77,43 @@ Prose carrying a link to the first leaf ([§1](v1-leaf.md)) and more prose.
 - [Overview](overview.md) — the drafted overview
 - [References](references.md) — the bibliography
 `,
-		"vol1/v1-leaf.md": `---
-kind: leaf
-no-claim: true
----
-[↑ First Volume](index.md)
+		"vol1/v1-leaf.md": `[↑ First Volume](index.md)
 
 # §1 The Leaf
 
 Body text with a cross-reference to [the other leaf](../vol2/v2-leaf.md).
 `,
-		"vol1/overview.md": `---
-kind: leaf
----
-[↑ First Volume](index.md)
+		"vol1/overview.md": `[↑ First Volume](index.md)
 
 # Overview
 
 The drafted overview body.
 `,
-		"vol1/references.md": `---
-kind: leaf
----
-[↑ First Volume](index.md)
+		"vol1/references.md": `[↑ First Volume](index.md)
 
 # References
 
 - Entry one
 `,
-		"vol1/nested/index.md": `---
-kind: index
----
-[↑ First Volume](../index.md)
+		"vol1/nested/index.md": `[↑ First Volume](../index.md)
 
 # Nested
 
 - [Deep Leaf](deep.md) — one rank deeper
 `,
-		"vol1/nested/deep.md": `---
-kind: leaf
----
-[↑ Nested](index.md)
+		"vol1/nested/deep.md": `[↑ Nested](index.md)
 
 # Deep
 
 Deeper body.
 `,
-		"vol2/index.md": `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+		"vol2/index.md": `[↑ A KB](../entry-point.md)
 
 # Second Volume
 
 - [The Second Leaf](v2-leaf.md) — a leaf
 `,
-		"vol2/v2-leaf.md": `---
-kind: leaf
----
-[↑ Second Volume](index.md)
+		"vol2/v2-leaf.md": `[↑ Second Volume](index.md)
 
 # §1 The Second Leaf
 
@@ -149,9 +129,9 @@ Body.
 func TestWalkSpine(t *testing.T) {
 	src := writeKB(t, smallKB())
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if tree.EntryPoint != "entry-point.md" {
 		t.Errorf("EntryPoint = %q", tree.EntryPoint)
@@ -171,10 +151,10 @@ func TestWalkSpine(t *testing.T) {
 		},
 	}
 	if !reflect.DeepEqual(tree, want) {
-		t.Errorf("Walk = %+v\nwant       %+v", tree, want)
+		t.Errorf("walk = %+v\nwant       %+v", tree, want)
 	}
 	if !rep.Empty() {
-		t.Errorf("Walk reported %q over a clean tree", rep.Findings())
+		t.Errorf("walk reported %q over a clean tree", rep.Findings())
 	}
 	targets := tree.Targets()
 	for p, want := range map[string]Target{
@@ -194,23 +174,20 @@ func TestWalkSpine(t *testing.T) {
 // first path keeps the label, the finding naming it, and the second holds none.
 func TestWalkReportsLabelCollision(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	files["vol1/index.md"] = `[↑ A KB](../entry-point.md)
 
 # First Volume
 
 - [One](§.md) — a name that slugs away
 - [Two](日.md) — another
 `
-	files["vol1/§.md"] = "---\nkind: leaf\n---\n[↑ First Volume](index.md)\n\n# One\n\nBody.\n"
-	files["vol1/日.md"] = "---\nkind: leaf\n---\n[↑ First Volume](index.md)\n\n# Two\n\nBody.\n"
+	files["vol1/§.md"] = "[↑ First Volume](index.md)\n\n# One\n\nBody.\n"
+	files["vol1/日.md"] = "[↑ First Volume](index.md)\n\n# Two\n\nBody.\n"
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if rep.Empty() {
 		t.Fatalf("no collision reported; findings %q", rep.Findings())
@@ -234,44 +211,35 @@ kind: index
 // labelled apart by the directories they sit under.
 func TestWalkLabelsComplete(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	files["vol1/index.md"] = `[↑ A KB](../entry-point.md)
 
 # First Volume
 
 - [Introduction](introduction/index.md) — one branch
 - [Appendix](appendix/index.md) — another branch
 `
-	files["vol1/introduction/index.md"] = `---
-kind: index
----
-[↑ First Volume](../index.md)
+	files["vol1/introduction/index.md"] = `[↑ First Volume](../index.md)
 
 # Introduction
 
 - [Overview](overview.md) — the introduction's overview
 `
-	files["vol1/introduction/overview.md"] = "---\nkind: leaf\n---\n[↑ Introduction](index.md)\n\n# Overview one\n\nBody.\n"
-	files["vol1/appendix/index.md"] = `---
-kind: index
----
-[↑ First Volume](../index.md)
+	files["vol1/introduction/overview.md"] = "[↑ Introduction](index.md)\n\n# Overview one\n\nBody.\n"
+	files["vol1/appendix/index.md"] = `[↑ First Volume](../index.md)
 
 # Appendix
 
 - [Overview](overview.md) — the appendix's overview
 `
-	files["vol1/appendix/overview.md"] = "---\nkind: leaf\n---\n[↑ Appendix](index.md)\n\n# Overview two\n\nBody.\n"
+	files["vol1/appendix/overview.md"] = "[↑ Appendix](index.md)\n\n# Overview two\n\nBody.\n"
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if !rep.Empty() {
-		t.Errorf("Walk reported %q; the paths are distinct", rep.Findings())
+		t.Errorf("walk reported %q; the paths are distinct", rep.Findings())
 	}
 	targets := tree.Targets()
 	labelable := len(tree.Volumes)
@@ -301,11 +269,7 @@ kind: index
 // the spine.
 func TestWalkMissingTargetsReported(t *testing.T) {
 	files := smallKB()
-	files["entry-point.md"] = `---
-kind: entry-point
----
-
-# A KB
+	files["entry-point.md"] = `# A KB
 
 ## Volumes
 
@@ -313,10 +277,7 @@ kind: entry-point
 - [First again](vol1/index.md) — named twice
 - [Ghost](vol9/index.md) — a volume with no directory
 `
-	files["vol1/index.md"] = `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	files["vol1/index.md"] = `[↑ A KB](../entry-point.md)
 
 # First Volume
 
@@ -324,9 +285,9 @@ kind: index
 `
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	reasons := reasonsOf(rep.Findings(), walkForm, "entry-point.md")
 	for _, want := range []string{"vol9/index.md", "already walked"} {
@@ -344,7 +305,7 @@ kind: index
 		}
 	}
 	if len(tree.Volumes) != 1 {
-		t.Errorf("Walk = %+v; want the one volume that exists", tree)
+		t.Errorf("walk = %+v; want the one volume that exists", tree)
 	}
 }
 
@@ -361,11 +322,8 @@ func TestWalkIndexCycle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			files := smallKB()
-			files["vol1/index.md"] = "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n" + tc.index
-			files["vol1/child/index.md"] = `---
-kind: index
----
-[↑ First Volume](../index.md)
+			files["vol1/index.md"] = "[↑ A KB](../entry-point.md)\n\n" + tc.index
+			files["vol1/child/index.md"] = `[↑ First Volume](../index.md)
 
 # Child
 
@@ -373,9 +331,9 @@ kind: index
 `
 			src := writeKB(t, files)
 			rep := &Report{}
-			tree, err := Walk(src, rep)
+			tree, err := walk(src, rep)
 			if err != nil {
-				t.Fatalf("Walk: %v", err)
+				t.Fatalf("walk: %v", err)
 			}
 			if !containsReason(reasonsOf(rep.Findings(), walkForm, ""), "already walked") {
 				t.Errorf("no repeat finding raised: %v", rep.Findings())
@@ -397,10 +355,7 @@ kind: index
 // enter this volume's spine under this volume's number.
 func TestWalkOutOfVolumeTarget(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	files["vol1/index.md"] = `[↑ A KB](../entry-point.md)
 
 # First Volume
 
@@ -408,9 +363,9 @@ kind: index
 `
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if !containsReason(reasonsOf(rep.Findings(), walkForm, "vol1/index.md"), "vol2/v2-leaf.md") {
 		t.Errorf("no finding names the out-of-volume target: %v", rep.Findings())
@@ -427,12 +382,12 @@ kind: index
 // \chapter title.
 func TestWalkTitleIsNotFenced(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n" +
+	files["vol1/index.md"] = "[↑ A KB](../entry-point.md)\n\n" +
 		"Write headings like this:\n\n```\n# Not the title\n```\n\nProse.\n"
 	src := writeKB(t, files)
-	tree, err := Walk(src, &Report{})
+	tree, err := walk(src, &Report{})
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if got := tree.Volumes[0].Title; got != "" {
 		t.Errorf("Title = %q; want the fenced heading ignored", got)
@@ -443,12 +398,12 @@ func TestWalkTitleIsNotFenced(t *testing.T) {
 // it, the fence blanking not reaching into the heading line.
 func TestWalkInlineMathSurvivesTitle(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n" +
+	files["vol1/index.md"] = "[↑ A KB](../entry-point.md)\n\n" +
 		"# On the $`\\mathrm{L}^p`$-theory\n\nProse.\n"
 	src := writeKB(t, files)
-	tree, err := Walk(src, &Report{})
+	tree, err := walk(src, &Report{})
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if want := "On the $`\\mathrm{L}^p`$-theory"; tree.Volumes[0].Title != want {
 		t.Errorf("Title = %q; want %q", tree.Volumes[0].Title, want)
@@ -460,10 +415,7 @@ func TestWalkInlineMathSurvivesTitle(t *testing.T) {
 // a finding.
 func TestWalkNestedIndexDoubleSpine(t *testing.T) {
 	files := smallKB()
-	files["vol1/index.md"] = `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	files["vol1/index.md"] = `[↑ A KB](../entry-point.md)
 
 # First Volume
 
@@ -472,9 +424,9 @@ kind: index
 `
 	src := writeKB(t, files)
 	rep := &Report{}
-	tree, err := Walk(src, rep)
+	tree, err := walk(src, rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	seen := 0
 	for _, d := range tree.Volumes[0].Documents {
@@ -499,18 +451,18 @@ kind: index
 // it, and the later volume's reach is a finding.
 func TestWalkOnceAcrossVolumes(t *testing.T) {
 	files := map[string]string{
-		"entry-point.md": "---\nkind: entry-point\n---\n# A KB\n\n- [A](a/index.md) — outer\n- [B](a/b/index.md) — inner\n",
-		"a/index.md":     "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n# A\n\n- [B](b/index.md) — nested\n",
-		"a/b/index.md":   "---\nkind: index\n---\n[↑ A](../index.md)\n\n# B\n\n- [X](x.md) — a leaf\n",
-		"a/b/x.md":       "---\nkind: leaf\n---\n[↑ B](index.md)\n\n# X\n\nBody.\n",
+		"entry-point.md": "# A KB\n\n- [A](a/index.md) — outer\n- [B](a/b/index.md) — inner\n",
+		"a/index.md":     "[↑ A KB](../entry-point.md)\n\n# A\n\n- [B](b/index.md) — nested\n",
+		"a/b/index.md":   "[↑ A](../index.md)\n\n# B\n\n- [X](x.md) — a leaf\n",
+		"a/b/x.md":       "[↑ B](index.md)\n\n# X\n\nBody.\n",
 	}
 	rep := &Report{}
-	tree, err := Walk(writeKB(t, files), rep)
+	tree, err := walk(writeKB(t, files), rep)
 	if err != nil {
-		t.Fatalf("Walk: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 	if len(tree.Volumes) != 1 {
-		t.Fatalf("Walk = %+v; want the one volume that reached a/b first", tree)
+		t.Fatalf("walk = %+v; want the one volume that reached a/b first", tree)
 	}
 	if got := tree.Targets()["a/b/x.md"]; got != (Target{Label: "d1-b-x", Volume: 1}) {
 		t.Errorf("Targets()[a/b/x.md] = %+v; want the first walk's", got)

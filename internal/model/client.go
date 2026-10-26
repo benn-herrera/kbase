@@ -1,10 +1,12 @@
 // Package model is the LLM client surface.
 //
-// Two implementations satisfy the same Client interface: HTTPClient
-// (http_client.go), targeting any OpenAI-compatible chat-completions
-// endpoint, and MockClient (mockllm.go), the test substrate. Both consume
-// the same Request/Response shape, so tests and the production pipeline
-// exercise the same code paths.
+// Two implementations satisfy the same Client interface: OpenAIClient
+// (openai_client.go), targeting any OpenAI-compatible chat-completions endpoint;
+// and AnthropicClient (anthropic_client.go), targeting the Anthropic Messages
+// protocol. NewClient is what picks between the two, from the protocol the
+// caller resolved onto the Endpoint. Both consume the same Request/Response
+// shape, so tests and the production pipeline exercise the same code paths. The
+// test substrate lives in internal/model/modeltest, out of this package's API.
 package model
 
 import (
@@ -16,8 +18,8 @@ import (
 )
 
 // Client is the abstraction the pipeline depends on for an LLM round-trip.
-// Defined here so test code can swap in MockClient without depending on
-// the HTTP transport.
+// Defined here so a test can substitute an implementation of its own without
+// depending on the HTTP transport.
 //
 // Two consult flavors are provided:
 //   - Consult: blocking, returns the full Response. Right for short calls.
@@ -32,6 +34,78 @@ type Client interface {
 	ConsultStream(ctx context.Context, req Request) (StreamReader, error)
 	Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
 	ListModels(ctx context.Context) ([]ModelInfo, error)
+}
+
+// Protocol names the chat wire protocol a client speaks. The caller resolves
+// the configured `api` value to one of these: this package knows the wire
+// shapes, and the configuration owns the vocabulary that names them, so no
+// third site compares the string.
+type Protocol int
+
+const (
+	// ProtocolOpenAI is the OpenAI-compatible chat-completions surface — the
+	// zero value, and what an endpoint naming no protocol gets.
+	ProtocolOpenAI Protocol = iota
+	// ProtocolAnthropic is the Anthropic Messages surface.
+	ProtocolAnthropic
+)
+
+// Endpoint is what one client is built from: where to reach an inference API,
+// which chat protocol it speaks, how to authenticate to it, and the
+// prompt-cache key its OpenAI-surface requests carry. The provider fields are
+// constructed from the canonical provider config at wiring time, which is what
+// keeps this package independent of the config layer; the key names a run, not
+// a provider.
+//
+// APIKey is secret-bearing. It is never logged, never placed in an error
+// string by this package, and is scrubbed out of provider responses that
+// echo it back (see scrubAuthorization).
+type Endpoint struct {
+	// Name is the pool entry's name, carried for diagnostics only.
+	Name string
+	// BaseURL is the API root; the protocol's paths ("chat/completions" and
+	// "models", or "messages" and "models") hang off it. A trailing slash is
+	// tolerated.
+	BaseURL string
+	// APIKey is the key. It rides the OpenAI surface as a bearer token and
+	// the Messages surface as `x-api-key`. Empty means send no auth header —
+	// several local servers reject an empty bearer value.
+	APIKey string
+	// Protocol is which chat wire protocol this endpoint speaks; the zero
+	// value is ProtocolOpenAI. NewClient dispatches on it.
+	Protocol Protocol
+	// Decisions is whether this server speaks the OpenAI Decisions shape for
+	// the letter asks: true for `POST <base-url>/decisions`, false for the
+	// SystemOne shape kbase's asks have always used. Chat is unaffected: it
+	// stays `chat/completions` under either surface, and Protocol is what
+	// selects chat.
+	//
+	// The configured `decisionsFlavor` value is resolved to this by the caller:
+	// this package knows the two wire shapes, and the configuration owns the
+	// vocabulary that names them, so no third comparison reads the string.
+	Decisions bool
+	// PromptCacheKey is the prompt-cache key every OpenAI-surface request this
+	// client sends carries, in the body's `prompt_cache_key`; empty sends none.
+	// It names a run rather than a provider: every ask of one run carries the
+	// same key, which is what holds that run's asks at one upstream and sharing
+	// one cache entry. The caller sets it, from the run it is opening the
+	// client for. The Messages protocol has no such field, so a client
+	// speaking it sends none of this.
+	PromptCacheKey string
+}
+
+// NewClient constructs the chat client the endpoint's protocol names: the
+// OpenAI-compatible surface by default, and the Anthropic Messages surface
+// where the caller resolved that. This is the one place the protocol value
+// selects an implementation; each constructor it names always builds the
+// protocol it is named for. The protocol value is the caller's — the
+// configuration owns the vocabulary that names it — so nothing here reads a
+// configuration string.
+func NewClient(e Endpoint) Client {
+	if e.Protocol == ProtocolAnthropic {
+		return NewAnthropicClient(e)
+	}
+	return NewOpenAIClient(e)
 }
 
 // ConsultDrained performs a consult with blocking semantics over the
@@ -66,35 +140,66 @@ func ConsultDrained(ctx context.Context, c Client, req Request) (Response, error
 	}
 }
 
-// ModelInfo describes a single model exposed by a provider, mirroring the
-// shape OpenAI-compatible /models endpoints return.
+// ModelInfo describes a single model exposed by a provider, mapped from
+// whichever catalogue shape the endpoint's protocol returns: the two protocols
+// spell the listing differently and both land here.
 type ModelInfo struct {
 	ID      string // provider-specific model identifier
 	Created int64  // unix seconds; 0 if provider didn't supply
 	OwnedBy string // free-form ownership string; "" if absent
 }
 
-// Request is one chat-completions invocation. No completion cap is sent: the
-// server's own applies.
+// Request is one chat invocation, as the pipeline's asks shape it. The two
+// protocols read different halves of it: the OpenAI client sends no completion
+// cap (the server's own applies) and reads ChatTemplateKwargs, Reasoning and
+// PromptCacheKey; the Messages client derives its required cap from the text
+// (maxTokensFor) and sends none of those three, which that protocol has no
+// field for.
 type Request struct {
 	Model    string
 	Messages []Message
 
-	// Temperature is the sampling temperature, always wired on the wire.
-	// 0 means deterministic (greedy decode); it is NOT a "use server
-	// default" sentinel.
+	// Temperature is the sampling temperature, wired on the wire by the
+	// OpenAI client always. 0 means deterministic (greedy decode); it is NOT
+	// a "use server default" sentinel. The Messages client sends it only
+	// inside that protocol's [0,1] range — see encodeAnthropicRequest.
 	Temperature float64
 
 	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
-	// chat-template-level kwargs through to the underlying tokenizer.
-	// Most commonly used for thinking-mode toggles on locally served
-	// models. Encoded as `chat_template_kwargs` in the JSON wire format.
-	// Empty/nil → field omitted entirely.
+	// chat-template-level kwargs through to the underlying tokenizer. It is
+	// sent beside Reasoning, for servers that speak the tokenizer extension;
+	// a provider that ignores it is not a reason to shape a request
+	// differently, because Reasoning covers that case. Encoded as
+	// `chat_template_kwargs` in the JSON wire format. Empty/nil → field
+	// omitted entirely.
 	ChatTemplateKwargs map[string]any
+
+	// Reasoning is the provider's own reasoning control, encoded as the
+	// `reasoning` object. It is what disables thinking on a provider that
+	// ignores chat-template-level toggles — OpenRouter, for one — and a
+	// server that speaks only the tokenizer extension ignores it. Every chat
+	// request carries it; there is no per-provider selection. Nil → field
+	// omitted entirely.
+	Reasoning *Reasoning
+
+	// PromptCacheKey is sent as `prompt_cache_key`, and omitted entirely
+	// where empty. The client is what sets it, from the key it was built
+	// with: one client serves one run, and every ask that run makes carries
+	// the same key. A caller does not set it.
+	PromptCacheKey string
 }
 
-// FinishLength is the finish_reason an OpenAI-compatible provider reports when
-// a generation hit its completion cap instead of finishing. It is the one
+// Reasoning is the `reasoning` request object: the provider's own control
+// over thinking, as the OpenAI-compatible surfaces that support it take it.
+// Only the one switch kbase sets is represented — kbase always asks for
+// thinking off.
+type Reasoning struct {
+	Enabled bool `json:"enabled"`
+}
+
+// FinishLength is the finish reason that says a generation hit its completion
+// cap instead of finishing — `length` on the OpenAI-compatible surface, and the
+// Messages protocol's `max_tokens` translated to it at decode. It is the one
 // finish reason that says the response is INCOMPLETE rather than wrong.
 const FinishLength = "length"
 
@@ -112,8 +217,9 @@ type Response struct {
 	FinishReason string
 
 	// StreamDone is whether a streamed response reached the provider's
-	// closing `[DONE]`: a stream whose body ended short of it did not
-	// complete, whatever content arrived first. False on a blocking Consult.
+	// closing event — `[DONE]` on the OpenAI surface, `message_stop` on the
+	// Messages one: a stream whose body ended short of it did not complete,
+	// whatever content arrived first. False on a blocking Consult.
 	StreamDone bool
 	// UsageReported is whether a streamed response carried a usage block at
 	// all, which an all-zero Usage cannot say.
@@ -196,11 +302,12 @@ type StreamReader interface {
 // reported. It is standard OpenAI accounting — a token count, hence its
 // place beside the others and NOT inside Telemetry.
 //
-// On a STREAMED response every figure here is zero unless the request
-// carried `stream_options.include_usage` (encodeRequest sends it on the
-// streaming path). An all-zero Usage therefore means "not reported", not
-// "no tokens", and anything gated on a token count must treat it as an
-// unevaluable input rather than a passing one.
+// On a STREAMED response every figure here is zero unless the request carried
+// `stream_options.include_usage` (the OpenAI client sends it on the streaming
+// path); the Messages client's streams report usage on every stream, so this
+// caveat is the OpenAI surface's alone. An all-zero Usage therefore means "not
+// reported", not "no tokens", and anything gated on a token count must treat it
+// as an unevaluable input rather than a passing one.
 type Usage struct {
 	PromptTokens       int
 	CompletionTokens   int
@@ -281,7 +388,3 @@ type StatusError struct {
 }
 
 func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }
-
-// ErrMockExhausted is returned by a scripted MockClient when its response
-// queue has been drained. Tests check for this with errors.Is.
-var ErrMockExhausted = errors.New("model: mock client exhausted")

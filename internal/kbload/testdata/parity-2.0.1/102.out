@@ -1,0 +1,14 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 2
+offset: 0
+truncated: false
+results:
+    - id: "clm-aaa005"
+      title: "An isolated $`\\Gamma`$-observation nothing cites"
+      strength: 0.0
+      build_band: "unsubstantiated"
+    - id: "clm-bbb002"
+      title: "The governance bifurcation"
+      strength: 0.66
+      build_band: "ok-with-caveats"

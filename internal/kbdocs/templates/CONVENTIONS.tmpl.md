@@ -2,29 +2,30 @@
 
 How to behave when operating on this knowledge base. The formats it conforms to are the toolchain's
 own — what a write op composes here was composed from values a seat supplied, and an op refuses
-values it cannot render and read back. This file is conduct, not format.
+values it cannot render. This file is conduct, not format.
 
 ## What this tree is
 
 Two graphs over one tree of Markdown files, beside which sit the images leaves embed, under
 `assets/` directories. The **topography graph** is the navigation hierarchy: entry point, domain
-indexes, subtopic indexes, leaves. The **claim graph** is a graph over results, of node kinds
-{node-kinds}, registered in `claim-rigor.md` files — axioms are declared in `axioms.md` instead
-(below) — and materialized under `.index/`. Its four scoring relations — `supports`, `founds`,
-`lifts` and `refutes` — close no cycle: the derived value is undefined on one, and verify fails it.
-`references` and `demoted` edges are unscored and may cycle; a `demoted` edge is a `supports` edge
-the build's cycle breaking cut. A leaf is a container — its position label says where it sits in the
-hierarchy and nothing about what it hosts.
+indexes, subtopic indexes, leaves. The **claim graph** is a graph over results, of node kinds {node-kinds}, held as kbase's records in
+`.index/` and shown for reading on generated `claim-rigor.md` pages. Its four scoring relations —
+`supports`, `founds`, `lifts` and `refutes` — close no cycle: the derived value is undefined on
+one, so the build and `refresh` demote one edge of any cycle they find, and a write op refuses an
+edge that would close one. `references` and `demoted` edges are unscored; a `demoted` edge is a
+scoring edge demoted to break a cycle, kept whole so `resolve-demoted` can restore it. A leaf is a
+container — its position label says where it sits in the hierarchy — and the claims, analyses and
+experiments it hosts are marked in its prose.
 
-Corpus axioms — notation and cross-cutting definitions — are declared in `axioms.md`, which is the
-file the toolchain parses for axiom nodes: a heading in it shaped `### Axiom <label>: Title` becomes
-one. Prose may call an axiom an invariant or a framework premise; the graph has one word for it.
+Corpus axioms — notation and cross-cutting definitions — are stated in `axioms.md`, one
+`### Axiom <label>: <title>` heading each, its label and title those `insert-axiom-entry` recorded.
+Prose may call an axiom an invariant or a framework premise; the graph has one word for it.
 
 ## Use the agents
 
 - The `kbase` skill — how the KB is reached: it locates this tree and routes to reading, maintenance
   or building.
-- `kb-maintainer` — every change: new leaves, corrections, frontmatter, claim-graph wiring, and the
+- `kb-maintainer` — every change: new leaves, corrections, records, claim-graph wiring, and the
   loop back to green.
 - A build (`kbase build`) writes this tree where it does not already stand; it is not rerun for
   incremental work.
@@ -48,6 +49,8 @@ kbase, a single binary run from the project root, maintains this KB.
 | Regenerate derived state | `kbase refresh` |
 | The read-only gate | `kbase verify` |
 | Claim-graph counts | `kbase stats` |
+| Edge counts by relation and bearing | `kbase edge-census` |
+| The edges of a relation | `kbase edges --relation <relation>` |
 
 Every subcommand but `help`, `completion` and `mcp` writes one YAML document to stdout, its
 `outcome` key the result: `refused` exits 1, `retry` exits 2, and `kbase --help` states the whole
@@ -64,26 +67,27 @@ work.
 
 ## Authored versus derived
 
-Authored: leaf content, leaf frontmatter, register entry text, premise membership, a node's local
-`rigor`, and a scoring edge's `bearing`. Derived and regenerated: `strength`, build status, the
-parenthetical `(strength …)` annotations, subtree aggregates, the `Leaf references:` line in each
-register entry, the `claim-graph.svg` and `claim-graph-digest.svg` sheets, and everything under `.index/`. **A hand-edited derived
-field is a verifier failure**, not a shortcut — the value is overwritten and the drift is reported.
+Authored: leaf content and the statement markers in it, and kbase's records — nodes, their local
+`rigor`, rationale and the rest, and edges with their `bearing`. Derived and regenerated:
+`strength`, build status, subtree aggregates, the `claim-rigor.md` pages, and the
+`claim-graph.svg` and `claim-graph-digest.svg` sheets. **A hand-edited `claim-rigor.md` page is a
+verifier failure**, not a shortcut; `refresh` overwrites every derived file.
 
-Authored does not mean typed. Everything authored except leaf prose is metadata, and metadata is
-written only by a write op: you supply values, the op composes the format, proves what it wrote by
-reading it back, and refuses rather than writing what it cannot prove. It mints an entry's id itself
-and reports it, so no id is ever chosen. A values file carrying a key its op does not take is refused
-with the offending key, its position, and the complete set the op does take, so the call you would
-have made anyway is what answers the question.
+Records and the statement markers are written only by a write op (`mark-claim-in-leaf` places or
+moves a marker), never by hand: you supply values, the op composes the record, proves each marker
+it placed by reading it back, and refuses rather than writing what it cannot prove. It mints an entry's id
+itself and reports it, so no id is ever chosen. A values file carrying a key its op does not take is
+refused with the offending key, its position, and the complete set the op does take, so the call
+you would have made anyway is what answers the question.
 
 ## The gate
 
 Refresh regenerates derived state; verify is the read-only gate. Refresh before verify, always, and
 leave the gate green. A failure marked refresh-fixable means run refresh; anything else is a real
-defect in what was authored, and re-running will not clear it. `verify` also lists every `demoted`
-edge under `findings`, which are not failures; `resolve-demoted` removes one or restores it to a
-`supports` premise edge, refusing a restore that would close a cycle.
+defect in what was authored, and re-running will not clear it. `verify` also lists every `demoted` edge under `findings`, which are not failures;
+`resolve-demoted` removes one or restores the edge it replaced, refusing a restore that would close
+a cycle. After a merge the load may be degraded; `refresh` repairs it, and its result's `warnings`
+name every edge it dropped or demoted. Report them: nothing else records a drop.
 
 `claim-graph.svg` and `claim-graph-digest.svg` beside this file and `<volume>/claim-graph.svg` in
 each volume are the derived files no verifier reads; the digest and the volume sheets exist only where
@@ -106,8 +110,8 @@ edits any of the three, and corpus content belongs in none — it belongs in `ax
 
 ## Citations
 
-In authored files — registers, indexes, summaries, `axioms.md`, and meta-docs — a reference to a
-node is a structured field, a marker, or a link, never an id or a rule name sitting loose in prose.
+In authored files — indexes, summaries, `axioms.md`, and meta-docs — a reference to a node is a
+structured field, a marker, or a link, never an id or a rule name sitting loose in prose.
 A cited authority carries the minimal quoted excerpt that makes the citing statement falsifiable
 where it stands, linked to a durable path in this tree; one clause, not the passage, because a
 citation that reproduces its source has become a second copy of it. Where a reference genuinely

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kbase/internal/result"
 )
 
 // keyFile stages a key file holding key and returns its path.
@@ -83,13 +85,16 @@ func TestModeOf(t *testing.T) {
 				}
 				return
 			}
-			var refusals Refusals
-			if !asRefusals(err, &refusals) {
+			refusals, ok := err.(result.Refusal)
+			if !ok {
 				t.Fatalf("err = %v, want refusals", err)
 			}
 			var keys []string
 			for _, r := range refusals {
 				keys = append(keys, r.Key)
+				if r.Check != CheckProvider {
+					t.Errorf("%s: check = %q, want %q", r.Key, r.Check, CheckProvider)
+				}
 				if strings.HasPrefix(r.Key, "models.") && r.Path != ConfigPath(dir) {
 					t.Errorf("%s names no config.toml: path %q", r.Key, r.Path)
 				}
@@ -99,15 +104,6 @@ func TestModeOf(t *testing.T) {
 			}
 		})
 	}
-}
-
-// asRefusals reports whether err is the aggregate, keeping its items.
-func asRefusals(err error, out *Refusals) bool {
-	several, ok := err.(Refusals)
-	if ok {
-		*out = several
-	}
-	return ok
 }
 
 // TestSelect: the catalogue verbs' choice is the flag, else the pool's only
@@ -202,20 +198,20 @@ func scenario(t *testing.T) Inputs {
 // with the model it names and the provenance its record states.
 func TestResolveFileMode(t *testing.T) {
 	in := scenario(t)
-	ep, err := Resolve(in, ModeFile, RoleDecision, BackEndProvider, "")
+	ep, err := Resolve(in, ModeFile, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Endpoint{Role: RoleDecision, Mode: ModeFile, Provider: "lab", Model: "d3", Rule: RuleConfig,
-		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, APIKey: "lab-key",
-		BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
+		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIOpenAI,
+		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
 		t.Errorf("= %+v, want %+v", ep, want)
 	}
 	// The key file is no mode: it replaces the key of whichever endpoint is in
 	// force, and the dial reads it.
 	in.Env = Overrides{APIKeyFile: "~/keys/lab.txt"}
-	ep, err = Resolve(in, ModeFile, RoleText, BackEndProvider, "")
+	ep, err = Resolve(in, ModeFile, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,9 +221,16 @@ func TestResolveFileMode(t *testing.T) {
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
-	ep, err = Resolve(in, ModeFile, RoleScoring, BackEndProvider, "lab/judge")
+	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/judge")
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
 		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
+	}
+	// The flag supplies the role the files name no model for: the entry is the
+	// flag's, no layer named the model, and the rule is the flag's.
+	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "", ""
+	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/clef")
+	if err != nil || ep.Provider != "lab" || ep.Model != "clef" || ep.Rule != RuleFlag || ep.ModelSource != "" {
+		t.Errorf("= %+v, %v; want the flag to supply lab/clef under its own rule", ep, err)
 	}
 }
 
@@ -235,7 +238,7 @@ func TestResolveFileMode(t *testing.T) {
 // and no pool entry behind it.
 func TestResolveEnvironmentMode(t *testing.T) {
 	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"}}
-	ep, err := Resolve(in, ModeEnvironment, RoleText, BackEndProvider, "")
+	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +248,7 @@ func TestResolveEnvironmentMode(t *testing.T) {
 	}
 	// A value bearing a slash is the endpoint's model, sent verbatim: nothing
 	// parses it against a provider the environment does not name.
-	ep, err = Resolve(in, ModeEnvironment, RoleText, BackEndProvider, "org/model")
+	ep, err = Resolve(in, ModeEnvironment, RoleText, "org/model")
 	if err != nil || ep.Model != "org/model" || ep.ModelSource != "" {
 		t.Errorf("= %+v, %v; want the flag verbatim", ep, err)
 	}
@@ -267,9 +270,9 @@ func TestResolveRefusals(t *testing.T) {
 		allowed []string
 		detail  string
 	}{
-		{name: "no value in the file", role: RoleScoring, mode: ModeFile,
+		{name: "no value in the file, and no flag", role: RoleScoring, mode: ModeFile,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
-			key:    "models.scoring", path: configFile, detail: "sets no models.scoring"},
+			key:    "models.scoring", path: configFile, detail: "and --scoring-model names no model"},
 		{name: "a bare id", role: RoleScoring, mode: ModeFile,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" },
 			key:    "models.scoring", path: configFile, detail: "<provider>/<model>"},
@@ -283,17 +286,19 @@ func TestResolveRefusals(t *testing.T) {
 			key:    EnvScoring},
 		{name: "the flag is not a reference", role: RoleScoring, mode: ModeFile, flag: "clef",
 			key: keyScoringModel, check: CheckUsage, detail: "<provider>/<model>"},
-		{name: "the flag names a provider the pool does not hold", role: RoleScoring, mode: ModeFile,
-			flag: "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"}},
+		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring, mode: ModeFile,
+			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
+			flag:   "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"},
+			detail: "--scoring-model names a provider the pool does not hold"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := scenario(t)
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, tc.mode, tc.role, BackEndProvider, tc.flag)
-			var refusal Refusal
-			if !asRefusal(err, &refusal) {
+			_, err := Resolve(in, tc.mode, tc.role, tc.flag)
+			refusal, ok := asRefusal(err)
+			if !ok {
 				t.Fatalf("err = %v, want one refusal", err)
 			}
 			if refusal.Key != tc.key || (tc.path != "" && strings.TrimPrefix(refusal.Path, in.WriteDir+"/") != tc.path) {
@@ -305,82 +310,50 @@ func TestResolveRefusals(t *testing.T) {
 			if tc.detail != "" && !strings.Contains(refusal.Detail, tc.detail) {
 				t.Errorf("detail = %q, want %q", refusal.Detail, tc.detail)
 			}
-			if refusal.Check != tc.check {
-				t.Errorf("check = %q, want %q", refusal.Check, tc.check)
+			wantCheck := tc.check
+			if wantCheck == "" {
+				wantCheck = CheckProvider
+			}
+			if refusal.Check != wantCheck {
+				t.Errorf("check = %q, want %q", refusal.Check, wantCheck)
 			}
 		})
 	}
 }
 
-// asRefusal reports whether err is exactly one refusal.
-func asRefusal(err error, out *Refusal) bool {
-	one, ok := err.(Refusal)
-	if ok {
-		*out = one
-	}
-	return ok
-}
-
-// TestResolveNeverFallsBack: a role the source does not configure refuses even
-// where another role has an endpoint and even where the flag names a model.
-func TestResolveNeverFallsBack(t *testing.T) {
+// TestResolveDefaultRefusalNamesTheRoleFirst: a verb whose role is its own
+// default — nothing named a selection — is refused by the role's key as the
+// first remedy and by the flag as the other, and never as though the flag had
+// been passed.
+func TestResolveDefaultRefusalNamesTheRoleFirst(t *testing.T) {
 	in := scenario(t)
 	in.Cfg.Models.Scoring = ""
-	if _, err := Resolve(in, ModeFile, RoleScoring, BackEndProvider, "lab/clef"); err == nil {
-		t.Error("the scoring role resolved from another role's endpoint, or from the flag")
+	_, err := ResolveFlag(in, ModeFile, RoleScoring, "", keyScoringModel, true)
+	refusal, ok := asRefusal(err)
+	if !ok {
+		t.Fatalf("err = %v, want one refusal", err)
+	}
+	if refusal.Key != "models.scoring" || refusal.Path != ConfigPath(in.WriteDir) || refusal.Remedy != configureRemedy {
+		t.Errorf("named %s in %s, remedy %q; want the role's key and file", refusal.Key, refusal.Path, refusal.Remedy)
+	}
+	for _, want := range []string{"sets no models.scoring", "nothing named a selection",
+		"the scoring role is the default", keyScoringModel} {
+		if !strings.Contains(refusal.Detail, want) {
+			t.Errorf("detail = %q, want %q", refusal.Detail, want)
+		}
+	}
+	if strings.Contains(refusal.Detail, "names no model") {
+		t.Errorf("detail = %q reads as though the flag had been passed", refusal.Detail)
 	}
 }
 
-// TestResolveHarness: under a harness no endpoint is chosen and the mode is
-// not consulted — the environment's id where it names one, else the reference
-// model part.
-func TestResolveHarness(t *testing.T) {
-	in := scenario(t)
-	ep, err := Resolve(in, "", RoleScoring, BackEndHarness, "")
-	if err != nil || ep.Model != "clef" || ep.Provider != "" || ep.BaseURL != "" || ep.ModelSource != LayerSourceRepository {
-		t.Fatalf("= %+v, %v; want the reference's model part alone", ep, err)
+// asRefusal returns the item of err where err is a refusal of exactly one.
+func asRefusal(err error) (result.Item, bool) {
+	one, ok := err.(result.Refusal)
+	if !ok || len(one) != 1 {
+		return result.Item{}, false
 	}
-	in.Env = Overrides{Scoring: "other/clef"}
-	ep, err = Resolve(in, "", RoleScoring, BackEndHarness, "")
-	if err != nil || ep.Model != "other/clef" {
-		t.Fatalf("= %+v, %v; want the environment's id verbatim", ep, err)
-	}
-	in.Cfg.Models.Scoring = ""
-	in.Env = Overrides{}
-	if _, err := Resolve(in, "", RoleScoring, BackEndHarness, ""); err == nil {
-		t.Error("an unconfigured role resolved under a harness")
-	}
-}
-
-// TestHarnessArgv: {model} is filled once and {prompt} is left for the item;
-// a model no element names is refused rather than dropped, and so is one the
-// child would read as an option.
-func TestHarnessArgv(t *testing.T) {
-	profile := Profile{Name: "p", Command: []string{"harness", "--model", "{model}", "{prompt}"}}
-	argv, err := HarnessArgv(profile, "anthropic/x")
-	if err != nil || strings.Join(argv, " ") != "harness --model anthropic/x {prompt}" {
-		t.Fatalf("= %q, %v", argv, err)
-	}
-	if strings.Join(profile.Command, " ") != "harness --model {model} {prompt}" {
-		t.Errorf("the profile's own command was rewritten: %q", profile.Command)
-	}
-	named := Profile{Name: "p", Command: []string{"harness", "--model", "{model}"}}
-	if argv, err := HarnessArgv(named, ""); err != nil || strings.Join(argv, " ") != "harness --model " {
-		t.Errorf("= %q, %v; want the empty substitution with no refusal", argv, err)
-	}
-	plain := Profile{Name: "claude", Command: []string{"claude", "-p"}}
-	_, err = HarnessArgv(plain, "d3")
-	var refusal Refusal
-	if !asRefusal(err, &refusal) || refusal.Check != CheckHarness || refusal.Key != "--scoring-model" {
-		t.Errorf("err = %v, want a harness refusal naming --scoring-model", err)
-	}
-	if argv, err := HarnessArgv(plain, ""); err != nil || len(argv) != 2 {
-		t.Errorf("a model nothing names is no refusal: %q, %v", argv, err)
-	}
-	// The child would read -d3 as an option of its own, not as a model id.
-	if _, err := HarnessArgv(profile, "-d3"); !asRefusal(err, &refusal) || refusal.Check != CheckHarness || refusal.Key != keyScoringModel {
-		t.Errorf("a model beginning with - = %v, want a harness refusal naming --scoring-model", err)
-	}
+	return one[0], true
 }
 
 func TestCleartextWarning(t *testing.T) {

@@ -96,33 +96,24 @@ func (ix *Index) Find(query string) []kb.NodeRow {
 	return out
 }
 
-// leafKindRE is the first kind: line anywhere in a document.
-var leafKindRE = kb.PyRE(`(?m)^\s*kind:\s*(\S+)`)
-
 // ReferencedBy is every leaf, other than the one first citing id, whose body
 // (code, maths and fences blanked) holds an inline link resolving to that
-// leaf: kb-root-relative paths, sorted. A document is a leaf by its first
-// kind: line; one that cannot be read as text is passed over.
+// leaf: kb-root-relative paths, sorted. A document is a leaf by its kind as
+// the load derives it; one that cannot be read as text is passed over.
 func (ix *Index) ReferencedBy(id string) ([]string, error) {
 	cites := ix.CitedBy(id)
 	if len(cites) == 0 {
 		return []string{}, nil
 	}
 	origin := kb.ResolvePath(ix.src.KBPath(cites[0].LeafPath))
-	files, err := kb.MarkdownFiles(ix.src)
-	if err != nil {
-		return nil, err
-	}
 	set := map[string]bool{}
-	for _, file := range files {
-		if kb.ResolvePath(file) == origin {
+	for rel, kind := range ix.documentKinds {
+		file := ix.src.KBPath(rel)
+		if kind != kb.DocumentLeaf || kb.ResolvePath(file) == origin {
 			continue
 		}
 		text, err := ix.src.ReadText(file)
 		if err != nil {
-			continue
-		}
-		if m := leafKindRE.FindStringSubmatch(text); m == nil || m[1] != kb.DocumentLeaf {
 			continue
 		}
 		for _, match := range kb.LinkRE.FindAllStringSubmatch(kb.StripCode(text), -1) {
@@ -134,11 +125,7 @@ func (ix *Index) ReferencedBy(id string) ([]string, error) {
 				target = filepath.Join(filepath.Dir(file), target)
 			}
 			if kb.ResolvePath(target) == origin {
-				rel, err := filepath.Rel(ix.src.Root(), file)
-				if err != nil {
-					return nil, err
-				}
-				set[filepath.ToSlash(rel)] = true
+				set[rel] = true
 				break
 			}
 		}

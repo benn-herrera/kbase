@@ -13,12 +13,13 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/asks"
-	"kbase/internal/asks/call"
 	"kbase/internal/buildrecords"
+	"kbase/internal/buildstore"
+	"kbase/internal/buildstore/storetest"
 	"kbase/internal/claimgraph"
 	"kbase/internal/kb"
-	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 	"kbase/internal/result"
 )
 
@@ -82,7 +83,7 @@ func (a *answering) ConsultStream(ctx context.Context, req model.Request) (model
 func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	reply := model.Response{Content: a.answer(req.Messages[0].Content, req.Messages[1].Content),
 		Usage: model.Usage{PromptTokens: 100, CompletionTokens: 1}, UsageReported: true}
-	return model.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
+	return modeltest.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
 }
 
 func (a *answering) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
@@ -189,7 +190,7 @@ func (f fixture) asking(client model.Client) Options {
 
 func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
 	provider := newAnswering(script)
 	outcome, fields := f.build(t, f.asking(provider))
 	if outcome != result.Done {
@@ -199,10 +200,10 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	// bound, so a reader of a finished build knows which entry received the
 	// corpus without consulting the configuration again.
 	wantKeys := []string{"kb-root", "state-dir", "roles", "through"}
-	if keys := fieldKeys(fields); len(keys) < len(wantKeys) || !slices.Equal(keys[:len(wantKeys)], wantKeys) {
+	if keys := storetest.FieldKeys(fields); len(keys) < len(wantKeys) || !slices.Equal(keys[:len(wantKeys)], wantKeys) {
 		t.Errorf("result keys = %q, want %q", keys, wantKeys)
 	}
-	roles, _ := field(fields, "roles").([]result.Record)
+	roles, _ := storetest.Field(fields, "roles").([]result.Record)
 	if len(roles) != 2 || roles[0][0].Value != "decision" || roles[1][0].Value != "text" {
 		t.Fatalf("roles = %v, want decision then text", roles)
 	}
@@ -268,7 +269,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		t.Fatalf("cull record: %+v, %v; want two pass-1 asks — the unmarked link and the marked link with a prose end — and no cull", cull, err)
 	}
 	for _, e := range cull.Entries {
-		if e.Verdict != buildrecords.VerdictDistinct || e.Outcome != claimgraph.ClassifyAnswered {
+		if e.Verdict != buildrecords.VerdictDistinct || e.Outcome != string(asks.Answered) {
 			t.Errorf("cull entry %+v, want answered distinct", e)
 		}
 	}
@@ -279,7 +280,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	}
 	var linked []buildrecords.CandidateEntry
 	for _, c := range classified.Candidates {
-		if c.Letter == nil || *c.Letter != asks.LetterSupportedBy || c.Outcome != claimgraph.ClassifyAnswered {
+		if c.Letter == nil || *c.Letter != asks.LetterSupportedBy || c.Outcome != string(asks.Answered) {
 			t.Errorf("candidate %s -> %s = %+v, want answered A", c.Source, c.Target, c)
 		}
 		if yeses[[2]string{c.Source, c.Target}] {
@@ -290,23 +291,42 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	if len(linked) != 1 || linked[0].Source != yes.Source || linked[0].Target != yes.Target || !slices.Equal(linked[0].Offered, threeWay) {
 		t.Errorf("the lemma–prose link's candidates = %+v, want one, the lemma to the prose claim before it, offered %q", linked, threeWay)
 	}
-	if demoted := dependsField(t, fields, "stage-D-ring", "demoted"); len(demoted) != 4 {
-		t.Errorf("demoted = %q, want all four depends edges: the lemma and the theorem each way, the lemma to the prose claim, and the prose claim to the theorem, every one on a cycle", demoted)
+	// The depends edges are the lemma and the theorem supporting each other, the
+	// theorem the prose claim and the prose claim the lemma. Walked in reading
+	// order — the prose claim, the lemma, the theorem — the ring row closes the
+	// lemma–theorem cycle on the theorem's edge into the lemma, then the
+	// three-cycle on the theorem's edge into the prose claim.
+	built, err := kb.LoadGraph(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	titles := map[string]string{}
+	for _, c := range built.Claims {
+		titles[c.ID] = c.Title
+	}
+	var cuts []string
+	for _, d := range built.Demoted {
+		cuts = append(cuts, titles[d.Source]+" -> "+titles[d.Target])
+	}
+	slices.Sort(cuts)
+	wantCuts := []string{"Theorem 1 -> Lemma 1", "Theorem 1 -> " + title}
+	if demoted := dependsField(t, fields, "stage-D-ring", "demoted"); len(demoted) != 2 || !slices.Equal(cuts, wantCuts) {
+		t.Errorf("demoted = %q, the records' cuts %q; want two, %q", demoted, cuts, wantCuts)
 	}
 
 	if readme := files["kb-root/README.md"]; !strings.Contains(readme, "A small paper showing that widgets and gadgets coincide.") {
 		t.Errorf("README.md = %q, want the re-asked passage", readme)
 	}
 
-	_, status := Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo})
-	fallbacks, _ := field(status, "recent-fallbacks").([]result.Item)
+	_, status := buildstore.Status(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+	fallbacks, _ := storetest.Field(status, "recent-fallbacks").([]result.Item)
 	if len(fallbacks) != 1 || fallbacks[0].Path != "a-small-paper/introduction.md" || fallbacks[0].Line == 0 {
 		t.Errorf("recent fallbacks = %+v, want the pointing paragraph that took its draft", fallbacks)
 	}
-	events, _ := readProgress(f.state)
+	events, _ := buildstore.ReadProgress(f.state)
 	var leaves []string
 	for _, e := range events {
-		if e.Event == eventUnit && e.Stage == "claims-discovered" && e.Unit != "discover.build" {
+		if e.Event == buildstore.EventUnit && e.Stage == "claims-discovered" && e.Unit != "discover.build" {
 			leaves = append(leaves, e.Unit)
 		}
 	}
@@ -315,23 +335,23 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	}
 	var groups []string
 	for _, e := range events {
-		if e.Event == eventUnit && e.Stage == "references-found" && e.Unit != "unmarked.build" {
+		if e.Event == buildstore.EventUnit && e.Stage == "references-found" && e.Unit != "unmarked.build" {
 			groups = append(groups, e.Unit)
 		}
 	}
 	if len(groups) != 2 || !slices.Contains(groups, yes.Source) || !slices.Contains(groups, yes.Target) {
 		t.Errorf("references-found's units = %q, want one per source group asked: the lemma's and the prose claim's", groups)
 	}
-	scratch := filepath.Join(f.state, scratchDir)
-	for _, dir := range []string{call.CapturesDir, call.AnswersDir, asks.AskRecordsDir} {
+	scratch := filepath.Join(f.state, buildstore.ScratchDir)
+	for _, dir := range []string{asks.CapturesDir, asks.AnswersDir, asks.AskRecordsDir} {
 		if entries, err := os.ReadDir(filepath.Join(scratch, dir)); err != nil || len(entries) == 0 {
-			t.Errorf("%s/%s holds nothing: %v", scratchDir, dir, err)
+			t.Errorf("%s/%s holds nothing: %v", buildstore.ScratchDir, dir, err)
 		}
 	}
 
 	// A second build of the same paper lands the same KB modulo node ids.
 	g := newFixture(t)
-	writeFile(t, filepath.Join(g.repo, "paper.tex"), askedPaper)
+	storetest.WriteFile(t, filepath.Join(g.repo, "paper.tex"), askedPaper)
 	if outcome, fields := g.build(t, g.asking(newAnswering(script))); outcome != result.Done {
 		t.Fatalf("rebuild = %s %v", outcome, fields)
 	}
@@ -342,7 +362,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 // the stage found among the result's stages.
 func claimgraphFindings(t *testing.T, fields []result.Field, stage string) []map[string]any {
 	t.Helper()
-	stages, _ := field(fields, "stages").([]result.Record)
+	stages, _ := storetest.Field(fields, "stages").([]result.Record)
 	for _, s := range stages {
 		if s[0].Value != stage {
 			continue
@@ -392,48 +412,46 @@ const settledRingPaper = "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n
 	"\\end{document}\n"
 
 // TestNoInferenceCutsTheSettledRing: without inference the two settled pairs
-// of a ring leave no depends edge between the lemmas, and each stands as a
-// demoted row of its own source, origin cited.
+// of a ring close a two-cycle, and the ring row cuts the edge the walk closes
+// it on. The walk starts at the lemma read first, so the second lemma's
+// supports edge into the first is demoted and the first's into the second
+// stands.
 func TestNoInferenceCutsTheSettledRing(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), settledRingPaper)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), settledRingPaper)
 	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
-	st, err := kb.Discover(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)), log.Discard())
+	g, err := kb.LoadGraph(kb.OnDisk(filepath.Join(f.repo, kb.KBDir)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids, depends, demoted []string
-	for _, e := range st.ClaimEntries {
-		ids = append(ids, e.ID)
-		for _, d := range e.Premises {
-			if d.Relation == kb.RelationSupports && d.TargetKind == kb.NodeKindClaim {
-				depends = append(depends, d.Source+" -> "+e.ID)
-			}
+	var supports, demoted []string
+	claims := slices.SortedFunc(slices.Values(g.Claims), func(a, b kb.ClaimNode) int { return strings.Compare(a.Title, b.Title) })
+	if len(claims) != 2 || claims[0].Title != "Lemma 1" || claims[1].Title != "Lemma 2" {
+		t.Fatalf("claim records = %+v, want the two lemmas", claims)
+	}
+	ids := []string{claims[0].ID, claims[1].ID}
+	for _, e := range g.Scorable {
+		if e.Relation == kb.RelationSupports {
+			supports = append(supports, e.Source+" -> "+e.Target)
 		}
-		for _, d := range e.Demoted {
-			demoted = append(demoted, e.ID+" -> "+d.Target+" "+d.Origin)
-		}
 	}
-	if len(ids) != 2 {
-		t.Fatalf("claim entries = %q, want the two lemmas", ids)
+	for _, d := range g.Demoted {
+		demoted = append(demoted, d.ReplacedRelation+" "+d.Source+" -> "+d.Target)
 	}
-	if len(depends) != 0 {
-		t.Errorf("depends edges = %q, want none", depends)
+	if want := []string{ids[0] + " -> " + ids[1]}; !slices.Equal(supports, want) {
+		t.Errorf("supports edges = %q, want %q", supports, want)
 	}
-	slices.Sort(demoted)
-	want := []string{ids[0] + " -> " + ids[1] + " " + kb.OriginCited, ids[1] + " -> " + ids[0] + " " + kb.OriginCited}
-	slices.Sort(want)
-	if !slices.Equal(demoted, want) {
-		t.Errorf("demoted = %q, want %q", demoted, want)
+	if want := []string{kb.RelationSupports + " " + ids[1] + " -> " + ids[0]}; !slices.Equal(demoted, want) {
+		t.Errorf("demoted records = %q, want %q", demoted, want)
 	}
 }
 
 func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	mock := model.NewScriptedMockPerConsult(nil)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
+	mock := modeltest.NewScriptedMockPerConsult(nil)
 	mock.SetError(errors.New("connection refused"))
 	outcome, fields := f.build(t, f.asking(mock))
 	if outcome != result.Failed {
@@ -442,7 +460,7 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("claims-declared")) {
 		t.Errorf("trail = %q, want every stage before the node pass and not the node pass", got)
 	}
-	stages := field(fields, "stages").([]result.Record)
+	stages := storetest.Field(fields, "stages").([]result.Record)
 	last := stages[len(stages)-1]
 	if last[0].Value != "claims-discovered" || last[1].Value != nil {
 		t.Fatalf("stopped in %v, commit %v", last[0].Value, last[1].Value)
@@ -452,7 +470,7 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	if detail, _ := stop["detail"].(string); stop["status"] != "FAIL" || stop["check"] != "inference-failed" || !strings.Contains(detail, "connection refused") {
 		t.Errorf("the stage's last finding = %v, want inference-failed naming the cause", stop)
 	}
-	if failures, _ := field(fields, "failures").([]result.Item); len(failures) != 1 || failures[0].Check != "inference-failed" || !strings.Contains(failures[0].Detail, "connection refused") {
+	if failures, _ := storetest.Field(fields, "failures").([]result.Item); len(failures) != 1 || failures[0].Check != "inference-failed" || !strings.Contains(failures[0].Detail, "connection refused") {
 		t.Errorf("failures = %+v, want the stopping check named", failures)
 	}
 	if _, err := os.Stat(filepath.Join(f.repo, kb.KBDir, "README.md")); err == nil {
@@ -513,14 +531,14 @@ func (s *stopsAfter) Decision(ctx context.Context, req model.DecisionRequest) (m
 // third.
 func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	whole := newFixture(t)
-	writeFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
+	storetest.WriteFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
 	clean := newAnswering(script)
 	if outcome, fields := whole.build(t, whole.asking(clean)); outcome != result.Done {
 		t.Fatalf("uninterrupted build = %s %v", outcome, fields)
 	}
 
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
 	// n = 12: the thirteenth letter ask never arrives — the third classify
 	// group of one candidate each; the call fails past SystemOne's own attempt
 	// count and the stage stops unrecorded.
@@ -531,7 +549,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("claims-culled")) {
 		t.Fatalf("trail = %q, want dependency attribution unrecorded", got)
 	}
-	answers := filepath.Join(f.state, scratchDir, call.AnswersDir)
+	answers := filepath.Join(f.state, buildstore.ScratchDir, asks.AnswersDir)
 	cached, _ := os.ReadDir(answers)
 	if len(cached) == 0 {
 		t.Fatal("the interrupted stage cached no answer")
@@ -542,7 +560,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
-	if restored, _ := field(fields, "restored").([]string); len(restored) == 0 {
+	if restored, _ := storetest.Field(fields, "restored").([]string); len(restored) == 0 {
 		t.Error("the resume restored nothing of the interrupted stage")
 	}
 	if want := clean.count() - len(cached); resumed.count() != want {
@@ -554,7 +572,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 func TestBibliographiesBesideTheVolumeRoots(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"z.bib", "a.bib", ".hidden.bib", "notes.txt", "two/m.bib"} {
-		writeFile(t, filepath.Join(dir, name), "")
+		storetest.WriteFile(t, filepath.Join(dir, name), "")
 	}
 	w := &walk{opts: Options{VolumeRoots: []string{filepath.Join(dir, "paper.tex")}}}
 	got, err := w.bibliographies()

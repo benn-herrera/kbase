@@ -7,8 +7,8 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
-	rootCmd.AddCommand(queryCommand(&cobra.Command{
+func referencedByCommand() *cobra.Command {
+	return queryCommand(&cobra.Command{
 		Use:   "referenced-by <id>",
 		Short: "the leaves whose body links to a claim's originating leaf",
 		Long: `referenced-by scans every leaf body under kb-root/ and lists, sorted, the
@@ -18,5 +18,5 @@ citing it — that leaf itself excepted.`,
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		leaves, err := query.ReferencedByPayload(ix, args[0])
 		return leaves, nil, err
-	}))
+	})
 }

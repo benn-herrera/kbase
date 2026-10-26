@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa002"
+    title: "Equation (`eq:flow`) — Flow Dynamics"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "equation-eqflow-flow-dynamics"
+    rigor: 0.95
+    strength: 0.95
+    build_status: "ok to build on"
+    build_band: "ok-to-build"
+    rationale: "Fixture."
+    premise_count: 1
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 1

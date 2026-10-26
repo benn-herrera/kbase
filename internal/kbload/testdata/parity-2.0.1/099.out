@@ -1,0 +1,10 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - id: "clm-aaa002"
+      title: "Equation (`eq:flow`) — Flow Dynamics"
+      strength: 0.95
+      build_band: "ok-to-build"

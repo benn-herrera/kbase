@@ -12,6 +12,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/records"
@@ -114,15 +115,14 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 		if !ok {
 			return nil, stopf("node-pass-record", "no node-pass record stands at %s. The declared pass writes one listing every leaf it stamped, and this pass reads its scope from nothing else", buildrecords.NodePassFile)
 		}
-		if _, err := passTwoGate(t); err != nil {
+		if err := passTwoGate(t); err != nil {
 			return nil, err
 		}
 		inv, err := scanInventory(t, recs)
 		if err != nil {
 			return nil, err
 		}
-		g, err := readGraph(t, &inv)
-		if err != nil {
+		if _, err := readGraph(t, &inv); err != nil {
 			return nil, err
 		}
 		paths := slices.Sorted(maps.Keys(record.Leaves))
@@ -134,13 +134,6 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 			}
 		}
 		findings := []Finding{fact("stage-C-scope", field("unread", states[ReadUnread]), field("planned", states[ReadPlanned]), field("landed", states[ReadLanded]))}
-		hosted := map[string]map[string]bool{}
-		for _, n := range g.Nodes {
-			if hosted[n.Document] == nil {
-				hosted[n.Document] = map[string]bool{}
-			}
-			hosted[n.Document][n.ID] = true
-		}
 		var groups []asks.GroupRecord
 		var defaulted []string
 		causes := map[string]int{}
@@ -191,33 +184,13 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 					return findings, err
 				}
 			}
-			elsewhere := map[string]bool{}
-			for other, ids := range hosted {
-				if other != p {
-					for id := range ids {
-						elsewhere[id] = true
-					}
-				}
-			}
-			blocks := map[string]string{}
-			for _, n := range g.hostedBy(p) {
-				if n.Locator != "" {
-					blocks[n.ID] = n.Locator
-				}
-			}
 			claims := make([]newClaim, len(entry.Claims))
 			for i, c := range entry.Claims {
-				claims[i] = newClaim{title: c.Title, rationale: proseRationale(p), locator: c.Locator}
+				claims[i] = newClaim{title: t.registerTitle(c.Title, p), rationale: proseRationale(p), locator: c.Locator}
 			}
-			ids, err := w.landLeaf(p, t.kind(p), claims, blocks, elsewhere)
+			ids, err := w.landLeaf(p, claims)
 			if err != nil {
 				return findings, err
-			}
-			if hosted[p] == nil {
-				hosted[p] = map[string]bool{}
-			}
-			for _, id := range ids {
-				hosted[p][id] = true
 			}
 			entry.State = ReadLanded
 			record.Leaves[p] = entry
@@ -361,8 +334,7 @@ func Declared(opts Options) (Report, error) {
 			sources[r.entry] = true
 		}
 		findings = append(findings,
-			pass("stage-E-assemble", field("register-entries", len(p.entries)), field("registers", len(p.registers())),
-				field("frontmatter-records", len(p.documents)), field("markers", len(p.markers))),
+			pass("stage-E-assemble", field("claims", len(p.entries))),
 			fact("stage-E-endcap", field("works", len(p.works)), field("off-graph-edges", len(p.restsOn)), field("citing-claims", len(sources))))
 		written, err := w.writePlan(p)
 		findings = append(findings, written...)
@@ -370,9 +342,9 @@ func Declared(opts Options) (Report, error) {
 			return findings, err
 		}
 		leaves := map[string]buildrecords.LeafEntry{}
-		for _, d := range p.documents {
-			if declaringKinds[d.kind] {
-				leaves[d.path] = buildrecords.LeafEntry{State: ReadUnread}
+		for _, path := range t.Paths {
+			if declaringKinds[t.kind(path)] {
+				leaves[path] = buildrecords.LeafEntry{State: ReadUnread}
 			}
 		}
 		if err := WriteNodePass(w.repoRoot, buildrecords.NodePassRecord{Leaves: leaves}); err != nil {
@@ -420,7 +392,7 @@ func Equations(opts Options) (Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := passTwoGate(t); err != nil {
+		if err := passTwoGate(t); err != nil {
 			return nil, err
 		}
 		inv, err := scanInventory(t, recs)
@@ -453,13 +425,6 @@ func Equations(opts Options) (Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		hosted := map[string]map[string]bool{}
-		for _, n := range g.Nodes {
-			if hosted[n.Document] == nil {
-				hosted[n.Document] = map[string]bool{}
-			}
-			hosted[n.Document][n.ID] = true
-		}
 		byDoc := map[string][]entry{}
 		var docs []string
 		for _, e := range entries {
@@ -470,27 +435,12 @@ func Equations(opts Options) (Report, error) {
 		}
 		slices.Sort(docs)
 		for _, d := range docs {
-			elsewhere := map[string]bool{}
-			for other, ids := range hosted {
-				if other != d {
-					for id := range ids {
-						elsewhere[id] = true
-					}
-				}
-			}
 			var claims []newClaim
 			for _, e := range byDoc[d] {
-				claims = append(claims, newClaim{title: e.title, rationale: e.rationale})
+				claims = append(claims, newClaim{title: e.title, rationale: e.rationale, locator: e.locator})
 			}
-			ids, err := w.landLeaf(d, t.kind(d), claims, nil, elsewhere)
-			if err != nil {
+			if _, err := w.landLeaf(d, claims); err != nil {
 				return nil, err
-			}
-			if hosted[d] == nil {
-				hosted[d] = map[string]bool{}
-			}
-			for _, id := range ids {
-				hosted[d][id] = true
 			}
 		}
 		after, err := readTree(opts.KBRoot)
@@ -555,8 +505,7 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		state, err := passTwoGate(t)
-		if err != nil {
+		if err := passTwoGate(t); err != nil {
 			return nil, err
 		}
 		findings := []Finding{pass("stage-A-conformance", field("documents", len(t.Paths)))}
@@ -578,7 +527,6 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 			}
 		}
 		findings = append(findings,
-			fact("stage-A-determinations", field("hosting", len(state.hosting)), field("no-claim", len(state.determined)), field("undeclared", len(state.undeclared))),
 			fact("authored-graph", field("claims", len(g.Nodes)), field("hosting-documents", g.documents())),
 			fact("stage-D-anchors", field("anchors", len(inv.Anchors)), field("resolving", resolving), field("in-proofs", inProof)))
 		a := narrow(t, g, &inv, record, orientLinks(cull.Links, g, claimPositions(t, g, &inv)))
@@ -593,34 +541,40 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return findings, err
 		}
-		inferred, err := inferredAt(w.repoRoot)
+		cut, warnings, err := ringRow(w)
 		if err != nil {
 			return findings, err
 		}
-		cut, err := ringRow(w, inferred)
-		if err != nil {
-			return findings, err
-		}
-		return append(findings, pass("stage-D-ring", field("demoted", pairs(cut)))), nil
+		return append(findings, pass("stage-D-ring", field("demoted", pairs(cut)), field("warnings", warnings))), nil
 	})
 }
 
-// ringRow cuts every premise edge lying on a cycle of the captured graph:
-// each leaves the rests-on list for a demoted row of its own source, origin
-// inferred where inferred holds for it and cited otherwise. It returns the cut
-// edges, sorted.
-func ringRow(w writer, inferred func(source, target string) bool) ([]pair, error) {
-	edges, err := capturedEdges(w.kbRoot, w.lg)
+// ringRow breaks every cycle of the records the edge batch left, cutting the
+// edges index.BreakCycles' walk cuts in the tree's hosted order, each through
+// demote-claim-edge. It returns each cut as the authored pair — the claim the
+// edge ran into, then the premise — in cut order, and the walk's warning for
+// each.
+func ringRow(w writer) ([]pair, []string, error) {
+	src := builtTree(w.kbRoot)
+	g, err := kb.LoadGraph(src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cut := cycleEdges(edges)
-	for _, e := range cut {
-		if _, err := issue(w.raw, write.DemoteClaimEdge, map[string]any{"id": e.source, "target": e.target, "origin": demotedOrigin(e, inferred)}); err != nil {
-			return nil, stopf("ring-row", "%v; the ring row cannot proceed", err)
+	hosted, err := index.HostedOrder(src, g)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, cuts, items := index.BreakCycles(g, hosted)
+	cut := make([]pair, 0, len(items))
+	warnings := make([]string, 0, len(items))
+	for i, d := range cuts {
+		if _, err := issue(w.raw, write.DemoteClaimEdge, map[string]any{"id": d.Target, "target": d.Source}); err != nil {
+			return nil, nil, stopf("ring-row", "%v; the ring row cannot proceed", err)
 		}
+		cut = append(cut, pair{d.Target, d.Source})
+		warnings = append(warnings, items[i].Detail)
 	}
-	return cut, nil
+	return cut, warnings, nil
 }
 
 func requireNodePass(repoRoot string) (buildrecords.NodePassRecord, error) {
@@ -685,24 +639,4 @@ func classificationFindings(c classification, asked bool) []Finding {
 		fact("stage-D-asks", askTotals(c.asked)...),
 		pass("stage-D-classify", field("dependency-edges", len(c.edges)), field("references", len(c.refs))),
 	}
-}
-
-// capturedEdges is the captured premise graph between the register's claim
-// entries, in the authored direction — the entry holding the bullet, and the
-// premise it names — sources and targets in entry order, read fresh from the
-// tree.
-func capturedEdges(kbRoot string, lg log.Logger) ([]pair, error) {
-	st, err := kb.Discover(builtTree(kbRoot), lg)
-	if err != nil {
-		return nil, err
-	}
-	var out []pair
-	for _, e := range st.ClaimEntries {
-		for _, d := range e.Premises {
-			if d.Relation == kb.RelationSupports && d.TargetKind == "claim" {
-				out = append(out, pair{e.ID, d.Source})
-			}
-		}
-	}
-	return out, nil
 }

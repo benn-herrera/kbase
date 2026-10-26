@@ -22,6 +22,9 @@ const (
 type Entry struct {
 	Name    string
 	BaseURL string
+	// Protocol is the chat wire protocol the entry speaks, its default filled
+	// in: a report states what the entry resolves to, not whether it said so.
+	Protocol string
 	// DecisionsFlavor is the decision surface the entry speaks, its default
 	// filled in: a report states what the entry resolves to, not whether it
 	// said so.
@@ -55,7 +58,6 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 		layer.Exists = exists(layer.Path)
 		layer.ProvidersExists = exists(ProvidersPath(layer.Path))
 		layer.ConfigExists = exists(ConfigPath(layer.Path))
-		layer.HarnessesExists = exists(HarnessesPath(layer.Path))
 		f.Layers = append(f.Layers, layer)
 	}
 
@@ -68,7 +70,7 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 		f.Entries = append(f.Entries, Entry{Name: fault.Name, Layer: faultLayer(layers, fault.Path), Fault: fault.Reason})
 	}
 	for name, p := range providers {
-		e := Entry{Name: name, BaseURL: p.BaseURL, DecisionsFlavor: p.Flavor(), Key: keyKind(p), Layer: p.Layer, Usable: true, Fault: warned[name]}
+		e := Entry{Name: name, BaseURL: p.BaseURL, Protocol: p.Protocol(), DecisionsFlavor: p.Flavor(), Key: keyKind(p), Layer: p.Layer, Usable: true, Fault: warned[name]}
 		if e.Key == KeyKindFile {
 			e.KeyFile = p.APIKeyFile
 		}

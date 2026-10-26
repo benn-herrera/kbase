@@ -1,0 +1,26 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 4
+offset: 0
+truncated: false
+results:
+    - relation: "supports"
+      direction: "out"
+      target: "clm-aaa001"
+      bearing: "1.0"
+      context: "first use"
+    - relation: "supports"
+      direction: "out"
+      target: "clm-aaa001"
+      bearing: "1.0"
+      context: "second use"
+    - relation: "supports"
+      direction: "out"
+      target: "clm-aaa003"
+      bearing: "1.0"
+      context: null
+    - relation: "founds"
+      direction: "in"
+      target: "axm-S1"
+      bearing: "1.0"
+      context: null

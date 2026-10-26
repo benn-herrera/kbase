@@ -1,0 +1,11 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - relation: "founds"
+      direction: "out"
+      target: "clm-bbb002"
+      bearing: "1.0"
+      context: null

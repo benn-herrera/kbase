@@ -1,0 +1,10 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - claim_id: "clm-bbb002"
+      leaf_path: "beta/governance.md"
+      leaf_kind: "leaf"
+      tier2_marked: true

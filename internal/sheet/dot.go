@@ -24,7 +24,7 @@ const (
 	ghostMeaning = "an id no record carries"
 	cutColor     = "#c0392b"
 	cutGlyph     = "┈┈┈▷"
-	cutLegend    = "cut from supports: part of a circle (cited / inferred)"
+	cutLegend    = "cut from supports: part of a circle"
 )
 
 // nodeStyle is how one kind draws; a fill of "" is the node's band's.
@@ -95,47 +95,37 @@ var bandFills, bandLabels = func() (map[string]string, map[string]string) {
 	return fills, labels
 }()
 
-// stroke is how one relation, or one provenance of depends or demoted, draws.
-// provenance is kb.OriginCited or kb.OriginInferred for those two relations
-// and "" for the rest. word is what the digest's counts call it, tip what an
-// edge's tooltip does, and legend its legend row's text, one row for strokes
-// sharing it; a reverse stroke is emitted target → source with dir=back, so
-// the premise sits at the head.
+// stroke is how one relation draws. word is what the digest's counts and an
+// edge's tooltip call it, and legend its legend row's text; a reverse stroke
+// is emitted target → source with dir=back, so the premise sits at the head.
 type stroke struct {
-	relation, provenance string
-	word, tip            string
-	reverse, premise     bool
-	color, extra, glyph  string
-	legend               string
+	relation            string
+	word                string
+	reverse, premise    bool
+	color, extra, glyph string
+	legend              string
 }
 
 // strokes is every stroke, in legend and count order. kb.RelationReferences
 // has none: a references edge is not drawn. Each scoring stroke points in the
 // push direction, from the supporter to the supported.
 var strokes = []stroke{
-	{kb.RelationSupports, kb.OriginCited, "supports, " + kb.OriginCited, kb.RelationSupports + ", " + kb.OriginCited, false, true, "#222222", "penwidth=1.2", "━━━▶",
-		kb.OriginCited + " — supports, marked in the text; points from the premise to the claim"},
-	{kb.RelationSupports, kb.OriginInferred, "supports, " + kb.OriginInferred, kb.RelationSupports + ", " + kb.OriginInferred, false, true, "#2471a3", "style=dashed penwidth=1.3", "╍╍╍▶",
-		kb.OriginInferred + " — supports, found with no mark in the text; points from the premise to the claim"},
-	{kb.RelationFounds, "", kb.RelationFounds, kb.RelationFounds, false, true, "#7d3c98", "style=dashed arrowhead=diamond", "╍╍╍◆",
+	{kb.RelationSupports, kb.RelationSupports, false, true, "#222222", "penwidth=1.2", "━━━▶",
+		kb.RelationSupports + " — points from the premise to the claim"},
+	{kb.RelationFounds, kb.RelationFounds, false, true, "#7d3c98", "style=dashed arrowhead=diamond", "╍╍╍◆",
 		kb.RelationFounds + " — points from the cited work or the axiom to the claim"},
-	{kb.RelationLifts, "", kb.RelationLifts, kb.RelationLifts, false, true, "#2e7d32", "penwidth=1.2", "━━━▶",
+	{kb.RelationLifts, kb.RelationLifts, false, true, "#2e7d32", "penwidth=1.2", "━━━▶",
 		kb.RelationLifts + " — points from the analysis or experiment to the claim or analysis it lifts"},
-	{kb.RelationRefutes, "", kb.RelationRefutes, kb.RelationRefutes, false, true, "#c0392b", "penwidth=1.4", "━━━▶",
+	{kb.RelationRefutes, kb.RelationRefutes, false, true, "#c0392b", "penwidth=1.4", "━━━▶",
 		kb.RelationRefutes + " — points from the claim, analysis or experiment to the claim or analysis it caps"},
-	{kb.RelationDemoted, kb.OriginCited, kb.OriginCited + " " + wordCut, wordCut + ", " + kb.OriginCited, false, false, cutColor,
-		"style=dotted penwidth=1.4 arrowhead=open constraint=false", cutGlyph, cutLegend},
-	{kb.RelationDemoted, kb.OriginInferred, kb.OriginInferred + " " + wordCut, wordCut + ", " + kb.OriginInferred, false, false, cutColor,
-		"style=dotted penwidth=1.0 arrowhead=open constraint=false", cutGlyph, cutLegend},
+	{kb.RelationDemoted, wordCut, false, false, cutColor, "style=dotted penwidth=1.4 arrowhead=open constraint=false", cutGlyph, cutLegend},
 }
 
-// strokeFor is relation's stroke, a supports or demoted edge's by whether it
-// is inferred; nil for a relation not drawn.
-func strokeFor(relation string, inferred bool) *stroke {
+// strokeFor is relation's stroke; nil for a relation not drawn.
+func strokeFor(relation string) *stroke {
 	for i := range strokes {
-		s := &strokes[i]
-		if s.relation == relation && (s.provenance == "" || (s.provenance == kb.OriginInferred) == inferred) {
-			return s
+		if strokes[i].relation == relation {
+			return &strokes[i]
 		}
 	}
 	return nil
@@ -354,7 +344,7 @@ func edgeStatement(e edge) string {
 		direction = "dir=back "
 	}
 	return fmt.Sprintf(`%s -> %s [%scolor=%s %s tooltip=%s]`, quoted(tail), quoted(head), direction, quoted(s.color), s.extra,
-		quoted(tip(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.tip))))
+		quoted(tip(fmt.Sprintf("%s → %s (%s)", e.source, e.target, s.word))))
 }
 
 func unattachedTable(nodes []node, base string) string {
@@ -591,8 +581,7 @@ func (g *graph) digest(lineSplines bool) string {
 		if b.premise {
 			lines = append(lines, fmt.Sprintf(`  %s [label=%s penwidth=%.1f color="#222222"]`, ends, label, math.Min(1+float64(len(b.edges))/4, 6)))
 		} else {
-			// A bundle of cuts of either origin draws as the cited cut.
-			s := strokeFor(kb.RelationDemoted, false)
+			s := strokeFor(kb.RelationDemoted)
 			lines = append(lines, fmt.Sprintf(`  %s [label=%s color=%s %s]`, ends, label, quoted(s.color), s.extra))
 		}
 		crossing = append(crossing, b.edges...)

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
-	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -48,11 +46,8 @@ func runExportLatex(ctx context.Context, opts exportLatexOptions) (int, error) {
 	return emitResult("export-latex", opts.Stdout, outcome, fields)
 }
 
-// exportLatex walks the KB, writes gen-tex/'s inputs, runs pandoc over them
-// in place and writes the report merging the walk's findings and the
-// filter's. It takes no lock and writes nothing under kb-root/. pandoc's
-// outputs are read before and after its run, so a file whose bytes it
-// rewrote unchanged is not reported written.
+// exportLatex opens the KB and has export.Run export it, supplying the pandoc
+// calls. It takes no lock and writes nothing under kb-root/.
 func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolresult.Field) {
 	root, refusals, err := kbRootFrom(opts.WorkDir)
 	if err != nil {
@@ -77,76 +72,40 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 		return refused(fields, refusals...)
 	}
 	fields = withMigration(fields, src, "export-latex", opts.Stderr)
-	rep := &export.Report{}
-	tree, err := export.Walk(src, rep)
-	if err != nil {
-		return failed(fields, err)
+	if outcome, out, stop := refuseDegraded(fields, src); stop {
+		return outcome, out
 	}
-	tree, err = export.SelectVolumes(tree, opts.Volumes)
+	// RunDefaults preflights too, but only after the export has written: the
+	// separate preflight puts a pandoc refusal before any write.
+	res, err := export.Run(ctx, src, out, opts.Volumes, version.Current,
+		func(ctx context.Context) error {
+			_, err := pandoc.Preflight(ctx)
+			return err
+		},
+		func(ctx context.Context, defaultsPath string) error {
+			return pandoc.RunDefaults(ctx, opts.Logger, defaultsPath)
+		})
 	var unknown export.UnknownVolumesError
-	if errors.As(err, &unknown) {
+	var foreign export.ExportDirError
+	switch {
+	case errors.As(err, &unknown):
 		items := make([]toolresult.Item, len(unknown.Names))
 		for i, name := range unknown.Names {
 			items[i] = toolresult.Item{Check: checkUsage, Key: "--volume",
 				Detail: fmt.Sprintf("--volume %s names no volume of the entry point's list", name)}
 		}
 		return refused(fields, items...)
-	}
-	if err != nil {
-		return failed(fields, err)
-	}
-	files, err := export.Assemble(src, tree, version.Current)
-	if err != nil {
-		return failed(fields, err)
-	}
-	// RunDefaults preflights too, but only after WriteOut has written: a
-	// pandoc refusal comes before any write.
-	if _, err := pandoc.Preflight(ctx); err != nil {
-		return pandocRefusedOrFailed(fields, err)
-	}
-	written, _, changed, err := export.WriteOut(out, files)
-	var foreign export.ExportDirError
-	if errors.As(err, &foreign) {
+	case errors.As(err, &foreign):
 		return refused(fields, toolresult.Item{Check: checkExportDir, Path: foreign.Dir,
 			Remedy: "empty the directory or name another --out", Detail: foreign.Error()})
-	}
-	if err != nil {
-		return failed(fields, err)
-	}
-	before, err := export.PandocOutputs(out)
-	if err != nil {
-		return failed(fields, err)
-	}
-	gen := filepath.Join(out, export.GenTexDir)
-	if err := pandoc.RunDefaults(ctx, opts.Logger, filepath.Join(gen, export.DefaultsFile)); err != nil {
+	case err != nil:
 		return pandocRefusedOrFailed(fields, err)
 	}
-	after, err := export.PandocOutputs(out)
-	if err != nil {
-		return failed(fields, err)
-	}
-	for p, data := range after {
-		if old, ok := before[p]; !ok || !bytes.Equal(old, data) {
-			written = append(written, p)
-		}
-	}
-	report, err := export.WriteReport(out, rep.Findings())
-	if err != nil {
-		return failed(fields, err)
-	}
-	if report != "" {
-		written = append(written, report)
-	}
-	slices.Sort(written)
-	volumes := make([]string, len(tree.Volumes))
-	for i, v := range tree.Volumes {
-		volumes[i] = v.Dir
-	}
 	fields = append(fields,
-		toolresult.Field{Key: "written", Value: append([]string{}, written...)},
-		toolresult.Field{Key: "volumes", Value: volumes},
-		toolresult.Field{Key: "report", Value: filepath.Join(gen, export.ReportFile)})
-	if changed || len(written) > 0 {
+		toolresult.Field{Key: "written", Value: append([]string{}, res.Written...)},
+		toolresult.Field{Key: "volumes", Value: res.Volumes},
+		toolresult.Field{Key: "report", Value: res.Report})
+	if res.Changed {
 		return toolresult.Done, fields
 	}
 	return toolresult.Unchanged, fields
@@ -162,7 +121,7 @@ func pandocRefusedOrFailed(fields []toolresult.Field, err error) (string, []tool
 	return failed(fields, err)
 }
 
-func init() {
+func exportLatexCommand() *cobra.Command {
 	var out string
 	var volumes []string
 	cmd := &cobra.Command{
@@ -181,8 +140,8 @@ export degraded and why. A gen-tex/ holding files and no export manifest is
 refused, nothing written. Where --out holds no preamble.tex, a commented
 starter is written for the packages and macros the sources used; one that
 stands is never read, written or removed. Compiling main.tex is the author's
-step. A re-issue over an unchanged KB writes nothing and reports unchanged. Its
-result is one YAML document on stdout.`,
+step. A re-issue over an unchanged KB writes nothing and reports unchanged. ` +
+			degradedRefusedHelp + ` Its result is one YAML document on stdout.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := invocationDir(cmd)
@@ -202,5 +161,5 @@ result is one YAML document on stdout.`,
 	}
 	cmd.Flags().StringVar(&out, "out", "", "the out directory (default: latex-export/ beside kb-root/)")
 	cmd.Flags().StringArrayVar(&volumes, "volume", nil, "a volume directory under kb-root/ to export; repeatable (default: every volume)")
-	rootCmd.AddCommand(mcpBinding(cmd, mcpBound))
+	return cmd
 }

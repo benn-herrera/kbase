@@ -1,91 +1,46 @@
 package write
 
 import (
-	"os"
+	"maps"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/kb"
-	"kbase/internal/log"
 	"kbase/internal/result"
 )
 
-// This repository's test fixture, its registers frozen 2026-09-02: every
-// marker authored above its heading, so each register's first entry parses to
-// nothing and every later title is its neighbour's. The replay writes the same
-// population through this package and requires all of it to read back.
+// This repository's frozen failure corpus, its 23 claims and their premises
+// held as records. The replay writes the same population through this package
+// and requires all of it to read back.
 
-const (
-	regressionClaims = 23
-	silentID         = "clm-07687j"
-)
-
-var markerLineRE = kb.PyRE(`^\s*<!--\s*id:\s*(` + kb.IDBody("clm", "ana") + `)\s*-->\s*$`)
+const regressionClaims = 23
 
 type recorded struct {
-	nodeID, register, kind, title, rationale string
-	rigor                                    *float64
-	premises                                 []string
+	nodeID, title, rationale string
+	rigor                    *float64
+	premises                 []string
 }
 
-// repaired puts every marker back below its own heading — the inverse of the
-// defect, touching no title, score or bullet.
-func repaired(text string) string {
-	lines := kb.SplitLines(text)
-	out := slices.Clone(lines)
-	for i, line := range lines {
-		if markerLineRE.MatchString(line) && i+1 < len(lines) && strings.HasPrefix(lines[i+1], "## ") {
-			out[i], out[i+1] = out[i+1], out[i]
-		}
-	}
-	return strings.Join(out, "\n") + "\n"
-}
-
-// loadRecorded reads the intended values out of the repaired registers with
-// the production readers, in document order.
+// loadRecorded reads the population out of the corpus's records, in record
+// order.
 func loadRecorded(t *testing.T) []recorded {
 	t.Helper()
-	dir := requireReferenceFixture(t, "writeapi-regression")
-	sources, err := filepath.Glob(filepath.Join(dir, "*-claim-rigor.md"))
+	g, err := kb.LoadAuthoredGraph(kb.OnDisk(filepath.Join(requireReferenceFixture(t, "writeapi-regression"), kb.KBDir)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(sources)
 	var out []recorded
-	for _, source := range sources {
-		rel := strings.TrimSuffix(filepath.Base(source), "-claim-rigor.md") + "/" + kb.RegisterFile
-		text := repaired(readText(t, source))
-		claims := map[string]kb.ClaimEntry{}
-		for _, c := range kb.ParseClaimEntries(text, rel, nil, log.Discard()) {
-			claims[c.ID] = c
-		}
-		_, analyses, err := kb.ParseAnalysisEntries(text, rel, nil, log.Discard())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, line := range kb.SplitLines(text) {
-			m := markerLineRE.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			r := recorded{nodeID: m[1], register: rel}
-			var edges []kb.Edge
-			if c, ok := claims[m[1]]; ok {
-				r.kind, r.title, r.rigor, r.rationale, edges = "clm", c.Title, c.Rigor, c.Rationale, c.Premises
-			} else if s, ok := analyses[m[1]]; ok {
-				r.kind, r.title, r.rigor, r.rationale, edges = "ana", s.Title, s.Rigor, s.Rationale, s.Premises
-			} else {
-				t.Fatalf("%s: %s yields no record even with its marker repaired", source, m[1])
-			}
-			for _, e := range edges {
+	for _, n := range g.Claims {
+		r := recorded{nodeID: n.ID, title: n.Title, rationale: n.Rationale, rigor: n.Rigor}
+		for _, e := range g.Scorable {
+			if e.Relation == kb.RelationSupports && e.Target == n.ID {
 				r.premises = append(r.premises, e.Source)
 			}
-			out = append(out, r)
 		}
+		out = append(out, r)
 	}
 	known := map[string]bool{}
 	for _, r := range out {
@@ -104,92 +59,6 @@ func loadRecorded(t *testing.T) []recorded {
 	return out
 }
 
-func registersOf(recs []recorded) []string {
-	var out []string
-	for _, r := range recs {
-		if !slices.Contains(out, r.register) {
-			out = append(out, r.register)
-		}
-	}
-	return out
-}
-
-// stampedEntryPoint is an entry point that declares the current format and
-// nothing else.
-const stampedEntryPoint = "---\nkb-format: \"2.0.0\"\n---\n# KB\n"
-
-func readText(t *testing.T, p string) string {
-	t.Helper()
-	text, err := kb.OnDisk(filepath.Dir(p)).ReadText(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return text
-}
-
-func seedRegisters(t *testing.T, root string, registers []string) {
-	t.Helper()
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, kb.EntryPointFile), []byte(stampedEntryPoint), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, rel := range registers {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte("# "+filepath.Base(filepath.Dir(p))+" Claim Quality Register\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// readBack is id -> (title, the premise ids its rests-on list names) over the
-// written registers, through the production readers.
-func readBack(t *testing.T, root string, registers []string) map[string][2]any {
-	t.Helper()
-	seen := map[string][2]any{}
-	for _, rel := range registers {
-		text := readText(t, filepath.Join(root, filepath.FromSlash(rel)))
-		for _, c := range kb.ParseClaimEntries(text, rel, nil, log.Discard()) {
-			var targets []string
-			for _, e := range c.Premises {
-				targets = append(targets, e.Source)
-			}
-			seen[c.ID] = [2]any{c.Title, targets}
-		}
-	}
-	return seen
-}
-
-func censusTotals(t *testing.T, root string, registers []string) (markers, records int) {
-	t.Helper()
-	for _, rel := range registers {
-		c, err := takeCensus(readText(t, filepath.Join(root, filepath.FromSlash(rel))))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !c.consistent() {
-			t.Errorf("%s: %s", rel, c.describe())
-		}
-		markers += c.claimMarkers
-		records += c.claimRecords
-	}
-	return markers, records
-}
-
-func edgeSet(back map[string][2]any, rename func(string) string) map[[2]string]bool {
-	out := map[[2]string]bool{}
-	for id, v := range back {
-		for _, target := range v[1].([]string) {
-			out[[2]string{rename(id), rename(target)}] = true
-		}
-	}
-	return out
-}
-
 func recordedEdges(recs []recorded) map[[2]string]bool {
 	out := map[[2]string]bool{}
 	for _, r := range recs {
@@ -200,76 +69,15 @@ func recordedEdges(recs []recorded) map[[2]string]bool {
 	return out
 }
 
-// TestRegressionReplayStore writes the population through render and the
-// store with its recorded ids, in one proven act.
-func TestRegressionReplayStore(t *testing.T) {
-	recs := loadRecorded(t)
-	if len(recs) != regressionClaims {
-		t.Fatalf("recovered %d markers, want %d", len(recs), regressionClaims)
-	}
-	root := filepath.Join(t.TempDir(), kb.KBDir)
-	registers := registersOf(recs)
-	seedRegisters(t, root, registers)
-	titles := map[string]string{}
-	for _, r := range recs {
-		titles[r.nodeID] = r.title
-	}
-	var edits []edit
-	for _, rel := range registers {
-		var rendered []string
-		expected := &[]expectedEntry{}
-		e := edit{path: rel, expect: expected}
-		for _, r := range recs {
-			if r.register != rel {
-				continue
-			}
-			entryValues := registerEntry{NodeID: r.nodeID, Title: r.title, Rigor: r.rigor, Rationale: r.rationale}
-			want := expectedEntry{NodeID: r.nodeID, Title: r.title, Rigor: r.rigor, Rationale: r.rationale}
-			for _, d := range r.premises {
-				entryValues.Premises = append(entryValues.Premises, premiseTarget{Target: d, Title: titles[d], Bearing: f64(1)})
-				want.Premises = append(want.Premises, expectedEdge{Source: d, Target: r.nodeID, Bearing: kb.Bearing{Value: 1}})
-			}
-			rendered = append(rendered, renderEntry(entryValues))
-			*expected = append(*expected, want)
-			e.claimDelta++
-		}
-		e.splice = func(document string) (string, error) {
-			for _, r := range rendered {
-				document = insertEntry(document, r)
-			}
-			return document, nil
-		}
-		edits = append(edits, e)
-	}
-	out, err := applyEdits(kb.OnDisk(root), edits)
-	if err != nil || out.status != statusWritten {
-		t.Fatalf("applyEdits: %+v, %v", out, err)
-	}
-	if markers, records := censusTotals(t, root, registers); markers != regressionClaims || records != regressionClaims {
-		t.Errorf("markers %d, records %d; want %d of each", markers, records, regressionClaims)
-	}
-	back := readBack(t, root, registers)
-	for _, r := range recs {
-		if got, ok := back[r.nodeID]; !ok || got[0] != r.title {
-			t.Errorf("%s reads back titled %v, want %q", r.nodeID, got[0], r.title)
-		}
-	}
-	if _, ok := back[silentID]; !ok {
-		t.Errorf("%s is absent", silentID)
-	}
-	if got, want := edgeSet(back, func(s string) string { return s }), recordedEdges(recs); !mapsEqual(got, want) {
-		t.Errorf("premise graph %v, want %v", got, want)
-	}
-}
-
-// TestRegressionReplayOps drives the same values through the insert op,
-// minting fresh ids, in dependency order; the graph must come back
-// isomorphic under the renaming.
+// TestRegressionReplayOps drives the corpus's values through the insert op
+// into the records, minting fresh ids, in dependency order; the graph must
+// come back isomorphic under the renaming.
 func TestRegressionReplayOps(t *testing.T) {
 	recs := loadRecorded(t)
-	root := filepath.Join(t.TempDir(), kb.KBDir)
-	registers := registersOf(recs)
-	seedRegisters(t, root, registers)
+	if len(recs) != regressionClaims {
+		t.Fatalf("recovered %d claims, want %d", len(recs), regressionClaims)
+	}
+	root := recordKB(t, kb.Graph{})
 	minted := map[string]string{}
 	remaining := slices.Clone(recs)
 	for len(remaining) > 0 {
@@ -294,7 +102,7 @@ func TestRegressionReplayOps(t *testing.T) {
 			// entry recording it is replayed at the rigor tables' maximum, the most
 			// the insert op takes.
 			rigor := min(*r.rigor, kb.RigorMaximum)
-			v := map[string]any{"register": r.register, "title": r.title, "rigor": rigor, "rationale": r.rationale}
+			v := map[string]any{"title": r.title, "rigor": rigor, "rationale": r.rationale}
 			var deps []map[string]any
 			for _, d := range r.premises {
 				deps = append(deps, map[string]any{"id": minted[d], "bearing": 1.0})
@@ -320,9 +128,6 @@ func TestRegressionReplayOps(t *testing.T) {
 	if len(minted) != len(recs) {
 		t.Fatalf("minted %d ids, want %d", len(minted), len(recs))
 	}
-	if markers, records := censusTotals(t, root, registers); markers != regressionClaims || records != regressionClaims {
-		t.Errorf("markers %d, records %d; want %d of each", markers, records, regressionClaims)
-	}
 	back := map[string]string{}
 	for old, fresh := range minted {
 		back[fresh] = old
@@ -330,56 +135,26 @@ func TestRegressionReplayOps(t *testing.T) {
 			t.Errorf("%s was written under its recorded id", old)
 		}
 	}
-	readback := readBack(t, root, registers)
+	g := records(t, root)
+	if len(g.Claims) != regressionClaims {
+		t.Errorf("%d claim records, want %d", len(g.Claims), regressionClaims)
+	}
+	titles := map[string]string{}
+	for _, n := range g.Claims {
+		titles[n.ID] = n.Title
+	}
 	for _, r := range recs {
-		if got := readback[minted[r.nodeID]]; got[0] != r.title {
-			t.Errorf("%s (was %s) reads back titled %v, want %q", minted[r.nodeID], r.nodeID, got[0], r.title)
+		if got := titles[minted[r.nodeID]]; got != r.title {
+			t.Errorf("%s (was %s) reads back titled %q, want %q", minted[r.nodeID], r.nodeID, got, r.title)
 		}
 	}
-	for _, rel := range registers {
-		landed := readBack(t, root, []string{rel})
-		for _, r := range recs {
-			if _, ok := landed[minted[r.nodeID]]; (r.register == rel) != ok {
-				t.Errorf("%s landed in the wrong register (want %s)", r.nodeID, r.register)
-			}
+	got := map[[2]string]bool{}
+	for _, e := range g.Scorable {
+		if e.Relation == kb.RelationSupports {
+			got[[2]string{back[e.Target], back[e.Source]}] = true
 		}
 	}
-	if got, want := edgeSet(readback, func(s string) string { return back[s] }), recordedEdges(recs); !mapsEqual(got, want) {
+	if want := recordedEdges(recs); !maps.Equal(got, want) {
 		t.Errorf("premise graph under the renaming %v, want %v", got, want)
 	}
-}
-
-// TestRegressionFixtureCarriesDefect: the frozen registers as stored still
-// lose one entry each to the marker above its heading — 23 markers, 18
-// records — or the replay's 23 of 23 proves nothing.
-func TestRegressionFixtureCarriesDefect(t *testing.T) {
-	dir := requireReferenceFixture(t, "writeapi-regression")
-	sources, err := filepath.Glob(filepath.Join(dir, "*-claim-rigor.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	markers, records := 0, 0
-	for _, source := range sources {
-		c, err := takeCensus(readText(t, source))
-		if err != nil {
-			t.Fatal(err)
-		}
-		markers += c.claimMarkers
-		records += c.claimRecords
-	}
-	if markers != regressionClaims || records != 18 {
-		t.Errorf("frozen registers hold %d markers and %d records; want %d and 18", markers, records, regressionClaims)
-	}
-}
-
-func mapsEqual(a, b map[[2]string]bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if !b[k] {
-			return false
-		}
-	}
-	return true
 }

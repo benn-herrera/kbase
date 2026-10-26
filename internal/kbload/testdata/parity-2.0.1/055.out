@@ -1,0 +1,16 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 2
+offset: 0
+truncated: false
+results:
+    - relation: "supports"
+      direction: "in"
+      target: "clm-aaa001"
+      bearing: "1.0"
+      context: null
+    - relation: "demoted"
+      direction: "out"
+      target: "clm-aaa004"
+      bearing: null
+      context: "the circle's other half"

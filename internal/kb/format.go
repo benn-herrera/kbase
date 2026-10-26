@@ -3,42 +3,46 @@ package kb
 import (
 	"errors"
 	"fmt"
+
+	"kbase/internal/formats/format300"
 )
 
 const (
-	// FormatVersion is the one metadata format version kbase reads and writes.
-	// The patch above the scoring vocabulary is the ladder's last rung's words:
-	// the bytes a writer produces changed, their meaning did not.
-	FormatVersion = "2.0.1"
-	// UnstampedFormatVersion is the version of a KB whose entry point carries
-	// no stamp.
-	UnstampedFormatVersion = "0.9.0"
-	// FormatKey is the stamp's key in the entry point's frontmatter.
-	FormatKey = "kb-format"
+	// FormatVersion is the one metadata format version kbase reads and writes:
+	// the KB's nodes and edges are records in two files.
+	FormatVersion = format300.Version300
+	// FormatKey is the stamp's one key, in the stamp file and in the frontmatter
+	// of a KB a migration has not stamped there yet.
+	FormatKey = format300.FormatKey
+	// FormatFile is the metadata-format stamp file, kb-root-relative.
+	FormatFile = format300.FormatFile
 )
+
+// EncodeFormatStamp is the stamp file's content holding version.
+func EncodeFormatStamp(version string) []byte { return format300.EncodeFormatStamp(version) }
+
+// DecodeFormatStamp is the version the stamp file's bytes hold; anything that
+// is not the one key with a non-empty string value is an error.
+func DecodeFormatStamp(data []byte) (string, error) { return format300.DecodeFormatStamp(data) }
 
 // ErrNoEntryPoint is the loader's error for a kb-root with no entry point.
 var ErrNoEntryPoint = errors.New("kb-root has no " + EntryPointFile)
 
-// FormatStamp is the kb-format stamp in an entry point's YAML frontmatter,
-// UnstampedFormatVersion where that frontmatter carries none. ok is false
-// where the entry point opens with no YAML frontmatter: its form is a
-// superseded one, whose stamp only the migration reads. A stamp that is not
-// one non-empty string is an error.
-func FormatStamp(entryPoint string) (stamp string, ok bool, err error) {
-	if FindFrontmatter(entryPoint) == nil {
-		return "", false, nil
-	}
+// FormatStamp is the kb-format stamp in an entry point's YAML frontmatter:
+// the standing place of a KB a migration has not yet stamped in FormatFile,
+// read forever. An entry point carrying no stamp, and a stamp that is not one
+// non-empty string, is an error.
+func FormatStamp(entryPoint string) (string, error) {
 	fm, err := ParseFrontmatter(entryPoint)
 	if err != nil {
-		return "", true, err
+		return "", err
 	}
 	v, stamped := fm[FormatKey]
 	switch {
 	case !stamped:
-		return UnstampedFormatVersion, true, nil
+		return "", fmt.Errorf("%s carries no %s", EntryPointFile, FormatKey)
 	case v.IsList || v.IsBool || v.Str == "":
-		return "", true, fmt.Errorf("%s in %s is not a version", FormatKey, EntryPointFile)
+		return "", fmt.Errorf("%s in %s is not a version", FormatKey, EntryPointFile)
 	}
-	return v.Str, true, nil
+	return v.Str, nil
 }

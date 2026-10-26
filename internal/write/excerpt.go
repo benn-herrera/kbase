@@ -172,7 +172,9 @@ func CanonicalForm(text string) string {
 }
 
 // locateExcerpt is the one line locator names; absent and ambiguous are two
-// refusals, since a marker at the wrong one of two matches binds silently.
+// refusals, since a marker at the wrong one of two matches binds silently. A
+// fence's opening or closing line is refused too: a marker appended there
+// leaves a line that no longer opens or closes the block.
 func locateExcerpt(document, locator string) (int, error) {
 	hits := excerptLines(document, locator)
 	switch {
@@ -186,7 +188,15 @@ func locateExcerpt(document, locator string) (int, error) {
 			"would be chosen arbitrarily", locator, len(hits)),
 			"restore: extend the locator until it names exactly one place, then re-run")
 	}
-	return hits[0], nil
+	at := hits[0]
+	for _, f := range kb.Fences(kb.SplitLines(document)) {
+		if at == f.Start || f.Closed && at == f.End-1 {
+			return 0, opRefusal("locator", fmt.Sprintf("%q names line %d, a fenced block's opening or closing line, and a "+
+				"marker appended there leaves a line that no longer opens or closes the block", locator, at+1),
+				"restore: quote a line of the prose the statement stands in, outside the fence lines, then re-run")
+		}
+	}
+	return at, nil
 }
 
 // nearestWindow is the window of haystack a failed match came closest to,

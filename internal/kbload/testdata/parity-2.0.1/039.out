@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa004"
+    title: "A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "a-deliberately-long-prose-claim-title-that-runs-well-past-the-three-wrapped-lines-a-sheet-label-allows-before-it-is-cut"
+    rigor: null
+    strength: 0.4
+    build_status: "do not build on, rework needed"
+    build_band: "do-not-build"
+    rationale: "Fixture."
+    premise_count: 0
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 1

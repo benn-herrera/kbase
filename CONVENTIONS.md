@@ -45,22 +45,29 @@ them. Working rules for packages that carry over:
   loader shell, so verbs unit-test without process/network.
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
   provider faults never abort the pool; fault reasons carry no key material. Resolution is pure and
-  lives here alone — `ModeOf`, `Resolve`, `Select` — and reads no file, opens no client, writes no
-  stderr and names no verb: the key file `KBASE_API_KEY_FILE` names is read by whoever dials (in
-  `cmd`, the registry; in `show-config`, its preflight). The package imports no kbase package but
-  `atomicfile`, never `model`, `result` or `log`. A `[models]` value is parsed by one function,
+  lives here alone — `ModeOf`, `Resolve`, `Select` — and reads no file, opens no client and writes no
+  stderr (a refusal's remedy may name the command that fixes it, such as `kbase configure`): the key file `KBASE_API_KEY_FILE` names is read by whoever dials (in
+  `cmd`, `internal/modelclient`'s registry; in `show-config`, its preflight). The package imports no kbase package but
+  `atomicfile` and `result` (it refuses in `result.Refusal`, each item carrying its check), never
+  `model` or `log`: it returns its faults as data, so each caller decides whether one is a warning
+  or a result field. A `[models]` value is parsed by one function,
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
   reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
-  parses. No site splits an id or concatenates a reference by hand. A
-  harness profile is `harnesses.toml`'s, and it is a separate namespace from the pool: a profile's
-  command comes from neither `providers.toml` nor a pool entry from `harnesses.toml`.
-- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Decisions}` is the transport-level slice
-  of a provider — the last saying whether its entry speaks the Decisions shape (`systemone` unless
-  the entry says `decisions`) — and the one mapping from configuration's flavour vocabulary to it
-  lives in `cmd`. The chat asks — the overview and each scoring call — go through `model.Chat`: one
-  tool-less request, re-issued identically on an incomplete stream up to the attempt count
-  (ARCHITECTURE §12). The letter asks go through `model.Decision`, one `POST` to whichever surface
-  the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
+  parses. No site splits an id or concatenates a reference by hand.
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey}` is the
+  transport-level slice of a provider — `Protocol` saying which chat surface its entry speaks
+  (`openai` unless the entry says `anthropic`), `Decisions` whether it speaks the Decisions shape
+  (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
+  ask of it carries — and the one mapping from configuration's vocabulary onto `Protocol` and
+  `Decisions` (`chatProtocol`, `decisionsSurface`) lives in `internal/modelclient`. The chat asks — the overview and each scoring call — go through
+  `model.Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
+  attempt count (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and
+  the two failures are not interchangeable: an endpoint that answered with a non-2xx status refused
+  the request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
+  body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
+  stream that failed with no answer — reading one as the other sends a diagnosis to the path to a
+  provider that is answering. The letter asks go through `model.Decision`, one `POST` to whichever
+  surface the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
   closed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
   `decisions` speaks the OpenAI Decisions shape at `<base-url>/decisions` — the state as `input`,
   questions a named array with a `noul` asked as a `predicate` carrying no choices, its criteria
@@ -68,10 +75,6 @@ them. Working rules for packages that carry over:
   seam's re-ask/default path. Either surface is re-issued identically on a transport error or
   retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
   `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference in file mode.
-- **internal/harness**: the user's command, run once per item. It imports stdlib and `log` alone of
-  kbase and knows nothing of kbase — no provider, no endpoint, no KB path, no configuration type.
-  It receives a prompt and hands it over whole: it composes none, and it is not the place a prompt's
-  text, its slots or its rules live.
 
 ---
 
@@ -95,44 +98,41 @@ single source. Working habits they impose:
 - **The exec monopoly (I1) is enforced by an AST-scan test** over every Go file
   (`cmd/execpolicy_test.go`), and ARCHITECTURE §11's dependency rules by `cmd/importpolicy_test.go`
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
-  beside it. The one self-exec owner is a file, not a package: `cmd/mcp.go` alone may exec the kbase
-  binary, and the test fails on any other file that does. A fifth owner is `internal/harness`, which
-  execs the program a harness profile names — a binary only the user's configuration states, so the
-  policy carries it with a sentinel and exempts its site from the per-static-binary check; what the
-  policy still holds is that no other package execs for that purpose, and that a profile can only be
-  run by `score --harness <name>`. A repository may supply one: the source is announced on stderr,
-  recorded in the role record and the ledger, and the promise is disclosure and explicit selection,
-  never inspection. The policy scans share one module walk
-  (`cmd/modulescan_test.go`), so they agree on which files are the module's source. The scan
-  reads test files as source too — the trap: a package test that compiles its output under
-  `pdflatex` has nothing wrong in it and fails the tree. A verification needing a binary no
-  package owns is never a package test: it is a runner recipe (recipes exec freely). Evidence
-  gathered for the change at hand is not a verification but a probe — a script run by hand in
-  scratch, its log cited in the report, with no durable home. A probe whose finding must keep
-  holding becomes a verification: the check lands in a recipe. A probe whose result a commit or
-  plan cites keeps its command in the commit message, so a later reader can re-run it.
+  beside it. The one self-exec owner is a file, not a package: `internal/mcp/launch.go` alone may
+  exec the kbase binary, and the test fails on any other file that does. Four owners are the whole
+  list — pandoc, git, `dot` and that self-exec — and a process started anywhere else fails the
+  test. The policy scans share one module walk (`cmd/modulescan_test.go`), so they agree on which
+  files are the module's source. The scan reads test files as source too — the trap: a package
+  test that compiles its output under `pdflatex` has nothing wrong in it and fails the tree. A
+  verification needing a binary no package owns is never a package test: it is a runner recipe
+  (recipes exec freely). Evidence gathered for the change at hand is not a verification but a
+  probe — a script run by hand in scratch, its log cited in the report, with no durable home. A
+  probe whose finding must keep holding becomes a verification: the check lands in a recipe. A
+  probe whose result a commit or plan cites keeps its command in the commit message, so a later
+  reader can re-run it.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
-- **The installed agent set is a pinned artifact, never edited here.** `.claude/agents/` and
-  `.claude/commands/` are tracked so a checkout pins them; a finding that needs an agent change
-  goes to the upstream project, adjagent, as a hand-off, the fix lands there, and the set is
-  updated from it.
+- **The agent set is adjagent's, never edited here.** Definitions are installed from the sibling
+  `../adjagent` checkout and are not tracked in this repository; a finding that needs an agent
+  change lands in adjagent, and the set is reinstalled from it.
 - **File formats follow personant's CONVENTIONS "Serialization format" rule:** JSONL for flat
-  records, YAML for documents, TOML for flat configuration — with one named departure from `1.0.0`
-  (SPEC §10): the KB's index is a YAML stream in flow style, one `--- {…}` record per line, so the
-  whole metadata layer has one serialisation while every line-oriented tool still sees one record
-  per line.
-- **A superseded format's parser lives in `internal/migrate` and nowhere else** (I8). The trap:
+  records, YAML for documents, TOML for flat configuration — with one named departure (SPEC §10):
+  the KB's two record files, `.index/nodes.yaml` and `.index/edges.yaml`, are each one YAML document,
+  a block list of block mappings, so the whole metadata layer has one serialisation. The trap: a
+  record spans several lines, so a line-oriented tool — `grep`, a line count, a line-wise merge —
+  sees fields, never whole records; read them through the record loader (below).
+- **A superseded format's parser lives in `internal/formats` and nowhere else** (I8). The trap:
   keeping a reader for the old form "for compatibility" in `kb` or `index`, which is the
   multi-version reader the design forbids. A converter's test is a golden pair, old bytes in and new
-  bytes out. The one permitted exception is a frozen copy of the superseded readers in test code
-  only, for the parity test (`internal/kbload/parity_test.go`).
+  bytes out. A format package may change until a kbase release ships its version, and is frozen
+  after.
 - **A `kb-format` patch bump moves the stamp and every fixture that pins its bytes, and stops the
   chain where its last converter does.** Two halves, both load-bearing. `kb.FormatVersion` moves, and
-  every fixture whose bytes carry the stamp — or a derived line the change rewrote — is rewritten in
+  every `.index/format.yaml` carrying the stamp — or a fixture whose bytes pin it, or a derived
+  line the change rewrote — is rewritten in
   the same commit: the loader reads an older patch of the same minor as current — no chain runs — and
   restamps it on the next save, so what moves under a fixture left behind is a leg that pins bytes
-  after a write, not one that only reads. And `migrate.Chain` must stop at the form its last converter
+  after a write, not one that only reads. And `formats.Chain` must stop at the form its last converter
   produces, because **no converter leads to a patch**: the chain breaks
   out where the major and minor already match the target, and the next save supplies the stamp. The
   trap on that side is teaching the chain to reach the patch, which is a converter whose output
@@ -145,16 +145,37 @@ single source. Working habits they impose:
 - **A result field's integer is `int`, never `int64`.** `result.Write` refuses `int64`.
 - **`just fmt` is the sanctioned formatter.** Running it to clear a gofmt alignment finding is not
   an edit outside the tools.
+- **The edit and write tools govern text changes, not filesystem operations.** A move is `git mv`, a
+  deletion `git rm`, and staging either is part of the landing's set; the landing commits once.
 - **An MCP tool is a subcommand's binding** (I9). The trap: a tool listed by hand, a description
-  copied into a tool, or a schema typed beside the command's flags. Each command declares its
-  binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`; the table binds only
-  `bound` commands, and the test derives its expectation from the annotations, never from a list.
+  copied into a tool, or a schema typed beside the command's flags. Every command reaches the tree
+  in `cmd/surface.go`, one `AddCommand` per family, wrapped `readOnlyTool`, `readWriteTool` or
+  `cliOnly`, which set the cobra annotation `kbase.mcp` = `bound` or `excluded` and the read-only
+  hint; `cliOnly` takes the command's reason as a required argument and records it as the
+  annotation `kbase.mcp.reason`, and the tool-table test fails an exclusion whose reason is empty;
+  cobra's own `help` and `completion` are declared `cliOnly` there too. A test fails an
+  `AddCommand` outside that file. The table binds only `bound` commands, and the test derives its
+  expectation from the annotations, never from a list, failing a command that declares neither. A
+  bound command's flag that its verb refuses to run without declares `kbase.required`
+  the same way, and the tool's schema lists it among `required`; the trap is a refusal whose flag
+  carries no mark, so a model reading the schema cannot tell the flag must be given.
   The exception is a tool no command stands behind: listed, and only where the tool-table test
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
-  returns through `toolResult`, so text, structured content and exit code cannot drift from a
-  command's. `rewind-build` in `cmd/mcp.go` is the only one: read-only, schema and description its
-  own. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings
-  asserted in code.
+  returns through `mcp.ToolResult`, so text, structured content and `isError` cannot drift from a
+  command's. `rewind-build`, built in `internal/mcp` and declared in `cmd/surface.go`, is the only
+  one: read-only, schema and description its own. A flag annotated `kbase.mcp` = `excluded`
+  (`mcp.ExcludeFlag`) is not part of its command's tool schema: `mcp.CommandSchema` skips it.
+  Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings asserted in
+  code.
+- **Dev-only diagnostics are compiled out of the shipped binary.** A diagnostic for developing kbase
+  itself — today `score --replay` — lives in files carrying `//go:build !kbasedist`, code and tests
+  alike; `just dist` builds with `-tags kbasedist`, so the release binary does not contain it. The
+  untagged code reaches it only through a hook its tagged file sets. Its flags carry the flag-level
+  `kbase.mcp` = `excluded` annotation, so dev and dist builds serve one MCP tool table. SPEC states
+  nothing of it; ARCHITECTURE does. The trap: an untagged reference to tagged code, which builds by
+  default and breaks only the dist build — `edit-gate` vets with the tag for that reason, and
+  `test-dist-no-replay`, in the hermetic omnibus and run first by `test-dist`, runs
+  `TestDistBuildHasNoReplay` (`cmd/dist_test.go`, tagged `kbasedist`).
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
   outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores `kbase mcp
   --kb-root`, so the tool reads the server's directory instead of the served KB.
@@ -166,27 +187,46 @@ single source. Working habits they impose:
   accepted values leaves an unanticipated one no trace: a reference whose type the pattern did not
   list is read as no reference. An answer to one of kbase's own asks is not this case — that format
   is ours, and its parser stays strict.
-- **Never spell the node-kind list.** It is defined once, in `internal/kb`'s schema. A site that
-  *iterates* — a census, a breakdown, a union, an ordering — reads the list and names no kind. A
-  site that *branches* names kinds, and its table must be total over the list. A count derived from
-  the list ("all four kinds") is the same copy in a shorter form.
-- **Never spell a relation.** The relation names (`kb.RelationSupports`, `kb.RelationFounds`,
-  `kb.RelationLifts`, `kb.RelationRefutes`, `kb.RelationReferences` and `kb.RelationDemoted`, with
-  `kb.Relations` and `kb.ScoringRelations` holding the sets) live in `internal/kb/schema.go` and
-  nowhere else; a site that needs one names the constant. `cmd/relationpolicy_test.go` is an AST
-  scan that fails on a spelling elsewhere, with a short allowlist of files where the same word means
-  something else.
-- **Read an index line only through `kb.ReadIndex`.** The row types (one per index file), the file
-  inventory and the reader `kb.ReadIndex[T]` live in `internal/kb/indexstream.go`; `index` writes
-  from them, `query`, `sheet` and the tests read through them. The trap: a second row struct or an
-  untyped decode beside it. The exception is `verify` and `citations`, which read untyped on purpose
-  to see malformed shapes.
+- **Never spell the node-kind list.** It is defined once, in `internal/formats/format300`, and named
+  everywhere else through `kb`. A site that *iterates* — a census, a breakdown, a union, an
+  ordering — reads the list and names no kind. A site that *branches* names kinds, and its table
+  must be total over the list. A count derived from the list ("all four kinds") is the same copy in
+  a shorter form. Nor a node id's prefix or a minted id's grammar: outside `internal/formats`, code
+  composes and matches ids through `kb.ClaimPrefix`, `kb.AnalysisPrefix`, `kb.ExperimentPrefix`,
+  `kb.WorkPrefix` and `kb.AxiomPrefix`, and the minted grammar, prefix included, through
+  `kb.IDBody`. A literal id in a test fixture or in help prose is not a spelling.
+- **Never spell a relation.** The six relation names (`RelationSupports`, `RelationFounds`,
+  `RelationLifts`, `RelationRefutes`, `RelationReferences` and `RelationDemoted`) and `Relations`,
+  the set of them, live in `internal/formats/format300`, and `ScoringRelations` in
+  `internal/kb/schema.go`; every other site names them through `kb` (`kb.RelationSupports`,
+  `kb.Relations`, `kb.ScoringRelations`), naming the constant. `cmd/relationpolicy_test.go` is an
+  AST scan that fails on a spelling elsewhere, with a short allowlist of files where the same word
+  means something else.
+- **Read a record file only through the record loader, and write one only through its encoder.**
+  `kb.LoadGraph` (rigor clamped, for a reader) and `kb.LoadAuthoredGraph` (rigor as the file holds
+  it, for a writer) decode both files strictly through `format300`; `kb.EncodeNodes` and
+  `kb.EncodeEdges` render them whole. The trap: a second record struct or a `yaml.Unmarshal` beside
+  them, which reads a missing `bearing` as the zero `kb.Bearing` — the judgement `0.0` — where the
+  strict decoder refuses the record (ARCHITECTURE §11, "The zero-value hazard").
+  `cmd/recordpolicy_test.go` is an AST scan outside `internal/kb` and `internal/formats` that fails
+  on a struct field tagged `bearing` or `manually-scored` and on a function that both names a record
+  file's path and calls the YAML package; a path handed to a YAML call in another function is
+  beyond it.
 - **Keep no prose copy of an op's key vocabulary.** The vocabulary is closed, total and per-op,
   stated once in `internal/write`. A second statement — in a doc, a docstring or a comment — drifts;
   point at the definition or the refusal message it produces.
-- **A frontmatter writer carries forward every attribute it does not own.** `set-frontmatter`
-  replaces the whole block, so a key left out is a key removed. A writer reads the block as it
-  stands and restates what is not its own.
+- **Who supplied a value is an options field, never a flag or a values key.**
+  `write.Options.Provenance` decides the `manually-scored` flag on the rigor and bearing values a
+  write gives (the record types SPEC §8 "Manually scored" names); its zero value,
+  `ProvenanceCaller`, marks them a person's, and only kbase's own machine writers — the build's
+  write runner, a scoring run's landing and re-price — pass `ProvenanceMachine`. The trap: a `--provenance` flag, a values key or an MCP property, through
+  which a session could mark its own value model-scored and have `score` overwrite it.
+  `TestNoSurfaceNamesTheProvenanceOrCreate` (`cmd/mcp_test.go`) fails on a flag or a tool property
+  that names it.
+- **A file kbase generates is regenerated whole.** The stamped `AGENTS.md` and `CONVENTIONS.md`, the
+  register pages and the sheets are kbase's output: a new format or template rewrites each from its
+  source, whatever it holds. The trap: merging new text into what stands — a matcher for the old
+  text, both forms of every passage and a warning for each one not found, for files no user edits.
 - **No stage exits on a model's opinion.** Every stage exits on a comparison of artifacts or a
   return code; a new stage does not get a third kind of exit.
 - **No prompt reaches a model from an in-code string.** Every prompt is an embedded template file
@@ -201,17 +241,17 @@ single source. Working habits they impose:
   presentation.** Byte equality is asserted only where SPEC "Compatibility contract" names a reader
   that needs it.
 - **A derived strength is one value; only its spelling differs.** The walk computes and publishes at
-  full precision, so a dependent multiplies its source's exact strength. A record — the `- strength:`
-  line and a premise bullet's `(strength …)` — carries the value in the fewest decimals that read
-  back as it: four in the ordinary case, more where four would lose it, trailing zeros trimmed; and
-  it is never the source of a dependent's arithmetic — the walk reads the value, not the record's
-  spelling. A surface that shows a value to a reader puts it at two decimals — a query result as the
-  number, the trace on a `- strength:` line as the spelling — while `verify` quotes the record's
-  spelling, because its message is about the record.
-- **A scoring-model fact lives once, in `internal/kb`.** The fourteen fault ids, `flt-pending`, the
+  full precision, so a dependent multiplies its source's exact strength. A register page
+  spells it — its `- strength:` line and a premise's `(strength …)` — in the fewest decimals that
+  read back as it: four in the ordinary case, more where four would lose it, trailing zeros
+  trimmed; and the walk never reads that spelling. A surface that shows a value to a reader puts it
+  at two decimals — a query result as the number, the trace on a `- strength:` line as the
+  spelling.
+- **A scoring-model fact lives once, in `internal/kb`.** The thirteen fault ids, the
   word `none`, each id's weight per occurrence and each table's maximum live in `faults.go` and
   nowhere else — the statement table, the method table and the bearing one, which a node's class
-  selects among. A template names only the ids its class accepts, and carries no figure or word a
+  selects among. No table holds the retired pending id; `Price` still reads one from an old ledger
+  line. A template names only the ids its class accepts, and carries no figure or word a
   model could read as a judgement on the answer — no decimal in `[0,1]`, no percentage, no weight, no
   maximum, no band's word — while a quantity of the subject's own, an example's rate or threshold, is
   the claim's and stays. `internal/asks` asserts both: the `flt-…` tokens it names are exactly its
@@ -222,7 +262,7 @@ single source. Working habits they impose:
   fault that has been named keeps its id for life: a ledger line records ids, and a rename would
   silently re-point every line that carried the old one. A new fault takes a new id; a retired fault's
   id never carries a new meaning.
-- **A citation is looked up in the closed text the call carried, never in the register.** The parse's
+- **A citation is looked up in the closed text the call carried, never in a register page.** The parse's
   one job is where a span is, not whether it earns its id: a span is an anchor, and the criteria's
   satisfaction is the model's judgement and a later reader's audit, never a check. The trap: a
   validity test dressed as a parse, which refuses defensible answers on a question no code can
@@ -232,6 +272,12 @@ single source. Working habits they impose:
   `float64`, where three weights land `0.3499999999999999` and the record's four-decimal rule breaks.
   A value is a projection of a ledger line's ids alone, which is what makes a landing checkable and
   a run re-scorable without asking a model.
+- **A scoring page's value tables are derived, not authored.** A page's maxima, its reachable-value
+  tables and its worked figures are functions of the ceiling and the weights, so they move in the
+  commit that moves either. The trap: leaving a page alone because no test pins its numbers — a value
+  table is a second copy of the arithmetic, and a stale one states a value the code cannot produce.
+  The reasoning a page gives for a superseded choice stays, marked superseded in one note; what moves
+  is the numbers.
 - **Name the producer before you write the refusal.** Before writing code that refuses, raises, or
   reports a finding on a state, name what produces that state. If nothing on a reachable path
   produces it, the code restates a design the rest of the code already states; delete it. If it can
@@ -257,15 +303,24 @@ single source. Working habits they impose:
   itself, as a list (`pandoc.Blocks{…}:walk(f)`, `pandoc.Inlines{…}:walk(f)`; an element's own
   `:walk` skips that element), and returns the result with `false` as the second value, or the
   descent walks those children twice.
-- **Inside a bracket expression, spell whitespace as `kb.PyWhitespace`, never `\s`.** `kb.PyRE`
-  expands `\s` into a bracket expression of its own, and nested inside `[...]` that compiles,
-  without error, into a different pattern.
+- **Inside a bracket expression, spell whitespace as `PyWhitespace`, never `\s`.** `PyRE` expands
+  `\s` into a bracket expression of its own, and nested inside `[...]` that compiles, without
+  error, into a different pattern. Both are `format300`'s; outside `internal/formats` use `kb`'s
+  re-exports, and a superseded format package keeps its own copy, as `format200` does.
 - **A float computation that decides a ranking sums in Python's order with its compensation**
   (`shortlist.go`'s `pySum`): Go's plain summation ranks a near-tie differently, and a differently
   ranked shortlist asks a different pair.
-- **A public integration recipe re-invokes `just` for its private body, so a command-line variable
-  override does not reach it.** A recipe that must take a configuration at the command line declares
-  it as a parameter.
+- **A `justfile` recipe whose body is a shebang script is a script under `tools/scripts/`, named for
+  its recipe, and the recipe passes the script its inputs as environment variables.** The recipe line
+  is `NAME="{{NAME}}" tools/scripts/<recipe>.sh`, so a command-line variable override reaches the script
+  and no recipe re-invokes `just` for a private body. The script runs under its own
+  `#!/usr/bin/env bash` with at least `set -u`, reads only what the recipe sets (the recipe's variables
+  and parameters, and `just` built-ins such as `invocation_directory()` as variables of its own), and
+  opens by refusing an unset one — `: "${NAME:?…}"`, with no apostrophe in the message, which the macOS
+  `/bin/bash` 3.2 reads as an open quote. Scripts that need one another call each other by path, not
+  through `just`. The one exception to environment inputs is a variadic list a script passes on
+  untouched (the volume roots and build flags of `test-integration-build-live-fixture`), which arrives
+  as positional arguments.
 - **kbase's stamped KB documents get prompt-engineer review before first use.** The templates
   `phase-3a` stamps into `kb-root/` and the README assembly template are read by models in every KB
   kbase builds.
@@ -295,6 +350,27 @@ file is one power-cycle from gone.
   rather than restate it. A plan that needs such a page names it in the plan, so a reader knows which
   source settles a disagreement.
 - Working drafts and half-formed notes are scratch (`.claude-temp/`), not plans.
+- Any plan that is activated, regardless of its location, gets a post-sprint review section
+  at the end. 
+  - That section contains the review, remediation, and burndown steps. 
+  - Unless otherwise specified the reviewers are an architect and a coder reviewing with THESIS.md, SPEC.md,
+  ARCHITECTURE.md, and CONVENTIONS.md as their pre-task reading list. 
+  - They do NOT get the plan doc. Their job is to review the changes against standards and suitability for purpose, not rehash the implementation. 
+  - Their review brief includes reviewing the tests
+  - The burndown list is written to a separate `<plan>_REVIEW_BURNDOWN.md` and gets the same
+    prompt engineer review and revision pass as any other document containing agent instructions.
+
+### Plan dispatchability
+A work package is dispatchable only when the following conditions have been met
+
+- It names its scope in files, packages or symbols — never a span of design sections
+- Carries the command and its answer, or the quoted line, for each fact it acts on
+- States its done-line in runner targets
+- Has received a usability review by the prompt engineer (its definition contains the criteria)
+- Has been revised by the architect based on the findings of the prompt engineer
+
+A plan whose packages lack these is not dispatchable. It is not offered for approval as a dispatch
+plan, and none of its packages is dispatched.
 
 ## Coordinator Policy
 
@@ -305,7 +381,8 @@ accepting — the report is an index, the diff is the evidence. Check the diff a
 violation classes:
 
 - integration tests invoke the app binary; no dev-only entry points, verbs, or test scaffolds around
-  the real surface
+  the real surface — save a diagnostic the shipped binary does not contain (see "Dev-only
+  diagnostics")
 - verifications are repeatable invocations; evidence lands in inspectable artifacts, never only in
   the report
 - no special-case file lifecycles: every path kbase writes belongs to a location SPEC or
@@ -315,7 +392,9 @@ violation classes:
 - no second home for a value, string, or mechanism that has one
 - nothing beyond the dispatched scope, even improvements
 
-Violations block acceptance: fix (redispatch or direct) before commit. Style and judgment calls
+Violations block acceptance: fix (redispatch or direct) before commit. A report that flags a
+departure from the package's scope text is redispatched or escalated, never accepted on the
+coordinator's reading of what the scope meant. Style and judgment calls
 outside these classes: flag only if egregious.
 
 **Direct coding at the session level**: permitted, but read the topic-specific coder agent
@@ -334,6 +413,16 @@ integration tests.
 
 **Results are part of the test.** Results that cannot be examined are not results.
 
+**A test helper an external test package needs is defined in that package.** An unexported name does
+not cross between `package p` and `package p_test`, and a test-support package that imports `p` cannot
+be imported by `p`'s in-package tests — the cycle is refused. Where the two need the same fixture,
+each package keeps one copy and the pair states why.
+
+**Where a directory holds both an in-package test file and an external `p_test` one for the same
+production file, the external file is `<file>_external_test.go`.** The two cannot share a file name,
+and the in-package file keeps the name that matches the production file —
+`internal/model/modeltest/` holds `mockllm_test.go` and `mockllm_external_test.go` for `mockllm.go`.
+
 **A test harness selects its inputs by content the KB contract fixes, never by presentation.** A
 choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
 another's.
@@ -350,26 +439,25 @@ way it names any other truth it moved, so a reader can see which change made it 
   `${VERSION}`, `${ID1}`, `${ID2}`, `${REPO}` (the repository root) and `${STATE_DIR}`, applied to
   requests as well as responses. The detached-build test needs a kbase binary to re-execute:
   `TestMain` runs the test binary as kbase when `KBASE_TEST_RUN_AS_KBASE` is set. The runner stages
-  the results fixture, inserts `kb-root/b` and `seed.yaml` through `insert-claim-entry --create`,
-  and requires exactly the expected lines on stdout.
+  the results fixture, inserts `seed.yaml`'s entries through `insert-claim-entry`, and requires
+  exactly the expected lines on stdout.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
   `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
   hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
-  dependency — pandoc, python3, the adjagent clone — leaves the omnibus the same way, what needs no
+  dependency — pandoc, python3, expect, the adjagent clone — leaves the omnibus the same way, what needs no
   tool staying in it as a recipe of its own.
-- `just` never syntax-checks a recipe body: it parses its own syntax, not the shell inside a body, so a
-  body can be invalid shell and still parse. After changing a `[private]` body, render it and check the
-  shell by hand — `set -o pipefail; just --dry-run <private-recipe> <its args> 2>&1 | bash -n`. Both
-  parts are load-bearing: `--dry-run` renders to stderr, so a plain `| bash -n` feeds it an empty stream
-  and passes vacuously, and `pipefail` keeps a justfile that did not parse from reading as a pass. The
-  check runs only when the justfile parses — that failure is loud already at the next `just` invocation —
-  and it does not replace running the recipe. A habit, not a target or a script: there is deliberately
-  no `just check-recipes`, because a checker built on `just --dry-run` cannot run when the file it would
-  check is the thing that is broken.
+- A script is checked where it stands: after changing one, `bash -n tools/scripts/<name>.sh`, and
+  `just edit-gate` runs `bash -n` over every `tools/scripts/*.sh`, so a syntax error fails the gate
+  whether or not the script's recipe is run. That is a syntax check only and does not replace running
+  the recipe; a recipe that is LIVE or needs an absent tool is checked by `bash -n` on its script and
+  `just --dry-run <recipe> <args>`, whose rendered line must set every variable the script requires.
+  `shellcheck` is not a project prerequisite and the gate does not call it.
 - The results fixture ships no claims: `test-data/fixtures/results/kb-root` holds its papers and nothing
   else, so a leg needing a claim to score cannot run against it as it stands — it looks ready and is
   not, for that purpose. Copy the fixture's repo to a scratch directory and insert what the leg needs
-  through `insert-claim-entry --create`, as the transcript staging above does.
+  through `insert-claim-entry`: a claim to score needs no host, and one a leg needs hosted takes a
+  `document` and a `locator`, as the transcript staging above does. A claim given a `rigor` is
+  manually scored, and a scoring run skips it.
 - A Go test that must drive `kbase mcp` over pipes the recipe holds starts no process: the recipe
   starts the server on two named FIFOs and passes their paths with `-args`, and the test opens the
   write end first, so neither side waits on the other's open.
@@ -382,6 +470,10 @@ way it names any other truth it moved, so a reader can see which change made it 
   store (`refresh`, `verify`, the queries) takes no such flag. `build` resolves and creates its
   state store before its first refusal; every recipe invocation of `build` takes `--state-dir`,
   refused outcomes included.
+- A scratch copy of a fixture repository under this repository needs its own `.git` (an empty
+  directory serves) before kbase runs over it. The trap: kbase resolves the repository root at the
+  nearest `.git` upward, so a copy without one answers from this repository's own `kb-root/`,
+  silently.
 - Unit tests pass hermetically (no network, no corpus) beside their packages; their `go test` log is
   preserved under `test-data/transient/unit_tests/`. Corpus-driven property tests skip when the
   corpus is absent and are wired into an integration recipe where it is guaranteed present.

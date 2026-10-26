@@ -174,7 +174,7 @@ func References(ctx context.Context, opts Options) (Report, error) {
 		if !ok {
 			return nil, stopf("unmarked-record", "no unmarked record stands at %s. The declared pass writes one empty, and this stage resumes from nothing else", buildrecords.UnmarkedFile)
 		}
-		if _, err := passTwoGate(t); err != nil {
+		if err := passTwoGate(t); err != nil {
 			return nil, err
 		}
 		inv, err := scanInventory(t, recs)

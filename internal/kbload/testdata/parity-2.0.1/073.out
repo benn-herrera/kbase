@@ -1,0 +1,11 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - relation: "lifts"
+      direction: "out"
+      target: "clm-aaa003"
+      bearing: "0.8"
+      context: null

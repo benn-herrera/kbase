@@ -2,7 +2,6 @@ package claimgraph
 
 import (
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -18,23 +17,28 @@ const retryLimit = 3
 // values is one op's values entries.
 type values []map[string]any
 
-// writer lands values through the write API's ops, with no trailing refresh:
-// kb_claimgraph stage G refreshes once the writes are in.
+// writer lands values through the write API's ops as the build's own, with no
+// trailing refresh: kb_claimgraph stage G refreshes once the writes are in.
 type writer struct {
 	kbRoot, repoRoot string
 	lg               log.Logger
 }
 
+// options is one op invocation of the writer's over data.
+func (w writer) options(data []byte) write.Options {
+	return write.Options{KBRoot: w.kbRoot, Values: data, NoRefresh: true, Provenance: write.ProvenanceMachine, Logger: w.lg}
+}
+
 // run issues op over vs, re-issuing an identical call on retry. Any outcome
 // but done or unchanged stops the stage: the values are this stage's own.
-func (w writer) run(name, op string, vs values, create bool) (write.Result, error) {
+func (w writer) run(name, op string, vs values) (write.Result, error) {
 	data, err := json.Marshal(map[string]any{"entry": vs})
 	if err != nil {
 		return write.Result{}, err
 	}
 	var res write.Result
 	for range retryLimit {
-		res = write.Run(op, write.Options{KBRoot: w.kbRoot, Values: data, Create: create, NoRefresh: true, Logger: w.lg})
+		res = write.Run(op, w.options(data))
 		if res.Outcome != result.Retry {
 			break
 		}
@@ -48,10 +52,10 @@ func (w writer) run(name, op string, vs values, create bool) (write.Result, erro
 	return res, stopf(name, "%s ended %s and wrote nothing this stage can proceed from: %s", op, res.Outcome, refusalText(res))
 }
 
-// raw issues op over data once, creating what the op creates, and returns
-// its result whatever the outcome: the caller judges it.
+// raw issues op over data once and returns its result whatever the outcome:
+// the caller judges it.
 func (w writer) raw(op string, data []byte) write.Result {
-	return write.Run(op, write.Options{KBRoot: w.kbRoot, Values: data, Create: true, NoRefresh: true, Logger: w.lg})
+	return write.Run(op, w.options(data))
 }
 
 func refusalText(res write.Result) string {
@@ -65,57 +69,34 @@ func refusalText(res write.Result) string {
 	return strings.Join(parts, "; ")
 }
 
-// claimEntries is every claim entry of the register at kbRoot/register; none
-// where there is no such register.
-func claimEntries(kbRoot, register string) ([]kb.ClaimEntry, error) {
-	src := builtTree(kbRoot)
-	p := src.KBPath(register)
-	if !src.IsFile(p) {
-		return nil, nil
+// insertClaims inserts one claim per entry, each marked in its document at its
+// locator in the call that mints it, and returns the id each took, in order.
+func (w writer) insertClaims(name string, entries []entry) ([]string, error) {
+	vs := make(values, len(entries))
+	for i, e := range entries {
+		vs[i] = map[string]any{"title": e.title, "rationale": e.rationale, "document": e.document, "locator": e.locator}
 	}
-	text, err := src.ReadText(p)
-	if err != nil {
-		return nil, err
-	}
-	return kb.ParseClaimEntries(text, register, nil, log.Discard()), nil
-}
-
-// insertClaims inserts one entry per title into register and returns the id
-// each took, in order.
-func (w writer) insertClaims(name, register string, titles, rationales []string) ([]string, error) {
-	vs := make(values, len(titles))
-	for i := range titles {
-		vs[i] = map[string]any{"register": register, "title": titles[i], "rigor": kb.PendingLiteral, "rationale": rationales[i]}
-	}
-	res, err := w.run(name, "insert-claim-entry", vs, true)
+	res, err := w.run(name, "insert-claim-entry", vs)
 	return res.IDs, err
 }
 
 // writePlan lands the declared pass's plan in the order the ops'
-// preconditions force: the claim entries, the works, every document's
-// frontmatter, the off-graph edges, the markers.
+// preconditions force: the claims, each marked at its display line, the works,
+// the off-graph edges.
 func (w writer) writePlan(p plan) ([]Finding, error) {
 	var findings []Finding
-	minted := map[int]string{}
-	for _, register := range p.registers() {
-		var positions []int
-		var titles, rationales []string
-		for i, e := range p.entries {
-			if e.register == register {
-				positions = append(positions, i)
-				titles = append(titles, registerTitle(e.title, e.document))
-				rationales = append(rationales, e.rationale)
-			}
-		}
-		ids, err := w.insertClaims("pass-1", register, titles, rationales)
-		if err != nil {
+	var ids []string
+	if len(p.entries) > 0 {
+		var err error
+		if ids, err = w.insertClaims("pass-1", p.entries); err != nil {
 			return findings, err
 		}
-		for i, pos := range positions {
-			minted[pos] = ids[i]
-		}
-		findings = append(findings, pass("pass-1-insert-claim-entry", field("register", register), field("entries", len(ids))))
 	}
+	docs := map[string]bool{}
+	for _, e := range p.entries {
+		docs[e.document] = true
+	}
+	findings = append(findings, pass("pass-1-insert-claim-entry", field("entries", len(ids)), field("documents", len(docs))))
 
 	f, err := w.writeWorks(p.works)
 	if err != nil {
@@ -123,55 +104,19 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	}
 	findings = append(findings, f)
 
-	var fm values
-	for _, d := range p.documents {
-		e := map[string]any{"document": d.path, "kind": d.kind}
-		if len(d.claims) > 0 {
-			ids := make([]string, len(d.claims))
-			for i, pos := range d.claims {
-				ids[i] = minted[pos]
-			}
-			e["claims"] = ids
-		}
-		if d.noClaim != "" {
-			e["no-claim"] = d.noClaim
-		}
-		fm = append(fm, e)
-	}
-	if _, err := w.run("pass-2", "set-frontmatter", fm, false); err != nil {
-		return findings, err
-	}
-	findings = append(findings, pass("pass-2-set-frontmatter", field("documents", len(fm))))
-
 	var edges []pair
 	for _, r := range p.restsOn {
-		edges = append(edges, pair{minted[r.entry], r.workID})
+		edges = append(edges, pair{ids[r.entry], r.workID})
 	}
 	f, err = w.writeEdges("pass-3-rests-on", edges, nil)
 	if err != nil {
 		return findings, err
 	}
-	findings = append(findings, f)
-
-	if len(p.markers) > 0 {
-		vs := make(values, len(p.markers))
-		for i, m := range p.markers {
-			vs[i] = map[string]any{"document": m.document, "id": minted[m.entry], "locator": m.locator}
-		}
-		if _, err := w.run("pass-4", "mark-claim-in-leaf", vs, false); err != nil {
-			return findings, err
-		}
-	}
-	docs := map[string]bool{}
-	for _, m := range p.markers {
-		docs[m.document] = true
-	}
-	findings = append(findings, pass("pass-4-mark-claim-in-leaf", field("markers", len(p.markers)), field("documents", len(docs))))
-	return findings, nil
+	return append(findings, f), nil
 }
 
-// writeWorks inserts one entry per external work into the KB root's register,
-// every rigor the pending literal.
+// writeWorks inserts one work record per external work, every rigor the
+// pending literal.
 func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 	if len(works) == 0 {
 		return fact("pass-1b-insert-work-entry", field("works", 0), field("named", 0), field("key-only", 0)), nil
@@ -179,12 +124,12 @@ func (w writer) writeWorks(works []CitedWork) (Finding, error) {
 	vs := make(values, len(works))
 	named := 0
 	for i, wk := range works {
-		vs[i] = map[string]any{"register": kb.RegisterFile, "key": wk.Key, "title": wk.Title, "rigor": kb.PendingLiteral, "rationale": workRationale(wk)}
+		vs[i] = map[string]any{"key": wk.Key, "title": wk.Title, "rigor": kb.PendingLiteral, "rationale": workRationale(wk)}
 		if wk.Named {
 			named++
 		}
 	}
-	if _, err := w.run("pass-1b", "insert-work-entry", vs, true); err != nil {
+	if _, err := w.run("pass-1b", "insert-work-entry", vs); err != nil {
 		return Finding{}, err
 	}
 	return pass("pass-1b-insert-work-entry", field("works", len(works)), field("named", named), field("key-only", len(works)-named)), nil
@@ -221,133 +166,31 @@ func (w writer) writeEdges(name string, edges, references []pair) (Finding, erro
 			vs[i]["references"] = r
 		}
 	}
-	if _, err := w.run(name, write.AddBuildEdges, vs, false); err != nil {
+	if _, err := w.run(name, write.AddBuildEdges, vs); err != nil {
 		return Finding{}, err
 	}
 	return pass(name, field("dependency-edges", len(edges)), field("dependency-sources", len(premises)),
 		field("references", len(references)), field("reference-sources", len(refs))), nil
 }
 
-// newClaim is one claim a leaf gains after the declared pass. Locator is what
-// its marker is placed by, "" for an equation, which takes none.
+// newClaim is one claim a leaf gains after the declared pass: its title as its
+// register page carries it, and the locator its marker is placed by.
 type newClaim struct {
 	title, rationale, locator string
 }
 
-// landLeaf is one leaf's final state after the declared pass, in one act,
-// and returns the ids claims took. A claim whose title the leaf's register
-// already carries under an id this leaf hosts, or under one no document
-// hosts, takes that id. The frontmatter is the leaf's block as it stands with
-// the new ids after its claims; markers cover a new claim with a locator however few the leaf declares, and
-// a block claim where the leaf's claims other than equations number two or
-// more — blocks maps each block claim's id to its display line.
-func (w writer) landLeaf(document, kind string, claims []newClaim, blocks map[string]string, elsewhere map[string]bool) ([]string, error) {
-	src := builtTree(w.kbRoot)
-	text, err := src.ReadText(src.KBPath(document))
-	if err != nil {
-		return nil, err
+// landLeaf lands one leaf's new claims in one act and returns the id each
+// took, in order. Each is inserted with the leaf and its locator, so it is
+// marked there in the call that mints it; a claim of that title the leaf
+// already hosts, or one no leaf hosts, is adopted instead, by the insert's own
+// rule.
+func (w writer) landLeaf(document string, claims []newClaim) ([]string, error) {
+	if len(claims) == 0 {
+		return nil, nil
 	}
-	fm, err := kb.ParseFrontmatter(text)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", document, err)
-	}
-	existing, err := fm.ListOrEmpty("claims")
-	if err != nil {
-		return nil, err
-	}
-	register := registerFor(document)
-	held, err := claimEntries(w.kbRoot, register)
-	if err != nil {
-		return nil, err
-	}
-	landed := map[string]string{}
-	for _, e := range held {
-		if slices.Contains(existing, e.ID) || !elsewhere[e.ID] {
-			landed[e.Title] = e.ID
-		}
-	}
-	titles := make([]string, len(claims))
-	var freshTitles, freshRationales []string
+	entries := make([]entry, len(claims))
 	for i, c := range claims {
-		titles[i] = registerTitle(c.title, document)
-		if _, ok := landed[titles[i]]; !ok {
-			freshTitles = append(freshTitles, titles[i])
-			freshRationales = append(freshRationales, c.rationale)
-		}
+		entries[i] = entry{title: c.title, rationale: c.rationale, document: document, locator: c.locator}
 	}
-	stem := "land-" + document
-	if len(freshTitles) > 0 {
-		ids, err := w.insertClaims(stem, register, freshTitles, freshRationales)
-		if err != nil {
-			return nil, err
-		}
-		for i, t := range freshTitles {
-			landed[t] = ids[i]
-		}
-		if held, err = claimEntries(w.kbRoot, register); err != nil {
-			return nil, err
-		}
-	}
-	ids := make([]string, len(titles))
-	for i, t := range titles {
-		ids[i] = landed[t]
-	}
-	final := slices.Clone(existing)
-	for _, id := range ids {
-		if !slices.Contains(final, id) {
-			final = append(final, id)
-		}
-	}
-	if !slices.Equal(final, existing) {
-		e, err := write.FrontmatterValues(text, document)
-		if err != nil {
-			return nil, err
-		}
-		if e == nil {
-			e = map[string]any{"document": document}
-		}
-		// A leaf declares its claims or a reason it has none, never both
-		// (tier-1 coverage), so one gaining a claim drops its reason.
-		delete(e, "no-claim")
-		e["kind"], e["claims"] = kind, final
-		if _, err := w.run(stem, "set-frontmatter", values{e}, false); err != nil {
-			return nil, err
-		}
-		if text, err = src.ReadText(src.KBPath(document)); err != nil {
-			return nil, err
-		}
-	}
-	heldTitles := map[string]string{}
-	for _, e := range held {
-		heldTitles[e.ID] = e.Title
-	}
-	counted := 0
-	for _, id := range final {
-		if _, isEquation := kb.EquationLabel(heldTitles[id]); !isEquation {
-			counted++
-		}
-	}
-	locators := map[string]string{}
-	for id, l := range blocks {
-		locators[id] = l
-	}
-	prose := map[string]bool{}
-	for i, c := range claims {
-		if c.locator != "" {
-			locators[ids[i]], prose[ids[i]] = c.locator, true
-		}
-	}
-	var wanted values
-	for _, id := range final {
-		l, ok := locators[id]
-		if ok && (prose[id] || counted > 1) && !strings.Contains(text, write.Tier2Marker(id)) {
-			wanted = append(wanted, map[string]any{"document": document, "id": id, "locator": l})
-		}
-	}
-	if len(wanted) > 0 {
-		if _, err := w.run(stem, "mark-claim-in-leaf", wanted, false); err != nil {
-			return nil, err
-		}
-	}
-	return ids, nil
+	return w.insertClaims("land-"+document, entries)
 }

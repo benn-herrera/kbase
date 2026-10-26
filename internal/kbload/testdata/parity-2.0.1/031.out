@@ -1,0 +1,26 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 4
+offset: 0
+truncated: false
+results:
+    - relation: "supports"
+      direction: "in"
+      target: "clm-aaa001"
+      bearing: "1.0"
+      context: null
+    - relation: "supports"
+      direction: "in"
+      target: "clm-aaa002"
+      bearing: "1.0"
+      context: null
+    - relation: "lifts"
+      direction: "in"
+      target: "exp-aaa008"
+      bearing: "0.8"
+      context: null
+    - relation: "refutes"
+      direction: "in"
+      target: "ana-aaa007"
+      bearing: "0.5"
+      context: null

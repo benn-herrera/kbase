@@ -7,8 +7,8 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
-	rootCmd.AddCommand(queryCommand(&cobra.Command{
+func statsCommand() *cobra.Command {
+	return queryCommand(&cobra.Command{
 		Use:   "stats",
 		Short: "the index census, the build-band distribution and the rework dashboard",
 		Long: `stats counts the nodes of each kind and the records of each index file,
@@ -18,5 +18,5 @@ the counts and the census are structural.`,
 		Args: cobra.NoArgs,
 	}, false, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.StatsPayload(ix))
-	}))
+	})
 }

@@ -1,0 +1,38 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 8
+offset: 0
+truncated: false
+results:
+    - id: "clm-aaa002"
+      title: "Equation (`eq:flow`) — Flow Dynamics"
+      strength: 0.95
+      build_band: "ok-to-build"
+    - id: "clm-aaa003"
+      title: "The gradient $`\\nabla f`$ is \"bounded\" when a < b & c"
+      strength: 0.6
+      build_band: "input-only"
+    - id: "clm-aaa004"
+      title: "A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut"
+      strength: 0.4
+      build_band: "do-not-build"
+    - id: "clm-aaa005"
+      title: "An isolated $`\\Gamma`$-observation nothing cites"
+      strength: 0.0
+      build_band: "unsubstantiated"
+    - id: "clm-aaa006"
+      title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+      strength: 0.0
+      build_band: "unsubstantiated"
+    - id: "clm-bbb001"
+      title: "Test example 2"
+      strength: 0.88
+      build_band: "ok-to-build"
+    - id: "clm-bbb002"
+      title: "The governance bifurcation"
+      strength: 0.66
+      build_band: "ok-with-caveats"
+    - id: "clm-bbb003"
+      title: "A prose claim in beta"
+      strength: null
+      build_band: "unknown"

@@ -12,20 +12,8 @@ import (
 // readingOrder, and its line in that document.
 type position struct{ doc, line int }
 
-// readingOrder is every document reachable from the entry point, in preorder
-// over each document's children as it lists them.
-func readingOrder(t *Tree) []string {
-	var out []string
-	var walk func(p string)
-	walk = func(p string) {
-		out = append(out, p)
-		for _, c := range t.Children[p] {
-			walk(c)
-		}
-	}
-	walk(kb.EntryPointFile)
-	return out
-}
+// readingOrder is the tree's reading order, kb.ReadingOrder over its children.
+func readingOrder(t *Tree) []string { return kb.ReadingOrder(t.Children) }
 
 // claimPositions is every claim's position: a block or prose claim at its
 // body's first line, an equation node at its fence's first line, and a claim

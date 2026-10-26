@@ -106,20 +106,20 @@ func TestExpandHomeEnvKeyFile(t *testing.T) {
 		Providers: Providers{"p": {Name: "p", BaseURL: "https://p.example/v1"}},
 		Env:       Overrides{APIKeyFile: "~/keys/env.txt"}}
 
-	ep, err := Resolve(in, ModeFile, RoleText, BackEndProvider, "")
+	ep, err := Resolve(in, ModeFile, RoleText, "")
 	if err != nil || ep.APIKeyFile != filepath.Join(keys, "env.txt") {
 		t.Fatalf("Resolve = %+v, %v; want the key file under the home directory", ep, err)
 	}
 	missing := filepath.Join(keys, "absent.txt")
 	ep, err = Resolve(Inputs{Cfg: in.Cfg, Providers: in.Providers, Env: Overrides{APIKeyFile: "~/keys/absent.txt"}},
-		ModeFile, RoleText, BackEndProvider, "")
+		ModeFile, RoleText, "")
 	if err != nil || ep.APIKeyFile != missing {
 		t.Errorf("= %+v, %v; want the expanded path, unread", ep, err)
 	}
 	// In environment mode the same variable names the environment endpoint's
 	// key.
 	env, err := Resolve(Inputs{Env: Overrides{BaseURL: "https://env/v1", Text: "t", APIKeyFile: "~/keys/env.txt"}},
-		ModeEnvironment, RoleText, BackEndProvider, "")
+		ModeEnvironment, RoleText, "")
 	if err != nil || env.APIKeyFile != filepath.Join(keys, "env.txt") || env.KeySource != LayerSourceEnvironment {
 		t.Errorf("= %+v, %v; want the environment's key file", env, err)
 	}

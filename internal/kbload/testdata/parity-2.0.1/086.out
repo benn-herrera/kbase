@@ -1,0 +1,11 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 5
+offset: 0
+truncated: false
+results:
+    - "clm-aaa001"
+    - "clm-aaa002"
+    - "clm-aaa003"
+    - "clm-aaa004"
+    - "clm-bbb002"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,7 +23,21 @@ import (
 // what is carried, and the digest the ledger records is of the bytes it was
 // handed. An error is the call's failure: the item is recorded failed and the
 // run goes on.
-type Ask func(ctx context.Context, prompt string) (string, error)
+type Ask func(ctx context.Context, prompt string) (Reply, error)
+
+// Reply is what one call returned: the reply's text, and whether the endpoint
+// cut it off at the completion cap. What a truncated reply is worth is the
+// runner's to decide, not the seam's.
+type Reply struct {
+	Text      string
+	Truncated bool
+}
+
+// errTruncatedReply fails an item whose reply reached the completion cap. The
+// lines it did not reach are lost, and where the cut falls between lines the
+// rest would parse as a clean under-charge: an incomplete answer is never a
+// judgement.
+var errTruncatedReply = errors.New("the reply reached the completion cap before it finished, so its charge list is incomplete")
 
 // Write lands one answer on one item: the value replaces the item's own, and
 // publishing it is the caller's refresh. An error is the write's refusal —
@@ -31,12 +46,33 @@ type Ask func(ctx context.Context, prompt string) (string, error)
 // the path a landing takes.
 type Write func(it query.Item, value kb.Bearing) error
 
+// Skip is whether this invocation skips it: the walk asks it nothing and lands
+// nothing on it, and a resume leaves its landed value unrepriced.
+type Skip func(it query.Item) bool
+
+// RescoreNone is the --rescore-manual value that re-judges no manually-scored
+// value; each other value names the pass whose values it re-judges.
+const RescoreNone = "none"
+
+// RescoreManual is every --rescore-manual value, in the order a refusal lists
+// them.
+var RescoreManual = []string{RescoreNone, query.PassRigor, query.PassBearing, query.PassBoth}
+
+// ManualSkip is the items a run over ix skips: each whose record carries the
+// manually-scored mark, unless rescore names the item's pass or both.
+func ManualSkip(ix *query.Index, rescore string) Skip {
+	return func(it query.Item) bool {
+		return ix.ManuallyScored(it) && rescore != query.PassBoth && rescore != passOf(it)
+	}
+}
+
 // Counts is a run's items by the status the ledger last records for each, so a
 // resumed run reports the whole run and not one invocation's attempts.
 type Counts struct {
-	Total  int
-	Done   int
-	Failed int
+	Total   int
+	Done    int
+	Failed  int
+	Skipped int
 	// Remaining is what the ledger records no attempt for: the items a limit
 	// left, or the run never reached.
 	Remaining int
@@ -64,13 +100,17 @@ type Runner struct {
 	Source *kb.Source
 	Index  *query.Index
 	Items  []query.Item
-	// Pass is the pass the run walks, one of query's two pass names. It decides
-	// what an item's call asks and what its charges are priced under, and a rigor
-	// run's item decides which of that pass's two classes it takes: no item is
-	// asked or priced as the other pass's subject.
-	Pass   string
-	Ask    Ask
-	Write  Write
+	// Pass names the set the run walks: one pass, or query.PassBoth for the
+	// node set and then the edge set. It decides what an item's call asks and
+	// what its charges are priced under, and a rigor item decides which of that
+	// pass's two classes it takes: no item is asked or priced as another class's
+	// subject.
+	Pass  string
+	Ask   Ask
+	Write Write
+	// Skip is the items the walk records skipped rather than asks; nil skips
+	// none.
+	Skip   Skip
 	Ledger *Ledger
 	// Model is what the ledger records of each attempt's call.
 	Model string
@@ -88,8 +128,9 @@ type Runner struct {
 // reply the parse cannot read, a refused text and a failed call or write are
 // recorded and the run goes on. An item the ledger already records as landed is
 // not asked again — a fresh run's ledger records nothing, so a fresh run asks
-// every item. A cancelled context stops before the next ask and records nothing
-// for the item in flight.
+// every item. An item Skip names is recorded skipped, once: a line already
+// recording it so is not appended again. A cancelled context stops before the
+// next ask and records nothing for the item in flight.
 func (r *Runner) Run(ctx context.Context) (Result, error) {
 	lg := r.Log
 	if lg == nil {
@@ -114,17 +155,35 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 	res := Result{Outcome: result.Done, Walked: items}
 	for _, it := range items {
-		if r.Ledger.Status(it) == StatusDone {
+		status := r.Ledger.Status(it)
+		if status == StatusDone {
 			continue
 		}
 		if ctx.Err() != nil {
 			res.Outcome = result.Cancelled
 			break
 		}
-		e, interrupted := r.attempt(ctx, it, facts, g)
+		if r.Skip != nil && r.Skip(it) {
+			if status == StatusSkipped {
+				continue
+			}
+			if err := r.Ledger.Append(it, Entry{Status: StatusSkipped, Reply: ReasonManuallyScored}); err != nil {
+				res.Outcome, res.Counts = result.Failed, r.counts()
+				return res, fmt.Errorf("record %s: %w", ItemName(it), err)
+			}
+			lg.Debug("score: item skipped", "item", label(it), "reason", ReasonManuallyScored)
+			continue
+		}
+		e, c, interrupted := r.attempt(ctx, it, facts, g)
 		if interrupted {
 			res.Outcome = result.Cancelled
 			break
+		}
+		if c != nil {
+			if err := r.Ledger.capture(it, e, *c); err != nil {
+				res.Outcome, res.Counts = result.Failed, r.counts()
+				return res, fmt.Errorf("capture %s: %w", ItemName(it), err)
+			}
 		}
 		if err := r.Ledger.Append(it, e); err != nil {
 			res.Outcome, res.Counts = result.Failed, r.counts()
@@ -154,56 +213,91 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 // attempt makes one item's pass: the item's class — the instruction its one call
 // carries and the table its reply is priced under, derived once — the closed text
 // the call is sent with, and either the charges the reply records or the reason it
-// records none. interrupted reports a context cancelled during the call, which is
-// the run's stop and not the item's outcome: the caller records nothing for it.
-func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, interrupted bool) {
-	e = Entry{Model: r.Model, Started: stamp()}
-	defer func() { e.Ended = stamp() }()
+// records none — and the call it made, nil where it made none. interrupted
+// reports a context cancelled during the call, which is the run's stop and not
+// the item's outcome: the caller records nothing for it.
+func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, c *call, interrupted bool) {
+	e = Entry{Model: r.Model, Before: priorOf(r.Index, g, it), Started: Stamp()}
+	defer func() { e.Ended = Stamp() }()
 	cl, err := facts.classOf(it)
 	if err != nil {
 		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+		return e, nil, false
 	}
 	prompt, digest, closed, err := r.compose(it, cl, g)
 	if err != nil {
 		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+		return e, nil, false
 	}
 	e.PromptSHA256 = digest
-	reply, err := r.Ask(ctx, prompt)
-	if err != nil {
-		if ctx.Err() != nil {
-			return Entry{}, true
-		}
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+	c = &call{class: cl, closed: closed, prompt: prompt}
+	answer, ok, interrupted := c.put(ctx, r.Ask, &e)
+	if interrupted {
+		return Entry{}, nil, true
 	}
-	answer, err := ParseAnswer(reply, closed, cl.table)
-	if err != nil {
-		// A reply that is no answer fails the attempt: no charges, no judgement,
-		// and the record keeps the reason and not the text — a malformed reply is
-		// blank, cut short or think-lock, and what matters is that it failed.
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, false
+	if !ok {
+		return e, c, false
 	}
-	e.Reply, e.Faults, e.Moot = reply, answer.Faults, answer.Moot
 	if err := r.Write(it, answer.Value); err != nil {
 		// The write's refusal is what the line records: no value landed, and the
 		// charges were a judgement the KB did not take.
 		e.Status, e.Reply, e.Faults, e.Moot = StatusFailed, err.Error(), nil, nil
-		return e, false
+		return e, c, false
 	}
 	e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
-	return e, false
+	return e, c, false
+}
+
+// call is what one attempt's call carried and returned: the class it asked
+// under, the closed text and the prompt rendered from it, and the reply the Ask
+// seam returned, "" where the call failed.
+type call struct {
+	class  class
+	closed closedText
+	prompt string
+	reply  string
+}
+
+// put sends the call's prompt through ask and reads the reply against its closed
+// text under its class's table: the answer, e carrying the reply and its charges,
+// or ok false and e failed with the reason. interrupted reports ctx cancelled
+// during the call, which is the walk's stop: nothing of it is recorded.
+func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, interrupted bool) {
+	reply, err := ask(ctx, c.prompt)
+	// A truncated reply is the call's failure, as an error from the seam is: the
+	// capture keeps no text of it.
+	if err == nil && reply.Truncated {
+		err = errTruncatedReply
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return Answer{}, false, true
+		}
+		e.Status, e.Reply = StatusFailed, err.Error()
+		return Answer{}, false, false
+	}
+	c.reply = reply.Text
+	answer, err = ParseAnswer(c.reply, c.closed, c.class.table)
+	if err != nil {
+		// A reply that is no answer fails the attempt: no charges, no judgement,
+		// and the line keeps the reason and not the text — a malformed reply is
+		// blank, cut short or think-lock, and what matters is that it failed. The
+		// capture keeps the text.
+		e.Status, e.Reply = StatusFailed, err.Error()
+		return Answer{}, false, false
+	}
+	e.Reply, e.Faults, e.Moot = c.reply, answer.Faults, answer.Moot
+	return answer, true, false
 }
 
 // compose is the prompt one item's call carries, the digest of exactly it, and
-// the closed text the prompt is made of — which a charge's citation is looked up
-// in. A text the guard refuses is composed of nothing and makes no call.
+// the closed text the prompt is made of — whose numbered lines are what a charge
+// cites. A text the guard refuses is composed of nothing and makes no call.
 //
 // The item's class has already fixed which pass's subject it is, and the text is
 // the shape that class is judged on: a rigor class asks a node's text, a bearing
-// class an edge's.
+// class an edge's. The call carries the text numbered, so what it judges and the
+// lines a charge names are one rendering.
 func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest string, closed closedText, err error) {
 	if cl.edge {
 		row, ok := r.Index.Edge(*it.Edge)
@@ -217,21 +311,53 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 	if err != nil {
 		return "", "", closedText{}, err
 	}
-	if prompt, err = cl.ask(closed.text); err != nil {
+	if prompt, err = cl.render(closed); err != nil {
 		return "", "", closedText{}, err
 	}
 	return prompt, digestOf(prompt), closed, nil
 }
 
+// render is the prompt cl's call carries over closed: its instruction around the
+// text as the call numbers it.
+func (cl class) render(closed closedText) (string, error) { return cl.ask(closed.numbered()) }
+
 // graphOf is the loaded index as the run's passages read it: every node by id,
-// and the citations in the order the index holds them.
+// and each hosted node's host.
 func graphOf(ix *query.Index) graph {
 	nodes := ix.Nodes()
-	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), cites: ix.Cites()}
+	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts()}
 	for _, n := range nodes {
 		g.nodes[n.ID] = n
 	}
 	return g
+}
+
+// priorOf is the value the item carried in the index this run read, before the
+// attempt's write: a node's rigor, or an edge's bearing, as a result spells it —
+// a number, `*pending*`, or "" where the record carries none. It is what makes a
+// run's line a before/after pair, so a replay's answers can be compared with the
+// value the KB actually held rather than only with an earlier attempt's.
+func priorOf(ix *query.Index, g graph, it query.Item) string {
+	switch {
+	case it.Node != nil:
+		row, ok := g.nodes[it.Node.ID]
+		if !ok || row.Rigor == nil {
+			return ""
+		}
+		return kb.PyFloatRepr(*row.Rigor)
+	case it.Edge != nil:
+		row, ok := ix.Edge(*it.Edge)
+		if !ok {
+			return ""
+		}
+		switch v := row.Bearing.(type) {
+		case float64:
+			return kb.PyFloatRepr(v)
+		case string:
+			return v
+		}
+	}
+	return ""
 }
 
 // digestOf is the SHA-256 of a prompt as the run's records spell it.
@@ -249,6 +375,8 @@ func (r *Runner) counts() Counts {
 			c.Done++
 		case StatusFailed:
 			c.Failed++
+		case StatusSkipped:
+			c.Skipped++
 		default:
 			c.Remaining++
 		}
@@ -280,15 +408,14 @@ func label(it query.Item) string {
 }
 
 // replySummaryLimit bounds the reason a document or a log line carries of a
-// failed attempt. The ledger's line holds the reply whole; a harness child's
-// stderr is kept to 64 KiB, and none of that belongs in a result's detail or a
-// terminal's log line.
+// failed attempt. The ledger's line holds the reply whole; none of that belongs
+// in a result's detail or a terminal's log line.
 const replySummaryLimit = 512
 
 // ReplySummary is a failed attempt's reply as a document or a log line states
 // it: bounded and stripped of control characters, with a line break read as a
-// space. A harness child's stderr is arbitrary bytes a repository chose, so
-// nothing it wrote reaches a terminal as an instruction. The ledger's line is
+// space. A reply is arbitrary bytes the endpoint's answer carried, so nothing it
+// wrote reaches a terminal as an instruction. The ledger's line is
 // the one place a reply lands whole, and every record and log line that reasons
 // a failure reads it through here.
 func ReplySummary(reply string) string {
@@ -314,5 +441,6 @@ func ReplySummary(reply string) string {
 	return strings.TrimSpace(s[:cut]) + "…"
 }
 
-// stamp is the time a ledger line records, RFC 3339 in UTC.
-func stamp() string { return time.Now().UTC().Format(time.RFC3339) }
+// Stamp is now as a run's records spell a time — a header's start and a ledger
+// line's — RFC 3339 in UTC.
+func Stamp() string { return time.Now().UTC().Format(time.RFC3339) }

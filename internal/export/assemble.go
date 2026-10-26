@@ -109,11 +109,11 @@ type defaultsMetadata struct {
 	Title     string `yaml:"title,omitempty"`
 }
 
-// Assemble is GenTexDir's inputs for the export of tree, read from src, by
+// assemble is GenTexDir's inputs for the export of tree, read from src, by
 // GenTexDir-relative slash path: the stream's files, the tables, the defaults
 // file, the filter, the template, and every non-Markdown file under an
 // exported volume's directory under assets/. Every volume of tree is exported
-// (see SelectVolumes); the defaults file names kbaseVersion for the template.
+// (see selectVolumes); the defaults file names kbaseVersion for the template.
 // The same KB and version give the same bytes.
 //
 // The stream is the front matter's file, then one file per volume, in order;
@@ -123,7 +123,7 @@ type defaultsMetadata struct {
 // and each document of its spine, navigation stripped. Each document's first
 // heading outside code fences carries its label as its id; a document with
 // none opens with a heading naming it by its path.
-func Assemble(src *kb.Source, tree Tree, kbaseVersion string) (map[string][]byte, error) {
+func assemble(src *kb.Source, tree Tree, kbaseVersion string) (map[string][]byte, error) {
 	entry, err := src.ReadText(src.KBPath(tree.EntryPoint))
 	if err != nil {
 		return nil, fmt.Errorf("reading the entry point: %w", err)
@@ -210,12 +210,12 @@ func Assemble(src *kb.Source, tree Tree, kbaseVersion string) (map[string][]byte
 	return files, nil
 }
 
-// SelectVolumes is tree with only the volumes whose directories names lists,
+// selectVolumes is tree with only the volumes whose directories names lists,
 // every volume where names is empty, each in entry-point order, renumbered by
 // its place among them and its labels minted again under that number. A name
 // that is no volume's directory is an UnknownVolumesError naming every such
 // name.
-func SelectVolumes(tree Tree, names []string) (Tree, error) {
+func selectVolumes(tree Tree, names []string) (Tree, error) {
 	want := map[string]bool{}
 	for _, name := range names {
 		want[path.Clean(name)] = true
@@ -363,8 +363,8 @@ func joinParts(parts []string) string {
 }
 
 // bibliography is every citation key's entry body: each exported volume's
-// references.md entries, and, where a volume has none, every register's
-// works, each a work's title under its key. The first entry of a key stands.
+// references.md entries, and, where a volume has none, every work record,
+// each a work's title under its key. The first entry of a key stands.
 func bibliography(src *kb.Source, tree Tree) (map[string]string, error) {
 	out := map[string]string{}
 	add := func(key, body string) {
@@ -391,18 +391,12 @@ func bibliography(src *kb.Source, tree Tree) (map[string]string, error) {
 	if !works {
 		return out, nil
 	}
-	registers, err := kb.Registers(src)
+	g, err := kb.LoadGraph(src)
 	if err != nil {
-		return nil, fmt.Errorf("listing the registers: %w", err)
+		return nil, fmt.Errorf("reading the node records: %w", err)
 	}
-	for _, rel := range registers {
-		text, err := src.ReadText(src.KBPath(rel))
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", rel, err)
-		}
-		for _, w := range kb.ParseWorkEntries(text, rel) {
-			add(w.Key, w.Title)
-		}
+	for _, w := range g.Works {
+		add(kb.WorkKey(w.ID), w.Title)
 	}
 	return out, nil
 }

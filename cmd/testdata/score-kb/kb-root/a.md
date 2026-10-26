@@ -1,7 +1,3 @@
----
-kind: leaf
-claims: [clm-aaaaaa, clm-bbbbbb]
----
 [↑ KB](entry-point.md)
 
 

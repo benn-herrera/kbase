@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"kbase/internal/kb"
 )
 
 // Finding statuses: a FACT describes state and never gates.
@@ -175,7 +177,7 @@ var (
 	annotatedMathRe = regexp.MustCompile(`(?s)<annotation encoding="application/x-tex">(.*?)</annotation>`)
 )
 
-const displayMathInfo = "math"
+const displayMathInfo = kb.DisplayMathInfo
 
 // checkMath is the maths-survival count: every Math element of the blocks
 // and the content metadata reaches some document's body, by literal content

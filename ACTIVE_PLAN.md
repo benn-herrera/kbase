@@ -1,96 +1,91 @@
-# ACTIVE PLAN
+# ACTIVE PLAN — scoring issues
 
-**Scope.** Phases 1, 2 and 4 are landed and merged: the `2.0.0` format, the scoring loop, and the
-inference asking rework with the rigour-and-bearing rubric. **Phase 3** — the two external hand-offs
-that consume the format — is what remains, owned elsewhere and landing nothing here.
+**Status:** active, in outline. Points to address are gathered here first; each becomes a
+dispatchable package under CONVENTIONS' "Plan dispatchability" once it is understood.
 
-The scoring driver sprint merged to `main` as one squashed commit; the branches are kept locally, so
-no history was lost. Its plans are retired and git holds them. `RIGOR_AND_BEARING_SCORING_SCHEME.md`
-remains the normative page on its subject: the fault vocabulary, the table, the answer and the ledger.
+## Objective
 
-## Plan documents
+Sort out the scoring issues: what the rigor and bearing asks answer, against what the scheme
+(`RIGOR_AND_BEARING_SCORING_SCHEME.md`) says they should.
 
-| Phase | Document | Lands | Depends on | Status |
-|---|---|---|---|---|
-| 1 | — | one commit series, merged once | — | **merged**, one squashed commit `07bf4c6` |
-| 2 | — | one commit series, merged once | Phase 1 | **merged** in `65e9b78`: the scoring loop, WP1–WP8, the contract fixes and the `test-data/` rename |
-| 3 | [`PLAN_3_TOOLING.md`](PLAN_3_TOOLING.md) | nothing here; two external repositories | Phases 1, 2, 4 | ready: the consuming formats are landed; external owners |
-| 4 | — | one commit series, merged once | Phase 2 | **merged** in `65e9b78`: resolution and the registry, the `scoring` role and its flags, the harness back end, the rubric's charge-line answer, and the contract text |
+## Points to address
 
-`PLAN_1_FORMAT.md`, `PLAN_2_SCORE.md`, `PLAN_4_INFERENCE.md`, `RIGOR_AND_BEARING_SCORING_DESIGN.md`
-and `REVIEW_BURNDOWN.md` are retired. What the rubric's design left open is the scheme's
-`## Not settled`; what the landings left open is carried below.
+1. **The bearing ask answered a lone `flt-no-engagement` on edges whose source supplies what the
+   context claims.** Landed: that id is retired. Bearing now prices how much of the source's own
+   argument does work for the target, one charge per part that does none, and every charge costs the
+   same `0.10` whatever its reason, so zero takes ten findings rather than one verdict. Open: the
+   next capture's count of links whose scale top (`none`) is never reached, and a re-tune of the
+   `0.10` against the corpus's average chunk size.
+2. **Target coverage is unpriced.** Bearing says how much of the source points at the target, not
+   how much of the target the source reaches; `flt-partial` used to price the second quantity and is
+   retired. A link that touches one clause of a five-part theorem prices high. The scheme's R&D
+   item: a measure of target coverage, and whether it belongs in the bearing value or beside it.
+3. **A part's dings are absolute, not a fraction.** Fifty on-target parts and two off read as two and
+   two. A second ask quantifying the argument's volume is the only fix considered and is not
+   reliable enough to build; the bias is stated in the scheme and the table until one lands. Both
+   rigor tables are uniform on the same reasoning — fifteen hundredths a finding, so one reads 0.85
+   and seven reach zero — and no table holds a charge that prices a text or a link at nothing alone.
+4. **An ask cannot carry its own call parameters: thinking, temperature and the completion cap.**
+   All three are fixed below the ask: thinking is disabled on both surfaces (`model.Chat`,
+   `encodeAnthropicRequest`), temperature is fixed, and only a Messages request is capped, by
+   `maxTokensFor`'s characters-per-token estimate. An ask, or the configuration behind its role,
+   should be able to set each, and each surface should send the value in its own protocol's field.
+5. **A scoring call that ends at the completion cap or the deadline is captured with `reply` `""`
+   and no finish reason or usage**, so a capture cannot tell a reasoning-exhausted reply from an
+   empty one. The `score.Ask` seam now reports a truncated reply to the runner, which fails the
+   item; the capture still records neither the reply nor why it ended.
+6. **No test drives a scoring landing against a held KB write lock.** A landing denied the lock is
+   that item's `failed`, covered by code reading alone: `write.LockWait` is a fixed constant, so no
+   test can hold the lock without paying the full wait. A wait seam for `holdKB` would cover every
+   writer, not only scoring.
+7. **`score.NewestRun` reads only `run.yaml`'s `started`**, so a `run.yaml` with another malformed
+   field counts toward `status`'s newest run where it was once skipped.
 
-[`STRENGTH_SCORING_SCHEME.md`](STRENGTH_SCORING_SCHEME.md) states the scoring model — the three
-quantities, the four relations and the walk's arithmetic. The format is [SPEC.md](SPEC.md) §10, the
-configuration surface §9, and [ARCHITECTURE.md](ARCHITECTURE.md) is how this implementation carries
-them.
+### The rubric's open questions
 
-## Phase 4 — outcomes
+The scheme's `## Not settled` (`RIGOR_AND_BEARING_SCORING_SCHEME.md`) is the full statement of each;
+this names only what would move.
 
-1. **Resolution is not connection.** Which endpoint a verb uses is a fact about the KB's
-   configuration, decided without I/O and refused by name before anything is asked; opening a client
-   is a separate step. One verb may hold several clients at once — a build whose decision and text
-   roles sit on different providers — and closes them together at its exit.
-2. **Per-role model references.** A model is named `provider/model` in the configuration, and the
-   global `provider` goes: each role carries its own provider, model, rule and layer, so the result
-   document reports those per role rather than for the verb. Existing configurations that name a
-   provider globally get a stated compatibility path, not a silent reinterpretation.
-3. **A `scoring` role.** `[models] scoring` names the model the scoring asks go to. Absent, it is a
-   refusal — never a fallback to `text` — in provider mode and in harness mode alike.
-4. **Two scoring-time flags.** `--scoring-model` chooses the model at scoring time; `--harness`
-   chooses the back end the asks go to. They compose: `--scoring-model` names the model to use in
-   either back end, a pool reference under provider mode and the harness's own model id under a
-   harness.
-5. **The harness back end.** The scoring runner already reaches a model through one seam. A harness
-   implementation of that seam is the second back end, and the design states what the ledger records
-   when a harness answers, how one item is kept from carrying into the next, whether a harness failure
-   is an item's or the run's, and whether the model a document names is the one requested or the one
-   the harness reports using.
-6. **The contract moves with it.** SPEC §9 for the configuration surface, §7 and §8 for the result
-   keys and the scoring flags, and `show-config`, `configure`, README, USER_CONVENTIONS and the MCP
-   integration guide for the reader's side.
+8. **The bottom cut's height.** The last rung takes every strength under `0.20` and reads
+   `unsubstantiated`; where the cut belongs is open, and moving it moves published strengths.
+9. **Whether a bare assertion becomes a criterion.** Today it charges none of the six and keeps
+   `1.00`; adding a seventh `rigor` id and a weight is a revision of the scheme, not an edit.
+10. **Whether the fault ids freeze.** A rename moves the ledger's recorded ids and the templates'
+    text with them, and so moves `ask_sha256`; what a re-derivation does with a recorded id the
+    running table lacks stays open until the vocabulary is frozen or a rule is written for it.
+11. **The ceiling and the axiom's rule value are one number** (0.8.0): a pass derives `1.00` and
+    `set-rigor` takes it, so the reserve is no longer an open question of discipline against
+    enforcement.
+12. **What `counts` reports for a run re-priced mid-run.** The run records the re-price in
+    `repriced.yaml`, and no result key states it.
 
-## Carried forward from Phase 2
+### Adjacent: the model, the sheet, the index load, the hit list
 
-Open issues the scoring landing leaves, none of them blocking its merge:
+13. **May a work refute a claim directly?** `2.0.0` said no: a work carries no authored role list,
+    so a work's counter-evidence reaches a claim as an analysis the work founds, and that analysis
+    refutes the claim. The move, written for `2.0.0`, was a `refutes:` list on the work's register
+    entry; the arithmetic is already defined — a cap at `1 − bearing × the work's rigor` — so the
+    change is the authored edge and its parse, not the walk. Under `3.0.0` the authored edge is a
+    record in `edges.yaml`.
+14. **Does the sheet want a bearing axis?** The sheet draws the derived value alone: a bearing is an
+    edge judgement, and a second visual axis over it is a ruling of its own. The move is a stroke
+    attribute per bearing drawn from the column every scoring row already carries, with the DOT
+    goldens regenerated.
+15. **The index load does not refuse a text bearing that is neither a number nor `*pending*`**;
+    `edge-census` ranks such text with pending.
+16. **The uncertainty pool and hit list, parked:** the declared categories yield nothing useful,
+    and the hit list returns when a scoring pass has run on the fixture and a ranking signal puts
+    the author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
+    plan's record is `ACTIVE_PLAN.md` at commit `34b956e`). Never an all-pairs check.
 
-- **A `bounded` run that also failed an item** reports `bounded` and carries no `failures` record;
-  the reasons stand in `counts.failed` and the ledger only, because `bounded` outranks `failed`.
-- **The landing's write lock is unproven under contention.** A landing denied the KB write lock is
-  that item's `failed`, and the repo has no cheap way to hold that lock without its fixed wait, so
-  the behaviour is covered by code reading alone. A wait seam for `holdKB` would close it for every
-  writer, not just scoring.
-- **A stop in the end refresh** reports the refresh's outcome over the walk's, so a run whose walk
-  was cancelled and whose closing refresh was retried reads `retry`. Which of the two a two-half
-  failure reports is a contract question, not a code one.
+## Post-sprint review
 
-- **A tool-less agent for the ask**, supplied by adjagent and usable from either harness through its
-  own agent configuration, so a harness profile can run an agent that cannot read the KB instead of
-  one that is merely instructed not to. Phase 3's territory; unowned.
+Once the plan's last landing is committed, one pass reviews the changes its packages landed. The
+reviewers are an architect and a go-coder. Before they start they read THESIS.md, SPEC.md,
+ARCHITECTURE.md and CONVENTIONS.md, and they do not read this plan. They review the changes against
+those standards and for fitness for their purpose, and their brief includes the tests.
 
-## Order and gates
-
-Phase 4's order is design, then its prompt-engineer review, then work packages, then the contract
-text in the same landing. The design is reviewed before any code, because it decides the shape of a
-surface the verbs that load configuration read.
-
-Per landing: `just test`, `just edit-gate`, and the integration targets the plan names. The Phase 2
-landing adds one leg to `_test-integration-results-fixture` — the `score --dry-run` invocation, run by
-the public target through the `run <verb-for-keys> <outcome> <args…>` helper — and no
-network-dependent target.
-
-**Seats.** The contract documents (`SPEC.md`, `ARCHITECTURE.md`, `README.md`, `USER_CONVENTIONS.md`,
-`INTEGRATING_KBASE_VIA_MCP.md`) are dual-audience and belong to the tech-writer seat; the coder
-supplies the built behaviour and the acceptance evidence, and the writer lands the prose in the same
-landing. Model-facing text — the two scoring prompt templates, and any the harness back end adds —
-gets prompt-engineer review before its first real run and before merge. The Phase 4 design is the
-architect's.
-
-## What this plan does not do
-
-- It does not change the scoring model: no fifth relation, no bearing on the sheet, no new derived
-  quantity.
-- It does not let a pass read the other pass's answer, and it does not make a scoring run's judgement
-  a verdict.
-- It does not take up Phase 3's hand-offs, and it does not merge Phase 2 ahead of the review.
+- **Review**: findings against the four documents.
+- **Burndown list**: findings that stand go into a burndown dispatch doc, which gets prompt-engineer
+  review and revision as usual.
+- **Remediation burndown**: dispatch the burndown list.

@@ -10,8 +10,8 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/buildrecords"
+	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/log"
 )
 
 // ComparedKB is one side of a comparison modulo node ids: a kb-root/ and the
@@ -34,10 +34,10 @@ type ModuloIDsCheck struct {
 	Differences []string
 }
 
-// CompareModuloIDs compares two KBs as data, every claim named by its
-// register, title and hosting leaves rather than by its id: register entries,
-// edges by their endpoints so named, works, claim count and no-claim reason per
-// leaf, and the build records, as data and byte for byte (recordBytes). Ids
+// CompareModuloIDs compares two KBs as data, every claim named by its title
+// and hosting leaf rather than by its id: claim records, edge records by their
+// endpoints so named, works, claim count per leaf, and the build records, as
+// data and byte for byte (recordBytes). Ids
 // are minted at random, so this is the equality two builds of the same inputs
 // owe each other.
 func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
@@ -53,11 +53,10 @@ func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 		return ModuloIDsCheck{Name: name, Counts: [2]int{na, nb}, Differences: diffs}
 	}
 	checks := []ModuloIDsCheck{
-		sized("register entries by (register, title, host)", len(av.entries), len(bv.entries), multisetDiff(a.Name, b.Name, av.entries, bv.entries)),
-		sized("premise and references edges by endpoint title and host", len(av.edges), len(bv.edges), multisetDiff(a.Name, b.Name, av.edges, bv.edges)),
+		sized("claim records by (title, host)", len(av.entries), len(bv.entries), multisetDiff(a.Name, b.Name, av.entries, bv.entries)),
+		sized("edge records by endpoint title and host", len(av.edges), len(bv.edges), multisetDiff(a.Name, b.Name, av.edges, bv.edges)),
 		sized("works", len(av.works), len(bv.works), multisetDiff(a.Name, b.Name, av.works, bv.works)),
 		sized("claim count per leaf", len(av.counts), len(bv.counts), mapDiff(a.Name, b.Name, av.counts, bv.counts)),
-		sized("no-claim reason per leaf", len(av.reasons), len(bv.reasons), mapDiff(a.Name, b.Name, av.reasons, bv.reasons)),
 	}
 
 	var an, bn buildrecords.NodePassRecord
@@ -208,73 +207,48 @@ func firstLineDifference(nx, ny string, x, y []byte) string {
 	return "the bytes differ"
 }
 
-// moduloIDsView is one KB as CompareModuloIDs reads it: every claim by id with
-// its title and host, every work, every edge, and per leaf its claim count and
-// no-claim reason.
+// moduloIDsView is one KB as CompareModuloIDs reads it: every claim record by
+// id with its title and its host, read off its statement marker, every work
+// record, every edge record, and per leaf the claims it hosts.
 type moduloIDsView struct {
 	claims  map[string]claimKey
 	entries []string
 	works   []string
 	edges   []string
 	counts  map[string]int
-	reasons map[string]string
 }
 
 // claimKey names a claim by what both sides give it: title and host.
-type claimKey struct{ register, title, host string }
+type claimKey struct{ title, host string }
 
-func (k claimKey) String() string { return fmt.Sprintf("%s | %s | %s", k.register, k.title, k.host) }
+func (k claimKey) String() string { return fmt.Sprintf("%s | %s", k.title, k.host) }
 
 func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
-	v := moduloIDsView{claims: map[string]claimKey{}, counts: map[string]int{}, reasons: map[string]string{}}
+	v := moduloIDsView{claims: map[string]claimKey{}, counts: map[string]int{}}
 	src := builtTree(kbRoot)
-	docs, err := kb.Documents(src)
+	g, err := kb.LoadGraph(src)
 	if err != nil {
 		return v, err
 	}
-	host := map[string][]string{}
-	for _, d := range docs {
-		text, err := src.ReadText(src.KBPath(d))
-		if err != nil {
-			return v, err
-		}
-		fm, err := kb.ParseFrontmatter(text)
-		if err != nil {
-			return v, fmt.Errorf("%s: %w", d, err)
-		}
-		ids, err := fm.ListOrEmpty("claims")
-		if err != nil {
-			return v, err
-		}
-		if fm.Kind() == kb.DocumentLeaf {
-			v.counts[d] = len(ids)
-			if r, ok := fm.Get("no-claim"); ok {
-				v.reasons[d] = r.Str
-			}
-		}
-		for _, id := range ids {
-			host[id] = append(host[id], d)
-		}
-	}
-	regs, err := kb.Registers(src)
+	rows, err := index.Derive(src)
 	if err != nil {
 		return v, err
 	}
-	var entries []kb.ClaimEntry
-	for _, rel := range regs {
-		text, err := src.ReadText(src.KBPath(rel))
-		if err != nil {
-			return v, err
+	for p, kind := range rows.DocumentKinds {
+		if kind == kb.DocumentLeaf {
+			v.counts[p] = 0
 		}
-		for _, e := range kb.ParseClaimEntries(text, rel, nil, log.Discard()) {
-			k := claimKey{rel, e.Title, strings.Join(host[e.ID], ",")}
-			v.claims[e.ID] = k
-			v.entries = append(v.entries, k.String())
-			entries = append(entries, e)
+	}
+	for _, n := range g.Claims {
+		k := claimKey{n.Title, rows.Hosts[n.ID]}
+		v.claims[n.ID] = k
+		v.entries = append(v.entries, k.String())
+		if k.host != "" {
+			v.counts[k.host]++
 		}
-		for _, w := range kb.ParseWorkEntries(text, rel) {
-			v.works = append(v.works, fmt.Sprintf("%s | %s | %s | %s", rel, w.ID, w.Title, w.Rationale))
-		}
+	}
+	for _, w := range g.Works {
+		v.works = append(v.works, fmt.Sprintf("%s | %s | %s", w.ID, w.Title, w.Rationale))
 	}
 	name := func(id string) string {
 		if k, ok := v.claims[id]; ok {
@@ -282,10 +256,12 @@ func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
 		}
 		return id
 	}
-	for _, e := range entries {
-		for _, edge := range slices.Concat(e.Premises, e.References) {
-			v.edges = append(v.edges, fmt.Sprintf("%s  -[%s]->  %s", name(edge.Source), edge.Relation, name(edge.Target)))
+	for _, e := range g.Edges() {
+		relation := e.Relation
+		if e.ReplacedRelation != "" {
+			relation += " " + e.ReplacedRelation
 		}
+		v.edges = append(v.edges, fmt.Sprintf("%s  -[%s]->  %s", name(e.Source), relation, name(e.Target)))
 	}
 	return v, nil
 }

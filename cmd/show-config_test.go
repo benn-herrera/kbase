@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 )
 
@@ -55,7 +56,7 @@ func runShowConfigVerb(t *testing.T, work string, args ...string) (doc resultDoc
 	stdoutBuf, stderrBuf, err := executeRoot(t, append([]string{"show-config"}, args...)...)
 	code = exitStatus(err, stdoutBuf, stderrBuf)
 	if sub, _, ferr := rootCmd.Find(args); ferr == nil {
-		if err := resetFlags(sub); err != nil {
+		if err := mcp.ResetFlags(sub); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,7 +93,7 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Fatalf("layers = %v, want the one directory the flag named", layers)
 	}
 	if want := (map[string]any{"path": dir, "source": config.LayerSourceExplicit, "exists": true,
-		"providersExists": true, "configExists": true, "harnessesExists": false}); !reflect.DeepEqual(layers[0], want) {
+		"providersExists": true, "configExists": true}); !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers[0] = %v, want %v", layers[0], want)
 	}
 
@@ -167,11 +168,11 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Fatalf("diagnostics = %v, want one per fault and one for the unset role", diagnostics)
 	}
 	for _, item := range diagnostics[:2] {
-		if item["check"] != checkProvider || item["path"] != config.ProvidersPath(dir) || item["detail"] == "" {
-			t.Errorf("diagnostic %v, want check %s, path the pool and the reason it gives", item, checkProvider)
+		if item["check"] != config.CheckProvider || item["path"] != config.ProvidersPath(dir) || item["detail"] == "" {
+			t.Errorf("diagnostic %v, want check %s, path the pool and the reason it gives", item, config.CheckProvider)
 		}
 	}
-	if last := diagnostics[2]; last["check"] != checkProvider || last["key"] != "models.scoring" || last["path"] != config.ConfigPath(dir) {
+	if last := diagnostics[2]; last["check"] != config.CheckProvider || last["key"] != "models.scoring" || last["path"] != config.ConfigPath(dir) {
 		t.Errorf("the role's diagnostic = %v, want models.scoring in the config file", last)
 	}
 	if strings.Contains(stdout, fileKey) {
@@ -216,7 +217,7 @@ func TestShowConfigReportsAnAbsentConfiguration(t *testing.T) {
 	}
 	layers := reportedLayers(t, doc)
 	if want := (map[string]any{"path": dir, "source": config.LayerSourceEnvironment,
-		"exists": false, "providersExists": false, "configExists": false, "harnessesExists": false}); len(layers) != 1 || !reflect.DeepEqual(layers[0], want) {
+		"exists": false, "providersExists": false, "configExists": false}); len(layers) != 1 || !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers = %v, want %v", layers, want)
 	}
 	if providers, _ := doc.Values["providers"].([]any); len(providers) != 0 {
@@ -293,9 +294,9 @@ func TestShowConfigReportsARolesProviderThePoolLacks(t *testing.T) {
 	if scoring == nil {
 		t.Fatalf("no item names models.scoring: %v", doc.items("diagnostics"))
 	}
-	if scoring["check"] != checkProvider || !slices.Equal(anyStrings(scoring["allowed"]), []string{"lab"}) ||
+	if scoring["check"] != config.CheckProvider || !slices.Equal(anyStrings(scoring["allowed"]), []string{"lab"}) ||
 		!strings.Contains(scoring["detail"].(string), `provider "elsewhere"`) {
-		t.Errorf("the item = %v, want check %s, the pool's entries allowed and the provider named", scoring, checkProvider)
+		t.Errorf("the item = %v, want check %s, the pool's entries allowed and the provider named", scoring, config.CheckProvider)
 	}
 	if role := roleOf(doc, "scoring"); role["detail"] == nil || role["provider"] != nil {
 		t.Errorf("the scoring role = %v, want a detail and no provider", role)
@@ -406,7 +407,7 @@ func TestShowConfigDiagnosesAnUnreadableKeyFile(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("diagnostics = %v, want the one key file named once", items)
 	}
-	if item := items[0]; item["check"] != checkProvider || item["key"] != config.EnvAPIKeyFile || item["path"] != missing {
+	if item := items[0]; item["check"] != config.CheckProvider || item["key"] != config.EnvAPIKeyFile || item["path"] != missing {
 		t.Errorf("diagnostic %v, want %s naming %s", item, config.EnvAPIKeyFile, missing)
 	}
 	for _, role := range config.Roles {
@@ -424,8 +425,8 @@ func TestShowConfigRefusesAConfigurationThatDoesNotLoad(t *testing.T) {
 	dir := t.TempDir()
 	writeValues(t, dir, config.ConfigFileName, "provider = \"a\"\n\n[models]\nheavy = \"some-model\"\n")
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
-	if code != exitCodes[toolresult.Refused] || doc.Outcome != toolresult.Refused {
-		t.Fatalf("outcome %s, exit %d; want refused, %d\n%s", doc.Outcome, code, exitCodes[toolresult.Refused], stdout)
+	if code != toolresult.ExitCode(toolresult.Refused) || doc.Outcome != toolresult.Refused {
+		t.Fatalf("outcome %s, exit %d; want refused, %d\n%s", doc.Outcome, code, toolresult.ExitCode(toolresult.Refused), stdout)
 	}
 	if _, ok := doc.Values["diagnostics"]; ok {
 		t.Errorf("a refused document carries diagnostics:\n%s", stdout)
@@ -473,38 +474,40 @@ decisionsFlavor = "decisions"
 	}
 }
 
-// TestShowConfigListsHarnesses: the loaded profiles, in name order, each with
-// the layer whose file supplied it and the command as written — a reader's only
-// way to see what --harness could choose — and `[]` where no layer supplies one.
-func TestShowConfigListsHarnesses(t *testing.T) {
+// TestShowConfigReportsTheProtocol: every usable entry states the chat protocol
+// it resolves to — `openai` where the entry is silent, `anthropic` where it names
+// the Messages protocol — and a dropped provider, which has no entry to
+// describe, states none.
+func TestShowConfigReportsTheProtocol(t *testing.T) {
 	unsetInferenceEnv(t)
 	dir := t.TempDir()
-	writeValues(t, dir, config.HarnessesFileName,
-		"[zeta]\ncommand = [\"z\", \"{prompt}\"]\n\n[alpha]\ncommand = [\"a\", \"--model\", \"{model}\"]\n")
+	writeValues(t, dir, config.ProvidersFileName, `[silent]
+baseUrl = "http://silent.example/v1"
+
+[messages]
+baseUrl = "http://messages.example/v1"
+api = "anthropic"
+
+[broken]
+`)
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"silent/dec-1\"\ntext = \"messages/text-1\"\nscoring = \"silent/score-1\"\n")
+
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d\n%s", doc.Outcome, code, stdout)
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 	}
-	got, ok := doc.Values["harnesses"].([]any)
-	if !ok || len(got) != 2 {
-		t.Fatalf("harnesses = %v, want the two profiles", doc.Values["harnesses"])
+	entries := map[string]map[string]any{}
+	for _, p := range doc.items("providers") {
+		name, _ := p["name"].(string)
+		entries[name] = p
 	}
-	want := []any{
-		map[string]any{"name": "alpha", "layer": "explicit", "command": []any{"a", "--model", "{model}"}},
-		map[string]any{"name": "zeta", "layer": "explicit", "command": []any{"z", "{prompt}"}},
+	if got := entries["silent"]["api"]; got != config.ProviderAPIOpenAI {
+		t.Errorf("an entry silent on the protocol reports %v, want %s", got, config.ProviderAPIOpenAI)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("harnesses = %v, want %v in name order with each command as written", got, want)
+	if got := entries["messages"]["api"]; got != config.ProviderAPIAnthropic {
+		t.Errorf("an entry naming anthropic reports %v, want %s", got, config.ProviderAPIAnthropic)
 	}
-	if got := reportedLayers(t, doc)[0]["harnessesExists"]; got != true {
-		t.Errorf("harnessesExists = %v, want the file it probes reported present", got)
-	}
-
-	empty, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", t.TempDir())
-	if code != 0 || empty.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d\n%s", empty.Outcome, code, stdout)
-	}
-	if got, ok := empty.Values["harnesses"].([]any); !ok || len(got) != 0 {
-		t.Errorf("harnesses with no file = %v, want []", empty.Values["harnesses"])
+	if got, ok := entries["broken"]["api"]; ok {
+		t.Errorf("the dropped entry states a protocol (%v): %v", got, entries["broken"])
 	}
 }

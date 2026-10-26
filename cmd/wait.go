@@ -1,19 +1,23 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"kbase/internal/build"
+	"kbase/internal/buildstore"
 	toolresult "kbase/internal/result"
+	"kbase/internal/score"
 )
 
 // waitPoll is how often wait reads the state store.
 const waitPoll = time.Second
 
-func init() {
+func waitCommand() *cobra.Command {
 	var stateDir string
 	var pid int
 	cmd := &cobra.Command{
@@ -45,27 +49,46 @@ lock and reads no commit trail until that final document.`,
 			if err != nil {
 				return err
 			}
-			opts := build.MonitorOptions{StateDir: stateDir, WorkDir: wd, Logger: processLog.logger}
+			opts := buildstore.MonitorOptions{StateDir: stateDir, WorkDir: wd, Logger: processLog.logger}
 			// status resolves a relative --state-dir against the working
-			// directory; build.Locate would resolve it against the repository
+			// directory; buildstore.Locate would resolve it against the repository
 			// root.
 			if opts.StateDir != "" && !filepath.IsAbs(opts.StateDir) {
 				if opts.StateDir, err = filepath.Abs(opts.StateDir); err != nil {
 					return err
 				}
 			}
-			kbRoot, dir, outcome, fields := build.Locate(opts)
+			kbRoot, dir, outcome, fields := buildstore.Locate(opts)
 			if outcome != "" {
 				return emit(outcome, fields)
 			}
 			placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
-			if _, err := build.WaitState(dir, pid, waitPoll); err != nil {
+			// A score run's pid is recorded in its run directory; where the pid
+			// names one, wait polls that run and reports the document it wrote.
+			_, err = score.RunByPID(dir, pid)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return emit(failed(placement, err))
 			}
-			return emit(build.Status(opts))
+			if err == nil {
+				doc, code, err := score.WaitRun(dir, pid, waitPoll)
+				if err != nil {
+					return emit(failed(placement, err))
+				}
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), doc); err != nil {
+					return err
+				}
+				if code != 0 {
+					return exitCode(code)
+				}
+				return nil
+			}
+			if _, err := buildstore.WaitState(dir, pid, waitPoll); err != nil {
+				return emit(failed(placement, err))
+			}
+			return emit(buildstore.Status(opts))
 		},
 	}
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	cmd.Flags().IntVar(&pid, "pid", 0, "the process id of the build run to wait for (required)")
-	rootCmd.AddCommand(mcpBinding(cmd, mcpExcluded))
+	return cmd
 }

@@ -23,132 +23,19 @@ func requireReferenceFixture(t *testing.T, name string) string {
 
 func f64(v float64) *float64 { return &v }
 
-func str(s string) *string { return &s }
-
-// goldenShapes are the reference's render specimens, the same values its
-// render test hands its renderers; the name is the golden's file stem.
+// goldenShapes are the render specimens; the name is the golden's file stem.
 var goldenShapes = map[string]func() string{
-	"claim-entry-full": func() string {
-		return renderEntry(registerEntry{
-			NodeID: "clm-aa1111", Title: "Regime Conservation Laws", Rigor: f64(0.7),
-			Rationale: "CES asymptotics applied with an explicit exponent formula and a cited " +
-				"methodology; scope marked as leading-order with error-term bounds.",
-			Premises: []premiseTarget{
-				{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "builds directly on the anchor claim", Bearing: f64(1)},
-				{Target: "clm-cc3333", Title: "Single-Dependency Claim C", Bearing: f64(0.5)},
-				{Target: "Axiom S2", Bearing: f64(0.8), Context: "labelling convention for the d-axis treatment"},
-				{Target: "Axiom S1", Bearing: f64(1)},
-			},
-			StrengthenBy: []string{
-				"Run an independent derivation to confirm the anchor value.",
-				"Discharge the open step so the dependency on clm-bb2222 can be closed.",
-			},
-			NoEdge: "the foreign-domain reference is illustrative, not load-bearing",
-		})
-	},
-	"claim-entry-minimal": func() string {
-		return renderEntry(registerEntry{NodeID: "clm-dd4444", Title: "Unassessed Foundation Result", Rationale: "*pending*"})
-	},
-	"support-entry": func() string {
-		return renderEntry(registerEntry{NodeID: "ana-ee5555", Title: "Free-Standing Analytical Support", Rigor: f64(0.9),
-			Rationale: "Non-physical analytical support; lifts a claim without gating it.",
-			Premises:  []premiseTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws", Bearing: f64(1)}}})
-	},
-	"support-entry-staged": func() string {
-		return renderEntry(registerEntry{NodeID: "ana-ee5555", Title: "Staged Analytical Support", Rigor: f64(0.9),
-			Rationale: "Derives the beneficiary result in full; staged before its hosting leaf exists.",
-			Premises:  []premiseTarget{{Target: "clm-aa1111", Title: "Regime Conservation Laws", Bearing: f64(1)}},
-			Lifts:     []pair{{ID: "clm-bb2222", Score: f64(0.5)}, {ID: "clm-cc3333"}},
-			Refutes:   []pair{{ID: "clm-dd4444", Score: f64(0.25)}},
-			NoEdge:    "the foreign-domain reference is illustrative, not load-bearing"})
-	},
-	"frontmatter-path-stable": func() string {
-		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", PathStable: str("regime conservation — stable reference label"), Claims: []string{"clm-aa1111"}}))
-	},
-	"frontmatter-claims": func() string {
-		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", Claims: []string{"clm-aa1111", "clm-bb2222", "clm-cc3333"}, Experiments: []string{"exp-ff6666"}}))
-	},
-	"frontmatter-no-claim": func() string {
-		return rendered(renderFrontmatterBlock(frontmatterValues{Kind: "leaf", NoClaim: str("navigation-only leaf — carries no claim-rigor entries")}))
-	},
-	"frontmatter-hosts": func() string {
-		return rendered(renderFrontmatterBlock(frontmatterValues{
-			Kind: "leaf", NoClaim: str("hosts an experiment and two analysis nodes only"),
-			ExperimentNodes: []experimentDecl{{ExpID: "exp-gg7777", Status: "run", Rigor: f64(0.9), Lifts: []pair{{ID: "clm-aa1111", Score: f64(0.8)}}}},
-			Analyses: []analysisDecl{
-				{AnaID: "ana-hh8888", Lifts: []pair{{ID: "clm-bb2222", Score: f64(1.0)}}},
-				{AnaID: "ana-ii9999", Refutes: []pair{{ID: "clm-bb2222"}, {ID: "clm-cc3333", Score: f64(0.5)}}},
-			},
-		}))
-	},
 	"markers": func() string {
-		return strings.Join([]string{renderIDMarker("clm-aa1111"), renderIDMarker("ana-ee5555"), renderTier2Marker("clm-aa1111")}, "\n")
-	},
-	"rests-on-bullets": func() string {
-		var lines []string
-		for _, t := range []premiseTarget{
-			{Target: "clm-bb2222", Title: "Foundation Claim B", Context: "the anchor dependency", Bearing: f64(0.5)},
-			{Target: "clm-bb2222", Title: "Foundation Claim B", Bearing: f64(0)},
-			{Target: "clm-bb2222"},
-			{Target: "wrk-smith2020", Title: "Smith (2020)", Bearing: f64(0.8), Context: "Theorem 3"},
-			{Target: "Axiom S2", Bearing: f64(0.8), Context: "labelling convention"},
-			{Target: "Axiom S1", Bearing: f64(1)},
-		} {
-			lines = append(lines, renderRestsOnBullet(t))
-		}
-		return strings.Join(lines, "\n")
-	},
-	"no-edge": func() string {
-		return renderNoEdgeLine("cited for context only; the derivation takes nothing from that domain")
+		return strings.Join([]string{kb.StatementMarker("clm-aa1111"), kb.StatementMarker("ana-ee5555"), kb.StatementMarker("exp-ff6666")}, "\n")
 	},
 	"citation": func() string {
 		return renderCitation("the weakest link in the dependency cone", "part3/claim-rigor.md", "regime-conservation-laws")
 	},
 }
 
-// rendered is a renderer's text, or its error in place of it.
-func rendered(s string, err error) string {
-	if err != nil {
-		return "render error: " + err.Error()
-	}
-	return s
-}
-
-// TestFrontmatterRenderedAsTheGoldens: each converted document of the
-// migration's golden pair, its frontmatter read by the production reader and
-// written back by set-frontmatter's splice, is byte-identical to the golden —
-// the writer and the migration write one frontmatter.
-func TestFrontmatterRenderedAsTheGoldens(t *testing.T) {
-	const dir = "../migrate/testdata/register-2.0.0/kb-root"
-	for _, rel := range []string{"leaf.md", "entry-point.md"} {
-		t.Run(rel, func(t *testing.T) {
-			golden, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := string(golden)
-			intended, err := observedFrontmatter(text, rel)
-			if err != nil || intended == nil {
-				t.Fatalf("observedFrontmatter = %v, %v", intended, err)
-			}
-			fm, err := kb.ParseFrontmatter(text)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := replaceBlock(*intended, rel, kb.DeclaredNodeIDs(fm))(text)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != text {
-				t.Errorf("written back as\n%s\nthe golden is\n%s", got, text)
-			}
-		})
-	}
-}
-
-// TestRenderGoldens byte-compares every rendered shape against the reference's
-// committed golden for it; each golden carries the one trailing newline a text
-// file ends with.
+// TestRenderGoldens byte-compares every rendered shape against the committed
+// golden for it; each golden carries the one trailing newline a text file ends
+// with.
 func TestRenderGoldens(t *testing.T) {
 	dir := requireReferenceFixture(t, "writeapi-render-golden")
 	onDisk, err := filepath.Glob(filepath.Join(dir, "*.md"))
@@ -177,7 +64,7 @@ func TestRenderGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			if want, got := string(golden), goldenShapes[name]()+"\n"; got != want {
-				t.Errorf("render differs from the reference's golden\n--- golden\n%s--- kbase\n%s", want, got)
+				t.Errorf("render differs from the golden\n--- golden\n%s--- kbase\n%s", want, got)
 			}
 		})
 	}

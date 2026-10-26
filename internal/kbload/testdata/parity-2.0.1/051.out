@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa006"
+    title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "see-the-appendixappendixmd-for-a-stated-bound-that-the-rest-of-the-volume-never-reaches-at-all"
+    rigor: 0.1
+    strength: 0.0
+    build_status: "unsubstantiated"
+    build_band: "unsubstantiated"
+    rationale: "Fixture."
+    premise_count: 0
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 0

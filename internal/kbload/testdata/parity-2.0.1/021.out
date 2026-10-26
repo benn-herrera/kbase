@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa001"
+    title: "Theorem 1"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "theorem-1"
+    rigor: 0.9
+    strength: 0.9
+    build_status: "ok to build on"
+    build_band: "ok-to-build"
+    rationale: "Fixture."
+    premise_count: 3
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 1

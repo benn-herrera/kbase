@@ -18,9 +18,9 @@ hardware.
 - **Graphviz `dot`**, optional, any version, on `PATH`. Draws the [claim-graph
   sheets](#claim-graph-sheets); without it they are not drawn.
 - **A provider configuration**, for builds that spend inference and for scoring runs. A build run with
-  `--no-inference` needs none, and so does a `kbase score --dry-run`. A `kbase score --harness` run
-  dials no endpoint, but `models.scoring` — or `KBASE_SCORING` — must still name a model, even where
-  the profile's command carries no `{model}`.
+  `--no-inference` needs none, and so does a `kbase score --dry-run`. A scoring run asks the
+  `scoring` role's endpoint, so `models.scoring` — or `KBASE_SCORING` under the environment's
+  endpoint — must name a model: the role is what declares which model judges the KB.
 - **Go**, to build kbase from source. `just` runs the project's recipes.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
@@ -108,7 +108,7 @@ examples below assume `PATH`.
 Configure a provider. Skip this step for `--no-inference` builds.
 
 ```sh
-kbase configure --create                    # writes providers.toml, harnesses.toml and config.toml, offline
+kbase configure --create                    # writes providers.toml and config.toml, offline
 $EDITOR ~/.config/kbase/providers.toml      # point [local] at your endpoint
 kbase models                                # the model ids it offers
 kbase configure --model-map decision=local/<id>,text=local/<id>,scoring=local/<id>
@@ -142,8 +142,9 @@ git init notes-kb && cd notes-kb
 kbase init
 ```
 
-`init` writes the skeleton — a stamped `entry-point.md` headed by the repository's name (or
-`--title`'s text), `.index/`, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect —
+`init` writes the skeleton — an `entry-point.md` headed by the repository's name (or `--title`'s
+text), `.index/` with the format stamp at `.index/format.yaml`, `AGENTS.md`, `CONVENTIONS.md` and
+the `CLAUDE.md` redirect —
 refreshes it, and commits `kb-root/` as the birth commit. It runs no `verify` of its own: `kbase
 verify` over a freshly born KB is green. Creation is birth-once: a second `init` is refused, and
 `kbase build` stays refused over a created KB. What the KB holds afterwards is authored with the
@@ -227,8 +228,9 @@ prunes `reports/build-*` and `scratch/captures/` older than the fifth-latest end
 the answer cache. `status` reports `cache-entries` and `cache-bytes`. Deleting the store is safe but
 forfeits the cache.
 
-The run lock is not in the store: it is `kbase-build.lock` in the repository's git directory, so one
-build runs per repository whatever `--state-dir` each names.
+The operation lock is not in the store: it is `kbase-operation.lock` in the repository's git
+directory, so one run — a build or a scoring run, never both — runs per repository whatever
+`--state-dir` each names.
 
 The build records are tracked at the repository root, as YAML: `kb-build-node-pass.yaml`,
 `kb-build-unmarked.yaml`, `kb-build-classification.yaml` and `kb-build-cull.yaml`.
@@ -246,16 +248,19 @@ After a build, subcommands operate on the living KB: write ops that insert entri
 scoring model for the faults each item's text commits, one item at a time, and prices them into the
 KB's rigor and bearing values.
 The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `strength-below`,
-`subtree`, `weak-points` and `stats`. Run `kbase --help` for the list and `kbase <command> --help`
-for each one.
+`subtree`, `weak-points`, `stats`, `edge-census` and `edges`. Run `kbase --help` for the list and
+`kbase <command> --help` for each one.
 
 - Write ops take values as YAML (JSON accepted) on stdin or `--values`. Re-issuing an op leaves
   `kb-root/` byte-identical, and the second call reports `unchanged`. An insert adopts an existing
-  entry of the same register and title instead of writing a second one.
+  node of the same title and host instead of writing a second one: one hosted in the `document` the
+  insert names, else one of that title no leaf hosts yet. A claim's, an analysis's or an
+  experiment's host is the leaf its statement marker stands in, and which `claim-rigor.md` register
+  page shows it follows from that host.
 - **Scores.** A node's own value is `rigor`, a scoring edge's is `bearing`, and a claim's or an
   analysis's derived value is `strength`. Two ops record a judgement: `set-rigor` writes a node's
-  `rigor` and `set-bearing` a scoring edge's `bearing`; `set-bearing` replaces an existing token and
-  never adds one, because every scoring edge already carries one. A claim or analysis with no
+  `rigor` and `set-bearing` a scoring edge's `bearing`; `set-bearing` replaces an existing edge
+  record's bearing and never creates an edge. A claim or analysis with no
   `rigor` reads `*pending*` — unscored, not low. Its derivation pends with it unless a lift stands
   over it: a node corroborated and never judged publishes the lift's product, while a refutation
   alone leaves its strength unknown. A `bearing` of `*pending*` leaves its edge out of the
@@ -274,44 +279,56 @@ for each one.
   supports the other end), `target`, `bearing` and `context`.
 - Maintenance never requires git.
 
-**Scoring.** `kbase score --pass rigor|bearing` asks the configured scoring model — `models.scoring`,
+**Scoring.** `kbase score` asks the configured scoring model — `models.scoring`,
 or `KBASE_SCORING` under the environment's endpoint — one item at a time, and asks it for the
 **faults the text commits**, not for a number: a list of charge lines, each a fault id and the span
-of the item's own text that shows it, or `none`, or `flt-pending`. kbase prices the list with the
+of the item's own text that shows it, or `none`. kbase prices the list with the
 pass's table and writes the result through `set-rigor` or `set-bearing`. The `rigor` pass covers
-every claim, analysis and experiment; the `bearing` pass every `supports`, `founds`, `lifts` and
-`refutes` edge. A work's rigor is not asked: it is the one value you judge by hand, with the document
-in hand, through `set-rigor`. The two ask templates, the ids and the weights are stated once, in
+every claim, analysis and experiment; the `bearing` pass every `supports`, `lifts` and `refutes` edge.
+A run walks both, the node set and then the edge set, because one text edit moves a node's rigor and
+the bearing of every edge that touches it: `--pass rigor` or `--pass bearing` scopes a run to one set,
+for one edited subtree or a pass that is failing. Two values are never asked, both because the
+document they rest on lies outside the corpus: a work's rigor, and a `founds` edge's bearing. Judge
+each by hand, with the document in hand, through `set-rigor` and `set-bearing`. The two ask templates,
+the ids and the weights are stated once, in
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md); the ledger is where a
 value can be checked against its charges.
 
-Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, the back end,
-the model and the digest of the ask its judgements answer; `ledger.jsonl` holds a line per attempt
-with the faults it recorded, the reply where it parsed, the value it prices to, the model and the
-prompt's digest; and under `--harness` one `harness/` working directory. `--resume <run>` continues a
-run without re-asking what it already landed, while a fresh run asks everything again. Because a
+Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, the set it walks
+(one pass, or `both`), what answered (`backend`: `provider` or `environment`), the model and the digest
+of the ask its judgements answer; `ledger.jsonl` holds a line per attempt with its own item's pass, the
+faults it recorded, the reply where it parsed, the
+value it prices to, the model and the prompt's digest. `--resume <run>` continues a run without
+re-asking what it already landed, while a fresh run asks everything again. Because a
 value is a projection of the line's ids, a resume **re-prices** a run when the table has moved since:
 it lands the values that moved through the same write path and records them in `repriced.yaml`, with
 no model asked. A resume under a changed ask — a run older than kbase's current instructions —
 continues under the current ask: the header keeps the digest the run began under, and nothing refuses
 and nothing asks you to choose. `--limit N` stops after N items, and the result carries the `resume`
-command — flags, back end and, under the environment mode, the variables it read — whenever an item is
+command — its flags and, under the environment mode, the variables it read — whenever an item is
 still not `done`. A failed run lists what failed under `failures` — an item and the reason its ledger
-line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. A
+line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. The
+reason names what ended the item's call: `provider-refused` where the endpoint answered with a status
+that is not success, its status and its own words beside it, and `transport-failure` where the
+connection, the name, the certificate or the stream failed and no answer was had. A
 `bounded` run carries no `failures`: its failures are counted in `counts.failed` and reasoned in the
 ledger.
 `--dry-run` lists the set, asks nothing and writes no charge record. A run refreshes once at its
 start — on an older KB that is the write that converts and saves it — and once after its last value
 or the values a resume re-priced, each refresh holding the KB write lock; a dry run does neither.
 
-`--scoring-model` overrides the role for one run: a `<provider>/<model>` reference in file mode, a
-bare id under the environment's endpoint, the harness's own id under `--harness`. `--harness NAME`
-runs one process per item instead of asking an endpoint: the profile of that name in
-[`harnesses.toml`](#configuration), with the prompt on its stdin or in the element carrying
-`{prompt}`, its stdout the reply. `configure --create` seeds a working `claude` profile and a
-commented `opencode` one. A harness is a command kbase did not write: it brings its own tools and
-instructions, and kbase cannot remove them — a profile a repository supplied says so once on stderr.
-A run asks a model for minutes, so it is a command line: nothing is offered for it over MCP.
+`--scoring-model` names the model for one run: a `<provider>/<model>` reference in file mode, which
+supplies the role where `models.scoring` names none and overrides it where it does; a bare id under
+the environment's endpoint, where the role's variable must name one too. Every ask is one chat call
+on that endpoint, re-issued identically up to the transport attempt count while it does not complete,
+pausing 5 s then 30 s between attempts — as long as the item's deadline covers the pause: a pause it
+cannot cover is not waited out, and the item fails at once naming the attempts it made. A status that
+is not retryable — any non-2xx other than 429
+or a 5xx — fails the item at once. Every ask of a run carries the run's id as its
+`prompt_cache_key`, so a run's asks reach one provider and share one cache entry.
+A run asks a model for minutes: at a terminal `kbase score` blocks until the walk ends, and as an
+[MCP](#using-kbase-from-an-agent-harness-mcp) tool it starts a detached child and returns at once with
+the run's identity, `kbase wait` reporting the outcome.
 
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
 A writer that cannot take it within 30 s gets `retry`. While a build runs, these are refused at once
@@ -321,26 +338,31 @@ under `kb-root/` to the last boundary, so edits made while a build is interrupte
 carried in git. `render-citation`, `verify` and the queries take no lock. Locks are advisory and
 Unix only.
 
-**Demoted edges.** When the build breaks a dependency cycle, the `supports` edge it cuts is recorded
-as a `demoted` relation carrying its origin, `cited` or `inferred`, instead of becoming a plain
-reference. `verify` lists each under `findings` with outcome `done`, `stats` counts them as
-`demoted_edges`, and the sheets draw them as cuts. `resolve-demoted` takes `entry` items of `id`,
-`target` and `action`: `remove` deletes the edge, `restore` rewrites it as a `supports` edge and is
-refused (`check: dependency-cycle`) where that would close a cycle.
+**Demoted edges.** When the build — or `refresh`, repairing what a merge left — breaks a dependency
+cycle, it cuts one edge of the cycle and records it as a `demoted` edge that keeps the edge it
+replaced whole, relation and bearing included. `verify` lists each under `findings` with outcome
+`done`, `stats` counts them as `demoted_edges`, and the sheets draw them as cuts. `resolve-demoted`
+takes `entry` items of `id`, `target` and `action`: `remove` deletes the demoted edge, `restore`
+puts back the edge it replaced and is refused (`check: dependency-cycle`) where that would close a
+cycle. A write op that adds a scoring edge closing a cycle is refused the same way.
 
-**Format migration.** A KB's metadata format is `2.0.1`, stamped `kb-format` in the entry point's
-frontmatter. A KB in either older form, `1.0.0` or `0.9.0`, is converted in memory when it is
-loaded, and the next write stamps the current version; the result document says so in a `migration`
-record, and one line on stderr says what the conversion moved. A `2.0.0` KB is read as current — its
-patch moved only the bottom band's words, `unsubstantiated` — and its derived `- strength:` lines and
-index re-render on the next `refresh`, which stamps `2.0.1`. Derived values are not carried across unchanged:
-a lifted claim may read higher and a work edge below `1` lower. Read-only commands write nothing,
-even over an older KB, but one that reads the derived index is refused until a save has rewritten it
-— the queries and `render-claim-graph` answer `check: index` with remedy `kbase refresh`. A write
-op's `--no-refresh` on an unmigrated KB is refused the same way (`check: index`, remedy `kbase
-refresh`), and `verify` reports it stale with the same remedy. The migrating `refresh`
-lists obsolete paths under `removed`. A KB stamped with a newer major or minor is refused
-(`check: kb-format`; update kbase). `status` and `cancel` do not load the KB.
+**Format migration.** A KB's metadata format is `3.0.0`, stamped `kb-format` in the one-key file
+`.index/format.yaml`, and its documents carry no frontmatter at all: its nodes and edges are kbase's
+records in `.index/nodes.yaml` and `.index/edges.yaml`, and its `claim-rigor.md` register pages are
+generated from them. A KB in an older form, `2.0.x` or `1.0.0`, is converted in memory when it is
+loaded and
+answers every command as converted; the result document says so in a `migration` record, whose
+`warnings` list what the conversion dropped or changed, and stderr says the same. The next write —
+`refresh`, a write op's trailing refresh or a scoring run's start — saves the conversion: it writes
+the records, strips every other document's frontmatter, writes `AGENTS.md` and `CONVENTIONS.md`
+whole from the current templates, renders the register pages, removes the files the form no longer
+has (listed under `removed`), strips the entry point's frontmatter too and writes `3.0.0` to the
+stamp file last. Every converted rigor and bearing is marked model-scored, so a default `score` run
+re-judges it. Read-only commands write nothing, and
+`render-claim-graph` writes only sheets. A write op's `--no-refresh` on an unmigrated KB is refused
+(`check: index`, remedy `kbase refresh`), and `verify` reports it stale with the same remedy. A KB
+stamped with a newer major or minor is refused (`check: kb-format`; update kbase). `status` and
+`cancel` do not load the KB.
 
 ### Claim-graph sheets
 
@@ -350,9 +372,10 @@ KB with every volume as a cluster; and, where two or more volumes hold nodes,
 `kb-root/<volume>/claim-graph.svg` for each volume (its claims plus every claim one edge away).
 Every arrow runs from the supporter to the node it supports: a claim or an experiment `supports` a
 claim or an analysis; a work or an axiom `founds` one; and a claim, an analysis or an experiment
-`lifts` or `refutes` one. Each relation has a stroke of its own, and the cut a cycle-breaking
+`lifts` or `refutes` one. Each relation has one stroke of its own, and the cut a cycle-breaking
 demotion made is drawn dotted. Nodes are styled by kind and filled by strength band, a pending one
-grey, and every node links to its register entry.
+grey, and every node links to its place: a claim's or a work's entry on its register page, an
+analysis's or an experiment's section in the leaf that hosts it, an axiom's heading in `axioms.md`.
 
 The sheets need Graphviz's `dot` on `PATH`, any version. Without it, existing sheets are left as
 they are, `refresh` writes a placeholder `kb-root/claim-graph.svg` only where none exists, and
@@ -364,8 +387,7 @@ reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 
 `kbase mcp` serves one KB to any agent harness that speaks the Model Context Protocol, over stdio.
 Every tool is one subcommand, with the same arguments and the same result — except `rewind-build`,
-which reports the build's commit trail and has no subcommand behind it. Wiring it into a harness is
-covered in [INTEGRATING_KBASE_VIA_MCP.md](INTEGRATING_KBASE_VIA_MCP.md).
+which reports the build's commit trail and has no subcommand behind it.
 
 The server entry is the same for every harness: command `kbase`, arguments:
 
@@ -392,12 +414,12 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
 
 - **Tools.** The subcommands: `init`, the write ops, `render-citation`, the queries (including `show`
   and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
-  `export-latex`, `status`, `cancel` and `build`. `completion`, `help` and `mcp` are not offered,
-  and neither is `wait`: a held call would spend the turn the build takes, so the `build` tool hands
-  you its command to run in the background instead. `score` is not offered either — a scoring run
-  asks a model for minutes, so it runs as the command line (SPEC §8). `models` reads a
-  provider's model catalogue and `configure` writes `config.toml`; neither performs inference —
-  `build` is the one tool that does. A write-op tool takes one entry and offers no `--no-refresh`.
+  `export-latex`, `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not
+  offered, and neither is `wait`: a held call would spend the turn the build or score run takes, so
+  the `build` and `score` tools hand you their command to run in the background instead. `models`
+  reads a provider's model catalogue and `configure` writes `config.toml`; neither performs
+  inference — `build` and `score` are the tools that do. A write-op tool takes one entry and offers
+  no `--no-refresh`.
   `rewind-build` is the exception to one tool per subcommand: it lists the build's boundaries,
   oldest first, and for a `target` you name — a stage id or display name — returns the
   `git reset --hard` and the recorded re-issue command, with `discards` counting the boundaries the
@@ -412,6 +434,15 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
   build's output is captured under the state store's `reports/`. A client that subscribes to
   `kbase://build` needs no `wait`: the server sends one notification when the build stops
   progressing.
+- **`score` is detached.** It starts a scoring run as its own process and returns once the run's
+  ledger and pid stand or it has exited, waiting at most 40 s. On a started run it returns `run`,
+  `ledger`, `pid` and `wait`, the exact background command that returns when the run is over and
+  prints the run's document — the counts by ledger status, the items whose values landed and the
+  ones that failed with their reasons. Run `wait` in the background and your harness wakes the
+  session when it exits. Follow the run with `status`, stop it with `cancel`, and continue it by
+  calling `score` again with `--resume <run>` and the same arguments. At the bound the result is
+  `failed`, naming the state directory, and the run keeps running. The run's output is captured
+  under the state store's `reports/`.
 - **Resources.** The claim-graph sheets are resources, `kbase://sheet/<path under kb-root>`, read as
   SVG. `kbase://model-hints` is the model guidance as markdown — the same rows a created
   `config.toml` states — and needs no KB. `kbase://build-trail` is the `rewind-build` document as
@@ -453,9 +484,12 @@ read in its place.
   — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
   `~` in `apiKeyFile`, `--config-dir`, `$KBASE_CONFIG_DIR` or `$KBASE_API_KEY_FILE` expands from your
   home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
-  `chmod 600` it. An entry's `decisionsFlavor` names which decision surface its server speaks —
-  `systemone` (the default) or `decisions` — and changes nothing else: chat stays
-  `chat/completions`, and the decision model is still `config.toml`'s `models.decision`.
+  `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `openai` (the
+  default, the OpenAI-compatible `chat/completions` surface) or `anthropic` (the Anthropic Messages
+  protocol); a Messages endpoint has no decision surface, so the `decision` role's entry must be an
+  OpenAI one. An entry's `decisionsFlavor` names which decision surface its server speaks —
+  `systemone` (the default) or `decisions` — and changes nothing about chat, which `api` decides, and
+  nothing about the model, which is still `config.toml`'s `models.decision`.
 - **`config.toml`** holds the choices: `[models]` `decision`, `text` and `scoring`, each a
   `<provider>/<model>` reference — the entry that supplies the endpoint, then the model id it serves,
   split at the first `/` (a model id may contain one, a provider name may not). A bare model id there
@@ -466,16 +500,9 @@ read in its place.
   writes it and preserves every other byte of an existing file. Its top-level `provider` key is
   **superseded**: it still loads and nothing chooses by it, and a file-mode run says so once on
   stderr; `kbase configure` removes it.
-- **`harnesses.toml`** holds the harness profiles `--harness` can name: one top-level table per
-  profile, with a `command` — an argv array — as its one key. It layers as the pool does, a
-  same-named profile replacing the global one whole, and it shares no namespace with `providers.toml`.
-  A profile whose command carries `{model}` is handed the scoring model; one that names none runs on
-  the harness's own. A profile a repository supplied is announced once on stderr, and where its
-  name replaced a same-named global profile the line says so (SPEC §9.3); `show-config` lists
-  every profile with the layer that supplied it.
-- **`kbase configure --create`** writes an annotated `providers.toml` and `harnesses.toml` where none
-  stands — nothing else creates either, and neither is ever added to — and overwrites no other
-  content. `config.toml` is created where absent by a run that resolves a provider, or by `--create`
+- **`kbase configure --create`** writes an annotated `providers.toml` where none stands — nothing
+  else creates it — and overwrites no other content. `config.toml` is created where absent by a run
+  that resolves a provider, or by `--create`
   with no `--provider`, and edited in place otherwise. It writes the layer a flag or
   `$KBASE_CONFIG_DIR` names, else `<repository>/.kbase/` where that directory
   already stands, else `~/.config/kbase`; `--project` names the repository's `.kbase/` whether or not
@@ -490,7 +517,7 @@ them only. The environment is `KBASE_API_BASE_URL` plus the role variables `KBAS
 directory at all. A role variable beside a `[models]` value is refused, one item per side, and so is a
 role variable without a base URL or a base URL beside file-supplied models: the environment is the
 whole configuration or nothing. `KBASE_API_KEY_FILE` is not a mode — it replaces the key of whichever
-endpoint is in force, and is optional. A harness consults neither mode: it chooses no endpoint.
+endpoint is in force, and is optional.
 
 Provider selection — `--provider`, else the sole `providers.toml` entry — belongs to `models` and
 `configure` alone: they select an entry to dial, which is not a role. A `--provider` the pool does not
@@ -503,10 +530,21 @@ file. In a build, the claim graph's letter asks go to the `decision` role and th
 `kbase show-config` reports how all of this resolves, and changes nothing: no KB read, no file
 written, no request made. It states the layers read and what named each; the pool, with each entry's
 layer, key kind, decision surface and any fault; `config.toml`'s merged `[models]` values; the
-harness profiles and the layer each came from; the inference variables this process sets; the mode;
+inference variables this process sets; the mode;
 the selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
+
+`kbase probe [--model <provider>/<model>] [--decision | --text | --scoring] [--prompt TEXT]` asks
+one model one question and reports what came back: the selection asked, the provider, the model, the
+time to the first token, the call's wall time, the finish reason, the reply, and the usage the
+provider reported. A probe asks one selection: `--decision`, `--text` and `--scoring` each ask the
+selection the configuration resolves for that role — `models.<role>` in the file, or the role's own
+variable (`KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING`) in environment mode — and `--model` names
+a reference to reach instead, resolved against the same pool. The four are exclusive; with none of
+them the probe asks the `scoring` role — the selection a run would make, in either mode — so
+`kbase probe` with no arguments is the heartbeat of a configuration. The document names the selection
+that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`
@@ -552,7 +590,7 @@ Directly consumed Go modules (versions in `go.mod`):
 
 | Library | Owner | License | Use |
 |---|---|---|---|
-| [BurntSushi/toml](https://github.com/BurntSushi/toml) | TOML authors | MIT | Strict decoding of `providers.toml`, `config.toml` and `harnesses.toml` |
+| [BurntSushi/toml](https://github.com/BurntSushi/toml) | TOML authors | MIT | Strict decoding of `providers.toml` and `config.toml` |
 | [spf13/cobra](https://github.com/spf13/cobra) | spf13 | Apache-2.0 | Command-line structure, flags and help |
 | [spf13/pflag](https://github.com/spf13/pflag) | spf13 | BSD-3-Clause | Flag parsing behind the MCP server's tool schemas and its flag reset |
 | [go.yaml.in/yaml/v3](https://go.yaml.in/yaml/v3) | YAML organization | MIT and Apache-2.0 | YAML values input, tool results and build records |

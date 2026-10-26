@@ -96,7 +96,7 @@ func TestCallerMapsAnswersToConfidenceAndAsksNothingTwice(t *testing.T) {
 	if req.State == "" {
 		t.Error("the composed state is not the request's state")
 	}
-	captures, _ := filepath.Glob(filepath.Join(scratch, CapturesDir, "paragraph-v_leaf.md-S*.capture.jsonl"))
+	captures, _ := filepath.Glob(filepath.Join(scratch, asks.CapturesDir, "paragraph-v_leaf.md-S*.capture.jsonl"))
 	if len(captures) != 2 {
 		t.Fatalf("captures = %q", captures)
 	}
@@ -105,7 +105,7 @@ func TestCallerMapsAnswersToConfidenceAndAsksNothingTwice(t *testing.T) {
 		!strings.Contains(lines[0], `"state-sha256"`) || !strings.Contains(lines[1], `"outcome":"ok"`) {
 		t.Errorf("capture = %s", b)
 	}
-	answers, _ := filepath.Glob(filepath.Join(scratch, AnswersDir, "*.json"))
+	answers, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*.json"))
 	if len(answers) != 2 {
 		t.Errorf("cached answers = %q, want one per completed call", answers)
 	}
@@ -179,7 +179,7 @@ func TestAReaskReachesTheModel(t *testing.T) {
 	if len(resumed.Items[0].Calls) != 2 {
 		t.Errorf("the resumed item holds %d calls, want both its asks", len(resumed.Items[0].Calls))
 	}
-	cached, _ := filepath.Glob(filepath.Join(scratch, AnswersDir, "*.json"))
+	cached, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*.json"))
 	if len(cached) != 4 {
 		t.Errorf("cached answers = %q, want one per ask including the re-asks", cached)
 	}
@@ -221,7 +221,7 @@ func TestCallerNamesTheCallThatNeverCompleted(t *testing.T) {
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("AskGroup = %v, want the incomplete call", err)
 	}
-	if answers, _ := filepath.Glob(filepath.Join(scratch, AnswersDir, "*")); len(answers) != 0 {
+	if answers, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*")); len(answers) != 0 {
 		t.Errorf("a failed call cached %q", answers)
 	}
 }

@@ -1,47 +1,28 @@
 package kb
 
 import (
-	"maps"
-	"math"
 	"slices"
 	"testing"
 )
 
-// TestFaultTablesAreTheSchemes: the three closed sets, their weights and their
-// maxima are the scheme's — each in walk order, the pending id shared by all
-// three and named by none, and nothing else any of them accepts.
-func TestFaultTablesAreTheSchemes(t *testing.T) {
-	for _, c := range []struct {
-		name    string
-		table   FaultTable
-		ids     []string
-		maximum float64
-	}{
-		{"statement", RigorStatement, []string{
-			FaultContradiction, FaultOverreach, FaultEquivocation, FaultUnderspecified, FaultPending}, 0.95},
-		{"method", RigorMethod, []string{
-			FaultUnaddressed, FaultContradiction, FaultOverreach,
-			FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement, FaultPending}, 0.95},
-		{"bearing", BearingFaults, []string{
-			FaultNoEngagement, FaultReferent, FaultPartial,
-			FaultNarrower, FaultTransfer, FaultConditional, FaultPending}, 1.00},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := c.table.IDs(); !slices.Equal(got, c.ids) {
-				t.Errorf("the set = %v, want %v", got, c.ids)
+// TestNoChargeLeavesNothingAlone: no id in any table costs the table's whole
+// maximum — a text or a link reaches zero by accumulating findings, never by one
+// verdict — and an empty claim and an empty analysis price the same, so neither
+// vocabulary treats silence as a special kind of badness. This asserts the
+// decision, not the numbers: any uniform weight satisfies it.
+func TestNoChargeLeavesNothingAlone(t *testing.T) {
+	for _, table := range []FaultTable{RigorStatement, RigorMethod, BearingFaults} {
+		for _, id := range table.IDs() {
+			if w := weightOf(table, id); w == table.maximum {
+				t.Errorf("%s weighs the table's whole maximum: one finding must not price it at nothing", id)
 			}
-			if got := c.table.Price(nil); got.Pending || got.Value != c.maximum {
-				t.Errorf("the empty list prices %+v, want the maximum %v", got, c.maximum)
+			if got := table.Price([]string{id}); got.Pending || got.Value == 0 {
+				t.Errorf("Price(%s) = %+v, want more than nothing", id, got)
 			}
-			if got := c.table.Price([]string{FaultPending}); !got.Pending {
-				t.Errorf("the pending fault prices %+v, want the pending literal", got)
-			}
-			for _, id := range c.ids {
-				if !c.table.Accepts(id) {
-					t.Errorf("the set does not accept its own id %s", id)
-				}
-			}
-		})
+		}
+	}
+	if a, b := RigorStatement.Price([]string{FaultUnderspecified}), RigorMethod.Price([]string{FaultUnaddressed}); a != b {
+		t.Errorf("an empty claim prices %+v and an empty analysis %+v, want one value for both", a, b)
 	}
 }
 
@@ -81,114 +62,6 @@ func weightOf(table FaultTable, id string) int {
 		}
 	}
 	return 0
-}
-
-// TestFaultPricesAreTheSchemes: each weight charges per occurrence, the sum is
-// floored at zero, and every value is a multiple of 0.05 — each table's own
-// arithmetic, on the charge lists the scheme tabulates.
-func TestFaultPricesAreTheSchemes(t *testing.T) {
-	for _, c := range []struct {
-		name  string
-		table FaultTable
-		ids   []string
-		want  float64
-	}{
-		{"a bare statement", RigorStatement, nil, 0.95},
-		{"one underspecification", RigorStatement, []string{FaultUnderspecified}, 0.90},
-		{"two underspecifications", RigorStatement, []string{FaultUnderspecified, FaultUnderspecified}, 0.85},
-		{"one equivocation", RigorStatement, []string{FaultEquivocation}, 0.70},
-		{"one statement overreach", RigorStatement, []string{FaultOverreach}, 0.60},
-		{"one statement contradiction", RigorStatement, []string{FaultContradiction}, 0.50},
-		{"a contradiction and an underspecification", RigorStatement, []string{FaultContradiction, FaultUnderspecified}, 0.45},
-		{"two equivocations", RigorStatement, []string{FaultEquivocation, FaultEquivocation}, 0.45},
-		{"an equivocation and an overreach", RigorStatement, []string{FaultEquivocation, FaultOverreach}, 0.35},
-		{"two statement overreaches", RigorStatement, []string{FaultOverreach, FaultOverreach}, 0.25},
-		{"an overreach and a contradiction", RigorStatement, []string{FaultOverreach, FaultContradiction}, 0.15},
-		{"two statement contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction}, 0.05},
-		{"three contradictions", RigorStatement, []string{FaultContradiction, FaultContradiction, FaultContradiction}, 0.00},
-
-		{"no method charge", RigorMethod, nil, 0.95},
-		{"one gap", RigorMethod, []string{FaultClaimedStep}, 0.65},
-		{"one method overreach", RigorMethod, []string{FaultOverreach}, 0.60},
-		{"one method contradiction", RigorMethod, []string{FaultContradiction}, 0.50},
-		{"two gaps", RigorMethod, []string{FaultClaimedStep, FaultBareMeasurement}, 0.35},
-		{"a gap and an overreach", RigorMethod, []string{FaultUnstatedPremise, FaultOverreach}, 0.30},
-		{"two method overreaches", RigorMethod, []string{FaultOverreach, FaultOverreach}, 0.25},
-		{"a gap and a contradiction", RigorMethod, []string{FaultBareMeasurement, FaultContradiction}, 0.20},
-		{"three gaps", RigorMethod, []string{FaultClaimedStep, FaultUnstatedPremise, FaultBareMeasurement}, 0.05},
-		{"two method contradictions", RigorMethod, []string{FaultContradiction, FaultContradiction}, 0.05},
-		{"the unaddressed text", RigorMethod, []string{FaultUnaddressed}, 0.00},
-		{"a method sum past the maximum", RigorMethod, []string{FaultUnaddressed, FaultOverreach}, 0.00},
-
-		{"one step weight", BearingFaults, []string{FaultTransfer}, 0.65},
-		{"one half weight", BearingFaults, []string{FaultPartial}, 0.50},
-		{"two step weights", BearingFaults, []string{FaultTransfer, FaultConditional}, 0.30},
-		{"a half and a step", BearingFaults, []string{FaultReferent, FaultTransfer}, 0.15},
-		{"two half weights", BearingFaults, []string{FaultNarrower, FaultPartial}, 0.00},
-		{"the no-engagement link", BearingFaults, []string{FaultNoEngagement}, 0.00},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := c.table.Price(c.ids); got.Pending || got.Value != c.want {
-				t.Errorf("Price(%v) = %+v, want %v", c.ids, got, c.want)
-			}
-		})
-	}
-}
-
-// TestFaultPriceReachesOnlyTheSchemesValues: enumerating every charge list up to
-// one charge per id reaches exactly the statement vocabulary's twenty multiples
-// of 0.05, the method vocabulary's eleven values and bearing's six, and nothing
-// else. A statement value is checked by the table's arithmetic rather than
-// membership in a short list, because underspecification stacks; a method value
-// off its eleven is a defect of a landing, not a judgement.
-func TestFaultPriceReachesOnlyTheSchemesValues(t *testing.T) {
-	var statement []float64
-	for i := 0; i <= 19; i++ {
-		statement = append(statement, float64(i)/20)
-	}
-	for _, c := range []struct {
-		name   string
-		table  FaultTable
-		values []float64
-	}{
-		{"statement", RigorStatement, statement},
-		{"method", RigorMethod, []float64{0.00, 0.05, 0.15, 0.20, 0.25, 0.30, 0.35, 0.50, 0.60, 0.65, 0.95}},
-		{"bearing", BearingFaults, []float64{0.00, 0.15, 0.30, 0.50, 0.65, 1.00}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			// Every charge list up to the length at which the heaviest count
-			// saturates the table. A weight is charged per occurrence, so one id
-			// may be charged more than once; the sum depends on the multiset
-			// alone, so the walk takes each multiset once, ids non-decreasing.
-			longest := 1
-			for _, f := range c.table.faults {
-				longest = max(longest, (c.table.maximum+f.weight-1)/f.weight)
-			}
-			values := map[float64]bool{}
-			var walk func(ids []string, left, from int)
-			walk = func(ids []string, left, from int) {
-				if got := c.table.Price(ids); !got.Pending {
-					values[got.Value] = true
-				}
-				if left == 0 {
-					return
-				}
-				for i := from; i < len(c.table.faults); i++ {
-					walk(append(slices.Clone(ids), c.table.faults[i].id), left-1, i)
-				}
-			}
-			walk(nil, longest, 0)
-			got := slices.Sorted(maps.Keys(values))
-			if !slices.Equal(got, c.values) {
-				t.Errorf("the table reaches %v, want exactly %v", got, c.values)
-			}
-			for v := range values {
-				if math.Abs(v*100-math.Round(v*100)) > 1e-9 {
-					t.Errorf("%v is finer than a hundredth", v)
-				}
-			}
-		})
-	}
 }
 
 // TestBottomRungStatesAnOutcome: the ladder's last rung is `unsubstantiated` —

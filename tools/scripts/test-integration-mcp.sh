@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# The MCP transcripts over the delivered binary: the results fixture staged as
+# cmd/mcp_test.go stages it, each test-data/fixtures/mcp/*.jsonl fed to
+# `./bin/kbase mcp` over real pipes and every response line compared to the
+# expected line after placeholder substitution. Every transcript runs: none
+# needs a stub child or a provider (build-refused refuses before it starts one).
+#
+# Inputs (environment): BIN_DIR; RESULTS_FIXTURE_DIR, the committed fixture;
+# MCP_TRANSCRIPT_DIR, the transcripts; MCP_OUT_DIR, the evidence directory.
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+cd "${script_dir}/../.." || exit 1
+
+: "${BIN_DIR:?BIN_DIR is not set: the build output directory}"
+: "${RESULTS_FIXTURE_DIR:?RESULTS_FIXTURE_DIR is not set: the committed results fixture}"
+: "${MCP_TRANSCRIPT_DIR:?MCP_TRANSCRIPT_DIR is not set: the transcript fixtures}"
+: "${MCP_OUT_DIR:?MCP_OUT_DIR is not set: the evidence directory}"
+
+root="$(pwd -P)"
+out="${root}/${MCP_OUT_DIR}"
+kbase="${root}/${BIN_DIR}/kbase"
+fixture="${root}/${RESULTS_FIXTURE_DIR}"
+transcripts="${root}/${MCP_TRANSCRIPT_DIR}"
+repo="${out}/repo"
+rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/comparison.tsv"
+mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts"
+printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
+cp -R "${fixture}/kb-root" "${repo}/"
+mkdir "${repo}/kb-root/b"
+( cd "${repo}" && "${kbase}" insert-claim-entry --values "${transcripts}/seed.yaml" ) > "${out}/insert.out" 2> "${out}/insert.log"
+( cd "${repo}" && "${kbase}" refresh ) > "${out}/refresh.out" 2> "${out}/refresh.log"
+kb_root="$(sed -n 's/^kb-root: "\(.*\)"$/\1/p' "${out}/insert.out")"
+ids=()
+while IFS= read -r id; do ids+=("${id}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${out}/insert.out" | sort)
+if [[ -z "${kb_root}" || "${#ids[@]}" -ne 2 ]]; then
+    printf 'integration(test-integration-mcp): the staging insert reported no kb-root and two ids — see insert.out\n' >&2
+    exit 1
+fi
+version="$("${kbase}" --version)"
+version="${version##* }"
+# sub <line>: the transcript placeholders, as cmd/mcp_test.go's mcpServer
+# derives them (paths here carry no JSON-escaped characters).
+sub() {
+    local s="${1}"
+    s="${s//'${KB_ROOT}'/${kb_root}}"
+    s="${s//'${REPO}'/${repo}}"
+    s="${s//'${STATE_DIR}'/${out}/state}"
+    s="${s//'${VERSION}'/${version}}"
+    s="${s//'${ID1}'/${ids[0]}}"
+    s="${s//'${ID2}'/${ids[1]}}"
+    printf '%s' "${s}"
+}
+status=0
+for file in "${transcripts}"/*.jsonl; do
+    name="$(basename "${file}" .jsonl)"
+    tdir="${out}/transcripts/${name}"
+    mkdir -p "${tdir}"
+    : > "${tdir}/requests.jsonl"
+    : > "${tdir}/expected.jsonl"
+    lines=()
+    while IFS= read -r line || [[ -n "${line}" ]]; do lines+=("${line}"); done < "${file}"
+    if (( ${#lines[@]} % 2 != 0 )); then
+        printf '  fail %s: %d lines — a transcript pairs each request with its response\n' "${name}" "${#lines[@]}"
+        printf '%s\t0\todd line count\n' "${name}" >> "${out}/comparison.tsv"
+        status=1
+        continue
+    fi
+    for ((i = 0; i < ${#lines[@]}; i += 2)); do
+        printf '%s\n' "$(sub "${lines[${i}]}")" >> "${tdir}/requests.jsonl"
+        if [[ "${lines[$((i + 1))]}" != "null" ]]; then
+            printf '%s\n' "$(sub "${lines[$((i + 1))]}")" >> "${tdir}/expected.jsonl"
+        fi
+    done
+    set +e
+    "${kbase}" mcp --kb-root "${kb_root}" < "${tdir}/requests.jsonl" > "${tdir}/actual.jsonl" 2> "${tdir}/mcp.log"
+    printf '%s\n' "$?" > "${tdir}/mcp.exit"
+    set -e
+    bad=0
+    wanted="$(wc -l < "${tdir}/expected.jsonl" | tr -d ' ')"
+    # The line numbers where actual and expected differ, one per line; a
+    # line present on one side only differs.
+    while IFS= read -r j; do
+        bad=1
+        printf '  fail %s response %s:\n    got:  %s\n    want: %s\n' "${name}" "${j}" \
+            "$(sed -n "${j}p" "${tdir}/actual.jsonl")" "$(sed -n "${j}p" "${tdir}/expected.jsonl")"
+        printf '%s\t%s\tdiffers\n' "${name}" "${j}" >> "${out}/comparison.tsv"
+    done < <(awk 'NR == FNR { w[FNR] = $0; n = FNR; next } { g[FNR] = $0; m = FNR }
+        END { for (i = 1; i <= (n > m ? n : m); i++) if (g[i] != w[i]) print i }' "${tdir}/expected.jsonl" "${tdir}/actual.jsonl")
+    [[ "$(cat "${tdir}/mcp.exit")" -eq 0 ]] || { bad=1; printf '  fail %s: kbase mcp exited %s — see %s\n' "${name}" "$(cat "${tdir}/mcp.exit")" "${tdir}/mcp.log"; printf '%s\t0\texit %s\n' "${name}" "$(cat "${tdir}/mcp.exit")" >> "${out}/comparison.tsv"; }
+    if [[ "${bad}" -eq 0 ]]; then
+        printf '  pass %s: %d response lines\n' "${name}" "${wanted}"
+        printf '%s\t-\tpass\n' "${name}" >> "${out}/comparison.tsv"
+    else
+        status=1
+    fi
+done
+OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml; ${kbase} refresh\nper transcript: ${kbase} mcp --kb-root ${kb_root} < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\ncomparison.tsv: per transcript, the response line that differs, or pass" \
+    tools/scripts/write-evidence.sh
+if [[ "${status}" -ne 0 ]]; then
+    printf 'integration(test-integration-mcp): a response differs from its transcript — see comparison.tsv\n'
+    exit 1
+fi
+printf 'integration(test-integration-mcp) ok\n'

@@ -140,12 +140,6 @@ func main() {
 	os.Exit(exitStatus(err, os.Stdout, os.Stderr))
 }
 
-// exitCodes maps a result's outcome to the process exit code.
-var exitCodes = map[string]int{
-	toolresult.Done: 0, toolresult.Unchanged: 0, toolresult.Bounded: 0,
-	toolresult.Refused: 1, toolresult.Retry: 2, toolresult.Failed: 3, toolresult.Cancelled: 4,
-}
-
 // exitStatus is the process exit code for what Execute returned. An error no
 // verb wrote a result document for — a usage error among them — is refused
 // with its own document.
@@ -162,5 +156,5 @@ func exitStatus(err error, stdout, stderr io.Writer) int {
 	if eerr := toolresult.Emit(stdout, outcome, fields...); eerr != nil {
 		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)
 	}
-	return exitCodes[outcome]
+	return toolresult.ExitCode(outcome)
 }

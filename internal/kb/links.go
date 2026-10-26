@@ -116,10 +116,12 @@ func blankFenced(lines []string) []string {
 }
 
 // Fence is one fenced block of a document's lines: Start is its opening
-// line, End one past its last, and Info the opener's info string.
+// line, End one past its last, Info the opener's info string, and Closed
+// whether its last line, End-1, is its closing fence.
 type Fence struct {
 	Start, End int
 	Info       string
+	Closed     bool
 }
 
 // Fences is every fenced block of lines, in order, by BlankFencedLines'
@@ -145,7 +147,7 @@ func Fences(lines []string) []Fence {
 		}
 		if m != nil && m[1][0] == opener[0] && len(m[1]) >= len(opener) && closerTail.MatchString(m[2]) {
 			opener = ""
-			out[len(out)-1].End = i + 1
+			out[len(out)-1].End, out[len(out)-1].Closed = i+1, true
 		}
 	}
 	return out
@@ -350,6 +352,28 @@ func TreeLinks(source, text string) (parent string, hasParent bool, children []s
 	return parent, hasParent, children
 }
 
+// ReadingOrder is every path children reaches from the entry point, in
+// preorder over each path's children as children lists them — TreeLinks' for
+// a document — each where the walk first reaches it, so a revisit ends that
+// branch and a cycle ends the walk.
+func ReadingOrder(children map[string][]string) []string {
+	var out []string
+	seen := map[string]bool{}
+	var walk func(p string)
+	walk = func(p string) {
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+		for _, c := range children[p] {
+			walk(c)
+		}
+	}
+	walk(EntryPointFile)
+	return out
+}
+
 // DeclaredLink is one link a document declares as the build validator reads
 // it: an inline link, an up-link where its text carries UplinkMarker, or a
 // reference definition.
@@ -384,14 +408,19 @@ func ResolveDeclared(source, target string) string {
 	return ""
 }
 
+// unwrapTarget is a raw link destination unwrapped from <...>.
+func unwrapTarget(target string) string {
+	if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") && len(target) >= 2 {
+		return target[1 : len(target)-1]
+	}
+	return target
+}
+
 // StripTarget is a raw link destination as a path to resolve: unwrapped from
 // <...>, its #anchor and trailing :line dropped, then percent-decoded — last,
 // so an encoded %23 is not split off as an anchor.
 func StripTarget(target string) string {
-	if strings.HasPrefix(target, "<") && strings.HasSuffix(target, ">") && len(target) >= 2 {
-		target = target[1 : len(target)-1]
-	}
-	target, _, _ = strings.Cut(target, "#")
+	target, _, _ = strings.Cut(unwrapTarget(target), "#")
 	target = lineSuffix.ReplaceAllString(target, "")
 	if decoded, err := url.PathUnescape(target); err == nil {
 		return decoded

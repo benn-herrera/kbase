@@ -1,8 +1,8 @@
 package kb
 
-// The fault ids the three vocabularies charge with, in one namespace, and the
-// pending id all three share. An id spells the criterion it names and carries no
-// weight of its own — the item's table does, per occurrence. The statement and
+// The fault ids the three vocabularies charge with, in one namespace. An id
+// spells the criterion it names and carries no weight of its own — the item's
+// table does, per occurrence. The statement and
 // the method vocabularies share flt-contradiction and flt-overreach, which name
 // the same fault at different subjects and carry the same weight in both tables,
 // so a ledger line's price never depends on which rigor vocabulary read it; every
@@ -23,17 +23,19 @@ const (
 	FaultBareMeasurement = "flt-bare-measurement"
 
 	// The bearing vocabulary: one scoring edge's link.
-	FaultNoEngagement = "flt-no-engagement"
 	FaultReferent     = "flt-referent"
-	FaultPartial      = "flt-partial"
+	FaultInapplicable = "flt-inapplicable"
 	FaultNarrower     = "flt-narrower"
 	FaultTransfer     = "flt-transfer"
 	FaultConditional  = "flt-conditional"
 
-	// FaultPending is every vocabulary's id for a text that holds no
-	// proposition to judge: nothing is identifiable, so no other id applies. It
-	// takes no citation, and its value is the pending literal whatever the
-	// table.
+	// FaultPending is the id a ledger line written before the scoring revision
+	// carries for a text that held no proposition to judge. No table
+	// accepts it any more: a text that asserts nothing is a charge against it
+	// (an empty claim is flt-underspecified, a method that displays nothing
+	// flt-unaddressed), and an answer that would have been pending is refused as
+	// an id outside the set. Price still reads it, so a recorded line keeps the
+	// value it was written with.
 	FaultPending = "flt-pending"
 )
 
@@ -43,20 +45,39 @@ const (
 // list is empty.
 const ChargeNone = "none"
 
-// RigorMaximum is the most rigor an authored node carries, and what a rigor
-// charge list with no charge prices to: the rigor tables' maximum, the largest
-// multiple of 0.05 below the 1.0 an axiom's rigor holds by rule. It is the
-// ceiling of every write that takes a node's own rigor, and no authored value
-// reaches the reserve. Bearing has none — its table's maximum is 1.00.
-const RigorMaximum = 0.95
+// RigorMaximum is the most rigor a node carries, and what a rigor charge list
+// with no charge prices to: the rigor tables' maximum, the value a text charged
+// with nothing takes. It is the ceiling of every write that takes a node's own
+// rigor, and it is the whole of the scale — an axiom's rule value, a pass's
+// largest price and an authored maximum are one number, and nothing is held
+// back from it. Bearing has no reserve either: BearingMaximum is its table's.
+const RigorMaximum = 1.0
+
+// rigorMaximumHundredths is rigorMaximum in the tables' integer hundredths:
+// the price of an answer that names no fault. No charge in either rigor table
+// costs it now — every one is fifteen hundredths — so a text reaches zero by
+// accumulating findings, not by one verdict.
+const rigorMaximumHundredths = int(RigorMaximum * 100)
+
+// BearingMaximum is the most bearing a link carries: the bearing table's whole
+// maximum, which reserves nothing the way the rigor one does.
+const BearingMaximum = 1.0
+
+// bearingMaximumHundredths is BearingMaximum in the tables' integer hundredths:
+// the price of a link charged with nothing. No charge in the bearing table costs
+// it: every one is a tenth of it, so a link reaches zero by accumulating parts
+// that do no work.
+const bearingMaximumHundredths = int(BearingMaximum * 100)
 
 // AuthoredRigor is an authored value as the system reads it: above
-// RigorMaximum it reads as RigorMaximum — a converted experiment's 1.0 reads
-// 0.95 — and nil is no value, pending staying pending. The clamp is a reading
-// rule and not a rewrite: the file keeps the bytes it had, and refresh leaves
-// its rigor as it found it. A value the write path refuses therefore reads at
-// the ceiling rather than making its KB unreadable, and an axiom's 1.0 is no
-// read value and is never clamped.
+// RigorMaximum it reads as RigorMaximum — a hand-edited 1.20 reads 1.00, a
+// value the write path refuses and a file edited by hand may still carry — and
+// nil is no value, pending staying pending. A value at the maximum is no
+// special case: an authored 1.00 is in domain and reads as itself, which is
+// what a converted experiment carries. The clamp is a reading rule and not a
+// rewrite: the file keeps the bytes it had, and refresh leaves its rigor as it
+// found it. A value the write path refuses therefore reads at the ceiling
+// rather than making its KB unreadable.
 func AuthoredRigor(v *float64) *float64 {
 	if v == nil || *v <= RigorMaximum {
 		return v
@@ -71,8 +92,9 @@ func AuthoredRigor(v *float64) *float64 {
 // Weights and the maximum are integer hundredths of the value's range, so every
 // sum and every value is exact at two decimals and nothing rounds.
 type FaultTable struct {
-	// maximum is what a charge list with no charge takes: RigorMaximum under
-	// either rigor vocabulary, and 1.00 for bearing, which reserves nothing.
+	// maximum is what a charge list with no charge takes:
+	// rigorMaximumHundredths under either rigor vocabulary, and
+	// bearingMaximumHundredths for bearing, which reserves nothing.
 	maximum int
 	faults  []fault
 }
@@ -84,53 +106,66 @@ type fault struct {
 	weight int
 }
 
-// The three tables, each in the walk order the criteria are written in, with the
-// pending id named by none of them and accepted by all. A node's class selects
-// which rigor table its charges are priced under; a bearing call has the one.
+// The three tables, each in the walk order the criteria are written in. A node's
+// class selects which rigor table its charges are priced under; a bearing call
+// has the one.
 var (
 	// RigorStatement is the statement vocabulary's: what a claim's own text is
-	// charged with.
-	RigorStatement = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
-		{FaultContradiction, 45},
-		{FaultOverreach, 35},
-		{FaultEquivocation, 25},
-		{FaultUnderspecified, 5},
+	// charged with. Every criterion costs the same fifteen hundredths, so the
+	// value is the proportion of findings the text avoided and nothing dies of one
+	// judgement: a claim with a single loose parameter reads 0.85, and zero takes
+	// seven findings.
+	RigorStatement = FaultTable{maximum: rigorMaximumHundredths, faults: []fault{
+		{FaultContradiction, 15},
+		{FaultOverreach, 15},
+		{FaultEquivocation, 15},
+		{FaultUnderspecified, 15},
 	}}
 	// RigorMethod is the method vocabulary's: what an analysis's or an
-	// experiment's own text is charged with.
-	RigorMethod = FaultTable{maximum: int(RigorMaximum * 100), faults: []fault{
-		{FaultUnaddressed, 95},
-		{FaultContradiction, 45},
-		{FaultOverreach, 35},
-		{FaultClaimedStep, 30},
-		{FaultUnstatedPremise, 30},
-		{FaultBareMeasurement, 30},
+	// experiment's own text is charged with. Every criterion costs the same
+	// fifteen hundredths. FaultUnaddressed is not the table's whole maximum: a text
+	// that displays nothing is one finding per respect, like any other, and seven
+	// findings are what price a text at nothing.
+	RigorMethod = FaultTable{maximum: rigorMaximumHundredths, faults: []fault{
+		{FaultUnaddressed, 15},
+		{FaultContradiction, 15},
+		{FaultOverreach, 15},
+		{FaultClaimedStep, 15},
+		{FaultUnstatedPremise, 15},
+		{FaultBareMeasurement, 15},
 	}}
-	BearingFaults = FaultTable{maximum: 100, faults: []fault{
-		{FaultNoEngagement, 100},
-		{FaultReferent, 50},
-		{FaultPartial, 50},
-		{FaultNarrower, 50},
-		{FaultTransfer, 35},
-		{FaultConditional, 35},
+	// BearingFaults is the bearing vocabulary's: how much of a link's source
+	// does work for the target. Every charge is one part of the source that does
+	// none — one part that asserts nothing, reaches none of the target, runs
+	// through an unstated bridge or depends on an unstated condition — and every
+	// charge costs the same ten hundredths whatever its reason, so the value is
+	// the proportion of parts that do work and nothing dies of one judgement.
+	// Nothing a model can write in one charge prices a link at nothing: that
+	// takes ten. The weight is absolute, so a long argument gathers more dings
+	// than a short one for the same judged weakness; pricing the fraction the
+	// dings are of the whole would take a second ask quantifying the argument's
+	// volume, which no reliable answer gives, so the bias stands until one does.
+	BearingFaults = FaultTable{maximum: bearingMaximumHundredths, faults: []fault{
+		{FaultReferent, 10},
+		{FaultNarrower, 10},
+		{FaultTransfer, 10},
+		{FaultConditional, 10},
+		{FaultInapplicable, 10},
 	}}
 )
 
-// IDs is the table's closed set in walk order: its own ids and FaultPending.
+// IDs is the table's closed set in walk order: its own ids, and nothing else.
 func (t FaultTable) IDs() []string {
-	out := make([]string, 0, len(t.faults)+1)
+	out := make([]string, 0, len(t.faults))
 	for _, f := range t.faults {
 		out = append(out, f.id)
 	}
-	return append(out, FaultPending)
+	return out
 }
 
 // Accepts is whether id is one of the table's ids. The caller case-folds what a
 // reply wrote before asking; the table holds the ids in their own spelling.
 func (t FaultTable) Accepts(id string) bool {
-	if id == FaultPending {
-		return true
-	}
 	for _, f := range t.faults {
 		if f.id == id {
 			return true
@@ -148,7 +183,9 @@ func (t FaultTable) Accepts(id string) bool {
 //
 // The whole input is the ids a ledger line recorded, a run resumed after an
 // update continues under the current ask, and an id the table does not hold
-// charges nothing.
+// charges nothing. FaultPending is no table's id, and this still prices a line
+// that records it as pending: a value written before the id was retired keeps
+// what it was written as.
 func (t FaultTable) Price(ids []string) Bearing {
 	sum := 0
 	for _, id := range ids {

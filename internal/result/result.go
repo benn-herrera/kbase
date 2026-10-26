@@ -23,6 +23,18 @@ const (
 	Cancelled = "cancelled"
 )
 
+var exitCodes = map[string]int{
+	Done: 0, Unchanged: 0, Bounded: 0,
+	Refused: 1, Retry: 2, Failed: 3, Cancelled: 4,
+}
+
+// ExitCode is the process exit code an outcome stands for. An outcome outside
+// the table reads 0.
+func ExitCode(outcome string) int { return exitCodes[outcome] }
+
+// IsError reports whether the outcome is an error: its exit code is not 0.
+func IsError(outcome string) bool { return ExitCode(outcome) != 0 }
+
 // Field is one key of a result document. Value is nil, a string, a bool, an
 // int, a float64, a []string, a Record, a []Record, an Item or an []Item.
 type Field struct {

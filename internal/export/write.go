@@ -32,7 +32,7 @@ type manifest struct {
 	Files []string `yaml:"files"`
 }
 
-// WriteOut writes files, by GenTexDir-relative slash path, into dir's
+// writeOut writes files, by GenTexDir-relative slash path, into dir's
 // GenTexDir, and dir's PreambleFile where none stands. It returns the
 // absolute paths it wrote, preamble's among them where it was written;
 // preamble, that path where this call wrote it and "" otherwise; and whether
@@ -43,7 +43,7 @@ type manifest struct {
 // write beside them, is written after them. A GenTexDir holding files and no
 // manifest is an ExportDirError, and nothing is written. Nothing in dir
 // outside GenTexDir but a missing PreambleFile is written, read or removed.
-func WriteOut(dir string, files map[string][]byte) (written []string, preamble string, changed bool, err error) {
+func writeOut(dir string, files map[string][]byte) (written []string, preamble string, changed bool, err error) {
 	dir, err = filepath.Abs(dir)
 	if err != nil {
 		return nil, "", false, err
@@ -106,9 +106,9 @@ func WriteOut(dir string, files map[string][]byte) (written []string, preamble s
 	return written, preamble, changed || len(written) > 0, nil
 }
 
-// PandocOutputs is the bytes of each file pandoc writes into dir's GenTexDir —
+// pandocOutputs is the bytes of each file pandoc writes into dir's GenTexDir —
 // OutputFile and FindingsFile — by absolute path, a file absent left out.
-func PandocOutputs(dir string) (map[string][]byte, error) {
+func pandocOutputs(dir string) (map[string][]byte, error) {
 	out := map[string][]byte{}
 	for _, name := range []string{OutputFile, FindingsFile} {
 		p, err := filepath.Abs(filepath.Join(dir, GenTexDir, name))
@@ -131,12 +131,12 @@ func PandocOutputs(dir string) (map[string][]byte, error) {
 // PreambleFile.
 const preambleForm = "preamble"
 
-// WriteReport writes dir's GenTexDir ReportFile: one YAML list of walk's
-// findings, then the filter's from FindingsFile, then, where dir's
+// writeReport writes dir's GenTexDir ReportFile: one YAML list of the walk's
+// findings, walked, then the filter's from FindingsFile, then, where dir's
 // PreambleFile exists, a line naming it as the author's. The preamble is
 // checked for existence only, never opened. It returns the report's absolute
 // path where this call changed its bytes, "" otherwise.
-func WriteReport(dir string, walk []Finding) (string, error) {
+func writeReport(dir string, walked []Finding) (string, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
@@ -150,7 +150,7 @@ func WriteReport(dir string, walk []Finding) (string, error) {
 	if err := json.Unmarshal(findings, &filter); err != nil {
 		return "", fmt.Errorf("reading the filter's findings %s: %w", filepath.Join(gen, FindingsFile), err)
 	}
-	report := append(append([]Finding{}, walk...), filter...)
+	report := append(append([]Finding{}, walked...), filter...)
 	preamble := filepath.Join(dir, PreambleFile)
 	switch _, err := os.Lstat(preamble); {
 	case err == nil:

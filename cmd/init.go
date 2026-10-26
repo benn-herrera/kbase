@@ -50,9 +50,9 @@ func runInit(opts initOptions) (int, error) {
 
 // initKB creates the KB: refusals before any write; then, under the write
 // lock, the spine, the readiness stamps and the refresh, and the birth commit
-// last. The order is load-bearing: the stamped entry point stands before the
-// loader opens it, and the stamps before the refresh, which refuses without
-// the redirect. A refusal is a result.Refusal on the error channel, the same
+// last. The order is load-bearing: the stamp file stands before the loader
+// opens it, and the stamps before the refresh, which refuses without the
+// redirect. A refusal is a result.Refusal on the error channel, the same
 // shape every underlying package carries its refusals.
 func initKB(opts initOptions) (string, []toolresult.Field) {
 	// A line break in the title would land as further lines of the entry
@@ -123,7 +123,8 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 	return toolresult.Done, fields
 }
 
-// skeleton writes the spine through the canonical renderers, opens the KB,
+// skeleton writes the spine — the plain entry point, the format stamp and
+// the empty record files — opens the KB,
 // stamps the readiness documents and refreshes, and returns every path it
 // wrote, kb-root-relative. Refusals and failures arrive as errors, the shape
 // the underlying packages carry them in; the caller decides the outcome.
@@ -132,17 +133,20 @@ func skeleton(opts initOptions, repo, kbRoot string) ([]string, error) {
 	if title == "" {
 		title = filepath.Base(repo)
 	}
-	text, err := skeletonEntryPoint(title)
-	if err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(filepath.Join(kbRoot, kb.IndexDir), 0o755); err != nil {
 		return nil, err
 	}
-	if err := atomicfile.Write(filepath.Join(kbRoot, kb.EntryPointFile), []byte(text), nil); err != nil {
-		return nil, err
+	var written []string
+	for _, f := range []struct {
+		rel  string
+		data []byte
+	}{{kb.EntryPointFile, []byte("# " + title + "\n")}, {kb.FormatFile, kb.EncodeFormatStamp(kb.FormatVersion)},
+		{kb.GraphNodesFile, kb.EncodeNodes(kb.Graph{})}, {kb.GraphEdgesFile, kb.EncodeEdges(kb.Graph{})}} {
+		if err := atomicfile.Write(filepath.Join(kbRoot, f.rel), f.data, nil); err != nil {
+			return written, err
+		}
+		written = append(written, f.rel)
 	}
-	written := []string{kb.EntryPointFile}
 	src, err := kbload.Open(kbRoot)
 	if err != nil {
 		return written, err
@@ -159,19 +163,7 @@ func skeleton(opts initOptions, repo, kbRoot string) ([]string, error) {
 	return append(written, refreshed...), err
 }
 
-// skeletonEntryPoint is the birth entry point as the canonical renderers
-// compose it: kind first, the format stamp last, the title as the only
-// heading, no children.
-func skeletonEntryPoint(title string) (string, error) {
-	kind, err := kb.RenderFrontmatterField("kind", kb.FrontmatterString(kb.DocumentEntryPoint))
-	if err != nil {
-		return "", err
-	}
-	text := kb.WrapFrontmatter(kind) + "\n\n# " + title + "\n"
-	return kb.StampFormat(text, kb.FormatVersion)
-}
-
-func init() {
+func initCommand() *cobra.Command {
 	var title string
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -182,12 +174,14 @@ nothing distilled. It refuses outside a git worktree, remedy git init, and
 refuses any repository whose kb-root/ already exists, in any state: creation
 is birth-once, and what the KB holds afterwards comes from the maintenance
 subcommands — insert an entry, set a field, refresh, verify, a claim at a
-time. It writes the stamped entry-point.md with --title (or the repository's
-directory name) as its only heading and no children — a --title holding a
-line break is refused — creates the empty .index/, stamps AGENTS.md,
+time. It writes entry-point.md with --title (or the repository's
+directory name) as its only heading and no children and no frontmatter — a
+--title holding a line break is refused — writes the format stamp
+.index/format.yaml and the record files .index/nodes.yaml and .index/edges.yaml,
+holding no record, stamps AGENTS.md,
 CONVENTIONS.md and the CLAUDE.md redirect from their templates, and
-refreshes the skeleton so the derived metadata and the claim-graph sheet
-stand at birth — the placeholder sheet where Graphviz dot is absent.
+refreshes the skeleton so the claim-graph sheet stands at birth — the
+placeholder sheet where Graphviz dot is absent.
 Finally it commits kb-root/ as the birth commit, "kb-init: knowledge base
 created" — a plain commit, never a kb-build: stage commit, so kbase build,
 which resumes from the build's stage trail, has no trail here and stays
@@ -209,5 +203,5 @@ refused against this KB. Its result is one YAML document on stdout.`,
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "the KB's title, as its entry point's heading (default: the repository's directory name)")
-	rootCmd.AddCommand(mcpBinding(cmd, mcpBound))
+	return cmd
 }

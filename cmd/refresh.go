@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/build"
-	"kbase/internal/filelock"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
@@ -31,8 +30,8 @@ type maintenanceOptions struct {
 // The refusal classes of a verb that finds no KB to work on.
 const (
 	checkWorktree = "worktree"
-	checkKBRoot   = "kb-root"
-	checkLock     = "lock"
+	checkKBRoot   = kb.CheckKBRoot
+	checkLock     = kb.CheckLock
 )
 
 // kbRootFrom is the kb-root beside the .git at or above dir, or a refusal
@@ -55,25 +54,44 @@ func kbRootFrom(dir string) (string, []toolresult.Item, error) {
 }
 
 // holdKB takes the write lock of the KB at root for a verb that writes it,
-// refusing while a build runs: at once, and again once the lock is taken, for
-// a build that started during the wait. Where release is nil, outcome and
-// items are the verb's answer.
+// refusing while a run — a build or a scoring run — holds the operation lock:
+// at once, and again once the lock is taken, for a run that started during the
+// wait. Where release is nil, outcome and items are the verb's answer.
 func holdKB(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
-	if running, err := build.RunningBuild(root); err != nil || running != nil {
-		return nil, toolresult.Refused, running, err
+	return holdWriting(root, remedy, true)
+}
+
+// holdWriting is holdKB for a verb that writes the KB at root. probe is
+// whether to refuse while a run holds the operation lock: a scoring run's own
+// landing and refresh clear it, the run that holds that lock being the writer.
+func holdWriting(root, remedy string, probe bool) (release func(), outcome string, items []toolresult.Item, err error) {
+	if probe {
+		if running, err := build.RunningOperation(root); err != nil || running != nil {
+			return nil, toolresult.Refused, running, err
+		}
 	}
+	release, outcome, items, err = holdWrite(root, remedy)
+	if release == nil || err != nil {
+		return release, outcome, items, err
+	}
+	if probe {
+		if running, err := build.RunningOperation(root); err != nil || running != nil {
+			release()
+			return nil, toolresult.Refused, running, err
+		}
+	}
+	return release, "", nil, nil
+}
+
+// holdWrite takes the KB write lock at root, waiting out a writer in progress;
+// where release is nil, outcome and items are the verb's answer.
+func holdWrite(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
 	release, err = write.LockKB(root)
-	if errors.Is(err, filelock.ErrHeld) {
-		return nil, toolresult.Retry, []toolresult.Item{{Check: checkLock, Path: filepath.Dir(root), Remedy: remedy,
-			Detail: "another write op or refresh held the KB's write lock past the wait; nothing was written"}}, nil
+	if item, held := write.HeldLockItem(err, root, remedy); held {
+		return nil, toolresult.Retry, []toolresult.Item{item}, nil
 	}
 	if err != nil {
 		return nil, "", nil, err
-	}
-	running, err := build.RunningBuild(root)
-	if err != nil || running != nil {
-		release()
-		return nil, toolresult.Refused, running, err
 	}
 	return release, "", nil, nil
 }
@@ -88,6 +106,20 @@ func openKB(root string) (*kb.Source, []toolresult.Item, error) {
 	return src, nil, err
 }
 
+// degradedFaults is the faults that degrade a KB's load, as help names them.
+const degradedFaults = "an edge authored twice, an edge naming no node, a cycle among the scoring edges"
+
+// degradedRefusedHelp is the help sentence of a verb refuseDegraded guards.
+const degradedRefusedHelp = "A KB whose load is degraded is refused, naming each fault; " + index.RefreshRemedy + " is the remedy."
+
+// refuseDegraded is the answer of a verb that does not run over a degraded
+// load: the records' refusal or a failure to read them, or a check: degraded
+// item per fault the load resolved, each with the remedy kbase refresh. stop
+// is false where the load is clean.
+func refuseDegraded(fields []toolresult.Field, src *kb.Source) (outcome string, out []toolresult.Field, stop bool) {
+	return refusalOrFailure(fields, index.RefuseDegraded(src))
+}
+
 // withMigration appends the record a migrated KB's result carries after
 // kb-root, and writes the sentence that says what the load converted to
 // stderr: once per call, on every verb that loads the KB.
@@ -99,11 +131,21 @@ func withMigration(fields []toolresult.Field, src *kb.Source, verb string, stder
 }
 
 // migrationNotice is one migrated KB's conditional record and the sentence
-// that earns it.
+// that earns it, each of the conversion's warnings a line of its own.
 func migrationNotice(verb string, stderr io.Writer, m *kb.Migration) toolresult.Record {
-	fmt.Fprintf(stderr, "%s: the KB's metadata format %s was converted to %s in memory: %s; kbase refresh writes the conversion\n",
+	fmt.Fprintf(stderr, "%s: the KB's metadata format %s was converted to %s in memory: %s; kbase refresh saves the conversion\n",
 		verb, m.From, m.To, m.Note)
-	return toolresult.Record{{Key: "from", Value: m.From}, {Key: "to", Value: m.To}, {Key: "note", Value: m.Note}}
+	warnings := []toolresult.Item{}
+	for _, w := range m.Warnings {
+		at := w.Path
+		if w.Line > 0 {
+			at = fmt.Sprintf("%s:%d", w.Path, w.Line)
+		}
+		fmt.Fprintf(stderr, "%s: conversion warning: %s: %s\n", verb, at, w.Detail)
+		warnings = append(warnings, toolresult.Item{Path: w.Path, Line: w.Line, Detail: w.Detail})
+	}
+	return toolresult.Record{{Key: "from", Value: m.From}, {Key: "to", Value: m.To}, {Key: "note", Value: m.Note},
+		{Key: "warnings", Value: warnings}}
 }
 
 // emitResult writes a verb's result document and returns its exit code.
@@ -111,7 +153,7 @@ func emitResult(verb string, stdout io.Writer, outcome string, fields []toolresu
 	if err := toolresult.Emit(stdout, outcome, fields...); err != nil {
 		return 0, fmt.Errorf("%s: writing the result: %w", verb, err)
 	}
-	return exitCodes[outcome], nil
+	return toolresult.ExitCode(outcome), nil
 }
 
 // sayNoDot tells the human on stderr that a verb's refresh drew no
@@ -136,7 +178,8 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	if refusals != nil {
 		return refused(nil, refusals...)
 	}
-	untouched := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: []string{}}, {Key: "removed", Value: []string{}}}
+	untouched := []toolresult.Field{{Key: "kb-root", Value: root}, {Key: "written", Value: []string{}}, {Key: "removed", Value: []string{}},
+		{Key: "warnings", Value: []toolresult.Item{}}}
 	release, outcome, items, err := holdKB(root, "re-run kbase refresh")
 	if err != nil {
 		return failed([]toolresult.Field{{Key: "kb-root", Value: root}}, err)
@@ -153,15 +196,18 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 		return refused(untouched, refusals...)
 	}
 	fields := withMigration([]toolresult.Field{{Key: "kb-root", Value: root}}, src, "refresh", opts.Stderr)
-	written, removed, noDot, err := index.RefreshReporting(src, opts.Logger)
-	if noDot {
+	if err := restamp(src); err != nil {
+		return failed(append(fields, untouched[1:]...), err)
+	}
+	r, err := index.RefreshWithWarnings(src, opts.Logger)
+	if r.NoDot {
 		sayNoDot(opts.Stderr, "refresh")
 	}
-	slices.Sort(written)
-	written = slices.Compact(written)
-	slices.Sort(removed)
+	written := slices.Compact(slices.Sorted(slices.Values(r.Written)))
+	removed := slices.Sorted(slices.Values(r.Removed))
 	fields = append(fields, toolresult.Field{Key: "written", Value: append([]string{}, written...)},
-		toolresult.Field{Key: "removed", Value: append([]string{}, removed...)})
+		toolresult.Field{Key: "removed", Value: append([]string{}, removed...)},
+		toolresult.Field{Key: "warnings", Value: append([]toolresult.Item{}, r.Warnings...)})
 	var refusal toolresult.Refusal
 	switch {
 	case errors.As(err, &refusal):
@@ -176,7 +222,7 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 
 // maintenanceCommand is a verb over the KB found from the working directory.
 func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (int, error)) *cobra.Command {
-	return mcpBinding(&cobra.Command{
+	return &cobra.Command{
 		Use:   use,
 		Short: short,
 		Long:  long,
@@ -195,22 +241,29 @@ func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (i
 			}
 			return nil
 		},
-	}, mcpBound)
+	}
 }
 
-func init() {
-	rootCmd.AddCommand(maintenanceCommand("refresh",
-		"derive the KB's derived metadata, .index/ and claim-graph sheets",
-		`refresh derives every derived field of the KB at kb-root/ beside the
-repository's .git — subtree aggregates, strength lines and annotations,
-leaf-references footers — and writes .index/*.yaml and the claim-graph
-sheets, drawn through Graphviz dot: kb-root/claim-graph.svg and, where two
-or more volumes hold nodes, kb-root/claim-graph-digest.svg and
-<volume>/claim-graph.svg (see render-claim-graph), removing a digest or volume sheet the KB no
-longer calls for. With no
-dot on PATH it draws nothing, says so on stderr, and writes a placeholder
-kb-root/claim-graph.svg only where none exists. A KB in an older metadata
-format is rewritten whole in the current one, the entry point stamped last,
-and the files the old format alone used are removed. It writes only files
-whose bytes change. Its result is one YAML document on stdout.`, runRefresh))
+func refreshCommand() *cobra.Command {
+	return maintenanceCommand("refresh",
+		"render the KB's register pages and claim-graph sheets; repair a degraded load and save a migration",
+		`refresh renders the KB at kb-root/ beside the repository's .git from its
+records: every register page the KB calls for — kb-root/`+kb.RegisterFile+` and
+<volume>/`+kb.RegisterFile+`, generated and never read as a source — removing a
+page it no longer calls for, and the claim-graph sheets, drawn through Graphviz dot:
+kb-root/claim-graph.svg and, where two or more volumes hold nodes,
+kb-root/claim-graph-digest.svg and <volume>/claim-graph.svg (see
+render-claim-graph), removing a digest or volume sheet the KB no longer calls
+for. With no dot on PATH it draws nothing, says so on stderr, and writes a
+placeholder kb-root/claim-graph.svg only where none exists. It writes no
+authored file but in two cases. A KB in an older metadata format is rewritten
+whole in the current one, the format stamp standing at the old version until
+the save's last write moves it to the current one, and the files the old
+format alone used are removed. A KB whose load is degraded — `+degradedFaults+` —
+has its records rewritten as the load resolved them, each record dropped, and
+each edge demoted to break a cycle, listed under warnings. A missing record
+file is refused, remedy "`+kb.RestoreFromGitRemedy+`"; one the load cannot parse
+is refused, naming its file and line; refresh repairs only a degraded load. It
+writes only files whose bytes change. Its result is one YAML document on
+stdout.`, runRefresh)
 }

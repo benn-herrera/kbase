@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"kbase/internal/atomicfile"
+	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -21,15 +22,19 @@ import (
 //go:embed templates/*.tmpl.md templates/digest-chunk.tmpl.md
 var templates embed.FS
 
+//go:embed templates/session-rule.txt
+var sessionRule string
+
+// SessionRule is the rule a session works under for rigor and bearing values:
+// plain text, the one copy that the stamped AGENTS.md and the MCP instructions
+// both carry.
+func SessionRule() string { return strings.TrimSpace(sessionRule) }
+
 // The documents, by the name each is written under in kb-root/.
 const (
-	ConventionsFile = "CONVENTIONS.md"
+	ConventionsFile = kb.ConventionsFile
 	OverviewFile    = "README.md"
 )
-
-// readinessDocs are the documents stamped from their templates, in this order:
-// init stamps them at a KB's birth, the build at its validation gate.
-var readinessDocs = []string{kb.AgentsFile, ConventionsFile}
 
 // The slots the templates name.
 const (
@@ -39,6 +44,7 @@ const (
 	slotPending     = "pending-literal"
 	slotPassage     = "overview-passage"
 	slotDigestChunk = "digest-chunk"
+	slotSessionRule = "session-rule"
 )
 
 // digestChunkName names the template sub-piece holding the digest sentence
@@ -108,12 +114,8 @@ func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []str
 	if msg != "" {
 		return nil, nil, result.Refusal{{Check: kb.UnmigratedAgentsCheck, Path: kb.AgentsRedirectFile, Detail: msg}}
 	}
-	kinds := make([]string, len(kb.NodeKinds))
-	for i, k := range kb.NodeKinds {
-		kinds[i] = "`" + k + "`"
-	}
-	values := map[string]string{slotProjectName: projectName, slotScopePin: scopePin, slotNodeKinds: strings.Join(kinds, ", ")}
-	for _, name := range readinessDocs {
+	values := readinessValues(projectName, scopePin)
+	for _, name := range kb.StampedFiles {
 		target := filepath.Join(kbRoot, name)
 		if exists(target) {
 			reports = append(reports, name+": present, left as authored")
@@ -137,6 +139,50 @@ func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []str
 		return written, reports, err
 	}
 	return append(written, kb.AgentsRedirectFile), append(reports, kb.AgentsRedirectFile+": written as the redirect to "+kb.AgentsFile), nil
+}
+
+// readinessValues is what the readiness documents' slots are filled with.
+func readinessValues(projectName, scopePin string) map[string]string {
+	kinds := make([]string, len(kb.NodeKinds))
+	for i, k := range kb.NodeKinds {
+		kinds[i] = "`" + k + "`"
+	}
+	return map[string]string{slotProjectName: projectName, slotScopePin: scopePin, slotNodeKinds: strings.Join(kinds, ", "),
+		slotSessionRule: SessionRule()}
+}
+
+// Restamp records in a migrated src, for its save to write, every readiness
+// document rendered whole from its template, whatever stood: projectName in
+// each, and as AGENTS.md's scope pin AuthoredKBPin where init made the KB, else
+// none. A source read at the current format is left as it is.
+func Restamp(src *kb.Source, projectName string) error {
+	if !src.Migrated() {
+		return nil
+	}
+	pin := ""
+	if bornByInit(src) {
+		pin = AuthoredKBPin
+	}
+	values := readinessValues(projectName, pin)
+	for _, name := range kb.StampedFiles {
+		text, err := fill(name, values)
+		if err != nil {
+			return err
+		}
+		src.Put(src.KBPath(name), []byte(text))
+	}
+	return nil
+}
+
+// bornByInit is whether init made the KB src holds: AGENTS.md stands and no
+// build record does. init stamps AGENTS.md at birth and writes no build record,
+// and build refuses the populated kb-root it leaves; a build writes its node-pass
+// record at claims-declared and stamps AGENTS.md only later, at phase-3a.
+func bornByInit(src *kb.Source) bool {
+	if !src.IsFile(src.KBPath(kb.AgentsFile)) {
+		return false
+	}
+	return !slices.ContainsFunc(buildrecords.RecordFiles, func(rel string) bool { return src.IsFile(src.Path(rel)) })
 }
 
 // Overview is the overview document: its template around the passage.

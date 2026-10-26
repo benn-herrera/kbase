@@ -21,7 +21,7 @@ var documentedKeys = map[string][]string{
 	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
 	"cancel":             {"state-dir", "pid", "resume"},
 	"init":               {"written", "removed"},
-	"refresh":            {"written", "removed"},
+	"refresh":            {"written", "removed", "warnings"},
 	"verify":             {"findings"},
 	"write-op":           {"ids", "minted", "adopted", "written", "refreshed", "removed"},
 	"resolve-demoted":    {"ids", "minted", "adopted", "written", "refreshed", "removed", "resolved"},
@@ -31,7 +31,8 @@ var documentedKeys = map[string][]string{
 	"render-claim-graph": {"written", "removed", "sheet", "dot"},
 	"models":             {"provider", "provider-rule", "provider-layer", "models"},
 	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
-	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "harnesses", "diagnostics"},
+	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "diagnostics"},
+	"probe":              {"provider", "provider-rule", "provider-layer", "selection", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
 	"export-latex":       {"written", "volumes", "report"},
 	"score":              {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
 }
@@ -44,16 +45,16 @@ var documentedSubKeys = map[string][]string{
 	"write-op.adopted":         {"entry", "id", "differs"},
 	"resolve-demoted.resolved": {"source", "target", "action"},
 	"configure.models":         {"decision", "text", "scoring"},
-	"score.counts":             {"total", "done", "failed", "remaining"},
-	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists", "harnessesExists"},
-	"show-config.providers":    {"name", "base-url", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
+	"score.counts":             {"total", "done", "failed", "skipped", "remaining"},
+	"probe.usage":              {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
+	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
+	"show-config.providers":    {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
 	"show-config.config":       {"models"},
 	"show-config.selection":    {"provider", "rule", "detail"},
-	"build.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer"},
-	"score.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer"},
-	"show-config.roles":        {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "harness", "harness-layer", "base-url", "sources", "detail"},
-	"show-config.harnesses":    {"name", "layer", "command"},
-	"migration":                {"from", "to", "note"},
+	"build.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model"},
+	"score.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model"},
+	"show-config.roles":        {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "base-url", "sources", "detail"},
+	"migration":                {"from", "to", "note", "warnings"},
 	"build.cancelled":          {"stage", "unit"},
 	"score.cancelled":          {"item"},
 	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
@@ -67,12 +68,12 @@ func keysFor(verb string) string {
 		return verb
 	case slices.Contains(write.Ops(), verb):
 		return "write-op"
-	case verb == "show" || verb == "stats":
+	case verb == "show" || verb == "stats" || verb == "edge-census":
 		return "mapping-query"
 	case verb == "wait":
 		// wait prints the status document for the store it waited on.
 		return "status"
-	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "weak-points"}, verb):
+	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "weak-points", "edges"}, verb):
 		return "list-query"
 	}
 	return verb
@@ -162,7 +163,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		t.Fatalf("%s: keys %q, want outcome first", verb, keys)
 	}
 	keys = keys[1:]
-	if verb != "models" && verb != "configure" && verb != "show-config" && len(keys) > 0 && keys[0] == "kb-root" {
+	if verb != "models" && verb != "configure" && verb != "show-config" && verb != "probe" && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 		// A migrated KB's record is conditional: present after kb-root and
 		// nowhere else, so a document carrying one is checked without it.

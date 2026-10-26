@@ -1,0 +1,9 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "axiom"
+    id: "axm-1"
+    title: "Agents act on what they observe"
+    canonical_path: "axioms.md"
+    canonical_anchor: "axiom-1-agents-act-on-what-they-observe"
+    rigor: 1.0

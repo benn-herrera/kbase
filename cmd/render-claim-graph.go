@@ -1,12 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+	"errors"
+
+	"github.com/spf13/cobra"
 
 	"kbase/internal/index"
-	"kbase/internal/kb"
 	toolresult "kbase/internal/result"
 )
 
@@ -43,16 +42,14 @@ func renderClaimGraph(opts maintenanceOptions) (string, []toolresult.Field) {
 		return refused(fields, refusals...)
 	}
 	fields = withMigration(fields, src, "render-claim-graph", opts.Stderr)
-	if src.Migrated() {
-		return refused(fields, toolresult.Item{Check: index.CheckIndex, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
-			Detail: fmt.Sprintf("the KB's metadata format is %s and kbase reads %s; render-claim-graph draws from the index a refresh derives",
-				src.Version(), kb.FormatVersion)})
-	}
-	if info, err := os.Stat(filepath.Join(root, kb.IndexDir)); err != nil || !info.IsDir() {
-		return refused(fields, toolresult.Item{Check: index.CheckIndex, Path: kb.IndexDir, Remedy: index.RefreshRemedy,
-			Detail: fmt.Sprintf("%s has no %s/ to render from; refresh derives it", root, kb.IndexDir)})
+	if outcome, out, stop := refuseDegraded(fields, src); stop {
+		return outcome, out
 	}
 	written, removed, drawn, err := index.WriteSheet(src)
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return refused(fields, refusal...)
+	}
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -77,11 +74,11 @@ const (
 	dotNotFound      = "not found on PATH"
 )
 
-func init() {
-	rootCmd.AddCommand(maintenanceCommand("render-claim-graph",
-		"render the claim-graph sheets from .index/",
-		`render-claim-graph draws the KB's claim-graph sheets from kb-root/.index/ and
-the build records beside kb-root/, through Graphviz dot: kb-root/claim-graph.svg,
+func renderClaimGraphCommand() *cobra.Command {
+	return maintenanceCommand("render-claim-graph",
+		"render the claim-graph sheets from the KB's records and statement markers",
+		`render-claim-graph draws the KB's claim-graph sheets from its records and the
+statement markers in its leaves, through Graphviz dot: kb-root/claim-graph.svg,
 every claim with each volume a cluster, always; and, where two or more volumes
 hold nodes, kb-root/claim-graph-digest.svg, one box per volume linking its
 index.md and its sheet, the two root sheets linking each other, and
@@ -89,6 +86,8 @@ index.md and its sheet, the two root sheets linking each other, and
 node one edge from it. It writes only the sheets whose bytes change, and
 removes a digest or volume sheet the KB no longer calls for. With no dot on
 PATH it draws nothing, leaves every sheet standing as it is, and writes a
-placeholder kb-root/claim-graph.svg only where none exists. Its result is one
-YAML document on stdout.`, runRenderClaimGraph))
+placeholder kb-root/claim-graph.svg only where none exists. A KB in an older
+metadata format is drawn from its conversion in memory, and the conversion is
+not saved; `+index.RefreshRemedy+` saves it. `+degradedRefusedHelp+` Its result is
+one YAML document on stdout.`, runRenderClaimGraph)
 }

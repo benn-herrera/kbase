@@ -4,7 +4,7 @@
 package index
 
 import (
-	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -27,8 +27,8 @@ type Strength struct {
 	AnalysisResults map[string]Result // every analysis's result, by id
 }
 
-// Finals is every claim's non-pending final strength.
-func (s Strength) Finals() map[string]float64 {
+// finals is every claim's non-pending final strength.
+func (s Strength) finals() map[string]float64 {
 	out := map[string]float64{}
 	for id, r := range s.Results {
 		if r.Final != nil {
@@ -36,25 +36,6 @@ func (s Strength) Finals() map[string]float64 {
 		}
 	}
 	return out
-}
-
-// AnalysisFinals is every analysis's non-pending strength.
-func (s Strength) AnalysisFinals() map[string]float64 {
-	out := map[string]float64{}
-	for id, r := range s.AnalysisResults {
-		if r.Final != nil {
-			out[id] = *r.Final
-		}
-	}
-	return out
-}
-
-// CycleError is a premise graph with a cycle; Members is every node the walk
-// could not reach, sorted.
-type CycleError struct{ Members []string }
-
-func (e CycleError) Error() string {
-	return fmt.Sprintf("claim premise graph has a cycle among %d node(s): %s", len(e.Members), strings.Join(e.Members, ", "))
 }
 
 func ptr(v float64) *float64 { return &v }
@@ -123,8 +104,9 @@ func minOf(first float64, rest ...float64) float64 {
 // took, leading space included, or "" where the line has nothing to explain.
 // The expression nests innermost-first: the min over the premises, the lift
 // above it, then the cap around both. A pending rigor has no min to show, so a
-// lift standing over it is the whole expression; no premise at all leaves the
-// derivation 0, which is the base a lift and a cap compose around.
+// lift standing over it is the whole expression; with no premise at all the
+// derivation is the node's bare value — 0 for a claim, its rigor for an
+// analysis — the base a lift and a cap compose around.
 func RenderStrengthTrace(r Result) string {
 	if r.Final == nil {
 		return ""
@@ -226,17 +208,20 @@ func capStrength(edges []kb.Edge, strength map[string]*float64) *float64 {
 }
 
 // derive is one node's result: the derivation is the least of its rigor and
-// its premises' contributions, or 0 where no premise contributes — a rigor caps
-// what the premises establish and is no premise itself. The final is that value
-// raised to the largest lift and capped by the smallest refutation. A pending
-// rigor over a premise set leaves the derivation pending, and a lift still
-// stands it; over no premise it caps nothing, and the node reads 0.
-func derive(rigor *float64, premises, lifts, caps []kb.Edge, strength map[string]*float64) Result {
+// its premises' contributions, or bare where no premise contributes — a rigor
+// caps what the premises establish and is no premise itself. bare is what the
+// node's kind derives with nothing to stand on: 0 for a claim, which nothing
+// substantiates, and its own rigor for an analysis, whose method is its
+// evidence. The final is that value raised to the largest lift and capped by
+// the smallest refutation. A pending rigor over a premise set leaves the
+// derivation pending, and a lift still stands it; over no premise it caps
+// nothing, and the node reads its kind's bare value.
+func derive(rigor, bare *float64, premises, lifts, caps []kb.Edge, strength map[string]*float64) Result {
 	r := Result{Rigor: rigor}
 	r.MinDep = MinDependencyStrength(premises, strength)
 	switch {
 	case r.MinDep == nil:
-		r.Derivation = ptr(0)
+		r.Derivation = bare
 	case rigor != nil:
 		r.Derivation = ptr(minOf(*rigor, *r.MinDep))
 	}
@@ -257,8 +242,9 @@ func derive(rigor *float64, premises, lifts, caps []kb.Edge, strength map[string
 
 // derivationOrder is Kahn's order over every claim and analysis that carries a
 // derived strength: a node after every node its premises name. Nodes outside
-// that set are not ordered and not waited on.
-func derivationOrder(nodes []string, deps map[string][]string) ([]string, error) {
+// that set are not ordered and not waited on. cycle is every node the order
+// could not reach — a cycle's members and every node resting on one — sorted.
+func derivationOrder(nodes []string, deps map[string][]string) (order, cycle []string) {
 	indegree := map[string]int{}
 	dependents := map[string][]string{}
 	for _, id := range nodes {
@@ -285,7 +271,6 @@ func derivationOrder(nodes []string, deps map[string][]string) ([]string, error)
 		}
 	}
 	slices.Sort(queue)
-	var order []string
 	for len(queue) > 0 {
 		node := queue[0]
 		queue = queue[1:]
@@ -300,143 +285,128 @@ func derivationOrder(nodes []string, deps map[string][]string) ([]string, error)
 			}
 		}
 	}
-	if len(order) != len(indegree) {
-		var members []string
-		for id, d := range indegree {
-			if d > 0 {
-				members = append(members, id)
-			}
+	for id, d := range indegree {
+		if d > 0 {
+			cycle = append(cycle, id)
 		}
-		slices.Sort(members)
-		return nil, CycleError{members}
 	}
-	return order, nil
+	slices.Sort(cycle)
+	return order, cycle
 }
 
-// ComputeStrength derives every claim's and analysis's strength.
+// strengthWalk is what one strength computation reads: every claim's and
+// analysis's rigor by id, each list in walk order; every other source's value —
+// an axiom's, a work's, a run experiment's; and every scoring edge by the node
+// it lands on: the supports and founds edges feeding its minimum, its lifts
+// and its caps.
+type strengthWalk struct {
+	claimOrder, analysisOrder []string
+	rigor                     map[string]*float64
+	sources                   map[string]*float64
+	premises, lifts, caps     map[string][]kb.Edge
+}
+
+func newStrengthWalk() strengthWalk {
+	return strengthWalk{rigor: map[string]*float64{}, sources: map[string]*float64{},
+		premises: map[string][]kb.Edge{}, lifts: map[string][]kb.Edge{}, caps: map[string][]kb.Edge{}}
+}
+
+// land files each edge under the node it lands on, by its relation's station.
+func (w strengthWalk) land(edges []kb.Edge) {
+	for _, e := range edges {
+		switch e.Relation {
+		case kb.RelationSupports, kb.RelationFounds:
+			w.premises[e.Target] = append(w.premises[e.Target], e)
+		case kb.RelationLifts:
+			w.lifts[e.Target] = append(w.lifts[e.Target], e)
+		case kb.RelationRefutes:
+			w.caps[e.Target] = append(w.caps[e.Target], e)
+		}
+	}
+}
+
+// run is every claim's and analysis's result the derivation order reaches,
+// and the nodes a cycle kept it from, which derive nothing.
+func (w strengthWalk) run() (Strength, []string) {
+	nodes := slices.Concat(w.claimOrder, w.analysisOrder)
+	inWalk := map[string]bool{}
+	for _, id := range nodes {
+		inWalk[id] = true
+	}
+	deps := map[string][]string{}
+	for _, id := range nodes {
+		for _, e := range slices.Concat(w.premises[id], w.lifts[id], w.caps[id]) {
+			if inWalk[e.Source] {
+				deps[id] = append(deps[id], e.Source)
+			}
+		}
+	}
+	order, cycle := derivationOrder(nodes, deps)
+	isClaim := map[string]bool{}
+	for _, id := range w.claimOrder {
+		isClaim[id] = true
+	}
+	strength := maps.Clone(w.sources)
+	out := Strength{Results: map[string]Result{}, AnalysisResults: map[string]Result{}}
+	for _, id := range order {
+		// A claim nothing carries derives 0; an analysis nothing carries
+		// derives its own rigor, its method being its evidence.
+		bare := ptr(0.0)
+		if !isClaim[id] {
+			bare = w.rigor[id]
+		}
+		r := derive(w.rigor[id], bare, w.premises[id], w.lifts[id], w.caps[id], strength)
+		strength[id] = r.Final
+		if isClaim[id] {
+			out.Results[id] = r
+		} else {
+			out.AnalysisResults[id] = r
+		}
+	}
+	return out, cycle
+}
+
+// graphStrength derives every claim's and analysis's strength from g's records
+// and edges, a non-run experiment supplying no value.
 //
 // A node's derivation is min(its rigor, every participating premise's
-// contribution), and 0 where no premise participates: rigor caps what the
-// premises establish and is no premise itself, so a node nothing carries reads
-// 0 whatever its rigor, judged or not. A claim or analysis premise contributes
+// contribution): rigor caps what the premises establish and is no premise
+// itself. A node with no participating premise derives what its kind is worth
+// bare — a claim reads 0, since nothing substantiates it, whatever its rigor,
+// judged or not; an analysis reads its own rigor, its method being the evidence
+// its premises would otherwise supply. A claim or analysis premise contributes
 // its bearing times its final strength, and a work or axiom premise its bearing
 // times the source's rigor — a work's judged once by a person, an axiom's 1.0 by
 // rule. A final strength is min(max(derivation, every lift), every cap), a lift
 // contributing its bearing times the lifter's strength and a refutation capping
 // at 1 − that product, the smallest cap winning. Every figure is carried at full
 // precision: a dependent multiplies the value its source published, not a
-// rounded one. A claim's refutations, an analysis's and an experiment's lifts
-// and refutations all land on the node they name. An edge whose bearing or
-// whose source's strength is pending is excluded; a pending rigor leaves the
-// node's derivation pending where a premise participates and its final open to a
-// lift. A non-run experiment's edges are excluded as an unjudged premise's are.
-// A cycle among claims and analyses is a CycleError, scored or not.
-func ComputeStrength(st kb.State) (Strength, error) {
-	claims := map[string]kb.ClaimEntry{}
-	var claimOrder []string
-	for _, e := range st.ClaimEntries {
-		if _, ok := claims[e.ID]; !ok {
-			claimOrder = append(claimOrder, e.ID)
-		}
-		claims[e.ID] = e
+// rounded one. An edge whose bearing or whose source's strength is pending is
+// excluded; a pending rigor leaves the node's derivation pending where a premise
+// participates and its final open to a lift. A premise cycle refuses nothing:
+// its members, and every node resting on one, derive nothing.
+func graphStrength(g kb.Graph, edges []kb.Edge) Strength {
+	w := newStrengthWalk()
+	for _, n := range g.Claims {
+		w.claimOrder = append(w.claimOrder, n.ID)
+		w.rigor[n.ID] = n.Rigor
 	}
-	analyses := map[string]kb.AnalysisNode{}
-	var analysisOrder []string
-	for _, s := range st.Analyses {
-		if _, ok := analyses[s.ID]; !ok {
-			analysisOrder = append(analysisOrder, s.ID)
-		}
-		analyses[s.ID] = s
+	for _, n := range g.Analyses {
+		w.analysisOrder = append(w.analysisOrder, n.ID)
+		w.rigor[n.ID] = n.Rigor
 	}
-	nodes := slices.Concat(claimOrder, analysisOrder)
-	inWalk := map[string]bool{}
-	for _, id := range nodes {
-		inWalk[id] = true
+	for _, n := range g.Axioms {
+		w.sources[n.ID] = ptr(kb.AxiomRigor)
 	}
-
-	// premises, lifts and caps are every scoring edge authored off the node's
-	// own lists — a claim's refutations, an analysis's lifts and refutations, an
-	// experiment's supports, lifts and refutations — by the node they land on.
-	premises, lifts, caps := map[string][]kb.Edge{}, map[string][]kb.Edge{}, map[string][]kb.Edge{}
-	addArrows := func(edges []kb.Edge, into map[string][]kb.Edge) {
-		for _, e := range edges {
-			into[e.Target] = append(into[e.Target], e)
+	for _, n := range g.Works {
+		w.sources[n.ID] = n.Rigor
+	}
+	for _, n := range g.Experiments {
+		if n.Status == kb.ExperimentRun {
+			w.sources[n.ID] = n.Rigor
 		}
 	}
-	for _, e := range st.ClaimEntries {
-		addArrows(e.Refutes, caps)
-	}
-	for _, s := range st.Analyses {
-		addArrows(s.Lifts, lifts)
-		addArrows(s.Refutes, caps)
-	}
-	for _, x := range st.Experiments {
-		if x.Status != "run" {
-			continue
-		}
-		addArrows(x.Supports, premises)
-		addArrows(x.Lifts, lifts)
-		addArrows(x.Refutes, caps)
-	}
-
-	deps := map[string][]string{}
-	premisesOf := func(id string, edges []kb.Edge) {
-		for _, e := range edges {
-			if kb.Scoring(e.Relation) && inWalk[e.Source] {
-				deps[id] = append(deps[id], e.Source)
-			}
-		}
-	}
-	for id, e := range claims {
-		premisesOf(id, e.Premises)
-	}
-	for id, s := range analyses {
-		premisesOf(id, s.Premises)
-	}
-	for _, arrows := range []map[string][]kb.Edge{lifts, caps} {
-		for target, edges := range arrows {
-			if inWalk[target] {
-				premisesOf(target, edges)
-			}
-		}
-	}
-	order, err := derivationOrder(nodes, deps)
-	if err != nil {
-		return Strength{}, err
-	}
-
-	// strength holds every source's value the walk has: an axiom its rigor of
-	// 1.0, a work its rigor, an experiment its rigor where it ran, and a claim
-	// or analysis the final value computed below.
-	strength := map[string]*float64{}
-	for _, n := range st.Axioms {
-		strength[n.ID] = ptr(kb.AxiomRigor)
-	}
-	for _, w := range st.Works {
-		strength[w.ID] = w.Rigor
-	}
-	for _, x := range st.Experiments {
-		if x.Status == "run" {
-			strength[x.ID] = x.Rigor
-		}
-	}
-
-	out := Strength{Results: map[string]Result{}, AnalysisResults: map[string]Result{}}
-	for _, id := range order {
-		var rigor *float64
-		var local []kb.Edge
-		if e, ok := claims[id]; ok {
-			rigor, local = e.Rigor, e.Premises
-		} else {
-			rigor, local = analyses[id].Rigor, analyses[id].Premises
-		}
-		r := derive(rigor, slices.Concat(local, premises[id]), lifts[id], caps[id], strength)
-		strength[id] = r.Final
-		if _, ok := claims[id]; ok {
-			out.Results[id] = r
-		} else {
-			out.AnalysisResults[id] = r
-		}
-	}
-	return out, nil
+	w.land(edges)
+	out, _ := w.run()
+	return out
 }

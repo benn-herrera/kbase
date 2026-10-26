@@ -4,12 +4,12 @@ Future intent, not commitment. Design truth lives in [SPEC.md](SPEC.md) and
 [ARCHITECTURE.md](ARCHITECTURE.md); the plan under way is `ACTIVE_PLAN.md`. Finished items are
 deleted, not archived.
 
-## Now
-
-- The uncertainty pool and hit list, parked: the declared categories yield nothing useful and the
-  hit list returns when a scoring pass has run on the fixture and a ranking signal puts the
-  author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
-  plan's record is `ACTIVE_PLAN.md` at commit `34b956e`). Never an all-pairs check.
+## Next
+- **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
+- **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
+  `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
+- Use goroutines to parallelize scoring asks - they are embarassingly parallel, so it is just a question of how many you want to run at once. 
+- Same for most of the build asks as well
 
 ## Reader fidelity
 
@@ -20,68 +20,28 @@ deleted, not archived.
   latex-latex_macros`), which may preserve author environment names.
 
 ## KB format changes
-The `2.0` model is in force, at `2.0.1` (the patch is the bottom band's words): five node types —
-`claim`, `analysis`, `experiment`, `work` and `axiom`; four scoring relations — `supports`, `founds`,
-`lifts` and `refutes` — beside the two unscored ones, `references` and `demoted`; and three
-quantities — `rigor`, a node's local value, `bearing`, a scoring edge's scalar, and `strength`, the
-derived value.
-
-- `3.0.0`: the derived index as **one file** instead of `.index/`'s five tables, each record
-  carrying its table's name. A new table becomes a record type rather than a new file, so a feature
-  does not grow the file set and needs no migration for it; the save commits one rename instead of
-  five, and the tables no longer have a partial state between them. The line-per-record shape makes
-  the merge mechanical; the cost is that every refresh rewrites the file and one malformed line
-  takes out every consumer at once.
+The `3.0.0` format is in force: the nodes and edges are records in two authored files and
+everything else is derived at load, over the `2.0` model — five node types — `claim`, `analysis`,
+`experiment`, `work` and `axiom`; four scoring relations — `supports`, `founds`, `lifts` and
+`refutes` — beside the two unscored ones, `references` and `demoted`; and three quantities —
+`rigor`, a node's local value, `bearing`, a scoring edge's scalar, and `strength`, the derived value.
+The next major is under "After kbase is proven in use".
 
 ## Configuration
 
 - **Remove the inert `provider` key from `config.toml` at the next major.** It loads and chooses
   nothing today, and a file-mode run reports it superseded (SPEC §9). It leaves the schema once the
-  reader-facing examples, `USER_CONVENTIONS.md` and Phase 3's `references/scoring.md` have moved off
+  reader-facing examples, `USER_CONVENTIONS.md` and adjagent's `references/scoring.md` have moved off
   it; until then strict load keeps modelling the key so the file a user has stays loadable and
   `kbase configure` can rewrite it.
-- **`harnesses.toml` gains no entry but the two seeds.** A profile is added by editing the file, and
-  the tool-less agent — one that cannot read the KB its ask is about — is adjagent's to supply for
-  both harnesses, not kbase's to write. `opencode`'s seed stays commented until that agent lands or a
-  user uncomments it.
-
-## Scoring rubric
-
-Carried from the rubric's landing; the scheme's `## Not settled` is the full statement of each, and
-this names only what would move.
-
-- **The bottom cut's height.** The last rung takes every strength under `0.20` and reads
-  `unsubstantiated`; where the cut belongs is open, and moving it moves published strengths.
-- **Whether a bare assertion becomes a criterion.** Today it charges none of the six and keeps
-  `0.95`; adding a seventh `rigor` id and a weight is a revision of the scheme, not an edit.
-- **Whether the twelve ids freeze.** A rename moves the ledger's recorded ids and the templates' text
-  with them, and so moves `ask_sha256`; what a re-derivation does with a recorded id the running
-  table lacks stays open until the vocabulary is frozen or a rule is written for it.
-- **Whether `0.95` is discipline or enforcement.** A pass cannot derive `1.00`, and `set-rigor`
-  accepts it; refusing `1.0` for a claim, an analysis and an experiment is the open move.
-- **What `counts` reports for a run re-priced mid-run.** The run records the re-price in
-  `repriced.yaml`, and no result key states it.
-
-## Deferred from `2.0.0`
-Two questions the model answers no to. Each names the move that would settle it.
-
-- **May a work refute a claim directly?** `2.0.0` says no: a work carries no authored role list, so a
-  work's counter-evidence reaches a claim as an analysis the work founds, and that analysis refutes
-  the claim. The move is a `refutes:` list on the work's register entry; the arithmetic is already
-  defined — a cap at `1 − bearing × the work's rigor` — so the change is the list and its parse, not
-  the walk.
-- **Does the sheet want a bearing axis?** `2.0.0` draws the derived value alone: a bearing is an edge
-  judgement, and a second visual axis over it is a ruling of its own. The move is a stroke attribute
-  per bearing drawn from the index column every scoring row already carries, with the DOT goldens
-  regenerated.
 
 ## After kbase is proven in use
 - The README's argument-graph images are snapshots of another project's graph. They are replaced by
   `render-claim-graph` output from kbase's own KB once a KB argues the scoring mechanism, so the
   pictures become kbase's own graph rather than an illustration of its capability.
 - Records-native leaves with a Go writer, replacing the pandoc writer route.
-- The next major bump of the metadata format, `3.0.0` (SPEC §10): jointly established units — a
-  strongly connected component a person promotes into one node carrying the strength its members
+- The next major bump of the metadata format after `3.0.0` (SPEC §10): jointly established units —
+  a strongly connected component a person promotes into one node carrying the strength its members
   share, the DAG constraint over units — once the `demoted` relation has been lived with.
 - A complete LaTeX reader in place of pandoc's: the `polytexnical` project (`../polytexnical`),
   taken up only after kbase has shown the pipeline produces a claim graph worth auditing.

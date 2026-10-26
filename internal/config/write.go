@@ -51,15 +51,6 @@ func CreateProvidersFile(path string) (bool, error) {
 	return createTemplateFile(path, providersTemplate)
 }
 
-// CreateHarnessesFile writes the annotated harnesses.toml template at path when
-// no file stands there, and reports whether it wrote. It is the only writer of
-// harnesses.toml, and creation is all it does: a profile is added by editing the
-// file, never by a verb, so a seed a user deleted stays deleted and a file they
-// wrote keeps every entry they wrote.
-func CreateHarnessesFile(path string) (bool, error) {
-	return createTemplateFile(path, harnessesTemplate)
-}
-
 // createTemplateFile installs template at path where nothing stands.
 func createTemplateFile(path, template string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {

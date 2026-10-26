@@ -1,4 +1,4 @@
-package model
+package model_test
 
 import (
 	"context"
@@ -7,13 +7,16 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // wantZeroResponse fails the test unless r is the zero Response — the
 // "nothing partial escaped" check every error path here owes its caller.
-func wantZeroResponse(t *testing.T, r Response) {
+func wantZeroResponse(t *testing.T, r model.Response) {
 	t.Helper()
-	if r != (Response{}) {
+	if r != (model.Response{}) {
 		t.Errorf("Response: got %+v, want zero", r)
 	}
 }
@@ -22,15 +25,15 @@ func wantZeroResponse(t *testing.T, r Response) {
 // same Response the blocking call would have — that equivalence is the
 // whole premise of using the streaming transport for batch call sites.
 func TestConsultDrainedMatchesConsult(t *testing.T) {
-	want := Response{
+	want := model.Response{
 		Content:      "the whole answer, delivered in pieces",
 		FinishReason: "stop",
-		Usage:        Usage{PromptTokens: 11, CompletionTokens: 7, TotalTokens: 18},
+		Usage:        model.Usage{PromptTokens: 11, CompletionTokens: 7, TotalTokens: 18},
 	}
-	m := NewScriptedMock([]Response{want}, nil)
+	m := modeltest.NewScriptedMock([]model.Response{want}, nil)
 	m.SetMockChunks(5)
 
-	got, err := ConsultDrained(context.Background(), m, Request{Model: "m"})
+	got, err := model.ConsultDrained(context.Background(), m, model.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("ConsultDrained: %v", err)
 	}
@@ -44,7 +47,7 @@ func TestConsultDrainedMatchesConsult(t *testing.T) {
 		t.Errorf("Usage: got %+v, want %+v", got.Usage, want.Usage)
 	}
 
-	blocking, err := m.Consult(context.Background(), Request{Model: "m"})
+	blocking, err := m.Consult(context.Background(), model.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("Consult: %v", err)
 	}
@@ -57,8 +60,8 @@ func TestConsultDrainedMatchesConsult(t *testing.T) {
 // real shape (the whole budget spent on reasoning). It must come back as an
 // empty Response, not an error.
 func TestConsultDrainedEmptyResponse(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: "", FinishReason: "stop"}}, nil)
-	got, err := ConsultDrained(context.Background(), m, Request{Model: "m"})
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "", FinishReason: "stop"}}, nil)
+	got, err := model.ConsultDrained(context.Background(), m, model.Request{Model: "m"})
 	if err != nil {
 		t.Fatalf("ConsultDrained: %v", err)
 	}
@@ -74,10 +77,10 @@ func TestConsultDrainedEmptyResponse(t *testing.T) {
 // unchanged, so callers can still match their own sentinels.
 func TestConsultDrainedOpenError(t *testing.T) {
 	injected := errors.New("provider unavailable")
-	m := NewScriptedMock([]Response{{Content: "unused"}}, nil)
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "unused"}}, nil)
 	m.SetError(injected)
 
-	got, err := ConsultDrained(context.Background(), m, Request{Model: "m"})
+	got, err := model.ConsultDrained(context.Background(), m, model.Request{Model: "m"})
 	if !errors.Is(err, injected) {
 		t.Fatalf("error: got %v, want the injected error", err)
 	}
@@ -103,8 +106,8 @@ data: [DONE]
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	got, err := ConsultDrained(context.Background(), c, chatRequest("m"))
+	c := model.NewOpenAIClient(newTestEndpoint(srv.URL))
+	got, err := model.ConsultDrained(context.Background(), c, chatRequest("m"))
 	if err != nil {
 		t.Fatalf("ConsultDrained: %v", err)
 	}
@@ -140,8 +143,8 @@ func TestConsultDrainedContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	c := NewHTTPClient(newTestEndpoint(srv.URL))
-	got, err := ConsultDrained(ctx, c, chatRequest("m"))
+	c := model.NewOpenAIClient(newTestEndpoint(srv.URL))
+	got, err := model.ConsultDrained(ctx, c, chatRequest("m"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error: got %v, want context.Canceled", err)
 	}
@@ -151,11 +154,11 @@ func TestConsultDrainedContextCancellation(t *testing.T) {
 // TestConsultDrainedPreCancelledContext: a context already cancelled at the
 // call is refused at stream open, before any request is made.
 func TestConsultDrainedPreCancelledContext(t *testing.T) {
-	m := NewScriptedMock([]Response{{Content: "abcdefgh"}}, nil)
+	m := modeltest.NewScriptedMock([]model.Response{{Content: "abcdefgh"}}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := ConsultDrained(ctx, m, Request{Model: "m"}); !errors.Is(err, context.Canceled) {
+	if _, err := model.ConsultDrained(ctx, m, model.Request{Model: "m"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("error: got %v, want context.Canceled", err)
 	}
 }

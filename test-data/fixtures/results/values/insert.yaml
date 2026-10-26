@@ -1,9 +1,5 @@
 entry:
-- register: claim-rigor.md
-  title: A Result
-  rigor: 0.5
+- title: A Result
   rationale: Shown.
-- register: claim-rigor.md
-  title: Another Result
-  rigor: 0.4
+- title: Another Result
   rationale: Shown too.

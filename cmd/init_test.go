@@ -52,8 +52,8 @@ func TestInitRefusesOutsideAWorktree(t *testing.T) {
 	dir := t.TempDir()
 	out, code := kbase(t, dir, "init")
 	d := checkDocument(t, "init", out)
-	if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] {
-		t.Fatalf("outcome %s exit %d, want refused exit %d\n%s", d.Outcome, code, exitCodes[toolresult.Refused], out)
+	if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
+		t.Fatalf("outcome %s exit %d, want refused exit %d\n%s", d.Outcome, code, toolresult.ExitCode(toolresult.Refused), out)
 	}
 	if slices.Contains(d.Keys, "kb-root") {
 		t.Errorf("refusal before birth carries a kb-root key: %q", d.Keys)
@@ -76,7 +76,7 @@ func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 		}
 		out, code := kbase(t, repo, "init")
 		d := checkDocument(t, "init", out)
-		if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] {
+		if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 			t.Fatalf("empty kb-root: outcome %s exit %d\n%s", d.Outcome, code, out)
 		}
 		if !strings.Contains(out, `check: "kb-root"`) {
@@ -101,7 +101,7 @@ func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 			}
 			out, code := kbase(t, repo, "init")
 			d := checkDocument(t, "init", out)
-			if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] {
+			if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 				t.Fatalf("existing kb-root (%s): outcome %s exit %d\n%s", name, d.Outcome, code, out)
 			}
 			if !strings.Contains(out, `check: "kb-root"`) {
@@ -143,13 +143,12 @@ func treeFiles(t *testing.T, root string) []string {
 
 // TestInitBirthWritesTheBornTreeAndCommitsIt: the born tree's file set is
 // exactly the written list, both directions; the bytes init is the sole
-// author of stand byte-exact — entry-point.md and the zero-node
-// subtree-aggregates row against their fixtures, CLAUDE.md against the
+// author of stand byte-exact — entry-point.md and the two record files,
+// holding no record, against their fixtures, CLAUDE.md against the
 // redirect constant it exists to be (the unmigrated_agents_file reader);
 // AGENTS.md and CONVENTIONS.md stand non-empty and hold no unfilled slot;
 // the authored pin is asserted where the template puts it, AGENTS.md's
-// {scope-pin}; the derived index's six files stand and are named
-// in written, the five empty ones' bytes not pinned. The birth commit lands —
+// {scope-pin}. The birth commit lands —
 // its branch ref standing, since cmd may not exec git to read the subject
 // back — and re-issue refuses. The subject is held off the trail by
 // TestBirthSubjectIsOffTheTrail.
@@ -182,16 +181,10 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	if born := treeFiles(t, filepath.Join(repo, "kb-root")); !slices.Equal(born, written) {
 		t.Errorf("born tree and written differ, born %q written %q", born, written)
 	}
-	for _, name := range kb.IndexFiles {
-		rel := kb.IndexDir + "/" + kb.IndexFileName(name)
-		if _, err := os.Stat(filepath.Join(repo, "kb-root", filepath.FromSlash(rel))); err != nil {
-			t.Errorf("the derived index lacks %s: %v", rel, err)
-		}
+	for _, rel := range []string{kb.EntryPointFile, kb.FormatFile, kb.GraphNodesFile, kb.GraphEdgesFile} {
 		if !slices.Contains(written, rel) {
 			t.Errorf("written lacks %s: %q", rel, written)
 		}
-	}
-	for _, rel := range []string{kb.EntryPointFile, kb.IndexDir + "/" + kb.IndexFileName(kb.IndexSubtreeAggregates)} {
 		got, err := os.ReadFile(filepath.Join(repo, "kb-root", filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatalf("born tree lacks %s: %v", rel, err)
@@ -239,7 +232,7 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 
 	again, code := kbase(t, repo, "init")
 	d = checkDocument(t, "init", again)
-	if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] || !strings.Contains(again, `check: "kb-root"`) {
+	if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || !strings.Contains(again, `check: "kb-root"`) {
 		t.Fatalf("re-issue at a born KB: outcome %s exit %d\n%s", d.Outcome, code, again)
 	}
 }
@@ -271,7 +264,7 @@ func TestInitRefusesATitleSpanningLines(t *testing.T) {
 		repo := gitWorktree(t)
 		out, code := kbase(t, repo, "init", "--title", title)
 		d := checkDocument(t, "init", out)
-		if d.Outcome != toolresult.Refused || code != exitCodes[toolresult.Refused] || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `key: "--title"`) {
+		if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `key: "--title"`) {
 			t.Errorf("--title %q: outcome %s exit %d, want a usage refusal naming --title\n%s", title, d.Outcome, code, out)
 		}
 		if _, err := os.Lstat(filepath.Join(repo, "kb-root")); !os.IsNotExist(err) {

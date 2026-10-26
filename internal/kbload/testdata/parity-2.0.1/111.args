@@ -1,0 +1,5 @@
+weak-points
+--max-strength
+1.1
+--min-dependents
+0

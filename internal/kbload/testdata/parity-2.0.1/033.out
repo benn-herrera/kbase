@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa003"
+    title: "The gradient $`\\nabla f`$ is \"bounded\" when a < b & c"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "the-gradient-nabla-f-is-bounded-when-a-b-c"
+    rigor: 0.5
+    strength: 0.6
+    build_status: "use as input only, don't build deeper"
+    build_band: "input-only"
+    rationale: "Fixture."
+    premise_count: 2
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 1

@@ -1,0 +1,110 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 8
+offset: 0
+truncated: false
+results:
+    - node_type: "claim"
+      id: "clm-aaa005"
+      title: "An isolated $`\\Gamma`$-observation nothing cites"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "an-isolated-gamma-observation-nothing-cites"
+      rigor: 0.3
+      strength: 0.0
+      build_status: "unsubstantiated"
+      build_band: "unsubstantiated"
+      rationale: "Fixture."
+      premise_count: 0
+      strengthen_by_count: 0
+      citation_count: 0
+    - node_type: "claim"
+      id: "clm-aaa006"
+      title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "see-the-appendixappendixmd-for-a-stated-bound-that-the-rest-of-the-volume-never-reaches-at-all"
+      rigor: 0.1
+      strength: 0.0
+      build_status: "unsubstantiated"
+      build_band: "unsubstantiated"
+      rationale: "Fixture."
+      premise_count: 0
+      strengthen_by_count: 0
+      citation_count: 0
+    - node_type: "claim"
+      id: "clm-aaa004"
+      title: "A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "a-deliberately-long-prose-claim-title-that-runs-well-past-the-three-wrapped-lines-a-sheet-label-allows-before-it-is-cut"
+      rigor: null
+      strength: 0.4
+      build_status: "do not build on, rework needed"
+      build_band: "do-not-build"
+      rationale: "Fixture."
+      premise_count: 0
+      strengthen_by_count: 0
+      citation_count: 1
+    - node_type: "claim"
+      id: "clm-aaa003"
+      title: "The gradient $`\\nabla f`$ is \"bounded\" when a < b & c"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "the-gradient-nabla-f-is-bounded-when-a-b-c"
+      rigor: 0.5
+      strength: 0.6
+      build_status: "use as input only, don't build deeper"
+      build_band: "input-only"
+      rationale: "Fixture."
+      premise_count: 2
+      strengthen_by_count: 0
+      citation_count: 1
+    - node_type: "claim"
+      id: "clm-bbb002"
+      title: "The governance bifurcation"
+      canonical_path: "beta/claim-rigor.md"
+      canonical_anchor: "the-governance-bifurcation"
+      rigor: 0.66
+      strength: 0.66
+      build_status: "ok to build on, see caveats"
+      build_band: "ok-with-caveats"
+      rationale: "Fixture."
+      premise_count: 2
+      strengthen_by_count: 0
+      citation_count: 1
+    - node_type: "claim"
+      id: "clm-bbb001"
+      title: "Test example 2"
+      canonical_path: "beta/claim-rigor.md"
+      canonical_anchor: "test-example-2"
+      rigor: 0.88
+      strength: 0.88
+      build_status: "ok to build on"
+      build_band: "ok-to-build"
+      rationale: "Fixture."
+      premise_count: 1
+      strengthen_by_count: 0
+      citation_count: 0
+    - node_type: "claim"
+      id: "clm-aaa001"
+      title: "Theorem 1"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "theorem-1"
+      rigor: 0.9
+      strength: 0.9
+      build_status: "ok to build on"
+      build_band: "ok-to-build"
+      rationale: "Fixture."
+      premise_count: 3
+      strengthen_by_count: 0
+      citation_count: 1
+    - node_type: "claim"
+      id: "clm-aaa002"
+      title: "Equation (`eq:flow`) — Flow Dynamics"
+      canonical_path: "alpha/claim-rigor.md"
+      canonical_anchor: "equation-eqflow-flow-dynamics"
+      rigor: 0.95
+      strength: 0.95
+      build_status: "ok to build on"
+      build_band: "ok-to-build"
+      rationale: "Fixture."
+      premise_count: 1
+      strengthen_by_count: 0
+      citation_count: 1

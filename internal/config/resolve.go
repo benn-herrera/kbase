@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"kbase/internal/result"
 )
 
 // Role is one thing a verb asks a model for on the KB's behalf. A role names
@@ -70,15 +72,12 @@ const (
 	ModeEnvironment Mode = "environment"
 )
 
-// BackEnd is which seam fills an ask. A role under a harness resolves with no
-// provider and no endpoint, its model alone.
+// BackEnd is which seam fills an ask, as a run's records name it.
 type BackEnd string
 
 const (
 	// BackEndProvider asks a pool entry, or the environment's endpoint.
 	BackEndProvider BackEnd = "provider"
-	// BackEndHarness asks a configured command.
-	BackEndHarness BackEnd = "harness"
 )
 
 // The rules that name an endpoint's provider, as a document reports them. A
@@ -147,7 +146,12 @@ type Endpoint struct {
 	BaseURL    string
 	APIKeyFile string
 	Flavor     string
-	APIKey     string
+	// Protocol is the chat wire protocol the entry speaks, its default filled
+	// in — `openai` where the entry states none; an environment endpoint is
+	// OpenAI. The vocabulary is this package's, and the model package is handed
+	// the resolved fact rather than the string.
+	Protocol string
+	APIKey   string
 
 	BaseURLSource, ModelSource, KeySource string
 }
@@ -184,26 +188,26 @@ func ModeOf(in Inputs) (Mode, error) {
 		return ModeFile, nil
 	case len(standing) > 0:
 		configFile := ConfigPath(in.WriteDir)
-		var refusals Refusals
+		var refusals result.Refusal
 		for _, name := range variables {
-			refusals = append(refusals, Refusal{Key: name,
+			refusals = append(refusals, result.Item{Check: CheckProvider, Key: name,
 				Detail: fmt.Sprintf("%s is set while %s names a model: the environment is the whole inference configuration or nothing, so unset %s, or remove the file's [%s] values",
 					name, configFile, name, tableModels)})
 		}
 		for _, role := range standing {
-			refusals = append(refusals, Refusal{Key: role.key(), Path: configFile,
+			refusals = append(refusals, result.Item{Check: CheckProvider, Key: role.key(), Path: configFile,
 				Detail: fmt.Sprintf("%s is set while the environment names inference: the environment is the whole inference configuration or nothing, so remove %s, or unset %s",
 					role.key(), role.key(), role.variable())})
 		}
 		return "", refusals
 	case in.Env.BaseURL == "":
-		var refusals Refusals
+		var refusals result.Refusal
 		for _, name := range variables {
-			refusals = append(refusals, Refusal{Key: name,
+			refusals = append(refusals, result.Item{Check: CheckProvider, Key: name,
 				Detail: fmt.Sprintf("%s is set, and %s is unset: the environment supplies an endpoint and a model together or neither, so set %s or unset %s",
 					name, EnvAPIBaseURL, EnvAPIBaseURL, name)})
 		}
-		refusals = append(refusals, Refusal{Key: EnvAPIBaseURL,
+		refusals = append(refusals, result.Item{Check: CheckProvider, Key: EnvAPIBaseURL,
 			Detail: fmt.Sprintf("%s is unset, and %s names a model: the environment supplies an endpoint and a model together or neither, so set %s",
 				EnvAPIBaseURL, strings.Join(variables, ", "), EnvAPIBaseURL)})
 		return "", refusals
@@ -212,68 +216,102 @@ func ModeOf(in Inputs) (Mode, error) {
 }
 
 // Resolve is one role's endpoint in a mode. It is pure, as ModeOf is: it reads
-// no file, opens no connection, writes nothing and names no verb.
+// no file, opens no connection and writes nothing; a refusal's remedy may name
+// the command that fixes it.
 //
-// The role's configured value is read first and a flag is an override of it,
-// never a substitute for it: a role the source does not configure refuses even
-// where flagModel names a model. Under BackEndHarness no endpoint is chosen and
-// the mode is not consulted — the environment names the model where it names
-// one, the file's reference's model part otherwise.
-func Resolve(in Inputs, mode Mode, role Role, backEnd BackEnd, flagModel string) (Endpoint, error) {
-	switch {
-	case backEnd == BackEndHarness:
-		return resolveHarness(in, role, flagModel)
-	case mode == ModeEnvironment:
+// A flag names the role's model where the files name none and overrides the
+// value where they name one; environment mode takes its endpoint and every
+// model from its own variables, so a variable it lacks is refused whatever the
+// flag says.
+func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
+	return ResolveFlag(in, mode, role, flagModel, keyScoringModel, false)
+}
+
+// ResolveFlag is Resolve with the flag that supplies a role's model spelled by
+// the caller — flagModel is the flag's value and flagKey its name — so a verb
+// whose flag is not --scoring-model is pointed at its own: a value that is no
+// reference, and a provider the pool does not hold, name the flag they came
+// from. flagKey is "" where no flag supplies a role's model — a verb that asks
+// a role by name supplies none — and a role the files leave unnamed then names
+// only its own key.
+//
+// defaulted states that the role is the caller's own default, nothing having
+// named a selection, rather than one a flag named. It is consulted only where
+// flagKey names a flag: the role the files leave unnamed is then refused by its
+// key as the first remedy and that flag as the other, and never as though the
+// flag had been passed.
+func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
+	if mode == ModeEnvironment {
 		return resolveEnvironment(in, role, flagModel)
 	}
-	return resolveFile(in, role, flagModel)
+	return resolveFile(in, role, flagModel, flagKey, defaulted)
 }
 
 // configureRemedy is the command that rewrites a config.toml still naming a
 // bare model id into the reference form.
-const configureRemedy = "kbase configure --provider <entry> --model-map " + CategoryDecision + "=<entry>/<id>," + CategoryText + "=<entry>/<id>," + string(RoleScoring) + "=<entry>/<id>"
+const configureRemedy = "kbase configure --provider <entry> " + modelMapSyntax
 
-// resolveFile is a role's endpoint from the pool entry its reference names.
-func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
+// resolveFile is a role's endpoint from the pool entry its reference names;
+// flagKey is the flag a refusal names where it was the flag that supplied the
+// value, so a verb whose flag is not --scoring-model is pointed at its own, and
+// defaulted says the role is the caller's default rather than one a flag named.
+func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
 	configured := role.model(in.Cfg.Models)
 	configFile := ConfigPath(in.WriteDir)
-	if configured == "" {
-		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
-			Detail: fmt.Sprintf("%s sets no %s", configFile, role.key())}
-	}
-	// The flag overrides the configured value and never substitutes for it: a
-	// role the files do not configure is refused above, whatever the flag says.
+	// The flag names the role's model where the files name none, and overrides
+	// the file's value where they name one.
 	value, rule := configured, RuleConfig
 	if flagModel != "" {
 		value, rule = flagModel, RuleFlag
 	}
+	if value == "" {
+		// The key is what a role left unnamed is refused by, and the three ways
+		// nothing supplied a value read differently: a role flag named the role
+		// and supplies no model, so the key is the whole of what is wrong;
+		// nothing named a selection, so the role is the caller's default and
+		// the key is the first remedy, the flag the other; else a flag could
+		// have supplied the value and named none.
+		var detail string
+		switch {
+		case flagKey == "":
+			detail = fmt.Sprintf("%s sets no %s — name one there as <provider>/<model>", configFile, role.key())
+		case defaulted:
+			detail = fmt.Sprintf("%s sets no %s — nothing named a selection, so the %s role is the default; name one there as <provider>/<model>, or pass %s to name a reference instead",
+				configFile, role.key(), role, flagKey)
+		default:
+			detail = fmt.Sprintf("%s sets no %s, and %s names no model — the flag supplies a role the files do not configure",
+				configFile, role.key(), flagKey)
+		}
+		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: role.key(), Path: configFile, Remedy: configureRemedy, Detail: detail}}
+	}
 	ref, err := FileReference(value)
 	if err != nil {
 		if rule == RuleFlag {
-			return Endpoint{}, Refusal{Check: CheckUsage, Key: keyScoringModel,
+			return Endpoint{}, result.Refusal{{Check: CheckUsage, Key: flagKey,
 				Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
-					keyScoringModel, value, ProvidersFileName)}
+					flagKey, value, ProvidersFileName)}}
 		}
-		return Endpoint{}, Refusal{Key: role.key(), Path: configFile, Remedy: configureRemedy,
+		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: role.key(), Path: configFile, Remedy: configureRemedy,
 			Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
-				role.key(), value, ProvidersFileName)}
+				role.key(), value, ProvidersFileName)}}
 	}
 	entry, ok := in.Providers[ref.Provider]
 	if !ok {
 		// The refusal is about what named the value: the role's own key where
 		// the file supplied it, the flag where the flag did, and either offers
 		// the pool's entries as the names that would work.
-		refusal := unresolvedProvider(ref.Provider, in)
+		item := unresolvedProvider(ref.Provider, in)
 		if rule == RuleFlag {
-			refusal.Key = keyScoringModel
-			refusal.Detail = fmt.Sprintf("%s names a provider the pool does not hold: %s", keyScoringModel, refusal.Detail)
+			item.Key = flagKey
+			item.Detail = fmt.Sprintf("%s names a provider the pool does not hold: %s", flagKey, item.Detail)
 		} else {
-			refusal.Key = role.key()
+			item.Key = role.key()
 		}
-		return Endpoint{}, refusal
+		return Endpoint{}, result.Refusal{item}
 	}
 	ep := Endpoint{Role: role, Mode: ModeFile, Provider: ref.Provider, Model: ref.Model, Rule: rule,
 		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor(),
+		Protocol:      entry.Protocol(),
 		BaseURLSource: entry.Layer, ModelSource: in.Cfg.ModelLayer(role)}
 	if keyKind(entry) == KeyKindFile {
 		ep.KeySource = entry.Layer
@@ -291,11 +329,12 @@ func resolveFile(in Inputs, role Role, flagModel string) (Endpoint, error) {
 func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error) {
 	configured := role.fromEnv(in.Env)
 	if configured == "" {
-		return Endpoint{}, Refusal{Key: role.variable(),
-			Detail: fmt.Sprintf("%s is unset, and the environment mode supplies every model by its own variable", role.variable())}
+		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: role.variable(),
+			Detail: fmt.Sprintf("%s is unset, and the environment mode supplies every model by its own variable", role.variable())}}
 	}
 	ep := Endpoint{Role: role, Mode: ModeEnvironment, Model: configured, BaseURL: in.Env.BaseURL,
-		Flavor: FlavorSystemOne, BaseURLSource: LayerSourceEnvironment, ModelSource: LayerSourceEnvironment}
+		Flavor: FlavorSystemOne, Protocol: ProviderAPIOpenAI,
+		BaseURLSource: LayerSourceEnvironment, ModelSource: LayerSourceEnvironment}
 	if flagModel != "" {
 		// The flag is the whole of what named the model, and no layer did.
 		ep.Model, ep.ModelSource = flagModel, ""
@@ -304,31 +343,6 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 		ep.APIKeyFile, ep.KeySource = path, LayerSourceEnvironment
 	}
 	return ep, nil
-}
-
-// resolveHarness is the model a harness profile is asked for: the
-// environment's id where it names one, else the file's reference model part.
-// No entry is contacted, so neither the provider part nor the pool matters.
-func resolveHarness(in Inputs, role Role, flagModel string) (Endpoint, error) {
-	model, source := role.fromEnv(in.Env), LayerSourceEnvironment
-	if model == "" {
-		if value := role.model(in.Cfg.Models); value != "" {
-			ref, err := FileReference(value)
-			if err != nil {
-				return Endpoint{}, Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir), Remedy: configureRemedy,
-					Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model>", role.key(), value)}
-			}
-			model, source = ref.Model, in.Cfg.ModelLayer(role)
-		}
-	}
-	if model == "" {
-		return Endpoint{}, Refusal{Key: role.key(), Path: ConfigPath(in.WriteDir),
-			Detail: fmt.Sprintf("no model is configured for the %s role: set %s, or %s", role, role.key(), role.variable())}
-	}
-	if flagModel != "" {
-		model, source = flagModel, ""
-	}
-	return Endpoint{Role: role, Model: model, Flavor: FlavorSystemOne, ModelSource: source}, nil
 }
 
 // Select is a catalogue verb's choice of which pool entry to dial — not a
@@ -340,14 +354,14 @@ func resolveHarness(in Inputs, role Role, flagModel string) (Endpoint, error) {
 func Select(in Inputs, flag string) (name, rule string, err error) {
 	if named := strings.TrimSpace(flag); named != "" {
 		if _, ok := in.Providers[named]; !ok {
-			return "", "", unresolvedProvider(named, in)
+			return "", "", result.Refusal{unresolvedProvider(named, in)}
 		}
 		return named, RuleFlag, nil
 	}
 	if len(in.Providers) == 0 {
 		providersFile := ProvidersPath(in.WriteDir)
-		return "", "", Refusal{Path: providersFile,
-			Detail: fmt.Sprintf("no usable provider in %s — declare one there", providersFile)}
+		return "", "", result.Refusal{{Check: CheckProvider, Path: providersFile,
+			Detail: fmt.Sprintf("no usable provider in %s — declare one there", providersFile)}}
 	}
 	if len(in.Providers) == 1 {
 		for named := range in.Providers {
@@ -355,42 +369,8 @@ func Select(in Inputs, flag string) (name, rule string, err error) {
 		}
 	}
 	names := providerNames(in.Providers)
-	return "", "", Refusal{Key: "--provider", Allowed: names,
-		Detail: fmt.Sprintf("no provider selected — pass --provider (available: %s)", strings.Join(names, ", "))}
-}
-
-// tokenModel is the argv token a harness profile's command carries where the
-// model goes.
-const tokenModel = "{model}"
-
-// HarnessArgv fills {model} in a profile's command — and only {model}: {prompt}
-// is the item's, filled per item by the command that runs it. Substitution is
-// one pass, so an element whose text happens to spell the token again is not
-// rewritten. A model is refused where no element names it: an id that would
-// reach nowhere is a silent wrong answer. Where the profile does carry the
-// model it arrives as an argv element of its own, so an id beginning with `-`
-// is refused here: after substitution nothing tells it from an option the
-// profile meant. The model is the role's, so the caller resolves the role
-// before it pairs the two.
-func HarnessArgv(p Profile, model string) ([]string, error) {
-	argv := slices.Clone(p.Command)
-	if !p.CarriesModel() {
-		if model != "" {
-			return nil, Refusal{Check: CheckHarness, Key: keyScoringModel,
-				Detail: fmt.Sprintf("the %s profile's command names no %s, so the model it is given can never reach it: add %s where that command takes a model id, or drop the model",
-					p.Name, tokenModel, tokenModel)}
-		}
-		return argv, nil
-	}
-	if strings.HasPrefix(model, "-") {
-		return nil, Refusal{Check: CheckHarness, Key: keyScoringModel,
-			Detail: fmt.Sprintf("the %s profile's command carries the model as an argv element of its own, and %q begins with -: that command would read it as an option rather than a model id, so name a model id that does not begin with -",
-				p.Name, model)}
-	}
-	for i, element := range argv {
-		argv[i] = strings.ReplaceAll(element, tokenModel, model)
-	}
-	return argv, nil
+	return "", "", result.Refusal{{Check: CheckProvider, Key: "--provider", Allowed: names,
+		Detail: fmt.Sprintf("no provider selected — pass --provider (available: %s)", strings.Join(names, ", "))}}
 }
 
 // unresolvedProvider explains a name the pool does not hold, distinguishing a
@@ -399,9 +379,9 @@ func HarnessArgv(p Profile, model string) ([]string, error) {
 // the user goes looking for the wrong mistake. A faulted name keeps the
 // file's own reason and gets no creation remedy — the file stands, and what is
 // wrong is the entry in it.
-func unresolvedProvider(name string, in Inputs) Refusal {
+func unresolvedProvider(name string, in Inputs) result.Item {
 	providersFile := ProvidersPath(in.WriteDir)
-	refusal := Refusal{Key: "--provider", Path: providersFile, Allowed: providerNames(in.Providers), Remedy: "kbase configure --create",
+	refusal := result.Item{Check: CheckProvider, Key: "--provider", Path: providersFile, Allowed: providerNames(in.Providers), Remedy: "kbase configure --create",
 		Detail: fmt.Sprintf("provider %q not found in %s — a pool entry there supplies baseUrl and apiKeyFile", name, providersFile)}
 	for _, fault := range in.Faults {
 		// A warning fault belongs to a provider that loaded, so it can
@@ -425,47 +405,14 @@ func providerNames(providers Providers) []string {
 	return names
 }
 
-// CheckHarness is the refusal class a profile that cannot carry what it is
-// given raises, and CheckUsage a flag value that is not the form the flag
-// takes; a resolution refusal's Check is otherwise empty, which is the provider
-// choice its rows are about.
-const (
-	CheckHarness = "harness"
-	CheckUsage   = "usage"
-)
+// CheckProvider is the refusal class of a provider choice, which every
+// resolution refusal is unless it names its own.
+const CheckProvider = "provider"
+
+// CheckUsage is the refusal class a flag value that is not the form the flag
+// takes raises.
+const CheckUsage = "usage"
 
 // keyScoringModel is the flag that overrides a role's model, as a refusal names
 // it: a bad value, or a provider the pool lacks, is the flag's fault to state.
 const keyScoringModel = "--scoring-model"
-
-// Refusal is a setting inference cannot resolve, named as the item a result
-// document refuses it with: the setting's key or variable, the file it belongs
-// in, the values it may take, the command that clears it, and one sentence.
-type Refusal struct {
-	// Check names the refusal class where it is not the provider choice.
-	Check   string
-	Key     string
-	Path    string
-	Allowed []string
-	Remedy  string
-	Detail  string
-}
-
-func (r Refusal) Error() string { return r.Detail }
-
-// Named is the setting and the file the refusal names, as the build's launch
-// refusal reads them.
-func (r Refusal) Named() (key, path string) { return r.Key, r.Path }
-
-// Refusals is every refusal one decision produced, where the decision has more
-// than one side to state — the mixed sources, the environment missing its
-// endpoint.
-type Refusals []Refusal
-
-func (rs Refusals) Error() string {
-	details := make([]string, 0, len(rs))
-	for _, r := range rs {
-		details = append(details, r.Detail)
-	}
-	return strings.Join(details, "; ")
-}

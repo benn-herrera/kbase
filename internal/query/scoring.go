@@ -9,10 +9,12 @@ import (
 	"kbase/internal/kb"
 )
 
-// The score passes, the values ScoringSet takes.
+// The score passes, the values ScoringSet takes. PassBoth is the set a run
+// walks where none is named: both of them, one after the other.
 const (
 	PassRigor   = "rigor"
 	PassBearing = "bearing"
+	PassBoth    = "both"
 )
 
 // ScoringNode is one node a score pass asks about: its kind and its id.
@@ -36,20 +38,26 @@ type Item struct {
 	Edge *ScoringEdge
 }
 
-// ScoringSet is the items a score pass walks, in the order it walks them. A
+// ScoringSet is the items a score run walks, in the order it walks them. A
 // rigor pass is every claim, analysis and experiment, by id: a work's rigor is
 // judged by hand and an axiom's is 1.0 by rule, so neither is a subject. A
-// bearing pass is every scoring edge, by relation in kb.ScoringRelations order,
-// then source, then target: a reference or a demoted row carries no bearing. An
-// unknown pass is an error.
+// bearing pass is every edge the walk asks about — supports, lifts and refutes,
+// by relation in kb.BearingWalkRelations order, then source, then target. A
+// founds edge is no item: its bearing is the user's, written by hand through
+// set-bearing, and a reference or a demoted row carries no bearing at all.
+// PassBoth is the node set and then the edge set, each in its own order, so one
+// walk covers both and neither set's order depends on the other's. An unknown
+// pass is an error.
 func ScoringSet(ix *Index, pass string) ([]Item, error) {
 	switch pass {
 	case PassRigor:
 		return rigorItems(ix), nil
 	case PassBearing:
 		return bearingItems(ix), nil
+	case PassBoth:
+		return append(rigorItems(ix), bearingItems(ix)...), nil
 	}
-	return nil, fmt.Errorf("unknown pass %q: the passes are %s and %s", pass, PassRigor, PassBearing)
+	return nil, fmt.Errorf("unknown pass %q: the passes are %s, %s and %s", pass, PassRigor, PassBearing, PassBoth)
 }
 
 // rigorItems is every node the rigor pass asks about, by id: every kind but the
@@ -70,16 +78,17 @@ func rigorItems(ix *Index) []Item {
 	return out
 }
 
-// bearingItems is every scoring edge, by relation, then source, then target.
+// bearingItems is every edge the walk asks about, by relation, then source,
+// then target.
 func bearingItems(ix *Index) []Item {
 	var edges []ScoringEdge
 	for _, e := range ix.edges {
-		if kb.Scoring(e.Relation) {
+		if kb.BearingWalk(e.Relation) {
 			edges = append(edges, ScoringEdge{Source: e.Source, Target: e.Target, Relation: e.Relation})
 		}
 	}
 	slices.SortStableFunc(edges, func(a, b ScoringEdge) int {
-		return cmp.Or(slices.Index(kb.ScoringRelations, a.Relation)-slices.Index(kb.ScoringRelations, b.Relation),
+		return cmp.Or(slices.Index(kb.BearingWalkRelations, a.Relation)-slices.Index(kb.BearingWalkRelations, b.Relation),
 			strings.Compare(a.Source, b.Source), strings.Compare(a.Target, b.Target))
 	})
 	out := make([]Item, len(edges))
@@ -100,4 +109,18 @@ func (ix *Index) Edge(e ScoringEdge) (kb.EdgeRow, bool) {
 		}
 	}
 	return found, ok
+}
+
+// ManuallyScored is whether the record of it carries the manually-scored mark:
+// a node's record, or the record of the edge its row shows. An item no record
+// marks is not.
+func (ix *Index) ManuallyScored(it Item) bool {
+	switch {
+	case it.Node != nil:
+		return ix.nodeManual[it.Node.ID]
+	case it.Edge != nil:
+		row, ok := ix.Edge(*it.Edge)
+		return ok && row.ManuallyScored != nil && *row.ManuallyScored
+	}
+	return false
 }

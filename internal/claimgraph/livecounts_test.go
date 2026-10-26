@@ -12,6 +12,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
 )
 
@@ -127,7 +128,7 @@ func TestLiveBuildCounts(t *testing.T) {
 			"source-groups":      len(sources),
 			"calls":              unmarkedAsks["calls"],
 			"pairs-by-letter":    zero([]string{"A", "B", "none"}, unmarkedLetters),
-			"pairs-by-outcome":   zero([]string{ClassifyAnswered, ClassifyReasked, ClassifyDefaulted}, unmarkedOutcomes),
+			"pairs-by-outcome":   zero([]string{string(asks.Answered), string(asks.Reasked), ClassifyDefaulted}, unmarkedOutcomes),
 			"yeses":              unmarkedLetters["A"],
 			"defaults":           unmarkedOutcomes[ClassifyDefaulted],
 			"report-asks-totals": unmarkedAsks,
@@ -142,7 +143,7 @@ func TestLiveBuildCounts(t *testing.T) {
 		"claims-minted":         minted,
 		"candidates-classified": len(cl.Candidates),
 		"candidates-by-letter":  zero([]string{"A", "B", "C", "none"}, letters),
-		"candidates-by-outcome": zero([]string{ClassifyAnswered, ClassifyReasked, ClassifyDefaulted, ClassifyDrafted}, classified),
+		"candidates-by-outcome": zero([]string{string(asks.Answered), string(asks.Reasked), ClassifyDefaulted, ClassifyDrafted}, classified),
 		"rings-demoted-edges":   len(demoted),
 		"demoted":               demoted,
 	}

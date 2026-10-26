@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"kbase/internal/formats/format300"
 )
 
 // Names the KB's readers key on.
@@ -18,8 +20,8 @@ const (
 	// OwnProseTitle heads the leaf a container's own prose is lifted into.
 	OwnProseTitle = "Overview"
 
-	// IndexDir is the derived index's directory inside kb-root.
-	IndexDir = ".index"
+	// IndexDir is the index's directory inside kb-root.
+	IndexDir = format300.IndexDir
 	// ClaimGraphFile is the claim-graph sheet, inside kb-root and each
 	// volume; ClaimGraphDigestFile is the volume digest, inside kb-root.
 	ClaimGraphFile       = "claim-graph.svg"
@@ -28,8 +30,10 @@ const (
 	AgentsFile         = "AGENTS.md"
 	AgentsRedirectFile = "CLAUDE.md"
 	AgentsRedirect     = "@" + AgentsFile
+	ConventionsFile    = "CONVENTIONS.md"
 	// AxiomsFile is the declaration document axioms are stated in;
-	// InvariantsFile and AGENTS.md are its legacy fallbacks.
+	// InvariantsFile is the superseded name a converted KB may still carry,
+	// which leaf discovery skips.
 	AxiomsFile     = "axioms.md"
 	InvariantsFile = "invariants.md"
 )
@@ -37,6 +41,16 @@ const (
 // CheckSymlink is the refusal class of a KB document that is a symbolic link:
 // a read meets it where the document stands, a write where it would replace it.
 const CheckSymlink = "symlink"
+
+// CheckLock is the refusal class of an operation that finds a lock held.
+const CheckLock = "lock"
+
+// CheckKBRoot is the refusal class of a KB that is not where a command looks
+// for it, or has no entry point.
+const CheckKBRoot = "kb-root"
+
+// CheckUnknownID is the refusal class of an id no node record carries.
+const CheckUnknownID = "unknown-id"
 
 // RepositoryRoot is the nearest directory at or above dir holding .git — the
 // directory kb-root/ sits in — or "" where there is none.
@@ -84,6 +98,11 @@ var (
 	ExcludeDirs  = map[string]bool{"session": true, IndexDir: true, "tools": true}
 	ExcludeNames = map[string]bool{
 		RegisterFile: true, "claim-quality-closure-roadmap.md": true, AgentsFile: true,
-		AgentsRedirectFile: true, "CONVENTIONS.md": true, "README.md": true, AxiomsFile: true, InvariantsFile: true,
+		AgentsRedirectFile: true, ConventionsFile: true, "README.md": true, AxiomsFile: true, InvariantsFile: true,
 	}
 )
+
+// StampedFiles are the kb-root documents kbase stamps from its templates, in
+// the order it stamps them: kbase owns and generates them, and a migration
+// save writes them whole.
+var StampedFiles = []string{AgentsFile, ConventionsFile}

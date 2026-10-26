@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/write"
 )
 
 func refusePoint(point int, format string, args ...any) *stop {
@@ -34,41 +34,14 @@ func conformanceGate(t *Tree) error {
 	return nil
 }
 
-// determinations partitions the leaves by what their frontmatter declares
-// about their claims, for the later stages' census.
-type determinations struct {
-	undeclared, hosting, determined []string
-}
-
-// passTwoGate is the later stages' entry condition: the structural checks,
-// then the partition.
-func passTwoGate(t *Tree) (determinations, error) {
-	var d determinations
+// passTwoGate is the later stages' entry condition: the structural checks.
+func passTwoGate(t *Tree) error {
 	for _, check := range structuralChecks {
 		if err := check(t); err != nil {
-			return d, err
+			return err
 		}
 	}
-	for _, p := range t.Paths {
-		if !declaringKinds[t.kind(p)] {
-			continue
-		}
-		fm, err := kb.ParseFrontmatter(t.Documents[p].Text)
-		if err != nil {
-			return d, fmt.Errorf("%s: %w", p, err)
-		}
-		claims, _ := fm.Get("claims")
-		reason, hasReason := fm.Get("no-claim")
-		switch {
-		case claims.Truthy():
-			d.hosting = append(d.hosting, p)
-		case !hasReason || reason.IsList || reason.IsBool || reason.Str == "":
-			d.undeclared = append(d.undeclared, p)
-		default:
-			d.determined = append(d.determined, p)
-		}
-	}
-	return d, nil
+	return nil
 }
 
 // checkEntryPoint is point 1: the root lists every volume, and nothing else.
@@ -217,10 +190,20 @@ func checkAnchors(t *Tree) error {
 	return nil
 }
 
-// checkCleanliness is point 14 over every Markdown file the tree holds.
+// checkCleanliness is point 14 over the node records and every Markdown file
+// the tree holds.
 func checkCleanliness(t *Tree) error {
+	const rebuild = "This is not a tree the front end just wrote: this stage mints ids, so a second run over its own output would mint a second set and double the graph. Rebuild the tree from the corpus and run once"
+	src := builtTree(t.Root)
+	g, err := kb.LoadGraph(src)
+	if err != nil {
+		return err
+	}
+	if len(index.GraphKinds(g)) > 0 {
+		return refusePoint(14, "%s already holds node records. %s", kb.GraphNodesFile, rebuild)
+	}
 	var files []string
-	err := filepath.WalkDir(t.Root, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(t.Root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -239,8 +222,6 @@ func checkCleanliness(t *Tree) error {
 		return err
 	}
 	slices.Sort(files)
-	src := builtTree(t.Root)
-	const rebuild = "This is not a tree the front end just wrote: this stage mints ids, so a second run over its own output would mint a second set and double the graph. Rebuild the tree from the corpus and run once"
 	for _, f := range files {
 		text, err := src.ReadText(f)
 		if err != nil {
@@ -255,14 +236,10 @@ func checkCleanliness(t *Tree) error {
 			return fmt.Errorf("%s: %w", filepath.ToSlash(rel), err)
 		}
 		for key := range fm {
-			if key != kb.FormatKey {
-				return refusePoint(14, "%s already carries frontmatter (%s). %s", filepath.ToSlash(rel), key, rebuild)
-			}
+			return refusePoint(14, "%s already carries frontmatter (%s). %s", filepath.ToSlash(rel), key, rebuild)
 		}
-		for _, artifact := range write.MarkerOpeners() {
-			if strings.Contains(text, artifact) {
-				return refusePoint(14, "%s already carries %q. %s", filepath.ToSlash(rel), artifact, rebuild)
-			}
+		if strings.Contains(text, kb.StatementMarkerOpener) {
+			return refusePoint(14, "%s already carries %q. %s", filepath.ToSlash(rel), kb.StatementMarkerOpener, rebuild)
 		}
 	}
 	return nil

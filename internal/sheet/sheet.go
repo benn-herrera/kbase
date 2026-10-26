@@ -1,4 +1,4 @@
-// Package sheet draws the KB's claim-graph sheets from its index: DOT text
+// Package sheet draws the KB's claim-graph sheets from its index rows: DOT text
 // rendered to SVG by Graphviz dot. The root's full sheet is every node
 // clustered by volume; where two or more volumes hold nodes, the root also
 // carries one box per volume and each such volume a sheet of itself and every
@@ -30,15 +30,15 @@ type Sheet struct {
 	SVG  []byte
 }
 
-// Render draws every sheet of the KB src reads from its .index/ and the build
-// records beside kb-root: the root's full sheet first, then, where two or
-// more volumes hold nodes, the digest and each volume's in slug order. It is
+// Render draws every sheet of the KB src reads from its index rows — nodes,
+// edges and cites: the root's full sheet first, then, where two or more
+// volumes hold nodes, the digest and each volume's in slug order. It is
 // ErrNoDot where dot is not on PATH.
-func Render(src *kb.Source) ([]Sheet, error) {
+func Render(src *kb.Source, nodes []kb.NodeRow, edges []kb.EdgeRow, cites []kb.CiteRow) ([]Sheet, error) {
 	if _, err := exec.LookPath("dot"); err != nil {
 		return nil, ErrNoDot
 	}
-	g, err := load(src)
+	g, err := load(src, nodes, edges, cites)
 	if err != nil {
 		return nil, err
 	}

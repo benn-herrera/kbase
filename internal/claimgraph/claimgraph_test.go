@@ -1,9 +1,12 @@
 package claimgraph
 
 import (
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"kbase/internal/kb"
@@ -11,66 +14,125 @@ import (
 	"kbase/internal/records"
 )
 
-// TestLandLeafCarriesTheBlock: a leaf gaining a claim keeps every attribute
-// of its block it does not own — its experiment and support declarations —
-// and trades its no-claim reason for the claims it now declares.
-func TestLandLeafCarriesTheBlock(t *testing.T) {
+// seedKB writes a KB at the current format — the entry point entry, the
+// format stamp, every document of docs and g's records — and returns its
+// kb-root.
+func seedKB(t *testing.T, entry string, docs map[string]string, g kb.Graph) string {
+	t.Helper()
 	root := filepath.Join(t.TempDir(), kb.KBDir)
-	for rel, text := range map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [V](v/index.md)\n",
-		"v/index.md":      "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n",
-		"v/a.md":          "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n",
-	} {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+	files := map[string][]byte{kb.EntryPointFile: []byte(entry), kb.FormatFile: kb.EncodeFormatStamp(kb.FormatVersion),
+		kb.GraphNodesFile: kb.EncodeNodes(g), kb.GraphEdgesFile: kb.EncodeEdges(g)}
+	for rel, text := range docs {
+		files[rel] = []byte(text)
+	}
+	for rel, data := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, rel), []byte(text), 0o644); err != nil {
+		if err := os.WriteFile(p, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return root
+}
+
+// claimRecords is a claim record per id of titles, titled as it gives, its
+// rigor pending, in id order.
+func claimRecords(titles map[string]string) []kb.ClaimNode {
+	var out []kb.ClaimNode
+	for _, id := range slices.Sorted(maps.Keys(titles)) {
+		out = append(out, kb.ClaimNode{ID: id, Title: titles[id], Rationale: titles[id] + "."})
+	}
+	return out
+}
+
+// loadRecords is the records root's files hold.
+func loadRecords(t *testing.T, root string) kb.Graph {
+	t.Helper()
+	g, err := kb.LoadGraph(kb.OnDisk(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// TestLandLeafMarksEveryClaim: a leaf's one prose claim and its equation are
+// each marked in the call that mints them — the prose claim on its locator's
+// line, the equation at the end of the line inside its fence that carries its
+// label, the fence still closing on its own line — and landing them again
+// adopts both and writes nothing.
+func TestLandLeafMarksEveryClaim(t *testing.T) {
+	const leaf = "v/a.md"
+	root := seedKB(t, "# Entry\n\n- [V](v/index.md)\n", map[string]string{
+		"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n",
+		leaf:         "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n\n``` math\nx = 1 \\label{eq:e}\n```\n",
+	}, kb.Graph{})
 	w := writer{kbRoot: root, lg: log.Discard()}
-	seed, err := w.insertClaims("seed", "v/claim-rigor.md", []string{"Seed"}, []string{"Seeded."})
+	claims := []newClaim{
+		{title: "The bound holds", rationale: "Prose.", locator: "The bound holds."},
+		{title: equationTitle("eq:e", "A"), rationale: "An equation.", locator: equationLocator("eq:e")},
+	}
+	ids, err := w.landLeaf(leaf, claims)
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis, err := w.run("analysis", "insert-analysis-entry", values{{"register": "v/claim-rigor.md", "title": "Analysis",
-		"rigor": kb.PendingLiteral, "rationale": "Supports.", kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}, true)
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("ids = %v, want two claims minted", ids)
+	}
+	text, err := kb.OnDisk(root).ReadText(filepath.Join(root, leaf))
 	if err != nil {
 		t.Fatal(err)
 	}
-	block := values{{"document": "v/a.md", "kind": kb.DocumentLeaf, "no-claim": "Nothing marked.",
-		"analysis-node": []map[string]any{{"ana-id": analysis.IDs[0], kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}}}
-	if _, err := w.run("block", "set-frontmatter", block, false); err != nil {
-		t.Fatal(err)
+	lines := kb.Lines(text)
+	at := kb.MarkerLines(text)
+	if got := lines[at[ids[0]]]; !strings.HasPrefix(got, "The bound holds.") {
+		t.Errorf("the prose claim's marker is on %q, want its locator's line", got)
 	}
-	exp, err := w.run("experiment", "insert-experiment-entry", values{{"document": "v/a.md", "status": "run",
-		kb.LiftsKey: []map[string]any{{"id": seed[0], "bearing": 0.5}}}}, false)
-	if err != nil {
-		t.Fatal(err)
+	if got := lines[at[ids[1]]]; !strings.HasPrefix(got, `x = 1 \label{eq:e}`) {
+		t.Errorf("the equation's marker is on %q, want the fence line carrying its label", got)
+	}
+	fences := kb.Fences(lines)
+	if len(fences) != 1 || fences[0].End != len(lines) || at[ids[1]] <= fences[0].Start {
+		t.Errorf("fences = %+v over %q, want the one fence closing on the last line with the equation's marker inside", fences, lines)
 	}
 
-	ids, err := w.landLeaf("v/a.md", kb.DocumentLeaf, []newClaim{{title: "Equation (`e`) — A", rationale: "An equation."}}, nil, map[string]bool{seed[0]: true})
+	again, err := w.landLeaf(leaf, claims)
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := kb.OnDisk(root)
-	text, err := src.ReadText(filepath.Join(root, "v/a.md"))
+	after, err := kb.OnDisk(root).ReadText(filepath.Join(root, leaf))
 	if err != nil {
 		t.Fatal(err)
 	}
-	fm, err := kb.ParseFrontmatter(text)
-	if err != nil {
-		t.Fatal(err)
+	if !slices.Equal(again, ids) || after != text {
+		t.Errorf("landing again took %v and rewrote the leaf: want %v adopted and the leaf as it stood", again, ids)
 	}
-	if claims, _ := fm.ListOrEmpty("claims"); !slices.Equal(claims, ids) {
-		t.Errorf("claims = %v, want %v", claims, ids)
-	}
-	if _, ok := fm.Get("no-claim"); ok {
-		t.Error("the leaf declares both claims and a no-claim reason")
-	}
-	declared := kb.DeclaredNodeIDs(fm)
-	if want := []string{exp.IDs[0], analysis.IDs[0]}; !slices.Equal(declared, want) {
-		t.Errorf("hosted declarations after landing = %v, want %v kept", declared, want)
+}
+
+// TestCleanlinessRefusesNodeRecords: the double-run guard passes a tree whose
+// node records file is empty and refuses one holding a record.
+func TestCleanlinessRefusesNodeRecords(t *testing.T) {
+	docs := map[string]string{"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n", "v/a.md": "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n"}
+	for _, tc := range []struct {
+		name    string
+		g       kb.Graph
+		refused bool
+	}{
+		{"no node records", kb.Graph{}, false},
+		{"a node record", kb.Graph{Claims: claimRecords(map[string]string{"clm-aaaaaa": "A"})}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree, err := readTree(seedKB(t, "# Entry\n\n- [V](v/index.md)\n", docs, tc.g))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = checkCleanliness(tree)
+			var s *stop
+			if refused := errors.As(err, &s) && s.check == "point-14"; refused != tc.refused || (err != nil && s == nil) {
+				t.Errorf("checkCleanliness = %v, want refused %t", err, tc.refused)
+			}
+		})
 	}
 }
 
@@ -113,14 +175,6 @@ func TestNamesNoPremise(t *testing.T) {
 		if got := namesNoPremise(word); got != want {
 			t.Errorf("namesNoPremise(%q) = %t, want %t", word, got, want)
 		}
-	}
-}
-
-func TestCycleEdges(t *testing.T) {
-	got := cycleEdges([]pair{{"a", "b"}, {"b", "c"}, {"c", "a"}, {"c", "d"}, {"d", "e"}})
-	want := []pair{{"a", "b"}, {"b", "c"}, {"c", "a"}}
-	if !slices.Equal(got, want) {
-		t.Errorf("cycleEdges = %v, want every edge of the ring and none off it: %v", got, want)
 	}
 }
 

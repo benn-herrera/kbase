@@ -10,176 +10,159 @@ import (
 	"kbase/internal/result"
 )
 
-// insertClaim inserts a claim titled title into the seed KB's register and
-// returns its id.
+// insertClaim inserts a claim titled title into the seed KB and returns its id.
 func insertClaim(t *testing.T, root, title, extra string) string {
 	t.Helper()
-	res := run(t, root, "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: "+title+"\n  rigor: 0.5\n  rationale: Shown.\n"+extra, false)
+	res := run(t, root, "insert-claim-entry", "entry:\n- title: "+title+"\n  rigor: 0.5\n  rationale: Shown.\n"+extra)
 	if res.Outcome != result.Done || len(res.IDs) != 1 {
 		t.Fatalf("insert %s: %+v", title, res)
 	}
 	return res.IDs[0]
 }
 
-// TestDemotedEdges lands demoted edges as the build does and resolves them:
-// each call issued twice, the second unchanged and byte-identical; a restore
-// that would close a cycle, alone or with the batch's earlier restores, is
-// refused naming the cycle.
-func TestDemotedEdges(t *testing.T) {
-	root := seedKB(t)
-	b := insertClaim(t, root, "Result B", "  rests-on:\n  - id: "+seedClaim+"\n")
-	c := insertClaim(t, root, "Result C", "")
-	d := insertClaim(t, root, "Result D", "")
-	register := func() string { return snapshot(t, root)[kb.RegisterFile] }
-	twice := func(op, values string, want []Resolution) {
-		t.Helper()
-		first := run(t, root, op, values, false)
-		if first.Outcome != result.Done || !slices.Equal(first.Resolved, want) {
-			t.Fatalf("%s %q: %+v, want done resolving %v", op, values, first, want)
-		}
-		before := snapshot(t, root)
-		second := run(t, root, op, values, false)
-		if second.Outcome != result.Unchanged || len(second.Resolved) != 0 {
-			t.Errorf("%s %q again: %+v, want unchanged resolving nothing", op, values, second)
-		}
-		if !maps.Equal(before, snapshot(t, root)) {
-			t.Errorf("%s %q again changed kb-root", op, values)
-		}
-	}
+const (
+	demotedA, demotedB, demotedC, demotedD = "clm-aaaaaa", "clm-bbbbbb", "clm-cccccc", "clm-dddddd"
+)
 
-	twice(AddBuildEdges, "entry:\n- id: "+seedClaim+"\n  demoted:\n  - id: "+b+"\n    origin: cited\n  - id: "+c+"\n    origin: inferred\n"+
-		"- id: "+c+"\n  demoted:\n  - id: "+d+"\n    origin: cited\n- id: "+d+"\n  demoted:\n  - id: "+c+"\n    origin: cited\n", nil)
-	if text := register(); !strings.Contains(text, "- demoted:\n  - "+b+" — Result B (origin cited)\n  - "+c+" — Result C (origin inferred)\n") {
-		t.Fatalf("the demoted list is not spelled as wanted:\n%s", text)
-	}
-	index := snapshot(t, root)[kb.IndexDir+"/"+kb.IndexFileName(kb.IndexEdges)]
-	if !strings.Contains(index, `"source": "`+seedClaim+`", "target": "`+b+`", "relation": "demoted", "target_kind": "claim", "source_strength_recorded": null, `+
-		`"bearing": null, "context": null, "origin": "cited"}`) {
-		t.Errorf("no demoted index row with its origin:\n%s", index)
-	}
-
-	cycle := run(t, root, ResolveDemoted, "entry:\n- id: "+seedClaim+"\n  target: "+b+"\n  action: restore\n", false)
-	if len(cycle.Refusals) != 1 || cycle.Refusals[0].Check != checkDependencyCycle || !strings.Contains(cycle.Refusals[0].Detail, b+" → "+seedClaim+" → "+b) {
-		t.Errorf("a restore closing a cycle: %+v", cycle)
-	}
-	batch := run(t, root, ResolveDemoted, "entry:\n- id: "+c+"\n  target: "+d+"\n  action: restore\n- id: "+d+"\n  target: "+c+"\n  action: restore\n", false)
-	if len(batch.Refusals) != 1 || batch.Refusals[0].Entry != 2 || !strings.Contains(batch.Refusals[0].Detail, c+" → "+d+" → "+c) {
-		t.Errorf("a batch whose second restore closes a cycle with its first: %+v", batch)
-	}
-	before := register()
-	twiceNamed := run(t, root, ResolveDemoted, "entry:\n- id: "+c+"\n  target: "+d+"\n  action: remove\n- id: "+c+"\n  target: "+d+"\n  action: restore\n", false)
-	if twiceNamed.Outcome != result.Refused || len(twiceNamed.Refusals) != 1 || twiceNamed.Refusals[0].Entry != 2 || twiceNamed.Refusals[0].Key != "target" {
-		t.Errorf("a batch naming one pair twice: %+v, want refused at entry 2", twiceNamed)
-	}
-	if register() != before {
-		t.Error("a refused batch naming one pair twice changed the register")
-	}
-
-	twice(ResolveDemoted, "entry:\n- id: "+seedClaim+"\n  target: "+c+"\n  action: restore\n", []Resolution{{seedClaim, c, resolvedRestore}})
-	text := register()
-	read, err := readRegister(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	held := read.claims[seedClaim]
-	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+c+" — Result C (strength ") ||
-		slices.ContainsFunc(held.Demoted, func(e kb.Edge) bool { return e.Target == c }) {
-		t.Errorf("the restore did not rewrite the demoted bullet as a rests-on bullet:\n%s", text)
-	}
-	twice(ResolveDemoted, "entry:\n- id: "+seedClaim+"\n  target: "+b+"\n  action: remove\n", []Resolution{{seedClaim, b, resolvedRemove}})
-	if text := register(); strings.Contains(text, b+" — Result B (origin") {
-		t.Errorf("the removed demoted bullet stands:\n%s", text)
-	}
-	read, err = readRegister(register())
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed := read.claims[seedClaim]
-	if len(seed.Demoted) != 0 || strings.Count(register(), "- demoted:") != 2 {
-		t.Errorf("the emptied demoted list kept its header: %+v\n%s", seed.Demoted, register())
-	}
-	nothing := run(t, root, ResolveDemoted, "entry:\n- id: "+b+"\n  target: "+seedClaim+"\n  action: restore\n", false)
-	if nothing.Outcome != result.Unchanged {
-		t.Errorf("restoring a pair already a depends edge: %+v, want unchanged", nothing)
+// demotedGraph holds four claims: B rests on A, and demoted records stand for
+// a supports edge B → A that closes a cycle with it, a judged refutation
+// C → A, and supports edges C → D and D → C that close one together.
+func demotedGraph() kb.Graph {
+	return kb.Graph{
+		Claims: []kb.ClaimNode{{ID: demotedA, Title: "A"}, {ID: demotedB, Title: "B"}, {ID: demotedC, Title: "C"}, {ID: demotedD, Title: "D"}},
+		Scorable: []kb.ScorableEdge{
+			{Relation: kb.RelationSupports, Source: demotedA, Target: demotedB, Bearing: kb.Bearing{Value: 0.5}},
+		},
+		Demoted: []kb.DemotedEdge{
+			{Source: demotedB, Target: demotedA, ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Pending: true}},
+			{Source: demotedC, Target: demotedA, Context: "a cut", ReplacedRelation: kb.RelationRefutes, Bearing: kb.Bearing{Value: 0.3}, ManuallyScored: true},
+			{Source: demotedC, Target: demotedD, ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Pending: true}},
+			{Source: demotedD, Target: demotedC, ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Pending: true}},
+		},
 	}
 }
 
-// TestDemoteClaimEdge turns an entry's existing rests-on bullet into a
-// demoted row of its own entry: the bullet and its emptied list's header go,
-// the demoted row lands with its context and the given origin, a re-issue
-// over the row alone is unchanged and byte-identical, a depends bullet
-// standing beside the row is removed, a row of another origin is refused
-// naming both, and a pair with no depends edge is refused.
-func TestDemoteClaimEdge(t *testing.T) {
-	root := seedKB(t)
-	b := insertClaim(t, root, "Result B", "  rests-on:\n  - id: "+seedClaim+"\n    context: the seed it rests on\n")
-	other := insertClaim(t, root, "Result C", "")
-	demote := "entry:\n- id: " + b + "\n  target: " + seedClaim + "\n  origin: " + kb.OriginInferred + "\n  context: cut in the cycle walk\n"
+func resolve(id, target, action string) string {
+	return "entry:\n- id: " + id + "\n  target: " + target + "\n  action: " + action + "\n"
+}
 
-	res := run(t, root, DemoteClaimEdge, demote, false)
-	if res.Outcome != result.Done {
-		t.Fatalf("demote: %+v", res)
-	}
-	text := snapshot(t, root)[kb.RegisterFile]
-	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("B's demoted depends bullet stands:\n%s", text)
-	}
-	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+b+" — Result B") {
-		t.Errorf("B's emptied rests-on list kept its header:\n%s", text)
-	}
-	demotedRow := "- " + kb.RelationDemoted + ":\n  - " + seedClaim + " — Seed Result (origin " + kb.OriginInferred + ") [cut in the cycle walk]\n"
-	if !strings.Contains(text, demotedRow) {
-		t.Errorf("no demoted row naming the seed with its context:\n%s", text)
-	}
-	read, err := readRegister(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed := read.claims[seedClaim]
-	if slices.ContainsFunc(seed.Premises, func(d kb.Edge) bool { return d.Source == b }) || slices.ContainsFunc(seed.Demoted, func(d kb.Edge) bool { return d.Target == b }) {
-		t.Errorf("the seed entry moved: %+v demoted %+v\n%s", seed.Premises, seed.Demoted, text)
-	}
-	bRead, err := readRegister(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bEntry := bRead.claims[b]
-	if len(bEntry.Premises) != 0 || len(bEntry.Demoted) != 1 || bEntry.Demoted[0].Target != seedClaim ||
-		bEntry.Demoted[0].Origin != kb.OriginInferred || bEntry.Demoted[0].Context == nil || *bEntry.Demoted[0].Context != "cut in the cycle walk" {
-		t.Errorf("B did not read back as demoted: premises %+v demoted %+v\n%s", bEntry.Premises, bEntry.Demoted, text)
+// TestResolveDemoted: a restore writes the replaced edge exactly — its
+// relation, context, bearing and manually-scored — and a remove deletes the
+// record, each issued twice, the second unchanged and byte-identical; a
+// restore that would close a cycle, alone or with the batch's earlier
+// restores, is refused naming the path; a batch naming one pair twice is
+// refused; a pair with no demoted record is unchanged where the edge stands
+// or the action is remove, and refused where a restore has nothing to restore.
+func TestResolveDemoted(t *testing.T) {
+	root := recordKB(t, demotedGraph())
+	twice := func(values string, want []Resolution) {
+		t.Helper()
+		first := runRecordOp(t, root, ResolveDemoted, values, ProvenanceCaller)
+		if first.Outcome != result.Done || !slices.Equal(first.Resolved, want) {
+			t.Fatalf("%q: %+v, want done resolving %v", values, first, want)
+		}
+		before := snapshot(t, root)
+		second := runRecordOp(t, root, ResolveDemoted, values, ProvenanceCaller)
+		if second.Outcome != result.Unchanged || len(second.Resolved) != 0 || !maps.Equal(before, snapshot(t, root)) {
+			t.Errorf("%q again: %+v, want unchanged resolving nothing, byte-identical", values, second)
+		}
 	}
 
 	before := snapshot(t, root)
-	again := run(t, root, DemoteClaimEdge, demote, false)
-	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("again: %+v, want unchanged, byte-identical", again)
+	cycle := runRecordOp(t, root, ResolveDemoted, resolve(demotedA, demotedB, actionRestore), ProvenanceCaller)
+	if len(cycle.Refusals) != 1 || cycle.Refusals[0].Check != checkDependencyCycle ||
+		!strings.Contains(cycle.Refusals[0].Detail, demotedB+" → "+demotedA+" → "+demotedB) {
+		t.Errorf("a restore closing a cycle: %+v", cycle)
+	}
+	batch := runRecordOp(t, root, ResolveDemoted, "entry:\n- id: "+demotedD+"\n  target: "+demotedC+"\n  action: restore\n"+
+		"- id: "+demotedC+"\n  target: "+demotedD+"\n  action: restore\n", ProvenanceCaller)
+	if len(batch.Refusals) != 1 || batch.Refusals[0].Check != checkDependencyCycle || batch.Refusals[0].Entry != 2 ||
+		!strings.Contains(batch.Refusals[0].Detail, demotedD+" → "+demotedC+" → "+demotedD) {
+		t.Errorf("a batch whose second restore closes a cycle with its first: %+v", batch)
+	}
+	repeated := runRecordOp(t, root, ResolveDemoted, "entry:\n- id: "+demotedD+"\n  target: "+demotedC+"\n  action: remove\n"+
+		"- id: "+demotedD+"\n  target: "+demotedC+"\n  action: restore\n", ProvenanceCaller)
+	if repeated.Outcome != result.Refused || len(repeated.Refusals) != 1 || repeated.Refusals[0].Entry != 2 || repeated.Refusals[0].Key != "target" {
+		t.Errorf("a batch naming one pair twice: %+v, want refused at entry 2", repeated)
+	}
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a refused resolve-demoted wrote the KB")
 	}
 
-	if res := run(t, root, AddBuildEdges, "entry:\n- id: "+b+"\n  rests-on:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
-		t.Fatalf("re-planting B's depends bullet beside its demoted row: %+v", res)
-	}
-	both := run(t, root, DemoteClaimEdge, demote, false)
-	text = snapshot(t, root)[kb.RegisterFile]
-	bRead, err = readRegister(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bEntry = bRead.claims[b]
-	if both.Outcome != result.Done || len(bEntry.Premises) != 0 || len(bEntry.Demoted) != 1 || !strings.Contains(text, demotedRow) {
-		t.Errorf("row and bullet both standing: %+v, premises %+v demoted %+v, want done, the bullet gone and the row as it stood\n%s",
-			both, bEntry.Premises, bEntry.Demoted, text)
+	twice(resolve(demotedA, demotedC, actionRestore), []Resolution{{demotedA, demotedC, resolvedRestore}})
+	g := records(t, root)
+	rebuilt := kb.ScorableEdge{Relation: kb.RelationRefutes, Source: demotedC, Target: demotedA, Context: "a cut",
+		Bearing: kb.Bearing{Value: 0.3}, ManuallyScored: true}
+	if !slices.Contains(g.Scorable, rebuilt) || slices.ContainsFunc(g.Demoted, func(d kb.DemotedEdge) bool { return d.Source == demotedC && d.Target == demotedA }) {
+		t.Errorf("the restore did not rebuild %+v from its demoted record: scorable %+v, demoted %+v", rebuilt, g.Scorable, g.Demoted)
 	}
 
-	before = snapshot(t, root)
-	mismatch := run(t, root, DemoteClaimEdge, "entry:\n- id: "+b+"\n  target: "+seedClaim+"\n  origin: "+kb.OriginCited+"\n", false)
-	if mismatch.Outcome != result.Refused || len(mismatch.Refusals) != 1 ||
-		!strings.Contains(mismatch.Refusals[0].Detail, "origin "+kb.OriginInferred+", not "+kb.OriginCited) || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("demoting with an origin other than the standing row's: %+v, want refused naming both, nothing written", mismatch)
+	twice(resolve(demotedA, demotedB, actionRemove), []Resolution{{demotedA, demotedB, resolvedRemove}})
+	g = records(t, root)
+	if slices.ContainsFunc(g.Demoted, func(d kb.DemotedEdge) bool { return d.Source == demotedB && d.Target == demotedA }) ||
+		slices.ContainsFunc(g.Scorable, func(r kb.ScorableEdge) bool { return r.Source == demotedB && r.Target == demotedA }) {
+		t.Errorf("the removed demoted record stands, or was restored: scorable %+v, demoted %+v", g.Scorable, g.Demoted)
 	}
 
-	absent := run(t, root, DemoteClaimEdge, "entry:\n- id: "+b+"\n  target: "+other+"\n  origin: "+kb.OriginCited+"\n", false)
-	if absent.Outcome != result.Refused || len(absent.Refusals) != 1 ||
-		!strings.Contains(absent.Refusals[0].Detail, "no rests-on bullet naming") {
-		t.Errorf("demoting an edge B does not hold: %+v, want refused naming the missing bullet", absent)
+	if res := runRecordOp(t, root, ResolveDemoted, resolve(demotedB, demotedA, actionRestore), ProvenanceCaller); res.Outcome != result.Unchanged {
+		t.Errorf("restoring a pair whose edge stands: %+v, want unchanged", res)
+	}
+	if res := runRecordOp(t, root, ResolveDemoted, resolve(demotedB, demotedC, actionRestore), ProvenanceCaller); res.Outcome != result.Refused ||
+		len(res.Refusals) != 1 || res.Refusals[0].Key != "target="+demotedC {
+		t.Errorf("restoring a pair with neither: %+v, want one refusal at target=%s", res, demotedC)
+	}
+}
+
+// TestDemoteClaimEdge: a standing scoring edge becomes the demoted record that
+// keeps it whole — its relation, context, bearing and manually-scored — and a
+// re-issue over the record alone is unchanged and byte-identical; an edge
+// standing again beside its record goes, the record as it stood; a pair with
+// neither is refused.
+func TestDemoteClaimEdge(t *testing.T) {
+	root := recordKB(t, kb.Graph{
+		Claims: []kb.ClaimNode{{ID: demotedA, Title: "A"}, {ID: demotedB, Title: "B"}, {ID: demotedC, Title: "C"}},
+		Scorable: []kb.ScorableEdge{
+			{Relation: kb.RelationSupports, Source: demotedA, Target: demotedB, Context: "the seed it rests on", Bearing: kb.Bearing{Value: 0.4}, ManuallyScored: true},
+			{Relation: kb.RelationRefutes, Source: demotedC, Target: demotedA, Bearing: kb.Bearing{Value: 0.2}},
+		},
+	})
+	demote := func(id, target string) string { return "entry:\n- id: " + id + "\n  target: " + target + "\n" }
+	kept := kb.DemotedEdge{Source: demotedA, Target: demotedB, Context: "the seed it rests on", ReplacedRelation: kb.RelationSupports,
+		Bearing: kb.Bearing{Value: 0.4}, ManuallyScored: true}
+	for _, c := range []struct {
+		id, target string
+		want       kb.DemotedEdge
+	}{
+		{demotedB, demotedA, kept},
+		{demotedA, demotedC, kb.DemotedEdge{Source: demotedC, Target: demotedA, ReplacedRelation: kb.RelationRefutes, Bearing: kb.Bearing{Value: 0.2}}},
+	} {
+		if res := runRecordOp(t, root, DemoteClaimEdge, demote(c.id, c.target), ProvenanceMachine); res.Outcome != result.Done {
+			t.Fatalf("demote %s → %s: %+v", c.target, c.id, res)
+		}
+		g := records(t, root)
+		if !slices.Contains(g.Demoted, c.want) || slices.ContainsFunc(g.Scorable, func(r kb.ScorableEdge) bool { return r.Source == c.target && r.Target == c.id }) {
+			t.Errorf("demote %s → %s: scorable %+v, demoted %+v; want the edge replaced by %+v", c.target, c.id, g.Scorable, g.Demoted, c.want)
+		}
+		before := snapshot(t, root)
+		if again := runRecordOp(t, root, DemoteClaimEdge, demote(c.id, c.target), ProvenanceMachine); again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
+			t.Errorf("demote %s → %s again: %+v, want unchanged, byte-identical", c.target, c.id, again)
+		}
+	}
+
+	if res := runRecordOp(t, root, AddBuildEdges, "entry:\n- id: "+demotedB+"\n  rests-on:\n  - id: "+demotedA+"\n", ProvenanceMachine); res.Outcome != result.Done {
+		t.Fatalf("re-planting the edge beside its demoted record: %+v", res)
+	}
+	if res := runRecordOp(t, root, DemoteClaimEdge, demote(demotedB, demotedA), ProvenanceMachine); res.Outcome != result.Done {
+		t.Fatalf("demoting the edge standing beside its record: %+v", res)
+	}
+	g := records(t, root)
+	if slices.ContainsFunc(g.Scorable, func(r kb.ScorableEdge) bool { return r.Source == demotedA && r.Target == demotedB }) ||
+		!slices.Contains(g.Demoted, kept) || len(g.Demoted) != 2 {
+		t.Errorf("record and edge both standing: scorable %+v, demoted %+v; want the edge gone and the record as it stood", g.Scorable, g.Demoted)
+	}
+
+	absent := runRecordOp(t, root, DemoteClaimEdge, demote(demotedB, demotedC), ProvenanceMachine)
+	if absent.Outcome != result.Refused || len(absent.Refusals) != 1 || absent.Refusals[0].Key != "target="+demotedC {
+		t.Errorf("demoting an edge that does not stand: %+v, want one refusal at target=%s", absent, demotedC)
 	}
 }

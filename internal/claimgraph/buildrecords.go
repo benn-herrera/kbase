@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
@@ -42,13 +41,11 @@ const (
 // DefaultCauses is every cause, in the order a report states them.
 var DefaultCauses = []string{CauseNoLetter, CauseUnplaceable}
 
-// How a candidate's classification was reached: answered — by the model, or,
-// for a candidate offered one letter, by that offer with no ask spent —
-// re-asked once and answered, asked and answered with no offered letter
-// twice, or no reader there to ask. The last two take the draft.
+// How a candidate's classification was reached, beyond the answered and
+// re-asked outcomes of asks.Outcome: asked and answered with no offered letter
+// twice, which takes the draft (defaulted), or no reader there to ask
+// (drafted).
 const (
-	ClassifyAnswered  = "answered"
-	ClassifyReasked   = "re-asked"
 	ClassifyDefaulted = "defaulted"
 	ClassifyDrafted   = "drafted"
 )
@@ -189,20 +186,4 @@ func WriteCull(repoRoot string, r buildrecords.CullRecord) error {
 		return err
 	}
 	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.CullFile), b, nil)
-}
-
-// inferredAt is whether a depends edge source → target was found with no
-// mark, by the unmarked and cull records standing at repoRoot; an absent
-// record finds nothing.
-func inferredAt(repoRoot string) (func(source, target string) bool, error) {
-	src := recordsAt(repoRoot)
-	u, _, err := buildrecords.ReadUnmarked(src)
-	if err != nil {
-		return nil, err
-	}
-	c, _, err := buildrecords.ReadCull(src)
-	if err != nil {
-		return nil, err
-	}
-	return buildrecords.InferredLinks(u, c, asks.LetterPoints), nil
 }

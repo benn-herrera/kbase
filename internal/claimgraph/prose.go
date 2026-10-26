@@ -115,11 +115,11 @@ func (r *leafReading) standing(a Anchor, entry buildrecords.LeafEntry) standing 
 	return standingUnjudged
 }
 
-// marks is whether id's Tier-2 marker sits in p: the paragraph its claim was
+// marks is whether id's statement marker sits in p: the paragraph its claim was
 // minted from.
 func (r *leafReading) marks(p paragraph, id string) bool {
 	lines := kb.SplitLines(r.text)
-	marker := write.Tier2Marker(id)
+	marker := kb.StatementMarker(id)
 	for _, n := range p.lines {
 		if n < len(lines) && strings.Contains(lines[n], marker) {
 			return true
@@ -291,5 +291,5 @@ func (r *leafReading) judge(answers []paragraphAnswer) ([]proseClaim, []buildrec
 // proseRationale is a prose claim's register rationale.
 func proseRationale(document string) string {
 	return "Identified in the prose of " + document + "; the span this entry names is anchored in that document by " +
-		"this claim's Tier-2 marker. Neither dependency attribution nor rigor assessment has run over it."
+		"this claim's statement marker. Neither dependency attribution nor rigor assessment has run over it."
 }

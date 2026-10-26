@@ -73,3 +73,9 @@ Written before the session starts, and read at its end:
 The feature table and the partition record are committed beside this plan; they are the evidence
 the next step rests on, and scratch is not. The session's dispatch brief gets prompt-engineer review
 before an agent reads it.
+
+## Additional Task
+
+Add a `--replay` dev-only feature to the `build` command that parallels the one `score` has.
+We will absolutely want this for doing iterative improvement tests on claim graph building
+inference prompts.

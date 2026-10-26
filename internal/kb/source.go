@@ -12,15 +12,26 @@ import (
 )
 
 // Migration is what a load did to an older KB: the format version it carried,
-// the one it was converted to, and the one sentence that says what changed.
+// the one it was converted to, the one sentence that says what changed, and
+// what the conversion dropped or changed that the converted files do not show.
 type Migration struct {
 	From, To, Note string
+	Warnings       []MigrationWarning
 }
 
-// MigrationNote is the one sentence a migrated KB's record carries: the three
-// value changes the 2.0.0 format makes, which no derived-value equality
-// survives.
-const MigrationNote = "a lift now raises the derivation, a work's bearing scales its finding, and an untokened work edge no longer pends"
+// MigrationWarning is one thing a migration dropped or changed: the file it
+// names — kb-root-relative inside kb-root, repository-relative beside it — its
+// 1-based line (0 where it names none), and one sentence.
+type MigrationWarning struct {
+	Path   string
+	Line   int
+	Detail string
+}
+
+// MigrationNote is the one sentence a migrated KB's record carries: every
+// migration ends in the 3.0.0 form, which marks each judged value
+// model-scored.
+const MigrationNote = "every rigor and bearing that score judges is now marked model-scored, so a default score run re-judges it; to keep one, re-assert its current value with set-rigor or set-bearing, only where the user asks"
 
 // Source is where kbase reads one KB's files — kb-root and the build records
 // beside it — named by absolute path. A KB at the current format version is
@@ -50,13 +61,14 @@ func OnDisk(kbRoot string) *Source {
 
 // MigratedSource is the source of the KB at kbRoot loaded at version and
 // migrated in memory: files are the current form's bytes and obsolete the
-// paths the migration made so, each keyed by repository-relative slash path.
-func MigratedSource(kbRoot, version string, files map[string][]byte, obsolete []string) *Source {
+// paths the migration made so, each keyed by repository-relative slash path,
+// and warnings what the migration reports it dropped or changed.
+func MigratedSource(kbRoot, version string, files map[string][]byte, obsolete []string, warnings ...MigrationWarning) *Source {
 	s := OnDisk(kbRoot)
 	s.version, s.migrated = version, true
 	s.files = maps.Clone(files)
 	s.obsolete = slices.Clone(obsolete)
-	s.migration = &Migration{From: version, To: FormatVersion, Note: MigrationNote}
+	s.migration = &Migration{From: version, To: FormatVersion, Note: MigrationNote, Warnings: slices.Clone(warnings)}
 	return s
 }
 
@@ -169,6 +181,13 @@ func (s *Source) IsFile(p string) bool {
 func (s *Source) Put(p string, data []byte) {
 	if rel, ok := s.RepoRel(p); ok {
 		s.files[rel] = slices.Clone(data)
+	}
+}
+
+// Removed records that p no longer stands, so later reads fall to the disk.
+func (s *Source) Removed(p string) {
+	if rel, ok := s.RepoRel(p); ok {
+		delete(s.files, rel)
 	}
 }
 

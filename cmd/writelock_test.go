@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/filelock"
+	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/write"
 )
 
-// lockedRepo is maintenanceRepo refreshed, with a claim register created.
+// lockedRepo is maintenanceRepo refreshed, with a claim recorded.
 func lockedRepo(t *testing.T) string {
 	t.Helper()
 	repo := maintenanceRepo(t)
@@ -34,11 +37,11 @@ func lockedRepo(t *testing.T) string {
 // reports through its return so a goroutine may call it.
 func insertClaim(repo, title string) (string, error) {
 	values := filepath.Join(repo, title+".yaml")
-	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- register: claim-rigor.md\n  title: %s\n  rigor: 0.5\n  rationale: Shown.\n", title), 0o644); err != nil {
+	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- title: %s\n  rigor: 0.5\n  rationale: Shown.\n", title), 0o644); err != nil {
 		return "", err
 	}
 	var out bytes.Buffer
-	_, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: values, Create: true,
+	_, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: values,
 		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
 	return out.String(), err
 }
@@ -49,9 +52,10 @@ func runQuiet(run func(maintenanceOptions) (int, error), repo string) (string, e
 	return out.String(), err
 }
 
-func register(t *testing.T, repo string) string {
+// nodeRecords is the KB's node record file as it stands.
+func nodeRecords(t *testing.T, repo string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repo, "kb-root", "claim-rigor.md"))
+	b, err := os.ReadFile(filepath.Join(repo, kb.KBDir, filepath.FromSlash(kb.GraphNodesFile)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +77,8 @@ func concurrently(calls ...func() (string, error)) ([]string, []error) {
 	return outs, errs
 }
 
-// landedOrRetried checks a racing insert: done with its title in the
-// register, or retry with the lock item; never done and lost.
+// landedOrRetried checks a racing insert: done with its title in the node
+// records, or retry with the lock item; never done and lost.
 func landedOrRetried(t *testing.T, repo, title, out string, err error) {
 	t.Helper()
 	if err != nil {
@@ -83,8 +87,8 @@ func landedOrRetried(t *testing.T, repo, title, out string, err error) {
 	d := checkDocument(t, "insert-claim-entry", out)
 	switch d.Outcome {
 	case "done":
-		if !strings.Contains(register(t, repo), title) {
-			t.Errorf("insert of %q reported done and the register lacks it:\n%s", title, register(t, repo))
+		if records := nodeRecords(t, repo); !strings.Contains(records, title) {
+			t.Errorf("insert of %q reported done and the node records lack it:\n%s", title, records)
 		}
 	case "retry":
 		if items := d.items("refusals"); len(items) != 1 || items[0]["check"] != checkLock {
@@ -122,13 +126,16 @@ func TestRefreshRacingAWriteOpLosesNoEdit(t *testing.T) {
 
 func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	repo := lockedRepo(t)
-	before := register(t, repo)
+	before := nodeRecords(t, repo)
 	verified, err := runQuiet(runVerify, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	state := filepath.Join(t.TempDir(), "state")
-	held, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-build.lock"), 0)
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	held, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-operation.lock"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +143,18 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	if err := held.Write([]byte(state)); err != nil {
 		t.Fatal(err)
 	}
+	record, err := json.Marshal(buildstore.Holder{PID: os.Getpid(), Started: time.Now().UTC().Format(time.RFC3339), Kind: buildstore.KindBuild})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildstore.HolderPath(state), record, 0o666); err != nil {
+		t.Fatal(err)
+	}
 
 	insert, insertErr := insertClaim(repo, "Blocked")
 	refreshed, refreshErr := runQuiet(runRefresh, repo)
 	rendered, renderErr := runQuiet(runRenderClaimGraph, repo)
+	detail := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), state)
 	for _, c := range []struct {
 		verb, out string
 		err       error
@@ -150,12 +165,12 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		d := checkDocument(t, c.verb, c.out)
 		items := d.items("refusals")
 		if d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != state ||
-			items[0]["detail"] != "a build is running; its state-dir is "+state || items[0]["remedy"] != nil {
+			items[0]["detail"] != detail || items[0]["remedy"] != nil {
 			t.Errorf("%s under a running build:\n%s", c.verb, c.out)
 		}
 	}
-	if after := register(t, repo); after != before {
-		t.Errorf("a refused write changed the register:\n%s", after)
+	if after := nodeRecords(t, repo); after != before {
+		t.Errorf("a refused write changed the node records:\n%s", after)
 	}
 	if out, err := runQuiet(runVerify, repo); err != nil || out != verified {
 		t.Errorf("verify under a running build: %v\n%s\nwant as before the build:\n%s", err, out, verified)
@@ -165,12 +180,12 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	}
 }
 
-// TestWriterRefusedAtOnceWhileABuildWaitsOutAnother: with a build holding the
-// run lock and another writer holding the write lock, a writer is refused
-// without waiting for the write lock.
+// TestWriterRefusedAtOnceWhileABuildWaitsOutAnother: with a run holding the
+// operation lock and another writer holding the write lock, a writer is
+// refused without waiting for the write lock.
 func TestWriterRefusedAtOnceWhileABuildWaitsOutAnother(t *testing.T) {
 	repo := lockedRepo(t)
-	run, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-build.lock"), 0)
+	run, err := filelock.Acquire(filepath.Join(repo, ".git", "kbase-operation.lock"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

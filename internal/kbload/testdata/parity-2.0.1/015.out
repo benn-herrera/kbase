@@ -1,0 +1,9 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "axiom"
+    id: "axm-S1"
+    title: "Conservation of stock"
+    canonical_path: "axioms.md"
+    canonical_anchor: "axiom-s1-conservation-of-stock"
+    rigor: 1.0

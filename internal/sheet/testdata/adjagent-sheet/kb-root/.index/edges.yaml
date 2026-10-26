@@ -1,18 +1,94 @@
---- {"source": "ana-aaa007", "target": "clm-aaa003", "relation": "refutes", "target_kind": "claim", "source_strength_recorded": null, "bearing": "0.5", "context": null}
---- {"source": "ana-aaa007", "target": "clm-aaa004", "relation": "lifts", "target_kind": "claim", "source_strength_recorded": null, "bearing": "0.5", "context": null}
---- {"source": "axm-1", "target": "clm-bbb002", "relation": "founds", "target_kind": "claim", "source_strength_recorded": null, "bearing": "1.0", "context": null}
---- {"source": "axm-S1", "target": "ana-aaa007", "relation": "founds", "target_kind": "analysis", "source_strength_recorded": null, "bearing": "0.8", "context": null}
---- {"source": "axm-S1", "target": "clm-aaa001", "relation": "founds", "target_kind": "claim", "source_strength_recorded": null, "bearing": "1.0", "context": null}
---- {"source": "axm-S1", "target": "clm-aaa002", "relation": "founds", "target_kind": "claim", "source_strength_recorded": null, "bearing": "1.0", "context": null}
---- {"source": "clm-aaa001", "target": "clm-aaa003", "relation": "supports", "target_kind": "claim", "source_strength_recorded": 0.9, "bearing": "1.0", "context": null}
---- {"source": "clm-aaa001", "target": "clm-aaa004", "relation": "demoted", "target_kind": "claim", "source_strength_recorded": null, "bearing": null, "context": null, "origin": "inferred"}
---- {"source": "clm-aaa001", "target": "clm-bbb001", "relation": "supports", "target_kind": "claim", "source_strength_recorded": 0.9, "bearing": "1.0", "context": null}
---- {"source": "clm-aaa002", "target": "clm-aaa001", "relation": "supports", "target_kind": "claim", "source_strength_recorded": 0.95, "bearing": "1.0", "context": "first use"}
---- {"source": "clm-aaa002", "target": "clm-aaa001", "relation": "supports", "target_kind": "claim", "source_strength_recorded": 0.95, "bearing": "1.0", "context": "second use"}
---- {"source": "clm-aaa002", "target": "clm-aaa003", "relation": "supports", "target_kind": "claim", "source_strength_recorded": 0.95, "bearing": "1.0", "context": null}
---- {"source": "clm-aaa004", "target": "clm-bbb003", "relation": "references", "target_kind": "claim", "source_strength_recorded": null, "bearing": null, "context": null}
---- {"source": "clm-bbb001", "target": "clm-aaa004", "relation": "demoted", "target_kind": "claim", "source_strength_recorded": null, "bearing": null, "context": "the circle's other half", "origin": "cited"}
---- {"source": "clm-bbb003", "target": "clm-aaa004", "relation": "references", "target_kind": "claim", "source_strength_recorded": null, "bearing": null, "context": null}
---- {"source": "exp-aaa008", "target": "clm-aaa003", "relation": "lifts", "target_kind": "claim", "source_strength_recorded": null, "bearing": "0.8", "context": null}
---- {"source": "wrk-smith2020", "target": "clm-bbb002", "relation": "founds", "target_kind": "claim", "source_strength_recorded": null, "bearing": "0.75", "context": null}
---- {"source": "wrk-smith2020", "target": "clm-bbb003", "relation": "founds", "target_kind": "claim", "source_strength_recorded": null, "bearing": "0.5", "context": null}
+- relation: "supports"
+  source: "clm-aaa001"
+  target: "clm-aaa003"
+  context: ""
+  bearing: 1.0
+  manually-scored: false
+- relation: "supports"
+  source: "clm-aaa001"
+  target: "clm-bbb001"
+  context: ""
+  bearing: 1.0
+  manually-scored: false
+- relation: "supports"
+  source: "clm-aaa002"
+  target: "clm-aaa001"
+  context: "first use; second use"
+  bearing: 1.0
+  manually-scored: false
+- relation: "supports"
+  source: "clm-aaa002"
+  target: "clm-aaa003"
+  context: ""
+  bearing: 1.0
+  manually-scored: false
+- relation: "founds"
+  source: "axm-1"
+  target: "clm-bbb002"
+  context: ""
+  bearing: 1.0
+- relation: "founds"
+  source: "axm-S1"
+  target: "ana-aaa007"
+  context: ""
+  bearing: 0.8
+- relation: "founds"
+  source: "axm-S1"
+  target: "clm-aaa001"
+  context: ""
+  bearing: 1.0
+- relation: "founds"
+  source: "axm-S1"
+  target: "clm-aaa002"
+  context: ""
+  bearing: 1.0
+- relation: "founds"
+  source: "wrk-smith2020"
+  target: "clm-bbb002"
+  context: ""
+  bearing: 0.75
+- relation: "founds"
+  source: "wrk-smith2020"
+  target: "clm-bbb003"
+  context: ""
+  bearing: 0.5
+- relation: "lifts"
+  source: "ana-aaa007"
+  target: "clm-aaa004"
+  context: ""
+  bearing: 0.5
+  manually-scored: false
+- relation: "lifts"
+  source: "exp-aaa008"
+  target: "clm-aaa003"
+  context: ""
+  bearing: 0.8
+  manually-scored: false
+- relation: "refutes"
+  source: "ana-aaa007"
+  target: "clm-aaa003"
+  context: ""
+  bearing: 0.5
+  manually-scored: false
+- relation: "references"
+  source: "clm-aaa004"
+  target: "clm-bbb003"
+  context: ""
+- relation: "references"
+  source: "clm-bbb003"
+  target: "clm-aaa004"
+  context: ""
+- relation: "demoted"
+  source: "clm-aaa004"
+  target: "clm-aaa001"
+  context: ""
+  replaced-relation: "supports"
+  bearing: "*pending*"
+  manually-scored: false
+- relation: "demoted"
+  source: "clm-aaa004"
+  target: "clm-bbb001"
+  context: "the circle's other half"
+  replaced-relation: "supports"
+  bearing: "*pending*"
+  manually-scored: false

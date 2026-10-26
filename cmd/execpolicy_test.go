@@ -15,23 +15,16 @@ import (
 // selfExec is the binary os.Executable names: kbase itself.
 const selfExec = "kbase"
 
-// dynamicExec is the sentinel execOwners holds for an owner whose binary is the
-// user's configuration rather than a program kbase names: a harness profile's
-// command. It cannot be resolved statically, so the per-site check exempts the
-// owner — the price of running a program kbase did not write, named rather than
-// hidden.
-const dynamicExec = "<the harness profile's command>"
-
 // execOwners are the only places that may start a process, each with the one
 // binary it starts: a package, or one file of a package that otherwise may
-// not — the MCP server's detached build, which execs kbase itself. Every
-// other package reaches each binary through its owner.
+// not — internal/mcp/launch.go, the MCP server's detached build and score
+// runs, which execs kbase itself. Every other package reaches each binary
+// through its owner.
 var execOwners = map[string]string{
-	"internal/latex/pandoc": "pandoc",
-	"internal/ledger":       "git",
-	"internal/sheet":        "dot",
-	"cmd/mcp.go":            selfExec,
-	"internal/harness":      dynamicExec,
+	"internal/latex/pandoc":  "pandoc",
+	"internal/ledger":        "git",
+	"internal/sheet":         "dot",
+	"internal/mcp/launch.go": selfExec,
 }
 
 // execNamers are the os/exec calls that name a binary, with the position of
@@ -75,12 +68,6 @@ func TestExecPolicy(t *testing.T) {
 			}
 			for _, s := range execSites(m.f, pkg) {
 				named[owner] = true
-				if binary == dynamicExec {
-					// The binary is the user's configuration: no argument
-					// can resolve it, and a site that appeared to would be
-					// the claim this sentinel exists to refuse.
-					continue
-				}
 				switch s.binary {
 				case binary:
 				case "":

@@ -16,9 +16,12 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/asks/call"
+	"kbase/internal/buildstore"
 	"kbase/internal/claimgraph"
+	"kbase/internal/config"
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
 	"kbase/internal/ledger"
 	"kbase/internal/log"
@@ -27,129 +30,45 @@ import (
 	"kbase/internal/statedir"
 )
 
-// Stage is one stage of the build: its id and what it is for.
-type Stage struct {
-	ID, Display string
-}
-
-// Stages is the build's stage vocabulary in walk order. The id "phase-5" is
-// never given to a stage: the ledgers would read it as recorded.
-var Stages = []Stage{
-	{"start", "build started"},
-	{"document-graph", "document tree derived"},
-	{"spine-seed", "claim-graph spine seeded"},
-	{"claims-declared", "declared claim graph"},
-	{"claims-discovered", "claim discovery"},
-	{"equations-minted", "equation nodes minted"},
-	{"references-found", "unmarked references found"},
-	{"claims-culled", "co-linear claims culled"},
-	{"depends-attributed", "dependency attribution"},
-	{"phase-3a", "validation gate"},
-	{"overview-drafted", "overview drafted"},
-}
-
-const (
-	stageStart         = "start"
-	stageDocumentGraph = "document-graph"
-	stageSpineSeed     = "spine-seed"
-)
-
-// ownedPaths are the root-relative paths a build commits and restores: the
-// build records under every spelling, so a migration's removal of the old
-// one is committed with the stage that saved it.
-var ownedPaths = append([]string{kb.KBDir}, kbload.RecordFiles()...)
-
 // Every boundary's body ends with the build's inputs, one line per path.
 const (
 	volumeRootField   = "volume-root:"
 	bibliographyField = "bibliography:"
 )
 
-// The refusal and failure classes a build names in its items.
+// The refusal and failure classes a build names in its items, beside those
+// buildstore names.
 const (
-	checkUsage      = "usage"
-	checkWorktree   = "worktree"
-	checkLock       = "lock"
 	checkDirtyPaths = "dirty-paths"
 	checkPandoc     = "pandoc"
 	checkSource     = "source"
 	checkInclude    = "include"
 	checkMetadata   = "metadata-key"
-	checkProvider   = "provider"
-	checkKBRoot     = "kb-root"
+	checkKBRoot     = kb.CheckKBRoot
 	checkInference  = "inference"
 	checkRecords    = "records"
-	checkStateDir   = "state-dir"
 	checkInputs     = "inputs"
-	checkTrail      = "trail"
-	checkError      = "error"
 )
 
-// row is one step of a stage, and one unit of its progress. A row spends
-// inference where it makes a model call under a system prompt, or where its
-// whole work is a model call made inside the tool it runs; it calls a model,
-// too, where part of its work does.
-type row struct {
-	id, stage             string
-	system                string
-	spendsOwnInference    bool
-	spendsInferenceInPart bool
-	run                   func(*walk) (result.Record, error)
-}
-
-func (r row) spendsInference() bool { return r.spendsOwnInference || r.system != "" }
-
-func (r row) callsAModel() bool { return r.spendsInference() || r.spendsInferenceInPart }
-
-// rows is the step table in walk order.
-var rows = []row{
-	{id: "pre.preflight", stage: stageStart, run: preflight},
-	{id: "dg.build", stage: stageDocumentGraph, run: documentGraph},
-	{id: "seed.graph-init", stage: "spine-seed", run: seedSpine},
-	{id: "declared.build", stage: "claims-declared", run: claimGraph(mechanical(claimgraph.Declared))},
-	{id: "discover.build", stage: "claims-discovered", spendsOwnInference: true, run: claimGraph(claimgraph.Discovered)},
-	{id: "equations.build", stage: "equations-minted", run: claimGraph(mechanical(claimgraph.Equations))},
-	{id: "unmarked.build", stage: "references-found", spendsOwnInference: true, run: claimGraph(claimgraph.References)},
-	{id: "cull.build", stage: "claims-culled", spendsOwnInference: true, run: claimGraph(claimgraph.Culled)},
-	{id: "depends.attribute", stage: "depends-attributed", spendsInferenceInPart: true, run: claimGraph(claimgraph.Depends)},
-	{id: "p3a.gate", stage: "phase-3a", run: validationGate},
-	{id: "p3a.stamp", stage: "phase-3a", run: stampReadiness},
-	{id: "ov.docs", stage: "overview-drafted", system: asks.OverviewSystem, run: overview},
-}
-
-// applies is whether a row runs: a run spending no inference drops every row
-// that would spend it and walks the rest.
-func (r row) applies(noInference bool) bool { return !noInference || !r.spendsInference() }
-
-// stageRows is a stage's rows that run in this build, and those it drops.
-func stageRows(stage string, noInference bool) (run []row, dropped []string) {
-	for _, r := range rows {
-		switch {
-		case r.stage != stage:
-		case r.applies(noInference):
-			run = append(run, r)
-		default:
-			dropped = append(dropped, r.id)
-		}
-	}
-	return run, dropped
-}
-
-// ResolveStage is the stage name names, by id or display name, whitespace
-// collapsed and case ignored.
-func ResolveStage(name string) (Stage, bool) {
-	wanted := strings.ToLower(strings.Join(strings.Fields(name), " "))
-	for _, s := range Stages {
-		if wanted == strings.ToLower(s.ID) || wanted == strings.ToLower(s.Display) {
-			return s, true
-		}
-	}
-	return Stage{}, false
+// stepRuns is what each step of buildstore.Steps does, keyed by its id.
+var stepRuns = map[string]func(*walk) (result.Record, error){
+	"pre.preflight":     preflight,
+	"dg.build":          documentGraph,
+	"seed.graph-init":   seedSpine,
+	"declared.build":    claimGraph(mechanical(claimgraph.Declared)),
+	"discover.build":    claimGraph(claimgraph.Discovered),
+	"equations.build":   claimGraph(mechanical(claimgraph.Equations)),
+	"unmarked.build":    claimGraph(claimgraph.References),
+	"cull.build":        claimGraph(claimgraph.Culled),
+	"depends.attribute": claimGraph(claimgraph.Depends),
+	"p3a.gate":          validationGate,
+	"p3a.stamp":         stampReadiness,
+	"ov.docs":           overview,
 }
 
 func stageIDList() []string {
-	ids := make([]string, len(Stages))
-	for i, s := range Stages {
+	ids := make([]string, len(buildstore.Stages))
+	for i, s := range buildstore.Stages {
 		ids[i] = s.ID
 	}
 	return ids
@@ -237,77 +156,6 @@ type walk struct {
 	roles []result.Record
 }
 
-// retry is a live holder of what the build needs.
-type retry []result.Item
-
-func (r retry) Error() string { return result.Items(r).Error() }
-
-// failure is a row whose own checks found its products disagreeing, or a
-// product a later step found wrong, every finding named. A row that leaves it
-// empty has its stage name the report holding the findings.
-type failure []result.Item
-
-func (f failure) Error() string {
-	if len(f) == 0 {
-		return "a check failed"
-	}
-	return result.Items(f).Error()
-}
-
-// cancelled is a build stopped on request, the unit in flight abandoned.
-type cancelled struct{ stage, unit string }
-
-func (c cancelled) Error() string { return fmt.Sprintf("cancelled in %s at %s", c.stage, c.unit) }
-
-// ending is how a build ended: its outcome, and the items or the unit in
-// flight that say why where it did not succeed.
-type ending struct {
-	outcome string
-	items   []result.Item
-	at      cancelled
-}
-
-// ended classifies a walk's error; success is the outcome given.
-func ended(success string, err error) ending {
-	var (
-		r result.Refusal
-		t retry
-		f failure
-		c cancelled
-	)
-	switch {
-	case err == nil:
-		return ending{outcome: success}
-	case errors.As(err, &r):
-		return ending{outcome: result.Refused, items: r}
-	case errors.As(err, &t):
-		return ending{outcome: result.Retry, items: t}
-	case errors.As(err, &c):
-		return ending{outcome: result.Cancelled, at: c}
-	case errors.As(err, &f):
-		return ending{outcome: result.Failed, items: f}
-	}
-	return ending{outcome: result.Failed, items: []result.Item{{Check: checkError, Detail: err.Error()}}}
-}
-
-// fields is the key that closes the result document, none on success.
-func (e ending) fields() []result.Field {
-	switch e.outcome {
-	case result.Refused, result.Retry:
-		return []result.Field{{Key: result.RefusalsKey, Value: e.items}}
-	case result.Failed:
-		return []result.Field{{Key: result.FailuresKey, Value: e.items}}
-	case result.Cancelled:
-		return []result.Field{{Key: result.CancelledKey, Value: result.Record{{Key: "stage", Value: e.at.stage}, {Key: "unit", Value: e.at.unit}}}}
-	}
-	return nil
-}
-
-// event is the progress record's end of the invocation that ended so.
-func (e ending) event() event {
-	return event{Event: eventEnd, Outcome: e.outcome, Items: e.items, Stage: e.at.stage, Unit: e.at.unit}
-}
-
 // Run walks the stages from where the commit trail stands through
 // opts.Through and returns the result's outcome and fields.
 func Run(ctx context.Context, opts Options) (string, []result.Field) {
@@ -318,45 +166,38 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 		opts.now = time.Now
 	}
 	w := &walk{ctx: ctx, opts: opts}
-	through := Stages[len(Stages)-1]
+	through := buildstore.Stages[len(buildstore.Stages)-1]
 	if opts.Through != "" {
 		var ok bool
-		if through, ok = ResolveStage(opts.Through); !ok {
-			return w.result(ended("", result.Refusal{{Check: checkUsage, Key: "--through", Allowed: stageIDList(),
+		if through, ok = buildstore.ResolveStage(opts.Through); !ok {
+			return w.result(buildstore.EndingOf("", result.Refusal{{Check: buildstore.CheckUsage, Key: "--through", Allowed: stageIDList(),
 				Detail: fmt.Sprintf("--through %q names no stage, by id or display name", opts.Through)}}))
 		}
 	}
 	w.through = through.ID
 	if err := w.open(); err != nil {
-		return w.result(ended("", err))
+		return w.result(buildstore.EndingOf("", err))
 	}
-	runLock, err := takeRunLock(w.kbRoot, w.stateDir)
+	// The run's locks, in the order every run takes them: the KB's operation
+	// lock, then the state store's holder lock, whose record names this run.
+	release, err := Hold(w.kbRoot, w.stateDir, buildstore.KindBuild, "", opts.now())
 	if err != nil {
-		return w.result(ended("", err))
+		return w.result(buildstore.EndingOf("", err))
 	}
 	defer func() {
-		if err := runLock.ReleaseRemoving(); err != nil {
-			opts.Logger.Error("the run lock was released and its file not removed", "error", err)
-		}
-	}()
-	lock, err := takeLock(w.stateDir, opts.now())
-	if err != nil {
-		return w.result(ended("", err))
-	}
-	defer func() {
-		if err := lock.ReleaseRemoving(); err != nil {
-			opts.Logger.Error("the state store's holder lock was released and its file not removed", "error", err)
+		if err := release(); err != nil {
+			opts.Logger.Error("the run's locks were released and their files not removed", "error", err)
 		}
 	}()
 	if err := readyStore(w.stateDir); err != nil {
-		return w.result(ended("", err))
+		return w.result(buildstore.EndingOf("", err))
 	}
 	if w.progress, err = openProgress(w.stateDir, opts.now); err != nil {
-		return w.result(ended("", err))
+		return w.result(buildstore.EndingOf("", err))
 	}
 	defer w.progress.close()
-	if err := w.progress.emit(event{Event: eventRun, PID: os.Getpid(), NoInference: opts.NoInference, Resume: w.resumeCommand()}); err != nil {
-		return w.result(ended("", err))
+	if err := w.progress.emit(buildstore.Event{Event: buildstore.EventRun, PID: os.Getpid(), NoInference: opts.NoInference, Resume: w.resumeCommand()}); err != nil {
+		return w.result(buildstore.EndingOf("", err))
 	}
 	var outcome string
 	err = pruneCaptures(w.stateDir)
@@ -366,8 +207,8 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if err == nil {
 		outcome, err = w.run(through)
 	}
-	end := ended(outcome, err)
-	if err := w.progress.emit(end.event()); err != nil {
+	end := buildstore.EndingOf(outcome, err)
+	if err := w.progress.emit(end.Event()); err != nil {
 		opts.Logger.Error("the progress record lost the build's end", "error", err)
 	}
 	return w.result(end)
@@ -375,7 +216,7 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 
 // result is the build's document: what the walk reached, in the order the
 // contract gives, then why it ended where it did not succeed.
-func (w *walk) result(end ending) (string, []result.Field) {
+func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 	var fields []result.Field
 	// walked is whether this invocation recorded a boundary: one that recorded
 	// none walked no stage, and its document names neither the bound nor the
@@ -409,25 +250,25 @@ func (w *walk) result(end ending) (string, []result.Field) {
 	// failed run is continued wherever it walked a stage; a refusal's only
 	// where it recorded a boundary, since a refusal that recorded none wrote
 	// nothing to continue.
-	switch end.outcome {
+	switch end.Outcome {
 	case result.Cancelled, result.Failed, result.Refused:
 		continues := walked
-		if end.outcome == result.Refused {
+		if end.Outcome == result.Refused {
 			continues = w.recordedBoundary
 		}
-		if command, confirmed := recordedCommand(w.resumeCommand()); continues && confirmed {
+		if command, confirmed := buildstore.RecordedCommand(w.resumeCommand()); continues && confirmed {
 			fields = append(fields, result.Field{Key: "resume", Value: command})
 		}
 	}
-	return end.outcome, append(fields, end.fields()...)
+	return end.Outcome, append(fields, end.Fields()...)
 }
 
 // open finds the repository, kb-root/ and the state store.
 func (w *walk) open() error {
-	repo, err := ledger.Open(w.opts.WorkDir, ownedPaths, w.opts.Logger)
+	repo, err := ledger.Open(w.opts.WorkDir, buildstore.OwnedPaths, w.opts.Logger)
 	var nw ledger.NotWorktreeError
 	if errors.As(err, &nw) {
-		return result.Refusal{{Check: checkWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
+		return result.Refusal{{Check: buildstore.CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
 	}
 	if err != nil {
 		return err
@@ -436,7 +277,7 @@ func (w *walk) open() error {
 	if w.stateDir, err = statedir.Dir(w.opts.StateDir, w.kbRoot); err != nil {
 		return err
 	}
-	if _, err := storeVersion(w.stateDir); err != nil {
+	if _, err := buildstore.StoreVersion(w.stateDir); err != nil {
 		return err
 	}
 	return os.MkdirAll(w.stateDir, 0o777)
@@ -444,7 +285,7 @@ func (w *walk) open() error {
 
 // run walks the stages the trail leaves unrecorded, through the bound, and
 // returns the outcome it succeeded with.
-func (w *walk) run(through Stage) (string, error) {
+func (w *walk) run(through buildstore.Stage) (string, error) {
 	trail, err := w.repo.Trail()
 	if err != nil {
 		return "", err
@@ -457,24 +298,24 @@ func (w *walk) run(through Stage) (string, error) {
 			}
 		}
 	}
-	recorded := w.recorded()
-	if items := trailRefusal(w.repo.Root, recorded); len(items) > 0 {
+	recorded := buildstore.RecordedStages(w.trail)
+	if items := buildstore.TrailRefusal(w.repo.Root, recorded); len(items) > 0 {
 		return "", items
 	}
-	last := slices.IndexFunc(Stages, func(s Stage) bool { return s.ID == through.ID })
-	var remaining []Stage
-	for _, s := range Stages[:last+1] {
+	last := slices.IndexFunc(buildstore.Stages, func(s buildstore.Stage) bool { return s.ID == through.ID })
+	var remaining []buildstore.Stage
+	for _, s := range buildstore.Stages[:last+1] {
 		if recorded[s.ID] == "" {
 			remaining = append(remaining, s)
 		}
 	}
-	resumed := recorded[stageStart] != ""
+	resumed := recorded[buildstore.StageStart] != ""
 	w.resumed = &resumed
 	if err := w.launch(remaining); err != nil {
 		return "", err
 	}
 	if len(remaining) == 0 {
-		if len(recorded) == len(Stages) {
+		if len(recorded) == len(buildstore.Stages) {
 			return result.Unchanged, nil
 		}
 		return result.Bounded, nil
@@ -492,65 +333,29 @@ func (w *walk) run(through Stage) (string, error) {
 			return "", err
 		}
 	}
-	if last == len(Stages)-1 {
+	if last == len(buildstore.Stages)-1 {
 		return result.Done, nil
 	}
 	return result.Bounded, nil
 }
 
-// recorded is each stage the trail records, with its newest boundary
-// commit. An id outside the vocabulary reads as no stage.
-func (w *walk) recorded() map[string]string {
-	recorded := map[string]string{}
-	for _, e := range w.trail {
-		known := slices.ContainsFunc(Stages, func(s Stage) bool { return s.ID == e.Stage })
-		if known && recorded[e.Stage] == "" {
-			recorded[e.Stage] = e.Commit
-		}
-	}
-	return recorded
-}
-
-// trailRefusal is the item refusing a trail that records a stage after one it
-// leaves unrecorded, in walk order: a build walking another stage order wrote
-// it, and walking the gap would run a stage over the products of stages meant
-// to follow it. None where the recorded stages are a prefix of the walk.
-func trailRefusal(repoRoot string, recorded map[string]string) result.Refusal {
-	gap := ""
-	for _, s := range Stages {
-		switch {
-		case recorded[s.ID] == "" && gap == "":
-			gap = s.ID
-		case recorded[s.ID] != "" && gap != "":
-			return result.Refusal{{Check: checkTrail, Path: repoRoot, Remedy: "start over from a commit before the trail",
-				Detail: fmt.Sprintf("the trail records %s but not %s: a build walking another stage order wrote it", s.ID, gap)}}
-		}
-	}
-	return nil
-}
-
-// namedSetting is a provider error naming the setting the configuration
-// lacks — by its configuration key or its variable — and the file that
-// supplies it.
-type namedSetting interface{ Named() (key, path string) }
-
 // launch refuses, before any stage is walked, a walk that cannot finish: a
 // volume root that is not a file, or a model call with no provider
 // configured. Where a row left to walk calls a model it readies the asks,
 // their evidence and answers kept under the state store's scratch.
-func (w *walk) launch(remaining []Stage) error {
+func (w *walk) launch(remaining []buildstore.Stage) error {
 	var items result.Refusal
 	for _, root := range w.opts.VolumeRoots {
 		if info, err := os.Stat(w.absolute(root)); err != nil || !info.Mode().IsRegular() {
-			items = append(items, result.Item{Check: checkUsage, Path: root, Key: "<volume-root>",
+			items = append(items, result.Item{Check: buildstore.CheckUsage, Path: root, Key: "<volume-root>",
 				Detail: fmt.Sprintf("volume root %s is not a file", root)})
 		}
 	}
-	var calling *row
+	var calling *buildstore.Step
 	for _, s := range remaining {
-		run, _ := stageRows(s.ID, w.opts.NoInference)
+		run, _ := buildstore.StageSteps(s.ID, w.opts.NoInference)
 		for i := range run {
-			if calling == nil && run[i].callsAModel() && !w.opts.NoInference {
+			if calling == nil && run[i].CallsAModel() && !w.opts.NoInference {
 				calling = &run[i]
 			}
 		}
@@ -562,17 +367,17 @@ func (w *walk) launch(remaining []Stage) error {
 			p, err = w.opts.Provider()
 		}
 		if err != nil {
-			it := result.Item{Check: checkProvider,
-				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; run kbase show-config to see the resolved configuration, or run with --no-inference", calling.id, calling.stage, err)}
-			var lack namedSetting
-			if errors.As(err, &lack) {
-				it.Key, it.Path = lack.Named()
+			it := result.Item{Check: config.CheckProvider,
+				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; run kbase show-config to see the resolved configuration, or run with --no-inference", calling.ID, calling.Stage, err)}
+			var lack result.Refusal
+			if errors.As(err, &lack) && len(lack) == 1 {
+				it.Key, it.Path = lack[0].Key, lack[0].Path
 			}
 			items = append(items, it)
 		} else {
 			w.roles = p.Roles
-			letters := call.New(p.LettersClient, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
-			overview := call.New(p.OverviewClient, filepath.Join(w.stateDir, scratchDir), w.opts.Logger)
+			letters := call.New(p.LettersClient, filepath.Join(w.stateDir, buildstore.ScratchDir), w.opts.Logger)
+			overview := call.New(p.OverviewClient, filepath.Join(w.stateDir, buildstore.ScratchDir), w.opts.Logger)
 			w.letters, w.readerConcurrency = letters.Letters(p.Letters), p.ReaderConcurrency
 			w.passage = func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error) {
 				return overview.Passage(ctx, p.Overview, excerpts, rejected, attempt)
@@ -590,8 +395,8 @@ func (w *walk) launch(remaining []Stage) error {
 // name; dirt in the paths the build owns is restored to the last boundary
 // where it is the interrupted stage's own uncommitted work, and refused
 // otherwise; a resume regenerates missing records.
-func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error) {
-	if recorded[stageStart] == "" {
+func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]string, error) {
+	if recorded[buildstore.StageStart] == "" {
 		if err := kbRootGuard(w.kbRoot); err != nil {
 			return nil, err
 		}
@@ -599,7 +404,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 	if lock, err := w.repo.IndexLock(); err != nil {
 		return nil, err
 	} else if lock != "" {
-		return nil, result.Refusal{{Check: checkLock, Path: lock,
+		return nil, result.Refusal{{Check: buildstore.CheckLock, Path: lock,
 			Detail: "git's index lock stands, so no boundary can be committed; a git process killed mid-commit leaves it — remove it once no git process is running in this repository"}}
 	}
 	dirty, err := w.repo.Dirty()
@@ -607,7 +412,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 		return nil, err
 	}
 	if len(dirty) > 0 {
-		events, err := readProgress(w.stateDir)
+		events, err := buildstore.ReadProgress(w.stateDir)
 		if err != nil {
 			return nil, err
 		}
@@ -628,7 +433,7 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 			return nil, err
 		}
 	}
-	if recorded[stageDocumentGraph] != "" {
+	if recorded[buildstore.StageDocumentGraph] != "" {
 		if err := w.ensureRecords(); err != nil {
 			return nil, err
 		}
@@ -640,24 +445,36 @@ func (w *walk) prepare(next Stage, recorded map[string]string) ([]string, error)
 }
 
 // loadFormat reads the format of the KB a resume walks on: one newer than
-// this kbase is refused; one older, past the stage that stamps the spine,
-// is saved in the current form before any later stage reads it, the save
-// landing with the next boundary.
+// this kbase is refused; past the stage that seeds the spine, a degraded one
+// is refused, and one older is saved in the current form before any later
+// stage reads it, the save landing with the next boundary.
 func (w *walk) loadFormat(recorded map[string]string) error {
 	src, err := kbload.Open(w.kbRoot)
-	if err != nil || !src.Migrated() || recorded[stageSpineSeed] == "" {
+	if err != nil || recorded[buildstore.StageSpineSeed] == "" {
+		return err
+	}
+	if err := index.RefuseDegraded(src); err != nil || !src.Migrated() {
 		return err
 	}
 	w.opts.Logger.Info("saving the KB in the current metadata format", "from", src.Version(), "to", kb.FormatVersion)
-	_, err = index.Refresh(src, w.opts.Logger)
+	_, err = w.refresh(src)
 	return err
+}
+
+// refresh is index.Refresh over src, the stamped documents a migration save
+// writes put in it first.
+func (w *walk) refresh(src *kb.Source) ([]string, error) {
+	if err := kbdocs.Restamp(src, filepath.Base(w.repo.Root)); err != nil {
+		return nil, err
+	}
+	return index.Refresh(src, w.opts.Logger)
 }
 
 // stage runs one stage's rows and records its boundary: its entry in the
 // result names the boundary, the rows dropped and the report holding each
 // row's record, written whether or not the rows held.
-func (w *walk) stage(s Stage) (result.Record, error) {
-	run, dropped := stageRows(s.ID, w.opts.NoInference)
+func (w *walk) stage(s buildstore.Stage) (result.Record, error) {
+	run, dropped := buildstore.StageSteps(s.ID, w.opts.NoInference)
 	report := reportPath(w.stateDir, s.ID)
 	entry := result.Record{{Key: "stage", Value: s.ID}, {Key: "commit", Value: nil},
 		{Key: "dropped", Value: append([]string{}, dropped...)}, {Key: "report", Value: report}}
@@ -666,9 +483,9 @@ func (w *walk) stage(s Stage) (result.Record, error) {
 		{Key: "rows", Value: ran}, {Key: "dropped", Value: append([]string{}, dropped...)}}); werr != nil && err == nil {
 		err = werr
 	}
-	var f failure
+	var f buildstore.Failure
 	if errors.As(err, &f) && len(f) == 0 {
-		err = failure{{Check: s.ID, Path: report, Detail: "a check of this stage found its products disagreeing; the report names each finding"}}
+		err = buildstore.Failure{{Check: s.ID, Path: report, Detail: "a check of this stage found its products disagreeing; the report names each finding"}}
 	}
 	if err != nil {
 		return entry, err
@@ -680,7 +497,7 @@ func (w *walk) stage(s Stage) (result.Record, error) {
 	}
 	entry[1].Value = commit
 	w.trail = append([]ledger.Entry{{Stage: s.ID, Commit: commit, Body: body}}, w.trail...)
-	if err := w.progress.emit(event{Event: eventRecorded, Stage: s.ID, Commit: commit}); err != nil {
+	if err := w.progress.emit(buildstore.Event{Event: buildstore.EventRecorded, Stage: s.ID, Commit: commit}); err != nil {
 		return entry, err
 	}
 	w.recordedBoundary = true
@@ -688,28 +505,28 @@ func (w *walk) stage(s Stage) (result.Record, error) {
 }
 
 // rows runs a stage's rows in order, each one's record kept under its id.
-func (w *walk) rows(s Stage, run []row) ([]result.Record, error) {
+func (w *walk) rows(s buildstore.Stage, run []buildstore.Step) ([]result.Record, error) {
 	ran := []result.Record{}
 	w.inStage = s.ID
-	if err := w.progress.emit(event{Event: eventStage, Stage: s.ID, Total: len(run)}); err != nil {
+	if err := w.progress.emit(buildstore.Event{Event: buildstore.EventStage, Stage: s.ID, Total: len(run)}); err != nil {
 		return ran, err
 	}
 	for i, r := range run {
 		if w.ctx.Err() != nil {
-			return ran, cancelled{s.ID, r.id}
+			return ran, buildstore.Cancelled{Stage: s.ID, Unit: r.ID}
 		}
 		if w.opts.beforeUnit != nil {
-			w.opts.beforeUnit(s.ID, r.id)
+			w.opts.beforeUnit(s.ID, r.ID)
 		}
-		out, err := r.run(w)
-		ran = append(ran, append(result.Record{{Key: "row", Value: r.id}}, out...))
+		out, err := stepRuns[r.ID](w)
+		ran = append(ran, append(result.Record{{Key: "row", Value: r.ID}}, out...))
 		if w.ctx.Err() != nil {
-			return ran, cancelled{s.ID, r.id}
+			return ran, buildstore.Cancelled{Stage: s.ID, Unit: r.ID}
 		}
 		if err != nil {
 			return ran, err
 		}
-		if err := w.progress.emit(event{Event: eventUnit, Stage: s.ID, Unit: r.id, Done: i + 1, Total: len(run)}); err != nil {
+		if err := w.progress.emit(buildstore.Event{Event: buildstore.EventUnit, Stage: s.ID, Unit: r.ID, Done: i + 1, Total: len(run)}); err != nil {
 			return ran, err
 		}
 	}

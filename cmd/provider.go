@@ -1,20 +1,18 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/kb"
-	"kbase/internal/log"
-	"kbase/internal/model"
+	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 )
 
@@ -22,11 +20,6 @@ import (
 // catalogue round-trip, or one item's call under score. A provider that cannot
 // answer a small GET inside this window is unreachable, not busy.
 const defaultListTimeout = 30 * time.Second
-
-// newClientFunc constructs the model client for an endpoint. It is the seam
-// that lets a verb be exercised without a network — production passes
-// model.NewHTTPClient, tests pass a factory returning a model.MockClient.
-type newClientFunc func(model.Endpoint) model.Client
 
 // providerOptions is the input every provider-reaching verb shares: the
 // already-loaded pool state, the two flags that decide WHICH provider is
@@ -59,11 +52,6 @@ type providerOptions struct {
 	// it.
 	Config config.Config
 
-	// Harnesses are the profiles the loaded layers supply: what --harness
-	// names, and what show-config lists. Every verb loads them and only score
-	// runs one.
-	Harnesses config.Harnesses
-
 	// Provider is the --provider flag, for the verbs that select a pool entry
 	// to dial. It names no role: a role's endpoint is its own reference's.
 	Provider string
@@ -76,8 +64,8 @@ type providerOptions struct {
 	// everything that is not the verb's actual output.
 	Stderr io.Writer
 
-	// NewClient is the client seam; nil means model.NewHTTPClient.
-	NewClient newClientFunc
+	// NewClient is the client seam; nil means model.NewClient.
+	NewClient modelclient.NewClientFunc
 }
 
 // inputs is what a resolution decision reads: the loaded configuration this
@@ -85,119 +73,6 @@ type providerOptions struct {
 func (o providerOptions) inputs(env config.Overrides) config.Inputs {
 	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir, Env: env}
 }
-
-// clients is the registry of the model clients one verb opens: at most one per
-// endpoint, opened on first use and closed together before the verb returns.
-// It is the only constructor of a model.Client in kbase, and it derives no
-// deadline — each caller bounds its own call.
-type clients struct {
-	newClient func(model.Endpoint) model.Client
-	opened    map[string]model.Client
-	// lg takes a close that failed. A close error is never raised: the verb
-	// has usually written its result by then.
-	lg log.Logger
-}
-
-// newClients is a registry over seam, nil taking the HTTP client, whose close
-// failures go to lg.
-func newClients(seam newClientFunc, lg log.Logger) *clients {
-	if seam == nil {
-		// Wrapped rather than referenced directly so the seam does not
-		// depend on NewHTTPClient's exact return type.
-		seam = func(e model.Endpoint) model.Client { return model.NewHTTPClient(e) }
-	}
-	if lg == nil {
-		lg = log.Discard()
-	}
-	return &clients{newClient: seam, opened: map[string]model.Client{}, lg: lg}
-}
-
-// get is the client for ep, opened on first use: two roles naming one pool
-// entry share a client and its connection pool, and an environment-mode
-// endpoint shares by base URL, which is all it has.
-func (c *clients) get(ep config.Endpoint) (model.Client, error) {
-	key := ep.Provider
-	if key == "" {
-		key = "base:" + ep.BaseURL
-	}
-	if client, ok := c.opened[key]; ok {
-		return client, nil
-	}
-	apiKey, err := c.key(ep)
-	if err != nil {
-		return nil, err
-	}
-	client := c.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
-		Decisions: decisionsSurface(ep.Flavor)})
-	c.opened[key] = client
-	return client, nil
-}
-
-// preflight is the key-file read alone: the refusal a file KBASE_API_KEY_FILE
-// names gives where it cannot be read, and nothing opened. It is what a verb
-// that reports an endpoint without dialling it can still learn.
-func (c *clients) preflight(ep config.Endpoint) error {
-	_, err := c.key(ep)
-	return err
-}
-
-// key is the key ep is dialled with: the file KBASE_API_KEY_FILE names where
-// it names one, and otherwise the key the pool entry's own file supplied.
-func (c *clients) key(ep config.Endpoint) (string, error) {
-	if ep.APIKeyFile == "" {
-		return ep.APIKey, nil
-	}
-	b, err := os.ReadFile(ep.APIKeyFile)
-	if err != nil {
-		return "", config.Refusal{Key: config.EnvAPIKeyFile, Path: ep.APIKeyFile,
-			Detail: fmt.Sprintf("%s names %s, which cannot be read: %v", config.EnvAPIKeyFile, ep.APIKeyFile, err)}
-	}
-	return strings.TrimSpace(string(b)), nil
-}
-
-// closeAll closes every client the registry opened, whatever the verb's
-// outcome. A client that is no io.Closer — a test's mock — has nothing to
-// release.
-func (c *clients) closeAll() {
-	for key, client := range c.opened {
-		closer, ok := client.(io.Closer)
-		if !ok {
-			continue
-		}
-		if err := closer.Close(); err != nil {
-			c.lg.Warn("a model client was not closed cleanly", "endpoint", key, "error", err)
-		}
-	}
-	c.opened = map[string]model.Client{}
-}
-
-// entryEndpoint is a pool entry as the registry takes it, for a verb that dials
-// the entry it selected to read that entry's catalogue: no role, no model, and
-// nothing the registry does not read.
-func entryEndpoint(entry config.Provider) config.Endpoint {
-	return config.Endpoint{Provider: entry.Name, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor()}
-}
-
-// catalogueIDs fetches the provider's catalogue and returns the model ids in
-// the order the provider listed them. Callers that show them to a human sort
-// first; callers that classify them do not care.
-func catalogueIDs(ctx context.Context, client model.Client) ([]string, error) {
-	infos, err := client.ListModels(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list models: %w", err)
-	}
-	ids := make([]string, 0, len(infos))
-	for _, mi := range infos {
-		ids = append(ids, mi.ID)
-	}
-	return ids, nil
-}
-
-// decisionsSurface is whether the decision surface a configured flavour names is
-// the OpenAI Decisions shape. The flavour vocabulary is configuration's — it
-// refuses a value it does not know at load — and the wire shapes are model's,
-// so the one mapping between the two lives here.
-func decisionsSurface(flavor string) bool { return flavor == config.FlavorDecisions }
 
 // warnFaults says what the pool's faults were, one line each. A provider
 // dropped from the pool is a warning, not a failure: the one being asked for
@@ -229,6 +104,22 @@ func supersededProvider(stderr io.Writer, cfg config.Config) {
 	fmt.Fprintln(stderr, "config.toml states the superseded provider key; kbase does not use it — run kbase configure to rewrite the file")
 }
 
+// warnCleartextKey writes config.CleartextWarning's line for ep, judged on the
+// key reg dials ep with, and reports whether it wrote one. A key reg cannot
+// read says nothing here: the dial refuses it.
+func warnCleartextKey(stderr io.Writer, reg *modelclient.Registry, ep config.Endpoint) bool {
+	key, err := reg.Key(ep)
+	if err != nil {
+		return false
+	}
+	line := config.CleartextWarning(ep.BaseURL, key)
+	if line == "" {
+		return false
+	}
+	fmt.Fprintln(stderr, line)
+	return true
+}
+
 // providerFields is a pool entry's provenance in the order a verb that selects
 // one states it: the entry the endpoint came from, the rule that named it and
 // the configuration layer that supplied the entry. It is empty together where
@@ -245,75 +136,24 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 	}
 }
 
-// harnessProfile is the profile --harness names and, where no loaded layer
-// supplies it, the refusal: the loaded names are the allowed set, so a profile
-// still commented out of harnesses.toml reads as a choice that does not stand
-// rather than as a name of its own shape.
-func harnessProfile(profiles config.Harnesses, name string) (config.Profile, []toolresult.Item) {
-	if p, ok := profiles[name]; ok {
-		return p, nil
-	}
-	return config.Profile{}, []toolresult.Item{{
-		Check: config.CheckHarness, Key: "--harness", Allowed: config.ProfileNames(profiles),
-		Detail: fmt.Sprintf("--harness names %q, and no loaded %s supplies that profile", name, config.HarnessesFileName)}}
-}
-
-// announceHarness is the one line a repository-supplied profile writes: the file
-// and the layer that named the command a run is about to execute. A profile the
-// user put in the global layer, or in the one directory a flag or the variable
-// names, says nothing — the user put it there. Where the repository's name also
-// stood in a lower layer, the same line names the layer it displaced: a user's
-// own profile replaced whole reads differently from a profile merely added.
-func announceHarness(stderr io.Writer, p config.Profile, layers []config.Layer) {
-	if p.Layer != config.LayerSourceRepository {
-		return
-	}
-	path := config.HarnessesPath(harnessLayerPath(layers, p.Layer))
-	where := p.Layer
-	if p.ReplacedLayer != "" {
-		where = fmt.Sprintf("%s, replacing the %s layer's", p.Layer, p.ReplacedLayer)
-	}
-	fmt.Fprintf(stderr, "%s supplies the %q harness profile (layer: %s) — kbase runs the command it names\n",
-		path, p.Name, where)
-}
-
-// harnessLayerPath is the directory of the layer whose source is source.
-func harnessLayerPath(layers []config.Layer, source string) string {
-	for _, layer := range layers {
-		if layer.Source == source {
-			return layer.Path
-		}
-	}
-	return ""
-}
-
-// harnessFields is a harness profile's provenance in §7.1's order, after the
-// model: the profile that answered the role and the layer whose file supplied
-// it, so a document says which command judged the KB.
-func harnessFields(p config.Profile) []toolresult.Field {
-	return []toolresult.Field{{Key: "harness", Value: p.Name}, {Key: "harness-layer", Value: p.Layer}}
-}
-
 // roleRecord is one role's record in a result document, in §7.1's key order:
 // the role, what answered it, where that endpoint came from, and the model
 // this invocation asked for. The pool entry's name, rule and layer stand
 // together or not at all — an environment endpoint has none of them — and
 // back-end is what tells the cases apart, so a reader never infers the source
 // from an absence.
-func roleRecord(ep config.Endpoint, backEnd config.BackEnd) toolresult.Record {
+func roleRecord(ep config.Endpoint) toolresult.Record {
 	record := toolresult.Record{
 		{Key: "role", Value: string(ep.Role)},
-		{Key: "back-end", Value: backEndName(ep, backEnd)},
+		{Key: "back-end", Value: backEndName(ep)},
 	}
 	record = append(record, providerFields(ep.Provider, ep.Rule, ep.Layer)...)
 	return append(record, toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
 }
 
-// backEndName is what answered ep, as a record states it.
-func backEndName(ep config.Endpoint, backEnd config.BackEnd) string {
-	if backEnd == config.BackEndHarness {
-		return string(config.BackEndHarness)
-	}
+// backEndName is what answered ep, as a record states it: the environment the
+// endpoint came from, or a pool entry's provider.
+func backEndName(ep config.Endpoint) string {
 	if ep.Mode == config.ModeEnvironment {
 		return string(config.ModeEnvironment)
 	}
@@ -325,51 +165,21 @@ func rolesField(records []toolresult.Record) toolresult.Field {
 	return toolresult.Field{Key: "roles", Value: records}
 }
 
-// checkProvider names a refusal of the provider choice.
-const checkProvider = "provider"
-
-// refusedOrFailed is a verb stopped on err: refused where err is wrong input,
-// failed otherwise.
+// refusedOrFailed is the one mapping from an error to a result document: a
+// refusal is refused with its items, a retry-class error is retry, and
+// anything else failed.
 func refusedOrFailed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
-	if items := refusalItems(err); items != nil {
-		return refused(fields, items...)
+	var (
+		refusal toolresult.Refusal
+		live    buildstore.Retry
+	)
+	switch {
+	case errors.As(err, &refusal):
+		return refused(fields, refusal...)
+	case errors.As(err, &live):
+		return toolresult.Retry, append(fields, toolresult.Field{Key: toolresult.RefusalsKey, Value: []toolresult.Item(live)})
 	}
 	return failed(fields, err)
-}
-
-// refusalItems is err as the items it refuses with — a configuration refusal
-// or several of them, or items already shaped as one — and nil where err is a
-// failure. It is the one mapping from configuration's refusals to a result
-// document's items.
-func refusalItems(err error) []toolresult.Item {
-	var shaped toolresult.Refusal
-	if errors.As(err, &shaped) {
-		return shaped
-	}
-	var several config.Refusals
-	if errors.As(err, &several) {
-		items := make([]toolresult.Item, 0, len(several))
-		for _, r := range several {
-			items = append(items, refusalItem(r))
-		}
-		return items
-	}
-	var one config.Refusal
-	if errors.As(err, &one) {
-		return []toolresult.Item{refusalItem(one)}
-	}
-	return nil
-}
-
-// refusalItem is one configuration refusal as a result document's item. A
-// resolution refusal is about the provider choice unless it names its own
-// check.
-func refusalItem(r config.Refusal) toolresult.Item {
-	check := r.Check
-	if check == "" {
-		check = checkProvider
-	}
-	return toolresult.Item{Check: check, Key: r.Key, Path: r.Path, Allowed: r.Allowed, Remedy: r.Remedy, Detail: r.Detail}
 }
 
 // loadVerbContext is the file-system half of a provider-reaching verb's RunE:
@@ -410,7 +220,6 @@ func loadConfigContext(layers []config.Layer) (providerOptions, error) {
 		Providers: loaded.Providers,
 		Faults:    loaded.Faults,
 		Config:    loaded.Cfg,
-		Harnesses: loaded.Harnesses,
 		Stderr:    os.Stderr,
 	}, nil
 }

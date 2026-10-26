@@ -1,7 +1,3 @@
----
-kind: leaf
-claims: [clm-bbb002]
----
 
 # Governance
 

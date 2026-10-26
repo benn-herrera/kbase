@@ -1,25 +1,20 @@
 package claimgraph
 
 import (
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
+	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/write"
 )
 
 var (
 	// markerRE is one marker the write API appended to a line, with the space
 	// separating it from the content it follows.
-	markerRE = func() *regexp.Regexp {
-		alts := make([]string, 0, 2)
-		for _, opener := range write.MarkerOpeners() {
-			alts = append(alts, `[ \t]*`+regexp.QuoteMeta(opener)+`.*?-->`)
-		}
-		return regexp.MustCompile(strings.Join(alts, "|"))
-	}()
+	markerRE = regexp.MustCompile(`[ \t]*` + regexp.QuoteMeta(kb.StatementMarkerOpener) + `.*?-->`)
 
 	// anchorRE is a rewritten cross-reference's three attributes, in the
 	// contract's order: href, type, label. The type is read as whatever the
@@ -116,23 +111,20 @@ type Tree struct {
 	Children map[string][]string
 	// Parents are the up-link each non-root document opens with.
 	Parents map[string]string
+	volumes map[string]bool
 }
 
-// declaringKinds must declare their claims or their absence.
+// declaringKinds are the documents whose claims the build accounts for: the
+// leaves, which host statement markers.
 var declaringKinds = map[string]bool{kb.DocumentLeaf: true}
 
-// documentKind is a document's kind by path shape alone.
-func documentKind(p string, hasChildren bool) string {
-	switch {
-	case p == kb.EntryPointFile:
-		return kb.DocumentEntryPoint
-	case hasChildren:
-		return kb.DocumentIndex
-	}
-	return kb.DocumentLeaf
-}
+func (t *Tree) kind(p string) string { return kb.DocumentKind(p, len(t.Children[p]) > 0) }
 
-func (t *Tree) kind(p string) string { return documentKind(p, len(t.Children[p]) > 0) }
+// registerTitle is a title read off document as its register page carries it:
+// every relative link rebased to resolve from that page's directory.
+func (t *Tree) registerTitle(title, document string) string {
+	return kb.RebaseInlineLinks(title, path.Dir(document), path.Dir(index.RegisterPage(document, t.volumes)))
+}
 
 // builtTree is the KB this build is writing. The walk's start loaded it and
 // saved it in the current format before any claim-graph stage, so it is read
@@ -159,6 +151,7 @@ func readTree(kbRoot string) (*Tree, error) {
 		t.Paths = append(t.Paths, p)
 	}
 	slices.Sort(t.Paths)
+	t.volumes = index.Volumes(t.Paths)
 	for _, p := range t.Paths {
 		parent, ok, children := kb.TreeLinks(p, t.Documents[p].Text)
 		if ok {

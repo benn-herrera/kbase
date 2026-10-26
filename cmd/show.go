@@ -7,8 +7,8 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
-	rootCmd.AddCommand(queryCommand(&cobra.Command{
+func showCommand() *cobra.Command {
+	return queryCommand(&cobra.Command{
 		Use:   "show <id>",
 		Short: "the full record of one node of any kind",
 		Long: `show returns the record of the node carrying <id>, whatever its kind, each
@@ -22,5 +22,5 @@ mentioned_ids. An id no node carries is refused.`,
 			return nil, []toolresult.Item{query.UnknownNode(args[0])}, nil
 		}
 		return answered(record)
-	}))
+	})
 }

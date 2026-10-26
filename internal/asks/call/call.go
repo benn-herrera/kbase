@@ -26,13 +26,6 @@ import (
 	"kbase/internal/model"
 )
 
-// What a Caller keeps under a build's scratch directory: each call's capture,
-// and each answer under the digest of what was asked.
-const (
-	CapturesDir = "captures"
-	AnswersDir  = "answers"
-)
-
 var fileNameUnsafeRE = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 const (
@@ -58,8 +51,8 @@ type Caller struct {
 func New(client model.Client, scratch string, lg log.Logger) *Caller {
 	return &Caller{
 		client:          client,
-		captures:        filepath.Join(scratch, CapturesDir),
-		answers:         filepath.Join(scratch, AnswersDir),
+		captures:        filepath.Join(scratch, asks.CapturesDir),
+		answers:         filepath.Join(scratch, asks.AnswersDir),
 		overviewBackoff: overviewBackoff,
 		lg:              lg,
 	}
@@ -414,7 +407,7 @@ func (c *Caller) ask(ctx context.Context, modelID, systemName, prompt string, at
 	case ctx.Err() != nil:
 		return asks.Reply{}, ctx.Err()
 	case errors.Is(err, model.ErrChatIncomplete):
-		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); it was re-issued identically to no effect, and no answer is assumed for a call that did not complete. Capture: %s", err, got.Error, capturePath)}
+		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. Capture: %s", err, got.Error, capturePath)}
 	case err != nil:
 		return asks.Reply{}, err
 	case writeErr != nil:

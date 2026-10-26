@@ -188,19 +188,9 @@ func pageLines(t *Tree, document string) []string {
 }
 
 // pageBody is pageLines with the index of the first line of the body, below
-// the frontmatter and the up-link line.
+// the up-link line.
 func pageBody(t *Tree, document string) (lines []string, first int) {
-	page := unquote(stripMarkers(t.Documents[document].Text))
-	return kb.SplitLines(page), bodyStart(page)
-}
-
-// demotedOrigin is the origin of a cut pair: inferred where the build found
-// its edge with no mark, cited otherwise.
-func demotedOrigin(p pair, inferred func(source, target string) bool) string {
-	if inferred(p.source, p.target) {
-		return kb.OriginInferred
-	}
-	return kb.OriginCited
+	return pageLines(t, document), bodyStart
 }
 
 // writtenRecords is the depends edges and references records the classified

@@ -20,11 +20,12 @@ TARGETS=(
 
 # dist-only build trim: -trimpath drops local filesystem paths from the
 # binary; -s -w strips symbol table + DWARF (panic traces keep function
-# names). Local `just build` stays fat for debugging.
+# names); -tags kbasedist compiles out the development diagnostics
+# (`score --replay`). Local `just build` stays fat for debugging and keeps them.
 function set_defaults() {
   BIN_DIR="${BIN_DIR:-bin}"
   DIST_DIR="${DIST_DIR:-dist}"
-  RELEASE_FLAGS=(-trimpath "-ldflags=-s -w")
+  RELEASE_FLAGS=(-trimpath -tags kbasedist "-ldflags=-s -w")
 }
 
 function build_targets() {

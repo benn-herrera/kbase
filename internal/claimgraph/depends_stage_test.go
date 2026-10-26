@@ -8,7 +8,7 @@ import (
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
-	"kbase/internal/log"
+	"kbase/internal/records"
 )
 
 // TestDependsAsksEveryLinkOnce: over a leaf holding prose A, B and C, block
@@ -18,9 +18,9 @@ import (
 // the target is the equation and three otherwise, never one. A pair the
 // unmarked record answered yes both ways is one entry, and a link whose pair
 // a marked harvest reached is not asked from the link's side. An in-support-of
-// answer writes target to source and a mention a references row. The ring
-// the answers close through the marked C → D is cut: origin inferred on the
-// links' edges, cited on the marked one.
+// answer writes target to source and a mention a references row. The ring the
+// answers close, A → D → C → A, loses the edge the walk closes it on, A's
+// premise C.
 func TestDependsAsksEveryLinkOnce(t *testing.T) {
 	const (
 		a = "clm-aaaaaa"
@@ -30,15 +30,15 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 		e = "clm-eeeeee"
 	)
 	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
-	root, repo, opts := seedTheoremLeaf(t, []string{a, b, c, d, e},
+	root, repo, opts := seedTheoremLeaf(t,
+		map[string]string{a: "Result A", b: "Result B", c: "Result C", d: "Theorem 1", e: "Equation (`eq:one`) — x equals one"},
 		"Alpha holds here."+m(a)+"\n\nBeta holds here, by Theorem 1."+m(b)+"\n\nGamma holds here, by Theorem 1."+m(c)+"\n\n"+
-			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(d)+"\n",
-		registerQuality(a, "Result A")+registerQuality(b, "Result B")+registerQuality(c, "Result C")+
-			registerQuality(d, "Theorem 1")+registerQuality(e, "Equation (`eq:one`) — x equals one"))
+			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(d)+"\n\n``` math\nx = 1 \\label{eq:one}"+m(e)+"\n```\n",
+		records.Record{Kind: records.KindFence, Order: 2, Document: cullLeaf, EquationLabels: []string{"eq:one"}})
 	yes := asks.LetterPoints
 	if err := WriteUnmarked(repo, buildrecords.UnmarkedRecord{Pairs: []buildrecords.CandidateEntry{
-		{Source: a, Target: b, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: ClassifyAnswered},
-		{Source: b, Target: a, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: ClassifyAnswered},
+		{Source: a, Target: b, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: string(asks.Answered)},
+		{Source: b, Target: a, Offered: []string{asks.LetterPoints, asks.LetterDoesNotPoint}, Letter: &yes, Outcome: string(asks.Answered)},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -97,37 +97,28 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 		t.Errorf("classification entries = %+v, want %+v", got, want)
 	}
 
-	st, err := kb.Discover(builtTree(root), log.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := loadRecords(t, root)
 	var rows []string
-	for _, ce := range st.ClaimEntries {
-		for _, edge := range slices.Concat(ce.Premises, ce.References) {
-			if edge.TargetKind != kb.NodeKindClaim {
-				continue
-			}
-			if edge.Relation != kb.RelationReferences && !edge.Bearing.Pending {
-				t.Errorf("the build wrote a judged bearing %v on %s's edge naming %s", edge.Bearing, ce.ID, edge.Source)
-			}
-			other := edge.Target
-			if edge.Relation != kb.RelationReferences {
-				other = edge.Source
-			}
-			rows = append(rows, ce.ID+" "+edge.Relation+" "+other)
+	for _, edge := range g.Scorable {
+		if !edge.Bearing.Pending || edge.ManuallyScored {
+			t.Errorf("the build wrote a judged bearing %+v on %s → %s", edge.Bearing, edge.Source, edge.Target)
 		}
-		for _, edge := range ce.Demoted {
-			rows = append(rows, ce.ID+" "+kb.RelationDemoted+" "+edge.Target+" "+edge.Origin)
-		}
+		rows = append(rows, edge.Target+" "+edge.Relation+" "+edge.Source)
+	}
+	for _, edge := range g.References {
+		rows = append(rows, edge.Source+" "+kb.RelationReferences+" "+edge.Target)
+	}
+	for _, edge := range g.Demoted {
+		rows = append(rows, edge.Target+" "+kb.RelationDemoted+" "+edge.Source)
 	}
 	slices.Sort(rows)
 	wantRows := []string{
-		a + " " + kb.RelationDemoted + " " + c + " " + kb.OriginInferred,
+		a + " " + kb.RelationDemoted + " " + c,
 		a + " " + kb.RelationSupports + " " + b,
 		b + " " + kb.RelationReferences + " " + d,
 		b + " " + kb.RelationReferences + " " + e,
-		c + " " + kb.RelationDemoted + " " + d + " " + kb.OriginCited,
-		d + " " + kb.RelationDemoted + " " + a + " " + kb.OriginInferred,
+		c + " " + kb.RelationSupports + " " + d,
+		d + " " + kb.RelationSupports + " " + a,
 	}
 	if !slices.Equal(rows, wantRows) {
 		t.Errorf("edges = %q, want %q", rows, wantRows)
@@ -141,7 +132,7 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 			}
 		}
 	}
-	if want := []string{a + " -> " + c, c + " -> " + d, d + " -> " + a}; !slices.Equal(ring, want) {
-		t.Errorf("stage-D-ring demoted = %q, want the ring's three edges %q", ring, want)
+	if want := []string{a + " -> " + c}; !slices.Equal(ring, want) {
+		t.Errorf("stage-D-ring demoted = %q, want the walk's one cut %q", ring, want)
 	}
 }

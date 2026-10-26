@@ -2,10 +2,7 @@ package claimgraph
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"kbase/internal/kb"
@@ -14,56 +11,38 @@ import (
 	"kbase/internal/write"
 )
 
-// registerQuality is one claim's Quality section as the fixture's register
-// carries it.
-func registerQuality(id, title string) string {
-	return "## " + title + "\n\n<!-- id: " + id + " -->\n\n### Rigor\n\n- rigor: *pending*\n- rationale: " + title + ".\n\n### Strength\n\n- strength: *pending*\n\n"
-}
-
 // The fixture's claims, keyed by the name the tests use, with the title each
-// takes in the register and its leaf's prose.
+// takes in its record and its leaf's prose.
 var (
 	elisionIDs    = map[string]string{"a": "clm-aaaaaa", "x": "clm-xaaaaa", "y": "clm-yaaaaa", "b": "clm-bbbbbb", "c": "clm-cccccc", "d": "clm-dddddd"}
 	elisionTitles = map[string]string{"a": "A", "x": "X", "y": "Y", "b": "B", "c": "C", "d": "D"}
 )
 
-// seedElisionLeaves writes a minimal KB with one register holding every
-// claim leaves names: leaves[0] is leaf.md, leaves[i] leaf<i+1>.md, each
-// claiming its names in order with each one's marker in its prose. It then
-// lands wires through AddBuildEdges, as the build's edge write does.
-func seedElisionLeaves(t *testing.T, leaves [][]string, wires values) string {
+// seedElisionLeaves writes a minimal KB holding a claim record for every
+// claim leaves names, and demoted's records: leaves[0] is leaf.md, leaves[i]
+// leaf<i+1>.md, each marking its names in order in its prose. It then lands
+// wires through AddBuildEdges, as the build's edge write does.
+func seedElisionLeaves(t *testing.T, leaves [][]string, wires values, demoted ...kb.DemotedEdge) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), kb.KBDir)
-	entry := "---\nkb-format: \"2.0.0\"\n---\n# Entry\n\n"
-	register := "# Register\n\n"
-	files := map[string]string{}
+	entry := "# Entry\n\n"
+	titles := map[string]string{}
+	docs := map[string]string{}
 	for i, names := range leaves {
 		rel, title := "leaf.md", "Leaf"
 		if i > 0 {
 			rel, title = fmt.Sprintf("leaf%d.md", i+1), fmt.Sprintf("Leaf %d", i+1)
 		}
 		entry += "- [" + title + "](" + rel + ")\n"
-		ids := make([]string, len(names))
 		prose := ""
-		for j, n := range names {
-			ids[j] = elisionIDs[n]
-			prose += "\n" + elisionTitles[n] + " holds here. <!-- claim-rigor: " + ids[j] + " -->\n"
-			register += registerQuality(ids[j], elisionTitles[n])
+		for _, n := range names {
+			prose += "\n" + elisionTitles[n] + " holds here. <!-- claim-rigor: " + elisionIDs[n] + " -->\n"
+			titles[elisionIDs[n]] = elisionTitles[n]
 		}
-		files[rel] = "---\nkind: leaf\nclaims: [" + strings.Join(ids, ", ") + "]\n---\n[↑ Entry](entry-point.md)\n\n# " + title + "\n" + prose
+		docs[rel] = "[↑ Entry](entry-point.md)\n\n# " + title + "\n" + prose
 	}
-	files[kb.EntryPointFile] = entry
-	files[kb.RegisterFile] = register
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for rel, text := range files {
-		if err := os.WriteFile(filepath.Join(root, rel), []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	root := seedKB(t, entry, docs, kb.Graph{Claims: claimRecords(titles), Demoted: demoted})
 	w := writer{kbRoot: root, lg: log.Discard()}
-	if _, err := w.run("seed", write.AddBuildEdges, wires, false); err != nil {
+	if _, err := w.run("seed", write.AddBuildEdges, wires); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -84,39 +63,51 @@ func elisionWires() values {
 	return values{dependsOn("a", "x"), dependsOn("x", "b"), dependsOn("c", "a"), dependsOn("b", "d")}
 }
 
-// TestIssueCullsLeavesNoUnknownID drives the culls through the real leaf
-// resolution and write ops over the fixture's variants, then the stage gate:
-// no line under kb-root names a culled node.
+// TestIssueCullsLeavesNoUnknownID drives the culls through the real write ops
+// over the fixture's variants, then the stage gate: no line under kb-root
+// names a culled node, and no culled node's record or marker stands.
 func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
-	cDemotesX := dependsOn("c", "a")
-	cDemotesX[kb.RelationDemoted] = []map[string]any{{"id": elisionIDs["x"], "origin": "cited"}}
+	xDemotedIntoC := kb.DemotedEdge{Source: elisionIDs["x"], Target: elisionIDs["c"], ReplacedRelation: kb.RelationSupports,
+		Bearing: kb.Bearing{Pending: true}}
 	for _, tc := range []struct {
-		name   string
-		leaves [][]string
-		wires  values
-		culled []string
+		name    string
+		leaves  [][]string
+		wires   values
+		demoted []kb.DemotedEdge
+		culled  []string
 	}{
-		{"culled node alone on its leaf", [][]string{{"a", "b", "c", "d"}, {"x"}}, elisionWires(), []string{"x"}},
+		{"culled node alone on its leaf", [][]string{{"a", "b", "c", "d"}, {"x"}}, elisionWires(), nil, []string{"x"}},
 		{"two culled nodes share a leaf", [][]string{{"a", "b", "c", "d"}, {"x", "y"}},
-			values{dependsOn("a", "x"), dependsOn("x", "y"), dependsOn("y", "b"), dependsOn("c", "a"), dependsOn("b", "d")}, []string{"x", "y"}},
-		{"another entry demotes the culled node", [][]string{{"a", "x", "b", "c", "d"}},
-			values{dependsOn("a", "x"), dependsOn("x", "b"), cDemotesX, dependsOn("b", "d")}, []string{"x"}},
+			values{dependsOn("a", "x"), dependsOn("x", "y"), dependsOn("y", "b"), dependsOn("c", "a"), dependsOn("b", "d")}, nil, []string{"x", "y"}},
+		{"a demoted record names the culled node", [][]string{{"a", "x", "b", "c", "d"}},
+			values{dependsOn("a", "x"), dependsOn("x", "b"), dependsOn("c", "a"), dependsOn("b", "d")}, []kb.DemotedEdge{xDemotedIntoC}, []string{"x"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := seedElisionLeaves(t, tc.leaves, tc.wires)
+			root := seedElisionLeaves(t, tc.leaves, tc.wires, tc.demoted...)
 			ids := make([]string, len(tc.culled))
 			for i, n := range tc.culled {
 				ids[i] = elisionIDs[n]
+			}
+			run := func(op string, values []byte) write.Result {
+				return write.Run(op, write.Options{KBRoot: root, Values: values, NoRefresh: true, Provenance: write.ProvenanceMachine})
+			}
+			if _, err := IssueCulls(ids, run); err != nil {
+				t.Errorf("IssueCulls: %v", err)
 			}
 			tree, err := readTree(root)
 			if err != nil {
 				t.Fatal(err)
 			}
-			run := func(op string, values []byte) write.Result {
-				return write.Run(op, write.Options{KBRoot: root, Values: values, NoRefresh: true})
-			}
-			if _, err := IssueCulls(ids, culledNoClaim, run, leafOf(tree, log.Discard())); err != nil {
-				t.Errorf("IssueCulls: %v", err)
+			g := loadRecords(t, root)
+			for _, id := range ids {
+				if slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == id }) {
+					t.Errorf("%s's record stands after its cull", id)
+				}
+				for _, p := range tree.Paths {
+					if _, marked := kb.MarkerLines(tree.Documents[p].Text)[id]; marked {
+						t.Errorf("%s still marks %s after its cull", p, id)
+					}
+				}
 			}
 			findings := gate(root, log.Discard())
 			if !slices.ContainsFunc(findings, func(f Finding) bool { return f.Check == "verify" }) {
@@ -147,7 +138,7 @@ func TestIssueCullsStopsOnRefusal(t *testing.T) {
 		}
 		return write.Result{Outcome: result.Done}
 	}
-	results, err := IssueCulls([]string{"x", "y"}, culledNoClaim, run, func(string) ([]soloClaimLeaf, error) { return nil, nil })
+	results, err := IssueCulls([]string{"x", "y"}, run)
 	if err == nil {
 		t.Fatal("IssueCulls succeeded over a refused op")
 	}

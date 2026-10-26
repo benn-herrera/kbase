@@ -11,72 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"kbase/internal/build"
+	"kbase/internal/mcp"
 )
 
 // The build-end probe's paths, which the recipe supplies: it starts the server
 // over two named pipes and stages the repository and state store the builds
 // run in and write. The exec monopoly (I1) leaves starting the server to
-// cmd/mcp.go inside the module and to a recipe outside it, so this leg starts
-// no process of its own.
+// internal/mcp/launch.go inside the module and to a recipe outside it, so this
+// leg starts no process of its own.
 var (
 	notifyRepo   = flag.String("notify.repo", "", "the repository the probe's builds run in")
 	notifyState  = flag.String("notify.state-dir", "", "the state store the probe's builds write")
 	notifySend   = flag.String("notify.requests", "", "the pipe the server reads requests from")
 	notifyFrames = flag.String("notify.frames", "", "the pipe the server writes frames to")
 )
-
-// TestBuildWatchAnnouncesEachRunOnce: the watcher announces a run's end once,
-// keyed on the run's identity so a resumed build is a new run. A run already
-// over at the subscription's first reading is announced there, but only for a
-// run this server launched, or for any run where it launched none: until the
-// child takes the store's lock the run before it reads interrupted, which is
-// no new build's end — and which that guard consumes, so no later reading of it
-// announces either. The states are internal/build's vocabulary.
-func TestBuildWatchAnnouncesEachRunOnce(t *testing.T) {
-	running := build.State{State: "running", PID: 7, Started: "10:00"}
-	finished := build.State{State: "finished", PID: 7, Started: "10:00"}
-	resumed := build.State{State: "finished", PID: 9, Started: "10:30"}
-	interrupted := build.State{State: "interrupted", PID: 5, Started: "09:00"}
-	none := build.State{State: "none"}
-	for _, tc := range []struct {
-		name     string
-		launched int
-		reads    []build.State
-		want     []bool
-	}{
-		{"a run ending while the subscription is held", 7,
-			[]build.State{running, running, finished, finished},
-			[]bool{false, false, true, false}},
-		{"a resumed build is a new run, announced once", 7,
-			[]build.State{finished, running, resumed, resumed},
-			[]bool{true, false, true, false}},
-		{"a store no build wrote", 7,
-			[]build.State{none, none},
-			[]bool{false, false}},
-		{"a run over before the subscription, this server's", 7,
-			[]build.State{finished},
-			[]bool{true}},
-		{"a run over before the subscription, one this server did not launch", 7,
-			[]build.State{interrupted, running, finished},
-			[]bool{false, false, true}},
-		{"a run this server did not launch, read twice, stays silent", 7,
-			[]build.State{interrupted, interrupted},
-			[]bool{false, false}},
-		{"a run over before the subscription, this server launched none", 0,
-			[]build.State{interrupted},
-			[]bool{true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := &buildWatch{atStart: true}
-			for i, state := range tc.reads {
-				if got := w.announce(state, tc.launched); got != tc.want[i] {
-					t.Errorf("reading %d (%s, pid %d) announced %v, want %v", i+1, state.State, state.PID, got, tc.want[i])
-				}
-			}
-		})
-	}
-}
 
 // probeFrame is one frame off the wire: a response by its id, or a notification
 // by its method.
@@ -190,8 +138,8 @@ func (p *buildProbe) awaited(t *testing.T, want int) {
 	if len(p.notifications) != want {
 		t.Fatalf("%d notifications, want %d", len(p.notifications), want)
 	}
-	if f := p.notifications[want-1]; f.Method != "notifications/resources/updated" || f.Params.URI != buildURI || f.ID != nil {
-		t.Fatalf("notification %d is %+v, want resources/updated for %s", want, f, buildURI)
+	if f := p.notifications[want-1]; f.Method != "notifications/resources/updated" || f.Params.URI != mcp.BuildURI || f.ID != nil {
+		t.Fatalf("notification %d is %+v, want resources/updated for %s", want, f, mcp.BuildURI)
 	}
 }
 
@@ -203,10 +151,10 @@ func (p *buildProbe) read(t *testing.T) string {
 			URI, MimeType, Text string
 		} `json:"contents"`
 	}
-	resp := p.answer(t, "resources/read", map[string]any{"uri": buildURI})
+	resp := p.answer(t, "resources/read", map[string]any{"uri": mcp.BuildURI})
 	if resp.Error != nil || json.Unmarshal(resp.Result, &read) != nil || len(read.Contents) != 1 ||
-		read.Contents[0].URI != buildURI || read.Contents[0].MimeType != "application/yaml" {
-		t.Fatalf("reading %s answered %+v", buildURI, resp)
+		read.Contents[0].URI != mcp.BuildURI || read.Contents[0].MimeType != "application/yaml" {
+		t.Fatalf("reading %s answered %+v", mcp.BuildURI, resp)
 	}
 	return read.Contents[0].Text
 }
@@ -257,7 +205,7 @@ func TestMCPBuildEndNotification(t *testing.T) {
 	if pid, _ := start["pid"].(float64); isError || start["outcome"] != "done" || pid <= 0 {
 		t.Fatalf("the build started as %v", start)
 	}
-	p.answer(t, "resources/subscribe", map[string]any{"uri": buildURI})
+	p.answer(t, "resources/subscribe", map[string]any{"uri": mcp.BuildURI})
 
 	p.awaited(t, 1)
 	if doc := p.read(t); !strings.Contains(doc, `state: "finished"`) {
@@ -280,8 +228,8 @@ func TestMCPBuildEndNotification(t *testing.T) {
 		t.Errorf("%d notifications after the second read, want exactly two", len(p.notifications))
 	}
 
-	p.answer(t, "resources/unsubscribe", map[string]any{"uri": buildURI})
-	p.answer(t, "resources/subscribe", map[string]any{"uri": buildURI})
+	p.answer(t, "resources/unsubscribe", map[string]any{"uri": mcp.BuildURI})
+	p.answer(t, "resources/subscribe", map[string]any{"uri": mcp.BuildURI})
 	p.awaited(t, 3)
 	p.read(t)
 	if len(p.notifications) != 3 {

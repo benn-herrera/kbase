@@ -1,10 +1,10 @@
 package config
 
-// The three templates a configuration directory is created with — the only
+// The two templates a configuration directory is created with — the only
 // prose kbase writes about its own file formats, in one home. Each is what a
-// file that does not exist yet is created as, and all three read as unset to
-// every loader: what a template states is commented out, and what a fresh
-// install must fill in is left blank.
+// file that does not exist yet is created as, and both read as unset to every
+// loader: what a template states is commented out, and what a fresh install
+// must fill in is left blank.
 
 // configTemplate is what a config.toml that does not exist yet is created
 // as. It is commented because the file is a hand-editing surface first and
@@ -44,7 +44,8 @@ const providersTemplate = `# Each provider is one top-level table. The names are
 baseUrl = "http://lab-server.local:8000/v1"
 # apiKeyFile = "~/.api_keys/lab-server.txt"  # relative paths resolve beside this file
 # type = "inference"  # optional; the only kind kbase can use
-# api = "openai"      # optional; the only protocol it speaks
+# api = "openai"      # optional; the chat protocol: "openai" (the default) or
+#                     # "anthropic", the Messages API
 # decisionsFlavor = "systemone"  # optional; which decision surface this server
 #                                # speaks: "systemone" (the default) or
 #                                # "decisions"
@@ -52,37 +53,4 @@ baseUrl = "http://lab-server.local:8000/v1"
 # [cloud]
 # baseUrl = "https://api.inference.example/v1"
 # apiKeyFile = "~/.api_keys/cloud.txt"
-`
-
-// harnessesTemplate is what a harnesses.toml that does not exist yet is created
-// as. One profile is live — `claude`, which takes the prompt on stdin with its
-// tools removed — so `kbase score --harness claude` runs from a fresh install.
-// The second ships commented, with the limitation of its command stated in the
-// file the user edits: `opencode run` has no flag that removes tools or
-// suppresses instructions, so enabling it means naming an agent that cannot
-// read the KB. Neither command names {model}: each runs on the harness's own
-// configured model, which is what a fresh install can rely on, and the header
-// says how to opt a profile into --scoring-model.
-const harnessesTemplate = `# kbase harness profiles — safe to hand-edit. Each profile is one top-level
-# table, named the way ` + "`--harness`" + ` names it, holding the command kbase runs
-# for one item: one process per item, the prompt on its stdin or in the
-# element carrying ` + "`{prompt}`" + `, and its stdout the reply. An entry here
-# replaces a same-named entry from ~/.config/kbase/harnesses.toml whole.
-#
-# A profile whose command carries ` + "`{model}`" + ` is handed the scoring role's
-# model, and ` + "`--scoring-model`" + ` overrides it. A profile naming no ` + "`{model}`" + `
-# runs on its own configured model and kbase records none: add
-# --model {model} (claude) or -m {model} (opencode) to have it take one.
-
-[claude]
-command = ["claude", "-p", "--tools", "", "--strict-mcp-config", "--safe-mode"]
-
-# [opencode]
-# command = ["opencode", "run", "--format", "default", "{prompt}"]
-# Off by default: ` + "`opencode run`" + ` (v2.0.32) has no flag that removes tools or
-# suppresses instructions, so a profile runs the default ` + "`build`" + ` agent with
-# its tools, its own system prompt and the instruction files opencode loads —
-# and an agent with tools can read the KB the ask is about. Run an agent that
-# cannot instead, by naming it with ` + "`--agent`" + `: that agent comes from the
-# agent set you install, not from kbase.
 `

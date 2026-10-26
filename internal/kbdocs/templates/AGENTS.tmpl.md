@@ -15,6 +15,16 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
 - **Do not edit files here directly.** Every structured field was written by a tool from supplied
   values, and much of what looks editable is derived and regenerated. An edit made outside the
   maintainer is either overwritten or caught as drift.
+- **Do not read kbase's records or its sheets.** `.index/` holds kbase's own records; the
+  `claim-graph.svg` and `claim-graph-digest.svg` sheets, a volume's `claim-graph.svg` and any `.dot`
+  file are its derived output. The query tools — `show`, `deps`, `find`, `stats` and the rest —
+  report what the records hold, the write tools change them, and `refresh` and
+  `render-claim-graph` write the sheets. Testing that such a path exists (`test -d`, a stat) is
+  allowed; listing, globbing or opening anything under `.index/` is reading it. A `claim-rigor.md`
+  page is the exception: `refresh` generates it for reading as prose; take values from the query
+  tools, never from it, and never edit it.
+
+{session-rule}
 
 ## What this tree holds
 
@@ -26,13 +36,13 @@ Text a maintainer adds directly — a summary, a rationale, a note — lives in 
 the tree; it was never a distillation of a corpus, so it is the KB's own word, not a claim about
 what any corpus says. Its nodes are `claim`, `analysis`, `experiment`, `work` and `axiom`, its
 scoring edges `supports`, `founds`, `lifts` and `refutes` — each from what bears on the argument to
-what it supports — and its unscored edges `references` and `demoted`. For live node and edge counts
-— what is in the graph right now — run `kbase stats`.
+what it supports — and its unscored edges `references` and `demoted`. For live counts — what is in
+the graph right now — run `kbase stats` for nodes and strength bands, and `kbase edge-census` for
+each relation's edges and, on a scoring relation, how many stand at each bearing;
+`kbase edges --relation <relation>` lists them.
 
-Corpus axioms — notation and cross-cutting definitions — are declared in `axioms.md` beside this
-file, one `### Axiom <label>: Title` heading each; prose may call one an invariant or a framework
-premise, and the graph has one word for it. Read it before reasoning about anything here. Where there
-is no such file none is declared, and nothing here is waiting on it.
+Corpus axioms are stated in `axioms.md` beside this file. Read it before reasoning about anything
+here. Where there is no such file none is stated, and nothing here is waiting on it.
 
 `CONVENTIONS.md` beside this file is the full contract: what is authored versus derived, how
 metadata gets written, how citations must be formed, and what to do when the gate goes red. Read it

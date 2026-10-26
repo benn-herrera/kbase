@@ -1,7 +1,6 @@
 package write
 
 import (
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,212 +12,264 @@ import (
 	"kbase/internal/result"
 )
 
-// TestDropClaimEdges drops a claim's outgoing edge bullets per class: both
-// classes when edge-class is omitted, one when named, an absent list left as
-// it stands, a demoted edge-class refused naming its producer.
-func TestDropClaimEdges(t *testing.T) {
-	seed := func(t *testing.T) (string, string) {
-		t.Helper()
-		root := seedKB(t)
-		id := insertClaim(t, root, "Second Result",
-			"  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
-		if res := run(t, root, "add-rests-on", "entry:\n- id: "+id+"\n  references:\n  - id: "+seedClaim+"\n", false); res.Outcome != result.Done {
-			t.Fatalf("add references: %+v", res)
+const (
+	dropped, other, refuted, isolated = "clm-drop00", "clm-other0", "clm-refut0", "clm-isol00"
+	dropAnalysis, dropExperiment      = "ana-aaaaaa", "exp-aaaaaa"
+)
+
+// edgeName is an edge as the drop tests compare it.
+type edgeName struct{ relation, source, target string }
+
+// edgeNames is every edge record of g but the demoted ones.
+func edgeNames(g kb.Graph) []edgeName {
+	var out []edgeName
+	for _, r := range g.References {
+		out = append(out, edgeName{kb.RelationReferences, r.Source, r.Target})
+	}
+	for _, r := range g.Founds {
+		out = append(out, edgeName{kb.RelationFounds, r.Source, r.Target})
+	}
+	for _, r := range g.Scorable {
+		out = append(out, edgeName{r.Relation, r.Source, r.Target})
+	}
+	return out
+}
+
+// Edges naming the dropped claim, by whose list they are.
+var (
+	// ownEdges are the claim's own lists: its rests-on — a claim's, a work's
+	// and an experiment's premise — and its references.
+	ownEdges = []edgeName{
+		{kb.RelationSupports, seedClaim, dropped}, {kb.RelationFounds, "wrk-k", dropped},
+		{kb.RelationReferences, dropped, seedClaim},
+	}
+	// inboundEdges are every other node's edges naming it: another claim's
+	// rests-on naming it, a references and a refutation of it, an analysis's
+	// lift and refutation of it, and an experiment's support and lift of it.
+	inboundEdges = []edgeName{
+		{kb.RelationSupports, dropped, other}, {kb.RelationReferences, other, dropped}, {kb.RelationRefutes, refuted, dropped},
+		{kb.RelationLifts, dropAnalysis, dropped}, {kb.RelationRefutes, dropAnalysis, dropped},
+		{kb.RelationSupports, dropExperiment, dropped}, {kb.RelationLifts, dropExperiment, dropped},
+	}
+	// unrelatedEdges name the claim in neither list: its own refutation of
+	// another, and an edge between two others.
+	unrelatedEdges = []edgeName{{kb.RelationRefutes, dropped, other}, {kb.RelationSupports, seedClaim, other}}
+)
+
+// dropGraph holds a claim carrying every edge list.
+func dropGraph() kb.Graph {
+	g := kb.Graph{
+		Claims: []kb.ClaimNode{{ID: seedClaim, Title: "Seed"}, {ID: dropped, Title: "Dropped"}, {ID: other, Title: "Other"},
+			{ID: refuted, Title: "Refuting"}, {ID: isolated, Title: "Isolated"}},
+		Analyses:    []kb.AnalysisNode{{ID: dropAnalysis, Title: "An"}},
+		Experiments: []kb.ExperimentNode{{ID: dropExperiment, Title: "E", Status: "run"}},
+		Works:       []kb.WorkNode{{ID: "wrk-k", Title: "W"}},
+	}
+	for _, e := range slices.Concat(ownEdges, inboundEdges, unrelatedEdges) {
+		switch e.relation {
+		case kb.RelationReferences:
+			g.References = append(g.References, kb.UnscoredEdge{Source: e.source, Target: e.target})
+		case kb.RelationFounds:
+			g.Founds = append(g.Founds, kb.BearingEdge{Source: e.source, Target: e.target, Bearing: kb.Bearing{Pending: true}})
+		default:
+			g.Scorable = append(g.Scorable, kb.ScorableEdge{Relation: e.relation, Source: e.source, Target: e.target, Bearing: kb.Bearing{Pending: true}})
 		}
-		return root, id
 	}
-	register := func(t *testing.T, root string) string { return snapshot(t, root)[kb.RegisterFile] }
+	return g
+}
 
-	root, id := seed(t)
-	res := run(t, root, "drop-claim-edges", "entry:\n- id: "+id+"\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop both classes: %+v", res)
+// TestDropEdges: drop-claim-edges removes a claim's own lists, the class named
+// or both, and drop-inbound-edges every other node's edges naming it; an
+// experiment's support of the claim is in both sets. Every other edge stands,
+// a re-issue is unchanged and byte-identical, and a claim no such edge names
+// is unchanged.
+func TestDropEdges(t *testing.T) {
+	isRestsOn := func(e edgeName) bool { return e.relation != kb.RelationReferences }
+	isReference := func(e edgeName) bool { return e.relation == kb.RelationReferences }
+	experimentSupport := edgeName{kb.RelationSupports, dropExperiment, dropped}
+	for _, c := range []struct {
+		name, op, values string
+		gone             []edgeName
+	}{
+		{"both classes", "drop-claim-edges", "entry:\n- id: " + dropped + "\n", append(slices.Clone(ownEdges), experimentSupport)},
+		{"rests-on", "drop-claim-edges", "entry:\n- id: " + dropped + "\n  edge-class: rests-on\n",
+			append(slices.DeleteFunc(slices.Clone(ownEdges), isReference), experimentSupport)},
+		{"references", "drop-claim-edges", "entry:\n- id: " + dropped + "\n  edge-class: references\n",
+			slices.DeleteFunc(slices.Clone(ownEdges), isRestsOn)},
+		{"inbound", "drop-inbound-edges", "entry:\n- id: " + dropped + "\n", inboundEdges},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := recordKB(t, dropGraph())
+			want := slices.DeleteFunc(edgeNames(records(t, root)), func(e edgeName) bool { return slices.Contains(c.gone, e) })
+			if res := runRecordOp(t, root, c.op, c.values, ProvenanceCaller); res.Outcome != result.Done {
+				t.Fatalf("%s: %+v", c.op, res)
+			}
+			if got := edgeNames(records(t, root)); !slices.Equal(got, want) {
+				t.Errorf("edges = %v, want %v", got, want)
+			}
+			before := snapshot(t, root)
+			if again := runRecordOp(t, root, c.op, c.values, ProvenanceCaller); again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
+				t.Errorf("again: %+v, want unchanged, byte-identical", again)
+			}
+			if res := runRecordOp(t, root, c.op, "entry:\n- id: "+isolated+"\n", ProvenanceCaller); res.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
+				t.Errorf("a claim no such edge names: %+v, want unchanged, byte-identical", res)
+			}
+		})
 	}
-	text := register(t, root)
-	if strings.Contains(text, "- "+kb.ListRestsOn+":") || strings.Contains(text, "- references:") {
-		t.Errorf("an edge list survived:\n%s", text)
-	}
-	if !strings.Contains(text, "## Seed Result") || !strings.Contains(text, "rationale: Seeded.") {
-		t.Errorf("the seed entry moved:\n%s", text)
-	}
-
-	before := snapshot(t, root)
-	again := run(t, root, "drop-claim-edges", "entry:\n- id: "+id+"\n", false)
-	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("again: %+v, want unchanged, byte-identical", again)
-	}
-
-	root, id = seed(t)
-	res = run(t, root, "drop-claim-edges", "entry:\n- id: "+id+"\n  edge-class: references\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop references: %+v", res)
-	}
-	text = register(t, root)
-	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("the rests-on list did not survive:\n%s", text)
-	}
-	if strings.Contains(text, "- references:\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("the references list did not go:\n%s", text)
-	}
-
-	res = run(t, root, "drop-claim-edges", "entry:\n- id: "+id+"\n  edge-class: demoted\n", false)
-	if res.Outcome != result.Refused || len(res.Refusals) != 1 ||
-		!strings.Contains(res.Refusals[0].Detail, "resolve-demoted") {
-		t.Errorf("edge-class demoted: %+v, want refused naming resolve-demoted", res)
+	root := recordKB(t, dropGraph())
+	res := runRecordOp(t, root, "drop-claim-edges", "entry:\n- id: "+dropped+"\n  edge-class: demoted\n", ProvenanceCaller)
+	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Key != "edge-class" || res.Refusals[0].Entry != 1 {
+		t.Errorf("edge-class demoted: %+v, want one refusal at entry 1 keyed edge-class", res)
 	}
 }
 
-// TestDropClaimEdgesEmptyList drops a references header carrying no bullets:
-// the header goes with the first call, and a re-issue is unchanged and
-// byte-identical. No writer produces a bulletless header, so the fixture
-// stages one by hand in the seed entry's Quality section.
-func TestDropClaimEdgesEmptyList(t *testing.T) {
-	root := seedKB(t)
-	reg := filepath.Join(root, kb.RegisterFile)
-	text, err := os.ReadFile(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	staged := strings.Replace(string(text), "- rationale: Seeded.",
-		"- references:\n- rationale: Seeded.", 1)
-	if staged == string(text) {
-		t.Fatal("no rationale line to stage the empty header beside")
-	}
-	if err := os.WriteFile(reg, []byte(staged), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	res := run(t, root, "drop-claim-edges", "entry:\n- id: "+seedClaim+"\n  edge-class: references\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop empty references list: %+v", res)
-	}
-	text, err = os.ReadFile(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(text), "- "+kb.RelationReferences+":") {
-		t.Errorf("the bulletless references header survived:\n%s", text)
-	}
-
-	before := snapshot(t, root)
-	again := run(t, root, "drop-claim-edges", "entry:\n- id: "+seedClaim+"\n  edge-class: references\n", false)
-	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("again: %+v, want unchanged, byte-identical", again)
-	}
-}
-
-// TestDropInboundEdges drops every entry's edge bullets naming one claim:
-// the naming entries lose their lists, the rest of each register and the
-// unnamed entries stand byte-identical, and a claim with no inbound edges
-// writes nothing.
-func TestDropInboundEdges(t *testing.T) {
-	root := seedKB(t)
-	b := insertClaim(t, root, "Bound Result",
-		"  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
-	insertClaim(t, root, "Dependent Result",
-		"  rests-on:\n  - id: "+b+"\n    context: rests on the bound result\n")
-	d := insertClaim(t, root, "Isolated Result", "")
-
-	res := run(t, root, "drop-inbound-edges", "entry:\n- id: "+b+"\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop inbound: %+v", res)
-	}
-	text := snapshot(t, root)[kb.RegisterFile]
-	if strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+b+" — Bound Result") {
-		t.Errorf("C's rests-on bullet naming B survived:\n%s", text)
-	}
-	if !strings.Contains(text, "- "+kb.ListRestsOn+":\n  - "+seedClaim+" — Seed Result") {
-		t.Errorf("B's own rests-on list did not survive:\n%s", text)
-	}
-	if !strings.Contains(text, "## Seed Result") || !strings.Contains(text, "rationale: Seeded.") {
-		t.Errorf("the seed entry moved:\n%s", text)
-	}
-
-	before := snapshot(t, root)
-	again := run(t, root, "drop-inbound-edges", "entry:\n- id: "+b+"\n", false)
-	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("again: %+v, want unchanged, byte-identical", again)
-	}
-
-	res = run(t, root, "drop-inbound-edges", "entry:\n- id: "+d+"\n", false)
-	if res.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
-		t.Errorf("no inbound: %+v, want unchanged, byte-identical", res)
-	}
-}
-
-// seedSharedLeaf seeds a KB whose leaf claims the seed claim and a second,
+// seedSharedLeaf seeds a KB whose leaf hosts the seed claim and a second,
 // "Bound Result", inserted with extra and marked in the leaf's prose; it
 // returns kb-root and the second claim's id.
 func seedSharedLeaf(t *testing.T, extra string) (string, string) {
 	t.Helper()
 	root := seedKB(t)
 	b := insertClaim(t, root, "Bound Result", extra)
-	if res := run(t, root, "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  claims: ["+seedClaim+", "+b+"]\n", false); res.Outcome != result.Done {
-		t.Fatalf("set-frontmatter: %+v", res)
-	}
-	if res := run(t, root, "mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: "+b+"\n  locator: a second paragraph names a bound\n", false); res.Outcome != result.Done {
+	if res := run(t, root, "mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: "+b+"\n  locator: a second paragraph names a bound\n"); res.Outcome != result.Done {
 		t.Fatalf("mark-claim-in-leaf: %+v", res)
 	}
 	return root, b
 }
 
-// TestDropClaimNode deletes a claim node whole: its register entry block, its
-// marker and its claims entry go from the leaf claiming it, the rest of each
-// file standing. An entry still naming the claim refuses, naming the entry
-// and the two edge ops; a leaf claimed by it alone refuses, an empty claims
-// list being no-claim's decision; a re-issue takes the resolve refusal, the
-// id having gone with the entry.
+// TestDropClaimNode deletes a claim node whole: its record and its marker go,
+// the rest of each file standing, and a re-issue is unchanged. A premise the
+// claim rests on goes with it, while a premise another claim rests on it
+// refuses the drop, naming the edge and the two edge ops.
 func TestDropClaimNode(t *testing.T) {
-	seed := func(t *testing.T) (string, string) {
-		t.Helper()
-		return seedSharedLeaf(t, "  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
-	}
-
-	root, b := seed(t)
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
+	root, b := seedSharedLeaf(t, "")
+	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
 	if res.Outcome != result.Done {
 		t.Fatalf("drop: %+v", res)
 	}
-	register := snapshot(t, root)[kb.RegisterFile]
-	if strings.Contains(register, b) || strings.Contains(register, "## Bound Result") {
-		t.Errorf("B's entry survived:\n%s", register)
-	}
-	if !strings.Contains(register, "## Seed Result") || !strings.Contains(register, "rationale: Seeded.") {
-		t.Errorf("the seed entry moved:\n%s", register)
+	if g := records(t, root); slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == b }) || len(g.Claims) != 1 {
+		t.Errorf("claims = %+v, want the seed alone", g.Claims)
 	}
 	leaf := snapshot(t, root)["leaf.md"]
-	if strings.Contains(leaf, renderTier2Marker(b)) || strings.Contains(leaf, b) {
-		t.Errorf("B's marker or claims entry survived:\n%s", leaf)
+	if strings.Contains(leaf, b) || !strings.Contains(leaf, "A second paragraph names a bound.  \n") ||
+		!strings.Contains(leaf, "holds here. "+kb.StatementMarker(seedClaim)) {
+		t.Errorf("the leaf lost other than B's marker:\n%s", leaf)
 	}
-	if !strings.Contains(leaf, "claims: ["+seedClaim+"]") || !strings.Contains(leaf, "A second paragraph names a bound.") {
-		t.Errorf("the leaf lost more than B:\n%s", leaf)
-	}
-
 	before := snapshot(t, root)
-	again := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
+	again := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
 	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
 		t.Errorf("again: %+v, want unchanged, byte-identical", again)
 	}
 
-	root, b = seed(t)
-	res = run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n", false)
-	if res.Outcome != result.Refused || len(res.Refusals) != 1 ||
-		!strings.Contains(res.Refusals[0].Detail, b) ||
-		!strings.Contains(res.Refusals[0].Detail, "drop-claim-edges") ||
-		!strings.Contains(res.Refusals[0].Detail, "drop-inbound-edges") {
-		t.Errorf("named inbound: %+v, want refused naming %s and the two edge ops", res, b)
+	root, b = seedSharedLeaf(t, "  rests-on:\n  - id: "+seedClaim+"\n")
+	before = snapshot(t, root)
+	res = run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n")
+	if !refusedAt(res, result.Item{Key: "id", Entry: 1}) {
+		t.Errorf("drop the premise another claim rests on: %+v, want one refusal of entry 1's id", res)
 	}
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a refused drop changed kb-root")
+	}
+	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n"); res.Outcome != result.Done {
+		t.Fatalf("drop the claim resting on the seed: %+v, want done", res)
+	}
+	if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 {
+		t.Errorf("records = %+v, want the seed alone and no edge", g)
+	}
+}
 
-	root = seedKB(t)
-	solo := insertClaim(t, root, "Solo Result", "")
-	if res := run(t, root, "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  claims: ["+solo+"]\n", false); res.Outcome != result.Done {
-		t.Fatalf("set-frontmatter solo: %+v", res)
+// TestDropClaimNodeTakesItsRefutations: a claim refuting another is dropped
+// with its refutation, while the claim it refutes cannot be dropped from under
+// the refutation.
+func TestDropClaimNodeTakesItsRefutations(t *testing.T) {
+	root := seedKB(t)
+	refuter := insertClaim(t, root, "Counter Result", "  refutes:\n  - id: "+seedClaim+"\n")
+	before := snapshot(t, root)
+	res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n")
+	if !refusedAt(res, result.Item{Key: "id", Entry: 1}) {
+		t.Errorf("drop the refuted claim: %+v, want one refusal of entry 1's id", res)
 	}
-	res = run(t, root, "drop-claim-node", "entry:\n- id: "+solo+"\n", false)
-	if res.Outcome != result.Refused || len(res.Refusals) != 1 ||
-		!strings.Contains(res.Refusals[0].Detail, "leaf.md") ||
-		!strings.Contains(res.Refusals[0].Detail, "no-claim") {
-		t.Errorf("solo claims: %+v, want refused naming leaf.md and the no-claim decision", res)
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a refused drop changed kb-root")
+	}
+	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+refuter+"\n"); res.Outcome != result.Done {
+		t.Fatalf("drop the refuter: %+v, want done", res)
+	}
+	g := records(t, root)
+	if len(g.Scorable) != 0 || slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == refuter }) {
+		t.Errorf("records = %+v, want the refuter and its refutation gone", g)
+	}
+}
+
+// TestDropClaimNodeTakesEveryClaimALeafHosts: a batch dropping every claim a
+// leaf hosts lands, the leaf losing both markers.
+func TestDropClaimNodeTakesEveryClaimALeafHosts(t *testing.T) {
+	root, b := seedSharedLeaf(t, "")
+	res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n- id: "+b+"\n")
+	if res.Outcome != result.Done {
+		t.Fatalf("drop both: %+v", res)
+	}
+	if leaf := snapshot(t, root)["leaf.md"]; strings.Contains(leaf, "claim-rigor") || !strings.Contains(leaf, "The first result holds here.\n") {
+		t.Errorf("the leaf kept a marker, or lost its prose:\n%s", leaf)
+	}
+}
+
+// TestDropClaimNodeDemotedRecords: every demoted record naming the node goes
+// with it, at either end, and the records of others stand.
+func TestDropClaimNodeDemotedRecords(t *testing.T) {
+	pending := kb.Bearing{Pending: true}
+	root := recordKB(t, kb.Graph{
+		Claims: []kb.ClaimNode{{ID: seedClaim, Title: "Seed"}, {ID: dropped, Title: "Dropped"}, {ID: other, Title: "Other"}},
+		Demoted: []kb.DemotedEdge{
+			{Source: dropped, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending},
+			{Source: other, Target: dropped, ReplacedRelation: kb.RelationRefutes, Bearing: pending},
+			{Source: seedClaim, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending},
+		},
+	})
+	if res := runRecordOp(t, root, "drop-claim-node", "entry:\n- id: "+dropped+"\n", ProvenanceCaller); res.Outcome != result.Done {
+		t.Fatalf("drop: %+v, want done", res)
+	}
+	want := []kb.DemotedEdge{{Source: seedClaim, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending}}
+	if got := records(t, root).Demoted; !slices.Equal(got, want) {
+		t.Errorf("demoted = %+v, want %+v", got, want)
+	}
+}
+
+// TestDropClaimNodeRecordMention: a prose field of another record naming the
+// node — which the trailing refresh renders onto a register page — refuses the
+// drop, naming the record file, the record and the field, and nothing is
+// written.
+func TestDropClaimNodeRecordMention(t *testing.T) {
+	mention := "as " + dropped + " shows"
+	for _, c := range []struct {
+		name, file, record, field string
+		stage                     func(g *kb.Graph)
+	}{
+		{"rationale", kb.GraphNodesFile, other, "rationale", func(g *kb.Graph) { g.Claims[1].Rationale = mention }},
+		{"strengthen-by", kb.GraphNodesFile, other, "strengthen-by[1]", func(g *kb.Graph) { g.Claims[1].StrengthenBy = []string{mention} }},
+		{"work rationale", kb.GraphNodesFile, "wrk-k", "rationale", func(g *kb.Graph) { g.Works[0].Rationale = mention }},
+		{"edge context", kb.GraphEdgesFile, kb.RelationSupports + " " + seedClaim + " → " + other, "context",
+			func(g *kb.Graph) { g.Scorable[0].Context = mention }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := kb.Graph{
+				Claims:   []kb.ClaimNode{{ID: dropped, Title: "Dropped"}, {ID: other, Title: "Other"}, {ID: seedClaim, Title: "Seed"}},
+				Works:    []kb.WorkNode{{ID: "wrk-k", Title: "W"}},
+				Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: seedClaim, Target: other, Bearing: kb.Bearing{Pending: true}}},
+			}
+			c.stage(&g)
+			root := recordKB(t, g)
+			before := snapshot(t, root)
+			res := runRecordOp(t, root, "drop-claim-node", "entry:\n- id: "+dropped+"\n", ProvenanceCaller)
+			if res.Outcome != result.Refused || len(res.Refusals) != 1 {
+				t.Fatalf("drop: %+v, want one refusal", res)
+			}
+			if it := res.Refusals[0]; it.Key != "id="+dropped || it.Path != c.file || !strings.Contains(it.Detail, c.record+"'s "+c.field) {
+				t.Errorf("refusal = %+v, want id=%s at %s naming %s's %s", it, dropped, c.file, c.record, c.field)
+			}
+			if !maps.Equal(before, snapshot(t, root)) {
+				t.Error("a refused drop changed kb-root")
+			}
+		})
 	}
 }
 
@@ -235,116 +286,29 @@ func lineOf(t *testing.T, text, sub string) int {
 	return 0
 }
 
-// refusedNaming is whether res is refused with an item whose detail names
-// every one of subs.
-func refusedNaming(res Result, subs ...string) bool {
-	if res.Outcome != result.Refused {
+// refusedAt is whether res is refused with exactly the items want, compared on
+// check, key, entry, path and line.
+func refusedAt(res Result, want ...result.Item) bool {
+	if res.Outcome != result.Refused || len(res.Refusals) != len(want) {
 		return false
 	}
-	for _, it := range res.Refusals {
-		if !slices.ContainsFunc(subs, func(s string) bool { return !strings.Contains(it.Detail, s) }) {
-			return true
+	for i, it := range res.Refusals {
+		w := want[i]
+		if it.Check != w.Check || it.Key != w.Key || it.Entry != w.Entry || it.Path != w.Path || it.Line != w.Line {
+			return false
 		}
 	}
-	return false
-}
-
-// TestDropClaimNodeRestatedLeaf: a leaf hosting one claim, restated no-claim
-// with the claim's marker still in its prose, loses the marker when the node
-// drops, and the register loses the entry.
-func TestDropClaimNodeRestatedLeaf(t *testing.T) {
-	root := seedKB(t)
-	if res := run(t, root, "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  no-claim: restated before the drop\n", false); res.Outcome != result.Done {
-		t.Fatalf("set-frontmatter no-claim: %+v", res)
-	}
-	if !strings.Contains(snapshot(t, root)["leaf.md"], renderTier2Marker(seedClaim)) {
-		t.Fatal("the restatement took the marker; the fixture needs it standing")
-	}
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop: %+v, want done", res)
-	}
-	files := snapshot(t, root)
-	if leaf := files["leaf.md"]; strings.Contains(leaf, renderTier2Marker(seedClaim)) {
-		t.Errorf("the marker survived the restated leaf:\n%s", leaf)
-	} else if !strings.Contains(leaf, "The first result holds here.") {
-		t.Errorf("the leaf lost more than the marker:\n%s", leaf)
-	}
-	if register := files[kb.RegisterFile]; strings.Contains(register, seedClaim) {
-		t.Errorf("the entry survived:\n%s", register)
-	}
-}
-
-// TestDropClaimNodeDemotedRow: another entry's demoted row naming the node
-// goes with the node, the rest of that entry byte-identical to before the
-// row was planted.
-func TestDropClaimNodeDemotedRow(t *testing.T) {
-	root := seedKB(t)
-	b := insertClaim(t, root, "Bound Result", "")
-	y := insertClaim(t, root, "Holding Result", "  rests-on:\n  - id: "+seedClaim+"\n    context: the bound it rests on\n")
-	entryY := func() string {
-		t.Helper()
-		register := snapshot(t, root)[kb.RegisterFile]
-		at := strings.Index(register, "## Holding Result")
-		if at < 0 {
-			t.Fatalf("no entry for Y:\n%s", register)
-		}
-		return register[at:] // Y is the register's last entry
-	}
-	before := entryY()
-	plant := Run(AddBuildEdges, Options{KBRoot: root, Values: []byte("entry:\n- id: " + y + "\n  " + kb.RelationDemoted + ":\n  - id: " + b + "\n    origin: cited\n")})
-	if plant.Outcome != result.Done || !strings.Contains(entryY(), b) {
-		t.Fatalf("plant the demoted row: %+v\n%s", plant, entryY())
-	}
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
-	if res.Outcome != result.Done {
-		t.Fatalf("drop: %+v, want done", res)
-	}
-	if after := entryY(); after != before {
-		t.Errorf("Y's entry is not as before the plant:\ngot:\n%s\nwant:\n%s", after, before)
-	}
-}
-
-// TestDropClaimNodeBatchEmptiesLeaf: a batch naming every claim a leaf holds
-// refuses the whole call, naming the leaf and the no-claim restatement.
-func TestDropClaimNodeBatchEmptiesLeaf(t *testing.T) {
-	root, b := seedSharedLeaf(t, "")
-	before := snapshot(t, root)
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n- id: "+b+"\n", false)
-	if !refusedNaming(res, "leaf.md", "set-frontmatter", "no-claim") {
-		t.Errorf("batch emptying leaf.md: %+v, want refused naming leaf.md and set-frontmatter's no-claim", res)
-	}
-	if !maps.Equal(before, snapshot(t, root)) {
-		t.Error("a refused batch changed kb-root")
-	}
-}
-
-// TestDropClaimNodeAnalysisPremise: an analysis entry whose rests-on list names
-// the node refuses the drop, naming the bullet's path:line. The analysis
-// stands in a register of its own, so the line is the same whether read
-// before or after the node's entry leaves the claim register.
-func TestDropClaimNodeAnalysisPremise(t *testing.T) {
-	const analyses = "analyses/claim-rigor.md"
-	root := seedKB(t)
-	b := insertClaim(t, root, "Bound Result", "")
-	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(analyses)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if res := run(t, root, "insert-analysis-entry", "entry:\n- register: "+analyses+"\n  title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Rests on the bound.\n  rests-on:\n  - id: "+b+"\n", true); res.Outcome != result.Done {
-		t.Fatalf("insert analysis: %+v", res)
-	}
-	at := fmt.Sprintf("%s:%d", analyses, lineOf(t, snapshot(t, root)[analyses], b))
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
-	if !refusedNaming(res, at, b) {
-		t.Errorf("analysis rests-on: %+v, want refused naming %s and %s", res, at, b)
-	}
+	return true
 }
 
 // TestDropClaimNodeProseMention: a prose mention of the node in a leaf that
-// does not claim it refuses the drop, naming the mention's path:line.
+// does not host it refuses the drop, naming the mention's path:line, and
+// nothing is written; the register page refresh renders is not read.
 func TestDropClaimNodeProseMention(t *testing.T) {
-	root := seedKB(t)
-	b := insertClaim(t, root, "Bound Result", "")
+	root, b := seedSharedLeaf(t, "")
+	if !strings.Contains(snapshot(t, root)[kb.RegisterFile], b) {
+		t.Fatalf("the register page refresh rendered does not name %s; the fixture needs it to", b)
+	}
 	leafPath := filepath.Join(root, "leaf.md")
 	text, err := os.ReadFile(leafPath)
 	if err != nil {
@@ -357,9 +321,13 @@ func TestDropClaimNodeProseMention(t *testing.T) {
 	if err := os.WriteFile(leafPath, []byte(staged), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	at := fmt.Sprintf("leaf.md:%d", lineOf(t, staged, b))
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n", false)
-	if !refusedNaming(res, at, b) {
-		t.Errorf("prose mention: %+v, want refused naming %s and %s", res, at, b)
+	before := snapshot(t, root)
+	line := lineOf(t, staged, "as "+b+" shows")
+	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
+	if !refusedAt(res, result.Item{Key: "id=" + b, Path: "leaf.md", Line: line}) {
+		t.Errorf("prose mention: %+v, want one refusal of id=%s at leaf.md:%d", res, b, line)
+	}
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a refused drop changed kb-root")
 	}
 }

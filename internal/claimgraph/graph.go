@@ -1,12 +1,12 @@
 package claimgraph
 
 import (
-	"fmt"
-	"path"
+	"cmp"
+	"maps"
+	"slices"
 	"strings"
 
 	"kbase/internal/kb"
-	"kbase/internal/write"
 )
 
 // Claim is one claim-bearing block's claim, before an id exists for it: its
@@ -39,22 +39,9 @@ func unmarkedDocuments(t *Tree, inv *Inventory) []string {
 	return out
 }
 
-// registerFor is the register a claim hosted by document belongs in: its
-// volume's. The external works are registered at the KB root.
-func registerFor(document string) string {
-	domain, _, _ := strings.Cut(document, "/")
-	return domain + "/" + kb.RegisterFile
-}
-
-// registerTitle is a title read off document as document's register carries
-// it: every relative link rebased to resolve from the register's directory.
-func registerTitle(title, document string) string {
-	return kb.RebaseInlineLinks(title, path.Dir(document), path.Dir(registerFor(document)))
-}
-
 // ClaimNode is one minted claim as the authored graph carries it. Locator is
 // where in its document the claim sits — its block's display line, or the
-// line its Tier-2 marker is on — "" where neither join answers. Equation is
+// line its statement marker is on — "" where neither join answers. Equation is
 // the label of the equation it stands for, "" for any other claim.
 type ClaimNode struct {
 	ID, Document, Title, Locator, Identifier, Equation string
@@ -104,29 +91,10 @@ func (g *AuthoredGraph) documents() int {
 	return len(seen)
 }
 
-// registerTitles is every minted claim id in the KB with its entry's title.
-func registerTitles(kbRoot string) (map[string]string, error) {
-	regs, err := kb.Registers(builtTree(kbRoot))
-	if err != nil {
-		return nil, err
-	}
-	titles := map[string]string{}
-	for _, rel := range regs {
-		entries, err := claimEntries(kbRoot, rel)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			titles[e.ID] = e.Title
-		}
-	}
-	return titles, nil
-}
-
-// markerLocator is the line carrying id's Tier-2 marker, as a locator: its
+// markerLocator is the line carrying id's statement marker, as a locator: its
 // authored content, markers and quote prefix off, whitespace collapsed.
 func markerLocator(text, id string) string {
-	marker := write.Tier2Marker(id)
+	marker := kb.StatementMarker(id)
 	for _, line := range kb.SplitLines(text) {
 		if strings.Contains(line, marker) {
 			return kb.NormalizeSpace(kb.BlockquotePrefix.ReplaceAllString(stripMarkers(line), ""))
@@ -135,13 +103,18 @@ func markerLocator(text, id string) string {
 	return ""
 }
 
-// readGraph joins each document's claims: declarations to the registers'
-// entries, and each claim to its site — an equation by the label its title
-// carries, a block claim by title, any other by its marker.
+// readGraph joins each leaf's statement markers to the claim records — a claim
+// marked in several leaves is hosted by the first in path order — and each
+// claim to its site: an equation by the label its title carries, a block claim
+// by title, any other by its marker. A leaf's claims are in marker order.
 func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
-	titles, err := registerTitles(t.Root)
+	recs, err := kb.LoadGraph(builtTree(t.Root))
 	if err != nil {
 		return nil, err
+	}
+	titles := map[string]string{}
+	for _, n := range recs.Claims {
+		titles[n.ID] = n.Title
 	}
 	type site struct{ display, identifier string }
 	blocks := map[string]map[string]site{}
@@ -149,22 +122,27 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 		if blocks[b.Document] == nil {
 			blocks[b.Document] = map[string]site{}
 		}
-		blocks[b.Document][registerTitle(b.Title, b.Document)] = site{b.Display, b.Identifier}
+		blocks[b.Document][t.registerTitle(b.Title, b.Document)] = site{b.Display, b.Identifier}
 	}
 	g := &AuthoredGraph{byID: map[string]int{}}
 	for _, p := range t.Paths {
-		fm, err := kb.ParseFrontmatter(t.Documents[p].Text)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+		if !declaringKinds[t.kind(p)] {
+			continue
 		}
-		ids, err := fm.ListOrEmpty("claims")
-		if err != nil {
-			return nil, err
-		}
+		lines := kb.MarkerLines(t.Documents[p].Text)
+		ids := slices.SortedFunc(maps.Keys(lines), func(a, b string) int {
+			return cmp.Or(cmp.Compare(lines[a], lines[b]), strings.Compare(a, b))
+		})
 		for _, id := range ids {
+			if kind, _ := kb.NodeIDKind(id); kind != kb.NodeKindClaim {
+				continue
+			}
+			if _, seen := g.byID[id]; seen {
+				continue
+			}
 			title, ok := titles[id]
 			if !ok {
-				return nil, stopf("orphan-claim", "%s declares %s, which no register in this KB mints. The declaration and the register disagree about what exists, and an edge authored over that disagreement would name a node with no entry", p, id)
+				return nil, stopf("orphan-claim", "%s marks %s, which no node record in this KB carries. The marker and the records disagree about what exists, and an edge authored over that disagreement would name a node with no record", p, id)
 			}
 			n := ClaimNode{ID: id, Document: p, Title: title}
 			if label, ok := kb.EquationLabel(title); ok {
@@ -173,10 +151,6 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 				n.Locator, n.Identifier = s.display, s.identifier
 			} else {
 				n.Locator = markerLocator(t.Documents[p].Text, id)
-			}
-			if at, seen := g.byID[id]; seen {
-				g.Nodes[at] = n
-				continue
 			}
 			g.byID[id] = len(g.Nodes)
 			g.Nodes = append(g.Nodes, n)

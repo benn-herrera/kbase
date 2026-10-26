@@ -21,10 +21,7 @@ func TestStripNavigation(t *testing.T) {
 		{
 			name: "index",
 			path: "vol1/index.md",
-			text: `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+			text: `[↑ A KB](../entry-point.md)
 
 # First Volume
 
@@ -36,14 +33,15 @@ Prose carrying a link to the first leaf ([§1](v1-leaf.md)) and more prose.
 - [§2 The Nested Index](nested/index.md)
 `,
 			keep:    []string{"# First Volume", "Prose carrying a link to the first leaf ([§1](v1-leaf.md)) and more prose.", "## Derivations"},
-			dropped: []string{"kind: index", "[↑ A KB](../entry-point.md)", "[§1 The Leaf](v1-leaf.md)", "[§2 The Nested Index](nested/index.md)"},
+			dropped: []string{"[↑ A KB](../entry-point.md)", "[§1 The Leaf](v1-leaf.md)", "[§2 The Nested Index](nested/index.md)"},
 		},
 		{
 			name: "entry point",
 			path: "entry-point.md",
 			text: `---
-kind: entry-point
+kb-format: "3.0.0"
 ---
+
 # A KB
 
 A blurb about the KB.
@@ -54,15 +52,12 @@ A blurb about the KB.
 - [Second](vol2/index.md) — the second volume
 `,
 			keep:    []string{"# A KB", "A blurb about the KB.", "## Volumes"},
-			dropped: []string{"kind: entry-point", "[First](vol1/index.md)", "[Second](vol2/index.md)"},
+			dropped: []string{"kb-format", "[First](vol1/index.md)", "[Second](vol2/index.md)"},
 		},
 		{
 			name: "leaf keeps a link list that is body",
 			path: "vol1/v1-leaf.md",
-			text: `---
-kind: leaf
----
-[↑ First Volume](index.md)
+			text: `[↑ First Volume](index.md)
 
 # §1 The Leaf
 
@@ -71,7 +66,7 @@ Body with a [link](../vol2/v2-leaf.md).
 - [A body link](../vol2/v2-leaf.md) — the author's own list
 `,
 			keep:    []string{"# §1 The Leaf", "Body with a [link](../vol2/v2-leaf.md).", "- [A body link](../vol2/v2-leaf.md) — the author's own list"},
-			dropped: []string{"kind: leaf", "[↑ First Volume](index.md)"},
+			dropped: []string{"[↑ First Volume](index.md)"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,15 +103,15 @@ func TestStripFrontmatterIsTheHouseRule(t *testing.T) {
 		},
 		{
 			name: "unclosed fence",
-			path: "vol1/index.md",
-			text: "---\nkind: index\n\n# T\n\nBody.\n",
-			keep: []string{"kind: index", "# T", "Body."},
+			path: "entry-point.md",
+			text: "---\nkb-format: \"3.0.0\"\n\n# T\n\nBody.\n",
+			keep: []string{"kb-format: \"3.0.0\"", "# T", "Body."},
 		},
 		{
 			name: "blank line after the fence",
-			path: "vol1/leaf.md",
-			text: "---\nkind: leaf\n---\n\n[↑ Vol](index.md)\n\nbody\n",
-			keep: []string{"body"},
+			path: "entry-point.md",
+			text: "---\nkb-format: \"3.0.0\"\n---\n\n# KB\n\nbody\n",
+			keep: []string{"# KB", "body"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,26 +126,26 @@ func TestStripFrontmatterIsTheHouseRule(t *testing.T) {
 }
 
 // TestStripUplinkAfterBlank: the up-link line is the body's first line carrying
-// text, so a blank line between the fence and the up-link does not save the
-// navigation link; prose in that position is kept.
+// text, so a blank line above the up-link does not save the navigation link;
+// prose in that position is kept.
 func TestStripUplinkAfterBlank(t *testing.T) {
-	atFence := Strip("vol1/leaf.md", "---\nkind: leaf\n---\n[↑ Vol](index.md)\n\nbody\n")
-	if strings.Contains(atFence, "[↑ Vol](index.md)") {
-		t.Errorf("the up-link survived directly after the fence:\n%q", atFence)
+	atTop := Strip("vol1/leaf.md", "[↑ Vol](index.md)\n\nbody\n")
+	if strings.Contains(atTop, "[↑ Vol](index.md)") {
+		t.Errorf("the up-link survived on the first line:\n%q", atTop)
 	}
-	afterBlank := Strip("vol1/leaf.md", "---\nkind: leaf\n---\n\n[↑ Vol](index.md)\n\nbody\n")
+	afterBlank := Strip("vol1/leaf.md", "\n[↑ Vol](index.md)\n\nbody\n")
 	if strings.Contains(afterBlank, "[↑ Vol](index.md)") {
-		t.Errorf("the up-link survived a blank line after the fence:\n%q", afterBlank)
+		t.Errorf("the up-link survived a blank line above it:\n%q", afterBlank)
 	}
-	afterTwoBlanks := Strip("vol1/leaf.md", "---\nkind: leaf\n---\n\n\n[↑ Vol](index.md)\n\nbody\n")
+	afterTwoBlanks := Strip("vol1/leaf.md", "\n\n[↑ Vol](index.md)\n\nbody\n")
 	if strings.Contains(afterTwoBlanks, "[↑ Vol](index.md)") {
-		t.Errorf("the up-link survived two blank lines after the fence:\n%q", afterTwoBlanks)
+		t.Errorf("the up-link survived two blank lines above it:\n%q", afterTwoBlanks)
 	}
-	prose := Strip("vol1/leaf.md", "---\nkind: leaf\n---\n\nSome prose without the marker.\n\nbody\n")
+	prose := Strip("vol1/leaf.md", "\nSome prose without the marker.\n\nbody\n")
 	if !strings.Contains(prose, "Some prose without the marker.") {
 		t.Errorf("prose in the body's first line was dropped:\n%q", prose)
 	}
-	unmarked := Strip("vol1/leaf.md", "---\nkind: leaf\n---\n\n[Some link](index.md)\n\nbody\n")
+	unmarked := Strip("vol1/leaf.md", "\n[Some link](index.md)\n\nbody\n")
 	if !strings.Contains(unmarked, "[Some link](index.md)") {
 		t.Errorf("a link line carrying no marker was dropped:\n%q", unmarked)
 	}
@@ -160,10 +155,7 @@ func TestStripUplinkAfterBlank(t *testing.T) {
 // an authored prose section both survive the strip; only the child-list lines
 // go.
 func TestStripKeepsProseAroundLinks(t *testing.T) {
-	text := `---
-kind: index
----
-[↑ A KB](../entry-point.md)
+	text := `[↑ A KB](../entry-point.md)
 
 ## Key Results
 
@@ -186,7 +178,7 @@ The price wedge ([§2](p3-friction.md)) and the selector ([§4](p3-selection.md)
 // TestStripAgreesWithChildList: the walk descends exactly the lines Strip drops
 // over a body carrying a fenced child-list example and a real child list.
 func TestStripAgreesWithChildList(t *testing.T) {
-	text := "---\nkind: index\n---\n[↑ A KB](../entry-point.md)\n\n# First Volume\n\n" +
+	text := "[↑ A KB](../entry-point.md)\n\n# First Volume\n\n" +
 		"```\n- [Example](child-file.md) — a fenced example\n```\n\n" +
 		"- [Real](real.md) — a real child\n- [Other](other/index.md) — a nested index\n"
 	targets := kb.ChildList("vol1/index.md", text)

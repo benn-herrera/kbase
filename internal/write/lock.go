@@ -1,10 +1,13 @@
 package write
 
 import (
+	"errors"
 	"path/filepath"
 	"time"
 
 	"kbase/internal/filelock"
+	"kbase/internal/kb"
+	"kbase/internal/result"
 )
 
 // LockWait bounds the wait for another writer — its read, its write,
@@ -22,6 +25,17 @@ func LockKB(kbRoot string) (release func(), err error) {
 		return nil, err
 	}
 	return l.Release, nil
+}
+
+// HeldLockItem is the item a writer answers with where err is LockKB's
+// filelock.ErrHeld for the KB at kbRoot, remedy the writer's own; held is false
+// for any other err, nil included.
+func HeldLockItem(err error, kbRoot, remedy string) (item result.Item, held bool) {
+	if !errors.Is(err, filelock.ErrHeld) {
+		return result.Item{}, false
+	}
+	return result.Item{Check: kb.CheckLock, Path: filepath.Dir(kbRoot), Remedy: remedy,
+		Detail: "another write op or refresh held the KB's write lock past the wait; nothing was written"}, true
 }
 
 // RetryRemedy is the remedy of op turned away by a concurrent writer.

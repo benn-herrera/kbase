@@ -21,22 +21,16 @@ const excerptMaxChars = 240
 const linkText = `(?:[^\[\]]|\[[^\[\]]*\])*`
 
 var (
-	citationLinkRE   = regexp.MustCompile(`\[(` + linkText + `)\]\([` + kb.PyWhitespace + `]*([^)` + kb.PyWhitespace + `]+)[` + kb.PyWhitespace + `]*\)`)
-	excerptRE        = kb.PyRE(`(?s)^\s*(?:"(.*)"|“(.*)”|‘(.*)’)\s*$`)
-	plainInvariantRE = regexp.MustCompile(`Invariant [0-9]+`)
-	invariantIDRE    = regexp.MustCompile(`INVARIANT-[A-Z]+[0-9]+`)
-	plainAxiomRE     = regexp.MustCompile(`Axiom ` + kb.AxiomLabel)
-	declarationRE    = kb.PyRE(`^###\s+Axiom\s+` + kb.AxiomLabel + `\s*:`)
-	invariantDeclRE  = kb.PyRE(`^###\s+INVARIANT-[A-Z]+[0-9]+\s*:`)
-	axiomBulletRE    = kb.PyRE(`^-\s+Axiom\s+[0-9]+\s*:`)
-	headingRE        = kb.PyRE(`^(#{1,6})\s`)
-	tier2MarkerRE    = kb.PyRE(`(?s)<!--\s*(?:claim-rigor|id):.*?-->`)
-	entryMarkerRE    = kb.PyRE(`<!--\s*id:\s*(` + kb.IDBody() + `)`)
-	fieldBulletRE    = kb.PyRE(`^-\s+[a-z][a-z-]*:`)
-	fieldContRE      = kb.PyRE(`^\s+\S`)
-	noEdgeRE         = kb.PyRE(`^\s*-\s+no-edge:\s*(\S.*)$`)
-	leafKindRE       = kb.PyRE(`(?m)^kind:\s*(\S+)`)
-	schemeRE         = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
+	citationLinkRE  = regexp.MustCompile(`\[(` + linkText + `)\]\([` + kb.PyWhitespace + `]*([^)` + kb.PyWhitespace + `]+)[` + kb.PyWhitespace + `]*\)`)
+	excerptRE       = kb.PyRE(`(?s)^\s*(?:"(.*)"|“(.*)”|‘(.*)’)\s*$`)
+	invariantIDRE   = regexp.MustCompile(`INVARIANT-[A-Z]+[0-9]+`)
+	plainAxiomRE    = regexp.MustCompile(`Axiom ` + kb.AxiomLabel)
+	declarationRE   = kb.PyRE(`^###\s+Axiom\s+` + kb.AxiomLabel + `\s*:`)
+	headingRE       = kb.PyRE(`^(#{1,6})\s`)
+	markerCommentRE = kb.PyRE(`(?s)<!--\s*claim-rigor:.*?-->`)
+	fieldBulletRE   = kb.PyRE(`^-\s+[a-z][a-z-]*:`)
+	fieldContRE     = kb.PyRE(`^\s+\S`)
+	schemeRE        = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:`)
 )
 
 // frontmatterSpans is the document's frontmatter block as one span, or none.
@@ -66,21 +60,15 @@ func blankRunes(s string) string {
 }
 
 // inScopeText is the part of a document the citation checks read: a leaf
-// keeps its frontmatter and Tier-2 markers only, every other document is read
+// keeps its frontmatter and statement markers only, every other document is read
 // whole; code is blanked either way.
-func inScopeText(text string) string {
+func inScopeText(text string, leaf bool) string {
 	text = kb.StripCodeSplitLines(text)
-	fm := frontmatterSpans(text)
-	kind := ""
-	if fm != nil {
-		if m := leafKindRE.FindStringSubmatch(text[fm[0][0]:fm[0][1]]); m != nil {
-			kind = m[1]
-		}
-	}
-	if kind != kb.DocumentLeaf {
+	if !leaf {
 		return text
 	}
-	keep := append(fm, tier2MarkerRE.FindAllStringIndex(text, -1)...)
+	fm := frontmatterSpans(text)
+	keep := append(fm, markerCommentRE.FindAllStringIndex(text, -1)...)
 	var b strings.Builder
 	for i, r := range text {
 		if r == '\n' || slices.ContainsFunc(keep, func(s []int) bool { return s[0] <= i && i < s[1] }) {
@@ -97,14 +85,14 @@ func inScopeText(text string) string {
 // declaration document, each declaration's own body.
 func proseOnly(text string, declarations bool) string {
 	text = blankSpans(text, frontmatterSpans(text))
-	for _, re := range []*regexp.Regexp{tier2MarkerRE, citationLinkRE} {
+	for _, re := range []*regexp.Regexp{markerCommentRE, citationLinkRE} {
 		text = blankSpans(text, re.FindAllStringIndex(text, -1))
 	}
 	lines := strings.Split(text, "\n")
 	inDeclaration, inField := false, false
 	for i, line := range lines {
 		if declarations {
-			if declarationRE.MatchString(line) || invariantDeclRE.MatchString(line) {
+			if declarationRE.MatchString(line) {
 				inDeclaration = true
 			} else if h := headingRE.FindStringSubmatch(line); h != nil && len(h[1]) <= 3 {
 				inDeclaration = false
@@ -115,7 +103,7 @@ func proseOnly(text string, declarations bool) string {
 		} else if inField && !fieldContRE.MatchString(line) {
 			inField = false
 		}
-		if inDeclaration || inField || declarations && axiomBulletRE.MatchString(line) {
+		if inDeclaration || inField {
 			lines[i] = strings.Repeat(" ", utf8.RuneCountInString(line))
 		}
 	}
@@ -142,7 +130,6 @@ func channelFindings(rel, text string, declarations bool) []Finding {
 			re     *regexp.Regexp
 			remedy string
 		}{
-			{plainInvariantRE, "plain-numbered invariant reference in prose"},
 			{invariantIDRE, "invariant id in prose outside its declaration section"},
 			{plainAxiomRE, "axiom token in prose outside its declaration section"},
 			{nodeIDPattern, "bare claim/experiment/analysis id in prose"},
@@ -228,88 +215,76 @@ func domainOf(canonicalPath string) string {
 	return ""
 }
 
-func foreignEdgeFindings(rel, text string, domains map[string]string, edges map[[2]string]bool) []Finding {
+// foreignEdgeFindings is a finding per id a claim's, an analysis's or a work's
+// rationale or strengthen-by item names in another domain than the node's own,
+// where no edge has the named node as its source and the node as its target. A
+// node whose record carries a no-edge reason is exempt, and a node with no
+// canonical path has no domain.
+func foreignEdgeFindings(x derivation) []Finding {
+	domains := map[string]string{}
+	for _, r := range x.rows.Nodes {
+		if r.CanonicalPath != "" {
+			domains[r.ID] = domainOf(r.CanonicalPath)
+		}
+	}
+	edges := map[[2]string]bool{}
+	for _, e := range x.edges {
+		edges[[2]string{e.Target, e.Source}] = true
+	}
+	type prose struct {
+		id, noEdge string
+		texts      []string
+	}
+	var nodes []prose
+	for _, n := range x.g.Claims {
+		nodes = append(nodes, prose{n.ID, n.NoEdge, slices.Concat([]string{n.Rationale}, n.StrengthenBy)})
+	}
+	for _, n := range x.g.Analyses {
+		nodes = append(nodes, prose{n.ID, n.NoEdge, []string{n.Rationale}})
+	}
+	for _, n := range x.g.Works {
+		nodes = append(nodes, prose{id: n.ID, texts: []string{n.Rationale}})
+	}
 	var out []Finding
-	entry, exempt := "", false
-	for n, line := range strings.Split(text, "\n") {
-		if m := entryMarkerRE.FindStringSubmatch(line); m != nil {
-			entry, exempt = m[1], false
+	for _, n := range nodes {
+		own, ok := domains[n.id]
+		if !ok || n.noEdge != "" {
 			continue
 		}
-		if entry == "" {
-			continue
-		}
-		if noEdgeRE.MatchString(line) {
-			exempt = true
-			continue
-		}
-		own, ok := domains[entry]
-		if !ok || exempt {
-			continue
-		}
-		for _, ref := range kb.NodeIDs(line) {
-			if ref == entry {
-				continue
+		for _, text := range n.texts {
+			for _, ref := range kb.NodeIDs(text) {
+				other, ok := domains[ref]
+				if ref == n.id || !ok || other == own || edges[[2]string{n.id, ref}] {
+					continue
+				}
+				out = append(out, Finding{Check: checkEdge, Path: kb.GraphNodesFile,
+					Detail: fmt.Sprintf("%s: %s (domain %q) references foreign-domain %s (domain %q) with no premise edge", kb.GraphNodesFile, n.id, own, ref, other)})
 			}
-			other, ok := domains[ref]
-			if !ok || other == own || edges[[2]string{entry, ref}] {
-				continue
-			}
-			out = append(out, citation(checkEdge, rel, n+1, "%s (domain %q) references foreign-domain %s (domain %q) with no premise edge", entry, own, ref, other))
 		}
 	}
 	return out
 }
 
-// indexMaps is the node domains and the (entry, premise) pairs the index
-// records: a premise bullet flip yields an edge whose target is the entry and
-// whose source the id it names, so the pair is keyed that way round.
-func indexMaps(src *kb.Source) (map[string]string, map[[2]string]bool, error) {
-	domains := map[string]string{}
-	edges := map[[2]string]bool{}
-	read := func(name string, each func(map[string]any)) error {
-		recs, _, _, err := recordLines(src, name)
-		for _, v := range recs {
-			if rec, ok := v.(map[string]any); ok {
-				each(rec)
-			}
-		}
-		return err
-	}
-	err := read(kb.IndexClaims, func(rec map[string]any) {
-		id, okID := rec["id"].(string)
-		p, okPath := rec["canonical_path"].(string)
-		if okID && okPath {
-			domains[id] = domainOf(p)
-		}
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	err = read(kb.IndexEdges, func(rec map[string]any) {
-		s, okS := rec["source"].(string)
-		t, okT := rec["target"].(string)
-		if okS && okT {
-			edges[[2]string{t, s}] = true
-		}
-	})
-	return domains, edges, err
-}
-
 // CitationFindings is the citation-grammar gate over every authored document
 // of the KB: ids and axiom tokens only in sanctioned channels, every citation
 // link resolving inside kb-root to a file, every quoted excerpt short and
-// present at its anchor, and every foreign-domain id in a register entry
-// backed by a premise edge. Leaf bodies are out of scope.
+// present at its anchor, and every foreign-domain id a node record's prose
+// names backed by a premise edge. Leaf bodies are out of scope, and register
+// pages, which refresh renders from the records, are out of the channel check.
+// A KB state Derive refuses is its refusal.
 func CitationFindings(src *kb.Source) ([]Finding, error) {
 	root := src.Root()
-	declarations, err := declarationDocuments(src)
+	x, err := loadDerivation(src)
 	if err != nil {
 		return nil, err
 	}
-	domains, edges, err := indexMaps(src)
+	declarations, err := declarationDocument(src)
 	if err != nil {
 		return nil, err
+	}
+	pages := map[string]bool{}
+	for _, p := range x.pagePositions() {
+		pages[p] = true
 	}
 	files, err := kb.MarkdownFiles(src)
 	if err != nil {
@@ -321,44 +296,35 @@ func CitationFindings(src *kb.Source) ([]Finding, error) {
 		if err != nil {
 			return nil, err
 		}
-		text := inScopeText(raw)
 		relPath, err := filepath.Rel(root, file)
 		if err != nil {
 			return nil, err
 		}
 		rel := filepath.ToSlash(relPath)
+		text := inScopeText(raw, x.d.kinds[rel] == kb.DocumentLeaf)
 		info, err := os.Stat(file)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
-		sanctioned := err == nil && slices.ContainsFunc(declarations, func(d fs.FileInfo) bool { return os.SameFile(info, d) })
-		out = append(out, channelFindings(rel, text, sanctioned)...)
+		if !pages[rel] {
+			sanctioned := err == nil && declarations != nil && os.SameFile(info, declarations)
+			out = append(out, channelFindings(rel, text, sanctioned)...)
+		}
 		links, err := citationLinkFindings(src, rel, text, file)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, links...)
-		if filepath.Base(file) == kb.RegisterFile {
-			out = append(out, foreignEdgeFindings(rel, text, domains, edges)...)
-		}
 	}
-	return out, nil
+	return append(out, foreignEdgeFindings(x)...), nil
 }
 
-// declarationDocuments is every document whose declarations the citation gate
-// sanctions: the axioms.md a KB declares its axioms in, and the legacy
-// invariants.md or AGENTS.md a converted KB may still carry declarations in.
-func declarationDocuments(src *kb.Source) ([]fs.FileInfo, error) {
-	var out []fs.FileInfo
-	for _, name := range []string{kb.AxiomsFile, kb.InvariantsFile, kb.AgentsFile} {
-		info, err := os.Stat(src.KBPath(name))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, info)
+// declarationDocument is the axioms.md a KB declares its axioms in, whose
+// declarations the citation gate sanctions; nil where the KB has none.
+func declarationDocument(src *kb.Source) (fs.FileInfo, error) {
+	info, err := os.Stat(src.KBPath(kb.AxiomsFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
 	}
-	return out, nil
+	return info, err
 }

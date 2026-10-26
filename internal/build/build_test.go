@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -15,9 +16,12 @@ import (
 	"time"
 
 	"kbase/internal/buildrecords"
+	"kbase/internal/buildstore"
+	"kbase/internal/buildstore/storetest"
 	"kbase/internal/claimgraph"
 	"kbase/internal/config"
 	"kbase/internal/filelock"
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/latex/pandoc"
@@ -28,30 +32,20 @@ import (
 	"kbase/internal/write"
 )
 
-func TestResolveStage(t *testing.T) {
-	for name, want := range map[string]string{
-		"phase-3a": "phase-3a", "  Validation   Gate ": "phase-3a", "DEPENDS-ATTRIBUTED": "depends-attributed",
-		"claim discovery":         "claims-discovered",
-		"co-linear claims culled": "claims-culled",
-	} {
-		if s, ok := ResolveStage(name); !ok || s.ID != want {
-			t.Errorf("ResolveStage(%q) = %v, %t; want %s", name, s, ok, want)
+// TestEveryStepHasItsRun: the step table's shape is buildstore's and what each
+// step does is the runner's, so each step names a run and each run a step.
+func TestEveryStepHasItsRun(t *testing.T) {
+	ids := map[string]bool{}
+	for _, s := range buildstore.Steps {
+		ids[s.ID] = true
+		if stepRuns[s.ID] == nil {
+			t.Errorf("step %s (%s) has no run", s.ID, s.Stage)
 		}
 	}
-	if _, ok := ResolveStage("phase-5"); ok {
-		t.Error("a name outside the vocabulary must resolve to no stage")
-	}
-}
-
-func TestDroppedRowsFollowInference(t *testing.T) {
-	var dropped []string
-	for _, r := range rows {
-		if !r.applies(true) {
-			dropped = append(dropped, r.id)
+	for id := range stepRuns {
+		if !ids[id] {
+			t.Errorf("a run is keyed by %s, which names no step", id)
 		}
-	}
-	if strings.Join(dropped, ",") != "discover.build,unmarked.build,cull.build,ov.docs" {
-		t.Errorf("rows dropped under --no-inference = %q, want the four that spend it", dropped)
 	}
 }
 
@@ -72,13 +66,6 @@ func TestKBRootState(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(kbRootPopulated)
-}
-
-func TestShellJoin(t *testing.T) {
-	got := ShellJoin([]string{"kbase", "build", "/a b/p.tex", "--state-dir", "/s/it's"})
-	if want := `kbase build '/a b/p.tex' --state-dir '/s/it'"'"'s'`; got != want {
-		t.Errorf("ShellJoin = %s, want %s", got, want)
-	}
 }
 
 // paper is a volume root whose build mints a lemma, a theorem resting on it
@@ -128,44 +115,11 @@ func newFixture(t *testing.T) fixture {
 		t.Skipf("pandoc is not usable here: %v", err)
 	}
 	base := t.TempDir()
-	gitEnv(t, base)
+	storetest.GitEnv(t, base)
 	f := fixture{repo: filepath.Join(base, "repo"), state: filepath.Join(base, "state")}
-	makeRepo(t, f.repo)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), paper)
+	storetest.MakeRepo(t, f.repo)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), paper)
 	return f
-}
-
-func writeFile(t *testing.T, path, text string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// gitEnv is git's identity, its global configuration and the state store's
-// home, all under base.
-func gitEnv(t *testing.T, base string) {
-	t.Helper()
-	for k, v := range map[string]string{
-		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@invalid",
-		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": filepath.Join(base, "gitconfig"), "XDG_STATE_HOME": filepath.Join(base, "xdg"),
-	} {
-		t.Setenv(k, v)
-	}
-}
-
-// makeRepo is the repository git init makes, without starting a process.
-func makeRepo(t *testing.T, repo string) {
-	t.Helper()
-	for _, d := range []string{".git/objects", ".git/refs/heads"} {
-		if err := os.MkdirAll(filepath.Join(repo, d), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
 }
 
 func (f fixture) options() Options {
@@ -180,9 +134,11 @@ func (f fixture) build(t *testing.T, opts Options) (string, []result.Field) {
 	return Run(context.Background(), opts)
 }
 
+// ledger opens the fixture's repository over the build's owned paths;
+// buildstore's tests keep their own copy, the fixture being each package's.
 func (f fixture) ledger(t *testing.T) *ledger.Repo {
 	t.Helper()
-	r, err := ledger.Open(f.repo, ownedPaths, log.Discard())
+	r, err := ledger.Open(f.repo, buildstore.OwnedPaths, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,15 +158,6 @@ func (f fixture) trailStages(t *testing.T) []string {
 	return stages
 }
 
-func field(fields []result.Field, key string) any {
-	for _, f := range fields {
-		if f.Key == key {
-			return f.Value
-		}
-	}
-	return nil
-}
-
 // roleValue is one key's value in a role record, nil where it carries none.
 func roleValue(record result.Record, key string) any {
 	for _, f := range record {
@@ -221,15 +168,9 @@ func roleValue(record result.Record, key string) any {
 	return nil
 }
 
-// carries is whether the document holds key at all, an absent key told apart
-// from one holding an empty value.
-func carries(fields []result.Field, key string) bool {
-	return slices.ContainsFunc(fields, func(f result.Field) bool { return f.Key == key })
-}
-
 // details is the details of the items under key.
 func details(fields []result.Field, key string) []string {
-	items, _ := field(fields, key).([]result.Item)
+	items, _ := storetest.Field(fields, key).([]result.Item)
 	var out []string
 	for _, it := range items {
 		out = append(out, it.Detail)
@@ -239,7 +180,7 @@ func details(fields []result.Field, key string) []string {
 
 func stageIDs(through string) []string {
 	var ids []string
-	for _, s := range Stages {
+	for _, s := range buildstore.Stages {
 		ids = append(ids, s.ID)
 		if s.ID == through {
 			break
@@ -252,7 +193,7 @@ func stageIDs(through string) []string {
 func snapshot(t *testing.T, repo string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
-	for _, owned := range ownedPaths {
+	for _, owned := range buildstore.OwnedPaths {
 		root := filepath.Join(repo, owned)
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if errors.Is(err, fs.ErrNotExist) && p == root {
@@ -304,7 +245,7 @@ func reference(t *testing.T) string {
 	}
 	dir := t.TempDir()
 	for p, text := range referenceFiles {
-		writeFile(t, filepath.Join(dir, filepath.FromSlash(p)), text)
+		storetest.WriteFile(t, filepath.Join(dir, filepath.FromSlash(p)), text)
 	}
 	return dir
 }
@@ -315,11 +256,11 @@ func TestBuildEndToEnd(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
-	if through, _ := field(fields, "through").(string); through != Stages[len(Stages)-1].ID || carries(fields, "resume") {
-		t.Errorf("a build walked to the end reports through %q and resume %v, want the last stage and none: it has nothing left to continue", through, field(fields, "resume"))
+	if through, _ := storetest.Field(fields, "through").(string); through != buildstore.Stages[len(buildstore.Stages)-1].ID || storetest.Carries(fields, "resume") {
+		t.Errorf("a build walked to the end reports through %q and resume %v, want the last stage and none: it has nothing left to continue", through, storetest.Field(fields, "resume"))
 	}
 	for _, key := range []string{"provider", "provider-rule", "provider-layer", "roles"} {
-		if carries(fields, key) {
+		if storetest.Carries(fields, key) {
 			t.Errorf("a build spending no inference = %v, want no %s: it resolved no endpoint", fields, key)
 		}
 	}
@@ -367,15 +308,15 @@ func TestBuildEndToEnd(t *testing.T) {
 
 	if outcome, fields := f.build(t, f.options()); outcome != result.Unchanged {
 		t.Errorf("a re-run over a finished build = %s %v, want unchanged", outcome, fields)
-	} else if carries(fields, "through") || carries(fields, "resume") {
+	} else if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
 		t.Errorf("an unchanged build = %v, want neither through nor resume: it entered no stage", fields)
 	}
 	opts := f.options()
 	opts.VolumeRoots = append(opts.VolumeRoots, filepath.Join(f.repo, "more.tex"))
-	writeFile(t, opts.VolumeRoots[1], paper)
+	storetest.WriteFile(t, opts.VolumeRoots[1], paper)
 	if outcome, fields := f.build(t, opts); outcome != result.Refused || details(fields, "refusals") == nil {
 		t.Errorf("a re-run over a finished build with another volume root = %s %v, want refused", outcome, fields)
-	} else if carries(fields, "through") || carries(fields, "resume") {
+	} else if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
 		t.Errorf("a refusal before the walk = %v, want neither through nor resume: it recorded no boundary", fields)
 	}
 }
@@ -388,7 +329,7 @@ func TestStampLeavesAnAuthoredDocument(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 	const authored = "# The project's own conventions\n"
-	writeFile(t, filepath.Join(f.repo, kb.KBDir, kbdocs.ConventionsFile), authored)
+	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, kbdocs.ConventionsFile), authored)
 	if _, err := f.ledger(t).Record("authored", "the project's own conventions", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +353,7 @@ func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
 	}
 	g := newFixture(t)
 	for p, text := range snapshot(t, f.repo) {
-		writeFile(t, filepath.Join(g.repo, filepath.FromSlash(p)), text)
+		storetest.WriteFile(t, filepath.Join(g.repo, filepath.FromSlash(p)), text)
 	}
 	outcome, fields := g.build(t, g.options())
 	if items := details(fields, "refusals"); outcome != result.Refused || len(items) != 1 || !strings.Contains(items[0], kbRootPopulated) {
@@ -423,12 +364,18 @@ func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
 	}
 }
 
+// holderOf is the record a run of kind writes when it takes the store: this
+// process, at its start.
+func holderOf(kind buildstore.Kind) buildstore.Holder {
+	return buildstore.Holder{PID: os.Getpid(), Started: stamp(time.Now()), Kind: kind}
+}
+
 func TestLockRefusesASecondBuilder(t *testing.T) {
 	f := newFixture(t)
 	if err := os.MkdirAll(f.state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	held, err := takeLock(f.state, time.Now())
+	held, err := takeLock(f.state, holderOf(buildstore.KindBuild))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,26 +384,35 @@ func TestLockRefusesASecondBuilder(t *testing.T) {
 	if items := details(fields, "refusals"); outcome != result.Retry || len(items) != 1 || !strings.Contains(items[0], "holds the state store") {
 		t.Errorf("a second builder = %s %v, want retry naming the holder", outcome, fields)
 	}
-	if events, _ := readProgress(f.state); len(events) != 0 {
+	if events, _ := buildstore.ReadProgress(f.state); len(events) != 0 {
 		t.Errorf("the refused builder wrote %d progress events", len(events))
 	}
 }
 
-func TestRunLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
+func TestOperationLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
 	f := newFixture(t)
 	other := filepath.Join(filepath.Dir(f.state), "other-state")
-	held, err := takeRunLock(filepath.Join(f.repo, kb.KBDir), other)
+	held, err := takeOperationLock(filepath.Join(f.repo, kb.KBDir), other)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
-	outcome, fields := f.build(t, f.options())
-	items, _ := field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkLock || items[0].Path != other ||
-		items[0].Remedy != "" || items[0].Detail != "a build is running; its state-dir is "+other {
-		t.Errorf("a second build through another state-dir = %s %v, want refused naming %s", outcome, fields, other)
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if events, _ := readProgress(f.state); len(events) != 0 {
+	store, err := takeLock(other, holderOf(buildstore.KindBuild))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Release()
+	outcome, fields := f.build(t, f.options())
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	want := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), other)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckLock || items[0].Path != other ||
+		items[0].Remedy != "" || items[0].Detail != want {
+		t.Errorf("a second build through another state-dir = %s %v, want refused naming %s", outcome, fields, want)
+	}
+	if events, _ := buildstore.ReadProgress(f.state); len(events) != 0 {
 		t.Errorf("the refused build wrote %d progress events", len(events))
 	}
 	if got := f.trailStages(t); len(got) != 0 {
@@ -464,29 +420,57 @@ func TestRunLockRefusesABuildThroughAnotherStateDir(t *testing.T) {
 	}
 }
 
-// TestRunLockHeldBeforeItsStateDirIsWritten: a run lock taken and not yet
-// holding its state directory is a build starting — a retry for a second
-// build, no refusal for a writer — never a refusal naming an empty path.
-func TestRunLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
+// TestOperationLockRefusesABuildNamingAScoreRun: the lock's holder is named
+// by the verb its record carries, so a build turned away by a scoring run is
+// told a score run holds the KB, and under which pid.
+func TestOperationLockRefusesABuildNamingAScoreRun(t *testing.T) {
+	const scorePID = 1<<30 + 7 // larger than any pid a running process holds
+	f := newFixture(t)
+	other := filepath.Join(filepath.Dir(f.state), "score-state")
+	held, err := takeOperationLock(filepath.Join(f.repo, kb.KBDir), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	record, err := json.Marshal(buildstore.Holder{PID: scorePID, Started: stamp(time.Now()), Kind: buildstore.KindScore, Run: "run-abcdefgh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	storetest.WriteFile(t, buildstore.HolderPath(other), string(record))
+	outcome, fields := f.build(t, f.options())
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	want := fmt.Sprintf("a score run (pid %d) is running; its state-dir is %s", scorePID, other)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckLock || items[0].Path != other || items[0].Detail != want {
+		t.Errorf("a build under a scoring run = %s %v, want refused naming %q", outcome, fields, want)
+	}
+}
+
+// TestOperationLockHeldBeforeItsStateDirIsWritten: an operation lock taken and
+// not yet holding its state directory is a run starting — a retry for a second
+// run, no refusal for a writer — never a refusal naming an empty path.
+func TestOperationLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
-	held, err := filelock.Acquire(runLockPath(kbRoot), 0)
+	held, err := filelock.Acquire(operationLockPath(kbRoot), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Release()
-	var r retry
-	if l, err := takeRunLock(kbRoot, t.TempDir()); !errors.As(err, &r) {
+	var r buildstore.Retry
+	if l, err := takeOperationLock(kbRoot, t.TempDir()); !errors.As(err, &r) {
 		if l != nil {
 			l.Release()
 		}
-		t.Errorf("a second build against a starting one: %v, want retry", err)
+		t.Errorf("a second run against a starting one: %v, want retry", err)
 	}
-	if items, err := RunningBuild(kbRoot); items != nil || err != nil {
-		t.Errorf("a writer against a starting build: %v, %v; want neither refusal nor error", items, err)
+	if items, err := RunningOperation(kbRoot); items != nil || err != nil {
+		t.Errorf("a writer against a starting run: %v, %v; want neither refusal nor error", items, err)
 	}
 }
 
@@ -508,8 +492,8 @@ func TestStatusSeesABuildWaitingOutAWriter(t *testing.T) {
 	}()
 	running := false
 	for deadline := time.Now().Add(write.LockWait / 2); !running && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(f.state, progressFile)); err == nil {
-			running = statusOf(t, f).state == stateRunning
+		if _, err := os.Stat(filepath.Join(f.state, buildstore.ProgressFile)); err == nil {
+			running = statusOf(t, f).state == buildstore.StateRunning
 		}
 	}
 	release()
@@ -521,14 +505,14 @@ func TestStatusSeesABuildWaitingOutAWriter(t *testing.T) {
 	}
 }
 
-func TestRunLockPathFollowsAGitFile(t *testing.T) {
+func TestOperationLockPathFollowsAGitFile(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "wt")
 	gitdir := filepath.Join(base, "main", ".git", "worktrees", "wt")
 	for _, tc := range []struct{ name, dotGit, want string }{
-		{"a .git directory", "", filepath.Join(repo, ".git", runLockFile)},
-		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, runLockFile)},
-		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, runLockFile)},
+		{"a .git directory", "", filepath.Join(repo, ".git", operationLockFile)},
+		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, operationLockFile)},
+		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, operationLockFile)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := os.RemoveAll(repo); err != nil {
@@ -539,10 +523,10 @@ func TestRunLockPathFollowsAGitFile(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				writeFile(t, filepath.Join(repo, ".git"), tc.dotGit)
+				storetest.WriteFile(t, filepath.Join(repo, ".git"), tc.dotGit)
 			}
-			if got := runLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
-				t.Errorf("runLockPath = %s, want %s", got, tc.want)
+			if got := operationLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
+				t.Errorf("operationLockPath = %s, want %s", got, tc.want)
 			}
 		})
 	}
@@ -556,10 +540,10 @@ func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 	stray := filepath.Join(f.repo, kb.KBDir, "stray.md")
-	writeFile(t, stray, "a hand edit\n")
+	storetest.WriteFile(t, stray, "a hand edit\n")
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
-	if items, _ := field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != checkDirtyPaths || items[0].Path != "kb-root/stray.md" {
+	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != checkDirtyPaths || items[0].Path != "kb-root/stray.md" {
 		t.Errorf("a build over unaccounted dirt = %s %v, want refused naming it", outcome, fields)
 	}
 	if _, err := os.Stat(stray); err != nil {
@@ -570,8 +554,8 @@ func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 	}
 }
 
-// TestSpineStampsTheFormat: the spine's boundary commits an entry point
-// stamped with the format version; a resume over a KB a newer kbase stamped
+// TestSpineStampsTheFormat: the spine's boundary commits the format stamp
+// file holding the format version; a resume over a KB a newer kbase stamped
 // is refused, naming the format.
 func TestSpineStampsTheFormat(t *testing.T) {
 	f := newFixture(t)
@@ -580,25 +564,51 @@ func TestSpineStampsTheFormat(t *testing.T) {
 	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
-	entry := filepath.Join(f.repo, kb.KBDir, kb.EntryPointFile)
-	b, err := os.ReadFile(entry)
+	stampFile := filepath.Join(f.repo, kb.KBDir, filepath.FromSlash(kb.FormatFile))
+	b, err := os.ReadFile(stampFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stamp, _, err := kb.FormatStamp(string(b)); err != nil || stamp != kb.FormatVersion {
-		t.Errorf("the spine left the entry point stamped %q (%v), want %s:\n%s", stamp, err, kb.FormatVersion, b)
+	if stamp, err := kb.DecodeFormatStamp(b); err != nil || stamp != kb.FormatVersion {
+		t.Errorf("the spine left the KB stamped %q (%v), want %s:\n%s", stamp, err, kb.FormatVersion, b)
 	}
 	if dirty, err := f.ledger(t).Dirty(); err != nil || len(dirty) > 0 {
 		t.Errorf("the stamp is not in the spine's boundary: dirty %q, %v", dirty, err)
 	}
-	writeFile(t, entry, strings.Replace(string(b), `"`+kb.FormatVersion+`"`, `"3.0.0"`, 1))
+	storetest.WriteFile(t, stampFile, "kb-format: \"3.1.0\"\n")
 	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
-	if items, _ := field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != "kb-format" {
-		t.Errorf("a resume over a KB stamped 3.0.0 = %s %v, want refused naming the format", outcome, fields)
+	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != "kb-format" {
+		t.Errorf("a resume over a KB stamped 3.1.0 = %s %v, want refused naming the format", outcome, fields)
+	}
+}
+
+// TestResumeOverADegradedKBRefused: a spine boundary whose edge records name
+// nodes no record carries loads degraded, and a resume over it is refused,
+// one degraded item with the refresh remedy, before any stage is walked.
+func TestResumeOverADegradedKBRefused(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	dangling := kb.Graph{References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb"}}}
+	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, filepath.FromSlash(kb.GraphEdgesFile)), string(kb.EncodeEdges(dangling)))
+	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = ""
+	outcome, fields := f.build(t, opts)
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckDegraded || items[0].Remedy != index.RefreshRemedy {
+		t.Errorf("a resume over a degraded KB = %s %v, want refused, one %s item with remedy %q", outcome, fields, kb.CheckDegraded, index.RefreshRemedy)
+	}
+	if storetest.Carries(fields, "stages") {
+		t.Errorf("a refused resume walked stages: %v", fields)
 	}
 }
 
@@ -616,7 +626,7 @@ func TestKillAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range []event{{Event: eventRun, PID: 1, NoInference: true}, {Event: eventStage, Stage: "claims-declared", Total: 1}} {
+	for _, e := range []buildstore.Event{{Event: buildstore.EventRun, PID: 1, NoInference: true}, {Event: buildstore.EventStage, Stage: "claims-declared", Total: 1}} {
 		if err := p.emit(e); err != nil {
 			t.Fatal(err)
 		}
@@ -631,13 +641,13 @@ func TestKillAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, torn, string(b[:len(b)/2]))
+	storetest.WriteFile(t, torn, string(b[:len(b)/2]))
 	dirty, err := f.ledger(t).Dirty()
 	if err != nil || len(dirty) == 0 {
 		t.Fatalf("the interrupted stage left no dirt: %q, %v", dirty, err)
 	}
 
-	if state := statusOf(t, f); state.state != stateInterrupted || state.current != "claims-declared" {
+	if state := statusOf(t, f); state.state != buildstore.StateInterrupted || state.current != "claims-declared" {
 		t.Errorf("status after the kill = %+v, want interrupted in claims-declared", state)
 	}
 	opts.Through = ""
@@ -645,7 +655,7 @@ func TestKillAndResume(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
-	if restored, _ := field(fields, "restored").([]string); !slices.Equal(restored, dirty) {
+	if restored, _ := storetest.Field(fields, "restored").([]string); !slices.Equal(restored, dirty) {
 		t.Errorf("restored %q, want the interrupted stage's dirt %q", restored, dirty)
 	}
 	sameModuloIDs(t, f.repo, reference(t))
@@ -666,22 +676,22 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 	if outcome != result.Cancelled {
 		t.Fatalf("build = %s %v, want cancelled", outcome, fields)
 	}
-	if got := field(fields, "cancelled").(result.Record); got[0].Value != "claims-declared" || got[1].Value != "declared.build" {
+	if got := storetest.Field(fields, "cancelled").(result.Record); got[0].Value != "claims-declared" || got[1].Value != "declared.build" {
 		t.Errorf("cancelled = %v, want claims-declared at declared.build", got)
 	}
-	if resume, _ := field(fields, "resume").(string); !carries(fields, "through") || !strings.HasPrefix(resume, "kbase build ") {
-		t.Errorf("a cancelled build's through = %v and resume = %q, want both: an identical re-issue continues it", field(fields, "through"), resume)
+	if resume, _ := storetest.Field(fields, "resume").(string); !storetest.Carries(fields, "through") || !strings.HasPrefix(resume, "kbase build ") {
+		t.Errorf("a cancelled build's through = %v and resume = %q, want both: an identical re-issue continues it", storetest.Field(fields, "through"), resume)
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
 		t.Errorf("trail after the cancel = %q, want every stage before the one in flight", got)
 	}
-	if _, err := os.Stat(filepath.Join(f.state, lockFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(buildstore.HolderPath(f.state)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the holder lock file stands after the cancel: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.repo, ".git", runLockFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the repository's run lock stands after the cancel: %v", err)
+	if _, err := os.Stat(filepath.Join(f.repo, ".git", operationLockFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the repository's operation lock stands after the cancel: %v", err)
 	}
-	if s := statusOf(t, f); s.state != stateCancelled || s.current != "claims-declared" || s.done != 0 || s.resume == "" {
+	if s := statusOf(t, f); s.state != buildstore.StateCancelled || s.current != "claims-declared" || s.done != 0 || s.resume == "" {
 		t.Errorf("status after the cancel = %+v", s)
 	}
 	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
@@ -717,7 +727,7 @@ func TestMissingRecordsOverAChangedSourceFail(t *testing.T) {
 	if err := os.RemoveAll(filepath.Dir(records.Path(f.state))); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "Some other prose.", 1))
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "Some other prose.", 1))
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
 	if items := details(fields, "failures"); outcome != result.Failed || len(items) != 1 || !strings.Contains(items[0], "kb-root/a-small-paper/introduction.md") {
@@ -746,10 +756,10 @@ func TestLaunchRefusals(t *testing.T) {
 				if outcome != result.Bounded {
 					t.Errorf("build = %s %v, want bounded", outcome, fields)
 				}
-				if through, _ := field(fields, "through").(string); through != tc.through {
+				if through, _ := storetest.Field(fields, "through").(string); through != tc.through {
 					t.Errorf("bounded build's through = %q, want the bound it was given, %s", through, tc.through)
 				}
-				if carries(fields, "resume") {
+				if storetest.Carries(fields, "resume") {
 					t.Errorf("bounded build = %v, want no resume: its own command repeats its --through and advances nothing", fields)
 				}
 				return
@@ -758,7 +768,7 @@ func TestLaunchRefusals(t *testing.T) {
 			if outcome != result.Refused || len(items) != len(tc.want) {
 				t.Fatalf("build = %s %q, want one refusal per %q", outcome, items, tc.want)
 			}
-			if carries(fields, "through") || carries(fields, "resume") {
+			if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
 				t.Errorf("a launch refusal = %v, want neither through nor resume: it recorded no boundary", fields)
 			}
 			for i, w := range tc.want {
@@ -766,7 +776,7 @@ func TestLaunchRefusals(t *testing.T) {
 					t.Errorf("refusal %q does not name %s", items[i], w)
 				}
 			}
-			if refusals, _ := field(fields, "refusals").([]result.Item); refusals[0].Remedy != "" {
+			if refusals, _ := storetest.Field(fields, "refusals").([]result.Item); refusals[0].Remedy != "" {
 				t.Errorf("the provider refusal carries remedy %q, want none: no command clears an unconfigured provider", refusals[0].Remedy)
 			}
 			if got := f.trailStages(t); len(got) != 0 {
@@ -779,10 +789,10 @@ func TestLaunchRefusals(t *testing.T) {
 	opts.NoInference, opts.Through = false, "claims-discovered"
 	const baseURLKey = "baseUrl"
 	opts.Provider = func() (Provider, error) {
-		return Provider{}, config.Refusal{Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}
+		return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}}
 	}
 	if _, fields := f.build(t, opts); func() bool {
-		items, _ := field(fields, "refusals").([]result.Item)
+		items, _ := storetest.Field(fields, "refusals").([]result.Item)
 		return len(items) != 1 || items[0].Key != baseURLKey || items[0].Path != config.ProvidersFileName
 	}() {
 		t.Errorf("a provider lacking its base URL = %v, want the refusal keyed by the pool's baseUrl and providers.toml", fields)
@@ -800,19 +810,19 @@ func TestLaunchRefusals(t *testing.T) {
 // records no boundary and names neither.
 func TestRefusalInsideDocumentGraphCarriesThroughAndResume(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
 	outcome, fields := f.build(t, f.options())
 	if items := details(fields, "refusals"); outcome != result.Refused || len(items) != 1 || !strings.Contains(items[0], "could not load include missing.tex") {
 		t.Fatalf("a build over an unloadable include = %s %v, want refused naming it", outcome, fields)
 	}
-	if through, _ := field(fields, "through").(string); through != Stages[len(Stages)-1].ID {
-		t.Errorf("through = %q, want the bound the build was given, %s", through, Stages[len(Stages)-1].ID)
+	if through, _ := storetest.Field(fields, "through").(string); through != buildstore.Stages[len(buildstore.Stages)-1].ID {
+		t.Errorf("through = %q, want the bound the build was given, %s", through, buildstore.Stages[len(buildstore.Stages)-1].ID)
 	}
-	if resume, _ := field(fields, "resume").(string); !strings.HasPrefix(resume, "kbase build ") {
+	if resume, _ := storetest.Field(fields, "resume").(string); !strings.HasPrefix(resume, "kbase build ") {
 		t.Errorf("resume = %q, want the command that continues the refused walk", resume)
 	}
-	if stages, _ := field(fields, "stages").([]result.Record); len(stages) != 2 || stages[0][1].Value == nil ||
-		stages[1][0].Value != stageDocumentGraph || stages[1][1].Value != nil {
+	if stages, _ := storetest.Field(fields, "stages").([]result.Record); len(stages) != 2 || stages[0][1].Value == nil ||
+		stages[1][0].Value != buildstore.StageDocumentGraph || stages[1][1].Value != nil {
 		t.Errorf("stages = %v, want the start boundary and the stage the refusal stopped in, uncommitted", stages)
 	}
 }
@@ -822,10 +832,10 @@ func TestRefusalInsideDocumentGraphCarriesThroughAndResume(t *testing.T) {
 // file the reader would have inlined.
 func TestIncludeOutsideTheVolumeRefused(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, filepath.Join(filepath.Dir(f.repo), "secret.tex"), "Outside the volume.\n")
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{../secret.tex}\nSome opening prose.", 1))
+	storetest.WriteFile(t, filepath.Join(filepath.Dir(f.repo), "secret.tex"), "Outside the volume.\n")
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{../secret.tex}\nSome opening prose.", 1))
 	outcome, fields := f.build(t, f.options())
-	items, _ := field(fields, "refusals").([]result.Item)
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInclude || items[0].Path != "../secret.tex" {
 		t.Fatalf("a build over an include outside the volume = %s %v, want one include refusal naming it", outcome, fields)
 	}
@@ -844,14 +854,14 @@ func TestFailedMidWalkCarriesThroughAndResume(t *testing.T) {
 	// the stage's reachability check finds it carrying no up-link and fails.
 	opts.beforeUnit = func(_, unit string) {
 		if unit == "dg.build" {
-			writeFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "# Stray\n")
+			storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "# Stray\n")
 		}
 	}
 	outcome, fields := f.build(t, opts)
 	if items := details(fields, "failures"); outcome != result.Failed || len(items) == 0 {
 		t.Fatalf("a build whose document graph found a stray document = %s %v, want failed naming it", outcome, fields)
 	}
-	if !carries(fields, "through") || !carries(fields, "resume") {
+	if !storetest.Carries(fields, "through") || !storetest.Carries(fields, "resume") {
 		t.Errorf("a failure inside a stage = %v, want through and resume: the walk it stopped in is resumable", fields)
 	}
 }
@@ -866,11 +876,11 @@ func TestStaleIndexLockRefusedByName(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 	lock := filepath.Join(f.repo, ".git", "index.lock")
-	writeFile(t, lock, "")
+	storetest.WriteFile(t, lock, "")
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
-	items, _ := field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkLock || !strings.HasSuffix(items[0].Path, filepath.Join(".git", "index.lock")) {
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckLock || !strings.HasSuffix(items[0].Path, filepath.Join(".git", "index.lock")) {
 		t.Fatalf("a build over a stale index lock = %s %+v, want refused naming the lock", outcome, items)
 	}
 	if err := os.Remove(lock); err != nil {
@@ -926,8 +936,8 @@ func TestInputsRefusal(t *testing.T) {
 func TestInputsSpelledOtherwise(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
-	writeFile(t, filepath.Join(repo, "papers", "paper.tex"), paper)
-	writeFile(t, filepath.Join(repo, "refs.bib"), "")
+	storetest.WriteFile(t, filepath.Join(repo, "papers", "paper.tex"), paper)
+	storetest.WriteFile(t, filepath.Join(repo, "refs.bib"), "")
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(repo, link); err != nil {
 		t.Fatal(err)
@@ -967,15 +977,15 @@ func TestResumeWithOtherInputsRefused(t *testing.T) {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
 	stray := filepath.Join(f.repo, kb.KBDir, "stray.md")
-	writeFile(t, stray, "a hand edit\n")
+	storetest.WriteFile(t, stray, "a hand edit\n")
 	before := snapshot(t, f.repo)
 
 	more := filepath.Join(f.repo, "more.tex")
-	writeFile(t, more, paper)
+	storetest.WriteFile(t, more, paper)
 	opts.Through = ""
 	opts.VolumeRoots = append(opts.VolumeRoots, more)
 	outcome, fields := f.build(t, opts)
-	items, _ := field(fields, "refusals").([]result.Item)
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "<volume-root>" ||
 		items[0].Path != f.ledger(t).Root || !strings.Contains(items[0].Detail, "added more.tex") {
 		t.Fatalf("a resume with another volume root = %s %+v, want refused naming it", outcome, items)
@@ -1019,17 +1029,17 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 	if _, err := f.ledger(t).Record("depends-attributed", "dependency attribution", ""); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "a hand edit\n")
+	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "a hand edit\n")
 	before := snapshot(t, f.repo)
 
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
-	items, _ := field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkTrail || items[0].Path != f.ledger(t).Root ||
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckTrail || items[0].Path != f.ledger(t).Root ||
 		!strings.Contains(items[0].Detail, "depends-attributed") || !strings.Contains(items[0].Detail, "claims-culled") {
 		t.Fatalf("a resume over an out-of-order trail = %s %+v, want refused naming both stages", outcome, items)
 	}
-	if restored := field(fields, "restored"); restored != nil {
+	if restored := storetest.Field(fields, "restored"); restored != nil {
 		t.Errorf("the refusal restored %v", restored)
 	}
 	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
@@ -1044,15 +1054,15 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
-	opts.Through, opts.ConfigDir = stageDocumentGraph, filepath.Join(f.repo, "config")
+	opts.Through, opts.ConfigDir = buildstore.StageDocumentGraph, filepath.Join(f.repo, "config")
 	opts.Bibliographies = []string{filepath.Join(f.repo, "refs.bib")}
-	writeFile(t, opts.Bibliographies[0], "")
-	writeFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
+	storetest.WriteFile(t, opts.Bibliographies[0], "")
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
 	outcome, fields := f.build(t, opts)
 	if outcome != result.Refused {
-		t.Fatalf("build = %s %v, want refused inside %s", outcome, fields, stageDocumentGraph)
+		t.Fatalf("build = %s %v, want refused inside %s", outcome, fields, buildstore.StageDocumentGraph)
 	}
-	resume, _ := field(fields, "resume").(string)
+	resume, _ := storetest.Field(fields, "resume").(string)
 	for _, want := range []string{"--bibliography " + opts.Bibliographies[0], "--no-inference", "--state-dir " + f.state,
 		"--config-dir " + opts.ConfigDir} {
 		if !strings.Contains(resume, want) {
@@ -1074,6 +1084,8 @@ func TestOutsideAWorktree(t *testing.T) {
 	}
 }
 
+// statusSnapshot and statusOf read buildstore.Status; buildstore's tests keep
+// a copy of their own, which a package its in-package tests import cannot hold.
 type statusSnapshot struct {
 	state, current, resume string
 	done, total            int
@@ -1083,18 +1095,18 @@ type statusSnapshot struct {
 
 func statusOf(t *testing.T, f fixture) statusSnapshot {
 	t.Helper()
-	outcome, fields := Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+	outcome, fields := buildstore.Status(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
 	if outcome != result.Done {
 		t.Fatalf("status = %s %v", outcome, fields)
 	}
-	s := statusSnapshot{state: field(fields, "state").(string), pid: field(fields, "pid")}
-	if r, ok := field(fields, "resume").(string); ok {
+	s := statusSnapshot{state: storetest.Field(fields, "state").(string), pid: storetest.Field(fields, "pid")}
+	if r, ok := storetest.Field(fields, "resume").(string); ok {
 		s.resume = r
 	}
-	if c, ok := field(fields, "current").(result.Record); ok {
+	if c, ok := storetest.Field(fields, "current").(result.Record); ok {
 		s.current, s.done, s.total = c[0].Value.(string), c[1].Value.(int), c[2].Value.(int)
 	}
-	for _, st := range field(fields, "stages").([]result.Record) {
+	for _, st := range storetest.Field(fields, "stages").([]result.Record) {
 		if st[1].Value != nil {
 			s.recorded++
 		}
@@ -1104,7 +1116,7 @@ func statusOf(t *testing.T, f fixture) statusSnapshot {
 
 func TestStatusAtEveryState(t *testing.T) {
 	f := newFixture(t)
-	if s := statusOf(t, f); s.state != stateNone || s.pid != nil || s.current != stageStart || s.recorded != 0 {
+	if s := statusOf(t, f); s.state != buildstore.StateNone || s.pid != nil || s.current != buildstore.StageStart || s.recorded != 0 {
 		t.Errorf("before any build: %+v", s)
 	}
 
@@ -1114,20 +1126,20 @@ func TestStatusAtEveryState(t *testing.T) {
 		t.Fatal(outcome)
 	}
 	s := statusOf(t, f)
-	if s.state != stateBounded || s.recorded != 4 || s.current != "claims-discovered" || s.resume != "" {
+	if s.state != buildstore.StateBounded || s.recorded != 4 || s.current != "claims-discovered" || s.resume != "" {
 		t.Errorf("bounded: %+v, want bounded with no resume to hand out", s)
 	}
 
 	opts.Through = "nonsense"
 	f.build(t, opts)
-	if s := statusOf(t, f); s.state != stateBounded {
+	if s := statusOf(t, f); s.state != buildstore.StateBounded {
 		t.Errorf("a refused launch moved the state: %+v", s)
 	}
 
 	if err := os.MkdirAll(f.state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	held, err := takeLock(f.state, time.Now())
+	held, err := takeLock(f.state, holderOf(buildstore.KindBuild))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,23 +1147,23 @@ func TestStatusAtEveryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range []event{{Event: eventRun, PID: os.Getpid(), NoInference: true}, {Event: eventStage, Stage: "claims-discovered", Total: 0}} {
+	for _, e := range []buildstore.Event{{Event: buildstore.EventRun, PID: os.Getpid(), NoInference: true}, {Event: buildstore.EventStage, Stage: "claims-discovered", Total: 0}} {
 		if err := p.emit(e); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s := statusOf(t, f); s.state != stateRunning || s.pid != os.Getpid() || s.resume != "" {
+	if s := statusOf(t, f); s.state != buildstore.StateRunning || s.pid != os.Getpid() || s.resume != "" {
 		t.Errorf("running: %+v", s)
 	}
 	held.Release()
-	if s := statusOf(t, f); s.state != stateInterrupted || s.current != "claims-discovered" {
+	if s := statusOf(t, f); s.state != buildstore.StateInterrupted || s.current != "claims-discovered" {
 		t.Errorf("a holder gone with no end recorded: %+v", s)
 	}
-	if err := p.emit(event{Event: eventEnd, Outcome: result.Failed, Items: []result.Item{{Check: checkError, Detail: "a check failed"}}}); err != nil {
+	if err := p.emit(buildstore.Event{Event: buildstore.EventEnd, Outcome: result.Failed, Items: []result.Item{{Check: buildstore.CheckError, Detail: "a check failed"}}}); err != nil {
 		t.Fatal(err)
 	}
 	p.close()
-	_, fields := Status(MonitorOptions{StateDir: f.state, WorkDir: f.repo})
+	_, fields := buildstore.Status(buildstore.MonitorOptions{StateDir: f.state, WorkDir: f.repo})
 	if items := details(fields, "recent-refusals"); !slices.Contains(items, "a check failed") {
 		t.Errorf("recent refusals = %q", items)
 	}
@@ -1160,200 +1172,9 @@ func TestStatusAtEveryState(t *testing.T) {
 	if outcome, _ := f.build(t, opts); outcome != result.Done {
 		t.Fatal(outcome)
 	}
-	if s := statusOf(t, f); s.state != stateFinished || s.recorded != len(Stages) || s.current != "" || s.resume != "" {
+	if s := statusOf(t, f); s.state != buildstore.StateFinished || s.recorded != len(buildstore.Stages) || s.current != "" || s.resume != "" {
 		t.Errorf("finished: %+v", s)
 	}
-}
-
-// TestStatusReportsAKilledBuild: a build killed inside a stage leaves the
-// state store's holder record naming a process that is gone and a progress
-// record that never ended. status reports interrupted, naming the stage, its
-// pid and the command that resumes it, and reports failed once an end event
-// says how the run ended.
-func TestStatusReportsAKilledBuild(t *testing.T) {
-	const deadPID = 1 << 30 // larger than any pid a running process holds
-	base := t.TempDir()
-	gitEnv(t, base)
-	repo := filepath.Join(base, "repo")
-	makeRepo(t, repo)
-	writeFile(t, filepath.Join(repo, kb.KBDir, kb.EntryPointFile), "# Knowledge Base\n")
-	f := fixture{repo: repo, state: filepath.Join(base, "state")}
-	if _, err := f.ledger(t).Record(Stages[0].ID, Stages[0].Display, ""); err != nil {
-		t.Fatal(err)
-	}
-	resume := []string{"kbase", "build", "/papers/paper.tex", "--state-dir", f.state}
-	b, err := json.Marshal(holder{PID: deadPID, Started: "2026-01-01T00:00:00Z"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(f.state, lockFile), string(b))
-	p, err := openProgress(f.state, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range []event{
-		{Event: eventRun, PID: deadPID, NoInference: true, Resume: resume},
-		{Event: eventStage, Stage: stageDocumentGraph, Total: 2},
-	} {
-		if err := p.emit(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s := statusOf(t, f)
-	if s.state != stateInterrupted || s.current != stageDocumentGraph || s.done != 0 || s.total != 2 || s.pid != deadPID || s.resume != ShellJoin(resume) {
-		t.Errorf("status of a build killed in %s = %+v, want interrupted there with pid %d and its resume command", stageDocumentGraph, s, deadPID)
-	}
-	if err := p.emit(event{Event: eventEnd, Outcome: result.Failed, Items: []result.Item{{Check: checkError, Detail: "a check failed"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.close(); err != nil {
-		t.Fatal(err)
-	}
-	if s := statusOf(t, f); s.state != stateFailed {
-		t.Errorf("status after the run's failed end event = %+v, want failed", s)
-	}
-}
-
-// TestReadStateNamesTheRun: ReadState is status's derivation without the
-// commit trail — the state, and the pid and start stamp that name one run and
-// no other — read from the store's holder lock and progress record alone.
-func TestReadStateNamesTheRun(t *testing.T) {
-	const deadPID = 1 << 30 // larger than any pid a running process holds
-	state := t.TempDir()
-	if got, err := ReadState(state); err != nil || got != (State{State: stateNone}) {
-		t.Fatalf("a store never written: %+v, %v; want state none and no run", got, err)
-	}
-	held, err := takeLock(state, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := openProgress(state, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := p.emit(event{Event: eventRun, PID: deadPID}); err != nil {
-		t.Fatal(err)
-	}
-	started := func() string {
-		events, err := readProgress(state)
-		if err != nil || len(events) == 0 {
-			t.Fatalf("the progress record: %v", err)
-		}
-		return events[0].Time
-	}()
-	if got, err := ReadState(state); err != nil || got != (State{State: stateRunning, PID: os.Getpid(), Started: started}) {
-		t.Fatalf("a held store: %+v, %v; want running under the holder's pid %d from %s", got, err, os.Getpid(), started)
-	}
-	held.Release()
-	if got, err := ReadState(state); err != nil || got != (State{State: stateInterrupted, PID: deadPID, Started: started}) {
-		t.Fatalf("a holder gone with no end recorded: %+v, %v; want interrupted, the run's own pid %d from %s", got, err, deadPID, started)
-	}
-	if err := p.emit(event{Event: eventEnd, Outcome: result.Done}); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.close(); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := ReadState(state); err != nil || got != (State{State: stateFinished, PID: deadPID, Started: started}) {
-		t.Fatalf("a finished run: %+v, %v; want finished, the same run and start", got, err)
-	}
-	for state, want := range map[string]bool{stateNone: false, stateRunning: false, stateFinished: true,
-		stateBounded: true, stateCancelled: true, stateFailed: true, stateInterrupted: true} {
-		if got := Ended(state); got != want {
-			t.Errorf("Ended(%s) = %v, want %v", state, got, want)
-		}
-	}
-}
-
-// TestWaitState: the wait ends the moment the store no longer stands at the
-// run's progress — another run has superseded it, or its own run ended — and
-// at once where the store never stood at that run at all.
-func TestWaitState(t *testing.T) {
-	const (
-		runPID   = 1 << 30 // larger than any pid a running process holds
-		otherPID = runPID + 1
-	)
-	// started is a store holding one run under pid, its lock held as a build
-	// holds it while it progresses.
-	started := func(t *testing.T, pid int) (string, *filelock.Lock, *progress) {
-		t.Helper()
-		dir := t.TempDir()
-		held, err := takeLock(dir, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		p, err := openProgress(dir, time.Now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := p.emit(event{Event: eventRun, PID: pid}); err != nil {
-			t.Fatal(err)
-		}
-		return dir, held, p
-	}
-	// end records the run's end and lets the lock go, as a build does on its
-	// way out.
-	end := func(t *testing.T, held *filelock.Lock, p *progress) {
-		t.Helper()
-		if err := p.emit(event{Event: eventEnd, Outcome: result.Done}); err != nil {
-			t.Fatal(err)
-		}
-		held.Release()
-		if err := p.close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	t.Run("a run that already ended returns at once", func(t *testing.T) {
-		dir, held, p := started(t, runPID)
-		end(t, held, p)
-		got, err := WaitState(dir, runPID, time.Hour)
-		if err != nil || got.State != stateFinished || got.PID != runPID {
-			t.Errorf("WaitState over an ended run = %+v, %v; want finished under pid %d", got, err, runPID)
-		}
-	})
-	t.Run("a running run returns when it ends", func(t *testing.T) {
-		// The holder's pid is the one the store reports while the lock is
-		// held, so the run being waited for is this process's.
-		pid := os.Getpid()
-		dir, held, p := started(t, pid)
-		done := make(chan error, 1)
-		go func() {
-			time.Sleep(20 * time.Millisecond)
-			err := p.emit(event{Event: eventEnd, Outcome: result.Done})
-			if err == nil {
-				err = p.close()
-			}
-			held.Release()
-			done <- err
-		}()
-		got, err := WaitState(dir, pid, 5*time.Millisecond)
-		if err != nil || got.State != stateFinished || got.PID != pid {
-			t.Errorf("WaitState over a running run = %+v, %v; want the finished run under pid %d", got, err, pid)
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("a superseded run returns", func(t *testing.T) {
-		dir, held, p := started(t, runPID)
-		got, err := WaitState(dir, otherPID, time.Hour)
-		if err != nil || got.State != stateRunning || got.PID != os.Getpid() {
-			t.Errorf("WaitState over a superseded run = %+v, %v; want running under the holder's pid %d", got, err, os.Getpid())
-		}
-		held.Release()
-		if err := p.close(); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("a pid the store does not hold returns with its standing run", func(t *testing.T) {
-		dir, held, p := started(t, runPID)
-		end(t, held, p)
-		got, err := WaitState(dir, otherPID, time.Hour)
-		if err != nil || got.State != stateFinished || got.PID != runPID {
-			t.Errorf("WaitState for an unheld pid = %+v, %v; want the store's finished run under pid %d", got, err, runPID)
-		}
-	})
 }
 
 func TestProgressRecordIsJSONLines(t *testing.T) {
@@ -1361,26 +1182,25 @@ func TestProgressRecordIsJSONLines(t *testing.T) {
 	if outcome, _ := f.build(t, f.options()); outcome != result.Done {
 		t.Fatal(outcome)
 	}
-	b, err := os.ReadFile(filepath.Join(f.state, progressFile))
+	b, err := os.ReadFile(filepath.Join(f.state, buildstore.ProgressFile))
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
 	units := 0
 	for _, l := range lines {
-		var e event
+		var e buildstore.Event
 		if err := json.Unmarshal(l, &e); err != nil {
 			t.Fatalf("line %q: %v", l, err)
 		}
-		if e.Event == eventUnit {
+		if e.Event == buildstore.EventUnit {
 			units++
 		}
 	}
 	want := 0
-	for _, r := range rows {
-		if r.applies(true) {
-			want++
-		}
+	for _, s := range buildstore.Stages {
+		run, _ := buildstore.StageSteps(s.ID, true)
+		want += len(run)
 	}
 	if units != want {
 		t.Errorf("unit events = %d, want one per row run (%d)", units, want)
@@ -1389,8 +1209,8 @@ func TestProgressRecordIsJSONLines(t *testing.T) {
 
 func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 	kbRoot := filepath.Join(t.TempDir(), "proj", kb.KBDir)
-	writeFile(t, filepath.Join(kbRoot, kb.EntryPointFile), "# Knowledge Base\n\n- [Volume](vol/index.md)\n")
-	writeFile(t, filepath.Join(kbRoot, "vol", "index.md"), "[↑ Knowledge Base](../entry-point.md)\n\n# Volume\n")
+	storetest.WriteFile(t, filepath.Join(kbRoot, kb.EntryPointFile), "---\nkb-format: \""+kb.FormatVersion+"\"\n---\n# Knowledge Base\n\n- [Volume](vol/index.md)\n")
+	storetest.WriteFile(t, filepath.Join(kbRoot, "vol", "index.md"), "[↑ Knowledge Base](../entry-point.md)\n\n# Volume\n")
 	for _, tc := range []struct {
 		name    string
 		replies []string
@@ -1416,9 +1236,11 @@ func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 					return tc.replies[len(asked)-1], nil
 				},
 			}
-			// The digest predicate reads the claims stream; this fixture
-			// carries none, and a one-volume KB is the shape it must give.
-			writeFile(t, filepath.Join(kbRoot, kb.IndexDir, "claims.yaml"), "")
+			// The digest predicate reads the derived node rows; this
+			// fixture's records carry none, and a one-volume KB is the shape
+			// it must give.
+			storetest.WriteFile(t, filepath.Join(kbRoot, filepath.FromSlash(kb.GraphNodesFile)), string(kb.EncodeNodes(kb.Graph{})))
+			storetest.WriteFile(t, filepath.Join(kbRoot, filepath.FromSlash(kb.GraphEdgesFile)), string(kb.EncodeEdges(kb.Graph{})))
 			_, err := overview(w)
 			if (err == nil) != tc.ok {
 				t.Fatalf("overview = %v, want ok %t", err, tc.ok)

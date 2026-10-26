@@ -3,9 +3,10 @@
 # installer it generates, the platforms that installer accepts, what it
 # verifies before it installs anything, and what it does about the key that
 # signed it. Runs against the stubs in tools/scripts/testdata/stubs, with no
-# network, no signing key and no go toolchain, inside .opencode-temp/test-dist/
-# only. NEEDS expect on PATH: the trust prompt is answered over a pty, and the
-# trust cases are why the suite exists.
+# network, no signing key and no go toolchain, inside
+# test-data/transient/test-dist/run/ only, beside the recipe's log. NEEDS
+# expect on PATH: the trust prompt is answered over a pty, and the trust cases
+# are why the suite exists.
 set -euo pipefail
 export LC_ALL=C
 
@@ -13,7 +14,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 repo_root="$(cd "${script_dir}/../.." && pwd)" || exit 1
 stubs="${script_dir}/testdata/stubs"
 testdata="${script_dir}/testdata"
-work="${repo_root}/.opencode-temp/test-dist"
+work="${repo_root}/test-data/transient/test-dist/run"
 
 go_version="2.0.0"
 version="v${go_version}"
@@ -187,7 +188,7 @@ function case_build_invocations() {
   fi
   for spec in "darwin arm64 kbase-darwin-arm64" "linux amd64 kbase-linux-amd64" "windows amd64 kbase-windows-amd64.exe"; do
     read -r os arch name <<< "${spec}"
-    line="GOOS=${os} GOARCH=${arch} go build -trimpath -ldflags=-s -w -o ${bin}/${name} ./cmd"
+    line="GOOS=${os} GOARCH=${arch} go build -trimpath -tags kbasedist -ldflags=-s -w -o ${bin}/${name} ./cmd"
     if ! grep -qxF "${line}" "${log}"; then
       printf 'missing invocation: %s\n' "${line}"
       cat "${log}"

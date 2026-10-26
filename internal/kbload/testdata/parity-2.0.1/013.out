@@ -1,0 +1,21 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 3
+offset: 0
+truncated: false
+results:
+    - relation: "founds"
+      direction: "out"
+      target: "ana-aaa007"
+      bearing: "0.8"
+      context: null
+    - relation: "founds"
+      direction: "out"
+      target: "clm-aaa001"
+      bearing: "1.0"
+      context: null
+    - relation: "founds"
+      direction: "out"
+      target: "clm-aaa002"
+      bearing: "1.0"
+      context: null

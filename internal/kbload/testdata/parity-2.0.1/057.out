@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-bbb001"
+    title: "Test example 2"
+    canonical_path: "beta/claim-rigor.md"
+    canonical_anchor: "test-example-2"
+    rigor: 0.88
+    strength: 0.88
+    build_status: "ok to build on"
+    build_band: "ok-to-build"
+    rationale: "Fixture."
+    premise_count: 1
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 0

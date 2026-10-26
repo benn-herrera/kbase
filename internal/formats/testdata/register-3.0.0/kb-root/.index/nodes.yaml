@@ -1,0 +1,69 @@
+- id: "ana-aaaaaa"
+  title: "A Supporting Lemma"
+  rigor: 0.8
+  manually-scored: false
+  rationale: "Derives the beneficiary result in full."
+  no-edge: ""
+- id: "ana-aaaaab"
+  title: "Regime Conservation Laws"
+  rigor: 0.85
+  manually-scored: false
+  rationale: "CES asymptotics applied with an explicit exponent formula."
+  no-edge: ""
+- id: "ana-bbbbbb"
+  title: "A Leaf"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+- id: "ana-bbbbbc"
+  title: "Foundation Claim B"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "One bullet names two claims; the next a claim and a work."
+  no-edge: ""
+- id: "ana-cccccc"
+  title: "A Second Claim"
+  rigor: 0.6
+  manually-scored: false
+  rationale: "An indented score line and a key of another kind."
+  no-edge: ""
+- id: "axm-1"
+  title: "Substrate Topology"
+- id: "axm-S3"
+  title: "A labelling convention"
+- id: "clm-aaaaaa"
+  title: "Regime Conservation Laws"
+  rigor: 0.85
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbbbbb"
+  title: "Foundation Claim B"
+  rigor: 0.9
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-cccccc"
+  title: "A Second Claim"
+  rigor: 0.6
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "exp-aaaaaa"
+  title: "A Leaf"
+  status: "run"
+  rigor: 1.0
+  manually-scored: false
+- id: "exp-bbbbbb"
+  title: "A Leaf"
+  status: "pending"
+  rigor: 1.0
+  manually-scored: false
+- id: "wrk-smith2020"
+  title: "Smith, A. 2020. *Markets*, on bearing 0.5"
+  rigor: 0.9
+  rationale: "Fixture Press."

@@ -1,0 +1,6 @@
+outcome: "refused"
+kb-root: "<kb-root>"
+refusals:
+    - check: "unknown-id"
+      key: "<id>"
+      detail: "unknown node id: clm-zzzzzz"

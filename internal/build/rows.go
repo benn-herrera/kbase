@@ -13,6 +13,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
+	"kbase/internal/buildstore"
 	"kbase/internal/claimgraph"
 	"kbase/internal/docgraph"
 	"kbase/internal/index"
@@ -131,7 +132,7 @@ func documentGraph(w *walk) (result.Record, error) {
 	}
 	rec = append(rec, result.Field{Key: "checks", Value: checks(report)})
 	if report.Failed() {
-		return rec, failure(failedChecks(report))
+		return rec, buildstore.Failure(failedChecks(report))
 	}
 	return rec, nil
 }
@@ -201,7 +202,7 @@ func (w *walk) ensureRecords() error {
 	if kb.IsFile(records.Path(w.stateDir)) {
 		return nil
 	}
-	scratch := filepath.Join(w.stateDir, scratchDir, regenerateDir)
+	scratch := filepath.Join(w.stateDir, buildstore.ScratchDir, regenerateDir)
 	if err := os.RemoveAll(scratch); err != nil {
 		return err
 	}
@@ -218,16 +219,16 @@ func (w *walk) ensureRecords() error {
 		return documentGraphFailure(err)
 	}
 	if report.Failed() {
-		return failure(failedChecks(report))
+		return buildstore.Failure(failedChecks(report))
 	}
-	committed, err := w.repo.Files(w.recorded()[stageDocumentGraph], kb.KBDir)
+	committed, err := w.repo.Files(buildstore.RecordedStages(w.trail)[buildstore.StageDocumentGraph], kb.KBDir)
 	if err != nil {
 		return err
 	}
 	if path, differs, err := firstDifference(built, committed); err != nil {
 		return err
 	} else if differs {
-		return failure{{Check: checkRecords, Path: kb.KBDir + "/" + path,
+		return buildstore.Failure{{Check: checkRecords, Path: kb.KBDir + "/" + path,
 			Detail: fmt.Sprintf("the document graph's records are missing from %s, and the tree regenerated to replace them differs from the document-graph boundary's at %s/%s", w.stateDir, kb.KBDir, path)}}
 	}
 	w.opts.Logger.Info("regenerated the document graph's records", "state-dir", w.stateDir)
@@ -282,14 +283,14 @@ func mechanical(stage func(claimgraph.Options) (claimgraph.Report, error)) func(
 func claimGraph(stage func(context.Context, claimgraph.Options) (claimgraph.Report, error)) func(*walk) (result.Record, error) {
 	return func(w *walk) (result.Record, error) {
 		report, err := stage(w.ctx, claimgraph.Options{KBRoot: w.kbRoot, RepoRoot: w.repo.Root, Records: records.Path(w.stateDir), Logger: w.opts.Logger,
-			Reader: w.letters, ReaderConcurrency: w.readerConcurrency, AskRecords: filepath.Join(w.stateDir, scratchDir, asks.AskRecordsDir),
+			Reader: w.letters, ReaderConcurrency: w.readerConcurrency, AskRecords: filepath.Join(w.stateDir, buildstore.ScratchDir, asks.AskRecordsDir),
 			Progress: w.unitProgress()})
 		if err != nil {
 			return nil, err
 		}
 		rec := result.Record{{Key: "claimgraph", Value: report.Records()}}
 		if report.Failed() {
-			return rec, failure(report.Failures())
+			return rec, buildstore.Failure(report.Failures())
 		}
 		return rec, nil
 	}
@@ -302,14 +303,14 @@ func (w *walk) unitProgress() claimgraph.Progress {
 	return claimgraph.Progress{
 		Units: func(n int) error {
 			done, total = 0, n
-			return w.progress.emit(event{Event: eventUnits, Stage: w.inStage, Total: n})
+			return w.progress.emit(buildstore.Event{Event: buildstore.EventUnits, Stage: w.inStage, Total: n})
 		},
 		Unit: func(name string) error {
 			done++
-			return w.progress.emit(event{Event: eventUnit, Stage: w.inStage, Unit: name, Done: done, Total: total})
+			return w.progress.emit(buildstore.Event{Event: buildstore.EventUnit, Stage: w.inStage, Unit: name, Done: done, Total: total})
 		},
 		Fallback: func(it result.Item) error {
-			return w.progress.emit(event{Event: eventFallback, Stage: w.inStage, Items: []result.Item{it}})
+			return w.progress.emit(buildstore.Event{Event: buildstore.EventFallback, Stage: w.inStage, Items: []result.Item{it}})
 		},
 	}
 }
@@ -321,7 +322,7 @@ func validationGate(w *walk) (result.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	written, err := index.Refresh(src, w.opts.Logger)
+	written, err := w.refresh(src)
 	slices.Sort(written)
 	rec := result.Record{{Key: "refreshed", Value: append([]string{}, slices.Compact(written)...)}}
 	if err != nil {
@@ -334,7 +335,7 @@ func validationGate(w *walk) (result.Record, error) {
 	items := index.Items(found)
 	rec = append(rec, result.Field{Key: "verify", Value: items})
 	if len(items) > 0 {
-		return rec, failure(items)
+		return rec, buildstore.Failure(items)
 	}
 	return rec, nil
 }
@@ -381,7 +382,7 @@ func overview(w *walk) (result.Record, error) {
 		reply, err := w.passage(w.ctx, ex.Text, rejected, attempt)
 		var incomplete asks.IncompleteError
 		if errors.As(err, &incomplete) {
-			return rec, failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
+			return rec, buildstore.Failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
 		}
 		if err != nil {
 			return rec, err
@@ -394,15 +395,15 @@ func overview(w *walk) (result.Record, error) {
 	switch {
 	case len(rejected) > 0:
 		return append(rec, result.Field{Key: "rejected", Value: rejected}),
-			failure{{Check: checkInference, Path: kbdocs.OverviewFile, Detail: "the overview passage held lines a passage may not, twice"}}
+			buildstore.Failure{{Check: checkInference, Path: kbdocs.OverviewFile, Detail: "the overview passage held lines a passage may not, twice"}}
 	case passage == "":
-		return rec, failure{{Check: checkInference, Path: kbdocs.OverviewFile, Detail: "the overview passage came back empty, twice"}}
+		return rec, buildstore.Failure{{Check: checkInference, Path: kbdocs.OverviewFile, Detail: "the overview passage came back empty, twice"}}
 	}
-	digestDrawn, err := kb.SheetDigestDrawnOf(src)
+	rows, err := index.Derive(src)
 	if err != nil {
 		return rec, err
 	}
-	text, err := kbdocs.Overview(filepath.Base(w.repo.Root), passage, digestDrawn)
+	text, err := kbdocs.Overview(filepath.Base(w.repo.Root), passage, kb.SheetDigestDrawn(rows.Nodes))
 	if err != nil {
 		return rec, err
 	}

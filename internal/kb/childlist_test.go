@@ -70,25 +70,3 @@ func TestChildListBlanksFences(t *testing.T) {
 		t.Errorf("ChildList = %q; want only the real leaf", got)
 	}
 }
-
-// TestIsMarker: the write API's two in-body markers are markers whatever
-// whitespace Python's \s admits around their content; any other comment is not.
-func TestIsMarker(t *testing.T) {
-	for _, tc := range []struct {
-		text string
-		want bool
-	}{
-		{"<!-- claim-rigor: clm-aa1111 -->", true},
-		{"<!-- id: clm-aa1111 -->", true},
-		{"  <!-- id: clm-aa1111 -->\n", true},
-		{"<!-- claim-rigor: clm-aa1111 -->", true},
-		{"<!--　id: clm-aa1111 -->", true},
-		{"<!-- keep me -->", false},
-		{"<!-- identity: x -->", false},
-		{"text <!-- id: clm-aa1111 -->", false},
-	} {
-		if got := IsMarker(tc.text); got != tc.want {
-			t.Errorf("IsMarker(%q) = %t; want %t", tc.text, got, tc.want)
-		}
-	}
-}

@@ -7,7 +7,7 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
+func strengthBelowCommand() *cobra.Command {
 	var maxStrength float64
 	cmd := queryCommand(&cobra.Command{
 		Use:   "strength-below",
@@ -19,5 +19,5 @@ strictly under --max-strength, lowest first; pending claims are left out.`,
 		return answered(query.StrengthBelowPayload(ix, maxStrength))
 	})
 	cmd.Flags().Float64Var(&maxStrength, "max-strength", query.DefaultMaxStrength, "only claims with strength strictly below this are listed")
-	rootCmd.AddCommand(cmd)
+	return cmd
 }

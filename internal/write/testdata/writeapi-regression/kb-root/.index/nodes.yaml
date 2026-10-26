@@ -1,0 +1,161 @@
+- id: "clm-07687j"
+  title: "Regime Conservation Laws"
+  rigor: 0.7
+  manually-scored: false
+  rationale: "CES asymptotics applied with explicit exponent formula ($O(\\Pi_2^{1-\\sigma_2})$) and cited methodology (factor-and-expand). Cyclic-coordinate and transversality steps end-to-end and correct, referenced to standard optimal-control theory. Scope clearly marked as leading-order with error term bounds. Framework assumptions ($\\sigma_2 < 1$, nested structure) stated. Not 0.9 because CES asymptotics are applied rather than re-derived; rises to 0.7 because methodology is disclosed and boundaries explicit."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-14895g"
+  title: "Discrete Pontryagin Analysis"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Proposition statement (lines 950–967) with four enumerated results (Form, Signs, Timing, Material regime), each with full justification. Form derived from Hamiltonian linearity. Costate signs (S1, S2) proved by backward induction (app:pontryagin-costate, lines 1003–1044). Timing proven by gate-identity contradiction (eq. 959–960). Material regime confirmed numerically. Repair documented in Remark rem:condii (lines 969–984) showing numerical audit falsified earlier claim and locating flaw. Derivation end-to-end."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-286k63"
+  title: "Lyapunov Stability of Cap-Table Attractor"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Proposition statement (lines 1219–1223) with complete proof embedded (lines 1224–1227). Proof derives exact recurrence $V(I_{n+1}) = (1-d)^2 V(I_n)$ by direct substitution and algebra, then concludes convergence $V(I_n) \\to 0$. Proof is terse but complete: all steps are algebraically verifiable and no external reference is needed."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-3105j6"
+  title: "Self-masking Slows Learning Below Collapse Clock"
+  rigor: 0.7
+  manually-scored: false
+  rationale: "Proof note (lines 314–326) derives the learning-clock scaling: Fisher information $\\int_0^t r(e(s))\\,ds$ governs Bayesian consistency; under ratchet $d|e|/dt \\to k/\\mu$, the integral diverges logarithmically for $\\gamma = 1$ and finitely for $\\gamma > 1$. Precision grows as $\\ln t$ while deficit grows linearly, starving correction on collapse timescale. Methodology disclosed with specific rate function, dynamics, and Fisher-information criterion. Open items explicitly bounded: (1) zombie equilibrium (finite $\\beta \\in (0,1)$) has positive constant signal rate and different starvation regime; (2) first-passage constant left open. Classified as derived prediction of the signal-rate and deficit-dynamics framework. Falsifiable if cumulative information diverges or grows faster than stated."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-3ig11l"
+  title: "Fixed Points"
+  rigor: 0.3
+  manually-scored: false
+  rationale: "Lemma statement (lines 314–318) asserts the existence and location of equilibria (origin and zombie at $s^* = (\\beta-1)/(\\beta\\mu)$) without proof or derivation. Statement is used in subsequent proofs but the verification of the claimed equilibrium coordinates is not shown."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-4114i0"
+  title: "Hybrid Stability of Constitutional Firm"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Theorem statement (lines 447–461) with proof deferred to Appendix C (app:hybrid, lines 701–720). Full composition proof shown: establishes safe-set asymptotic stability via $V_{\\mathrm{fast}}$-based Lyapunov function and geometric convergence of cap table via $V_{\\mathrm{slow}}$ under cap-binding allocation. All three load-bearing conditions stated explicitly (lines 463–471). Derivation end-to-end."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-424074"
+  title: "Macro Selection Engagement (Open Conjecture)"
+  rigor: 0.5
+  manually-scored: false
+  rationale: "| The conjecture states a *conditional* prediction: IF capital-gated autocatalytic formation ($b_1 > 0$) holds, THEN the macro selection dynamic undergoes a transcritical bifurcation at $\\sigma_X^* = \\mu_C - b_1$. The form of the bifurcation condition is clearly articulated and mirrors the firm-scale $\\beta = 1$ transition (structural analogy providing consistency support). However, the paper explicitly marks the linchpin condition $b_1 > 0$ as **unresolved**: \"the autocatalytic-formation linchpin is the condition still to discharge\" (line 211). The formation-rate model is \"sketched through legibility and floor-raising but not solved\" (line 216). The modelling choice (Lotka–Volterra replicator vs. density-dependent competition) remains unsettled (lines 214–215). Supporting mechanism (replicator dynamics, control-sharp-transition narrative) is articulated but the critical condition remains open, placing this at open-dependency level (0.5): form stated, condition unproven."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-48gj1k"
+  title: "Forward Invariance of Safe Region"
+  rigor: 1.0
+  manually-scored: false
+  rationale: "Lemma statement (lines 695–699) asserts that $\\{I < I_c\\}$ is forward-invariant. The claim is an algebraic identity: the inequality $I' = I(1-d) + \\alpha_{\\mathrm{inv}}d \\le (1-d)I_c + d\\,\\alpha_{\\max} < I_c$ follows directly from convexity and the given bounds. No proof shown because the result is immediate from definitions and arithmetic."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-4gi6l6"
+  title: "Geometric Convergence"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Corollary statement (lines 1229–1235) states geometric convergence bound $N(\\varepsilon) \\le \\frac{\\log(1/\\varepsilon)}{2\\,d_{\\min}}$ on cycle count to reduce displacement by factor $\\varepsilon$. Derived directly from prop:lyapunov's recurrence $V(I_n) \\le V(I_0)(1-d_{\\min})^{2n}$ via logarithm. Derivation end-to-end as corollary."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-64k104"
+  title: "Validity of Dimensional Reduction"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Corollary statement (lines 1166–1170) with supporting justification via slaving argument (lines 1172–1181). Argument cites Haken's slaving principle and geometric singular-perturbation theory (Fenichel) to justify fast–slow decomposition. Cites thm:invariance as necessary condition: fast subsystem stays in productive region, so reduction does not degenerate. Derivation end-to-end as corollary from thm:invariance."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-6kk2h6"
+  title: "Positive Invariance of M"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Theorem statement (lines 1140–1164) with five enumerated clauses, each with embedded proof or justification. (i) Investor cap proven by convexity (line 1145). (ii) Employee floor proven by absorption (line 1147). (iii) KPI-gating stated as charter rule (line 1149). (iv) Anti-stagnation proven by recurrence and boundedness (lines 1154–1159). (v) Governance structure stated as charter-level invariance (line 1161). All load-bearing conditions verified. Derivation end-to-end."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-962898"
+  title: "Switched-System Stability of Cap-Table Attractor"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Theorem statement (lines 1291–1296) with complete proof embedded (lines 1297–1307). Proof verifies three Lyapunov conditions for switched systems: (i) positive definiteness of $V(I^*) = 0$; (ii) non-increase in frozen mode ($d_n = 0$); (iii) strict decrease in event mode via prop:lyapunov's recurrence. Proof shows anti-stagnation clause ensures event mode recurs infinitely, so condition (iii) bites. Each mechanism's role made explicit (lines 1309–1312). Derivation end-to-end."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-9j27j1"
+  title: "Macro-to-Firm Propagation"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Proposition statement (lines 490–495) with complete derivation via competitive factor markets (lines 497–506). Argument traces factor-price transmission: $w_A / r_{\\tilde{K}} = \\Pi_2 > 1$ (macro) implies firm inherits $\\Pi_c > 1$, hence $\\muAc > 0$ by costate balance (Appendix E). Full derivation embedded; cross-volume reference to Part 1 for regime parameter $\\Pi_2$ and to Appendix E for costate result."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-g0l36l"
+  title: "Global Basin of Attraction"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Corollary statement (lines 1237–1240) asserts basin of attraction of $I^* = 0.49$ is all of $[0,1]$ under the 49% cap and dilution condition $d_n \\ge d_{\\min} > 0$. Derived from prop:lyapunov: the Lyapunov function $V(I_n) = (I_n - I^*)^2$ contracts on its level sets for any initial condition, and the uniform convergence holds globally. Derivation end-to-end as corollary."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-g3iig7"
+  title: "Institutional Misalignment"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Proposition statement (lines 844–852) with proof labeled \"Argument\" (lines 854–865). Proof derives that setting $\\mu_{A_c} = 0$ in attention regime ($\\Pi_c > 1$) omits optimal first-order conditions, showing misallocation magnitude scales with $(\\Pi_c - 1)$. Proof is complete: it identifies the domain error (applying material-regime solution post-transition) and quantifies the cost via costate balance."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-gi3glh"
+  title: "Scale-Invariant Kernel (with five named footnotes)"
+  rigor: 0.7
+  manually-scored: false
+  rationale: "| The theorem rigorously derives universality on the firm–economy rung (boundary-equilibrium type recurrence, conditional on $b_1 > 0$) and partially derives it on mind and community rungs via substrate-faithful variable swaps with derived corners from robust likelihood. All five residuals (F1–F5) are explicitly named and located. The firm ↔ economy rung meets the 0.9 tier (fully derived); mind and community rungs meet the 0.7 tier (partial but methodologically sound with grounded assumptions). Limitations are disclosed and do not render the result speculative—remedies are identified. No step is asserted without justification. The approach is methodologically sound with transparent scope."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-h77054"
+  title: "The Un-blinded Selector"
+  rigor: 0.5
+  manually-scored: false
+  rationale: "Proposition states three experiential channels (labour, consumer, mortality) remain unblinded where capital is blinded. Argument given (lines 381–389): experiential signal $s_X = q(A_P)$ is \"a draw from the true state, since under $\\sigma_2 < 1$ the attention deficit propagates into output and into the work; it never transits the channel that generates $\\varphi_e$.\" Mechanism is structural argument, not formally derived here. Validity rests substantively on Section 3's characterization (that friction is on reporting channel, not state) and the production-function implication (deficit propagates to experiential outcomes under complementarity). Those links are asserted rather than formally proven in this section. Classified as manifestation of observability structure. Falsifiable if experiential outcomes can be distorted by reporting channel or if deficit does not propagate to experience under $\\sigma_2 < 1$."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-i53k14"
+  title: "β-Independent Fast Certificate"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Lemma statement (lines 680–689) with complete proof embedded at lines 690–693. Proof verifies that $\\dot V_{\\mathrm{fast}}$ decomposes into negative-definite forms on each half-plane ($v>0$ and $v<0$) for all $\\beta>1$, and shows continuity across $v=0$. Derivation end-to-end."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-j634h4"
+  title: "Macro Collapse Under Mis-Encoded Symmetry"
+  rigor: 0.7
+  manually-scored: false
+  rationale: "Parts (i) and (ii) fully derived: inadmissibility via direct substitution and contradiction (algebraic verification); output collapse via standard ODE and CES limit evaluation. Part (iii) aggregation depends on stated macro-to-firm lemma (lines 506–514, derivation deferred to Part 2), disclosed transparently as unproven. Scope qualifications explicit: asymptotic result, $\\delta_A > 0$ for strong form, partial vs. complete mis-encoding distinguished (lines 560–571). Methodology disclosed; open dependency clearly marked. Not 0.9 due to lemma; 0.7 because bounds and open steps transparent."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-j6i01j"
+  title: "Non-transferability"
+  rigor: 0.3
+  manually-scored: false
+  rationale: "Proposition states three-part conjunction: (1) cannot substitute (no machine bears accountability), (2) cannot import without re-inclusion (procurement relocates corrupted channel, not observable state), (3) therefore no decoupled economy at prior scale is fixed point. Components rely on prior sections (hinges, observability, friction characterization). Lines 530–540 supply partial argument for (2)—procurement narrative (offshoring widens wedge, arms-length maximizes φₑ)—but this is narrative reasoning, not formal derivation. Claim (1) asserted without proof. The overall proposition reads as conjunction/restatement of prior results (lines 551–553: \"This is the conjunction of Section 3 read for the thesis\") rather than independent derivation. Classified as manifestation of binding + non-observability structure. Falsifiable if substitution or relocation can close observability gap."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-jll5k1"
+  title: "Gate Optimality Under Credibility (Open Conjecture)"
+  rigor: 0.3
+  manually-scored: false
+  rationale: "Conjecture statement (lines 1082–1088) without proof. Status explicitly OPEN. Supporting argument provided (lines 1090–1099) describing proof programme as \"three steps, each well posed\" and naming the programme structure. Numerical prototyping (Remark rem:protoB, lines 1101–1123) confirms conjectured flip at KPI margin and sharpens scope. No analytic proof supplied; dependence on extended dynamics with credibility state $c_n$ remains unresolved."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-k970j7"
+  title: "Price-Unclosable Attention Wedge"
+  rigor: 0.7
+  manually-scored: false
+  rationale: "Proof note (lines 211–217) supplies the derivation chain: firm equates perceived MP to wage, true MP exceeds wage by multiplicative factor $(1+\\varphi_e)^{1-\\rho_2}$. Mechanism is explained step-by-step (distorted perception of stock → MP calculation → true MP revealed by solving). Open item explicitly named: general case ($\\Ahat_i > 0$) deferred to appendix. Disclosed methodology with stated bounds. Classified as manifestation of the production structure and reporting distortion: falsifiable if $(1+\\varphi_e)^{1-\\rho_2} \\not> 1$ for $\\varphi_e > 0$ and $\\rho_2 < 0$."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-l56g59"
+  title: "Governance Bifurcation Theorem"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Theorem statement (lines 339–349) with proof sketch at lines 351–361. Full proof deferred to Appendix A (app:bifurcation). Proof sketch explicitly states \"The full account is in Appendix~\\ref{app:bifurcation}\" and names the key ingredients (determinant signs, eigenvalue analysis, Lyapunov certificate). Derivation is complete end-to-end across body and appendix."
+  no-edge: ""
+  strengthen-by: []

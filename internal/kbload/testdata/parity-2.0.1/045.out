@@ -1,0 +1,17 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "claim"
+    id: "clm-aaa005"
+    title: "An isolated $`\\Gamma`$-observation nothing cites"
+    canonical_path: "alpha/claim-rigor.md"
+    canonical_anchor: "an-isolated-gamma-observation-nothing-cites"
+    rigor: 0.3
+    strength: 0.0
+    build_status: "unsubstantiated"
+    build_band: "unsubstantiated"
+    rationale: "Fixture."
+    premise_count: 0
+    strengthen_by_count: 0
+    strengthen_by: []
+    citation_count: 0

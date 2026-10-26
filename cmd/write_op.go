@@ -19,7 +19,6 @@ type writeOpOptions struct {
 	// ValuesFile is the values document's path; "" reads Stdin.
 	ValuesFile string
 	Stdin      io.Reader
-	Create     bool
 	NoRefresh  bool
 	// ArgumentEntry is whether the values are one entry composed from a
 	// tool call's arguments rather than a document the caller wrote, so a
@@ -56,7 +55,7 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 	if err != nil {
 		return failed(fields, fmt.Errorf("reading the values: %w", err))
 	}
-	run := write.Options{KBRoot: root, Values: values, Create: opts.Create, NoRefresh: opts.NoRefresh, Logger: opts.Logger}
+	run := write.Options{KBRoot: root, Values: values, NoRefresh: opts.NoRefresh, Logger: opts.Logger, Restamp: restamp}
 	var res write.Result
 	if opts.Op == write.RenderCitation {
 		res = write.Run(opts.Op, run)
@@ -130,7 +129,7 @@ refusal names each offending key, its position and every key the op takes.`
 // directory.
 func writeOpCommand(op, short, long string) *cobra.Command {
 	var valuesFile string
-	var create, noRefresh bool
+	var noRefresh bool
 	cmd := &cobra.Command{
 		Use:   op,
 		Short: short,
@@ -142,7 +141,7 @@ func writeOpCommand(op, short, long string) *cobra.Command {
 				return err
 			}
 			code, err := runWriteOp(writeOpOptions{Op: op, WorkDir: wd, ValuesFile: valuesFile, Stdin: cmd.InOrStdin(),
-				Create: create, NoRefresh: noRefresh, Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(), Logger: processLog.logger})
+				NoRefresh: noRefresh, Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(), Logger: processLog.logger})
 			if err != nil {
 				return err
 			}
@@ -156,8 +155,5 @@ func writeOpCommand(op, short, long string) *cobra.Command {
 	if op != write.RenderCitation {
 		cmd.Flags().BoolVar(&noRefresh, "no-refresh", false, "skip the refresh that otherwise follows the write")
 	}
-	if write.CreatesRegister(op) {
-		cmd.Flags().BoolVar(&create, "create", false, "create the register when it does not exist yet")
-	}
-	return mcpBinding(cmd, mcpBound)
+	return cmd
 }

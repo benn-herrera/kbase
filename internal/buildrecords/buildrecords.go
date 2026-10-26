@@ -165,21 +165,3 @@ func ReadCull(src *kb.Source) (CullRecord, bool, error) {
 	ok, err := Read(src, src.Path(CullFile), &r)
 	return r, ok, err
 }
-
-// InferredLinks is whether a depends edge source → target was found with no
-// mark: the unmarked record answered it yes in that direction, the cull
-// record holds its link either way round. yes is the unmarked ask's yes
-// letter.
-func InferredLinks(u UnmarkedRecord, c CullRecord, yes string) func(source, target string) bool {
-	found := map[[2]string]bool{}
-	for _, e := range u.Pairs {
-		if e.Letter != nil && *e.Letter == yes {
-			found[[2]string{e.Source, e.Target}] = true
-		}
-	}
-	for _, l := range c.Links {
-		found[[2]string{l.A, l.B}] = true
-		found[[2]string{l.B, l.A}] = true
-	}
-	return func(source, target string) bool { return found[[2]string{source, target}] }
-}

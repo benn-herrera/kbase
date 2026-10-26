@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"kbase/internal/formats/format300"
 )
 
 // The metadata layer's readers follow Python's text semantics: a file read in
@@ -15,15 +17,11 @@ import (
 
 // PyWhitespace is the body of the class Python's \s and str.isspace() share,
 // for use inside a bracket expression.
-const PyWhitespace = `\t\n\v\f\r\x1c-\x1f \x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
-
-var pyEscapes = strings.NewReplacer(`\s`, "["+PyWhitespace+"]", `\S`, "[^"+PyWhitespace+"]", `\d`, `[0-9]`)
+const PyWhitespace = format300.PyWhitespace
 
 // PyRE compiles a pattern written in Python's spelling of \s, \S and \d,
 // none of them inside a bracket expression. \d stays ASCII.
-func PyRE(pattern string) *regexp.Regexp {
-	return regexp.MustCompile(pyEscapes.Replace(pattern))
-}
+func PyRE(pattern string) *regexp.Regexp { return format300.PyRE(pattern) }
 
 // TranslateNewlines is text as Python's text-mode read returns it: \r\n and
 // \r translated to \n.
@@ -103,9 +101,6 @@ func IsSpace(r rune) bool {
 // Strip is str.strip().
 func Strip(s string) string { return strings.TrimFunc(s, IsSpace) }
 
-// RStrip is str.rstrip().
-func RStrip(s string) string { return strings.TrimRightFunc(s, IsSpace) }
-
 // LStrip is str.lstrip().
 func LStrip(s string) string { return strings.TrimLeftFunc(s, IsSpace) }
 
@@ -150,23 +145,6 @@ func findAllBounded(re *regexp.Regexp, s string) []string {
 		}
 	}
 	return out
-}
-
-// containsBounded is re.search(r"\b" + re.escape(token) + r"\b", s).
-func containsBounded(s, token string) bool {
-	for i := 0; i <= len(s)-len(token); {
-		j := strings.Index(s[i:], token)
-		if j < 0 {
-			return false
-		}
-		at := i + j
-		if boundaryAt(s, at) && boundaryAt(s, at+len(token)) {
-			return true
-		}
-		_, size := utf8.DecodeRuneInString(s[at:])
-		i = at + max(size, 1)
-	}
-	return false
 }
 
 // Slugify is the heading anchor every KB's stored canonical_anchor carries:

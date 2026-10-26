@@ -1,0 +1,10 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 1
+offset: 0
+truncated: false
+results:
+    - id: "clm-aaa001"
+      title: "Theorem 1"
+      strength: 0.9
+      build_band: "ok-to-build"

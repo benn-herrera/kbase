@@ -11,9 +11,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Provider kind and wire protocol. kbase is an inference-only appliance —
-// one endpoint kind, one protocol — so the pair is a compatibility surface
-// with the wider providers.toml format rather than a choice. Both fields
+// Provider kind and wire protocol. kbase is an inference-only appliance — one
+// endpoint kind, two chat protocols — so the pair is a compatibility surface
+// with the wider providers.toml format rather than a free choice. Both fields
 // are OPTIONAL and default to the values below; an entry that states them
 // explicitly is accepted, and an entry that states something else is
 // dropped with a named reason (see Provider.Validate) rather than being
@@ -23,9 +23,15 @@ const (
 	// The default, and the only kind kbase can use.
 	ProviderTypeInference = "inference"
 
-	// ProviderAPIOpenAI is the OpenAI-compatible HTTP protocol. The
-	// default, and the only protocol kbase speaks.
+	// ProviderAPIOpenAI is the OpenAI-compatible HTTP protocol: chat on
+	// `chat/completions`, plus the decision surfaces. The default.
 	ProviderAPIOpenAI = "openai"
+
+	// ProviderAPIAnthropic is the Anthropic Messages protocol: chat on
+	// `POST <baseUrl>/messages` and models on `GET <baseUrl>/models`. It has
+	// no decision surface, so an entry speaking it can serve the text and
+	// scoring roles but not the decision role's letter asks.
+	ProviderAPIAnthropic = "anthropic"
 
 	// FlavorSystemOne is the decision surface kbase's letter asks have
 	// always used: `POST <baseUrl>/systemone`, one question keyed by its
@@ -59,7 +65,11 @@ type Provider struct {
 	// ProviderTypeInference.
 	Type string `toml:"type"`
 
-	// API is the wire protocol. Optional; empty means ProviderAPIOpenAI.
+	// API is the wire protocol chat uses. Optional; empty means
+	// ProviderAPIOpenAI. `openai` speaks the OpenAI-compatible
+	// chat-completions surface and carries the decision surfaces;
+	// `anthropic` speaks the Messages protocol for chat and has no decision
+	// surface.
 	API string `toml:"api"`
 
 	// DecisionsFlavor is which decision surface this endpoint's server
@@ -158,9 +168,9 @@ func (p Provider) Validate() error {
 	if kind := p.Kind(); kind != ProviderTypeInference {
 		return fmt.Errorf("unknown type %q (known types: %s)", p.Type, ProviderTypeInference)
 	}
-	if api := p.Protocol(); api != ProviderAPIOpenAI {
-		return fmt.Errorf("api %q is not valid for a %s provider (which speaks: %s)",
-			p.API, ProviderTypeInference, ProviderAPIOpenAI)
+	if api := p.Protocol(); api != ProviderAPIOpenAI && api != ProviderAPIAnthropic {
+		return fmt.Errorf("api %q is not valid for a %s provider (known protocols: %s, %s)",
+			p.API, ProviderTypeInference, ProviderAPIOpenAI, ProviderAPIAnthropic)
 	}
 	switch p.Flavor() {
 	case FlavorSystemOne, FlavorDecisions:

@@ -41,6 +41,13 @@ const DefaultReaderConcurrency = 4
 // group's record lands.
 const AskRecordsDir = "asks"
 
+// What a Caller keeps under a build's scratch directory: each call's capture,
+// and each answer under the digest of what was asked.
+const (
+	CapturesDir = "captures"
+	AnswersDir  = "answers"
+)
+
 // LetterQuestion is one ask as a reader receives it: Group and Item name it,
 // State is the composed body, Question the one typed question over the
 // offered letters, and Attempt counts the item's asks from 1. A decision

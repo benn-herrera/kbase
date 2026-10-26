@@ -1,11 +1,16 @@
 package main
 
-func init() {
-	rootCmd.AddCommand(writeOpCommand("insert-analysis-entry",
-		"mint an analysis id and write its register entry",
-		`insert-analysis-entry mints an ana- id and writes its canonical register entry,
-staging its lifts and refutations there until a document hosts it, and reports
-the id. An entry already in the register with the same title and values is
-adopted rather than written twice. The register is created only under
---create. A refresh follows unless --no-refresh.`))
+import "github.com/spf13/cobra"
+
+func insertAnalysisEntryCommand() *cobra.Command {
+	return writeOpCommand("insert-analysis-entry",
+		"mint an analysis id, write its node record and edges and, given a document, mark it there",
+		`insert-analysis-entry mints an ana- id, writes the analysis's node record and
+edges in one act, and reports the id. Given a document, it places the
+analysis's statement marker on a new line directly after that document's first
+heading; an analysis with no marker is a verify fault until one is placed. An
+analysis with the same title is adopted rather than written twice: one hosted
+in the given document, else one with no marker, which is then marked there;
+with no document, only an unmarked analysis is adopted. A refresh follows
+unless --no-refresh.`)
 }

@@ -110,21 +110,16 @@ func (r *render) spanOf(p paragraph) span {
 	return out
 }
 
-// bodyStart is the first line a label may name: below the frontmatter and
-// the up-link line that follows it.
-func bodyStart(text string) int {
-	if m := kb.FindFrontmatter(text); m != nil {
-		return strings.Count(text[:m[1]], "\n") + 2
-	}
-	return 1
-}
+// bodyStart is the first line a label may name: below the up-link line a
+// document opens with. Only the entry point carries frontmatter, and no
+// record, node or anchor names it.
+const bodyStart = 1
 
 // headingLines is every line of the labelled region that is a heading.
 func headingLines(text string) map[int]bool {
 	out := map[int]bool{}
-	first := bodyStart(text)
 	for i, line := range kb.SplitLines(text) {
-		if i >= first && headingRE.MatchString(kb.Strip(kb.BlockquotePrefix.ReplaceAllString(line, ""))) {
+		if i >= bodyStart && headingRE.MatchString(kb.Strip(kb.BlockquotePrefix.ReplaceAllString(line, ""))) {
 			out[i] = true
 		}
 	}
@@ -312,7 +307,7 @@ func renderText(text string, fences []MathFence, excluded map[int]bool) render {
 		offsets[i] = cursor
 		cursor += len(l) + 1
 	}
-	top := bodyStart(text)
+	top := bodyStart
 	for n := top; n < len(lines); n++ {
 		if headingRE.MatchString(kb.Strip(kb.BlockquotePrefix.ReplaceAllString(lines[n], ""))) {
 			top = n

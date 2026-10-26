@@ -262,7 +262,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := passTwoGate(t); err != nil {
+		if err := passTwoGate(t); err != nil {
 			return nil, err
 		}
 		inv, err := scanInventory(t, recs)
@@ -334,7 +334,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return nil, stopf("cull-plan", "%v", err)
 		}
-		if _, err := IssueCulls(plan.Culls, culledNoClaim, w.raw, leafOf(t, w.lg)); err != nil {
+		if _, err := IssueCulls(plan.Culls, w.raw); err != nil {
 			return nil, err
 		}
 		rec := buildrecords.CullRecord{Entries: entries, Links: plan.Links}

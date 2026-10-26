@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,103 +11,18 @@ import (
 	"strings"
 	"testing"
 
-	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
-	"kbase/internal/kbload"
 )
 
-// adjagentFixture is the claim-sheet fixture: a 1.0.0 KB, its unmarked build
-// record, and the DOT the sheets compose to.
-const adjagentFixture = "testdata/adjagent-sheet"
-
-func openAdjagentFixture(t *testing.T) *kb.Source {
-	t.Helper()
-	src, err := kbload.Open(filepath.Join(adjagentFixture, "kb-root"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return src
-}
-
-// fixtureFiles is every file under dir, by slash path relative to it.
-func fixtureFiles(t *testing.T, dir string) map[string][]byte {
-	t.Helper()
-	out := map[string][]byte{}
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(dir, p)
-		out[filepath.ToSlash(rel)] = data
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-// TestAdjagentSheetGoldens: kbase draws the fixture as the full sheet,
-// the digest and the sheets of the two volumes holding nodes — none for
-// gamma, which holds none — and its sheets are the goldens' DOT, byte for byte.
-func TestAdjagentSheetGoldens(t *testing.T) {
-	g, err := load(openAdjagentFixture(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	drawn := map[string]string{}
-	var paths []string
-	for _, s := range g.sheets() {
-		drawn[s.path] = s.dot(false)
-		paths = append(paths, s.path)
-	}
-	if want := []string{kb.ClaimGraphFile, kb.ClaimGraphDigestFile, "alpha/" + kb.ClaimGraphFile, "beta/" + kb.ClaimGraphFile}; !slices.Equal(paths, want) {
-		t.Errorf("sheets %q, want %q", paths, want)
-	}
-	for golden, path := range map[string]string{"claim-graph.dot": kb.ClaimGraphFile, "claim-graph-digest.dot": kb.ClaimGraphDigestFile,
-		"alpha-claim-graph.dot": "alpha/" + kb.ClaimGraphFile} {
-		data, err := os.ReadFile(filepath.Join(adjagentFixture, golden))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := string(data)
-		got, ok := drawn[path]
-		if !ok {
-			t.Errorf("no sheet %s", path)
-			continue
-		}
-		if got != want {
-			gl, wl := strings.Split(got, "\n"), strings.Split(want, "\n")
-			for i := range max(len(gl), len(wl)) {
-				if i >= len(gl) || i >= len(wl) || gl[i] != wl[i] {
-					t.Errorf("%s differs from %s at line %d:\ngot:  %s\nwant: %s", path, golden, i+1, at(gl, i), at(wl, i))
-					break
-				}
-			}
-		}
-	}
-}
-
-func at(lines []string, i int) string {
-	if i < len(lines) {
-		return lines[i]
-	}
-	return "(none)"
-}
-
-// TestDrawnEdges covers what the fixture lacks: a demoted row with no origin
-// draws as the cited cut, whatever the unmarked ask answered for its pair,
-// and a relation with no stroke is not drawn.
+// TestDrawnEdges covers what the fixture lacks: demoted rows of one pair
+// draw as one cut, and a relation with no stroke is not drawn.
 func TestDrawnEdges(t *testing.T) {
-	rows := []kb.EdgeRow{{Source: "a", Target: "b", Relation: kb.RelationDemoted}, {Source: "c", Target: "b", Relation: "unknown"}}
-	got := drawnEdges(rows, func(source, target string) bool { return source == "a" && target == "b" })
-	if len(got) != 1 || got[0].source != "a" || got[0].target != "b" ||
-		got[0].stroke.relation != kb.RelationDemoted || got[0].stroke.provenance != kb.OriginCited {
-		t.Errorf("drawnEdges = %+v, want the a → b cut alone, cited", got)
+	first, second := "first", "second"
+	rows := []kb.EdgeRow{{Source: "a", Target: "b", Relation: kb.RelationDemoted, Context: &first},
+		{Source: "a", Target: "b", Relation: kb.RelationDemoted, Context: &second}, {Source: "c", Target: "b", Relation: "unknown"}}
+	got := drawnEdges(rows)
+	if len(got) != 1 || got[0].source != "a" || got[0].target != "b" || got[0].stroke != strokeFor(kb.RelationDemoted) {
+		t.Errorf("drawnEdges = %+v, want the a → b cut alone", got)
 	}
 }
 
@@ -117,8 +30,8 @@ func TestReduce(t *testing.T) {
 	stroked := func(s *stroke) func(string, string) edge {
 		return func(source, target string) edge { return edge{source: source, target: target, stroke: s} }
 	}
-	dep, asked := stroked(strokeFor(kb.RelationSupports, false)), stroked(strokeFor(kb.RelationSupports, true))
-	founds, demoted := stroked(strokeFor(kb.RelationFounds, false)), stroked(strokeFor(kb.RelationDemoted, false))
+	dep := stroked(strokeFor(kb.RelationSupports))
+	founds, demoted := stroked(strokeFor(kb.RelationFounds)), stroked(strokeFor(kb.RelationDemoted))
 	for _, tc := range []struct {
 		name  string
 		edges []edge
@@ -129,7 +42,6 @@ func TestReduce(t *testing.T) {
 		{"diamond kept", []edge{dep("a", "b"), dep("a", "c"), dep("b", "d"), dep("c", "d")}, []string{"ab", "ac", "bd", "cd"}},
 		{"a path through a non-supports edge does not count", []edge{dep("a", "b"), dep("a", "c"), founds("b", "c")}, []string{"ab", "ac", "bc"}},
 		{"a demoted edge neither reduces nor is reduced", []edge{dep("a", "b"), demoted("a", "c"), dep("b", "c")}, []string{"ab", "ac", "bc"}},
-		{"an inferred edge is a supports edge", []edge{dep("a", "b"), dep("a", "c"), asked("b", "c")}, []string{"ab", "bc"}},
 		{"a cycle keeps every reachability", []edge{dep("a", "b"), dep("a", "c"), dep("b", "a"), dep("b", "c")}, []string{"ab", "ba", "bc"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,8 +117,8 @@ func TestWrapAsPython(t *testing.T) {
 	}
 }
 
-// TestStyleTablesAreTotal: every node kind, relation and band has its
-// drawing, references alone being undrawn, and the legend lists the node kinds
+// TestStyleTablesAreTotal: every node kind and band has its drawing, every
+// relation one stroke, references alone being undrawn, and the legend lists the node kinds
 // in kb.NodeKinds order after a claim's three.
 func TestStyleTablesAreTotal(t *testing.T) {
 	for _, k := range kb.NodeKinds {
@@ -230,12 +142,12 @@ func TestStyleTablesAreTotal(t *testing.T) {
 		t.Errorf("legend node kinds %q, want %q", nodeKinds, want)
 	}
 	for _, r := range kb.Relations {
-		if drawn := strokeFor(r, false) != nil; drawn == (r == kb.RelationReferences) {
+		if drawn := strokeFor(r) != nil; drawn == (r == kb.RelationReferences) {
 			t.Errorf("relation %q: drawn %t", r, drawn)
 		}
 	}
-	if strokeFor(kb.RelationSupports, true) == strokeFor(kb.RelationSupports, false) {
-		t.Error("an inferred supports edge draws as a cited one")
+	if len(strokes) != len(kb.Relations)-1 {
+		t.Errorf("%d strokes for the %d drawn relations, want one each", len(strokes), len(kb.Relations)-1)
 	}
 	if len(ladderFills) != len(kb.BuildBandLadder) {
 		t.Errorf("%d fills for a ladder of %d bands", len(ladderFills), len(kb.BuildBandLadder))
@@ -261,7 +173,7 @@ func TestPlural(t *testing.T) {
 // volume's title and a node title stay inside their DOT strings, and a
 // tooltip's backslash survives Graphviz's escString pass.
 func TestDOTQuoting(t *testing.T) {
-	dep := strokeFor(kb.RelationSupports, false)
+	dep := strokeFor(kb.RelationSupports)
 	g := &graph{kbTitle: `K "B" \x`,
 		volumes: []volume{{"v", `A "quoted" \title <x>`, "v/" + kb.IndexFile}, {"w", "W", "w/" + kb.IndexFile}, {"", `K "B" \x`, kb.EntryPointFile}},
 		nodes: []node{
@@ -298,7 +210,7 @@ func TestGhostDraws(t *testing.T) {
 			{id: "clm-aaaaaa", kind: kindProse, title: "A", href: "claim-rigor.md#a", band: kb.UnknownBandSlug},
 			{id: "clm-zzz999", kind: kindGhost},
 		},
-		edges: []edge{{source: "clm-zzz999", target: "clm-aaaaaa", stroke: strokeFor(kb.RelationSupports, false)}}}
+		edges: []edge{{source: "clm-zzz999", target: "clm-aaaaaa", stroke: strokeFor(kb.RelationSupports)}}}
 	full := g.sheets()[0].dot(false)
 	for _, want := range []string{
 		`"clm-zzz999" [shape=box style="dashed" penwidth=1 color="#c0392b" label="clm-zzz999" tooltip="clm-zzz999 — no record carries this id"]`,
@@ -318,119 +230,10 @@ func TestVolumeCountRule(t *testing.T) {
 			{id: "clm-aaaaaa", kind: kindProse, href: "v/claim-rigor.md", band: kb.UnknownBandSlug, group: "v"},
 			{id: "clm-bbbbbb", kind: kindProse, href: "claim-rigor.md", band: kb.UnknownBandSlug},
 		},
-		edges: []edge{{source: "clm-aaaaaa", target: "clm-bbbbbb", stroke: strokeFor(kb.RelationSupports, false)}}}
+		edges: []edge{{source: "clm-aaaaaa", target: "clm-bbbbbb", stroke: strokeFor(kb.RelationSupports)}}}
 	sheets := g.sheets()
 	if len(sheets) != 1 || sheets[0].path != kb.ClaimGraphFile || strings.Contains(sheets[0].dot(false), kb.ClaimGraphDigestFile) {
 		t.Errorf("one volume: sheets %v, want the full sheet alone, unlinked", sheets)
-	}
-}
-
-// TestLadderThroughFakeDot drives renderSVG over every sheet the emitter
-// composes for the adjagent fixture, with a dot stand-in that refuses any DOT
-// lacking splines=line: the first rung fails and the emitter's retry DOT
-// renders; where the retry fails too, the first error comes back.
-func TestLadderThroughFakeDot(t *testing.T) {
-	g, err := load(openAdjagentFixture(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	fake := filepath.Join(dir, "dot")
-	script := "#!/bin/sh\ninput=$(cat)\nif printf '%s' \"$input\" | grep -q 'splines=line'; then echo '<svg/>'; exit 0; fi\necho 'routesplines failed' >&2\nexit 1\n"
-	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, s := range g.sheets() {
-		if svg, err := renderSVG(s.dot); err != nil || string(svg) != "<svg/>\n" {
-			t.Errorf("%s: renderSVG with fallback = %q, %v; want <svg/>", s.path, svg, err)
-		}
-		unlined := func(bool) string { return s.dot(false) }
-		if _, err := renderSVG(unlined); err == nil || !strings.Contains(err.Error(), "routesplines failed") {
-			t.Errorf("%s: renderSVG where both rungs fail = %v, want the first error", s.path, err)
-		}
-	}
-}
-
-// copiedAdjagentFixture is a writable copy of the adjagent fixture's
-// repository.
-func copiedAdjagentFixture(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	for rel, data := range fixtureFiles(t, adjagentFixture) {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return root
-}
-
-// fullSheetEdge is the full sheet's DOT line for the edge source → target in
-// the KB at root.
-func fullSheetEdge(t *testing.T, root, source, target string) string {
-	t.Helper()
-	src, err := kbload.Open(filepath.Join(root, kb.KBDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	g, err := load(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	edgeLine := `"` + source + `" -> "` + target + `" [`
-	for line := range strings.SplitSeq(g.full(false), "\n") {
-		if strings.Contains(line, edgeLine) {
-			return line
-		}
-	}
-	t.Fatalf("the full sheet draws no %s edge", edgeLine)
-	return ""
-}
-
-// TestCullLinkDrawsInferredEitherWay: a depends row whose direction runs
-// against the cull record's link — target first in id order — draws
-// inferred; the same KB without the record draws it cited.
-func TestCullLinkDrawsInferredEitherWay(t *testing.T) {
-	root := copiedAdjagentFixture(t)
-	if line := fullSheetEdge(t, root, "clm-aaa001", "clm-bbb001"); strings.Contains(line, "style=dashed") {
-		t.Errorf("without a cull record: %s, want the cited stroke", line)
-	}
-	record := "links:\n  - a: clm-aaa001\n    b: clm-bbb001\n    harvest: adjacent\n"
-	if err := os.WriteFile(filepath.Join(root, buildrecords.CullFile), []byte(record), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if line := fullSheetEdge(t, root, "clm-aaa001", "clm-bbb001"); !strings.Contains(line, "style=dashed") {
-		t.Errorf("with the link recorded: %s, want the inferred stroke", line)
-	}
-}
-
-func TestRenderWithoutDot(t *testing.T) {
-	src := openAdjagentFixture(t)
-	t.Setenv("PATH", "")
-	if _, err := Render(src); !errors.Is(err, ErrNoDot) {
-		t.Errorf("Render with no PATH = %v, want ErrNoDot", err)
-	}
-}
-
-func TestRenderDraws(t *testing.T) {
-	sheets, err := Render(openAdjagentFixture(t))
-	if errors.Is(err, ErrNoDot) {
-		t.Skip("no Graphviz dot on PATH")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sheets) == 0 {
-		t.Fatal("Render drew no sheet")
-	}
-	for _, s := range sheets {
-		if !bytes.Contains(s.SVG, []byte(`<svg width="100%"`)) {
-			t.Errorf("%s: the root is not fitted to the viewer", s.Path)
-		}
 	}
 }
 

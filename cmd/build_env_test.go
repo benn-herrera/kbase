@@ -9,6 +9,8 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
+	"kbase/internal/modelclient"
 )
 
 // TestBuildConfiguredByEnvironmentAlone: with no configuration directory at
@@ -36,9 +38,9 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 	var dialled []model.Endpoint
 	providers.NewClient = func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e)
-		return model.NewScriptedMock(nil, nil)
+		return modeltest.NewScriptedMock(nil, nil)
 	}
-	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(newClients(providers.NewClient, nil))
+	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(modelclient.New(providers.NewClient, nil, ""))
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}

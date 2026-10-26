@@ -7,7 +7,7 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-func init() {
+func depsCommand() *cobra.Command {
 	var inverse bool
 	cmd := queryCommand(&cobra.Command{
 		Use:   "deps <id>",
@@ -25,5 +25,5 @@ references or demoted edge makes neither end a dependent.`,
 		return answered(query.DepsPayload(ix, args[0], inverse))
 	})
 	cmd.Flags().BoolVarP(&inverse, "inverse", "i", false, "list the ids depending on <id> instead")
-	rootCmd.AddCommand(cmd)
+	return cmd
 }

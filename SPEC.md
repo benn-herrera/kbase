@@ -12,17 +12,18 @@ Every statement here is decided; where a point was once left open, its ruling is
 
 kbase is a Go binary that builds and maintains a knowledge base (KB) from LaTeX. One or more volume
 roots go in, one KB comes out — its entry point listing every volume — and a set of maintenance
-subcommands then operates on the living KB, at a shell or, through `kbase mcp` (§11), from any agent
-harness that speaks MCP. A KB can also be created empty by `init` (§8) and filled by authoring with
-those same subcommands — no volume, no LaTeX, no build: LaTeX stays the only input format of
-`build`, and `init` is the zero case of the tree, not another input.
+subcommands then operates on the living KB, at a shell or, through `kbase mcp` (§11), from any
+external agent harness that speaks MCP. A KB can also be created empty by `init` (§8) and filled by
+authoring with those same subcommands — no volume, no LaTeX, no build: LaTeX stays the only input
+format of `build`, and `init` is the zero case of the tree, not another input.
 
 - A **volume root** is the top `.tex` file of a paper: the file `00README.json`'s `toplevel` entry
   names, else the sole file containing `\documentclass`.
-- A **KB** is a `kb-root/` directory beside a repository's `.git`: the Markdown document tree, its
-  metadata layer, and `.index/`.
-- The **metadata layer** is what the write API renders into a KB: the YAML frontmatter,
-  registers, Tier-2 markers, `.index/*.yaml` (the format of §10).
+- A **KB** is a `kb-root/` directory beside a repository's `.git`: the Markdown document tree and
+  its metadata layer.
+- The **metadata layer** is what kbase writes into a KB: the node and edge records in `.index/`,
+  the statement markers in the leaves, the format stamp in `.index/format.yaml`, and the register
+  pages `refresh` renders from them (the format of §10).
 - The **load-bearing forms** are the Markdown shapes KB readers key on: the up-link line, the
   cross-reference anchor form, the `` ``` math `` fence, the citation span, and the labelled
   blockquote.
@@ -61,18 +62,26 @@ filter.
 
 | Byte-equal | Reader that needs it |
 |---|---|
-| Metadata rendering (register entries, frontmatter, markers, derived-field placeholders) | The metadata reader; refresh's placeholder recognition; the write ops' locate and splice |
-| `.index/*.yaml` and derived fields | Refresh's freshness gate (dry-run refresh diffed against disk) |
+| Statement markers | The marker reader; `mark-claim-in-leaf`'s locate and splice |
+| `.index/format.yaml` | `kbload`'s stamp read — the version is the bytes the file holds — and every save, which rewrites it only where its bytes change |
+| Register pages | `verify`'s freshness check (`register freshness`: each page rendered in memory and compared with the bytes on disk) |
+| `.index/nodes.yaml`, `.index/edges.yaml` | The write ops' idempotence: whole files rendered deterministically |
 | `kb-root/CLAUDE.md` exactly `@AGENTS.md` | Refresh's precheck of the stamped documents (`check: agents-redirect`) |
 | The `` ``` math `` fence opener | The inventory's display-maths fence reader |
 | The up-link line | `kb.UplinkMarker` and the readers that key on it |
 | The claim-graph sheets' DOT, against the DOT goldens (`internal/sheet/testdata/`) | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, `refresh` and `render-claim-graph` leave an unchanged sheet's bytes as they are |
 
 **Stamped documents.** `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands:
-kbase's subcommands.
+kbase's subcommands. They point a reader at kbase's tools, never at its records: `AGENTS.md`
+forbids reading `.index/`, the claim-graph sheets and any `.dot` file, and states the rule that a
+session sets a rigor or a bearing only to a value the user gave, as the MCP server's instructions do
+(§11). A register page is the one exception: `refresh` generates it as prose for people and
+sessions to read, and nobody takes a value from it or edits it. `CONVENTIONS.md` states that the
+records and the statement markers are written only by a write op, never by hand. `AGENTS.md` and
+`CONVENTIONS.md` are kbase's: a migration save writes both whole from the current templates (§10).
 
-**Formats.** A new KB is written in the current metadata format, `2.0.1` (§10). A KB in a superseded
-form — `0.9.0` or `1.0.0` (§10) — is read through migration.
+**Formats.** A new KB is written in the current metadata format, `3.0.0` (§10). A KB in a
+superseded form, `2.0.x` or `1.0.0` (§10), is read through migration.
 
 **Theorem numbering** is whatever pandoc prints.
 
@@ -87,8 +96,8 @@ other command's behaviour depends on them (ARCHITECTURE §6).
 **Three kinds of sheet.**
 
 - `kb-root/claim-graph.svg` is the full sheet of the whole KB, always drawn: every volume a cluster
-  holding its attached nodes. The sheet's title, and the label of the cluster of claims registered
-  at `kb-root/` level, is the entry point's first heading, verbatim; `kb-root` where it has none.
+  holding its attached nodes. The sheet's title, and the label of the cluster of nodes no volume
+  hosts, is the entry point's first heading, verbatim; `kb-root` where it has none.
   The KB title is the graph's label across the top. A volume's cluster is titled from its `index.md`
   first heading, falling back to the directory name, with the subtitle "N nodes · M unattached".
 - `kb-root/claim-graph-digest.svg` is the volume digest: one box per volume listing its node counts
@@ -99,47 +108,42 @@ other command's behaviour depends on them (ARCHITECTURE §6).
 - `kb-root/<volume>/claim-graph.svg`, one per volume, a top-level directory holding an `index.md`:
   the volume's claims plus every claim one edge away, drawing only edges with an end in the volume.
 
-The digest and the per-volume sheets exist only where two or more volumes hold nodes; the
-`kb-root/`-level claims are not a volume, and a volume holding no node has no sheet and no digest
+The digest and the per-volume sheets exist only where two or more volumes hold nodes; the nodes no
+volume hosts are not a volume, and a volume holding no node has no sheet and no digest
 box. A one-volume KB has the full sheet alone. A digest or volume sheet the KB no longer calls for
 is removed by the next render, and reported (§7); a file named `claim-graph.svg` directly inside a
 top-level directory of `kb-root/` is by definition such a sheet.
 
 **What is drawn.** The four scoring relations — `supports`, `founds`, `lifts` and `refutes` — each in
 a stroke of its own, every stroke pointing in the push direction, from the supporter to the node it
-supports. `references` edges are not drawn, except those the build's cycle breaking cut from
-`supports`, which are the index's `demoted` rows (§10), drawn as cuts. A KB whose cuts are plain
-`references` rows draws no cuts. A node with no drawn edge is not drawn as a node; it is listed in a
-table titled "unattached (N)", one row per node with a link and a tooltip. Of the drawn `supports`
-edges, only the transitive reduction appears; it checks an edge only against the edges still kept. Of
-`supports` edges sharing a source and target, one is drawn whatever their contexts.
+supports. `references` edges are not drawn; a `demoted` edge (§10) is drawn as a cut. A node with
+no drawn edge is not drawn as a node; it is listed in a table titled "unattached (N)", one row per
+node with a link and a tooltip. Of the drawn `supports` edges, only the transitive reduction
+appears; it checks an edge only against the edges still kept.
 
-- *Edges*: a `supports` edge is **cited**, black solid, where the paper's text marks the dependency,
-  or **inferred**, blue dashed, where the build found it with no mark. An edge source → target was
-  found with no mark where the unmarked record answers (source, target) yes in that direction, or
-  where the cull record's `links` hold its pair either way round (§6). Of the build records beside
-  `kb-root/` the sheet reads only the unmarked record and the cull record's links, for that
-  distinction; an absent record finds nothing. `founds`, `lifts` and `refutes` edges are each drawn
-  in a style of their own, beside the supports strokes. A **cut**, read from the index's `demoted`
-  rows, is drawn dotted red, heavier where its origin is `cited` (or absent) than where it is
-  `inferred`; its tooltip names the origin (`cut, cited`, `cut, inferred`), and the digest counts
-  cuts by origin (`1 cited cut`) and draws a bundle of cuts at the cited weight. Both origins share
-  one legend row, "cut from supports: part of a circle (cited / inferred)".
+- *Edges*: each relation is drawn in one style of its own — `supports` black solid, and `founds`,
+  `lifts` and `refutes` each a stroke beside it — whatever the build knew of how an edge was found:
+  the sheet reads no build record. A **cut**, a `demoted` record, is drawn dotted red in the
+  direction of the edge it replaced; its tooltip calls it `cut`, the digest counts cuts beside the
+  other classes (`1 cut`) and draws a bundle of them, and its legend row reads "cut from supports:
+  part of a circle".
 - *Nodes by kind*, seven, each with its own mark: a labelled block (bold frame), an equation, prose,
   an analysis (dashed rounded), an experiment (component shape), an axiom (grey, bold frame), a work
   (note). An edge end that no record carries is drawn as a ghost box, dashed red, labelled with the
   id. Claims and analyses are filled by strength band, `*pending*` in grey. A node's tooltip reads
   `<id> [<kind>, <band>] <title>`, the band omitted for a node that has none, every backslash in it
   shown as written (`$\Gamma$` does not become the graph's name).
-- *Links*: every node links to its register entry; a digest box links to the volume's index and
-  sheet.
+- *Links*: every node links to its canonical place (§10) — a claim's or a work's entry on its
+  register page, an analysis's or an experiment's section in the leaf hosting it, an axiom's heading
+  in `axioms.md` — and a claim with no host links nowhere; a digest box links to the volume's index
+  and sheet.
 - A legend. The SVG root is `width="100%"` with a `viewBox`, so it scales to the viewer.
 
 **Without `dot` on `PATH`**, no sheet is rendered: an existing sheet is left as it is, and where
 `kb-root/claim-graph.svg` does not exist `refresh` writes a placeholder there — an SVG naming the
 missing tool and, beneath it, `index sha256:` followed by the first 12 hex digits of the SHA-256 of
-the `.index/*.yaml` files concatenated in sorted path order, deterministic. `refresh` says so in one
-line on stderr; `render-claim-graph`'s result names the lack (§7).
+the `.index/` files — the two record files — concatenated in sorted path order, deterministic.
+`refresh` says so in one line on stderr; `render-claim-graph`'s result names the lack (§7).
 
 ---
 
@@ -187,7 +191,7 @@ outcome `bounded`, exit 0 (§7).
 **Inference preflight.** A build with a stage left to walk that calls a model refuses (§7,
 `refused`) before the first stage it walks when no provider is configured (§9), naming the
 configuration it lacks; its `detail` names `kbase show-config` as the diagnostic that shows how the
-configuration resolved (§9.7). A build spending no inference needs none. Every model call a build
+configuration resolved (§9.6). A build spending no inference needs none. Every model call a build
 makes is one tool-less chat request answered from its prompt alone — except the claim-graph letter
 asks, which are each one `POST` to the decision surface the selected entry names (§9.1) carrying a
 closed-set question (a `choice` or `noul` question over the offered letters) and answered by
@@ -213,17 +217,24 @@ and reports the file.
 **Under `--no-inference`** no `README.md` is written: the overview call is the dropped row, and the
 README is assembled around its passage.
 
-**Monitoring.** `build` runs in the foreground; an agent harness backgrounds it. `kbase status` and
-`kbase cancel` (§6) observe and stop it.
+**Monitoring.** `build` runs in the foreground; an external agent harness backgrounds it. `kbase
+status` and `kbase cancel` (§6) observe and stop it.
 
 **What a build produces**: Markdown leaves; the index, up-link and cross-reference structure;
-load-bearing forms; claim-graph registers and nodes; the derived index. The build's stages and what
-each does are in ARCHITECTURE, "Stage table"; how each computes its product is ARCHITECTURE's.
+load-bearing forms; the claim graph's node and edge records; the register pages. The build's stages
+and what each does are in ARCHITECTURE, "Stage table"; how each computes its product is
+ARCHITECTURE's.
+
+**A build marks every claim.** Every claim a build mints is hosted in the call that mints it: its
+statement marker (§10) stands in its leaf, a leaf's only claim and an equation included — an
+equation's at the end of the line inside its display-maths fence that carries its `\label{…}`,
+never on the fence's closing line; a block claim's on its locator's line.
 
 **A build records no judgement.** Every scoring edge a build writes carries `*pending*` as its
-bearing, and no stage writes a `rigor` or any other number into a score: the judgement is a person's,
-through `set-rigor` and `set-bearing` (§8). A claim a build attaches an edge to reads unchanged until
-that edge is judged.
+bearing, and no stage writes a `rigor` or any other number into a score; every value a build writes
+is `manually-scored: false` (§8). The judgement is a person's, through `set-rigor` and `set-bearing`,
+or a scoring run's (§8). A claim a build attaches an edge to reads unchanged until that edge is
+judged.
 
 **Co-linearity cull (`claims-culled`).** The stage walks between `references-found` and
 `depends-attributed`, and removes prose claims that state no step a linked claim does not. Its
@@ -239,8 +250,7 @@ keep. A claim several answers cull goes into the earliest of their partners in r
 following those to a claim culled into nothing gives its root. A claim whose root is not the claim
 it was culled into is asked once more against its root and kept unless that answer names it as
 adding nothing; no claim is asked a third time. A culled claim is removed — its outgoing and
-inbound edges, then its register entry, its marker and its id in every leaf's `claims`, a leaf whose
-only claim it was restated no-claim with a fixed reason — and no edge is added. The stage asks no
+inbound edges, then its node record and its statement marker — and no edge is added. The stage asks no
 direction: every inferred link that survives, one with a culled end re-pointed onto that end's root,
 goes undirected to the cull record (§6) for dependency attribution. Under `--no-inference` the stage
 is still walked with its row dropped: no ask is made and the cull record stands as the declared
@@ -256,8 +266,8 @@ node. *Supported by* writes a `supports` edge from source to target, *in support
 to source, and *mention* a `references` edge. A candidate whose ask yields no readable answer after
 the re-ask, and every candidate under `--no-inference`, takes its draft: *supported by* where
 containment directed the pair, *mention* otherwise. The stage writes every edge its answers make,
-cycles included; last, every `supports` edge lying on a cycle is demoted (§10), before the stage's
-refresh and verify.
+cycles included; last, the cycle walk (§10) demotes one edge of each cycle those edges close, each
+cut a warning in the stage's report, before the stage's refresh and verify.
 
 **Records and inference.** The reader and placement facts the claim graph needs travel as records in
 the build state store, not in `kb-root/` (ARCHITECTURE, "Records"). Each inference pass is one
@@ -292,22 +302,30 @@ kbase-owned paths to the last stage commit and re-runs the stage. **A build in f
 `kb-root/`:** a resume restores every path under it to the last boundary, whatever was done to it
 since, and nothing vets what it finds there. An edit made while a build is interrupted is the
 editor's to carry in git, by waiting for the build or by reverting the commit that reset it; a write
-op, `refresh` or `render-claim-graph` attempted while a build runs is refused (§8). Commits are
-scoped by pathspec to kbase-owned paths.
+op, `refresh` or `render-claim-graph` attempted while a build or a scoring run runs is refused (§8).
+Commits are scoped by pathspec to kbase-owned paths.
 
-**The state store holds what does not belong in the repository** — the pid and the holder lock
-`status` and `cancel` read, `progress.jsonl`, per-call evidence, the docgraph records (§5), a
+**The state store holds what does not belong in the repository** — the holder lock and the record
+the holder writes, which `status` and `cancel` read: the holder's pid, its start, the verb that owns
+the run (`build` or `score`) and, for a scoring run, its run id — `progress.jsonl`, per-call
+evidence, the docgraph records (§5), the scoring runs under `score/` (each with its ledger and
+`captures.jsonl`, every call's closed text, prompt and reply, failures included; §8), a
 per-unit answer cache keyed by input hash, and the captured output of a build the MCP server starts
 (§11). Nothing in it is authoritative for position. A clean exit removes the holder lock's file,
-cancel included, so a file standing in the store is never evidence of a live holder. The store
+cancel included, so a file standing in the store is never evidence of a live holder. The kind is
+required of the record: one naming neither verb is a store another version wrote, `refused` with
+`check: state-dir`, `path` the record, and never read as a build's. The store
 lives at `$XDG_STATE_HOME/kbase/<key>/`, where `<key>` is the first 16 hex digits of the SHA-256 of
 the absolute, symlink-resolved `kb-root/` path, overridable with `--state-dir`; it holds paid-for
-inference and survives `git clean`. **The run lock is in the repository's git directory**,
-`kbase-build.lock`, recording the state-dir: one build runs on a repository at a time, whatever
-`--state-dir` each names. A second build is `refused` with `check: lock`, `path` the running build's
-state-dir, and no remedy; where the run lock is held but names no state-dir yet (the build is
-starting), the second build gets `retry`. Every lock is advisory and exists on Unix only; on Windows
-`status` cannot see a running build and no lock-based refusal or `retry` is given.
+inference and survives `git clean`. **The operation lock is in the repository's git directory**,
+`kbase-operation.lock`, recording the state-dir: a repository carries one run at a time — a build or
+a scoring run, never both — whatever `--state-dir` each names. A second run is `refused` with `check: lock`,
+`path` the running run's state-dir, and no remedy, its `detail` naming the holder's verb and pid: "a
+build (pid 4321) is running; its state-dir is …", or "a score run (pid 4321) is running; …". Where
+the operation lock is held but names no state-dir yet, the second run gets `retry`; where it names
+one whose holder record is not yet written, the refusal says a run is starting. Every lock is
+advisory and exists on Unix only; on Windows `status` cannot see a running run and no lock-based
+refusal or `retry` is given.
 
 **The state store is versioned.** `<state-dir>/format` holds one integer, currently `1`, written
 when a build first holds the store; a store with no `format` file is version 1. `build`, `status`,
@@ -317,10 +335,21 @@ when a build first holds the store; a store with no `format` file is version 1. 
 stepwise and resumes if interrupted. The store's version is independent of the KB format version
 (§10).
 
-**The state store is pruned only by a build.** At a build's start, the captured output of earlier
-builds (`reports/build-*`) and the call captures (`scratch/captures/`) last modified before the
-start of the fifth-latest build that ended are removed; a build that ended `refused` or `retry` does
-not count. The answer cache and the stage reports are kept. `status` and `cancel` remove nothing.
+**The state store is pruned only by a build or a scoring run.** At a build's start, the captured
+output of earlier builds (`reports/build-*`) and the call captures (`scratch/captures/`) last
+modified before the start of the fifth-latest build that ended are removed; a build that ended
+`refused` or `retry` does not count. At a scoring run's start, once its own run directory stands,
+the run directories under `score/` are pruned by kind: a real run's id is `run-<id>` and a dry run's
+`dry-<id>` (§8), a directory's kind is its name's prefix, and the invocation keeps, of its own kind,
+16 runs — the run it names, created or resumed, and the newest 15 others by the start their
+`run.yaml` records, equal starts ordered by name with the later name newer — and removes the rest of
+that kind whole, captures included. A dry run never removes a real run, nor a real run a dry one,
+and a dry run an earlier kbase minted as `run-…` counts as real. A directory whose `run.yaml` is
+absent or unreadable has no start to order by and is left. An invocation refused before its run
+directory stands — a `--resume` naming a run no longer standing among them — removes nothing. A
+resumed run's `captures.jsonl` loses a torn last line before anything appends to it, as its ledger
+does. The answer cache and the stage reports are kept. `status` and `cancel`
+remove nothing.
 Deleting the store is always safe, but it forfeits the answer cache, whose entries were paid for in
 inference; `status` reports its size.
 
@@ -340,11 +369,30 @@ is the one state the build never writes: it is derived from a run event with no 
 holder that is not live.
 Progress is persisted to a file so a late or reconnecting monitor catches up.
 
+**A score run's status.** Where the store's holder record names a score run, `status` reports that run
+in its own shape instead of the build's: `state-dir`; `state` (`running` while the record holds the
+store, else `interrupted` where the run left no result document, or the outcome
+its result document records — `done`, `bounded`, `cancelled`, `failed`, `refused`
+or `retry`); `pid`;
+`started`; `run`; `pass`; `counts` (`total`, `done`, `failed`, `skipped`, `remaining`, read from the
+run's `items.jsonl` and the status `ledger.jsonl` last records for each); `scored` (the items whose
+value landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
+continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
+document: `wait` prints the result document the run wrote beside its ledger. A store no live run
+holds, and whose record names no score run, reports its newest run, whichever verb it was: the later
+of the newest score run's start, read from its `run.yaml`, and the newest build invocation's, read
+from the progress record — each the record the run already wrote. A run directory whose `run.yaml` is
+absent or unreadable left no record of when it started and is skipped. Where the store records
+neither run, or the two starts cannot be compared — a missing or unparsable stamp on either side — it
+reports the build as above.
+
 ### `kbase cancel`
 
-Signals the lock holder. The in-flight call is abandoned with nothing written for it; the event is
-logged, the lock is released, and the build process exits `cancelled`. Cancel costs only the
-in-flight unit; the build is resumable.
+Signals the store's holder, a build or a scoring run as the holder record names it. The in-flight
+call is abandoned with nothing written for it; the event is logged, the lock is released, and the run
+process exits `cancelled`. Cancel costs only the in-flight unit or item; the run is resumable, and a
+cancelled score run's `resume` is the command read from its result document. A store no run holds is
+`refused`: `check: lock`, `path` the store's holder lock, detail "no run holds the state store".
 
 ### `kbase wait`
 
@@ -369,10 +417,12 @@ usage error on its own command line, before it serves, still prints a YAML refus
 
 1. `outcome`.
 2. `kb-root`: the absolute path. Present on every subcommand that resolves a KB, which is all of
-   them except `models`, `configure` and `show-config`; `init` omits it from results written while
-   no `kb-root/` stands (§8).
-3. `migration`: a conditional record — `from`, `to`, `note` — present on the result of every verb
-   that reads a KB through the loader on an older format version, and absent otherwise (§10):
+   them except `models`, `configure`, `show-config` and `probe`; `init` omits it from results written
+   while no `kb-root/` stands (§8).
+3. `migration`: a conditional record — `from`, `to`, `note`, `warnings` (one item per thing the
+   conversion dropped or changed that the converted files do not show: `path`, `line` where it
+   names one, `detail`; `[]` when none) — present on the result of every verb that reads a KB
+   through the loader on an older format version, and absent otherwise (§10):
    `refresh`, `verify`, `render-claim-graph`, `render-citation`, `export-latex`, the queries, `score`
    and every write op. It follows `kb-root` where the result carries both.
 4. The subcommand's own keys, in the order its table gives.
@@ -383,9 +433,11 @@ usage error on its own command line, before it serves, still prints a YAML refus
 
 Keys are kebab-case. The one exception is query data under `results`, which keeps the query data's
 own names verbatim (`strengthen_by`, `mentioned_ids`). The same fact always uses the same key:
-`written` (files this call wrote; kb-root-relative inside `kb-root/`, absolute outside it; `[]` when
-nothing was written), `ids` (node ids, in entry order), `count` (a total before any limit), `resume`
-(a shell command that continues the work), `state-dir` (the state store's absolute path).
+`written` (files this call wrote, a path named once however many times the call wrote it — a
+converted file a phase writes and a later phase rewrites is still one entry; kb-root-relative inside
+`kb-root/`, absolute outside it; `[]` when nothing was written), `ids` (node ids, in entry order),
+`count` (a total before any limit), `resume` (a shell command that continues the work), `state-dir`
+(the state store's absolute path).
 
 **Item.** Every refusal, failure and verify finding is one mapping with these keys in this order, a
 key omitted when it does not apply; `detail` is always present, with at least one of `check`, `path`
@@ -393,7 +445,7 @@ or `key`:
 
 | Key | Holds |
 |---|---|
-| `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `harness`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `symlink`, `conversion`, `demoted`, `axiom-source`, `dependency-cycle` |
+| `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `degraded`, `symlink`, `conversion`, `demoted`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
 | `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it |
@@ -414,20 +466,23 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `build` | `state-dir`; `roles` (one record per role the build resolved, in role order — `decision`, then `text` — in the role record's shape below; absent where it resolved none, as under `--no-inference`); `through` (absent where this invocation walked no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store); absent where this invocation walked no stage); `resume` (absent where an identical re-issue continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that walked no stage, and a `refused` run that recorded no boundary) |
 | `status` | `state-dir`; `state` (§6's vocabulary, `interrupted` included); `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` (absent for `finished`, `running` and `bounded`; read from the run §6 names) |
 | `cancel` | `state-dir`; `pid`; `resume` (absent where the record's command does not read as a `kbase build` invocation, §6) |
-| `init` | `written` (every path this call wrote — the spine, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
-| `refresh` | `written` (includes every sheet written); `removed` (files the KB no longer calls for — a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none) |
-| `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` edge (§10), as items with `check: demoted`, `path` the register, `detail` the edge and its origin; and each declaration a legacy `AGENTS.md` still carries beside an `axioms.md`, as an item with `check: axiom-source`, `path` that file, `line` the declaration's line and `detail` the token as written, informational and carrying no `remedy`; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
+| `init` | `written` (every path this call wrote — the spine, the two empty record files, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
+| `refresh` | `written` (includes every register page and sheet written); `removed` (files the KB no longer calls for — a register page no node is rendered on, a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none); `warnings` (one item per record the repair of a degraded load dropped and per edge it cut (§10), `path` the record file and `detail` the record and why; `[]` when none) |
+| `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` record (§10), as an item with `check: demoted`, `path` the register page of the record's `target`, omitted where that target has no host, and `detail` the edge and the relation it replaced; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
 | every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (paths this call wrote); `refreshed` (paths; null under `--no-refresh`); `removed` (the trailing refresh's, as `refresh`'s; `[]` under `--no-refresh`) |
 | `resolve-demoted` | as every write op; `resolved` (list of `source`, `target`, `action`: `removed` or `restored`) |
 | `render-citation` | `citations` (one per entry, in entry order) |
-| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; the context null where the edge has none) |
-| `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
-| `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (as `refresh`'s); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
+| `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength-below`, `subtree`, `weak-points`, `edges` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `manually_scored`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; `manually_scored` the record's flag (§8), null where its record carries none; the context null where the edge has none; `edges`' records are `source`, `relation`, `target`, `bearing` (as `deps`' bearing), `manually_scored` (as `deps`'), `context` (as `deps`') and `walked` (bool)) |
+| `show`, `stats`, `edge-census` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `show` adds `manually_scored` (§8) after `rigor` on a claim, an analysis and an experiment; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `rigor_manual`, `rigor_model`, `bearing_manual` and `bearing_model` (the records whose type carries `manually-scored`, `*pending*` values included, counted by the flag), then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none); `edge-census`' mapping carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`, and on `supports`, `lifts` and `refutes` `manual` and `model` after `edges`, the rows at that bearing counted by their `manually-scored` flag; numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows) |
+| `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (the sheets the volume-count rule drops; `[]` when none); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
-| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists`, `harnessesExists` — the directory's presence and each of its three files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `harnesses` (the loaded profiles in name order: `name`, `layer` (the layer whose file supplied it), `command` (the argv as written, tokens in place); `[]` where none loads); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
-| `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `harnesses.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
+| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
+| `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
+| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
-| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass`; `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item is not `done`, and it stands before the record the outcome closes on — absent from a dry run, and from a stop before the walk) |
+| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
+
+A `status` read over a score run reports §6's score shape in place of the build keys above.
 
 **The role record.** A verb whose endpoints are per role states them in `roles`, one record per role
 it resolved, in role order — `decision`, `text`, `scoring` — with these keys in this order, each
@@ -436,29 +491,26 @@ omitted where it does not apply:
 | Key | Holds |
 |---|---|
 | `role` | `decision`, `text` or `scoring` |
-| `back-end` | what answered: `provider` (a pool entry), `environment` (the environment's endpoint) or `harness` (a profile) |
+| `back-end` | what answered: `provider` (a pool entry) or `environment` (the environment's endpoint) |
 | `provider` | the pool entry's name |
 | `provider-rule` | the rule that named it: `flag` (a flag overrode the reference) or `config` (the reference named it) |
 | `provider-layer` | the layer that supplied the entry: `explicit`, `environment`, `repository` or `global` |
 | `model` | the model id this invocation asked for; null where no source named one |
-| `harness` | the profile's name, under a harness alone |
-| `harness-layer` | the layer that supplied the profile: `explicit`, `environment`, `repository` or `global` |
 | `base-url`, `sources` | `show-config` alone: the endpoint, and the layer that supplied each field |
 | `detail` | `show-config` alone: why the role does not resolve, where it does not |
 
 `provider`, `provider-rule` and `provider-layer` stand together or not at all: no pool entry supplied
-the endpoint when the environment did, or when a harness did. `back-end` is what tells the three
-cases apart, so a reader never infers the source from an absence.
+the endpoint when the environment did. `back-end` is what tells the two cases apart, so a reader never
+infers the source from an absence.
 
 **The model is the one requested, never one observed.** `model` is the id this invocation asked for,
-and no result document or ledger line states one a server or a command ran. It is null where no
-source named one, and a harness profile whose command names no `{model}` asks its own model, which
-kbase cannot name — that null is how a reader tells a harness's own choice from a named model.
+and no result document or ledger line states one a server ran.
 
 **Bounded results.** List queries take `--limit N` (default in ARCHITECTURE §12; `0` means all) and
 `--offset N`; where `truncated` is true the caller re-issues the query with `--offset` set to
-`offset + len(results)`. `stats`' ranked sections stay at 10. No other subcommand's result
-grows with the KB; `build`'s per-stage detail goes to the `report` file, not stdout.
+`offset + len(results)`. `stats`' ranked sections stay at 10. `edge-census`' `bearings` hold one
+record per distinct bearing value. No other subcommand's result grows with the KB; `build`'s
+per-stage detail goes to the `report` file, not stdout.
 
 **Exit codes** derive from `outcome`:
 
@@ -466,7 +518,7 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 |---|---|---|
 | `done`, `unchanged`, `bounded` | 0 | Success, including a `--through`-bounded run |
 | `refused` (including verify faults and usage errors) | 1 | Wrong input or KB state; nothing written past the last checkpoint |
-| `retry` | 2 | Another writer holds the KB write lock past the wait (`check: lock`, `path` the repository root), or another build holds the state store (its holder lock, §6); re-issue identically later. A running build is not `retry`: it is `refused` with the `lock` item (§6) |
+| `retry` | 2 | Another writer holds the KB write lock past the wait (`check: lock`, `path` the repository root), or another run holds the state store (its holder lock, §6); re-issue identically later. A run holding the operation lock is not `retry`: it is `refused` with the `lock` item (§6) |
 | `failed` | 3 | Defect in the tool, its input or the environment; re-issuing will not fix it |
 | `cancelled` | 4 | Stopped on request; resumable |
 
@@ -474,9 +526,10 @@ grows with the KB; `build`'s per-stage detail goes to the `report` file, not std
 
 ## 8. Maintenance subcommands
 
-Every subcommand below but `score` is a builtin tool an agent harness can call; `score` drives one
-model call per item and runs as the binary, excluded from the server (§11). The rules in this
-section govern each.
+Every subcommand below is a builtin tool an external agent harness can call, `probe` excepted — a
+tool would let an agent poll a model, which no KB operation asks for (§11); `score` starts a detached
+child that asks one model call per item and returns at once with the run's identity, so the turn is
+not held for the walk's duration (§11). The rules in this section govern each.
 
 **Values input.** YAML (JSON accepted) on stdin or `--values`. The per-op key vocabulary is closed,
 and stated once, in kbase's write package; it is not copied into prose. A refusal names the key, its
@@ -485,12 +538,20 @@ U+0008 or U+000C is refused.
 
 **Idempotence.** Every mutating op is idempotent under re-issue: the same values issued twice leave
 `kb-root/` byte-identical to issuing them once, and the second call reports `unchanged`. An insert
-adopts an existing entry of the same register and title (an insert's values name no host; the host
-is assigned later through `set-frontmatter` and the marker); a work is adopted by its key. The one
+of a claim, an analysis or an experiment adopts by title and host: given a `document`, it adopts a
+node of that title hosted there, else one of that title with no statement marker, which it then
+marks there; given no `document`, it adopts only a node of that title with no marker; otherwise it
+mints. No insert adopts by title alone, and an experiment is adopted only where its status, and
+the rigor and the `supports`, `lifts` and `refutes` lists the values supply, also equal the supplied
+ones; a rigor, a list or a pair's bearing left out is not compared. A work is adopted by its
+citation key, an axiom by its label; a batch naming twice a key or label the KB does not yet hold is
+refused at the repeat. An adoption that writes nothing is `unchanged`; one that marks an unhosted node is `done`. The one
 exception is `init`: creation is birth-once (below), and a re-issue where a `kb-root/` stands
 is `refused`, never `unchanged`.
 
-**Writes leave nothing stale.** A mutating op ends with a refresh unless `--no-refresh` is given.
+**Writes leave nothing stale.** A mutating op ends with a refresh unless `--no-refresh` is given;
+one that ends with a refresh refuses, before it writes anything, a `kb-root/CLAUDE.md` that is not
+the redirect (`check: agents-redirect`, §3), which that refresh would refuse.
 
 **One write lock.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the
 whole run: from loading the KB through the trailing refresh and the sheets to the result. `init`
@@ -498,12 +559,13 @@ holds it from before `kb-root/` exists — the lock sits on the directory `kb-ro
 is available at birth — through the skeleton, the trailing refresh and the birth commit to the
 result. `score` takes it around each landing and around each of its two refreshes, never across the
 run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
-repository root, and the remedy. A write verb probes for a running build (§6) before it waits on the
-write lock and again after taking it: where a build runs it is `refused` with the `lock` item at
-once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes
-(`retry` if it cannot); its own writes take no lock. `render-citation`, `verify` and the queries take
+repository root, and the remedy. A write verb probes for a run holding the operation lock (§6) before
+it waits on the write lock and again after taking it: where one runs it is `refused` with the `lock`
+item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it
+writes (`retry` if it cannot); its own writes take no lock, and neither do a scoring run's landings
+and refreshes, which write as the run that holds the operation lock. `render-citation`, `verify` and the queries take
 no lock. On Windows no
-advisory lock exists (§6): neither the `retry` nor the build-running refusal is available there, and
+advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and
 one writer at a time is the operator's to keep.
 
 **Batches** are all-or-nothing.
@@ -525,10 +587,11 @@ creation is birth-once, a re-issue where a tree stands is `refused`, never `unch
 a refusal that found no `kb-root/` carries no `kb-root` key; the refusal items name the paths.
 
 Then, under the KB write lock from before the directory exists (§8): it writes `entry-point.md` —
-frontmatter `kind: entry-point`, stamped (§10), with the `--title` text, or the repository's
-directory name, as the only heading and no children — and `kb-root/.index/`, empty; stamps the
-readiness documents, `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect, each only where
-absent, `AGENTS.md` pinned that this KB is authored, not distilled — what it holds its author writes
+with the `--title` text, or the repository's directory name, as the only heading, no children and
+no frontmatter (§10) — the format stamp file, `.index/format.yaml` (§10), and the two record files,
+`.index/nodes.yaml` and `.index/edges.yaml`, holding no record; stamps the readiness documents, `AGENTS.md`,
+`CONVENTIONS.md` and the `CLAUDE.md` redirect, each only where absent, `AGENTS.md` pinned that this
+KB is authored, not distilled — what it holds its author writes
 into it, a claim at a time; then refreshes, so the derived metadata layer is present at birth
 (§3's full sheet always, the placeholder where `dot` is absent, the digest and volume sheets
 not drawn: no volume holds a node). Every input to the skeleton is kbase's own, so `init` runs no
@@ -546,76 +609,102 @@ Each op's result keys are §7's.
 ### `resolve-demoted`
 
 The op over a cut (§10). Values:
-`entry` items of `id` (the source claim), `target`, and `action`: `remove` or `restore`. `remove`
-deletes the `demoted` row; `restore` rewrites it as a `supports` premise edge, refused (`check:
-dependency-cycle`, `entry` the item's number, `detail` naming the path `target → … → id → target`)
-where that would close a cycle, and refused where the pair has neither a `demoted` nor a `supports`
-edge. A batch naming the same (`id`, `target`) pair twice is refused whatever the actions: the
-item's `entry` is the repeat's number, its `key` is `target`, and its `detail` names the first
-entry. Idempotent: a re-issue is `unchanged` — a pair with no `demoted` row and `remove`, or already
-a `supports` edge and `restore`. Runs the trailing refresh as every write op does.
+`entry` items of `id` (the node the replaced edge went into, the record's `target`), `target` (the
+other end, the record's `source`) — each a claim, an analysis or an experiment — and `action`:
+`remove` or `restore`. `remove` deletes the `demoted` record, leaving the edge cut; `restore` writes
+the edge it replaced exactly — its relation, ends, context, bearing and `manually-scored` — refused
+(`check: dependency-cycle`, `entry` the item's number, `detail` naming the cycle the restored edge
+would close) where that would close a cycle, and refused where the pair has neither a `demoted`
+record nor the replaced edge standing. A batch naming the same (`id`, `target`) pair twice is
+refused whatever the actions: the item's `entry` is the repeat's number, its `key` is `target`, and
+its `detail` names the first entry. Idempotent: a re-issue is `unchanged` — a pair with no `demoted`
+record and `remove`, or with the replaced edge standing and `restore`. Runs the trailing refresh as
+every write op does.
 
 ### `insert-claim-entry`
 ### `insert-analysis-entry`
 ### `insert-experiment-entry`
 ### `insert-work-entry`
+### `insert-axiom-entry`
 ### `set-bearing`
 ### `set-rigor`
 ### `set-rationale`
+### `set-status`
 ### `add-rests-on`
-### `set-frontmatter`
+### `add-pairs`
 ### `mark-claim-in-leaf`
 
-An insert creates a missing register only under `--create`.
+Each writes records and statement markers (§10), and none names a register: which register page
+shows a node follows from its host. An insert writes a node's record and its edges in one act;
+`insert-claim-entry` given `document` and `locator` together places the claim's marker at the
+located line in the same call, and given one without the other is refused, naming the missing key;
+`insert-analysis-entry` given a `document`, and `insert-experiment-entry`, which requires one, place
+the marker on a new line directly after that document's first heading. `mark-claim-in-leaf` places
+or moves a claim's, an analysis's or an experiment's one marker, appending it to the line the
+locator names. `insert-axiom-entry` records an axiom by `label` and `title`.
 
 The values take the shapes §10 gives them: a node's `rigor`; `rests-on` entries of `{id, context,
-bearing}`; and pair entries of `{id, bearing}` in a claim's `refutes`, an analysis's `lifts` and
-`refutes`, and an experiment's `supports`, `lifts` and `refutes`, which also takes its `status`.
-`set-rigor` takes `id` and `rigor`; `set-bearing` takes `id` (the source), `target`, `relation` and
-`bearing`; `add-rests-on` takes `id` and the `rests-on` and `references` lists it adds. Each op's
-closed key set is `kbase <op> --help`'s, as for every op.
+bearing}`; pair entries of `{id, bearing}` in a claim's `refutes` and, at insert, in an analysis's
+`lifts` and `refutes` and an experiment's `supports`, `lifts` and `refutes`; and `add-pairs`'
+entries of `{id, bearing, context}`, from an existing claim (`refutes`), analysis (`lifts`,
+`refutes`) or experiment (`supports`, `lifts`, `refutes`). `set-rigor` takes `id` and `rigor`;
+`set-bearing` takes `id` (the source), `target`, `relation` and `bearing`; `set-status` takes an
+experiment's `id` and its `status`, `run` or `pending`; `add-rests-on` takes `id` and the `rests-on`
+and `references` lists it adds. Each op's closed key set is `kbase <op> --help`'s, as for every op.
 
-A written `rigor` is a number in `[0, 0.95]` or `*pending*`: `1.00` belongs to an axiom by rule, so
-every op taking a node's own rigor — the four inserts, `set-rigor` and `set-frontmatter`'s
-`experiment-node` — refuses a value above, naming the key and the range. `0.95` is the rigor tables'
-maximum, the value a charge list with no charge takes (§10); a bearing's writes are unchanged, its
-table reserving nothing.
+A written `rigor` is a number in `[0, 1]` or `*pending*`. `1.00` is the rigor tables' maximum — the
+whole of the rigor scale, and the value a charge list with no charge takes (§10) — so every op taking
+a node's own rigor — the inserts and `set-rigor` — refuses a value above it, naming the key and the
+range. A bearing's writes take the same top, its table reserving nothing either.
 
-`set-bearing` **replaces an existing token and never inserts one**: a scoring edge carrying no
-bearing is a load fault (§10) before the op runs. It refuses a relation outside the four, a pairing
-whose bearing is illegal (`references` and `demoted`, and every source and target kind the four do
-not join), and a value outside `[0, 1] ∪ {*pending*}`. A new `rests-on` entry's bearing is
-`*pending*` where the caller leaves it out, as is a new refutation's in a claim's `refutes` list, so
-attaching an edge moves no derived value until it is judged; an analysis's or an experiment's pair
-list requires its bearing.
+`set-bearing` **replaces an existing edge record's bearing and never creates an edge**: an edge with
+no record is refused, and so is a `demoted` record, which `resolve-demoted` restores. It refuses a
+relation outside the four, a pairing whose bearing is illegal (`references` and `demoted`, and every
+source and target kind the four do not join), and a value outside `[0, 1] ∪ {*pending*}`. A node's
+`rigor` is optional on every insert, and a bearing on every `rests-on` entry and every pair entry, at
+insert or through `add-pairs`: a value the caller leaves out is written `*pending*`, so attaching a
+node or an edge moves no derived value until it is judged. Every public op that adds a scoring edge
+refuses one that would close a cycle (`check: dependency-cycle`, naming the path); an edge the
+records already hold keeps its record as it stands, bearing included.
+
+**Manually scored.** A claim's, an analysis's and an experiment's record, and every `supports`,
+`lifts` and `refutes` edge record, carries `manually-scored` (§10). A public write op — at the
+command line or over MCP — writes it `true` on a rigor or a bearing its caller supplied, `*pending*`
+included, and `false` on one it writes `*pending*` because the caller left it out; the build and a
+scoring run's landings and re-prices write `false`; an op leaves the flag as it stands on a value it
+does not write, and an insert that adopts writes no value. `set-rigor` or `set-bearing` re-asserting
+the current value of a record marked `false` marks it `true`, outcome `done`. A `demoted` record
+keeps the replaced edge's bearing and flag unchanged, through the cut and through its restoration.
+No values key, flag or tool argument sets the flag.
 
 ### `drop-claim-edges`
 
-Removes a claim entry's `rests-on` and `references` lists, the `edge-class` named or, where none is,
-both — each bullet with its continuation lines — and a list's header where neither bullet nor other
-text is left; an absent list stands. The `demoted` class is refused: demoted rows are
-`resolve-demoted`'s to remove. Idempotent: a re-issue is `unchanged`.
+Removes a claim's own edge records of one class — its premises (every `supports` and `founds` edge
+into it, an experiment's support included) or its references (the `references` edges out of it) —
+the `edge-class` named or, where none is, both; a claim holding no edge of the class stands. The
+`demoted` class is refused: demoted records are `resolve-demoted`'s to remove. Idempotent: a
+re-issue is `unchanged`.
 
 ### `drop-inbound-edges`
 
-Removes every authored edge that names the claim: each register entry's `rests-on` bullet naming it,
-each entry's `references` bullet pointing at it, each claim's refutation of it, and each analysis's
-or experiment's `supports`, `lifts` or `refutes` pair naming it — each with its continuation lines,
-and a list's header where neither bullet nor other text is left. An entry authoring no such edge
-stands. Idempotent: a re-issue is `unchanged`.
+Removes every edge record by which another node names the claim: a `supports` edge from it into
+another node, a `references` edge into it, and every `lifts` or `refutes` edge and every
+experiment's `supports` edge into it. A claim no other node names stands. Idempotent: a re-issue is
+`unchanged`.
 
 ### `drop-claim-node`
 
-Deletes a claim node entirely: its register entry block, its claim-rigor marker
-from every leaf carrying it, its id from every leaf claiming it, and every other entry's demoted
-row naming it. Refused, writing nothing, where any entry or leaf-declared pair list still names the
-node — its `rests-on` bullet, a `references` bullet, a claim's `refutes` entry or an analysis's or
-experiment's pair: run `drop-claim-edges` and `drop-inbound-edges` first; where the call would empty
-a leaf's claims list, the nodes one call drops from a leaf counted together, that being a no-claim
-decision `set-frontmatter` makes; and where, once those removals are composed, any line under
-`kb-root/` still names the node, each such line named as `path:line` — refresh's own roll-ups
-excepted, the trailing refresh rewriting them. Idempotent: a re-issue removes whatever of the node
-still stands (`done`) and is `unchanged` where nothing does.
+Deletes a claim node entirely: its node record, its statement marker in every leaf carrying one,
+every `demoted` record naming it, and its own edges — every `founds` edge and every claim's
+`supports` edge into it, and the `references` and `refutes` edges out of it. Refused, writing
+nothing, where another node's edge record still names the claim — a `supports` edge from it into
+another node, a `references` or `refutes` edge into it, a lift into it or an experiment's support of
+it: run `drop-claim-edges` and `drop-inbound-edges` first; and where, once those removals are
+composed, the node is still named by a line under `kb-root/` outside the register pages, each such
+line named as `path:line`, or by a prose field of another record — a title, `rationale`, `no-edge`,
+a `strengthen-by` item, an edge's `context` — each named by its record file, its record and its
+field. Idempotent: a re-issue removes whatever of the node still stands (`done`) and is `unchanged`
+where nothing does.
 
 ### `render-citation`
 
@@ -625,8 +714,11 @@ spelled relative to the citing document: `["<excerpt>"](<path>#<anchor>)`.
 
 ### Queries
 
-Each query reads `kb-root/.index/` and writes nothing; `kbase <query> --help` states its arguments,
-and §7 gives its result keys.
+Each query derives its answer from the KB's records and statement markers and writes nothing;
+`kbase <query> --help` states its arguments, and §7 gives its result keys. A KB converted at load
+and not yet saved answers as converted, its result carrying `migration`; a degraded KB is refused
+(§10). `cited-by`, `referenced-by` and a claim's `citation_count` read a claim's citations from the
+leaves its statement markers stand in.
 
 ### `deps`
 ### `gated-on`
@@ -638,6 +730,8 @@ and §7 gives its result keys.
 ### `show`
 ### `weak-points`
 ### `stats`
+### `edge-census`
+### `edges`
 
 `weak-points` orders and thresholds on the derived value: its rows read each claim's `strength`, so a
 bearing that moves a claim moves the list. Its `dependents` count and `show`'s `premise_count` are
@@ -646,11 +740,18 @@ structural — counts of edges, which no bearing changes.
 `stats` reads the derivation in `strength_bands`, `highest_leverage` and `weakest`, and is
 structural in its per-kind counts, `edges`, `demoted_edges` and `strengthen_by_items`.
 
+`edge-census` and `edges` read the index's edge rows and no derivation: their edge counts are
+structural, and the bearings they report are the values the rows hold, which `set-bearing` moves.
+`edge-census` reports `walked` per relation and `edges` on each row: whether a score run's bearing
+pass asks about that relation's edges — `supports`, `lifts` and `refutes` — where a `founds`
+bearing is the user's, written by `set-bearing`.
+
 ### `render-claim-graph`
 
-Renders every claim-graph sheet (§3) from the index and the build records, writing those whose bytes
-change. Without `dot`, §3's rule, and the result names
-the lack. Result keys: §7.
+Renders every claim-graph sheet (§3) from the KB's records and statement markers, writing those
+whose bytes change. Without `dot`, §3's rule, and the result names the lack. On a KB in an older
+format it draws from the conversion in memory and writes sheets only: it saves no conversion, and
+its result carries `migration`. A degraded KB is refused (§10). Result keys: §7.
 
 ### `export-latex`
 
@@ -697,7 +798,7 @@ over every label it names, one or several, without the anchor's own text beside 
 exported KB document becomes a hyperlink to that document's heading. Prose is exported as written:
 a hand-maintained KB's prose mentions of equations and works (`(eq:dv)`, `(Khalil, 2002)`) and its
 bold-line theorem blocks stay text. The bibliography holds `references.md`'s entries or, where a
-volume has none, the register's works.
+volume has none, the KB's work records.
 
 **Degradation, not refusal** (§3's `dot` posture): a reference whose label its volume does not
 define, a link to a document not exported, and a citation with no bibliography entry each become
@@ -712,151 +813,195 @@ keys: §7.
 ### `score`
 
 ```
-kbase score --pass rigor|bearing [--limit N] [--scoring-model MODEL] [--harness NAME]
-            [--dry-run] [--resume RUN] [--state-dir DIR] [--timeout DURATION]
+kbase score [--pass rigor|bearing|both] [--limit N] [--scoring-model MODEL] [--dry-run]
+            [--resume RUN] [--rescore-manual none|rigor|bearing|both] [--state-dir DIR]
+            [--timeout DURATION]
 ```
 
 Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
-call, each value landed through the write API and recorded in a ledger. `--pass` is required and names
-one of the two; `--timeout` is the deadline for one item's call (default `30s`). It is a CLI verb and
-not a tool (§11): a run asks one call per item and takes minutes, so a harness runs `kbase score` at a
-shell rather than holding a tool call open. There is no `--provider`: a scoring-time endpoint is named
-by `--scoring-model`, which states the provider and the model in one value, and passing `--provider`
-is a usage refusal.
+call, each value landed through the write API and recorded in a ledger. `--pass` names the set to walk
+— `rigor`, `bearing`, or `both`, which is the default — and `--timeout` is the deadline for one item's
+call (default `30s`). A run asks one call
+per item and takes minutes: at a terminal `kbase score` blocks until the walk ends, and as an MCP tool
+(§11) it starts a detached child and returns at once with the run's identity, while `kbase wait`
+reports its outcome when it ends. A shell caller gets the blocking behaviour a terminal gets.
+There is no `--provider`: a scoring-time endpoint is named by `--scoring-model`, which states the
+provider and the model in one value, and passing `--provider` is a usage refusal.
 
 **The two passes.** `rigor` walks every claim, analysis and experiment, by id — a node's own value.
-`bearing` walks every scoring edge — `supports`, `founds`, `lifts` and `refutes` — by relation in
-that order, then source, then target. The set is read from the index once, at the run's start, and
-does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a run
-walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
+`bearing` walks every `supports`, `lifts` and `refutes` edge, by relation in that order, then source,
+then target. A run walks both, the node set and then the edge set, unless `--pass` names one: a text
+edit moves a node's rigor and the bearing of every edge that touches it, so a run scoped to one pass
+leaves the other stale against that edit, and scoping is for the case with a reason — one edited
+subtree, or isolating a pass that is failing. A both-pass run is one run: one lock, one
+`run.yaml`, one `items.jsonl`, one `ledger.jsonl` and one `resume` command, and its
+`run.yaml` names the set it walks (`both`). The set is read from the index once, at the run's start,
+and does not move as values land; `--limit N` bounds the walk at N items of the set, and without it a
+run walks every one. **A work's rigor is the one value no pass asks and no run writes:** a
 work's standing is judged with the document in hand, and `set-rigor` is what writes it. An axiom is
-on neither pass either, its rigor being `1.0` by rule; a `founds` edge is a bearing subject like any
-other.
+on neither pass either, its rigor being `1.0` by rule. **A `founds` edge's bearing is the second such
+value:** the work or axiom it rests on lies outside the corpus, so a model shown only the KB has the
+work's title and nothing to judge the link by, and the bearing is the reader's, made with the work in
+hand. `set-bearing` is what writes it, as `set-rigor` writes a work's rigor. The edge carries a bearing
+like any other — the values table prices it `bearing × the source's rigor` — and no pass reaches it.
+
+**A person's value is skipped.** A value whose record is `manually-scored: true` (§8) is a person's
+judgement standing, and the walk skips it — reading the flag from the KB the run loaded at its
+start — unless `--rescore-manual` names its pass: `rigor`, `bearing` or `both`; `none`, the default,
+re-judges none, and any other value is a usage refusal. A skipped item is asked nothing and lands
+nothing: its ledger line records status `skipped`, reason `manually-scored`, with no value, charges
+or call, and so no capture. It counts under `counts.skipped`, never under `scored` or `failures`,
+and does not make `resume` present. A value `--rescore-manual` re-judges lands `false`, so later
+runs re-judge it too. The flag holds for one invocation and is not in `run.yaml`: `resume` repeats
+it where the run was started with it, a `--resume` asks a skipped item only where its own
+`--rescore-manual` names that item's pass, appending no second `skipped` line for an item, and a
+re-price leaves a skipped item's landed line as it is. A `--dry-run` evaluates nothing, so its
+`skipped` is `0`.
 
 **One item, one quantity, one call.** A call carries one node's text or one edge's — never two
 subjects, never the other pass's quantity. The item's class gates the instruction as it gates the ids:
 a claim is asked whether its statement is fixed, consistent and single-sensed, an analysis or an
 experiment whether its method establishes what it sets out to, and neither is asked the other's
 question. The text is closed to the subject: a node's title and statement, or an edge's two
-statements, its authored context and the target's passage; the register's own score and strength
-sections are never read. A text carrying a scoring token (`- rigor:`, `- strength:`, `(bearing …)`,
-`(strength …)`) is refused before the call, naming the document and line, and that item is `failed`
-with no call made.
+statements, its authored context and the target's passage; a register page is never read. A text
+carrying a scoring token (`- rigor:`, `- strength:`, `(bearing …)`, `(strength …)`) is refused
+before the call, naming the document and line, and that item is `failed` with no call made.
 
-**The answer.** A reply is a list of charge lines, each one fault id and the span of the item's own
-text that shows the fault — one line per occurrence, in the order written — or the word `none`,
-alone, or `flt-pending` — alone, or beside charge lines, which it moots.
+**The answer.** A reply is a list of charge lines, each one fault id and the numbered line of the item's
+own text where the fault shows — one line per occurrence, in the order written — or the word `none`,
+alone. The call carries the text
+wrapped at word boundaries to at most 100 columns, its own line breaks kept and nothing rewritten, and
+writes `N| ` before each line lying inside a passage a charge may cite, numbering from 1: a numbered
+line is a verbatim slice of that text. A frame label and an edge's `## Context` carry no number, and a
+line with no number is no site.
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) states the criteria, the
 three closed sets and the citation rule; this section states what kbase does with a reply.
 
 - **The ids are the item's class's.** `rigor` on a claim accepts the statement vocabulary's four,
-  `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its six, each
-  with `flt-pending` and nothing else; an id outside that set — the other rigor class's among them —
-  is `malformed`, the refusal naming the id and the call's ids as `allowed`.
-- **The citation is looked up in the text the call carried** — never in the register — by collapsed
-  whitespace and folded case, whole within one passage: a node's `title` or `statement`, an edge's
-  `source` or `target`. An edge's `## Context` is not citable. A span the two ends carry alike is
-  recorded as `both`, at its earlier match. A citation not found is `malformed`, naming the id and the
-  span; so is an empty or whitespace-only span.
+  `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its five, and
+  nothing else; an id outside that set — the other rigor class's among them, and `flt-pending`, which
+  no table holds — is `malformed`, the refusal naming the id and the call's ids as `allowed`.
+- **The citation is the numbered line where the fault shows.** The ask asks for one number, the line
+  where the fault first shows, `flt-inapplicable: 12`, and never a range. The parse still reads a
+  contiguous range within one passage, `flt-transfer: 12-14`; its dash may be a hyphen, an en dash, an
+  em dash or a minus sign, with or without spaces. kbase resolves the
+  field against the rendering the call carried — never a register page — and records three facts beside
+  the `passage` the lines lie in: `lines`, the answer's own numbers; `citation`, the quoted lines
+  without the gutter; and `offset`, the quote's byte offset in the carried text. A charge naming no
+  line, one naming a line the call does not show, and a range crossing from one passage to another or
+  over a gap — a blank line, a label or a heading between its lines — are `malformed`, naming the id
+  and the lines. A numbered line lies in one passage, so the `both` value — a span the two ends
+  carried alike — is no longer produced; a ledger line already recorded with it keeps the meaning it
+  was written with.
 - **Nothing is read out of prose.** Blank lines are ignored and any other line that is not a charge
   line is `malformed`. So is `none` beside any other line, a bare number — a decimal, a percentage, a
-  fraction, a `*pending*` written as a value — and an empty reply: silence is never a clean pass.
-- **Duplicates and overlaps.** One id on one span, written twice, is one charge; two spans of one id
-  that overlap without coinciding is `malformed`, naming both lines; two ids on one span are both
-  charged, the offset shared.
+  fraction, a `*pending*` written as a value — since a number standing alone names no fault id, and an
+  empty reply: silence is never a clean pass.
+- **Duplicates and overlaps.** One id on one line set, written twice, is one charge; two line sets of
+  one id that overlap without coinciding is `malformed`, naming both lines; two ids on one line set
+  are both charged, the quote and its offset shared.
 
-**The four parse rules are frozen for the life of the format version.** The citation's one-character
-floor, `flt-pending` beside charges read as the judgement with the rest moot, `none` beside charges
-refused, and one id over two spans that overlap without coinciding refused — fixed while the ledger's
-format version stands, and what moves one is a new version, which `--resume` reads by its own rules.
-A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written under
-a new grammar.
+**The three parse rules are frozen for the life of the format version.** The citation's floor of at
+least one valid line number, `none` beside charges refused, and one id over two line sets that
+overlap without coinciding refused —
+fixed while the ledger's format version stands, and what moves one is a new version, which `--resume`
+reads by its own rules. A valid line number is one the call shows, lying in a passage a charge may
+cite. A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written
+under a new grammar. This change moves no version: `citation` is still a span of the carried text, so
+a line written before it reads as it did, and a line recording `flt-pending` still prices `*pending*`.
 
-**The value.** kbase prices the charge list: the item's class's maximum — `0.95` under either rigor
-vocabulary, `1.00` for `bearing` — less each id's weight per occurrence under that class's table,
-floored at zero and exact at two decimals, summed in integer hundredths. `none` is the empty list and
-reaches the maximum; `flt-pending` is `*pending*` whatever the table. The tables are `internal/kb`'s
+**The value.** kbase prices the charge list: the item's class's maximum — `1.00` under each of the
+three tables — less each id's weight per occurrence under that class's table, floored at zero and
+exact at two decimals, summed in integer hundredths. `none` is the empty list and
+reaches the maximum; a ledger line recorded with `flt-pending` prices `*pending*` whatever the table,
+though no table holds that id now. The tables are `internal/kb`'s
 and no template carries a weight, a maximum or a band: the ids and the criteria are the ask's, the
 price is kbase's, and nothing else is an input. A landing is therefore checkable against its own
 ledger line without asking a model.
 
 **A refused reply is a failed attempt.** A `malformed` reply writes nothing, and the attempt's line
-records `status: failed` and the reason — the case, and where it names one the id and the span — and
+records `status: failed` and the reason — the case, and where it names one the id and the lines — and
 **no text of the reply**. The same holds for a reply cut off at the completion cap, whose charge list
 may be incomplete, and for a call or a write that failed. The run goes on, and `--resume` asks the
-item again. Nothing is defaulted or supplied by kbase: `*pending*` is an answer the model may give,
-and a record like any other.
+item again. Nothing is defaulted or supplied by kbase: a link or a node is charged, answered `none`, or
+left unasked, and `*pending*` is no model's answer — `set-bearing` and `set-rigor` are what write one,
+as a person's decision.
+
+**A provider call's failure names what ended it.** `provider-refused` — the endpoint answered
+with a status that is not success: the request was carried, read and declined, and the reason
+carries that status and the provider's own words beside it. `transport-failure` — the
+connection, the name, the certificate or the stream failed, and no answer of the provider's was
+had. A reason states the one that happened: the first calls for the request to be looked at, the
+second for the path to the provider.
 
 **Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
 `set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. Each op
 runs with `--no-refresh`, under the KB write lock taken and released for that one landing. A write
 refusal is that item's `failed`, and so is a landing that cannot take the lock: the item's line
-carries the lock item's `detail` — another writer held it past the wait, or a build is running — and
+carries the lock item's `detail` — another writer held it past the wait — and
 the run goes on.
 
 **The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
 `KBASE_SCORING` in environment mode. The role is the KB's declaration of which model judges it, so a
-mode that names none refuses the run as setup — naming that key, before the KB is opened and before
-the run's start refresh — and nothing falls back to the text role. `--scoring-model` **overrides** a
-configured role for one run and never substitutes for one, and the value is read in the mode's own
-form: a `<provider>/<model>` reference in file mode, a bare id under the environment's endpoint,
-verbatim under `--harness`. A `--dry-run` resolves no role and refuses nothing for one.
+run that names none refuses as setup — naming that key, before the KB is opened and before the run's
+start refresh — and nothing falls back to the text role. In file mode the role's model is the file's
+`<provider>/<model>` reference or, where the files name none, the one `--scoring-model` names: the
+flag supplies an unconfigured role and overrides a configured one, its reference is resolved against
+the pool, and a provider the pool does not hold refuses naming the flag with the pool listed.
+Environment mode supplies every model by its own variable, so a variable the environment leaves unset
+refuses whatever the flag says, and `--scoring-model` there overrides the variable's bare id for the
+one run. A run records the model as the flag's where the flag named it. A `--dry-run` resolves no role
+and refuses nothing for one.
 
-**The harness back end.** `--harness NAME` runs one process per item instead of asking an endpoint:
-the profile that name selects in `harnesses.toml` (§9.3). It consults no mode and no pool — a harness
-chooses no endpoint, so a `KBASE_API_BASE_URL` or a role variable set beside it is neither a mixed
-mode nor a refusal. The prompt goes to the command's stdin, or into the one element carrying
-`{prompt}`; a profile whose command carries no `{prompt}` receives it on stdin, and stdin is closed
-empty where the element carried it. The command's stdout is the reply and is parsed by the same rule a
-provider's reply is; its stderr is captured to a bound and recorded only in a failing attempt's
-reason, never forwarded. Each item runs in its own process, in one directory under the run's records
-that is emptied before each item, so nothing a command wrote is visible to the next.
-
-- **No re-issue.** A provider call is re-issued up to the transport attempt count
-  (ARCHITECTURE §12); a harness call is not. One item is one process and one judgement, and
-  `--resume` is how a user asks again.
-- **A failure is the item's.** A non-zero exit, a deadline, a reply or a stderr past its bound, or a
-  process that cannot be started after the walk began fails that item — the exit code and the bounded
-  stderr tail in the line's `reply` — and the next item is asked. A command that cannot be started at
-  all is a refusal before the walk (`check: harness`, `key: --harness`), because nothing was asked.
-- **The model.** The scoring role resolves whether or not the profile carries `{model}`: a
-  configuration that names no scoring model refuses the run as setup even where the command names no
-  `{model}`, because the role is the run's declaration of which model judges it. Where the profile's
-  command names `{model}`, it is handed the role's model — the environment's id, else the reference's
-  model part, overridden by `--scoring-model`. Where it names none, the command asks its own model
-  and kbase names none: `roles[0].model` is null, and a `--scoring-model` a profile cannot carry is
-  refused (`check: harness`) rather than dropped. Where the profile's command carries the model as
-  an argv element of its own, a model beginning `-` is refused there too (`check: harness`,
-  `key: --scoring-model`): after substitution the command would read that id as an option, not a
-  model id.
-- **What kbase cannot guarantee.** A command is executable code and may bring its own tools, its own
-  system prompt and its own instructions; kbase can remove neither, and does not sandbox a child. The
-  input guard keeps the register's scoring tokens out of the prompt and the parse refuses a reply that
-  is no answer; neither says what a tool-enabled command's own instructions ask for. The profile's
-  name, layer and argv are recorded so a reader knows which command answered, and a profile a
-  repository supplied says so on stderr once per run.
+**One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint, over the
+chat protocol that endpoint's entry names (§9.1): `openai` speaks `chat/completions` and `anthropic`
+speaks the Messages protocol. Every ask a run sends to an `openai` endpoint carries the run's id as
+its `prompt_cache_key`, so a run's asks reach one provider and share one cache entry; the Messages
+protocol has no such field, so a run whose endpoint speaks it sends no key. Messages requires a
+completion cap, and no other request is capped: the cap is `max(256, ceil(characters / 4))` over the
+characters of the ask's messages and system text — four characters per token because the ask is plain
+prose and no LaTeX is ever sent. Thinking is disabled on a Messages endpoint by sending the
+protocol's thinking field as disabled (`thinking: {type: disabled}`), kbase's `reasoning` control
+being OpenAI-surface only, and thinking text is never part of a reply on either protocol. A call
+that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
+30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
+it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and
+the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a failed item again.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
-`ledger.jsonl`, and — under a harness — one `harness/` working directory. `run.yaml` holds the run,
-its KB root, the ledger's format, the pass, `backend` (`provider`, `environment` or `harness`; absent
-under `--dry-run`, which resolves no back end because it asks nothing), the provider, the model,
-`ask_sha256`, the start, and under a harness the profile's name,
-`harness_layer` and the argv (`command`, `{model}` substituted and `{prompt}` left as the token, so
-the header names how the run was invoked and never the text of one item). **It is written once, at
-the run's creation, and no resume rewrites it**: a resumed or mixed run's header states the first
-invocation's back end and model, and each ledger line states what answered its own item.
+`items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
+run), `ledger.jsonl`, and `captures.jsonl`. A real run's id is `run-<id>`; the runs kept are §6's.
+`run.yaml` holds the run, its KB root, the ledger's format, the set it walks
+(one pass, or `both`), `backend` (`provider` or `environment`; absent under `--dry-run`, which
+resolves no role because it asks nothing), the provider, the model, `ask_sha256` and the start. **It is
+written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
+states the first invocation's back end and model, and each ledger line states its own item's pass and
+what answered it.
 
-`ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the reply, `faults`
-(the parsed charges: `id`, `passage`, `citation`, `offset`, in the order written), `moot` (the charge
-lines a `flt-pending` made moot), `backend`, the model, `harness` and `harness_layer` where a harness
-answered, the prompt's digest and the attempt's bounds — appended after the item's write and its
-validation, never before. `faults` is `[]` for one reply alone, the word `none`; a failed attempt
-carries neither `faults` nor text. The state directory is `build`'s:
+`ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the value the KB
+carried before the attempt (`before`, absent where the record held none), the reply, `faults`
+(the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
+lines a reply recorded beside a retired `flt-pending`), `backend`, the model, the prompt's digest and the attempt's bounds —
+appended after the item's write and its validation, never before. `faults` is `[]` for one reply
+alone, the word `none`; a failed attempt carries neither `faults` nor text. The state directory is
+`build`'s:
 `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
 
+`captures.jsonl` is one JSON object per call made — the item, its class (`statement`, `method` or
+`bearing`), the closed text whole with the line each number names, the prompt sent and its digest,
+the reply the call returned (`""` where the call failed), the error that failed the attempt where
+one did — the call's, the parse's or the write's — the model, the back end and the call's bounds.
+Every attempt that makes a call has one, whatever its outcome: a landing, a refused reply, a failed
+call or a refused write. A failed attempt's reply therefore stands whole there, where its ledger
+line keeps no text of it. An item the guard refuses makes no call and has no capture, and a call
+cancelled in flight leaves no capture and no ledger line. A capture is appended before the item's
+ledger line, a resume appends to the same file, and a capture that cannot be written fails the run
+as a ledger line that cannot be does.
+
 **`ask_sha256` records the ask set and gates nothing.** It is one digest over every instruction the
-pass can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
-statement instruction and then its method one, a bearing run's one — so every fixed byte of a run's
+run can send, each rendered for an empty subject and concatenated in a fixed order — a rigor run's
+statement instruction and then its method one, a bearing run's one, a both-pass run's statement, method
+and then bearing instruction — so every fixed byte of a run's
 instructions is certified and nothing that varies with an item is. Each ledger line carries its own
 item's prompt digest beside it, which is what names the variant that judged that item. A header
 written before the rigor pair carries one render's digest and is read as the one ask that run began
@@ -873,81 +1018,137 @@ up. A re-derivation that moves nothing records nothing and lands nothing. A run 
 is a new run that asks everything: a value already in the KB is not evidence about the one this run
 would judge.
 
-**The run lock.** A run holds `<state-dir>/score` for its length and does not wait: a second run is
-`retry`, `check: lock`, `path` that directory.
+**The run's locks.** A scoring run takes the KB's operation lock and the state store's holder lock
+for its length, in the order a build takes them, before it writes anything and before its start
+refresh: a second run over the KB — a build or a scoring run — is `refused` at once, `check: lock`,
+`path` the holder's state-dir, its `detail` naming the holder's verb and pid (§6), never held through
+a wait the first run will outlast. Its holder record names `kind: score` and the run id, which is
+what `status`, `cancel` and `wait` read (§6).
 
 **Refresh and format.** Both refreshes hold the KB write lock for the refresh and release it before
-the run continues. One `refresh` opens a run, before the index is read, so the set comes from a
+the run continues. A degraded KB (§10) is refused before that refresh, naming each fault: the
+refresh is the remedy, and a run would judge a graph the load resolved rather than the one the
+records hold. One `refresh` opens a run, before the index is read, so the set comes from a
 current index; on an older KB it is the natural write that converts and stamps the KB (§10), so a
-scoring run is the call that saves a conversion, and its document carries `migration`. One more
+scoring run is the call that saves a conversion, and its document carries `migration`. A KB still
+unmigrated after it is refused before the first item (`check: index`, remedy `kbase refresh`): a
+landing runs with `--no-refresh`, which an unmigrated KB refuses (§10). One more
 `refresh` follows the last write — on completion, on `--limit` and on cancellation. A refresh that
 cannot take the lock ends the run there, with the lock's own outcome — `retry` where another writer
-held it past the wait, `refused` at once where a build is running — and the `lock` item, whose remedy
-is `re-run kbase score`. A crash after a write leaves a stale index, which `verify` reports and the
-next run's start refresh repairs.
+held it past the wait — and the `lock` item, whose remedy is `re-run kbase score`. A crash after a
+write leaves a stale index, which `verify` reports and the next run's start refresh repairs.
 
 **Outcomes.** `done` when the run finished; `bounded` when `--limit` stopped it, and a run that both
 stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or SIGTERM stopped it
 at an item boundary, with no line recorded for the item in flight and the ledger standing as it was;
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
-`<state-dir>/score`, or where a refresh could not take the KB write lock past the wait; `refused`
-where the run cannot go on — setup (a pass outside the two, a negative `--limit`, a `--state-dir`
-inside `kb-root/`, a `--resume` naming no run kbase minted, no scoring model in the mode's source,
-a mode whose sources are mixed or whose environment is partial, a `--harness` naming no loaded
-profile, a profile that cannot carry the model it is given, a model a profile's command would read
-as an option, a command that cannot be started, an index the load cannot answer), a refresh that found
-a build running, or a KB that no longer opens when the end refresh re-reads it.
+the state store, or where a refresh could not take the KB write lock past the wait; `refused`
+where the run cannot go on — setup (a pass outside the three, a negative `--limit`, a `--state-dir`
+inside `kb-root/`, a `--resume` naming no real run kbase minted, no scoring model in the mode's source,
+a mode whose sources are mixed or whose environment is partial, an index the load cannot answer, a
+degraded KB, a KB still unmigrated after the start refresh), a run already holding the KB's
+operation lock (§6), or a KB that no longer opens when the end refresh re-reads it.
 
 **The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
 `check: error` item per item the ledger records `failed`, `detail` the item as the document names it
 and the reason its line recorded — `<node id>: <reason>`, or `<relation> <source> → <target>:
 <reason>` — in the walk's order; the reason is the line's reply as a bounded, control-stripped
-summary, the ledger's line being the one place a harness child's stderr stands whole; a run a
-refresh stopped closes on one `check: error` item naming the
-refresh's own error. A `cancelled` run closes on `cancelled`, whose `item` is the walk's first item
-carrying no attempt, the one it stopped before, and `{}` where every item of the walk carries one. A
-`refused` or `retry` run closes on its `refusals`. A `bounded` run that failed an item carries no
-`failures`: the failure is counted in `counts.failed` and reasoned in the ledger alone.
+summary, the ledger's line being the one place a reply stands whole; a run a refresh stopped closes
+on one `check: error` item naming the refresh's own error. A `cancelled` run closes on `cancelled`,
+whose `item` is the walk's first item carrying no attempt, the one it stopped before, and `{}` where
+every item of the walk carries one. A `refused` or `retry` run closes on its `refusals`. A `bounded`
+run that failed an item carries no `failures`: the failure is counted in `counts.failed` and reasoned
+in the ledger alone.
 
-**`resume`** carries the command that continues the run, present wherever an item is not `done` — one
-`--limit` left, one `failed` — and it stands after `counts` and `scored` and before the closing
-record, so a stop at the end refresh carries it whenever an item is still not `done`. It is absent
+**`resume`** carries the command that continues the run, present wherever an item failed or was not
+reached — one `--limit` left, one `failed`; a `skipped` item is no such item — and it stands after
+`counts` and `scored` and before the closing record, so a stop at the end refresh carries it
+whenever such an item remains. It carries `--rescore-manual` wherever the run was started with it
+naming a pass. It is absent
 from a dry run and from a stop before the walk: the start refresh's, the dial's, the
-ledger's or the index load's. It carries `--config-dir` wherever the invocation named one — the
-resumed run must read that directory and no other, or the same run id would resolve another profile
-or reference — and it carries `--scoring-model` and `--harness` whenever the invocation
-did — the command must reach the same model on the same back end, or it is a different judgement
-under the same run id — and under the environment mode the settings this invocation read, as
-assignments before the program (`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and
-`KBASE_API_KEY_FILE` where it was set), so re-issuing it in a shell with none of them set asks the
-same endpoint with the same models. The key is named by its path, never printed.
+ledger's or the index load's. It carries `--pass` wherever the invocation named one, and names none
+where it did not: a run that walked both by default is continued the same way, its header being what
+says which set it walks. It carries `--config-dir` wherever the invocation named one — the
+resumed run must read that directory and no other, or the same run id would resolve another
+reference — and it carries `--scoring-model` whenever the invocation did — the command must reach the
+same model, or it is a different judgement under the same run id — and under the environment mode the
+settings this invocation read, as assignments before the program
+(`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and `KBASE_API_KEY_FILE` where it was set), so
+re-issuing it in a shell with none of them set asks the same endpoint with the same models. The key is
+named by its path, never printed.
 
 **`--dry-run`** lists the set and asks nothing. It writes `run.yaml` and `items.jsonl` (one pending
 line per item), dials no provider, resolves no role and runs no mode decision, and writes no KB file:
 its `counts.done` is `0`, its `scored` is `[]`, it carries no `resume` and no `roles`, and its outcome
-is `done`. It writes no charge record. It cannot
-be resumed — `--resume` with `--dry-run` is a usage refusal naming `--resume`. Because the refresh
-that would save a conversion is a write, a dry run on an older KB is refused by the load
-(`check: index`, remedy `kbase refresh`), and a real run on the same KB then migrates and saves.
+is `done`. It writes no charge record and no capture. Its run id is `dry-<id>`, and the runs kept
+are counted by kind (§6), so a dry run counts only against dry runs. It cannot
+be resumed — `--resume` with `--dry-run` is a usage refusal naming `--resume`, and `--resume` naming
+a `dry-` id is refused as no real run's id. Because the refresh
+that would save a conversion is a write, a dry run on an older KB saves none and so is refused by
+the run itself, as a KB still unmigrated after its start refresh is (`check: index`, remedy
+`kbase refresh`), and a real run on the same KB then migrates and saves.
+
+Result keys: §7.
+
+### `probe`
+
+```
+kbase probe [--model <provider>/<model>] [--decision | --text | --scoring]
+            [--prompt TEXT] [--timeout DURATION]
+```
+
+One ask, no KB and no state: a diagnostic of a model selection, answered by the selection itself.
+A probe asks one selection, and its flags name it: `--model` names a `<provider>/<model>` reference,
+resolved against the pool as a role's reference is; `--decision`, `--text` and `--scoring` each ask
+the selection the configuration resolves for that role — in file mode the `models.<role>` reference,
+in environment mode the role's own variable — and supply no model of their own; and with none of the
+four given the probe asks the `scoring` role, the selection a scoring run would make, in file mode or
+in the environment's, so `kbase probe` with no arguments is the heartbeat of a configuration. The
+four are mutually exclusive: more than one is a usage refusal naming all four as what may be chosen
+once, before anything resolves or dials. A selection that does not resolve is `refused`, naming the
+role's own key — `models.<role>`, or the role's variable — or the flag, and what is missing, before
+any client is opened. The document states which selection answered: the role's name where a role flag
+or the default named it, and the reference where `--model` did.
+
+A chat selection is one tool-less chat request through the registry a scoring run's asks take, so
+an endpoint is reached over the wire shape its pool entry names: no tools, no history, an empty
+system prompt, and `--prompt` in place of the default one-word check. A `--decision` selection is
+one decision call on the surface its entry's `decisionsFlavor` names, with no system message, and
+its `--prompt` in place of the default predicate. `--timeout` bounds the call (default `30s`); a
+call that does not complete is re-issued at once up to the attempt count, so that deadline is spent
+on attempts rather than on pauses (§12). The document reports what a ledger cannot — the selection,
+the provider, the model, the time to the first token, the call's wall time, the finish reason, the
+reply, and the usage the provider reported — and its outcome follows the call: `done` where it
+completed, `failed` where it did not, with the attempt's own outcome and the provider's words in the
+failure. It reads no KB and reads or writes no state directory: it prints its document and exits,
+and no MCP tool binds it (§11).
 
 Result keys: §7.
 
 ### `refresh`
 
-Derives the metadata layer's derived fields and `.index/*.yaml` and writes every claim-graph sheet
-(§3) on each run. Without `dot`, §3's rule. Result
-keys: §7.
+Renders every register page (§10) from the records and the statement markers and writes every
+claim-graph sheet (§3) on each run, each only where its bytes change, removing a page or a sheet the
+KB no longer calls for. **`refresh` writes no authored file but a migration save and a degraded
+repair** (§10): on a degraded load it first writes the records as the walk resolves them and reports
+every record it dropped and every edge it cut under `warnings`, and on a KB converted at load it
+saves the conversion. Without `dot`, §3's rule. Result keys: §7.
 
 ### `verify`
 
-The standard check a running KB owes: the dead-link and
-unknown-id gate over the documents under `kb-root/`, link targets resolved against the repository,
-then the metadata gate. Faults are outcome `refused`; a `demoted` edge (§10) is a finding, listed
-under `findings` with outcome `done`, and `findings` is present on both `done` and `refused`. A
-`demoted` row whose origin is missing or not `cited` or `inferred` is a fault, refused under
-`referential integrity`. The citation grammar is the build-time
-check: the build's gate stage runs it after the standard check, and `verify` does not. Result keys:
-§7.
+The standard check a running KB owes: the dead-link and unknown-id gate over the documents under
+`kb-root/`, link targets resolved against the repository and the ids against the node records — a
+link into a register page also has its fragment checked against the slugs of the entries derived
+for that page — then the metadata gate: a frontmatter block on any document, the entry point
+included (`frontmatter`, remedy "remove the block: kbase reads no frontmatter here"); a KB loaded at an older
+format (`index freshness`, refresh-fixable); a claim, an analysis or an experiment carrying no
+statement marker or more than one (`statement marker`, not refresh-fixable); an axiom record and
+`axioms.md`'s headings that disagree (`axiom heading`, not refresh-fixable); each fault a degraded
+load resolved (`degraded`, refresh-fixable); and each register page that does not stand as `refresh`
+renders it (`register freshness`, refresh-fixable). Faults are outcome `refused`; a `demoted` record
+(§10) is a finding, listed under `findings` with outcome `done`, and `findings` is present on both
+`done` and `refused`. The citation grammar is the build-time check: the build's gate stage runs it
+after the standard check, and `verify` does not. Result keys: §7.
 
 ### `status`, `cancel`
 
@@ -957,18 +1158,17 @@ See §6.
 
 ## 9. Configuration
 
-Three TOML files — `providers.toml` (§9.1, the endpoint pool), `config.toml` (§9.2, the choices) and
-`harnesses.toml` (§9.3, the harness profiles) — read under the strict-load contract (§9.4), in one or
-two layers.
+Two TOML files — `providers.toml` (§9.1, the endpoint pool) and `config.toml` (§9.2, the choices) —
+are read under the strict-load contract (§9.3), in one or two layers.
 `<repository>/.kbase/` is read over `~/.config/kbase`; a directory `--config-dir` names, else
 `$KBASE_CONFIG_DIR`, is instead the one directory read, so an explicit choice isolates a run from a
 repository's own `.kbase/`. An invocation outside a worktree has no repository layer:
 `show-config`, `models` and `configure` run in any directory.
 
-**Merging.** The three files merge by two rules. `providers.toml` and `harnesses.toml` merge by entry
+**Merging.** The two files merge by two rules. `providers.toml` merges by entry
 name and an entry is replaced whole: a repository entry of the same name supersedes the global one
-entirely, never field by field, so a repository cannot inherit a credential for an endpoint it chose,
-or borrow the command of a profile it named. A fault naming a pool entry a higher layer superseded is
+entirely, never field by field, so a repository cannot inherit a credential for an endpoint it chose.
+A fault naming a pool entry a higher layer superseded is
 not reported: the pool's entry is the higher one, and a diagnostic about a value nobody reads is not a
 fact about this run. `config.toml` merges field by field: a value a higher layer states wins, and one
 it leaves out keeps the lower layer's value. The environment is not a layer: it is one of the two
@@ -998,7 +1198,10 @@ with the provider's model ids as `allowed` (§7) — except `scoring` where the 
 states one, which is left standing, so `configure --provider P` over a complete file writes no
 scoring value and is `unchanged` where it changes nothing else. A file `configure` writes is never
 left making `kbase score` refuse. `kbase show-config [--provider NAME]` reports how the configuration
-resolves and changes nothing (§9.7). Each writes its result under §7.
+resolves and changes nothing (§9.6). `kbase probe [--model REF] [--decision | --text | --scoring]
+[--prompt TEXT]` asks one selection — a role flag's role, else the `scoring` role, or the reference
+`--model` names — one question and reports the call, reading no KB and writing no state (§8). Each
+writes its result under §7.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
 dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is
@@ -1020,12 +1223,11 @@ with `--project` is a usage refusal naming `--project`, the two naming different
 started from, and `git init` as the remedy. Otherwise `configure` writes the repository layer where
 its directory already stands, and the global layer otherwise.
 
-**`configure --create`** writes the target layer's `providers.toml` and `harnesses.toml` where no file
-stands, from their annotated templates — no other command creates either — and overwrites no file's
-other content, `harnesses.toml` included: a profile is added by editing the file, so a seed a user
-deleted stays deleted. `config.toml` is created where absent by a run that resolves a provider, and
+**`configure --create`** writes the target layer's `providers.toml` where no file
+stands, from its annotated template — no other command creates it — and overwrites no file's
+other content. `config.toml` is created where absent by a run that resolves a provider, and
 by `--create` with no `--provider` — a run over a pool that resolves none refuses before writing
-anything (§9, "Provider selection") — and otherwise edited under §9.6, which keeps every byte
+anything (§9, "Provider selection") — and otherwise edited under §9.5, which keeps every byte
 `configure` was not asked to change. Without `--provider` it makes no request, and one line on stderr
 says the model ids went unchecked; with `--provider` the ordinary path runs — select, dial, list the
 catalogue, warn on an id the catalogue does not offer. A refusal writes nothing, and so does a dial or
@@ -1056,14 +1258,14 @@ them.
 **`KBASE_API_KEY_FILE` is not a mode.** It names a file, not a provider and not a model: it overrides
 the key of whichever endpoint is in force — the selected entry's in file mode, the environment's in
 environment mode — and is optional in both: absent everywhere, no key is sent. It alone never flips
-the mode and never makes a mixed source. A harness consults neither mode (§8), choosing no endpoint.
+the mode and never makes a mixed source.
 
 **The preflight.** The inference preflight (§5) names each lacking setting in the mode's own
 spelling: `baseUrl` or `models.<role>` in file mode — `models.decision`, `models.text`,
 `models.scoring` — and `KBASE_API_BASE_URL` or `KBASE_<ROLE>` in environment mode, never
 `models.<role>` for a mode the files do not supply. A lack a variable's doing names that variable, as
 `KBASE_API_KEY_FILE` naming an unreadable file does. `show-config` runs the same decision and reports
-its refusal as a diagnostic rather than stopping (§9.7).
+its refusal as a diagnostic rather than stopping (§9.6).
 
 **The `provider` key is superseded.** `config.toml`'s top-level `provider` loads and merges and
 chooses nothing: no role's endpoint is taken from it, and no catalogue verb selects by it. A file-mode
@@ -1073,7 +1275,7 @@ naming `kbase configure` as the rewrite. It leaves the schema at the next major
 
 There is no plaintext-transport switch: when a key is configured and the base URL is `http://` to a
 host other than loopback, one line on stderr says the key travels in cleartext, and the build
-proceeds (as §9.5's permission warning does).
+proceeds (as §9.4's permission warning does).
 
 ### 9.1 `providers.toml` — the endpoint pool
 
@@ -1085,20 +1287,34 @@ baseUrl = "..."        # required
 apiKeyFile = "..."     # path to a key file, resolved relative to this file's
                         # own directory if relative; an entry's only key field
 type = "inference"     # optional; the only accepted value, also the default
-api = "openai"         # optional; the only accepted value, also the default
+api = "openai"         # optional; "openai" (also the default) or "anthropic" —
+                       # the chat protocol this server speaks
 decisionsFlavor = "systemone"  # optional; "systemone" (also the default) or
                                # "decisions" — the decision surface this
                                # server speaks
 ```
 
 No other key is recognized inside an entry. An entry that fails validation (empty `baseUrl`, or
-`type`/`api`/`decisionsFlavor` set to anything but its accepted value) is **dropped** with a warning
-naming the entry and the reason (never key material); the rest of the pool still loads. A key-file
-read failure faults just that entry the same way. An absent `providers.toml` is an empty pool, not a
-load error.
+`type`/`api`/`decisionsFlavor` set to anything but its accepted values) is **dropped** with a
+warning naming the entry and the reason (never key material); the rest of the pool still loads. A
+key-file read failure faults just that entry the same way. An absent `providers.toml` is an empty
+pool, not a load error.
+
+**The chat protocol.** `api` names the wire protocol chat uses, chosen per server; it is a two-value
+field. `openai` is the OpenAI-compatible `chat/completions` surface — what an entry silent on `api`
+gets — and `anthropic` is the Anthropic Messages surface, `POST <baseUrl>/messages`. The two differ
+in more than a path. Messages requires a `max_tokens` cap, which kbase estimates as
+`max(256, ceil(characters / 4))` over the ask's messages and system text (§8). It takes the system
+prompt as a top-level `system` string rather than a turn, so a system message is lifted out of
+`messages`. It accepts `temperature` only in [0,1], so a value outside that range is omitted rather
+than clamped. It has no `prompt_cache_key`, `chat_template_kwargs` or `reasoning` field: none is
+sent, and thinking is disabled by sending the protocol's thinking field as `{type: disabled}`. Its
+catalogue is `GET <baseUrl>/models`, whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected
+by `api`, and the decision surfaces are OpenAI-shaped: the `decision` role's entry must speak
+`openai`, and a Messages endpoint asked for a letter ask refuses, naming the provider and the role.
 
 **The decision surface.** `decisionsFlavor` names the wire shape the decision call uses, chosen per
-server: it changes nothing about chat, which is `chat/completions` under either shape, and it binds
+server: it changes nothing about chat, which `api` alone decides, and it binds
 no model id — the decision category's id stays in `config.toml` (§9.2). An entry silent on it speaks
 `systemone`, the shape kbase's letter asks were written against. `systemone`: `POST
 <baseUrl>/systemone`, body `model`, `state` and `questions` — an object keyed by each question's own
@@ -1140,92 +1356,32 @@ endpoint instead (§9), and one form of value is never read as the other.
 A category left unset resolves to "not configured" — no defaulting, no guessing, and no role falls
 back to another. `readerConcurrency` is how many of one group's letter asks a build has in flight once
 the group's first ask has returned; absent, it is 4. A value under 1 fails the load, naming
-`asks.readerConcurrency`. There is no `[dev]` table; an old `[dev]` key fails strict load (§9.4). A
+`asks.readerConcurrency`. There is no `[dev]` table; an old `[dev]` key fails strict load (§9.3). A
 `[models]` table spelling `heavy`/`light` — the superseded category names — fails strict load as
-unmodeled keys (§9.4); the remedy is a hand edit.
+unmodeled keys (§9.3); the remedy is a hand edit.
 
-### 9.3 `harnesses.toml` — the harness profiles
+### 9.3 Strict-load contract
 
-A `kbase score` run can ask a command instead of an endpoint (§8's `--harness`). The commands live in
-their own file, so `providers.toml` stays exactly what it was and no name in it is reserved:
-
-```toml
-# harnesses.toml — an excerpt of what `configure --create` writes: the file carries
-# a header, and above each profile the comment it ships with.
-[claude]
-command = ["claude", "-p", "--tools", "", "--strict-mcp-config", "--safe-mode"]
-
-# [opencode]
-# command = ["opencode", "run", "--format", "default", "{prompt}"]
-# Off by default: `opencode run` (v2.0.32) has no flag that removes tools or
-# suppresses instructions, so a profile runs the default `build` agent with its
-# tools, its own system prompt and the instruction files opencode loads — and an
-# agent with tools can read the KB the ask is about. Run an agent that cannot
-# instead, by naming it with `--agent`: that agent comes from the agent set you
-# install, not from kbase.
-```
-
-Top-level tables are profile names, an open set the user chooses — the grammar `providers.toml` uses
-for pool entries, with its merge rule: a profile of the same name is replaced whole by a higher
-layer's. A profile is `<name>` at the top level and never a nested table. An absent `harnesses.toml`
-is no profiles, not a load error.
-
-**`command` is the profile's closed schema:** an array of strings, non-empty, where an element may be
-empty — the `claude` seed's `--tools ""` is one, and a schema that refused it would refuse the seed
-the template prints. A key the schema does not model fails the whole file's load as either other
-file's does (§9.4), and so does a profile naming no command: a profile is a command, and one that
-states none would load as a name a run could select and nothing to execute.
-
-**Two tokens, one grammar.** `{model}` is filled once per run from the scoring role's model, and
-`{prompt}` per item, in the one element that names it — a profile carrying `{prompt}` receives the
-prompt there and stdin is closed empty; an argv naming it nowhere receives the prompt on stdin. That
-is how a command taking its prompt as an argument and one taking it on stdin share one contract
-without kbase knowing either CLI. Substitution is one pass, `{model}` then `{prompt}`, and the result
-is never re-scanned; `{prompt}` in two elements is refused.
-
-**The profiles layer as the pool does**, the repository's over the global one, or the one directory
-`--config-dir`/`$KBASE_CONFIG_DIR` names. **The source is never silent:** a profile resolved from the
-repository layer writes one line on stderr naming the file and the layer, once per invocation — a
-warning, never a refusal, and it does not stop the run. Where a lower layer supplied the same name,
-that line names the layer whose profile it replaced whole; where the name was added, the line
-carries no such clause and reads as it did before. A profile from the global layer, or from the
-directory a flag or the variable names, says nothing: the user put it there. `show-config` says
-nothing on stderr and reports the layer in `harnesses[].layer` (§9.7).
-
-**Five verbs load it, and one verb uses it.** `build`, `score`, `models`, `configure` and
-`show-config` load configuration before doing anything else (§9.4), and so parse this file; every other
-verb reads no configuration file, and a file that will not load does not stop it. `score --harness`
-alone resolves a profile, and `score` is not an MCP tool.
-
-**The seeds.** `configure --create` writes this file where none stands (§9), with `claude` live and
-`opencode` commented out with its limitation stated in the file the user edits. Neither seed names
-`{model}`: each runs on the harness's own configured model, which is what a fresh install can rely
-on. A pool entry that happens to be named `harness` is an ordinary entry, and the pool template's
-one-live-entry rule does not apply here — a profile is only ever named by `--harness`, so a live
-profile is not a choice the configuration makes behind the user's back.
-
-### 9.4 Strict-load contract
-
-All three files are decoded strictly: any key or table not modeled by the schemas above fails the **whole
+Both files are decoded strictly: any key or table not modeled by the schemas above fails the **whole
 file's** load. The message names the file path and every offending key by its full dotted path (e.g.
 `models.typo_key` — a superseded category name such as `models.heavy` fails the same way),
 pluralizing "unknown key"/"unknown keys" when more than one. A malformed-TOML file fails with a
 parser-detail message naming the file and line. Only key **names** ever appear in either message,
 never values: a file may still hold a secret a hand edit left behind — a field no longer modeled, a
 stray value — and the refusal that names its key is exactly where that value would be echoed.
-`kbase configure` cannot repair a config file it cannot load: the verbs §9.3 names load configuration
-before doing anything else. A layer that supplies a pool entry supplies its `apiKeyFile` path too, and
-kbase confines no key file's location: trusting a cloned configuration means trusting the key file it
-names as much as the endpoint it names.
+`kbase configure` cannot repair a config file it cannot load: the verbs that read configuration load
+it before doing anything else. A layer that supplies a pool entry supplies its `apiKeyFile` path too,
+and kbase confines no key file's location: trusting a cloned configuration means trusting the key
+file it names as much as the endpoint it names.
 
-### 9.5 Key-file permission warning
+### 9.4 Key-file permission warning
 
 When a `providers.toml` entry sets `apiKeyFile` and the host is not Windows, kbase stats the
 resolved key-file path. If its permission bits grant group-read or other-read, it prints a warning
 naming the path and the offending mode and recommending `chmod 600`. The entry stays usable. This is
 the only file-permission behaviour kbase applies to a file it did not create.
 
-### 9.6 `configure`'s targeted update (byte-preservation contract)
+### 9.5 `configure`'s targeted update (byte-preservation contract)
 
 `kbase configure` never re-serializes `config.toml`; it edits the existing bytes in place.
 
@@ -1247,11 +1403,11 @@ the only file-permission behaviour kbase applies to a file it did not create.
   symlink has its target rewritten; the symlink stays.
 - Any failure along this path leaves the file completely unwritten.
 
-### 9.7 `kbase show-config`
+### 9.6 `kbase show-config`
 
 `kbase show-config [--provider NAME]` reports how this invocation's configuration resolves, and
 changes nothing: it reads no KB, writes no file and makes no network request. A configuration that
-fails strict load is refused before the verb runs, as for every verb (§9.4). Otherwise the outcome is
+fails strict load is refused before the verb runs, as for every verb (§9.3). Otherwise the outcome is
 `done` whatever the report finds: a fault in the pool, an unresolved role and a mixed or partial
 inference mode are diagnostics, not refusals, so one call shows every gap at once. It makes no
 request and opens no client, so an unreadable key file reaches it through the registry's preflight
@@ -1266,8 +1422,7 @@ the flavour reads `systemone` — including a provider a dropping fault removed 
 fault's reason); the inference variable names this process sets (§9, "The two modes"); the mode, or
 null where the sources are mixed; the pool entry the selection names and the rule that named it, or
 why no entry was named; one record per role — the endpoint it resolves to, the layer that supplied
-each field, or why it does not resolve; and the loaded harness profiles with the layer that supplied
-each, so a profile's source is visible here even though nothing is said on stderr.
+each field, or why it does not resolve.
 
 The sources vocabulary is `layers`': `repository` or `global` for a value a file holds, `explicit` or
 `environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named, and
@@ -1275,7 +1430,7 @@ The sources vocabulary is `layers`': `repository` or `global` for a value a file
 fault, each carrying `path` the `providers.toml` that carries the fault — which need not be the file
 a selection or `configure` names — and one item per role that does not resolve or per side of a mixed
 mode, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
-`config.toml`. It says nothing about harnesses beyond listing them: a profile supplies no endpoint.
+`config.toml`.
 
 **Names and paths, never secrets.** A key is reported by the kind it is — from a file, or none —
 and a key file by the path its entry states, never by its content; an inference variable by its
@@ -1289,25 +1444,28 @@ process.
 
 ## 10. Metadata format version
 
-**The stamp.** A KB declares its metadata format as `kb-format: <major>.<minor>.<patch>` in the
-entry point's frontmatter, semver. Two forms are superseded: `0.9.0` — the comment-block
-frontmatter, the JSON build records, the JSONL index — and `1.0.0`, which `2.0.0` replaces; a KB
-with no stamp is `0.9.0`. Major: a reader built for the old major misreads the KB (a renamed field,
+**The stamp.** A KB declares its metadata format as `kb-format: <major>.<minor>.<patch>`, semver,
+in `kb-root/.index/format.yaml`: one block mapping carrying the one key, no `---` fences. The entry
+point's frontmatter is the stamp's superseded place, standing in every KB older than `3.0.0` and
+read wherever it still stands. Two forms are
+superseded: `1.0.0`, which `2.0.0` replaced, and `2.0.x`, which `3.0.0` replaces. Major: a reader
+built for the old major misreads the KB (a renamed field,
 changed semantics, a changed anchor rule). Minor: additive; an old reader ignores the addition
 safely. Patch: the bytes a writer produces changed, their meaning did not.
 
-**Reading the stamp.** Before any other read, kbase reads `kb-format` alone from
-`kb-root/entry-point.md`, recognising either frontmatter form; a KB with no entry point is refused
-(`check: kb-root`) as it is today. Every producer of a KB stamps it: the build's spine, `init`'s
-entry point at birth, and every save (below). A stamp at the current major and minor with another patch is read as current and
+**Reading the stamp.** Before any other read, kbase reads `kb-format` from
+`kb-root/.index/format.yaml`; where that file does not stand, from the entry point's frontmatter,
+the superseded place — and where both stand, the file's stamp is the KB's. A KB with neither stamp
+file nor entry point is refused (`check: kb-root`) as it is today; a KB stamped in neither place,
+and an unreadable stamp in either, are refused (`check: kb-format`), the refusal naming where it
+looked. Every producer of a KB stamps the file: the build's spine, `init` at birth, and every save
+(below). A stamp at the current major and minor with another patch is read as current and
 rewritten on the next save.
 
-The current version is `2.0.1`. Its patch over `2.0.0` is the band ladder's bottom rung's words
-above: the bytes a writer produces changed — every derived `- strength:` line carrying
-`unsubstantiated` at that rung — and their meaning did not, the value being unchanged. A `2.0.0` KB
-is read as current; its derived lines re-render on the next `refresh`, and the save stamps `2.0.1`.
-No converter leads to a patch, so a migration chain stops at the form its last converter produces and
-the next save supplies the stamp.
+The current version is `3.0.0`. No converter leads to a patch, so a migration chain stops at the
+form its last converter produces and the next save supplies the stamp: a `2.0.0` and a `2.0.1` KB
+both convert through the one `2.0.x → 3.0.0` converter (below), `2.0.1`'s patch having changed only
+the words of the band ladder's bottom rung on a derived line.
 
 **One version read and written.** kbase reads and writes exactly the current version (ARCHITECTURE
 §12). An older stamp is read through migration (below). A newer major or minor is refused by every
@@ -1319,54 +1477,187 @@ writes an older format, and nothing downgrades.
 
 **Migration happens at load and lands on the next write.** Reading an older KB converts it — the
 KB's files as bytes in, the current form's files as bytes out, plus the set of repository-relative
-paths the conversion made obsolete — version step by version step, in memory; every command then
-sees the current form. A read-only command (`verify`, the queries) writes nothing. The next natural
-write — `refresh`, or a write op's trailing refresh — writes every file the format covers in the
-current form, the authored frontmatter of every document included, then removes the obsolete paths
-less any the save itself wrote, then stamps the entry point last — the stamp is the mark that the
-migration completed — reporting the removals under `removed` (§7). Every read of a KB file goes
-through one loader, `internal/kbload`, which serves the migrated bytes to every command on an older
-KB (ARCHITECTURE §11); `verify` reports an unmigrated KB stale from its stamp. A write op with
-`--no-refresh` on an unmigrated KB is refused (`check: index`, remedy `kbase refresh`): no save
-mixes two formats. A save that fails before the stamp leaves the old form standing with some files
-already current; the next load reads each file in the form it finds, and the next save completes the
-migration. On an unmigrated KB `verify` reports the index stale with remedy `kbase refresh`, which
-is the migration.
+paths the conversion made obsolete and the conversion's warnings — version step by version step, in
+memory; every command then sees the current form, and a converted, unsaved KB answers every query
+as converted. A read-only command (`verify`, the queries, `render-citation`, `export-latex`) writes
+nothing, and `render-claim-graph` writes sheets only (§8). The next natural write — `refresh`, a
+write op's trailing refresh, or a scoring run's start refresh — saves the conversion, in this
+order: `.index/edges.yaml`, then `.index/nodes.yaml`, then every other file the conversion produced
+(each document with its frontmatter removed); then the stamped `AGENTS.md` and `CONVENTIONS.md`,
+each written whole from the current templates whatever it held; then the register pages and the
+sheets; then the stamp file is written at the version the KB is still at, so that a stamp always
+stands and always names the version the tree is at; then the obsolete paths are removed, less any
+the save itself wrote; then the entry point, whose frontmatter the conversion stripped; and last
+the stamp file is rewritten at the current version — the stamp is the mark that the migration
+completed. The removals are reported under `removed` (§7). Every read of a KB file goes through one
+loader, `internal/kbload`, which serves the migrated bytes to every command on an older KB
+(ARCHITECTURE §11). A write op with `--no-refresh` on an unmigrated KB is refused (`check: index`,
+remedy `kbase refresh`): no save mixes two formats. A save that stops part-way leaves the old form
+standing, stamped at the version it converts from, with some files already current. Where
+`.index/nodes.yaml` then stands, both record files are the current form's —
+no `2.0.x` KB carries a `nodes.yaml`, and it is written second — so the next load takes them as they
+stand, strips any remaining frontmatter unread and derives nothing from the `2.0.x` registers or
+frontmatter; and the next save completes the migration. On an unmigrated KB `verify` reports
+`index freshness` with remedy `kbase refresh`, which is the migration.
 
 **`1.0.0`**, the first major bump, is one change of serialisation: standard YAML frontmatter (`---`
-fenced, the same keys and values) in place of the comment block, with one change of shape — a leaf's
+fenced, the same keys and values), with one change of shape — a leaf's
 repeated per-node key groups (`exp-id`, `status`, `strengthens`; `sup-id`, `supports`) become one
 mapping each in a top-level `experiment-nodes:` or `support-nodes:` list, keys and order kept, a
 one-node leaf a one-element list; the build records as YAML (`kb-build-*.yaml`); `.index/*.yaml` as
-YAML streams, one document per line, each the record as a JSON object after the `--- ` marker — a
-valid YAML flow mapping that a reader holding only a JSON parser reads by stripping the marker — in
-place of `.jsonl`; a writer never folds a record across lines. The YAML frontmatter stands at the
-top of the file, so the up-link line (§3) is the first line after its closing `---`. **Recognising
-frontmatter.** A document's leading `---` block is frontmatter only when its first non-empty line is
-key-shaped: `name:` with a kebab-case name. Such a block that does not parse as a YAML mapping is
-the malformed-frontmatter refusal. A leading `---` block whose first line is not key-shaped (a prose
-paragraph, a list, the content after a thematic break) is prose, and the document has no
-frontmatter. **The KB YAML dialect.** kbase writes, and a reader needs, only this subset: block
-mappings and block lists, lists of flat mappings, plain or double-quoted scalars, no anchors, tags,
-folded or multi-line scalars; flow style only for a list of scalars (`[clm-a, clm-b]`), an empty
-list or mapping (`[]`, `{}`), and the JSON object of an index line; a scalar is never wrapped. A
-reader of the dialect, in any language, is conformant when it reads the `1.0.0` golden pairs
-(ARCHITECTURE §12) to the same values. The `0.9.0 → 1.0.0` migration converts the record and index
-files under their new names and leaves nothing of the old form behind. Elsewhere this document
-describes the `2.0.0` form, which keeps this serialisation; `1.0.0` is the form `2.0.0` supersedes,
-and its names appear here and in the migration below. `.jsonl` and the comment block are `0.9.0`,
-the oldest superseded form, named only here.
+YAML streams, one document per line, each the record as a JSON object after the `--- ` marker; a
+writer never folded a record across lines. The YAML frontmatter stood at the top of the file, so the
+up-link line (§3) was the first line after its closing `---`.
 
 **`2.0.0`**, the second major bump, is the scoring vocabulary: three quantities named, five node
-types in place of six, and one scalar on every scoring edge. It keeps the serialisation above and
-changes field names, relation names and the arithmetic those fields feed.
+types in place of six, and one scalar on every scoring edge. It kept the serialisation above and
+changed field names, relation names and the arithmetic those fields feed. Its patch `2.0.1` changed
+the bottom band's words on a derived line, and nothing else.
+
+**`3.0.0`**, the third major bump, moves the graph into records. Every node and every edge is a
+record in one of two authored files, `.index/nodes.yaml` and `.index/edges.yaml`; a statement marker
+in a leaf hosts each claim, analysis and experiment; the register pages are rendered from the
+records and never read back; and no document carries frontmatter at all, the stamp standing in
+`.index/format.yaml`. Everything else — the index the queries, the sheets and `score`
+read — is derived at load and never stored: strength,
+derivation strength, build status and band, the premise, strengthen-by and citation counts, a
+scoring edge's `target_kind`, the strengthen-by rows and their `mentioned_ids`, the citations,
+subtree aggregates, each document's kind (the entry point is the entry point, a document whose child
+list names a child an index, any other document a leaf), each node's host, canonical path and anchor,
+and the degraded state (below). The scoring vocabulary of `2.0.0` — five node types, three
+quantities, four scoring relations, one arithmetic — stands unchanged, and the rest of this section
+describes `3.0.0`; `1.0.0` and `2.0.x` are the forms it supersedes, and their names appear only in
+the migrations below.
+
+**The KB YAML dialect.** kbase writes, and a reader needs, only this subset: block mappings and
+block lists, lists of flat mappings, a block list of scalars as a mapping's value, plain or
+double-quoted scalars, no anchors, tags, folded or multi-line scalars; flow style only for a list of
+scalars (`[clm-a, clm-b]`) and an empty list or mapping (`[]`, `{}`); a scalar is never wrapped. A
+reader of the dialect, in any language, is conformant when it reads the record files of the `3.0.0`
+golden trees to the values their decoded-values goldens hold (ARCHITECTURE §12).
+
+**Recognising frontmatter.** A document's leading `---` block is frontmatter only when its first
+non-empty line is key-shaped: `name:` with a kebab-case name. Such a block that does not parse as a
+YAML mapping is the malformed-frontmatter refusal. A leading `---` block whose first line is not
+key-shaped (a prose paragraph, a list, the content after a thematic break) is prose, and the
+document has no frontmatter. kbase reads frontmatter on the entry point alone, and there for the
+superseded stamp alone (§10); `verify` reports a
+frontmatter block on every document, the entry point included (§8).
+
+**The record files.** Each is one YAML document: a block list of block mappings, `[]` when it holds
+none. A node record's type is its `id`'s prefix and an edge record's its `relation`; no record
+carries a `kind`. Every field its type has is present and any other field is refused; an empty
+value is spelled `""` or `[]`, never omitted, so no reader takes an absent bearing for the judgement
+`0`. Strings are double-quoted, escaping `\`, `"`, every control character below U+0020 but tab, and
+the characters a YAML reader would take as a line break or refuse as unprintable, as `\uXXXX`; a
+string holds no line break, and a prose value collapses each whitespace run to one space, its ends
+trimmed — adoption and an op's re-assertion test compare the collapsed value.
+Numbers are plain, in the spelling a rigor is written in; booleans `true` and `false`; keys in the
+type's field order. Nodes are written in `id` byte order and edges by identity — relation in the
+order of the relations table below, a `demoted` record's `replaced-relation` in the same order, then
+`source`, then `target`. Every writer re-renders a whole file from the records, and writes it only
+where its bytes change.
+
+| Node record | Fields, in order |
+|---|---|
+| claim (`clm-`) | `id`, `title`, `rigor`, `manually-scored`, `rationale`, `no-edge`, `strengthen-by` |
+| analysis (`ana-`) | `id`, `title`, `rigor`, `manually-scored`, `rationale`, `no-edge` |
+| experiment (`exp-`) | `id`, `title`, `status`, `rigor`, `manually-scored` |
+| work (`wrk-`) | `id`, `title`, `rigor`, `rationale` |
+| axiom (`axm-`) | `id`, `title` |
+
+A `title` is a non-empty line; titles may repeat, two entries of one register page sharing a title
+sharing its slug. `rigor` is a number in `[0, 1]` or `"*pending*"`. `manually-scored` is a boolean
+(§8). `rationale` and `no-edge` are strings, `""` for none; `strengthen-by` a list of strings, `[]`
+for none, in block form otherwise; `status` `"run"` or `"pending"`. No record names a register: the
+page that renders a node is derived from its host.
+
+| Edge record | Relations | Fields, in order |
+|---|---|---|
+| unscored | `references` | `relation`, `source`, `target`, `context` |
+| demoted | `demoted` | `relation`, `source`, `target`, `context`, `replaced-relation`, `bearing`, `manually-scored` |
+| bearing | `founds` | `relation`, `source`, `target`, `context`, `bearing` |
+| scorable | `supports`, `lifts`, `refutes` | `relation`, `source`, `target`, `context`, `bearing`, `manually-scored` |
+
+`context` is `""` for none, and a query reports it null. `bearing` is a number in `[0, 1]` or
+`"*pending*"`. A scoring edge runs push, from the supporter to the supported; a `references` edge
+runs from the node that names to the node named. An edge record's identity is (`relation`,
+`source`, `target`), but a `demoted` record's is (`demoted`, `replaced-relation`, `source`,
+`target`), so an analysis's `lifts` and `refutes` of one claim, both demoted, are two records.
+
+**Statement markers.** A claim, an analysis and an experiment is hosted by one statement marker,
+`<!-- claim-rigor: <id> -->`, in a leaf; its host is the leaf holding it, derived at load, and no
+record stores hosting. A node with no marker has no host, and one with several takes the first in
+path order for the walk; both are `verify`'s `statement marker` fault, never refresh-fixable, and
+neither degrades the load. A claim's statement is the block its marker sits in, or, where the marker
+ends a heading's line, the section that heading opens, from the line after it to the next heading as
+deep or shallower; an analysis's or an experiment's is the section the marker sits in, from the
+nearest heading above it to the next heading as deep or shallower. The inserts place an analysis's or an experiment's marker on a new
+line directly after the host's first heading; `mark-claim-in-leaf` places or moves any node's
+marker at the end of the line its locator names (§8). A marker is never on a fenced block's opening
+or closing line (a display-maths fence included), so a locator naming either line is refused, naming
+the locator.
+
+**Register pages.** A claim, an analysis and an experiment is rendered on the register page of the
+volume its host lies in, `<volume>/claim-rigor.md`, a volume being a top-level directory of
+`kb-root/` holding an `index.md` (§3); a host outside every volume puts it on the root page,
+`claim-rigor.md`. Works are rendered on the root page; an axiom on none, `axioms.md` stating it; a
+node with no host on none. A page exists for each volume hosting a node, and at the root where a node
+is hosted outside every volume or a work exists; a page no longer called for is removed by `refresh`
+and reported under `removed`. Each entry is headed `## <title>`, so its anchor is the title's slug,
+and every link a page renders — a premise's title to its entry — is computed from each node's
+derived page and slug, so it holds within a page and across pages; a prose link `<page>#<slug>`
+holds while its node stays on that page with that title, and the dead-link gate reports one that no
+longer does (§8). A page is never read back: `verify` renders it in memory and compares bytes, and a
+difference is `register freshness`, which `refresh` fixes. People and sessions read a page as prose,
+take no value from it, and never edit it. Entries come in the reading order of their markers — the
+spine walk, then the marker's line — then works by id. What an entry shows is presentation,
+untested beyond the anchors and the freshness compare: the title, the id, the leaves citing it, the
+`### Rigor` block — `rigor`, marked manual where `manually-scored` is true, then `rests-on` (every
+`supports` and `founds` edge into it, with the source's title, derived strength and bearing),
+`lifted-by`, `refuted-by`, `references`, `demoted` (each demoted edge into it, with the relation it
+replaced and its bearing), `rationale`, `strengthen-by` and `no-edge` — and on a claim or an
+analysis the `### Strength` block, its derived line and trace; an experiment's `status` and
+`rigor`; a work's `rigor` and `rationale`. Each scoring and demoted edge appears on its target's
+entry.
+
+**`canonical_path` and `canonical_anchor`.** A claim's are its register page and its title's slug;
+a work's the root register page and its title's slug; an analysis's and an experiment's the leaf
+hosting it and the slug of the heading of the section holding its marker; an axiom's `axioms.md` and
+the slug of `Axiom <label>: <title>`. A node with no host has neither, each null.
+
+**Axioms.** An axiom is declared by its node record, which `insert-axiom-entry` writes (§8);
+`axioms.md` is prose stating it, one `### Axiom <label>: <title>` heading each, and is not read for
+declarations. `verify`'s `axiom heading` check holds the two together, not refresh-fixable: each
+axiom record has its heading in `axioms.md`, and each such heading names an axiom record of that
+label and title.
+
+**The load: strict on syntax, lenient on integrity.** The load refuses, naming file and line
+(`check: metadata`), a record file that does not parse, an unknown or missing field, a value of the
+wrong type or outside its domain, an id outside its kind's grammar, a node `id` twice, and a pairing
+no relation joins (the relations table below); an absent record file in a stamped `3.0.0` KB is
+refused `check: index`, remedy "restore it from git". Three faults are resolved instead, and the load
+completes **degraded** — a state computed on every load and never stored:
+
+| Fault | Resolved for the walk, and in `refresh`'s repair |
+|---|---|
+| An edge identity on two or more records | the record with the higher bearing — a number above `*pending*`, the first in file order on a tie; for a `demoted` record the replaced edge's bearing; for `references` the first in file order |
+| An edge naming a node no record carries | dropped |
+| A cycle among the scoring edges | cut by the cycle walk (below); nothing is dropped |
+
+While degraded, `verify` runs and reports every fault as a `degraded` item, remedy `kbase refresh`;
+every query, `score`, `export-latex`, `render-claim-graph`, a `build` resuming a trail and every
+public write op is refused, `check: degraded`, naming the faults, remedy `kbase refresh`. `refresh`
+writes the records as the walk resolved them and reports each record dropped and each edge cut under
+its `warnings` (§7). Merging metadata across branches is unsupported; `kbase refresh` repairs what a
+merge leaves.
 
 **Five node types.** `claim`, `analysis`, `experiment`, `work` and `axiom`. `node_type`,
 `target_kind`, the index, the sheet and the result documents use these five words and no other. Ids
 carry the kind's three-letter prefix — `clm-`, `ana-`, `exp-` and `wrk-` before a minted or authored
 body, and `axm-<label>` for an axiom, whose label is written as authored
 (`[A-Za-z0-9][A-Za-z0-9._-]*`) — so a token names its kind without translation. An axiom is
-declared in `axioms.md`, one `### Axiom <label>: Title` heading per declaration. Authoring prose may
+declared by its record and stated in `axioms.md` (above). Authoring prose may
 say *invariant*, *framework premise*, *framework*, *proposition*, *evidence*, *trial*, *cited work*
 or *reference*: *invariant* and *framework premise* name an axiom, *proposition* a claim, *evidence*
 and *trial* an experiment, *cited work* and *reference* a work; *framework* names the document that
@@ -1396,26 +1687,32 @@ cited work, or an axiom the argument leans on. An axiom's declaration in `axioms
 not origin: what it states is an external fact.
 
 `references` and `demoted` are the two unscored relations: `references` carries no bearing and no
-value, and `demoted` carries an origin in its place. A bearing is required on every scoring edge and
-illegal on these two. A bearing weights the contribution and never modifies its source's value.
+value, and `demoted` keeps the bearing of the edge it replaced, which no walk reads. A bearing is
+required on every scoring edge and illegal on these two. A bearing weights the contribution and
+never modifies its source's value.
 
 ```
 premises   = every supports and founds contribution that participates
-derivation = min(rigor, every contribution in premises), and 0 where premises is empty
+derivation = min(rigor, every contribution in premises), and where premises is empty the node's
+             own rigor for an analysis, 0 for a claim
 final      = min(max(derivation, every lift), every cap)
 ```
 
 `rigor` caps what the premises establish and is no premise itself. A node no participating premise
-carries has an empty premise set and a derivation of `0` — whatever its `rigor` says, judged, pending
-or absent — so a bare claim reads `0.00` and lands `unsubstantiated`, however good its statement. An
-edge that does not contribute is no supporter, so a node whose only edge is excluded reads `0` too.
-Where a premise does participate and `rigor` is pending, the derivation is unknown and propagates
-nowhere: a lift stands over it — `max(pending, lift)` is the lift — while a refutation alone leaves it
-unknown. `lifts` and `refutes` compose around the derivation unchanged: a node whose only scoring
-edge is a lift takes the lift's product, and one whose only scoring edge is a refutation takes `0`.
+carries has an empty premise set, and its derivation is what its kind is worth bare: `0` for a claim
+— whatever its `rigor` says, judged, pending or absent — so a bare claim reads `0.00` and lands
+`unsubstantiated`, however good its statement; an analysis's own `rigor`, since a method's inputs are
+the rules of inference and not a KB node, so a premise-less analysis reads its method's value and the
+claim it lifts reads it too. An edge that does not contribute is no supporter, so a claim whose only
+edge is excluded reads `0`. Where a premise does participate and `rigor` is pending, the derivation is
+unknown and propagates nowhere: a lift stands over it — `max(pending, lift)` is the lift — while a
+refutation alone leaves it unknown. `lifts` and `refutes` compose around the derivation unchanged: a
+claim whose only scoring edge is a lift takes the lift's product, and one whose only scoring edge is
+a refutation takes `0`; an analysis composes the same two around its own rigor, so a lift takes
+`max(rigor, lift)` and a refutation `min(rigor, cap)`.
 
 The walk carries full precision: nothing rounds a value on its way into a derivation, so a dependent
-multiplies its source's exact strength. The record — the `- strength:` line and a premise bullet's
+multiplies its source's exact strength. A register page — its `- strength:` line and a premise's
 `(strength …)` — carries the value in the fewest decimals that read back as it: four in the ordinary
 case, more only where four would lose it, trailing zeros trimmed. A query result carries it as a
 number at two decimals, the trace on a `- strength:` line spells it at two, and a `verify` message
@@ -1427,19 +1724,21 @@ and its `supports` edge is excluded like any unjudged premise.
 **A value is derived from a charge list, not composed from the interior of the scale.** Each of the
 two scoring passes asks a model for the faults the text commits — the ids
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](RIGOR_AND_BEARING_SCORING_SCHEME.md) defines, each with the
-span that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
+line that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
 occurrence, floored at zero and exact at two decimals (§8). A written `rigor` is a value in
-`[0, 0.95]` or `*pending*`, and a bearing's in `[0, 1]` or `*pending*`; what changed is who chooses a
-number. A pass derives it, `1.00` is reserved to an axiom's rigor by rule, and `0.95` is the rigor
-tables' maximum — the largest a `rigor` pass derives, which reads *no charge among the six*, never
-*the text displays its reasoning*. An authored `rigor` above the maximum is read as the maximum: a
-file already carrying `1.0` — a converted experiment, which the `1.0.0` migration gives `rigor: 1.0`
-— reads as `0.95` everywhere the system shows it — the strength line a refresh derives from it, the
-index's derivation, a query's display and the walk — and the file keeps its text, `refresh` rewriting
-no rigor it found. The clamp is a reading rule, not a finding: `verify` reports nothing for it. `1.00`
-belongs to an axiom by rule and is no read value, so nothing authored clamps it, and a bearing's `1.0`
-stands — its table reserves nothing. The walk itself is unchanged and reads the value it is handed,
-whatever wrote the number.
+`[0, 1]` or `*pending*`, and a bearing's the same; what changed is who chooses a number. A pass
+derives it, `1.00` is the rigor tables' maximum — the largest a `rigor` pass derives, which reads *no
+charge among the six*, never *the text displays its reasoning*. An axiom's `1.00` by rule is that
+same number and no separate case on the read path: an authored `rigor: 1.0` — a converted
+experiment, which the `1.0.0` migration gives `rigor: 1.0` — is in domain and reads as itself
+everywhere the system shows it — the strength line a refresh derives from it, the index's
+derivation, a query's display and the walk. An authored finite `rigor` above the maximum is read as
+the maximum: a hand-edited `1.20` reads as `1.00`, and the record file keeps its text, while an
+infinity (`.inf`) is outside the domain and refused — `refresh` writes
+no authored file but a migration save and a degraded repair, and the repair writes a rigor it found
+as it found it. The clamp is a reading rule, not a finding: `verify` reports nothing for it. A
+bearing's `1.0` stands, its table reserving nothing either. The walk itself is unchanged and reads
+the value it is handed, whatever wrote the number.
 
 **The band ladder.** A `strength` is read against five rungs, each an inclusive lower bound: `0.85`
 *ok to build on*, `0.65` *ok to build on, see caveats*, `0.45` *use as input only*, `0.20` *do not
@@ -1454,66 +1753,47 @@ tooltip. A pending strength has no band, and a strength below `0.00` cannot occu
 **A claim stands alone; an analysis is made of its citations.** A claim is a proposition about the
 subject matter: its premises support it, and it means what it means without them. An analysis is
 constituted by the nodes it cites — strip the ids from its sentence and no proposition remains — so
-it has at least one premise and concludes in a claim. The authoring test is that removal: if a
-proposition survives it is a claim, and if nothing survives it is an analysis. A claim is the model's
-atom and needs neither: it may stand with no premises and nothing resting on it. These are rules for
-authors, not faults: the loader enforces neither, and a KB that breaks one is still read.
+it has at least one premise and concludes in a claim. An analysis citing none is a method with no
+inputs but its own, and reads its `rigor` rather than a claim's `0` (above). The authoring test is
+that removal: if a proposition survives it is a claim, and if nothing survives it is an analysis. A
+claim is the model's atom and needs neither: it may stand with no premises and nothing resting on it.
+These are rules for authors, not faults: the loader enforces neither, and a KB that breaks one is
+still read.
 
-**Edge direction and authoring.** The register stays claim-centric: a claim's or an analysis's
-`- rests-on:` bullets name its premises, and the parse flips them into push edges — a `clm-` or `exp-`
-token yields a `supports` edge into the entry, a `wrk-` or `Axiom …` token a `founds` edge into it.
-An `ana-` token is not one of these: an analysis lifts or refutes and never supplies a premise, so a
-bullet naming one is refused as a pairing no relation joins. An analysis's `lifts:` and `refutes:`
-lists and an experiment's `supports:`, `lifts:` and `refutes:`
-lists are authored on the source and are already push; a claim's `refutes:` list
-(`- <clm-id>: <bearing>`) is authored on the refuting claim. `rests-on` is a list key and names no
-relation. `deps` presents an incident edge from the reader's side — `relation`, `direction` (`in`
-where the other end supports `id`, `out` where `id` supports it), `target`, `bearing`, `context` —
-and the inverse query is unchanged in name and meaning: the nodes a node's strength enters.
+**Edge direction and authoring.** Every edge is stored as its record says, the scoring edges push:
+a `supports` or `founds` record runs from the premise into the claim or analysis it supports, and a
+`lifts` or `refutes` record from the lifter or refuter. The write ops author them from either side
+(§8): `add-rests-on` and an insert's `rests-on` list name a claim's or an analysis's premises — a
+claim or an experiment yields a `supports` edge into it, a work or an axiom a `founds` edge — and its
+`references`; an insert's or `add-pairs`' pair lists name the targets of a claim's refutations, an
+analysis's lifts and refutations, and an experiment's supports, lifts and refutations. An analysis
+lifts or refutes and never supplies a premise, so a `rests-on` entry naming one is refused as a
+pairing no relation joins, as the load refuses such a record. `deps` presents an incident edge from
+the reader's side — `relation`, `direction` (`in` where the other end supports `id`, `out` where
+`id` supports it), `target`, `bearing`, `manually_scored`, `context` — and the inverse query is
+unchanged in name and meaning: the nodes a node's strength enters.
 
-**Required bearings.** A scoring edge carries its bearing on the bullet or pair line that authors it,
-and one bullet names at most one scoring target — a `clm-`, `exp-`, `wrk-` or `Axiom …` token — since
-one bearing cannot judge two edges. The load refuses a bullet that breaks a rule, before any state is
-built: `check: metadata`, `key` the field, `path` the register, `line` the bullet's first physical
-line, and `detail` naming the rule. A premise bullet naming an `ana-` id is one of those refusals: an
-analysis supplies no premise, so the bullet yields no edge and the load names the pairing.
+**Required bearings.** Every scoring edge record carries its `bearing` field, and the strict load
+refuses one that lacks it, carries a value outside `[0, 1] ∪ {*pending*}`, or carries it on a
+`references` record (above), naming the file, the line and the field: a missing bearing is never
+read as `0`, nor as pending.
 
-| # | A `rests-on` bullet | Fault |
-|---|---|---|
-| R1 | names two or more scoring targets | ambiguous: split the bullet, one target each |
-| R2 | yields a scoring edge and carries no `(bearing …)` | missing |
-| R3 | carries a bearing outside `[0, 1] ∪ {*pending*}` | domain; `allowed` names the set |
-| R4 | carries a bearing and names no scoring target | misplaced |
-| R5 | carries two or more `(bearing …)` tokens | ambiguous |
-
-A bullet naming one scoring target that resolves to no node is dropped with a log line and is no
-fault: no edge exists, so nothing is required. A pair line under a leaf's `analysis-nodes` or
-`experiment-nodes` mapping, and a claim's `refutes:` pair, names its one target as its key and
-carries a bearing like any scoring edge; one with no readable value, or a second value, is malformed
-and refused by the load, not read as pending.
-
-In the index an edge row carries `source_strength_recorded`, then `bearing`, then `context`, and a
-`demoted` row closes with its `origin`. `source_strength_recorded` is a number or null; a scoring
-row's `bearing` is a number in `[0, 1]` or `*pending*`, written as text; `null` means exactly one
-thing: this row cannot carry one.
-
-**The register's vocabulary.** `confidence`, `quality` and a work's `strength` were three names for
-one local value; all three are `rigor`. `solidity` was the derived value; it is `strength` on every
-surface — the register's `- strength:` line and `(strength …)` annotation, the index columns, the
-query keys, the sheet's bands, `strength-below` and its `--max-strength`. The register file is
-`claim-rigor.md`; an entry's authored fields stand under `### Rigor` and its derived line and trace
-under `### Strength`; the Tier-2 marker is `<!-- claim-rigor: … -->`. A claim's and an analysis's
-entry carries both headings; a work's carries `### Rigor` alone, having no derived value. A
-`- rests-on:` bullet reads `- <id> — <title> (strength 0.90) (bearing 0.4) [context]`, its strength
-annotation the premise's own derived strength and absent on a work or axiom bullet; that order is
-normative for writers and not for readers.
+**The vocabulary.** `confidence`, `quality` and a work's `strength` were three names for one local
+value; all three are `rigor`. `solidity` was the derived value; it is `strength` on every surface —
+a register page's `- strength:` line and `(strength …)` annotation, the derived rows, the query
+keys, the sheet's bands, `strength-below` and its `--max-strength`. The register page is
+`claim-rigor.md`, placed by host (above); an entry's authored values stand under `### Rigor` and its
+derived line and trace under `### Strength`; the statement marker is `<!-- claim-rigor: … -->`. A
+claim's and an analysis's entry carries both headings; a work's carries `### Rigor` alone, having no
+derived value.
 
 **The `1.0.0 → 2.0.0` migration.** One converter reads a `1.0.0` KB's files as bytes and writes the
-current form's. A file it does not locate it does not touch, and a file already
-malformed under `1.0.0` is carried as bytes for the `2.0.0` load to refuse by name — the converter
-never makes invalid `1.0.0` bytes valid. Nor does it drop bytes: a file holding content the converter
-cannot carry refuses the conversion, `check: conversion`, naming the file, the line and the content,
-so the load writes nothing and the KB stands as it was. It
+`2.0.0` form's, which the `2.0.x → 3.0.0` converter (below) then takes. A file it does not locate it
+does not touch, and a file already malformed under `1.0.0` is carried as bytes for the `2.0.x` load
+the next step runs to refuse by name — the converter never makes invalid `1.0.0` bytes valid. Nor
+does it drop bytes: a file holding content the converter cannot carry refuses the conversion,
+`check: conversion`, naming the file, the line and the content, so the load writes nothing and the
+KB stands as it was. It
 
 - renames `- confidence:` on a claim entry, `- quality:` on an analysis entry and a work's
   `- strength:` to `- rigor:`, and `- solidity:` and `(solidity …)` to `- strength:` and
@@ -1521,12 +1801,23 @@ so the load writes nothing and the KB stands as it was. It
 - renames the premise list `- depends-on:` to `- rests-on:`, an analysis's `supports:` pairs to
   `lifts:` and an experiment's `strengthens:` pairs to `lifts:`, each pair's value becoming its
   bearing;
+- splits every claim into its statement and the argument for it: an analysis `ana-<body>` — the
+  claim's own id body, or the next free body where the KB already holds that id — takes the claim's
+  title, its rigor and its rationale, the claim's premise list moves to it whole, and the claim keeps
+  its rigor, its derived line and its rework items and is lifted by that analysis alone, one `lifts`
+  pair at bearing `1.0` declared on the leaf that hosts it. The analysis's statement marker stands on
+  the claim's own marker line, after the claim's, in the leaf the claim's statement is read from; a
+  claim its leaf lists and does not mark takes one on the leaf's first heading. An argument stating
+  no premise gives its analysis no premise list, which the walk reads at the analysis's own rigor. A
+  claim no leaf carries is not split: it keeps its premise list and its rationale, since the analysis
+  would hold them on behalf of no host — the `2.0.x` load reads no node for it;
 - gives every scoring edge its bearing: an old `(applicability X)` becomes `(bearing X)` with its
   value carried, an untokened premise bullet takes `(bearing 1.0)` — work and axiom bullets included
   — and every experiment's mapping gains `rigor: 1.0`;
 - rewrites each entry's `### Quality` to `### Rigor` and `### Solidity` to `### Strength`, and
   renames the register file `claim-quality.md` to `claim-rigor.md` with its Tier-2 marker
-  `<!-- claim-quality: … -->` to `<!-- claim-rigor: … -->`;
+  `<!-- claim-quality: … -->` to `<!-- claim-rigor: … -->`, and rewrites every Markdown link to it
+  to name `claim-rigor.md`, its anchor kept;
 - rewrites every authored `work-<citation key>` id to `wrk-<citation key>` where it appears, an
   analysis's `support-nodes:` to `analysis-nodes:`, its `sup-id:` to `ana-id:` and its `sup-` ids to
   `ana-`;
@@ -1539,9 +1830,9 @@ so the load writes nothing and the KB stands as it was. It
 - splits a bullet naming several scoring targets into one bullet per target; and
 - removes both paths the form no longer has, reported under `removed`: `claim-quality.md`, and
   `invariants.md`, whose declarations have moved into `axioms.md`. Every other file is left byte for
-  byte and no index is converted: the index is derived and regenerated.
+  byte and no index is converted: the `1.0.0` index was derived.
 
-**The migration is not value-identical, and no derived-value equality is promised.** Three causes,
+**The migration is not value-identical, and no derived-value equality is promised.** Four causes,
 and every one of them is a value a reader will see move:
 
 1. **An analysis's lift moves station; an experiment's does not.** Under `1.0.0` an analysis's
@@ -1557,75 +1848,156 @@ and every one of them is a value a reader will see move:
    explicit pending one, left its claim pending. The untokened bullet now carries `1.0` and
    contributes the work's rigor; an explicit `*pending*` token is carried and the edge is excluded.
    In both cases the claim reads a number where it withheld one.
+4. **A claim nobody judged reads `0`.** A `1.0.0` claim whose `confidence` is `*pending*` withheld a
+   number. The split gives that unjudged value to the claim's analysis, and an analysis whose
+   premises are judged reads pending — so the claim's lift from it is excluded, the claim derives
+   nothing, and it reads `0.00` and lands `unsubstantiated`. That is the walk's rule and not a
+   defect: an unjudged analysis is no lift, exactly as an unjudged bearing is no supporter.
 
 An old applicability was authored as a gate, not a weight, so every non-`1` value needs a human
 re-read before it is trusted; the converter carries the number and does not reinterpret it, and it
 invents neither a finding nor a context where a migrated work bullet's context names none.
 
+**The `2.0.x → 3.0.0` migration.** One converter reads a `2.0.x` KB's files as bytes and writes the
+`3.0.0` form's: the two record files from what the `2.0.x` load reads, every document stripped of
+its frontmatter — the entry point's `kb-format` with it, the next save writing the stamp file — and
+a statement marker for each node. It refuses only
+what the `2.0.x` load refuses, with that load's own items, and the owner repairs such a KB as a
+`2.0.x` KB; otherwise it never refuses, but takes the outcomes below and warns — one item each,
+`path`, `line` and `detail` — wherever it drops data or invents it.
+
+- A claim's and a work's register entry becomes its node record — `title` its heading, `rigor`,
+  `rationale`, `no-edge`, `strengthen-by` — and which `2.0.x` register held it is dropped silently:
+  its page is now its host's (above), so a node printed in another volume's register moves, and a
+  prose link to its old anchor is reported by the dead-link gate. A second register entry for one
+  id is dropped with a warning.
+- An analysis is its leaf's `analysis-nodes` entry joined with its register entry, titled with the
+  heading the register entry is written under — the author's title for it — and where the register
+  carries no entry for it, with its host leaf's first heading. An analysis entry no leaf hosts, which
+  `2.0.x` never read as a node, is dropped with a warning. Its canonical anchor is the section its
+  statement marker stands in, wherever the marker is (below), so a title and an anchor differing is
+  no loss: the anchor names the place the reader lands on. An
+  experiment's `experiment-nodes` entry becomes its record, titled with its host's first heading and
+  its `rigor` `*pending*` where it had none. A host with no heading titles its node with its file
+  name, with a warning. An axiom is `axioms.md`'s heading, else a legacy declaration, as the `2.0.x`
+  load read it.
+- Every `rests-on`, `refutes`, `references` bullet, register analysis pair and leaf pair line
+  becomes an edge record oriented as the `2.0.x` index row, `context` `""` where it had none. A
+  bullet whose token named no node, which `2.0.x` dropped too, is dropped with a warning quoting it.
+  An edge authored more than once — a `rests-on` target repeated, an analysis pair in both the
+  register and the leaf, an experiment's `supports` pair beside a `rests-on` bullet naming it — is
+  one record: equal bearings silently, their contexts joined with `; ` in authored order; different
+  bearings keep the higher, a number above `*pending*`, with a warning naming both sites.
+- A `demoted` bullet on an entry X naming Y becomes a `demoted` record from Y into X, replacing
+  `supports`, its bearing `*pending*` — `2.0.x`'s cut kept no bearing, so none is lost — and its
+  origin dropped silently.
+- Every `manually-scored` is written `false`.
+- Each node's statement marker is placed from the `2.0.x` `claims:` listings and markers. A claim
+  marked in a leaf that lists it keeps that marker. A claim listed but marked nowhere it is listed
+  gets a marker in the first listing leaf in path order — an equation's on the line inside its
+  display-maths fence carrying its `\label{…}`, and a claim whose leaf lists no other non-equation
+  claim and holds one labelled blockquote on that blockquote's first content line, so its label line
+  still reads as one, silently; any other on the leaf's first heading line, with a warning, the
+  section that heading opens being its statement. A leaf with no heading gets none of the markers
+  its heading would carry, each with a warning. Every other listing leaf becomes a mention,
+  with a warning, its `referenced-by` row lost, and every other marker of the claim is removed, with
+  a warning. A claim listed nowhere keeps its first marker in path order and loses the others, each with a
+  warning; one listed and marked nowhere has no host, `verify`'s `statement marker` fault. An
+  analysis's or an experiment's marker that a `2.0.x` document already carries stands where it is —
+  the section it sits in is the node's statement, so one the `1.0.0` migration placed beside the claim
+  it argues for keeps that place — and a second marker for the same node is dropped with a warning
+  naming the one that stands; a marker standing in a leaf other than the one declaring the node is
+  warned of, naming both paths, and its marker's leaf is the statement's home. Where none stands, one
+  is written on a new line directly after the host's first heading.
+- Frontmatter is removed from every document, the entry point's with it. `kb-format`, `kind`,
+  `claims`, a string `no-claim` and the `subtree-*`
+  keys are dropped silently, markers and the derivation carrying their facts; `experiments`,
+  `path-stable`, a key no `2.0.x` reader knew, an `experiment-nodes` or `analysis-nodes` list on a
+  document that is not `kind: leaf` — which declared no node to the `2.0.x` load — and a value of
+  the wrong type are dropped with a warning naming file, line and key.
+- In a `2.0.x` register, text outside every entry is dropped silently, and text inside an entry that
+  is neither a field it read nor a derived line is dropped with a warning quoting it. The registers
+  are left as bytes: the save renders the pages the KB calls for (above) over them, and removes a `2.0.x`
+  register at a page position no page takes, reported under `removed`.
+- The derived `.index/edges.yaml` is replaced by the record file, and every other file under
+  `.index/` but the two record files and the stamp file — `2.0.x`'s `claims.yaml`, `cites.yaml`,
+  `strengthen-by.yaml` and `subtree-aggregates.yaml` — is obsolete, reported under `removed`. The
+  stamp file is carried through, holding the version the tree is still at, until the save's last
+  write replaces it. The stamped `AGENTS.md` and `CONVENTIONS.md` are not read: the save writes
+  both whole from the current templates, a legacy `AGENTS.md`'s declarations going with its old
+  text.
+
 **The migration announces itself.** A verb that reads a KB through the loader on an older version
-writes one sentence to stderr and carries one `migration` record — `from`, `to`, `note` — after
-`kb-root` (§7), on every such call until the call whose save stamps `2.0.1`; `note` states the three
-value changes in one sentence. §7 names the verbs. Over MCP the document is the channel and stderr
-is the server's log; `status` and `cancel` load no KB and never carry it. A `0.9.0` KB yields one
-record for the whole chain, `0.9.0` to `2.0.1`.
+writes one sentence to stderr, and each warning on a line of its own, and carries one `migration`
+record — `from`, `to`, `note`, `warnings` — after `kb-root` (§7), on every such call until the call
+whose save stamps `3.0.0`. `note` is, for every migration, "every rigor and bearing that score judges
+is now marked model-scored, so a default score run re-judges it; to keep one, re-assert its current
+value with set-rigor or set-bearing, only where the user asks". §7 names the verbs. Over MCP the
+document is the channel and stderr is the server's log; `status` and `cancel` load no KB and never
+carry it. A `3.1.0` and a `4.0.0` KB are refused `check: kb-format`.
 
-**A converted but unsaved KB answers no query.** A query is refused with remedy `kbase refresh`: the
-index predates the columns, and a legal edge must never be reported without a token. `verify` reports
-the KB stale from its stamp and reports the strength drift the migration's own value changes produce;
-the save clears both. A `2.1.0` and a `3.0.0` KB are refused `check: kb-format`.
+**The `demoted` relation**, added at `1.0.0`. An edge class only the build's cycle walk and
+`refresh`'s repair of a degraded load write: a scoring edge one of them cuts to break a cycle is
+replaced by a `demoted` record that keeps it whole — its `source`, `target` and `context`, and as
+`replaced-relation`, `bearing` and `manually-scored` the replaced edge's relation and values — in
+the replaced edge's direction. `replaced-relation` is `supports`, `lifts` or `refutes`: a `founds`
+source, a work or an axiom, has no incoming scoring edge, so it closes no cycle. A `demoted` record
+stands outside the premise walk and the acyclicity check exactly as `references` does and carries
+no strength. The build writes cuts through two build-only write ops, `add-build-edges` and
+`demote-claim-edge`, neither a subcommand nor among the public ops, so the public write surface
+cannot create one. `demote-claim-edge` replaces each standing scoring edge of a pair with its
+`demoted` record; where that record already stands it removes the edge standing beside it, where
+only `demoted` records stand it leaves the pair as it stands, and a pair with neither is refused.
+`resolve-demoted` (§8) removes a `demoted` record or restores the edge it replaced exactly, refusing
+a restore that would close a cycle (`check: dependency-cycle`, the entry number and the path) and a
+restore where neither a `demoted` record nor the replaced edge stands. `verify` lists every `demoted`
+record under `findings` (§7) with outcome `done`; `deps` reports it as a row of its own relation, out
+of its source; `stats` counts them as `demoted_edges`, after `edges`, which counts every row; the
+sheet draws each as a cut (§3); and its target's register entry lists it.
 
-**A legacy `AGENTS.md`.** The converter moves a legacy `AGENTS.md`'s declarations into `axioms.md` and
-leaves the file in place, since it also carries instructions; its axioms become inert. The load reads
-`axioms.md`, falling back to a legacy `invariants.md` and then to `AGENTS.md` only for a source the
-converter has not rewritten. `verify` reports each declaration still standing in a legacy document
-beside an `axioms.md` as `check: axiom-source`, with its path and line: informational, under
-`findings`, not refresh-fixable, and never a load refusal (§7).
+**Cycles: cut as the walk finds them.** One walk serves the build's ring row, the degraded load's
+resolution and `refresh`'s repair, so all three cut the same edges.
 
-**The `demoted` relation**, added at `1.0.0`. A claim-graph edge class only the build writes: the
-build's cycle breaking records the `supports` edge it removes as `demoted` with its origin — `cited`
-where the text marked the dependency, `inferred` where the build found it (§3's words) — in place of
-turning it into `references`. The cuts are the dependency-attribution stage's ring row — every
-`supports` edge on a cycle once attribution has written its edges. The origin is `inferred` where
-the build found the cut edge with no mark, by §3's rule, else `cited`. It stands outside the
-premise walk and the acyclicity check exactly as `references` does and carries no strength. In the
-register an entry carries a `- demoted:` list after `references:`, its items `- <target> — <title>
-(origin cited)` or `(origin inferred)`, with an optional context, in the annotation style of the
-other lists. In the index the row has `relation: "demoted"`, every field a `references` row
-carries, then `origin` (`cited`, `inferred`, or null where the bullet has none). The build writes
-cuts through two build-only write ops, `add-build-edges` and `demote-claim-edge`, neither a
-subcommand nor among the public ops, so the public write surface cannot create one; `verify`
-refuses a `demoted` row carrying no valid origin, so a KB's demoted edges are the build's and a
-person's resolutions only remove them. `demote-claim-edge` turns an entry's existing `supports` edge
-into a `demoted` row of the same entry carrying the origin the build computed for the pair; where
-that row already stands it removes a `supports` edge still standing beside it, and otherwise leaves
-the pair as it stands; it refuses a row standing with the other origin, naming both, and a pair
-with neither a `supports` edge nor a `demoted` row. One write op, `resolve-demoted` (§8), removes
-one or restores it to `supports`, refusing a restore that would close a cycle
-(`check: dependency-cycle`, the entry number and the path) and a restore where neither a
-`demoted` nor a `supports` edge exists. `verify` lists every `demoted` edge under `findings` (§7)
-with outcome `done`; `deps` reports it as a row of its own relation and `stats` counts it
-(`demoted_edges`), while `show` carries no edge list and `referenced-by` answers leaf paths; the
-sheet draws it as a cut, its origin in the cut's weight and
-tooltip (§3); `stats` counts them as `demoted_edges`, after `edges`, which counts every row.
+- The walk order is the node order of the register pages, which no minted id decides, so a build's
+  cuts are reproducible modulo ids (§5): hosted nodes in the reading order of their markers, then
+  every other node by id — a work's and an axiom's id being its key or label, not minted. Edges
+  compare by relation in the relations table's order, then source, then target, each end in that
+  node order.
+- The walk is depth-first over the `supports`, `founds`, `lifts` and `refutes` records, starting at
+  each node and following each node's edges in the walk order; `demoted` records are not walked.
+- Each time the walk closes a cycle — an edge reaching a node on the current path — it cuts one edge
+  of that cycle: the first, in the walk order, of the cycle's `supports` edges into an analysis,
+  where one stands; else the edge the walk is on. The cut edge becomes its `demoted` record, with a
+  warning naming the edge and the cycle it broke; where a `demoted` record of its identity already
+  stands, the cut edge goes and that record stands alone, as `demote-claim-edge` leaves it. Nothing
+  else is dropped.
+- After each cut the walk starts over, until no cycle remains, so the cuts depend on the edge set and
+  the documents' order alone.
+
+Every public op that adds a scoring edge refuses one that would close a cycle (§8), so outside the
+build only a merge reaches the walk. Repairing a cycle takes at most two edits: remove or redirect
+another edge of the cycle, then restore the demoted edge with `resolve-demoted`, which refuses a
+restore that still closes a cycle.
 
 ---
 
 ## 11. The MCP server
 
-`kbase mcp --kb-root <path>` serves one KB to any agent harness that speaks the Model Context
-Protocol, over stdio JSON-RPC. It is the subcommands, bound: every tool but one is one subcommand,
-with the same arguments and the same result, so a harness without MCP loses nothing but convenience.
-The exception is `rewind-build`, the one listed tool — it has no subcommand behind it, reports
-position that `status` and the commit trail already state, and changes nothing.
+`kbase mcp --kb-root <path>` serves one KB to any external agent harness that speaks the Model
+Context Protocol, over stdio JSON-RPC. It is the subcommands, bound: every tool but one is one
+subcommand, with the same arguments and the same result, so an external agent harness without MCP
+loses nothing but convenience. The exception is `rewind-build`, the one listed tool — it has no
+subcommand behind it, reports position that `status` and the commit trail already state, and
+changes nothing.
 
 - **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself and
-  `wait` — a tool call would hold the turn for the build's duration — and `score`, whose run asks one
-  call per item for minutes and runs as the binary; plus `rewind-build`, which no subcommand stands
-  behind. A tool's input schema is derived from its command's arguments and flags (the global flags
+  `wait` — a tool call would hold the turn for the build's or score run's duration — and less
+  `probe`, a diagnostic whose tool would let an agent poll a model at will; plus
+  `rewind-build`, which no subcommand stands behind. A tool's input schema is derived from its command's arguments and flags (the global flags
   excluded; the server carries its own), and a duration flag's argument is the Go duration string
   the command line spells (`30s`). A write op's schema is one entry: the op's closed vocabulary (§8)
-  as properties, no others allowed, plus `create` where the CLI offers `--create`; a call writes that
-  one entry, and `--no-refresh` is not offered. A refusal over MCP carries `entry` as `1` and no
+  as properties, no others allowed; a call writes that one entry, and `--no-refresh` is not
+  offered. A refusal over MCP carries `entry` as `1` and no
   `line` or `column`; its `key` keeps the CLI spelling (§7), or, where no command stands behind the
   tool, is the schema property name (`target` on `rewind-build`). Arguments that fail the tool's
   schema (a missing required key, a wrong type, an unknown key) are JSON-RPC `-32602` errors, not
@@ -1657,6 +2029,27 @@ position that `status` and the commit trail already state, and changes nothing.
   - *exited* — the build's own document, `isError` set by its outcome (§7);
   - *still starting at the bound* — outcome `failed`, with an item naming the state directory and
     saying the build is still starting; the build keeps running, and `status` reports it once it has
+    begun.
+
+  A relative `state-dir` argument resolves against the repository root; the server's own
+  `--config-dir` and `--log-file` stay relative to the server's working directory. Where `status`
+  would refuse (no git worktree, or a `--state-dir` inside `kb-root/`), the tool returns that
+  refusal and starts no process. The capture files are not removed.
+- **`score` is detached.** The tool starts `kbase score` as its own process, from the repository
+  root, in its own process group, with no stdin, configured as the server is (the environment,
+  `--config-dir`, `--log-level` and `--log-file`, §9). The run's stdout and stderr are captured as
+  files in the state store's `reports/` (§6). The tool waits until the run's ledger and pid stand,
+  or until it exits, for at most 40 s, and returns by what happened first. The bound is the KB
+  write-lock wait (30 s, §8) plus 10 s, because a run starting during a write waits that write out
+  before its first refresh; the run is visible to `status` while it waits:
+  - *started* — outcome `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait`.
+    `wait` is the exact shell command `kbase wait --state-dir <store> --pid <pid>`, shell-joined as
+    `status` joins its `resume` (§6): it returns when the run is over and prints that run's
+    document, so a session whose client does not subscribe to a run's progress runs it in the
+    background and is woken when it exits. `status` and `cancel` follow it;
+  - *exited* — the run's own document, `isError` set by its outcome (§7);
+  - *still starting at the bound* — outcome `failed`, with an item naming the state directory and
+    saying the run is still starting; the run keeps running, and `status` reports it once it has
     begun.
 
   A relative `state-dir` argument resolves against the repository root; the server's own
@@ -1720,17 +2113,19 @@ position that `status` and the commit trail already state, and changes nothing.
   when the run ends, and nothing here makes it promise the session is at a turn when it arrives. An
   unknown URI is JSON-RPC `-32002` (resource not found); a missing `uri` is `-32602`.
   `initialize` advertises the `resources` capability, its `subscribe` among the ones it carries.
-  Nothing else is served: the KB's documents are the harness's own files.
+  Nothing else is served, a register page included: the KB's documents are the external agent
+  harness's own files.
 - **What the server never does.** It sends no sampling request and offers no prompts; no inference
-  runs from any tool but `build`, and `build`'s inference is the build's own. `models` reads the
+  runs from any tool but `build` and `score`, and each tool's inference is its own — the build's
+  decision and text calls, the score run's scoring calls. `models` reads the
   selected provider's model catalogue; `configure` reads that catalogue before it writes the model
   map, refusing a category `--model-map` leaves unassigned — `scoring` alone excepted where the
   target file already states one — and naming the catalogue as the ids to choose from, except under
-  `--create` with no `--provider`, where it dials nothing and says the ids are unchecked. Neither asks a model anything. It writes nothing but JSON-RPC frames to stdout;
-  diagnostics go to stderr and `--log-file`. It loads no configuration itself — the verbs it exposes
-  load their own on each call (§9.3), harness profiles included — and uses none of it for a harness:
-  no tool asks a harness, and `score` is not a tool. The `build` child it starts inherits the
-  server's environment and `--config-dir`. It names no harness.
+  `--create` with no `--provider`, where it dials nothing and says the ids are unchecked. Neither
+  asks a model anything. It writes nothing but JSON-RPC frames to stdout; diagnostics go to stderr
+  and `--log-file`. It loads no configuration itself — the verbs it exposes load their own on each
+  call (§9.3). The `build` and `score` children it starts inherit the server's environment and
+  `--config-dir`.
 - **Protocol.** One MCP revision, the one the server implements, pinned as one constant
   (ARCHITECTURE §12); an initialise naming another revision is answered with the server's for the
   client to decide; calls are answered one at a time, in order; EOF on stdin ends the server.
@@ -1738,6 +2133,91 @@ position that `status` and the commit trail already state, and changes nothing.
   what carries a session on from there. Over a repository whose `kb-root/` stands it names the KB's
   path; over one whose `kb-root/` is yet to be made it names the repository's and says the KB can be
   built; where no repository holds the served directory the field is absent. Either path is
-  absolute, the `kbase` skill is named as the workflow, and `show-config` is the one tool it names.
-- **Registration** is the harness's: one server entry naming the command `kbase mcp --kb-root
-  <absolute path>`. README gives the entry for two harnesses as examples.
+  absolute, the `kbase` skill is named as the workflow, and `show-config` as the tool reporting
+  configuration. It forbids a session to read or write kbase's records and derived files — anything
+  under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
+  exists; it names the query tools as what reports what the records hold, the write tools as what
+  changes them, and `refresh` and `render-claim-graph` as what writes the sheets. A `claim-rigor.md`
+  register page is the exception: `refresh` generates it to be read as prose, and a session takes no
+  value from it and never edits it. Its last paragraph is the session rule `AGENTS.md` also states
+  (§3): a session sets a rigor or a bearing, its current value included, only to a value the user
+  gave for that node or edge, in their own words or quoted in its task; it leaves a value out when
+  the user gave none, so kbase records it pending for `score` to judge; a value it writes is
+  recorded as the user's, which `score` skips unless `--rescore-manual` names its pass; and `score`
+  is how values are judged or re-judged. Reading a document's prose stays open, and so does reading a
+  sheet as an MCP resource. Every tool it names is one the server serves. The text is an embedded
+  file of the binary.
+- **Registration** is the external agent harness's: one server entry naming the command
+  `kbase mcp --kb-root <absolute path>`. README gives the entry for two external agent harnesses as
+  examples.
+
+---
+
+## 12. Interim releases
+
+**0.8.0 — KB format `3.0.0`: the graph as records.** A KB's nodes and edges are records in two
+authored files, `.index/nodes.yaml` and `.index/edges.yaml`, and everything else is derived at load
+(§10). A `2.0.x` or `1.0.0` KB converts at load, answers every command as converted, and is saved by
+the next natural write, which writes `AGENTS.md` and `CONVENTIONS.md` whole from the current
+templates; the `migration` record gains `warnings` (§7, §10).
+
+- **Statement markers host every claim, analysis and experiment**, one each; the build marks every
+  claim it mints, and `mark-claim-in-leaf` places or moves any node's marker (§5, §8, §10).
+- **Register pages are rendered, never read.** A node's page is its host's volume's; `refresh`
+  renders the pages and `verify` checks them byte for byte, and a prose link into one has its
+  fragment checked (§8, §10).
+- **A person's value stands.** A rigor or a bearing a caller supplies is marked `manually-scored`,
+  and `score` skips it unless `--rescore-manual` names its pass (§8).
+- **Inserts adopt by title and host**; the write ops' `--create` and `set-frontmatter` are gone, and
+  `insert-axiom-entry`, `set-status` and `add-pairs` are new (§8).
+- **Cycles are cut one edge at a time, by one walk** the build, the load and `refresh` share; a
+  `demoted` record keeps the edge it replaced whole and carries no origin, and the sheet draws one
+  style per relation (§3, §10).
+- **The load is strict on syntax and lenient on integrity**: a duplicate edge, a dangling edge and a
+  cycle — what a merge leaves — degrade the load rather than refuse it, and `refresh` repairs them,
+  reporting each under `warnings` (§8, §10).
+
+**0.8.0 — a second chat protocol: the Anthropic Messages API.** A `providers.toml` entry may state
+`api = "anthropic"` to reach an Anthropic Messages endpoint directly, with `api = "openai"` (the
+default) behaving as before (§9.1). `models`, `configure`, `kbase probe`'s chat selections, a build's
+overview call and a scoring run's asks all reach it; the `decision` role's letter asks and
+`kbase probe --decision` do not, because the decision surfaces are OpenAI-shaped, and a Messages
+endpoint asked for either fails naming the provider and the role (§8). Messages requires a
+completion cap, sent as `max(256, ceil(characters / 4))` over the ask's text, and has no
+prompt-cache key, so a scoring run against such an endpoint sends none (§8).
+
+**0.8.0 — the rigor ceiling is `1.00`.** The rigor tables' maximum, the most a write carries, and
+an axiom's rule value are one number: a rigor pass's maximum is `1.00`, so a text charged with
+nothing prices at `1.00` (§8), and an authored `rigor: 1.0` is in domain and reads as itself (§10).
+No charge means *this leaves nothing*: both rigor vocabularies price every finding at fifteen
+hundredths of the maximum and the bearing table every finding at a tenth, so nothing one charge
+says can price a text or a link at nothing. Zero takes seven rigor findings, or ten bearing ones.
+
+**0.8.0 — `score` as a tool, the provider as its one back end, and one operation lock.**
+
+- **A scoring run reaches its model through the provider.** Every ask is one chat call on the
+  `scoring` role's endpoint, in either mode (§8).
+- **`score` is a builtin tool as well as a CLI verb.** A tool call starts the run detached and returns
+  its pid, state store and ledger; `status`, `cancel` and `wait` cover a scoring run as they cover a
+  build, and a run at a terminal blocks as before (§11).
+- **One operation lock.** `kbase-operation.lock` in the repository's git directory is held by a build
+  or by a scoring run, so the two never write the same KB at once. A write op or `refresh` is refused
+  while either holds it, and the refusal names which run and its pid (§6).
+
+**0.8.0 — a scoring charge cites line numbers.** A call numbers the lines of the text it carries, and
+a charge names the line where the fault shows instead of reproducing a span of it: selecting a
+numbered line is a capability a model has, and reproducing a span byte for byte is not (§8).
+
+- **The call numbers its lines.** Each passage is wrapped at word boundaries to at most 100 columns,
+  its own line breaks kept and nothing rewritten, so a numbered line is a verbatim slice of the
+  passage it came from and one paragraph still charges once per occurrence. `N| ` before a numbered
+  line is the frame's gutter and no part of the text. The frame's labels and an edge's `## Context`
+  carry no number, so the note is no site a charge can cite.
+- **A charge names one line or a contiguous range within one passage**: `flt-inapplicable: 12`,
+  `flt-transfer: 12-14`. A charge naming no line, or a line the call does not show, fails the attempt
+  as a malformed reply does, and so does a range crossing a passage or a gap.
+- **The ledger records the quote and the numbers.** `faults` keeps `citation` a span of the carried
+  text, now quoted by kbase, and gains `lines`, the answer's own numbers. The `both` passage value is
+  no longer produced — a numbered line lies in one passage — while a line already written with it
+  keeps the meaning it was written with, so the format version does not move.
+

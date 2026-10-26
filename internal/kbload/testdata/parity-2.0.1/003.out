@@ -1,0 +1,11 @@
+outcome: "done"
+kb-root: "<kb-root>"
+results:
+    node_type: "analysis"
+    id: "ana-aaa007"
+    title: "A supporting lemma"
+    canonical_path: "alpha/analysis.md"
+    canonical_anchor: "a-supporting-lemma"
+    rigor: 0.8
+    strength: 0.8
+    build_band: "ok-with-caveats"

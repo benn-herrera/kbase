@@ -1,11 +1,15 @@
 package main
 
-func init() {
-	rootCmd.AddCommand(writeOpCommand("add-rests-on",
-		"add rests-on premises and references to a register entry",
-		`add-rests-on appends rests-on and references bullets to one entry, below
-the bullets already there. A rests-on premise defaults to a pending bearing
-when the values name none, and an edge the entry already holds is not written
-a second time; the result notes how many were. A refresh follows unless
---no-refresh.`))
+import "github.com/spf13/cobra"
+
+func addRestsOnCommand() *cobra.Command {
+	return writeOpCommand("add-rests-on",
+		"add supports or founds edges into a node, or references edges from it",
+		`add-rests-on adds edge records on one claim or analysis: each rests-on premise
+a supports edge into it from a clm- or exp- id, or a founds edge from a wrk- or
+axm- id, and each references entry a references edge out of it, which only a
+claim takes. A rests-on premise defaults to a pending bearing when the values
+name none, an edge the records already hold keeps its record as it stands —
+set-bearing re-scores it — and an edge that would close a cycle is refused. A
+refresh follows unless --no-refresh.`)
 }

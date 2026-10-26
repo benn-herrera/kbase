@@ -60,3 +60,20 @@ In the final claim graph construction, base claims sit at the bottom, asserted d
 on a citation to a work outside this document set. The rest of the edges connect internally,
 resulting in a directed graph whose nodes and edges were drafted mechanically and refined by
 inference.
+
+## Where we came from and where we are going
+
+The first prototypes of KB building took a full day of combined human/frontier AI model work and resulted
+in something that had a considerable settling-in period. Scoring the claim graph was on the order of hours.
+
+The mechanical process to get the spine now takes seconds, and the current state of R&D has the inference
+portion of a KB build down to a couple hours of local inference with a result that still
+requires settling in, but is more structurally sound than the prototype. Scoring a full KB on high-end local
+inference (a 128 GB machine) takes minutes (again, WIP).
+
+The goal is to get to a ~30 minute KB build time for an average arXiv math paper using models that can be
+hosted on a 36GB M3 Max MacBook Pro. Scoring via local inference on the same machine should only take 
+five minutes. This would make kbase's utility available on a standard middleweight notebook commonly found
+in university labs and on researcher's desks.
+
+If we could make it work even moderately well on a 16GB M3 MacBook Air, we've made it available to students.

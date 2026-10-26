@@ -1,0 +1,82 @@
+- id: "ana-aaa007"
+  title: "A supporting lemma"
+  rigor: 0.8
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+- id: "axm-1"
+  title: "Agents act on what they observe"
+- id: "axm-S1"
+  title: "Conservation of stock"
+- id: "clm-aaa001"
+  title: "Theorem 1"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-aaa002"
+  title: "Equation (`eq:flow`) — Flow Dynamics"
+  rigor: 0.95
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-aaa003"
+  title: "The gradient $`\\nabla f`$ is \"bounded\" when a < b & c"
+  rigor: 0.5
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-aaa004"
+  title: "A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-aaa005"
+  title: "An isolated $`\\Gamma`$-observation nothing cites"
+  rigor: 0.3
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-aaa006"
+  title: "See [the appendix](appendix.md) for a *stated* bound that the rest of the volume never reaches at all"
+  rigor: 0.1
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbb001"
+  title: "Test example 2"
+  rigor: 0.88
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbb002"
+  title: "The governance bifurcation"
+  rigor: 0.66
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbb003"
+  title: "A prose claim in beta"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: "Fixture."
+  no-edge: ""
+  strengthen-by: []
+- id: "exp-aaa008"
+  title: "Flow simulation"
+  status: "run"
+  rigor: 0.8
+  manually-scored: false
+- id: "wrk-smith2020"
+  title: "Smith, A. 2020. *Markets*. Fixture Press."
+  rigor: 0.9
+  rationale: "Fixture Press."

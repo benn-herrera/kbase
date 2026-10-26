@@ -1,0 +1,9 @@
+outcome: "done"
+kb-root: "<kb-root>"
+count: 3
+offset: 0
+truncated: false
+results:
+    - "ana-aaa007"
+    - "clm-aaa001"
+    - "clm-aaa002"

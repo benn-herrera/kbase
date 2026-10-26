@@ -6,12 +6,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/index"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
 
 // queryAnswer is one query's answer over the loaded index and its positional
-// arguments — a list, or show's and stats' one mapping — or the items it
+// arguments — a list or a mapping — or the items it
 // refuses.
 type queryAnswer func(ix *query.Index, args []string) (answer any, refusals []toolresult.Item, err error)
 
@@ -95,10 +96,10 @@ func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, 
 const checkUsage = "usage"
 
 const queryHelp = `
-It reads kb-root/.index/ beside the repository's .git and writes nothing; a KB
-in an older metadata format is refused, the index being derived, with
-"kbase refresh" as the remedy. Its result is one YAML
-document on stdout, the answer under "` + query.ResultsKey + `".`
+It reads the KB under kb-root/ beside the repository's .git and writes nothing; a KB
+in an older metadata format answers as converted, its result saying so, and a KB
+whose load is degraded is refused, with "` + index.RefreshRemedy + `" as the remedy.
+Its result is one YAML document on stdout, the answer under "` + query.ResultsKey + `".`
 
 const listQueryHelp = `
 A list answer is returned --limit results at a time from --offset, with
@@ -130,5 +131,5 @@ func queryCommand(cmd *cobra.Command, list bool, answer queryAnswer) *cobra.Comm
 		}
 		return nil
 	}
-	return mcpBinding(readOnly(cmd), mcpBound)
+	return cmd
 }

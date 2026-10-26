@@ -15,24 +15,19 @@ import (
 
 const seedClaim = "clm-aaaaaa"
 
-// seedKB writes a minimal KB: an entry point, one leaf citing one claim, and
-// the register holding it.
+// seedKB writes a minimal KB at the current format: an entry point listing one
+// leaf, the leaf marking one claim, and the claim's record.
 func seedKB(t *testing.T) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), kb.KBDir)
+	root := recordKB(t, kb.Graph{Claims: []kb.ClaimNode{{ID: seedClaim, Title: "Seed Result", Rigor: f64(0.9), Rationale: "Seeded."}}})
 	files := map[string]string{
-		kb.EntryPointFile: "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n# Entry\n\n- [Leaf](leaf.md)\n",
-		"leaf.md": "---\nkind: leaf\nclaims: [" + seedClaim + "]\n---\n[↑ Entry](entry-point.md)\n\n" +
-			"# Leaf\n\nThe first result holds here. <!-- claim-rigor: " + seedClaim + " -->\n\nA second paragraph names a bound.  \n\n## Bounds\n\nThe bound is tight in the limit.\n",
-		kb.RegisterFile: "# Register\n\n" + renderEntry(registerEntry{NodeID: seedClaim, Title: "Seed Result",
-			Rigor: f64(0.9), Rationale: "Seeded."}) + "\n",
+		kb.EntryPointFile: "# Entry\n\n- [Leaf](leaf.md)\n",
+		kb.FormatFile:     string(kb.EncodeFormatStamp(kb.FormatVersion)),
+		"leaf.md": "[↑ Entry](entry-point.md)\n\n# Leaf\n\nThe first result holds here. <!-- claim-rigor: " + seedClaim + " -->\n\n" +
+			"A second paragraph names a bound.  \n\n## Bounds\n\nThe bound is tight in the limit.\n",
 	}
 	for rel, text := range files {
-		p := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,9 +52,9 @@ func snapshot(t *testing.T, root string) map[string]string {
 	return out
 }
 
-func run(t *testing.T, root, op, values string, create bool) Result {
+func run(t *testing.T, root, op, values string) Result {
 	t.Helper()
-	return Run(op, Options{KBRoot: root, Values: []byte(values), Create: create})
+	return Run(op, Options{KBRoot: root, Values: []byte(values)})
 }
 
 // TestIdempotence issues every op twice with the same values: the second
@@ -72,25 +67,25 @@ func TestIdempotence(t *testing.T) {
 		op, values string
 		mints      string
 	}{
-		{"insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: A New Result\n  rigor: 0.5\n  rationale: |\n    Derived from the seed\n    in two steps.\n  rests-on:\n  - id: " + seedClaim + "\n    context: the bound it rests on\n    bearing: 0.5\n  strengthen-by:\n  - Tighten the constant.\n", "claim"},
+		{"insert-claim-entry", "entry:\n- title: A New Result\n  rigor: 0.5\n  rationale: |\n    Derived from the seed\n    in two steps.\n  rests-on:\n  - id: " + seedClaim + "\n    context: the bound it rests on\n    bearing: 0.5\n  strengthen-by:\n  - Tighten the constant.\n", "claim"},
 		{"set-rigor", "entry:\n- id: {claim}\n  rigor: 0.75\n", ""},
 		{"set-rationale", "entry:\n- id: {claim}\n  rationale: Rewritten whole.\n", ""},
 		{"add-rests-on", "entry:\n- id: {claim}\n  references:\n  - id: " + seedClaim + "\n", ""},
-		{"set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  claims: [" + seedClaim + ", {claim}]\n", ""},
 		{"mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: {claim}\n  locator: a second paragraph names a bound\n", ""},
-		{"insert-work-entry", "entry:\n- register: claim-rigor.md\n  key: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work"},
+		{"insert-work-entry", "entry:\n- key: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work"},
 		{"add-rests-on", "entry:\n- id: {claim}\n  rests-on:\n  - id: wrk-Smith2020\n", ""},
 		{"set-bearing", "entry:\n- id: wrk-Smith2020\n  target: {claim}\n  relation: founds\n  bearing: 0.5\n", ""},
-		{"insert-analysis-entry", "entry:\n- register: claim-rigor.md\n  title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "analysis"},
+		{"insert-analysis-entry", "entry:\n- title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "analysis"},
 		{"set-bearing", "entry:\n- id: {analysis}\n  target: {claim}\n  relation: lifts\n  bearing: 0.25\n", ""},
-		{"insert-experiment-entry", "entry:\n- document: leaf.md\n  status: run\n  rigor: 0.9\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "experiment"},
+		{"add-pairs", "entry:\n- id: {analysis}\n  refutes:\n  - id: " + seedClaim + "\n    context: the bound is loose\n", ""},
+		{"insert-experiment-entry", "entry:\n- document: leaf.md\n  title: A Trial\n  status: run\n  rigor: 0.9\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "experiment"},
 	}
 	for i, s := range steps {
 		values := s.values
 		for name, id := range ids {
 			values = strings.ReplaceAll(values, "{"+name+"}", id)
 		}
-		first := run(t, root, s.op, values, false)
+		first := run(t, root, s.op, values)
 		if first.Outcome != result.Done {
 			t.Fatalf("step %d %s: first call %+v", i, s.op, first)
 		}
@@ -105,7 +100,7 @@ func TestIdempotence(t *testing.T) {
 			ids[s.mints] = first.IDs[0]
 		}
 		before := snapshot(t, root)
-		second := run(t, root, s.op, values, false)
+		second := run(t, root, s.op, values)
 		if second.Outcome != result.Unchanged {
 			t.Errorf("step %d %s: second call %+v, want unchanged", i, s.op, second)
 		}
@@ -117,29 +112,11 @@ func TestIdempotence(t *testing.T) {
 		}
 	}
 	leaf := snapshot(t, root)["leaf.md"]
-	if n := strings.Count(leaf, renderTier2Marker(ids["claim"])); n != 1 {
+	if n := strings.Count(leaf, kb.StatementMarker(ids["claim"])); n != 1 {
 		t.Errorf("leaf.md carries the new claim's marker %d times, want 1:\n%s", n, leaf)
 	}
-	if !strings.Contains(leaf, "names a bound. "+renderTier2Marker(ids["claim"])+"  \n") {
+	if !strings.Contains(leaf, "names a bound. "+kb.StatementMarker(ids["claim"])+"  \n") {
 		t.Errorf("the marker did not land ahead of the line's trailing whitespace:\n%s", leaf)
-	}
-}
-
-// TestInsertAdoptsByTitle: an insert whose title the register already keys
-// lands on that entry, changes nothing, and names the values it differs in.
-func TestInsertAdoptsByTitle(t *testing.T) {
-	root := seedKB(t)
-	run(t, root, "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: Other\n  rigor: 0.2\n  rationale: Other.\n", false)
-	before := snapshot(t, root)
-	res := run(t, root, "insert-claim-entry", "entry:\n- register: claim-rigor.md\n  title: Seed Result\n  rigor: 0.1\n  rationale: Seeded.\n", false)
-	if res.Outcome != result.Unchanged || !slices.Equal(res.IDs, []string{seedClaim}) || len(res.Minted) != 0 {
-		t.Fatalf("got %+v", res)
-	}
-	if len(res.Adopted) != 1 || res.Adopted[0].Entry != 1 || res.Adopted[0].ID != seedClaim || !slices.Equal(res.Adopted[0].Differs, []string{"rigor"}) {
-		t.Errorf("adopted %+v, want entry 1 adopting %s and differing in rigor", res.Adopted, seedClaim)
-	}
-	if !maps.Equal(before, snapshot(t, root)) {
-		t.Error("an adopting insert wrote")
 	}
 }
 
@@ -162,19 +139,25 @@ func TestValuesRefusalShape(t *testing.T) {
 		{"unreadable number", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.00001\n",
 			[]result.Item{{Key: "rigor", Entry: 1, Line: 3, Column: 10, Allowed: setRigor}}},
 		{"second entry, nested key", "insert-claim-entry",
-			"entry:\n- register: r.md\n  title: T\n  rigor: 0.5\n  rationale: R\n- register: r.md\n  title: T\n  rigor: 0.5\n  rationale: R\n  rests-on:\n  - id: clm-abcdef\n    weight: 2\n",
-			[]result.Item{{Key: "rests-on[1].weight", Entry: 2, Line: 12, Column: 5, Allowed: premises}}},
+			"entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n- title: T\n  rigor: 0.5\n  rationale: R\n  rests-on:\n  - id: clm-abcdef\n    weight: 2\n",
+			[]result.Item{{Key: "rests-on[1].weight", Entry: 2, Line: 10, Column: 5, Allowed: premises}}},
 		{"form feed from JSON", "insert-claim-entry",
-			`{"entry": [{"register": "r.md", "title": "the \frac rule", "rigor": 0.5, "rationale": "R"}]}`,
-			[]result.Item{{Key: "title", Entry: 1, Line: 1, Column: 42, Allowed: insert}}},
+			`{"entry": [{"title": "the \frac rule", "rigor": 0.5, "rationale": "R"}]}`,
+			[]result.Item{{Key: "title", Entry: 1, Line: 1, Column: 22, Allowed: insert}}},
 		{"backspace", "insert-claim-entry",
-			"entry:\n- register: r.md\n  title: \"\\beta decay\"\n  rigor: 0.5\n  rationale: R\n",
-			[]result.Item{{Key: "title", Entry: 1, Line: 3, Column: 10, Allowed: insert}}},
+			"entry:\n- title: \"\\beta decay\"\n  rigor: 0.5\n  rationale: R\n",
+			[]result.Item{{Key: "title", Entry: 1, Line: 2, Column: 10, Allowed: insert}}},
 		{"blank line names the line", "insert-claim-entry",
-			"entry:\n- register: r.md\n  title: T\n  rigor: 0.5\n  rationale: |\n    one\n\n    two\n",
-			[]result.Item{{Key: "rationale", Entry: 1, Line: 7, Allowed: insert}}},
+			"entry:\n- title: T\n  rigor: 0.5\n  rationale: |\n    one\n\n    two\n",
+			[]result.Item{{Key: "rationale", Entry: 1, Line: 6, Allowed: insert}}},
 		{"op named in the document", "set-rigor", "op: set-rigor\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
 			[]result.Item{{Key: "op", Line: 1, Column: 1, Allowed: []string{entryKey}}}},
+		{"empty top-level key", "set-rigor", "\"\": 1\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
+			[]result.Item{{Key: `""`, Line: 1, Column: 1, Allowed: []string{entryKey}}}},
+		{"empty entry key", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n  \"\": 1\n",
+			[]result.Item{{Key: `""`, Entry: 1, Line: 4, Column: 3, Allowed: setRigor}}},
+		{"empty key twice", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n  \"\": 1\n  \"\": 2\n",
+			[]result.Item{{Key: `""`, Entry: 1, Line: 5, Column: 3, Allowed: setRigor}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, got := parseValues([]byte(tc.values), tc.op)
@@ -213,8 +196,8 @@ func TestValuesAccepted(t *testing.T) {
 	}
 }
 
-// TestIDVocabulary: every op's id checks take the 2.0.0 prefixes and no
-// retired one, an axiom premise is cited as "Axiom <label>" and carries its
+// TestIDVocabulary: every op's id checks take the kinds' prefixes and no
+// retired one, an axiom premise is named by its axm- id and carries its
 // bearing, and a claim's refutation defaults to the pending judgement.
 func TestIDVocabulary(t *testing.T) {
 	for _, tc := range []struct {
@@ -231,12 +214,11 @@ func TestIDVocabulary(t *testing.T) {
 		{"analysis source", "set-bearing", "entry:\n- id: ana-abcdef\n  target: clm-abcdef\n  relation: lifts\n  bearing: 0.8\n", true},
 		{"analysis target", "set-bearing", "entry:\n- id: clm-abcdef\n  target: ana-abcdef\n  relation: supports\n  bearing: 0.8\n", true},
 		{"retired analysis target", "set-bearing", "entry:\n- id: clm-abcdef\n  target: sup-abcdef\n  relation: supports\n  bearing: 0.8\n", false},
-		{"axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: Axiom S1\n    bearing: 0.8\n", true},
-		{"label-less axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: Axiom\n    bearing: 0.8\n", false},
+		{"axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-S1\n    bearing: 0.8\n", true},
+		{"label-less axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-\n    bearing: 0.8\n", false},
+		{"retired axiom token premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: Axiom S1\n    bearing: 0.8\n", false},
 		{"retired invariant premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: INVARIANT-S1\n    bearing: 0.8\n", false},
-		{"claim refutation", "insert-claim-entry", "entry:\n- register: r.md\n  title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n", true},
-		{"analysis declaration", "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  analysis-node:\n  - ana-id: ana-abcdef\n    refutes:\n    - id: clm-abcdef\n      bearing: 0.5\n", true},
-		{"retired analysis declaration", "set-frontmatter", "entry:\n- document: leaf.md\n  kind: leaf\n  support-node:\n  - sup-id: sup-abcdef\n", false},
+		{"claim refutation", "insert-claim-entry", "entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, refusals := parseValues([]byte(tc.values), tc.op)
@@ -252,7 +234,7 @@ func TestIDVocabulary(t *testing.T) {
 		})
 	}
 	t.Run("a claim refutation without a bearing is pending", func(t *testing.T) {
-		entries, refusals := parseValues([]byte("entry:\n- register: r.md\n  title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n"), "insert-claim-entry")
+		entries, refusals := parseValues([]byte("entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n"), "insert-claim-entry")
 		if refusals != nil {
 			t.Fatal(refusals)
 		}
@@ -283,7 +265,7 @@ func TestSpliceLines(t *testing.T) {
 }
 
 func TestExcerptLines(t *testing.T) {
-	doc := "<!-- kb-frontmatter\nkind: leaf\n-->\n\n# Title\n\n> **Theorem 1.** The *bound* holds\n> for every $n$.\n\nSee [the proof](p.md#x) of the bound holds.\n"
+	doc := "---\nkind: leaf\n---\n\n# Title\n\n> **Theorem 1.** The *bound* holds\n> for every $n$.\n\nSee [the proof](p.md#x) of the bound holds.\n"
 	for _, tc := range []struct {
 		excerpt string
 		want    []int
@@ -303,15 +285,15 @@ func TestExcerptLines(t *testing.T) {
 
 func TestRenderCitation(t *testing.T) {
 	root := seedKB(t)
-	res := run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: sub/notes.md\n", false)
+	res := run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: sub/notes.md\n")
 	if res.Outcome != result.Refused || res.Refusals[0].Key != "citing-document" {
 		t.Fatalf("a citing document in a missing directory: %+v", res)
 	}
-	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n", false)
+	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n")
 	if res.Outcome != result.Done || !slices.Equal(res.Citations, []string{`["The bound is tight"](leaf.md#bounds)`}) {
 		t.Fatalf("got %+v", res)
 	}
-	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is loose in the limit\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n", false)
+	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is loose in the limit\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n")
 	if res.Outcome != result.Refused || res.Refusals[0].Key != "excerpt" {
 		t.Fatalf("a misquote: %+v", res)
 	}

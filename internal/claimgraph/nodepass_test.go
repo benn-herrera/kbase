@@ -69,42 +69,38 @@ func TestRenderParagraphs(t *testing.T) {
 	}
 }
 
-// leafWithFrontmatter is a leaf as the build writes it: frontmatter, up-link,
-// then a body whose sentence carries a cross-reference and a citation.
-const leafWithFrontmatter = "---\n" +
-	"kind: leaf\n" +
-	"no-claim: \"This document carries no claim block.\"\n" +
-	"---\n" +
-	"[↑ V](index.md)\n" +
+// leafWithReferences is a leaf opening on its up-link, then a body whose
+// sentence carries a cross-reference and a citation.
+const leafWithReferences = "[↑ V](index.md)\n" +
 	"\n" +
 	"# A\n" +
 	"\n" +
 	"By <a href=\"b.md#l\" data-reference-type=\"ref\" data-reference=\"lem:l\">Lemma 2</a> the bound holds\n" +
 	"<span class=\"citation\" data-cites=\"k01\">(K 2001)</span>.\n"
 
-const leafWithFrontmatterSentence = "By <a href=\"b.md#l\" data-reference-type=\"ref\" data-reference=\"lem:l\">Lemma 2</a> the bound holds " +
+const leafWithReferencesSentence = "By <a href=\"b.md#l\" data-reference-type=\"ref\" data-reference=\"lem:l\">Lemma 2</a> the bound holds " +
 	"<span class=\"citation\" data-cites=\"k01\">(K 2001)</span>."
 
 func TestRenderBeginsAtTheHeading(t *testing.T) {
-	r := renderText(leafWithFrontmatter, nil, excludedLines(leafWithFrontmatter, nil))
-	if !strings.HasPrefix(r.text, "# A\n") || strings.Contains(r.text, "no-claim") || strings.Contains(r.text, "[↑ V]") {
+	r := renderText(leafWithReferences, nil, excludedLines(leafWithReferences, nil))
+	if !strings.HasPrefix(r.text, "# A\n") || strings.Contains(r.text, "[↑ V]") {
 		t.Errorf("the render does not begin at the heading:\n%s", r.text)
 	}
 	if len(r.sentences) != 1 {
 		t.Fatalf("sentences = %+v", r.sentences)
 	}
 	s := r.sentences[0]
-	if s.line != 8 || !strings.HasPrefix(leafWithFrontmatter[s.start:], "By <a href=") || !strings.HasSuffix(leafWithFrontmatter[:s.end], "</span>.") {
-		t.Errorf("S1 at line %d, bytes %q; want line 8 and the raw sentence of the original text", s.line, leafWithFrontmatter[s.start:s.end])
+	if s.line != 4 || !strings.HasPrefix(leafWithReferences[s.start:], "By <a href=") || !strings.HasSuffix(leafWithReferences[:s.end], "</span>.") {
+		t.Errorf("S1 at line %d, bytes %q; want line 4 and the raw sentence of the original text", s.line, leafWithReferences[s.start:s.end])
 	}
-	if p, ok := r.paragraphAt(9); !ok || p.start != 8 {
-		t.Errorf("the paragraph at line 9 = %+v, %v; want the one opening at line 8", p, ok)
+	if p, ok := r.paragraphAt(5); !ok || p.start != 4 {
+		t.Errorf("the paragraph at line 5 = %+v, %v; want the one opening at line 4", p, ok)
 	}
 }
 
 func TestRenderShowsSentencesAsThePageShowsThem(t *testing.T) {
-	leaf := &leafReading{document: "v/a.md", text: leafWithFrontmatter}
-	leaf.render = renderText(leafWithFrontmatter, nil, excludedLines(leafWithFrontmatter, nil))
+	leaf := &leafReading{document: "v/a.md", text: leafWithReferences}
+	leaf.render = renderText(leafWithReferences, nil, excludedLines(leafWithReferences, nil))
 	shown := "S1: By Lemma 2 the bound holds (K 2001)."
 	if !strings.Contains(leaf.render.text, shown+"\n") || strings.Contains(leaf.render.text, "<a ") || strings.Contains(leaf.render.text, "<span") {
 		t.Errorf("the sentence is not shown as the page shows it:\n%s", leaf.render.text)
@@ -113,13 +109,13 @@ func TestRenderShowsSentencesAsThePageShowsThem(t *testing.T) {
 	if len(asked) != 1 || asked[0].labelled() != shown {
 		t.Fatalf("asked = %+v", asked)
 	}
-	if got := asked[0].span.excerpt(); got != leafWithFrontmatterSentence {
+	if got := asked[0].span.excerpt(); got != leafWithReferencesSentence {
 		t.Errorf("excerpt = %q, want the raw span", got)
 	}
 	yes := true
 	claims, _ := leaf.judge([]paragraphAnswer{{asked[0], &yes}})
-	if len(claims) != 1 || claims[0].line != 8 {
-		t.Errorf("claims = %+v, want the raw span located at line 8", claims)
+	if len(claims) != 1 || claims[0].line != 4 {
+		t.Errorf("claims = %+v, want the raw span located at line 4", claims)
 	}
 }
 
@@ -232,7 +228,7 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 		t.Errorf("references = %v, want the mention", c.refs)
 	}
 	rec, _, _ := buildrecords.ReadClassification(recordsAt(repo))
-	if len(rec.Candidates) != 4 || rec.Candidates[0].Outcome != ClassifyAnswered || !slices.Equal(rec.Candidates[0].Offered, []string{"A", "C"}) {
+	if len(rec.Candidates) != 4 || rec.Candidates[0].Outcome != string(asks.Answered) || !slices.Equal(rec.Candidates[0].Offered, []string{"A", "C"}) {
 		t.Errorf("record = %+v", rec.Candidates)
 	}
 

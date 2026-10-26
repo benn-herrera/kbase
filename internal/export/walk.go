@@ -78,7 +78,7 @@ func (t Tree) Targets() map[string]Target {
 	return targets
 }
 
-// Walk reads the KB tree src describes. The entry point's child list gives the
+// walk reads the KB tree src describes. The entry point's child list gives the
 // volumes in written order; each volume index's child-list spine descends, its
 // nested indexes one rank deeper, in the source's own order. Every named
 // document walks — no-claim: leaves included, overview.md as ordinary leaf
@@ -93,7 +93,7 @@ func (t Tree) Targets() map[string]Target {
 // entry point names but does not hold are each reported and not walked. A
 // minted label that collides with another is reported, and the first path
 // keeps it.
-func Walk(src *kb.Source, rep *Report) (Tree, error) {
+func walk(src *kb.Source, rep *Report) (Tree, error) {
 	entry := kb.EntryPointFile
 	text, err := src.ReadText(src.KBPath(entry))
 	if err != nil {
