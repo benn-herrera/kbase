@@ -2,6 +2,7 @@ package score
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/asks"
+	"kbase/internal/buildstore"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
@@ -75,8 +77,11 @@ func kept(t *testing.T, dir string) *Ledger {
 // claim about the KB.
 func reopened(t *testing.T, dir string) *Ledger {
 	t.Helper()
-	return resumed(t, dir, func(query.Item, kb.Bearing) error { return nil })
+	return resumed(t, dir, landsAll)
 }
+
+// landsAll is a write seam that takes every value and keeps none of them.
+func landsAll(values []Landing) []error { return make([]error, len(values)) }
 
 // resumed is reopened with w as the write a re-priced value lands through.
 func resumed(t *testing.T, dir string, w Write) *Ledger {
@@ -97,12 +102,16 @@ type landing struct {
 }
 
 // landingOn is a write seam collecting what it is asked to land, in the order it
-// is asked; err, where set, is what every write returns.
+// is asked; err, where set, is what it returns for every value.
 func landingOn(err error) (*[]landing, Write) {
 	var got []landing
-	return &got, func(it query.Item, value kb.Bearing) error {
-		got = append(got, landing{item: it, value: kb.BearingText(value)})
-		return err
+	return &got, func(values []Landing) []error {
+		errs := make([]error, len(values))
+		for i, v := range values {
+			got = append(got, landing{item: v.Item, value: kb.BearingText(v.Value)})
+			errs[i] = err
+		}
+		return errs
 	}
 }
 
@@ -326,7 +335,7 @@ func TestResumedRunRecordsWhatAskedEachLine(t *testing.T) {
 	// names the environment.
 	env := header()
 	env.BackEnd, env.Provider, env.Model = "environment", "", "judge"
-	back, err := Resume(dir, env, func(query.Item, kb.Bearing) error { return nil }, nil)
+	back, err := Resume(dir, env, landsAll, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,6 +651,97 @@ func TestResumeLeavesASkippedItemUnrepriced(t *testing.T) {
 	}
 }
 
+// TestResumeFoldsTheResultsAStoppedRunLeft: the result files a killed walk left
+// fold on the next resume, before it re-prices and with no ask for them: an
+// answered value lands, its capture and its line are recorded in the order of
+// the walk that wrote them, and the files are removed. A result whose attempt
+// the ledger already records is removed alone. A result for an item the resume
+// skips lands nothing and records no line, its capture still appended, and the
+// walk then records the item skipped.
+func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
+	src, ix, _ := runSet(t)
+	dir := t.TempDir()
+	l := kept(t, dir)
+	answered, recorded, failed := node(kb.NodeKindClaim, "clm-aaaaaa"), node(kb.NodeKindClaim, "clm-bbbbbb"), node(kb.NodeKindClaim, "clm-cccccc")
+	manual, moved := node(kb.NodeKindAnalysis, "ana-aaaaaa"), node(kb.NodeKindClaim, "clm-eeeeee")
+	bounded := func(e Entry, digest string) Entry {
+		e.Model, e.PromptSHA256, e.Started, e.Ended = "small", digest, "2026-10-20T10:01:00Z", "2026-10-20T10:01:05Z"
+		return e
+	}
+	// The ledger as the killed invocation's start left it: a line the running
+	// table re-prices, and the line of an attempt whose result file still
+	// stands.
+	if err := l.Append(moved, landedEntry("0.30", kb.FaultOverreach)); err != nil {
+		t.Fatal(err)
+	}
+	recordedEntry := bounded(landedEntry("0.85", kb.FaultOverreach), "bb")
+	if err := l.Append(recorded, recordedEntry); err != nil {
+		t.Fatal(err)
+	}
+	// The result files, named by place in the walk: the fold takes them in that
+	// order, 3 before 10, and not in their names' order.
+	for _, r := range []struct {
+		at int
+		it query.Item
+		e  Entry
+	}{
+		{10, answered, bounded(landedEntry("0.85", kb.FaultOverreach), "aa")},
+		{0, recorded, recordedEntry},
+		{12, manual, bounded(Entry{Status: StatusDone, Value: "1.0", Reply: "none"}, "dd")},
+		{3, failed, bounded(Entry{Status: StatusFailed, Reply: "the provider closed the connection"}, "cc")},
+	} {
+		c := captureRecord{Run: l.run, Pass: passOf(r.it), identity: identityOf(r.it), PromptSHA256: r.e.PromptSHA256,
+			Started: r.e.Started, Ended: r.e.Ended}
+		if err := l.writeResult(r.at, resultRecord{Line: l.line(r.it, r.e), Capture: c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	skip := func(it query.Item) bool { return itemKey(it) == itemKey(manual) }
+	landed, land := landingOn(nil)
+	back, err := Resume(dir, header(), land, skip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	// The fold's landing comes before the re-price's.
+	if want := []landing{{item: answered, value: "0.85"}, {item: moved, value: "0.85"}}; !reflect.DeepEqual(*landed, want) {
+		t.Errorf("the resume landed %+v, want %+v", *landed, want)
+	}
+	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "id"); !slices.Equal(got, []string{"clm-eeeeee", "clm-bbbbbb", "clm-cccccc", "clm-aaaaaa"}) {
+		t.Errorf("the ledger's lines name %q, want the folded results behind the run's own, in walk order", got)
+	}
+	if got := fieldOf(t, filepath.Join(l.Dir(), capturesFile), "id"); !slices.Equal(got, []string{"clm-cccccc", "clm-aaaaaa", "ana-aaaaaa"}) {
+		t.Errorf("the captures name %q, want every folded result's but the one already recorded, in walk order", got)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir(), resultsDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the fold left the result files: %v", err)
+	}
+	for it, want := range map[query.Item]string{answered: StatusDone, failed: StatusFailed, manual: ""} {
+		if got := back.Status(it); got != want {
+			t.Errorf("%s folded as %q, want %q", itemID(it), got, want)
+		}
+	}
+
+	// The walk after the fold asks only the item whose result failed, and records
+	// the skipped one skipped; its lines land behind the re-priced file.
+	ask, prompts := asking(t, []asked{{title: "1| Claim C", reply: "none"}})
+	res, err := (&Runner{Source: src, Index: ix, Items: []query.Item{answered, recorded, failed, manual}, Pass: query.PassRigor,
+		Launch: sequentialLaunch(ask), Write: land, Skip: skip, Ledger: back, Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*prompts) != 1 || res.Counts != (Counts{Total: 4, Done: 3, Skipped: 1}) {
+		t.Errorf("the walk made %d calls, counts %+v; want the failed item asked alone and the skipped one recorded", len(*prompts), res.Counts)
+	}
+	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got[len(got)-2:], []string{StatusDone, StatusSkipped}) {
+		t.Errorf("the ledger's lines record %q, want the walk's two lines last", got)
+	}
+}
+
 // landedEntry is a landed entry recording one charge of id.
 func landedEntry(value, id string) Entry {
 	return Entry{Status: StatusDone, Value: value, Reply: id + ": A span",
@@ -720,7 +820,7 @@ func TestResumeRefusesAnotherRun(t *testing.T) {
 		{"no run", RunHeader{Run: "run-9", KBRoot: "/repo/kb-root", Pass: query.PassRigor}, "is missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Resume(dir, tc.h, func(query.Item, kb.Bearing) error { return nil }, nil)
+			_, err := Resume(dir, tc.h, landsAll, nil)
 			var ref result.Refusal
 			if !errors.As(err, &ref) {
 				t.Fatalf("Resume(%s) = %v, want a refusal", tc.name, err)
@@ -877,5 +977,40 @@ func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPruneRunsKeepsTheNewestSixteenScoreCaptures: of 18 captured score runs, each a
+// .stdout.yaml and .stderr.log pair, the newest 16 pairs stand, by name; a build
+// capture beside them stands.
+func TestPruneRunsKeepsTheNewestSixteenScoreCaptures(t *testing.T) {
+	dir := t.TempDir()
+	reports := filepath.Join(dir, buildstore.ReportsDir)
+	if err := os.MkdirAll(reports, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	stems := make([]string, 18)
+	for i := range stems {
+		stems[i] = fmt.Sprintf("%s20260101T0000%02dZ-r", CapturePrefix, i)
+	}
+	files := []string{buildstore.CapturePrefix + "old.stdout.yaml"}
+	for _, stem := range stems {
+		files = append(files, stem+".stdout.yaml", stem+".stderr.log")
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(reports, f), nil, 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PruneRuns(dir, "run-new"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		_, err := os.Stat(filepath.Join(reports, f))
+		gone := errors.Is(err, os.ErrNotExist)
+		oldest := strings.HasPrefix(f, stems[0]) || strings.HasPrefix(f, stems[1])
+		if gone != oldest {
+			t.Errorf("%s removed %v, want %v", f, gone, oldest)
+		}
 	}
 }

@@ -90,7 +90,7 @@ func newSSEScanner(ctx context.Context, cancel context.CancelCauseFunc, body io.
 //
 // It is deliberately not called from the constructor. The window bounds the
 // gap between a read starting and bytes arriving — provider silence — and a
-// caller that does other work between ConsultStream and its first Next has
+// caller that does other work between opening the stream and its first Next has
 // kept nobody waiting. Arming at construction would charge that work to the
 // provider and abort a stream that never misbehaved.
 func (r *sseScanner) armIdle() {

@@ -98,7 +98,7 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
   absent for `finished`, `running` and `bounded`. `interrupted` is a build that died without writing
   an end event: no build writes it, and it names the stage in flight, the pid and the command that
   resumes it.
-- `cancel` stops the running build; the build exits `cancelled`, losing only the unit in flight.
+- `cancel` stops the running build; the build exits `cancelled`, losing only the calls in flight.
 - To continue a cancelled or failed build, or one `status` reports `interrupted`, run the `resume`
   command exactly as given; a `bounded` build hands out none. The trail document below prints that
   command anyway, and says why.
@@ -293,7 +293,7 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
   default) or `decisions`. It names a wire shape, not a model — the decision category's id stays in
   `config.toml` — and chat is the entry's `api`'s, which the flavour does not touch. Any other value
   drops the entry the way a wrong `type` or `api` does. The decision surfaces are OpenAI-shaped, so
-  the `decision` role's entry must speak `api = "openai"`: a Messages endpoint asked for a letter ask
+  the `decision` role's entry must speak `api = "openai"`: a Messages endpoint asked for a multichoice ask
   refuses, naming the provider and the role.
 - `kbase show-config` states each entry's effective `api` and `decisions-flavor`, so an entry silent
   on either reads `openai` and `systemone`.

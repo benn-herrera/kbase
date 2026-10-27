@@ -27,6 +27,10 @@ type buildOptions struct {
 	NoInference    bool
 	// ConfigDir is the --config-dir flag, "" where it was not given.
 	ConfigDir string
+	// AskConcurrency is the --ask-concurrency flag, nil where it was not
+	// given; ConfiguredConcurrency is [asks] concurrency as the loaded
+	// configuration states it, nil where it states none.
+	AskConcurrency, ConfiguredConcurrency *int
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
 	// Provider builds where the build's model calls go, or what the
@@ -47,27 +51,48 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
 		return 0, err
 	}
-	reg := modelclient.New(opts.NewClient, opts.Logger, "")
-	defer reg.CloseAll()
-	outcome, fields := build.Run(ctx, build.Options{
-		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
-		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, WorkDir: opts.WorkDir, Provider: providerFor(opts, reg),
-		Logger: opts.Logger,
-	})
+	outcome, fields := buildRun(ctx, opts)
 	if err := toolresult.Emit(opts.Stdout, outcome, fields...); err != nil {
 		return 0, fmt.Errorf("build: writing the result: %w", err)
 	}
 	return toolresult.ExitCode(outcome), nil
 }
 
-// providerFor is the build's Provider seam over the registry the verb opened.
-// A run that names no Provider — a caller with nothing to hand it — resolves
-// none, and the walk's launch refuses a model call it cannot make.
-func providerFor(opts buildOptions, reg *modelclient.Registry) func() (build.Provider, error) {
+// buildRun is the verb's body: the build's one queue of the invocation's
+// model calls in flight, the registry its clients are opened through, and the
+// walk.
+func buildRun(ctx context.Context, opts buildOptions) (string, []toolresult.Field) {
+	concurrency, err := askConcurrency(opts.AskConcurrency, opts.ConfiguredConcurrency)
+	if err != nil {
+		return refusedOrFailed(nil, err)
+	}
+	queue := model.NewQueue(concurrency)
+	reg := modelclient.New(opts.NewClient, opts.Logger, "", concurrency)
+	defer reg.CloseAll()
+	named := 0
+	if opts.AskConcurrency != nil {
+		named = *opts.AskConcurrency
+	}
+	return build.Run(ctx, build.Options{
+		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
+		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, AskConcurrency: named,
+		WorkDir: opts.WorkDir, Provider: providerFor(opts, reg, queue), Logger: opts.Logger,
+	})
+}
+
+// providerFor is the build's Provider seam over the registry the verb opened,
+// every role's calls on queue. A run that names no Provider — a caller with
+// nothing to hand it — resolves none, and the walk's launch refuses a model
+// call it cannot make.
+func providerFor(opts buildOptions, reg *modelclient.Registry, queue *model.Queue) func() (build.Provider, error) {
 	if opts.Provider == nil {
 		return nil
 	}
-	return func() (build.Provider, error) { return opts.Provider(reg) }
+	return func() (build.Provider, error) {
+		p, err := opts.Provider(reg)
+		p.Queue = queue
+		return p, err
+	}
 }
 
 // refused is a refusal of every item, after fields.
@@ -95,10 +120,11 @@ var (
 	flagThrough        string
 	flagStateDir       string
 	flagNoInference    bool
+	flagAskConcurrency int
 )
 
 // buildProvider is where the build's model calls go: each role resolved from
-// the loaded configuration, its own entry dialled through reg — the letter
+// the loaded configuration, its own entry dialled through reg — the multichoice
 // asks on the decision role, the overview passage on the text role — or what
 // it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
 // and the build proceeds.
@@ -111,8 +137,9 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		}
 		if mode == config.ModeFile {
 			// An environment-mode invocation reads no file value, so it says
-			// nothing of the key the files state.
+			// nothing of the keys the files state.
 			supersededProvider(stderr, p.Config)
+			supersededReaderConcurrency(stderr, p.Config)
 		}
 		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
@@ -141,9 +168,6 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		if provider.OverviewClient, provider.Overview, err = role(config.RoleText); err != nil {
 			return build.Provider{}, err
 		}
-		if n := p.Config.Asks.ReaderConcurrency; n != nil {
-			provider.ReaderConcurrency = *n
-		}
 		provider.Roles = records
 		return provider, nil
 	}
@@ -164,7 +188,7 @@ resumes from any recorded boundary, not only the last: status names each
 stage's commit, so reset the repository to one and re-issue the build, and the
 kbase://build-trail MCP resource prints the commands.
 --no-inference drops every row that spends inference and walks the rest;
-without it, the claim graph's letter asks go to the endpoint [models] decision
+without it, the claim graph's multichoice asks go to the endpoint [models] decision
 names and the overview passage to the one [models] text names — each value a
 provider/model reference, the providers.toml entry that supplies the endpoint
 then the model it serves. KBASE_API_BASE_URL, KBASE_DECISION and KBASE_TEXT
@@ -193,17 +217,19 @@ report, and the command that resumes the build where it did not finish.`,
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		code, err := runBuild(ctx, buildOptions{
-			VolumeRoots:    args,
-			Bibliographies: flagBibliographies,
-			Through:        flagThrough,
-			StateDir:       flagStateDir,
-			NoInference:    flagNoInference,
-			ConfigDir:      flagConfigDir,
-			WorkDir:        wd,
-			Provider:       buildProvider(providers, config.EnvOverrides(os.Getenv), cmd.ErrOrStderr()),
-			Stdout:         cmd.OutOrStdout(),
-			Stderr:         cmd.ErrOrStderr(),
-			Logger:         processLog.logger,
+			VolumeRoots:           args,
+			Bibliographies:        flagBibliographies,
+			Through:               flagThrough,
+			StateDir:              flagStateDir,
+			NoInference:           flagNoInference,
+			ConfigDir:             flagConfigDir,
+			AskConcurrency:        givenAskConcurrency(cmd, flagAskConcurrency),
+			ConfiguredConcurrency: providers.Config.Asks.Concurrency,
+			WorkDir:               wd,
+			Provider:              buildProvider(providers, config.EnvOverrides(os.Getenv), cmd.ErrOrStderr()),
+			Stdout:                cmd.OutOrStdout(),
+			Stderr:                cmd.ErrOrStderr(),
+			Logger:                processLog.logger,
 		})
 		if err != nil {
 			return err
@@ -221,4 +247,5 @@ func init() {
 	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id or display name (default: every stage)")
 	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "drop every row that spends inference and walk the rest")
+	registerAskConcurrencyFlag(buildCmd, &flagAskConcurrency)
 }

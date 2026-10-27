@@ -263,8 +263,8 @@ func TestDropClaimNodeRecordMention(t *testing.T) {
 			if res.Outcome != result.Refused || len(res.Refusals) != 1 {
 				t.Fatalf("drop: %+v, want one refusal", res)
 			}
-			if it := res.Refusals[0]; it.Key != "id="+dropped || it.Path != c.file || !strings.Contains(it.Detail, c.record+"'s "+c.field) {
-				t.Errorf("refusal = %+v, want id=%s at %s naming %s's %s", it, dropped, c.file, c.record, c.field)
+			if it := res.Refusals[0]; it.Key != "id="+dropped || it.Entry != 1 || it.Path != c.file || !strings.Contains(it.Detail, c.record+"'s "+c.field) {
+				t.Errorf("refusal = %+v, want entry 1's id=%s at %s naming %s's %s", it, dropped, c.file, c.record, c.field)
 			}
 			if !maps.Equal(before, snapshot(t, root)) {
 				t.Error("a refused drop changed kb-root")
@@ -324,8 +324,8 @@ func TestDropClaimNodeProseMention(t *testing.T) {
 	before := snapshot(t, root)
 	line := lineOf(t, staged, "as "+b+" shows")
 	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
-	if !refusedAt(res, result.Item{Key: "id=" + b, Path: "leaf.md", Line: line}) {
-		t.Errorf("prose mention: %+v, want one refusal of id=%s at leaf.md:%d", res, b, line)
+	if !refusedAt(res, result.Item{Key: "id=" + b, Entry: 1, Path: "leaf.md", Line: line}) {
+		t.Errorf("prose mention: %+v, want one refusal of entry 1's id=%s at leaf.md:%d", res, b, line)
 	}
 	if !maps.Equal(before, snapshot(t, root)) {
 		t.Error("a refused drop changed kb-root")

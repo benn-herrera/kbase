@@ -610,9 +610,9 @@ report "${outside_stem}" "${outside_ok}" "configure --create --project outside a
 refsdir="${cdir}/refsdir"
 mkdir -p "${refsdir}"
 printf '%s\n' '# kept note' 'provider = "local"' '' '[models]' 'decision = "d3"   # the letter asks' 'text = "qwen"' \
-    '' '[asks]' 'readerConcurrency = 2' > "${refsdir}/config.toml"
+    '' '[asks]' 'concurrency = 2' > "${refsdir}/config.toml"
 printf '%s\n' '# kept note' '' '[models]' 'decision = "local/d3"  # the letter asks' 'text = "local/qwen"' \
-    'scoring = "local/clef"' '' '[asks]' 'readerConcurrency = 2' > "${out}/refs-expected.toml"
+    'scoring = "local/clef"' '' '[asks]' 'concurrency = 2' > "${out}/refs-expected.toml"
 refs_stem="${docs}/23-configure-references"
 set +e
 ( cd "${work}" && env "${scrub[@]}" "${kbase}" configure --create --config-dir "${refsdir}" \

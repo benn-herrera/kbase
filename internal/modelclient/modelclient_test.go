@@ -17,7 +17,7 @@ type closeLog struct{ n int }
 // closer is a mock client that records its Close — the release the registry
 // owes every client it opened.
 type closer struct {
-	*modeltest.MockClient
+	model.Client
 	log *closeLog
 }
 
@@ -32,8 +32,8 @@ func TestRegistryOpensEachEndpointOnce(t *testing.T) {
 	var opened int
 	reg := New(func(model.Endpoint) model.Client {
 		opened++
-		return closer{modeltest.NewScriptedMock(nil, nil), &log}
-	}, nil, "")
+		return closer{modeltest.NewScriptedMock(nil, nil).Client(), &log}
+	}, nil, "", 0)
 	lab := config.Endpoint{Mode: config.ModeFile, Provider: "lab", BaseURL: "http://lab.example/v1"}
 	first, err := reg.Get(lab)
 	if err != nil {
@@ -62,6 +62,24 @@ func TestRegistryOpensEachEndpointOnce(t *testing.T) {
 	}
 }
 
+// TestRegistryPutsItsIdleConnsOnEveryEndpoint: the count the registry was
+// built with rides every endpoint it hands its seam.
+func TestRegistryPutsItsIdleConnsOnEveryEndpoint(t *testing.T) {
+	var got []int
+	reg := New(func(e model.Endpoint) model.Client {
+		got = append(got, e.IdleConns)
+		return modeltest.NewScriptedMock(nil, nil).Client()
+	}, nil, "", 4)
+	for _, name := range []string{"a", "b"} {
+		if _, err := reg.Get(config.Endpoint{Provider: name, BaseURL: "http://" + name + ".example/v1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 2 || got[0] != 4 || got[1] != 4 {
+		t.Errorf("IdleConns on the endpoints = %v, want [4 4]", got)
+	}
+}
+
 // TestRegistryPreflightReadsTheKeyFile: the key file is the registry's read,
 // and the refusal it cannot read names the variable and the path. Nothing is
 // opened.
@@ -69,8 +87,8 @@ func TestRegistryPreflightReadsTheKeyFile(t *testing.T) {
 	var opened int
 	reg := New(func(model.Endpoint) model.Client {
 		opened++
-		return modeltest.NewScriptedMock(nil, nil)
-	}, nil, "")
+		return modeltest.NewScriptedMock(nil, nil).Client()
+	}, nil, "", 0)
 	_, err := reg.Get(config.Endpoint{Provider: "lab", BaseURL: "http://lab.example/v1", APIKeyFile: "/absent/key.txt"})
 	var refusal result.Refusal
 	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Key != config.EnvAPIKeyFile || refusal[0].Path != "/absent/key.txt" ||

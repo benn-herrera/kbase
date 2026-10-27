@@ -213,7 +213,7 @@ func refuseRemainingMentions(b *recordBatch, entries []entry) error {
 				if !slices.Contains(named, id) {
 					continue
 				}
-				refusals = append(refusals, result.Item{Key: "id=" + id, Path: rel, Line: n + 1,
+				refusals = append(refusals, result.Item{Key: "id=" + id, Entry: e.Index, Path: rel, Line: n + 1,
 					Remedy: "remove the mention — through the op that wrote it, or by hand where it was authored — then re-run",
 					Detail: fmt.Sprintf("%s:%d names %s, a mention this op does not remove, and once the node is gone "+
 						"verify's claim-id link check reports it as an unknown id", rel, n+1, id)})
@@ -233,7 +233,7 @@ func refuseRemainingMentions(b *recordBatch, entries []entry) error {
 			if fix == "" {
 				detail += "; no kbase op rewrites this field"
 			}
-			refusals = append(refusals, result.Item{Key: "id=" + id, Path: p.file, Remedy: fix, Detail: detail})
+			refusals = append(refusals, result.Item{Key: "id=" + id, Entry: e.Index, Path: p.file, Remedy: fix, Detail: detail})
 		}
 	}
 	if len(refusals) > 0 {

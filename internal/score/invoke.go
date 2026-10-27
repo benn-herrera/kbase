@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"kbase/internal/index"
@@ -61,10 +62,8 @@ type Invocation struct {
 	// answering it; Model is what each line records too. A dry run records none.
 	BackEnd, Provider, Model string
 	Log                      log.Logger
-	// NewAsk opens the Ask the walk calls. It is called once, on a run that is
-	// not dry, after the set is read: a KB the load refuses is refused before
-	// any endpoint is reached.
-	NewAsk func() (Ask, error)
+	// Launch is the route the walk's calls take; a dry run does not use it.
+	Launch Launch
 }
 
 // Report is what an invocation reports of its run.
@@ -72,8 +71,8 @@ type Report struct {
 	// Outcome is the walk's: result.Done, result.Bounded, result.Cancelled or
 	// result.Failed.
 	Outcome string
-	// Asked is whether the invocation opened its Ask: NewAsk was called and
-	// returned no error.
+	// Asked is whether the invocation reached the route its calls take: it was
+	// not a dry run, so Launch was handed to the walk.
 	Asked bool
 	// Run and Ledger are the run's id and directory, set once its ledger stands
 	// with its pid and its set beside it.
@@ -97,9 +96,10 @@ type Report struct {
 
 // Invoke runs one invocation: the set read from inv.Source, the run's ledger
 // created or resumed, retention, the pid and the set beside the ledger, and the
-// walk, each value landed through the write API under the KB write lock. An
-// error is the invocation's stop; the report then carries Asked where the Ask
-// was opened, and Run and Ledger only where the error is the walk's — one that
+// walk, whose values land when it ends, in one landing through the write API
+// under the KB write lock. An
+// error is the invocation's stop; the report then carries Asked where the
+// calls' route was reached, and Run and Ledger only where the error is the walk's — one that
 // stops the ledger's opening, retention, or the pid or the set beside it leaves
 // them empty though the ledger stands. A refusal is a result.Refusal.
 func Invoke(ctx context.Context, inv Invocation) (Report, error) {
@@ -136,17 +136,14 @@ func Invoke(ctx context.Context, inv Invocation) (Report, error) {
 		return Report{Outcome: res.Outcome, Run: inv.Run, Ledger: l.Dir(), Counts: res.Counts, Scored: []string{}}, nil
 	}
 
-	ask, err := inv.NewAsk()
-	if err != nil {
-		return Report{}, err
-	}
 	rep := Report{Asked: true}
 	header := RunHeader{Run: inv.Run, KBRoot: inv.KBRoot, Pass: inv.Pass, BackEnd: inv.BackEnd,
 		Provider: inv.Provider, Model: inv.Model, Started: Stamp()}
-	// One write seam for both: the values the walk lands and the values a resume
-	// re-prices under a changed table take the same path, the KB's lock held as
-	// every write holds it.
-	land := func(it query.Item, value kb.Bearing) error { return landValue(inv.KBRoot, it, value, inv.Log) }
+	// One write seam for all three: the values the walk lands, the values a
+	// resume folds from a stopped invocation's results and the values it
+	// re-prices under a changed table take the same landing, the KB's lock held
+	// as every write holds it.
+	land := func(values []Landing) []error { return landValues(inv.KBRoot, values, inv.Log) }
 	// The items this invocation skips, read off the KB as the run loaded it: the
 	// walk asks none of them, and a resume re-prices none of their values.
 	skip := ManualSkip(ix, inv.Rescore)
@@ -165,20 +162,23 @@ func Invoke(ctx context.Context, inv Invocation) (Report, error) {
 	}
 	rep.Run, rep.Ledger = inv.Run, l.Dir()
 
-	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: inv.Pass, Ask: ask,
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: inv.Pass, Launch: inv.Launch,
 		Write: land, Skip: skip, Ledger: l, Model: inv.Model, Limit: inv.Limit, Log: inv.Log}).Run(ctx)
 	if err != nil {
 		return rep, err
 	}
 	rep.Outcome, rep.Counts = res.Outcome, res.Counts
-	rep.Scored = make([]string, 0, len(res.Written))
-	for _, it := range res.Written {
+	// A resume's fold landed what a stopped invocation answered, before the walk
+	// landed what this one did.
+	landed := slices.Concat(l.folded, res.Written)
+	rep.Scored = make([]string, 0, len(landed))
+	for _, it := range landed {
 		rep.Scored = append(rep.Scored, ItemName(it))
 	}
 	rep.Unfinished = res.Counts.Failed > 0 || res.Counts.Remaining > 0
-	// A resume that re-priced a value wrote as well, whether or not its walk
-	// landed one.
-	rep.Wrote = len(res.Written) > 0 || l.Repriced() > 0
+	// A resume that re-priced a value wrote as well, whether or not a value
+	// landed.
+	rep.Wrote = len(landed) > 0 || l.Repriced() > 0
 	switch res.Outcome {
 	case result.Failed:
 		rep.Failures = failures(res.Walked, l)
@@ -236,44 +236,146 @@ func failures(walked []query.Item, l *Ledger) []result.Item {
 	return out
 }
 
-// landValue lands one answer on one item through the write API — a node's rigor
-// through set-rigor, an edge's bearing through set-bearing — and lands nothing
-// else: the caller refreshes once the run's writes are in. The write holds the
-// KB's write lock, as every writer of the KB does, and probes for no operation
-// lock: the run holding that lock is the writer. A lock the write cannot take
-// is the item's failure, its error the held-lock item. A value the KB already
-// holds is no failure; a refusal or a failure is the item's, and the run goes
-// on. The value is the run's own judgement, so it is written not manually
-// scored.
-func landValue(root string, it query.Item, value kb.Bearing, lg log.Logger) error {
-	op, entry := "set-rigor", map[string]any{}
-	switch {
-	case it.Node != nil:
-		entry["id"], entry["rigor"] = it.Node.ID, opValue(value)
-	case it.Edge != nil:
-		op = "set-bearing"
-		entry["id"], entry["target"], entry["relation"] = it.Edge.Source, it.Edge.Target, it.Edge.Relation
-		entry["bearing"] = opValue(value)
-	default:
-		return errors.New("the item names neither a node nor an edge")
-	}
-	values, err := json.Marshal(map[string]any{"entry": []map[string]any{entry}})
-	if err != nil {
-		return err
+// The ops a landing writes through: a node's rigor, and an edge's bearing.
+const (
+	opSetRigor   = "set-rigor"
+	opSetBearing = "set-bearing"
+)
+
+// landValues is the landing: it lands values through the write API under one
+// hold of the KB's write lock — the nodes' rigor as one set-rigor write batch,
+// then the edges' bearings as one set-bearing write batch, each in the order
+// given — and lands nothing else: the caller refreshes once the run's writes
+// are in. It returns one error per value, nil where it landed. The lock is
+// held as every writer of the KB holds it, and no operation lock is probed: the
+// run holding that lock is the writer. A lock it cannot take fails every value,
+// each error the held-lock item. A write batch is all-or-nothing: one the KB
+// refuses is issued again without each entry its refusal names, until it lands
+// or is empty; one that fails fails every value it carried. A value the KB
+// already holds is no failure. The values are the run's own judgement, so they
+// are written not manually scored.
+func landValues(root string, values []Landing, lg log.Logger) []error {
+	errs := make([]error, len(values))
+	if len(values) == 0 {
+		return errs
 	}
 	release, err := write.LockKB(root)
-	if item, held := write.HeldLockItem(err, root, write.RetryRemedy(op)); held {
-		return result.Items{item}
-	}
 	if err != nil {
-		return fmt.Errorf("the KB's write lock: %w", err)
+		for i, v := range values {
+			if item, held := write.HeldLockItem(err, root, write.RetryRemedy(opOf(v.Item))); held {
+				errs[i] = result.Items{item}
+			} else {
+				errs[i] = fmt.Errorf("the KB's write lock: %w", err)
+			}
+		}
+		return errs
 	}
 	defer release()
-	res := write.Run(op, write.Options{KBRoot: root, Values: values, NoRefresh: true, Provenance: write.ProvenanceMachine, Logger: lg})
-	switch res.Outcome {
-	case result.Done, result.Unchanged:
-		return nil
+	batches := map[string][]int{}
+	for i, v := range values {
+		op := opOf(v.Item)
+		if op == "" {
+			errs[i] = errors.New("the item names neither a node nor an edge")
+			continue
+		}
+		batches[op] = append(batches[op], i)
 	}
+	for _, op := range []string{opSetRigor, opSetBearing} {
+		landBatch(root, op, values, batches[op], errs, lg)
+	}
+	return errs
+}
+
+// landBatch issues op over the values batch names, as one write batch, and
+// records each value's failure in errs. A refusal naming its entries fails
+// those, and the rest are issued again. A refusal naming none cannot say which
+// value it refuses, so a batch of more than one is then issued value by value.
+func landBatch(root, op string, values []Landing, batch []int, errs []error, lg log.Logger) {
+	for len(batch) > 0 {
+		entries := make([]map[string]any, len(batch))
+		for k, i := range batch {
+			entries[k] = entryOf(values[i])
+		}
+		b, err := json.Marshal(map[string]any{"entry": entries})
+		if err != nil {
+			for _, i := range batch {
+				errs[i] = err
+			}
+			return
+		}
+		res := write.Run(op, write.Options{KBRoot: root, Values: b, NoRefresh: true, Provenance: write.ProvenanceMachine, Logger: lg})
+		switch res.Outcome {
+		case result.Done, result.Unchanged:
+			return
+		case result.Refused:
+			named := refusedEntries(res.Refusals, len(batch))
+			if len(named) == 0 && len(batch) > 1 {
+				for _, i := range batch {
+					landBatch(root, op, values, []int{i}, errs, lg)
+				}
+				return
+			}
+			if len(named) == 0 {
+				errs[batch[0]] = writeError(res)
+				return
+			}
+			var rest []int
+			for k, i := range batch {
+				if details, ok := named[k+1]; ok {
+					errs[i] = errors.New(strings.Join(details, "; "))
+				} else {
+					rest = append(rest, i)
+				}
+			}
+			batch = rest
+		default:
+			err := writeError(res)
+			for _, i := range batch {
+				errs[i] = err
+			}
+			return
+		}
+	}
+}
+
+// refusedEntries is each entry of an n-entry batch the refusal names, with the
+// details naming it, or nil where any of its items names no entry of the batch.
+// It is empty, not nil, where there are no refusals: callers test len.
+func refusedEntries(refusals []result.Item, n int) map[int][]string {
+	named := map[int][]string{}
+	for _, item := range refusals {
+		if item.Entry < 1 || item.Entry > n {
+			return nil
+		}
+		named[item.Entry] = append(named[item.Entry], item.Detail)
+	}
+	return named
+}
+
+// opOf is the op a value on it lands through, "" where it names neither a node
+// nor an edge.
+func opOf(it query.Item) string {
+	switch {
+	case it.Node != nil:
+		return opSetRigor
+	case it.Edge != nil:
+		return opSetBearing
+	}
+	return ""
+}
+
+// entryOf is v as its op's values entry: a node's id and rigor, or an edge's
+// source as id, its target and relation, and the bearing.
+func entryOf(v Landing) map[string]any {
+	if it := v.Item; it.Edge != nil {
+		return map[string]any{"id": it.Edge.Source, "target": it.Edge.Target, "relation": it.Edge.Relation, "bearing": opValue(v.Value)}
+	}
+	return map[string]any{"id": v.Item.Node.ID, "rigor": opValue(v.Value)}
+}
+
+// writeError is what a write that did not land reports: each refusal's and
+// failure's detail, or the outcome where it names none.
+func writeError(res write.Result) error {
 	parts := make([]string, 0, len(res.Refusals)+len(res.Failures))
 	for _, item := range res.Refusals {
 		parts = append(parts, item.Detail)

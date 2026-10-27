@@ -157,20 +157,20 @@ type ParagraphItem struct {
 // kb-root-relative path and shown as its labelled render, each item named by
 // its label range and offered both letters. The one noul question reads its
 // question file once for the group.
-func ParagraphAsks(document, body string, items []ParagraphItem) []LetterItem {
+func ParagraphAsks(document, body string, items []ParagraphItem) []MultichoiceItem {
 	return paragraphAsks(load, document, body, items)
 }
 
 // paragraphAsks is ParagraphAsks over the templates load reads.
-func paragraphAsks(load func(string) (string, error), document, body string, items []ParagraphItem) []LetterItem {
+func paragraphAsks(load func(string) (string, error), document, body string, items []ParagraphItem) []MultichoiceItem {
 	offered := []string{LetterClaim, LetterNotClaim}
 	q, err := loadQuestion(load, paragraphQuestion, offered)
 	if err != nil {
 		return dyingItems(err)
 	}
-	out := make([]LetterItem, len(items))
+	out := make([]MultichoiceItem, len(items))
 	for i, it := range items {
-		out[i] = LetterItem{Item: it.Paragraph, Offered: offered, Question: q, Compose: func() (string, error) {
+		out[i] = MultichoiceItem{Item: it.Paragraph, Offered: offered, Question: q, Compose: func() (string, error) {
 			slots := map[string]string{
 				"document":       document,
 				"body":           strings.TrimRight(body, "\n"),
@@ -222,12 +222,12 @@ func classifyQuestionFile(offered []string) (string, error) {
 // target's id. The group's passages are every item's, sorted, deduplicated
 // and numbered P1…, so each ask names its own against one shared list. The
 // two-letter and three-letter offered sets ask their own question files.
-func ClassifyAsks(source Claim, statement string, items []ClassifyItem) []LetterItem {
+func ClassifyAsks(source Claim, statement string, items []ClassifyItem) []MultichoiceItem {
 	return classifyAsks(load, source, statement, items)
 }
 
 // classifyAsks is ClassifyAsks over the templates load reads.
-func classifyAsks(load func(string) (string, error), source Claim, statement string, items []ClassifyItem) []LetterItem {
+func classifyAsks(load func(string) (string, error), source Claim, statement string, items []ClassifyItem) []MultichoiceItem {
 	var passages []string
 	for _, it := range items {
 		passages = append(passages, it.Passages...)
@@ -240,7 +240,7 @@ func classifyAsks(load func(string) (string, error), source Claim, statement str
 		number[p] = i + 1
 		lines[i] = fmt.Sprintf("P%d: %s", i+1, p)
 	}
-	out := make([]LetterItem, len(items))
+	out := make([]MultichoiceItem, len(items))
 	for i, it := range items {
 		var offered []string
 		for _, l := range []string{LetterSupportedBy, LetterInSupportOf, LetterMention} {
@@ -266,7 +266,7 @@ func classifyAsks(load func(string) (string, error), source Claim, statement str
 		for j, n := range own {
 			named[j] = fmt.Sprintf("P%d", n)
 		}
-		out[i] = LetterItem{Item: it.Target.ID, Offered: offered, Question: q, Compose: func() (string, error) {
+		out[i] = MultichoiceItem{Item: it.Target.ID, Offered: offered, Question: q, Compose: func() (string, error) {
 			slots := map[string]string{
 				"claim-line":         source.line(),
 				"claim-text":         strings.TrimRight(statement, "\n"),
@@ -292,20 +292,20 @@ type UnmarkedItem struct {
 // and the kb-root-relative document stating it as its labelled render, each
 // item named by its target's id and offered both letters. The one noul
 // question reads its question file once for the group.
-func UnmarkedAsks(document, body string, source Claim, statement string, items []UnmarkedItem) []LetterItem {
+func UnmarkedAsks(document, body string, source Claim, statement string, items []UnmarkedItem) []MultichoiceItem {
 	return unmarkedAsks(load, document, body, source, statement, items)
 }
 
 // unmarkedAsks is UnmarkedAsks over the templates load reads.
-func unmarkedAsks(load func(string) (string, error), document, body string, source Claim, statement string, items []UnmarkedItem) []LetterItem {
+func unmarkedAsks(load func(string) (string, error), document, body string, source Claim, statement string, items []UnmarkedItem) []MultichoiceItem {
 	offered := []string{LetterPoints, LetterDoesNotPoint}
 	q, err := loadQuestion(load, unmarkedQuestion, offered)
 	if err != nil {
 		return dyingItems(err)
 	}
-	out := make([]LetterItem, len(items))
+	out := make([]MultichoiceItem, len(items))
 	for i, it := range items {
-		out[i] = LetterItem{Item: it.Target.ID, Offered: offered, Question: q, Compose: func() (string, error) {
+		out[i] = MultichoiceItem{Item: it.Target.ID, Offered: offered, Question: q, Compose: func() (string, error) {
 			slots := map[string]string{
 				"document":       document,
 				"body":           strings.TrimRight(body, "\n"),
@@ -332,20 +332,20 @@ type ColinearItem struct {
 // nothing to the first, the first nothing to the second, or is each a step of
 // its own — each item named by its Key and offered all three letters. The one
 // choice question reads its question file once for the group.
-func ColinearAsks(items []ColinearItem) []LetterItem {
+func ColinearAsks(items []ColinearItem) []MultichoiceItem {
 	return colinearAsks(load, items)
 }
 
 // colinearAsks is ColinearAsks over the templates load reads.
-func colinearAsks(load func(string) (string, error), items []ColinearItem) []LetterItem {
+func colinearAsks(load func(string) (string, error), items []ColinearItem) []MultichoiceItem {
 	offered := []string{LetterSecondAddsNothing, LetterFirstAddsNothing, LetterDistinct}
 	q, err := loadQuestion(load, colinearQuestion, offered)
 	if err != nil {
 		return dyingItems(err)
 	}
-	out := make([]LetterItem, len(items))
+	out := make([]MultichoiceItem, len(items))
 	for i, it := range items {
-		out[i] = LetterItem{Item: it.Key, Offered: offered, Question: q, Compose: func() (string, error) {
+		out[i] = MultichoiceItem{Item: it.Key, Offered: offered, Question: q, Compose: func() (string, error) {
 			slots := map[string]string{
 				"first-line":  it.First.line(),
 				"first-text":  strings.TrimRight(it.FirstText, "\n"),
@@ -361,8 +361,8 @@ func colinearAsks(load func(string) (string, error), items []ColinearItem) []Let
 // dyingItems is what a group of asks is where its question file does not
 // load: one item whose every compose returns the load error, so the ask
 // fails at its call site — a defect in kbase, never an outcome of a build.
-func dyingItems(err error) []LetterItem {
-	return []LetterItem{{Compose: func() (string, error) { return "", err }}}
+func dyingItems(err error) []MultichoiceItem {
+	return []MultichoiceItem{{Compose: func() (string, error) { return "", err }}}
 }
 
 // OverviewPrompt is the overview passage's ask over excerpts: on a re-ask,

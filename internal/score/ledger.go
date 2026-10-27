@@ -51,6 +51,11 @@ const (
 	capturesFile = "captures.jsonl"
 	itemsFile    = "items.jsonl"
 	pidFile      = "pid"
+	// resultsDir holds an answered item's result file, from its answer until
+	// the walk's end folds it: one file per item, named by its place in the
+	// walk and resultSuffix.
+	resultsDir   = "results"
+	resultSuffix = ".json"
 	// ResultFile is the name of the run's result document, written beside its
 	// ledger so a waiter reads the same document the run reported.
 	ResultFile   = "result.yaml"
@@ -200,6 +205,9 @@ type Ledger struct {
 	// lines recorded: the count says whether the KB holds a write this
 	// invocation must publish.
 	moved []rePricedLine
+	// folded is the items this resume's fold landed, in the order they landed:
+	// values the KB took in this invocation, which it must publish.
+	folded []query.Item
 }
 
 // Create starts the ledger of a run in the state directory dir, at
@@ -247,6 +255,8 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 // unrepriced: it is a person's now. A line a killed process left torn did not
 // land: it is dropped, and the item it names is asked again; a capture it left
 // torn is dropped too, so this run's first capture is not appended behind it.
+// Before it re-prices, it folds the result files a stopped invocation left, so
+// a kill forfeits only the calls that were in flight.
 func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), lines: map[string]Entry{}}
 	have, err := readHeader(l.dir)
@@ -269,8 +279,13 @@ func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 	if _, err := trimTorn(filepath.Join(l.dir, capturesFile)); err != nil {
 		return nil, err
 	}
+	// The fold appends, and opens the files it appends to: a resume refused
+	// after it closes them.
+	if err := l.fold(w, skip); err != nil {
+		return nil, errors.Join(err, l.Close())
+	}
 	if err := l.reprice(w, skip); err != nil {
-		return nil, err
+		return nil, errors.Join(err, l.Close())
 	}
 	return l, nil
 }
@@ -310,31 +325,208 @@ func (l *Ledger) Last(it query.Item) (Entry, bool) {
 	return e, ok
 }
 
-// Append records one attempt at it. The line lands after the item's write and
-// validation, never before: a crash between the two re-asks an item whose
-// write is idempotent, where the reverse would skip a value that never landed.
+// Append appends one line for it to the run's ledger immediately. The walk does
+// not use it: the walk records its lines once, at its end, through appendLines.
+// Its callers are tests seeding a ledger, the external cmd package's included.
 func (l *Ledger) Append(it query.Item, e Entry) error {
-	a := l.line(it, e)
-	if err := l.appendLine(&l.f, linesFile, a); err != nil {
+	return l.record([]attempt{l.line(it, e)})
+}
+
+// record appends lines to the ledger in one write, and reads them back as its
+// own: each item's last line, and the file's order.
+func (l *Ledger) record(lines []attempt) error {
+	vs := make([]any, len(lines))
+	for i := range lines {
+		vs[i] = lines[i]
+	}
+	if err := l.appendLines(&l.f, linesFile, vs); err != nil {
 		return err
 	}
-	l.lines[a.lineKey()] = a.entry()
+	for _, a := range lines {
+		l.lines[a.lineKey()] = a.entry()
+		l.order = append(l.order, a)
+	}
 	return nil
 }
 
-// capture records the call one attempt at it made, in captures.jsonl: the closed
-// text whole, the prompt sent and the reply returned, beside e's outcome. It is
-// written before the attempt's ledger line, and only for an attempt that reached
-// the Ask seam. A failed attempt's reason is the capture's error, where the
-// ledger line carries it as its reply and keeps no text of the model's.
-func (l *Ledger) capture(it query.Item, e Entry, c call) error {
+// captureOf is the capture of the call one attempt at it made: the closed text
+// whole, the prompt sent and the reply returned, beside e's outcome. Only an
+// attempt that reached the Ask seam has one. A failed attempt's reason is the
+// capture's error, where the ledger line carries it as its reply and keeps no
+// text of the model's.
+func (l *Ledger) captureOf(it query.Item, e Entry, c call) captureRecord {
 	rec := captureRecord{Run: l.run, Pass: passOf(it), identity: identityOf(it), Class: c.class.name,
 		Text: c.closed.text, Lines: capturedLines(c.closed.lines), Prompt: c.prompt, PromptSHA256: e.PromptSHA256,
 		Reply: c.reply, Model: e.Model, Backend: l.backEnd, Started: e.Started, Ended: e.Ended}
 	if e.Status != StatusDone {
 		rec.Error = e.Reply
 	}
-	return l.appendLine(&l.captures, capturesFile, rec)
+	return rec
+}
+
+// resultRecord is one answered item's result file: the line the walk's end
+// records for it — priced, or failed with its reason — and the capture of the
+// call it made. It is everything the walk's end needs of the item, so a result
+// a kill left folds on the next resume without asking again.
+type resultRecord struct {
+	Line    attempt       `json:"line"`
+	Capture captureRecord `json:"capture"`
+}
+
+// writeResult writes the result file of the item at place i of the walk. It is
+// the one file an answered item writes before the walk ends, and it is that
+// item's alone.
+func (l *Ledger) writeResult(i int, r resultRecord) error {
+	dir := filepath.Join(l.dir, resultsDir)
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(dir, strconv.Itoa(i)+resultSuffix), b, nil)
+}
+
+// readResults is the result files standing in the run directory runDir, in the
+// order of the walk that wrote them; none standing is none. A name that is no
+// place in a walk — a temp file a killed write left — is no result.
+func readResults(runDir string) ([]resultRecord, error) {
+	dir := filepath.Join(runDir, resultsDir)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	type placed struct {
+		at int
+		r  resultRecord
+	}
+	var found []placed
+	for _, e := range entries {
+		at, err := strconv.Atoi(strings.TrimSuffix(e.Name(), resultSuffix))
+		if err != nil || !strings.HasSuffix(e.Name(), resultSuffix) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var r resultRecord
+		if err := json.Unmarshal(b, &r); err != nil {
+			return nil, fmt.Errorf("read the result %s: %w", filepath.Join(dir, e.Name()), err)
+		}
+		found = append(found, placed{at, r})
+	}
+	slices.SortFunc(found, func(a, b placed) int { return a.at - b.at })
+	out := make([]resultRecord, len(found))
+	for i, p := range found {
+		out[i] = p.r
+	}
+	return out, nil
+}
+
+// resultCell is one item's place in an ask batch: the line the batch's end
+// records for it and the capture of the call it made, each nil where it has
+// none. A line recording done carries a priced value the end lands first.
+type resultCell struct {
+	item    query.Item
+	line    *attempt
+	capture *captureRecord
+}
+
+// fail records that the cell's value did not land: the line records err as its
+// reason and no charges or value — they were a judgement the KB did not take —
+// and the capture carries err as the attempt's error.
+func (c resultCell) fail(err error) {
+	c.line.Status, c.line.Reply, c.line.Value, c.line.Faults, c.line.Moot = StatusFailed, err.Error(), "", nil, nil
+	if c.capture != nil {
+		c.capture.Error = err.Error()
+	}
+}
+
+// flush ends an ask batch: the values its cells priced land through w in one
+// landing, then every capture is appended in one write and every line in
+// another, each in the cells' order, and then the run's result files are
+// removed. A value w does not land fails its cell. It returns the items whose
+// value landed, in the cells' order. It takes no context: a walk the cancel
+// stopped still records everything it answered.
+func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
+	var values []Landing
+	var at []int
+	for i, c := range cells {
+		if c.line == nil || c.line.Status != StatusDone {
+			continue
+		}
+		v, ok := kb.BearingFromValue(c.line.Value)
+		if !ok {
+			c.fail(fmt.Errorf("the priced value %q is no bearing a landing writes", c.line.Value))
+			continue
+		}
+		values, at = append(values, Landing{Item: c.item, Value: v}), append(at, i)
+	}
+	var landed []query.Item
+	if len(values) > 0 {
+		for k, err := range w(values) {
+			if err != nil {
+				cells[at[k]].fail(err)
+				continue
+			}
+			landed = append(landed, values[k].Item)
+		}
+	}
+	var captures []any
+	var lines []attempt
+	for _, c := range cells {
+		if c.capture != nil {
+			captures = append(captures, c.capture)
+		}
+		if c.line != nil {
+			lines = append(lines, *c.line)
+		}
+	}
+	if err := l.appendLines(&l.captures, capturesFile, captures); err != nil {
+		return landed, fmt.Errorf("append the captures: %w", err)
+	}
+	if err := l.record(lines); err != nil {
+		return landed, fmt.Errorf("append the ledger's lines: %w", err)
+	}
+	return landed, os.RemoveAll(filepath.Join(l.dir, resultsDir))
+}
+
+// fold flushes the result files a stopped invocation left, in the order of the
+// walk that wrote them, as that walk's end would have: each value lands, its
+// capture and its line are appended, and the files are removed. A result whose
+// attempt the ledger already records — the same item, bounds and prompt digest,
+// a flush that stopped before it removed the files — is removed alone. A result
+// for an item skip names lands nothing and records no line, a person's value
+// standing since the kill; its capture is still appended, the call having been
+// made, and the walk then records the item skipped.
+func (l *Ledger) fold(w Write, skip Skip) error {
+	results, err := readResults(l.dir)
+	if err != nil {
+		return err
+	}
+	cells := make([]resultCell, 0, len(results))
+	for i := range results {
+		r := &results[i]
+		have, ok := l.lines[r.Line.lineKey()]
+		if ok && have.Started == r.Line.Started && have.Ended == r.Line.Ended && have.PromptSHA256 == r.Line.PromptSHA256 {
+			continue
+		}
+		c := resultCell{item: r.Line.asItem(), capture: &r.Capture}
+		if skip == nil || !skip(c.item) {
+			c.line = &r.Line
+		}
+		cells = append(cells, c)
+	}
+	l.folded, err = l.flush(cells, w)
+	return err
 }
 
 // captureRecord is one line of a run's captures.jsonl: the call one attempt
@@ -408,9 +600,22 @@ func trimTorn(path string) ([]byte, error) {
 	return b, nil
 }
 
-// appendLine appends v as one JSON line to the run directory's file name,
-// opening it into *f on first use, and syncs it: a line that returns has landed.
-func (l *Ledger) appendLine(f **os.File, name string, v any) error {
+// appendLines appends each of vs as one JSON line to the run directory's file
+// name, all of them in one write, opening the file into *f on first use, and
+// syncs it: lines that return have landed. Nothing to append opens nothing, so
+// a run that records nothing leaves no file.
+func (l *Ledger) appendLines(f **os.File, name string, vs []any) error {
+	if len(vs) == 0 {
+		return nil
+	}
+	var b bytes.Buffer
+	for _, v := range vs {
+		line, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		b.Write(append(line, '\n'))
+	}
 	if *f == nil {
 		opened, err := os.OpenFile(filepath.Join(l.dir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, atomicfile.CreateMode)
 		if err != nil {
@@ -418,11 +623,7 @@ func (l *Ledger) appendLine(f **os.File, name string, v any) error {
 		}
 		*f = opened
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if _, err := (*f).Write(append(b, '\n')); err != nil {
+	if _, err := (*f).Write(b.Bytes()); err != nil {
 		return err
 	}
 	return (*f).Sync()
@@ -566,9 +767,13 @@ func dirStarts(parent, header string) ([]dirStart, error) {
 // PruneRuns keeps, of the runs in the state directory dir, the run keep names —
 // created or resumed — and the newest KeptRuns-1 others of its kind, and
 // removes the rest of that kind whole. A run's kind is its id's prefix, so a
-// dry run never removes a real run nor a real run a dry one.
+// dry run never removes a real run nor a real run a dry one. It also keeps the
+// newest KeptRuns captures under the state store's reports, by name.
 func PruneRuns(dir, keep string) error {
-	return pruneByStart(RunsDir(dir), runFile, keep)
+	if err := pruneByStart(RunsDir(dir), runFile, keep); err != nil {
+		return err
+	}
+	return buildstore.PruneCaptures(filepath.Join(dir, buildstore.ReportsDir), CapturePrefix, KeptRuns)
 }
 
 // pruneByStart keeps, of the directories under parent of keep's kind, keep and
@@ -613,8 +818,12 @@ type RunStatus struct {
 }
 
 // ReadRun reads the run in the state directory dir without opening it for
-// appending: its header, its item list and its ledger lines. The item list is
-// the set the run enumerated; a line the list does not carry is an item a
+// appending: its header, its item list, its ledger lines and the result files
+// not yet folded into the ledger, which count after the lines and so override
+// the ledger's last status for their items. A live run's flush appends the
+// ledger and then removes the result files, so the result files are read before
+// the ledger: a flush between the two reads leaves a result in both, never in
+// neither. The item list is the set the run enumerated; a line the list does not carry is an item a
 // resume asked outside it, and is counted too, the ledger being the record.
 func ReadRun(dir, run string) (RunStatus, error) {
 	runDir := filepath.Join(RunsDir(dir), run)
@@ -626,9 +835,16 @@ func ReadRun(dir, run string) (RunStatus, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return RunStatus{}, err
 	}
+	results, err := readResults(runDir)
+	if err != nil {
+		return RunStatus{}, err
+	}
 	lines, err := readAttempts(filepath.Join(runDir, linesFile))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return RunStatus{}, err
+	}
+	for _, r := range results {
+		lines = append(lines, r.Line)
 	}
 	last := make(map[string]attempt, len(lines))
 	for _, a := range lines {
@@ -946,23 +1162,24 @@ type rePricedLine struct {
 const repricedFile = "repriced.yaml"
 
 // reprice re-derives every landed value from the ids its line records, under the
-// table the line's own class holds, lands each value a re-derivation moves
-// through w — the write a landing uses, under the lock that landing holds — and
-// rewrites the lines it moved. It asks no model: the model never saw a weight, the
-// ids are the whole input of the price, and a weight that changed between
-// invocations re-prices a run rather than making it incomparable. A run whose
-// values all stand writes nothing.
+// table the line's own class holds, lands every value a re-derivation moves
+// through w in one landing — the write a landing uses, under the lock that
+// landing holds — and rewrites the lines it moved. It asks no model: the model
+// never saw a weight, the ids are the whole input of the price, and a weight
+// that changed between invocations re-prices a run rather than making it
+// incomparable. A run whose values all stand writes nothing.
 //
 // A moved value is landed before its line records it, so the record never claims
-// a value the KB did not take: a refused write fails the resume with the ledger
-// as it stood, and the next resume re-derives the same move, the write being
-// idempotent. An item skip names is left as it stands.
+// a value the KB did not take: any value the landing does not take fails the
+// resume with the ledger as it stood, and the next resume re-derives the same
+// moves, the write being idempotent. An item skip names is left as it stands.
 func (l *Ledger) reprice(w Write, skip Skip) error {
 	facts, err := passFactsOf(l.pass)
 	if err != nil {
 		return err
 	}
-	var moved []rePricedLine
+	var moves []Landing
+	var at []int
 	for i := range l.order {
 		a := &l.order[i]
 		if a.Status != StatusDone || a.Faults == nil {
@@ -985,20 +1202,36 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 			ids = append(ids, c.ID)
 		}
 		value := cl.table.Price(ids)
-		want := kb.BearingText(value)
-		if a.Value == want {
+		if a.Value == kb.BearingText(value) {
 			continue
 		}
-		if err := w(a.asItem(), value); err != nil {
-			return fmt.Errorf("re-price %s: %w", a.item(), err)
+		moves, at = append(moves, Landing{Item: a.asItem(), Value: value}), append(at, i)
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	for k, err := range w(moves) {
+		if err != nil {
+			return fmt.Errorf("re-price %s: %w", l.order[at[k]].item(), err)
 		}
-		moved = append(moved, rePricedLine{Item: a.item(), From: a.Value, To: want})
+	}
+	moved := make([]rePricedLine, len(at))
+	for k, i := range at {
+		a := &l.order[i]
+		want := kb.BearingText(moves[k].Value)
+		moved[k] = rePricedLine{Item: a.item(), From: a.Value, To: want}
 		a.Value = want
 		l.lines[a.lineKey()] = a.entry()
 	}
 	l.moved = moved
-	if len(moved) == 0 {
-		return nil
+	// The rewrite replaces the file a fold appended to: the next line opens the
+	// file that stands.
+	if l.f != nil {
+		err := l.f.Close()
+		l.f = nil
+		if err != nil {
+			return err
+		}
 	}
 	var b bytes.Buffer
 	for _, a := range l.order {

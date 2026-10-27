@@ -151,8 +151,11 @@ the `.index/` files — the two record files — concatenated in sorted path ord
 
 ```
 kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
-            [--through <stage>] [--state-dir DIR]
+            [--through <stage>] [--state-dir DIR] [--ask-concurrency N]
 ```
+
+A value of `--ask-concurrency` under 1 is a usage refusal naming `--ask-concurrency`, and `build`'s
+`resume` carries it.
 
 **Output and placement.** The KB is written only at `<git root>/kb-root/`. Build state is never
 written into `kb-root/`.
@@ -192,7 +195,7 @@ outcome `bounded`, exit 0 (§7).
 `refused`) before the first stage it walks when no provider is configured (§9), naming the
 configuration it lacks; its `detail` names `kbase show-config` as the diagnostic that shows how the
 configuration resolved (§9.6). A build spending no inference needs none. Every model call a build
-makes is one tool-less chat request answered from its prompt alone — except the claim-graph letter
+makes is one tool-less chat request answered from its prompt alone — except the claim-graph multichoice
 asks, which are each one `POST` to the decision surface the selected entry names (§9.1) carrying a
 closed-set question (a `choice` or `noul` question over the offered letters) and answered by
 probabilities over that set, not by reply text (§9).
@@ -272,7 +275,7 @@ cut a warning in the stage's report, before the stage's refresh and verify.
 **Records and inference.** The reader and placement facts the claim graph needs travel as records in
 the build state store, not in `kb-root/` (ARCHITECTURE, "Records"). Each inference pass is one
 closed-set decision per call under its embedded template (ARCHITECTURE, "Inference seams"); no stage
-exits on a model's opinion. The letter asks are each one `POST` to the decision surface the selected
+exits on a model's opinion. The multichoice asks are each one `POST` to the decision surface the selected
 entry names (§9.1) carrying a closed-set question (`choice` or `noul`) and answered by probabilities
 over that set — no reply text is parsed; the overview call remains one tool-less chat request
 answered from its prompt alone.
@@ -336,19 +339,26 @@ stepwise and resumes if interrupted. The store's version is independent of the K
 (§10).
 
 **The state store is pruned only by a build or a scoring run.** At a build's start, the captured
-output of earlier builds (`reports/build-*`) and the call captures (`scratch/captures/`) last
-modified before the start of the fifth-latest build that ended are removed; a build that ended
-`refused` or `retry` does not count. At a scoring run's start, once its own run directory stands,
+output of builds the MCP server started (`reports/build-*`, §11) is pruned to the newest six by the
+start each one's name records. At a scoring run's start, once its own run directory stands,
 the run directories under `score/` are pruned by kind: a real run's id is `run-<id>` and a dry run's
 `dry-<id>` (§8), a directory's kind is its name's prefix, and the invocation keeps, of its own kind,
 16 runs — the run it names, created or resumed, and the newest 15 others by the start their
 `run.yaml` records, equal starts ordered by name with the later name newer — and removes the rest of
-that kind whole, captures included. A dry run never removes a real run, nor a real run a dry one,
+that kind whole, captures included. The captured output of scoring runs the MCP server started
+(`reports/score-*`, §11) is pruned at the same point to the newest 16 by the start each one's name
+records. A dry run never removes a real run, nor a real run a dry one,
 and a dry run an earlier kbase minted as `run-…` counts as real. A directory whose `run.yaml` is
 absent or unreadable has no start to order by and is left. An invocation refused before its run
 directory stands — a `--resume` naming a run no longer standing among them — removes nothing. A
 resumed run's `captures.jsonl` loses a torn last line before anything appends to it, as its ledger
-does. The answer cache and the stage reports are kept. `status` and `cancel`
+does. A build trail's answer cache, multichoice-ask records and call captures are kept in one
+directory per trail, named by the trail's `start` boundary commit. At a build's start, before its first stage,
+the current trail's directory and the newest five others stand, and the rest are removed whole,
+along with the undivided cache, records and call captures an earlier kbase kept. At the same point, a fresh build
+whose progress record exceeds 500 lines moves the earlier runs' lines to a file under a timestamped
+name, keeping its own in the record; the 15 newest such files are kept. The stage reports are
+kept. `status` and `cancel`
 remove nothing.
 Deleting the store is always safe, but it forfeits the answer cache, whose entries were paid for in
 inference; `status` reports its size.
@@ -367,7 +377,9 @@ recorded command does not read as a `kbase build` invocation — at least two el
 boundary wrote nothing, so the run before it is the one reported. `interrupted`
 is the one state the build never writes: it is derived from a run event with no end event and a
 holder that is not live.
-Progress is persisted to a file so a late or reconnecting monitor catches up.
+Progress is persisted to a file so a late or reconnecting monitor catches up. An inference stage's
+units and fallbacks are recorded once its asks have all returned, so while they are in flight
+`current` names the stage and its total with none done.
 
 **A score run's status.** Where the store's holder record names a score run, `status` reports that run
 in its own shape instead of the build's: `state-dir`; `state` (`running` while the record holds the
@@ -375,7 +387,8 @@ store, else `interrupted` where the run left no result document, or the outcome
 its result document records — `done`, `bounded`, `cancelled`, `failed`, `refused`
 or `retry`); `pid`;
 `started`; `run`; `pass`; `counts` (`total`, `done`, `failed`, `skipped`, `remaining`, read from the
-run's `items.jsonl` and the status `ledger.jsonl` last records for each); `scored` (the items whose
+run's `items.jsonl`, the status `ledger.jsonl` last records for each, and, while the run walks, each
+answered item's result file); `scored` (the items whose
 value landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
 continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
 document: `wait` prints the result document the run wrote beside its ledger. A store no live run
@@ -388,9 +401,10 @@ reports the build as above.
 
 ### `kbase cancel`
 
-Signals the store's holder, a build or a scoring run as the holder record names it. The in-flight
-call is abandoned with nothing written for it; the event is logged, the lock is released, and the run
-process exits `cancelled`. Cancel costs only the in-flight unit or item; the run is resumable, and a
+Signals the store's holder, a build or a scoring run as the holder record names it. The calls
+in flight are abandoned with nothing written for them; the event is logged, the lock is released, and the run
+process exits `cancelled`. Cancel costs only the calls in flight: an answer already returned stands — in a
+build's answer cache, and in a score run's ledger; the run is resumable, and a
 cancelled score run's `resume` is the command read from its result document. A store no run holds is
 `refused`: `check: lock`, `path` the store's holder lock, detail "no run holds the state store".
 
@@ -480,7 +494,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
 | `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
-| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the order it landed them — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
+| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the walk's order — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
 
 A `status` read over a score run reports §6's score shape in place of the build keys above.
 
@@ -557,8 +571,8 @@ the redirect (`check: agents-redirect`, §3), which that refresh would refuse.
 whole run: from loading the KB through the trailing refresh and the sheets to the result. `init`
 holds it from before `kb-root/` exists — the lock sits on the directory `kb-root/` stands in, so it
 is available at birth — through the skeleton, the trailing refresh and the birth commit to the
-result. `score` takes it around each landing and around each of its two refreshes, never across the
-run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
+result. `score` takes it around its one landing — every value the walk produced, after the walk — and
+around each of its two refreshes, never across the run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
 repository root, and the remedy. A write verb probes for a run holding the operation lock (§6) before
 it waits on the write lock and again after taking it: where one runs it is `refused` with the `lock`
 item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it
@@ -815,13 +829,16 @@ keys: §7.
 ```
 kbase score [--pass rigor|bearing|both] [--limit N] [--scoring-model MODEL] [--dry-run]
             [--resume RUN] [--rescore-manual none|rigor|bearing|both] [--state-dir DIR]
-            [--timeout DURATION]
+            [--timeout DURATION] [--ask-concurrency N]
 ```
+
+`--ask-concurrency` under 1 is refused as `build`'s is (§5); `score`'s `resume` does not carry it,
+nor `--timeout` or `--limit`: each shapes one invocation, not the run.
 
 Grades the KB's rigor and bearing values by asking the scoring model: one call per item, one value per
 call, each value landed through the write API and recorded in a ledger. `--pass` names the set to walk
 — `rigor`, `bearing`, or `both`, which is the default — and `--timeout` is the deadline for one item's
-call (default `30s`). A run asks one call
+call (default `30s`), counted from the call's start, never while the call waits for its turn. A run asks one call
 per item and takes minutes: at a terminal `kbase score` blocks until the walk ends, and as an MCP tool
 (§11) it starts a detached child and returns at once with the run's identity, while `kbase wait`
 reports its outcome when it ends. A shell caller gets the blocking behaviour a terminal gets.
@@ -935,11 +952,13 @@ had. A reason states the one that happened: the first calls for the request to b
 second for the path to the provider.
 
 **Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
-`set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. Each op
-runs with `--no-refresh`, under the KB write lock taken and released for that one landing. A write
-refusal is that item's `failed`, and so is a landing that cannot take the lock: the item's line
-carries the lock item's `detail` — another writer held it past the wait — and
-the run goes on.
+`set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. The run
+lands every answered value at once when its walk ends: one `set-rigor` batch and one `set-bearing`
+batch, each `--no-refresh`, under one hold of the KB write lock. An entry a batch refuses is that
+item's `failed`, and the batch is re-issued without it; a landing that cannot take the lock fails
+every item it carried: where another writer held the lock past the wait, the item's line
+carries the lock item's `detail`; any other lock failure records its own error. The
+run goes on.
 
 **The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
 `KBASE_SCORING` in environment mode. The role is the KB's declaration of which model judges it, so a
@@ -970,7 +989,8 @@ the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
-run), `ledger.jsonl`, and `captures.jsonl`. A real run's id is `run-<id>`; the runs kept are §6's.
+run), `ledger.jsonl`, `captures.jsonl` and, while a walk runs, one result file per answered item, which
+the walk's end folds into the ledger. A real run's id is `run-<id>`; the runs kept are §6's.
 `run.yaml` holds the run, its KB root, the ledger's format, the set it walks
 (one pass, or `both`), `backend` (`provider` or `environment`; absent under `--dry-run`, which
 resolves no role because it asks nothing), the provider, the model, `ask_sha256` and the start. **It is
@@ -982,7 +1002,9 @@ what answered it.
 carried before the attempt (`before`, absent where the record held none), the reply, `faults`
 (the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
 lines a reply recorded beside a retired `flt-pending`), `backend`, the model, the prompt's digest and the attempt's bounds —
-appended after the item's write and its validation, never before. `faults` is `[]` for one reply
+appended after the item's write and its validation, never before. A run writes its captures and then
+its ledger lines once, in the set's order, when its walk ends — on completion, on `--limit`, on
+cancellation and on a failure that stops it. `faults` is `[]` for one reply
 alone, the word `none`; a failed attempt carries neither `faults` nor text. The state directory is
 `build`'s:
 `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
@@ -994,8 +1016,8 @@ one did — the call's, the parse's or the write's — the model, the back end a
 Every attempt that makes a call has one, whatever its outcome: a landing, a refused reply, a failed
 call or a refused write. A failed attempt's reply therefore stands whole there, where its ledger
 line keeps no text of it. An item the guard refuses makes no call and has no capture, and a call
-cancelled in flight leaves no capture and no ledger line. A capture is appended before the item's
-ledger line, a resume appends to the same file, and a capture that cannot be written fails the run
+cancelled in flight leaves no capture and no ledger line. A run's captures are appended before its
+ledger lines, at the walk's end, and a resume appends to the same file, and a capture that cannot be written fails the run
 as a ledger line that cannot be does.
 
 **`ask_sha256` records the ask set and gates nothing.** It is one digest over every instruction the
@@ -1005,8 +1027,9 @@ and then bearing instruction — so every fixed byte of a run's
 instructions is certified and nothing that varies with an item is. Each ledger line carries its own
 item's prompt digest beside it, which is what names the variant that judged that item. A header
 written before the rigor pair carries one render's digest and is read as the one ask that run began
-under. `--resume RUN` continues a run: it refuses a ledger for another KB root, format or pass, skips
-every item the ledger records `done`, and re-asks the `failed` ones. A run resumed after an update
+under. `--resume RUN` continues a run: it refuses a ledger for another KB root, format or pass, first lands and records every answer a
+stopped invocation left in a result file — a value a person has set since being left as it
+stands — then skips every item the ledger records `done`, and re-asks the `failed` ones. A run resumed after an update
 continues and asks nothing about versions: one whose `ask_sha256` differs, or
 which carries none as every run written before the field existed does, is asked under the running
 template's ask, and the header keeps the digest the run began under. Where the running table for a
@@ -1039,8 +1062,9 @@ held it past the wait — and the `lock` item, whose remedy is `re-run kbase sco
 write leaves a stale index, which `verify` reports and the next run's start refresh repairs.
 
 **Outcomes.** `done` when the run finished; `bounded` when `--limit` stopped it, and a run that both
-stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or SIGTERM stopped it
-at an item boundary, with no line recorded for the item in flight and the ledger standing as it was;
+stopped at its limit and failed an item is `bounded`; `cancelled` when SIGINT or SIGTERM stopped it,
+with no line recorded for an item whose call was in flight or not yet made, and a line for every
+item answered before the stop;
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
 the state store, or where a refresh could not take the KB write lock past the wait; `refused`
 where the run cannot go on — setup (a pass outside the three, a negative `--limit`, a `--state-dir`
@@ -1055,7 +1079,7 @@ and the reason its line recorded — `<node id>: <reason>`, or `<relation> <sour
 <reason>` — in the walk's order; the reason is the line's reply as a bounded, control-stripped
 summary, the ledger's line being the one place a reply stands whole; a run a refresh stopped closes
 on one `check: error` item naming the refresh's own error. A `cancelled` run closes on `cancelled`,
-whose `item` is the walk's first item carrying no attempt, the one it stopped before, and `{}` where
+whose `item` is the walk's first item carrying no attempt, and `{}` where
 every item of the walk carries one. A `refused` or `retry` run closes on its `refusals`. A `bounded`
 run that failed an item carries no `failures`: the failure is counted in `counts.failed` and reasoned
 in the ledger alone.
@@ -1311,12 +1335,12 @@ than clamped. It has no `prompt_cache_key`, `chat_template_kwargs` or `reasoning
 sent, and thinking is disabled by sending the protocol's thinking field as `{type: disabled}`. Its
 catalogue is `GET <baseUrl>/models`, whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected
 by `api`, and the decision surfaces are OpenAI-shaped: the `decision` role's entry must speak
-`openai`, and a Messages endpoint asked for a letter ask refuses, naming the provider and the role.
+`openai`, and a Messages endpoint asked for a multichoice ask refuses, naming the provider and the role.
 
 **The decision surface.** `decisionsFlavor` names the wire shape the decision call uses, chosen per
 server: it changes nothing about chat, which `api` alone decides, and it binds
 no model id — the decision category's id stays in `config.toml` (§9.2). An entry silent on it speaks
-`systemone`, the shape kbase's letter asks were written against. `systemone`: `POST
+`systemone`, the shape kbase's multichoice asks were written against. `systemone`: `POST
 <baseUrl>/systemone`, body `model`, `state` and `questions` — an object keyed by each question's own
 key — answered by an `answers` object keyed the same way. `decisions`: `POST <baseUrl>/decisions`,
 body `model`, `input` (the same composed state) and `questions` — an array of `type`, `name`,
@@ -1335,14 +1359,15 @@ provider = "..."             # SUPERSEDED — loads, and chooses nothing (§9); 
                              # at the next major
 
 [models]
-decision = "<entry>/<id>"      # the claim graph's letter asks: a providers.toml
+decision = "<entry>/<id>"      # the claim graph's multichoice asks: a providers.toml
                                # entry name, then the model that entry's
                                # decision surface serves
 text = "<entry>/<id>"          # the overview passage
 scoring = "<entry>/<id>"       # kbase score's asks; required for score, in every mode
 
 [asks]
-readerConcurrency = 4          # optional; asks of one group in flight once its first has returned
+concurrency = 2                # optional; model calls one build or score has in flight at once, across every role
+readerConcurrency              # SUPERSEDED — loads, and chooses nothing; removed at the next major
 ```
 
 **A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider
@@ -1354,9 +1379,12 @@ provider's spelling, not kbase's. In environment mode a model is a bare id of th
 endpoint instead (§9), and one form of value is never read as the other.
 
 A category left unset resolves to "not configured" — no defaulting, no guessing, and no role falls
-back to another. `readerConcurrency` is how many of one group's letter asks a build has in flight once
-the group's first ask has returned; absent, it is 4. A value under 1 fails the load, naming
-`asks.readerConcurrency`. There is no `[dev]` table; an old `[dev]` key fails strict load (§9.3). A
+back to another. `concurrency` is how many model calls one invocation of `build` or `score` has in
+flight at once, across every role; absent, it is 2, and `--ask-concurrency` overrides it for that
+invocation. A value under 1 fails the load, naming `asks.concurrency`. Calls start in the order the
+invocation submits them. `readerConcurrency` is superseded: it loads and chooses nothing, a file-mode
+`build` or `score` says so in one line on stderr naming `asks.concurrency`, and it leaves the schema
+at the next major ([ROADMAP.md](ROADMAP.md)). There is no `[dev]` table; an old `[dev]` key fails strict load (§9.3). A
 `[models]` table spelling `heavy`/`light` — the superseded category names — fails strict load as
 unmodeled keys (§9.3); the remedy is a hand edit.
 
@@ -2180,7 +2208,7 @@ templates; the `migration` record gains `warnings` (§7, §10).
 **0.8.0 — a second chat protocol: the Anthropic Messages API.** A `providers.toml` entry may state
 `api = "anthropic"` to reach an Anthropic Messages endpoint directly, with `api = "openai"` (the
 default) behaving as before (§9.1). `models`, `configure`, `kbase probe`'s chat selections, a build's
-overview call and a scoring run's asks all reach it; the `decision` role's letter asks and
+overview call and a scoring run's asks all reach it; the `decision` role's multichoice asks and
 `kbase probe --decision` do not, because the decision surfaces are OpenAI-shaped, and a Messages
 endpoint asked for either fails naming the provider and the role (§8). Messages requires a
 completion cap, sent as `max(256, ceil(characters / 4))` over the ask's text, and has no

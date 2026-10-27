@@ -60,7 +60,7 @@ func run(t *testing.T, opts modelsOptions, client *modeltest.MockClient) result 
 	opts.Stderr = &stderr
 	opts.NewClient = func(e model.Endpoint) model.Client {
 		seen = append(seen, e)
-		return client
+		return client.Client()
 	}
 	code, err := runModels(context.Background(), opts)
 	if err != nil {
@@ -137,7 +137,7 @@ func TestRunModelsSortedOutput(t *testing.T) {
 }
 
 // TestRunModelsCarriesTheDecisionSurface: the client a verb dials is built for
-// the decision surface the pool entry names, so a build's letter asks reach
+// the decision surface the pool entry names, so a build's multichoice asks reach
 // the endpoint its own entry declares.
 func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	onDecisions := provider("deciding", "http://deciding.example/v1")

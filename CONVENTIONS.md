@@ -24,7 +24,9 @@ hermetic `just test-integration` omnibus and says so in its docstring.
 `just dist` cross-compiles every target from one host (pure Go, no extra toolchain setup needed) and
 stages the signed distro tarball and installer. Run it on a tree that has passed `just checkpoint`: a
 cross-build is what users receive, so the gate is a precondition of the release, not a step the
-recipe runs.
+recipe runs. `just dist --tag` also runs a lightweight, local `git tag v<version>` once every stage,
+signing included, has succeeded; it pushes nothing. It refuses before building anything if that tag
+already exists or tracked files have uncommitted changes.
 
 **No built binaries live in the repo.** `bin/` and `dist/` are gitignored build products;
 distribution is the `just dist` tarball attached to a GitHub release by the user. Never commit build
@@ -54,19 +56,20 @@ them. Working rules for packages that carry over:
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
   reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
   parses. No site splits an id or concatenates a reference by hand.
-- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey}` is the
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey, IdleConns}` is the
   transport-level slice of a provider — `Protocol` saying which chat surface its entry speaks
   (`openai` unless the entry says `anthropic`), `Decisions` whether it speaks the Decisions shape
   (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
-  ask of it carries — and the one mapping from configuration's vocabulary onto `Protocol` and
+  ask of it carries, and `IdleConns` the idle connections per host its client keeps (the invocation's
+  concurrency; zero leaves the defaults) — and the one mapping from configuration's vocabulary onto `Protocol` and
   `Decisions` (`chatProtocol`, `decisionsSurface`) lives in `internal/modelclient`. The chat asks — the overview and each scoring call — go through
-  `model.Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
+  a `Slot`'s `Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
   attempt count (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and
   the two failures are not interchangeable: an endpoint that answered with a non-2xx status refused
   the request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
   body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
   stream that failed with no answer — reading one as the other sends a diagnosis to the path to a
-  provider that is answering. The letter asks go through `model.Decision`, one `POST` to whichever
+  provider that is answering. The multichoice asks go through a `Slot`'s `Decision`, one `POST` to whichever
   surface the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
   closed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
   `decisions` speaks the OpenAI Decisions shape at `<base-url>/decisions` — the state as `input`,
@@ -229,6 +232,12 @@ single source. Working habits they impose:
   text, both forms of every passage and a warning for each one not found, for files no user edits.
 - **No stage exits on a model's opinion.** Every stage exits on a comparison of artifacts or a
   return code; a new stage does not get a third kind of exit.
+- **A model call is made through a `Slot` from the invocation's queue, inside the item `Go`
+  launches; the item writes files only in its `after`, once its token is released.** The trap: a
+  goroutine pool or semaphore beside the queue, which re-introduces a second bound; a `WithTimeout`
+  around `Go`, which times an item out for its wait; groups launched from per-group goroutines,
+  which loses submission order; or a common file — a ledger, a record, a progress line — written
+  from an item while its ask batch is in flight (ARCHITECTURE I11).
 - **No prompt reaches a model from an in-code string.** Every prompt is an embedded template file
   under `internal/asks`, rendered with its slots filled, and its prose lives in that file alone —
   never in a code string, a test, or a second copy elsewhere. A new or changed template gets
@@ -352,11 +361,11 @@ file is one power-cycle from gone.
 - Working drafts and half-formed notes are scratch (`.claude-temp/`), not plans.
 - Any plan that is activated, regardless of its location, gets a post-sprint review section
   at the end. 
-  - That section contains the review, remediation, and burndown steps. 
+  - That section contains the review, revision, and burndown steps. 
   - Unless otherwise specified the reviewers are an architect and a coder reviewing with THESIS.md, SPEC.md,
   ARCHITECTURE.md, and CONVENTIONS.md as their pre-task reading list. 
   - They do NOT get the plan doc. Their job is to review the changes against standards and suitability for purpose, not rehash the implementation. 
-  - Their review brief includes reviewing the tests
+  - Their review brief includes reviewing the tests of all touched code
   - The burndown list is written to a separate `<plan>_REVIEW_BURNDOWN.md` and gets the same
     prompt engineer review and revision pass as any other document containing agent instructions.
 
@@ -365,6 +374,9 @@ A work package is dispatchable only when the following conditions have been met
 
 - It names its scope in files, packages or symbols — never a span of design sections
 - Carries the command and its answer, or the quoted line, for each fact it acts on
+- A package that changes a type, a signature or a test double names in its scope every file
+  that references it — `git grep -l '<Name>' -- '*.go'`, test files included — and carries
+  that command and its answer
 - States its done-line in runner targets
 - Has received a usability review by the prompt engineer (its definition contains the criteria)
 - Has been revised by the architect based on the findings of the prompt engineer
@@ -467,9 +479,10 @@ way it names any other truth it moved, so a reader can see which change made it 
   run tree under `test-data/transient/<test-name>/` before removing it. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
-  store (`refresh`, `verify`, the queries) takes no such flag. `build` resolves and creates its
-  state store before its first refusal; every recipe invocation of `build` takes `--state-dir`,
-  refused outcomes included.
+  store (`refresh`, `verify`, the queries) takes no such flag. `build` refuses an unknown `--through`,
+  a `--state-dir` inside `kb-root/` and a `--ask-concurrency` under 1 before it resolves and creates
+  its state store, and those refusals carry no `state-dir`; its later refusals follow the store. Every
+  recipe invocation of `build` takes `--state-dir`, refused outcomes included.
 - A scratch copy of a fixture repository under this repository needs its own `.git` (an empty
   directory serves) before kbase runs over it. The trap: kbase resolves the repository root at the
   nearest `.git` upward, so a copy without one answers from this repository's own `kb-root/`,

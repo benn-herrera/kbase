@@ -42,40 +42,33 @@ var wantMLXUsage = Usage{
 	},
 }
 
-// TestUsageTelemetryDecode_MLX pins the extended block's decode on BOTH
-// paths off the one shared projection: the blocking response and the
-// streamed include_usage chunk.
-func TestUsageTelemetryDecode_MLX(t *testing.T) {
-	t.Run("blocking", func(t *testing.T) {
-		resp, err := decodeResponse([]byte(
-			`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],
-			"usage":` + mlxUsageBlock + `}`))
-		if err != nil {
-			t.Fatalf("decodeResponse: %v", err)
-		}
-		if resp.Usage != wantMLXUsage {
-			t.Errorf("blocking Usage =\n %+v\nwant\n %+v", resp.Usage, wantMLXUsage)
-		}
-	})
+// streamedUsage is the Usage a stream ending in the include_usage chunk
+// carrying usage decodes to. SSE frames one event per line, so the block's
+// line wrapping — and only that — is removed; field names and values stay
+// verbatim.
+func streamedUsage(t *testing.T, usage string) Usage {
+	t.Helper()
+	sse := `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
 
-	t.Run("streamed", func(t *testing.T) {
-		// SSE frames one event per line, so the capture's line wrapping —
-		// and only that — is removed here. The field names and values stay
-		// verbatim, which is what the fixture exists to pin.
-		oneLine := strings.ReplaceAll(mlxUsageBlock, "\n", "")
-		sse := `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
-
-data: {"choices":[],"usage":` + oneLine + `}
+data: {"choices":[],"usage":` + strings.ReplaceAll(usage, "\n", "") + `}
 
 data: [DONE]
 
 `
-		_, final, err := runStream(t, sse)
-		if !errors.Is(err, io.EOF) {
-			t.Fatalf("stream did not end cleanly: %v", err)
-		}
-		if final.Usage != wantMLXUsage {
-			t.Errorf("streamed Usage =\n %+v\nwant\n %+v", final.Usage, wantMLXUsage)
+	_, final, err := runStream(t, sse)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("stream did not end cleanly: %v", err)
+	}
+	return final.Usage
+}
+
+// TestUsageTelemetryDecode_MLX pins the extended block's decode off the
+// streamed include_usage chunk — an absent completion_tokens_details
+// included, which decodes to zero reasoning tokens rather than an error.
+func TestUsageTelemetryDecode_MLX(t *testing.T) {
+	t.Run("streamed", func(t *testing.T) {
+		if got := streamedUsage(t, mlxUsageBlock); got != wantMLXUsage {
+			t.Errorf("streamed Usage =\n %+v\nwant\n %+v", got, wantMLXUsage)
 		}
 	})
 
@@ -108,31 +101,23 @@ func TestUsageTelemetryAbsent(t *testing.T) {
 	const openAIUsage = `{"prompt_tokens":41,"completion_tokens":9,"total_tokens":50,
 "completion_tokens_details":{"reasoning_tokens":4}}`
 
-	resp, err := decodeResponse([]byte(
-		`{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}],"usage":` + openAIUsage + `}`))
-	if err != nil {
-		t.Fatalf("decodeResponse: %v", err)
-	}
+	usage := streamedUsage(t, openAIUsage)
 	want := Usage{PromptTokens: 41, CompletionTokens: 9, TotalTokens: 50, ReasoningTokens: 4}
-	if resp.Usage != want {
-		t.Errorf("Usage = %+v; want %+v (every extension field zero)", resp.Usage, want)
+	if usage != want {
+		t.Errorf("Usage = %+v; want %+v (every extension field zero)", usage, want)
 	}
-	if resp.Usage.HasTelemetry() {
-		t.Errorf("HasTelemetry = true on a standard OpenAI usage block: %+v", resp.Usage.Telemetry)
+	if usage.HasTelemetry() {
+		t.Errorf("HasTelemetry = true on a standard OpenAI usage block: %+v", usage.Telemetry)
 	}
-	if resp.Usage.Telemetry != (InferenceTelemetry{}) {
-		t.Errorf("Telemetry = %+v; want zero", resp.Usage.Telemetry)
+	if usage.Telemetry != (InferenceTelemetry{}) {
+		t.Errorf("Telemetry = %+v; want zero", usage.Telemetry)
 	}
 
 	// A usage block with nothing in it at all stays fully zero, and IsZero
 	// still reports "the provider supplied nothing".
-	resp, err = decodeResponse([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
-	if err != nil {
-		t.Fatalf("decodeResponse (empty usage): %v", err)
-	}
-	if !resp.Usage.IsZero() || resp.Usage.HasTelemetry() {
+	if empty := streamedUsage(t, `{}`); !empty.IsZero() || empty.HasTelemetry() {
 		t.Errorf("empty usage block: IsZero=%v HasTelemetry=%v; want true/false",
-			resp.Usage.IsZero(), resp.Usage.HasTelemetry())
+			empty.IsZero(), empty.HasTelemetry())
 	}
 }
 
@@ -151,22 +136,18 @@ func TestUsageIsZeroWithTelemetryOnly(t *testing.T) {
 "prompt_eval_duration":0.5,"generation_duration":1.5,
 "prompt_tokens_per_second":900.0,"generation_tokens_per_second":120.0}`
 
-	resp, err := decodeResponse([]byte(
-		`{"choices":[{"message":{"content":"ok"}}],"usage":` + telemetryOnly + `}`))
-	if err != nil {
-		t.Fatalf("decodeResponse: %v", err)
+	usage := streamedUsage(t, telemetryOnly)
+	if usage.IsZero() {
+		t.Errorf("IsZero = true on a telemetry-bearing block: %+v", usage)
 	}
-	if resp.Usage.IsZero() {
-		t.Errorf("IsZero = true on a telemetry-bearing block: %+v", resp.Usage)
+	if !usage.HasTelemetry() {
+		t.Errorf("HasTelemetry = false on a telemetry-bearing block: %+v", usage)
 	}
-	if !resp.Usage.HasTelemetry() {
-		t.Errorf("HasTelemetry = false on a telemetry-bearing block: %+v", resp.Usage)
-	}
-	if resp.Usage.PromptTokens != 0 {
+	if usage.PromptTokens != 0 {
 		t.Errorf("PromptTokens = %d; want 0 — a budget check must still see it as unmeasured",
-			resp.Usage.PromptTokens)
+			usage.PromptTokens)
 	}
-	if got := resp.Usage.Telemetry.GenerationDuration; got != 1500*time.Millisecond {
+	if got := usage.Telemetry.GenerationDuration; got != 1500*time.Millisecond {
 		t.Errorf("GenerationDuration = %v; want 1.5s", got)
 	}
 }

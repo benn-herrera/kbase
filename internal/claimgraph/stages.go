@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
@@ -27,20 +28,26 @@ type Options struct {
 	RepoRoot string
 	Records  string
 	Logger   log.Logger
-	// Reader puts each letter ask. It is nil only for a build spending no
-	// inference, which drops the node pass, the unmarked-reference asks and the
-	// co-linearity cull and classifies every candidate as its draft.
-	Reader asks.LetterReader
-	// ReaderConcurrency is how many asks of one group the reader has in
-	// flight once its first has returned; 0 is asks.DefaultReaderConcurrency.
-	ReaderConcurrency int
-	// AskRecords is where each letter-ask group's record lands; none is kept
-	// where it is "".
+	// Launch starts each multichoice ask's item. It is nil only for a build
+	// spending no inference, which drops the node pass, the unmarked-reference
+	// asks and the co-linearity cull and classifies every candidate as its
+	// draft.
+	Launch asks.Launch
+	// AskRecords is where the stage's multichoice-ask group records land, as one
+	// file once its asks are done; none is kept where it is "".
 	AskRecords string
 	// Progress hears the units of a stage that asks: the node pass's leaves,
 	// the unmarked-reference asks' and classification's source groups, and the
 	// cull's groups of each pass.
 	Progress Progress
+}
+
+// asking is whether the stage puts its multichoice asks to a model.
+func (o Options) asking() bool { return o.Launch != nil }
+
+// batch is a new ask batch of the stage, launched through Launch.
+func (o Options) batch(ctx context.Context) *asks.Batch {
+	return asks.NewBatch(ctx, o.Launch)
 }
 
 // Progress hears a stage's units as they go; a nil func hears nothing.
@@ -86,8 +93,9 @@ func askStop(err error) error {
 	return err
 }
 
-// askTotals is a stage's letter asks in the zero form.
-func askTotals(records []asks.GroupRecord) result.Record {
+// askTotals is a stage's multichoice asks in the zero form: wall-seconds sums its
+// calls' wall time, stage-wall-seconds is wall, the ask batch's elapsed time.
+func askTotals(records []asks.GroupRecord, wall time.Duration) result.Record {
 	t := asks.Totals(records)
 	perCall := 0.0
 	if t.Calls > 0 {
@@ -96,16 +104,16 @@ func askTotals(records []asks.GroupRecord) result.Record {
 	return recordOf(field("items", t.Items), field("answered", t.Answered), field("re-asked", t.Reasked), field("defaulted", t.Defaulted),
 		field("calls", t.Calls), field("unmeasured", t.Unmeasured), field("thinking-blocks", t.ThinkingBlocks), field("output-tokens", t.OutputTokens),
 		field("seconds-per-call", fmt.Sprintf("%.2f", perCall)), field("wall-seconds", fmt.Sprintf("%.1f", t.WallSeconds)),
-		field("api-seconds", fmt.Sprintf("%.1f", t.APISeconds)), field("warm-cache-read", fmt.Sprintf("%d/%d", t.WarmCacheReadTokens, t.WarmPromptTokens)))
+		field("stage-wall-seconds", fmt.Sprintf("%.1f", wall.Seconds())), field("api-seconds", fmt.Sprintf("%.1f", t.APISeconds)), field("warm-cache-read", fmt.Sprintf("%d/%d", t.WarmCacheReadTokens, t.WarmPromptTokens)))
 }
 
 // Discovered is the node pass. Per leaf the record holds unlanded, in sorted
-// order: an unread leaf's paragraph asks as one group sharing its render, its
-// whole outcome into the record as planned, the leaf landed in one act, and
-// the leaf marked landed — so a stop costs at most one leaf's asks and a
-// planned leaf completes from the record without an ask. It exits on every
-// obligated paragraph of every leaf carrying a recorded verdict, recomputed
-// over the tree it wrote.
+// order, an unread leaf's paragraph asks go as one group sharing its render,
+// and its whole outcome is held; a planned leaf's comes from the record
+// without an ask. Once every ask is done, every held claim lands in one insert
+// batch, in sorted leaf order, and the record is written once, every leaf
+// landed. It exits on every obligated paragraph of every leaf carrying a
+// recorded verdict, recomputed over the tree it wrote.
 func Discovered(ctx context.Context, opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		record, ok, err := buildrecords.ReadNodePass(recordsAt(w.repoRoot))
@@ -136,37 +144,57 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 		findings := []Finding{fact("stage-C-scope", field("unread", states[ReadUnread]), field("planned", states[ReadPlanned]), field("landed", states[ReadLanded]))}
 		var groups []asks.GroupRecord
 		var defaulted []string
+		var landing []entry
 		causes := map[string]int{}
-		minted := 0
 		if err := opts.Progress.units(len(paths)); err != nil {
 			return findings, err
 		}
+		type leafAsks struct {
+			leaf  *leafReading
+			asked []askedParagraph
+			group int
+		}
+		unread := map[string]leafAsks{}
+		batch, launched := opts.batch(ctx), 0
 		for _, p := range paths {
-			entry := record.Leaves[p]
-			if entry.State == ReadLanded {
+			if record.Leaves[p].State != ReadUnread {
+				continue
+			}
+			leaf := readLeaf(t.Documents[p], &inv)
+			a := leafAsks{leaf: leaf, asked: leaf.askedParagraphs(leaf.obligated(&inv)), group: -1}
+			if len(a.asked) > 0 {
+				if err := askLeaf(batch, leaf, a.asked); err != nil {
+					break
+				}
+				a.group, launched = launched, launched+1
+			}
+			unread[p] = a
+		}
+		groups, err = batch.Wait()
+		if err != nil {
+			return findings, askStop(err)
+		}
+		for _, p := range paths {
+			held := record.Leaves[p]
+			if held.State == ReadLanded {
 				if err := opts.Progress.unit(p); err != nil {
 					return findings, err
 				}
 				continue
 			}
-			if entry.State == ReadUnread {
-				leaf := readLeaf(t.Documents[p], &inv)
-				asked := leaf.askedParagraphs(leaf.obligated(&inv))
+			if held.State == ReadUnread {
+				a := unread[p]
 				nothing := OutcomeNothingToRead
-				entry = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &nothing}
-				if len(asked) > 0 {
-					group, claims, verdicts, err := askLeaf(ctx, leaf, asked, opts)
-					if err != nil {
-						return findings, askStop(err)
-					}
-					groups = append(groups, group)
+				held = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &nothing}
+				if a.group >= 0 {
+					claims, verdicts := judgeLeaf(a.leaf, a.asked, groups[a.group])
 					outcome := OutcomeNoClaim
 					if len(claims) > 0 {
 						outcome = OutcomeMinted
 					}
-					entry = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &outcome, Verdicts: verdicts}
+					held = buildrecords.LeafEntry{State: ReadPlanned, Outcome: &outcome, Verdicts: verdicts}
 					for _, c := range claims {
-						entry.Claims = append(entry.Claims, buildrecords.PlannedClaim{Title: c.title, Locator: c.excerpt})
+						held.Claims = append(held.Claims, buildrecords.PlannedClaim{Title: c.title, Locator: c.excerpt})
 					}
 					for _, v := range verdicts {
 						if v.Verdict == JudgementDefaulted {
@@ -179,31 +207,31 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 						}
 					}
 				}
-				record.Leaves[p] = entry
-				if err := WriteNodePass(w.repoRoot, record); err != nil {
-					return findings, err
-				}
 			}
-			claims := make([]newClaim, len(entry.Claims))
-			for i, c := range entry.Claims {
-				claims[i] = newClaim{title: t.registerTitle(c.Title, p), rationale: proseRationale(p), locator: c.Locator}
+			for _, c := range held.Claims {
+				landing = append(landing, entry{title: t.registerTitle(c.Title, p), rationale: proseRationale(p), document: p, locator: c.Locator})
 			}
-			ids, err := w.landLeaf(p, claims)
-			if err != nil {
-				return findings, err
-			}
-			entry.State = ReadLanded
-			record.Leaves[p] = entry
-			if err := WriteNodePass(w.repoRoot, record); err != nil {
-				return findings, err
-			}
-			minted += len(ids)
+			held.State = ReadLanded
+			record.Leaves[p] = held
 			if err := opts.Progress.unit(p); err != nil {
 				return findings, err
 			}
 		}
+		if err := asks.WriteGroupRecords(opts.AskRecords, groups); err != nil {
+			return findings, err
+		}
+		ids, err := w.landLeaves(landing)
+		if err != nil {
+			return findings, err
+		}
+		if states[ReadLanded] < len(paths) {
+			if err := WriteNodePass(w.repoRoot, record); err != nil {
+				return findings, err
+			}
+		}
+		minted := len(ids)
 		findings = append(findings,
-			fact("stage-C-asks", append(recordOf(field("leaves", len(groups))), askTotals(groups)...)...),
+			fact("stage-C-asks", append(recordOf(field("leaves", len(groups))), askTotals(groups, batch.Elapsed())...)...),
 			fact("stage-C-defaulted", field("by-cause", counts(DefaultCauses, causes)), field("paragraphs", nonNilStrings(defaulted))))
 
 		after, err := readTree(opts.KBRoot)
@@ -237,27 +265,27 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 	})
 }
 
-// askLeaf is one leaf's paragraph asks, as one group sharing its render, and
-// what they come to.
-func askLeaf(ctx context.Context, leaf *leafReading, asked []askedParagraph, opts Options) (asks.GroupRecord, []proseClaim, []buildrecords.ParagraphVerdict, error) {
+// askLeaf launches one leaf's paragraph asks into batch, as one group sharing
+// its render.
+func askLeaf(batch *asks.Batch, leaf *leafReading, asked []askedParagraph) error {
 	items := make([]asks.ParagraphItem, len(asked))
 	for i, a := range asked {
 		items[i] = asks.ParagraphItem{Paragraph: a.name(), Text: a.labelled()}
 	}
-	group, err := asks.AskGroup(ctx, asks.Paragraph, leaf.document, asks.ParagraphAsks(leaf.document, leaf.render.text, items), opts.Reader, opts.ReaderConcurrency, opts.AskRecords)
-	if err != nil {
-		return group, nil, nil, err
-	}
+	return batch.AskGroup(asks.Paragraph, leaf.document, asks.ParagraphAsks(leaf.document, leaf.render.text, items))
+}
+
+// judgeLeaf is what one leaf's answered paragraph asks come to.
+func judgeLeaf(leaf *leafReading, asked []askedParagraph, group asks.GroupRecord) ([]proseClaim, []buildrecords.ParagraphVerdict) {
 	answers := make([]paragraphAnswer, len(asked))
 	for i, a := range asked {
 		answers[i] = paragraphAnswer{asked: a}
-		if l := group.Items[i].Letter; l != nil {
+		if l := group.Items[i].Choice; l != nil {
 			yes := *l == asks.LetterClaim
 			answers[i].statesResult = &yes
 		}
 	}
-	claims, verdicts := leaf.judge(answers)
-	return group, claims, verdicts, nil
+	return leaf.judge(answers)
 }
 
 func nonNilStrings(s []string) []string {
@@ -535,7 +563,7 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return findings, askStop(err)
 		}
-		findings = append(findings, classificationFindings(c, opts.Reader != nil)...)
+		findings = append(findings, classificationFindings(c, opts.asking())...)
 		f, err := w.writeEdges("pass-3-add-rests-on", c.edges, c.refs)
 		findings = append(findings, f)
 		if err != nil {
@@ -550,10 +578,11 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 }
 
 // ringRow breaks every cycle of the records the edge batch left, cutting the
-// edges index.BreakCycles' walk cuts in the tree's hosted order, each through
-// demote-claim-edge. It returns each cut as the authored pair — the claim the
-// edge ran into, then the premise — in cut order, and the walk's warning for
-// each.
+// edges index.BreakCycles' walk cuts in the tree's hosted order, all through
+// one demote-claim-edge batch in cut order: the walk computes every cut over
+// one graph before any is issued. It returns each cut as the authored pair —
+// the claim the edge ran into, then the premise — in cut order, and the walk's
+// warning for each.
 func ringRow(w writer) ([]pair, []string, error) {
 	src := builtTree(w.kbRoot)
 	g, err := kb.LoadGraph(src)
@@ -567,12 +596,16 @@ func ringRow(w writer) ([]pair, []string, error) {
 	_, cuts, items := index.BreakCycles(g, hosted)
 	cut := make([]pair, 0, len(items))
 	warnings := make([]string, 0, len(items))
+	entries := make([]map[string]any, 0, len(cuts))
 	for i, d := range cuts {
-		if _, err := issue(w.raw, write.DemoteClaimEdge, map[string]any{"id": d.Target, "target": d.Source}); err != nil {
-			return nil, nil, stopf("ring-row", "%v; the ring row cannot proceed", err)
-		}
+		entries = append(entries, map[string]any{"id": d.Target, "target": d.Source})
 		cut = append(cut, pair{d.Target, d.Source})
 		warnings = append(warnings, items[i].Detail)
+	}
+	if len(entries) > 0 {
+		if _, err := issue(w.raw, write.DemoteClaimEdge, entries); err != nil {
+			return nil, nil, stopf("ring-row", "%v; the ring row cannot proceed", err)
+		}
 	}
 	return cut, warnings, nil
 }
@@ -636,7 +669,7 @@ func classificationFindings(c classification, asked bool) []Finding {
 	return []Finding{
 		fact("stage-D-classified", field("by-relation", counts(names, countOf(rels))), field("by-outcome", tally(outcomes)), field("asked", asked)),
 		fact("stage-D-defaulted", field("candidates", pairs(defaulted))),
-		fact("stage-D-asks", askTotals(c.asked)...),
+		fact("stage-D-asks", askTotals(c.asked, c.wall)...),
 		pass("stage-D-classify", field("dependency-edges", len(c.edges)), field("references", len(c.refs))),
 	}
 }

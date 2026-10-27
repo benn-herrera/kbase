@@ -29,7 +29,7 @@ func replayable(t *testing.T, dir string) *Ledger {
 	write, _ := writing()
 	for _, reply := range []string{"about half", "none"} {
 		ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: reply}})
-		if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write,
+		if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 			Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +46,7 @@ func replayed(t *testing.T, dir string) (*Replay, ReplayResult) {
 		t.Fatal(err)
 	}
 	ask, _ := asking(t, []asked{{reply: "none"}})
-	res, err := rp.Walk(context.Background(), ask, ReplayHeader{BackEnd: "provider", Provider: "local", Model: "small",
+	res, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{BackEnd: "provider", Provider: "local", Model: "small",
 		Started: minute(1000)})
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	defer l.Close()
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Ask: ask, Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestResumeDropsATornCapture(t *testing.T) {
 	runOnce := func(l *Ledger, reply string) {
 		t.Helper()
 		ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: reply}})
-		if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write,
+		if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 			Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -277,7 +277,7 @@ func TestReplayOfARemovedRunRecreatesNothing(t *testing.T) {
 		t.Fatal("a replay of a removed run asked")
 		return Reply{}, nil
 	}
-	if _, err := rp.Walk(context.Background(), ask, ReplayHeader{Started: minute(1000)}); err == nil {
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}); err == nil {
 		t.Error("the replay of a removed run succeeded")
 	}
 	if _, err := os.Stat(l.Dir()); !errors.Is(err, os.ErrNotExist) {
@@ -297,7 +297,7 @@ func TestReplayFailsWhereItsDirectoryIsRemovedUnderIt(t *testing.T) {
 	}
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: set[:2], Pass: query.PassRigor, Ask: ask, Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: set[:2], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -314,9 +314,90 @@ func TestReplayFailsWhereItsDirectoryIsRemovedUnderIt(t *testing.T) {
 		}
 		return Reply{Text: "none"}, nil
 	}
-	if _, err := rp.Walk(context.Background(), removing, ReplayHeader{Started: minute(1000)}); err == nil ||
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(removing), ReplayHeader{Started: minute(1000)}); err == nil ||
 		!strings.Contains(err.Error(), rp.Dir()) {
 		t.Errorf("Walk = %v, want a failure naming %s", err, rp.Dir())
+	}
+}
+
+// twoItemRun is a finished run in dir over the first two items of runSet, and a
+// replay of it.
+func twoItemRun(t *testing.T, dir string) *Replay {
+	t.Helper()
+	src, ix, set := runSet(t)
+	l := kept(t, dir)
+	if err := l.WriteItems(set[:2]); err != nil {
+		t.Fatal(err)
+	}
+	ask, _ := asking(t, []asked{{reply: "none"}})
+	write, _ := writing()
+	if _, err := (&Runner{Source: src, Index: ix, Items: set[:2], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rp, err := OpenReplay(dir, header().Run, "", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rp
+}
+
+// TestReplayAppendsEachFileOnceAfterItsAsks: while the replay asks, its ledger,
+// captures and comparison files are absent; after the walk each holds one line
+// per asked item, in the run's order.
+func TestReplayAppendsEachFileOnceAfterItsAsks(t *testing.T) {
+	rp := twoItemRun(t, t.TempDir())
+	files := []string{linesFile, capturesFile, comparisonFile}
+	ask := func(context.Context, string) (Reply, error) {
+		for _, f := range files {
+			if _, err := os.Stat(filepath.Join(rp.Dir(), f)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s stands while the replay asks (stat: %v), want it written after the walk", f, err)
+			}
+		}
+		return Reply{Text: "none"}, nil
+	}
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}); err != nil {
+		t.Fatal(err)
+	}
+	var items []string
+	for _, c := range lines(t, filepath.Join(rp.Dir(), comparisonFile)) {
+		items = append(items, c["item"].(string))
+	}
+	if len(items) != 2 || items[0] == items[1] {
+		t.Fatalf("the comparison names %v, want the two items", items)
+	}
+	for _, f := range []string{linesFile, capturesFile} {
+		if got := len(lines(t, filepath.Join(rp.Dir(), f))); got != 2 {
+			t.Errorf("%s holds %d lines, want one per asked item", f, got)
+		}
+	}
+}
+
+// TestReplayCancelledMidWalkKeepsWhatItAsked: a cancel during the second ask
+// leaves one line in each file, for the item asked before the stop.
+func TestReplayCancelledMidWalkKeepsWhatItAsked(t *testing.T) {
+	rp := twoItemRun(t, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls int
+	ask := func(context.Context, string) (Reply, error) {
+		if calls++; calls == 2 {
+			cancel()
+			return Reply{}, ctx.Err()
+		}
+		return Reply{Text: "none"}, nil
+	}
+	res, err := rp.Walk(ctx, sequentialLaunch(ask), ReplayHeader{Started: minute(1000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != result.Cancelled {
+		t.Errorf("outcome = %q, want cancelled", res.Outcome)
+	}
+	for _, f := range []string{linesFile, capturesFile, comparisonFile} {
+		if got := len(lines(t, filepath.Join(rp.Dir(), f))); got != 1 {
+			t.Errorf("%s holds %d lines, want one for the item asked before the stop", f, got)
+		}
 	}
 }
 

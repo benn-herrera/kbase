@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
@@ -153,11 +154,11 @@ func unmarkedLocality(source, target string) string {
 	return unmarkedLocalities[3]
 }
 
-// References is the references-found stage: the shortlist planned into the
-// unmarked record before the first ask, then one letter ask per planned pair
-// the record does not hold, grouped by source in ascending id, every ask of a
-// group sharing the source's leaf and statement, each group's letters landing
-// in the record as it completes. A yes is the only answer that yields
+// References is the references-found stage: the shortlist planned, then one
+// multichoice ask per planned pair the record does not hold, grouped by source in
+// ascending id, every ask of a group sharing the source's leaf and statement,
+// and once every group is done the unmarked record written once, carrying the
+// plan and every group's letters. A yes is the only answer that yields
 // anything, and it yields it to dependency attribution. It writes nothing
 // under kb-root/, so no gate follows it; it exits on the record as it stands
 // on disk: its plan against its outcomes, every planned pair carrying one.
@@ -207,9 +208,6 @@ func References(ctx context.Context, opts Options) (Report, error) {
 			plan[i] = buildrecords.PlannedPair{p.source, p.target}
 		}
 		record.Planned = &plan
-		if err := WriteUnmarked(w.repoRoot, record); err != nil {
-			return nil, err
-		}
 		bodies := map[string]string{}
 		body := func(document string) string {
 			if _, ok := bodies[document]; !ok {
@@ -217,10 +215,16 @@ func References(ctx context.Context, opts Options) (Report, error) {
 			}
 			return bodies[document]
 		}
-		record, held, groups, err := askPlanned(ctx, w.repoRoot, record, g, statementOf, body, opts)
-		findings := unmarkedFindings(planned, record, g, held, groups)
+		record, held, groups, wall, err := askPlanned(ctx, record, g, statementOf, body, opts)
+		findings := unmarkedFindings(planned, record, g, held, groups, wall)
 		if err != nil {
 			return findings, askStop(err)
+		}
+		if err := asks.WriteGroupRecords(opts.AskRecords, groups); err != nil {
+			return findings, err
+		}
+		if err := WriteUnmarked(w.repoRoot, record); err != nil {
+			return findings, err
 		}
 		landed, _, err := buildrecords.ReadUnmarked(recordsAt(w.repoRoot))
 		if err != nil {
@@ -234,13 +238,14 @@ func References(ctx context.Context, opts Options) (Report, error) {
 }
 
 // askPlanned asks every planned pair rec does not hold, one group per source
-// in plan order, landing each group in the record as it completes: an
-// answered or re-asked pair carries its letter, a defaulted one none. It
-// returns the record, how many planned pairs it already held, and this run's
-// groups. A call that never completes stops it with every completed group
-// recorded. Each source's group is a unit of progress and each defaulted pair
-// a fallback.
-func askPlanned(ctx context.Context, repoRoot string, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, statement func(ClaimNode) string, body func(document string) string, opts Options) (buildrecords.UnmarkedRecord, int, []asks.GroupRecord, error) {
+// in plan order, as one ask batch, adding every group to the record in that
+// order once the batch has drained: an answered or re-asked pair carries its
+// letter, a defaulted one none. It writes nothing, and returns the record,
+// how many planned pairs it already held, this run's groups and the batch's
+// elapsed time. A call that never completes stops it, the record as it was
+// given and no group. Each source's group is a unit of progress and each
+// defaulted pair a fallback, both heard once the batch has drained.
+func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, statement func(ClaimNode) string, body func(document string) string, opts Options) (buildrecords.UnmarkedRecord, int, []asks.GroupRecord, time.Duration, error) {
 	pending := unanswered(rec)
 	held := 0
 	if rec.Planned != nil {
@@ -254,10 +259,10 @@ func askPlanned(ctx context.Context, repoRoot string, rec buildrecords.UnmarkedR
 		}
 		bySource[p.source] = append(bySource[p.source], p.target)
 	}
-	var groups []asks.GroupRecord
 	if err := opts.Progress.units(len(sources)); err != nil {
-		return rec, held, groups, err
+		return rec, held, nil, 0, err
 	}
+	batch := opts.batch(ctx)
 	for _, id := range sources {
 		source, _ := g.node(id)
 		items := make([]asks.UnmarkedItem, len(bySource[id]))
@@ -265,15 +270,19 @@ func askPlanned(ctx context.Context, repoRoot string, rec buildrecords.UnmarkedR
 			target, _ := g.node(targetID)
 			items[i] = asks.UnmarkedItem{Target: askClaim(target), Statement: statement(target)}
 		}
-		group, err := asks.AskGroup(ctx, asks.Unmarked, id,
-			asks.UnmarkedAsks(source.Document, body(source.Document), askClaim(source), statement(source), items),
-			opts.Reader, opts.ReaderConcurrency, opts.AskRecords)
-		if err != nil {
-			return rec, held, groups, err
+		if err := batch.AskGroup(asks.Unmarked, id,
+			asks.UnmarkedAsks(source.Document, body(source.Document), askClaim(source), statement(source), items)); err != nil {
+			break
 		}
-		groups = append(groups, group)
-		for _, item := range group.Items {
-			e := buildrecords.CandidateEntry{Source: id, Target: item.Item, Offered: item.Offered, Letter: item.Letter, Outcome: string(item.Outcome)}
+	}
+	groups, err := batch.Wait()
+	if err != nil {
+		return rec, held, nil, 0, err
+	}
+	for i, id := range sources {
+		source, _ := g.node(id)
+		for _, item := range groups[i].Items {
+			e := buildrecords.CandidateEntry{Source: id, Target: item.Item, Offered: item.Offered, Letter: item.Choice, Outcome: string(item.Outcome)}
 			if item.Confidence != nil {
 				e.Confidence = &item.Confidence
 			}
@@ -281,21 +290,18 @@ func askPlanned(ctx context.Context, repoRoot string, rec buildrecords.UnmarkedR
 			if item.Outcome == asks.Defaulted {
 				if err := opts.Progress.fallback(result.Item{Check: checkDefaulted, Path: source.Document,
 					Detail: fmt.Sprintf("%s -> %s was answered with no offered letter twice: it is recorded defaulted and yields no candidate", id, item.Item)}); err != nil {
-					return rec, held, groups, err
+					return rec, held, groups, batch.Elapsed(), err
 				}
 			}
 		}
-		if err := WriteUnmarked(repoRoot, rec); err != nil {
-			return rec, held, groups, err
-		}
 		if err := opts.Progress.unit(id); err != nil {
-			return rec, held, groups, err
+			return rec, held, groups, batch.Elapsed(), err
 		}
 	}
-	return rec, held, groups, nil
+	return rec, held, groups, batch.Elapsed(), nil
 }
 
-func unmarkedFindings(planned unmarkedPlan, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, held int, groups []asks.GroupRecord) []Finding {
+func unmarkedFindings(planned unmarkedPlan, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, held int, groups []asks.GroupRecord, wall time.Duration) []Finding {
 	yeses := unmarkedFound(rec)
 	localities := map[string]int{}
 	for _, p := range yeses {
@@ -321,7 +327,7 @@ func unmarkedFindings(planned unmarkedPlan, rec buildrecords.UnmarkedRecord, g *
 	return []Finding{
 		fact("stage-U-shortlist", field("sources", len(planned.sources)), field("proximity-k", shortlistProximityK), field("wildcard-k", shortlistWildcardK),
 			field("adjacent", planned.adjacent), field("planned", len(planned.pairs)), field("held", held), field("asked", len(planned.pairs)-held)),
-		fact("stage-U-asks", append(recordOf(field("sources", len(groups))), askTotals(groups)...)...),
+		fact("stage-U-asks", append(recordOf(field("sources", len(groups))), askTotals(groups, wall)...)...),
 		fact("stage-U-yeses", field("found", len(yeses)), field("by-locality", counts(unmarkedLocalities, localities))),
 		fact("stage-U-defaulted", field("pairs", pairs(defaulted))),
 		fact("stage-U-picks", picks...),

@@ -8,56 +8,29 @@ import (
 	"testing"
 )
 
-// TestEncodeRequestStreamOptions pins the conditional: a STREAMING request
-// carries stream_options.include_usage=true (without it an
-// OpenAI-compatible provider sends no usage payload at all on a streamed
-// response, which zeroes every token count and silently disables anything
-// gated on one), and a BLOCKING request must NOT carry the field — its
-// mere presence is a protocol error with some providers.
+// TestEncodeRequestStreamOptions: a chat request streams and carries
+// stream_options.include_usage=true — without it an OpenAI-compatible
+// provider sends no usage payload at all on a streamed response, which zeroes
+// every token count and silently disables anything gated on one.
 func TestEncodeRequestStreamOptions(t *testing.T) {
-	req := chatRequest("m")
-
-	for _, tc := range []struct {
-		name   string
-		stream bool
-		want   bool
-	}{
-		{name: "streaming", stream: true, want: true},
-		{name: "blocking", stream: false, want: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			body, err := encodeRequest(req, tc.stream)
-			if err != nil {
-				t.Fatalf("encodeRequest: %v", err)
-			}
-			var decoded struct {
-				Stream        bool `json:"stream"`
-				StreamOptions *struct {
-					IncludeUsage bool `json:"include_usage"`
-				} `json:"stream_options"`
-			}
-			if err := json.Unmarshal(body, &decoded); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
-			if decoded.Stream != tc.stream {
-				t.Errorf("stream: got %v want %v", decoded.Stream, tc.stream)
-			}
-			if !tc.want {
-				if decoded.StreamOptions != nil {
-					t.Errorf("stream_options must be absent on a blocking request: %s", body)
-				}
-				if strings.Contains(string(body), "stream_options") {
-					t.Errorf("stream_options key present in blocking body: %s", body)
-				}
-				return
-			}
-			if decoded.StreamOptions == nil {
-				t.Fatalf("stream_options missing from streaming request: %s", body)
-			}
-			if !decoded.StreamOptions.IncludeUsage {
-				t.Errorf("stream_options.include_usage: got false want true: %s", body)
-			}
-		})
+	body, err := encodeRequest(chatRequest("m"))
+	if err != nil {
+		t.Fatalf("encodeRequest: %v", err)
+	}
+	var decoded struct {
+		Stream        bool `json:"stream"`
+		StreamOptions *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !decoded.Stream {
+		t.Errorf("stream: got false want true: %s", body)
+	}
+	if decoded.StreamOptions == nil || !decoded.StreamOptions.IncludeUsage {
+		t.Errorf("stream_options.include_usage missing or false: %s", body)
 	}
 }
 
@@ -105,7 +78,7 @@ data: [DONE]
 
 // TestStreamUsageReasoningTokens: completion_tokens_details.reasoning_tokens
 // is the only measurement of what thinking mode costs; capture it from the
-// usage block on both the streaming and the blocking path.
+// usage block.
 func TestStreamUsageReasoningTokens(t *testing.T) {
 	const sse = `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
 
@@ -123,24 +96,6 @@ data: [DONE]
 	}
 	if final.Usage.CompletionTokens != 900 {
 		t.Errorf("Final.Usage.CompletionTokens = %d; want 900", final.Usage.CompletionTokens)
-	}
-
-	// Blocking path shares the same wire projection.
-	resp, err := decodeResponse([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],
-		"usage":{"prompt_tokens":12,"completion_tokens":900,"total_tokens":912,"completion_tokens_details":{"reasoning_tokens":880}}}`))
-	if err != nil {
-		t.Fatalf("decodeResponse: %v", err)
-	}
-	if resp.Usage.ReasoningTokens != 880 {
-		t.Errorf("blocking Usage.ReasoningTokens = %d; want 880", resp.Usage.ReasoningTokens)
-	}
-	// An absent details block is 0, not an error.
-	resp, err = decodeResponse([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"total_tokens":3}}`))
-	if err != nil {
-		t.Fatalf("decodeResponse (no details): %v", err)
-	}
-	if resp.Usage.ReasoningTokens != 0 {
-		t.Errorf("absent completion_tokens_details should yield 0, got %d", resp.Usage.ReasoningTokens)
 	}
 }
 

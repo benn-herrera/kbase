@@ -1,6 +1,6 @@
 // Package asks is everything kbase puts to a model: the prompt templates and
 // fragments, embedded as they stand; the composer that fills their slots; the
-// letter-ask seam every claim-graph decision crosses;
+// multichoice-ask seam every claim-graph decision crosses;
 // the asks of each kind; and the Caller that puts a composed prompt to a
 // provider under its system fragment.
 package asks

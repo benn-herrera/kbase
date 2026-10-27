@@ -15,7 +15,7 @@ import (
 type Role string
 
 const (
-	// RoleDecision is the claim graph's letter asks.
+	// RoleDecision is the claim graph's multichoice asks.
 	RoleDecision Role = CategoryDecision
 	// RoleText is the overview passage.
 	RoleText Role = CategoryText

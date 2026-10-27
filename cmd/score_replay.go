@@ -40,7 +40,7 @@ type scoreReplayOptions struct {
 
 // replayFlags is score's own flags a replay takes beside --replay; any other of
 // them is a run's and is refused with it.
-var replayFlags = []string{"replay", "pass", "failed", "limit", "scoring-model", "state-dir", "timeout"}
+var replayFlags = []string{"replay", "pass", "failed", "limit", "scoring-model", "state-dir", "timeout", "ask-concurrency"}
 
 // replayRunRE is the shape of the run --replay names: a real or a dry run's id
 // as kb.MintID mints it, never a path.
@@ -122,6 +122,10 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	case opts.Limit < 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	}
+	concurrency, err := askConcurrency(opts.AskConcurrency, opts.Config.Asks.Concurrency)
+	if err != nil {
+		return refusedOrFailed(nil, err)
+	}
 	ctx := opts.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -148,14 +152,14 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	if err != nil {
 		return refusedOrFailed(fields, err)
 	}
-	reg := modelclient.New(opts.NewClient, opts.Logger, rp.ID())
+	reg := modelclient.New(opts.NewClient, opts.Logger, rp.ID(), concurrency)
 	defer reg.CloseAll()
-	ask, err := scoringAsk(opts.scoreOptions, reg, ep)
+	launch, err := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
 	}
 	fields = append(fields, toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "dir", Value: rp.Dir()})
-	res, err := rp.Walk(ctx, ask, score.ReplayHeader{BackEnd: backEndName(ep), Provider: ep.Provider, Model: ep.Model,
+	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: backEndName(ep), Provider: ep.Provider, Model: ep.Model,
 		Started: score.Stamp()})
 	if err != nil {
 		return failed(fields, err)

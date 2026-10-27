@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
@@ -28,13 +29,14 @@ func letterRelation(letter string) (Relation, bool) {
 
 // classification is what classification decided and what it writes: every
 // candidate's relation and outcome, the depends edges and references records,
-// and this run's ask records.
+// and this run's ask records and its ask batch's elapsed time.
 type classification struct {
 	relations map[pair]Relation
 	outcomes  map[pair]string
 	edges     []pair
 	refs      []pair
 	asked     []asks.GroupRecord
+	wall      time.Duration
 }
 
 // held is whether the record already answers for a candidate: a draft does
@@ -43,16 +45,16 @@ func held(e buildrecords.CandidateEntry, ok, asking bool) bool {
 	return ok && !(asking && e.Outcome == ClassifyDrafted)
 }
 
-// classify classifies every candidate, one letter ask each, grouped by source
+// classify classifies every candidate, one multichoice ask each, grouped by source
 // in ascending id and offered only the letters of its offered relations;
-// with no reader every candidate takes its draft. Each group lands in the
-// classification record as it completes, and a resumed run asks only what the
-// record does not hold. A call that never completes stops it with every
-// completed group recorded. A run that asks reports each source's group as
-// a unit of progress, and each candidate defaulted as a fallback. opts
-// supplies the reader and how it asks.
+// where opts cannot ask every candidate takes its draft. The groups are one
+// ask batch; once it has drained, the classification record is written once
+// with them all, and a resumed run asks only what the record does not hold. A
+// call that never completes stops it with nothing written. A run that asks
+// reports each source's group as a unit of progress, and each candidate
+// defaulted as a fallback, once the batch has drained.
 func classify(ctx context.Context, repoRoot string, candidates []candidate, statement func(ClaimNode) string, opts Options) (classification, error) {
-	reader, progress := opts.Reader, opts.Progress
+	asking, progress := opts.asking(), opts.Progress
 	out := classification{relations: map[pair]Relation{}, outcomes: map[pair]string{}}
 	rec, _, err := buildrecords.ReadClassification(recordsAt(repoRoot))
 	if err != nil {
@@ -71,49 +73,54 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		bySource[c.source.ID] = append(bySource[c.source.ID], c)
 	}
 	slices.Sort(sources)
-	save := func() error {
-		rec.Candidates = rec.Candidates[:0]
-		for _, e := range entries {
-			rec.Candidates = append(rec.Candidates, e)
-		}
-		return WriteClassification(repoRoot, rec)
-	}
 	pendingOf := map[string][]candidate{}
 	for _, s := range sources {
 		for _, c := range bySource[s] {
-			if e, ok := entries[c.pair()]; !held(e, ok, reader != nil) {
+			if e, ok := entries[c.pair()]; !held(e, ok, asking) {
 				pendingOf[s] = append(pendingOf[s], c)
 			}
 		}
 	}
-	if reader != nil {
+	if asking {
 		if err := progress.units(len(pendingOf)); err != nil {
 			return out, err
 		}
-	}
-	for _, s := range sources {
-		pending := pendingOf[s]
-		if len(pending) == 0 {
-			continue
-		}
-		if reader == nil {
-			for _, c := range pending {
-				entries[c.pair()] = buildrecords.CandidateEntry{Source: c.source.ID, Target: c.target.ID, Offered: offeredLetters(c), Outcome: ClassifyDrafted}
+		batch := opts.batch(ctx)
+		for _, s := range sources {
+			pending := pendingOf[s]
+			if len(pending) == 0 {
+				continue
 			}
-		} else {
 			items := make([]asks.ClassifyItem, len(pending))
 			for i, c := range pending {
 				items[i] = asks.ClassifyItem{Target: askClaim(c.target), Statement: statement(c.target), Passages: c.passages, Offered: offeredLetters(c)}
 			}
 			source := pending[0].source
-			group, err := asks.AskGroup(ctx, asks.Classify, source.ID, asks.ClassifyAsks(askClaim(source), statement(source), items), reader, opts.ReaderConcurrency, opts.AskRecords)
-			if err != nil {
-				return out, err
+			if err := batch.AskGroup(asks.Classify, source.ID, asks.ClassifyAsks(askClaim(source), statement(source), items)); err != nil {
+				break
 			}
-			out.asked = append(out.asked, group)
+		}
+		if out.asked, err = batch.Wait(); err != nil {
+			return out, err
+		}
+		out.wall = batch.Elapsed()
+	}
+	asked := 0
+	for _, s := range sources {
+		pending := pendingOf[s]
+		if len(pending) == 0 {
+			continue
+		}
+		if !asking {
+			for _, c := range pending {
+				entries[c.pair()] = buildrecords.CandidateEntry{Source: c.source.ID, Target: c.target.ID, Offered: offeredLetters(c), Outcome: ClassifyDrafted}
+			}
+		} else {
+			source, group := pending[0].source, out.asked[asked]
+			asked++
 			for i, item := range group.Items {
 				c := pending[i]
-				e := buildrecords.CandidateEntry{Source: source.ID, Target: c.target.ID, Offered: item.Offered, Letter: item.Letter, Outcome: string(item.Outcome)}
+				e := buildrecords.CandidateEntry{Source: source.ID, Target: c.target.ID, Offered: item.Offered, Letter: item.Choice, Outcome: string(item.Outcome)}
 				if item.Confidence != nil {
 					e.Confidence = &item.Confidence
 				}
@@ -129,7 +136,13 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 				return out, err
 			}
 		}
-		if err := save(); err != nil {
+	}
+	if err := asks.WriteGroupRecords(opts.AskRecords, out.asked); err != nil {
+		return out, err
+	}
+	if len(pendingOf) > 0 {
+		rec.Candidates = slices.Collect(maps.Values(entries))
+		if err := WriteClassification(repoRoot, rec); err != nil {
 			return out, err
 		}
 	}

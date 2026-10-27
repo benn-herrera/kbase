@@ -161,16 +161,21 @@ func dropInboundEdges(b *recordBatch, e entry) error {
 }
 
 // refuseRepeatedPairs refuses a resolve-demoted batch naming one pair twice,
-// whatever the actions.
+// whatever the actions, one item per repeat.
 func refuseRepeatedPairs(entries []entry) error {
 	named := map[[2]string]int{}
+	var refusals result.Refusal
 	for _, e := range entries {
 		id, target := e.str("id"), e.str("target")
 		if first, ok := named[[2]string{id, target}]; ok {
-			return result.Refusal{{Entry: e.Index, Key: "target", Remedy: "drop one of the two entries, then re-run",
-				Detail: fmt.Sprintf("names %s → %s, which entry %d already names; a pair takes one action per batch", id, target, first)}}
+			refusals = append(refusals, result.Item{Entry: e.Index, Key: "target", Remedy: "drop one of the two entries, then re-run",
+				Detail: fmt.Sprintf("names %s → %s, which entry %d already names; a pair takes one action per batch", id, target, first)})
+			continue
 		}
 		named[[2]string{id, target}] = e.Index
+	}
+	if len(refusals) > 0 {
+		return refusals
 	}
 	return nil
 }

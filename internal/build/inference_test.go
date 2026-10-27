@@ -69,8 +69,9 @@ func newAnswering(answer func(system, prompt string) string) *answering {
 	return &answering{answer: answer, asked: map[string]int{}}
 }
 
-func (a *answering) Consult(context.Context, model.Request) (model.Response, error) {
-	return model.Response{}, errors.New("the build asks over the stream")
+// Client is the model.Client whose calls a answers.
+func (a *answering) Client() model.Client {
+	return &model.ClientFuncs{Stream: a.ConsultStream, Decide: a.Decision}
 }
 
 func (a *answering) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
@@ -86,9 +87,7 @@ func (a *answering) reply(ctx context.Context, req model.Request) (model.StreamR
 	return modeltest.NewScriptedMock([]model.Response{reply}, nil).ConsultStream(ctx, req)
 }
 
-func (a *answering) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
-
-// Decision answers the letter asks: the state and the question's key name
+// Decision answers the multichoice asks: the state and the question's key name
 // the ask, and the answer is a confidence over the offered letters keyed by
 // their criteria — a noul question's true-letter taking the noul figure and
 // the false letter the remainder. Each answer is one figure the script names
@@ -175,7 +174,7 @@ func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
 	opts.Provider = func() (Provider, error) {
-		return Provider{LettersClient: client, Letters: "decision", OverviewClient: client, Overview: "text",
+		return Provider{LettersClient: client, Letters: "decision", OverviewClient: client, Overview: "text", Queue: model.NewQueue(2),
 			Roles: []result.Record{
 				{{Key: "role", Value: "decision"}, {Key: "back-end", Value: "provider"},
 					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
@@ -192,7 +191,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	f := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
 	provider := newAnswering(script)
-	outcome, fields := f.build(t, f.asking(provider))
+	outcome, fields := f.build(t, f.asking(provider.Client()))
 	if outcome != result.Done {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
@@ -342,17 +341,21 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 	if len(groups) != 2 || !slices.Contains(groups, yes.Source) || !slices.Contains(groups, yes.Target) {
 		t.Errorf("references-found's units = %q, want one per source group asked: the lemma's and the prose claim's", groups)
 	}
-	scratch := filepath.Join(f.state, buildstore.ScratchDir)
-	for _, dir := range []string{asks.CapturesDir, asks.AnswersDir, asks.AskRecordsDir} {
-		if entries, err := os.ReadDir(filepath.Join(scratch, dir)); err != nil || len(entries) == 0 {
-			t.Errorf("%s/%s holds nothing: %v", buildstore.ScratchDir, dir, err)
+	trail := f.startTrailDir(t)
+	for _, dir := range []string{
+		filepath.Join(trail, asks.CapturesDir),
+		filepath.Join(trail, asks.AnswersDir),
+		filepath.Join(trail, asks.AskRecordsDir),
+	} {
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) == 0 {
+			t.Errorf("%s holds nothing: %v", dir, err)
 		}
 	}
 
 	// A second build of the same paper lands the same KB modulo node ids.
 	g := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(g.repo, "paper.tex"), askedPaper)
-	if outcome, fields := g.build(t, g.asking(newAnswering(script))); outcome != result.Done {
+	if outcome, fields := g.build(t, g.asking(newAnswering(script).Client())); outcome != result.Done {
 		t.Fatalf("rebuild = %s %v", outcome, fields)
 	}
 	sameModuloIDs(t, g.repo, f.repo)
@@ -453,7 +456,7 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
 	mock := modeltest.NewScriptedMockPerConsult(nil)
 	mock.SetError(errors.New("connection refused"))
-	outcome, fields := f.build(t, f.asking(mock))
+	outcome, fields := f.build(t, f.asking(mock.Client()))
 	if outcome != result.Failed {
 		t.Fatalf("build = %s %v, want failed", outcome, fields)
 	}
@@ -499,6 +502,11 @@ func (s *stopsAfter) step() bool {
 	return over
 }
 
+// Client is the model.Client whose calls s answers.
+func (s *stopsAfter) Client() model.Client {
+	return &model.ClientFuncs{Stream: s.ConsultStream, Decide: s.Decision}
+}
+
 func (s *stopsAfter) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	if s.step() {
 		return nil, errors.New("connection refused")
@@ -515,8 +523,9 @@ func (s *stopsAfter) Decision(ctx context.Context, req model.DecisionRequest) (m
 
 // TestInterruptedAskingStageResumesFromTheAnswerCache: a build whose provider
 // is lost inside classification — the node pass's and the unmarked asks
-// answered, some source's group recorded and not every one — leaves the stage
-// unrecorded and its writes uncommitted; the resume restores them, asks the
+// answered, some source's group answered and not every one — leaves the stage
+// unrecorded and writes nothing the build owns, since a stage writes its
+// records once its asks are done; the resume has nothing to restore, asks the
 // provider only what the answer cache does not hold, and lands what the
 // uninterrupted build lands.
 //
@@ -533,35 +542,38 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	whole := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(whole.repo, "paper.tex"), askedPaper)
 	clean := newAnswering(script)
-	if outcome, fields := whole.build(t, whole.asking(clean)); outcome != result.Done {
+	if outcome, fields := whole.build(t, whole.asking(clean.Client())); outcome != result.Done {
 		t.Fatalf("uninterrupted build = %s %v", outcome, fields)
 	}
 
 	f := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
-	// n = 12: the thirteenth letter ask never arrives — the third classify
+	// n = 12: the thirteenth multichoice ask never arrives — the third classify
 	// group of one candidate each; the call fails past SystemOne's own attempt
 	// count and the stage stops unrecorded.
 	lost := &stopsAfter{answering: *newAnswering(script), n: 12}
-	if outcome, fields := f.build(t, f.asking(lost)); outcome != result.Failed {
+	if outcome, fields := f.build(t, f.asking(lost.Client())); outcome != result.Failed {
 		t.Fatalf("build losing its provider = %s %v, want failed", outcome, fields)
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("claims-culled")) {
 		t.Fatalf("trail = %q, want dependency attribution unrecorded", got)
 	}
-	answers := filepath.Join(f.state, buildstore.ScratchDir, asks.AnswersDir)
-	cached, _ := os.ReadDir(answers)
+	trail := f.startTrailDir(t)
+	cached, _ := os.ReadDir(filepath.Join(trail, asks.AnswersDir))
 	if len(cached) == 0 {
-		t.Fatal("the interrupted stage cached no answer")
+		t.Fatal("the interrupted run cached no answer under its trail's directory")
+	}
+	if records, _ := os.ReadDir(filepath.Join(trail, asks.AskRecordsDir)); len(records) == 0 {
+		t.Fatal("the interrupted run wrote no group record under its trail's directory")
 	}
 
 	resumed := newAnswering(script)
-	outcome, fields := f.build(t, f.asking(resumed))
+	outcome, fields := f.build(t, f.asking(resumed.Client()))
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
-	if restored, _ := storetest.Field(fields, "restored").([]string); len(restored) == 0 {
-		t.Error("the resume restored nothing of the interrupted stage")
+	if restored, _ := storetest.Field(fields, "restored").([]string); len(restored) != 0 {
+		t.Errorf("the resume restored %q; want nothing, since a stage stopped mid-asks writes no build record and nothing under kb-root/", restored)
 	}
 	if want := clean.count() - len(cached); resumed.count() != want {
 		t.Errorf("the resume asked %d times, want %d: every ask but the %d the cache holds", resumed.count(), want, len(cached))

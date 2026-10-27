@@ -194,3 +194,15 @@ func (w writer) landLeaf(document string, claims []newClaim) ([]string, error) {
 	}
 	return w.insertClaims("land-"+document, entries)
 }
+
+// landLeaves is landLeaf over several leaves in one insert batch, each entry
+// naming its leaf, and returns the id each entry took, in order. It adopts
+// exactly what landing the leaves one by one in entry order would: within the
+// batch a minted claim joins the batch's graph and its marker the batch's
+// hosts, which adoption reads.
+func (w writer) landLeaves(entries []entry) ([]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	return w.insertClaims("land-leaves", entries)
+}

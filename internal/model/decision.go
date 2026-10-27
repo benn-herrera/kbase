@@ -57,14 +57,14 @@ type DecisionResponse struct {
 	Usage   Usage // input_tokens → PromptTokens, output_tokens → CompletionTokens
 }
 
-// Decision performs one decision-model round-trip over the surface the
+// decision performs one decision-model round-trip over the surface the
 // endpoint names: the request re-issued identically up to ChatAttempts on a
 // transport error or a retry-class status (429 or 5xx), with no pause between
 // attempts; a non-retryable non-2xx (any other 4xx) returns at once as
 // StatusError. There is no streaming and no ErrChatIncomplete path — the
-// re-issue loop is this method's own, not Chat's. A cancelled ctx returns its
+// re-issue loop is this method's own, not chat's. A cancelled ctx returns its
 // error at once.
-func (c *OpenAIClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (c *OpenAIClient) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
 	if c.endpoint.BaseURL == "" {
 		return DecisionResponse{}, fmt.Errorf("endpoint BaseURL is empty")
 	}
@@ -88,7 +88,7 @@ func (c *OpenAIClient) Decision(ctx context.Context, req DecisionRequest) (Decis
 		if errors.As(err, &se) && !retryableStatus(se.Code) {
 			return DecisionResponse{}, err
 		}
-		// As Chat does: a ctx cancelled during an attempt ends the call
+		// As chat does: a ctx cancelled during an attempt ends the call
 		// with the ctx's own error instead of a re-issue.
 		if err := ctx.Err(); err != nil {
 			return DecisionResponse{}, err

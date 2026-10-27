@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -73,6 +74,10 @@ type scoreOptions struct {
 	// carries so a resume reads the same one.
 	ConfigDir string
 
+	// AskConcurrency is the --ask-concurrency flag, nil where it was not
+	// given.
+	AskConcurrency *int
+
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
 
@@ -133,6 +138,10 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	case opts.DryRun && opts.Resume != "":
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
 			Detail: "a dry run asks nothing and records nothing to resume: drop --resume, or drop --dry-run to continue run " + opts.Resume})
+	}
+	concurrency, err := askConcurrency(opts.AskConcurrency, opts.Config.Asks.Concurrency)
+	if err != nil {
+		return refusedOrFailed(nil, err)
 	}
 	// The set the run's walk and its records both take: both where the flag
 	// named none, so a default run is one run over both sets.
@@ -217,14 +226,16 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		Pass: pass, Rescore: rescore, Limit: opts.Limit, DryRun: opts.DryRun, Log: opts.Logger}
 	if !opts.DryRun {
 		// The registry is opened for the entry the scoring role named, and its
-		// client is what every ask in this run sends through. The run's id is the
-		// key the registry gives every client it opens, so every ask of this run
-		// carries it — a resumed run re-derives the same id from its ledger, and
-		// so sends the same key.
-		reg := modelclient.New(opts.NewClient, opts.Logger, run)
+		// client is what every ask in this run sends through, each on a slot of
+		// the run's one queue. The run's id is the key the registry gives every
+		// client it opens, so every ask of this run carries it — a resumed run
+		// re-derives the same id from its ledger, and so sends the same key.
+		reg := modelclient.New(opts.NewClient, opts.Logger, run, concurrency)
 		defer reg.CloseAll()
 		inv.BackEnd, inv.Provider, inv.Model = backEndName(ep), ep.Provider, ep.Model
-		inv.NewAsk = func() (score.Ask, error) { return scoringAsk(opts, reg, ep) }
+		if inv.Launch, err = scoringLaunch(opts, reg, ep, concurrency); err != nil {
+			return refusedOrFailed(fields, err)
+		}
 	}
 	// The document is written beside the ledger once its fields name one, before
 	// the run lets go of its locks.
@@ -286,8 +297,9 @@ func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, conf
 	}
 	if mode == config.ModeFile {
 		// An environment-mode invocation reads no file value, so it says
-		// nothing of the key the files state.
+		// nothing of the keys the files state.
 		supersededProvider(opts.Stderr, opts.Config)
+		supersededReaderConcurrency(opts.Stderr, opts.Config)
 	}
 	ep, err := config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel)
 	if err != nil {
@@ -297,11 +309,14 @@ func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, conf
 	return ep, mode, nil
 }
 
-// scoringAsk is the Ask seam every scoring call goes through: one tool-less
-// chat call on ep's model, through the client reg opens for it. Each ask's own
-// text carries the instruction, so the system prompt is empty and nothing is
-// said twice.
-func scoringAsk(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint) (score.Ask, error) {
+// scoringLaunch is the launch every scoring call goes through: each item
+// started on the invocation's one queue of concurrency tokens, its Ask one
+// tool-less chat call on ep's model through the item's slot and the client reg
+// opens for it. The --timeout deadline is set inside the item, around the
+// call, so it counts from the call's start and never covers the wait for a
+// token. Each ask's own text carries the instruction, so the system prompt is
+// empty and nothing is said twice.
+func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint, concurrency int) (score.Launch, error) {
 	client, err := reg.Get(ep)
 	if err != nil {
 		return nil, err
@@ -315,14 +330,19 @@ func scoringAsk(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint
 	if backoff == nil {
 		backoff = scoreBackoff
 	}
-	return func(ctx context.Context, prompt string) (score.Reply, error) {
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		attempt, err := model.Chat(callCtx, client, ep.Model, "", prompt, backoff, nil)
-		if err != nil {
-			return score.Reply{}, err
-		}
-		return score.Reply{Text: attempt.Reply, Truncated: attempt.FinishReason == model.FinishLength}, nil
+	queue := model.NewQueue(concurrency)
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(score.Ask) func()) error {
+		return queue.Go(ctx, wg, func(slot *model.Slot) func() {
+			return item(func(ctx context.Context, prompt string) (score.Reply, error) {
+				callCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				res, err := slot.Chat(callCtx, client, model.ChatRequest{Model: ep.Model, Prompt: prompt, Backoff: backoff})
+				if err != nil {
+					return score.Reply{}, err
+				}
+				return score.Reply{Text: res.Final.Reply, Truncated: res.Final.FinishReason == model.FinishLength}, nil
+			})
+		})
 	}, nil
 }
 
@@ -470,6 +490,7 @@ var (
 	scoreFlagResume       string
 	scoreFlagStateDir     string
 	scoreFlagRescore      string
+	scoreFlagAskConc      int
 )
 
 // scoreReplay is the development replay's entry: given the invoked command, the
@@ -563,7 +584,8 @@ is one YAML document on stdout.`,
 		}
 		code, err := verb(scoreOptions{providerOptions: opts, Ctx: ctx, Pass: scoreFlagPass, Limit: scoreFlagLimit,
 			DryRun: scoreFlagDryRun, ScoringModel: scoreFlagScoringModel,
-			Resume: scoreFlagResume, RescoreManual: scoreFlagRescore, StateDir: scoreFlagStateDir, ConfigDir: flagConfigDir, WorkDir: wd,
+			Resume: scoreFlagResume, RescoreManual: scoreFlagRescore, StateDir: scoreFlagStateDir, ConfigDir: flagConfigDir,
+			AskConcurrency: givenAskConcurrency(cmd, scoreFlagAskConc), WorkDir: wd,
 			Stdout: cmd.OutOrStdout(), Logger: processLog.logger})
 		if err != nil {
 			return err
@@ -590,4 +612,5 @@ func init() {
 	scoreCmd.Flags().StringVar(&scoreFlagRescore, "rescore-manual", score.RescoreNone,
 		"re-judge values marked manually scored: none, rigor, bearing or both")
 	scoreCmd.Flags().StringVar(&scoreFlagStateDir, "state-dir", "", "the state store (default: $XDG_STATE_HOME/kbase/<key>)")
+	registerAskConcurrencyFlag(scoreCmd, &scoreFlagAskConc)
 }

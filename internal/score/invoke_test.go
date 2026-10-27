@@ -86,8 +86,8 @@ var (
 
 // invocation is one invocation over the KB at root with its records under
 // state, as a caller hands it over: the KB refreshed and opened, a run id
-// RunID minted, and the scoring model answering through newAsk.
-func invocation(t *testing.T, root, state, pass string, dryRun bool, newAsk func() (Ask, error)) Invocation {
+// RunID minted, and the scoring model answering through ask, one item at a time.
+func invocation(t *testing.T, root, state, pass string, dryRun bool, ask Ask) Invocation {
 	t.Helper()
 	if _, err := index.Refresh(kb.OnDisk(root), log.Discard()); err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -97,7 +97,10 @@ func invocation(t *testing.T, root, state, pass string, dryRun bool, newAsk func
 		t.Fatal(err)
 	}
 	inv := Invocation{KBRoot: root, Source: kb.OnDisk(root), StateDir: state, Run: run, Pass: pass,
-		Rescore: RescoreNone, DryRun: dryRun, Log: log.Discard(), NewAsk: newAsk}
+		Rescore: RescoreNone, DryRun: dryRun, Log: log.Discard()}
+	if ask != nil {
+		inv.Launch = sequentialLaunch(ask)
+	}
 	if !dryRun {
 		inv.BackEnd, inv.Provider, inv.Model = "provider", "solo", "scoring-model"
 	}
@@ -105,37 +108,33 @@ func invocation(t *testing.T, root, state, pass string, dryRun bool, newAsk func
 }
 
 // resumeOf is inv continuing the run rep reported, over the KB as it now stands.
-func resumeOf(t *testing.T, inv Invocation, rep Report, newAsk func() (Ask, error)) Invocation {
+func resumeOf(t *testing.T, inv Invocation, rep Report, ask Ask) Invocation {
 	t.Helper()
-	next := invocation(t, inv.KBRoot, inv.StateDir, inv.Pass, false, newAsk)
+	next := invocation(t, inv.KBRoot, inv.StateDir, inv.Pass, false, ask)
 	next.Run, next.Resume = rep.Run, true
 	return next
 }
 
-// replying is a NewAsk whose Ask answers each call with the next of texts, in
-// order; calls counts them, and a call past the last fails the test.
-func replying(t *testing.T, texts ...string) (newAsk func() (Ask, error), calls *int) {
+// replying is an Ask that answers each call with the next of texts, in order;
+// calls counts them, and a call past the last fails the test.
+func replying(t *testing.T, texts ...string) (ask Ask, calls *int) {
 	t.Helper()
 	n := 0
-	return func() (Ask, error) {
-		return func(context.Context, string) (Reply, error) {
-			if n >= len(texts) {
-				t.Fatalf("the run asked %d times, and %d replies were scripted", n+1, len(texts))
-			}
-			n++
-			return Reply{Text: texts[n-1]}, nil
-		}, nil
+	return func(context.Context, string) (Reply, error) {
+		if n >= len(texts) {
+			t.Fatalf("the run asked %d times, and %d replies were scripted", n+1, len(texts))
+		}
+		n++
+		return Reply{Text: texts[n-1]}, nil
 	}, &n
 }
 
-// askingNothing is a NewAsk whose Ask fails the test on any call.
-func askingNothing(t *testing.T) func() (Ask, error) {
+// askingNothing is an Ask that fails the test on any call.
+func askingNothing(t *testing.T) Ask {
 	t.Helper()
-	return func() (Ask, error) {
-		return func(context.Context, string) (Reply, error) {
-			t.Error("the run asked the model")
-			return Reply{}, errors.New("no call was expected")
-		}, nil
+	return func(context.Context, string) (Reply, error) {
+		t.Error("the run asked the model")
+		return Reply{}, errors.New("no call was expected")
 	}
 }
 
@@ -205,8 +204,8 @@ func fieldOf(t *testing.T, path, key string) []string {
 func TestInvokeLandsEachPassThroughTheWriteAPI(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
 
-	newAsk, calls := replying(t, "none", "flt-overreach: 2", "flt-underspecified: 2", "none")
-	rep := invoked(t, invocation(t, root, state, query.PassRigor, false, newAsk))
+	ask, calls := replying(t, "none", "flt-overreach: 2", "flt-underspecified: 2", "none")
+	rep := invoked(t, invocation(t, root, state, query.PassRigor, false, ask))
 	if rep.Outcome != result.Done || !rep.Asked || *calls != 4 {
 		t.Fatalf("the rigor run: outcome %s, asked %v, %d calls", rep.Outcome, rep.Asked, *calls)
 	}
@@ -228,8 +227,8 @@ func TestInvokeLandsEachPassThroughTheWriteAPI(t *testing.T) {
 		t.Errorf("the work's rigor = %v, want the authored 0.9", got)
 	}
 
-	newAsk, calls = replying(t, "flt-transfer: 1", "none", "none", "none")
-	rep = invoked(t, invocation(t, root, state, query.PassBearing, false, newAsk))
+	ask, calls = replying(t, "flt-transfer: 1", "none", "none", "none")
+	rep = invoked(t, invocation(t, root, state, query.PassBearing, false, ask))
 	if rep.Outcome != result.Done || *calls != 4 || rep.Counts != (Counts{Total: 4, Done: 4}) {
 		t.Fatalf("the bearing run: outcome %s, %d calls, counts %+v; want the four edges done", rep.Outcome, *calls, rep.Counts)
 	}
@@ -266,13 +265,168 @@ func TestInvokeLandsEachPassThroughTheWriteAPI(t *testing.T) {
 	}
 }
 
+// TestInvokeWritesNoCommonFileWhileItAsks: while any call of a run over both sets
+// is out, the run's ledger and captures and the KB's two record files hold the
+// bytes they held before the walk — each answered item waits in its own result
+// file — and once the walk ends its lines and captures stand in walk order.
+func TestInvokeWritesNoCommonFileWhileItAsks(t *testing.T) {
+	root, state := invokeKB(t), t.TempDir()
+	ask, calls := replying(t, "none", "flt-overreach: 2", "flt-underspecified: 2", "none",
+		"flt-transfer: 1", "none", "none", "none")
+	inv := invocation(t, root, state, query.PassBoth, false, nil)
+	runDir, src := filepath.Join(RunsDir(state), inv.Run), kb.OnDisk(root)
+	common := []string{filepath.Join(runDir, linesFile), filepath.Join(runDir, capturesFile),
+		src.KBPath(kb.GraphNodesFile), src.KBPath(kb.GraphEdgesFile)}
+	read := func() []string {
+		out := make([]string, len(common))
+		for i, path := range common {
+			b, err := os.ReadFile(path)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			out[i] = string(b)
+		}
+		return out
+	}
+	before := read()
+	inv.Launch = sequentialLaunch(func(ctx context.Context, prompt string) (Reply, error) {
+		if now := read(); !slices.Equal(now, before) {
+			t.Errorf("call %d: a common file changed while the walk asked", *calls+1)
+		}
+		return ask(ctx, prompt)
+	})
+	rep := invoked(t, inv)
+	if rep.Outcome != result.Done || *calls != 8 {
+		t.Fatalf("the run: outcome %s, %d calls; want the eight items of both sets done", rep.Outcome, *calls)
+	}
+	want := slices.Concat(invokeRigorItems, invokeBearingItems)
+	for _, name := range []string{linesFile, capturesFile} {
+		var got []string
+		for _, rec := range lines(t, filepath.Join(rep.Ledger, name)) {
+			got = append(got, recordedItem(rec))
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s names %q, want the walk's order %q", name, got, want)
+		}
+	}
+}
+
+// TestInvokeResumeLandsAKilledRunsResults: a resume over a run a kill stopped
+// after an item's answer lands that answer from its result file and asks
+// nothing for it, and reports the value scored and written, so the caller's end
+// refresh publishes it.
+func TestInvokeResumeLandsAKilledRunsResults(t *testing.T) {
+	root, state := oneClaimKB(t), t.TempDir()
+	inv := invocation(t, root, state, query.PassRigor, false, func(context.Context, string) (Reply, error) {
+		return Reply{}, errors.New("the provider closed the connection")
+	})
+	first := invoked(t, inv)
+	if first.Outcome != result.Failed {
+		t.Fatalf("the first invocation: outcome %s, want its one item failed", first.Outcome)
+	}
+	// What a kill after the next invocation's answer leaves: the answer's result
+	// file, and no line or capture for it.
+	claim := node(kb.NodeKindClaim, "clm-aaaaaa")
+	l := &Ledger{dir: first.Ledger, run: first.Run, backEnd: "provider"}
+	e := landedEntry("0.85", kb.FaultOverreach)
+	e.Started, e.Ended = "2026-10-20T10:01:00Z", "2026-10-20T10:01:05Z"
+	if err := l.writeResult(0, resultRecord{Line: l.line(claim, e), Capture: captureRecord{Run: first.Run, identity: identityOf(claim)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	again := invoked(t, resumeOf(t, inv, first, askingNothing(t)))
+	if again.Outcome != result.Done || !again.Wrote || !slices.Equal(again.Scored, []string{"clm-aaaaaa"}) {
+		t.Fatalf("the resume: outcome %s, wrote %v, scored %q; want the folded value landed and reported", again.Outcome, again.Wrote, again.Scored)
+	}
+	if got := rigorAt(t, root, "clm-aaaaaa"); got != 0.85 {
+		t.Errorf("the claim's rigor = %v, want the result's 0.85", got)
+	}
+}
+
+// TestLandValuesFailsARefusedEntryAndLandsTheRest: a write batch the KB refuses
+// for one entry, naming it, fails that entry's item and lands every other
+// value, and the rigor values and the bearing land under the one lock hold.
+func TestLandValuesFailsARefusedEntryAndLandsTheRest(t *testing.T) {
+	supports := query.ScoringEdge{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationSupports}
+	root := invokeKB(t)
+	values := []Landing{
+		{Item: node(kb.NodeKindClaim, "clm-aaaaaa"), Value: kb.Bearing{Value: 0.85}},
+		// A second value for a record the batch already writes.
+		{Item: node(kb.NodeKindClaim, "clm-aaaaaa"), Value: kb.Bearing{Value: 0.5}},
+		{Item: node(kb.NodeKindClaim, "clm-bbbbbb"), Value: kb.Bearing{Value: 0.7}},
+		{Item: query.Item{Edge: &supports}, Value: kb.Bearing{Value: 0.9}},
+	}
+	errs := landValues(root, values, log.Discard())
+	if len(errs) != len(values) || errs[1] == nil {
+		t.Fatalf("errors %v, want one per value and the refused one failed", errs)
+	}
+	for i, err := range errs {
+		if i != 1 && err != nil {
+			t.Errorf("value %d failed (%v), want it landed beside the refused one", i, err)
+		}
+	}
+	if a, b := rigorAt(t, root, "clm-aaaaaa"), rigorAt(t, root, "clm-bbbbbb"); a != 0.85 || b != 0.7 {
+		t.Errorf("the rigor values are %v and %v, want the batch's 0.85 and 0.7", a, b)
+	}
+	if got := bearingAt(t, root, supports); got != "0.9" {
+		t.Errorf("the supports edge bears %q, want the batch's 0.9", got)
+	}
+}
+
+// TestLandValuesFailsEachValueARefusalNamingNoEntryCovers: records a hand edit
+// left degraded after the run's start refuse every write batch naming no
+// entry, so each value is re-issued alone, fails with the refusal's detail, and
+// nothing lands.
+func TestLandValuesFailsEachValueARefusalNamingNoEntryCovers(t *testing.T) {
+	supports := query.ScoringEdge{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: kb.RelationSupports}
+	root := invokeKB(t)
+	src := kb.OnDisk(root)
+	g, err := kb.LoadAuthoredGraph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.References = append(g.References, kb.UnscoredEdge{Source: "clm-aaaaaa", Target: "clm-ffffff"})
+	if err := os.WriteFile(src.KBPath(kb.GraphEdgesFile), kb.EncodeEdges(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	records := func() []string {
+		var out []string
+		for _, rel := range []string{kb.GraphNodesFile, kb.GraphEdgesFile} {
+			b, err := os.ReadFile(src.KBPath(rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, string(b))
+		}
+		return out
+	}
+	before := records()
+	values := []Landing{
+		{Item: node(kb.NodeKindClaim, "clm-aaaaaa"), Value: kb.Bearing{Value: 0.85}},
+		{Item: node(kb.NodeKindClaim, "clm-bbbbbb"), Value: kb.Bearing{Value: 0.7}},
+		{Item: query.Item{Edge: &supports}, Value: kb.Bearing{Value: 0.9}},
+	}
+	errs := landValues(root, values, log.Discard())
+	if len(errs) != len(values) {
+		t.Fatalf("errors %v, want one per value", errs)
+	}
+	for i, err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "clm-ffffff") {
+			t.Errorf("value %d: error %v, want it failed with the degraded load's detail", i, err)
+		}
+	}
+	if !slices.Equal(records(), before) {
+		t.Error("a landing over a degraded load wrote the records")
+	}
+}
+
 // TestInvokeResumeOfAFinishedRunAsksNothing: continuing a run whose every item is
 // done asks nothing and lands nothing, reports the whole run done over its own
 // ledger, and leaves nothing unfinished.
 func TestInvokeResumeOfAFinishedRunAsksNothing(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	newAsk, _ := replying(t, "flt-transfer: 1", "none", "none", "none")
-	inv := invocation(t, root, state, query.PassBearing, false, newAsk)
+	ask, _ := replying(t, "flt-transfer: 1", "none", "none", "none")
+	inv := invocation(t, root, state, query.PassBearing, false, ask)
 	first := invoked(t, inv)
 	if first.Outcome != result.Done {
 		t.Fatalf("the run: outcome %s", first.Outcome)
@@ -296,8 +450,8 @@ func TestInvokeResumeOfAFinishedRunAsksNothing(t *testing.T) {
 // and the report names the failed item with the reason its line recorded.
 func TestInvokeFailsAMalformedReplyAndGoesOn(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	newAsk, _ := replying(t, "none", "about half", "none", "none")
-	rep := invoked(t, invocation(t, root, state, query.PassRigor, false, newAsk))
+	ask, _ := replying(t, "none", "about half", "none", "none")
+	rep := invoked(t, invocation(t, root, state, query.PassRigor, false, ask))
 	if rep.Outcome != result.Failed {
 		t.Fatalf("the run with a malformed reply: outcome %s", rep.Outcome)
 	}
@@ -324,9 +478,9 @@ func TestInvokeFailsAMalformedReplyAndGoesOn(t *testing.T) {
 // mixed set and each line naming its own item's pass.
 func TestInvokeWalksBothSetsInOneRun(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	newAsk, _ := replying(t, "none", "flt-overreach: 2", "flt-underspecified: 2", "none",
+	ask, _ := replying(t, "none", "flt-overreach: 2", "flt-underspecified: 2", "none",
 		"flt-transfer: 1", "none", "none", "none")
-	rep := invoked(t, invocation(t, root, state, query.PassBoth, false, newAsk))
+	rep := invoked(t, invocation(t, root, state, query.PassBoth, false, ask))
 	if rep.Outcome != result.Done || rep.Counts != (Counts{Total: 8, Done: 8}) || rep.Unfinished {
 		t.Fatalf("the run: outcome %s, counts %+v, unfinished %v; want the eight items of both sets done",
 			rep.Outcome, rep.Counts, rep.Unfinished)
@@ -362,16 +516,13 @@ func TestInvokeWalksBothSetsInOneRun(t *testing.T) {
 	}
 }
 
-// TestInvokeDryRunAsksNothing: a dry run over both sets opens no Ask, lands
+// TestInvokeDryRunAsksNothing: a dry run over both sets makes no call, lands
 // nothing and leaves nothing to continue; it lists both sets in its item list
 // with every item remaining, records the mixed set and no back end in its
 // header, and writes no ledger line.
 func TestInvokeDryRunAsksNothing(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	inv := invocation(t, root, state, query.PassBoth, true, func() (Ask, error) {
-		t.Error("a dry run opened its Ask")
-		return nil, errors.New("no Ask was expected")
-	})
+	inv := invocation(t, root, state, query.PassBoth, true, askingNothing(t))
 	rep := invoked(t, inv)
 	if rep.Outcome != result.Done || rep.Asked || rep.Unfinished || rep.Wrote {
 		t.Fatalf("the dry run: outcome %s, asked %v, unfinished %v, wrote %v; want done with nothing asked, left or written",
@@ -405,8 +556,8 @@ func TestInvokeDryRunAsksNothing(t *testing.T) {
 // the walk asks anything.
 func TestInvokeResumesAMixedRun(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	newAsk, _ := replying(t, "none", "none", "none", "none", "none")
-	inv := invocation(t, root, state, query.PassBoth, false, newAsk)
+	ask, _ := replying(t, "none", "none", "none", "none", "none")
+	inv := invocation(t, root, state, query.PassBoth, false, ask)
 	inv.Limit = 5
 	bounded := invoked(t, inv)
 	if bounded.Outcome != result.Bounded || bounded.Counts != (Counts{Total: 8, Done: 5, Remaining: 3}) || !bounded.Unfinished {
@@ -414,8 +565,8 @@ func TestInvokeResumesAMixedRun(t *testing.T) {
 			bounded.Outcome, bounded.Counts, bounded.Unfinished)
 	}
 
-	newAsk, _ = replying(t, "none", "none", "none")
-	again := invoked(t, resumeOf(t, inv, bounded, newAsk))
+	ask, _ = replying(t, "none", "none", "none")
+	again := invoked(t, resumeOf(t, inv, bounded, ask))
 	if again.Outcome != result.Done || again.Counts != (Counts{Total: 8, Done: 8}) {
 		t.Fatalf("the resumed run: outcome %s, counts %+v; want the whole mixed set done", again.Outcome, again.Counts)
 	}
@@ -437,8 +588,8 @@ func TestInvokeResumesAMixedRun(t *testing.T) {
 // judgements answered; and nothing asks the model.
 func TestInvokeResumeRepricesUnderAMovedTable(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
-	newAsk, _ := replying(t, "flt-overreach: 2")
-	inv := invocation(t, root, state, query.PassRigor, false, newAsk)
+	ask, _ := replying(t, "flt-overreach: 2")
+	inv := invocation(t, root, state, query.PassRigor, false, ask)
 	first := invoked(t, inv)
 	if first.Outcome != result.Done || !slices.Equal(first.Scored, []string{"clm-aaaaaa"}) {
 		t.Fatalf("the run: outcome %s, scored %q; want the one claim landed", first.Outcome, first.Scored)
@@ -538,15 +689,13 @@ func TestInvokeNamesTheItemACancelStoppedBefore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
-	inv := invocation(t, root, state, query.PassRigor, false, func() (Ask, error) {
-		return func(context.Context, string) (Reply, error) {
-			calls++
-			if calls == 2 {
-				cancel()
-				return Reply{}, context.Canceled
-			}
-			return Reply{Text: "none"}, nil
-		}, nil
+	inv := invocation(t, root, state, query.PassRigor, false, func(context.Context, string) (Reply, error) {
+		calls++
+		if calls == 2 {
+			cancel()
+			return Reply{}, context.Canceled
+		}
+		return Reply{Text: "none"}, nil
 	})
 	rep, err := Invoke(ctx, inv)
 	if err != nil {
@@ -571,8 +720,8 @@ func TestInvokeNamesTheItemACancelStoppedBefore(t *testing.T) {
 // KB keeps its value.
 func TestInvokeFailsAnItemItCannotLand(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
-	newAsk, _ := replying(t, "none")
-	inv := invocation(t, root, state, query.PassRigor, false, newAsk)
+	ask, _ := replying(t, "none")
+	inv := invocation(t, root, state, query.PassRigor, false, ask)
 	// The records' directory refuses every new file, which is where a landing
 	// writes.
 	dir := filepath.Join(root, kb.IndexDir)
@@ -696,8 +845,8 @@ func TestInvokeDryRunPrunesDryRunsAlone(t *testing.T) {
 func TestInvokeRefusesAResumeOfAPrunedRun(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
 	stood := standRuns(t, state, series(RunKindReal, KeptRuns, 0))
-	newAsk, _ := replying(t, "none")
-	inv := invocation(t, root, state, query.PassRigor, false, newAsk)
+	ask, _ := replying(t, "none")
+	inv := invocation(t, root, state, query.PassRigor, false, ask)
 	if rep := invoked(t, inv); rep.Outcome != result.Done {
 		t.Fatalf("the run: outcome %s", rep.Outcome)
 	}

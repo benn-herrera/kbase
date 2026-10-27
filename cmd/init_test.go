@@ -9,15 +9,15 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/gitledger"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
-	"kbase/internal/ledger"
 	toolresult "kbase/internal/result"
 )
 
 // gitWorktree is a fresh git worktree named repo under a temp dir, its
 // .git laid down by hand rather than git-init: cmd may not exec git
-// (execpolicy), and init commits through ledger, the one package that may.
+// (execpolicy), and init commits through gitledger, the one package that may.
 // The hand-built objects/refs/HEAD is the whole layout a birth commit needs.
 func gitWorktree(t *testing.T) string {
 	t.Helper()
@@ -224,7 +224,7 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 		t.Errorf("%s lacks the authored pin", kb.AgentsFile)
 	}
 	// The birth commit landed where git writes a first commit: the branch
-	// ref. Reading the commit back needs git, which only ledger may exec, so
+	// ref. Reading the commit back needs git, which only gitledger may exec, so
 	// the ref standing is the exec-free proof commit ran.
 	if _, err := os.Stat(filepath.Join(repo, ".git", "refs", "heads", "main")); err != nil {
 		t.Errorf("the birth commit left no branch ref: %v", err)
@@ -237,13 +237,13 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	}
 }
 
-// TestBirthSubjectIsOffTheTrail: ledger's Trail reads only subjects opening
-// with ledger.Prefix, so a birth subject that opened with it would put the
+// TestBirthSubjectIsOffTheTrail: gitledger's Trail reads only subjects opening
+// with gitledger.Prefix, so a birth subject that opened with it would put the
 // birth commit on build's trail and lift build's refusal over a created KB.
 // ledger_test.go pins that a plain subject leaves Trail empty.
 func TestBirthSubjectIsOffTheTrail(t *testing.T) {
-	if strings.HasPrefix(birthSubject, ledger.Prefix) {
-		t.Errorf("birth subject %q opens with the trail prefix %q", birthSubject, ledger.Prefix)
+	if strings.HasPrefix(birthSubject, gitledger.Prefix) {
+		t.Errorf("birth subject %q opens with the trail prefix %q", birthSubject, gitledger.Prefix)
 	}
 }
 

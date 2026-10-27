@@ -80,7 +80,7 @@ func runConfig(t *testing.T, opts configureOptions, client *modeltest.MockClient
 	var stdout, stderr bytes.Buffer
 	opts.Stdout, opts.Stderr = &stdout, &stderr
 	if opts.NewClient == nil {
-		opts.NewClient = func(model.Endpoint) model.Client { return client }
+		opts.NewClient = func(model.Endpoint) model.Client { return client.Client() }
 	}
 	code, err := runConfigure(context.Background(), opts)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestRunConfigureWarnsBeforeTheDial(t *testing.T) {
 	var atDial string
 	opts.NewClient = func(model.Endpoint) model.Client {
 		atDial = stderr.String()
-		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
 	}
 	if _, err := runConfigure(context.Background(), opts); err != nil {
 		t.Fatalf("runConfigure: %v", err)
@@ -219,7 +219,7 @@ func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
 		opts.ModelMap = []string{value}
 		opts.NewClient = func(model.Endpoint) model.Client {
 			t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
-			return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+			return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
 		}
 
 		got := runConfig(t, opts, nil)
@@ -244,7 +244,7 @@ func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
 	opts.ModelMap = refs(decisionID, textID, scoringID)
 	opts.NewClient = func(model.Endpoint) model.Client {
 		dialed = true
-		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
 	}
 	got := runConfig(t, opts, nil)
 

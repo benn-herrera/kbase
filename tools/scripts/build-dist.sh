@@ -51,6 +51,25 @@ function resolve_release_names() {
   inst_asc="${inst}.asc"
 }
 
+# With TAG=1 the build ends by tagging the commit it built, so a tag that
+# exists, or a tree that differs from HEAD, is refused before anything is built.
+function check_tag_ready() {
+  [[ "${TAG:-}" == "1" ]] || return 0
+  if git rev-parse -q --verify "refs/tags/${ver}" > /dev/null; then
+    printf 'dist: check: usage: tag %s already exists; nothing was staged or signed.\n' "${ver}" >&2
+    exit 1
+  fi
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    printf 'dist: check: usage: tracked files have uncommitted changes, so tag %s would name a commit that did not build the release; nothing was staged or signed.\n' "${ver}" >&2
+    exit 1
+  fi
+}
+
+function tag_release() {
+  [[ "${TAG:-}" == "1" ]] || return 0
+  git tag "${ver}"
+}
+
 function stage_release() {
   command rm -rf "${DIST_DIR}/${ver_dir}" "${DIST_DIR}/${tgz}" "${DIST_DIR}/${tgz_asc}" \
     "${DIST_DIR}/${inst}" "${DIST_DIR}/${inst_asc}"
@@ -89,7 +108,7 @@ function installer_binary_verifications() {
   local record bin
   for record in "${TARGETS[@]}"; do
     IFS=, read -r _ _ bin _ _ <<< "${record}"
-    printf 'gpg --verify "./%s/%s.asc" "./%s/%s"\n' "${ver_dir}" "${bin}" "${ver_dir}" "${bin}"
+    printf 'gpg --assert-signer "${fpr}" --verify "./%s/%s.asc" "./%s/%s"\n' "${ver_dir}" "${bin}" "${ver_dir}" "${bin}"
   done
 }
 
@@ -107,42 +126,22 @@ $(installer_platform_arms)
     ;;
 esac
 command -v gpg > /dev/null || { echo "gpg not installed or not in PATH."; exit 1; }
-key_url="https://bennherrera.dev/.well-known/openpgpkey/hu/dpqu1e7ew9iu17qy81b7oqfb8yq11or4"
-policy_url="https://bennherrera.dev/.well-known/openpgpkey/policy"
-gpg --auto-key-locate wkd --locate-keys benn@bennherrera.dev
+key_url="https://bennherrera.dev/wkd"
+key_info=\$(gpg --auto-key-locate wkd --locate-external-keys benn@bennherrera.dev)
 [[ -f "${inst_asc}" ]] || curl --fail --silent --show-error --location --proto '=https' --max-time 60 -O "https://github.com/benn-herrera/kbase/releases/download/${ver}/${inst_asc}"
-packets="\$(gpg --batch --list-packets "${inst_asc}")"
-fpr="\$(printf '%s\n' "\${packets}" | awk '/issuer fpr v4 / { sub(/.*issuer fpr v4 /, ""); sub(/\).*/, ""); print; exit }')"
-lookup="\${fpr}"
-[[ -n "\${lookup}" ]] || lookup="\$(printf '%s\n' "\${packets}" | awk '/keyid / && /:signature packet:/ { sub(/.*keyid /, ""); print; exit }')"
-[[ -n "\${lookup}" ]] || {
-  printf 'kbase: cannot say who signed this script: its signature names no key. Nothing was verified and nothing was installed.\n' 1>&2
-  exit 1
-}
-if ! listing="\$(gpg --batch --with-colons --list-keys "\${lookup}")"; then
-  printf 'kbase: this script is signed by key %s, which is not in the keyring. The kbase signing key is published at %s. Nothing was verified and nothing was installed.\n' "\${lookup}" "\${key_url}" 1>&2
-  exit 1
-fi
-[[ -n "\${fpr}" ]] || fpr="\$(printf '%s\n' "\${listing}" | awk -F: '\$1 == "fpr" { print \$10; exit }')"
-uid="\$(printf '%s\n' "\${listing}" | awk -F: '\$1 == "uid" { print \$10; exit }')"
-otrust="\$(printf '%s\n' "\${listing}" | awk -F: '\$1 == "pub" { print \$9; exit }')"
-[[ -n "\${fpr}" && -n "\${uid}" ]] || {
-  printf 'kbase: gpg listed no fingerprint or user ID for signing key %s, so nothing can be trusted. Nothing was verified and nothing was installed.\n' "\${lookup}" 1>&2
-  exit 1
-}
-if [[ "\${otrust}" != "u" ]]; then
+otrust=\$(awk '/^uid/ { print \$2; exit(0); }' <<< "\${key_info}")
+fpr=\$(awk '/^pub/ {Y=1; next;} {if (Y != 1) next; print \$1; exit(0);}' <<< "\${key_info}")
+if [[ "\${otrust}" != "[ultimate]" ]]; then
   if [[ ! -t 0 ]]; then
     printf 'kbase: stdin is not a terminal, so the key cannot be trusted interactively. Nothing was verified and nothing was installed.\nEstablish the trust by hand, then rerun this script:\n' 1>&2
-    printf '  curl -fsSL %s | gpg --import\n' "\${key_url}" 1>&2
-    printf '  echo %s:6: | gpg --import-ownertrust\n' "\${fpr}" 1>&2
     exit 1
   fi
-  printf 'kbase releases are signed by:\n  uid:         %s\n  fingerprint: %s\n  key:         %s\n  policy:      %s\nHolding a copy of the key and of the policy is how you check both for yourself.\nNeither this script nor the download is trusted until you answer.\nTrust this key for kbase releases?\n  y: record ultimate ownertrust for the fingerprint above; later installs with this key ask nothing\n  o: record nothing and verify now; the keyring stays untouched and gpg flags each signature as untrusted\n  anything else: abort, installing nothing\nChoice [y/o/N]: ' "\${uid}" "\${fpr}" "\${key_url}" "\${policy_url}" 1>&2
+  printf '\nkbase releases are signed by benn@bennherrera.dev\n\n%s\n\n%s\n\nNeither this script nor the download is trusted until you answer.\nTrust this key for kbase releases?\n  y: record ultimate ownertrust for the fingerprint above; later installs with this key ask nothing\n  o: record nothing and verify now; the keyring stays untouched and gpg flags each signature as untrusted\n  anything else: abort, installing nothing\nChoice [y/o/N]: ' "\${key_url}" "\${key_info}" 1>&2
   answer=""
   read -r answer || answer=""
   case "\${answer}" in
     y|Y)
-      printf '%s:6:\n' "\${fpr}" | gpg --batch --import-ownertrust
+      printf '%s:6:\n' "\${fpr}" | gpg --import-ownertrust
       ;;
     o|O)
       ;;
@@ -153,10 +152,10 @@ if [[ "\${otrust}" != "u" ]]; then
   esac
 fi
 printf "If gpg check fails for the tgz or any binary DO NOT USE THIS DOWNLOAD!\n\n"
-gpg --verify "${inst_asc}" "\${0}"
+gpg --assert-signer "\${fpr}" --verify "${inst_asc}" "\${0}"
 [[ -f "${tgz_asc}" ]] || curl --fail --silent --show-error --location --proto '=https' --max-time 600 -O "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz_asc}"
 [[ -f "${tgz}" ]] || curl --fail --silent --show-error --location --proto '=https' --max-time 600 -O "https://github.com/benn-herrera/kbase/releases/download/${ver}/${tgz}"
-gpg --verify "${tgz_asc}" "${tgz}"
+gpg --assert-signer "\${fpr}" --verify "${tgz_asc}" "${tgz}"
 [[ -d "${ver_dir}" ]] || tar xzf "${tgz}"
 
 $(installer_binary_verifications)
@@ -164,13 +163,16 @@ $(installer_binary_verifications)
 case "\${plat}" in
   darwin-arm64)
     command cp -vf "./${ver_dir}/kbase-darwin-arm64" "./${ver_dir}/kbase"
+    command cp -vf "./${ver_dir}/kbase-darwin-arm64.asc" "./${ver_dir}/kbase.asc"
     xattr -d com.apple.quarantine "./${ver_dir}/kbase" 2> /dev/null || true
     ;;
   linux-amd64)
     command cp -vf "./${ver_dir}/kbase-linux-amd64" "./${ver_dir}/kbase"
+    command cp -vf "./${ver_dir}/kbase-linux-amd64.asc" "./${ver_dir}/kbase.asc"
     ;;
   windows-amd64)
     command cp -vf "./${ver_dir}/kbase-windows-amd64.exe" "./${ver_dir}/kbase.exe"
+    command cp -vf "./${ver_dir}/kbase-windows-amd64.exe.asc" "./${ver_dir}/kbase.exe.asc"
     ;;
 esac
 EOF
@@ -188,8 +190,9 @@ function report() {
 
 function main() {
   set_defaults
-  build_targets
   resolve_release_names
+  check_tag_ready
+  build_targets
   stage_release
   sign_staged
   make_tarball
@@ -197,6 +200,7 @@ function main() {
   write_installer
   sign_installer
   report
+  tag_release
 }
 
 main

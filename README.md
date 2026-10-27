@@ -214,7 +214,7 @@ is detached). From the repository, in a second shell:
 
 ```sh
 kbase status   # state, pid, stage commits, progress, the resume command
-kbase cancel   # stop the build; costs only the unit in flight
+kbase cancel   # stop the build; costs only the calls in flight
 ```
 
 State that does not belong in the repository lives in `$XDG_STATE_HOME/kbase/<key>/`, or in
@@ -224,8 +224,9 @@ paid-for inference and survives `git clean`.
 
 The store is versioned: `<state-dir>/format` is `1`, and `build`, `status`, `wait`, `cancel`, the
 MCP `build` tool and the MCP `rewind-build` tool refuse a newer store (`check: state-dir`). Each build
-prunes `reports/build-*` and `scratch/captures/` older than the fifth-latest ended build, and keeps
-the answer cache. `status` reports `cache-entries` and `cache-bytes`. Deleting the store is safe but
+keeps the newest six captured outputs of builds the MCP server started (`reports/build-*`), and the
+answer cache, multichoice-ask records and call captures of the current build trail and the five before
+it. `status` reports `cache-entries` and `cache-bytes`. Deleting the store is safe but
 forfeits the cache.
 
 The operation lock is not in the store: it is `kbase-operation.lock` in the repository's git
@@ -333,7 +334,7 @@ the run's identity, `kbase wait` reporting the outcome.
 **Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
 A writer that cannot take it within 30 s gets `retry`. While a build runs, these are refused at once
 (`check: lock`). A build waits out a write in progress for up to 30 s. `kbase score` takes it around
-each landing and each of its two refreshes, never across the run. A resume restores every path
+its one landing and each of its two refreshes, never across the run. A resume restores every path
 under `kb-root/` to the last boundary, so edits made while a build is interrupted are lost unless
 carried in git. `render-citation`, `verify` and the queries take no lock. Locks are advisory and
 Unix only.
@@ -524,7 +525,7 @@ Provider selection — `--provider`, else the sole `providers.toml` entry — be
 hold refuses against the `providers.toml` of the layer `configure` writes into — the file an entry
 belongs in — and offers `kbase configure --create` unless that provider faulted out of the pool,
 where the fault's own reason stands instead. A pool with no usable entry refuses against that same
-file. In a build, the claim graph's letter asks go to the `decision` role and the overview passage to
+file. In a build, the claim graph's multichoice asks go to the `decision` role and the overview passage to
 `text`; in a scoring run, the asks go to `scoring`.
 
 `kbase show-config` reports how all of this resolves, and changes nothing: no KB read, no file
@@ -558,12 +559,16 @@ just edit-gate   # cheap gate: run after every change
 just checkpoint  # full suite: run at checkpoints
 just test        # unit tests (VERBOSE=1 for per-test output)
 just dist        # cross-build every target and stage the signed distro; run checkpoint first
+just dist --tag  # the same, then git tag v<version> locally
 ```
 
 `just dist` writes four artifacts to `dist/`: the tarball `kbase-v<version>.tgz`, its detached
 signature `kbase-v<version>.tgz.asc`, the installer `install-kbase-v<version>.sh` and its signature
 `install-kbase-v<version>.sh.asc`. It runs no checkpoint of its own: a cross-build is what users
-receive, so the gate is a precondition of the release, not a step the recipe runs. No built binaries
+receive, so the gate is a precondition of the release, not a step the recipe runs. `just dist --tag`
+also runs a lightweight, local `git tag v<version>` once every stage, signing included, has
+succeeded; it pushes nothing. It refuses before building anything if that tag already exists or
+tracked files have uncommitted changes. No built binaries
 are committed; `bin/` and `dist/` are gitignored. The tarball unpacks to `kbase-v<version>/` holding
 this README, [USER_CONVENTIONS.md](USER_CONVENTIONS.md) as `CONVENTIONS.md` — the operating contract
 for an agent driving the CLI — the LICENSE, and one binary per platform, each with its own `.asc`.

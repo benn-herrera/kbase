@@ -180,7 +180,7 @@ type letters struct {
 	asked []string
 }
 
-func (l *letters) read(_ context.Context, q asks.LetterQuestion) (asks.Reply, error) {
+func (l *letters) read(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.asked = append(l.asked, q.Group+"->"+q.Item)
@@ -214,7 +214,7 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 		Units: func(n int) error { total = n; return nil },
 		Unit:  func(name string) error { units = append(units, name); return nil },
 	}
-	c, err := classify(context.Background(), repo, candidates, statement, Options{Reader: reader.read, Progress: progress})
+	c, err := classify(context.Background(), repo, candidates, statement, Options{Launch: readerLaunch(reader.read), Progress: progress})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestClassifyThroughTheLetterSeam(t *testing.T) {
 	}
 
 	again := &letters{by: map[string]string{}}
-	if _, err := classify(context.Background(), repo, candidates, statement, Options{Reader: again.read}); err != nil || len(again.asked) != 0 {
+	if _, err := classify(context.Background(), repo, candidates, statement, Options{Launch: readerLaunch(again.read)}); err != nil || len(again.asked) != 0 {
 		t.Errorf("a resume asked %q, %v; want nothing the record holds", again.asked, err)
 	}
 }
@@ -256,7 +256,7 @@ func TestClassifyDefaultsToTheDraft(t *testing.T) {
 		t.Errorf("a run that cannot ask reported fallbacks %+v; its drafts were never asked", fallbacks)
 	}
 	unreadable := &letters{by: map[string]string{"clm-a->clm-b": "B"}}
-	got, err := classify(context.Background(), repo, candidates, func(n ClaimNode) string { return n.Title }, Options{Reader: unreadable.read, Progress: progress})
+	got, err := classify(context.Background(), repo, candidates, func(n ClaimNode) string { return n.Title }, Options{Launch: readerLaunch(unreadable.read), Progress: progress})
 	if err != nil {
 		t.Fatal(err)
 	}

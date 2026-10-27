@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -20,6 +22,22 @@ import (
 // landed is one value a write seam was handed: the item's id and the value as
 // the KB spells it.
 type landed struct{ id, value string }
+
+// sequentialLaunch is a Launch over a plain ask that runs each item, its after
+// included, before it returns: one item at a time, in the order launched.
+func sequentialLaunch(ask Ask) Launch {
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(Ask) (after func())) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		wg.Add(1)
+		defer wg.Done()
+		if after := item(ask); after != nil {
+			after()
+		}
+		return nil
+	}
+}
 
 // asked is one scripted reply: the title its item's prompt carries, and the
 // reply — cut off at the completion cap where truncated — or the error the call
@@ -51,9 +69,11 @@ func asking(t *testing.T, answers []asked) (Ask, *[]string) {
 // writing is a Write seam recording every value it lands.
 func writing() (Write, *[]landed) {
 	var got []landed
-	return func(it query.Item, v kb.Bearing) error {
-		got = append(got, landed{itemID(it), kb.BearingText(v)})
-		return nil
+	return func(values []Landing) []error {
+		for _, v := range values {
+			got = append(got, landed{itemID(v.Item), kb.BearingText(v.Value)})
+		}
+		return make([]error, len(values))
 	}, &got
 }
 
@@ -98,7 +118,7 @@ func TestTheLineRecordsTheValueItReplaced(t *testing.T) {
 	l := kept(t, dir)
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: ask, Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +161,7 @@ func TestRunRefusesAnItemItsPassDoesNotWalk(t *testing.T) {
 		return Reply{}, nil
 	}
 	write, landed := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: bearing[:1], Pass: query.PassRigor, Ask: ask, Write: write,
+	res, err := (&Runner{Source: src, Index: ix, Items: bearing[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +211,7 @@ func TestRunReadsTheIndexBeforeTheWalkAndNotDuringIt(t *testing.T) {
 
 	l := kept(t, t.TempDir())
 	ask, prompts := asking(t, []asked{{title: "markdown", reply: "none"}})
-	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +231,7 @@ func TestRunReadsTheIndexBeforeTheWalkAndNotDuringIt(t *testing.T) {
 	}
 	defer bl.Close()
 	bask, bprompts := asking(t, []asked{{title: "## Source:", reply: "none"}})
-	if _, err := (&Runner{Source: src, Index: ix, Items: bearing, Pass: query.PassBearing, Ask: bask, Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: bearing, Pass: query.PassBearing, Launch: sequentialLaunch(bask), Write: write,
 		Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +311,7 @@ func TestRunWalksTheSet(t *testing.T) {
 			l := kept(t, t.TempDir())
 			ask, prompts := asking(t, tc.answer)
 			write, landed := writing()
-			res, err := (&Runner{Source: src, Index: ix, Items: tc.items, Pass: query.PassRigor, Ask: ask, Write: write,
+			res, err := (&Runner{Source: src, Index: ix, Items: tc.items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 				Ledger: l, Model: "small", Limit: tc.limit}).Run(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -359,7 +379,7 @@ func TestRunRecordsARefusedTextWithoutACall(t *testing.T) {
 	}
 	write, landed := writing()
 	items := []query.Item{{Node: &query.ScoringNode{Kind: kb.NodeKindClaim, ID: "clm-dddddd"}}}
-	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write, Ledger: l, Model: "small"}).Run(context.Background())
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write, Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,8 +409,8 @@ func TestRunRecordsAWriteRefusal(t *testing.T) {
 	l := kept(t, t.TempDir())
 	ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
 	refuse := errors.New("the register changed under the write")
-	write := func(query.Item, kb.Bearing) error { return refuse }
-	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write, Ledger: l, Model: "small"}).Run(context.Background())
+	_, write := landingOn(refuse)
+	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write, Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +435,7 @@ func TestRunFailsATruncatedReply(t *testing.T) {
 	l := kept(t, t.TempDir())
 	ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none", truncated: true}})
 	write, landed := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write, Ledger: l, Model: "small"}).Run(context.Background())
+	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write, Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,10 +456,11 @@ func TestRunFailsATruncatedReply(t *testing.T) {
 	}
 }
 
-// TestRunStopsAtAnItemBoundaryOnCancel: a context cancelled during a call stops
-// the run before the next ask, records nothing for the item in flight, and
-// reports the ledger as it stands.
-func TestRunStopsAtAnItemBoundaryOnCancel(t *testing.T) {
+// TestRunCancelRecordsWhatWasAnswered: a context cancelled during a call stops
+// the walk, and the walk's end still records a line for every item answered
+// before the stop — the value that parsed landed, the reply that did not failed
+// — and none for the call in flight, then removes the result files.
+func TestRunCancelRecordsWhatWasAnswered(t *testing.T) {
 	src, ix, set := runSet(t)
 	set = set[:3]
 	l := kept(t, t.TempDir())
@@ -448,34 +469,163 @@ func TestRunStopsAtAnItemBoundaryOnCancel(t *testing.T) {
 	var calls int
 	ask := func(_ context.Context, _ string) (Reply, error) {
 		calls++
-		if calls == 2 {
+		switch calls {
+		case 2:
+			return Reply{Text: "about half"}, nil
+		case 3:
 			cancel()
 			return Reply{}, context.Canceled
 		}
 		return Reply{Text: "none"}, nil
 	}
-	write, landed := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: ask, Write: write, Ledger: l, Model: "small"}).Run(ctx)
+	write, wrote := writing()
+	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write, Ledger: l, Model: "small"}).Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Outcome != result.Cancelled {
 		t.Errorf("outcome = %q, want %q", res.Outcome, result.Cancelled)
 	}
-	if want := (Counts{Total: 3, Done: 1, Remaining: 2}); res.Counts != want {
+	if want := (Counts{Total: 3, Done: 1, Failed: 1, Remaining: 1}); res.Counts != want {
 		t.Errorf("counts = %+v, want %+v", res.Counts, want)
 	}
-	if calls != 2 {
-		t.Errorf("the run made %d calls, want 2: a cancelled context stops before the next ask", calls)
+	if calls != 3 {
+		t.Errorf("the run made %d calls, want 3: a cancelled context stops the walk", calls)
 	}
-	if len(*landed) != 1 {
-		t.Errorf("the write seam was handed %v, want the one item that finished", *landed)
+	if want := []landed{{itemID(set[0]), "1.0"}}; !slices.Equal(*wrote, want) {
+		t.Errorf("the write seam was handed %v, want %v: the cancelled walk's end still lands what it answered", *wrote, want)
 	}
-	if got := l.Status(set[1]); got != "" {
+	if got := l.Status(set[2]); got != "" {
 		t.Errorf("the item in flight recorded %q, want nothing", got)
 	}
-	if recs := lines(t, filepath.Join(l.Dir(), linesFile)); len(recs) != 1 {
-		t.Errorf("the ledger holds %d lines, want the one item that finished", len(recs))
+	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got, []string{StatusDone, StatusFailed}) {
+		t.Errorf("the ledger's lines record %q, want the two items answered before the stop, in walk order", got)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir(), resultsDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the walk's end left its result files: %v", err)
+	}
+}
+
+// reversing is a Launch over ask that holds each item it launches until the item
+// launched after it has finished, so the n items a walk launches complete in the
+// reverse of their launch order. The slice records, by launch, the prompt each
+// item's call carried. A walk that launches fewer than n items never drains, so
+// n is the count of items the walk calls.
+func reversing(n int, ask Ask) (Launch, []string) {
+	prompts := make([]string, n)
+	finished := make([]chan struct{}, n+1)
+	for k := range finished {
+		finished[k] = make(chan struct{})
+	}
+	close(finished[n])
+	launched := 0
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(Ask) func()) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		k := launched
+		launched++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer close(finished[k])
+			<-finished[k+1]
+			after := item(func(ctx context.Context, prompt string) (Reply, error) {
+				prompts[k] = prompt
+				return ask(ctx, prompt)
+			})
+			if after != nil {
+				after()
+			}
+		}()
+		return nil
+	}, prompts
+}
+
+// unstamped is the records of the JSONL file at path, each without the started
+// and ended stamps a walk's timing sets.
+func unstamped(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	recs := lines(t, path)
+	for _, rec := range recs {
+		delete(rec, "started")
+		delete(rec, "ended")
+	}
+	return recs
+}
+
+// TestRunRecordsTheSameWhateverOrderItsItemsComplete: a walk whose items
+// complete in the reverse of their launch order records the ledger and the
+// captures a one-at-a-time walk records, modulo the stamps: each answer goes
+// into its item's result cell, and the walk's end records the cells in walk
+// order. The set holds a landed charge, a malformed reply, a failed call and a
+// text the guard refuses, so every kind of line is compared.
+func TestRunRecordsTheSameWhateverOrderItsItemsComplete(t *testing.T) {
+	src, ix, set := runSet(t)
+	ask, prompts := asking(t, []asked{
+		{title: "1| Claim A", reply: "0.5, roughly — the paragraph is thin."},
+		{title: "1| Claim B", err: errors.New("the provider closed the connection")},
+		{title: "1| Claim C", reply: "flt-overreach: 2\n"},
+		{title: "", reply: "none"},
+	})
+	walk := func(launch Launch) *Ledger {
+		t.Helper()
+		l := kept(t, t.TempDir())
+		write, _ := writing()
+		if _, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: launch, Write: write,
+			Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	sequential := walk(sequentialLaunch(ask))
+	n := len(*prompts)
+	launch, _ := reversing(n, ask)
+	outOfOrder := walk(launch)
+	reversed := slices.Clone((*prompts)[:n])
+	slices.Reverse(reversed)
+	if !slices.Equal((*prompts)[n:], reversed) {
+		t.Fatal("the reversing launch did not complete the calls in the reverse of the one-at-a-time walk's order")
+	}
+	for _, name := range []string{linesFile, capturesFile} {
+		want, got := unstamped(t, filepath.Join(sequential.Dir(), name)), unstamped(t, filepath.Join(outOfOrder.Dir(), name))
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s of the out-of-order walk differs from the one-at-a-time walk's:\n got %v\nwant %v", name, got, want)
+		}
+	}
+}
+
+// TestRunLaunchesItsItemsInSetOrder: the walk launches the items it asks in the
+// set's order, whatever order they complete in: the k-th launch carries the
+// prompt the k-th capture records, and the captures stand in walk order.
+func TestRunLaunchesItsItemsInSetOrder(t *testing.T) {
+	src, ix, set := runSet(t)
+	// The fixture's clm-dddddd is refused by the guard and launches nothing.
+	var items []query.Item
+	for _, it := range set {
+		if it.Node == nil || it.Node.ID != "clm-dddddd" {
+			items = append(items, it)
+		}
+	}
+	ask, _ := asking(t, []asked{{reply: "none"}})
+	launch, launched := reversing(len(items), ask)
+	l := kept(t, t.TempDir())
+	write, _ := writing()
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: launch, Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	captures := lines(t, filepath.Join(l.Dir(), capturesFile))
+	if len(captures) != len(items) {
+		t.Fatalf("the run left %d captures, want one per item, %d", len(captures), len(items))
+	}
+	for k, rec := range captures {
+		if recordedItem(rec) != itemID(items[k]) {
+			t.Errorf("capture %d names %s, want %s: the captures stand in walk order", k, recordedItem(rec), itemID(items[k]))
+		}
+		if rec["prompt"] != launched[k] {
+			t.Errorf("launch %d carried another item's prompt than %s's, the set's item %d", k, itemID(items[k]), k)
+		}
 	}
 }
 
@@ -488,7 +638,7 @@ func TestRunContinuesARun(t *testing.T) {
 	l := kept(t, t.TempDir())
 	first, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
 	w, _ := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: first, Write: w, Ledger: l, Model: "small", Limit: 1}).Run(context.Background())
+	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(first), Write: w, Ledger: l, Model: "small", Limit: 1}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +653,7 @@ func TestRunContinuesARun(t *testing.T) {
 		{title: "1| Claim B", reply: "flt-underspecified: 2"},
 	})
 	w2, secondLanded := writing()
-	res, err = (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Ask: second, Write: w2, Ledger: l, Model: "small"}).Run(context.Background())
+	res, err = (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(second), Write: w2, Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +709,7 @@ func TestRunSkipsManuallyScoredValues(t *testing.T) {
 			l := kept(t, dir)
 			ask, prompts := asking(t, []asked{{title: "", reply: "none"}})
 			write, landed := writing()
-			runner := &Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Ask: ask, Write: write,
+			runner := &Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Launch: sequentialLaunch(ask), Write: write,
 				Skip: ManualSkip(ix, tc.rescore), Ledger: l, Model: "small"}
 			res, err := runner.Run(context.Background())
 			if err != nil {
@@ -618,7 +768,7 @@ func TestRunSkipsManuallyScoredValues(t *testing.T) {
 			}
 			// A walk told to re-judge both asks every skipped item.
 			again, prompted := asking(t, []asked{{title: "", reply: "none"}})
-			runner.Ask, runner.Skip = again, ManualSkip(ix, query.PassBoth)
+			runner.Launch, runner.Skip = sequentialLaunch(again), ManualSkip(ix, query.PassBoth)
 			res, err = runner.Run(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -656,7 +806,7 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 	l := kept(t, t.TempDir())
 	ask, _ := asking(t, []asked{{title: "markdown", reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +877,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 		{title: "1| An Analysis", reply: "none"},
 		{title: "1| An Experiment", reply: "none"},
 	})
-	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: rigorAsk, Write: write, Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(rigorAsk), Write: write, Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assertDerivable(t, l, rigorTables)
@@ -750,7 +900,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 		{title: "1| The design rule", reply: "none"},
 		{title: "1| An Analysis", reply: "none"},
 	})
-	if _, err := (&Runner{Source: src, Index: ix, Items: bearingSet, Pass: query.PassBearing, Ask: bearingAsk, Write: write, Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
+	if _, err := (&Runner{Source: src, Index: ix, Items: bearingSet, Pass: query.PassBearing, Launch: sequentialLaunch(bearingAsk), Write: write, Ledger: bl, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	assertDerivable(t, bl, bearingTables)
@@ -764,7 +914,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 		t.Fatal("a resume asked a model")
 		return Reply{}, nil
 	}
-	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: inert, Write: write, Ledger: back, Model: "small"}).Run(context.Background())
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(inert), Write: write, Ledger: back, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +946,7 @@ func TestRunLandsALineCitationAndReAsksAnAbsentNumber(t *testing.T) {
 		{title: "1| Claim B", reply: "flt-overreach: 9"},
 	})
 	write, wrote := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -834,7 +984,7 @@ func TestRunLandsALineCitationAndReAsksAnAbsentNumber(t *testing.T) {
 	// The resume asks only the item the ledger records failed, and lands it.
 	back := resumed(t, state, write)
 	again, prompts := asking(t, []asked{{title: "1| Claim B", reply: "flt-underspecified: 2"}})
-	res, err = (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: again, Write: write,
+	res, err = (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(again), Write: write,
 		Ledger: back, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)

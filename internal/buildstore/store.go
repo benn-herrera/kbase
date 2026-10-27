@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"kbase/internal/asks"
@@ -29,6 +31,14 @@ const (
 	// captures the output of a build started in its own process.
 	CapturePrefix = "build-"
 	ScratchDir    = "scratch"
+	// CaptureStdoutSuffix and CaptureStderrSuffix end the two files of one
+	// captured run under ReportsDir, which share a stem.
+	CaptureStdoutSuffix = ".stdout.yaml"
+	CaptureStderrSuffix = ".stderr.log"
+	// TrailsDir is where, under ScratchDir, each build trail keeps its
+	// answers and group records, in a directory named by the trail's start
+	// commit.
+	TrailsDir = "trails"
 	// LockWait bounds the wait for the operation lock and the holder lock, so
 	// a monitor probing one does not turn a starting run away.
 	LockWait = 2 * time.Second
@@ -222,26 +232,68 @@ func (inv Invocation) Entered() (stage string, recorded bool) {
 	return stage, recorded
 }
 
-// answerCache is how many answers the store at dir caches and the bytes they
-// hold.
+// answerCache is how many answers the store at dir caches across its trail
+// directories and the bytes they hold.
 func answerCache(dir string) (entries, size int, err error) {
-	list, err := os.ReadDir(filepath.Join(dir, ScratchDir, asks.AnswersDir))
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, 0, nil
-	}
+	trails, err := filepath.Glob(filepath.Join(dir, ScratchDir, TrailsDir, "*", asks.AnswersDir))
 	if err != nil {
 		return 0, 0, err
 	}
-	for _, e := range list {
-		if !e.Type().IsRegular() {
+	for _, answers := range trails {
+		list, err := os.ReadDir(answers)
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		info, err := e.Info()
 		if err != nil {
 			return 0, 0, err
 		}
-		entries++
-		size += int(info.Size())
+		for _, e := range list {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				return 0, 0, err
+			}
+			entries++
+			size += int(info.Size())
+		}
 	}
 	return entries, size, nil
+}
+
+// PruneCaptures keeps, under reports, the newest keep captured runs whose
+// stem begins prefix, and removes the rest. A capture is the
+// CaptureStdoutSuffix and CaptureStderrSuffix files sharing a stem; the
+// stem's UTC stamp makes name order start order.
+func PruneCaptures(reports, prefix string, keep int) error {
+	suffixes := []string{CaptureStdoutSuffix, CaptureStderrSuffix}
+	entries, err := os.ReadDir(reports)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the captures under %s: %w", reports, err)
+	}
+	var stems []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		for _, suffix := range suffixes {
+			if stem, ok := strings.CutSuffix(name, suffix); ok && !slices.Contains(stems, stem) {
+				stems = append(stems, stem)
+			}
+		}
+	}
+	slices.Sort(stems)
+	for _, stem := range stems[:max(0, len(stems)-keep)] {
+		for _, suffix := range suffixes {
+			if err := os.Remove(filepath.Join(reports, stem+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove the capture %s: %w", stem, err)
+			}
+		}
+	}
+	return nil
 }

@@ -47,12 +47,13 @@ func templateKeys(template string) map[string]bool {
 	return keys
 }
 
-// modelledNotWritten is the key config's schema models and no template writes:
-// the superseded top-level provider key, which loads so an old config.toml
-// keeps working and which `kbase configure` removes rather than writes. The
-// entry fails the test once a template spells the key, so it cannot outlive its
+// modelledNotWritten is the keys config's schema models and no template
+// writes: the superseded keys, which load so an old config.toml keeps working
+// — the top-level provider key, which `kbase configure` removes rather than
+// writes, and [asks] readerConcurrency, which asks.concurrency replaces. An
+// entry fails the test once a template spells its key, so it cannot outlive its
 // reason.
-var modelledNotWritten = map[string]bool{"provider": true}
+var modelledNotWritten = map[string]bool{"provider": true, "asks.readerConcurrency": true}
 
 // TestTemplatesSpellEveryModeledKey: a template is the only schema prose a
 // user is handed, so neither may fall behind the structs it describes. Every
@@ -153,7 +154,7 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 			t.Errorf("entry %q = %+v, want a usable entry from the one layer", name, p)
 		}
 	}
-	if cfg.Provider != "" || cfg.Models != (ModelMap{}) || cfg.Asks.ReaderConcurrency != nil || cfg.Sources != (Sources{}) {
+	if cfg.Provider != "" || cfg.Models != (ModelMap{}) || cfg.Asks.ReaderConcurrency != nil || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {
 		t.Errorf("config = %+v (%+v), want every field unset", cfg, cfg.Sources)
 	}
 }

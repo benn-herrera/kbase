@@ -88,6 +88,62 @@ func decoded(t *testing.T, doc string) map[string]any {
 	return d
 }
 
+// TestReadRunOverlaysTheResultFilesOnTheLedger: a run that was killed before its
+// flush has result files and no lines for them. They count under the status
+// they record: a result overrides the ledger's last status for its item, and an
+// item outside the item list counts too.
+func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
+	state := t.TempDir()
+	l := heldRun(t, state, "run-unflushed", 0)
+	landedAgain := node(kb.NodeKindClaim, "clm-aaaaaa")
+	answered, outside := node(kb.NodeKindClaim, "clm-bbbbbb"), node(kb.NodeKindClaim, "clm-cccccc")
+	at := "2026-10-01T10:00:00Z"
+	for i, r := range []struct {
+		it query.Item
+		e  Entry
+	}{
+		{landedAgain, Entry{Status: StatusFailed, Reply: "the provider closed the connection", Started: at, Ended: at}},
+		{answered, Entry{Status: StatusDone, Value: "0.40", Faults: []Charge{}, Started: at, Ended: at}},
+		{outside, Entry{Status: StatusFailed, Reply: "no reply", Started: at, Ended: at}},
+	} {
+		if err := l.writeResult(i, resultRecord{Line: l.line(r.it, r.e)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st, err := ReadRun(state, "run-unflushed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Counts{Total: 3, Done: 1, Failed: 2}); st.Counts != want {
+		t.Errorf("counts %+v, want %+v", st.Counts, want)
+	}
+	if want := []string{"clm-bbbbbb"}; !slices.Equal(st.Scored, want) {
+		t.Errorf("scored %q, want %q", st.Scored, want)
+	}
+	if len(st.Failures) != 2 {
+		t.Errorf("failures %+v, want the overridden item and the outside one", st.Failures)
+	}
+}
+
+// TestReadResultsSkipsAFileThatNoLongerStands: a result file the flush removes
+// between the listing and the read is no result, not an error. A dangling link
+// is listed and fails to read the same way.
+func TestReadResultsSkipsAFileThatNoLongerStands(t *testing.T) {
+	runDir := t.TempDir()
+	dir := filepath.Join(runDir, resultsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "0"+resultSuffix)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readResults(runDir)
+	if err != nil || len(got) != 0 {
+		t.Errorf("readResults = %v, %v; want none and no error", got, err)
+	}
+}
+
 // TestWaitRunReturnsTheRunsDocument: the run wrote its result document, so the
 // waiter reads that document rather than inventing one, and exits on the outcome
 // it names — cancelled here, so the code 4 is the document's own.

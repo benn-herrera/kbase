@@ -3,7 +3,7 @@
 // from the document graph's records and the page, the claims the author marked,
 // the edge candidates and their mechanical drafts, the referenced equations,
 // the off-graph endcap, the writes through the write API, and the refresh and
-// verify gate. The node pass and classification put their letter asks through
+// verify gate. The node pass and classification put their multichoice asks through
 // the reader they are handed; nothing here reaches a model otherwise.
 package claimgraph
 

@@ -60,7 +60,7 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 		b + "->" + d: mention,
 		c + "->" + d: supported,
 	}}
-	opts.Reader = reader.read
+	opts.Launch = readerLaunch(reader.read)
 	report, err := Depends(context.Background(), opts)
 	requireStagePassed(t, report, err)
 

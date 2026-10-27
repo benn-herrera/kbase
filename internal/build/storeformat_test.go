@@ -1,7 +1,7 @@
 package build
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"kbase/internal/asks"
 	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/result"
@@ -85,92 +84,47 @@ func TestStoreUpgradeRefusesAGap(t *testing.T) {
 	}
 }
 
-// TestPruneCapturesKeepsTheLatestBuilds: of keptBuilds+2 builds that walked,
-// the captures last written before the oldest kept one's start are removed;
-// later captures, the stage reports and the answer cache stay, and refused
-// builds do not count.
-func TestPruneCapturesKeepsTheLatestBuilds(t *testing.T) {
+// TestPruneBuildCapturesKeepsTheNewestSix: of eight captured builds, the
+// newest keptBuilds+1 pairs stand whatever the progress record holds — here
+// one run event, as a rotation leaves it — and the stage reports stay.
+func TestPruneBuildCapturesKeepsTheNewestSix(t *testing.T) {
 	dir := t.TempDir()
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	at := func(i int) time.Time { return base.Add(time.Duration(i) * time.Hour) }
-	clock := base
-	p, err := openProgress(dir, func() time.Time { return clock })
+	reports := filepath.Join(dir, buildstore.ReportsDir)
+	p, err := openProgress(dir, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	builds := keptBuilds + 2
-	for i := range builds {
-		for _, outcome := range []string{result.Done, result.Refused} {
-			clock = at(i)
-			if outcome == result.Refused {
-				clock = clock.Add(30 * time.Minute)
-			}
-			for _, e := range []buildstore.Event{{Event: buildstore.EventRun}, {Event: buildstore.EventEnd, Outcome: outcome}} {
-				if err := p.emit(e); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
+	if err := p.emit(buildstore.Event{Event: buildstore.EventRun}); err != nil {
+		t.Fatal(err)
 	}
 	if err := p.close(); err != nil {
 		t.Fatal(err)
 	}
-	captures := filepath.Join(dir, buildstore.ScratchDir, asks.CapturesDir)
-	reports := filepath.Join(dir, buildstore.ReportsDir)
-	answers := filepath.Join(dir, buildstore.ScratchDir, asks.AnswersDir)
-	written := func(path string, when time.Time) {
-		storetest.WriteFile(t, path, "x")
-		if err := os.Chtimes(path, when, when); err != nil {
-			t.Fatal(err)
+	want := []string{"start.yaml"}
+	storetest.WriteFile(t, filepath.Join(reports, "start.yaml"), "x")
+	for i := range 8 {
+		stem := fmt.Sprintf("%s202601%02dT000000Z-x", buildstore.CapturePrefix, i+1)
+		for _, suffix := range []string{buildstore.CaptureStdoutSuffix, buildstore.CaptureStderrSuffix} {
+			storetest.WriteFile(t, filepath.Join(reports, stem+suffix), "x")
+			if i >= 8-(keptBuilds+1) {
+				want = append(want, stem+suffix)
+			}
 		}
 	}
-	for i := range builds {
-		when := at(i).Add(10 * time.Minute)
-		written(filepath.Join(captures, "ask-"+string(rune('a'+i))+".capture.jsonl"), when)
-		written(filepath.Join(reports, buildstore.CapturePrefix+string(rune('a'+i))+".stdout.yaml"), when)
-		written(filepath.Join(answers, string(rune('a'+i))+".txt"), when)
-	}
-	written(filepath.Join(reports, "start.yaml"), at(0))
 
-	if err := pruneCaptures(dir); err != nil {
+	if err := pruneBuildCaptures(dir); err != nil {
 		t.Fatal(err)
 	}
-	names := func(d string) []string {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []string
-		for _, e := range entries {
-			out = append(out, e.Name())
-		}
-		return out
+	entries, err := os.ReadDir(reports)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, want := names(captures), []string{"ask-c.capture.jsonl", "ask-d.capture.jsonl", "ask-e.capture.jsonl", "ask-f.capture.jsonl", "ask-g.capture.jsonl"}; !slices.Equal(got, want) {
-		t.Errorf("captures kept %q, want %q", got, want)
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Name())
 	}
-	if got, want := names(reports), []string{"build-c.stdout.yaml", "build-d.stdout.yaml", "build-e.stdout.yaml", "build-f.stdout.yaml", "build-g.stdout.yaml", "start.yaml"}; !slices.Equal(got, want) {
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
 		t.Errorf("reports kept %q, want %q", got, want)
-	}
-	if got := names(answers); len(got) != builds {
-		t.Errorf("answer cache holds %q, want all %d answers", got, builds)
-	}
-}
-
-// TestPruneCapturesBelowTheLimitKeepsAll: fewer builds than keptBuilds remove
-// nothing, and a store with no progress record is no error.
-func TestPruneCapturesBelowTheLimitKeepsAll(t *testing.T) {
-	dir := t.TempDir()
-	capture := filepath.Join(dir, buildstore.ScratchDir, asks.CapturesDir, "old.capture.jsonl")
-	storetest.WriteFile(t, capture, "x")
-	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := os.Chtimes(capture, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := pruneCaptures(dir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(capture); errors.Is(err, os.ErrNotExist) {
-		t.Error("a capture was removed with no build recorded")
 	}
 }

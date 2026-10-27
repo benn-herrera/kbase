@@ -17,13 +17,14 @@ import (
 // ComparedKB is one side of a comparison modulo node ids: a kb-root/ and the
 // paths of its build records. Name is how a difference names the side.
 type ComparedKB struct {
-	Name, KBRoot, NodePass, Classification, Unmarked string
+	Name, KBRoot, NodePass, Classification, Unmarked, Cull string
 }
 
 // BuiltBy is the KB kbase built in repo, named name.
 func BuiltBy(name, repo string) ComparedKB {
 	return ComparedKB{Name: name, KBRoot: filepath.Join(repo, kb.KBDir), NodePass: filepath.Join(repo, buildrecords.NodePassFile),
-		Classification: filepath.Join(repo, buildrecords.ClassificationFile), Unmarked: filepath.Join(repo, buildrecords.UnmarkedFile)}
+		Classification: filepath.Join(repo, buildrecords.ClassificationFile), Unmarked: filepath.Join(repo, buildrecords.UnmarkedFile),
+		Cull: filepath.Join(repo, buildrecords.CullFile)}
 }
 
 // ModuloIDsCheck is one aspect of two KBs compared modulo node ids: the items
@@ -39,7 +40,9 @@ type ModuloIDsCheck struct {
 // endpoints so named, works, claim count per leaf, and the build records, as
 // data and byte for byte (recordBytes). Ids
 // are minted at random, so this is the equality two builds of the same inputs
-// owe each other.
+// owe each other. A claim the cull removed is named by the claim it was culled
+// into. The cull record is compared where both sides hold one, since only a
+// build that reached the claim-graph stages writes it.
 func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 	av, err := readModuloIDsView(a.KBRoot)
 	if err != nil {
@@ -75,14 +78,36 @@ func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 			errs = append(errs, r.path+" does not exist")
 		}
 	}
+	var acu, bcu buildrecords.CullRecord
+	aCull, err := buildrecords.Read(as, a.Cull, &acu)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	bCull, err := buildrecords.Read(bs, b.Cull, &bcu)
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+	switch {
+	case aCull && !bCull:
+		errs = append(errs, b.Cull+" does not exist")
+	case bCull && !aCull:
+		errs = append(errs, a.Cull+" does not exist")
+	}
 	if len(errs) > 0 {
 		return append(checks, ModuloIDsCheck{Name: "build records", Differences: errs}), nil
 	}
+	av.nameCulled(acu)
+	bv.nameCulled(bcu)
 	checks = append(checks,
 		sized("node-pass record", len(an.Leaves), len(bn.Leaves), nodePassDiff(a.Name, b.Name, an, bn)),
 		sized("classification record, less the ids", len(ac.Candidates), len(bc.Candidates), classificationDiff(a.Name, b.Name, ac, bc, av, bv)),
 		sized("unmarked record, less the ids", len(au.Pairs), len(bu.Pairs), unmarkedDiff(a.Name, b.Name, au, bu, av, bv)))
-	byteChecks, err := recordBytes(a, b, an, ac, au, newIDRenaming(av, bv))
+	var culled *buildrecords.CullRecord
+	if aCull {
+		culled = &acu
+		checks = append(checks, sized("cull record, less the ids", len(acu.Entries), len(bcu.Entries), cullDiff(a.Name, b.Name, acu, bcu, av, bv)))
+	}
+	byteChecks, err := recordBytes(a, b, an, ac, au, culled, newIDRenaming(av, bv))
 	return append(checks, byteChecks...), err
 }
 
@@ -118,14 +143,46 @@ func (r *idRenaming) entries(entries []buildrecords.CandidateEntry) []buildrecor
 	return out
 }
 
+// cull is c with every id renamed. A pair whose renamed ids fall out of id
+// order is turned round, its verdict with it, so each pair stands as the
+// cull's writer keys it.
+func (r *idRenaming) cull(c buildrecords.CullRecord) buildrecords.CullRecord {
+	out := buildrecords.CullRecord{About: c.About}
+	for _, e := range c.Entries {
+		e.A, e.B = r.id(e.A), r.id(e.B)
+		if e.A > e.B {
+			e.A, e.B = e.B, e.A
+			switch e.Verdict {
+			case buildrecords.VerdictAAddsNothing:
+				e.Verdict = buildrecords.VerdictBAddsNothing
+			case buildrecords.VerdictBAddsNothing:
+				e.Verdict = buildrecords.VerdictAAddsNothing
+			}
+		}
+		out.Entries = append(out.Entries, e)
+	}
+	for _, k := range c.Culls {
+		out.Culls = append(out.Culls, buildrecords.Cull{ID: r.id(k.ID), Into: r.id(k.Into)})
+	}
+	for _, l := range c.Links {
+		l.A, l.B = r.id(l.A), r.id(l.B)
+		if l.A > l.B {
+			l.A, l.B = l.B, l.A
+		}
+		out.Links = append(out.Links, l)
+	}
+	return out
+}
+
 // recordBytes compares each of a's build records with b's byte for byte. The
 // node-pass record names no claim by id and is compared as it stands. The
 // classification and unmarked records are compared after a's ids are renamed
 // to b's and the record is written again as a's build writes it; a's file
 // must itself be that writer's output. A plan lists its sources in id order,
 // each source's pairs in rank order, so the renamed plan is re-ordered by its
-// new source ids, each source's pairs kept in a's order.
-func recordBytes(a, b ComparedKB, an buildrecords.NodePassRecord, ac buildrecords.ClassificationRecord, au buildrecords.UnmarkedRecord, rename *idRenaming) ([]ModuloIDsCheck, error) {
+// new source ids, each source's pairs kept in a's order. The cull record, where
+// acu is not nil, is compared as the classification record is.
+func recordBytes(a, b ComparedKB, an buildrecords.NodePassRecord, ac buildrecords.ClassificationRecord, au buildrecords.UnmarkedRecord, acu *buildrecords.CullRecord, rename *idRenaming) ([]ModuloIDsCheck, error) {
 	rc, ru := ac, au
 	rc.Candidates = rename.entries(ac.Candidates)
 	ru.Pairs = rename.entries(au.Pairs)
@@ -149,6 +206,11 @@ func recordBytes(a, b ComparedKB, an buildrecords.NodePassRecord, ac buildrecord
 			func() ([]byte, error) { return classificationBytes(ac) }, func() ([]byte, error) { return classificationBytes(rc) }},
 		{"unmarked record bytes, ids renamed", a.Unmarked, b.Unmarked,
 			func() ([]byte, error) { return unmarkedBytes(au) }, func() ([]byte, error) { return unmarkedBytes(ru) }},
+	}
+	if acu != nil {
+		rcu := rename.cull(*acu)
+		sides = append(sides, side{"cull record bytes, ids renamed", a.Cull, b.Cull,
+			func() ([]byte, error) { return cullBytes(*acu) }, func() ([]byte, error) { return cullBytes(rcu) }})
 	}
 	var unmapped []string
 	for id := range rename.unmapped {
@@ -218,10 +280,29 @@ type moduloIDsView struct {
 	counts  map[string]int
 }
 
-// claimKey names a claim by what both sides give it: title and host.
-type claimKey struct{ title, host string }
+// claimKey names a claim by what both sides give it: title and host, or, for a
+// claim the cull removed, the name of the claim it was culled into.
+type claimKey struct{ title, host, into string }
 
-func (k claimKey) String() string { return fmt.Sprintf("%s | %s", k.title, k.host) }
+func (k claimKey) String() string {
+	if k.into != "" {
+		return "culled into " + k.into
+	}
+	return fmt.Sprintf("%s | %s", k.title, k.host)
+}
+
+// nameCulled names each claim c culls by the claim it was culled into, which
+// the KB still holds. Two claims culled into one claim share a name, and so
+// map to no single claim of the other side.
+func (v moduloIDsView) nameCulled(c buildrecords.CullRecord) {
+	for _, k := range c.Culls {
+		into := k.Into
+		if key, ok := v.claims[k.Into]; ok {
+			into = key.String()
+		}
+		v.claims[k.ID] = claimKey{into: into}
+	}
+}
 
 func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
 	v := moduloIDsView{claims: map[string]claimKey{}, counts: map[string]int{}}
@@ -240,7 +321,7 @@ func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
 		}
 	}
 	for _, n := range g.Claims {
-		k := claimKey{n.Title, rows.Hosts[n.ID]}
+		k := claimKey{title: n.Title, host: rows.Hosts[n.ID]}
 		v.claims[n.ID] = k
 		v.entries = append(v.entries, k.String())
 		if k.host != "" {
@@ -371,6 +452,44 @@ func unmarkedDiff(na, nb string, a, b buildrecords.UnmarkedRecord, av, bv modulo
 	}
 	diffs := multisetDiff(na, nb, planned(a, av), planned(b, bv))
 	diffs = append(diffs, multisetDiff(na, nb, renderEntries(a.Pairs, av), renderEntries(b.Pairs, bv))...)
+	if a.About != b.About {
+		diffs = append(diffs, "about differs")
+	}
+	return diffs
+}
+
+// cullDiff compares the cull records as data: the asks, the culls and the
+// surviving links, claims named by title and host rather than id. A pair is
+// keyed in id order, so each is rendered unordered, a verdict naming the claim
+// that adds nothing.
+func cullDiff(na, nb string, a, b buildrecords.CullRecord, av, bv moduloIDsView) []string {
+	render := func(r buildrecords.CullRecord, v moduloIDsView) []string {
+		name := func(id string) string { return v.claims[id].String() }
+		unordered := func(x, y string) string {
+			p := []string{name(x), name(y)}
+			slices.Sort(p)
+			return p[0] + "  ~  " + p[1]
+		}
+		var out []string
+		for _, e := range r.Entries {
+			judged := unordered(e.A, e.B) + ": " + e.Verdict
+			switch e.Verdict {
+			case buildrecords.VerdictAAddsNothing:
+				judged = name(e.A) + " adds nothing to " + name(e.B)
+			case buildrecords.VerdictBAddsNothing:
+				judged = name(e.B) + " adds nothing to " + name(e.A)
+			}
+			out = append(out, fmt.Sprintf("pass %d, %s: %s", e.Pass, e.Outcome, judged))
+		}
+		for _, c := range r.Culls {
+			out = append(out, "cull: "+name(c.ID)+"  ->  "+name(c.Into))
+		}
+		for _, l := range r.Links {
+			out = append(out, "link: "+unordered(l.A, l.B)+" ("+l.Harvest+")")
+		}
+		return out
+	}
+	diffs := multisetDiff(na, nb, render(a, av), render(b, bv))
 	if a.About != b.About {
 		diffs = append(diffs, "about differs")
 	}

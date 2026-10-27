@@ -80,8 +80,8 @@ func TestRunCapturesEveryCallItMakes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			l := kept(t, t.TempDir())
 			ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: tc.reply, err: tc.err}})
-			write := func(query.Item, kb.Bearing) error { return tc.write }
-			if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Ask: ask, Write: write,
+			_, write := landingOn(tc.write)
+			if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 				Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -138,7 +138,7 @@ func TestRunCapturesNoCallItDidNotFinish(t *testing.T) {
 			return Reply{Text: "none"}, nil
 		}
 		write, _ := writing()
-		res, err := (&Runner{Source: src, Index: ix, Items: set[:3], Pass: query.PassRigor, Ask: ask, Write: write,
+		res, err := (&Runner{Source: src, Index: ix, Items: set[:3], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 			Ledger: l, Model: "small"}).Run(ctx)
 		if err != nil || res.Outcome != result.Cancelled {
 			t.Fatalf("outcome %q, %v; want cancelled", res.Outcome, err)
@@ -163,7 +163,7 @@ func TestRunCapturesNoCallItDidNotFinish(t *testing.T) {
 		}
 		write, _ := writing()
 		items := []query.Item{node(kb.NodeKindClaim, "clm-dddddd")}
-		if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Ask: ask, Write: write,
+		if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 			Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -173,18 +173,18 @@ func TestRunCapturesNoCallItDidNotFinish(t *testing.T) {
 	})
 }
 
-// TestRunFailsWhereACaptureCannotBeWritten: a capture that cannot be written
-// fails the run as a ledger line that cannot be written does, and the item's
-// line, which follows its capture, is not written.
+// TestRunFailsWhereACaptureCannotBeWritten: captures that cannot be written at
+// the walk's end fail the run as ledger lines that cannot be written do, and the
+// lines, which follow the captures, are not written.
 func TestRunFailsWhereACaptureCannotBeWritten(t *testing.T) {
 	src, ix, set := runSet(t)
 	l := kept(t, t.TempDir())
 	if err := os.Mkdir(filepath.Join(l.Dir(), capturesFile), 0o777); err != nil {
 		t.Fatal(err)
 	}
-	ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
+	ask, _ := asking(t, []asked{{title: "", reply: "none"}})
 	write, _ := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: set[:2], Pass: query.PassRigor, Ask: ask, Write: write,
+	res, err := (&Runner{Source: src, Index: ix, Items: set[:2], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background())
 	if err == nil || res.Outcome != result.Failed {
 		t.Fatalf("outcome %q, %v; want the run failed on the capture", res.Outcome, err)

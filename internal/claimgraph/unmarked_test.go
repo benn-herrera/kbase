@@ -1,6 +1,7 @@
 package claimgraph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -190,7 +191,7 @@ type scriptedLetters struct {
 	asked   map[string]int
 }
 
-func (s *scriptedLetters) read(_ context.Context, q asks.LetterQuestion) (asks.Reply, error) {
+func (s *scriptedLetters) read(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := q.Group + "->" + q.Item
@@ -226,12 +227,16 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 		Unit:     func(name string) error { units = append(units, name); return nil },
 		Fallback: func(it result.Item) error { fallbacks = append(fallbacks, it); return nil },
 	}
-	reader := &scriptedLetters{replies: map[string][]string{
+	replies := map[string][]string{
 		"clm-s1->clm-t1": {"A"},
 		"clm-s1->clm-t2": {"It does not.", "B"},
 		"clm-s1->clm-t3": {"?", "maybe"},
-	}}
-	_, held, groups, err := askPlanned(context.Background(), repo, rec, g, statement, body, Options{Reader: reader.read, Progress: progress})
+	}
+	before, err := os.ReadFile(filepath.Join(repo, buildrecords.UnmarkedFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, held, groups, _, err := askPlanned(context.Background(), rec, g, statement, body, Options{Launch: readerLaunch((&scriptedLetters{replies: replies}).read), Progress: progress})
 	var incomplete asks.IncompleteError
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("askPlanned = %v, want the call that never completed", err)
@@ -240,15 +245,24 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 	if !errors.As(askStop(err), &s) || s.check != "inference-failed" {
 		t.Errorf("the stage's stop = %v, want inference-failed", askStop(err))
 	}
-	if held != 0 || len(groups) != 1 || total != 2 || !slices.Equal(units, []string{"clm-s1"}) {
-		t.Errorf("held %d, %d groups, units %q of %d; want s1's group done of two", held, len(groups), units, total)
+	if held != 0 || len(groups) != 0 || total != 2 || len(units) != 0 || len(fallbacks) != 0 || len(stopped.Pairs) != 0 {
+		t.Errorf("held %d, %d groups, units %q of %d, fallbacks %+v, pairs %+v; want two units announced and nothing of the stopped batch taken",
+			held, len(groups), units, total, fallbacks, stopped.Pairs)
 	}
-	landed, _, _ := buildrecords.ReadUnmarked(recordsAt(repo))
+	if after, err := os.ReadFile(filepath.Join(repo, buildrecords.UnmarkedFile)); err != nil || !bytes.Equal(after, before) {
+		t.Errorf("the stopped asks changed the record on disk (%v):\n%s", err, after)
+	}
+
+	replies["clm-s2->clm-t4"] = []string{"A"}
+	landed, held, groups, _, err := askPlanned(context.Background(), rec, g, statement, body, Options{Launch: readerLaunch((&scriptedLetters{replies: replies}).read), Progress: progress})
+	if err != nil || held != 0 || len(groups) != 2 || !slices.Equal(units, []string{"clm-s1", "clm-s2"}) {
+		t.Fatalf("held %d, %d groups, units %q, %v; want both groups done", held, len(groups), units, err)
+	}
 	want := map[string]string{"clm-t1": "A answered", "clm-t2": "B re-asked", "clm-t3": "- defaulted"}
-	if len(landed.Pairs) != 3 {
-		t.Fatalf("landed %+v, want s1's group whole and s2's nothing", landed.Pairs)
+	if len(landed.Pairs) != 4 {
+		t.Fatalf("landed %+v, want s1's group whole then s2's", landed.Pairs)
 	}
-	for _, e := range landed.Pairs {
+	for _, e := range landed.Pairs[:3] {
 		l := "-"
 		if e.Letter != nil {
 			l = *e.Letter
@@ -262,15 +276,16 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 		t.Errorf("fallbacks = %+v, want the defaulted pair named with its cause under its source's document", fallbacks)
 	}
 
+	landed.Pairs = landed.Pairs[:3]
 	again := &scriptedLetters{replies: map[string][]string{"clm-s2->clm-t4": {"A"}}}
-	done, held, groups, err := askPlanned(context.Background(), repo, landed, g, statement, body, Options{Reader: again.read})
+	done, held, groups, wall, err := askPlanned(context.Background(), landed, g, statement, body, Options{Launch: readerLaunch(again.read)})
 	if err != nil || held != 3 || len(groups) != 1 || len(again.asked) != 1 {
 		t.Fatalf("the resume = held %d, %d groups, asked %v, %v; want only the pair the record lacks", held, len(groups), again.asked, err)
 	}
 	if got := unmarkedFound(done); !slices.Equal(got, []pair{{"clm-s1", "clm-t1"}, {"clm-s2", "clm-t4"}}) {
 		t.Errorf("found = %v, want the two As and neither the B nor the default", got)
 	}
-	findings := unmarkedFindings(unmarkedPlan{sources: []string{"clm-s1", "clm-s2"}, pairs: []pair{{"clm-s1", "clm-t1"}, {"clm-s1", "clm-t2"}, {"clm-s1", "clm-t3"}, {"clm-s2", "clm-t4"}}}, done, g, held, groups)
+	findings := unmarkedFindings(unmarkedPlan{sources: []string{"clm-s1", "clm-s2"}, pairs: []pair{{"clm-s1", "clm-t1"}, {"clm-s1", "clm-t2"}, {"clm-s1", "clm-t3"}, {"clm-s2", "clm-t4"}}}, done, g, held, groups, wall)
 	if f := findings[2].Record(); f[2].Value != 2 || f[3].Value.(result.Record)[0].Value != 1 || f[3].Value.(result.Record)[1].Value != 1 {
 		t.Errorf("stage-U-yeses = %v, want one in the same document and one in the same directory", f)
 	}
@@ -321,7 +336,7 @@ func TestAnInferredLinkIsAskedThreeWay(t *testing.T) {
 		}
 		opts := Options{}
 		if reader != nil {
-			opts.Reader = reader.read
+			opts.Launch = readerLaunch(reader.read)
 		}
 		if _, err := classify(context.Background(), repo, a.candidates, statement, opts); err != nil {
 			t.Fatal(err)

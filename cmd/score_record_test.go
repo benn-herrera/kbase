@@ -74,7 +74,7 @@ func TestScoreFailureReasonIsASummary(t *testing.T) {
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}}, func() model.Client {
 		m := modeltest.NewScriptedMock(nil, nil)
 		m.SetError(errors.New("the stub refuses\n\x1b[2J\x1b]0;owned\a" + strings.Repeat("x", 2000)))
-		return m
+		return m.Client()
 	})
 	if got.doc.Outcome != "failed" {
 		t.Fatalf("the failing run: outcome %s\n%s", got.doc.Outcome, got.stdout)

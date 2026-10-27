@@ -30,10 +30,10 @@ const (
 	// ProviderAPIAnthropic is the Anthropic Messages protocol: chat on
 	// `POST <baseUrl>/messages` and models on `GET <baseUrl>/models`. It has
 	// no decision surface, so an entry speaking it can serve the text and
-	// scoring roles but not the decision role's letter asks.
+	// scoring roles but not the decision role's multichoice asks.
 	ProviderAPIAnthropic = "anthropic"
 
-	// FlavorSystemOne is the decision surface kbase's letter asks have
+	// FlavorSystemOne is the decision surface kbase's multichoice asks have
 	// always used: `POST <baseUrl>/systemone`, one question keyed by its
 	// own key, answers keyed the same way. The default for an entry that
 	// states no flavour.
@@ -141,7 +141,7 @@ func (p Provider) Protocol() string {
 
 // Flavor returns the normalized decision surface this entry's server speaks,
 // defaulting to FlavorSystemOne when unstated — an entry that says nothing is
-// a server kbase's letter asks already worked against.
+// a server kbase's multichoice asks already worked against.
 func (p Provider) Flavor() string {
 	if f := strings.ToLower(strings.TrimSpace(p.DecisionsFlavor)); f != "" {
 		return f

@@ -48,7 +48,7 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
-	reg := modelclient.New(opts.NewClient, opts.Logger, "")
+	reg := modelclient.New(opts.NewClient, opts.Logger, "", 0)
 	defer reg.CloseAll()
 	entry := opts.Providers[name]
 	fields := providerFields(name, rule, entry.Layer)

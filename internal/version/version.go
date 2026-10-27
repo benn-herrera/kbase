@@ -5,4 +5,4 @@ package version
 
 // Current is the appliance version — the string --version prints and every
 // provenance stamp carries.
-const Current = "0.8.0"
+const Current = "0.8.1"

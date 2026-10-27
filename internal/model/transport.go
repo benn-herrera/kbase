@@ -41,11 +41,17 @@ const errorBodyLimit = 8 << 10
 // total round-trip bound including the body read, which would kill exactly
 // the long streamed generations this package exists to carry. Bounds are
 // placed where they mean something instead — a call-site context deadline
-// for a blocking Consult, responseHeaderTimeout for the handshake, and
+// for the whole call, responseHeaderTimeout for the handshake, and
 // streamIdleTimeout for the gap between chunks of a stream.
-func newHTTPTransport() *http.Client {
+//
+// idleConns is the count of idle connections kept per host, never below
+// net/http's default of two; the total across hosts is raised with it so it
+// never binds first.
+func newHTTPTransport(idleConns int) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
+	tr.MaxIdleConnsPerHost = max(idleConns, http.DefaultMaxIdleConnsPerHost)
+	tr.MaxIdleConns = max(idleConns, tr.MaxIdleConns)
 	return &http.Client{Transport: tr}
 }
 

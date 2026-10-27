@@ -2,6 +2,7 @@ package write
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -128,8 +129,11 @@ func recordFiles(g kb.Graph) []recordFile {
 // them and to the leaves it marks, hosts being each hosted node's leaf, then
 // writes each record file whose records moved, whole, and each leaf whose text
 // moved, once each marker reads back where it was placed and the disk still
-// holds what was read. A file that did not move is not written. The batch is
-// returned once it is opened, with what its entries reported.
+// holds what was read. A file that did not move is not written. An entry's
+// refusal does not stop the batch: each later entry is judged against the
+// records as the entries before it left them, and the batch is refused with
+// every entry's items, writing nothing. Any other error stops it at once. The
+// batch is returned once it is opened, with what its entries reported.
 func editRecords(src *kb.Source, edit *recordEdit, entries []entry, provenance Provenance, hosts map[string]string) (outcome, *recordBatch, error) {
 	if err := edit.conflicts(entries); err != nil {
 		return outcome{}, nil, err
@@ -157,10 +161,20 @@ func editRecords(src *kb.Source, edit *recordEdit, entries []entry, provenance P
 	b := &recordBatch{src: src, root: kb.ResolvePath(src.Root()), g: g, provenance: provenance, hosts: maps.Clone(hosts),
 		leaves: map[string]*leafEdit{}, created: map[string]int{}}
 	before := recordFiles(g)
+	var refusals result.Refusal
 	for _, e := range entries {
-		if err := edit.apply(b, e); err != nil {
+		err := edit.apply(b, e)
+		if err == nil {
+			continue
+		}
+		items, refused := entryRefusal(err, e.Index)
+		if !refused {
 			return outcome{}, b, err
 		}
+		refusals = append(refusals, items...)
+	}
+	if len(refusals) > 0 {
+		return outcome{}, b, refusals
 	}
 	if edit.finish != nil {
 		if err := edit.finish(b, entries); err != nil {
@@ -229,6 +243,22 @@ func readBackMarkers(b *recordBatch) error {
 		}
 	}
 	return nil
+}
+
+// entryRefusal is err's refusal items, each that names no entry naming the
+// entry at index, and false where err is not a refusal.
+func entryRefusal(err error, index int) (result.Refusal, bool) {
+	var refused result.Refusal
+	if !errors.As(err, &refused) {
+		return nil, false
+	}
+	items := slices.Clone(refused)
+	for i := range items {
+		if items[i].Entry == 0 {
+			items[i].Entry = index
+		}
+	}
+	return items, true
 }
 
 // record is the first of records match holds, nil where none does.

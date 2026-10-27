@@ -25,7 +25,7 @@ func TestRunConfigureDialsEachProviderItsReferencesName(t *testing.T) {
 	var dialled []string
 	opts.NewClient = func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e.BaseURL)
-		return modeltest.NewScriptedMock(nil, catalogue("d", "t", "s"))
+		return modeltest.NewScriptedMock(nil, catalogue("d", "t", "s")).Client()
 	}
 	got := runConfig(t, opts, nil)
 	if got.code != 0 || got.doc.Outcome != "done" {

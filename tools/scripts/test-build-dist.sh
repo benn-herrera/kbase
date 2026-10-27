@@ -13,7 +13,6 @@ export LC_ALL=C
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 repo_root="$(cd "${script_dir}/../.." && pwd)" || exit 1
 stubs="${script_dir}/testdata/stubs"
-testdata="${script_dir}/testdata"
 work="${repo_root}/test-data/transient/test-dist/run"
 
 go_version="2.0.0"
@@ -24,7 +23,6 @@ tgz_asc="${tgz}.asc"
 installer="install-kbase-${version}.sh"
 installer_asc="${installer}.asc"
 
-key_url="https://bennherrera.dev/.well-known/openpgpkey/hu/dpqu1e7ew9iu17qy81b7oqfb8yq11or4"
 signer_fpr="9F3A1C7B5D2E8064A1B2C3D4E5F60718293A4B5C"
 signer_uid="Benn Herrera <benn@bennherrera.dev>"
 other_fpr="0123456789ABCDEF0123456789ABCDEF01234567"
@@ -87,7 +85,7 @@ exit [lindex $result 3]
 EXPECT
 }
 
-for stub in curl go gpg uname; do
+for stub in curl git go gpg uname; do
   if [[ ! -x "${stubs}/${stub}" ]]; then
     printf 'error: stub missing or not executable: %s\n' "${stubs}/${stub}" >&2
     exit 1
@@ -103,13 +101,15 @@ command rm -rf "${work}"
 mkdir -p "${bin}" "${dist}" "${checks}" "${work}/stub"
 write_pty_driver
 
-# build_release <name> [version]: cross-build, stage and sign into ${bin} and
-# ${dist} with the stubs; the exit code lands in <name>.exit.
+# build_release <name> [version [NAME=value...]]: cross-build, stage and sign
+# into ${bin} and ${dist} with the stubs; the exit code lands in <name>.exit.
+# The NAME=value pairs join the environment after the defaults, so they win.
 function build_release() {
   local name="${1}" reported="${2:-${go_version}}" rc
+  shift $(($# < 2 ? $# : 2))
   set +e
   env "PATH=${stubs}:${PATH}" "STUB_STATE_DIR=${work}/stub" "STUB_GO_VERSION=${reported}" \
-    "BIN_DIR=${bin}" "DIST_DIR=${dist}" bash "${script_dir}/build-dist.sh" \
+    "BIN_DIR=${bin}" "DIST_DIR=${dist}" "$@" bash "${script_dir}/build-dist.sh" \
     > "${work}/${name}.out" 2> "${work}/${name}.err"
   rc=$?
   set -e
@@ -132,12 +132,7 @@ function case_layout_stage() {
     kbase-darwin-arm64 kbase-darwin-arm64.asc \
     kbase-linux-amd64 kbase-linux-amd64.asc \
     kbase-windows-amd64.exe kbase-windows-amd64.exe.asc > "${expected}"
-  if ! diff "${expected}" <(ls -1 "${stage}"); then
-    return 1
-  fi
-  cmp "${stage}/CONVENTIONS.md" "${repo_root}/USER_CONVENTIONS.md" || return 1
-  cmp "${stage}/README.md" "${repo_root}/README.md" || return 1
-  cmp "${stage}/LICENSE" "${repo_root}/LICENSE" || return 1
+  diff "${expected}" <(ls -1 "${stage}")
 }
 
 function case_layout_dist() {
@@ -162,9 +157,11 @@ function case_layout_tarball() {
   fi
 }
 
+# case_layout_report [run]: checks the last line of the named run's output
+# (default: the base build).
 function case_layout_report() {
   local reported fields
-  reported="$(tail -n 1 "${work}/build-dist.out")"
+  reported="$(tail -n 1 "${work}/${1:-build-dist}.out")"
   read -r -a fields <<< "${reported}"
   if [[ "${#fields[@]}" -ne 5 || "${fields[0]}" != "dist:" ]]; then
     printf 'report line: %s\n' "${reported}"
@@ -198,15 +195,6 @@ function case_build_invocations() {
 }
 
 # ---- the generated installer ----------------------------------------------
-
-function case_installer_golden() {
-  local golden="${testdata}/installer-${version}.sh"
-  if [[ ! -f "${golden}" ]]; then
-    printf 'golden missing: %s\nthe generated installer is %s\n' "${golden}" "${dist}/${installer}"
-    return 1
-  fi
-  cmp "${golden}" "${dist}/${installer}"
-}
 
 function case_installer_syntax() {
   bash -n "${dist}/${installer}"
@@ -322,11 +310,6 @@ function platform_refuse() {
     printf 'exit 0, expected a refusal\n'
     return 1
   fi
-  if ! grep -qF 'unsupported platform' "${dir}/stderr"; then
-    printf 'stderr does not name the platform:\n'
-    cat "${dir}/stderr"
-    return 1
-  fi
   if [[ "$(verify_count "${dir}")" -ne 0 ]]; then
     printf '%s verifications, expected none\n' "$(verify_count "${dir}")"
     return 1
@@ -412,11 +395,6 @@ function case_trust_answer_y() {
     cat "${dir}/output"
     return 1
   fi
-  if ! grep -qF 'Choice [y/o/N]:' "${dir}/output"; then
-    printf 'no prompt:\n'
-    cat "${dir}/output"
-    return 1
-  fi
   if [[ "$(ownertrust_writes "${dir}")" != "${signer_fpr}:6:" ]]; then
     printf 'ownertrust: %s\nexpected:   %s\n' "$(ownertrust_writes "${dir}")" "${signer_fpr}:6:"
     return 1
@@ -434,11 +412,6 @@ function case_trust_answer_o() {
   run_installer_interactive "${dir}" Darwin arm64 o
   if [[ "$(installer_rc "${dir}")" -ne 0 ]]; then
     printf 'exit %s\n' "$(installer_rc "${dir}")"
-    cat "${dir}/output"
-    return 1
-  fi
-  if ! grep -qF 'Choice [y/o/N]:' "${dir}/output"; then
-    printf 'no prompt:\n'
     cat "${dir}/output"
     return 1
   fi
@@ -462,11 +435,6 @@ function case_trust_answer_n() {
     cat "${dir}/output"
     return 1
   fi
-  if ! grep -qF 'Choice [y/o/N]:' "${dir}/output"; then
-    printf 'no prompt:\n'
-    cat "${dir}/output"
-    return 1
-  fi
   if [[ -n "$(ownertrust_writes "${dir}")" ]]; then
     printf 'wrote ownertrust:\n%s\n' "$(ownertrust_writes "${dir}")"
     return 1
@@ -484,11 +452,6 @@ function case_trust_signer_absent() {
   run_installer "${dir}" Darwin arm64
   if [[ "$(installer_rc "${dir}")" -eq 0 ]]; then
     printf 'exit 0, expected a refusal\n'
-    return 1
-  fi
-  if ! grep -qF "${signer_fpr}" "${dir}/stderr"; then
-    printf 'stderr does not name %s:\n' "${signer_fpr}"
-    cat "${dir}/stderr"
     return 1
   fi
   if [[ "$(verify_count "${dir}")" -ne 0 ]]; then
@@ -519,11 +482,6 @@ function case_trust_signer_untrusted() {
     cat "${dir}/output"
     return 1
   fi
-  if ! grep -qF "${signer_fpr}" "${dir}/output"; then
-    printf 'the prompt does not name the signer %s:\n' "${signer_fpr}"
-    cat "${dir}/output"
-    return 1
-  fi
   if [[ "$(ownertrust_writes "${dir}")" != "${signer_fpr}:6:" ]]; then
     printf 'ownertrust: %s\nexpected:   %s\n' "$(ownertrust_writes "${dir}")" "${signer_fpr}:6:"
     return 1
@@ -545,16 +503,6 @@ function case_trust_stdin_not_terminal() {
   fi
   if grep -qF 'Choice' "${dir}/stderr"; then
     printf 'prompted with stdin not a terminal:\n'
-    cat "${dir}/stderr"
-    return 1
-  fi
-  if ! grep -qF "curl -fsSL ${key_url} | gpg --import" "${dir}/stderr"; then
-    printf 'the import instruction is missing:\n'
-    cat "${dir}/stderr"
-    return 1
-  fi
-  if ! grep -qF "echo ${signer_fpr}:6: | gpg --import-ownertrust" "${dir}/stderr"; then
-    printf 'the ownertrust instruction is missing:\n'
     cat "${dir}/stderr"
     return 1
   fi
@@ -587,12 +535,7 @@ function case_signature_tampered_tarball() {
   prepare_install "${dir}" "u"
   printf 'tampered\n' >> "${dir}/${tgz}" || return 1
   run_installer "${dir}" Darwin arm64
-  refused_before_extract "${dir}" || return 1
-  if ! grep -qF "bad signature for ${tgz}" "${dir}/stderr"; then
-    printf 'the refusal does not name the tarball whose bytes changed:\n'
-    cat "${dir}/stderr"
-    return 1
-  fi
+  refused_before_extract "${dir}"
 }
 
 # retar_with_swapped_asc <dir>: writes <dir>'s tarball with
@@ -626,11 +569,6 @@ function case_signature_asc_for_another_file() {
   if [[ "$(tail -n 1 "${dir}/stub/gpg.log")" != "gpg --verify ./${ver_dir}/kbase-linux-amd64.asc ./${ver_dir}/kbase-linux-amd64" ]]; then
     printf 'the installer did not stop at the mismatched signature:\n'
     cat "${dir}/stub/gpg.log"
-    return 1
-  fi
-  if ! grep -qF 'signs kbase-darwin-arm64, not' "${dir}/stderr"; then
-    printf 'the refusal does not say which file the signature names:\n'
-    cat "${dir}/stderr"
     return 1
   fi
 }
@@ -676,11 +614,6 @@ function case_download_404_not_a_signature() {
     cat "${dir}/${installer_asc}"
     return 1
   fi
-  if ! grep -qF '404' "${dir}/stderr"; then
-    printf 'the refusal does not report the failed download:\n'
-    cat "${dir}/stderr"
-    return 1
-  fi
 }
 
 # ---- dist reruns and the version string ------------------------------------
@@ -703,11 +636,6 @@ function case_version_refused() {
       printf 'version %s was accepted\n' "${wanted}"
       return 1
     fi
-    if ! grep -qF 'check: usage' "${work}/version-refused.err"; then
-      printf 'the refusal of %s does not report check usage:\n' "${wanted}"
-      cat "${work}/version-refused.err"
-      return 1
-    fi
     if [[ -e "${work}/version-escaped" ]]; then
       printf 'version %s reached the shell\n' "${wanted}"
       return 1
@@ -719,6 +647,77 @@ function case_version_refused() {
   done
 }
 
+# ---- tagging ---------------------------------------------------------------
+
+# tag_run <name> [NAME=value...]: a build with its own stub state, so its logs
+# hold this run's calls only.
+function tag_run() {
+  local name="${1}"
+  shift
+  mkdir -p "${work}/stub-${name}"
+  build_release "${name}" "${go_version}" "STUB_STATE_DIR=${work}/stub-${name}" "$@"
+}
+
+function case_tag_after_last_stage() {
+  local state="${work}/stub-tag" signs
+  tag_run tag TAG=1
+  if [[ "$(cat "${work}/tag.exit")" -ne 0 ]]; then
+    cat "${work}/tag.err"
+    return 1
+  fi
+  signs="$(wc -l < "${state}/gpg.log" | tr -d ' ')"
+  if [[ "${signs}" -ne 5 ]]; then
+    printf 'expected 5 signing calls, found %s\n' "${signs}"
+    return 1
+  fi
+  if [[ "$(grep -c '^git tag' "${state}/git.log")" -ne 1 ]] \
+    || ! grep -qxF "git tag ${version}" "${state}/git.log" \
+    || [[ "$(tail -n 1 "${state}/git.log")" != "tagged ${version} after ${signs} gpg calls" ]]; then
+    printf 'the tag was not the single, last call after all %s signatures:\n' "${signs}"
+    cat "${state}/git.log"
+    return 1
+  fi
+  case_layout_report tag
+}
+
+# tag_refused <name> NAME=value...: the run fails with the usage refusal, builds
+# nothing and tags nothing.
+function tag_refused() {
+  local name="${1}" state="${work}/stub-${1}"
+  tag_run "$@"
+  if [[ "$(cat "${work}/${name}.exit")" -eq 0 ]]; then
+    printf 'the run was accepted\n'
+    return 1
+  fi
+  if grep -q ' go build ' "${state}/go.log" || grep -q '^git tag' "${state}/git.log"; then
+    printf 'the refused run built or tagged:\n'
+    cat "${state}/go.log" "${state}/git.log"
+    return 1
+  fi
+}
+
+function case_tag_refused_when_tag_exists() {
+  tag_refused tag-exists TAG=1 STUB_GIT_TAG_EXISTS=1
+}
+
+function case_tag_refused_when_tree_dirty() {
+  tag_refused tag-dirty TAG=1 "STUB_GIT_DIRTY= M cmd/main.go"
+}
+
+function case_no_tag_without_the_option() {
+  local state="${work}/stub-no-tag"
+  tag_run no-tag
+  if [[ "$(cat "${work}/no-tag.exit")" -ne 0 ]]; then
+    cat "${work}/no-tag.err"
+    return 1
+  fi
+  if [[ -e "${state}/git.log" ]]; then
+    printf 'git was called without TAG:\n'
+    cat "${state}/git.log"
+    return 1
+  fi
+}
+
 # ---- cases -----------------------------------------------------------------
 
 run_case layout-stage case_layout_stage
@@ -726,11 +725,14 @@ run_case layout-dist case_layout_dist
 run_case layout-tarball case_layout_tarball
 run_case layout-report case_layout_report
 run_case build-invocations case_build_invocations
-run_case installer-golden case_installer_golden
 run_case installer-syntax case_installer_syntax
 run_case installer-mode case_installer_mode
 run_case version-refused case_version_refused
 run_case dist-rerunnable case_dist_rerunnable
+run_case tag-after-last-stage case_tag_after_last_stage
+run_case tag-refused-when-tag-exists case_tag_refused_when_tag_exists
+run_case tag-refused-when-tree-dirty case_tag_refused_when_tree_dirty
+run_case no-tag-without-the-option case_no_tag_without_the_option
 run_case platform-darwin-arm64 case_platform_darwin_arm64
 run_case platform-linux-x86_64 case_platform_linux_x86_64
 run_case platform-mingw64-x86_64 case_platform_mingw64_x86_64

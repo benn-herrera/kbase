@@ -15,18 +15,17 @@ import (
 
 // The Anthropic Messages wire surface: the path chat hangs off
 // Endpoint.BaseURL at (the catalogue reuses pathModels), the version header the
-// API requires, and the block and delta kinds this client reads.
+// API requires, and the delta kinds this client reads.
 const (
 	pathMessages       = "messages"
 	headerAnthropicVer = "anthropic-version"
 	anthropicVersion   = "2023-06-01"
 
-	// contentTypeText and the delta kinds: the protocol mixes several kinds
-	// of block into one response, and only these two carry anything a caller
-	// of this package reads.
-	contentTypeText = "text"
-	deltaText       = "text_delta"
-	deltaThinking   = "thinking_delta"
+	// The delta kinds: the protocol mixes several kinds of block into one
+	// response, and only these two carry anything a caller of this package
+	// reads.
+	deltaText     = "text_delta"
+	deltaThinking = "thinking_delta"
 
 	// The event names this client acts on. Events it does not name —
 	// content_block_start, content_block_stop, ping, and anything the
@@ -60,7 +59,7 @@ var _ Client = (*AnthropicClient)(nil)
 // NewAnthropicClient constructs an AnthropicClient for e. A zero Endpoint
 // yields a client whose first call produces a clear error.
 func NewAnthropicClient(e Endpoint) *AnthropicClient {
-	return &AnthropicClient{endpoint: e, http: newHTTPTransport()}
+	return &AnthropicClient{endpoint: e, http: newHTTPTransport(e.IdleConns)}
 }
 
 // Close releases the client's idle connections, as OpenAIClient.Close does.
@@ -68,42 +67,7 @@ func (c *AnthropicClient) Close() error {
 	return closeIdleConnections(c.http)
 }
 
-// Consult performs one Messages round-trip with `stream: false`, decoding the
-// single message it answers with.
-//
-// On any non-2xx response the body is included in the returned error, scrubbed
-// of the key the server might have echoed back — the same StatusError the
-// OpenAI client returns, so a caller's 429/5xx classification holds on both
-// protocols.
-func (c *AnthropicClient) Consult(ctx context.Context, req Request) (Response, error) {
-	if c.endpoint.BaseURL == "" {
-		return Response{}, fmt.Errorf("endpoint BaseURL is empty")
-	}
-
-	body, err := encodeAnthropicRequest(req, false)
-	if err != nil {
-		return Response{}, fmt.Errorf("encode request: %w", err)
-	}
-
-	resp, err := c.do(ctx, http.MethodPost, pathMessages, mimeJSON, body)
-	if err != nil {
-		return Response{}, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return Response{}, fmt.Errorf("read response: %w", err)
-	}
-
-	out, err := decodeAnthropicResponse(respBody)
-	if err != nil {
-		return Response{}, fmt.Errorf("decode response: %w", err)
-	}
-	return out, nil
-}
-
-// ConsultStream performs one streaming Messages round-trip, returning a
+// consultStream performs one streaming Messages round-trip, returning a
 // StreamReader that yields chunks as they arrive.
 //
 // The wire format is that protocol's named event sequence:
@@ -120,15 +84,16 @@ func (c *AnthropicClient) Consult(ctx context.Context, req Request) (Response, e
 //	event: message_stop
 //	data: {"type":"message_stop"}
 //
-// On non-2xx the body is read fully, the connection closed, and a wrapped
-// error returned (matching Consult's shape). On 2xx the response body is owned
-// by the returned StreamReader; the caller MUST Close it.
-func (c *AnthropicClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
+// On non-2xx the body is read, the connection closed, and the same
+// StatusError the OpenAI client returns, so a caller's 429/5xx classification
+// holds on both protocols. On 2xx the response body is owned by the returned
+// StreamReader; the caller MUST Close it.
+func (c *AnthropicClient) consultStream(ctx context.Context, req Request) (StreamReader, error) {
 	if c.endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}
 
-	body, err := encodeAnthropicRequest(req, true)
+	body, err := encodeAnthropicRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
@@ -178,18 +143,18 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return out, nil
 }
 
-// Decision refuses. kbase's decision surfaces are OpenAI-shaped — the
+// decision refuses. kbase's decision surfaces are OpenAI-shaped — the
 // SystemOne and Decisions shapes in decision.go — and the Messages protocol has
-// no equivalent, so an endpoint whose `api` is anthropic cannot answer a letter
+// no equivalent, so an endpoint whose `api` is anthropic cannot answer a multichoice
 // ask. The refusal names the provider and the role rather than borrowing a
 // shape this protocol never spoke: the remedy is a different entry for that
 // role, not a different request.
-func (c *AnthropicClient) Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (c *AnthropicClient) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
 	name := c.endpoint.Name
 	if name == "" {
 		name = c.endpoint.BaseURL
 	}
-	return DecisionResponse{}, fmt.Errorf("provider %q speaks the Anthropic Messages protocol, which has no decision surface: the decision role's letter asks are answered by the OpenAI-shaped surfaces (systemone, decisions), so that role needs an entry whose api is openai",
+	return DecisionResponse{}, fmt.Errorf("provider %q speaks the Anthropic Messages protocol, which has no decision surface: the decision role's multichoice asks are answered by the OpenAI-shaped surfaces (systemone, decisions), so that role needs an entry whose api is openai",
 		name)
 }
 
@@ -281,11 +246,11 @@ type wireAnthropicThinking struct {
 // Messages equivalent. Thinking is disabled by sending the protocol's own
 // thinking field as `{"type":"disabled"}`: the field's absence would leave it at
 // the server's default, which is not off on every server behind this protocol.
-func encodeAnthropicRequest(req Request, stream bool) ([]byte, error) {
+func encodeAnthropicRequest(req Request) ([]byte, error) {
 	wr := wireAnthropicRequest{
 		Model:     req.Model,
 		MaxTokens: maxTokensFor(req),
-		Stream:    stream,
+		Stream:    true,
 		Thinking:  wireAnthropicThinking{Type: "disabled"},
 		// An empty array, never null: the protocol requires the list, and a
 		// request carrying no turns at all should be refused by the server
@@ -328,21 +293,7 @@ func maxTokensFor(req Request) int {
 	return maxTokensFloor
 }
 
-// wireAnthropicContent is one block of a message. `text` is the only field
-// read: a thinking block is scratch and Response has no field for one.
-type wireAnthropicContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type wireAnthropicResponse struct {
-	Content    []wireAnthropicContent `json:"content"`
-	StopReason string                 `json:"stop_reason"`
-	Usage      wireAnthropicUsage     `json:"usage"`
-}
-
-// wireAnthropicUsage is the usage block of a message, and the one a
-// message_start event carries. A message_delta event carries output_tokens
+// wireAnthropicUsage is the usage block a message_start event carries. A message_delta event carries output_tokens
 // alone, so a streamed call fills this from two events.
 type wireAnthropicUsage struct {
 	InputTokens  int `json:"input_tokens"`
@@ -376,26 +327,6 @@ func finishReason(stopReason string) string {
 		return FinishLength
 	}
 	return stopReason
-}
-
-func decodeAnthropicResponse(body []byte) (Response, error) {
-	var w wireAnthropicResponse
-	if err := json.Unmarshal(body, &w); err != nil {
-		return Response{}, err
-	}
-	// Only text blocks are the reply: a thinking block is model scratch and
-	// must never join the answer (see Chunk.Reasoning).
-	var content strings.Builder
-	for _, block := range w.Content {
-		if block.Type == contentTypeText {
-			content.WriteString(block.Text)
-		}
-	}
-	return Response{
-		Content:      content.String(),
-		FinishReason: finishReason(w.StopReason),
-		Usage:        w.Usage.usage(),
-	}, nil
 }
 
 // wireAnthropicModelList is the catalogue. `created_at` is RFC 3339 here, not

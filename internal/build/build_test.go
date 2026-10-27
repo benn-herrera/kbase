@@ -12,20 +12,22 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
 	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/claimgraph"
 	"kbase/internal/config"
 	"kbase/internal/filelock"
+	"kbase/internal/gitledger"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/latex/pandoc"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/records"
 	"kbase/internal/result"
@@ -136,13 +138,30 @@ func (f fixture) build(t *testing.T, opts Options) (string, []result.Field) {
 
 // ledger opens the fixture's repository over the build's owned paths;
 // buildstore's tests keep their own copy, the fixture being each package's.
-func (f fixture) ledger(t *testing.T) *ledger.Repo {
+func (f fixture) ledger(t *testing.T) *gitledger.Repo {
 	t.Helper()
-	r, err := ledger.Open(f.repo, buildstore.OwnedPaths, log.Discard())
+	r, err := gitledger.Open(f.repo, buildstore.OwnedPaths, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// startTrailDir is the per-trail directory of the repository's trail: named by
+// the commit of its start entry.
+func (f fixture) startTrailDir(t *testing.T) string {
+	t.Helper()
+	trail, err := f.ledger(t).Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range trail {
+		if e.Stage == buildstore.StageStart {
+			return filepath.Join(f.state, buildstore.ScratchDir, buildstore.TrailsDir, e.Commit)
+		}
+	}
+	t.Fatal("the trail holds no start entry")
+	return ""
 }
 
 func (f fixture) trailStages(t *testing.T) []string {
@@ -951,7 +970,7 @@ func TestInputsSpelledOtherwise(t *testing.T) {
 		{"the repository root through a symlink", link, repo, "papers/paper.tex", "refs.bib"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w := &walk{repo: &ledger.Repo{Root: c.root}, opts: Options{WorkDir: c.workDir,
+			w := &walk{repo: &gitledger.Repo{Root: c.root}, opts: Options{WorkDir: c.workDir,
 				VolumeRoots: []string{c.volumeRoot}, Bibliographies: []string{c.bibliography}}}
 			given := w.inputs()
 			if !slices.Equal(given.roots, recorded.roots) || !slices.Equal(given.bibliographies, recorded.bibliographies) {
@@ -1049,12 +1068,13 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 
 // TestResumeCarriesEveryLaunchFlag: a walk refused inside its first stage hands
 // out the command that continues it, restating the bibliographies,
-// --no-inference, the store and the configuration directory, and leaving the
-// bound off.
+// --no-inference, --ask-concurrency, the store and the configuration
+// directory, and leaving the bound off.
 func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
 	opts.Through, opts.ConfigDir = buildstore.StageDocumentGraph, filepath.Join(f.repo, "config")
+	opts.AskConcurrency = 3
 	opts.Bibliographies = []string{filepath.Join(f.repo, "refs.bib")}
 	storetest.WriteFile(t, opts.Bibliographies[0], "")
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
@@ -1063,14 +1083,19 @@ func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 		t.Fatalf("build = %s %v, want refused inside %s", outcome, fields, buildstore.StageDocumentGraph)
 	}
 	resume, _ := storetest.Field(fields, "resume").(string)
-	for _, want := range []string{"--bibliography " + opts.Bibliographies[0], "--no-inference", "--state-dir " + f.state,
-		"--config-dir " + opts.ConfigDir} {
+	for _, want := range []string{"--bibliography " + opts.Bibliographies[0], "--no-inference", "--ask-concurrency 3",
+		"--state-dir " + f.state, "--config-dir " + opts.ConfigDir} {
 		if !strings.Contains(resume, want) {
 			t.Errorf("resume = %q, want it to carry %q", resume, want)
 		}
 	}
 	if strings.Contains(resume, "--through") {
 		t.Errorf("resume = %q carries the bound", resume)
+	}
+	// A launch that named no --ask-concurrency is continued without it, so the
+	// resumed build reads the configuration's value as the launch did.
+	if argv := (&walk{opts: Options{VolumeRoots: []string{"/paper.tex"}}}).resumeCommand(); slices.Contains(argv, "--ask-concurrency") {
+		t.Errorf("resume = %q names a flag the launch did not", argv)
 	}
 }
 
@@ -1207,6 +1232,77 @@ func TestProgressRecordIsJSONLines(t *testing.T) {
 	}
 }
 
+// TestUnitProgressHoldsEventsUntilFlush: while a stage's asks run, the progress
+// record holds its units event and none of its unit or fallback events; the
+// flush writes them in order, done running 1..n, and the next Units flushes
+// first.
+func TestUnitProgressHoldsEventsUntilFlush(t *testing.T) {
+	dir := t.TempDir()
+	p, err := openProgress(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	w := &walk{progress: p, inStage: "claims-discovered"}
+	prog, flush := w.unitProgress()
+	read := func() []string {
+		events, err := buildstore.ReadProgress(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range events {
+			got = append(got, fmt.Sprintf("%s:%s:%d", e.Event, e.Unit, e.Done))
+		}
+		return got
+	}
+	check := func(when string, want ...string) {
+		t.Helper()
+		if got := read(); !slices.Equal(got, want) {
+			t.Errorf("%s: events = %q, want %q", when, got, want)
+		}
+	}
+
+	if err := prog.Units(2); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{"a", "b"} {
+		if err := prog.Unit(u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prog.Fallback(result.Item{Path: "x.md"}); err != nil {
+		t.Fatal(err)
+	}
+	check("while asks run", "units::0")
+
+	if err := prog.Units(1); err != nil {
+		t.Fatal(err)
+	}
+	check("after the next Units", "units::0", "unit:a:1", "unit:b:2", "fallback::0", "units::0")
+
+	if err := prog.Unit("c"); err != nil {
+		t.Fatal(err)
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	check("after the stage returns", "units::0", "unit:a:1", "unit:b:2", "fallback::0", "units::0", "unit:c:1")
+}
+
+// inlineOverview is an asks.PassageLaunch that runs its one item at once, on the
+// launching goroutine, over ask, which leaves no file to write.
+func inlineOverview(ask func(context.Context, string, []string, int) (string, error)) asks.PassageLaunch {
+	return func(_ context.Context, wg *sync.WaitGroup, item func(func(context.Context, string, []string, int) (string, error)) func(error)) error {
+		wg.Add(1)
+		defer wg.Done()
+		if after := item(ask); after != nil {
+			after(nil)
+		}
+		return nil
+	}
+}
+
 func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 	kbRoot := filepath.Join(t.TempDir(), "proj", kb.KBDir)
 	storetest.WriteFile(t, filepath.Join(kbRoot, kb.EntryPointFile), "---\nkb-format: \""+kb.FormatVersion+"\"\n---\n# Knowledge Base\n\n- [Volume](vol/index.md)\n")
@@ -1224,8 +1320,8 @@ func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			os.Remove(filepath.Join(kbRoot, kbdocs.OverviewFile))
 			var asked [][]string
-			w := &walk{ctx: context.Background(), kbRoot: kbRoot, repo: &ledger.Repo{Root: filepath.Dir(kbRoot)}, opts: Options{Logger: log.Discard()},
-				passage: func(_ context.Context, excerpts string, rejected []string, attempt int) (string, error) {
+			w := &walk{ctx: context.Background(), kbRoot: kbRoot, repo: &gitledger.Repo{Root: filepath.Dir(kbRoot)}, opts: Options{Logger: log.Discard()},
+				passage: inlineOverview(func(_ context.Context, excerpts string, rejected []string, attempt int) (string, error) {
 					if !strings.HasPrefix(excerpts, "==> Knowledge Base <==") {
 						t.Errorf("excerpts = %q", excerpts)
 					}
@@ -1234,7 +1330,7 @@ func TestOverviewAsksOnceMoreAndAssembles(t *testing.T) {
 						t.Errorf("ask %d carried attempt %d", len(asked), attempt)
 					}
 					return tc.replies[len(asked)-1], nil
-				},
+				}),
 			}
 			// The digest predicate reads the derived node rows; this
 			// fixture's records carry none, and a one-volume KB is the shape

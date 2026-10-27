@@ -28,7 +28,7 @@ const (
 // block claim D, in that reading order, beside a docgraph record of D's block,
 // the node pass landed and an unmarked record answering B → D yes. It returns
 // the kb-root, the repository root and the stage's options with reader.
-func seedCullStage(t *testing.T, reader asks.LetterReader) (string, string, Options) {
+func seedCullStage(t *testing.T, reader asks.MultichoiceReader) (string, string, Options) {
 	t.Helper()
 	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
 	root, repo, opts := seedTheoremLeaf(t, map[string]string{cullA: "Result A", cullB: "Result B", cullD: "Theorem 1"},
@@ -40,7 +40,9 @@ func seedCullStage(t *testing.T, reader asks.LetterReader) (string, string, Opti
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	opts.Reader = reader
+	if reader != nil {
+		opts.Launch = readerLaunch(reader)
+	}
 	return root, repo, opts
 }
 
@@ -80,8 +82,8 @@ func seedTheoremLeaf(t *testing.T, titles map[string]string, body string, extra 
 
 // answeringItem answers the ask named item with letter and every other ask
 // distinct.
-func answeringItem(item, letter string) asks.LetterReader {
-	return func(_ context.Context, q asks.LetterQuestion) (asks.Reply, error) {
+func answeringItem(item, letter string) asks.MultichoiceReader {
+	return func(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
 		if q.Item == item {
 			return asks.Reply{Text: letter}, nil
 		}

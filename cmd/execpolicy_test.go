@@ -22,7 +22,7 @@ const selfExec = "kbase"
 // through its owner.
 var execOwners = map[string]string{
 	"internal/latex/pandoc":  "pandoc",
-	"internal/ledger":        "git",
+	"internal/gitledger":     "git",
 	"internal/sheet":         "dot",
 	"internal/mcp/launch.go": selfExec,
 }

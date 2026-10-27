@@ -228,15 +228,25 @@ func nearestWindow(needle, haystack string) string {
 }
 
 // renderCitations composes each entry's citation after checking what the
-// citation gate will check of it, all or none.
+// citation gate will check of it, all or none: a refusal names every entry
+// refused.
 func renderCitations(src *kb.Source, entries []entry) Result {
 	res := Result{Outcome: result.Done}
+	var refusals result.Refusal
 	for _, e := range entries {
 		citation, err := composeCitation(src, e)
-		if err != nil {
+		if err == nil {
+			res.Citations = append(res.Citations, citation)
+			continue
+		}
+		items, refused := entryRefusal(err, e.Index)
+		if !refused {
 			return errorResult(err)
 		}
-		res.Citations = append(res.Citations, citation)
+		refusals = append(refusals, items...)
+	}
+	if len(refusals) > 0 {
+		return errorResult(refusals)
 	}
 	return res
 }

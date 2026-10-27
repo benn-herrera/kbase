@@ -134,6 +134,7 @@ text = "global-text"
 
 [asks]
 readerConcurrency = 2
+concurrency = 3
 `)
 	writeProviders(t, repoDir, `
 [shared]
@@ -180,6 +181,9 @@ baseUrl = "http://local.example/v1"
 	}
 	if n := cfg.Asks.ReaderConcurrency; n == nil || *n != 2 {
 		t.Errorf("readerConcurrency = %v, want the global layer's 2 inherited", n)
+	}
+	if n := cfg.Asks.Concurrency; n == nil || *n != 3 {
+		t.Errorf("concurrency = %v, want the global layer's 3 inherited", n)
 	}
 }
 

@@ -174,6 +174,9 @@ func takeConfig(cfg *Config, over Config, source string) {
 	if cfg.Asks.ReaderConcurrency == nil {
 		cfg.Asks.ReaderConcurrency = over.Asks.ReaderConcurrency
 	}
+	if cfg.Asks.Concurrency == nil {
+		cfg.Asks.Concurrency = over.Asks.Concurrency
+	}
 }
 
 // namedLayer returns the directory a flag or the environment names — a leading

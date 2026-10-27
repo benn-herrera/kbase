@@ -22,19 +22,6 @@ func newAnthropicTestEndpoint(baseURL string) Endpoint {
 	return ep
 }
 
-// anthropicMessagesBody is a blocking Messages response: one thinking block
-// (scratch that must never join the reply), one text block, the stop reason and
-// the usage block. cache_creation_input_tokens is sent because a real server
-// does, and a client that decodes it into nowhere would be reading a field it
-// has no home for.
-func anthropicMessagesBody(text, stopReason string, input, output, cached int) string {
-	return fmt.Sprintf(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-x",
-		"content":[{"type":"thinking","thinking":"scratch"},{"type":"text","text":%q}],
-		"stop_reason":%q,
-		"usage":{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":%d,"cache_creation_input_tokens":3}}`,
-		text, stopReason, input, output, cached)
-}
-
 // anthropicStreamSSE is one complete Messages event sequence: usage on
 // message_start, a ping, a thinking delta, two text deltas, the stop reason and
 // output tokens on message_delta, and the closing message_stop.
@@ -88,9 +75,9 @@ func drainAnthropicStream(t *testing.T, body string) ([]Chunk, Response, error) 
 	defer srv.Close()
 
 	c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), chatRequest("claude-x"))
+	sr, err := c.consultStream(context.Background(), chatRequest("claude-x"))
 	if err != nil {
-		t.Fatalf("ConsultStream: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 	defer sr.Close()
 
@@ -112,11 +99,11 @@ func drainAnthropicStream(t *testing.T, body string) ([]Chunk, Response, error) 
 	return chunks, sr.Final(), termErr
 }
 
-// TestAnthropicConsultSendsTheMessagesRequest: the blocking call is one POST to
-// <base>/messages with the protocol's headers, the required max_tokens
-// estimated from the ask's characters, the system turn lifted to the top-level
-// string, and none of the OpenAI surface's fields.
-func TestAnthropicConsultSendsTheMessagesRequest(t *testing.T) {
+// TestAnthropicSendsTheMessagesRequest: the call is one POST to <base>/messages
+// with the protocol's headers, the required max_tokens estimated from the ask's
+// characters, the system turn lifted to the top-level string, and none of the
+// OpenAI surface's fields.
+func TestAnthropicSendsTheMessagesRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		system  string
@@ -134,12 +121,13 @@ func TestAnthropicConsultSendsTheMessagesRequest(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath, headers = r.URL.Path, r.Header.Clone()
 				raw, _ = io.ReadAll(r.Body)
-				_, _ = w.Write([]byte(anthropicMessagesBody("ok", "end_turn", 11, 2, 0)))
+				w.Header().Set("Content-Type", mimeEventStream)
+				_, _ = w.Write([]byte(anthropicStreamSSE))
 			}))
 			defer srv.Close()
 
 			c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
-			_, err := c.Consult(context.Background(), Request{
+			_, err := streamed(context.Background(), c, Request{
 				Model:              "claude-x",
 				Messages:           []Message{{Role: "system", Content: tc.system}, {Role: "user", Content: tc.prompt}},
 				Temperature:        0,
@@ -148,7 +136,7 @@ func TestAnthropicConsultSendsTheMessagesRequest(t *testing.T) {
 				PromptCacheKey:     "run-abcdefgh",
 			})
 			if err != nil {
-				t.Fatalf("Consult: %v", err)
+				t.Fatalf("consultStream: %v", err)
 			}
 
 			if gotPath != "/messages" {
@@ -202,8 +190,8 @@ func TestAnthropicConsultSendsTheMessagesRequest(t *testing.T) {
 					t.Errorf("%s sent to a Messages endpoint: %s", field, raw)
 				}
 			}
-			if v, ok := wire["stream"]; ok && string(v) != "false" {
-				t.Errorf("stream: got %s, want absent or false", v)
+			if v := wire["stream"]; string(v) != "true" {
+				t.Errorf("stream: got %s, want true", v)
 			}
 			// Thinking is disabled explicitly: omitting the field leaves it
 			// at the server's default.
@@ -237,15 +225,16 @@ func TestAnthropicTemperatureOutsideTheRangeIsOmitted(t *testing.T) {
 			var raw []byte
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				raw, _ = io.ReadAll(r.Body)
-				_, _ = w.Write([]byte(anthropicMessagesBody("ok", "end_turn", 1, 1, 0)))
+				w.Header().Set("Content-Type", mimeEventStream)
+				_, _ = w.Write([]byte(anthropicStreamSSE))
 			}))
 			defer srv.Close()
 
 			c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
 			req := chatRequest("claude-x")
 			req.Temperature = tc.temperature
-			if _, err := c.Consult(context.Background(), req); err != nil {
-				t.Fatalf("Consult: %v", err)
+			if _, err := streamed(context.Background(), c, req); err != nil {
+				t.Fatalf("consultStream: %v", err)
 			}
 			var wire map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &wire); err != nil {
@@ -258,38 +247,9 @@ func TestAnthropicTemperatureOutsideTheRangeIsOmitted(t *testing.T) {
 	}
 }
 
-// TestAnthropicConsultDecodesTheMessage: the text blocks are the reply, a
-// thinking block never joins them, and the usage block lands on the caller's
-// token counts.
-func TestAnthropicConsultDecodesTheMessage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(anthropicMessagesBody("hello world", "end_turn", 11, 4, 3)))
-	}))
-	defer srv.Close()
-
-	c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
-	resp, err := c.Consult(context.Background(), chatRequest("claude-x"))
-	if err != nil {
-		t.Fatalf("Consult: %v", err)
-	}
-	if resp.Content != "hello world" {
-		t.Errorf("content: got %q, want the text block alone", resp.Content)
-	}
-	if resp.FinishReason != "end_turn" {
-		t.Errorf("finish reason: got %q, want the protocol's own end_turn", resp.FinishReason)
-	}
-	if want := (Usage{PromptTokens: 11, CompletionTokens: 4, CachedPromptTokens: 3}); resp.Usage != want {
-		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
-	}
-	if resp.Truncated() {
-		t.Error("a call that ended on end_turn reports truncation")
-	}
-}
-
 // TestAnthropicStopReasonMapsTheCap: `max_tokens` is the one stop reason
 // translated — to FinishLength, so Response.Truncated() says the answer is
-// incomplete — on the blocking and the streamed path alike; `end_turn` stays
-// the protocol's own word and is a clean finish.
+// incomplete; `end_turn` stays the protocol's own word and is a clean finish.
 func TestAnthropicStopReasonMapsTheCap(t *testing.T) {
 	for _, tc := range []struct {
 		stopReason    string
@@ -300,29 +260,14 @@ func TestAnthropicStopReasonMapsTheCap(t *testing.T) {
 		{"end_turn", "end_turn", false},
 	} {
 		t.Run(tc.stopReason, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte(anthropicMessagesBody("cut", tc.stopReason, 5, 5, 0)))
-			}))
-			defer srv.Close()
-
-			c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
-			resp, err := c.Consult(context.Background(), chatRequest("claude-x"))
-			if err != nil {
-				t.Fatalf("Consult: %v", err)
-			}
-			if resp.FinishReason != tc.want || resp.Truncated() != tc.wantTruncated {
-				t.Errorf("blocking: finish reason %q, truncated %t; want %q, %t",
-					resp.FinishReason, resp.Truncated(), tc.want, tc.wantTruncated)
-			}
-
-			streamed, final, err := drainAnthropicStream(t, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"+
+			chunks, final, err := drainAnthropicStream(t, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"+
 				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\""+tc.stopReason+"\"},\"usage\":{\"output_tokens\":5}}\n\n"+
 				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 			if err != nil {
 				t.Fatalf("stream: %v", err)
 			}
-			if len(streamed) != 2 || streamed[1].FinishReason != tc.want {
-				t.Errorf("streamed chunks = %+v, want the stop reason on the message_delta chunk", streamed)
+			if len(chunks) != 2 || chunks[1].FinishReason != tc.want {
+				t.Errorf("streamed chunks = %+v, want the stop reason on the message_delta chunk", chunks)
 			}
 			if final.FinishReason != tc.want || final.Truncated() != tc.wantTruncated {
 				t.Errorf("streamed: finish reason %q, truncated %t; want %q, %t",
@@ -443,14 +388,14 @@ func TestAnthropicStatusesClassifyThroughChat(t *testing.T) {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			// The error type itself is what classification reads.
 			typeSrv, _ := statusServer(t, tc.code)
-			if _, err := NewClient(newAnthropicTestEndpoint(typeSrv.URL)).ConsultStream(context.Background(), chatRequest("claude-x")); !errors.As(err, new(StatusError)) {
-				t.Fatalf("ConsultStream on %d = %v, want a StatusError", tc.code, err)
+			if _, err := NewClient(newAnthropicTestEndpoint(typeSrv.URL)).consultStream(context.Background(), chatRequest("claude-x")); !errors.As(err, new(StatusError)) {
+				t.Fatalf("consultStream on %d = %v, want a StatusError", tc.code, err)
 			}
 
 			srv, requests := statusServer(t, tc.code)
 			client := NewClient(newAnthropicTestEndpoint(srv.URL))
 
-			got, err := Chat(context.Background(), client, "claude-x", "the system", "the prompt", nil, nil)
+			got, err := chat(context.Background(), client, "claude-x", "the system", "the prompt", nil, nil)
 			if !errors.Is(err, ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
 			}
@@ -503,11 +448,11 @@ func TestAnthropicListModels(t *testing.T) {
 }
 
 // TestAnthropicDecisionRefuses: the decision surfaces are OpenAI-shaped, so a
-// Messages endpoint asked for a letter ask refuses — naming the provider and the
+// Messages endpoint asked for a multichoice ask refuses — naming the provider and the
 // role rather than answering in a shape this protocol never spoke.
 func TestAnthropicDecisionRefuses(t *testing.T) {
 	c := NewAnthropicClient(Endpoint{Name: "claude", BaseURL: "http://claude.example/v1", Protocol: ProtocolAnthropic})
-	_, err := c.Decision(context.Background(), DecisionRequest{
+	_, err := c.decision(context.Background(), DecisionRequest{
 		Model:     "claude-x",
 		State:     "state",
 		Questions: []DecisionQuestion{{Key: "q1", Type: "noul"}},

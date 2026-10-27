@@ -11,28 +11,17 @@ package model
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"time"
 )
 
-// Client is the abstraction the pipeline depends on for an LLM round-trip.
-// Defined here so a test can substitute an implementation of its own without
-// depending on the HTTP transport.
-//
-// Two consult flavors are provided:
-//   - Consult: blocking, returns the full Response. Right for short calls.
-//   - ConsultStream: returns a StreamReader; callers iterate chunks as they
-//     arrive. Right for long generations, whether or not anything renders
-//     the deltas — see ConsultDrained.
-//
-// Both methods consume the same Request and produce equivalent final
-// content; ConsultStream additionally exposes per-chunk deltas.
+// Client is one endpoint's surface. Its two inference methods are unexported,
+// so no package but this one can put a request on the wire: a call goes
+// through a Slot, and only Queue.Go issues one. A test double outside this
+// package becomes a Client through ClientFuncs.
 type Client interface {
-	Consult(ctx context.Context, req Request) (Response, error)
-	ConsultStream(ctx context.Context, req Request) (StreamReader, error)
-	Decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
+	consultStream(ctx context.Context, req Request) (StreamReader, error)
+	decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 
@@ -75,7 +64,7 @@ type Endpoint struct {
 	// value is ProtocolOpenAI. NewClient dispatches on it.
 	Protocol Protocol
 	// Decisions is whether this server speaks the OpenAI Decisions shape for
-	// the letter asks: true for `POST <base-url>/decisions`, false for the
+	// the multichoice asks: true for `POST <base-url>/decisions`, false for the
 	// SystemOne shape kbase's asks have always used. Chat is unaffected: it
 	// stays `chat/completions` under either surface, and Protocol is what
 	// selects chat.
@@ -92,6 +81,11 @@ type Endpoint struct {
 	// client for. The Messages protocol has no such field, so a client
 	// speaking it sends none of this.
 	PromptCacheKey string
+	// IdleConns is how many idle connections the client keeps to its host: the
+	// invocation's concurrency, so that N parallel calls reuse N connections
+	// rather than redialling all past net/http's default of two. Zero or less
+	// leaves the defaults.
+	IdleConns int
 }
 
 // NewClient constructs the chat client the endpoint's protocol names: the
@@ -106,38 +100,6 @@ func NewClient(e Endpoint) Client {
 		return NewAnthropicClient(e)
 	}
 	return NewOpenAIClient(e)
-}
-
-// ConsultDrained performs a consult with blocking semantics over the
-// STREAMING transport: it opens a stream, iterates to EOF discarding every
-// delta, and returns the accumulated Final().
-//
-// Batch pipeline call sites use this instead of Consult. A blocking request
-// puts nothing on the wire until the whole completion is ready, and a long
-// generation therefore looks like a dead connection to every idle timeout in
-// the path (proxy, gateway, http.Client). A streamed request keeps bytes
-// flowing for the same work. Consult remains the right call for short
-// round-trips and for callers that must not pay the SSE decode.
-//
-// A stream that fails mid-flight (transport error, decode error, idle
-// watchdog) reports that error instead of io.EOF; ConsultDrained propagates
-// it and returns no partial Response. Reasoning deltas are discarded along
-// with the rest — Response has no field for them by design (see
-// Chunk.Reasoning).
-func ConsultDrained(ctx context.Context, c Client, req Request) (Response, error) {
-	sr, err := c.ConsultStream(ctx, req)
-	if err != nil {
-		return Response{}, err
-	}
-	defer sr.Close()
-	for {
-		if _, err := sr.Next(); err != nil {
-			if errors.Is(err, io.EOF) {
-				return sr.Final(), nil
-			}
-			return Response{}, fmt.Errorf("drain stream: %w", err)
-		}
-	}
 }
 
 // ModelInfo describes a single model exposed by a provider, mapped from
@@ -219,7 +181,7 @@ type Response struct {
 	// StreamDone is whether a streamed response reached the provider's
 	// closing event — `[DONE]` on the OpenAI surface, `message_stop` on the
 	// Messages one: a stream whose body ended short of it did not complete,
-	// whatever content arrived first. False on a blocking Consult.
+	// whatever content arrived first.
 	StreamDone bool
 	// UsageReported is whether a streamed response carried a usage block at
 	// all, which an all-zero Usage cannot say.
@@ -263,7 +225,7 @@ type Chunk struct {
 //
 // Usage:
 //
-//	sr, err := client.ConsultStream(ctx, req)
+//	sr, err := client.consultStream(ctx, req)
 //	if err != nil { ... }
 //	defer sr.Close()
 //	for {
@@ -281,7 +243,7 @@ type Chunk struct {
 // must all be called from the goroutine that owns it; nothing here is
 // guarded, and a second goroutine calling Close mid-Next is a data race.
 // Cross-goroutine abort is the context's job — the ctx passed to
-// ConsultStream is checked first on every Next, so cancelling it stops the
+// consultStream is checked first on every Next, so cancelling it stops the
 // iteration from anywhere. Close then releases the transport, from the
 // owning goroutine, on the way out.
 type StreamReader interface {
@@ -379,9 +341,9 @@ func (u Usage) HasTelemetry() bool { return u.Telemetry != InferenceTelemetry{} 
 // means the request itself is wrong and will be just as wrong three times.
 // Match with errors.As over a value target, as elsewhere in this codebase.
 //
-// Both the blocking and the streaming path return it, because both go through
-// the one request helper: a caller's 429-awareness therefore holds on the
-// streaming transport the long pipeline calls actually use.
+// The chat stream and the decision call both return it, because both go
+// through the one request helper: a caller's 429-awareness therefore holds on
+// either.
 type StatusError struct {
 	Code int
 	Body string

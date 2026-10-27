@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
@@ -278,13 +279,21 @@ func mechanical(stage func(claimgraph.Options) (claimgraph.Report, error)) func(
 }
 
 // claimGraph runs one claim-graph stage over the tree, the build records at
-// the repository root and the document graph's records, its letter asks put
-// through the build's reader — none under --no-inference.
+// the repository root and the document graph's records, its multichoice asks
+// launched through the build's queue — none under --no-inference.
 func claimGraph(stage func(context.Context, claimgraph.Options) (claimgraph.Report, error)) func(*walk) (result.Record, error) {
 	return func(w *walk) (result.Record, error) {
+		progress, flush := w.unitProgress()
 		report, err := stage(w.ctx, claimgraph.Options{KBRoot: w.kbRoot, RepoRoot: w.repo.Root, Records: records.Path(w.stateDir), Logger: w.opts.Logger,
-			Reader: w.letters, ReaderConcurrency: w.readerConcurrency, AskRecords: filepath.Join(w.stateDir, buildstore.ScratchDir, asks.AskRecordsDir),
-			Progress: w.unitProgress()})
+			Launch: w.letters, AskRecords: filepath.Join(w.trailDir, asks.AskRecordsDir),
+			Progress: progress})
+		if ferr := flush(); ferr != nil {
+			if err != nil {
+				w.opts.Logger.Error("the stage's held progress events were not written", "stage", w.inStage, "error", ferr)
+			} else {
+				err = ferr
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -297,22 +306,35 @@ func claimGraph(stage func(context.Context, claimgraph.Options) (claimgraph.Repo
 }
 
 // unitProgress records a claim-graph stage's own units and fallbacks in the
-// progress record, under the stage the walk is in.
-func (w *walk) unitProgress() claimgraph.Progress {
+// progress record, under the stage the walk is in. A unit's and a fallback's
+// event is held, and flush writes the held events in one append: the caller
+// runs it when the stage returns, and the next Units runs it first.
+func (w *walk) unitProgress() (p claimgraph.Progress, flush func() error) {
 	done, total := 0, 0
+	var held []buildstore.Event
+	flush = func() error {
+		err := w.progress.emitAll(held)
+		held = nil
+		return err
+	}
 	return claimgraph.Progress{
 		Units: func(n int) error {
+			if err := flush(); err != nil {
+				return err
+			}
 			done, total = 0, n
 			return w.progress.emit(buildstore.Event{Event: buildstore.EventUnits, Stage: w.inStage, Total: n})
 		},
 		Unit: func(name string) error {
 			done++
-			return w.progress.emit(buildstore.Event{Event: buildstore.EventUnit, Stage: w.inStage, Unit: name, Done: done, Total: total})
+			held = append(held, buildstore.Event{Event: buildstore.EventUnit, Stage: w.inStage, Unit: name, Done: done, Total: total})
+			return nil
 		},
 		Fallback: func(it result.Item) error {
-			return w.progress.emit(buildstore.Event{Event: buildstore.EventFallback, Stage: w.inStage, Items: []result.Item{it}})
+			held = append(held, buildstore.Event{Event: buildstore.EventFallback, Stage: w.inStage, Items: []result.Item{it}})
+			return nil
 		},
-	}
+	}, flush
 }
 
 // validationGate is refresh, then verify green: every check compares one
@@ -363,6 +385,8 @@ const overviewAsks = 2
 // overview writes the overview document: the passage asked for from excerpts
 // of the tree, a reply holding a construct the document cannot take asked
 // for once more with those lines quoted, and the template filled around it.
+// Both asks are one item, which holds its token across them, since the second
+// quotes the first's reply; the document is written once the item is done.
 func overview(w *walk) (result.Record, error) {
 	src, err := w.source()
 	if err != nil {
@@ -376,21 +400,38 @@ func overview(w *walk) (result.Record, error) {
 		w.opts.Logger.Warn("an excerpt was cut to fit its cap, at a paragraph boundary", "document", c.Title, "kept", c.Kept, "cut", c.Excluded)
 	}
 	rec := result.Record{{Key: "excerpt-chars", Value: len([]rune(ex.Text))}, {Key: "excerpt-cuts", Value: len(ex.Cuts)}}
-	var rejected []string
-	var passage string
-	for attempt := 1; attempt <= overviewAsks; attempt++ {
-		reply, err := w.passage(w.ctx, ex.Text, rejected, attempt)
-		var incomplete asks.IncompleteError
-		if errors.As(err, &incomplete) {
-			return rec, buildstore.Failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
+	var (
+		rejected         []string
+		passage          string
+		askErr, writeErr error
+		wg               sync.WaitGroup
+	)
+	err = w.passage(w.ctx, &wg, func(ask func(context.Context, string, []string, int) (string, error)) func(error) {
+		for attempt := 1; attempt <= overviewAsks; attempt++ {
+			reply, err := ask(w.ctx, ex.Text, rejected, attempt)
+			if err != nil {
+				askErr = err
+				break
+			}
+			passage, rejected = kb.Strip(reply), kbdocs.NotProse(reply)
+			if passage != "" && len(rejected) == 0 {
+				break
+			}
 		}
-		if err != nil {
-			return rec, err
-		}
-		passage, rejected = kb.Strip(reply), kbdocs.NotProse(reply)
-		if passage != "" && len(rejected) == 0 {
-			break
-		}
+		return func(err error) { writeErr = err }
+	})
+	if err != nil {
+		return rec, err
+	}
+	wg.Wait()
+	var incomplete asks.IncompleteError
+	switch {
+	case errors.As(askErr, &incomplete):
+		return rec, buildstore.Failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
+	case askErr != nil:
+		return rec, askErr
+	case writeErr != nil:
+		return rec, writeErr
 	}
 	switch {
 	case len(rejected) > 0:

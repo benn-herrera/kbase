@@ -49,6 +49,9 @@ func replayIn(t *testing.T, repo, state string, opts scoreReplayOptions, client 
 		opts.Given = append(opts.Given, "limit")
 	}
 	opts.providerOptions = scoreProvider()
+	// The scripted providers answer in the order calls reach them, which only
+	// one call in flight at a time fixes to the walk's order.
+	opts.AskConcurrency = new(1)
 	var stdout, stderr bytes.Buffer
 	opts.WorkDir, opts.StateDir = repo, state
 	opts.Stdout, opts.Stderr, opts.Logger = &stdout, &stderr, log.Discard()
@@ -141,7 +144,7 @@ func TestScoreReplayCancelledNamesTheFirstItemNotAsked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, scoreOptions: scoreOptions{Ctx: ctx}}, func() model.Client {
-		return &cancelOnSecond{MockClient: scoring(replayedReplies...), cancel: cancel}
+		return (&cancelOnSecond{MockClient: scriptedScoring(replayedReplies...), cancel: cancel}).Client()
 	})
 	stopped, _ := doc.Values[toolresult.CancelledKey].(map[string]any)
 	if doc.Outcome != toolresult.Cancelled || stopped["item"] != "clm-aaaaaa" {

@@ -8,8 +8,6 @@ deleted, not archived.
 - **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
 - **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
   `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
-- Use goroutines to parallelize scoring asks - they are embarassingly parallel, so it is just a question of how many you want to run at once. 
-- Same for most of the build asks as well
 
 ## Reader fidelity
 
@@ -34,6 +32,7 @@ The next major is under "After kbase is proven in use".
   reader-facing examples, `USER_CONVENTIONS.md` and adjagent's `references/scoring.md` have moved off
   it; until then strict load keeps modelling the key so the file a user has stays loadable and
   `kbase configure` can rewrite it.
+- **Remove the inert `readerConcurrency` key from `config.toml`'s `[asks]` at the next major.**
 
 ## After kbase is proven in use
 - The README's argument-graph images are snapshots of another project's graph. They are replaced by

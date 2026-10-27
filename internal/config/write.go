@@ -122,7 +122,8 @@ func freshConfig(cfg Config) string {
 		modelHintsComment(),
 		assign(CategoryDecision, cfg.Models.Decision),
 		assign(CategoryText, cfg.Models.Text),
-		assign(CategoryScoring, cfg.Models.Scoring))
+		assign(CategoryScoring, cfg.Models.Scoring),
+		DefaultAskConcurrency)
 }
 
 // updateLines rewrites the [models] lines of an existing config.toml, removes

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"kbase/internal/gitledger"
 	"kbase/internal/kb"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/result"
 	"kbase/internal/statedir"
@@ -37,12 +37,12 @@ type MonitorOptions struct {
 	Logger   log.Logger
 }
 
-func (o MonitorOptions) repo() (*ledger.Repo, error) {
+func (o MonitorOptions) repo() (*gitledger.Repo, error) {
 	if o.Logger == nil {
 		o.Logger = log.Discard()
 	}
-	repo, err := ledger.Open(o.WorkDir, OwnedPaths, o.Logger)
-	var nw ledger.NotWorktreeError
+	repo, err := gitledger.Open(o.WorkDir, OwnedPaths, o.Logger)
+	var nw gitledger.NotWorktreeError
 	if errors.As(err, &nw) {
 		return nil, result.Refusal{{Check: CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
 	}
@@ -51,7 +51,7 @@ func (o MonitorOptions) repo() (*ledger.Repo, error) {
 
 // Open is the repository, kb-root/ and the state store, a store newer than
 // this kbase refused.
-func (o MonitorOptions) Open() (repo *ledger.Repo, kbRoot, dir string, err error) {
+func (o MonitorOptions) Open() (repo *gitledger.Repo, kbRoot, dir string, err error) {
 	if repo, err = o.repo(); err != nil {
 		return nil, "", "", err
 	}

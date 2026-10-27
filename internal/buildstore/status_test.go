@@ -10,8 +10,8 @@ import (
 
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/filelock"
+	"kbase/internal/gitledger"
 	"kbase/internal/kb"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/result"
 )
@@ -22,7 +22,7 @@ type fixture struct {
 }
 
 // newTrailFixture is a fresh repository whose boundaries the test writes by
-// hand through the ledger, and a state store beside it: nothing here runs a
+// hand through gitledger, and a state store beside it: nothing here runs a
 // build, so no test needs pandoc.
 func newTrailFixture(t *testing.T) fixture {
 	t.Helper()
@@ -36,9 +36,9 @@ func newTrailFixture(t *testing.T) fixture {
 // ledger opens the fixture's repository over the build's owned paths. build's
 // tests keep a copy of their own: it names buildstore.OwnedPaths, which a
 // package these in-package tests import cannot reach.
-func (f fixture) ledger(t *testing.T) *ledger.Repo {
+func (f fixture) ledger(t *testing.T) *gitledger.Repo {
 	t.Helper()
-	r, err := ledger.Open(f.repo, OwnedPaths, log.Discard())
+	r, err := gitledger.Open(f.repo, OwnedPaths, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}

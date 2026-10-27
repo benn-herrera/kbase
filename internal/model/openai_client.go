@@ -25,7 +25,7 @@ type OpenAIClient struct {
 	endpoint Endpoint
 	http     *http.Client
 	// promptCacheKey is the key every request this client sends carries,
-	// stamped onto the Request in Consult and ConsultStream. It is the
+	// stamped onto the Request in consultStream. It is the
 	// client's alone: a request cannot name a key of its own.
 	promptCacheKey string
 }
@@ -42,7 +42,7 @@ var _ Client = (*OpenAIClient)(nil)
 func NewOpenAIClient(e Endpoint) *OpenAIClient {
 	return &OpenAIClient{
 		endpoint:       e,
-		http:           newHTTPTransport(),
+		http:           newHTTPTransport(e.IdleConns),
 		promptCacheKey: e.PromptCacheKey,
 	}
 }
@@ -53,48 +53,13 @@ func (c *OpenAIClient) Close() error {
 	return closeIdleConnections(c.http)
 }
 
-// Consult performs one chat-completions round-trip.
-//
-// On any non-2xx response, the body is included in the returned error,
-// scrubbed of any Authorization header value the server might have
-// echoed back. The APIKey itself is never written into an error string
-// constructed by this client.
-func (c *OpenAIClient) Consult(ctx context.Context, req Request) (Response, error) {
-	if c.endpoint.BaseURL == "" {
-		return Response{}, fmt.Errorf("endpoint BaseURL is empty")
-	}
-	req.PromptCacheKey = c.promptCacheKey
-
-	body, err := encodeRequest(req, false)
-	if err != nil {
-		return Response{}, fmt.Errorf("encode request: %w", err)
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodPost, pathChatCompletions, mimeJSON, body)
-	if err != nil {
-		return Response{}, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return Response{}, fmt.Errorf("read response: %w", err)
-	}
-
-	out, err := decodeResponse(respBody)
-	if err != nil {
-		return Response{}, fmt.Errorf("decode response: %w", err)
-	}
-	return out, nil
-}
-
 // doRequest builds a request to <BaseURL>/<path> with the given method,
 // Accept header, and optional JSON body (nil for a bodyless GET), sets
 // the standard headers — Content-Type when a body is present, plus
 // User-Agent and bearer Authorization when an API key is configured —
 // and performs it against the shared http.Client.
 //
-// This is the collapsed shape shared by Consult, ConsultStream, and
+// This is the collapsed shape shared by consultStream, decision, and
 // ListModels. Per-call differences (decode targets, and the streaming
 // path's response ownership) stay at the call sites.
 //
@@ -135,7 +100,7 @@ func (c *OpenAIClient) doRequest(ctx context.Context, method, path, accept strin
 	return resp, nil
 }
 
-// ConsultStream performs one streaming chat-completions round-trip,
+// consultStream performs one streaming chat-completions round-trip,
 // returning a StreamReader that yields chunks as they arrive.
 //
 // Wire format is OpenAI-compatible Server-Sent Events:
@@ -146,17 +111,16 @@ func (c *OpenAIClient) doRequest(ctx context.Context, method, path, accept strin
 //
 //	data: [DONE]
 //
-// On non-2xx the body is read fully, the connection closed, and a wrapped
-// error returned (matching Consult's shape, with the API key scrubbed).
-// On 2xx the response body is owned by the returned StreamReader; the
-// caller MUST Close it.
-func (c *OpenAIClient) ConsultStream(ctx context.Context, req Request) (StreamReader, error) {
+// On non-2xx the body is read, the connection closed, and a StatusError
+// returned with the API key scrubbed. On 2xx the response body is owned by
+// the returned StreamReader; the caller MUST Close it.
+func (c *OpenAIClient) consultStream(ctx context.Context, req Request) (StreamReader, error) {
 	if c.endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("endpoint BaseURL is empty")
 	}
 	req.PromptCacheKey = c.promptCacheKey
 
-	body, err := encodeRequest(req, true)
+	body, err := encodeRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
@@ -250,10 +214,8 @@ type wireRequest struct {
 	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
 }
 
-// wireStreamOptions is the `stream_options` request block. It is valid
-// ONLY on a streaming request — several OpenAI-compatible providers reject
-// its presence on a blocking one — so encodeRequest attaches it behind the
-// stream flag and the pointer stays nil (field omitted) otherwise.
+// wireStreamOptions is the `stream_options` request block, valid only on a
+// streaming request — which every chat request this client sends is.
 type wireStreamOptions struct {
 	// IncludeUsage asks the provider to emit a final, CHOICES-LESS chunk
 	// carrying only `usage`. Without it a streamed response carries NO
@@ -262,12 +224,6 @@ type wireStreamOptions struct {
 	// gated on one — including the token accounting the per-call budget
 	// is calibrated from.
 	IncludeUsage bool `json:"include_usage"`
-}
-
-type wireChoice struct {
-	Index        int         `json:"index"`
-	Message      wireMessage `json:"message"`
-	FinishReason string      `json:"finish_reason"`
 }
 
 // wireUsage is the `usage` block. The first fields are the OpenAI schema;
@@ -314,8 +270,7 @@ type wirePromptTokenDetail struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
-// usage projects the wire block onto the caller-facing type. One
-// projection shared by the blocking decode and the SSE decode.
+// usage projects the wire block onto the caller-facing type.
 func (w wireUsage) usage() Usage {
 	u := Usage{
 		PromptTokens:     w.PromptTokens,
@@ -346,11 +301,6 @@ func secondsToDuration(sec float64) time.Duration {
 	return time.Duration(math.Round(sec * float64(time.Second)))
 }
 
-type wireResponse struct {
-	Choices []wireChoice `json:"choices"`
-	Usage   wireUsage    `json:"usage"`
-}
-
 type wireModelList struct {
 	Object string      `json:"object"`
 	Data   []wireModel `json:"data"`
@@ -364,14 +314,12 @@ type wireModel struct {
 }
 
 // encodeRequest serializes a Request to the OpenAI chat-completions wire
-// format. stream toggles the `stream` field AND attaches
-// `stream_options.include_usage` (see wireStreamOptions — usage is not
-// reported on a streamed response without it, and the field is a protocol
-// error on a blocking one); the encoding is otherwise identical across the
-// blocking and streaming paths. `prompt_cache_key` is written where the
-// request carries one and omitted otherwise: a server that rejects the field
-// must not receive an empty one from a caller sending no key.
-func encodeRequest(req Request, stream bool) ([]byte, error) {
+// format as a streaming request, carrying `stream_options.include_usage` (see
+// wireStreamOptions — usage is not reported on a streamed response without
+// it). `prompt_cache_key` is written where the request carries one and
+// omitted otherwise: a server that rejects the field must not receive an
+// empty one from a caller sending no key.
+func encodeRequest(req Request) ([]byte, error) {
 	wr := wireRequest{
 		Model:              req.Model,
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
@@ -379,29 +327,11 @@ func encodeRequest(req Request, stream bool) ([]byte, error) {
 		ChatTemplateKwargs: req.ChatTemplateKwargs,
 		Reasoning:          req.Reasoning,
 		PromptCacheKey:     req.PromptCacheKey,
-		Stream:             stream,
-	}
-	if stream {
-		wr.StreamOptions = &wireStreamOptions{IncludeUsage: true}
+		Stream:             true,
+		StreamOptions:      &wireStreamOptions{IncludeUsage: true},
 	}
 	for _, m := range req.Messages {
 		wr.Messages = append(wr.Messages, wireMessage{Role: m.Role, Content: m.Content})
 	}
 	return json.Marshal(wr)
-}
-
-func decodeResponse(body []byte) (Response, error) {
-	var w wireResponse
-	if err := json.Unmarshal(body, &w); err != nil {
-		return Response{}, err
-	}
-	if len(w.Choices) == 0 {
-		return Response{}, fmt.Errorf("response contains no choices")
-	}
-	choice := w.Choices[0]
-	return Response{
-		Content:      choice.Message.Content,
-		FinishReason: choice.FinishReason,
-		Usage:        w.Usage.usage(),
-	}, nil
 }

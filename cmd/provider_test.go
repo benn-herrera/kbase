@@ -22,30 +22,11 @@ type closeLog struct{ n int }
 // closer is a mock client that records its Close — the release the registry
 // owes every client it opened.
 type closer struct {
-	*modeltest.MockClient
+	model.Client
 	log *closeLog
 }
 
 func (c closer) Close() error { c.log.n++; return nil }
-
-// cancellingCloser is the score run's client: it cancels the run as the second
-// call arrives, and records its Close.
-type cancellingCloser struct {
-	*modeltest.MockClient
-	cancel context.CancelFunc
-	calls  int
-	log    *closeLog
-}
-
-func (c *cancellingCloser) Close() error { c.log.n++; return nil }
-
-func (c *cancellingCloser) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
-	c.calls++
-	if c.calls == 2 {
-		c.cancel()
-	}
-	return c.MockClient.ConsultStream(ctx, req)
-}
 
 // TestVerbsCloseEveryClientTheyOpen: every client a verb opens is closed
 // before the verb returns, whatever the outcome — done, failed, refused and
@@ -57,7 +38,7 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 	var log closeLog
 	newClient := func() modelclient.NewClientFunc {
 		return func(model.Endpoint) model.Client {
-			return closer{modeltest.NewScriptedMock(nil, catalogue("m1")), &log}
+			return closer{modeltest.NewScriptedMock(nil, catalogue("m1")).Client(), &log}
 		}
 	}
 
@@ -81,7 +62,7 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 		unreachable.SetError(errors.New("http 503: service unavailable"))
 		code, err := runModels(context.Background(), modelsOptions{
 			providerOptions: providerOptions{Providers: pool(), Stderr: &stderr,
-				NewClient: func(model.Endpoint) model.Client { return closer{unreachable, &log} }},
+				NewClient: func(model.Endpoint) model.Client { return closer{unreachable.Client(), &log} }},
 			Stdout: &stdout,
 		})
 		if err != nil || code != toolresult.ExitCode(toolresult.Failed) {
@@ -109,7 +90,7 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Ctx: ctx}, func() model.Client {
-			return &cancellingCloser{MockClient: scoring("0.11"), cancel: cancel, log: &log}
+			return closer{(&cancelOnSecond{MockClient: scriptedScoring("0.11"), cancel: cancel}).Client(), &log}
 		})
 		if got.doc.Outcome != toolresult.Cancelled {
 			t.Fatalf("score: outcome %s\n%s", got.doc.Outcome, got.stdout)

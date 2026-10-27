@@ -60,9 +60,9 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
+	sr, err := c.consultStream(context.Background(), chatRequest("m"))
 	if err != nil {
-		t.Fatalf("ConsultStream: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 	defer sr.Close()
 
@@ -79,6 +79,27 @@ func runStream(t *testing.T, sse string) ([]Chunk, Response, error) {
 	return chunks, sr.Final(), termErr
 }
 
+// sseDone is a stream that ends at once, cleanly.
+const sseDone = "data: [DONE]\n\n"
+
+// streamed opens c's chat stream for req and reads it to its end, returning
+// what accumulated, or the error that opened or ended the stream.
+func streamed(ctx context.Context, c Client, req Request) (Response, error) {
+	sr, err := c.consultStream(ctx, req)
+	if err != nil {
+		return Response{}, err
+	}
+	defer sr.Close()
+	for {
+		if _, err := sr.Next(); err != nil {
+			if errors.Is(err, io.EOF) {
+				return sr.Final(), nil
+			}
+			return Response{}, err
+		}
+	}
+}
+
 // TestOpenAIClientHappyPath: verify the request body shape, the auth header,
 // the User-Agent header, and the response decode round-trip.
 func TestOpenAIClientHappyPath(t *testing.T) {
@@ -93,20 +114,15 @@ func TestOpenAIClientHappyPath(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &gotBody)
 
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [{
-				"index": 0,
-				"finish_reason": "stop",
-				"message": {"role": "assistant", "content": "hello world"}
-			}],
-			"usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
-		}`))
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello world\"},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n" +
+			sseDone))
 	}))
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	resp, err := c.Consult(context.Background(), Request{
+	resp, err := streamed(context.Background(), c, Request{
 		Model: "test-model",
 		Messages: []Message{
 			{Role: "system", Content: "be brief"},
@@ -114,7 +130,7 @@ func TestOpenAIClientHappyPath(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("Consult: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 
 	if gotMethod != http.MethodPost {
@@ -154,13 +170,13 @@ func TestOpenAIClientBaseURLTrailingSlash(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+		_, _ = w.Write([]byte(sseDone))
 	}))
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL + "/"))
-	if _, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
-		t.Fatalf("Consult: %v", err)
+	if _, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+		t.Fatalf("consultStream: %v", err)
 	}
 	if gotPath != "/chat/completions" {
 		t.Errorf("path with trailing-slash base: got %q, want /chat/completions", gotPath)
@@ -173,13 +189,13 @@ func TestOpenAIClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
 	var sawAuth bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, sawAuth = r.Header["Authorization"]
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+		_, _ = w.Write([]byte(sseDone))
 	}))
 	defer srv.Close()
 
 	c := NewOpenAIClient(Endpoint{Name: "nokey", BaseURL: srv.URL})
-	if _, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
-		t.Fatalf("Consult: %v", err)
+	if _, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+		t.Fatalf("consultStream: %v", err)
 	}
 	if sawAuth {
 		t.Errorf("Authorization header sent despite empty APIKey")
@@ -199,7 +215,7 @@ func TestOpenAIClientHTTPErrorWraps(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
 	}
@@ -237,7 +253,7 @@ func TestOpenAIClientContextCancellation(t *testing.T) {
 	}()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := c.Consult(ctx, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(ctx, c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from cancellation, got nil")
 	}
@@ -258,7 +274,7 @@ func TestOpenAIClientErrorBodyIsBounded(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 502, got nil")
 	}
@@ -278,7 +294,7 @@ func TestOpenAIClientErrorScrubsAPIKey(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := c.Consult(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -299,8 +315,8 @@ func TestOpenAIClientEmptyBaseURLErrors(t *testing.T) {
 	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}
 
 	calls := map[string]func() error{
-		"Consult":       func() error { _, err := c.Consult(ctx, req); return err },
-		"ConsultStream": func() error { _, err := c.ConsultStream(ctx, req); return err },
+		"consultStream": func() error { _, err := c.consultStream(ctx, req); return err },
+		"decision":      func() error { _, err := c.decision(ctx, DecisionRequest{Model: "m"}); return err },
 		"ListModels":    func() error { _, err := c.ListModels(ctx); return err },
 	}
 	for name, call := range calls {
@@ -376,42 +392,7 @@ func TestOpenAIClientListModelsErrorScrubs(t *testing.T) {
 	}
 }
 
-// TestOpenAIClientWiresTheChatShape: the request Chat makes reaches the wire in
-// the call shape — `temperature: 0` PRESENT, not omitted as it would be
-// with `omitempty`; thinking disabled; no completion cap.
-func TestOpenAIClientWiresTheChatShape(t *testing.T) {
-	var rawBody []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rawBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
-	}))
-	defer srv.Close()
-
-	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	if _, err := c.Consult(context.Background(), chatRequest("test-model")); err != nil {
-		t.Fatalf("Consult: %v", err)
-	}
-
-	var asMap map[string]any
-	if err := json.Unmarshal(rawBody, &asMap); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !strings.Contains(string(rawBody), `"temperature":0`) {
-		t.Errorf("expected literal `\"temperature\":0` in body: %s", rawBody)
-	}
-	if _, ok := asMap["max_tokens"]; ok {
-		t.Errorf("max_tokens sent; the request must carry none: %s", rawBody)
-	}
-	ctk, ok := asMap["chat_template_kwargs"].(map[string]any)
-	if !ok || ctk["enable_thinking"] != false {
-		t.Errorf("chat_template_kwargs = %v, want enable_thinking false", asMap["chat_template_kwargs"])
-	}
-	if v, ok := asMap["stream"]; ok && v != false {
-		t.Errorf("stream: got %v, want absent or false", v)
-	}
-}
-
-// chatRequest is the request Chat makes, with one user turn.
+// chatRequest is the request chat makes, with one user turn.
 func chatRequest(modelID string) Request {
 	return Request{Model: modelID, Messages: []Message{{Role: "user", Content: "hi"}},
 		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
@@ -425,15 +406,15 @@ func TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 	var rawBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rawBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+		_, _ = w.Write([]byte(sseDone))
 	}))
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	// Built bare so ChatTemplateKwargs stays nil.
 	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
-	if _, err := c.Consult(context.Background(), req); err != nil {
-		t.Fatalf("Consult: %v", err)
+	if _, err := streamed(context.Background(), c, req); err != nil {
+		t.Fatalf("consultStream: %v", err)
 	}
 	if strings.Contains(string(rawBody), "chat_template_kwargs") {
 		t.Errorf("chat_template_kwargs should be omitted when empty; got body: %s", rawBody)
@@ -441,36 +422,28 @@ func TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
 }
 
 // TestEncodeRequestReasoning: the provider's own thinking control rides every
-// chat body in one spelling — `{"enabled":false}` — and the blocking and
-// streaming encodings carry it identically. A request carrying none omits the
-// field rather than sending a null or an empty object: the control is the
-// caller's, and a server that does not know the field must not be handed one.
+// chat body in one spelling — `{"enabled":false}`. A request carrying none
+// omits the field rather than sending a null or an empty object: the control
+// is the caller's, and a server that does not know the field must not be
+// handed one.
 func TestEncodeRequestReasoning(t *testing.T) {
 	req := chatRequest("m")
 	const want = `{"enabled":false}`
-	var encoded []string
-	for _, stream := range []bool{false, true} {
-		body, err := encodeRequest(req, stream)
-		if err != nil {
-			t.Fatalf("encodeRequest(stream=%t): %v", stream, err)
-		}
-		var wire map[string]json.RawMessage
-		if err := json.Unmarshal(body, &wire); err != nil {
-			t.Fatalf("unmarshal %s: %v", body, err)
-		}
-		got, present := wire["reasoning"]
-		if !present || string(got) != want {
-			t.Errorf("stream=%t: reasoning = %s (present %t), want %s", stream, got, present, want)
-		}
-		encoded = append(encoded, string(got))
+	body, err := encodeRequest(req)
+	if err != nil {
+		t.Fatalf("encodeRequest: %v", err)
 	}
-	if encoded[0] != encoded[1] {
-		t.Errorf("reasoning differs between the blocking and streaming encodings: %q vs %q", encoded[0], encoded[1])
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal %s: %v", body, err)
+	}
+	if got, present := wire["reasoning"]; !present || string(got) != want {
+		t.Errorf("reasoning = %s (present %t), want %s", got, present, want)
 	}
 
 	bare := req
 	bare.Reasoning = nil
-	body, err := encodeRequest(bare, false)
+	body, err = encodeRequest(bare)
 	if err != nil {
 		t.Fatalf("encodeRequest with no reasoning: %v", err)
 	}
@@ -480,9 +453,8 @@ func TestEncodeRequestReasoning(t *testing.T) {
 }
 
 // TestOpenAIClientPromptCacheKey: a client built with a prompt-cache key stamps it
-// on every request it sends, on both the blocking and the streaming path; one
-// built with no key sends no such field at all — an omitted field, never an
-// empty one.
+// on every request it sends; one built with no key sends no such field at all —
+// an omitted field, never an empty one.
 func TestOpenAIClientPromptCacheKey(t *testing.T) {
 	const key = "run-abcdefgh"
 	var mu sync.Mutex
@@ -492,36 +464,19 @@ func TestOpenAIClientPromptCacheKey(t *testing.T) {
 		mu.Lock()
 		bodies = append(bodies, body)
 		mu.Unlock()
-		if r.Header.Get("Accept") == mimeEventStream {
-			w.Header().Set("Content-Type", mimeEventStream)
-			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
-			return
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 
-	// sent sends one request each way and returns the bodies it carried.
+	// sent sends one request and returns the body it carried.
 	sent := func(t *testing.T, c *OpenAIClient) [][]byte {
 		t.Helper()
 		mu.Lock()
 		from := len(bodies)
 		mu.Unlock()
-		if _, err := c.Consult(context.Background(), chatRequest("m")); err != nil {
-			t.Fatalf("Consult: %v", err)
-		}
-		sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
-		if err != nil {
-			t.Fatalf("ConsultStream: %v", err)
-		}
-		defer sr.Close()
-		for {
-			if _, err := sr.Next(); err != nil {
-				if !errors.Is(err, io.EOF) {
-					t.Fatalf("Next: %v", err)
-				}
-				break
-			}
+		if _, err := streamed(context.Background(), c, chatRequest("m")); err != nil {
+			t.Fatalf("consultStream: %v", err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -588,9 +543,9 @@ data: [DONE]
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	req := chatRequest("test-model")
-	sr, err := c.ConsultStream(context.Background(), req)
+	sr, err := c.consultStream(context.Background(), req)
 	if err != nil {
-		t.Fatalf("ConsultStream: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 	defer sr.Close()
 
@@ -644,7 +599,7 @@ func TestOpenAIClientStreamErrorWraps(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := c.ConsultStream(context.Background(), chatRequest("m"))
+	_, err := c.consultStream(context.Background(), chatRequest("m"))
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
 	}
@@ -677,9 +632,9 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	sr, err := c.ConsultStream(context.Background(), chatRequest("m"))
+	sr, err := c.consultStream(context.Background(), chatRequest("m"))
 	if err != nil {
-		t.Fatalf("ConsultStream: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 	chunk, err := sr.Next()
 	if err != nil {
@@ -717,9 +672,9 @@ func TestOpenAIClientStreamCtxCancellation(t *testing.T) {
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
-	sr, err := c.ConsultStream(ctx, chatRequest("m"))
+	sr, err := c.consultStream(ctx, chatRequest("m"))
 	if err != nil {
-		t.Fatalf("ConsultStream: %v", err)
+		t.Fatalf("consultStream: %v", err)
 	}
 	defer sr.Close()
 	// Drain the first chunk.
@@ -850,7 +805,7 @@ func TestStreamIdleWatchdogToleratesSlowStream(t *testing.T) {
 }
 
 // TestStreamIdleWatchdogArmsAtFirstRead: the window bounds provider silence,
-// not caller latency. A caller that does its own work between ConsultStream
+// not caller latency. A caller that does its own work between consultStream
 // and its first read — building the next call, writing out the last one —
 // has kept nobody waiting, and must find the stream intact when it arrives.
 func TestStreamIdleWatchdogArmsAtFirstRead(t *testing.T) {

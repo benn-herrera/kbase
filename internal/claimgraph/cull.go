@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
@@ -249,9 +250,10 @@ type cullAsk struct {
 // pairs, the unmarked record's yeses and the adjacency links, unordered — is
 // asked once, grouped by its earlier claim in reading order and named by the
 // later. Every culled claim whose root is not its target is asked once more
-// against its root, grouped by the root and named by the claim. The culls are
-// issued, the inferred links that survive them re-pointed, and the cull record
-// written once. A defaulted ask keeps both claims.
+// against its root, grouped by the root and named by the claim. Once both
+// passes' asks are done, the culls are issued as one batch per drop op, the
+// inferred links that survive them re-pointed, and the cull record written
+// once. A defaulted ask keeps both claims.
 func Culled(ctx context.Context, opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		nodePass, err := requireNodePass(w.repoRoot)
@@ -307,7 +309,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 			earlier, later := shownOrder(l, pos)
 			first[earlier] = append(first[earlier], cullAsk{l, later})
 		}
-		answers1, entries, groups1, err := askCull(ctx, opts, 1, first, g, say, pos)
+		answers1, entries, groups1, wall1, err := askCull(ctx, opts, 1, first, g, say, pos)
 		if err != nil {
 			return nil, askStop(err)
 		}
@@ -323,9 +325,12 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 			}
 			second[root] = append(second[root], cullAsk{l, c})
 		}
-		answers2, entries2, groups2, err := askCull(ctx, opts, 2, second, g, say, pos)
+		answers2, entries2, groups2, wall2, err := askCull(ctx, opts, 2, second, g, say, pos)
 		if err != nil {
 			return nil, askStop(err)
+		}
+		if err := asks.WriteGroupRecords(opts.AskRecords, slices.Concat(groups1, groups2)); err != nil {
+			return nil, err
 		}
 		entries = append(entries, entries2...)
 
@@ -353,8 +358,8 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 			}
 		}
 		return []Finding{
-			fact("stage-cull-asks-1", askTotals(groups1)...),
-			fact("stage-cull-asks-2", askTotals(groups2)...),
+			fact("stage-cull-asks-1", askTotals(groups1, wall1)...),
+			fact("stage-cull-asks-2", askTotals(groups2, wall2)...),
 			pass("stage-cull", field("candidates", len(candidates)), field("one-step", oneStep), field("confirm-asked", len(confirm)),
 				field("culled", len(plan.Culls)), field("by-root", tally(intoRoots)), field("links", len(plan.Links))),
 		}, nil
@@ -370,16 +375,18 @@ func shownOrder(l link, pos map[string]position) (first, second string) {
 }
 
 // askCull is one pass of co-linearity asks, one group per key of groups in
-// ascending order, its id the pass and the key. Each answer is mapped from the
-// order the claims were shown in onto the link's id order; a defaulted ask is
-// distinct, and a fallback. Each group is a unit of progress.
-func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cullAsk, g *AuthoredGraph, say func(ClaimNode) string, pos map[string]position) ([]cullAnswer, []buildrecords.CullEntry, []asks.GroupRecord, error) {
+// ascending order, its id the pass and the key, the pass one ask batch. Each
+// answer is mapped from the order the claims were shown in onto the link's id
+// order; a defaulted ask is distinct, and a fallback. Each group is a unit of
+// progress. Answers, units and fallbacks are taken once the batch has
+// drained. It returns the pass's answers, entries and group records, and the
+// batch's elapsed time.
+func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cullAsk, g *AuthoredGraph, say func(ClaimNode) string, pos map[string]position) ([]cullAnswer, []buildrecords.CullEntry, []asks.GroupRecord, time.Duration, error) {
 	var answers []cullAnswer
 	var entries []buildrecords.CullEntry
-	var records []asks.GroupRecord
 	ids := slices.Sorted(maps.Keys(groups))
 	if err := opts.Progress.units(len(ids)); err != nil {
-		return answers, entries, records, err
+		return nil, nil, nil, 0, err
 	}
 	addsNothing := func(l link, id string) string {
 		if id == l.a {
@@ -387,8 +394,9 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 		}
 		return buildrecords.VerdictBAddsNothing
 	}
+	name := func(id string) string { return fmt.Sprintf("p%d-%s", pass, id) }
+	batch := opts.batch(ctx)
 	for _, id := range ids {
-		group := fmt.Sprintf("p%d-%s", pass, id)
 		items := make([]asks.ColinearItem, len(groups[id]))
 		for i, a := range groups[id] {
 			first, second := shownOrder(a.link, pos)
@@ -396,17 +404,21 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 			sn, _ := g.node(second)
 			items[i] = asks.ColinearItem{Key: a.key, First: askClaim(fn), Second: askClaim(sn), FirstText: say(fn), SecondText: say(sn)}
 		}
-		rec, err := asks.AskGroup(ctx, asks.Colinear, group, asks.ColinearAsks(items), opts.Reader, opts.ReaderConcurrency, opts.AskRecords)
-		if err != nil {
-			return answers, entries, records, err
+		if err := batch.AskGroup(asks.Colinear, name(id), asks.ColinearAsks(items)); err != nil {
+			break
 		}
-		records = append(records, rec)
-		for i, it := range rec.Items {
+	}
+	records, err := batch.Wait()
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	for k, id := range ids {
+		for i, it := range records[k].Items {
 			a := groups[id][i]
 			first, second := shownOrder(a.link, pos)
 			verdict := buildrecords.VerdictDistinct
-			if it.Letter != nil {
-				switch *it.Letter {
+			if it.Choice != nil {
+				switch *it.Choice {
 				case asks.LetterSecondAddsNothing:
 					verdict = addsNothing(a.link, second)
 				case asks.LetterFirstAddsNothing:
@@ -419,13 +431,13 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 				n, _ := g.node(a.key)
 				if err := opts.Progress.fallback(result.Item{Check: checkDefaulted, Path: n.Document,
 					Detail: fmt.Sprintf("the co-linearity ask over %s and %s was answered with no offered letter twice: it is recorded distinct and both claims keep", a.a, a.b)}); err != nil {
-					return answers, entries, records, err
+					return answers, entries, records, batch.Elapsed(), err
 				}
 			}
 		}
-		if err := opts.Progress.unit(group); err != nil {
-			return answers, entries, records, err
+		if err := opts.Progress.unit(name(id)); err != nil {
+			return answers, entries, records, batch.Elapsed(), err
 		}
 	}
-	return answers, entries, records, nil
+	return answers, entries, records, batch.Elapsed(), nil
 }

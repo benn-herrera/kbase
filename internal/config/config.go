@@ -10,12 +10,12 @@ import (
 
 // Model categories. The build names a category, never a model id: which model
 // serves the decision category is a deployment fact that belongs in
-// config.toml, while "the letter asks are decision-model calls" is a build
+// config.toml, while "the multichoice asks are decision-model calls" is a build
 // fact that belongs in the code. These constants are the single source of the
 // category names — a role is one of them typed as Role, and the `toml` tags on
 // ModelMap must mirror them (struct tags cannot reference constants).
 const (
-	// CategoryDecision is the claim graph's letter asks' category: the
+	// CategoryDecision is the claim graph's multichoice asks' category: the
 	// decision model that answers them.
 	CategoryDecision = "decision"
 	// CategoryText is the overview passage's category.
@@ -40,7 +40,7 @@ type Config struct {
 	// Models maps the verb's roles onto the endpoint and model each asks.
 	Models ModelMap `toml:"models"`
 
-	// Asks is how the build puts its letter asks.
+	// Asks is how the build puts its multichoice asks.
 	Asks AsksConfig `toml:"asks"`
 
 	// Sources names the layer that supplied each merged model id — one of
@@ -52,14 +52,23 @@ type Config struct {
 
 // AsksConfig is the [asks] table.
 type AsksConfig struct {
-	// ReaderConcurrency is how many asks of one group are in flight once its
-	// first has returned; nil, the key absent, leaves the build's default.
+	// ReaderConcurrency is the superseded readerConcurrency key: it loads and
+	// merges, any value, and chooses nothing. Concurrency replaces it.
 	ReaderConcurrency *int `toml:"readerConcurrency"`
+
+	// Concurrency is how many model calls one build or score has in flight
+	// at once, across every role; nil, the key absent, leaves the default.
+	Concurrency *int `toml:"concurrency"`
 }
 
-// keyReaderConcurrency is AsksConfig's key by its full dotted path, as a
-// message names it.
-const keyReaderConcurrency = "asks.readerConcurrency"
+// keyConcurrency is AsksConfig's concurrency key by its full dotted path, as
+// a message names it.
+const keyConcurrency = "asks.concurrency"
+
+// DefaultAskConcurrency is how many model calls an invocation has in flight
+// at once where neither --ask-concurrency nor [asks] concurrency names a
+// number.
+const DefaultAskConcurrency = 2
 
 // ModelMap is the [models] table: the role→model resolution, written by
 // `kbase configure` or by hand. A value is a file-mode reference,
@@ -139,8 +148,8 @@ func LoadConfig(path string) (Config, error) {
 	if err := rejectUnknownKeys(path, md); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
-	if n := cfg.Asks.ReaderConcurrency; n != nil && *n < 1 {
-		return Config{}, fmt.Errorf("config: %s: %s is a whole number of asks, at least 1", path, keyReaderConcurrency)
+	if n := cfg.Asks.Concurrency; n != nil && *n < 1 {
+		return Config{}, fmt.Errorf("config: %s: %s is a whole number of model calls, at least 1", path, keyConcurrency)
 	}
 	return cfg, nil
 }

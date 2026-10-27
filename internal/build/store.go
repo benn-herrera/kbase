@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -196,19 +197,83 @@ func openProgress(dir string, now func() time.Time) (*progress, error) {
 	return &progress{f, now}, nil
 }
 
-func (p *progress) emit(e buildstore.Event) error {
-	e.Time = stamp(p.now())
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
+func (p *progress) emit(e buildstore.Event) error { return p.emitAll([]buildstore.Event{e}) }
+
+// emitAll appends the events in one write and one sync, each stamped as it is
+// written.
+func (p *progress) emitAll(events []buildstore.Event) error {
+	if len(events) == 0 {
+		return nil
 	}
-	if _, err := p.f.Write(append(b, '\n')); err != nil {
+	var buf []byte
+	for _, e := range events {
+		e.Time = stamp(p.now())
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		buf = append(append(buf, b...), '\n')
+	}
+	if _, err := p.f.Write(buf); err != nil {
 		return err
 	}
 	return p.f.Sync()
 }
 
 func (p *progress) close() error { return p.f.Close() }
+
+const (
+	// progressRotateLines is how many lines the live progress record may hold
+	// before a fresh build moves the earlier runs' lines out of it.
+	progressRotateLines = 500
+	// keptProgressFiles is how many rotated progress records stand.
+	keptProgressFiles = 15
+)
+
+// rotateProgress moves, where the live record in dir holds more than
+// progressRotateLines lines, every line but the last — this invocation's run
+// event, the only line of it — to progress-<stamp>.jsonl, and prunes the
+// rotated records to the newest keptProgressFiles. The record is reopened into
+// p whatever fails before it, so later events still land.
+func (p *progress) rotateProgress(dir string) (err error) {
+	live := filepath.Join(dir, buildstore.ProgressFile)
+	defer func() {
+		f, openErr := os.OpenFile(live, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
+		if openErr == nil {
+			p.f = f
+		}
+		err = errors.Join(err, openErr)
+	}()
+	if err := p.f.Close(); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(live)
+	if err != nil {
+		return err
+	}
+	if bytes.Count(data, []byte{'\n'}) <= progressRotateLines {
+		return nil
+	}
+	last := bytes.LastIndexByte(data[:len(data)-1], '\n') + 1
+	name := "progress-" + p.now().UTC().Format("20060102T150405.000000000Z") + ".jsonl"
+	if err := atomicfile.Write(filepath.Join(dir, name), data[:last], nil); err != nil {
+		return err
+	}
+	if err := atomicfile.Write(live, data[last:], nil); err != nil {
+		return err
+	}
+	rotated, err := filepath.Glob(filepath.Join(dir, "progress-*.jsonl"))
+	if err != nil {
+		return err
+	}
+	slices.Sort(rotated)
+	for _, path := range rotated[:max(0, len(rotated)-keptProgressFiles)] {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // uncommittedIn is whether the progress record accounts for uncommitted work
 // in stage: the latest invocation that entered a stage and was not refused —
@@ -228,58 +293,64 @@ func uncommittedIn(events []buildstore.Event, stage string) bool {
 	return false
 }
 
-// keptBuilds is how many of the latest builds that ended having walked keep
-// their captures in the store.
+// keptBuilds is how many build trails, beside the current one, keep their
+// directories, and how many captured builds, beside the newest, stand.
 const keptBuilds = 5
 
-// pruneCaptures removes, from the store at dir, every capture — a started
-// build's output under ReportsDir and a call's under scratch — last written
-// before the start of the keptBuilds-th latest build that ended neither
-// refused nor told to retry. A build killed before its end is not counted.
-// The answer cache and the stage reports are kept.
-func pruneCaptures(dir string) error {
-	events, err := buildstore.ReadProgress(dir)
-	if err != nil {
-		return err
-	}
-	var starts []string
-	for _, inv := range buildstore.Invocations(events) {
-		if o := inv.End().Outcome; o != "" && o != result.Refused && o != result.Retry {
-			starts = append(starts, inv[0].Time)
+// pruneTrails keeps, of the trail directories under the store at dir's
+// scratch, the current one and the keptBuilds newest others by modification
+// time, and removes the rest whole. The current directory current — empty
+// for a fresh build — is created where it does not stand, and stamped now:
+// that stamp is what marks a trail as last built on. The flat answers, group
+// records and call captures an earlier kbase wrote are removed.
+func pruneTrails(dir, current string) error {
+	if current != "" {
+		if err := os.MkdirAll(current, 0o777); err != nil {
+			return err
+		}
+		now := time.Now()
+		if err := os.Chtimes(current, now, now); err != nil {
+			return err
 		}
 	}
-	if len(starts) < keptBuilds {
-		return nil
-	}
-	cutoff, err := time.Parse(time.RFC3339, starts[len(starts)-keptBuilds])
-	if err != nil {
+	scratch := filepath.Join(dir, buildstore.ScratchDir)
+	trails := filepath.Join(scratch, buildstore.TrailsDir)
+	entries, err := os.ReadDir(trails)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for _, d := range []struct{ dir, prefix string }{
-		{filepath.Join(dir, buildstore.ReportsDir), buildstore.CapturePrefix},
-		{filepath.Join(dir, buildstore.ScratchDir, asks.CapturesDir), ""},
-	} {
-		entries, err := os.ReadDir(d.dir)
-		if errors.Is(err, os.ErrNotExist) {
+	type trail struct {
+		path string
+		mod  time.Time
+	}
+	var others []trail
+	for _, e := range entries {
+		path := filepath.Join(trails, e.Name())
+		if !e.IsDir() || path == current {
 			continue
 		}
+		info, err := e.Info()
 		if err != nil {
 			return err
 		}
-		for _, e := range entries {
-			if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), d.prefix) {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				return err
-			}
-			if info.ModTime().Before(cutoff) {
-				if err := os.Remove(filepath.Join(d.dir, e.Name())); err != nil {
-					return err
-				}
-			}
+		others = append(others, trail{path, info.ModTime()})
+	}
+	slices.SortFunc(others, func(a, b trail) int { return b.mod.Compare(a.mod) })
+	for _, t := range others[min(keptBuilds, len(others)):] {
+		if err := os.RemoveAll(t.path); err != nil {
+			return err
+		}
+	}
+	for _, flat := range []string{asks.AnswersDir, asks.AskRecordsDir, asks.CapturesDir} {
+		if err := os.RemoveAll(filepath.Join(scratch, flat)); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// pruneBuildCaptures keeps, under the store at dir's ReportsDir, the newest
+// keptBuilds+1 captured builds and removes the rest.
+func pruneBuildCaptures(dir string) error {
+	return buildstore.PruneCaptures(filepath.Join(dir, buildstore.ReportsDir), buildstore.CapturePrefix, keptBuilds+1)
 }

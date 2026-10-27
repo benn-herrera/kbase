@@ -23,10 +23,10 @@ import (
 // queue has been drained. Tests check for this with errors.Is.
 var ErrMockExhausted = errors.New("modeltest: mock client exhausted")
 
-// MockClient implements model.Client without crossing the network. It is the
-// test substrate for every stage that consults a model: scripted responses,
+// MockClient answers model calls without crossing the network. It is the test
+// substrate for every stage that consults a model: scripted responses,
 // injected failures, and a streaming simulation whose chunk boundaries the
-// test chooses.
+// test chooses. Client is the model.Client that serves its answers.
 //
 // MockClient's own methods are safe for concurrent use, so a fan-out stage
 // under test may share one MockClient across worker goroutines. The
@@ -39,18 +39,18 @@ type MockClient struct {
 	// Two scripted sub-modes, selected at construction.
 	//
 	// Single-slot mode (NewScriptedMock): the mock holds one current
-	// Response that every Consult re-serves. A caller driving several
+	// Response that every consult re-serves. A caller driving several
 	// stages installs each stage's response with SetResponse before
-	// driving it. If no response was ever installed, Consult returns
+	// driving it. If no response was ever installed, consult returns
 	// ErrMockExhausted.
 	//
 	// Per-consult queue mode (NewScriptedMockPerConsult): the mock walks
-	// `queue` one entry per Consult — queue[0], queue[1], … This is for
+	// `queue` one entry per consult — queue[0], queue[1], … This is for
 	// tests that must observe two *distinct* consults, e.g. a
 	// reject-and-retry path where the retry must see a different
-	// response. A Consult past the queue end returns ErrMockExhausted.
+	// response. A consult past the queue end returns ErrMockExhausted.
 	scripted   bool           // true once the mock is in scripted mode
-	current    model.Response // single-slot mode: the response every Consult serves
+	current    model.Response // single-slot mode: the response every consult serves
 	hasCurrent bool           // single-slot mode: SetResponse (or ctor) installed a response
 	queue      []model.Response
 	step       int
@@ -67,7 +67,7 @@ type MockClient struct {
 
 	calls []MockCall
 
-	// RecordCalls — when true, every Consult call is appended to the
+	// RecordCalls — when true, every consult call is appended to the
 	// internal calls log (inspectable via Calls()). Default false —
 	// recording is opt-in to prevent unbounded growth in long runs, where
 	// each retained Request holds its full Messages slice and produces
@@ -85,6 +85,11 @@ type MockClient struct {
 	decisionStep    int
 }
 
+// Client is the model.Client whose calls m answers.
+func (m *MockClient) Client() model.Client {
+	return &model.ClientFuncs{Stream: m.ConsultStream, Decide: m.Decision, List: m.ListModels}
+}
+
 // NewScriptedMockWithDecisions returns a MockClient whose Decision walks
 // `answers` in order, one per call; a call past the end yields
 // ErrMockExhausted. The consult scripting of the other constructors is
@@ -99,7 +104,7 @@ func NewScriptedMockWithDecisions(answers []model.DecisionAnswer) *MockClient {
 // when SetMockChunks has not been called.
 const DefaultMockChunks = 8
 
-// MockCall records one Consult invocation for test assertions.
+// MockCall records one consult invocation for test assertions.
 type MockCall struct {
 	Request  model.Request
 	Response model.Response
@@ -108,14 +113,14 @@ type MockCall struct {
 }
 
 // NewScriptedMock returns a single-slot scripted MockClient. The mock
-// holds one current Response that every Consult re-serves; it is changed
+// holds one current Response that every consult re-serves; it is changed
 // with SetResponse.
 //
 // `responses` seeds the initial slot: if non-empty, responses[0] is
 // installed as the current response, so a single-call test can pass a
 // one-element slice and never call SetResponse. Any further elements
 // are ignored — use NewScriptedMockPerConsult for a walked queue. A
-// nil/empty `responses` leaves the slot empty; the first Consult before
+// nil/empty `responses` leaves the slot empty; the first consult before
 // any SetResponse yields ErrMockExhausted.
 //
 // models is returned verbatim from ListModels; nil yields an empty list.
@@ -133,19 +138,19 @@ func NewScriptedMock(responses []model.Response, models []model.ModelInfo) *Mock
 }
 
 // NewScriptedMockPerConsult returns a scripted MockClient that advances
-// through the queue one entry per Consult: queue[0], queue[1], … This is
+// through the queue one entry per consult: queue[0], queue[1], … This is
 // for tests that must observe two distinct consults — a reject-and-retry
 // path, where the retry must see a different response than the rejected
-// first one. A Consult past the end yields ErrMockExhausted.
+// first one. A consult past the end yields ErrMockExhausted.
 func NewScriptedMockPerConsult(responses []model.Response) *MockClient {
 	q := make([]model.Response, len(responses))
 	copy(q, responses)
 	return &MockClient{scripted: true, queue: q, perConsult: true}
 }
 
-// Consult returns the next response from this mock, or the error installed
+// consult returns the next response from this mock, or the error installed
 // by SetError.
-func (m *MockClient) Consult(ctx context.Context, req model.Request) (model.Response, error) {
+func (m *MockClient) consult(ctx context.Context, req model.Request) (model.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Response{}, err
 	}
@@ -186,7 +191,7 @@ func (m *MockClient) Consult(ctx context.Context, req model.Request) (model.Resp
 	return resp, err
 }
 
-// ConsultStream produces the same Response Consult would have produced,
+// ConsultStream produces the same Response consult would have produced,
 // then splits it across chunks for incremental delivery. The number of
 // chunks is set by SetMockChunks (default DefaultMockChunks). An injected
 // error surfaces here too, from the stream-open call rather than from
@@ -195,7 +200,7 @@ func (m *MockClient) Consult(ctx context.Context, req model.Request) (model.Resp
 // All non-content fields (FinishReason, Usage) attach to the final chunk
 // so iteration order matches a real provider.
 func (m *MockClient) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
-	resp, err := m.Consult(ctx, req)
+	resp, err := m.consult(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +223,7 @@ func (m *MockClient) SetMockChunks(n int) {
 }
 
 // SetResponse installs the current response a single-slot scripted mock
-// serves; every subsequent Consult returns it. Has no effect on a
+// serves; every subsequent consult returns it. Has no effect on a
 // per-consult-queue mock.
 func (m *MockClient) SetResponse(resp model.Response) {
 	m.mu.Lock()
@@ -229,7 +234,7 @@ func (m *MockClient) SetResponse(resp model.Response) {
 	m.mu.Unlock()
 }
 
-// SetError installs a sticky failure: every subsequent Consult — and
+// SetError installs a sticky failure: every subsequent consult — and
 // therefore every ConsultStream — returns err instead of a response, until
 // cleared with SetError(nil). It is the seam for exercising caller error
 // paths (transport failure, provider rejection, retry-then-fall-back) with
@@ -259,7 +264,7 @@ func (m *MockClient) ListModels(ctx context.Context) ([]model.ModelInfo, error) 
 	return out, nil
 }
 
-// Calls returns a snapshot of every Consult invocation observed so far.
+// Calls returns a snapshot of every consult invocation observed so far.
 // Returned slice is a defensive copy; safe to retain across further calls.
 func (m *MockClient) Calls() []MockCall {
 	m.mu.Lock()

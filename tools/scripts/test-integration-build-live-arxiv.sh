@@ -108,11 +108,12 @@ check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 ]] && grep -qx 'outcome: "do
 check no-row-dropped "$(ok test -z "$(git -C "${repo}" log --format=%b --grep='^kb-build: ' | grep -- '--no-inference')")" \
     "no boundary names a dropped row" "${repo}/.git"
 check overview "$(ok grep -q '^# .* Knowledge Base$' "${repo}/kb-root/README.md")" "README.md written around its passage" "${repo}/kb-root/README.md"
-captures="$(count "${state}/scratch/captures" '*.capture.jsonl')"
-answers="$(count "${state}/scratch/answers" '*.txt')"
-ask_records="$(count "${state}/scratch/asks" '*.yaml')"
-check captures "$(ok test "${captures}" -gt 0 -a "${answers}" -gt 0 -a "${ask_records}" -gt 0)" \
-    "${captures} captures, ${answers} cached answers, ${ask_records} group records under the state store's scratch/" "${state}/scratch"
+captures="$(count "${state}/scratch/trails" '*.capture.jsonl')"
+letter_answers="$(count "${state}/scratch/trails" '*.json')"
+overview_answers="$(count "${state}/scratch/trails" '*.txt')"
+ask_records="$(count "${state}/scratch/trails" '*.yaml')"
+check captures "$(ok test "${captures}" -gt 0 -a "${letter_answers}" -gt 0 -a "${overview_answers}" -gt 0 -a "${ask_records}" -gt 0)" \
+    "${captures} captures, ${letter_answers} cached letter-ask answers, ${overview_answers} cached overview answers, ${ask_records} group-record files under the state store's scratch/" "${state}/scratch"
 
 # the counts, off the build records and the result
 set +e
@@ -137,8 +138,8 @@ warned="$(grep -c 'travels in cleartext' "${ck}/kbase-build-env.log" || true)"
 expect_warning=0
 [[ -n "${key_file}" && "${base_url}" == http://* && ! "${base_url}" =~ ^http://(localhost|127\.|\[::1\]) ]] && expect_warning=1
 check build-env "$([[ "$(rc "${ck}/kbase-build-env")" -eq 0 ]] && grep -qx 'outcome: "bounded"' "${ck}/kbase-build-env.out" \
-    && [[ "$(count "${root}/${dir}/env-state/scratch/captures" '*.capture.jsonl')" -gt 0 && ! -e "${no_config}" && "${warned}" -eq "${expect_warning}" ]] && echo 0 || echo 1)" \
-    "configured by KBASE_API_BASE_URL, KBASE_DECISION=${decision}, KBASE_TEXT=${text} and KBASE_API_KEY_FILE alone: exit $(rc "${ck}/kbase-build-env"), $(grep -m1 '^outcome:' "${ck}/kbase-build-env.out" || echo 'no outcome'), $(count "${root}/${dir}/env-state/scratch/captures" '*.capture.jsonl') captures, ${warned} cleartext warning(s) (${expect_warning} expected), no configuration directory" \
+    && [[ "$(count "${root}/${dir}/env-state/scratch/trails" '*.capture.jsonl')" -gt 0 && ! -e "${no_config}" && "${warned}" -eq "${expect_warning}" ]] && echo 0 || echo 1)" \
+    "configured by KBASE_API_BASE_URL, KBASE_DECISION=${decision}, KBASE_TEXT=${text} and KBASE_API_KEY_FILE alone: exit $(rc "${ck}/kbase-build-env"), $(grep -m1 '^outcome:' "${ck}/kbase-build-env.out" || echo 'no outcome'), $(count "${root}/${dir}/env-state/scratch/trails" '*.capture.jsonl') captures, ${warned} cleartext warning(s) (${expect_warning} expected), no configuration directory" \
     "${ck}/kbase-build-env.out"
 
 # The layering proof, which names no configuration directory at all: every
@@ -186,7 +187,7 @@ check configure-layered "${layered_refs}" \
     "${ck}/kbase-configure-layered.out"
 capture "${ck}/kbase-build-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" build "${layered_volume_root}" \
     --state-dir "${layered}/state" --log-level info
-layered_captures="$(count "${layered}/state/scratch/captures" '*.capture.jsonl')"
+layered_captures="$(count "${layered}/state/scratch/trails" '*.capture.jsonl')"
 check layered-build "$([[ "$(rc "${ck}/kbase-build-layered")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build-layered.out" \
     && [[ "${layered_captures}" -gt 0 ]] && echo 0 || echo 1)" \
     "no --config-dir: exit $(rc "${ck}/kbase-build-layered"), $(grep -m1 '^outcome:' "${ck}/kbase-build-layered.out" || echo 'no outcome'), ${layered_captures} captures against the endpoint the global layer names" \
@@ -271,8 +272,8 @@ check score-env "${score_ok}" \
     "${ck}/kbase-score-env.out"
 
 {
-    printf -- '- id: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    answers: %s\n    ask-records: %s\n  checks:\n' \
-        "$(yaml_str "${id}")" "$(yaml_str "${state}")" "${captures}" "${answers}" "${ask_records}"
+    printf -- '- id: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    letter-answers: %s\n    overview-answers: %s\n    ask-records: %s\n  checks:\n' \
+        "$(yaml_str "${id}")" "$(yaml_str "${state}")" "${captures}" "${letter_answers}" "${overview_answers}" "${ask_records}"
     for c in "${checks[@]}"; do
         IFS=$'\t' read -r c_name c_verdict c_detail c_evidence <<< "${c}"
         printf '    - check: %s\n      result: %s\n      detail: %s\n      evidence: %s\n' \

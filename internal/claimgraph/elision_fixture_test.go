@@ -1,8 +1,10 @@
 package claimgraph
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"kbase/internal/kb"
@@ -127,24 +129,66 @@ func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
 	}
 }
 
-// TestIssueCullsStopsOnRefusal: the issuer stops at the first outcome that is
-// neither done nor unchanged, with the ops before it issued.
+// TestIssueCullsDropsAClaimNamedOnlyByAnotherCull: the one case where the
+// per-op batches accept what culling claim by claim refuses — y named only in
+// x's rationale, y issued first — lands, both records gone.
+func TestIssueCullsDropsAClaimNamedOnlyByAnotherCull(t *testing.T) {
+	seed := func() (string, func(op string, values []byte) write.Result) {
+		root := seedElisionLeaves(t, [][]string{{"a", "b", "c", "d"}, {"x", "y"}},
+			values{dependsOn("a", "x"), dependsOn("x", "y"), dependsOn("y", "b"), dependsOn("c", "a"), dependsOn("b", "d")})
+		w := writer{kbRoot: root, lg: log.Discard()}
+		if _, err := w.run("seed", "set-rationale", values{{"id": elisionIDs["x"], "rationale": "Follows from " + elisionIDs["y"] + "."}}); err != nil {
+			t.Fatal(err)
+		}
+		return root, w.raw
+	}
+	cull := []string{elisionIDs["y"], elisionIDs["x"]}
+
+	_, run := seed()
+	if _, err := IssueCulls(cull[:1], run); err == nil {
+		t.Fatal("culling y alone landed while x's rationale names it; the case this test pins does not arise")
+	}
+	root, run := seed()
+	if _, err := IssueCulls(cull, run); err != nil {
+		t.Fatalf("IssueCulls: %v", err)
+	}
+	g := loadRecords(t, root)
+	for _, id := range cull {
+		if slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == id }) {
+			t.Errorf("%s's record stands after its cull", id)
+		}
+	}
+}
+
+// TestIssueCullsStopsOnRefusal: each op is one batch over every culled id in
+// plan order, and the issuer stops at the first batch whose outcome is
+// neither done nor unchanged, with the batches before it issued.
 func TestIssueCullsStopsOnRefusal(t *testing.T) {
 	var ops []string
 	run := func(op string, values []byte) write.Result {
-		ops = append(ops, op)
+		var batch struct {
+			Entry []struct{ ID string }
+		}
+		if err := json.Unmarshal(values, &batch); err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, len(batch.Entry))
+		for i, e := range batch.Entry {
+			ids[i] = e.ID
+		}
+		ops = append(ops, op+" "+strings.Join(ids, ","))
 		if op == "drop-inbound-edges" {
 			return write.Result{Outcome: result.Refused}
 		}
 		return write.Result{Outcome: result.Done}
 	}
-	results, err := IssueCulls([]string{"x", "y"}, run)
+	results, err := IssueCulls([]string{"y", "x"}, run)
 	if err == nil {
 		t.Fatal("IssueCulls succeeded over a refused op")
 	}
-	want := []string{"drop-claim-edges", "drop-inbound-edges"}
+	want := []string{"drop-claim-edges y,x", "drop-inbound-edges y,x"}
 	if !slices.Equal(ops, want) {
-		t.Errorf("issued %v, want %v (stopped at x)", ops, want)
+		t.Errorf("issued %q, want %q", ops, want)
 	}
 	if len(results) != 1 {
 		t.Errorf("returned %d results, want the 1 before the refusal", len(results))

@@ -23,9 +23,9 @@ import (
 
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
+	"kbase/internal/gitledger"
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/mcp/protocol"
@@ -383,6 +383,25 @@ func TestMCPRequiredFlags(t *testing.T) {
 			t.Errorf("score: properties %v, want its flags %v", got, flags)
 		}
 	})
+}
+
+// TestMCPBuildAndScoreTakeAskConcurrency: --ask-concurrency, declared on each
+// verb's own flags, reaches the build and score tool schemas as an optional
+// integer, with no table naming it.
+func TestMCPBuildAndScoreTakeAskConcurrency(t *testing.T) {
+	tools := map[string]listedTool{}
+	for _, tool := range listTools(t) {
+		tools[tool.Name] = tool
+	}
+	for _, name := range []string{"build", "score"} {
+		s := tools[name].InputSchema
+		if property, ok := s.Properties[askConcurrencyFlag]; !ok || property["type"] != "integer" {
+			t.Errorf("%s: %s property %v, want an integer", name, askConcurrencyFlag, s.Properties[askConcurrencyFlag])
+		}
+		if slices.Contains(s.Required, askConcurrencyFlag) {
+			t.Errorf("%s: %s is required", name, askConcurrencyFlag)
+		}
+	}
 }
 
 // TestMCPWriteOpSchemas reads each write op's vocabulary off its own
@@ -774,7 +793,7 @@ func TestMCPModelHintsResource(t *testing.T) {
 }
 
 // trailRepo stages the results fixture's KB in a fresh repository and records
-// two of the build's boundaries there through the ledger, as a build records
+// two of the build's boundaries there through gitledger, as a build records
 // them — no build runs, so the test needs no pandoc — and returns the
 // repository and the last boundary's commit.
 func trailRepo(t *testing.T) (string, string) {
@@ -791,7 +810,7 @@ func trailRepo(t *testing.T) (string, string) {
 	isolateChildBuild(t, base)
 	// The paths a build owns in a KB: kb-root/ and the values records. The
 	// boundaries commit them, so the worktree is clean when the tool reads it.
-	led, err := ledger.Open(repo, []string{kb.KBDir, "values"}, log.Discard())
+	led, err := gitledger.Open(repo, []string{kb.KBDir, "values"}, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}

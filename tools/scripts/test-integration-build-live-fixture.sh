@@ -171,9 +171,10 @@ function run_build() {
         "exit $(rc "${ck}/kbase-build"), outcome ${outcome:-none}" "${ck}/kbase-build.out"
     volumes="$(grep '^- \[' "${dir}/kb-root/entry-point.md" 2>/dev/null || true)"
     check entry-point "$(ok test -n "${volumes}")" "$(grep -c . <<< "${volumes}" || true) volume(s) listed: $(tr '\n' ' ' <<< "${volumes}")" "${dir}/kb-root/entry-point.md"
-    captures="$(count "${state}/scratch/captures" '*.capture.jsonl')"
-    answers="$(count "${state}/scratch/answers" '*.txt')"
-    ask_records="$(count "${state}/scratch/asks" '*.yaml')"
+    captures="$(count "${state}/scratch/trails" '*.capture.jsonl')"
+    letter_answers="$(count "${state}/scratch/trails" '*.json')"
+    overview_answers="$(count "${state}/scratch/trails" '*.txt')"
+    ask_records="$(count "${state}/scratch/trails" '*.yaml')"
 
     if [[ "${outcome}" != done ]]; then
         for c in no-row-dropped captures kbase-refresh kbase-verify records; do
@@ -182,8 +183,8 @@ function run_build() {
     else
         check no-row-dropped "$(ok test -z "$(git -C "${dir}" log --format=%b --grep='^kb-build: ' "${staged}..HEAD" | grep -- '--no-inference')")" \
             "no boundary names a dropped row" "${dir}/.git"
-        check captures "$(ok test "${captures}" -gt 0 -a "${answers}" -gt 0 -a "${ask_records}" -gt 0)" \
-            "${captures} captures, ${answers} cached answers, ${ask_records} group records under the state store's scratch/" "${state}/scratch"
+        check captures "$(ok test "${captures}" -gt 0 -a "${letter_answers}" -gt 0 -a "${ask_records}" -gt 0)" \
+            "${captures} captures, ${letter_answers} cached letter-ask answers, ${overview_answers} cached overview answers, ${ask_records} group-record files under the state store's scratch/" "${state}/scratch"
 
         capture "${ck}/kbase-refresh" "${dir}" "${kbase}" refresh
         check kbase-refresh "$(rc "${ck}/kbase-refresh")" "exit $(rc "${ck}/kbase-refresh")" "${ck}/kbase-refresh.out"
@@ -203,8 +204,8 @@ function run_build() {
         for a in "$@"; do
             printf '    - %s\n' "$(yaml_str "${a}")"
         done
-        printf '  outcome: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    answers: %s\n    ask-records: %s\n  checks:\n' \
-            "$(yaml_str "${outcome}")" "$(yaml_str "${state}")" "${captures}" "${answers}" "${ask_records}"
+        printf '  outcome: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    letter-answers: %s\n    overview-answers: %s\n    ask-records: %s\n  checks:\n' \
+            "$(yaml_str "${outcome}")" "$(yaml_str "${state}")" "${captures}" "${letter_answers}" "${overview_answers}" "${ask_records}"
         for c in "${checks[@]}"; do
             IFS=$'\t' read -r c_name c_verdict c_detail c_evidence <<< "${c}"
             printf '    - check: %s\n      result: %s\n      detail: %s\n      evidence: %s\n' \

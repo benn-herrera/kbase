@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,11 @@ import (
 	"kbase/internal/buildstore"
 	"kbase/internal/claimgraph"
 	"kbase/internal/config"
+	"kbase/internal/gitledger"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/result"
@@ -87,6 +88,9 @@ type Options struct {
 	// ConfigDir is the configuration directory the invocation named, if it
 	// named one; the resume command names it too.
 	ConfigDir string
+	// AskConcurrency is the --ask-concurrency value the invocation named, 0
+	// where it named none; the resume command names it too.
+	AskConcurrency int
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
 	// Provider is where the build's model calls go, or what the configuration
@@ -101,16 +105,16 @@ type Options struct {
 }
 
 // Provider is where a build's model calls go: one client and the model it is
-// asked for, per role — the letter asks and the overview passage reach their
-// own endpoints independently — how many asks of one group are in flight at
-// once (0 for the default), and the provenance its result states, one record
-// per role in role order.
+// asked for, per role — the multichoice asks and the overview passage reach their
+// own endpoints independently — the invocation's one queue every call of
+// every role takes a slot of, and the provenance its result states, one
+// record per role in role order.
 type Provider struct {
-	LettersClient     model.Client
-	Letters           string
-	OverviewClient    model.Client
-	Overview          string
-	ReaderConcurrency int
+	LettersClient  model.Client
+	Letters        string
+	OverviewClient model.Client
+	Overview       string
+	Queue          *model.Queue
 
 	// Roles is the build's result record of where each role's asks went, one
 	// per role the build resolved, in role order.
@@ -122,20 +126,21 @@ type Provider struct {
 type walk struct {
 	ctx      context.Context
 	opts     Options
-	repo     *ledger.Repo
+	repo     *gitledger.Repo
 	kbRoot   string
 	stateDir string
 	progress *progress
 	// trail is the boundary commits, newest first, as this invocation
 	// extends it.
-	trail []ledger.Entry
-	// letters puts the claim graph's letter asks, nil where this build calls
-	// no model; passage asks the overview passage from excerpts, rejected
-	// holding the lines a previous reply was refused for and attempt
-	// counting the asks from 1.
-	letters           asks.LetterReader
-	readerConcurrency int
-	passage           func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error)
+	trail []gitledger.Entry
+	// trailDir is the current trail's directory under the store's scratch,
+	// empty until the trail holds a start entry; it is set on the stage
+	// goroutine, before any later stage launches an item.
+	trailDir string
+	// letters launches the claim graph's multichoice asks, nil where this build
+	// calls no model; passage launches the overview's one item.
+	letters asks.Launch
+	passage asks.PassageLaunch
 
 	// inStage is the stage whose rows are running.
 	inStage string
@@ -200,7 +205,7 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 		return w.result(buildstore.EndingOf("", err))
 	}
 	var outcome string
-	err = pruneCaptures(w.stateDir)
+	err = pruneBuildCaptures(w.stateDir)
 	if err == nil {
 		err = awaitWriters(w.kbRoot)
 	}
@@ -265,8 +270,8 @@ func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 
 // open finds the repository, kb-root/ and the state store.
 func (w *walk) open() error {
-	repo, err := ledger.Open(w.opts.WorkDir, buildstore.OwnedPaths, w.opts.Logger)
-	var nw ledger.NotWorktreeError
+	repo, err := gitledger.Open(w.opts.WorkDir, buildstore.OwnedPaths, w.opts.Logger)
+	var nw gitledger.NotWorktreeError
 	if errors.As(err, &nw) {
 		return result.Refusal{{Check: buildstore.CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
 	}
@@ -291,6 +296,7 @@ func (w *walk) run(through buildstore.Stage) (string, error) {
 		return "", err
 	}
 	w.trail = trail
+	w.setTrailDir()
 	if len(trail) > 0 {
 		if was, ok := recordedInputs(trail[0].Body); ok {
 			if items := inputsRefusal(w.repo.Root, was, w.inputs()); len(items) > 0 {
@@ -313,6 +319,16 @@ func (w *walk) run(through buildstore.Stage) (string, error) {
 	w.resumed = &resumed
 	if err := w.launch(remaining); err != nil {
 		return "", err
+	}
+	if len(remaining) > 0 {
+		if err := pruneTrails(w.stateDir, w.trailDir); err != nil {
+			return "", err
+		}
+		if !resumed {
+			if err := w.progress.rotateProgress(w.stateDir); err != nil {
+				return "", err
+			}
+		}
 	}
 	if len(remaining) == 0 {
 		if len(recorded) == len(buildstore.Stages) {
@@ -376,12 +392,9 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 			items = append(items, it)
 		} else {
 			w.roles = p.Roles
-			letters := call.New(p.LettersClient, filepath.Join(w.stateDir, buildstore.ScratchDir), w.opts.Logger)
-			overview := call.New(p.OverviewClient, filepath.Join(w.stateDir, buildstore.ScratchDir), w.opts.Logger)
-			w.letters, w.readerConcurrency = letters.Letters(p.Letters), p.ReaderConcurrency
-			w.passage = func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error) {
-				return overview.Passage(ctx, p.Overview, excerpts, rejected, attempt)
-			}
+			trail := func() string { return w.trailDir }
+			w.letters = call.New(p.LettersClient, trail, w.opts.Logger).Launch(p.Queue, p.Letters)
+			w.passage = call.New(p.OverviewClient, trail, w.opts.Logger).PassageLaunch(p.Queue, p.Overview)
 		}
 	}
 	if len(items) > 0 {
@@ -496,12 +509,21 @@ func (w *walk) stage(s buildstore.Stage) (result.Record, error) {
 		return entry, err
 	}
 	entry[1].Value = commit
-	w.trail = append([]ledger.Entry{{Stage: s.ID, Commit: commit, Body: body}}, w.trail...)
+	w.trail = append([]gitledger.Entry{{Stage: s.ID, Commit: commit, Body: body}}, w.trail...)
+	w.setTrailDir()
 	if err := w.progress.emit(buildstore.Event{Event: buildstore.EventRecorded, Stage: s.ID, Commit: commit}); err != nil {
 		return entry, err
 	}
 	w.recordedBoundary = true
 	return entry, nil
+}
+
+// setTrailDir points the walk at the directory of the trail's newest start
+// entry, where the trail holds one.
+func (w *walk) setTrailDir() {
+	if i := slices.IndexFunc(w.trail, func(e gitledger.Entry) bool { return e.Stage == buildstore.StageStart }); i >= 0 {
+		w.trailDir = filepath.Join(w.stateDir, buildstore.ScratchDir, buildstore.TrailsDir, w.trail[i].Commit)
+	}
 }
 
 // rows runs a stage's rows in order, each one's record kept under its id.
@@ -668,6 +690,9 @@ func (w *walk) resumeCommand() []string {
 	}
 	if w.opts.NoInference {
 		argv = append(argv, "--no-inference")
+	}
+	if w.opts.AskConcurrency != 0 {
+		argv = append(argv, "--ask-concurrency", strconv.Itoa(w.opts.AskConcurrency))
 	}
 	if w.opts.StateDir != "" {
 		argv = append(argv, "--state-dir", w.stateDir)

@@ -12,11 +12,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/atomicfile"
+	"kbase/internal/gitledger"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
-	"kbase/internal/ledger"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
 )
@@ -32,7 +32,7 @@ type initOptions struct {
 	Logger  log.Logger
 }
 
-// birthSubject is the birth commit's subject: plain, never ledger.Prefix, so
+// birthSubject is the birth commit's subject: plain, never gitledger.Prefix, so
 // Trail() reads no trail and build's populated-kb-root/ refusal stands over
 // a created KB forever.
 const birthSubject = "kb-init: knowledge base created"
@@ -108,7 +108,7 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 		}
 		return failed(fields, err)
 	}
-	commit, err := ledger.Open(opts.WorkDir, birthOwned, opts.Logger)
+	commit, err := gitledger.Open(opts.WorkDir, birthOwned, opts.Logger)
 	if err != nil {
 		return failed(fields, err)
 	}

@@ -150,12 +150,12 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 	if err := os.MkdirAll(reports, 0o777); err != nil {
 		return err
 	}
-	stdout, err := os.CreateTemp(reports, l.capturePrefix+time.Now().UTC().Format("20060102T150405Z")+"-*.stdout.yaml")
+	stdout, err := os.CreateTemp(reports, l.capturePrefix+time.Now().UTC().Format("20060102T150405Z")+"-*"+buildstore.CaptureStdoutSuffix)
 	if err != nil {
 		return err
 	}
 	defer stdout.Close()
-	stderrPath := strings.TrimSuffix(stdout.Name(), ".stdout.yaml") + ".stderr.log"
+	stderrPath := strings.TrimSuffix(stdout.Name(), buildstore.CaptureStdoutSuffix) + buildstore.CaptureStderrSuffix
 	stderr, err := os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return err

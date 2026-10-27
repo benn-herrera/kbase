@@ -67,7 +67,7 @@ decisionsFlavor = "decisions"
 	// test reads is the document the run wrote anyway.
 	newClient := func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e)
-		return modeltest.NewScriptedMock(nil, nil)
+		return modeltest.NewScriptedMock(nil, nil).Client()
 	}
 	var stdout, stderr bytes.Buffer
 	opts.Stderr = &stderr
@@ -150,7 +150,7 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 			Config:    config.Config{Models: models},
 			Stderr:    &stderr,
 		}
-		_, err := buildProvider(providers, config.Overrides{}, &stderr)(modelclient.New(nil, nil, ""))
+		_, err := buildProvider(providers, config.Overrides{}, &stderr)(modelclient.New(nil, nil, "", 0))
 		var refusal toolresult.Refusal
 		if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Key != "models."+string(role) ||
 			refusal[0].Check != config.CheckProvider || !strings.Contains(refusal[0].Detail, `provider "absent"`) {

@@ -18,7 +18,8 @@ import (
 
 // NewClientFunc constructs the model client for an endpoint. It is the seam
 // that lets a verb be exercised without a network — production passes
-// model.NewClient, tests pass a factory returning a modeltest.MockClient.
+// model.NewClient, tests pass a factory returning a test double's
+// model.ClientFuncs, such as a modeltest.MockClient's Client.
 type NewClientFunc func(model.Endpoint) model.Client
 
 // Registry is the registry of the model clients one verb opens: at most one per
@@ -32,7 +33,9 @@ type Registry struct {
 	// every ask of the run carries one key; every other verb names no run and
 	// passes nothing.
 	promptCacheKey string
-	opened         map[string]model.Client
+	// idleConns is what every client the registry opens keeps idle per host.
+	idleConns int
+	opened    map[string]model.Client
 	// lg takes a close that failed. A close error is never raised: the verb
 	// has usually written its result by then.
 	lg log.Logger
@@ -40,15 +43,16 @@ type Registry struct {
 
 // New is a registry over seam, nil taking model.NewClient — which builds the
 // wire client the endpoint's protocol names — whose close failures go to lg and
-// whose every client carries promptCacheKey.
-func New(seam NewClientFunc, lg log.Logger, promptCacheKey string) *Registry {
+// whose every client carries promptCacheKey and keeps idleConns idle
+// connections to its host (0 leaves the transport's defaults).
+func New(seam NewClientFunc, lg log.Logger, promptCacheKey string, idleConns int) *Registry {
 	if seam == nil {
 		seam = model.NewClient
 	}
 	if lg == nil {
 		lg = log.Discard()
 	}
-	return &Registry{newClient: seam, promptCacheKey: promptCacheKey, opened: map[string]model.Client{}, lg: lg}
+	return &Registry{newClient: seam, promptCacheKey: promptCacheKey, idleConns: idleConns, opened: map[string]model.Client{}, lg: lg}
 }
 
 // Get is the client for ep, opened on first use: two roles naming one pool
@@ -67,7 +71,7 @@ func (r *Registry) Get(ep config.Endpoint) (model.Client, error) {
 		return nil, err
 	}
 	client := r.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
-		Protocol: chatProtocol(ep.Protocol), Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey})
+		Protocol: chatProtocol(ep.Protocol), Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns})
 	r.opened[key] = client
 	return client, nil
 }

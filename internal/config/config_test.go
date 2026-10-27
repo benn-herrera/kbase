@@ -32,9 +32,38 @@ text = "`+textModel+`"
 	}
 }
 
-// TestLoadConfigReaderConcurrency: [asks] readerConcurrency is optional, and
-// a value under 1 is refused naming the key and never the value.
+// TestLoadConfigReaderConcurrency: the superseded [asks] readerConcurrency
+// key still loads, whatever its value — a value under 1 included, since
+// nothing reads it — and leaves the concurrency key unset.
 func TestLoadConfigReaderConcurrency(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want *int
+	}{
+		{"absent", "provider = \"reaper\"\n", nil},
+		{"set", "[asks]\nreaderConcurrency = 2\n", new(2)},
+		{"zero", "[asks]\nreaderConcurrency = 0\n", new(0)},
+		{"negative", "[asks]\nreaderConcurrency = -3\n", new(-3)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v, want the superseded key loaded", err)
+			}
+			if got := cfg.Asks.ReaderConcurrency; (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Errorf("readerConcurrency = %v, want %v", got, tc.want)
+			}
+			if cfg.Asks.Concurrency != nil {
+				t.Errorf("concurrency = %v, want it unset by the superseded key", *cfg.Asks.Concurrency)
+			}
+		})
+	}
+}
+
+// TestLoadConfigConcurrency: [asks] concurrency is optional, and a value
+// under 1 is refused naming asks.concurrency and never the value.
+func TestLoadConfigConcurrency(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		body string
@@ -42,23 +71,23 @@ func TestLoadConfigReaderConcurrency(t *testing.T) {
 		ok   bool
 	}{
 		{"absent", "provider = \"reaper\"\n", nil, true},
-		{"set", "[asks]\nreaderConcurrency = 2\n", new(2), true},
-		{"zero", "[asks]\nreaderConcurrency = 0\n", nil, false},
-		{"negative", "[asks]\nreaderConcurrency = -3\n", nil, false},
+		{"set", "[asks]\nconcurrency = 3\n", new(3), true},
+		{"zero", "[asks]\nconcurrency = 0\n", nil, false},
+		{"negative", "[asks]\nconcurrency = -3\n", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
 			if !tc.ok {
-				if err == nil || !strings.Contains(err.Error(), keyReaderConcurrency) || strings.Contains(err.Error(), "-3") {
-					t.Errorf("LoadConfig = %v, want a refusal naming %s and no value", err, keyReaderConcurrency)
+				if err == nil || !strings.Contains(err.Error(), "asks.concurrency") || strings.Contains(err.Error(), "-3") {
+					t.Errorf("LoadConfig = %v, want a refusal naming asks.concurrency and no value", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("LoadConfig: %v", err)
 			}
-			if got := cfg.Asks.ReaderConcurrency; (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
-				t.Errorf("readerConcurrency = %v, want %v", got, tc.want)
+			if got := cfg.Asks.Concurrency; (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Errorf("concurrency = %v, want %v", got, tc.want)
 			}
 		})
 	}

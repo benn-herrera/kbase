@@ -24,8 +24,8 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 %s
 
 # [asks]
-# readerConcurrency = 4  # asks of one group in flight once its first has
-#                        # returned; a whole number, at least 1.
+# concurrency = %d        # model calls one build or score has in flight at once,
+#                        # across every role; a whole number, at least 1.
 `
 
 // providersTemplate is what a providers.toml that does not exist yet is

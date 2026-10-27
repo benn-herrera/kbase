@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -25,6 +27,15 @@ import (
 // run goes on.
 type Ask func(ctx context.Context, prompt string) (Reply, error)
 
+// Launch starts one item of an ask batch: it waits until the item may make its
+// call, adds it to wg, runs item with the Ask its call goes through, then runs
+// the after item returns, where non-nil — the item's per-result writes, made
+// once its call is done — and marks it done in wg. A ctx that ends before the
+// item starts returns ctx.Err(), and nothing is started. The caller launches
+// its items in set order from one goroutine and then waits on wg; each item
+// writes only its own result cell.
+type Launch func(ctx context.Context, wg *sync.WaitGroup, item func(Ask) (after func())) error
+
 // Reply is what one call returned: the reply's text, and whether the endpoint
 // cut it off at the completion cap. What a truncated reply is worth is the
 // runner's to decide, not the seam's.
@@ -39,12 +50,19 @@ type Reply struct {
 // judgement.
 var errTruncatedReply = errors.New("the reply reached the completion cap before it finished, so its charge list is incomplete")
 
-// Write lands one answer on one item: the value replaces the item's own, and
-// publishing it is the caller's refresh. An error is the write's refusal —
-// nothing landed — and the item is recorded failed, the run going on. A resume
-// re-prices through this same seam, so a value an update moved reaches the KB by
-// the path a landing takes.
-type Write func(it query.Item, value kb.Bearing) error
+// Landing is one value a landing writes: the value replaces the item's own.
+type Landing struct {
+	Item  query.Item
+	Value kb.Bearing
+}
+
+// Write lands an ask batch's values in one landing, and returns one error per
+// value, in the order given: nil where it landed, and otherwise why it did not,
+// that item then recorded failed and the run going on. Publishing what landed
+// is the caller's refresh. A resume folds a stopped invocation's results and
+// re-prices through this same seam, so every value reaches the KB by the path
+// a landing takes.
+type Write func(values []Landing) []error
 
 // Skip is whether this invocation skips it: the walk asks it nothing and lands
 // nothing on it, and a resume leaves its landed value unrepriced.
@@ -105,9 +123,10 @@ type Runner struct {
 	// what its charges are priced under, and a rigor item decides which of that
 	// pass's two classes it takes: no item is asked or priced as another class's
 	// subject.
-	Pass  string
-	Ask   Ask
-	Write Write
+	Pass string
+	// Launch is the route each item's call takes.
+	Launch Launch
+	Write  Write
 	// Skip is the items the walk records skipped rather than asks; nil skips
 	// none.
 	Skip   Skip
@@ -123,14 +142,21 @@ type Runner struct {
 	Log    log.Logger
 }
 
-// Run walks the set once: per item compose the closed text, ask, read the
-// charges the reply records against that text, price them, and land the value. A
-// reply the parse cannot read, a refused text and a failed call or write are
+// Run walks the set once, as one ask batch. Its launch loop decides each item's
+// status and skip, composes its closed text and prompt, and launches the items
+// it asks in set order; each launched item asks, reads the charges the reply
+// records against that text, prices them into its own result cell, and writes
+// its result file once its call is done. A result file that cannot be written
+// is the run's failure, and stops the launches and the calls still out. When
+// the walk has drained — done, bounded, cancelled or failed — the ledger's flush
+// lands the cells' values, then appends their captures and their lines, in walk
+// order, and removes the result files; no common file is written before then. A
+// reply the parse cannot read, a refused text and a failed call or landing are
 // recorded and the run goes on. An item the ledger already records as landed is
 // not asked again — a fresh run's ledger records nothing, so a fresh run asks
 // every item. An item Skip names is recorded skipped, once: a line already
-// recording it so is not appended again. A cancelled context stops before the
-// next ask and records nothing for the item in flight.
+// recording it so is not appended again. A cancelled context stops the walk and
+// records nothing for an item without an answer.
 func (r *Runner) Run(ctx context.Context) (Result, error) {
 	lg := r.Log
 	if lg == nil {
@@ -154,49 +180,88 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		items = items[:r.Limit]
 	}
 	res := Result{Outcome: result.Done, Walked: items}
-	for _, it := range items {
+	// Each item's place in the walk is its result cell, so the walk's end
+	// records in walk order whatever order the answers came in.
+	cells := make([]resultCell, len(items))
+	// cut is each launched item whose call the walk's stop interrupted: it
+	// records nothing.
+	cut := make([]bool, len(items))
+	// walk ends with ctx, or at the first result file an item cannot write,
+	// which is then the run's error.
+	walk, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		stopOnce sync.Once
+		walkErr  error
+		stopped  bool
+	)
+	for i, it := range items {
 		status := r.Ledger.Status(it)
 		if status == StatusDone {
 			continue
 		}
-		if ctx.Err() != nil {
-			res.Outcome = result.Cancelled
+		if walk.Err() != nil {
+			stopped = true
 			break
 		}
 		if r.Skip != nil && r.Skip(it) {
 			if status == StatusSkipped {
 				continue
 			}
-			if err := r.Ledger.Append(it, Entry{Status: StatusSkipped, Reply: ReasonManuallyScored}); err != nil {
-				res.Outcome, res.Counts = result.Failed, r.counts()
-				return res, fmt.Errorf("record %s: %w", ItemName(it), err)
-			}
+			rec := r.Ledger.line(it, Entry{Status: StatusSkipped, Reply: ReasonManuallyScored})
+			cells[i] = resultCell{item: it, line: &rec}
 			lg.Debug("score: item skipped", "item", label(it), "reason", ReasonManuallyScored)
 			continue
 		}
-		e, c, interrupted := r.attempt(ctx, it, facts, g)
-		if interrupted {
-			res.Outcome = result.Cancelled
-			break
-		}
-		if c != nil {
-			if err := r.Ledger.capture(it, e, *c); err != nil {
-				res.Outcome, res.Counts = result.Failed, r.counts()
-				return res, fmt.Errorf("capture %s: %w", ItemName(it), err)
-			}
-		}
-		if err := r.Ledger.Append(it, e); err != nil {
-			res.Outcome, res.Counts = result.Failed, r.counts()
-			return res, fmt.Errorf("record %s: %w", ItemName(it), err)
-		}
-		if e.Status != StatusDone {
-			lg.Warn("score: item not written", "item", label(it), "status", e.Status, "reason", ReplySummary(e.Reply))
+		e, c := r.prepare(it, facts, g)
+		if c == nil {
+			rec := r.Ledger.line(it, e)
+			cells[i] = resultCell{item: it, line: &rec}
 			continue
 		}
-		res.Written = append(res.Written, it)
-		lg.Debug("score: item written", "item", label(it), "value", e.Value)
+		err := r.Launch(walk, &wg, func(ask Ask) func() {
+			answered, interrupted := c.attempt(walk, ask, e)
+			if interrupted {
+				cut[i] = true
+				return nil
+			}
+			rec := r.Ledger.line(it, answered)
+			capture := r.Ledger.captureOf(it, answered, *c)
+			cells[i] = resultCell{item: it, line: &rec, capture: &capture}
+			return func() {
+				if err := r.Ledger.writeResult(i, resultRecord{Line: rec, Capture: capture}); err != nil {
+					stopOnce.Do(func() {
+						walkErr = fmt.Errorf("write the result of %s: %w", ItemName(it), err)
+						cancel()
+					})
+				}
+			}
+		})
+		if err != nil {
+			stopped = true
+			break
+		}
 	}
-	res.Counts = r.counts()
+	wg.Wait()
+	if stopped || slices.Contains(cut, true) {
+		res.Outcome = result.Cancelled
+	}
+	written, err := r.Ledger.flush(cells, r.Write)
+	res.Written, res.Counts = written, r.counts()
+	if err := errors.Join(walkErr, err); err != nil {
+		res.Outcome = result.Failed
+		return res, err
+	}
+	for _, c := range cells {
+		switch {
+		case c.line == nil || c.line.Status == StatusSkipped:
+		case c.line.Status == StatusDone:
+			lg.Debug("score: item written", "item", label(c.item), "value", c.line.Value)
+		default:
+			lg.Warn("score: item not written", "item", label(c.item), "status", c.line.Status, "reason", ReplySummary(c.line.Reply))
+		}
+	}
 	// An interruption outranks a bound and a failure: it says the run stopped
 	// short, which is what the caller resumes from.
 	if res.Outcome != result.Cancelled {
@@ -210,42 +275,47 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// attempt makes one item's pass: the item's class — the instruction its one call
-// carries and the table its reply is priced under, derived once — the closed text
-// the call is sent with, and either the charges the reply records or the reason it
-// records none — and the call it made, nil where it made none. interrupted
-// reports a context cancelled during the call, which is the run's stop and not
-// the item's outcome: the caller records nothing for it.
-func (r *Runner) attempt(ctx context.Context, it query.Item, facts passFacts, g graph) (e Entry, c *call, interrupted bool) {
-	e = Entry{Model: r.Model, Before: priorOf(r.Index, g, it), Started: Stamp()}
-	defer func() { e.Ended = Stamp() }()
+// prepare is what the launch loop composes of one item before it launches it:
+// the item's class — the instruction its one call carries and the table its
+// reply is priced under, derived once — and the closed text and prompt the call
+// is sent with, as the entry its line starts from and the call. Where the class
+// cannot be derived or the guard refuses the text, the entry is failed with the
+// reason and there is no call.
+func (r *Runner) prepare(it query.Item, facts passFacts, g graph) (Entry, *call) {
+	e := Entry{Model: r.Model, Before: priorOf(r.Index, g, it)}
+	refused := func(err error) (Entry, *call) {
+		e.Status, e.Reply = StatusFailed, err.Error()
+		e.Started, e.Ended = Stamp(), Stamp()
+		return e, nil
+	}
 	cl, err := facts.classOf(it)
 	if err != nil {
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, nil, false
+		return refused(err)
 	}
 	prompt, digest, closed, err := r.compose(it, cl, g)
 	if err != nil {
-		e.Status, e.Reply = StatusFailed, err.Error()
-		return e, nil, false
+		return refused(err)
 	}
 	e.PromptSHA256 = digest
-	c = &call{class: cl, closed: closed, prompt: prompt}
-	answer, ok, interrupted := c.put(ctx, r.Ask, &e)
+	return e, &call{class: cl, closed: closed, prompt: prompt}
+}
+
+// attempt makes the call through ask and reads its reply, e's bounds stamped
+// around the call alone: e with the charges the reply records and the value they
+// price, which the walk's end lands, or failed with the reason it records none.
+// interrupted reports ctx ended during the call, which is the walk's stop and
+// not the item's outcome: the caller records nothing for it.
+func (c *call) attempt(ctx context.Context, ask Ask, e Entry) (_ Entry, interrupted bool) {
+	e.Started = Stamp()
+	answer, ok, interrupted := c.put(ctx, ask, &e)
+	e.Ended = Stamp()
 	if interrupted {
-		return Entry{}, nil, true
+		return Entry{}, true
 	}
-	if !ok {
-		return e, c, false
+	if ok {
+		e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
 	}
-	if err := r.Write(it, answer.Value); err != nil {
-		// The write's refusal is what the line records: no value landed, and the
-		// charges were a judgement the KB did not take.
-		e.Status, e.Reply, e.Faults, e.Moot = StatusFailed, err.Error(), nil, nil
-		return e, c, false
-	}
-	e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
-	return e, c, false
+	return e, false
 }
 
 // call is what one attempt's call carried and returned: the class it asked

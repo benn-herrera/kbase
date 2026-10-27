@@ -81,7 +81,7 @@ func configure(ctx context.Context, opts configureOptions) (string, []toolresult
 	// missing pool entry points at the file this run would write.
 	opts.WriteDir = target
 
-	reg := modelclient.New(opts.NewClient, opts.Logger, "")
+	reg := modelclient.New(opts.NewClient, opts.Logger, "", 0)
 	defer reg.CloseAll()
 	timeout := opts.Timeout
 	if timeout <= 0 {

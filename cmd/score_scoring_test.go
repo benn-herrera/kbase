@@ -36,7 +36,7 @@ func TestScoreRecordsAProviderRefusalAsItsOwnReason(t *testing.T) {
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
 		m := modeltest.NewScriptedMock(nil, nil)
 		m.SetError(model.StatusError{Code: http.StatusBadRequest, Body: body})
-		return m
+		return m.Client()
 	})
 	if got.doc.Outcome != "failed" {
 		t.Fatalf("the run = %s, want failed\n%s", got.doc.Outcome, got.stdout)

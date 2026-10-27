@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"sync"
 
 	"go.yaml.in/yaml/v3"
 
@@ -249,9 +251,12 @@ func judgementOf(e Entry) judgement {
 	return judgement{Status: e.Status, Value: e.Value, Faults: ids}
 }
 
-// Walk re-asks the selected calls through ask, recording the replay under its
-// directory alone: replay.yaml, a ledger line and a capture per call in the
-// run's own shapes, its run the replay's id, and a comparison line per item.
+// Walk re-asks the selected calls, launched in item order through launch,
+// recording the replay under its directory alone: replay.yaml, a ledger line and
+// a capture per call in the run's own shapes, its run the replay's id, and a
+// comparison line per item. The three files are appended once each, in item
+// order, after the walk has drained, on every exit after the walk asked
+// anything.
 // Each call renders its captured closed text through this binary's template for
 // the capture's class and is parsed against that closed text, priced, and landed
 // nowhere. At its start the replay keeps itself and the newest KeptRuns-1 others
@@ -259,7 +264,7 @@ func judgementOf(e Entry) judgement {
 // returned: the error is a fault of the replay itself — among them a run
 // directory that no longer stands, which the replay never recreates, and a
 // replay directory removed under the walk.
-func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResult, error) {
+func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (ReplayResult, error) {
 	digest, err := askDigest(rp.askPass())
 	if err != nil {
 		return ReplayResult{}, err
@@ -293,40 +298,60 @@ func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResu
 		}
 	}()
 	res := ReplayResult{Outcome: result.Done, Counts: Counts{Total: len(rp.calls)}}
-	for _, captured := range rp.calls {
-		it := captured.asItem()
-		if ctx.Err() != nil {
-			res.Outcome, res.Stopped = result.Cancelled, ItemName(it)
-			break
-		}
-		e := Entry{Model: h.Model, Started: Stamp()}
+	// Each call's place in the selection is its result cell, so the files take
+	// their records in item order whatever order the answers came in; a cell
+	// left nil was not answered.
+	answers := make([]*Entry, len(rp.calls))
+	calls := make([]*call, len(rp.calls))
+	cut := make([]bool, len(rp.calls))
+	var (
+		wg      sync.WaitGroup
+		walkErr error
+		stopped bool
+	)
+	for i, captured := range rp.calls {
 		c := &call{class: captured.class, closed: captured.closed}
 		if c.prompt, err = c.class.render(c.closed); err != nil {
-			return res, err
-		}
-		e.PromptSHA256 = digestOf(c.prompt)
-		answer, ok, interrupted := c.put(ctx, ask, &e)
-		if interrupted {
-			res.Outcome, res.Stopped = result.Cancelled, ItemName(it)
+			walkErr = err
 			break
 		}
-		if ok {
-			e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
+		calls[i] = c
+		e := Entry{Model: h.Model, PromptSHA256: digestOf(c.prompt)}
+		if err := launch(ctx, &wg, func(ask Ask) func() {
+			answered, interrupted := c.attempt(ctx, ask, e)
+			if interrupted {
+				cut[i] = true
+			} else {
+				answers[i] = &answered
+			}
+			return nil
+		}); err != nil {
+			stopped = true
+			break
 		}
-		e.Ended = Stamp()
-		if err := l.capture(it, e, *c); err != nil {
-			return res, fmt.Errorf("capture %s: %w", ItemName(it), err)
+	}
+	wg.Wait()
+	if stopped || slices.Contains(cut, true) {
+		res.Outcome = result.Cancelled
+	}
+	var recorded []attempt
+	var captures, compared []any
+	for i, answered := range answers {
+		captured := rp.calls[i]
+		it := captured.asItem()
+		if answered == nil {
+			if res.Outcome == result.Cancelled && res.Stopped == "" {
+				res.Stopped = ItemName(it)
+			}
+			continue
 		}
-		if err := l.Append(it, e); err != nil {
-			return res, fmt.Errorf("record %s: %w", ItemName(it), err)
-		}
-		recorded, hasLine := rp.original[captured.lineKey()]
-		original := recorded.entry()
-		cmp := comparisonLine{Item: ItemName(it), Before: original.Before, Original: judgementOf(original), Replay: judgementOf(e),
-			PromptChanged: e.PromptSHA256 != captured.PromptSHA256}
-		if err := l.appendLine(&comparisons, comparisonFile, cmp); err != nil {
-			return res, fmt.Errorf("compare %s: %w", ItemName(it), err)
-		}
+		e, c := *answered, calls[i]
+		captures = append(captures, l.captureOf(it, e, *c))
+		recorded = append(recorded, l.line(it, e))
+		originalLine, hasLine := rp.original[captured.lineKey()]
+		original := originalLine.entry()
+		compared = append(compared, comparisonLine{Item: ItemName(it), Before: original.Before, Original: judgementOf(original),
+			Replay: judgementOf(e), PromptChanged: e.PromptSHA256 != captured.PromptSHA256})
 		switch e.Status {
 		case StatusDone:
 			res.Counts.Done++
@@ -340,6 +365,23 @@ func (rp *Replay) Walk(ctx context.Context, ask Ask, h ReplayHeader) (ReplayResu
 		}
 	}
 	res.Counts.Remaining = res.Counts.Total - res.Counts.Done - res.Counts.Failed
+	// The three files take their records here, one append each in item order,
+	// whatever ended the walk.
+	if err := l.appendLines(&l.captures, capturesFile, captures); err != nil {
+		res.Outcome = result.Failed
+		return res, fmt.Errorf("capture the replay: %w", err)
+	}
+	if err := l.record(recorded); err != nil {
+		res.Outcome = result.Failed
+		return res, fmt.Errorf("record the replay: %w", err)
+	}
+	if err := l.appendLines(&comparisons, comparisonFile, compared); err != nil {
+		res.Outcome = result.Failed
+		return res, fmt.Errorf("compare the replay: %w", err)
+	}
+	if walkErr != nil {
+		return res, walkErr
+	}
 	if _, err := os.Stat(rp.dir); err != nil {
 		return res, fmt.Errorf("the replay directory %s no longer stands: %w", rp.dir, err)
 	}

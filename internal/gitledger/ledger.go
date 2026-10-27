@@ -1,9 +1,9 @@
-// Package ledger is the build's record in git: each stage boundary a commit
+// Package gitledger is the build's record in git: each stage boundary a commit
 // whose subject names the stage, scoped by pathspec to the paths the build
 // owns, and the trail of those commits read back as the build's position. It
 // is the only package that runs git, and it runs the host's, so the user's
 // configuration, hooks and attributes apply.
-package ledger
+package gitledger
 
 import (
 	"archive/tar"

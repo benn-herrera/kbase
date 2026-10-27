@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"kbase/internal/ledger"
+	"kbase/internal/gitledger"
 	"kbase/internal/result"
 )
 
@@ -92,7 +92,7 @@ func Rewind(opts RewindOptions) (string, []result.Field) {
 
 // trailBoundaries is the trail's boundaries as the document lists them, oldest
 // first.
-func trailBoundaries(trail []ledger.Entry) []result.Record {
+func trailBoundaries(trail []gitledger.Entry) []result.Record {
 	records := make([]result.Record, len(trail))
 	for i := range trail {
 		b := trail[len(trail)-1-i]
@@ -106,17 +106,17 @@ func trailBoundaries(trail []ledger.Entry) []result.Record {
 // targetBoundary is the trail's index of the boundary a target names, -1 where
 // it names none: a target resolves as --through resolves it, and names the
 // newest boundary of that stage.
-func targetBoundary(target string, trail []ledger.Entry) int {
+func targetBoundary(target string, trail []gitledger.Entry) int {
 	s, ok := ResolveStage(target)
 	if !ok {
 		return -1
 	}
-	return slices.IndexFunc(trail, func(e ledger.Entry) bool { return e.Stage == s.ID })
+	return slices.IndexFunc(trail, func(e gitledger.Entry) bool { return e.Stage == s.ID })
 }
 
 // targetRefusal is the usage refusal naming a target no boundary carries, the
 // boundary ids the trail holds as the closed set it comes from.
-func targetRefusal(target string, trail []ledger.Entry) result.Refusal {
+func targetRefusal(target string, trail []gitledger.Entry) result.Refusal {
 	ids := make([]string, len(trail))
 	for i, e := range trail {
 		ids[len(trail)-1-i] = e.Stage

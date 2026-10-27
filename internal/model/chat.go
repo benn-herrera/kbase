@@ -58,7 +58,7 @@ type ChatAttempt struct {
 	FirstToken time.Duration
 }
 
-// Chat puts prompt to modelID under system as one tool-less chat request —
+// chat puts prompt to modelID under system as one tool-less chat request —
 // temperature 0, thinking disabled by the provider's own `reasoning` control
 // (with `chat_template_kwargs` sent beside it for servers that speak the
 // tokenizer extension), the usage chunk requested — re-issued
@@ -72,7 +72,7 @@ type ChatAttempt struct {
 // attempt as it ends. It returns the completed attempt, or the last one with
 // an error wrapping ErrChatIncomplete; a cancelled ctx returns its error at
 // once.
-func Chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
+func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
 	req := Request{
 		Model:              modelID,
 		Messages:           []Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}},
@@ -141,7 +141,7 @@ func chatOnce(ctx context.Context, c Client, req Request) (ChatAttempt, error) {
 	started := time.Now()
 	var a ChatAttempt
 	var failure error
-	sr, err := c.ConsultStream(ctx, req)
+	sr, err := c.consultStream(ctx, req)
 	if err != nil {
 		a.Outcome, a.Error = chatFailure(err)
 		a.Duration = time.Since(started)

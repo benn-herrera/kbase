@@ -225,7 +225,7 @@ test-integration-config: build
     @mkdir -p "{{CONFIG_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" CONFIG_OUT_DIR="{{CONFIG_OUT_DIR}}" tools/scripts/test-integration-config.sh 2>&1 | tee "{{CONFIG_OUT_DIR}}/log.txt"
 
-[doc("NEEDS expect (the trust prompt is answered over a pty): hermetic run of tools/scripts/build-dist.sh against stub go, gpg, curl and uname — the release layout it stages, the installer checked byte for byte against its golden, the platform matrix, what the installer verifies before it installs anything (a tampered tarball, another file's signature, a 404 in place of a signature), a second run at one version, the version-string refusal, and what it does about the signing key; evidence under test-data/transient/test-dist/ (log.txt, the run's tree in run/)")]
+[doc("NEEDS expect (the trust prompt is answered over a pty): hermetic run of tools/scripts/build-dist.sh against stub git, go, gpg, curl and uname — the release layout it stages, the platform matrix, what the installer verifies before it installs anything (a tampered tarball, another file's signature, a 404 in place of a signature), a second run at one version, the version-string refusal, the --tag tagging and its refusals, and what it does about the signing key; evidence under test-data/transient/test-dist/ (log.txt, the run's tree in run/)")]
 test-dist: test-dist-no-replay
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist"
     @tools/scripts/test-build-dist.sh 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist/log.txt"
@@ -271,9 +271,10 @@ clean:
 # source). Run it on a tree that has passed the checkpoint: a cross-build is
 # what users receive, so the gate is a precondition of the release, not a step
 # this recipe runs.
-[doc("cross-build every target and stage the signed user distro tarball (priv user only)")]
-dist:
-    @BIN_DIR="{{BIN_DIR}}" DIST_DIR="{{DIST_DIR}}" tools/scripts/build-dist.sh
+[arg("tag", long="tag", value="1")]
+[doc("cross-build every target and stage the signed user distro tarball (priv user only); --tag also runs a local, unpushed git tag v<version> after a complete build, refused if the tag exists or tracked files are uncommitted")]
+dist tag="":
+    @BIN_DIR="{{BIN_DIR}}" DIST_DIR="{{DIST_DIR}}" TAG="{{tag}}" tools/scripts/build-dist.sh
 
 ADJAGENT_TOOL_DIST_CACHE_DIR := justfile_dir() / ".." / "adjagent" / ".tool-dist-cache"
 [doc("build a dist and stage it in adjagent for local installation and testing (priv user only)")]

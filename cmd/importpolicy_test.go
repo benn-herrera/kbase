@@ -52,7 +52,7 @@ var dependencyRules = []dependencyRule{{
 }, {
 	from:      []string{"internal/claimgraph"},
 	forbidden: []string{"internal/model", "internal/asks/call"},
-	why:       "nothing in claimgraph knows a network exists: it asks through the letter seam build injects",
+	why:       "nothing in claimgraph knows a network exists: it asks through the multichoice-ask seam build injects",
 }, {
 	except:    []string{"internal/build", "internal/asks/call"},
 	forbidden: []string{"internal/asks/call"},
@@ -67,9 +67,13 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/log", "internal/formats/format300"},
 	why:     "kb imports no other kbase package but log and format300, the live format it re-exports",
 }, {
-	from:    []string{"internal/ledger"},
+	from:    []string{"internal/gitledger"},
 	allowed: []string{"internal/log"},
-	why:     "ledger imports log and nothing else of kbase",
+	why:     "gitledger imports log and nothing else of kbase",
+}, {
+	from:    []string{"internal/model"},
+	allowed: []string{"internal/model"},
+	why:     "model imports no kbase package: it knows nothing of files, roles or consumers, and its test support, modeltest, imports model alone",
 }, {
 	from:    []string{"internal/config"},
 	allowed: []string{"internal/atomicfile", "internal/result"},
@@ -80,10 +84,10 @@ var dependencyRules = []dependencyRule{{
 	direct:    true,
 	why:       "only build and cmd stamp readiness documents: init at a KB's birth, a migration save whole; mcp reads the session rule alone",
 }, {
-	except:    []string{"internal/build", "internal/buildstore", "internal/ledger", "cmd"},
-	forbidden: []string{"internal/ledger"},
+	except:    []string{"internal/build", "internal/buildstore", "internal/gitledger", "cmd"},
+	forbidden: []string{"internal/gitledger"},
 	direct:    true,
-	why:       "only build, buildstore and cmd's init verb import ledger",
+	why:       "only build, buildstore and cmd's init verb import gitledger",
 }, {
 	except:    []string{"internal/build", "internal/buildstore", "cmd"},
 	forbidden: []string{"internal/statedir"},
@@ -462,7 +466,7 @@ var cmdFileImporters = map[string][]string{
 	// the build verb's role closure, the score verb's ask, and the probe's one call
 	"internal/model": {"cmd/build.go", "cmd/score.go", "cmd/probe.go"},
 	// the init verb, the only cmd path that commits
-	"internal/ledger": {"cmd/init.go"},
+	"internal/gitledger": {"cmd/init.go"},
 	// the init verb, which stamps readiness documents at a KB's birth, and the
 	// render every cmd verb that saves a migration puts in its source
 	"internal/kbdocs": {"cmd/init.go", "cmd/restamp.go"},
@@ -489,6 +493,24 @@ func TestCmdFileImporters(t *testing.T) {
 				t.Errorf("%s is listed as importing %s and does not; drop it from cmdFileImporters", owner, pkg)
 			}
 		}
+	}
+}
+
+// TestModelImportsNoOS: no production file of internal/model imports os, so
+// the package that reaches the wire touches no file.
+func TestModelImportsNoOS(t *testing.T) {
+	read := false
+	for _, m := range moduleGoFiles(t, token.NewFileSet()) {
+		if !m.production() || path.Dir(m.rel) != "internal/model" {
+			continue
+		}
+		read = true
+		if slices.Contains(slices.Collect(maps.Values(importedAs(m.f))), "os") {
+			t.Errorf("%s imports os; internal/model touches no file", m.rel)
+		}
+	}
+	if !read {
+		t.Fatal("the walk read no production file of internal/model")
 	}
 }
 

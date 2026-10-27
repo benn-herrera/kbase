@@ -2,25 +2,71 @@ package call
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"kbase/internal/asks"
 	"kbase/internal/log"
 	"kbase/internal/model"
 )
 
-func paragraphItems(names ...string) []asks.LetterItem {
+// trailDir is the one trail directory a test's scratch holds.
+func trailDir(scratch string) string {
+	return filepath.Join(scratch, "trails", "t")
+}
+
+// trailAnswers is the answers directory of the one trail a test's scratch holds.
+func trailAnswers(scratch string) string {
+	return filepath.Join(trailDir(scratch), asks.AnswersDir)
+}
+
+// trailCaptures is the captures directory of the one trail a test's scratch holds.
+func trailCaptures(scratch string) string {
+	return filepath.Join(trailDir(scratch), asks.CapturesDir)
+}
+
+// double is a test client, answering through the model.Client it gives.
+type double interface{ Client() model.Client }
+
+// newCaller is a Caller over d whose answers and captures go to scratch's one trail.
+func newCaller(d double, scratch string) *Caller {
+	return New(d.Client(), func() string { return trailDir(scratch) }, log.Discard())
+}
+
+func paragraphItems(names ...string) []asks.MultichoiceItem {
 	items := make([]asks.ParagraphItem, len(names))
 	for i, n := range names {
 		items[i] = asks.ParagraphItem{Paragraph: n, Text: n + ": text"}
 	}
 	return asks.ParagraphAsks("v/leaf.md", "the leaf", items)
+}
+
+// letters is c's Launch for the decision model m-decision, on a queue of two.
+func letters(c *Caller) asks.Launch { return c.Launch(model.NewQueue(2), "m-decision") }
+
+// askGroup asks items as the one paragraph group of a batch launched through
+// launch, and returns its record.
+func askGroup(launch asks.Launch, items []asks.MultichoiceItem) (asks.GroupRecord, error) {
+	b := asks.NewBatch(context.Background(), launch)
+	if err := b.AskGroup(asks.Paragraph, "v/leaf.md", items); err != nil {
+		_, err = b.Wait()
+		return asks.GroupRecord{}, err
+	}
+	recs, err := b.Wait()
+	if err != nil {
+		return asks.GroupRecord{}, err
+	}
+	return recs[0], nil
 }
 
 // decisions serves the answers scripted per question key, one per call.
@@ -42,15 +88,14 @@ func (d *decisions) Decision(_ context.Context, req model.DecisionRequest) (mode
 	return model.DecisionResponse{Answers: []model.DecisionAnswer{a}}, nil
 }
 
-func (d *decisions) Consult(context.Context, model.Request) (model.Response, error) {
-	return model.Response{}, errors.New("the decision asks go over Decision")
-}
-
 func (d *decisions) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
 	return nil, errors.New("the decision asks go over Decision")
 }
 
-func (d *decisions) ListModels(context.Context) ([]model.ModelInfo, error) { return nil, nil }
+// Client is the model.Client whose calls d answers.
+func (d *decisions) Client() model.Client {
+	return &model.ClientFuncs{Decide: d.Decision, Stream: d.ConsultStream}
+}
 
 // noulAnswer is a noul answer of p, keyed as the seam keys its questions: by
 // the item's name.
@@ -58,12 +103,10 @@ func noulAnswer(key string, p float64) model.DecisionAnswer {
 	return model.DecisionAnswer{Key: key, Type: "noul", Noul: p}
 }
 
-// ask asks the two paragraph items of one group over client and returns the
-// record.
-func ask(t *testing.T, client model.Client, scratch string) asks.GroupRecord {
+// ask asks the two paragraph items of one group over d and returns the record.
+func ask(t *testing.T, d double, scratch string) asks.GroupRecord {
 	t.Helper()
-	read := New(client, scratch, log.Discard()).Letters("m-decision")
-	rec, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1", "S2"), read, 0, filepath.Join(scratch, asks.AskRecordsDir))
+	rec, err := askGroup(letters(newCaller(d, scratch)), paragraphItems("S1", "S2"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +117,8 @@ func TestCallerMapsAnswersToConfidenceAndAsksNothingTwice(t *testing.T) {
 	scratch := t.TempDir()
 	served := &decisions{answers: []model.DecisionAnswer{noulAnswer("S1", 0.96), noulAnswer("S2", 0.04)}}
 	rec := ask(t, served, scratch)
-	if *rec.Items[0].Letter != "A" || *rec.Items[1].Letter != "B" {
-		t.Fatalf("letters = %v, %v", *rec.Items[0].Letter, *rec.Items[1].Letter)
+	if *rec.Items[0].Choice != "A" || *rec.Items[1].Choice != "B" {
+		t.Fatalf("letters = %v, %v", *rec.Items[0].Choice, *rec.Items[1].Choice)
 	}
 	// The noul figure sits under the true letter, the remainder under the
 	// false one — keyed by which criterion the letter names, never by order.
@@ -96,7 +139,7 @@ func TestCallerMapsAnswersToConfidenceAndAsksNothingTwice(t *testing.T) {
 	if req.State == "" {
 		t.Error("the composed state is not the request's state")
 	}
-	captures, _ := filepath.Glob(filepath.Join(scratch, asks.CapturesDir, "paragraph-v_leaf.md-S*.capture.jsonl"))
+	captures, _ := filepath.Glob(filepath.Join(trailCaptures(scratch), "paragraph-v_leaf.md-S*.capture.jsonl"))
 	if len(captures) != 2 {
 		t.Fatalf("captures = %q", captures)
 	}
@@ -105,14 +148,14 @@ func TestCallerMapsAnswersToConfidenceAndAsksNothingTwice(t *testing.T) {
 		!strings.Contains(lines[0], `"state-sha256"`) || !strings.Contains(lines[1], `"outcome":"ok"`) {
 		t.Errorf("capture = %s", b)
 	}
-	answers, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*.json"))
+	answers, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*.json"))
 	if len(answers) != 2 {
 		t.Errorf("cached answers = %q, want one per completed call", answers)
 	}
 
 	// A resume over the cache makes no request and decides identically.
 	again := ask(t, &decisions{}, scratch)
-	if *again.Items[0].Letter != "A" || *again.Items[1].Letter != "B" {
+	if *again.Items[0].Choice != "A" || *again.Items[1].Choice != "B" {
 		t.Error("the cached answers decided differently")
 	}
 
@@ -130,24 +173,22 @@ func TestCallerMapsAChoiceAnswerAndItsFallbacks(t *testing.T) {
 		{Key: "S1", Type: "choice", Choice: "A", Probabilities: map[string]float64{"A": 0.9, "B": 0.1}},
 		{Key: "S2", Type: "choice", Choice: "B", Confidence: 0.8},
 	}}
-	read := New(served, scratch, log.Discard()).Letters("m-decision")
-	rec, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1", "S2"), read, 0, "")
+	rec, err := askGroup(letters(newCaller(served, scratch)), paragraphItems("S1", "S2"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *rec.Items[0].Letter != "A" {
-		t.Errorf("S1 = %s, want A over its probabilities", *rec.Items[0].Letter)
+	if *rec.Items[0].Choice != "A" {
+		t.Errorf("S1 = %s, want A over its probabilities", *rec.Items[0].Choice)
 	}
-	if *rec.Items[1].Letter != "B" {
-		t.Errorf("S2 = %s, want B, its own confidence under the chosen letter", *rec.Items[1].Letter)
+	if *rec.Items[1].Choice != "B" {
+		t.Errorf("S2 = %s, want B, its own confidence under the chosen letter", *rec.Items[1].Choice)
 	}
 	if c := rec.Items[1].Confidence; c["B"] != 0.8 || len(c) != 1 {
 		t.Errorf("S2's confidence = %v, want B alone", c)
 	}
 
 	empty := &decisions{answers: []model.DecisionAnswer{{Key: "S1", Type: "choice"}, {Key: "S1", Type: "choice"}}}
-	read = New(empty, t.TempDir(), log.Discard()).Letters("m-decision")
-	rec, err = asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1"), read, 0, "")
+	rec, err = askGroup(letters(newCaller(empty, t.TempDir())), paragraphItems("S1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,8 +205,7 @@ func TestAReaskReachesTheModel(t *testing.T) {
 	// The transport re-serves the same unreadable answer: the re-ask reads
 	// it again and the item defaults on the second pass.
 	same := &decisions{answers: []model.DecisionAnswer{{Key: "S1", Type: "choice"}, {Key: "S1", Type: "choice"}}}
-	read := New(same, scratch, log.Discard()).Letters("m-decision")
-	rec, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1"), read, 0, "")
+	rec, err := askGroup(letters(newCaller(same, scratch)), paragraphItems("S1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +219,7 @@ func TestAReaskReachesTheModel(t *testing.T) {
 	if len(resumed.Items[0].Calls) != 2 {
 		t.Errorf("the resumed item holds %d calls, want both its asks", len(resumed.Items[0].Calls))
 	}
-	cached, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*.json"))
+	cached, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*.json"))
 	if len(cached) != 4 {
 		t.Errorf("cached answers = %q, want one per ask including the re-asks", cached)
 	}
@@ -194,8 +234,7 @@ func TestARefusalTakesTheReaskThenTheDefault(t *testing.T) {
 		{Key: "S1", Type: "refusal"},
 		{Key: "S1", Type: "refusal"},
 	}}
-	read := New(refusals, t.TempDir(), log.Discard()).Letters("m-decision")
-	rec, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1"), read, 0, "")
+	rec, err := askGroup(letters(newCaller(refusals, t.TempDir())), paragraphItems("S1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,13 +254,12 @@ func TestARefusalTakesTheReaskThenTheDefault(t *testing.T) {
 func TestCallerNamesTheCallThatNeverCompleted(t *testing.T) {
 	scratch := t.TempDir()
 	served := &decisions{}
-	read := New(served, scratch, log.Discard()).Letters("m-decision")
-	_, err := asks.AskGroup(context.Background(), asks.Paragraph, "v/leaf.md", paragraphItems("S1"), read, 0, "")
+	_, err := askGroup(letters(newCaller(served, scratch)), paragraphItems("S1"))
 	var incomplete asks.IncompleteError
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("AskGroup = %v, want the incomplete call", err)
 	}
-	if answers, _ := filepath.Glob(filepath.Join(scratch, asks.AnswersDir, "*")); len(answers) != 0 {
+	if answers, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*")); len(answers) != 0 {
 		t.Errorf("a failed call cached %q", answers)
 	}
 }
@@ -240,5 +278,205 @@ func TestDecideHoldsTheLettersTheQuestionOffers(t *testing.T) {
 	}
 	if !strings.Contains(state, "S1: text") || strings.Contains(state, "@!") {
 		t.Errorf("the composed state = %q, want its paragraph's text and no unfilled slot", state)
+	}
+}
+
+// probed is a client whose calls run during over the scratch tree, so a test
+// sees what exists on disk while a call is in flight.
+type probed struct {
+	decisions
+	during func()
+}
+
+func (p *probed) Decision(ctx context.Context, req model.DecisionRequest) (model.DecisionResponse, error) {
+	p.during()
+	return p.decisions.Decision(ctx, req)
+}
+
+func (p *probed) ConsultStream(context.Context, model.Request) (model.StreamReader, error) {
+	p.during()
+	return doneStream{}, nil
+}
+
+// Client is the model.Client whose calls p answers.
+func (p *probed) Client() model.Client {
+	return &model.ClientFuncs{Decide: p.Decision, Stream: p.ConsultStream}
+}
+
+type doneStream struct{}
+
+func (doneStream) Next() (model.Chunk, error) { return model.Chunk{}, io.EOF }
+func (doneStream) Final() model.Response {
+	return model.Response{Content: "the passage", FinishReason: "stop", StreamDone: true}
+}
+func (doneStream) Close() error { return nil }
+
+// question is paragraph item's ask as a reader receives it, at attempt.
+func question(item string, attempt int) asks.MultichoiceQuestion {
+	it := paragraphItems(item)[0]
+	q := it.Question
+	q.Key = it.Item
+	return asks.MultichoiceQuestion{Kind: asks.Paragraph, Group: "v/leaf.md", Item: it.Item, State: it.Item + " state",
+		Question: q, Offered: it.Offered, Attempt: attempt}
+}
+
+// TestAnItemsFilesExistOnlyOnceItsAfterRuns pins the write rule through the
+// seam: while any call of an item runs, none of the files its calls leave
+// exists — its earlier call's included — and every one of them exists by the
+// time the item's own after runs.
+func TestAnItemsFilesExistOnlyOnceItsAfterRuns(t *testing.T) {
+	files := func(scratch string) int {
+		n := 0
+		for _, dir := range []string{trailCaptures(scratch), trailAnswers(scratch)} {
+			entries, _ := os.ReadDir(dir)
+			n += len(entries)
+		}
+		return n
+	}
+	ctx := context.Background()
+	// Each item makes two calls, as a re-ask or the overview's second ask
+	// does, and hands its after back.
+	items := map[string]func(t *testing.T, c *Caller, wg *sync.WaitGroup, after func(error)) error{
+		"decide": func(t *testing.T, c *Caller, wg *sync.WaitGroup, after func(error)) error {
+			return c.Launch(model.NewQueue(1), "m")(ctx, wg, func(read asks.MultichoiceReader) func(error) {
+				for attempt := 1; attempt <= 2; attempt++ {
+					if _, err := read(ctx, question("S1", attempt)); err != nil {
+						t.Error(err)
+					}
+				}
+				return after
+			})
+		},
+		"ask": func(t *testing.T, c *Caller, wg *sync.WaitGroup, after func(error)) error {
+			return c.PassageLaunch(model.NewQueue(1), "m")(ctx, wg, func(passage func(context.Context, string, []string, int) (string, error)) func(error) {
+				for attempt := 1; attempt <= 2; attempt++ {
+					if _, err := passage(ctx, "excerpts", nil, attempt); err != nil {
+						t.Error(err)
+					}
+				}
+				return after
+			})
+		},
+	}
+	for name, launch := range items {
+		t.Run(name, func(t *testing.T) {
+			scratch := t.TempDir()
+			var during []int
+			client := &probed{decisions: decisions{answers: []model.DecisionAnswer{noulAnswer("S1", 0.9), noulAnswer("S1", 0.9)}}}
+			client.during = func() { during = append(during, files(scratch)) }
+			atAfter := -1
+			var wg sync.WaitGroup
+			err := launch(t, newCaller(client, scratch), &wg, func(writeErr error) {
+				if writeErr != nil {
+					t.Error(writeErr)
+				}
+				atAfter = files(scratch)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wg.Wait()
+			if !slices.Equal(during, []int{0, 0}) {
+				t.Errorf("files during the item's calls = %v, want none during either", during)
+			}
+			if atAfter != 4 {
+				t.Errorf("%d files when the item's after ran, want both calls' capture and answer", atAfter)
+			}
+		})
+	}
+}
+
+// TestDecideReturnsItsContextsEnd: a call whose ctx ends while it is in
+// flight — its batch stopped by a sibling — returns that ending, never an
+// incomplete call that would read as its own inference failure.
+func TestDecideReturnsItsContextsEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &probed{}
+	client.during = cancel
+	var got error
+	var wg sync.WaitGroup
+	scratch := t.TempDir()
+	err := newCaller(client, scratch).Launch(model.NewQueue(1), "m")(ctx, &wg, func(read asks.MultichoiceReader) func(error) {
+		_, got = read(ctx, question("S1", 1))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	var incomplete asks.IncompleteError
+	if !errors.Is(got, context.Canceled) || errors.As(got, &incomplete) {
+		t.Errorf("a cancelled call returned %v, want its context's error", got)
+	}
+	if left, err := filepath.Glob(filepath.Join(trailCaptures(scratch), "*")); err != nil || len(left) != 0 {
+		t.Errorf("a cancelled call left captures %v (%v), want nothing written for it", left, err)
+	}
+}
+
+// TestACaptureRecordsItsTokenWait: an item launched behind another on a queue
+// of one records, in its capture, the wait for the token the first held; the
+// first, which took a free token, records next to none.
+func TestACaptureRecordsItsTokenWait(t *testing.T) {
+	const hold = 100 * time.Millisecond
+	scratch := t.TempDir()
+	release := make(chan struct{})
+	var calls atomic.Int32
+	client := &probed{decisions: decisions{answers: []model.DecisionAnswer{noulAnswer("S1", 0.9), noulAnswer("S2", 0.9)}}}
+	client.during = func() {
+		if calls.Add(1) == 1 {
+			<-release
+		}
+	}
+	ctx := context.Background()
+	launch := newCaller(client, scratch).Launch(model.NewQueue(1), "m")
+	item := func(name string) func(asks.MultichoiceReader) func(error) {
+		return func(read asks.MultichoiceReader) func(error) {
+			if _, err := read(ctx, question(name, 1)); err != nil {
+				t.Error(err)
+			}
+			return func(error) {}
+		}
+	}
+	var wg sync.WaitGroup
+	if err := launch(ctx, &wg, item("S1")); err != nil {
+		t.Fatal(err)
+	}
+	var releasedAt time.Time
+	go func() {
+		time.Sleep(hold)
+		releasedAt = time.Now()
+		close(release)
+	}()
+	before := time.Now()
+	if err := launch(ctx, &wg, item("S2")); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	waited := func(item string) int64 {
+		t.Helper()
+		paths, _ := filepath.Glob(filepath.Join(trailCaptures(scratch), "paragraph-v_leaf.md-"+item+"-*.capture.jsonl"))
+		if len(paths) != 1 {
+			t.Fatalf("%s's captures = %q, want one", item, paths)
+		}
+		b, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request struct {
+			Type        string `json:"type"`
+			TokenWaitMS *int64 `json:"token-wait-ms"`
+		}
+		if err := json.Unmarshal([]byte(strings.SplitN(string(b), "\n", 2)[0]), &request); err != nil || request.Type != "request" || request.TokenWaitMS == nil {
+			t.Fatalf("%s's capture opens %s, want a request carrying token-wait-ms (%v)", item, b, err)
+		}
+		return *request.TokenWaitMS
+	}
+	first, second := waited("S1"), waited("S2")
+	if floor := (releasedAt.Sub(before) - 10*time.Millisecond).Milliseconds(); second < floor {
+		t.Errorf("S2 waited out S1's call and records %dms, want at least %dms", second, floor)
+	}
+	if first >= second {
+		t.Errorf("S1 took a free token and records a %dms wait, S2 records %dms", first, second)
 	}
 }

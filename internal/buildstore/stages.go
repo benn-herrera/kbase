@@ -13,8 +13,8 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
+	"kbase/internal/gitledger"
 	"kbase/internal/kb"
-	"kbase/internal/ledger"
 	"kbase/internal/result"
 )
 
@@ -125,7 +125,7 @@ func ResolveStage(name string) (Stage, bool) {
 
 // RecordedStages is each stage the trail records, with its newest boundary
 // commit. An id outside the vocabulary reads as no stage.
-func RecordedStages(trail []ledger.Entry) map[string]string {
+func RecordedStages(trail []gitledger.Entry) map[string]string {
 	recorded := map[string]string{}
 	for _, e := range trail {
 		known := slices.ContainsFunc(Stages, func(s Stage) bool { return s.ID == e.Stage })

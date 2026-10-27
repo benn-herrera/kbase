@@ -1,12 +1,13 @@
-// Package call puts a build's asks to a provider: each composed prompt under
-// the system fragment its kind names, as one model.Chat call re-issued
-// identically while it does not complete, every attempt captured, and the
-// answer cached by what was asked so a resumed stage asks nothing it already
-// has an answer for.
+// Package call puts a build's asks to a provider, each item of an ask batch
+// on a slot of the build's queue: each composed prompt under the system
+// fragment its kind names, as one chat call re-issued identically while it
+// does not complete, every attempt captured, and the answer cached by what was
+// asked so a resumed stage asks nothing it already has an answer for. An
+// item's captures and answers are written once it has returned its token.
 package call
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"kbase/internal/asks"
@@ -34,47 +36,124 @@ const (
 )
 
 // overviewBackoff is the pause before each re-issue of an overview call that
-// did not complete; a letter ask is re-issued at once.
+// did not complete; a multichoice ask is re-issued at once.
 var overviewBackoff = []time.Duration{5 * time.Second, 30 * time.Second}
 
 // Caller puts composed prompts to one provider. Safe for concurrent use over
 // distinct prompts.
 type Caller struct {
 	client          model.Client
-	captures        string
-	answers         string
+	trail           func() string
 	overviewBackoff []time.Duration
 	lg              log.Logger
 }
 
-// New is a Caller over client keeping its evidence and answers under scratch.
-func New(client model.Client, scratch string, lg log.Logger) *Caller {
+// New is a Caller over client keeping its answers and captures in the trail
+// directory trail returns, asked at every call.
+func New(client model.Client, trail func() string, lg log.Logger) *Caller {
 	return &Caller{
 		client:          client,
-		captures:        filepath.Join(scratch, asks.CapturesDir),
-		answers:         filepath.Join(scratch, asks.AnswersDir),
+		trail:           trail,
 		overviewBackoff: overviewBackoff,
 		lg:              lg,
 	}
 }
 
-// Letters is the production LetterReader: each question put to modelID as
-// one Decision call — the composed state the request's state, the question
-// serialized under its item's key — the answer mapped to a confidence keyed
-// by the offered letters, and the mapped answer cached by the digest of the
-// model, the question and the state.
-func (c *Caller) Letters(modelID string) asks.LetterReader {
-	return func(ctx context.Context, q asks.LetterQuestion) (asks.Reply, error) {
-		conf, err := c.decide(ctx, modelID, q)
-		if err != nil {
-			return asks.Reply{}, err
-		}
-		return asks.Reply{Confidence: conf}, nil
+func (c *Caller) answers() string { return filepath.Join(c.trail(), asks.AnswersDir) }
+
+func (c *Caller) captures() string { return filepath.Join(c.trail(), asks.CapturesDir) }
+
+// Launch is the production asks.Launch: each item started on q, its reader
+// putting each question to modelID as one Decision call through the item's
+// slot — the composed state the request's state, the question serialized
+// under its item's key — the answer mapped to a confidence keyed by the
+// offered letters, and the mapped answer cached by the digest of the model,
+// the question and the state.
+func (c *Caller) Launch(q *model.Queue, modelID string) asks.Launch {
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(asks.MultichoiceReader) func(error)) error {
+		return c.goHolding(ctx, q, wg, func(slot *model.Slot, held *heldFiles) func(error) {
+			return item(func(ctx context.Context, lq asks.MultichoiceQuestion) (asks.Reply, error) {
+				conf, err := c.decide(ctx, slot, held, modelID, lq)
+				if err != nil {
+					return asks.Reply{}, err
+				}
+				return asks.Reply{Confidence: conf}, nil
+			})
+		})
 	}
 }
 
+// PassageLaunch starts the overview's item on q, its asker putting the
+// overview passage to modelID from excerpts through the item's slot,
+// rejected holding the lines a previous reply was refused for, attempt
+// counting the asks from 1.
+func (c *Caller) PassageLaunch(q *model.Queue, modelID string) asks.PassageLaunch {
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(func(context.Context, string, []string, int) (string, error)) func(error)) error {
+		return c.goHolding(ctx, q, wg, func(slot *model.Slot, held *heldFiles) func(error) {
+			return item(func(ctx context.Context, excerpts string, rejected []string, attempt int) (string, error) {
+				prompt, err := asks.OverviewPrompt(excerpts, rejected)
+				if err != nil {
+					return "", err
+				}
+				reply, err := c.ask(ctx, slot, held, modelID, asks.OverviewSystem, prompt, attempt, c.overviewBackoff, "overview")
+				return reply.Text, err
+			})
+		})
+	}
+}
+
+// goHolding starts item on q: every call it makes goes through its slot, and
+// the files those calls leave are held in memory until it returns, then
+// written in its after, on no token. The item's own after is handed the error
+// of that write; one that returned none has already failed, and a write error
+// beside its failure is logged.
+func (c *Caller) goHolding(ctx context.Context, q *model.Queue, wg *sync.WaitGroup, item func(*model.Slot, *heldFiles) func(error)) error {
+	return q.Go(ctx, wg, func(slot *model.Slot) func() {
+		held := &heldFiles{}
+		after := item(slot, held)
+		return func() {
+			err := held.write()
+			if after != nil {
+				after(err)
+				return
+			}
+			if err != nil {
+				c.lg.Warn("a failed item's captures and answers were not all written", "error", err)
+			}
+		}
+	})
+}
+
+// heldFiles is the captures and answers one item's calls leave, in the order
+// they were made, held until the item has returned its token.
+type heldFiles struct {
+	files []heldFile
+}
+
+type heldFile struct {
+	dir, path string
+	data      []byte
+}
+
+func (h *heldFiles) hold(dir, path string, data []byte) {
+	h.files = append(h.files, heldFile{dir: dir, path: path, data: data})
+}
+
+// write writes every held file, each whatever another's write did, and
+// returns their errors joined.
+func (h *heldFiles) write() error {
+	var errs []error
+	for _, f := range h.files {
+		if err := writeFileIn(f.dir, f.path, f.data); err != nil {
+			errs = append(errs, fmt.Errorf("call: writing %s: %w", f.path, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // decide is one question's Decision round-trip: the cached answer where one
-// stands for these exact inputs, else the call, its every attempt captured.
+// stands for these exact inputs, else the call through slot, its capture and
+// its answer held in held.
 //
 // The mapping, per answer type, keyed by which criterion the letter names,
 // never by offered order: a choice answer carries the probabilities whole;
@@ -83,9 +162,9 @@ func (c *Caller) Letters(modelID string) asks.LetterReader {
 // carries one figure read as P(true) — the OpenRouter example's reading,
 // confirmed against the live provider before the hermetic suite treats it as
 // fixed — so the true letter takes noul and the false letter the remainder.
-func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuestion) (map[string]float64, error) {
+func (c *Caller) decide(ctx context.Context, slot *model.Slot, held *heldFiles, modelID string, q asks.MultichoiceQuestion) (map[string]float64, error) {
 	key := decisionDigest(modelID, q)
-	answer := filepath.Join(c.answers, key+".json")
+	answer := filepath.Join(c.answers(), key+".json")
 	switch cached, err := os.ReadFile(answer); {
 	case err == nil:
 		var a model.DecisionAnswer
@@ -100,35 +179,21 @@ func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuesti
 	promptHash := key
 	stem := fileNameUnsafeRE.ReplaceAllString(fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), "_")
 	stem = stem[:min(len(stem), fileStemMaxChars)]
-	capturePath := filepath.Join(c.captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], q.Attempt))
-	if err := os.MkdirAll(c.captures, 0o777); err != nil {
-		return nil, err
-	}
-	f, err := os.Create(capturePath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	w := bufio.NewWriter(f)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	var writeErr error
-	record := func(v any) {
-		if writeErr == nil {
-			writeErr = enc.Encode(v)
-		}
-	}
+	captures := c.captures()
+	capturePath := filepath.Join(captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], q.Attempt))
+	cl := newCaptureLog()
 	stateHash := digestOfState(q.State)
-	record(decisionCaptureRequest{
+	cl.record(decisionCaptureRequest{
 		Type: "request", Model: modelID, StateSHA256: stateHash,
 		Question: decisionQuestionCapture{
 			Key: q.Question.Key, Type: q.Question.Type,
 			Instructions: q.Question.Instructions, Criteria: q.Question.Criteria,
 		},
-		Attempt: q.Attempt,
+		Attempt:     q.Attempt,
+		TokenWaitMS: slot.Waited().Milliseconds(),
 	})
 	started := time.Now()
-	got, err := c.client.Decision(ctx, model.DecisionRequest{
+	got, err := slot.Decision(ctx, c.client, model.DecisionRequest{
 		Model: modelID,
 		State: q.State,
 		Questions: []model.DecisionQuestion{{
@@ -141,33 +206,31 @@ func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuesti
 	wall := time.Since(started)
 	a := oneAnswer(got, err, q)
 	if a.Type != "" {
-		record(decisionCaptureAttempt{
+		cl.record(decisionCaptureAttempt{
 			Type: "attempt", Attempt: q.Attempt, Outcome: "ok", DurationMS: wall.Milliseconds(),
 			FinishReason: "stop", UsageReported: got.Usage.PromptTokens > 0,
 			PromptTokens: got.Usage.PromptTokens, CompletionTokens: got.Usage.CompletionTokens,
 		})
 	} else {
-		record(decisionCaptureAttempt{
+		cl.record(decisionCaptureAttempt{
 			Type: "attempt", Attempt: q.Attempt, Outcome: "failed", Error: fmt.Sprint(err), DurationMS: wall.Milliseconds(),
 		})
 	}
-	if flushErr := w.Flush(); writeErr == nil {
-		writeErr = flushErr
+	if err := ctx.Err(); err != nil {
+		// The call was stopped, not failed: its ctx ending is the cause, so a
+		// sibling's stop is never read as this call's inference failure.
+		return nil, err
 	}
-	if err != nil {
+	captureErr := cl.holdIn(held, captures, capturePath)
+	switch {
+	case err != nil:
 		// Decision has re-issued identically to its attempt count; a call
 		// past it never completed, and no answer is assumed for one.
 		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath)}
+	case captureErr != nil:
+		return nil, captureErr
 	}
-	if writeErr != nil {
-		return nil, fmt.Errorf("call: writing the capture %s: %w", capturePath, writeErr)
-	}
-	if err := os.MkdirAll(c.answers, 0o777); err != nil {
-		return nil, err
-	}
-	if err := atomicfile.Write(answer, mustMarshal(a), nil); err != nil {
-		return nil, err
-	}
+	held.hold(c.answers(), answer, mustMarshal(a))
 	return confidence(a, q), nil
 }
 
@@ -177,7 +240,7 @@ func (c *Caller) decide(ctx context.Context, modelID string, q asks.LetterQuesti
 // recoverable path, an unreadable answer here. The response is passed whole
 // and the zero one returned where nothing decided, so the caller caches and
 // maps the one answer it asked for.
-func oneAnswer(resp model.DecisionResponse, err error, q asks.LetterQuestion) model.DecisionAnswer {
+func oneAnswer(resp model.DecisionResponse, err error, q asks.MultichoiceQuestion) model.DecisionAnswer {
 	if err != nil {
 		return model.DecisionAnswer{}
 	}
@@ -191,7 +254,7 @@ func oneAnswer(resp model.DecisionResponse, err error, q asks.LetterQuestion) mo
 
 // confidence maps an answer to a per-letter confidence over the offered
 // letters; nil where the answer decides nothing (an unreadable answer).
-func confidence(a model.DecisionAnswer, q asks.LetterQuestion) map[string]float64 {
+func confidence(a model.DecisionAnswer, q asks.MultichoiceQuestion) map[string]float64 {
 	switch a.Type {
 	case "choice":
 		if a.Probabilities != nil {
@@ -214,7 +277,7 @@ func confidence(a model.DecisionAnswer, q asks.LetterQuestion) map[string]float6
 
 // otherLetter is the offered letter whose criterion is not the true one, ""
 // where the offered set is not two.
-func otherLetter(q asks.LetterQuestion) string {
+func otherLetter(q asks.MultichoiceQuestion) string {
 	var rest []string
 	for _, l := range q.Offered {
 		if l != q.Question.TrueLetter {
@@ -228,22 +291,24 @@ func otherLetter(q asks.LetterQuestion) string {
 }
 
 // digestOfState is the state's digest, the prompt-sha256 precedent: the
-// capture carries the composed state as a digest, its bytes under
-// scratch/asks/ as today.
+// capture carries the composed state as a digest, its bytes in the group
+// records under the trail's asks/.
 func digestOfState(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
 }
 
 // decisionCaptureRequest opens a decision call's capture: what was asked, by
-// digest, never the endpoint or its key — the state as a digest, its bytes
-// under scratch/asks/ as today, the question whole.
+// digest, never the endpoint or its key — the state as a digest, its bytes in
+// the group records under the trail's asks/, the question whole — and how long the call's
+// item waited for its token, time outside the attempt's duration-ms.
 type decisionCaptureRequest struct {
 	Type        string                  `json:"type"`
 	Model       string                  `json:"model"`
 	StateSHA256 string                  `json:"state-sha256"`
 	Question    decisionQuestionCapture `json:"question"`
 	Attempt     int                     `json:"ask-attempt"`
+	TokenWaitMS int64                   `json:"token-wait-ms"`
 }
 
 type decisionQuestionCapture struct {
@@ -276,7 +341,7 @@ type decisionCaptureAttempt struct {
 // cache's key, the re-ask reaching the model. The criteria serialize in
 // sorted key order, so the digest is deterministic across map iteration
 // orders.
-func decisionDigest(modelID string, q asks.LetterQuestion) string {
+func decisionDigest(modelID string, q asks.MultichoiceQuestion) string {
 	keys := make([]string, 0, len(q.Question.Criteria))
 	for k := range q.Question.Criteria {
 		keys = append(keys, k)
@@ -289,6 +354,45 @@ func decisionDigest(modelID string, q asks.LetterQuestion) string {
 	return digest(append(parts, q.State, strconv.Itoa(q.Attempt))...)
 }
 
+// captureLog composes a call's capture in memory, one JSON line per record;
+// nothing reaches a file until write.
+type captureLog struct {
+	buf bytes.Buffer
+	enc *json.Encoder
+	err error
+}
+
+func newCaptureLog() *captureLog {
+	l := &captureLog{}
+	l.enc = json.NewEncoder(&l.buf)
+	l.enc.SetEscapeHTML(false)
+	return l
+}
+
+func (l *captureLog) record(v any) {
+	if l.err == nil {
+		l.err = l.enc.Encode(v)
+	}
+}
+
+// holdIn holds the composed capture in held, for path under dir; where it
+// could not be composed it holds nothing and says why.
+func (l *captureLog) holdIn(held *heldFiles, dir, path string) error {
+	if l.err != nil {
+		return fmt.Errorf("call: composing the capture %s: %w", path, l.err)
+	}
+	held.hold(dir, path, l.buf.Bytes())
+	return nil
+}
+
+// writeFileIn writes data atomically at path, creating dir first.
+func writeFileIn(dir, path string, data []byte) error {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	return atomicfile.Write(path, data, nil)
+}
+
 func mustMarshal(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -297,20 +401,9 @@ func mustMarshal(v any) []byte {
 	return b
 }
 
-// Passage is the overview passage asked of modelID from excerpts, rejected
-// holding the lines a previous reply was refused for, attempt counting the
-// asks from 1.
-func (c *Caller) Passage(ctx context.Context, modelID, excerpts string, rejected []string, attempt int) (string, error) {
-	prompt, err := asks.OverviewPrompt(excerpts, rejected)
-	if err != nil {
-		return "", err
-	}
-	reply, err := c.ask(ctx, modelID, asks.OverviewSystem, prompt, attempt, c.overviewBackoff, "overview")
-	return reply.Text, err
-}
-
 // captureRequest opens a capture: what was asked, by digest, never the
-// endpoint or its key.
+// endpoint or its key, and how long the call's item waited for its token —
+// time outside every attempt's duration-ms.
 type captureRequest struct {
 	Type           string  `json:"type"`
 	Model          string  `json:"model"`
@@ -319,6 +412,7 @@ type captureRequest struct {
 	Attempt        int     `json:"ask-attempt"`
 	Temperature    float64 `json:"temperature"`
 	EnableThinking bool    `json:"enable-thinking"`
+	TokenWaitMS    int64   `json:"token-wait-ms"`
 }
 
 // captureAttempt is one request of the call, as it ended.
@@ -349,12 +443,13 @@ func digest(parts ...string) string {
 // the model, the system prompt, the prompt and the ask's attempt, so the same
 // ask finds its answer and a re-ask of an identical prompt does not.
 func (c *Caller) answerPath(modelID, system, prompt string, attempt int) string {
-	return filepath.Join(c.answers, digest(modelID, system, prompt, strconv.Itoa(attempt))+".txt")
+	return filepath.Join(c.answers(), digest(modelID, system, prompt, strconv.Itoa(attempt))+".txt")
 }
 
 // ask is prompt under the named system fragment: the answer cached for these
-// exact inputs where one stands, else the call, its every attempt captured.
-func (c *Caller) ask(ctx context.Context, modelID, systemName, prompt string, attempt int, backoff []time.Duration, name string) (asks.Reply, error) {
+// exact inputs where one stands, else the call through slot, its every
+// attempt captured, the capture and the answer held in held.
+func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, modelID, systemName, prompt string, attempt int, backoff []time.Duration, name string) (asks.Reply, error) {
 	system, err := asks.System(systemName)
 	if err != nil {
 		return asks.Reply{}, err
@@ -370,60 +465,42 @@ func (c *Caller) ask(ctx context.Context, modelID, systemName, prompt string, at
 	promptHash := digest(prompt)
 	stem := fileNameUnsafeRE.ReplaceAllString(name, "_")
 	stem = stem[:min(len(stem), fileStemMaxChars)]
-	capturePath := filepath.Join(c.captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], attempt))
-	if err := os.MkdirAll(c.captures, 0o777); err != nil {
-		return asks.Reply{}, err
-	}
-	f, err := os.Create(capturePath)
-	if err != nil {
-		return asks.Reply{}, err
-	}
-	defer f.Close()
-	w := bufio.NewWriter(f)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	var writeErr error
-	record := func(v any) {
-		if writeErr == nil {
-			writeErr = enc.Encode(v)
-		}
-	}
-	record(captureRequest{Type: "request", Model: modelID, System: systemName, PromptSHA256: promptHash, Attempt: attempt})
+	captures := c.captures()
+	capturePath := filepath.Join(captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], attempt))
+	cl := newCaptureLog()
+	cl.record(captureRequest{Type: "request", Model: modelID, System: systemName, PromptSHA256: promptHash, Attempt: attempt,
+		TokenWaitMS: slot.Waited().Milliseconds()})
+	res, err := slot.Chat(ctx, c.client, model.ChatRequest{Model: modelID, System: system, Prompt: prompt, Backoff: backoff})
 	thinking := 0
-	got, err := model.Chat(ctx, c.client, modelID, system, prompt, backoff, func(a model.ChatAttempt) {
+	for _, a := range res.Attempts {
 		if a.Reasoned {
 			thinking++
 		}
-		record(captureAttempt{
+		cl.record(captureAttempt{
 			Type: "attempt", Attempt: a.Attempt, Outcome: a.Outcome, Error: a.Error, DurationMS: a.Duration.Milliseconds(),
 			FinishReason: a.FinishReason, UsageReported: a.UsageReported, PromptTokens: a.Usage.PromptTokens,
 			CompletionTokens: a.Usage.CompletionTokens, CachedTokens: a.Usage.CachedPromptTokens, Reasoned: a.Reasoned, Reply: a.Reply,
 		})
-	})
-	if flushErr := w.Flush(); writeErr == nil {
-		writeErr = flushErr
 	}
+	if err := ctx.Err(); err != nil {
+		return asks.Reply{}, err
+	}
+	captureErr := cl.holdIn(held, captures, capturePath)
 	switch {
-	case ctx.Err() != nil:
-		return asks.Reply{}, ctx.Err()
 	case errors.Is(err, model.ErrChatIncomplete):
-		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. Capture: %s", err, got.Error, capturePath)}
+		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. Capture: %s", err, res.Final.Error, capturePath)}
 	case err != nil:
 		return asks.Reply{}, err
-	case writeErr != nil:
-		return asks.Reply{}, fmt.Errorf("call: writing the capture %s: %w", capturePath, writeErr)
+	case captureErr != nil:
+		return asks.Reply{}, captureErr
 	}
-	if got.FinishReason == model.FinishLength {
+	final := res.Final
+	if final.FinishReason == model.FinishLength {
 		c.lg.Warn("a chat reply was cut off at the completion cap", "ask", name, "capture", capturePath)
 	}
-	if err := os.MkdirAll(c.answers, 0o777); err != nil {
-		return asks.Reply{}, err
-	}
-	if err := atomicfile.Write(answer, []byte(got.Reply), nil); err != nil {
-		return asks.Reply{}, err
-	}
-	return asks.Reply{Text: got.Reply, Stats: &asks.CallStats{
-		APIDuration: got.Duration, PromptTokens: got.Usage.PromptTokens, OutputTokens: got.Usage.CompletionTokens,
-		CachedTokens: got.Usage.CachedPromptTokens, ThinkingBlocks: thinking,
+	held.hold(c.answers(), answer, []byte(final.Reply))
+	return asks.Reply{Text: final.Reply, Stats: &asks.CallStats{
+		APIDuration: final.Duration, PromptTokens: final.Usage.PromptTokens, OutputTokens: final.Usage.CompletionTokens,
+		CachedTokens: final.Usage.CachedPromptTokens, ThinkingBlocks: thinking,
 	}}, nil
 }

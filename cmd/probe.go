@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -86,7 +87,7 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 		toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
 	// The registry is scoring's client path, so the probe speaks whatever wire
 	// shape the endpoint's entry names.
-	reg := modelclient.New(opts.NewClient, opts.Logger, "")
+	reg := modelclient.New(opts.NewClient, opts.Logger, "", probeAskConcurrency)
 	defer reg.CloseAll()
 	client, err := reg.Get(ep)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
@@ -97,35 +98,62 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 	if timeout <= 0 {
 		timeout = defaultListTimeout
 	}
+	// The one call is the one item of a queue of one. Its deadline and its
+	// wall clock both start inside the item, at the call, so neither covers a
+	// wait for the token.
+	var (
+		answer  []toolresult.Field
+		callErr error
+		wg      sync.WaitGroup
+	)
+	err = model.NewQueue(probeAskConcurrency).Go(ctx, &wg, func(slot *model.Slot) func() {
+		answer, callErr = probeAsk(ctx, slot, client, ep, opts, timeout)
+		return nil
+	})
+	if err != nil {
+		return failed(fields, err)
+	}
+	wg.Wait()
+	if callErr != nil {
+		return failed(fields, callErr)
+	}
+	return toolresult.Done, append(fields, answer...)
+}
+
+// probeAskConcurrency is the probe's queue: one call, so one token.
+const probeAskConcurrency = 1
+
+// probeAsk is the probe's one call through slot, under timeout counted from
+// the call's start, and the fields its answer reports. The selection's own
+// surface answers it: --decision names the decision role, whose asks are
+// decision calls on whichever surface its entry declares, and a chat request
+// to that selection is the mismatch a probe exists to find. Every other
+// selection is asked the one chat turn. No backoff: a heartbeat re-issues at
+// once, so the deadline is spent on attempts rather than on pauses.
+func probeAsk(ctx context.Context, slot *model.Slot, client model.Client, ep config.Endpoint, opts probeOptions, timeout time.Duration) ([]toolresult.Field, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// No backoff: a heartbeat re-issues at once, so the deadline is spent on
-	// attempts rather than on pauses.
 	started := time.Now()
-	// The selection's own surface answers it: --decision names the decision
-	// role, whose asks are decision calls on whichever surface its entry
-	// declares, and a chat request to that selection is the mismatch a probe
-	// exists to find. Every other selection is asked the one chat turn.
 	if opts.Decision {
 		prompt := opts.Prompt
 		if prompt == "" {
 			prompt = probeDecisionPrompt
 		}
-		resp, err := client.Decision(callCtx, probeDecisionRequest(ep.Model, prompt))
+		resp, err := slot.Decision(callCtx, client, probeDecisionRequest(ep.Model, prompt))
 		if err != nil {
-			return failed(fields, err)
+			return nil, err
 		}
-		return toolresult.Done, append(fields, probeDecisionAnswer(resp, time.Since(started))...)
+		return probeDecisionAnswer(resp, time.Since(started)), nil
 	}
 	prompt := opts.Prompt
 	if prompt == "" {
 		prompt = probePrompt
 	}
-	attempt, err := model.Chat(callCtx, client, ep.Model, "", prompt, nil, nil)
+	res, err := slot.Chat(callCtx, client, model.ChatRequest{Model: ep.Model, Prompt: prompt})
 	if err != nil {
-		return failed(fields, err)
+		return nil, err
 	}
-	return toolresult.Done, append(fields, probeAnswer(attempt, time.Since(started))...)
+	return probeAnswer(res.Final, time.Since(started)), nil
 }
 
 // probeDecisionRequest is the one ask a decision selection receives: the check
@@ -327,7 +355,7 @@ path, a predicate to answer on the decision one.
 The call goes through the same registry a scoring run's asks go through, so the
 endpoint is reached over the wire shape its pool entry names. A decision
 selection is asked a decision call on the surface its entry declares, as a
-run's letter asks are: a surface that reports no first token and no finish
+run's multichoice asks are: a surface that reports no first token and no finish
 reason, which the document states as zero and null. An entry whose api is
 anthropic speaks no decision surface, and refuses rather than taking a chat
 request. Nothing is read from a KB and no state directory is read or written:

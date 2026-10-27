@@ -130,6 +130,11 @@ func scoreDrive(t *testing.T, repo, state string, opts scoreOptions, newClient m
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
+	if opts.AskConcurrency == nil {
+		// The scripted providers answer in the order calls reach them, which
+		// only one call in flight at a time fixes to the walk's order.
+		opts.AskConcurrency = new(1)
+	}
 	var stdout, stderr bytes.Buffer
 	opts.WorkDir, opts.StateDir = repo, state
 	opts.Stdout, opts.Stderr, opts.Logger = &stdout, &stderr, log.Discard()
@@ -153,7 +158,10 @@ func scoreDrive(t *testing.T, repo, state string, opts scoreOptions, newClient m
 }
 
 // scoring is a scripted provider serving one reply per call, in order.
-func scoring(replies ...string) *modeltest.MockClient {
+func scoring(replies ...string) model.Client { return scriptedScoring(replies...).Client() }
+
+// scriptedScoring is scoring's script, for a double that wraps it.
+func scriptedScoring(replies ...string) *modeltest.MockClient {
 	responses := make([]model.Response, len(replies))
 	for i, reply := range replies {
 		responses[i] = model.Response{Content: reply}
@@ -165,9 +173,9 @@ func scoring(replies ...string) *modeltest.MockClient {
 // call arrives: the first item's question is answered and lands, and the item
 // after it meets a cancelled context, which is where the walk stops.
 type cancelOnSecond struct {
-	*modeltest.MockClient
-	cancel context.CancelFunc
-	calls  int
+	MockClient *modeltest.MockClient
+	cancel     context.CancelFunc
+	calls      int
 }
 
 func (c *cancelOnSecond) ConsultStream(ctx context.Context, req model.Request) (model.StreamReader, error) {
@@ -176,6 +184,11 @@ func (c *cancelOnSecond) ConsultStream(ctx context.Context, req model.Request) (
 		c.cancel()
 	}
 	return c.MockClient.ConsultStream(ctx, req)
+}
+
+// Client is the model.Client whose calls c answers.
+func (c *cancelOnSecond) Client() model.Client {
+	return &model.ClientFuncs{Stream: c.ConsultStream, Decide: c.MockClient.Decision, List: c.MockClient.ListModels}
 }
 
 // rigorOf is the index's rigor for the node carrying id.
@@ -336,7 +349,7 @@ func TestScoreCancelledClosesOnTheItemItStoppedBefore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Ctx: ctx}, func() model.Client {
-		return &cancelOnSecond{MockClient: scoring("none"), cancel: cancel}
+		return (&cancelOnSecond{MockClient: scriptedScoring("none"), cancel: cancel}).Client()
 	})
 	if got.doc.Outcome != "cancelled" || got.code != toolresult.ExitCode("cancelled") {
 		t.Fatalf("the cancelled run: outcome %s\n%s", got.doc.Outcome, got.stdout)

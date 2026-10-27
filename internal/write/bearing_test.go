@@ -138,6 +138,30 @@ func TestSetBearingRefusals(t *testing.T) {
 	}
 }
 
+// TestASetBearingRefusalNamesEveryOffendingEntry: a batch whose entries 1 and
+// 3 name no edge record is refused with one item for each, naming its entry,
+// and the legal entry between them is not written.
+func TestASetBearingRefusalNamesEveryOffendingEntry(t *testing.T) {
+	root := seedKB(t)
+	claim := insertClaim(t, root, "Bound Result", "  rests-on:\n  - id: "+seedClaim+"\n    bearing: 0.5\n")
+	res := run(t, root, "insert-analysis-entry", "entry:\n- title: An Analysis\n  rigor: 0.9\n  rationale: Lifts.\n")
+	if res.Outcome != result.Done {
+		t.Fatalf("insert analysis: %+v", res)
+	}
+	analysis := res.IDs[0]
+	before := snapshot(t, root)
+	res = run(t, root, "set-bearing", "entry:\n"+
+		"- id: "+analysis+"\n  target: "+claim+"\n  relation: lifts\n  bearing: 0.5\n"+
+		"- id: "+seedClaim+"\n  target: "+claim+"\n  relation: supports\n  bearing: 0.6\n"+
+		"- id: "+analysis+"\n  target: "+seedClaim+"\n  relation: lifts\n  bearing: 0.5\n")
+	if !refusedAt(res, result.Item{Key: "id=" + analysis, Entry: 1}, result.Item{Key: "id=" + analysis, Entry: 3}) {
+		t.Errorf("got %+v, want two refusals, entries 1 and 3", res)
+	}
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a refused set-bearing wrote")
+	}
+}
+
 // TestARigorWriteTakesTheTablesMaximum: every op that takes a node's own rigor
 // refuses a value above the rigor tables' maximum, naming the key and the
 // range, and the maximum itself — the whole of the scale — is written and read
