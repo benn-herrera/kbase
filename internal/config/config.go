@@ -28,9 +28,9 @@ const (
 
 // Config is the kbase settings file (config.toml) — the choices that draw
 // from the providers.toml pool. providers.toml lists what is available;
-// config.toml says which to use. It holds no credentials: every key lives
-// on its providers.toml pool entry, which is what keeps config.toml safe
-// to read and edit.
+// config.toml says which to use. It holds no credentials: every key belongs
+// to a providers.toml pool entry, stored under its name or in its key file,
+// which is what keeps config.toml safe to read and edit.
 type Config struct {
 	// Models maps the verb's roles onto the endpoint and model each asks.
 	Models ModelMap `toml:"models"`
@@ -178,7 +178,7 @@ type Sources struct {
 // is running.
 //
 // No key material is resolved here: config.toml holds CHOICES, and every
-// credential lives on its providers.toml pool entry, resolved by
+// credential belongs to a providers.toml pool entry, resolved by
 // LoadProviders.
 //
 // The decode is strict: a key or table Config does not model refuses the

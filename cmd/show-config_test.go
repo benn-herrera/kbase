@@ -1,13 +1,17 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"kbase/internal/auth"
 	"kbase/internal/config"
 	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
@@ -36,6 +40,227 @@ apiKeyFile = "key.txt"
 	}
 	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"file/dec-1\"\ntext = \"file/text-1\"\n")
 	return dir
+}
+
+// storedKey is the key the store fixture holds. No test lets it reach a stream.
+const storedKey = "sk-stored-MUST-NOT-APPEAR"
+
+// storeFixture points XDG_STATE_HOME at a fresh directory and stages a
+// configuration over a store there: both, an entry with a stored key and an
+// apiKeyFile; stored, one with a stored key alone; filed, one whose key file's
+// path holds a space; and Truncated, one whose stored key file is truncated and
+// whose apiKeyFile is missing. config.toml names stored, both and filed for the
+// three roles. It returns the configuration directory, the path of filed's key
+// file and the truncated store file.
+func storeFixture(t *testing.T) (configDir, keyPath, truncated string) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	storeDir, err := authStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := auth.NewStore(storeDir)
+	for _, name := range []string{"both", "stored", "Truncated"} {
+		if err := store.Add(name, storedKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	truncated = filepath.Join(storeDir, "truncated"+auth.FileSuffix)
+	if err := os.WriteFile(truncated, []byte("x"), auth.FileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	configDir = t.TempDir()
+	writeValues(t, configDir, config.ProvidersFileName, `[both]
+baseUrl = "http://both.example/v1"
+apiKeyFile = "both.key"
+
+[stored]
+baseUrl = "http://stored.example/v1"
+
+[filed]
+baseUrl = "http://filed.example/v1"
+apiKeyFile = "my keys/filed.key"
+
+[Truncated]
+baseUrl = "http://truncated.example/v1"
+apiKeyFile = "missing.key"
+`)
+	writeValues(t, configDir, config.ConfigFileName, "[models]\ndecision = \"stored/d\"\ntext = \"both/t\"\nscoring = \"filed/s\"\n")
+	if err := os.Mkdir(filepath.Join(configDir, "my keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath = filepath.Join(configDir, "my keys", "filed.key")
+	if err := os.WriteFile(keyPath, []byte(fileKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configDir, keyPath, truncated
+}
+
+// TestShowConfigReportsTheStore: an entry's key is reported by its kind — store
+// over a stated apiKeyFile, which a warning says goes unread, with remedies
+// naming the provider; file with its upgrade command, the path quoted — and a
+// truncated store file is a diagnostic by its path, its remedy adding the key
+// again, beside the read fault of the missing key file it fell through to,
+// with the outcome still done. Each role names the store as its key's source
+// where the store supplied it.
+func TestShowConfigReportsTheStore(t *testing.T) {
+	configDir, keyPath, truncated := storeFixture(t)
+	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", configDir)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
+	}
+	entries := map[string]map[string]any{}
+	for _, p := range doc.items("providers") {
+		name, _ := p["name"].(string)
+		entries[name] = p
+	}
+	for _, name := range []string{"both", "stored"} {
+		e := entries[name]
+		_, keyFile := e["key-file"]
+		_, upgrade := e["upgrade"]
+		if e["key"] != string(config.KeyKindStore) || keyFile || upgrade {
+			t.Errorf("%s = %v, want key store with no key-file and no upgrade", name, e)
+		}
+	}
+	if filed, want := entries["filed"], "cat '"+keyPath+"' | kbase auth add filed"; filed["key"] != string(config.KeyKindFile) ||
+		filed["key-file"] != "my keys/filed.key" || filed["upgrade"] != want {
+		t.Errorf("filed = %v, want key file, its key-file and upgrade %q", filed, want)
+	}
+	if e := entries["Truncated"]; e["usable"] != false {
+		t.Errorf("Truncated = %v, want it dropped: its store file does not open and its key file is missing", e)
+	}
+
+	providersFile := config.ProvidersPath(configDir)
+	diagnostics := doc.items("diagnostics")
+	if len(diagnostics) != 3 {
+		t.Fatalf("diagnostics = %v, want Truncated's two faults and both's unread key file", diagnostics)
+	}
+	if d := diagnostics[0]; d["path"] != providersFile || d["remedy"] != nil {
+		t.Errorf("diagnostic 0 = %v, want the missing key file's read fault against %s", d, providersFile)
+	}
+	if d := diagnostics[1]; d["path"] != truncated || d["detail"] != auth.ErrTruncated.Error() || d["remedy"] != "<key-manager> --print-key | kbase auth add Truncated" {
+		t.Errorf("diagnostic 1 = %v, want the truncated store file, what is wrong with it, and the piped kbase auth add Truncated", d)
+	}
+	if d := diagnostics[2]; d["path"] != providersFile || !strings.Contains(d["detail"].(string), `provider "both"`) ||
+		!strings.Contains(d["remedy"].(string), "kbase auth remove both") {
+		t.Errorf("diagnostic 2 = %v, want both's unread apiKeyFile against %s, kbase auth remove both in its remedy", d, providersFile)
+	}
+
+	for role, want := range map[string]string{"decision": string(config.KeyKindStore), "text": string(config.KeyKindStore), "scoring": config.LayerSourceExplicit} {
+		sources, _ := roleOf(doc, role)["sources"].(map[string]any)
+		if sources["key"] != want {
+			t.Errorf("%s sources.key = %v, want %s", role, sources["key"], want)
+		}
+	}
+}
+
+// TestStoredKeyNeverReported: show-config over a store holding keys reports
+// where each came from, and neither stream carries a key.
+func TestStoredKeyNeverReported(t *testing.T) {
+	configDir, _, _ := storeFixture(t)
+	_, stdout, stderr, _ := runShowConfigVerb(t, t.TempDir(), "--config-dir", configDir)
+	for stream, text := range map[string]string{"stdout": stdout, "stderr": stderr} {
+		if strings.Contains(text, storedKey) || strings.Contains(text, fileKey) {
+			t.Errorf("%s (%d bytes) carries a key", stream, len(text))
+		}
+	}
+}
+
+// TestStoreReportIsShowConfigsAlone: a verb loading configuration warns, on
+// stderr, of a store file that did not open, by its path and what is wrong with
+// it — and never of the upgrade or the unread key file, which show-config's
+// document alone carries.
+func TestStoreReportIsShowConfigsAlone(t *testing.T) {
+	configDir, _, truncated := storeFixture(t)
+	t.Setenv(config.EnvConfigDir, configDir)
+	opts, err := loadVerbContext(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	warnFaults(&stderr, opts.Faults)
+	got := stderr.String()
+	if want := `provider "Truncated": ` + truncated + ": " + auth.ErrTruncated.Error(); !strings.Contains(got, want) {
+		t.Errorf("stderr = %q, want the line %q", got, want)
+	}
+	for _, reported := range []string{"| kbase auth add", "kbase auth remove", "not read"} {
+		if strings.Contains(got, reported) {
+			t.Errorf("stderr = %q carries %q, which only show-config reports", got, reported)
+		}
+	}
+	if strings.Contains(got, storedKey) || strings.Contains(got, fileKey) {
+		t.Errorf("stderr (%d bytes) carries a key", len(got))
+	}
+}
+
+// TestUnlistableStoreIsADiagnostic: a store directory that stands and does not
+// list fails no load. Its entry falls back to the key file it states;
+// show-config reports the directory as a diagnostic with what went wrong, no
+// remedy and no path repeated in the detail; and a verb loading configuration
+// warns of it on stderr as the credentials store's.
+func TestUnlistableStoreIsADiagnostic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a mode-000 directory still lists on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root lists a mode-000 directory")
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	storeDir, err := authStoreDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(storeDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(storeDir, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
+	_, listErr := os.ReadDir(storeDir)
+	var pathErr *fs.PathError
+	if !errors.As(listErr, &pathErr) {
+		t.Fatalf("listing the mode-000 store = %v, want a path error", listErr)
+	}
+	wantDetail := pathErr.Err.Error()
+
+	configDir := t.TempDir()
+	writeValues(t, configDir, config.ProvidersFileName, "[filed]\nbaseUrl = \"http://filed.example/v1\"\napiKeyFile = \"filed.key\"\n")
+	if err := os.WriteFile(filepath.Join(configDir, "filed.key"), []byte(fileKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", configDir)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
+	}
+	if providers := doc.items("providers"); len(providers) != 1 || providers[0]["key"] != string(config.KeyKindFile) {
+		t.Errorf("providers = %v, want filed with its file key", providers)
+	}
+	// config.toml names no role, so each role's diagnostic follows the store's.
+	diagnostics := doc.items("diagnostics")
+	if len(diagnostics) == 0 {
+		t.Fatal("no diagnostics, want the store directory's first")
+	}
+	if d := diagnostics[0]; d["path"] != storeDir || d["detail"] != wantDetail || d["remedy"] != nil {
+		t.Errorf("diagnostic 0 = %v, want path %s, detail %q and no remedy", d, storeDir, wantDetail)
+	}
+
+	t.Setenv(config.EnvConfigDir, configDir)
+	opts, err := loadVerbContext(t.TempDir())
+	if err != nil {
+		t.Fatalf("loadVerbContext = %v, want the load to go on past the store", err)
+	}
+	var stderr strings.Builder
+	warnFaults(&stderr, opts.Faults)
+	if got, want := stderr.String(), "credentials store: "+storeDir+": "+wantDetail+"\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
 }
 
 // runShowConfigVerb runs `kbase show-config` through the real root command from

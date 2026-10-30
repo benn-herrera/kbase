@@ -45,6 +45,16 @@ type result struct {
 	endpoints []model.Endpoint
 }
 
+// shownEndpoints is endpoints, each with its key left out, for a failure
+// message.
+func shownEndpoints(endpoints []model.Endpoint) []model.Endpoint {
+	shown := slices.Clone(endpoints)
+	for i := range shown {
+		shown[i].APIKey = ""
+	}
+	return shown
+}
+
 // ids is the result's model ids.
 func (r result) ids() []string { return anyStrings(r.doc.Values["models"]) }
 
@@ -149,7 +159,7 @@ func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	}}, modeltest.NewScriptedMock(nil, catalogue("only")))
 
 	if len(got.endpoints) != 1 || !got.endpoints[0].Decisions {
-		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", got.endpoints)
+		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", shownEndpoints(got.endpoints))
 	}
 }
 
@@ -171,7 +181,7 @@ func TestRunModelsDialsTheEntrysProtocol(t *testing.T) {
 			Provider:  tc.entry.Name,
 		}}, modeltest.NewScriptedMock(nil, catalogue("only")))
 		if len(got.endpoints) != 1 || got.endpoints[0].Protocol != tc.want {
-			t.Errorf("%s: endpoints = %+v, want one speaking protocol %v", tc.entry.Name, got.endpoints, tc.want)
+			t.Errorf("%s: endpoints = %+v, want one speaking protocol %v", tc.entry.Name, shownEndpoints(got.endpoints), tc.want)
 		}
 	}
 }

@@ -13,17 +13,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/auth"
+	"kbase/internal/config"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
 	"kbase/internal/statedir"
 )
-
-// authPipedForm is how a key reaches the store for provider: piped on stdin,
-// never typed at a prompt or given as an argument. A refusal of add's input
-// names it as its remedy.
-func authPipedForm(provider string) string {
-	return "<key-manager> --print-key | kbase auth add " + provider
-}
 
 // authProviderArg is the positional the add and remove verbs take, spelled as
 // their help spells it. A refusal with no single provider to name, or whose
@@ -63,7 +57,7 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 			Detail: fmt.Sprintf("%q is no providers.toml entry's name: give the name exactly as the entry spells it, case included", opts.Provider)})
 	}
 	if opts.StdinIsTerminal {
-		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: authPipedForm(opts.Provider),
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider),
 			Detail: "stdin is a terminal: kbase never prompts for a key, so it reads one from a pipe alone"})
 	}
 	b, err := io.ReadAll(opts.Stdin)
@@ -72,7 +66,7 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 	}
 	key := strings.TrimSpace(string(b))
 	if key == "" {
-		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: authPipedForm(opts.Provider),
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider),
 			Detail: "stdin held no key: the piped input was empty or whitespace alone"})
 	}
 	if err := auth.NewStore(opts.Dir).Add(opts.Provider, key); err != nil {
@@ -243,7 +237,7 @@ keeps it. Input that is empty or whitespace alone is refused. A refusal writes
 nothing.
 
 The result names the provider, never the key.`,
-		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: authPipedForm(authProviderArg),
+		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: config.AuthAddRemedy(authProviderArg),
 			Detail: "kbase auth add takes one argument, the provider name; the key is piped on stdin, never given as an argument"}),
 		true, authAdd)
 }

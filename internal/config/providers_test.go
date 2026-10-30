@@ -76,7 +76,7 @@ type = "inference"
 api = "openai"
 `)
 
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestLoadProvidersAbsoluteKeyFile(t *testing.T) {
 baseUrl = "https://api.example.com/v1"
 apiKeyFile = "`+keyPath+`"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -139,7 +139,7 @@ apiKeyFile = "healthy.key"
 baseUrl = "http://x/v1"
 apiKeyFile = "not-here.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("an unreadable key file must not fail the whole load: %v", err)
 	}
@@ -176,7 +176,7 @@ baseUrl = "https://api.example.com/v1"
 apiKeyFile = "reaper.key"
 `)
 
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -205,8 +205,69 @@ func TestLoadProvidersOwnerOnlyKeyFile(t *testing.T) {
 baseUrl = "https://api.example.com/v1"
 apiKeyFile = "reaper.key"
 `)
-	if _, faults, err := LoadProviders(path); err != nil || len(faults) != 0 {
+	if _, faults, err := LoadProviders(path, nil); err != nil || len(faults) != 0 {
 		t.Errorf("a 0600 key file produced %+v (err %v)", faults, err)
+	}
+}
+
+// TestLoadProvidersKeyPrecedence: an entry's key is the one stored under its
+// name, lowercased as the store names its files; else its apiKeyFile's; else
+// none. An entry with a stored key never reads its apiKeyFile, so a missing or
+// exposed one raises no fault.
+func TestLoadProvidersKeyPrecedence(t *testing.T) {
+	const storedKey, fileKey = "stored-key-456", "file-key-789"
+	dir := t.TempDir()
+	writeFile(t, dir, "readable.key", fileKey+"\n")
+	exposedKeyFile(t, dir, "exposed.key", fileKey+"\n")
+	path := writeProviders(t, dir, `
+[Missing]
+baseUrl = "http://missing.example/v1"
+apiKeyFile = "not-here.key"
+
+[exposed]
+baseUrl = "http://exposed.example/v1"
+apiKeyFile = "exposed.key"
+
+[storedonly]
+baseUrl = "http://storedonly.example/v1"
+
+[fileonly]
+baseUrl = "http://fileonly.example/v1"
+apiKeyFile = "readable.key"
+
+[nokey]
+baseUrl = "http://nokey.example/v1"
+`)
+	stored := map[string]string{"missing": storedKey, "exposed": storedKey, "storedonly": storedKey}
+
+	got, faults, err := LoadProviders(path, stored)
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
+	}
+	if len(faults) != 0 {
+		t.Errorf("faults = %+v, want none: a stored key leaves the apiKeyFile unread", faults)
+	}
+	for _, tc := range []struct {
+		name, key string
+		kind      KeyKind
+	}{
+		{"Missing", storedKey, KeyKindStore},
+		{"exposed", storedKey, KeyKindStore},
+		{"storedonly", storedKey, KeyKindStore},
+		{"fileonly", fileKey, KeyKindFile},
+		{"nokey", "", KeyKindNone},
+	} {
+		p, ok := got[tc.name]
+		if !ok {
+			t.Errorf("%s is not in the pool", tc.name)
+			continue
+		}
+		if p.APIKey != tc.key {
+			t.Errorf("%s: the key (len %d) is not the %s key (len %d)", tc.name, len(p.APIKey), tc.kind, len(tc.key))
+		}
+		if k := keyKind(p); k != tc.kind {
+			t.Errorf("%s: key kind %s, want %s", tc.name, k, tc.kind)
+		}
 	}
 }
 
@@ -231,7 +292,7 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 			path := writeProviders(t, dir,
 				"[healthy]\nbaseUrl = \"http://ok/v1\"\n\n[suspect]\n"+tc.entry)
 
-			got, faults, err := LoadProviders(path)
+			got, faults, err := LoadProviders(path, nil)
 			if err != nil {
 				t.Fatalf("an invalid ENTRY must not fail the whole load: %v", err)
 			}
@@ -322,7 +383,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 		{"comment-only template", template},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, faults, err := LoadProviders(writeProviders(t, t.TempDir(), tc.body))
+			got, faults, err := LoadProviders(writeProviders(t, t.TempDir(), tc.body), nil)
 			if err != nil {
 				t.Fatalf("LoadProviders: %v", err)
 			}
@@ -336,7 +397,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 	}
 
 	t.Run("missing file", func(t *testing.T) {
-		got, faults, err := LoadProviders(filepath.Join(t.TempDir(), ProvidersFileName))
+		got, faults, err := LoadProviders(filepath.Join(t.TempDir(), ProvidersFileName), nil)
 		if err != nil {
 			t.Fatalf("a missing providers.toml is not an error: %v", err)
 		}
@@ -348,7 +409,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 
 func TestLoadProvidersMalformed(t *testing.T) {
 	path := writeProviders(t, t.TempDir(), "[bad toml content\n")
-	_, _, err := LoadProviders(path)
+	_, _, err := LoadProviders(path, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed TOML, got nil")
 	}
@@ -375,7 +436,7 @@ apiKeyUnsafe = "`+fakeKey+`"
 url = "https://api.example.com/v1"
 apiKeyPath = "reaper.key"
 `)
-	_, _, err := LoadProviders(path)
+	_, _, err := LoadProviders(path, nil)
 	if err == nil {
 		t.Fatal("a misspelled provider field left the entry unroutable and the load allowed it: got nil error")
 	}
@@ -402,7 +463,7 @@ func TestLoadProvidersFieldCaseInsensitive(t *testing.T) {
 BaseURL = "https://api.example.com/v1"
 APIKEYFILE = "reaper.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -428,7 +489,7 @@ baseUrl = "http://127.0.0.1:8081/v1"
 [42]
 baseUrl = "http://127.0.0.1:8082/v1"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("a provider name is not a schema key: %v", err)
 	}
@@ -449,7 +510,7 @@ func TestLoadProvidersRefusesUnusableNames(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := writeProviders(t, dir, fmt.Sprintf("[%q]\nbaseUrl = \"http://x.example/v1\"\napiKeyFile = \"not-here.key\"\n\n[fine]\nbaseUrl = \"http://y.example/v1\"\n", name))
-			got, faults, err := LoadProviders(path)
+			got, faults, err := LoadProviders(path, nil)
 			if err == nil {
 				t.Fatalf("the load allowed it: pool %v, faults %+v", keysOf(got), faults)
 			}
@@ -473,7 +534,7 @@ baseUrl = "http://a.example/v1"
 [reaper]
 baseUrl = "http://b.example/v1"
 `)
-	_, _, err := LoadProviders(path)
+	_, _, err := LoadProviders(path, nil)
 	if err == nil {
 		t.Fatal("the load allowed two names differing only by case")
 	}
@@ -500,7 +561,7 @@ apiKeyFile = "reaper.key"
 baseUrl = "http://x/v1"
 apiKeyFile = "not-here.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -561,12 +622,12 @@ func TestLoadProvidersAdmitsAMessagesEntry(t *testing.T) {
 baseUrl = "https://api.anthropic.example/v1"
 api = "anthropic"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil || len(faults) != 0 {
 		t.Fatalf("LoadProviders = %v, %v; want the entry loaded", faults, err)
 	}
 	if entry, ok := got["claude"]; !ok || entry.Protocol() != ProviderAPIAnthropic {
-		t.Errorf("pool = %+v, want the anthropic entry", got)
+		t.Errorf("pool = %v, claude speaks %q; want the anthropic entry", keysOf(got), entry.Protocol())
 	}
 }
 
@@ -583,7 +644,7 @@ baseUrl = "http://silent.example/v1"
 baseUrl = "http://compat.example/v1"
 api = "openai"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil || len(faults) != 0 {
 		t.Fatalf("LoadProviders = %v, %v; want both entries loaded", faults, err)
 	}

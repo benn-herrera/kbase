@@ -105,22 +105,56 @@ func TestResolve(t *testing.T) {
 		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
 		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
-		gotShown, wantShown := ep, want
-		gotShown.APIKey, wantShown.APIKey = "", ""
-		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", gotShown, wantShown, len(ep.APIKey), len(want.APIKey))
+		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", shownEndpoint(ep), shownEndpoint(want), len(ep.APIKey), len(want.APIKey))
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
 	ep, err = Resolve(in, RoleScoring, "lab/judge")
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
-		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
+		t.Errorf("= %s/%s under %q, %v; want lab/judge under the flag's rule", ep.Provider, ep.Model, ep.Rule, err)
 	}
 	// The flag supplies the role the files name no model for: the entry is the
 	// flag's, no layer named the model, and the rule is the flag's.
 	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "", ""
 	ep, err = Resolve(in, RoleScoring, "lab/clef")
 	if err != nil || ep.Provider != "lab" || ep.Model != "clef" || ep.Rule != RuleFlag || ep.ModelSource != "" {
-		t.Errorf("= %+v, %v; want the flag to supply lab/clef under its own rule", ep, err)
+		t.Errorf("= %s/%s under %q, model source %q, %v; want the flag to supply lab/clef under its own rule",
+			ep.Provider, ep.Model, ep.Rule, ep.ModelSource, err)
+	}
+}
+
+// shownEndpoint is ep with its key left out, for a failure message.
+func shownEndpoint(ep Endpoint) Endpoint {
+	ep.APIKey = ""
+	return ep
+}
+
+// TestResolveKeySource: a role's key source names the store where the store
+// supplied the entry's key, whatever the entry's apiKeyFile; the entry's layer
+// where its key file did; and nothing where it has no key.
+func TestResolveKeySource(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry Provider
+		want  string
+	}{
+		{"a stored key over a key file", Provider{APIKeyFile: "lab.key", KeyStored: true}, string(KeyKindStore)},
+		{"a key file", Provider{APIKeyFile: "lab.key"}, LayerSourceGlobal},
+		{"no key", Provider{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := scenario(t)
+			entry := tc.entry
+			entry.Name, entry.BaseURL, entry.Layer = "lab", "https://lab.example/v1", LayerSourceGlobal
+			in.Providers = Providers{"lab": entry}
+			ep, err := Resolve(in, RoleDecision, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ep.KeySource != tc.want {
+				t.Errorf("KeySource = %q, want %q", ep.KeySource, tc.want)
+			}
+		})
 	}
 }
 
@@ -363,7 +397,7 @@ func TestResolveSamplingUnset(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ep.Temperature != nil || ep.Thinking != "" || ep.TemperatureSource != "" || ep.ThinkingSource != "" {
-		t.Errorf("endpoint = %+v, want no sampling", ep)
+		t.Errorf("endpoint = %+v, want no sampling", shownEndpoint(ep))
 	}
 
 	in = samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(0.5), Thinking: ThinkingHigh}}, Sources{
@@ -373,6 +407,6 @@ func TestResolveSamplingUnset(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ep.Temperature != nil || ep.Thinking != "" {
-		t.Errorf("decision endpoint = %+v, want no sampling", ep)
+		t.Errorf("decision endpoint = %+v, want no sampling", shownEndpoint(ep))
 	}
 }

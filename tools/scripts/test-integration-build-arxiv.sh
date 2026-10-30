@@ -27,6 +27,10 @@ cd "${script_dir}/../.." || exit 1
 root="$(pwd)"
 out="${BUILD_ARXIV_OUT_DIR}"
 kbase="${root}/${BIN_DIR}/kbase"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${root}/${out}/xdg"
+rm -rf "${XDG_STATE_HOME}"
 pandoc_version="$(pandoc --version | head -n 1)"
 printf 'pandoc: %s\n' "${pandoc_version}"
 # capture <stem> <dir> <command...>: run the command in dir, stdout to

@@ -504,7 +504,10 @@ way it names any other truth it moved, so a reader can see which change made it 
   run tree under `test-data/transient/<test-name>/` before removing it. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
-  store (`refresh`, `verify`, the queries) takes no such flag. `build` refuses an unknown `--through`,
+  store (`refresh`, `verify`, the queries) takes no such flag. Every verb that reads the
+  configuration also reads the credentials store under `$XDG_STATE_HOME`, which neither
+  `--state-dir` nor `--config-dir` moves, so a hermetic recipe that runs one sets `XDG_STATE_HOME`
+  under that directory too, and `cmd`'s `TestMain` points it at scratch. `build` refuses an unknown `--through`,
   `--resume` given inputs, no inputs without `--resume`, a `--state-dir` inside `kb-root/` and a
   `--ask-concurrency` under 1 before it resolves and creates its state store, and those refusals carry no `state-dir`; its later refusals follow the store. Every
   recipe invocation of `build` takes `--state-dir`, refused outcomes included.

@@ -38,7 +38,10 @@ kbase="${root}/${BIN_DIR}/kbase"
 dirs="${out}/configs"
 docs="${out}/docs"
 work="${out}/work"
-rm -rf "${dirs}" "${docs}" "${work}" "${out}/home" "${out}/layered" "${out}/literal" "${out}/configure" "${out}/sampling" "${out}/mcp.requests.jsonl" "${out}/mcp.actual.jsonl" "${out}/mcp.log" "${out}/mcp.exit" "${out}/config.tsv"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${out}/xdg"
+rm -rf "${dirs}" "${docs}" "${work}" "${out}/home" "${out}/layered" "${out}/literal" "${out}/configure" "${out}/sampling" "${out}/mcp.requests.jsonl" "${out}/mcp.actual.jsonl" "${out}/mcp.log" "${out}/mcp.exit" "${out}/config.tsv" "${XDG_STATE_HOME}"
 mkdir -p "${dirs}/pool" "${dirs}/both" "${docs}" "${work}"
 file_key='sk-file-MUST-NOT-APPEAR'
 # The home every invocation runs under, so the global layer is this staged

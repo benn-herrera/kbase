@@ -62,6 +62,7 @@ func storeFiles(t *testing.T, dir string) []string {
 // the name rule, the configured check, a terminal, empty input — and leaves
 // the store empty; the first two fire before stdin is read.
 func TestAuthAddRefusesBeforeWriting(t *testing.T) {
+	const pipedP = "<key-manager> --print-key | kbase auth add p"
 	for _, tc := range []struct {
 		name       string
 		provider   string
@@ -74,9 +75,9 @@ func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 	}{
 		{"an unusable name", "a/b", []string{"a/b"}, authSentinelKey, true, "a/b", "kbase show-config", true},
 		{"an unconfigured name", "ghost", []string{"p"}, authSentinelKey, true, "ghost", "kbase show-config", true},
-		{"a terminal", "p", []string{"p"}, authSentinelKey, true, nil, authPipedForm("p"), true},
-		{"empty input", "p", []string{"p"}, "", false, nil, authPipedForm("p"), false},
-		{"whitespace alone", "p", []string{"p"}, " \n\t \r\n", false, nil, authPipedForm("p"), false},
+		{"a terminal", "p", []string{"p"}, authSentinelKey, true, nil, pipedP, true},
+		{"empty input", "p", []string{"p"}, "", false, nil, pipedP, false},
+		{"whitespace alone", "p", []string{"p"}, " \n\t \r\n", false, nil, pipedP, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "auth")

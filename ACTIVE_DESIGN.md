@@ -67,8 +67,10 @@ putting the key in a transcript.
    (`internal/model/openai_client.go:89`). That is what makes a loopback credential proxy possible
    later without a code change.
 6. **The agent names the command; the key stays out of the conversation.** Where a provider
-   refuses a call for its key, the failure names `kbase auth add <provider>`. An agent tells the user to run
-   it, or runs the piped form against the user's key manager; it never asks for the key itself.
+   refuses a call for its key, the failure's remedy is the piped form,
+   `<key-manager> --print-key | kbase auth add <provider>` (`config.AuthAddRemedy`), the name filled
+   in. An agent tells the user to run it, or runs it against the user's key manager; it never asks
+   for the key itself.
 
 ## Considered and set aside
 
@@ -91,8 +93,8 @@ The plan built from this design rates and scopes each part.
 2. **Resolution.** An entry's key is the store's, looked up by the entry's name whatever layer
    supplied the entry, else its `apiKeyFile` where one is given, else none (decision 5). Nothing is
    checked before dialling: a provider that answers 401 or 403 fails the call as `provider-refused`
-   does today, and that failure's item carries the remedy `kbase auth add <provider>`, the
-   provider's name filled in — for a missing key and a wrong one alike, since adding a key replaces
+   does today, and that failure's item carries decision 6's piped remedy, the provider's name
+   filled in — for a missing key and a wrong one alike, since adding a key replaces
    the stored one. A project that overrides a provider and needs a different key manages that key
    itself; there is no per-project store. SPEC §9's "a repository cannot inherit a credential for
    an endpoint it chose" narrows to `apiKeyFile`.

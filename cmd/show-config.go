@@ -41,13 +41,17 @@ func runShowConfig(opts showConfigOptions) (int, error) {
 func showConfigFields(opts showConfigOptions) []toolresult.Field {
 	// LoadProviders walks a map, so its faults arrive in no fixed order; a
 	// report sorts them, so the same configuration always reads the same way.
+	// The sort is stable: one name's faults keep the order Load gives them.
 	faults := slices.Clone(opts.Faults)
-	slices.SortFunc(faults, func(a, b config.ProviderFault) int {
+	slices.SortStableFunc(faults, func(a, b config.ProviderFault) int {
 		return strings.Compare(a.Name, b.Name)
 	})
-	facts := config.Report(opts.Config, opts.Providers, faults, opts.Layers, fileExists)
+	facts := config.Report(opts.Config, opts.Providers, faults, opts.StoreFaults, opts.Layers, fileExists)
 	s := opts.inputs()
 	roles, roleItems := resolvedRoles(s)
+	// The configuration's own diagnostics, then one per role that does not
+	// resolve; an empty list where there is neither.
+	diagnostics := append(append(make([]toolresult.Item, 0), facts.Diagnostics...), roleItems...)
 	return []toolresult.Field{
 		{Key: "layers", Value: layerRecords(facts.Layers)},
 		{Key: "providers", Value: providerRecords(facts.Entries)},
@@ -64,7 +68,7 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 		}},
 		{Key: "selection", Value: selectionRecord(s, opts.Provider)},
 		{Key: "roles", Value: roles},
-		{Key: "diagnostics", Value: diagnostics(faults, roleItems)},
+		{Key: "diagnostics", Value: diagnostics},
 	}
 }
 
@@ -114,6 +118,9 @@ func providerRecords(entries []config.Entry) []toolresult.Record {
 		}
 		if e.KeyFile != "" {
 			record = append(record, toolresult.Field{Key: "key-file", Value: e.KeyFile})
+		}
+		if e.Upgrade != "" {
+			record = append(record, toolresult.Field{Key: "upgrade", Value: e.Upgrade})
 		}
 		if e.Layer != "" {
 			record = append(record, toolresult.Field{Key: "layer", Value: e.Layer})
@@ -204,18 +211,6 @@ func resolvedRoles(s config.Inputs) ([]toolresult.Record, []toolresult.Item) {
 	return records, items
 }
 
-// diagnostics is every fault the pool reports — one item per dropped provider
-// and one per warning, each naming the providers.toml that carries it —
-// followed by one per role that does not resolve. Each is the error that
-// produced it: nothing here composes a sentence of its own.
-func diagnostics(faults []config.ProviderFault, roleItems []toolresult.Item) []toolresult.Item {
-	items := make([]toolresult.Item, 0, len(faults)+len(roleItems))
-	for _, f := range faults {
-		items = append(items, toolresult.Item{Check: config.CheckProvider, Path: f.Path, Detail: f.Reason})
-	}
-	return append(items, roleItems...)
-}
-
 var showConfigFlagProvider string
 
 var showConfigCmd = &cobra.Command{
@@ -243,9 +238,16 @@ or what it lacks, with an item saying so.
 
 Not every role resolves here and that is no refusal: an unresolved role is a
 diagnostic. Diagnostics are not refusals at all — one call shows every gap at
-once, and the outcome is done. Keys never appear: a key is reported by the kind
-it is (file or none) and a key file by the path its entry states, never its
-content.
+once, and the outcome is done.
+
+Keys never appear. A key is reported by the kind it is: store, kept by kbase
+under the entry's name; file, read from the key file the entry states, which
+is reported by its path; or none. A stored key outranks a key file. An entry
+whose key comes from a file carries upgrade, the command that moves the key
+into the store; an entry with both has a diagnostic saying its key file is
+not read. A file in the store that does not open is a diagnostic, and the
+entry falls back to the key file it states, else to none. kbase auth add
+runs from a shell, with the key piped on its stdin; no MCP tool accepts a key.
 
 It reads no KB and makes no network request.`,
 	Args: cobra.NoArgs,

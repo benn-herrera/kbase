@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/auth"
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/kb"
@@ -43,9 +45,13 @@ type providerOptions struct {
 	WriteDir string
 
 	// Providers and Faults are the loaded pool and the entries that dropped
-	// out of it.
-	Providers config.Providers
-	Faults    []config.ProviderFault
+	// out of it, or warn. StoreFaults are the credentials store's files that
+	// did not open, and its directory where it did not list, as read: Faults
+	// carries each a configured entry names and the directory's, and
+	// show-config's report states each from its parts.
+	Providers   config.Providers
+	Faults      []config.ProviderFault
+	StoreFaults []config.StoreFault
 
 	// Config is the merged config.toml. A verb that resolves a role reads its
 	// [models] table; the verb that selects a pool entry to dial reads none of
@@ -80,6 +86,11 @@ func (o providerOptions) inputs() config.Inputs {
 // material.
 func warnFaults(stderr io.Writer, faults []config.ProviderFault) {
 	for _, f := range faults {
+		if f.Name == "" {
+			// The credentials store's own fault: it names no provider.
+			fmt.Fprintf(stderr, "credentials store: %s\n", f.Reason)
+			continue
+		}
 		if f.Warning {
 			// The provider SURVIVED this one: it is in the pool and
 			// selectable, so saying "unavailable" would send the user
@@ -175,20 +186,66 @@ func loadVerbContext(workDir string) (providerOptions, error) {
 	return opts, nil
 }
 
-// loadConfigContext loads every configuration file of every layer into the
-// shared options a verb works from.
+// loadConfigContext reads the credentials store and loads every configuration
+// file of every layer over it into the shared options a verb works from.
 func loadConfigContext(layers []config.Layer) (providerOptions, error) {
-	loaded, err := config.Load(layers)
+	dir, err := authStoreDir()
+	if err != nil {
+		return providerOptions{}, err
+	}
+	stored := readStoredKeys(dir)
+	loaded, err := config.Load(layers, stored)
 	if err != nil {
 		return providerOptions{}, err
 	}
 	return providerOptions{
-		Layers:    layers,
-		Providers: loaded.Providers,
-		Faults:    loaded.Faults,
-		Config:    loaded.Cfg,
-		Stderr:    os.Stderr,
+		Layers:      layers,
+		Providers:   loaded.Providers,
+		Faults:      loaded.Faults,
+		StoreFaults: stored.Faults,
+		Config:      loaded.Cfg,
+		Stderr:      os.Stderr,
 	}, nil
+}
+
+// readStoredKeys reads every key file in the credentials store at dir: each key
+// that opens, by the name its file is stored under, and a fault for each file
+// that does not. A store directory that does not stand holds no key; one that
+// stands and does not list holds none either, and is a nameless fault against
+// the directory, its reason the OS error's text without the path.
+func readStoredKeys(dir string) config.StoredKeys {
+	store := auth.NewStore(dir)
+	names, err := store.List()
+	if err != nil {
+		reason := err.Error()
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			reason = pathErr.Err.Error()
+		}
+		return config.StoredKeys{Faults: []config.StoreFault{{Path: dir, Reason: reason}}}
+	}
+	stored := config.StoredKeys{Keys: make(map[string]string, len(names))}
+	for _, name := range names {
+		key, err := store.Read(name)
+		if err != nil {
+			stored.Faults = append(stored.Faults, storeFault(dir, name, err))
+			continue
+		}
+		stored.Keys[name] = key
+	}
+	return stored
+}
+
+// storeFault is the fault of the key file stored under name, from the store's
+// error: a *auth.FileError's path and what went wrong with the file, apart; any
+// other error, which no one file caused, against the store's directory dir.
+func storeFault(dir, name string, err error) config.StoreFault {
+	var fileErr *auth.FileError
+	if !errors.As(err, &fileErr) {
+		return config.StoreFault{Name: name, Path: dir, Reason: err.Error()}
+	}
+	return config.StoreFault{Name: name, Path: fileErr.Path, Reason: fileErr.Err.Error(),
+		DoesNotOpen: errors.Is(fileErr.Err, auth.ErrTruncated) || errors.Is(fileErr.Err, auth.ErrDoesNotOpen)}
 }
 
 // registerProviderFlags declares the --provider and --timeout flags a verb

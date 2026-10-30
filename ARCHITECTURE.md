@@ -1009,6 +1009,26 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `Refusal`'s path names the file a lacking setting belongs in — the write target's
   `providers.toml` or `config.toml` — so
   a layered configuration says which file to edit.
+- **Keys: the store is read in `cmd`, the precedence lives in `config`.** `cmd`'s
+  `loadConfigContext` reads every file of the credentials store through `internal/auth`
+  (`readStoredKeys`) before the load, and hands `config.Load` a `config.StoredKeys` as data — each
+  key that opened, by the lowercase name its file is stored under, and a `config.StoreFault` per
+  file that did not, built from the `*auth.FileError`'s path and its error apart; a store directory
+  that stands and does not list is one nameless `StoreFault` against the directory, with no keys,
+  and the load goes on. `config` imports
+  no `auth`. `keyKind` is the precedence's one home: the key stored under the entry's name, whatever
+  layer supplied the entry; else the entry's `apiKeyFile`, which `LoadProviders` then reads, and
+  which an entry with a stored key never reads, so it raises neither a read fault nor a permission
+  warning; else none. `config.Load` turns each store fault whose name a configured entry carries
+  into a warning `ProviderFault` naming that entry as spelled, its `Path` the store file, so every
+  configuration-loading verb's `warnFaults` writes it; a file no entry names is read by nothing and
+  not reported. The nameless directory fault names no entry and becomes a warning `ProviderFault`
+  with an empty `Name`, its `Path` the directory, which `warnFaults` writes as the credentials
+  store's. `config.Report` is given the store faults too, and reports each from its parts with
+  `config.AuthAddRemedy` — the piped form, also `kbase auth add`'s own input-refusal remedy — as the
+  remedy where the file does not open; it alone computes a
+  `file` key's `upgrade` and the warning that a stored key leaves an `apiKeyFile` unread, so
+  `show-config` alone emits them.
 - **Resolution is pure, and connection is the registry's.** `config.Resolve`
   (`internal/config/resolve.go`) answers one role's `Endpoint` from the pool entry its reference
   names; for `text` and `scoring` it carries `Temperature` and `Thinking` from `[sampling.<role>]`
@@ -1029,12 +1049,12 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `model.Client`: one client per endpoint, wire protocol and resolved sampling — roles whose
   resolved sampling is equal, an unset setting equal to its stated default, share one client and its
   connection pool — opened on first use, keyed by the entry's name, by the protocol and by the
-  resolved sampling, dialled with the key the entry's own file supplied at load, and closed together
+  resolved sampling, dialled with the key the entry resolved to at load, and closed together
   before the verb returns on every outcome. `samplingOf` maps the configuration's `thinking` onto
   `model.Sampling`.
-  The report's other facts — the pool's entries and faults, the files' presence, `config.toml`'s
-  values — come from `internal/config.Report`, which reads no file of its own: the caller passes the
-  existence probe.
+  The report's other facts — the pool's entries and faults, each entry's key kind and upgrade, the
+  diagnostics, the files' presence, `config.toml`'s values — come from `internal/config.Report`,
+  which reads no file of its own: the caller passes the existence probe.
 - A multichoice ask is one `POST` to the entry's decision surface (a `Slot`'s `Decision`; `decisionsFlavor`,
   SPEC §9.1), one `noul` or `choice` question asked and the answer read by the key it echoes — no
   reply text parsed. Two shapes stand behind that choice. `systemone`, what an entry silent on the

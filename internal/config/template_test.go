@@ -94,7 +94,7 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
-	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}}, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -103,11 +103,11 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 		t.Errorf("faults = %+v, want none: a fresh template drops nothing", faults)
 	}
 	if len(providers) != 1 {
-		t.Fatalf("pool = %v, want the one live entry", providers)
+		t.Fatalf("pool = %v, want the one live entry", keysOf(providers))
 	}
 	for name, p := range providers {
 		if p.BaseURL == "" || p.Layer != LayerSourceExplicit {
-			t.Errorf("entry %q = %+v, want a usable entry from the one layer", name, p)
+			t.Errorf("entry %q: baseUrl %q, layer %q; want a usable entry from the one layer", name, p.BaseURL, p.Layer)
 		}
 	}
 	if cfg.Models != (ModelMap{}) || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {

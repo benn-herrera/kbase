@@ -70,7 +70,7 @@ apiKeyFile = "~/keys/home.txt"
 baseUrl = "http://user.example/v1"
 apiKeyFile = "~other/key.txt"
 `)
-	providers, faults, err := LoadProviders(ProvidersPath(dir))
+	providers, faults, err := LoadProviders(ProvidersPath(dir), nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}

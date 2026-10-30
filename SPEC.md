@@ -555,7 +555,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength`, `subtree`, `edges` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `strength`'s records are a claim's node record (as `show`'s below, without `manually_scored` and `strengthen_by`) then `dependents`, the count of nodes its strength enters — `strength` null on a pending claim; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `manually_scored`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; `manually_scored` the record's flag (§8), null where its record carries none; the context null where the edge has none; `edges`' records are `source`, `relation`, `target`, `bearing` (as `deps`' bearing), `manually_scored` (as `deps`'), `context` (as `deps`') and `walked` (bool)) |
 | `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `show` adds `manually_scored` (§8) after `rigor` on a claim, an analysis and an experiment; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `rigor_manual`, `rigor_model`, `bearing_manual` and `bearing_model` (the records whose type carries `manually-scored`, `*pending*` values included, counted by the flag), then `relations`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `relations` carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`; numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
-| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve) |
+| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`store`, `file` or `none`), `key-file`, `upgrade` (for a `file` key, `cat <key-path> | kbase auth add <provider>`, the resolved path single-quoted where a shell would split or expand it), `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, `store` for a key the store supplied, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, the stored key file that does not open, with `remedy` `<key-manager> --print-key | kbase auth add <provider>` where it is truncated or does not decrypt, or the store's directory where it stands and does not list; a warning per entry whose stored key leaves its `apiKeyFile` unread, `path` the `providers.toml` stating it; and the resolution failure where a role does not resolve) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
 | `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `temperature`, `thinking` (chat selections only: the effective settings — `temperature` a number; `thinking` `off`, `low`, `medium` or `high`); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `auth add`, `auth remove` | `provider` (the name given; never the key) |
@@ -1256,7 +1256,8 @@ repository's own `.kbase/`. An invocation outside a worktree has no repository l
 
 **Merging.** The two files merge by two rules. `providers.toml` merges by entry
 name and an entry is replaced whole: a repository entry of the same name supersedes the global one
-entirely, never field by field, so a repository cannot inherit a credential for an endpoint it chose.
+entirely, never field by field, so a repository cannot inherit the global entry's `apiKeyFile` for an
+endpoint it chose; a stored key belongs to the provider name, whatever layer supplies the entry.
 An override names its entry exactly: entries whose names differ only by case — two in one file, or
 one in each of two layers, whether pooled or dropped by a fault — refuse the load, naming both
 spellings and the file stating each; across layers its detail names the fix: spell the higher entry
@@ -1352,8 +1353,17 @@ catalogue failure.
 
 **The files are the one source of inference.** The endpoint and the model each role asks come from
 `providers.toml` and `config.toml` alone, and so does how a role is asked — `[asks]` and `[sampling]`
-(§9.2). No environment variable supplies an endpoint, a model or a key. A run isolated from the
-user's layers names its directory with `--config-dir` or `$KBASE_CONFIG_DIR`. The inference
+(§9.2). An entry's key is the one the store (`kbase auth add`, above) holds under its name, whatever
+layer supplies the entry; else the one in the file its `apiKeyFile` names, which an entry with a
+stored key never reads; else none. Every verb that reads the configuration reads the store. A stored
+key file that does not open is treated as no stored key — the entry's `apiKeyFile`, else none — and
+is reported by its path and what is wrong with it, never its content: a diagnostic in `show-config`
+(§9.6), and a warning line on stderr for every other verb. A store directory that stands and does
+not list holds no stored key for any entry, and is reported the same way by its path and what went
+wrong; it does not stop the configuration loading. No environment variable supplies an
+endpoint, a model or a key; `$XDG_STATE_HOME` chooses where the store is, never a key. A run isolated
+from the user's layers names its directory with `--config-dir` or `$KBASE_CONFIG_DIR`, which does
+not isolate it from the user's store: `$XDG_STATE_HOME` does. The inference
 preflight (§5) names each lacking setting as `baseUrl` or `models.<role>` — `models.decision`,
 `models.text`, `models.scoring` — and `show-config` reports that refusal as a diagnostic rather than
 stopping (§9.6).
@@ -1489,13 +1499,14 @@ never values: a file may still hold a secret a hand edit left behind — a field
 stray value — and the refusal that names its key is exactly where that value would be echoed.
 `kbase configure` cannot repair a config file it cannot load: the verbs that read configuration load
 it before doing anything else. A layer that supplies a pool entry supplies its `apiKeyFile` path too,
-and kbase confines no key file's location: trusting a cloned configuration means trusting the key
-file it names as much as the endpoint it names.
+and kbase confines no key file's location; and a stored key goes to the endpoint of whichever entry
+carries its name, in whatever layer. Trusting a cloned configuration means trusting the key file it
+names, and the endpoint it would send a stored key to, as much as the endpoint it names.
 
 ### 9.4 Key-file permission warning
 
-When a `providers.toml` entry sets `apiKeyFile` and the host is not Windows, kbase stats the
-resolved key-file path. If its permission bits grant group-read or other-read, it prints a warning
+When a `providers.toml` entry sets `apiKeyFile`, the store holds no key under its name, and the host
+is not Windows, kbase stats the resolved key-file path. If its permission bits grant group-read or other-read, it prints a warning
 naming the path and the offending mode and recommending `chmod 600`. The entry stays usable. This is
 the only file-permission behaviour kbase applies to a file it did not create.
 
@@ -1542,12 +1553,23 @@ each field, a chat role's sampling settings, or why it does not resolve.
 The sources vocabulary is `layers`': `repository` or `global` for a value a file holds, `explicit` or
 `environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named. Its
 diagnostics are one `provider` item per fault, each carrying `path` the `providers.toml` that carries
-the fault — which need not be the file a selection or `configure` names — and one item per role that
-does not resolve, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
-`config.toml`.
+the fault — which need not be the file a selection or `configure` names — or, for a stored key file
+that does not open, that file, its `detail` what is wrong with it and, where it is truncated or
+does not decrypt,
+`remedy` `<key-manager> --print-key | kbase auth add <provider>`, the entry's name filled in — or,
+for a store directory that stands and does not list, that directory and its `detail` what went
+wrong, with no `remedy`; then one `provider` item per entry
+whose stored key leaves the `apiKeyFile` it states unread, `path` the `providers.toml` that states
+it and `remedy` removing that line from the file, or `kbase auth remove <provider>` to use the file;
+then one item per role that does not resolve, its `path` naming the file the setting belongs in: the
+write target's `providers.toml` or `config.toml`. The upgrade and the unread-`apiKeyFile` warning are
+this report's alone: no other verb's output carries them.
 
-**Names and paths, never secrets.** A key is reported by the kind it is — from a file, or none —
-and a key file by the path its entry states, never by its content.
+**Names and paths, never secrets.** A key is reported by the kind it is — `store`, `file` or
+`none` — and a key file by the path its entry states, never by its content. A `file` key's entry
+carries its `upgrade`, the command that moves the key into the store with its values filled in,
+`cat <key-path> | kbase auth add <provider>`; the stored key then outranks the file.
+`kbase auth add` runs from a shell with the key piped on stdin; no MCP tool accepts a key (§11).
 
 **It describes the process that ran it.** The layers, the environment and the selection are this
 invocation's, so a call through the MCP server (§11) reports the configuration of the server

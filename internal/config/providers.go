@@ -92,14 +92,19 @@ type Provider struct {
 	DecisionsFlavor string `toml:"decisionsFlavor"`
 
 	// APIKeyFile is a path to a file holding the API key. Relative paths
-	// resolve against the providers.toml directory. It is the only way an
-	// entry supplies a key: the secret stays out of providers.toml, so the
-	// config file itself is safe to scan and edit.
+	// resolve against the providers.toml directory. It is the only key field
+	// an entry has: the secret stays out of providers.toml, so the config
+	// file itself is safe to scan and edit. A key stored under the entry's
+	// name outranks it (see keyKind).
 	APIKeyFile string `toml:"apiKeyFile"`
 
-	// APIKey is the resolved key — populated by LoadProviders from the file
-	// APIKeyFile names. Not a TOML field.
+	// APIKey is the resolved key — populated by LoadProviders from the
+	// credentials store or the file APIKeyFile names. Not a TOML field.
 	APIKey string `toml:"-"`
+
+	// KeyStored is whether the credentials store holds a key under the
+	// entry's name. Populated by LoadProviders, never by the file.
+	KeyStored bool `toml:"-"`
 
 	// Layer is the configuration layer this entry came from — repository or
 	// global, or the source of the one directory a flag or the environment
@@ -112,15 +117,19 @@ type Provider struct {
 type Providers map[string]Provider
 
 // ProviderFault names a provider that parsed correctly but did not load
-// cleanly — an unusable declaration, an unreadable apiKeyFile, or a key
-// file anyone on the machine can read. The fault lets the caller surface
-// the problem without discarding the rest of the pool.
+// cleanly — an unusable declaration, an unreadable apiKeyFile, a key
+// file anyone on the machine can read, or a stored key file that did not
+// open — or, with no Name, the credentials store's directory, which did not
+// list. The fault lets the caller surface the problem without discarding the
+// rest of the pool.
 type ProviderFault struct {
 	Name   string
 	Reason string // never carries key content — path/IO detail only
 
 	// Path is the providers.toml this fault came from: the layer's own file,
-	// never the single path a one-directory report used to assume.
+	// never the single path a one-directory report used to assume — or, for a
+	// stored key file that did not open, that file, and for the store's
+	// directory, that directory.
 	Path string
 
 	// Warning distinguishes a fault the provider SURVIVED from one that
@@ -195,9 +204,11 @@ func (p Provider) Validate() error {
 }
 
 // LoadProviders reads providers.toml at path and returns a name-keyed
-// map. Each provider's API key is resolved from the file its APIKeyFile
-// names, read relative to the providers.toml directory; an entry that names
-// no file has no key.
+// map. Each provider's API key is the one storedKeys holds under the
+// entry's name, lowercased as the store names its files; else the one in
+// the file its APIKeyFile names, read relative to the providers.toml
+// directory; else none (keyKind). An entry with a stored key never reads its
+// APIKeyFile.
 //
 // A nonexistent or empty file yields an empty Providers, no faults, and a
 // nil error — a fresh install has no populated providers.toml yet.
@@ -221,7 +232,7 @@ func (p Provider) Validate() error {
 // Errors and faults are constructed without TOML value content or key
 // material — a parse error references line/column, and a key-file read
 // failure references the path, so no secret leaks.
-func LoadProviders(path string) (Providers, []ProviderFault, error) {
+func LoadProviders(path string, storedKeys map[string]string) (Providers, []ProviderFault, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -265,15 +276,18 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
 			continue
 		}
-		key, err := resolveAPIKey(p, dir)
-		if err != nil {
-			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
-			continue
+		p.APIKey, p.KeyStored = storedKeys[strings.ToLower(name)]
+		if keyKind(p) == KeyKindFile {
+			key, err := resolveAPIKey(p, dir)
+			if err != nil {
+				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
+				continue
+			}
+			if reason := keyFileExposure(p, dir); reason != "" {
+				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: reason, Warning: true})
+			}
+			p.APIKey = key
 		}
-		if reason := keyFileExposure(p, dir); reason != "" {
-			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: reason, Warning: true})
-		}
-		p.APIKey = key
 		out[name] = p
 	}
 	return out, faults, nil

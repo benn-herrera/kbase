@@ -247,9 +247,9 @@ func TestConfigureOfflineWritesBothFiles(t *testing.T) {
 	if written := []string{ProvidersPath(dir), ConfigPath(dir)}; !slices.Equal(run.Written, written) {
 		t.Errorf("written = %v, want %v: the pool, then the choices", run.Written, written)
 	}
-	pool, faults, err := LoadProviders(ProvidersPath(dir))
+	pool, faults, err := LoadProviders(ProvidersPath(dir), nil)
 	if err != nil || len(faults) != 0 || len(pool) != 1 {
-		t.Fatalf("the created pool = %v, faults %v, err %v; want one usable entry", pool, faults, err)
+		t.Fatalf("the created pool = %v, faults %v, err %v; want one usable entry", keysOf(pool), faults, err)
 	}
 	if cfg, written := configFile(t, dir); !written || cfg.Models != want {
 		t.Errorf("config.toml = %+v (%t), want the references", cfg, written)

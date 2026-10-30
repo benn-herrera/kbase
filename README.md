@@ -465,11 +465,14 @@ unknown key fails that file's load and that run, naming the key and the file, an
 read in its place.
 
 - **`providers.toml`** is the endpoint pool, merged by entry name: a repository entry of the same
-  name replaces the global entry whole, so a repository never inherits a credential for an endpoint
-  it chose. Each top-level table is a provider you name — one or more ASCII letters, digits, `_` or `-`, not beginning with `-`, and names differing only by case are refused — with `baseUrl` (required) and `apiKeyFile`
-  — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
+  name replaces the global entry whole, so a repository never inherits the global entry's key file
+  for an endpoint it chose. Each top-level table is a provider you name — one or more ASCII letters, digits, `_` or `-`, not beginning with `-`, and names differing only by case are refused — with `baseUrl` (required).
+  Give it its key with `kbase auth add <name>` (below): a stored key belongs to the name, whatever
+  layer states the entry. An entry may instead name a key file with `apiKeyFile` — for CI and
+  mounted secrets — and a relative path resolves beside the file; a stored key outranks it, and
+  `kbase show-config` prints the command that moves such a key into the store. A leading
   `~` in `apiKeyFile`, `--config-dir` or `$KBASE_CONFIG_DIR` expands from your
-  home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
+  home directory; `~user` does not. kbase warns if a key file it reads is group- or world-readable;
   `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `anthropic` (the
   default, the Anthropic Messages protocol) or `openai` (the OpenAI-compatible `chat/completions`
   surface), which an entry selects with `api = "openai"`. Use Messages for any role whose thinking
@@ -499,9 +502,11 @@ read in its place.
   a failed dial or listing — writes nothing. A dialled run requires all three roles, except a
   `scoring` value the target file already holds, which it leaves standing.
 
-**The files are the whole configuration.** The endpoint, the model and the key each role uses come
-from `providers.toml` and `config.toml` alone; no environment variable supplies any of them. To keep
-a run apart from your own layers, name its directory with `--config-dir` or `$KBASE_CONFIG_DIR`.
+**The files and the store are the whole configuration.** The endpoint and the model each role uses
+come from `providers.toml` and `config.toml` alone, and its key from the store, else the entry's key
+file; no environment variable supplies any of them. To keep a run apart from your own layers, name
+its directory with `--config-dir` or `$KBASE_CONFIG_DIR`; that leaves your store in use, which
+`$XDG_STATE_HOME` moves.
 
 Provider selection — `--provider`, else the sole `providers.toml` entry — belongs to `models` and
 `configure` alone: they select an entry to dial, which is not a role. A `--provider` the pool does not
@@ -513,7 +518,7 @@ file. In a build, the claim graph's multichoice asks go to the `decision` role a
 
 `kbase show-config` reports how all of this resolves, and changes nothing: no KB read, no file
 written, no request made. It states the layers read and what named each; the pool, with each entry's
-layer, key kind, decision surface and any fault; `config.toml`'s merged `[models]` values; the
+layer, key kind (`store`, `file` or `none`, never the key), decision surface and any fault; `config.toml`'s merged `[models]` values; the
 selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
@@ -528,7 +533,7 @@ none of them the probe asks the `scoring` role — the selection a run would mak
 `kbase probe` with no arguments is the heartbeat of a configuration. The document names the selection
 that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
 
-`kbase auth add <provider>` stores a provider's API key, read from stdin and nowhere else, one
+`kbase auth add <provider>` is how you give an entry its key. It stores a provider's API key, read from stdin and nowhere else, one
 encrypted file per `providers.toml` entry under `$XDG_STATE_HOME/kbase/auth/`
 (`~/.local/state/kbase/auth/` by default). Pipe the key in from your key manager or clipboard —
 `<key-manager> --print-key | kbase auth add <provider>` — so it never stands on a command line or

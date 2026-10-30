@@ -146,7 +146,7 @@ baseUrl = "http://local.example/v1"
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
 	}
-	loaded, err := Load(layers)
+	loaded, err := Load(layers, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestLoadOneLayer(t *testing.T) {
 	writeProviders(t, dir, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
 	writeFile(t, dir, ConfigFileName, "[models]\ndecision = \"d\"\ntext = \"t\"\n")
 
-	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}}, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestLoadFaultNamesItsFile(t *testing.T) {
 // mustLoad is Load for a test that has already checked it succeeds.
 func mustLoad(t *testing.T, layers []Layer) Loaded {
 	t.Helper()
-	loaded, err := Load(layers)
+	loaded, err := Load(layers, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -270,13 +270,13 @@ apiKeyFile = "not-here.key"
 				{Path: repoDir, Source: LayerSourceRepository},
 				{Path: globalDir, Source: LayerSourceGlobal},
 			}
-			loaded, err := Load(layers)
+			loaded, err := Load(layers, StoredKeys{})
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
 			providers, faults, cfg := loaded.Providers, loaded.Faults, loaded.Cfg
 			if len(providers) != 1 || providers["local"].Layer != tc.wantLayer {
-				t.Fatalf("pool = %+v, want the one local entry from %s", providers, tc.wantLayer)
+				t.Fatalf("pool = %v, local from %q; want the one local entry from %s", keysOf(providers), providers["local"].Layer, tc.wantLayer)
 			}
 			if len(faults) != tc.wantFaults {
 				t.Fatalf("faults = %+v, want %d", faults, tc.wantFaults)
@@ -285,7 +285,7 @@ apiKeyFile = "not-here.key"
 				t.Errorf("fault = %+v, want the dropped repository entry naming %s", faults[0], brokenPath)
 			}
 
-			facts := Report(cfg, providers, faults, layers, func(string) bool { return false })
+			facts := Report(cfg, providers, faults, nil, layers, func(string) bool { return false })
 			usable, dropped := 0, 0
 			for _, e := range facts.Entries {
 				switch {
@@ -318,12 +318,13 @@ func TestLoadRefusesTheStack(t *testing.T) {
 	loaded, err := Load([]Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
-	})
+	}, StoredKeys{})
 	if err == nil || !strings.Contains(err.Error(), repoConfig) || strings.Contains(err.Error(), globalConfig) {
 		t.Fatalf("Load = %v, want the repository file refused and the global one unnamed", err)
 	}
 	if loaded.Providers != nil || loaded.Faults != nil || loaded.Cfg != (Config{}) {
-		t.Errorf("a refused load returned a partial configuration: %+v", loaded)
+		t.Errorf("a refused load returned a partial configuration: pool %v, faults %+v, config %+v",
+			keysOf(loaded.Providers), loaded.Faults, loaded.Cfg)
 	}
 }
 
@@ -343,7 +344,7 @@ func TestLoadRefusesCaseOnlyOverride(t *testing.T) {
 			loaded, err := Load([]Layer{
 				{Path: repoDir, Source: LayerSourceRepository},
 				{Path: globalDir, Source: LayerSourceGlobal},
-			})
+			}, StoredKeys{})
 			if err == nil {
 				t.Fatalf("the load allowed it: pool %v", keysOf(loaded.Providers))
 			}
@@ -353,6 +354,81 @@ func TestLoadRefusesCaseOnlyOverride(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLoadStoredKeys: a stored key is the name's whatever layer supplies the
+// entry, and a stored key file that did not open is a warning naming the entry
+// as it spells it and the file as its path, the entry then falling through to
+// its apiKeyFile — an unreadable one raising its own fault and dropping the
+// entry. A file whose name no entry carries is not reported; the store
+// directory's own, nameless fault is, against the directory.
+func TestLoadStoredKeys(t *testing.T) {
+	const storedKey = "stored-key-456"
+	const storeFile = "/state/kbase/auth/broken-key.enc"
+	globalDir, repoDir := t.TempDir(), t.TempDir()
+	writeFile(t, globalDir, "fallback.key", fakeKey+"\n")
+	globalPath := writeProviders(t, globalDir, `
+[shared]
+baseUrl = "http://global.example/v1"
+
+[Broken]
+baseUrl = "http://broken.example/v1"
+apiKeyFile = "not-here.key"
+
+[fallback]
+baseUrl = "http://fallback.example/v1"
+apiKeyFile = "fallback.key"
+`)
+	writeProviders(t, repoDir, "[shared]\nbaseUrl = \"http://repo.example/v1\"\n")
+	stored := StoredKeys{
+		Keys: map[string]string{"shared": storedKey},
+		Faults: []StoreFault{
+			{Name: "broken", Path: storeFile, Reason: "too short", DoesNotOpen: true},
+			{Name: "fallback", Path: "/state/kbase/auth/fallback-key.enc", Reason: "too short", DoesNotOpen: true},
+			{Name: "orphan", Path: "/state/kbase/auth/orphan-key.enc", Reason: "too short", DoesNotOpen: true},
+			{Path: "/state/kbase/auth", Reason: "permission denied"},
+		},
+	}
+
+	loaded, err := Load([]Layer{
+		{Path: repoDir, Source: LayerSourceRepository},
+		{Path: globalDir, Source: LayerSourceGlobal},
+	}, stored)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if shared := loaded.Providers["shared"]; shared.Layer != LayerSourceRepository || shared.APIKey != storedKey || keyKind(shared) != KeyKindStore {
+		t.Errorf("shared from %s, key kind %s, stored key %t; want the repository entry with the stored key",
+			shared.Layer, keyKind(shared), shared.APIKey == storedKey)
+	}
+	if fallback := loaded.Providers["fallback"]; fallback.APIKey != fakeKey || keyKind(fallback) != KeyKindFile {
+		t.Errorf("fallback key kind %s, file key %t; want its apiKeyFile's key", keyKind(fallback), fallback.APIKey == fakeKey)
+	}
+	if _, ok := loaded.Providers["Broken"]; ok {
+		t.Error("Broken is in the pool: its store file did not open and its apiKeyFile is missing")
+	}
+
+	type fault struct {
+		name, path string
+		warning    bool
+	}
+	var got []fault
+	for _, f := range loaded.Faults {
+		got = append(got, fault{f.Name, f.Path, f.Warning})
+		if strings.Contains(f.Reason, storedKey) || strings.Contains(f.Reason, fakeKey) {
+			t.Errorf("the fault naming %s carries key material", f.Name)
+		}
+	}
+	// The layers' faults, then the store's.
+	want := []fault{
+		{"Broken", globalPath, false},
+		{"Broken", storeFile, true},
+		{"fallback", "/state/kbase/auth/fallback-key.enc", true},
+		{"", "/state/kbase/auth", true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("faults = %+v, want %+v", got, want)
 	}
 }
 

@@ -28,11 +28,14 @@ fixture="${root}/${RESULTS_FIXTURE_DIR}"
 # The configuration-directory variable is scrubbed for the whole script: every
 # leg below reads the staged tree and no directory the host exports.
 unset KBASE_CONFIG_DIR
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${root}/${out}/xdg"
 repo="${out}/repo"
 docs="${out}/docs"
 rm -rf "${repo}" "${docs}" "${out}/values" "${out}/checks.tsv" "${out}/score-config" \
     "${out}/score-state" "${out}/probe-config" "${out}/probestub" \
-    "${out}/probestub.url" "${out}/probestub.log"
+    "${out}/probestub.url" "${out}/probestub.log" "${XDG_STATE_HOME}"
 mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
 cp -R "${fixture}/kb-root" "${repo}/"

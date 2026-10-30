@@ -34,6 +34,7 @@ MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
 MEASURE_MCP_SURFACE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "measure-mcp-surface"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
 CONFIG_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-config"
+AUTH_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-auth"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 OPSCRIPT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-opscript-results"
 COMPAT_OP_SCRIPT := TEST_DATA_FIXTURES_DIR / "compat" / "ops.yaml"
@@ -277,6 +278,11 @@ test-integration-config: build
     @mkdir -p "{{CONFIG_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" CONFIG_OUT_DIR="{{CONFIG_OUT_DIR}}" tools/scripts/test-integration-config.sh 2>&1 | tee "{{CONFIG_OUT_DIR}}/log.txt"
 
+[doc("hermetic: the credentials store through ./bin/kbase with HOME, XDG_STATE_HOME and --config-dir under the evidence directory — auth add by pipe and auth list naming the provider; show-config reporting key: store; auth add over an empty pipe refused with the store unchanged by cksum; an entry with a stored key and an apiKeyFile reporting key: store and the unread-apiKeyFile diagnostic; an entry with an apiKeyFile alone reporting its upgrade, which run as printed makes it report key: store; a store file the script truncates reported as a diagnostic by its path, show-config still done; auth remove, after which each entry reports key: file or none as it states; and the stored key's text in no stream or file; evidence under test-data/transient/test-integration-auth/")]
+test-integration-auth: build
+    @mkdir -p "{{AUTH_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" AUTH_OUT_DIR="{{AUTH_OUT_DIR}}" tools/scripts/test-integration-auth.sh 2>&1 | tee "{{AUTH_OUT_DIR}}/log.txt"
+
 [doc("hermetic: the default, release-shaped build carries no development replays (`score --replay`, `build --replay`) — TestDistBuildHasNoReplay in the untagged build; log under test-data/transient/test-dist-no-replay/")]
 test-dist-no-replay:
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay"
@@ -297,7 +303,7 @@ test-integration-refused-write-adjagent-sheet: build
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
 [doc("run every hermetic integration test (the ones needing network, a provider, pandoc, python3 or the adjagent clone are excluded; run those by name)")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
+test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
 
 # Full suite: run once at checkpoints.
 checkpoint: edit-gate test-race build

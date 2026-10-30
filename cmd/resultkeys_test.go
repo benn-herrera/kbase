@@ -50,7 +50,7 @@ var documentedSubKeys = map[string][]string{
 	"score.counts":             {"total", "done", "failed", "skipped", "remaining"},
 	"probe.usage":              {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
 	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
-	"show-config.providers":    {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
+	"show-config.providers":    {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "upgrade", "layer", "usable", "fault"},
 	"show-config.config":       {"models", "sampling"},
 	"show-config.selection":    {"provider", "rule", "detail"},
 	"build.roles":              {"role", "provider", "provider-rule", "provider-layer", "model"},

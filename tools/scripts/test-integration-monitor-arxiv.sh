@@ -31,7 +31,10 @@ kbase="${root}/${BIN_DIR}/kbase"
 name="$(printf '%s' "${MONITOR_ARXIV_ID}" | tr '/' '_')"
 repo="${out}/repo"
 state="${root}/${out}/state"
-rm -rf "${repo}" "${out}/state" "${out}/polls" "${out}/config" "${out}"/*.out "${out}"/*.log "${out}"/*.exit "${out}/monitor.tsv" "${out}/checks.tsv"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${root}/${out}/xdg"
+rm -rf "${repo}" "${out}/state" "${out}/polls" "${out}/config" "${out}"/*.out "${out}"/*.log "${out}"/*.exit "${out}/monitor.tsv" "${out}/checks.tsv" "${XDG_STATE_HOME}"
 mkdir -p "${repo}" "${out}/polls" "${out}/config"
 cp -R "${ARXIV_DIR}/${name}/." "${repo}/"
 git -C "${repo}" init -q

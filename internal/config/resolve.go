@@ -92,12 +92,13 @@ type Inputs struct {
 }
 
 // Endpoint is one role's resolved endpoint: the entry that supplies it, the
-// model it asks, and what named the entry. APIKey is the key the pool entry's
-// own file supplied.
+// model it asks, and what named the entry. APIKey is the key the pool entry
+// resolved to: the store's, else its own file's.
 //
-// The three source fields name the layer that supplied each field, for a
-// report that states one; "" where no layer did, as under a flag that named
-// the model itself.
+// The source fields name the layer that supplied each field, for a report
+// that states one; "" where no layer did, as under a flag that named the model
+// itself. KeySource names the store, KeyKindStore, where the store supplied
+// the key.
 type Endpoint struct {
 	Role     Role
 	Provider string
@@ -204,7 +205,10 @@ func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor(),
 		Protocol:      entry.Protocol(),
 		BaseURLSource: entry.Layer, ModelSource: in.Cfg.ModelLayer(role)}
-	if keyKind(entry) == KeyKindFile {
+	switch keyKind(entry) {
+	case KeyKindStore:
+		ep.KeySource = string(KeyKindStore)
+	case KeyKindFile:
 		ep.KeySource = entry.Layer
 	}
 	return withSampling(in, ep)
@@ -213,6 +217,17 @@ func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 // configureRemedy is the command that rewrites a config.toml still naming a
 // bare model id into the reference form.
 const configureRemedy = "kbase configure --provider <entry> " + modelMapSyntax
+
+// authAddCommand is the command that stores a key for the provider name,
+// replacing any stored for it; the key arrives on its stdin.
+func authAddCommand(provider string) string { return "kbase auth add " + provider }
+
+// AuthAddRemedy is how a key reaches the store for provider, as a remedy
+// spells it: piped on stdin from wherever the user keeps it, never typed at a
+// prompt or given as an argument.
+func AuthAddRemedy(provider string) string {
+	return "<key-manager> --print-key | " + authAddCommand(provider)
+}
 
 // temperatureMax is the top of the temperature range each chat protocol
 // accepts; the bottom is 0 for both.

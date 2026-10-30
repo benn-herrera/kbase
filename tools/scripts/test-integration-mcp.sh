@@ -26,7 +26,10 @@ kbase="${root}/${BIN_DIR}/kbase"
 fixture="${root}/${RESULTS_FIXTURE_DIR}"
 transcripts="${root}/${MCP_TRANSCRIPT_DIR}"
 repo="${out}/repo"
-rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/help" "${out}/comparison.tsv"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${out}/xdg"
+rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/help" "${out}/comparison.tsv" "${XDG_STATE_HOME}"
 mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts" "${out}/staging" "${out}/help"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
 cp -R "${fixture}/kb-root" "${repo}/"

@@ -98,8 +98,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | landed |
 | C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | landed |
 | C2 | expert | provider names: the name pattern at load and in the store, case-only collisions refused, key files named in lowercase | C | landed |
-| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | in progress |
-| E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D | pending |
+| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | landed |
+| E | expert | a 401 or 403 from the provider fails with the piped `kbase auth add` remedy | D | in progress |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
 
 **Order:** one package at a time, A through F, with one agent editing the tree at once.
@@ -472,14 +472,15 @@ file name.
 
 ### E — a refused key fails with the remedy (expert)
 
-**Requirement** (design, outline item 2): "Nothing is checked before dialling: a provider that
-answers 401 or 403 fails the call as `provider-refused` does today, and that failure's item
-carries the remedy `kbase auth add <provider>`, the provider's name filled in — for a missing key
-and a wrong one alike."
+**Requirement** (design, outline item 2 and decision 6): a provider that answers 401 or 403 fails
+the call as `provider-refused` does today, and that failure's item carries the remedy
+`config.AuthAddRemedy(<provider>)` — `<key-manager> --print-key | kbase auth add <provider>`, the
+provider's name filled in — for a missing key and a wrong one alike. Nothing is checked before
+dialling.
 
 **Scope:**
 - `internal/model/client.go` (`StatusError`)
-- `internal/config/resolve.go`, the remedy text's one home, beside `configureRemedy` (line 215)
+- `internal/config/resolve.go`: `AuthAddRemedy`, the remedy text's one home (landed in D)
 - `internal/asks/multichoice.go` (`IncompleteError`) and `internal/asks/call/call.go`
 - `internal/claimgraph/report.go` (`stop`) and `internal/claimgraph/stages.go` (`askStop`)
 - `internal/build/rows.go` (overview failure, lines 444–447)

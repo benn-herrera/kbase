@@ -100,12 +100,40 @@ type Loaded struct {
 	Cfg       Config
 }
 
+// StoredKeys is the credentials store as the caller read it, every name the
+// lowercase one a key file is stored under: each key that opened, by name, and
+// each file that did not open — or, where the store's directory stands and
+// does not list, no key and that directory's fault.
+type StoredKeys struct {
+	Keys   map[string]string
+	Faults []StoreFault
+}
+
+// StoreFault is a stored key file that did not open: the name it is stored
+// under, the file, and what went wrong — never the file's content. A fault
+// with no name is the store's directory, which did not list.
+// DoesNotOpen is a file that stands and is truncated or does not decrypt, so
+// adding the key again, which replaces the file, is its remedy.
+type StoreFault struct {
+	Name, Path, Reason string
+	DoesNotOpen        bool
+}
+
 // Load reads both files of every layer — providers.toml and config.toml —
 // highest precedence first, and merges them into one configuration: the pool is
 // the union, a repository entry replacing a same-named global one whole, and
 // config.toml's fields overlay one by one. Each pooled provider and model id
 // names the layer it came from; each fault names the providers.toml that
-// carries it.
+// carries it. Each entry's key is stored's under its name, else its apiKeyFile's
+// (LoadProviders).
+//
+// A stored key file that did not open is a warning fault naming the entry that
+// carries its name — in the pool or dropped from it — as that entry spells it,
+// and the file as its path; the entry's key then comes from its apiKeyFile, else
+// none. A file whose name no entry carries is read by nothing and not reported.
+// A fault with no name — the store's directory, which did not list — names no
+// entry and is a warning fault of its own, Name empty and the directory as its
+// path, since every entry's stored key then goes unread.
 //
 // A fault naming an entry a higher layer already supplies is dropped: the
 // pool's entry is the higher one, so the lower entry is a value nobody reads.
@@ -119,13 +147,13 @@ type Loaded struct {
 // name differs only by case from one a higher layer states refuses the load
 // the same way, naming both spellings and the file stating each: an override
 // names its entry exactly.
-func Load(layers []Layer) (Loaded, error) {
+func Load(layers []Layer, stored StoredKeys) (Loaded, error) {
 	var loaded Loaded
 	pool := Providers{}
 	stated := map[string]statedName{}
 	for _, layer := range layers {
 		path := ProvidersPath(layer.Path)
-		providers, layerFaults, err := LoadProviders(path)
+		providers, layerFaults, err := LoadProviders(path, stored.Keys)
 		if err != nil {
 			return Loaded{}, err
 		}
@@ -147,8 +175,30 @@ func Load(layers []Layer) (Loaded, error) {
 		takeProviders(pool, providers, layer.Source)
 		takeConfig(&loaded.Cfg, layerCfg, layer.Source)
 	}
+	loaded.Faults = append(loaded.Faults, storeFaults(stored.Faults, pool, loaded.Faults)...)
 	loaded.Providers = pool
 	return loaded, nil
+}
+
+// storeFaults is a warning fault for each stored key file in faults whose name
+// an entry carries — in pool, or dropped from it by one of dropped — named as
+// the entry spells it, and for each nameless fault, named by nobody; each
+// reason is led by the fault's path.
+func storeFaults(faults []StoreFault, pool Providers, dropped []ProviderFault) []ProviderFault {
+	spelled := make(map[string]string, len(pool)+len(dropped))
+	for name := range pool {
+		spelled[strings.ToLower(name)] = name
+	}
+	for _, f := range dropped {
+		spelled[strings.ToLower(f.Name)] = f.Name
+	}
+	var out []ProviderFault
+	for _, sf := range faults {
+		if name, ok := spelled[sf.Name]; ok || sf.Name == "" {
+			out = append(out, ProviderFault{Name: name, Path: sf.Path, Reason: sf.Path + ": " + sf.Reason, Warning: true})
+		}
+	}
+	return out
 }
 
 // rejectCaseOverrides refuses a layer's providers.toml, at path, where one of
@@ -175,7 +225,8 @@ func rejectCaseOverrides(stated map[string]statedName, path string, providers Pr
 // takeProviders adds over's entries to pool, each naming the layer it came
 // from. An entry a higher layer already supplied stands as it is: a same-named
 // entry is replaced whole, never field by field, so a repository entry cannot
-// borrow the global entry's credential for an endpoint it chose.
+// borrow the global entry's apiKeyFile for an endpoint it chose. A stored key
+// is the name's, whatever layer supplies the entry.
 func takeProviders(pool, over Providers, source string) {
 	for name, p := range over {
 		if _, ok := pool[name]; ok {

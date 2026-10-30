@@ -163,7 +163,7 @@ func TestScoreScoringModelOverridesTheRole(t *testing.T) {
 		t.Errorf("roles = %v, want other/judge under the flag's rule\n%s", got.doc.Values["roles"], got.stdout)
 	}
 	if len(got.endpoints) != 1 || got.endpoints[0].BaseURL != "http://other.example/v1" {
-		t.Errorf("endpoints = %+v, want the flag's entry", got.endpoints)
+		t.Errorf("endpoints = %+v, want the flag's entry", shownEndpoints(got.endpoints))
 	}
 	dir, _ := got.doc.Values["ledger"].(string)
 	ledger, err := os.ReadFile(filepath.Join(dir, "ledger.jsonl"))
