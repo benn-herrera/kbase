@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -413,16 +414,19 @@ APIKEYFILE = "reaper.key"
 	}
 }
 
-// TestLoadProvidersDynamicNames: provider names are the user's own, so no
-// spelling of a table header is unknown — only the fields beneath it are
-// checked. A pool of oddly-named entries must load without complaint.
+// TestLoadProvidersDynamicNames: provider names are the user's own, so a name
+// the schema has never seen is no unknown key — only the fields beneath it are
+// checked. Any name the provider-name rule admits loads without complaint.
 func TestLoadProvidersDynamicNames(t *testing.T) {
 	path := writeProviders(t, t.TempDir(), `
 [some-box_2]
 baseUrl = "http://127.0.0.1:8080/v1"
 
-["quoted.name"]
+[_Lab-9]
 baseUrl = "http://127.0.0.1:8081/v1"
+
+[42]
+baseUrl = "http://127.0.0.1:8082/v1"
 `)
 	got, faults, err := LoadProviders(path)
 	if err != nil {
@@ -431,8 +435,52 @@ baseUrl = "http://127.0.0.1:8081/v1"
 	if len(faults) != 0 {
 		t.Errorf("unexpected faults: %+v", faults)
 	}
-	if len(got) != 2 {
-		t.Errorf("expected both entries, got %v", keysOf(got))
+	if len(got) != 3 {
+		t.Errorf("expected every entry, got %v", keysOf(got))
+	}
+}
+
+// TestLoadProvidersRefusesUnusableNames: an entry whose name breaks the
+// provider-name rule — a quoted header holding a dot, a space or a non-ASCII
+// letter, an empty one, or a leading "-" — fails the file's load, naming the
+// file, the entry and the rule, before any key file is read.
+func TestLoadProvidersRefusesUnusableNames(t *testing.T) {
+	for _, name := range []string{"quoted.name", "with space", "naïve", "", "-lead", "colon:name", "slash/name"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeProviders(t, dir, fmt.Sprintf("[%q]\nbaseUrl = \"http://x.example/v1\"\napiKeyFile = \"not-here.key\"\n\n[fine]\nbaseUrl = \"http://y.example/v1\"\n", name))
+			got, faults, err := LoadProviders(path)
+			if err == nil {
+				t.Fatalf("the load allowed it: pool %v, faults %+v", keysOf(got), faults)
+			}
+			msg := err.Error()
+			for _, want := range []string{"providers:", path, fmt.Sprintf("%q", name), ProviderNameRule} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal %q does not name %s", msg, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadProvidersRefusesCaseOnlyNames: two entries of one file whose names
+// differ only by case fail its load, naming both spellings and the file.
+func TestLoadProvidersRefusesCaseOnlyNames(t *testing.T) {
+	path := writeProviders(t, t.TempDir(), `
+[Reaper]
+baseUrl = "http://a.example/v1"
+
+[reaper]
+baseUrl = "http://b.example/v1"
+`)
+	_, _, err := LoadProviders(path)
+	if err == nil {
+		t.Fatal("the load allowed two names differing only by case")
+	}
+	for _, want := range []string{"providers:", path, `"Reaper"`, `"reaper"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %s", err, want)
+		}
 	}
 }
 

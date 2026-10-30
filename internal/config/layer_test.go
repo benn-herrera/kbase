@@ -327,6 +327,35 @@ func TestLoadRefusesTheStack(t *testing.T) {
 	}
 }
 
+// TestLoadRefusesCaseOnlyOverride: a repository entry whose name differs only
+// by case from a global one refuses the load — whether the repository entry
+// is pooled or a fault dropped it — naming both spellings, the file stating
+// each, and the override's exact spelling as the remedy.
+func TestLoadRefusesCaseOnlyOverride(t *testing.T) {
+	for _, tc := range []struct{ name, repoEntry string }{
+		{"a pooled override", "[Reaper]\nbaseUrl = \"http://repo.example/v1\"\n"},
+		{"an override a fault dropped", "[Reaper]\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir, repoDir := t.TempDir(), t.TempDir()
+			globalPath := writeProviders(t, globalDir, "[reaper]\nbaseUrl = \"http://global.example/v1\"\n")
+			repoPath := writeProviders(t, repoDir, tc.repoEntry)
+			loaded, err := Load([]Layer{
+				{Path: repoDir, Source: LayerSourceRepository},
+				{Path: globalDir, Source: LayerSourceGlobal},
+			})
+			if err == nil {
+				t.Fatalf("the load allowed it: pool %v", keysOf(loaded.Providers))
+			}
+			for _, want := range []string{`"Reaper" in ` + repoPath, `"reaper" in ` + globalPath, `spell "Reaper" in ` + repoPath + ` as "reaper"`} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal %q does not carry %s", err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestLoadMergesSampling: each sampling field overlays on its own, so the
 // repository layer's thinking overrides the global one while the global
 // temperature is kept, and every value names the layer that supplied it.

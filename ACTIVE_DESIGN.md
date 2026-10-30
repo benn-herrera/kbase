@@ -31,6 +31,11 @@ putting the key in a transcript.
      `kbase show-config` — which lists the entries — as its remedy; a configuration that does not
      load refuses as it does for any verb. `remove` takes any name, so an orphaned file can be
      cleared. Refusals and remedies name the provider as given.
+   - A provider name matches `^[A-Za-z0-9_][A-Za-z0-9_-]*$`: a `providers.toml` entry that does
+     not fails the configuration's load, and the store refuses such a name too. Two entries whose
+     names differ only by case are refused, within a file or across layers: an override names its
+     entry exactly. A key file's name is the provider's name lowercased, so a hand-renamed file is
+     found only under a lowercase name, and `auth list` names the providers in lowercase.
    - The key is piped in: `<key-manager> --print-key | kbase auth add <provider>`. A key manager
      feeds it hands-free, and the key never enters an agent's context, even when the agent runs that
      pipeline.

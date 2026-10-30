@@ -56,11 +56,11 @@ func runAuthVerb(name string, verb func(authOptions) (string, []toolresult.Field
 // file's is.
 func authAdd(opts authOptions) (string, []toolresult.Field) {
 	if err := auth.CheckName(opts.Provider); err != nil {
-		return authStoreFailure(err, authPipedForm(authProviderArg))
+		return authStoreFailure(err, "kbase show-config")
 	}
 	if !slices.Contains(opts.Configured, opts.Provider) {
 		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: opts.Provider, Remedy: "kbase show-config",
-			Detail: fmt.Sprintf("%q is not a configured provider", opts.Provider)})
+			Detail: fmt.Sprintf("%q is no providers.toml entry's name: give the name exactly as the entry spells it, case included", opts.Provider)})
 	}
 	if opts.StdinIsTerminal {
 		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: authPipedForm(opts.Provider),
@@ -86,7 +86,7 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 func authRemove(opts authOptions) (string, []toolresult.Field) {
 	removed, err := auth.NewStore(opts.Dir).Remove(opts.Provider)
 	if err != nil {
-		return authStoreFailure(err, authRemoveForm)
+		return authStoreFailure(err, "kbase auth list")
 	}
 	outcome := toolresult.Done
 	if !removed {
@@ -226,8 +226,10 @@ func authAddCommand() *cobra.Command {
 	return authVerbCommand("add <provider>",
 		"store the API key piped on stdin for a providers.toml entry",
 		`Store the API key piped on stdin for <provider>, a providers.toml entry
-name, replacing any key stored for it; a name no providers.toml entry carries
-is refused. The key is read from stdin alone, never from an argument. Pipe it
+name, replacing any key stored for it; a name no providers.toml entry carries,
+spelled exactly as the entry spells it, is refused, and `+auth.NameRule+`.
+
+The key is read from stdin alone, never from an argument. Pipe it
 from a program that prints it: a key manager, or your system's clipboard paster
 for a key copied there by hand or by a program.
 
@@ -260,7 +262,8 @@ func authListCommand() *cobra.Command {
 	return authVerbCommand("list",
 		"name the providers that have a stored API key",
 		`Name each provider that has a stored key, in name order: names alone,
-never a key.`,
+never a key. Each name is in lowercase, the form its key is stored under,
+whatever case add was given.`,
 		authArgs(0, toolresult.Item{Check: toolresult.CheckUsage, Remedy: "kbase auth list", Detail: "kbase auth list takes no argument"}),
 		false, authList)
 }

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -59,22 +60,28 @@ type FileError struct {
 func (e *FileError) Error() string { return e.Path + ": " + e.Err.Error() }
 func (e *FileError) Unwrap() error { return e.Err }
 
-// NameError refuses a provider name that cannot name a key file.
+// NamePattern is what a provider name matches, and NameRule says it in words:
+// the rule internal/config holds a providers.toml entry's name to, stated
+// again because this package imports no config; a test pins the two equal.
+// No name it admits is `.` or `..` or holds a path separator.
+const (
+	NamePattern = `^[A-Za-z0-9_][A-Za-z0-9_-]*$`
+	NameRule    = `a provider name is one or more ASCII letters, digits, "_" or "-", not beginning with "-"`
+)
+
+var validName = regexp.MustCompile(NamePattern)
+
+// NameError refuses a provider name that breaks the rule. Its text is the rule
+// alone, never the name.
 type NameError struct{ Name, Detail string }
 
 func (e *NameError) Error() string { return e.Detail }
 
-// CheckName refuses a provider name that cannot be a file name: empty, `.` or
-// `..`, or holding `/`, `\` or a NUL. The name arrives from the user, so it is
-// checked before any path is built from it.
+// CheckName refuses a provider name that breaks the rule. The name arrives
+// from the user, so it is checked before any path is built from it.
 func CheckName(name string) error {
-	switch {
-	case name == "":
-		return &NameError{Name: name, Detail: "a provider name is empty"}
-	case name == "." || name == "..":
-		return &NameError{Name: name, Detail: `a provider name cannot be "." or ".."`}
-	case strings.ContainsAny(name, "/\\\x00"):
-		return &NameError{Name: name, Detail: `a provider name cannot hold "/", "\" or a NUL`}
+	if !validName.MatchString(name) {
+		return &NameError{Name: name, Detail: NameRule}
 	}
 	return nil
 }
@@ -158,9 +165,9 @@ func (s Store) Remove(name string) (bool, error) {
 	return true, nil
 }
 
-// List names the providers with a key file, in name order. A directory that
-// does not stand holds none; a file whose name no provider name yields is not
-// a key file.
+// List names the providers with a key file, in lowercase and in name order. A
+// directory that does not stand holds none; a file whose name no lowercase
+// provider name yields is not a key file.
 func (s Store) List() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -172,7 +179,7 @@ func (s Store) List() ([]string, error) {
 	var names []string
 	for _, e := range entries {
 		name, ok := strings.CutSuffix(e.Name(), FileSuffix)
-		if ok && e.Type().IsRegular() && CheckName(name) == nil {
+		if ok && e.Type().IsRegular() && CheckName(name) == nil && name == strings.ToLower(name) {
 			names = append(names, name)
 		}
 	}
@@ -180,12 +187,14 @@ func (s Store) List() ([]string, error) {
 	return names, nil
 }
 
-// path is the provider name's key file, once the name is checked.
+// path is the provider name's key file, once the name is checked: the name
+// lowercased, so names differing only by case share one file, whatever the
+// filesystem's own case rule.
 func (s Store) path(name string) (string, error) {
 	if err := CheckName(name); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, name+FileSuffix), nil
+	return filepath.Join(s.dir, strings.ToLower(name)+FileSuffix), nil
 }
 
 // sealer is AES-256-GCM under the current user's key, derived by HKDF from

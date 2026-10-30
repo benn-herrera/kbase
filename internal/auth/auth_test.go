@@ -117,14 +117,18 @@ func TestRenamedFileOpensUnderItsNewName(t *testing.T) {
 	}
 }
 
-// TestUnusableNamesRefused: a name that cannot be a file name is refused by
-// every operation, and nothing is written.
+// TestUnusableNamesRefused: a name that breaks the provider-name rule is
+// refused by every operation, by the rule alone and never the name, and
+// nothing is written.
 func TestUnusableNamesRefused(t *testing.T) {
 	s := storeFor(t, "alice")
-	for _, name := range []string{"", ".", "..", "a/b", `a\b`, "a\x00b", "../escape"} {
+	for _, name := range []string{"", ".", "..", "a/b", `a\b`, "a\x00b", "../escape",
+		"dotted.name", "with space", "naïve", "-lead", "colon:name"} {
 		var refused *NameError
 		if err := s.Add(name, sentinelKey); !errors.As(err, &refused) {
 			t.Errorf("Add(%q) returned a %T, want a name refusal", name, err)
+		} else if err.Error() != NameRule {
+			t.Errorf("Add(%q) refused with %q, want the rule alone", name, err)
 		}
 		if _, err := s.Read(name); !errors.As(err, &refused) {
 			t.Errorf("Read(%q) returned a %T, want a name refusal", name, err)
@@ -149,7 +153,7 @@ func TestListAndRemove(t *testing.T) {
 	for _, name := range []string{"zeta", "alpha", "mid-key"} {
 		addSentinel(t, s, name)
 	}
-	for _, stray := range []string{"notes.txt", FileSuffix, ".alpha" + FileSuffix + ".x1.tmp"} {
+	for _, stray := range []string{"notes.txt", FileSuffix, ".alpha" + FileSuffix + ".x1.tmp", "Mixed" + FileSuffix} {
 		if err := os.WriteFile(filepath.Join(s.dir, stray), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -167,6 +171,38 @@ func TestListAndRemove(t *testing.T) {
 	}
 	if _, err := s.Read("alpha"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Read of a removed key returned a %T, want not-exist", err)
+	}
+}
+
+// TestNameCaseSharesOneFile: a key added under a name in any case is stored in
+// the file of its lowercase, and read and removed under any other case of it.
+func TestNameCaseSharesOneFile(t *testing.T) {
+	s := storeFor(t, "alice")
+	if err := s.Add("Reaper", sentinelKey); err != nil {
+		t.Fatalf("Add(Reaper) failed with a %T", err)
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, e := range entries {
+		files = append(files, e.Name())
+	}
+	if !slices.Equal(files, []string{"reaper" + FileSuffix}) {
+		t.Fatalf("the store holds %q, want reaper%s alone", files, FileSuffix)
+	}
+	if got, err := s.Read("reaper"); err != nil || got != sentinelKey {
+		t.Errorf("Read(reaper) after Add(Reaper): key matches %t, error %T; want the key", got == sentinelKey, err)
+	}
+	if names, err := s.List(); err != nil || !slices.Equal(names, []string{"reaper"}) {
+		t.Errorf("List = %q, %v; want [reaper]", names, err)
+	}
+	if removed, err := s.Remove("REAPER"); err != nil || !removed {
+		t.Errorf("Remove(REAPER) = %t, %v; want the key removed", removed, err)
+	}
+	if entries, err := os.ReadDir(s.dir); err != nil || len(entries) != 0 {
+		t.Errorf("after Remove the store holds %d entries (err %v), want none", len(entries), err)
 	}
 }
 

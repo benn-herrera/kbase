@@ -466,7 +466,7 @@ read in its place.
 
 - **`providers.toml`** is the endpoint pool, merged by entry name: a repository entry of the same
   name replaces the global entry whole, so a repository never inherits a credential for an endpoint
-  it chose. Each top-level table is a provider you name, with `baseUrl` (required) and `apiKeyFile`
+  it chose. Each top-level table is a provider you name — one or more ASCII letters, digits, `_` or `-`, not beginning with `-`, and names differing only by case are refused — with `baseUrl` (required) and `apiKeyFile`
   — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
   `~` in `apiKeyFile`, `--config-dir` or `$KBASE_CONFIG_DIR` expands from your
   home directory; `~user` does not. kbase warns if a key file is group- or world-readable;

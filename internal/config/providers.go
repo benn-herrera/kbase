@@ -3,9 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -51,6 +54,16 @@ const (
 	// is worth saying out loud even though kbase still loads it.
 	keyFileExposedBits = 0o044
 )
+
+// ProviderNamePattern is what every providers.toml entry's name matches, and
+// ProviderNameRule says it in words. internal/auth names key files by the same
+// rule and, importing no config, states it again; a test pins the two equal.
+const (
+	ProviderNamePattern = `^[A-Za-z0-9_][A-Za-z0-9_-]*$`
+	ProviderNameRule    = `a provider name is one or more ASCII letters, digits, "_" or "-", not beginning with "-"`
+)
+
+var providerName = regexp.MustCompile(ProviderNamePattern)
 
 // A Provider declares WHERE and HOW to reach an endpoint — never WHICH
 // MODEL to use. Providers rotate their catalogues constantly, so a model
@@ -190,10 +203,12 @@ func (p Provider) Validate() error {
 // nil error — a fresh install has no populated providers.toml yet.
 //
 // The error return is reserved for file-level failures only: the
-// providers.toml file unreadable (non-not-exist), malformed TOML, or a
-// field no Provider models — the table headers are provider names and so
-// stay open, but the fields inside them are a fixed set and a misspelled
-// one refuses the load (see rejectUnknownKeys). A
+// providers.toml file unreadable (non-not-exist), malformed TOML, a
+// field no Provider models — the table headers are provider names, an open
+// set, but the fields inside them are a fixed set and a misspelled one
+// refuses the load (see rejectUnknownKeys) — or a table header that breaks
+// the provider-name rule or differs from another only by case (see
+// rejectProviderNames). A
 // provider that is individually unusable — a mismatched `type`/`api`
 // pair, a missing baseUrl, or an apiKeyFile that cannot be read — does
 // NOT abort the load: it is omitted from the returned map and appended to
@@ -226,11 +241,14 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 		return nil, nil, fmt.Errorf("providers: parse %s: %w", path, err)
 	}
 	// A file-level refusal, like a parse error: the provider NAMES are the
-	// table headers and stay open, but a misspelled field inside an entry
+	// table headers, an open set, but a misspelled field inside an entry
 	// ("baseURL") would otherwise leave the entry pointing nowhere with
 	// nothing said. Runs before the per-entry loop so no key file is read
 	// for a file that is going to be rejected.
 	if err := rejectUnknownKeys(path, md); err != nil {
+		return nil, nil, fmt.Errorf("providers: %w", err)
+	}
+	if err := rejectProviderNames(path, slices.Sorted(maps.Keys(raw))); err != nil {
 		return nil, nil, fmt.Errorf("providers: %w", err)
 	}
 
@@ -259,6 +277,60 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 		out[name] = p
 	}
 	return out, faults, nil
+}
+
+// rejectProviderNames refuses the providers.toml at path where any of its
+// entry names, in sorted order, breaks the provider-name rule — naming every
+// such entry — or differs from another only by case. It returns nil when
+// every name is usable and distinct.
+func rejectProviderNames(path string, names []string) error {
+	var unusable []string
+	for _, name := range names {
+		if !providerName.MatchString(name) {
+			unusable = append(unusable, fmt.Sprintf("%q", name))
+		}
+	}
+	switch len(unusable) {
+	case 0:
+	case 1:
+		return fmt.Errorf("%s: entry %s is not a usable provider name — %s", path, unusable[0], ProviderNameRule)
+	default:
+		return fmt.Errorf("%s: entries %s are not usable provider names — %s", path, strings.Join(unusable, ", "), ProviderNameRule)
+	}
+	var pairs []string
+	for _, c := range caseCollisions(map[string]statedName{}, path, names) {
+		pairs = append(pairs, fmt.Sprintf("%q and %q", c.first.name, c.second.name))
+	}
+	if len(pairs) > 0 {
+		return fmt.Errorf("%s: entries %s differ only by case, which no two entry names may; rename one",
+			path, strings.Join(pairs, "; "))
+	}
+	return nil
+}
+
+// statedName is a providers.toml entry's name and the file stating it.
+type statedName struct{ name, path string }
+
+// caseCollision is two entries whose names differ only by case, first the one
+// seen first.
+type caseCollision struct{ first, second statedName }
+
+// caseCollisions records each of names, stated in path, in seen under its
+// lowercase, and returns each name whose lowercase a differently spelled name
+// already holds there. A name spelled exactly as the one seen is no collision.
+func caseCollisions(seen map[string]statedName, path string, names []string) []caseCollision {
+	var found []caseCollision
+	for _, name := range names {
+		folded := strings.ToLower(name)
+		first, ok := seen[folded]
+		switch {
+		case !ok:
+			seen[folded] = statedName{name: name, path: path}
+		case first.name != name:
+			found = append(found, caseCollision{first: first, second: statedName{name: name, path: path}})
+		}
+	}
+	return found
 }
 
 // resolveAPIKey returns the provider's API key, read from the file

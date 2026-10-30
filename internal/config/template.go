@@ -42,9 +42,10 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // entry — a fault where an endpoint was meant. The live base URL is a lab
 // host, and .example is a reserved TLD that can never resolve, so no
 // placeholder can reach a real vendor.
-const providersTemplate = `# Each provider is one top-level table. The names are arbitrary: they are
-# what a [models] reference's provider part and --provider name. An entry
-# here replaces a same-named entry from ~/.config/kbase/providers.toml whole.
+const providersTemplate = `# Each provider is one top-level table; ` + ProviderNameRule + `;
+# no two names may differ by case alone. The name is what a [models]
+# reference's provider part and --provider name. An entry here replaces the
+# entry of exactly the same name from ~/.config/kbase/providers.toml whole.
 
 [local]
 baseUrl = "http://lab-server.local:8000/v1"

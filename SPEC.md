@@ -528,7 +528,7 @@ or `key`:
 | `check` | The named check or refusal class: a verify check name, `error`, `write`, `usage`, `provider`, `detect`, `dirty-paths`, `include`, `metadata-key`, `metadata`, `lock`, `state-dir`, `inputs`, `trail`, `pandoc`, `unknown-id`, `kb-format`, `kb-root`, `worktree`, `export-dir`, `index`, `degraded`, `symlink`, `conversion`, `demoted`, `dependency-cycle` |
 | `path` | The file the item is about |
 | `entry` | 1-based index into the values' `entry` list |
-| `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it |
+| `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it; an item refusing a value given for a named thing may carry that value as given, as the auth verbs carry the provider name |
 | `line`, `column` | 1-based position in the values document or in `path` |
 | `allowed` | The closed set the value must come from |
 | `remedy` | The command that clears the item, where one exists (e.g. `kbase refresh`, `git init`) |
@@ -1257,7 +1257,10 @@ repository's own `.kbase/`. An invocation outside a worktree has no repository l
 **Merging.** The two files merge by two rules. `providers.toml` merges by entry
 name and an entry is replaced whole: a repository entry of the same name supersedes the global one
 entirely, never field by field, so a repository cannot inherit a credential for an endpoint it chose.
-A fault naming a pool entry a higher layer superseded is
+An override names its entry exactly: entries whose names differ only by case — two in one file, or
+one in each of two layers, whether pooled or dropped by a fault — refuse the load, naming both
+spellings and the file stating each; across layers its detail names the fix: spell the higher entry
+as the lower one is, or rename it. A fault naming a pool entry a higher layer superseded is
 not reported: the pool's entry is the higher one, and a diagnostic about a value nobody reads is not a
 fact about this run. `config.toml` merges field by field: a value a higher layer states wins, and one
 it leaves out keeps the lower layer's value. A layer that fails the strict load refuses the whole
@@ -1303,18 +1306,19 @@ writes its result under §7.
 `kbase auth add <provider>` stores the API key piped on its stdin for `<provider>`, a
 `providers.toml` entry name, replacing any key stored for it: one file per provider,
 `$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset),
-encrypted under an encryption key derived for the OS user — obfuscation against a reader of the
-file, not a boundary against that user — and readable by its owner alone. `add` reads the
-configuration as the provider verbs do, and a configuration that does not load refuses as it does
-for them; a name no `providers.toml` entry carries — in the pool or dropped from it by a fault —
-is refused, `check: usage`, `key` the name as given, `remedy: kbase show-config`. The key arrives
-on stdin and no other way: stdin that is a terminal is refused, as is input that is empty once
-surrounding whitespace is trimmed, each `check: usage` with the piped form, the provider's name
-filled in, as its `remedy`. A refusal writes nothing, and the name refusals come before stdin is
-read. `kbase auth remove <provider>` clears the stored key, `unchanged` where none was stored, and
-`kbase auth list` names the providers with a stored key; neither reads the configuration, so a
-key file whose entry is gone is still removed. A provider name that cannot name a file — empty,
-`.` or `..`, or holding `/`, `\` or a NUL — is a usage refusal, `key` the name as given. A
+the file named for `<provider>` in lowercase, each file encrypted under an encryption key derived
+for the OS user — obfuscation against a reader of the file, not a boundary against that user — and
+readable by its owner alone. `add` reads the configuration as the provider verbs do, and a
+configuration that does not load refuses as it does for them; a name no `providers.toml` entry
+carries exactly, case included — in the pool or dropped from it by a fault — is refused,
+`check: usage`, `key` the name as given, `remedy: kbase show-config`. The key arrives on stdin and
+no other way: stdin that is a terminal is refused, as is input that is empty once surrounding
+whitespace is trimmed, each `check: usage` with the piped form, the provider's name filled in, as
+its `remedy`. A refusal writes nothing, and the name refusals come before stdin is read. `kbase auth remove <provider>` clears the stored key, `unchanged` where none was stored, and
+`kbase auth list` names the providers with a stored key, in lowercase; neither reads the
+configuration, so a key file whose entry is gone is still removed. A name that breaks the
+provider-name rule (§9.1) is a usage refusal, `key` the name as given and the detail the rule,
+never the name; its `remedy` is `kbase show-config` on `add`, `kbase auth list` on `remove`. A
 refusal of the argument count names no argument given. No result names a key.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
@@ -1360,7 +1364,10 @@ proceeds (as §9.4's permission warning does).
 
 ### 9.1 `providers.toml` — the endpoint pool
 
-Top-level tables are provider names, an open set the user chooses:
+Top-level tables are provider names, an open set the user chooses within the provider-name rule:
+each matches `^[A-Za-z0-9_][A-Za-z0-9_-]*$`, and an entry whose name does not fails the file's
+load, naming the file and the entry; names that differ only by case are refused (§9, "Merging"). An
+entry:
 
 ```toml
 [<name>]

@@ -97,7 +97,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | A | mechanical | test failure messages never print a key | none | landed |
 | B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | landed |
 | C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | landed |
-| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C | pending |
+| C2 | expert | provider names: the name pattern at load and in the store, case-only collisions refused, key files named in lowercase | C | landed |
+| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | in progress |
 | E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D | pending |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
 
@@ -289,6 +290,27 @@ site that is not in this list, it reports the site and does not change it.
   scratch directory.
 
 **Done-line:** `just edit-gate`, `just test`, `just test-integration-mcp`.
+
+---
+
+### C2 — provider names (expert)
+
+**Scope:** `internal/config` (the providers.toml load and the layer merge), `internal/auth`,
+`cmd/auth.go` help, their tests and fixtures; SPEC §9; ARCHITECTURE where it states the store's
+file name.
+
+**Work:** ACTIVE_DESIGN decision 2's provider-name bullet.
+- A `providers.toml` entry whose name does not match `^[A-Za-z0-9_][A-Za-z0-9_-]*$` fails the
+  load, naming the file and the entry.
+- Two entries whose names differ only by case are refused: within one file, and across layers in
+  the merge. The refusal names both spellings and the file stating each; across layers its remedy
+  is to spell the override exactly.
+- `internal/auth`'s name rule becomes the same pattern, one definition both packages use or one
+  each with a test pinning them equal (the import rules allow `auth` nothing of `config`). The
+  store names a key file by the provider name lowercased, for add, read and remove; `List` returns
+  the lowercase names and skips files whose names are not lowercase.
+
+**Done-line:** `just edit-gate`, `just test`, `just test-integration`.
 
 ---
 

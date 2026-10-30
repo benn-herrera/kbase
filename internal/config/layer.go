@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -113,13 +115,21 @@ type Loaded struct {
 // A layer that fails the strict load refuses the whole load. The error is
 // returned as the loader wrote it, naming the file, and no lower layer is
 // read: a broken repository file that silently fell through to the global one
-// would leave the user's edit doing nothing with nothing said.
+// would leave the user's edit doing nothing with nothing said. An entry whose
+// name differs only by case from one a higher layer states refuses the load
+// the same way, naming both spellings and the file stating each: an override
+// names its entry exactly.
 func Load(layers []Layer) (Loaded, error) {
 	var loaded Loaded
 	pool := Providers{}
+	stated := map[string]statedName{}
 	for _, layer := range layers {
-		providers, layerFaults, err := LoadProviders(ProvidersPath(layer.Path))
+		path := ProvidersPath(layer.Path)
+		providers, layerFaults, err := LoadProviders(path)
 		if err != nil {
+			return Loaded{}, err
+		}
+		if err := rejectCaseOverrides(stated, path, providers, layerFaults); err != nil {
 			return Loaded{}, err
 		}
 		layerCfg, err := LoadConfig(ConfigPath(layer.Path))
@@ -139,6 +149,27 @@ func Load(layers []Layer) (Loaded, error) {
 	}
 	loaded.Providers = pool
 	return loaded, nil
+}
+
+// rejectCaseOverrides refuses a layer's providers.toml, at path, where one of
+// its entries — pooled or dropped by a fault — differs only by case from an
+// entry a higher layer stated, as recorded in stated; it then records this
+// layer's entries there. An override names its entry exactly.
+func rejectCaseOverrides(stated map[string]statedName, path string, providers Providers, faults []ProviderFault) error {
+	names := slices.Collect(maps.Keys(providers))
+	for _, f := range faults {
+		names = append(names, f.Name)
+	}
+	slices.Sort(names)
+	var refusals []string
+	for _, c := range caseCollisions(stated, path, names) {
+		refusals = append(refusals, fmt.Sprintf("%q in %s and %q in %s differ only by case: to override, spell %q in %s as %q; otherwise rename it",
+			c.first.name, c.first.path, c.second.name, c.second.path, c.first.name, c.first.path, c.second.name))
+	}
+	if len(refusals) > 0 {
+		return fmt.Errorf("providers: %s", strings.Join(refusals, "; "))
+	}
+	return nil
 }
 
 // takeProviders adds over's entries to pool, each naming the layer it came

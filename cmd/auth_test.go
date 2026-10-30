@@ -72,7 +72,7 @@ func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 		remedy     string
 		unread     bool
 	}{
-		{"an unusable name", "a/b", []string{"a/b"}, authSentinelKey, true, "a/b", authPipedForm(authProviderArg), true},
+		{"an unusable name", "a/b", []string{"a/b"}, authSentinelKey, true, "a/b", "kbase show-config", true},
 		{"an unconfigured name", "ghost", []string{"p"}, authSentinelKey, true, "ghost", "kbase show-config", true},
 		{"a terminal", "p", []string{"p"}, authSentinelKey, true, nil, authPipedForm("p"), true},
 		{"empty input", "p", []string{"p"}, "", false, nil, authPipedForm("p"), false},
@@ -355,6 +355,19 @@ func TestAuthAddChecksTheConfiguration(t *testing.T) {
 				t.Errorf("the piped key stored: %v, want %v (read: %v)", stored, !stored, err)
 			}
 		})
+	}
+}
+
+// TestProviderNameRuleIsOne: the store names key files by the rule a
+// providers.toml entry's name is loaded under, pattern and words alike, so
+// every configured entry can be given a key. The two packages may not import
+// each other, so each states it and this pins them equal.
+func TestProviderNameRuleIsOne(t *testing.T) {
+	if auth.NamePattern != config.ProviderNamePattern {
+		t.Errorf("auth.NamePattern %q differs from config.ProviderNamePattern %q", auth.NamePattern, config.ProviderNamePattern)
+	}
+	if auth.NameRule != config.ProviderNameRule {
+		t.Errorf("auth.NameRule %q differs from config.ProviderNameRule %q", auth.NameRule, config.ProviderNameRule)
 	}
 }
 
