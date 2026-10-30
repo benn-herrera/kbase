@@ -29,7 +29,7 @@ Violating any is a blocking defect.
 | I6 | Every mutating op is idempotent under re-issue; `init`'s creation is birth-once (SPEC §8). |
 | I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built for a command's read of a KB by `internal/kbload` alone — the build's stage machinery reads the tree its own stages wrote through `kb.OnDisk` (`docgraph`'s `writtenTree`, `claimgraph`'s `builtTree`); `kbload` is the one importer of `internal/formats`' root from outside the tree, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O; a tree of packages that import each other and no kbase package outside it, so maintenance of a package outside it can never change what an old KB converts to — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. The tree also holds the live format's one definition, `internal/formats/format300`, which imports no kbase package and which `kb` alone imports and re-exports. |
-| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. A command that reads or writes KB content or metadata is bound; only process control (`mcp`, `wait`), environment diagnostics (`probe`) and cobra's own `help` and `completion` are CLI-only. |
+| I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and a family member its family with `kbase.mcp.family`; the tool table is built from the `bound` commands of the command tree — one tool per family, whose operations are its members, one per other bound command — plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. A command that reads or writes KB content or metadata is bound; only process control (`mcp`, `wait`), environment diagnostics (`probe`) and cobra's own `help` and `completion` are CLI-only. |
 | I10 | Every ask whose answer a build or a scoring run recorded leaves, for as long as its records are retained, what re-asking it under the binary's embedded templates and re-reading its reply as the run read it needs. A build leaves it through its commit trail, its records and the answer cache's keying on the composed ask, so re-running a stage from its boundary re-renders every ask; and its trail's group records hold each multichoice ask's template inputs — those its group shares once, the rest per item — and its `prompt-sha256`, and each overview call's capture holds its `excerpts` and, on a retry, its `rejected-lines`, so a recorded ask re-renders without the source tree; a scoring run leaves it through its `captures.jsonl` (§6, Scoring). `probe` is a diagnostic and outside it. |
 | I11 | While an ask batch's asks are in flight, the only file written is one per result, unique to it, in the state store — a build's answer and capture per call, a score run's result per item — written by the item that made the call, after it has released its token; every file more than one result lands in is written after the ask batch has drained. An ask batch is a build stage's asks (each cull pass and the overview its own), a score walk or a replay walk. |
 | I12 | Every model call an invocation makes — a multichoice ask, the overview call, a scoring ask, a probe — is made through a `model.Slot`, which only the invocation's one `model.Queue` issues, from `Go`, and only while one of its N tokens is free; nothing else bounds model calls in flight. An item holds its token across all of its calls and releases it before it writes a file. Within one consumer, items take their tokens in the order the consumer launches them. The methods that put a request on the wire are unexported, so the compiler holds every other package to a slot. |
@@ -1461,10 +1461,14 @@ internal/mcp/protocol     (SPEC §11) JSON-RPC framing, dispatch, the Tool, Sche
                           the subscription and the server version are injected by
                           internal/mcp through Serve(in, out, version, instructions,
                           tools, resources, subscription, lg)
-internal/mcp              the MCP exposure of the command tree: the `kbase.mcp` and
-                          `kbase.readOnly` annotations, the tool table derived from the
-                          bound commands, a call run as its command's RunE, the
-                          project a call runs in, the resources (each bound
+internal/mcp              the MCP exposure of the command tree: the `kbase.mcp`,
+                          `kbase.mcp.family` and `kbase.readOnly` annotations, the
+                          tool table derived from the bound commands and their
+                          families, a call run as its command's RunE, a family
+                          tool's dispatch to its operation and the check of its
+                          arguments against that operation's own schema, the
+                          project a call runs in, the resources (each family's
+                          help, `kbase://help/<family>`, and each bound
                           command's help, `kbase://help/<command>`, among them:
                           cobra's own help rendering, `--help`'s text), the build
                           watcher, and the detached build and score launches
@@ -1700,8 +1704,11 @@ its type's field order, a pending value as the literal, which `format300`'s deco
 
 **MCP server (SPEC §11).** `internal/mcp` builds the tool table from the command tree its caller
 hands it: one Tool per command declaring `kbase.mcp` = `bound` — `mcp`, `wait`, `probe` and cobra's
-own `completion` and `help` declare `excluded`, each with its reason — plus the one listed tool
-below. A tool's schema is derived from the command's `Use` line positionals and its flags,
+own `completion` and `help` declare `excluded`, each with its reason — save that the commands
+declaring one family (`kbase.mcp.family`, set by `mcp.InFamily`) are one Tool together, in the place
+of the first, plus the one listed tool below. A family is an `mcp.Family` its caller hands it (name,
+description sentence, shared help), `query` and `write` (`toolFamilies`, `cmd/surface.go`). A
+command tool's schema is derived from the command's `Use` line positionals and its flags,
 `mcp.CommandSchema` skipping a flag annotated `kbase.mcp` = `excluded` (set by `mcp.ExcludeFlag`),
 which is no argument of the tool; `score`'s `--replay` and `--failed` are such flags, and an
 argument naming one is refused by `internal/mcp/protocol` as outside the schema. A command's
@@ -1711,8 +1718,24 @@ spells `[<name>...]`: no bound command refuses for want of a flag, `score`'s `--
 run walking both passes unless it is told otherwise; `wait`'s `--pid`, the one flag a verb requires,
 is outside the derivation, `wait` declaring `excluded` (§11).
 
-`cmd/surface.go` adds every command to the tree, one `AddCommand` per family, its binding and
-read-only hint on that line (`readOnlyTool`, `readWriteTool`, `cliOnly`), and declares beside them
+A family tool's schema is `operation`, a string enum of its members' names in the tree's order, and
+`arguments`, an object; its read-only hint is set where every member declares `kbase.readOnly`.
+Each member is built as its own tool would be — a write op's one-entry tool, a command tool — and
+the family keeps it by name, unlisted: a call takes the member `operation` names and checks
+`arguments` against that member's schema with `protocol.Schema.Faults`, the same check
+`internal/mcp/protocol` runs on a tool's arguments, so no argument list is stated twice (a query's
+from `mcp.CommandSchema`, a values op's from `write.OpVocabulary`). A fault is a usage refusal
+document, one item per fault naming the argument, the member's arguments as `allowed` and its
+help resource as the remedy; arguments that fit run the member as its own tool would. The members'
+shared help is appended to no member's `Long`. The root command's `Long` states the CLI's form once
+each — `queryHelp`, `listQueryHelp("--limit", "--offset")` and `valuesHelp` in `cmd` — and each
+family's `Help` the MCP form for `kbase://help/<family>`, from the same text where the two agree
+(`queryReads`, `listQueryHelp("limit", "offset")`) and `valuesArguments` in place of `valuesHelp`'s
+stdin and `--values`; the resource lists the members from the annotations the enum is built from.
+
+`cmd/surface.go` adds every command to the tree, one `AddCommand` per group, its binding and
+read-only hint on that line (`readOnlyTool`, `readWriteTool`, `cliOnly`, and for a family tool's
+operation `queryOperation` or `writeOperation`, which add `kbase.mcp.family`), and declares beside them
 the MCP-only surfaces: `rewind-build`, the resource families and the detached launches. It names
 neither a project nor a launch record for them: `mcp.Server.Serve` binds the resources to the
 server's located project and to the one record of the build it launched last, which the build
@@ -1740,8 +1763,9 @@ derivation would have supplied: a hand-written schema (`target` and `state-dir`,
 as its refusal key in place of a flag spelling. It reports the build's commit trail and mutates
 nothing, which is what makes the exception affordable — the derivation buys a schema from flags, one
 implementation and one test path, all of which an operation listed by hand would forgo.
-`TestMCPToolsAreTheCommandTree` derives its expectation from the annotations plus that one name and
-asserts the tool set for equality, so a second listed tool fails; `TestMCPRewindBuildIsTheBuildTrail`
+`TestMCPToolsAreTheCommandTree` derives its expectation from the annotations — a family's name for
+its members, a command's own otherwise — plus that one name and asserts the tool set for equality,
+so a second listed tool fails; `TestMCPRewindBuildIsTheBuildTrail`
 calls the tool and reads the resource through the server's handlers, and requires the text to agree.
 
 A write op runs through `runWriteOp` with one entry composed from the arguments; its schema comes
@@ -1757,7 +1781,8 @@ the call's project over MCP, else `--project-dir`, else the working directory �
 `internal/mcp/protocol` holds newline-delimited JSON-RPC over stdio, `initialize`, `ping`,
 `tools/list` and `tools/call`, the `Tool`, `Schema` and `Property` types, and the frame checks
 (`jsonrpc`, `id`, `method`, known tool, object arguments). Arguments failing the schema (missing,
-wrong type, unknown key) are JSON-RPC `-32602` errors, not refusal documents. `Serve` takes the
+wrong type, a string outside its `enum`, unknown key) are JSON-RPC `-32602` errors, not refusal
+documents; `Schema.Faults` is that check as data, which a family tool runs on its `arguments`. `Serve` takes the
 server version, the instructions `initialize` reports, the tool table and the resources from its
 caller, and imports `log` only. The instructions are `mcp.ServedInstructions`' opening, which
 varies by mode — the located project's state in TUI mode, none where it located no project, the
@@ -1766,9 +1791,9 @@ and then the session rule, `kbdocs.SessionRule`, which the stamped `AGENTS.md` c
 slot: the text a session reads. `resources/list` and `resources/read` serve the resources `internal/mcp` supplies: the
 sheets, under `kbase://sheet/<kb-root-relative path>`; the model guidance, at
 `kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB;
-and each bound command's help, at `kbase://help/<command>` (`mcp.HelpResources`), which is
-cobra's own help function run on the command into a buffer, the text `--help` prints, and needs
-no KB either.
+and each family's help, at `kbase://help/<family>`, then each bound command's, at
+`kbase://help/<command>` (`mcp.HelpResources`), the latter cobra's own help function run on the
+command into a buffer, the text `--help` prints; neither needs a KB.
 Beside them `kbase://build-trail` is `internal/buildstore`'s `Rewind` document (`rewind.go`) for
 the repository the KB sits in, no target named: the same text `internal/mcp`'s `rewindDocument`
 gives the tool, because one function serves both — the resource is discovery, the tool is

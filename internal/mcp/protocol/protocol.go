@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -41,10 +42,12 @@ type Schema struct {
 }
 
 // Property is one input key: Type is its JSON Schema type, "" admitting any
-// value; Items is the element schema where Type is "array".
+// value; Items is the element schema where Type is "array"; Enum, where set,
+// is every value a "string" property admits.
 type Property struct {
 	Type        string    `json:"type,omitempty"`
 	Items       *Property `json:"items,omitempty"`
+	Enum        []string  `json:"enum,omitempty"`
 	Description string    `json:"description,omitempty"`
 }
 
@@ -94,7 +97,10 @@ func (p Property) admits(v any) bool {
 	case "":
 		return true
 	case "string":
-		_, ok := v.(string)
+		s, ok := v.(string)
+		return ok && (p.Enum == nil || slices.Contains(p.Enum, s))
+	case "object":
+		_, ok := v.(map[string]any)
 		return ok
 	case "boolean":
 		_, ok := v.(bool)
@@ -115,31 +121,50 @@ func (p Property) admits(v any) bool {
 	return false
 }
 
-// check is every way args fail s, in key order; "" where none.
-func (s Schema) check(args map[string]any) string {
-	var faults []string
+// Fault is one argument failing a schema: Missing where the schema requires
+// it and the arguments lack it, Unknown where the schema has no property of
+// its name, and otherwise a value Want does not admit.
+type Fault struct {
+	Key              string
+	Missing, Unknown bool
+	Want             Property
+}
+
+// Faults is every way args fail s: each required key missing, in s's order,
+// then each argument s has no property for or does not admit, in key order.
+func (s Schema) Faults(args map[string]any) []Fault {
+	var faults []Fault
 	for _, key := range s.Required {
 		if _, ok := args[key]; !ok {
-			faults = append(faults, fmt.Sprintf("argument %q is required", key))
+			faults = append(faults, Fault{Key: key, Missing: true})
 		}
 	}
-	keys := make([]string, 0, len(args))
-	for key := range args {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	for _, key := range keys {
+	for _, key := range slices.Sorted(maps.Keys(args)) {
 		p, ok := s.Properties[key]
 		switch {
 		case !ok:
-			allowed := make([]string, 0, len(s.Properties))
-			for name := range s.Properties {
-				allowed = append(allowed, name)
-			}
-			slices.Sort(allowed)
-			faults = append(faults, fmt.Sprintf("argument %q is not one this tool takes (it takes %s)", key, strings.Join(allowed, ", ")))
+			faults = append(faults, Fault{Key: key, Unknown: true})
 		case !p.admits(args[key]):
-			faults = append(faults, fmt.Sprintf("argument %q must be of type %s", key, p.Type))
+			faults = append(faults, Fault{Key: key, Want: p})
+		}
+	}
+	return faults
+}
+
+// check is every way args fail s, in Faults' order; "" where none.
+func (s Schema) check(args map[string]any) string {
+	var faults []string
+	for _, f := range s.Faults(args) {
+		switch {
+		case f.Missing:
+			faults = append(faults, fmt.Sprintf("argument %q is required", f.Key))
+		case f.Unknown:
+			allowed := slices.Sorted(maps.Keys(s.Properties))
+			faults = append(faults, fmt.Sprintf("argument %q is not one this tool takes (it takes %s)", f.Key, strings.Join(allowed, ", ")))
+		case f.Want.Enum != nil:
+			faults = append(faults, fmt.Sprintf("argument %q must be one of %s", f.Key, strings.Join(f.Want.Enum, ", ")))
+		default:
+			faults = append(faults, fmt.Sprintf("argument %q must be of type %s", f.Key, f.Want.Type))
 		}
 	}
 	return strings.Join(faults, "; ")

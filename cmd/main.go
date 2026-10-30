@@ -65,7 +65,13 @@ configuration resolves; models and configure choose it.
 
 Every subcommand writes one YAML document to stdout, its outcome first, and
 nothing else; stderr is for humans. The exit code follows the outcome: 0 for
-done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.`,
+done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.
+
+` + queryHelp + `
+
+` + listQueryHelp("--limit", "--offset") + `
+
+` + valuesHelp,
 	// No subcommand a bare invocation could reasonably mean, so it prints
 	// help rather than guessing.
 	Args: cobra.NoArgs,

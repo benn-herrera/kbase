@@ -1,6 +1,7 @@
-// Package mcp is the MCP server over the command tree: the kbase.mcp and
-// kbase.readOnly annotations a command and a flag declare, the tool table
-// derived from the bound commands, a call run as its command's RunE, the
+// Package mcp is the MCP server over the command tree: the kbase.mcp,
+// kbase.mcp.family and kbase.readOnly annotations a command and a flag
+// declare, the tool table derived from the bound commands and their families,
+// a call run as its command's RunE, the
 // project a call runs in, the resources, the build watcher, and the detached
 // build and score launches. What a call reaches beyond the command
 // tree is the caller's, handed in as function values.
@@ -71,6 +72,26 @@ func ExcludeFlag(f *pflag.Flag) {
 // tool.
 func ExcludedFlag(f *pflag.Flag) bool {
 	return slices.Equal(f.Annotations[BindingAnnotation], []string{Excluded})
+}
+
+// FamilyAnnotation names the family tool a bound command is an operation of;
+// a bound command without it is a tool of its own.
+const FamilyAnnotation = "kbase.mcp.family"
+
+// InFamily declares cmd an operation of the family tool named family.
+func InFamily(cmd *cobra.Command, family string) *cobra.Command {
+	return annotate(cmd, FamilyAnnotation, family)
+}
+
+// Family is one tool binding several commands, each an operation of it.
+type Family struct {
+	// Name is the tool's name, which its members declare with InFamily.
+	Name string
+	// Summary is the sentence opening the tool's description.
+	Summary string
+	// Help is what the family's operations share, stated once, in the
+	// family's help resource.
+	Help string
 }
 
 func annotate(cmd *cobra.Command, key, value string) *cobra.Command {
@@ -175,27 +196,39 @@ type Calls struct {
 	Detached map[*cobra.Command]func(*cobra.Command) (ProjectTool, error)
 	// Listed is the tools no command stands behind, after the derived ones.
 	Listed []ProjectTool
+	// Families is the family tools the bound commands' FamilyAnnotation names.
+	Families []Family
 }
 
-// Tools is the tool table: one tool per command under root its binding
-// declares bound, and after them calls.Listed, each served by inProject.
+// Tools is the tool table, each tool served by inProject: one tool per command
+// under root its binding declares bound and no family claims, one per family
+// in the place of its first member, and after them calls.Listed.
 func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
 	var tools []protocol.Tool
-	for _, cmd := range boundCommands(root) {
-		var tool ProjectTool
-		var err error
-		if fields, ok := write.OpVocabulary(cmd.Name()); ok {
-			tool = writeOpTool(cmd.Name(), fields, calls.WriteOp)
-		} else if detached, ok := calls.Detached[cmd]; ok {
-			tool, err = detached(cmd)
-		} else {
-			tool, err = commandTool(cmd, stderr, calls.RenderError)
+	bound := boundCommands(root)
+	for _, cmd := range bound {
+		family := cmd.Annotations[FamilyAnnotation]
+		if family == "" {
+			tool, err := operationTool(cmd, stderr, calls)
+			if err != nil {
+				return nil, err
+			}
+			tool.Tool.Description = cmd.Short
+			tool.Tool.ReadOnly = readOnly(cmd)
+			tools = append(tools, inProject(tool, located))
+			continue
 		}
+		if slices.ContainsFunc(tools, func(t protocol.Tool) bool { return t.Name == family }) {
+			continue
+		}
+		i := slices.IndexFunc(calls.Families, func(f Family) bool { return f.Name == family })
+		if i < 0 {
+			return nil, fmt.Errorf("%s: an operation of the family %q, which no Family names", cmd.Name(), family)
+		}
+		tool, err := familyTool(calls.Families[i], familyMembers(bound, family), stderr, calls)
 		if err != nil {
 			return nil, err
 		}
-		tool.Tool.Description = cmd.Short
-		tool.Tool.ReadOnly = cmd.Annotations[ReadOnlyAnnotation] == "true"
 		tools = append(tools, inProject(tool, located))
 	}
 	for _, tool := range calls.Listed {
@@ -210,6 +243,108 @@ func boundCommands(root *cobra.Command) []*cobra.Command {
 	return slices.DeleteFunc(slices.Clone(root.Commands()), func(c *cobra.Command) bool {
 		return c.Annotations[BindingAnnotation] != Bound
 	})
+}
+
+// familyMembers is the commands of bound that declare themselves operations of
+// family, in bound's order.
+func familyMembers(bound []*cobra.Command, family string) []*cobra.Command {
+	return slices.DeleteFunc(slices.Clone(bound), func(c *cobra.Command) bool {
+		return c.Annotations[FamilyAnnotation] != family
+	})
+}
+
+func readOnly(cmd *cobra.Command) bool { return cmd.Annotations[ReadOnlyAnnotation] == "true" }
+
+// operationTool is cmd run as its own tool would run it, with no description
+// or read-only hint: a write op over one entry, a detached launch, or its
+// RunE over positionals and flags.
+func operationTool(cmd *cobra.Command, stderr io.Writer, calls Calls) (ProjectTool, error) {
+	if fields, ok := write.OpVocabulary(cmd.Name()); ok {
+		return writeOpTool(cmd.Name(), fields, calls.WriteOp), nil
+	}
+	if detached, ok := calls.Detached[cmd]; ok {
+		return detached(cmd)
+	}
+	return commandTool(cmd, stderr, calls.RenderError)
+}
+
+// The family tool's two arguments: the operation a call runs, and the
+// arguments that operation's own tool would take.
+const (
+	operationProperty = "operation"
+	argumentsProperty = "arguments"
+)
+
+// familyTool is f over its members, in their order: operation names the member
+// a call runs, and arguments, checked against that member's own schema, run it
+// as its own tool would. The tool is read-only where every member declares
+// itself so.
+func familyTool(f Family, members []*cobra.Command, stderr io.Writer, calls Calls) (ProjectTool, error) {
+	operations := make(map[string]ProjectTool, len(members))
+	names := make([]string, 0, len(members))
+	allReadOnly := true
+	for _, cmd := range members {
+		op, err := operationTool(cmd, stderr, calls)
+		if err != nil {
+			return ProjectTool{}, err
+		}
+		operations[cmd.Name()] = op
+		names = append(names, cmd.Name())
+		allReadOnly = allReadOnly && readOnly(cmd)
+	}
+	schema := protocol.Schema{
+		Properties: map[string]protocol.Property{
+			operationProperty: {Type: "string", Enum: names},
+			argumentsProperty: {Type: "object", Description: "a positional by its Usage name, a flag by its name " +
+				"without dashes; for a write op, its entry's keys"},
+		},
+		Required: []string{operationProperty},
+	}
+	// The schema admits only a member's name as the operation, so the lookup
+	// always finds one.
+	run := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
+		name, _ := args[operationProperty].(string)
+		op := operations[name]
+		arguments, _ := args[argumentsProperty].(map[string]any)
+		if arguments == nil {
+			arguments = map[string]any{}
+		}
+		if refusal := argumentRefusal(op.Tool, arguments); refusal != nil {
+			doc, err := refusalDocument(refusal)
+			if err != nil {
+				return "", nil, false, err
+			}
+			return ToolResult([]byte(doc))
+		}
+		return op.Run(p, arguments)
+	}
+	description := f.Summary + " What its operations share: " + HelpURIPrefix + f.Name +
+		". An operation's full help: " + HelpURIPrefix + "<operation>."
+	return ProjectTool{Tool: protocol.Tool{Name: f.Name, Description: description, InputSchema: schema, ReadOnly: allReadOnly}, Run: run}, nil
+}
+
+// argumentRefusal is the usage refusal of each way arguments fail op's own
+// schema, each item naming its argument and every argument op takes; nil where
+// they fit it.
+func argumentRefusal(op protocol.Tool, arguments map[string]any) result.Refusal {
+	faults := op.InputSchema.Faults(arguments)
+	if faults == nil {
+		return nil
+	}
+	allowed := slices.Sorted(maps.Keys(op.InputSchema.Properties))
+	refusal := make(result.Refusal, 0, len(faults))
+	for _, f := range faults {
+		detail := fmt.Sprintf("%s's argument %q must be of type %s", op.Name, f.Key, f.Want.Type)
+		switch {
+		case f.Missing:
+			detail = fmt.Sprintf("%s requires the argument %q", op.Name, f.Key)
+		case f.Unknown:
+			detail = fmt.Sprintf("%q is no argument of %s", f.Key, op.Name)
+		}
+		refusal = append(refusal, result.Item{Check: buildstore.CheckUsage, Key: f.Key, Allowed: allowed, Detail: detail,
+			Remedy: "its arguments are in its full help, " + HelpURIPrefix + op.Name})
+	}
+	return refusal
 }
 
 // projectDirProperty is the argument naming the project a call runs in, which

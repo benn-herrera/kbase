@@ -51,27 +51,32 @@ type Server struct {
 	Launches map[*cobra.Command]Launch
 	// Listed is the tools no command stands behind.
 	Listed []ProjectTool
+	// Families is the family tools, Calls' field of the same name; the help
+	// resources serve each one's help.
+	Families []Family
 	// Resources is the resource families, listed in order. At most one offers
 	// a subscription.
 	Resources []ResourceFamily
 }
 
 // serving is what one Serve binds its launches and resources to: the located
-// project, the build it launched last, and its logger.
+// project, the build it launched last, its logger and its family tools.
 type serving struct {
-	located Located
-	last    *lastBuild
-	lg      log.Logger
+	located  Located
+	last     *lastBuild
+	lg       log.Logger
+	families []Family
 }
 
 // Serve serves s over in and out until EOF on in.
 func (s Server) Serve(in io.Reader, out io.Writer) error {
-	sv := serving{located: s.Located, last: newLastBuild(s.Located), lg: s.Logger}
+	sv := serving{located: s.Located, last: newLastBuild(s.Located), lg: s.Logger, families: s.Families}
 	detached := make(map[*cobra.Command]func(*cobra.Command) (ProjectTool, error), len(s.Launches))
 	for cmd, l := range s.Launches {
 		detached[cmd] = func(cmd *cobra.Command) (ProjectTool, error) { return launchTool(cmd, l, sv, s.Globals) }
 	}
-	tools, err := Tools(s.Root, s.Located, s.Stderr, Calls{WriteOp: s.WriteOp, RenderError: s.RenderError, Detached: detached, Listed: s.Listed})
+	tools, err := Tools(s.Root, s.Located, s.Stderr, Calls{WriteOp: s.WriteOp, RenderError: s.RenderError, Detached: detached,
+		Listed: s.Listed, Families: s.Families})
 	if err != nil {
 		return err
 	}

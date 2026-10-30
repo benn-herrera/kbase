@@ -9,6 +9,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
+	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
@@ -22,39 +23,76 @@ func readWriteTool(cmd *cobra.Command) *cobra.Command { return mcp.Bind(cmd) }
 // cliOnly declares that no MCP tool binds cmd, for reason.
 func cliOnly(cmd *cobra.Command, reason string) *cobra.Command { return mcp.Exclude(cmd, reason) }
 
+// The family tools' names: the query tool's operations read, the write
+// tool's write.
+const (
+	queryFamily = "query"
+	writeFamily = "write"
+)
+
+// queryOperation binds cmd read-only as an operation of the query tool.
+func queryOperation(cmd *cobra.Command) *cobra.Command {
+	return mcp.InFamily(readOnlyTool(cmd), queryFamily)
+}
+
+// writeOperation binds cmd as an operation of the write tool, which may write.
+func writeOperation(cmd *cobra.Command) *cobra.Command {
+	return mcp.InFamily(readWriteTool(cmd), writeFamily)
+}
+
+// valuesArguments is how a values op takes its arguments over MCP, where
+// valuesHelp's stdin and --values do not reach.
+const valuesArguments = "arguments is one entry: the op's keys."
+
+// toolFamilies is the family tools: each one's description sentence and the
+// help its operations share, in the MCP form. render-citation, the query
+// tool's one values operation, is why its help says how a values op takes its
+// arguments.
+func toolFamilies() []mcp.Family {
+	return []mcp.Family{
+		{Name: queryFamily,
+			Summary: "Runs one read-only query over the KB, or render-citation: operation names it.",
+			Help: queryReads + ` Its result is one YAML document, the answer under "` + query.ResultsKey + `".` +
+				"\n\n" + listQueryHelp("limit", "offset") + "\n\nFor render-citation, " + valuesArguments},
+		{Name: writeFamily,
+			Summary: "Runs one write op over the KB: operation names it.",
+			Help:    valuesArguments + " A call writes all of it or none."},
+	}
+}
+
 func init() {
-	// Queries.
+	// Queries, and render-citation: the query tool's operations.
 	rootCmd.AddCommand(
-		readOnlyTool(citedByCommand()),
-		readOnlyTool(depsCommand()),
-		readOnlyTool(edgesCommand()),
-		readOnlyTool(findCommand()),
-		readOnlyTool(gatedOnCommand()),
-		readOnlyTool(referencedByCommand()),
-		readOnlyTool(showCommand()),
-		readOnlyTool(statsCommand()),
-		readOnlyTool(strengthCommand()),
-		readOnlyTool(subtreeCommand()),
+		queryOperation(citedByCommand()),
+		queryOperation(depsCommand()),
+		queryOperation(edgesCommand()),
+		queryOperation(findCommand()),
+		queryOperation(gatedOnCommand()),
+		queryOperation(referencedByCommand()),
+		queryOperation(renderCitationCommand()),
+		queryOperation(showCommand()),
+		queryOperation(statsCommand()),
+		queryOperation(strengthCommand()),
+		queryOperation(subtreeCommand()),
 	)
-	// Write ops.
+	// Write ops: the write tool's operations.
 	rootCmd.AddCommand(
-		readWriteTool(addPairsCommand()),
-		readWriteTool(addRestsOnCommand()),
-		readWriteTool(dropClaimEdgesCommand()),
-		readWriteTool(dropClaimNodeCommand()),
-		readWriteTool(dropInboundEdgesCommand()),
-		readWriteTool(insertAnalysisEntryCommand()),
-		readWriteTool(insertAxiomEntryCommand()),
-		readWriteTool(insertClaimEntryCommand()),
-		readWriteTool(insertExperimentEntryCommand()),
-		readWriteTool(insertWorkEntryCommand()),
-		readWriteTool(markClaimInLeafCommand()),
-		readOnlyTool(renderCitationCommand()),
-		readWriteTool(resolveDemotedCommand()),
-		readWriteTool(setBearingCommand()),
-		readWriteTool(setRationaleCommand()),
-		readWriteTool(setRigorCommand()),
-		readWriteTool(setStatusCommand()),
+		writeOperation(addPairsCommand()),
+		writeOperation(addRestsOnCommand()),
+		writeOperation(dropClaimEdgesCommand()),
+		writeOperation(dropClaimNodeCommand()),
+		writeOperation(dropInboundEdgesCommand()),
+		writeOperation(insertAnalysisEntryCommand()),
+		writeOperation(insertAxiomEntryCommand()),
+		writeOperation(insertClaimEntryCommand()),
+		writeOperation(insertExperimentEntryCommand()),
+		writeOperation(insertWorkEntryCommand()),
+		writeOperation(markClaimInLeafCommand()),
+		writeOperation(resolveDemotedCommand()),
+		writeOperation(setBearingCommand()),
+		writeOperation(setRationaleCommand()),
+		writeOperation(setRigorCommand()),
+		writeOperation(setStatusCommand()),
 	)
 	// KB maintenance.
 	rootCmd.AddCommand(
@@ -99,9 +137,10 @@ func init() {
 // servedServer is the server over the command tree under root with the
 // located project, or none: a write op runs through runWriteOp, an error no
 // verb documented is refused as exitStatus refuses it, build and score start
-// detached with the server's global flags, rewind-build stands beside the
-// derived tools, and the resources are the sheets, the model guidance, the
-// build trail, the build's state and each bound command's help, in that order.
+// detached with the server's global flags, the queries and the write ops are
+// the family tools' operations, rewind-build stands beside the derived tools,
+// and the resources are the sheets, the model guidance, the build trail, the
+// build's state and the help of each family and bound command, in that order.
 func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg log.Logger) mcp.Server {
 	return mcp.Server{
 		Version: version.Current,
@@ -118,6 +157,7 @@ func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg
 		RenderError: func(err error, out, stderr io.Writer) { exitStatus(err, out, stderr) },
 		Launches:    map[*cobra.Command]mcp.Launch{buildCmd: mcp.BuildLaunch(), scoreCmd: mcp.ScoreLaunch()},
 		Listed:      []mcp.ProjectTool{mcp.RewindBuildTool()},
+		Families:    toolFamilies(),
 		Resources: []mcp.ResourceFamily{mcp.SheetResources(servedKB), mcp.ModelHintsResource(),
 			mcp.BuildTrailResource(), mcp.BuildResource(), mcp.HelpResources(root)},
 	}

@@ -167,6 +167,12 @@ These are decided. Packages implement them as stated.
   differ from the current templates' render, SPEC §3/§10 moving with it; (B) leave them until the
   next format migration and narrow CONVENTIONS to "a new format". The plan runs without R; it is
   added, or CONVENTIONS narrowed, on the owner's ruling.
+- **A wrong-typed values key over MCP (awaiting the owner).** Settled says a family call's arguments
+  that fail their check are a `check: usage` refusal. For a write op (and `render-citation`) a key's
+  value of the wrong type is still the op's own refusal, naming the key and the allowed set but not
+  `check: usage`: `write.OpVocabulary` carries key names, not types. Readings: (A) give the
+  vocabulary its types in `internal/write`, so the family check refuses it as usage; (B) accept the
+  op's own refusal there and narrow Settled to unknown and missing keys.
 - **`sheet: placeholder` (awaiting the owner).** SPEC §8 defines it as "nothing was drawn, whether or
   not a sheet stands", so a model reading it beside an older full drawing may report the graph as a
   placeholder. Readings: (A) rename the value to one that says what happened (`not-drawn`), a SPEC
@@ -189,7 +195,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | landed |
 | S3: `drop-claim-node` deletes a claim in one call | expert | S2 | landed |
 | S4: `refresh` absorbs `render-claim-graph` | expert | S3 | landed |
-| S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | pending |
+| S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | landed |
 | Review | — | S5 | pending |
 
 - **Gate before S1.** The working-tree edit to `ARCHITECTURE.md` §3 is committed:
@@ -1260,8 +1266,10 @@ Only the deletion sequence merges into `drop-claim-node`.
     `CommandSchema` and `write.OpVocabulary`, with no second statement of any argument list.
 - **Shared help.**
   - Members' `Long` stop appending `queryHelp`, `listQueryHelp` and `valuesHelp`.
-  - `kbase://help/query` serves `queryHelp`, `listQueryHelp` and, for `render-citation`,
-    `valuesHelp`. `kbase://help/write` serves `valuesHelp`. Each lists its family's operations,
+  - The family resources are served only over MCP, so they state the MCP call's shape, never the
+    CLI's: `arguments` is one entry of the op's keys for a write op and `render-citation`, and a
+    query's arguments by name. `valuesHelp`, `queryHelp` and `listQueryHelp` keep the CLI's wording
+    in the root command's `Long`. Each family resource lists its family's operations,
     rendered from the same annotations as the tool's `operation` enum, never written by hand.
   - The root command's `Long` draws on the same three constants for the CLI.
   - `kbase://help/<command>` serves each member's own help (S1).

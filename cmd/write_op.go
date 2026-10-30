@@ -123,10 +123,10 @@ func nonNil(s []string) []string {
 	return s
 }
 
-const valuesHelp = `
-Values arrive as YAML (JSON accepted) on stdin, or in the file --values names:
-a document whose one key, entry, lists the entries, all written or none. A
-refusal names each offending key, its position and every key the op takes.`
+const valuesHelp = `A write op, and render-citation, takes its values as YAML (JSON accepted) on
+stdin, or in the file --values names: a document whose one key, entry, lists
+the entries, all written or none. A refusal names each offending key, its
+position and every key the op takes.`
 
 // writeOpCommand is one write-API op over the KB found from the working
 // directory.
@@ -136,7 +136,7 @@ func writeOpCommand(op, short, long string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   op,
 		Short: short,
-		Long:  long + "\n" + valuesHelp,
+		Long:  long,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := invocationDir(cmd)

@@ -291,21 +291,97 @@ func toolsListedBy(t *testing.T, srv mcp.Server) []listedTool {
 // bound commands derive: the build trail, which no subcommand stands behind.
 const listedToolName = "rewind-build"
 
+// asOperation is the call of the family tool whose operation op is: the tool's
+// name, and its arguments, operation and, where given, arguments.
+func asOperation(t *testing.T, op string, arguments map[string]any) (string, map[string]any) {
+	t.Helper()
+	cmd, _, err := rootCmd.Find([]string{op})
+	if err != nil || cmd.Annotations[mcp.FamilyAnnotation] == "" {
+		t.Fatalf("%s is no family tool's operation (%v)", op, err)
+	}
+	args := map[string]any{"operation": op}
+	if arguments != nil {
+		args["arguments"] = arguments
+	}
+	return cmd.Annotations[mcp.FamilyAnnotation], args
+}
+
+// callOperation is one call of op through its family tool, as callTool.
+func callOperation(t *testing.T, srv mcp.Server, op string, arguments map[string]any) (map[string]any, bool) {
+	t.Helper()
+	name, args := asOperation(t, op, arguments)
+	return callTool(t, srv, name, args)
+}
+
+// unknownArgument is an argument no operation takes.
+const unknownArgument = "not-an-argument"
+
+// operationArguments is what the family tool's argument check refuses in a call
+// of op given unknownArgument alone: the arguments op takes, as the item
+// refusing unknownArgument lists them, and the required ones it misses.
+func operationArguments(t *testing.T, srv mcp.Server, op string) (allowed, missing []string) {
+	t.Helper()
+	doc, isError := callOperation(t, srv, op, map[string]any{unknownArgument: 1})
+	items, _ := doc["refusals"].([]any)
+	if !isError || doc["outcome"] != toolresult.Refused || len(items) == 0 {
+		t.Fatalf("%s given %s: isError %v, %v; want refused", op, unknownArgument, isError, doc)
+	}
+	refusedUnknown := false
+	for _, it := range items {
+		item, _ := it.(map[string]any)
+		if item["check"] != checkUsage {
+			t.Errorf("%s: refused %v, want a usage refusal", op, item)
+		}
+		key, _ := item["key"].(string)
+		if key != unknownArgument {
+			missing = append(missing, key)
+			continue
+		}
+		// An operation that takes no argument lists none: allowed is absent.
+		refusedUnknown = true
+		listed, _ := item["allowed"].([]any)
+		for _, a := range listed {
+			name, _ := a.(string)
+			allowed = append(allowed, name)
+		}
+	}
+	if !refusedUnknown {
+		t.Fatalf("%s: no item refuses %s: %v", op, unknownArgument, items)
+	}
+	return allowed, missing
+}
+
 func TestMCPToolsAreTheCommandTree(t *testing.T) {
-	// want is every bound command plus the one listed tool, and the same set
-	// is the read-only expectation. The listed tool is a deliberate exception,
-	// so the equality below fails a second listed tool as it fails a missing
-	// command.
+	// want is every family, every bound command no family claims, and the
+	// one listed tool, and readOnly the read-only expectation of the same
+	// set. The listed tool is a deliberate exception, so the equality below
+	// fails a second listed tool as it fails a missing command.
 	want := []string{listedToolName}
 	readOnly := []string{listedToolName}
+	// operations is each family's members in the tree's order, and writes
+	// whether one of them may write.
+	operations := map[string][]string{}
+	writes := map[string]bool{}
 	// The tree is walked as Execute leaves it, so the commands cobra adds of
 	// its own are held to the same declaration as the rest.
 	rootCmd.InitDefaultHelpCmd()
 	rootCmd.InitDefaultCompletionCmd()
 	for _, c := range rootCmd.Commands() {
+		declaredReadOnly := c.Annotations[mcp.ReadOnlyAnnotation] == "true"
 		switch c.Annotations[mcp.BindingAnnotation] {
 		case mcp.Bound:
+			if family := c.Annotations[mcp.FamilyAnnotation]; family != "" {
+				if operations[family] == nil {
+					want = append(want, family)
+				}
+				operations[family] = append(operations[family], c.Name())
+				writes[family] = writes[family] || !declaredReadOnly
+				continue
+			}
 			want = append(want, c.Name())
+			if declaredReadOnly {
+				readOnly = append(readOnly, c.Name())
+			}
 		case mcp.Excluded:
 			if strings.TrimSpace(c.Annotations[mcp.ExclusionReasonAnnotation]) == "" {
 				t.Errorf("%s is excluded with no reason: give cliOnly its reason where %s adds it", c.Name(), registrationFile)
@@ -313,8 +389,10 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 		default:
 			t.Errorf("%s declares no MCP binding: wrap it readOnlyTool, readWriteTool or cliOnly where %s adds it", c.Name(), registrationFile)
 		}
-		if c.Annotations[mcp.ReadOnlyAnnotation] == "true" {
-			readOnly = append(readOnly, c.Name())
+	}
+	for family := range operations {
+		if !writes[family] {
+			readOnly = append(readOnly, family)
 		}
 	}
 	var names, gotReadOnly []string
@@ -366,6 +444,32 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 			}
 			continue
 		}
+		if ops, ok := operations[tool.Name]; ok {
+			// A family's description is its own sentence and two pointers: to
+			// the family's help resource and to each operation's.
+			for _, uri := range []string{mcp.HelpURIPrefix + tool.Name + ".", mcp.HelpURIPrefix + "<operation>"} {
+				if !strings.Contains(tool.Description, uri) {
+					t.Errorf("%s: description %q does not point at %s", tool.Name, tool.Description, uri)
+				}
+			}
+			if keys := slices.Sorted(maps.Keys(s.Properties)); !slices.Equal(keys, []string{"arguments", "operation", "project-dir"}) {
+				t.Errorf("%s: takes %v, want arguments, operation and project-dir", tool.Name, keys)
+			}
+			var enum []string
+			listed, _ := s.Properties["operation"]["enum"].([]any)
+			for _, op := range listed {
+				name, _ := op.(string)
+				enum = append(enum, name)
+			}
+			if s.Properties["operation"]["type"] != "string" || !slices.Equal(enum, ops) || !slices.Contains(s.Required, "operation") {
+				t.Errorf("%s: operation is %v, required %v; want a required string enum of its members %v",
+					tool.Name, s.Properties["operation"], s.Required, ops)
+			}
+			if s.Properties["arguments"]["type"] != "object" || slices.Contains(s.Required, "arguments") {
+				t.Errorf("%s: arguments is %v, required %v; want an optional object", tool.Name, s.Properties["arguments"], s.Required)
+			}
+			continue
+		}
 		if cmd, _, err := rootCmd.Find([]string{tool.Name}); err != nil || tool.Description != cmd.Short {
 			t.Errorf("%s: description %q is not the command's Short", tool.Name, tool.Description)
 		} else if declared, err := mcp.DeclaredPositionals(cmd); err != nil {
@@ -390,10 +494,12 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 	}
 }
 
-// TestMCPRequiredFlags: a tool's schema requires its positionals and no flag —
-// score's --pass among them, a run walking both passes unless it is told
-// otherwise — and every flag still stands as an optional property carrying its
-// usage as its description.
+// TestMCPRequiredFlags: a tool's schema requires its positionals, less an
+// optional variadic one, and no flag — score's --pass among them, a run walking
+// both passes unless it is told otherwise — and every flag still stands as an
+// optional property carrying its usage as its description. A query's required
+// positional is an operation's argument, which TestMCPFamilyArgumentCheck
+// holds to the same rule.
 func TestMCPRequiredFlags(t *testing.T) {
 	tools := map[string]listedTool{}
 	for _, tool := range listTools(t) {
@@ -412,7 +518,7 @@ func TestMCPRequiredFlags(t *testing.T) {
 		want       []string
 	}{
 		{"flags alone, none of them required", "score", nil},
-		{"flags and a positional", "find", []string{"query"}},
+		{"flags and an optional variadic positional", "build", nil},
 		{"flags and no positional", "status", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -483,51 +589,205 @@ func TestMCPBuildAndScoreTakeAskConcurrency(t *testing.T) {
 	}
 }
 
-// TestMCPWriteOpSchemas reads each write op's vocabulary off its own
-// refusal — every key it allows, every required key it misses — and
-// requires the tool's schema to be exactly that, plus the optional
-// project-dir every tool carries.
+// TestMCPWriteOpSchemas reads each values operation's vocabulary off the op's
+// own refusal — every key it allows, every required key it misses — and
+// requires its family tool's argument check to refuse the same call alike:
+// exactly that vocabulary as what it takes, and those keys as missing.
 func TestMCPWriteOpSchemas(t *testing.T) {
-	const unknown = "not-a-values-key"
+	srv, _ := mcpServer(t)
 	seen := 0
-	for _, tool := range listTools(t) {
-		if _, ok := write.OpVocabulary(tool.Name); !ok {
+	for _, c := range rootCmd.Commands() {
+		if _, ok := write.OpVocabulary(c.Name()); !ok {
 			continue
 		}
 		seen++
-		res := write.Run(tool.Name, write.Options{KBRoot: t.TempDir(), Values: []byte(`{"entry":[{"` + unknown + `":1}]}`)})
+		res := write.Run(c.Name(), write.Options{KBRoot: t.TempDir(), Values: []byte(`{"entry":[{"` + unknownArgument + `":1}]}`)})
 		var allowed, required []string
 		for _, r := range res.Refusals {
-			if r.Key == unknown {
-				allowed = append(slices.Clone(r.Allowed), "project-dir")
+			if r.Key == unknownArgument {
+				allowed = slices.Clone(r.Allowed)
 			} else {
 				required = append(required, r.Key)
 			}
 		}
-		var keys []string
-		for k := range tool.InputSchema.Properties {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
+		gotAllowed, gotMissing := operationArguments(t, srv, c.Name())
 		slices.Sort(allowed)
 		slices.Sort(required)
-		gotRequired := slices.Sorted(slices.Values(tool.InputSchema.Required))
-		if len(allowed) == 0 || !slices.Equal(keys, allowed) {
-			t.Errorf("%s: schema keys %v, the op allows %v", tool.Name, keys, allowed)
+		slices.Sort(gotAllowed)
+		slices.Sort(gotMissing)
+		if len(allowed) == 0 || !slices.Equal(gotAllowed, allowed) {
+			t.Errorf("%s: the argument check takes %v, the op allows %v", c.Name(), gotAllowed, allowed)
 		}
-		if !slices.Equal(gotRequired, required) {
-			t.Errorf("%s: schema requires %v, the op requires %v", tool.Name, gotRequired, required)
+		if !slices.Equal(gotMissing, required) {
+			t.Errorf("%s: the argument check requires %v, the op requires %v", c.Name(), gotMissing, required)
 		}
 	}
 	if want := len(write.Ops()) + 1; seen != want {
-		t.Errorf("%d write-op tools, want every op and render-citation: %d", seen, want)
+		t.Errorf("%d values operations, want every op and render-citation: %d", seen, want)
 	}
+}
+
+// TestMCPFamiliesSplitReadFromWrite: every operation of the query tool
+// declares itself read-only and none of the write tool's does, so the query
+// tool carries the read-only hint and the write tool does not.
+func TestMCPFamiliesSplitReadFromWrite(t *testing.T) {
+	members := map[string]int{}
+	for _, c := range rootCmd.Commands() {
+		family := c.Annotations[mcp.FamilyAnnotation]
+		readOnly := c.Annotations[mcp.ReadOnlyAnnotation] == "true"
+		switch {
+		case family == queryFamily && !readOnly:
+			t.Errorf("%s: an operation of %s that does not declare itself read-only", c.Name(), queryFamily)
+		case family == writeFamily && readOnly:
+			t.Errorf("%s: an operation of %s that declares itself read-only", c.Name(), writeFamily)
+		}
+		members[family]++
+	}
+	if members[queryFamily] == 0 || members[writeFamily] == 0 {
+		t.Errorf("operations per family %v, want members of both %s and %s", members, queryFamily, writeFamily)
+	}
+}
+
+// TestMCPFamilyArgumentCheck: a family tool checks a call's arguments against
+// its operation's own schema — a query's positionals and flags, a values
+// operation's vocabulary — and refuses an unknown argument, a missing required
+// one and a value of the wrong type, each item naming its argument and every
+// argument the operation takes. A values operation's vocabulary carries no
+// types, so its wrong type is the op's own refusal, which names the same.
+func TestMCPFamilyArgumentCheck(t *testing.T) {
+	srv, _ := mcpServer(t)
+	for _, tc := range []struct {
+		name, op  string
+		arguments map[string]any
+		key       string
+		allowed   []string
+		// usage is whether the argument check refuses, rather than the op.
+		usage bool
+	}{
+		{"a query's unknown argument", "find", map[string]any{"query": "", "page": 2}, "page", []string{"limit", "offset", "query"}, true},
+		{"a query's missing positional", "find", map[string]any{}, "query", []string{"limit", "offset", "query"}, true},
+		{"a query's wrong type", "find", map[string]any{"query": "", "limit": 1.5}, "limit", []string{"limit", "offset", "query"}, true},
+		{"render-citation's unknown argument", "render-citation", citation(map[string]any{"page": 2}),
+			"page", renderCitationVocabulary(t), true},
+		{"render-citation's missing argument", "render-citation", citation(map[string]any{"anchor": nil}),
+			"anchor", renderCitationVocabulary(t), true},
+		{"render-citation's wrong type", "render-citation", citation(map[string]any{"anchor": 5}),
+			"anchor", renderCitationVocabulary(t), false},
+		{"a write op's unknown argument", "set-rigor", map[string]any{"id": "clm-abcdef", "rigor": 0.5, "page": 2}, "page", []string{"id", "rigor"}, true},
+		{"a write op's missing argument", "set-rigor", map[string]any{"rigor": 0.5}, "id", []string{"id", "rigor"}, true},
+		{"a write op's wrong type", "set-rigor", map[string]any{"id": "clm-abcdef", "rigor": "high"}, "rigor", []string{"id", "rigor"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, isError := callOperation(t, srv, tc.op, tc.arguments)
+			items, _ := doc["refusals"].([]any)
+			i := slices.IndexFunc(items, func(it any) bool { item, _ := it.(map[string]any); return item["key"] == tc.key })
+			if !isError || doc["outcome"] != toolresult.Refused || i < 0 || tc.usage && len(items) != 1 {
+				t.Fatalf("isError %v, %v; want a refusal of %s, alone where the argument check refuses", isError, doc, tc.key)
+			}
+			item, _ := items[i].(map[string]any)
+			var allowed []string
+			listed, _ := item["allowed"].([]any)
+			for _, a := range listed {
+				name, _ := a.(string)
+				allowed = append(allowed, name)
+			}
+			slices.Sort(allowed)
+			if item["key"] != tc.key || !slices.Equal(allowed, slices.Sorted(slices.Values(tc.allowed))) || (item["check"] == checkUsage) != tc.usage {
+				t.Errorf("refused %v; want key %s, allowed %v, a usage refusal %v", item, tc.key, tc.allowed, tc.usage)
+			}
+		})
+	}
+}
+
+// citation is a render-citation entry naming every key it requires, with
+// changes applied over it: a nil value removes its key.
+func citation(changes map[string]any) map[string]any {
+	entry := map[string]any{"excerpt": "x", "cited-document": "a.md", "anchor": "A", "citing-document": "b.md"}
+	for k, v := range changes {
+		if v == nil {
+			delete(entry, k)
+			continue
+		}
+		entry[k] = v
+	}
+	return entry
+}
+
+// renderCitationVocabulary is render-citation's values keys.
+func renderCitationVocabulary(t *testing.T) []string {
+	t.Helper()
+	fields, ok := write.OpVocabulary(write.RenderCitation)
+	if !ok {
+		t.Fatalf("%s has no vocabulary", write.RenderCitation)
+	}
+	var names []string
+	for _, f := range fields {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// TestSharedHelpIsStatedOnce: what the queries and the values operations share
+// is stated in no command's own help. The root command's help states the CLI's
+// form once each; the family tools' help resources, each of which lists its
+// operations from the tree, state the MCP form and none of the CLI's.
+func TestSharedHelpIsStatedOnce(t *testing.T) {
+	srv, _ := mcpServer(t)
+	cliList, mcpList := listQueryHelp("--limit", "--offset"), listQueryHelp("limit", "offset")
+	cli := []string{queryHelp, cliList, valuesHelp}
+	every := []string{queryReads, cliList, mcpList, valuesHelp, valuesArguments}
+	for _, text := range cli {
+		if strings.Count(rootCmd.Long, text) != 1 {
+			t.Errorf("kbase --help states %q %d times, want once", text, strings.Count(rootCmd.Long, text))
+		}
+	}
+	for _, c := range rootCmd.Commands() {
+		if c.Annotations[mcp.BindingAnnotation] != mcp.Bound {
+			continue
+		}
+		help := readResource(t, srv, mcp.HelpURIPrefix+c.Name())
+		for _, text := range every {
+			if strings.Contains(help, text) {
+				t.Errorf("%s's own help states %q, which shared help states", c.Name(), text)
+			}
+		}
+	}
+	for family, want := range map[string][]string{queryFamily: {queryReads, mcpList, valuesArguments}, writeFamily: {valuesArguments}} {
+		help := readResource(t, srv, mcp.HelpURIPrefix+family)
+		for _, text := range every {
+			if strings.Contains(help, text) != slices.Contains(want, text) {
+				t.Errorf("%s's help states %q %v, want %v", family, text, strings.Contains(help, text), slices.Contains(want, text))
+			}
+		}
+		if strings.Contains(help, "--") || strings.Contains(help, "stdin") || strings.Contains(help, "stdout") {
+			t.Errorf("%s's help carries the CLI's form:\n%s", family, help)
+		}
+		for _, c := range rootCmd.Commands() {
+			if c.Annotations[mcp.FamilyAnnotation] == family && !strings.Contains(help, c.Name()) {
+				t.Errorf("%s's help does not list its operation %s", family, c.Name())
+			}
+		}
+	}
+}
+
+// readResource is the text resources/read answers for uri.
+func readResource(t *testing.T, srv mcp.Server, uri string) string {
+	t.Helper()
+	var read struct {
+		Contents []struct{ Text string } `json:"contents"`
+	}
+	serveOne(t, srv, "resources/read", map[string]any{"uri": uri}, &read)
+	if len(read.Contents) != 1 {
+		t.Fatalf("%s reads %+v", uri, read.Contents)
+	}
+	return read.Contents[0].Text
 }
 
 // TestNoSurfaceNamesTheProvenanceOrCreate: who supplied a write's values is
 // write.Options.Provenance, set by kbase's own callers and never by a caller of
-// the surface, so no command flag and no tool property names it; and no write
-// op offers --create, as a flag or as its tool's create property.
+// the surface, so no command flag, tool property or operation argument names
+// it; and no write op offers --create, as a flag or as its operation's create
+// argument.
 func TestNoSurfaceNamesTheProvenanceOrCreate(t *testing.T) {
 	const provenance, create = "provenance", "create"
 	var walk func(c *cobra.Command)
@@ -547,13 +807,26 @@ func TestNoSurfaceNamesTheProvenanceOrCreate(t *testing.T) {
 		}
 	}
 	walk(rootCmd)
-	for _, tool := range listTools(t) {
+	srv, _ := mcpServer(t)
+	for _, tool := range toolsListedBy(t, srv) {
 		for p := range tool.InputSchema.Properties {
 			if strings.Contains(strings.ToLower(p), provenance) {
 				t.Errorf("%s: tool property %s names the provenance", tool.Name, p)
 			}
-			if _, op := write.OpVocabulary(tool.Name); op && p == create {
-				t.Errorf("%s: the write op's tool carries %s", tool.Name, p)
+		}
+		// A family tool's operations take the arguments their own schemas
+		// derive, which its argument check lists.
+		operations, _ := tool.InputSchema.Properties["operation"]["enum"].([]any)
+		for _, o := range operations {
+			op, _ := o.(string)
+			arguments, _ := operationArguments(t, srv, op)
+			for _, a := range arguments {
+				if strings.Contains(strings.ToLower(a), provenance) {
+					t.Errorf("%s: %s's argument %s names the provenance", tool.Name, op, a)
+				}
+				if _, isOp := write.OpVocabulary(op); isOp && a == create {
+					t.Errorf("%s: the write op %s takes %s", tool.Name, op, a)
+				}
 			}
 		}
 	}
@@ -844,12 +1117,15 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 	}
 }
 
-// requireHelpResources requires listed to be the help resources: one per
-// bound command, in the command tree's order, each its command's
-// kbase://help/<command> as text/plain.
+// requireHelpResources requires listed to be the help resources, each
+// text/plain: one per family tool, kbase://help/<family>, then one per bound
+// command, in the command tree's order, its kbase://help/<command>.
 func requireHelpResources(t *testing.T, listed []protocol.Resource) {
 	t.Helper()
 	var want []protocol.Resource
+	for _, f := range toolFamilies() {
+		want = append(want, protocol.Resource{URI: mcp.HelpURIPrefix + f.Name, Name: f.Name + " tool", MimeType: "text/plain"})
+	}
 	for _, c := range rootCmd.Commands() {
 		if c.Annotations[mcp.BindingAnnotation] == mcp.Bound {
 			want = append(want, protocol.Resource{URI: mcp.HelpURIPrefix + c.Name(), Name: c.CommandPath() + " --help", MimeType: "text/plain"})
@@ -1137,14 +1413,17 @@ func TestMCPCallRunsInItsProject(t *testing.T) {
 		{"a server with none runs a call where it names", none, map[string]any{"project-dir": a}, filepath.Join(a, "kb-root")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if stats, isError := callTool(t, tc.srv, "stats", tc.args); isError || stats["kb-root"] != tc.kbRoot {
+			name, args := asOperation(t, "stats", nil)
+			maps.Copy(args, tc.args)
+			if stats, isError := callTool(t, tc.srv, name, args); isError || stats["kb-root"] != tc.kbRoot {
 				t.Errorf("stats: isError %v, %v; want kb-root %s", isError, stats, tc.kbRoot)
 			}
 		})
 	}
 
 	t.Run("a server with none refuses a call naming none", func(t *testing.T) {
-		doc, _, isError := callToolResult(t, none, "stats", map[string]any{})
+		name, args := asOperation(t, "stats", nil)
+		doc, _, isError := callToolResult(t, none, name, args)
 		if !isError {
 			t.Errorf("stats: not an error result\n%s", doc)
 		}
@@ -1153,7 +1432,9 @@ func TestMCPCallRunsInItsProject(t *testing.T) {
 
 	t.Run("a project-dir that is no worktree root is refused", func(t *testing.T) {
 		sub := filepath.Join(b, "kb-root")
-		stats, isError := callTool(t, srvA, "stats", map[string]any{"project-dir": sub})
+		name, args := asOperation(t, "stats", nil)
+		args["project-dir"] = sub
+		stats, isError := callTool(t, srvA, name, args)
 		items, _ := stats["refusals"].([]any)
 		if !isError || stats["outcome"] != toolresult.Refused || len(items) != 1 {
 			t.Fatalf("stats naming %s: isError %v, %v; want one refusal", sub, isError, stats)
@@ -1164,8 +1445,10 @@ func TestMCPCallRunsInItsProject(t *testing.T) {
 	})
 
 	t.Run("a write op naming another project writes there", func(t *testing.T) {
-		inserted, isError := callTool(t, srvA, "insert-claim-entry", map[string]any{"project-dir": b,
+		name, args := asOperation(t, "insert-claim-entry", map[string]any{
 			"title": "B's result", "rigor": 0.5, "rationale": "Shown.", "document": "a.md", "locator": "B"})
+		args["project-dir"] = b
+		inserted, isError := callTool(t, srvA, name, args)
 		ids, _ := inserted["ids"].([]any)
 		if isError || inserted["outcome"] != toolresult.Done || inserted["kb-root"] != filepath.Join(b, "kb-root") || len(ids) != 1 {
 			t.Fatalf("insert-claim-entry: isError %v, %v", isError, inserted)
@@ -1174,8 +1457,10 @@ func TestMCPCallRunsInItsProject(t *testing.T) {
 			project string
 			args    map[string]any
 			found   bool
-		}{{"B", map[string]any{"project-dir": b, "id": ids[0]}, true}, {"A", map[string]any{"id": ids[0]}, false}} {
-			if shown, isError := callTool(t, srvA, "show", tc.args); isError == tc.found {
+		}{{"B", map[string]any{"project-dir": b}, true}, {"A", map[string]any{}, false}} {
+			name, args := asOperation(t, "show", map[string]any{"id": ids[0]})
+			maps.Copy(args, tc.args)
+			if shown, isError := callTool(t, srvA, name, args); isError == tc.found {
 				t.Errorf("show %v in %s: isError %v, %v; want it found %v", ids[0], tc.project, isError, shown, tc.found)
 			}
 		}
@@ -1220,8 +1505,8 @@ func TestMCPProjectRequiredLocatesNoProject(t *testing.T) {
 	srv, _ := mcpServer(t)
 	repo, _ := srv.Located.Root()
 	requests := []string{
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stats","arguments":{}}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"stats","arguments":{"project-dir":""}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":{"operation":"stats"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"operation":"stats","project-dir":""}}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"resources/list"}`,
 		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"` + mcp.BuildTrailURI + `"}}`,
 	}
@@ -1336,9 +1621,15 @@ func TestMCPProjectDirSchemaPerMode(t *testing.T) {
 // build occurs only in the phrase its state chooses. The transcripts pin the
 // serving state's bytes.
 func TestMCPInitializeNamesWhatItServes(t *testing.T) {
+	// What the server serves: its tools, and each family tool's operations.
 	bound := map[string]bool{}
 	for _, tool := range listTools(t) {
 		bound[tool.Name] = true
+		operations, _ := tool.InputSchema.Properties["operation"]["enum"].([]any)
+		for _, op := range operations {
+			name, _ := op.(string)
+			bound[name] = true
+		}
 	}
 	// The instructions may name only what the server serves: a command the
 	// tree holds but the tool table does not is refused by name.

@@ -95,29 +95,37 @@ func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, 
 // checkUsage names a refusal of the invocation itself.
 const checkUsage = "usage"
 
-const queryHelp = `
-It reads the KB under kb-root/ beside the repository's .git and writes nothing; a KB
-in an older metadata format answers as converted, its result saying so, and a KB
-whose load is degraded is refused, with "` + index.RefreshRemedy + `" as the remedy.
-Its result is one YAML document on stdout, the answer under "` + query.ResultsKey + `".`
+// queryReads, queryHelp, listQueryHelp and valuesHelp are what the queries and
+// the values ops share, never stated in a member's own help: the root
+// command's help carries the CLI's form, and the family tools' help resources
+// (toolFamilies) the MCP form, from the same text where the surfaces agree.
+const queryReads = `A query reads the KB under kb-root/ beside the repository's .git and writes
+nothing; a KB in an older metadata format answers as converted, its result
+saying so, and a KB whose load is degraded is refused, with "` + index.RefreshRemedy + `"
+as the remedy.`
+
+// queryHelp is queryReads as the CLI states it.
+const queryHelp = queryReads + ` Its result is one YAML document on stdout, the answer
+under "` + query.ResultsKey + `".`
 
 // pendingHelp closes the Long of each query whose result carries a rigor or a
 // bearing.
 const pendingHelp = `
 A rigor or bearing that reads *pending* is unscored, not low.`
 
-const listQueryHelp = `
-A list answer is returned --limit results at a time from --offset, with
+// listQueryHelp is how a list answer pages, its limit and offset spelled as
+// the surface reading it spells them.
+func listQueryHelp(limit, offset string) string {
+	return `A list answer is returned ` + limit + ` results at a time from ` + offset + `, with
 "count" the whole answer's length and "truncated" whether results lie past
-the ones returned: re-issue with --offset at offset plus those returned.`
+the ones returned: re-issue with ` + offset + ` at offset plus those returned.`
+}
 
 // queryCommand is cmd answering over the KB found from the working
 // directory; a list query takes --limit and --offset.
 func queryCommand(cmd *cobra.Command, list bool, answer queryAnswer) *cobra.Command {
 	var limit, offset int
-	cmd.Long += "\n" + queryHelp
 	if list {
-		cmd.Long += "\n" + listQueryHelp
 		cmd.Flags().IntVar(&limit, "limit", query.DefaultLimit, "the most results to return; 0 returns every one")
 		cmd.Flags().IntVar(&offset, "offset", 0, "how many results to skip")
 	}

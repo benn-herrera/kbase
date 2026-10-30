@@ -13,11 +13,12 @@ import (
 const registrationFile = "cmd/surface.go"
 
 // bindingWrappers are the declarations registrationFile wraps each command in.
-var bindingWrappers = map[string]bool{"readOnlyTool": true, "readWriteTool": true, "cliOnly": true}
+var bindingWrappers = map[string]bool{"readOnlyTool": true, "readWriteTool": true, "cliOnly": true,
+	"queryOperation": true, "writeOperation": true}
 
 // mcpBindingCalls are internal/mcp's command-level binding declarations, which
 // the wrappers call; a flag's ExcludeFlag is not among them.
-var mcpBindingCalls = map[string]bool{"Bind": true, "Exclude": true, "ReadOnly": true}
+var mcpBindingCalls = map[string]bool{"Bind": true, "Exclude": true, "ReadOnly": true, "InFamily": true}
 
 // TestCommandsRegisterOnlyInTheSurface scans every production file of the
 // module and fails on an AddCommand, a binding wrapper or an internal/mcp
@@ -36,7 +37,7 @@ func TestCommandsRegisterOnlyInTheSurface(t *testing.T) {
 			continue
 		}
 		for _, pos := range calls {
-			t.Errorf("%s: a command added or bound outside %s; add it there, wrapped readOnlyTool, readWriteTool or cliOnly", fset.Position(pos), registrationFile)
+			t.Errorf("%s: a command added or bound outside %s; add it there, wrapped readOnlyTool, readWriteTool, queryOperation, writeOperation or cliOnly", fset.Position(pos), registrationFile)
 		}
 	}
 	if !registered {
@@ -53,6 +54,7 @@ func TestRegistrationCallsScan(t *testing.T) {
 		{"a binding wrapper", `package p; func f() { g(readWriteTool(c)) }`, 1},
 		{"cliOnly in a package-level var", `package p; var c = cliOnly(d, "r")`, 1},
 		{"mcp.Bind", `package p; import "kbase/internal/mcp"; func f() { mcp.Bind(c) }`, 1},
+		{"a family wrapper around mcp.InFamily", `package p; import "kbase/internal/mcp"; func f() { queryOperation(mcp.InFamily(c, "q")) }`, 2},
 		{"aliased mcp", `package p; import m "kbase/internal/mcp"; func f() { m.ReadOnly(m.Exclude(c, "r")) }`, 2},
 		{"a flag's exclusion", `package p; import "kbase/internal/mcp"; func f() { mcp.ExcludeFlag(fl) }`, 0},
 		{"another package's Bind", `package p; import "x/mcp"; func f() { mcp.Bind(c) }`, 0},

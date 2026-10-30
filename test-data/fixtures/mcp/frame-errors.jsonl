@@ -10,11 +10,11 @@ this is not JSON
 {"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"method \"prompts/list\" is not one this server answers"}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tree","arguments":{}}}
 {"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"no tool is named \"tree\""}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"find","arguments":{}}}
-{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"find: argument \"query\" is required"}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"find","arguments":{"query":5,"limit":1.5,"page":2}}}
-{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"find: argument \"limit\" must be of type integer; argument \"page\" is not one this tool takes (it takes limit, offset, project-dir, query); argument \"query\" must be of type string"}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"find","arguments":[]}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"query","arguments":{}}}
+{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"query: argument \"operation\" is required"}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query","arguments":{"operation":"tree","arguments":[],"page":2}}}
+{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"query: argument \"arguments\" must be of type object; argument \"operation\" must be one of cited-by, deps, edges, find, gated-on, referenced-by, render-citation, show, stats, strength, subtree; argument \"page\" is not one this tool takes (it takes arguments, operation, project-dir)"}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"query","arguments":[]}}
 {"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"params.arguments must be an object"}}
 {"jsonrpc":"2.0","method":"no/such/notification"}
 null

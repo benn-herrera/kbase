@@ -605,7 +605,8 @@ per-stage detail goes to the `report` file, not stdout.
 
 ## 8. Maintenance subcommands
 
-Every subcommand below is a builtin tool an external agent harness can call, `probe` excepted — a
+Every subcommand below is reachable by an external agent harness as a builtin tool — its own, or as
+an operation of the `query` or `write` tool (§11) — `probe` excepted — a
 tool would let an agent poll a model, which no KB operation asks for (§11); `score` starts a detached
 child that asks one model call per item and returns at once with the run's identity, so the turn is
 not held for the walk's duration (§11). The rules in this section govern each.
@@ -2087,20 +2088,32 @@ restore that still closes a cycle.
 ## 11. The MCP server
 
 `kbase mcp` serves kbase to any external agent harness that speaks the Model Context Protocol, over
-stdio JSON-RPC. It is the subcommands, bound: every tool but one is one subcommand, with the same
-arguments and the same result, so an external agent harness without MCP loses nothing but
-convenience. The exception is `rewind-build`, the one listed tool — it has no
-subcommand behind it, reports position that `status` and the commit trail already state, and
-changes nothing.
+stdio JSON-RPC. It is the subcommands, bound: every subcommand it serves is a tool of its own or an
+operation of one of two family tools, with the same arguments and the same result, so an external
+agent harness without MCP loses nothing but convenience. The exception is `rewind-build`, the one
+listed tool — it has no subcommand behind it, reports position that `status` and the commit trail
+already state, and changes nothing.
 
-- **Tools.** One per subcommand, named as the subcommand, less `completion`, `help`, `mcp` itself and
+- **Tools.** Every subcommand is served, less `completion`, `help`, `mcp` itself and
   `wait` — a tool call would hold the turn for the build's or score run's duration — and less
   `probe`, a diagnostic whose tool would let an agent poll a model at will; plus
-  `rewind-build`, which no subcommand stands behind. A tool's input schema is derived from its command's arguments and flags (the global flags
+  `rewind-build`, which no subcommand stands behind. The queries and `render-citation` are the
+  operations of one tool, `query`, and the write ops the operations of another, `write`; every
+  other subcommand is one tool, named as the subcommand. Each operation stays a subcommand, unchanged
+  on the command line. A command tool's input schema is derived from its command's arguments and flags (the global flags
   excluded — the server carries its own — but for `project-dir`, below), and a duration flag's
-  argument is the Go duration string the command line spells (`30s`). A write op's schema is one
-  entry: the op's closed vocabulary (§8) as properties, no others allowed; a call writes that one
-  entry, and `--no-refresh` is not offered. Every tool's schema, a write op's included, carries one
+  argument is the Go duration string the command line spells (`30s`). A family tool's schema is
+  `operation`, required, a string enum of its operations' names, and `arguments`, an object holding
+  what the operation takes: for a query, its positionals and flags by name, derived as a command
+  tool's schema is; for `render-citation` and a write op, one values entry, the op's closed
+  vocabulary (§8) as its keys. A call writes that one entry, and `--no-refresh` is not offered. The
+  family tool checks `arguments` against its operation's own schema: an unknown key, a missing
+  required key or a value of the wrong type is a refusal document, `refused`, one item per fault,
+  `check: usage`, `key` the argument's name, `allowed` every argument the operation takes and
+  `remedy` naming the operation's help resource. A values entry's keys carry no types there, so
+  a wrong value for a values key is the op's own refusal (§8), which names the key and the allowed
+  set. An `operation` outside the enum, or an `arguments` that is not an object, fails the tool's
+  schema. Every tool's schema, a family's included, carries one
   more property, `project-dir`: the project the call runs in, the git worktree root that holds
   `kb-root/` or will. The schema is rendered per mode (below): in TUI mode the property is
   optional, and a call that omits it runs in the server's located project; in GUI mode it is listed
@@ -2110,18 +2123,23 @@ changes nothing.
   project-dir`, `path` the absolute path; a relative one resolves against the server's working
   directory. A refusal over MCP carries `entry` as `1` and no
   `line` or `column`; its `key` keeps the CLI spelling (§7), or, where no command stands behind the
-  tool, is the schema property name (`target` on `rewind-build`). Arguments that fail the tool's
+  tool, is the schema property name (`target` on `rewind-build`), as it is in a family tool's
+  argument check. Arguments that fail the tool's
   schema (a missing required key, a wrong type, an unknown key) are JSON-RPC `-32602` errors, not
-  refusal documents. A command declares itself read-only in its definition, and the tool carries that
-  as its read-only annotation; the queries, `verify`, `status`, `render-citation`, `show`,
-  `show-config` and `models` are the read-only set, and `rewind-build` completes it, its annotation
-  hand-set with its description because no command declares it. The table is the bound commands plus
-  that one listed tool, and a test asserts the set for equality, so a second listed tool fails as a
-  missing command does.
+  refusal documents; a family tool's `arguments` are checked as above instead. A command declares
+  itself read-only in its definition, and the tool carries that as its read-only annotation, a
+  family tool where every operation declares it; `query` — every query and `render-citation` among
+  its operations — `verify`, `status`, `show-config` and `models` are the read-only set, and
+  `rewind-build` completes it, its annotation hand-set with its description because no command
+  declares it. A family tool's description is one sentence, then where its operations' shared help
+  is, `kbase://help/query` or `kbase://help/write`, and where one operation's is,
+  `kbase://help/<operation>`. The table is one tool per family, one per other bound command, and
+  that one listed tool, and a test derives the set from the commands' declarations and asserts it
+  for equality, so a second listed tool fails as a missing command does.
 - **Results.** The §7 document, as the result's text and as structured content. `isError` is set
   exactly when the document's exit code (§7) is not 0, so a refusal reaches the model as an error
-  carrying its items and remedy while `bounded` and a completed `cancel` do not. List queries take
-  `limit` and `offset` with §7's semantics.
+  carrying its items and remedy while `bounded` and a completed `cancel` do not. A list query takes
+  `limit` and `offset` among its `arguments`, with §7's semantics.
 - **Two modes.** In TUI mode, `kbase mcp`, for a harness that runs kbase from inside the project,
   the server locates its project by searching upward from its working directory for the repository
   root, and a tool call naming no `project-dir` runs there; a server whose search finds no
@@ -2242,9 +2260,15 @@ changes nothing.
   when the run ends, and nothing here makes it promise the session is at a turn when it arrives. An
   unknown URI is JSON-RPC `-32002` (resource not found); a missing `uri` is `-32602`.
   `initialize` advertises the `resources` capability, its `subscribe` among the ones it carries.
-  Each command a tool binds has its help listed as one `text/plain` resource with URI
+  Each family tool has its help listed as one `text/plain` resource, `kbase://help/query` and
+  `kbase://help/write`: its operations, listed from the commands it serves, then what they share,
+  stated there as MCP's arguments spell it, in `kbase --help` as the command line spells it, and in
+  no operation's own help — for `query`, how a query reads the KB and answers, how a list query
+  pages, and how `render-citation` takes its arguments; for `write`, how a write op takes its
+  arguments, one entry. Each command a tool binds, an operation's included,
+  then has its help listed as one `text/plain` resource with URI
   `kbase://help/<command>`, the command's name in place of `<command>`: exactly the text
-  `kbase <command> --help` prints. It is KB-independent text, as the model guidance is: listed
+  `kbase <command> --help` prints. These are KB-independent text, as the model guidance is: listed
   whether or not a KB is found or opens, and the same in every project. `rewind-build`, which no
   command stands behind, has none.
   Nothing else is served, a register page included: the KB's documents are the external agent
@@ -2270,13 +2294,13 @@ changes nothing.
   built; the path is absolute. In GUI mode that opening is one line instead: name the project with
   `project-dir` on each tool call. A TUI-mode server that located no project opens with neither.
   The `kbase` skill is named as the workflow, `show-config` as the tool reporting
-  configuration, and `kbase://help/<command>` as a tool's full help. It states what two outcomes (§7)
+  configuration, and `kbase://help/<name>` as a tool's or an operation's full help. It states what two outcomes (§7)
   ask of the caller: a `retry` call is re-issued unchanged later, and a `failed` call is not
   re-issued, since re-issuing will not fix it. It forbids a session to read or
   write kbase's records and derived files — anything
   under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
-  exists; it names the query tools as what reports what the records hold, the write tools as what
-  changes them, and `refresh` as what writes the sheets. A `claim-rigor.md`
+  exists; it names the `query` tool's operations as what reports what the records hold, the `write`
+  tool's as what changes them, and `refresh` as what writes the sheets. A `claim-rigor.md`
   register page is the exception: `refresh` generates it to be read as prose, and a session takes no
   value from it and never edits it. Its last paragraph is the session rule `AGENTS.md` also states
   (§3): a session sets a rigor or a bearing, its current value included, only to a value the user
@@ -2313,6 +2337,11 @@ changes nothing.
   node, so `drop-claim-edges` and `drop-inbound-edges` are no longer needed first; a mention in prose
   still refuses the drop (§8).
 - **`render-claim-graph` is gone**: `refresh` draws the sheets and reports `sheet` and `dot` (§7, §8).
+- **The queries and the write ops are one MCP tool each.** `query` runs a query or
+  `render-citation`, `write` a write op: `operation` names it from an enum and `arguments` carries
+  what its own tool took; a bad argument is a usage refusal naming it and the allowed set. Every
+  subcommand stands on the command line, and what the queries and the write ops share is stated
+  once, in `kbase --help` and in `kbase://help/query` and `kbase://help/write` (§11).
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

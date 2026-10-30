@@ -355,8 +355,9 @@ reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 ### Using kbase from an agent harness (MCP)
 
 `kbase mcp` serves kbase to any agent harness that speaks the Model Context Protocol, over stdio.
-Every tool is one subcommand, with the same arguments and the same result — except `rewind-build`,
-which reports the build's commit trail and has no subcommand behind it.
+Every subcommand it serves is a tool of its own or an operation of the `query` or `write` tool, with
+the same arguments and the same result; `rewind-build`, which reports the build's commit trail, has
+no subcommand behind it.
 
 The server entry is command `kbase` with one of two argument lists. A harness that runs kbase from
 inside the project uses TUI mode, where the server finds its project from the working directory:
@@ -388,13 +389,16 @@ opencode, in `opencode.json`:
 
 These are examples; any MCP-capable harness adds its own equivalent entry.
 
-- **Tools.** The subcommands: `init`, the write ops, `render-citation`, the queries (including `show`
-  and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `export-latex`,
+- **Tools.** `query` runs the queries (including `show` and `stats`) and `render-citation`, and
+  `write` runs the write ops: `operation` names the subcommand and `arguments` carries what it
+  takes — a query's positionals and flags by name, or one values entry — and a bad argument is a
+  usage refusal naming it and every argument the operation takes. Every other subcommand is a tool
+  of its own: `init`, `show-config`, `models`, `configure`, `refresh`, `verify`, `export-latex`,
   `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not offered,
   and neither is `wait`: a held call would spend the turn the build or score run takes, so the
   `build` and `score` tools hand you their command to run in the background instead. `models`
   reads a provider's model catalogue and `configure` writes `config.toml`; neither performs
-  inference — `build` and `score` are the tools that do. A write-op tool takes one entry and offers
+  inference — `build` and `score` are the tools that do. A write op takes one entry and offers
   no `--no-refresh`.
   `rewind-build` is the exception to one tool per subcommand: it lists the build's boundaries,
   oldest first, and for a `target` you name — a stage id or display name — returns the
@@ -548,7 +552,7 @@ tag `v<version>` locally, the version being what the binary reports, and verifie
 runs no gates, so vet the tree first, and it pushes nothing. No built binaries are committed;
 `bin/` is gitignored. An agent driving kbase reads its operating contract from kbase itself:
 `kbase --help` and `kbase <command> --help` on the command line; over MCP, the server's
-instructions, the tools, and each tool's help at `kbase://help/<command>`.
+instructions, the tools, and each tool's or operation's help at `kbase://help/<name>`.
 
 Integration recipes run `./bin/kbase` itself, except the live-fixture recipes, which run the
 fixture's own copy (below), and keep their evidence under `test-data/transient/`.

@@ -151,13 +151,21 @@ single source. Working habits they impose:
   deletion `git rm`, and staging either is part of the landing's set; the landing commits once.
 - **An MCP tool is a subcommand's binding** (I9). The trap: a tool listed by hand, a description
   copied into a tool, or a schema typed beside the command's flags. Every command reaches the tree
-  in `cmd/surface.go`, one `AddCommand` per family, wrapped `readOnlyTool`, `readWriteTool` or
-  `cliOnly`, which set the cobra annotation `kbase.mcp` = `bound` or `excluded` and the read-only
-  hint; `cliOnly` takes the command's reason as a required argument and records it as the
+  in `cmd/surface.go`, one `AddCommand` per group, wrapped `readOnlyTool`, `readWriteTool`,
+  `queryOperation`, `writeOperation` or `cliOnly`, which set the cobra annotation `kbase.mcp` =
+  `bound` or `excluded` and the read-only hint, the two operation wrappers adding
+  `kbase.mcp.family` (`mcp.InFamily`): the command is an operation of that family's tool, not a
+  tool of its own; `cliOnly` takes the command's reason as a required argument and records it as the
   annotation `kbase.mcp.reason`, and the tool-table test fails an exclusion whose reason is empty;
   cobra's own `help` and `completion` are declared `cliOnly` there too. A test fails an
   `AddCommand` outside that file. The table binds only `bound` commands, and the test derives its
-  expectation from the annotations, never from a list, failing a command that declares neither.
+  expectation from the annotations, never from a list — one tool per family named by a member's
+  `kbase.mcp.family`, its `operation` enum those members, one per other bound command — failing a
+  command that declares neither. A family operation's arguments are checked against its own derived
+  schema (`mcp.CommandSchema`, `write.OpVocabulary`); the trap is an argument list typed into the
+  family tool. What a family's operations share is never appended to a member's `Long`: the root
+  help states the CLI's form and `kbase://help/<family>` the MCP form, from one text where they
+  agree; the trap is CLI input shape (stdin, `--values`, a dashed flag) in a resource only MCP reads.
   The exception is a tool no command stands behind: listed, and only where the tool-table test
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `mcp.ToolResult`, so text, structured content and `isError` cannot drift from a
