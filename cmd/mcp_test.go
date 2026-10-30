@@ -387,7 +387,7 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 				t.Errorf("%s is excluded with no reason: give cliOnly its reason where %s adds it", c.Name(), registrationFile)
 			}
 		default:
-			t.Errorf("%s declares no MCP binding: wrap it readOnlyTool, readWriteTool or cliOnly where %s adds it", c.Name(), registrationFile)
+			t.Errorf("%s declares no MCP binding: wrap it readOnlyTool, readWriteTool, queryOperation, writeOperation or cliOnly where %s adds it", c.Name(), registrationFile)
 		}
 	}
 	for family := range operations {
@@ -498,7 +498,7 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 // optional variadic one, and no flag — score's --pass among them, a run walking
 // both passes unless it is told otherwise — and every flag still stands as an
 // optional property carrying its usage as its description. A query's required
-// positional is an operation's argument, which TestMCPFamilyArgumentCheck
+// positional is an operation's argument, which refusal.jsonl's find exchange
 // holds to the same rule.
 func TestMCPRequiredFlags(t *testing.T) {
 	tools := map[string]listedTool{}
@@ -627,62 +627,26 @@ func TestMCPWriteOpSchemas(t *testing.T) {
 	}
 }
 
-// TestMCPFamiliesSplitReadFromWrite: every operation of the query tool
-// declares itself read-only and none of the write tool's does, so the query
-// tool carries the read-only hint and the write tool does not.
-func TestMCPFamiliesSplitReadFromWrite(t *testing.T) {
-	members := map[string]int{}
-	for _, c := range rootCmd.Commands() {
-		family := c.Annotations[mcp.FamilyAnnotation]
-		readOnly := c.Annotations[mcp.ReadOnlyAnnotation] == "true"
-		switch {
-		case family == queryFamily && !readOnly:
-			t.Errorf("%s: an operation of %s that does not declare itself read-only", c.Name(), queryFamily)
-		case family == writeFamily && readOnly:
-			t.Errorf("%s: an operation of %s that declares itself read-only", c.Name(), writeFamily)
-		}
-		members[family]++
-	}
-	if members[queryFamily] == 0 || members[writeFamily] == 0 {
-		t.Errorf("operations per family %v, want members of both %s and %s", members, queryFamily, writeFamily)
-	}
-}
-
-// TestMCPFamilyArgumentCheck: a family tool checks a call's arguments against
-// its operation's own schema — a query's positionals and flags, a values
-// operation's vocabulary — and refuses an unknown argument, a missing required
-// one and a value of the wrong type, each item naming its argument and every
-// argument the operation takes. A values operation's vocabulary carries no
-// types, so its wrong type is the op's own refusal, which names the same.
-func TestMCPFamilyArgumentCheck(t *testing.T) {
+// TestMCPRenderCitationWrongTypeIsTheOpsRefusal: render-citation's vocabulary
+// carries no types, so the family tool's argument check passes a wrong-typed
+// key and the op refuses it itself, naming the key and every key it takes.
+func TestMCPRenderCitationWrongTypeIsTheOpsRefusal(t *testing.T) {
 	srv, _ := mcpServer(t)
 	for _, tc := range []struct {
 		name, op  string
 		arguments map[string]any
 		key       string
 		allowed   []string
-		// usage is whether the argument check refuses, rather than the op.
-		usage bool
 	}{
-		{"a query's unknown argument", "find", map[string]any{"query": "", "page": 2}, "page", []string{"limit", "offset", "query"}, true},
-		{"a query's missing positional", "find", map[string]any{}, "query", []string{"limit", "offset", "query"}, true},
-		{"a query's wrong type", "find", map[string]any{"query": "", "limit": 1.5}, "limit", []string{"limit", "offset", "query"}, true},
-		{"render-citation's unknown argument", "render-citation", citation(map[string]any{"page": 2}),
-			"page", renderCitationVocabulary(t), true},
-		{"render-citation's missing argument", "render-citation", citation(map[string]any{"anchor": nil}),
-			"anchor", renderCitationVocabulary(t), true},
 		{"render-citation's wrong type", "render-citation", citation(map[string]any{"anchor": 5}),
-			"anchor", renderCitationVocabulary(t), false},
-		{"a write op's unknown argument", "set-rigor", map[string]any{"id": "clm-abcdef", "rigor": 0.5, "page": 2}, "page", []string{"id", "rigor"}, true},
-		{"a write op's missing argument", "set-rigor", map[string]any{"rigor": 0.5}, "id", []string{"id", "rigor"}, true},
-		{"a write op's wrong type", "set-rigor", map[string]any{"id": "clm-abcdef", "rigor": "high"}, "rigor", []string{"id", "rigor"}, false},
+			"anchor", renderCitationVocabulary(t)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc, isError := callOperation(t, srv, tc.op, tc.arguments)
 			items, _ := doc["refusals"].([]any)
 			i := slices.IndexFunc(items, func(it any) bool { item, _ := it.(map[string]any); return item["key"] == tc.key })
-			if !isError || doc["outcome"] != toolresult.Refused || i < 0 || tc.usage && len(items) != 1 {
-				t.Fatalf("isError %v, %v; want a refusal of %s, alone where the argument check refuses", isError, doc, tc.key)
+			if !isError || doc["outcome"] != toolresult.Refused || i < 0 {
+				t.Fatalf("isError %v, %v; want a refusal of %s", isError, doc, tc.key)
 			}
 			item, _ := items[i].(map[string]any)
 			var allowed []string
@@ -692,8 +656,8 @@ func TestMCPFamilyArgumentCheck(t *testing.T) {
 				allowed = append(allowed, name)
 			}
 			slices.Sort(allowed)
-			if item["key"] != tc.key || !slices.Equal(allowed, slices.Sorted(slices.Values(tc.allowed))) || (item["check"] == checkUsage) != tc.usage {
-				t.Errorf("refused %v; want key %s, allowed %v, a usage refusal %v", item, tc.key, tc.allowed, tc.usage)
+			if item["key"] != tc.key || !slices.Equal(allowed, slices.Sorted(slices.Values(tc.allowed))) || item["check"] == checkUsage {
+				t.Errorf("refused %v; want key %s, allowed %v, the op's own refusal rather than a usage one", item, tc.key, tc.allowed)
 			}
 		})
 	}
@@ -734,8 +698,9 @@ func renderCitationVocabulary(t *testing.T) []string {
 func TestSharedHelpIsStatedOnce(t *testing.T) {
 	srv, _ := mcpServer(t)
 	cliList, mcpList := listQueryHelp("--limit", "--offset"), listQueryHelp("limit", "offset")
+	cliAnswer, mcpAnswer := queryAnswerHelp(" on stdout"), queryAnswerHelp("")
 	cli := []string{queryHelp, cliList, valuesHelp}
-	every := []string{queryReads, cliList, mcpList, valuesHelp, valuesArguments}
+	every := []string{queryReads, cliAnswer, mcpAnswer, cliList, mcpList, valuesHelp, valuesArguments}
 	for _, text := range cli {
 		if strings.Count(rootCmd.Long, text) != 1 {
 			t.Errorf("kbase --help states %q %d times, want once", text, strings.Count(rootCmd.Long, text))
@@ -752,7 +717,7 @@ func TestSharedHelpIsStatedOnce(t *testing.T) {
 			}
 		}
 	}
-	for family, want := range map[string][]string{queryFamily: {queryReads, mcpList, valuesArguments}, writeFamily: {valuesArguments}} {
+	for family, want := range map[string][]string{queryFamily: {queryReads, mcpAnswer, mcpList, valuesArguments}, writeFamily: {valuesArguments}} {
 		help := readResource(t, srv, mcp.HelpURIPrefix+family)
 		for _, text := range every {
 			if strings.Contains(help, text) != slices.Contains(want, text) {
@@ -767,6 +732,29 @@ func TestSharedHelpIsStatedOnce(t *testing.T) {
 				t.Errorf("%s's help does not list its operation %s", family, c.Name())
 			}
 		}
+	}
+}
+
+// TestValuesOpHelpNamesItsKeys: a values operation's full help names every key
+// of its entry, so the help its argument refusal points at holds its keys.
+func TestValuesOpHelpNamesItsKeys(t *testing.T) {
+	srv, _ := mcpServer(t)
+	seen := 0
+	for _, c := range rootCmd.Commands() {
+		fields, ok := write.OpVocabulary(c.Name())
+		if !ok {
+			continue
+		}
+		seen++
+		words := instructionsTokens(readResource(t, srv, mcp.HelpURIPrefix+c.Name()))
+		for _, f := range fields {
+			if !slices.Contains(words, f.Name) {
+				t.Errorf("%s's help does not name its key %s", c.Name(), f.Name)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no command is a values operation")
 	}
 }
 
@@ -1200,8 +1188,8 @@ func TestMCPModelHintsResource(t *testing.T) {
 		{URI: mcp.BuildTrailURI, Name: "Build trail", MimeType: "application/yaml"},
 		{URI: mcp.BuildURI, Name: "Build state", MimeType: "application/yaml"}}
 	// listedBy is what a server's resources/list answers before the help
-	// resources, which it requires to follow; a fault in the list is an error
-	// response, which fails the test.
+	// resources; a fault in the list is an error response, which fails the
+	// test.
 	listedBy := func(srv mcp.Server) []protocol.Resource {
 		var listed struct {
 			Resources []protocol.Resource `json:"resources"`
@@ -1210,7 +1198,6 @@ func TestMCPModelHintsResource(t *testing.T) {
 		if len(listed.Resources) < len(want) {
 			return listed.Resources
 		}
-		requireHelpResources(t, listed.Resources[len(want):])
 		return listed.Resources[:len(want)]
 	}
 
@@ -1354,7 +1341,6 @@ func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 	if len(listed.Resources) < 3 || listed.Resources[1].URI != mcp.BuildTrailURI {
 		t.Fatalf("resources/list is %+v, want the guidance, the build trail and the build state", listed.Resources)
 	}
-	requireHelpResources(t, listed.Resources[3:])
 	if trail := listed.Resources[1]; trail.Name != "Build trail" || trail.MimeType != "application/yaml" {
 		t.Errorf("the build trail lists as %+v", trail)
 	}
@@ -1644,6 +1630,7 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 	if !bound["build"] || len(unserved) == 0 {
 		t.Fatalf("the tool table lacks build, or the tree holds no unserved command: bound %v unserved %v", bound, unserved)
 	}
+	cobraOwn := cobraCommands()
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n"
 
 	repo := realPath(t, stageRepo(t, resultsFixture))
@@ -1734,16 +1721,15 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 			prose := strings.Join(slices.DeleteFunc(strings.Fields(text), func(word string) bool {
 				return strings.HasPrefix(word, "kbase://")
 			}), " ")
-			// help is the word for a tool's help, said once in that phrase,
-			// never the CLI-only help command.
-			const helpPhrase = "full help"
-			if strings.Count(prose, helpPhrase) != 1 {
-				t.Errorf("instructions %q do not say %q once", text, helpPhrase)
-			}
 			builds := 0
-			for _, token := range instructionsTokens(strings.Replace(prose, helpPhrase, "", 1)) {
+			for _, token := range instructionsTokens(prose) {
 				if token == "build" {
 					builds++
+					continue
+				}
+				// A word cobra names a command of its own by (help) is the
+				// word, never that CLI-only command.
+				if cobraOwn[token] {
 					continue
 				}
 				if unserved[token] {
@@ -1762,6 +1748,24 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// cobraCommands is the names of the commands cobra adds to a tree of its own —
+// the ones cmd/surface.go declares cliOnly after adding them — read off a tree
+// holding one command of ours, which cobra requires before it adds any.
+func cobraCommands() map[string]bool {
+	const ours = "ours"
+	tree := &cobra.Command{Use: "tree"}
+	tree.AddCommand(&cobra.Command{Use: ours})
+	tree.InitDefaultHelpCmd()
+	tree.InitDefaultCompletionCmd()
+	names := map[string]bool{}
+	for _, c := range tree.Commands() {
+		if c.Name() != ours {
+			names[c.Name()] = true
+		}
+	}
+	return names
 }
 
 // instructionsTokens splits text on every character that is neither a letter,

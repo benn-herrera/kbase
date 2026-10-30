@@ -202,7 +202,9 @@ type Calls struct {
 
 // Tools is the tool table, each tool served by inProject: one tool per command
 // under root its binding declares bound and no family claims, one per family
-// in the place of its first member, and after them calls.Listed.
+// in the place of its first member, and after them calls.Listed. A member
+// naming a family calls.Families lacks, or a family no member names, is an
+// error.
 func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
 	var tools []protocol.Tool
 	bound := boundCommands(root)
@@ -233,6 +235,13 @@ func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) 
 	}
 	for _, tool := range calls.Listed {
 		tools = append(tools, inProject(tool, located))
+	}
+	// The help resources list calls.Families, so a family no bound command
+	// declares would serve help for a tool the table does not hold.
+	for _, f := range calls.Families {
+		if len(familyMembers(bound, f.Name)) == 0 {
+			return nil, fmt.Errorf("family %q: no bound command declares it", f.Name)
+		}
 	}
 	return tools, nil
 }
@@ -296,7 +305,7 @@ func familyTool(f Family, members []*cobra.Command, stderr io.Writer, calls Call
 		Properties: map[string]protocol.Property{
 			operationProperty: {Type: "string", Enum: names},
 			argumentsProperty: {Type: "object", Description: "a positional by its Usage name, a flag by its name " +
-				"without dashes; for a write op, its entry's keys"},
+				"without dashes; for a write op or render-citation, the entry keys its full help lists"},
 		},
 		Required: []string{operationProperty},
 	}
@@ -324,8 +333,8 @@ func familyTool(f Family, members []*cobra.Command, stderr io.Writer, calls Call
 }
 
 // argumentRefusal is the usage refusal of each way arguments fail op's own
-// schema, each item naming its argument and every argument op takes; nil where
-// they fit it.
+// schema, each item naming its argument and every argument op takes, and its
+// remedy pointing at op's full help for the rest; nil where they fit it.
 func argumentRefusal(op protocol.Tool, arguments map[string]any) result.Refusal {
 	faults := op.InputSchema.Faults(arguments)
 	if faults == nil {
@@ -342,7 +351,8 @@ func argumentRefusal(op protocol.Tool, arguments map[string]any) result.Refusal 
 			detail = fmt.Sprintf("%q is no argument of %s", f.Key, op.Name)
 		}
 		refusal = append(refusal, result.Item{Check: buildstore.CheckUsage, Key: f.Key, Allowed: allowed, Detail: detail,
-			Remedy: "its arguments are in its full help, " + HelpURIPrefix + op.Name})
+			Remedy: "allowed names every argument it takes; its full help, " + HelpURIPrefix + op.Name +
+				", says what it does and, for a write op or render-citation, its keys"})
 	}
 	return refusal
 }

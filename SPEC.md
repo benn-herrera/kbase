@@ -2110,7 +2110,8 @@ already state, and changes nothing.
   family tool checks `arguments` against its operation's own schema: an unknown key, a missing
   required key or a value of the wrong type is a refusal document, `refused`, one item per fault,
   `check: usage`, `key` the argument's name, `allowed` every argument the operation takes and
-  `remedy` naming the operation's help resource. A values entry's keys carry no types there, so
+  `remedy` naming `allowed` for the argument names and the operation's help resource for what it
+  does and, for a write op or `render-citation`, its keys. A values entry's keys carry no types there, so
   a wrong value for a values key is the op's own refusal (§8), which names the key and the allowed
   set. An `operation` outside the enum, or an `arguments` that is not an object, fails the tool's
   schema. Every tool's schema, a family's included, carries one
@@ -2265,7 +2266,8 @@ already state, and changes nothing.
   stated there as MCP's arguments spell it, in `kbase --help` as the command line spells it, and in
   no operation's own help — for `query`, how a query reads the KB and answers, how a list query
   pages, and how `render-citation` takes its arguments; for `write`, how a write op takes its
-  arguments, one entry. Each command a tool binds, an operation's included,
+  arguments, one entry, and that over MCP the op's values and no-refresh flags do not apply and a
+  refresh always follows. Each command a tool binds, an operation's included,
   then has its help listed as one `text/plain` resource with URI
   `kbase://help/<command>`, the command's name in place of `<command>`: exactly the text
   `kbase <command> --help` prints. These are KB-independent text, as the model guidance is: listed

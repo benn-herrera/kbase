@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -90,6 +91,32 @@ func TestCommandSchema(t *testing.T) {
 			c := &cobra.Command{Use: "verb <paper>"}
 			tc.build(c)
 			if _, _, err := CommandSchema(c); err == nil {
+				t.Error("no error")
+			}
+		})
+	}
+}
+
+// TestToolsRequireFamiliesAndMembersToMatch: the tool table and the help
+// resources must agree on which families exist, so a member naming a family
+// no Family names, and a Family no bound command names, are each an error.
+func TestToolsRequireFamiliesAndMembersToMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		member   string
+		families []Family
+	}{
+		{"a member whose family is absent", "absent", nil},
+		{"a family with no member", "", []Family{{Name: "lonely"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "root"}
+			cmd := Bind(&cobra.Command{Use: "verb", RunE: func(*cobra.Command, []string) error { return nil }})
+			if tc.member != "" {
+				InFamily(cmd, tc.member)
+			}
+			root.AddCommand(cmd)
+			if _, err := Tools(root, Located{}, io.Discard, Calls{Families: tc.families}); err == nil {
 				t.Error("no error")
 			}
 		})

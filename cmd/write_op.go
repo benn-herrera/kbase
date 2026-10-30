@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -128,15 +129,31 @@ stdin, or in the file --values names: a document whose one key, entry, lists
 the entries, all written or none. A refusal names each offending key, its
 position and every key the op takes.`
 
+// entryKeysHelp is the line closing op's Long: its entry's keys in vocabulary
+// order, the required ones marked. It names no flag, so it holds on the
+// command line and over MCP alike.
+func entryKeysHelp(op string) string {
+	fields, _ := write.OpVocabulary(op)
+	keys := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f.Required {
+			keys = append(keys, f.Name+" (required)")
+		} else {
+			keys = append(keys, f.Name)
+		}
+	}
+	return "An entry's keys: " + strings.Join(keys, ", ") + "."
+}
+
 // writeOpCommand is one write-API op over the KB found from the working
-// directory.
+// directory, its Long closed by entryKeysHelp.
 func writeOpCommand(op, short, long string) *cobra.Command {
 	var valuesFile string
 	var noRefresh bool
 	cmd := &cobra.Command{
 		Use:   op,
 		Short: short,
-		Long:  long,
+		Long:  long + "\n\n" + entryKeysHelp(op),
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := invocationDir(cmd)

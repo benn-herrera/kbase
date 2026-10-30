@@ -1725,13 +1725,18 @@ the family keeps it by name, unlisted: a call takes the member `operation` names
 `arguments` against that member's schema with `protocol.Schema.Faults`, the same check
 `internal/mcp/protocol` runs on a tool's arguments, so no argument list is stated twice (a query's
 from `mcp.CommandSchema`, a values op's from `write.OpVocabulary`). A fault is a usage refusal
-document, one item per fault naming the argument, the member's arguments as `allowed` and its
-help resource as the remedy; arguments that fit run the member as its own tool would. The members'
-shared help is appended to no member's `Long`. The root command's `Long` states the CLI's form once
-each — `queryHelp`, `listQueryHelp("--limit", "--offset")` and `valuesHelp` in `cmd` — and each
-family's `Help` the MCP form for `kbase://help/<family>`, from the same text where the two agree
-(`queryReads`, `listQueryHelp("limit", "offset")`) and `valuesArguments` in place of `valuesHelp`'s
-stdin and `--values`; the resource lists the members from the annotations the enum is built from.
+document, one item per fault naming the argument, the member's arguments as `allowed`, and a
+remedy naming `allowed` for the argument names and the member's help resource for what it does and
+a values op's keys; arguments that fit run the member as its own tool would. A values op's `Long`
+closes with one line `writeOpCommand` generates from `write.OpVocabulary` (`entryKeysHelp`): its
+entry's keys in vocabulary order, the required ones marked, naming no flag, so it is true on both
+surfaces. The members' shared help is appended to no member's `Long`. The root command's `Long`
+states the CLI's form once each — `queryHelp`, `listQueryHelp("--limit", "--offset")` and
+`valuesHelp` in `cmd` — and each family's `Help` the MCP form for `kbase://help/<family>`, from the
+same text where the two agree (`queryReads`, `queryAnswerHelp`, `listQueryHelp("limit", "offset")`)
+and `valuesArguments` in place of `valuesHelp`'s stdin and `--values`, the `write` family's adding
+that the values and no-refresh flags do not apply over MCP; the resource lists the members from the
+annotations the enum is built from.
 
 `cmd/surface.go` adds every command to the tree, one `AddCommand` per group, its binding and
 read-only hint on that line (`readOnlyTool`, `readWriteTool`, `cliOnly`, and for a family tool's

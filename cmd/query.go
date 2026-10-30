@@ -95,18 +95,24 @@ func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, 
 // checkUsage names a refusal of the invocation itself.
 const checkUsage = "usage"
 
-// queryReads, queryHelp, listQueryHelp and valuesHelp are what the queries and
-// the values ops share, never stated in a member's own help: the root
-// command's help carries the CLI's form, and the family tools' help resources
-// (toolFamilies) the MCP form, from the same text where the surfaces agree.
+// queryReads, queryHelp, queryAnswerHelp, listQueryHelp and valuesHelp are
+// what the queries and the values ops share, never stated in a member's own
+// help: the root command's help carries the CLI's form, and the family tools'
+// help resources (toolFamilies) the MCP form, from the same text where the
+// surfaces agree.
 const queryReads = `A query reads the KB under kb-root/ beside the repository's .git and writes
 nothing; a KB in an older metadata format answers as converted, its result
 saying so, and a KB whose load is degraded is refused, with "` + index.RefreshRemedy + `"
 as the remedy.`
 
 // queryHelp is queryReads as the CLI states it.
-const queryHelp = queryReads + ` Its result is one YAML document on stdout, the answer
-under "` + query.ResultsKey + `".`
+var queryHelp = queryReads + "\n" + queryAnswerHelp(" on stdout")
+
+// queryAnswerHelp is where a query's result puts its answer, where naming the
+// channel the document arrives on as the surface reading it states it.
+func queryAnswerHelp(where string) string {
+	return "Its result is one YAML document" + where + ", the answer under \"" + query.ResultsKey + "\"."
+}
 
 // pendingHelp closes the Long of each query whose result carries a rigor or a
 // bearing.

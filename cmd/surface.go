@@ -9,7 +9,6 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
-	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
@@ -52,11 +51,13 @@ func toolFamilies() []mcp.Family {
 	return []mcp.Family{
 		{Name: queryFamily,
 			Summary: "Runs one read-only query over the KB, or render-citation: operation names it.",
-			Help: queryReads + ` Its result is one YAML document, the answer under "` + query.ResultsKey + `".` +
-				"\n\n" + listQueryHelp("limit", "offset") + "\n\nFor render-citation, " + valuesArguments},
+			Help: queryReads + " " + queryAnswerHelp("") +
+				"\n\n" + listQueryHelp("limit", "offset") + "\n\nFor render-citation, " + valuesArguments +
+				" Its values flag does not apply."},
 		{Name: writeFamily,
 			Summary: "Runs one write op over the KB: operation names it.",
-			Help:    valuesArguments + " A call writes all of it or none."},
+			Help: valuesArguments + " A call writes all of it or none; the op's values and no-refresh flags do " +
+				"not apply, and a refresh always follows."},
 	}
 }
 
@@ -127,7 +128,7 @@ func init() {
 	for _, c := range rootCmd.Commands() {
 		switch c.Name() {
 		case "help":
-			cliOnly(c, "a tool's schema and description already carry what help prints for a terminal")
+			cliOnly(c, "each bound command's help is the resource kbase://help/<command>, so a tool printing it would duplicate a resource")
 		case "completion":
 			cliOnly(c, "it writes a shell's completion script, which no tool caller runs")
 		}
