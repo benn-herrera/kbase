@@ -643,8 +643,8 @@ around each of its two refreshes, never across the run (§8). A writer that cann
 repository root, and the remedy. A write verb probes for a run holding the operation lock (§6) before
 it waits on the write lock and again after taking it: where one runs it is `refused` with the `lock`
 item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it
-writes (`retry` if it cannot); its own writes take no lock, and neither do a scoring run's landings
-and refreshes, which write as the run that holds the operation lock. `render-citation`, `verify` and the queries take
+writes (`retry` if it cannot); its own writes take no lock. A scoring run's landings and refreshes
+make no operation-lock probe, writing as the run that holds it. `render-citation`, `verify` and the queries take
 no lock. On Windows no
 advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and
 one writer at a time is the operator's to keep.
