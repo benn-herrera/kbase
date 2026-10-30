@@ -14,7 +14,8 @@ putting the key in a transcript.
 ## Decisions taken
 
 1. **kbase holds one store, of the opencode kind,** one file per provider at
-   `~/.local/state/kbase/auth/<provider>-key.enc`. A key is encrypted at rest with a per-user key
+   `~/.local/state/kbase/auth/<provider>-key.enc` — `$XDG_STATE_HOME/kbase/auth/` where that
+   variable is set, as kbase's state base already resolves. A key is encrypted at rest with a per-user key
    derived by HKDF from a key compiled into the binary, the username as HKDF's `info` (stdlib
    `crypto/hkdf`). The compiled-in key is a plain constant in the source: a build-time key would
    leave each release unable to read the last one's store, and disguising a constant in public

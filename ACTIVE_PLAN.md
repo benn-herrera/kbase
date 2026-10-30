@@ -6,11 +6,11 @@ Built from [ACTIVE_DESIGN](ACTIVE_DESIGN.md)
 architect's revision (CONVENTIONS "Plan dispatchability"). Line numbers below are as of commit
 `be1adb5`.
 
-**Awaiting the owner's confirmation before dispatch:** the plan reads the store location as
-`$XDG_STATE_HOME/kbase/auth/` (defaulting to `~/.local/state/kbase/auth/`, as "The store's
-location" below states). Under this reading, tests isolate the store through `XDG_STATE_HOME`,
-and SPEC §9's "No environment variable supplies an endpoint, a model or a key" narrows. Under the
-alternative, the literal path, tests override `HOME` instead.
+**The store location** is `$XDG_STATE_HOME/kbase/auth/`, defaulting to
+`~/.local/state/kbase/auth/` where the variable is unset, as kbase's state base already resolves
+(`internal/statedir/statedir.go:35–41`; "The store's location" below). Tests isolate the store
+through `XDG_STATE_HOME`, and SPEC §9's "No environment variable supplies an endpoint, a model or a
+key" narrows: the variable chooses where the store is, never a key.
 
 ## Outcome
 
