@@ -2,9 +2,8 @@
 
 Built from [ACTIVE_DESIGN](ACTIVE_DESIGN.md)
 
-**Status: not dispatchable.** It still needs the prompt-engineer usability review and the
-architect's revision (CONVENTIONS "Plan dispatchability"). Line numbers below are as of commit
-`be1adb5`.
+**Status: dispatching,** one package at a time; the table below tracks each. Line numbers below are
+as of commit `be1adb5`.
 
 **The store location** is `$XDG_STATE_HOME/kbase/auth/`, defaulting to
 `~/.local/state/kbase/auth/` where the variable is unset, as kbase's state base already resolves
@@ -96,8 +95,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | id | rating | one line | depends on | status |
 |---|---|---|---|---|
 | A | mechanical | test failure messages never print a key | none | landed |
-| B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | in progress |
-| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | pending |
+| B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | landed |
+| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | in progress |
 | D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C | pending |
 | E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D | pending |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |

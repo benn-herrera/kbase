@@ -180,6 +180,15 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/kb", "internal/atomicfile"},
 	direct:  true,
 	why:     "export imports kb and atomicfile and nothing else of kbase: the verb opens the KB and supplies every pandoc call",
+}, {
+	from:    []string{"internal/auth"},
+	allowed: []string{"internal/atomicfile"},
+	why:     "the credentials store imports nothing of kbase but atomicfile, to write its files at their mode",
+}, {
+	except:    []string{"cmd"},
+	forbidden: []string{"internal/auth"},
+	direct:    true,
+	why:       "only cmd imports the credentials store: it reads the stored keys and hands them to config as data",
 }}
 
 func underAny(pkg string, prefixes []string) bool {

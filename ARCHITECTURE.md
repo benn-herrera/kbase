@@ -1385,7 +1385,8 @@ internal/index            `Derive` (the derived rows in memory), the degraded lo
 internal/write            render / values / store / ops over the records and the
                           statement markers, provenance, the build-only
                           `add-build-edges`, `demote-claim-edge` and `split-claim`
-internal/atomicfile       the one atomic file writer
+internal/atomicfile       the one atomic file writer; `WriteMode` sets the file's
+                          permission exactly, umask and a replaced file's mode aside
 internal/query
 internal/sheet            DOT emitter, `dot` invocation: `Derive`'s rows, the leaves,
                           the entry point's and volumes' headings in; SVGs out
@@ -1427,9 +1428,18 @@ internal/score            the score passes' closed text, its guard and the passa
                           its re-pricing and the retention of runs, and the development
                           replay (`kbasedev`); imports not `model`; imported by cmd and
                           internal/mcp alone
-internal/statedir         the state directory of one KB: the override, else
-                          $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
-                          imported by build, buildstore and cmd
+internal/statedir         the state base (`Base`: $XDG_STATE_HOME/kbase,
+                          $XDG_STATE_HOME defaulting to ~/.local/state), and the
+                          state directory of one KB: the override, else <key>
+                          under the base, never inside kb-root/; imported by build,
+                          buildstore and cmd
+internal/auth             the credentials store: one file per provider,
+                          `<provider>-key.enc` in the directory its caller names,
+                          the key sealed by AES-GCM under a per-user key HKDF derives from
+                          a constant in the source and the username — obfuscation,
+                          not a boundary, separation between users being the
+                          file's mode; the provider-name rule for a file name;
+                          imported by cmd alone
 internal/asks/call        the caller: the multichoice asks through a Slot's Decision behind the multichoice-ask
                           seam, the overview call through a Slot's Chat; captures, answer
                           cache; imported by build alone
@@ -1618,6 +1628,8 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB and supplies every pandoc call — the preflight and the one `pandoc.RunDefaults` call — as a
   function value `export.Run` calls.
+- `internal/auth` imports nothing of kbase but `atomicfile`, to write its files at their mode, and
+  only `cmd` imports it; `config`'s own rule keeps it from the store.
 
 The dependency rules are enforced by an import-policy test over the transitive import graph
 (`cmd/importpolicy_test.go`), beside the I1 exec-policy test (`cmd/execpolicy_test.go`).
@@ -1629,6 +1641,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Constant | Value |
 |---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6) |
+| Credentials store | `auth.DirName`: `auth`, the store's directory under the state base (`statedir.Base`), beside the per-KB state directories, whose 16-hex-digit keys it cannot collide with; `auth.FileSuffix`: `-key.enc`, ending each provider's file, `<provider>-key.enc`; `auth.FileMode`: `0600`, each file's permission on creation and on every replace |
 | Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures |
 | `stats` leverage bar and floor | `query.DefaultMaxStrength`: 0.65, the strength bar, and `query.DefaultMinDependents`: 1, the dependents floor, of `stats`' `highest_leverage`; the bar is its own constant, not derived from the band ladder, so a change to a band's lower bound does not move `stats` |
 | Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, an answer cut off at the completion cap before any answer text ends the call on its first attempt, and every transport failure and incomplete stream is re-issued; the build's multichoice asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts, and a pause the call's deadline cannot cover is not waited out — the call gives up at once, naming the attempts it made |

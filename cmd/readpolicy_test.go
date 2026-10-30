@@ -52,6 +52,7 @@ var fileOpenOwners = map[string]string{
 	"internal/export/write.go":                "the export's gen-tex/: its manifest, each file's bytes and pandoc's outputs, compared so an unchanged file is not rewritten or reported, and the filter's findings; never the author's preamble.tex",
 	"internal/mcp/launch.go":                  "a detached build's or score run's captured output in the state store",
 	"internal/score/status.go":                "a scoring run's result document in the state store",
+	"internal/auth/auth.go":                   "the credentials store's key files",
 }
 
 // onDiskOwners are the production files that read a KB with no stamp check:

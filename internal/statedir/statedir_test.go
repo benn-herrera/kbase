@@ -37,6 +37,24 @@ func TestDirPerKBRoot(t *testing.T) {
 	}
 }
 
+// TestBaseFollowsXDGStateHome: the state base is kbase under $XDG_STATE_HOME,
+// and under ~/.local/state where the variable is unset or empty.
+func TestBaseFollowsXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir's source on Windows
+	xdg := t.TempDir()
+	for _, tc := range []struct{ xdg, want string }{
+		{xdg, filepath.Join(xdg, "kbase")},
+		{"", filepath.Join(home, ".local", "state", "kbase")},
+	} {
+		t.Setenv("XDG_STATE_HOME", tc.xdg)
+		if got, err := Base(); err != nil || got != tc.want {
+			t.Errorf("Base with XDG_STATE_HOME=%q = %q, %v; want %q", tc.xdg, got, err, tc.want)
+		}
+	}
+}
+
 // TestOverrideInsideKBRootRefused: an override the user names is used as given,
 // and one inside kb-root/ is refused with the item every state-store refusal
 // names.
