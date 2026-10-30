@@ -134,6 +134,60 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 	}
 }
 
+// TestBuildDialsOneEntryBothRolesNameOnce: two roles referencing one OpenAI
+// pool entry are one endpoint, dialled once with the key its apiKeyFile holds; each role's
+// record names that entry; and a key bound for a non-loopback http:// endpoint
+// is one line on the verb's stderr, naming no key.
+func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
+	unsetInferenceEnv(t)
+	cfgDir := t.TempDir()
+	writeValues(t, cfgDir, "key.txt", "secret-key\n")
+	if err := os.Chmod(filepath.Join(cfgDir, "key.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The entry speaks OpenAI chat, the decision surface's protocol, so both
+	// roles reach one endpoint; an entry speaking Messages is two.
+	writeValues(t, cfgDir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://reaper.local:4000/v1\"\napiKeyFile = \"key.txt\"\napi = \"openai\"\n")
+	writeValues(t, cfgDir, config.ConfigFileName, "[models]\ndecision = \"lab/Some-Decision\"\ntext = \"lab/Some-Text\"\n")
+	saved := flagConfigDir
+	t.Cleanup(func() { flagConfigDir = saved })
+	flagConfigDir = cfgDir
+
+	providers, err := loadVerbContext(t.TempDir())
+	if err != nil {
+		t.Fatalf("loading the staged configuration: %v", err)
+	}
+	var stderr bytes.Buffer
+	var dialled []model.Endpoint
+	providers.NewClient = func(e model.Endpoint) model.Client {
+		dialled = append(dialled, e)
+		return modeltest.NewScriptedMock(nil, nil).Client()
+	}
+	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(modelclient.New(providers.NewClient, nil, "", 0))
+	if err != nil {
+		t.Fatalf("provider = %v", err)
+	}
+	if p.Multichoice != "Some-Decision" || p.Overview != "Some-Text" {
+		t.Errorf("provider = %+v, want each role's own model", p)
+	}
+	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey != "secret-key" {
+		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", dialled)
+	}
+	if len(p.Roles) != 2 {
+		t.Fatalf("roles = %v, want one per role the build asks", p.Roles)
+	}
+	for i, id := range []string{"Some-Decision", "Some-Text"} {
+		for key, want := range map[string]any{"provider": "lab", "provider-rule": config.RuleConfig, "model": id} {
+			if got := roleField(p.Roles[i], key); got != want {
+				t.Errorf("roles[%d] %s = %v, want %v", i, key, got, want)
+			}
+		}
+	}
+	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "cleartext") || strings.Contains(stderr.String(), "secret-key") {
+		t.Errorf("stderr = %q, want one cleartext line naming no key", stderr.String())
+	}
+}
+
 // TestBuildRefusesTheRoleWhoseProviderThePoolLacks: a role whose reference
 // names an entry the pool does not hold refuses by that role's key and that
 // provider's name — never as "the provider" — before any stage is walked.

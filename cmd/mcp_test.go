@@ -66,10 +66,32 @@ func isolateChildBuild(t *testing.T, base string) {
 		runAsKBaseEnv:     "1",
 		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@invalid",
 		"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": filepath.Join(base, "gitconfig"),
-		"XDG_STATE_HOME": filepath.Join(base, "xdg"), "KBASE_CONFIG_DIR": filepath.Join(base, "config"),
+		"XDG_STATE_HOME": filepath.Join(base, "xdg"), "KBASE_CONFIG_DIR": childConfigDir(base),
 	} {
 		t.Setenv(k, v)
 	}
+}
+
+// childConfigDir is the configuration directory isolateChildBuild names for
+// base: the one directory a kbase started from the test reads.
+func childConfigDir(base string) string { return filepath.Join(base, "config") }
+
+// childStubConfig writes, into the configuration directory isolateChildBuild
+// names for base, a pool of one entry, stub, on url — speaking OpenAI chat, as
+// the test's stub endpoints stream it — and a config.toml naming model m on it
+// for each of roles.
+func childStubConfig(t *testing.T, base, url string, roles ...config.Role) {
+	t.Helper()
+	dir := childConfigDir(base)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValues(t, dir, config.ProvidersFileName, "[stub]\nbaseUrl = \""+url+"\"\napi = \"openai\"\n")
+	models := "[models]\n"
+	for _, role := range roles {
+		models += string(role) + " = \"stub/m\"\n"
+	}
+	writeValues(t, dir, config.ConfigFileName, models)
 }
 
 // gitRepo makes repo a repository as git init makes one, without starting
@@ -641,9 +663,8 @@ func stalledBuildRepos(t *testing.T, names ...string) (string, []string) {
 		repos = append(repos, repo)
 	}
 	isolateChildBuild(t, base)
-	t.Setenv(config.EnvAPIBaseURL, provider.URL)
-	t.Setenv(config.EnvDecision, "m")
-	t.Setenv(config.EnvText, "m")
+	unsetInferenceEnv(t)
+	childStubConfig(t, base, provider.URL, config.RoleDecision, config.RoleText)
 	return base, repos
 }
 

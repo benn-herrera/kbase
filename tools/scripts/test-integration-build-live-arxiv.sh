@@ -3,8 +3,8 @@
 # BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository, asking the
 # provider the resolved configuration names; then a second build through
 # claims-discovered configured by the environment alone, a third naming no
-# configuration directory, and a score run configured by the environment
-# alone. Counts land in comparison.yaml.
+# configuration directory, and a score run configured by --config-dir.
+# Counts land in comparison.yaml.
 #
 # Inputs (environment): BIN_DIR; ARXIV_DIR, the unpacked corpus;
 # BUILD_ARXIV_SPECIAL_ID, the paper built; BUILD_LIVE_ARXIV_OUT_DIR, the
@@ -197,15 +197,20 @@ check build-env "$([[ "$(rc "${ck}/kbase-build-env")" -eq 0 ]] && grep -qx 'outc
 layered="${root}/${dir}/layered"
 layered_home="${layered}/home"
 layered_repo="${layered}/repo"
-mkdir -p "${layered_home}/.config/kbase" "${layered_repo}"
-cp "${source_dir}/providers.toml" "${layered_home}/.config/kbase/providers.toml"
-# A relative apiKeyFile resolves beside its providers.toml, so the keys it
-# names travel with it or its entries drop; owner-only, because a key file
-# any other account can read is reported as a warning fault.
-if [[ -d "${source_dir}/api_keys" ]]; then
-    cp -R "${source_dir}/api_keys" "${layered_home}/.config/kbase/api_keys"
-    find "${layered_home}/.config/kbase/api_keys" -type f -exec chmod 0600 {} +
-fi
+# copy_pool <dir>: the providers.toml of the layer that supplied the provider,
+# copied into dir. A relative apiKeyFile resolves beside its providers.toml,
+# so the keys it names travel with it or its entries drop; owner-only, because
+# a key file any other account can read is reported as a warning fault.
+copy_pool() {
+    mkdir -p "$1"
+    cp "${source_dir}/providers.toml" "$1/providers.toml"
+    if [[ -d "${source_dir}/api_keys" ]]; then
+        cp -R "${source_dir}/api_keys" "$1/api_keys"
+        find "$1/api_keys" -type f -exec chmod 0600 {} +
+    fi
+}
+mkdir -p "${layered_repo}"
+copy_pool "${layered_home}/.config/kbase"
 # The build commits its boundaries with the ambient git identity, which this
 # home supplies in place of the operator's.
 printf '[user]\n\tname = kbase integration\n\temail = kbase@invalid\n' > "${layered_home}/.gitconfig"
@@ -291,36 +296,33 @@ check layered-sources "${layered_sources}" \
     "three role records, each ${provider} out of the global pool with its model from the repository's file: base-url and key global, model repository; decision and scoring ${decision}, text ${text}" \
     "${layered_show}.out"
 
-# The environment mode configures a score run with no configuration
-# directory: the base URL and the role variables alone, against the KB the
-# first build finished. One item is asked; the document and the ledger name
-# the scoring model, which differs from the text model, and the text model
-# appears nowhere in the run.
-score_home="${dir}/score-home"
-mkdir -p "${score_home}"
-score_env=(-u KBASE_CONFIG_DIR "HOME=${score_home}" "KBASE_API_BASE_URL=${base_url}"
-    "KBASE_DECISION=${decision}" "KBASE_TEXT=${text}" "KBASE_SCORING=${scoring}")
-[[ -z "${key_file}" ]] || score_env+=("KBASE_API_KEY_FILE=${key_file}")
-capture "${ck}/kbase-score-env" "${repo}" env "${score_env[@]}" "${kbase}" score \
-    --pass rigor --limit 1 --state-dir "${root}/${dir}/score-state"
+# A score run configured by --config-dir, against the KB the first build
+# finished: a directory of this leg's own holding the pool of the layer that
+# supplied the provider and a config.toml with the three references, so the
+# operator's layers are not read. One item is asked; the scoring role record
+# names the provider, the config rule and the scoring model, the ledger names
+# that model, and the text model appears nowhere, resume included.
+score_config="${root}/${dir}/score-config"
+copy_pool "${score_config}"
+printf '%s\n' '[models]' "decision = \"${provider}/${decision}\"" "text = \"${provider}/${text}\"" \
+    "scoring = \"${provider}/${scoring}\"" > "${score_config}/config.toml"
+capture "${ck}/kbase-score" "${repo}" env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING \
+    -u KBASE_API_KEY_FILE "${kbase}" score --pass rigor --limit 1 --config-dir "${score_config}" --state-dir "${root}/${dir}/score-state"
 score_ok=0
-[[ "$(rc "${ck}/kbase-score-env")" -eq 0 ]] || score_ok=1
-grep -qx 'outcome: "done"' "${ck}/kbase-score-env.out" || score_ok=1
-grep -qx '    - role: "scoring"' "${ck}/kbase-score-env.out" || score_ok=1
-grep -qx '      back-end: "environment"' "${ck}/kbase-score-env.out" || score_ok=1
-grep -qxF "      model: \"${scoring}\"" "${ck}/kbase-score-env.out" || score_ok=1
-[[ "$(sed -n 's/^    done: //p' "${ck}/kbase-score-env.out")" -eq 1 ]] || score_ok=1
-score_ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${ck}/kbase-score-env.out" | head -n 1)"
+[[ "$(rc "${ck}/kbase-score")" -eq 0 ]] || score_ok=1
+grep -qx 'outcome: "done"' "${ck}/kbase-score.out" || score_ok=1
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider)" == "${provider}" ]] || score_ok=1
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider-rule)" == config ]] || score_ok=1
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring model)" == "${scoring}" ]] || score_ok=1
+[[ "$(sed -n 's/^    done: //p' "${ck}/kbase-score.out")" -eq 1 ]] || score_ok=1
+score_ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${ck}/kbase-score.out" | head -n 1)"
 [[ -n "${score_ledger}" && -f "${score_ledger}/ledger.jsonl" ]] || score_ok=1
 grep -qF "\"model\":\"${scoring}\"" "${score_ledger}/ledger.jsonl" || score_ok=1
-# The text model appears nowhere the run asked. The resume record is the one
-# place it stands: an environment-mode command re-issues the whole
-# configuration it read, text's variable included.
-if grep -v '^resume:' "${ck}/kbase-score-env.out" | grep -qF "${text}"; then score_ok=1; fi
+if grep -qF "${text}" "${ck}/kbase-score.out"; then score_ok=1; fi
 if grep -qF "${text}" "${score_ledger}/ledger.jsonl"; then score_ok=1; fi
-check score-env "${score_ok}" \
-    "environment mode configured a score run with no configuration directory: one item asked on ${scoring} (the text model ${text} appears nowhere the run asked), against ${base_url}" \
-    "${ck}/kbase-score-env.out"
+check score "${score_ok}" \
+    "a score run configured by --config-dir ${score_config}: one item asked on ${provider}/${scoring} under the config rule (the text model ${text} appears nowhere, resume included), against ${base_url}" \
+    "${ck}/kbase-score.out"
 
 {
     printf -- '- id: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    letter-answers: %s\n    overview-answers: %s\n    ask-records: %s\n  checks:\n' \
@@ -333,7 +335,7 @@ check score-env "${score_ok}" \
     [[ -f "${dir}/counts.yaml" ]] && sed 's/^/  /' "${dir}/counts.yaml"
 } > "${out}/comparison.yaml"
 
-OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the environment or layered legs, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, models, base URL, key file and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_API_KEY_FILE=<the provider's key file> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider <the decision role's provider> --model-map decision=<provider>/<the decision role's model>,text=<provider>/<the text role's model>,scoring=<provider>/<the decision role's model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE HOME=<id>/score-home KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_SCORING=<the decision role's model> [KBASE_API_KEY_FILE=<the provider's key file>] ${kbase} score --pass rigor --limit 1 --state-dir <id>/score-state) into <id>/checks/kbase-score-env.*: environment mode with no configuration directory, one item asked on the scoring model, the ledger naming it and no line naming the text model" \
+OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the environment or layered legs, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, models, base URL, key file and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_API_KEY_FILE=<the provider's key file> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider <the decision role's provider> --model-map decision=<provider>/<the decision role's model>,text=<provider>/<the text role's model>,scoring=<provider>/<the decision role's model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE ${kbase} score --pass rigor --limit 1 --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score.*, <id>/score-config holding the providers.toml and api_keys of the layer that supplied the provider and a config.toml with decision=<provider>/<the decision role's model>, text=<provider>/<the text role's model>, scoring=<provider>/<the decision role's model>: one item asked, the scoring role record naming the provider, provider-rule config and the scoring model, the ledger naming it, and the text model nowhere on stdout or in the ledger" \
     tools/scripts/write-evidence.sh
 printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
 if [[ "${status}" -ne 0 ]]; then

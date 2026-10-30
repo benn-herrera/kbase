@@ -23,11 +23,12 @@ import (
 )
 
 // scoreToolProvider starts the inference endpoint a tool call's scoring run
-// reaches and names it in the environment: slow holds each request for a moment
-// so the run stays in flight, fail refuses it with a reason of its own, and
-// value answers at once. The tool call's child is the shipped binary and the run
-// is real, so what answers it is an endpoint rather than a stub process.
-func scoreToolProvider(t *testing.T, mode string) {
+// reaches and names it as the scoring role in the configuration directory the
+// child reads under base: slow holds each request for a moment so the run stays
+// in flight, fail refuses it with a reason of its own, and value answers at
+// once. The tool call's child is the shipped binary and the run is real, so
+// what answers it is an endpoint rather than a stub process.
+func scoreToolProvider(t *testing.T, base, mode string) {
 	t.Helper()
 	unsetInferenceEnv(t)
 	release := make(chan struct{})
@@ -57,8 +58,7 @@ func scoreToolProvider(t *testing.T, mode string) {
 	// Registered after Close so it runs before it: a request the run left
 	// hanging must wake before the server waits for its handlers.
 	t.Cleanup(func() { close(release) })
-	t.Setenv(config.EnvAPIBaseURL, srv.URL)
-	t.Setenv(config.EnvScoring, "stub/model")
+	childStubConfig(t, base, srv.URL, config.RoleScoring)
 }
 
 // scoreToolServer is the MCP tool table over repo, with the child's state and
@@ -108,7 +108,7 @@ func TestMCPScoreStartsDetached(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -153,7 +153,7 @@ func TestMCPScoreWaitReportsFailures(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "fail")
+	scoreToolProvider(t, base, "fail")
 	srv := scoreToolServer(t, repo, base)
 
 	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -189,7 +189,7 @@ func TestBuildRefusedWhileAScoreRunHoldsTheLock(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -223,7 +223,7 @@ func TestStatusReportsAKilledScoreRun(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -295,7 +295,7 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -315,7 +315,7 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 
 	// The cancelled run's ledger continues: an endpoint that answers lands the
 	// item the cancellation left unasked.
-	scoreToolProvider(t, "value")
+	scoreToolProvider(t, base, "value")
 	out, code := kbase(t, repo, "score", "--pass", "rigor", "--resume", run, "--state-dir", state)
 	doc := checkDocument(t, "score", out)
 	if doc.Outcome != toolresult.Done || code != 0 {

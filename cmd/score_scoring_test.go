@@ -126,6 +126,34 @@ func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 	}
 }
 
+// TestScoreNamesTheScoringModelAlone: with no --scoring-model, a run over files
+// whose text and scoring roles name different models asks the scoring one: the
+// roles record names its entry and model, the ledger's lines name it, and the
+// text model appears neither in the document nor in the ledger.
+func TestScoreNamesTheScoringModelAlone(t *testing.T) {
+	unsetInferenceEnv(t)
+	repo, state := scoreRepo(t), t.TempDir()
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })
+	if got.doc.Outcome != "done" || got.dialled != 1 {
+		t.Fatalf("the run: %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
+	}
+	role := roleOf(got.doc, "scoring")
+	if role == nil || role["provider"] != "solo" || role["provider-rule"] != config.RuleConfig || role["model"] != "scoring-model" {
+		t.Errorf("roles = %v, want solo/scoring-model under the config rule\n%s", got.doc.Values["roles"], got.stdout)
+	}
+	if strings.Contains(got.stdout, "text-model") {
+		t.Errorf("the run names the text model:\n%s", got.stdout)
+	}
+	dir, _ := got.doc.Values["ledger"].(string)
+	ledger, err := os.ReadFile(filepath.Join(dir, "ledger.jsonl"))
+	if err != nil {
+		t.Fatalf("read the ledger: %v", err)
+	}
+	if !strings.Contains(string(ledger), `"model":"scoring-model"`) || strings.Contains(string(ledger), "text-model") {
+		t.Errorf("the ledger's lines do not name the scoring model alone:\n%s", ledger)
+	}
+}
+
 // TestScoreConfiguredByEnvironmentAlone: the environment's endpoint and its
 // scoring variable configure a run with no configuration directory at all: one
 // client on that endpoint, a roles record naming the environment back end and

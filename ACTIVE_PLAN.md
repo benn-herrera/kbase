@@ -172,7 +172,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 |---|---|---|---|
 | S1: measure the served surface; serve each command's help as a resource | expert | Gate | landed |
 | U: retire `USER_CONVENTIONS.md` onto the served surface | expert | S1 | landed |
-| P1: move environment-configured tests onto configuration directories | expert | U | pending |
+| P1: move environment-configured tests onto configuration directories | expert | U | landed |
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | pending |
 | P3: remove the environment inference mode | expert | P2; P1's evidence green | pending |
 | S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | pending |
@@ -223,7 +223,9 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 - **Role-record assertions.** New or moved assertions on a role record check `provider`,
   `provider-rule` and `model`, never `back-end`.
 - **Stubs.** A `providers.toml` entry standing in for a stub that streams OpenAI chat states
-  `api = "openai"`. An entry silent on `api` speaks Messages (SPEC §9.1).
+  `api = "openai"`. An entry silent on `api` speaks Messages (SPEC §9.1). A test pinning one dial
+  for several roles references an `openai` entry: the decision role always speaks OpenAI, so a
+  Messages entry is two endpoints.
 
 ---
 
@@ -677,7 +679,10 @@ This is a pure removal: the keys do nothing today.
   - `git grep -l -E 'backEndName|BackEndProvider|config\.BackEnd' -- '*.go'` answers
     `cmd/provider.go cmd/score.go cmd/score_replay.go internal/config/resolve.go`.
 - **`unsetInferenceEnv`.** `git grep -l -E 'unsetInferenceEnv' -- '*.go'` answers `cmd/probe_test.go
-  cmd/score_scoring_test.go cmd/score_test.go cmd/score_tool_test.go cmd/show-config_test.go`.
+  cmd/score_scoring_test.go cmd/score_test.go cmd/score_tool_test.go cmd/show-config_test.go`. After
+  P1 it also answers `cmd/build_test.go` and `cmd/mcp_test.go` (both already in P3's scope).
+  `TestScoreDocumentsARun` (`cmd/score_test.go`) does not blank the inference variables though
+  `runScore` reads them; P3's removal ends that exposure.
 - **`FileReference`.** `git grep -l -E 'FileReference' -- '*.go'` answers
   `internal/config/configure.go internal/config/inference_test.go internal/config/resolve.go`. Its doc
   reads "so the mode a value came from is stated where it is read".
