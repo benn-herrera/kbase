@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # LIVE: ./bin/kbase build without --no-inference over the Slice-1 paper
 # BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository, asking the
-# provider the resolved configuration names; then a second build through
-# claims-discovered configured by the environment alone, a third naming no
+# provider the resolved configuration names; then a second build naming no
 # configuration directory, and a score run configured by --config-dir.
 # Counts land in comparison.yaml.
 #
@@ -119,11 +118,6 @@ provider_layer="$(doc_get "${sc}.out" roles role decision provider-layer)"
 source_dir="$(doc_get "${sc}.out" layers source "${provider_layer}" path)"
 [[ -d "${source_dir}" ]] || refuse "the layer that supplied ${provider} (${provider_layer}) has no directory ('${source_dir}')"
 key_file="$(doc_get "${sc}.out" providers name "${provider}" key-file)"
-case "${key_file}" in
-    "" | /*) ;;
-    "~/"*) key_file="${HOME}/${key_file:2}" ;;
-    *) key_file="${source_dir}/${key_file}" ;;
-esac
 scoring="${decision}"
 source_names=()
 while IFS= read -r source_name; do source_names+=("${source_name}"); done \
@@ -160,26 +154,6 @@ go test -count=1 -run '^TestLiveBuildCounts$' ./internal/claimgraph -args -claim
 check records "$?" "every leaf landed, every planned pair answered, no candidate drafted; counts.yaml and nodepass.json written" "${ck}/counts.log"
 set -e
 
-# The same server and model configured by the environment alone: no
-# --config-dir, the configuration directory absent, through the node pass
-# so the build asks. The environment names bare ids, as it does by
-# definition; the resolved configuration's own values are what it carries.
-env_repo="${dir}/env-repo"
-no_config="${root}/${dir}/no-config"
-mkdir -p "${env_repo}"
-cp -R "${ARXIV_DIR}/${name}/." "${env_repo}/"
-git -C "${env_repo}" init -q
-capture "${ck}/kbase-build-env" "${env_repo}" env KBASE_CONFIG_DIR="${no_config}" KBASE_API_BASE_URL="${base_url}" \
-    KBASE_DECISION="${decision}" KBASE_TEXT="${text}" KBASE_API_KEY_FILE="${key_file}" "${kbase}" build "${volume_root}" \
-    --through claims-discovered --state-dir "${root}/${dir}/env-state" --log-level info
-warned="$(grep -c 'travels in cleartext' "${ck}/kbase-build-env.log" || true)"
-expect_warning=0
-[[ -n "${key_file}" && "${base_url}" == http://* && ! "${base_url}" =~ ^http://(localhost|127\.|\[::1\]) ]] && expect_warning=1
-check build-env "$([[ "$(rc "${ck}/kbase-build-env")" -eq 0 ]] && grep -qx 'outcome: "bounded"' "${ck}/kbase-build-env.out" \
-    && [[ "$(count "${root}/${dir}/env-state/scratch/trails" '*.capture.jsonl')" -gt 0 && ! -e "${no_config}" && "${warned}" -eq "${expect_warning}" ]] && echo 0 || echo 1)" \
-    "configured by KBASE_API_BASE_URL, KBASE_DECISION=${decision}, KBASE_TEXT=${text} and KBASE_API_KEY_FILE alone: exit $(rc "${ck}/kbase-build-env"), $(grep -m1 '^outcome:' "${ck}/kbase-build-env.out" || echo 'no outcome'), $(count "${root}/${dir}/env-state/scratch/trails" '*.capture.jsonl') captures, ${warned} cleartext warning(s) (${expect_warning} expected), no configuration directory" \
-    "${ck}/kbase-build-env.out"
-
 # The layering proof, which names no configuration directory at all: a
 # --config-dir, where given, is single-layer mode. The global layer is the
 # providers.toml and api_keys/ of the layer that supplied the provider, copied
@@ -192,8 +166,7 @@ check build-env "$([[ "$(rc "${ck}/kbase-build-env")" -eq 0 ]] && grep -qx 'outc
 # The build then takes its endpoint from the global file and its three
 # references from the repository's, with the operator's own
 # ~/.config/kbase read by neither: HOME is this leg's directory, and the
-# variable that would name a directory, and the five that would supply a
-# field over the files, are unset.
+# variable that would name a directory is unset.
 layered="${root}/${dir}/layered"
 layered_home="${layered}/home"
 layered_repo="${layered}/repo"
@@ -217,7 +190,7 @@ printf '[user]\n\tname = kbase integration\n\temail = kbase@invalid\n' > "${laye
 cp -R "${ARXIV_DIR}/${name}/." "${layered_repo}/"
 git -C "${layered_repo}" init -q
 layered_volume_root="$(ARXIV_VOLUME_DIR="${layered_repo}" tools/scripts/arxiv-volume-root.sh)"
-layered_env=(-u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE "HOME=${layered_home}")
+layered_env=(-u KBASE_CONFIG_DIR "HOME=${layered_home}")
 capture "${ck}/kbase-configure-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" configure \
     --create --project --provider "${provider}" \
     --model-map "decision=${provider}/${decision},text=${provider}/${text},scoring=${provider}/${scoring}"
@@ -291,7 +264,6 @@ else
     [[ "$(grep -cxF "      model: \"${decision}\"" "${layered_show}.out")" -eq 2 ]] || layered_sources=1
     [[ "$(grep -cxF "      model: \"${text}\"" "${layered_show}.out")" -eq 1 ]] || layered_sources=1
 fi
-grep -qxF 'environment: []' "${layered_show}.out" || layered_sources=1
 check layered-sources "${layered_sources}" \
     "three role records, each ${provider} out of the global pool with its model from the repository's file: base-url and key global, model repository; decision and scoring ${decision}, text ${text}" \
     "${layered_show}.out"
@@ -306,8 +278,7 @@ score_config="${root}/${dir}/score-config"
 copy_pool "${score_config}"
 printf '%s\n' '[models]' "decision = \"${provider}/${decision}\"" "text = \"${provider}/${text}\"" \
     "scoring = \"${provider}/${scoring}\"" > "${score_config}/config.toml"
-capture "${ck}/kbase-score" "${repo}" env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING \
-    -u KBASE_API_KEY_FILE "${kbase}" score --pass rigor --limit 1 --config-dir "${score_config}" --state-dir "${root}/${dir}/score-state"
+capture "${ck}/kbase-score" "${repo}" "${kbase}" score --pass rigor --limit 1 --config-dir "${score_config}" --state-dir "${root}/${dir}/score-state"
 score_ok=0
 [[ "$(rc "${ck}/kbase-score")" -eq 0 ]] || score_ok=1
 grep -qx 'outcome: "done"' "${ck}/kbase-score.out" || score_ok=1
@@ -335,7 +306,7 @@ check score "${score_ok}" \
     [[ -f "${dir}/counts.yaml" ]] && sed 's/^/  /' "${dir}/counts.yaml"
 } > "${out}/comparison.yaml"
 
-OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the environment or layered legs, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, models, base URL, key file and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_API_KEY_FILE=<the provider's key file> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider <the decision role's provider> --model-map decision=<provider>/<the decision role's model>,text=<provider>/<the text role's model>,scoring=<provider>/<the decision role's model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE ${kbase} score --pass rigor --limit 1 --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score.*, <id>/score-config holding the providers.toml and api_keys of the layer that supplied the provider and a config.toml with decision=<provider>/<the decision role's model>, text=<provider>/<the text role's model>, scoring=<provider>/<the decision role's model>: one item asked, the scoring role record naming the provider, provider-rule config and the scoring model, the ledger naming it, and the text model nowhere on stdout or in the ledger" \
+OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the layered leg, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, models, base URL, key file and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR HOME=<id>/layered/home ${kbase} configure --create --project --provider <the decision role's provider> --model-map decision=<provider>/<the decision role's model>,text=<provider>/<the text role's model>,scoring=<provider>/<the decision role's model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && ${kbase} score --pass rigor --limit 1 --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score.*, <id>/score-config holding the providers.toml and api_keys of the layer that supplied the provider and a config.toml with decision=<provider>/<the decision role's model>, text=<provider>/<the text role's model>, scoring=<provider>/<the decision role's model>: one item asked, the scoring role record naming the provider, provider-rule config and the scoring model, the ledger naming it, and the text model nowhere on stdout or in the ledger" \
     tools/scripts/write-evidence.sh
 printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
 if [[ "${status}" -ne 0 ]]; then

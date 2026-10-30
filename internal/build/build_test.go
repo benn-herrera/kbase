@@ -884,7 +884,7 @@ func TestLaunchRefusals(t *testing.T) {
 	opts.NoInference, opts.Through = false, "claims-discovered"
 	const baseURLKey = "baseUrl"
 	opts.Provider = func() (Provider, error) {
-		return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}}
+		return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: baseURLKey, Path: config.ProvidersFileName, Detail: "the entry declares no baseUrl"}}
 	}
 	if _, fields := f.build(t, opts); func() bool {
 		items, _ := storetest.Field(fields, "refusals").([]result.Item)

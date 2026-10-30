@@ -48,15 +48,13 @@ them. Working rules for packages that carry over:
   loader shell, so verbs unit-test without process/network.
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
   provider faults never abort the pool; fault reasons carry no key material. Resolution is pure and
-  lives here alone — `ModeOf`, `Resolve`, `Select` — and reads no file, opens no client and writes no
-  stderr (a refusal's remedy may name the command that fixes it, such as `kbase configure`): the key file `KBASE_API_KEY_FILE` names is read by whoever dials (in
-  `cmd`, `internal/modelclient`'s registry; in `show-config`, its preflight). The package imports no kbase package but
+  lives here alone — `Resolve`, `Select` — and reads no file, opens no client and writes no
+  stderr (a refusal's remedy may name the command that fixes it, such as `kbase configure`). The package imports no kbase package but
   `atomicfile` and `result` (it refuses in `result.Refusal`, each item carrying its check), never
   `model` or `log`: it returns its faults as data, so each caller decides whether one is a warning
   or a result field. A `[models]` value is parsed by one function,
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
-  reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
-  parses. No site splits an id or concatenates a reference by hand.
+  reference back. No site splits an id or concatenates a reference by hand.
 - **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey, IdleConns, Sampling}` is the
   transport-level slice of a provider — `Protocol` saying which client the registry builds
   (the chat protocol the role's endpoint speaks, and always `openai` for the `decision` role), `Decisions` whether it speaks the Decisions shape (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
@@ -78,7 +76,7 @@ them. Working rules for packages that carry over:
   folded into `instructions`, and an `answers` array where a `refusal` is unreadable and takes the
   seam's re-ask/default path. Either surface is re-issued identically on a transport error or
   retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
-  `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference in file mode.
+  `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference.
 
 ---
 

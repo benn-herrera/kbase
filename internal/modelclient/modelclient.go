@@ -7,19 +7,15 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 
 	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
-	"kbase/internal/result"
 )
 
-// openedKey identifies an open client: the endpoint it dials (the entry's name,
-// or "base:" and the base URL in environment mode), the wire protocol it speaks
-// and its resolved sampling — defaults filled in, so a setting left unset and
-// one stating its default key alike.
+// openedKey identifies an open client: the pool entry it dials, the wire
+// protocol it speaks and its resolved sampling — defaults filled in, so a
+// setting left unset and one stating its default key alike.
 type openedKey struct {
 	endpoint    string
 	protocol    model.Protocol
@@ -69,13 +65,13 @@ func New(seam NewClientFunc, lg log.Logger, promptCacheKey string, idleConns int
 // Get is the client for ep, opened on first use: roles naming one pool entry,
 // speaking one wire protocol and resolving to equal sampling — an unset
 // setting equal to its stated default — share a client and its connection
-// pool, and an environment-mode endpoint shares by base URL, which is all it
-// has. A role whose resolved sampling differs gets its own client, since a
-// client asks for one sampling on every call.
+// pool. A role whose resolved sampling differs gets its own client, since a
+// client asks for one sampling on every call. The key dialled is the one the
+// pool entry's own file supplied at load.
 // The decision role always speaks the OpenAI protocol, the only one carrying
 // the decision surfaces; every other role speaks the protocol its entry's `api`
 // names.
-func (r *Registry) Get(ep config.Endpoint) (model.Client, error) {
+func (r *Registry) Get(ep config.Endpoint) model.Client {
 	protocol := chatProtocol(ep.Protocol)
 	if ep.Role == config.RoleDecision {
 		protocol = model.ProtocolOpenAI
@@ -83,43 +79,14 @@ func (r *Registry) Get(ep config.Endpoint) (model.Client, error) {
 	sampling := samplingOf(ep)
 	resolved := sampling.Resolved()
 	key := openedKey{endpoint: ep.Provider, protocol: protocol, temperature: *resolved.Temperature, thinking: *resolved.Thinking}
-	if key.endpoint == "" {
-		key.endpoint = "base:" + ep.BaseURL
-	}
 	if client, ok := r.opened[key]; ok {
-		return client, nil
+		return client
 	}
-	apiKey, err := r.Key(ep)
-	if err != nil {
-		return nil, err
-	}
-	client := r.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
+	client := r.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: ep.APIKey,
 		Protocol: protocol, Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns,
 		Sampling: sampling})
 	r.opened[key] = client
-	return client, nil
-}
-
-// Preflight is the key-file read alone: the refusal a file KBASE_API_KEY_FILE
-// names gives where it cannot be read, and nothing opened. It is what a verb
-// that reports an endpoint without dialling it can still learn.
-func (r *Registry) Preflight(ep config.Endpoint) error {
-	_, err := r.Key(ep)
-	return err
-}
-
-// Key is the key ep is dialled with: the file KBASE_API_KEY_FILE names where
-// it names one, and otherwise the key the pool entry's own file supplied.
-func (r *Registry) Key(ep config.Endpoint) (string, error) {
-	if ep.APIKeyFile == "" {
-		return ep.APIKey, nil
-	}
-	b, err := os.ReadFile(ep.APIKeyFile)
-	if err != nil {
-		return "", result.Refusal{{Check: config.CheckProvider, Key: config.EnvAPIKeyFile, Path: ep.APIKeyFile,
-			Detail: fmt.Sprintf("%s names %s, which cannot be read: %v", config.EnvAPIKeyFile, ep.APIKeyFile, err)}}
-	}
-	return strings.TrimSpace(string(b)), nil
+	return client
 }
 
 // CloseAll closes every client the registry opened, whatever the verb's
@@ -140,13 +107,9 @@ func (r *Registry) CloseAll() {
 
 // Catalogue is the model ids entry's provider lists, in the order it listed
 // them: callers that show them to a human sort first; callers that classify
-// them do not care. A key file that cannot be read is the refusal Get gives.
+// them do not care.
 func (r *Registry) Catalogue(ctx context.Context, entry config.Provider) ([]string, error) {
-	client, err := r.Get(entryEndpoint(entry))
-	if err != nil {
-		return nil, err
-	}
-	return catalogueIDs(ctx, client)
+	return catalogueIDs(ctx, r.Get(entryEndpoint(entry)))
 }
 
 // entryEndpoint is a pool entry as the registry takes it, for a verb that dials

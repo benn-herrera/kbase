@@ -556,9 +556,9 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `show`, `stats`, `edge-census` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `show` adds `manually_scored` (§8) after `rigor` on a claim, an analysis and an experiment; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `rigor_manual`, `rigor_model`, `bearing_manual` and `bearing_model` (the records whose type carries `manually-scored`, `*pending*` values included, counted by the flag), then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none); `edge-census`' mapping carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`, and on `supports`, `lifts` and `refutes` `manual` and `model` after `edges`, the rows at that bearing counted by their `manually-scored` flag; numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (the sheets the volume-count rule drops; `[]` when none); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
-| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
+| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
-| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `temperature`, `thinking` (chat selections only: the effective settings — `temperature` a number; `thinking` `off`, `low`, `medium` or `high`); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
+| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `temperature`, `thinking` (chat selections only: the effective settings — `temperature` a number; `thinking` `off`, `low`, `medium` or `high`); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 | `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the walk's order — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run, carrying `--project-dir` where given, and `--config-dir` written absolute; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
 
@@ -571,7 +571,6 @@ omitted where it does not apply:
 | Key | Holds |
 |---|---|
 | `role` | `decision`, `text` or `scoring` |
-| `back-end` | what answered: `provider` (a pool entry) or `environment` (the environment's endpoint) |
 | `provider` | the pool entry's name |
 | `provider-rule` | the rule that named it: `flag` (a flag overrode the reference) or `config` (the reference named it) |
 | `provider-layer` | the layer that supplied the entry: `explicit`, `environment`, `repository` or `global` |
@@ -580,9 +579,9 @@ omitted where it does not apply:
 | `temperature`, `thinking` | `show-config` alone, chat roles: the role's sampling settings, null where unset (§9.2) |
 | `detail` | `show-config` alone: why the role does not resolve, where it does not |
 
-`provider`, `provider-rule` and `provider-layer` stand together or not at all: no pool entry supplied
-the endpoint when the environment did. `back-end` is what tells the two cases apart, so a reader never
-infers the source from an absence.
+`provider`, `provider-rule` and `provider-layer` stand together on every role that resolved: a pool
+entry supplies every endpoint. `provider-layer`'s `environment` is the directory `$KBASE_CONFIG_DIR`
+names (§9).
 
 **The model is the one requested, never one observed.** `model` is the id this invocation asked for,
 and no result document or ledger line states one a server ran.
@@ -1029,17 +1028,14 @@ every item it carried: where another writer held the lock past the wait, the ite
 carries the lock item's `detail`; any other lock failure records its own error. The
 run goes on.
 
-**The scoring role.** The calls go to the `scoring` role (§9): `models.scoring` in file mode,
-`KBASE_SCORING` in environment mode. The role is the KB's declaration of which model judges it, so a
-run that names none refuses as setup — naming that key, before the KB is opened and before the run's
-start refresh — and nothing falls back to the text role. In file mode the role's model is the file's
-`<provider>/<model>` reference or, where the files name none, the one `--scoring-model` names: the
-flag supplies an unconfigured role and overrides a configured one, its reference is resolved against
-the pool, and a provider the pool does not hold refuses naming the flag with the pool listed.
-Environment mode supplies every model by its own variable, so a variable the environment leaves unset
-refuses whatever the flag says, and `--scoring-model` there overrides the variable's bare id for the
-one run. A run records the model as the flag's where the flag named it. A `--dry-run` resolves no role
-and refuses nothing for one.
+**The scoring role.** The calls go to the `scoring` role (§9): `models.scoring`. The role is the KB's
+declaration of which model judges it, so a run that names none refuses as setup — naming that key,
+before the KB is opened and before the run's start refresh — and nothing falls back to the text role.
+The role's model is the file's `<provider>/<model>` reference or, where the files name none, the one
+`--scoring-model` names: the flag supplies an unconfigured role and overrides a configured one, its
+reference is resolved against the pool, and a provider the pool does not hold refuses naming the flag
+with the pool listed. A run records the model as the flag's where the flag named it. A `--dry-run`
+resolves no role and refuses nothing for one.
 
 **One item, one call.** The ask is one tool-less chat call on the `scoring` role's endpoint, over the
 chat protocol that endpoint's entry names (§9.1): `openai` speaks `chat/completions` and `anthropic`
@@ -1061,8 +1057,9 @@ identical re-send would cut off the same way, and a reply the parse refuses. `--
 run), `ledger.jsonl`, `captures.jsonl` and, while a walk runs, one result file per answered item, which
 the walk's end folds into the ledger. A real run's id is `run-<id>`; the runs kept are §6's.
 `run.yaml` holds the run, its KB root, the ledger's format, the set it walks
-(one pass, or `both`), `backend` (`provider` or `environment`; absent under `--dry-run`, which
-resolves no role because it asks nothing), the provider, the model, `ask_sha256` and the start. **It is
+(one pass, or `both`), `backend` (`provider`, which a header written under an earlier release may
+read `environment`; absent under `--dry-run`, which resolves no role because it asks nothing), the
+provider, the model, `ask_sha256` and the start. **It is
 written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
 states the first invocation's back end and model, and each ledger line states its own item's pass and
 what answered it.
@@ -1070,7 +1067,8 @@ what answered it.
 `ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the value the KB
 carried before the attempt (`before`, absent where the record held none), the reply, `faults`
 (the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
-lines a reply recorded beside a retired `flt-pending`), `backend`, the model, the prompt's digest and the attempt's bounds —
+lines a reply recorded beside a retired `flt-pending`), `backend` (as the header's; a line written
+under an earlier release may read `environment`), the model, the prompt's digest and the attempt's bounds —
 appended after the item's write and its validation, never before. A run writes its captures and then
 its ledger lines once, in the set's order, when its walk ends — on completion, on `--limit`, on
 cancellation and on a failure that stops it. `faults` is `[]` for one reply
@@ -1137,8 +1135,8 @@ item answered before the stop;
 `failed` when an item's call or write failed, or a refresh did; `retry` while another run holds
 the state store, or where a refresh could not take the KB write lock past the wait; `refused`
 where the run cannot go on — setup (a pass outside the three, a negative `--limit`, a `--state-dir`
-inside `kb-root/`, a `--resume` naming no real run kbase minted, no scoring model in the mode's source,
-a mode whose sources are mixed or whose environment is partial, an index the load cannot answer, a
+inside `kb-root/`, a `--resume` naming no real run kbase minted, no scoring model configured, an
+index the load cannot answer, a
 degraded KB, a KB still unmigrated after the start refresh), a run already holding the KB's
 operation lock (§6), or a KB that no longer opens when the end refresh re-reads it.
 
@@ -1164,14 +1162,12 @@ where it did not: a run that walked both by default is continued the same way, i
 says which set it walks. It carries `--config-dir` wherever the invocation named one — the
 resumed run must read that directory and no other, or the same run id would resolve another
 reference — and it carries `--scoring-model` whenever the invocation did — the command must reach the
-same model, or it is a different judgement under the same run id — and under the environment mode the
-settings this invocation read, as assignments before the program
-(`KBASE_API_BASE_URL=… KBASE_SCORING=… kbase score …`, and `KBASE_API_KEY_FILE` where it was set), so
-re-issuing it in a shell with none of them set asks the same endpoint with the same models. The key is
-named by its path, never printed.
+same model, or it is a different judgement under the same run id. A run started under an earlier
+release whose header reads `backend: environment` is resumed on whatever the files now resolve, and
+its new lines record that.
 
 **`--dry-run`** lists the set and asks nothing. It writes `run.yaml` and `items.jsonl` (one pending
-line per item), dials no provider, resolves no role and runs no mode decision, and writes no KB file:
+line per item), dials no provider, resolves no role, and writes no KB file:
 its `counts.done` is `0`, its `scored` is `[]`, it carries no `resume` and no `roles`, and its outcome
 is `done`. It writes no charge record and no capture. Its run id is `dry-<id>`, and the runs kept
 are counted by kind (§6), so a dry run counts only against dry runs. It cannot
@@ -1193,13 +1189,12 @@ kbase probe [--model <provider>/<model>] [--decision | --text | --scoring]
 One ask, no KB and no state: a diagnostic of a model selection, answered by the selection itself.
 A probe asks one selection, and its flags name it: `--model` names a `<provider>/<model>` reference,
 resolved against the pool as a role's reference is; `--decision`, `--text` and `--scoring` each ask
-the selection the configuration resolves for that role — in file mode the `models.<role>` reference,
-in environment mode the role's own variable — and supply no model of their own; and with none of the
-four given the probe asks the `scoring` role, the selection a scoring run would make, in file mode or
-in the environment's, so `kbase probe` with no arguments is the heartbeat of a configuration. The
-four are mutually exclusive: more than one is a usage refusal naming all four as what may be chosen
-once, before anything resolves or dials. A selection that does not resolve is `refused`, naming the
-role's own key — `models.<role>`, or the role's variable — or the flag, and what is missing, before
+the selection the configuration resolves for that role — the `models.<role>` reference — and supply
+no model of their own; and with none of the four given the probe asks the `scoring` role, the
+selection a scoring run would make, so `kbase probe` with no arguments is the heartbeat of a
+configuration. The four are mutually exclusive: more than one is a usage refusal naming all four as
+what may be chosen once, before anything resolves or dials. A selection that does not resolve is
+`refused`, naming the role's own key — `models.<role>` — or the flag, and what is missing, before
 any client is opened. The document states which selection answered: the role's name where a role flag
 or the default named it, and the reference where `--model` did.
 
@@ -1267,13 +1262,12 @@ entirely, never field by field, so a repository cannot inherit a credential for 
 A fault naming a pool entry a higher layer superseded is
 not reported: the pool's entry is the higher one, and a diagnostic about a value nobody reads is not a
 fact about this run. `config.toml` merges field by field: a value a higher layer states wins, and one
-it leaves out keeps the lower layer's value. The environment is not a layer: it is one of the two
-modes below, and it never merges with a file. A layer that fails the strict load refuses the whole
+it leaves out keeps the lower layer's value. A layer that fails the strict load refuses the whole
 load, naming its file: no lower layer is read, so a broken repository file never silently falls
 through to the global one.
 
 **A leading `~` expands; nothing else does.** In the `--config-dir` and `$KBASE_CONFIG_DIR` values,
-in an entry's `apiKeyFile`, and in `$KBASE_API_KEY_FILE`, `~` alone is the home directory and `~`
+and in an entry's `apiKeyFile`, `~` alone is the home directory and `~`
 followed by a path separator is a path beneath it. `~user` is not supported, a `~` anywhere else is
 literal, and where the home lookup fails or its answer is not absolute, the string stays exactly as
 written.
@@ -1337,42 +1331,13 @@ says the model ids went unchecked; with `--provider` the ordinary path runs — 
 catalogue, warn on an id the catalogue does not offer. A refusal writes nothing, and so does a dial or
 catalogue failure.
 
-**The two modes.** Inference — the endpoint and the model each role asks — comes from exactly one of two
-sources, and never from both. How a role is asked is not part of that choice: `[asks]
-concurrency` and `[sampling]` (§9.2) are read from `config.toml` in either mode, and an
-environment-mode role speaks `openai`. An
-integrator configures a build — or a scoring run — from the invoking environment with no
-configuration directory at all; a run in file mode has no inference variable set.
-
-| | File mode | Environment mode |
-|---|---|---|
-| Supplied by | `providers.toml` and `config.toml` | `KBASE_API_BASE_URL` and the role variables |
-| A model is named | a `<provider>/<model>` reference in `[models]` | a bare model id in `KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING` |
-| The endpoint | the named pool entry | `KBASE_API_BASE_URL`; no pool entry |
-| Entered when | no inference variable is set | `KBASE_API_BASE_URL` or any role variable is set |
-| Complete when | every role the verb needs has a reference | the base URL and every role the verb needs are set |
-
-`KBASE_DECISION`, `KBASE_TEXT` and `KBASE_SCORING` are the three roles, spelled as `[models]` spells
-them; there is no `KBASE_*_MODEL`. The sources are exclusive: an environment role variable alongside
-a `[models]` value is refused with one item per side — the variable, and the `models.<role>` key —
-and the detail says which side to unset. The environment is also all or nothing: a role variable
-without `KBASE_API_BASE_URL` names the variable that is set and the one that is missing, and a base
-URL alone beside a `[models]` value is the same refusal the other way round, because a base URL is an
-endpoint and an endpoint is the whole of what the environment mode supplies. Where the mode's rows
-overlap every item is listed: a user facing two sides needs both named, not one representative of
-them.
-
-**`KBASE_API_KEY_FILE` is not a mode.** It names a file, not a provider and not a model: it overrides
-the key of whichever endpoint is in force — the selected entry's in file mode, the environment's in
-environment mode — and is optional in both: absent everywhere, no key is sent. It alone never flips
-the mode and never makes a mixed source.
-
-**The preflight.** The inference preflight (§5) names each lacking setting in the mode's own
-spelling: `baseUrl` or `models.<role>` in file mode — `models.decision`, `models.text`,
-`models.scoring` — and `KBASE_API_BASE_URL` or `KBASE_<ROLE>` in environment mode, never
-`models.<role>` for a mode the files do not supply. A lack a variable's doing names that variable, as
-`KBASE_API_KEY_FILE` naming an unreadable file does. `show-config` runs the same decision and reports
-its refusal as a diagnostic rather than stopping (§9.6).
+**The files are the one source of inference.** The endpoint and the model each role asks come from
+`providers.toml` and `config.toml` alone, and so does how a role is asked — `[asks]` and `[sampling]`
+(§9.2). No environment variable supplies an endpoint, a model or a key. A run isolated from the
+user's layers names its directory with `--config-dir` or `$KBASE_CONFIG_DIR`. The inference
+preflight (§5) names each lacking setting as `baseUrl` or `models.<role>` — `models.decision`,
+`models.text`, `models.scoring` — and `show-config` reports that refusal as a diagnostic rather than
+stopping (§9.6).
 
 There is no plaintext-transport switch: when a key is configured and the base URL is `http://` to a
 host other than loopback, one line on stderr says the key travels in cleartext, and the build
@@ -1454,7 +1419,7 @@ decision = "<entry>/<id>"      # the claim graph's multichoice asks: a providers
                                # entry name, then the model that entry's
                                # decision surface serves
 text = "<entry>/<id>"          # the overview passage
-scoring = "<entry>/<id>"       # kbase score's asks; required for score, in every mode
+scoring = "<entry>/<id>"       # kbase score's asks; required for score
 
 [asks]
 concurrency = 4                # optional; model calls one build or score has in flight at once, across every role
@@ -1469,8 +1434,7 @@ thinking = "off"               # optional; off | low | medium | high
 name is a `providers.toml` table's and carries none, while a model id may (`openrouter/anthropic/…`).
 Either part empty, or no `/` at all, is not a reference and is refused at resolution, naming
 `models.<role>` and the form. Nothing is normalised but whitespace: a model id is the
-provider's spelling, not kbase's. In environment mode a model is a bare id of the environment's
-endpoint instead (§9), and one form of value is never read as the other.
+provider's spelling, not kbase's.
 
 A category left unset resolves to "not configured" — no defaulting, no guessing, and no role falls
 back to another. `concurrency` is how many model calls one invocation of `build` or `score` has in
@@ -1540,10 +1504,8 @@ the only file-permission behaviour kbase applies to a file it did not create.
 `kbase show-config [--provider NAME]` reports how this invocation's configuration resolves, and
 changes nothing: it reads no KB, writes no file and makes no network request. A configuration that
 fails strict load is refused before the verb runs, as for every verb (§9.3). Otherwise the outcome is
-`done` whatever the report finds: a fault in the pool, an unresolved role and a mixed or partial
-inference mode are diagnostics, not refusals, so one call shows every gap at once. It makes no
-request and opens no client, so an unreadable key file reaches it through the registry's preflight
-rather than by dialling.
+`done` whatever the report finds: a fault in the pool and an unresolved role are diagnostics, not
+refusals, so one call shows every gap at once. It makes no request and opens no client.
 
 The report states the layers this invocation read, in precedence order, each with its path, the
 source that named it — `explicit` (a flag), `environment` (`$KBASE_CONFIG_DIR`), `repository` or
@@ -1551,22 +1513,19 @@ source that named it — `explicit` (a flag), `environment` (`$KBASE_CONFIG_DIR`
 `[models]` values, null where a category is unset, and its `[sampling]` values, null where unset; every pool entry in name order with the layer
 that supplied it and the decision surface it speaks — its default filled in, so an entry silent on
 the flavour reads `systemone` — including a provider a dropping fault removed (unusable, with the
-fault's reason); the inference variable names this process sets (§9, "The two modes"); the mode, or
-null where the sources are mixed; the pool entry the selection names and the rule that named it, or
+fault's reason); the pool entry the selection names and the rule that named it, or
 why no entry was named; one record per role — the endpoint it resolves to, the layer that supplied
 each field, a chat role's sampling settings, or why it does not resolve.
 
 The sources vocabulary is `layers`': `repository` or `global` for a value a file holds, `explicit` or
-`environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named, and
-`environment` for one a `KBASE_*` variable supplied. Its diagnostics are one `provider` item per
-fault, each carrying `path` the `providers.toml` that carries the fault — which need not be the file
-a selection or `configure` names — and one item per role that does not resolve or per side of a mixed
-mode, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
+`environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named. Its
+diagnostics are one `provider` item per fault, each carrying `path` the `providers.toml` that carries
+the fault — which need not be the file a selection or `configure` names — and one item per role that
+does not resolve, its `path` naming the file the setting belongs in: the write target's `providers.toml` or
 `config.toml`.
 
 **Names and paths, never secrets.** A key is reported by the kind it is — from a file, or none —
-and a key file by the path its entry states, never by its content; an inference variable by its
-name, never its value.
+and a key file by the path its entry states, never by its content.
 
 **It describes the process that ran it.** The layers, the environment and the selection are this
 invocation's, so a call through the MCP server (§11) reports the configuration of the server
@@ -2346,6 +2305,11 @@ changes nothing.
 - **`provider` and `[asks] readerConcurrency` leave `config.toml`.** A file still stating either
   fails strict load naming the key (§9.3); delete the line by hand — `kbase configure` cannot load
   the file to repair it.
+- **The environment inference mode is gone.** `KBASE_API_BASE_URL`, `KBASE_API_KEY_FILE`,
+  `KBASE_DECISION`, `KBASE_TEXT` and `KBASE_SCORING` are not read; `providers.toml` and
+  `config.toml` are the one source, and a run isolated from your layers names its directory with
+  `--config-dir` or `$KBASE_CONFIG_DIR` (§9). The role record carries no `back-end`, and
+  `show-config` no `mode` or `environment` (§7).
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

@@ -174,7 +174,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | U: retire `USER_CONVENTIONS.md` onto the served surface | expert | S1 | landed |
 | P1: move environment-configured tests onto configuration directories | expert | U | landed |
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | landed |
-| P3: remove the environment inference mode | expert | P2; P1's evidence green | pending |
+| P3: remove the environment inference mode | expert | P2; P1's evidence green | landed |
 | S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | pending |
 | S3: `drop-claim-node` deletes a claim in one call | expert | S2 | pending |
 | S4: `refresh` absorbs `render-claim-graph` | expert | S3 | pending |

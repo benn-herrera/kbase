@@ -30,7 +30,6 @@ import (
 // what answers it is an endpoint rather than a stub process.
 func scoreToolProvider(t *testing.T, base, mode string) {
 	t.Helper()
-	unsetInferenceEnv(t)
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch mode {

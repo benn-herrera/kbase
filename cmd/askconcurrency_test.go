@@ -88,7 +88,7 @@ func TestBuildAndScoreRefuseAnAskConcurrencyUnderOne(t *testing.T) {
 // TestScoreResumeLeavesOutTheAskConcurrency: a score run's resume command does
 // not carry the --ask-concurrency it ran at.
 func TestScoreResumeLeavesOutTheAskConcurrency(t *testing.T) {
-	resume := scoreResume(scoreOptions{AskConcurrency: new(3)}, "run", "state", config.ModeFile, config.Overrides{})
+	resume := scoreResume(scoreOptions{AskConcurrency: new(3)}, "run", "state")
 	if strings.Contains(resume, "--ask-concurrency") {
 		t.Errorf("resume = %q, want no --ask-concurrency", resume)
 	}

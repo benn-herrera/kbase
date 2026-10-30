@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -121,18 +120,15 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
 	}
-	ep, _, err := scoringRole(opts.scoreOptions, config.EnvOverrides(os.Getenv))
+	ep, err := scoringRole(opts.scoreOptions)
 	if err != nil {
 		return refusedOrFailed(fields, err)
 	}
 	reg := modelclient.New(opts.NewClient, opts.Logger, rp.ID(), concurrency)
 	defer reg.CloseAll()
-	launch, err := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
-	if outcome, f, stop := refusalOrFailure(fields, err); stop {
-		return outcome, f
-	}
+	launch := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
 	fields = append(fields, toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "dir", Value: rp.Dir()})
-	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: backEndName(ep), Provider: ep.Provider, Model: ep.Model,
+	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: string(config.BackEndProvider), Provider: ep.Provider, Model: ep.Model,
 		Started: score.Stamp()})
 	if err != nil {
 		return failed(fields, err)

@@ -8,8 +8,8 @@ is logged in. So kbase will hold a credential. The question the plan answers is 
 
 ## The problem
 
-A provider's key reaches kbase today through a path — `apiKeyFile` in `providers.toml`, or
-`KBASE_API_KEY_FILE` — and `clients.key` reads that file at dial time (`cmd/provider.go:149`). The
+A provider's key reaches kbase today through a path — `apiKeyFile` in `providers.toml` — and
+`clients.key` reads that file at dial time (`cmd/provider.go:149`). The
 failure mode is not an attacker: it is an agent being helpful, reading the file to check the key is
 configured, and putting the key in a transcript.
 

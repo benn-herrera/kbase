@@ -148,34 +148,28 @@ var (
 // asks on the decision role, the overview passage on the text role — or what
 // it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
 // and the build proceeds.
-func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
+func buildProvider(p providerOptions, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
 	return func(reg *modelclient.Registry) (build.Provider, error) {
-		s := p.inputs(env)
-		mode, err := config.ModeOf(s)
-		if err != nil {
-			return build.Provider{}, err
-		}
+		s := p.inputs()
 		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
 		warned := map[string]bool{}
 		role := func(r config.Role) (model.Client, string, error) {
-			ep, err := config.Resolve(s, mode, r, "")
+			ep, err := config.Resolve(s, r, "")
 			if err != nil {
 				return nil, "", err
 			}
-			// One line per endpoint, however many roles reach it: the key is
-			// what the run sends, and the registry is what read it.
+			// One line per endpoint, however many roles reach it.
 			if !warned[ep.BaseURL] {
-				warned[ep.BaseURL] = warnCleartextKey(stderr, reg, ep)
-			}
-			client, err := reg.Get(ep)
-			if err != nil {
-				return nil, "", err
+				warned[ep.BaseURL] = warnCleartextKey(stderr, ep)
 			}
 			records = append(records, roleRecord(ep))
-			return client, ep.Model, nil
+			return reg.Get(ep), ep.Model, nil
 		}
-		var provider build.Provider
+		var (
+			provider build.Provider
+			err      error
+		)
 		if provider.MultichoiceClient, provider.Multichoice, err = role(config.RoleDecision); err != nil {
 			return build.Provider{}, err
 		}
@@ -220,13 +214,8 @@ resource print the commands for either.
 without it, the claim graph's multichoice asks go to the endpoint [models] decision
 names and the overview passage to the one [models] text names — each value a
 provider/model reference, the providers.toml entry that supplies the endpoint
-then the model it serves. KBASE_API_BASE_URL, KBASE_DECISION and KBASE_TEXT
-configure the build from the environment with no configuration directory at
-all: the environment supplies the whole inference configuration or nothing, so
-a variable set beside a config.toml model is refused, and KBASE_API_KEY_FILE —
-no mode, a key — replaces the key of whichever endpoint is in force. With no
---bibliography,
-every .bib beside any volume root is offered to every volume, in sorted order.
+then the model it serves. With no --bibliography, every .bib beside any volume
+root is offered to every volume, in sorted order.
 Build state — the holder lock, progress.jsonl, the document graph's records, each
 stage's report under reports/, each call's capture and the answer cache under
 scratch/ — lives in --state-dir, by default $XDG_STATE_HOME/kbase/<key>.
@@ -273,7 +262,7 @@ report, and the command that resumes the build where it did not finish.`,
 			AskConcurrency:        givenAskConcurrency(cmd, flagAskConcurrency),
 			ConfiguredConcurrency: providers.Config.Asks.Concurrency,
 			WorkDir:               wd,
-			Provider:              buildProvider(providers, config.EnvOverrides(os.Getenv), cmd.ErrOrStderr()),
+			Provider:              buildProvider(providers, cmd.ErrOrStderr()),
 			Stdout:                cmd.OutOrStdout(),
 			Stderr:                cmd.ErrOrStderr(),
 			Logger:                processLog.logger,

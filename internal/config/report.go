@@ -37,23 +37,20 @@ type Entry struct {
 }
 
 // Facts is a configuration as loaded: the layers it was read from with what
-// each holds, the pool the merge produced and what faults say about it, its
-// merged choices, and which inference variables the process supplies. It
-// carries no key material and no variable value.
+// each holds, the pool the merge produced and what faults say about it, and
+// its merged choices. It carries no key material.
 type Facts struct {
-	Layers      []Layer       // in precedence order, each with its existence probed
-	Models      ModelMap      // the merged role values
-	Sampling    SamplingTable // the merged sampling values
-	Entries     []Entry       // one per usable pool entry and per dropped provider, sorted by name
-	Environment []string      // the inference variable names set, sorted
+	Layers   []Layer       // in precedence order, each with its existence probed
+	Models   ModelMap      // the merged role values
+	Sampling SamplingTable // the merged sampling values
+	Entries  []Entry       // one per usable pool entry and per dropped provider, sorted by name
 }
 
-// Report describes configuration loaded from layers. It reads no file and no
-// environment of its own: file existence and the process's variables arrive as
-// the seams the caller passes, so a report describes a configuration without
-// this process having to be the one that holds it.
-func Report(cfg Config, providers Providers, faults []ProviderFault, layers []Layer,
-	exists func(string) bool, getenv func(string) string) Facts {
+// Report describes configuration loaded from layers. It reads no file of its
+// own: file existence arrives as the seam the caller passes, so a report
+// describes a configuration without this process having to be the one that
+// holds it.
+func Report(cfg Config, providers Providers, faults []ProviderFault, layers []Layer, exists func(string) bool) Facts {
 	f := Facts{Models: cfg.Models, Sampling: cfg.Sampling}
 	for _, layer := range layers {
 		layer.Exists = exists(layer.Path)
@@ -78,17 +75,6 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 		f.Entries = append(f.Entries, e)
 	}
 	slices.SortFunc(f.Entries, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
-
-	// The variables a subcommand that spends inference reads, as inference.go
-	// declares them. EnvConfigDir is not among them: it chooses a layer, which
-	// the report states separately. A variable set to nothing supplies
-	// nothing, so it counts as unset.
-	for _, name := range []string{EnvAPIBaseURL, EnvDecision, EnvText, EnvScoring, EnvAPIKeyFile} {
-		if strings.TrimSpace(getenv(name)) != "" {
-			f.Environment = append(f.Environment, name)
-		}
-	}
-	slices.Sort(f.Environment)
 	return f
 }
 

@@ -160,7 +160,6 @@ func answeredProbe(t *testing.T, doc resultDoc) (firstToken, wall int, usage map
 // 0 — the heartbeat a healthy selection gives. With none of the four selection
 // flags given, that selection is the scoring role's.
 func TestProbeReportsTheCall(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, _ := probeWire(t)
 	dir := probeFixture(t, srv.URL, srv.URL)
 
@@ -194,7 +193,6 @@ func TestProbeReportsTheCall(t *testing.T) {
 // user turn — the default one-word check, or the check --prompt names — as the
 // only turn, no system text, no history and no tools.
 func TestProbeAsksOneBareTurn(t *testing.T) {
-	unsetInferenceEnv(t)
 	for _, tc := range []struct {
 		name, prompt, want string
 	}{
@@ -247,7 +245,6 @@ func TestProbeAsksOneBareTurn(t *testing.T) {
 // answer cut off at the completion cap before any text is an answer: done, its
 // finish reason and empty reply reported, on the one request it took.
 func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
-	unsetInferenceEnv(t)
 	answered := func(_ http.ResponseWriter, flush func(string)) {
 		flush("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
 			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
@@ -336,7 +333,6 @@ func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
 // outcome and text, the status and the provider's words — and exits on that
 // outcome (§7). The one attempt is not re-issued: a 400 will be as wrong again.
 func TestProbeNamesAProviderRefusal(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, requests := statusProvider(t, http.StatusBadRequest)
 	dir := probeFixture(t, srv.URL, srv.URL)
 
@@ -367,7 +363,6 @@ func TestProbeNamesAProviderRefusal(t *testing.T) {
 // of the configured scoring role, resolved against the same pool — so the call
 // reaches the entry and model the flag named.
 func TestProbeModelOverridesTheRole(t *testing.T) {
-	unsetInferenceEnv(t)
 	role, roleBodies := probeWire(t)
 	other, otherBodies := probeWire(t)
 	dir := probeFixture(t, role.URL, other.URL)
@@ -396,7 +391,6 @@ func TestProbeModelOverridesTheRole(t *testing.T) {
 // model of their own. A fixture naming three different entries proves which one
 // is dialled; the document names the role as the selection that answered.
 func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
-	unsetInferenceEnv(t)
 	for _, tc := range []struct {
 		flag string
 		role config.Role
@@ -441,7 +435,6 @@ func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
 // --model, is a usage refusal naming all four, and nothing is dialled, the
 // roles' own configuration notwithstanding.
 func TestProbeRefusesTwoSelections(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, bodies := probeWire(t)
 	dir := probeFixture(t, srv.URL, srv.URL)
 	selectionFlags := []string{"--model", "--decision", "--text", "--scoring"}
@@ -485,7 +478,6 @@ func TestProbeRefusesTwoSelections(t *testing.T) {
 // scoring role's key first, the role being the default rather than a flag's,
 // and names --model only as the other way to ask.
 func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, bodies := probeWire(t)
 	dir := probeFixture(t, srv.URL, srv.URL)
 	unconfigured := t.TempDir()
@@ -593,7 +585,6 @@ data: {"type":"message_stop"}
 // back in the document — so the whole route, from providers.toml to the wire,
 // is exercised.
 func TestProbeReachesAMessagesProvider(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, requests := anthropicProbeWire(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claude.key"), []byte(testAPIKey+"\n"), 0o600); err != nil {
@@ -759,7 +750,6 @@ func probeAskedQuestion(t *testing.T, body []byte) (modelID, key, typ, instructi
 // token arrived and no finish reason came back; the row states those as zero and
 // null. A probe that took the chat path would be answered 400 and fail.
 func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
-	unsetInferenceEnv(t)
 	for _, tc := range []struct {
 		name, keys, path, prompt, wantType, wantInstructions string
 	}{
@@ -817,7 +807,6 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 // entry whose api is anthropic still asks the OpenAI-shaped decision surface on
 // the entry's base URL.
 func TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, served := probeDecisionWire(t, "/systemone")
 	dir := probeDecisionConfig(t, srv.URL, "api = \"anthropic\"\n")
 
@@ -856,7 +845,6 @@ func TestProbeDecisionReplyStatesTheAnswer(t *testing.T) {
 // reading verb refuses, and leaves the state store untouched — and it declares
 // no flag that could point it at either.
 func TestProbeReadsNoKBAndWritesNoState(t *testing.T) {
-	unsetInferenceEnv(t)
 	srv, _ := probeWire(t)
 	dir := probeFixture(t, srv.URL, srv.URL)
 	stateHome := t.TempDir()

@@ -284,7 +284,7 @@ apiKeyFile = "not-here.key"
 				t.Errorf("fault = %+v, want the dropped repository entry naming %s", faults[0], brokenPath)
 			}
 
-			facts := Report(cfg, providers, faults, layers, func(string) bool { return false }, func(string) string { return "" })
+			facts := Report(cfg, providers, faults, layers, func(string) bool { return false })
 			usable, dropped := 0, 0
 			for _, e := range facts.Entries {
 				switch {

@@ -9,9 +9,8 @@ import (
 )
 
 // Role is one thing a verb asks a model for on the KB's behalf. A role names
-// its own endpoint and its own model in config.toml's [models] table, or in
-// the environment by its own variable; no role's endpoint, model or provider
-// is ever taken from another's.
+// its own endpoint and its own model in config.toml's [models] table; no
+// role's endpoint, model or provider is ever taken from another's.
 type Role string
 
 const (
@@ -29,11 +28,8 @@ var Roles = []Role{RoleDecision, RoleText, RoleScoring}
 // key is the role as config.toml's [models] table spells it.
 func (r Role) key() string { return tableModels + "." + string(r) }
 
-// variable is the role as the environment spells it: KBASE_<ROLE>.
-func (r Role) variable() string { return "KBASE_" + strings.ToUpper(string(r)) }
-
-// model is the role's value in the configuration files — a file-mode
-// reference, or "" where no layer names one.
+// model is the role's value in the configuration files — a reference, or ""
+// where no layer names one.
 func (r Role) model(cfg ModelMap) string {
 	switch r {
 	case RoleDecision:
@@ -46,37 +42,11 @@ func (r Role) model(cfg ModelMap) string {
 	return ""
 }
 
-// fromEnv is the role's value in the environment — a bare model id of the
-// environment's endpoint, or "".
-func (r Role) fromEnv(env Overrides) string {
-	switch r {
-	case RoleDecision:
-		return env.Decision
-	case RoleText:
-		return env.Text
-	case RoleScoring:
-		return env.Scoring
-	}
-	return ""
-}
-
-// Mode is which source supplies inference: the configuration files and the
-// pool they draw on, or the environment's strings. There is no third, and the
-// two are never merged.
-type Mode string
-
-const (
-	// ModeFile is providers.toml plus config.toml.
-	ModeFile Mode = "file"
-	// ModeEnvironment is KBASE_API_BASE_URL plus the role variables.
-	ModeEnvironment Mode = "environment"
-)
-
 // BackEnd is which seam fills an ask, as a run's records name it.
 type BackEnd string
 
 const (
-	// BackEndProvider asks a pool entry, or the environment's endpoint.
+	// BackEndProvider asks a pool entry.
 	BackEndProvider BackEnd = "provider"
 )
 
@@ -91,16 +61,14 @@ const (
 )
 
 // Reference is a model named for one endpoint: the pool entry that supplies
-// the endpoint, and the model id that entry's server serves. A file-mode value
-// is parsed from `<provider>/<model>`, split at the FIRST `/` — a model id may
-// contain one (`openrouter/anthropic/...`), a provider name may not — and
-// String writes it back, so no site concatenates a reference by hand. An
-// environment-supplied model is no reference: it is a bare id of the
-// environment's endpoint, and nothing parses or formats it.
+// the endpoint, and the model id that entry's server serves. A value is parsed
+// from `<provider>/<model>`, split at the FIRST `/` — a model id may contain
+// one (`openrouter/anthropic/...`), a provider name may not — and String
+// writes it back, so no site concatenates a reference by hand.
 type Reference struct{ Provider, Model string }
 
-// ParseReference reads a file-mode model reference. Either part empty, or no
-// `/` at all, is not a reference.
+// ParseReference reads a model reference. Either part empty, or no `/` at
+// all, is not a reference.
 func ParseReference(s string) (Reference, error) {
 	provider, model, split := strings.Cut(strings.TrimSpace(s), "/")
 	provider, model = strings.TrimSpace(provider), strings.TrimSpace(model)
@@ -110,46 +78,38 @@ func ParseReference(s string) (Reference, error) {
 	return Reference{Provider: provider, Model: model}, nil
 }
 
-// FileReference is ParseReference under the name a caller reading a file's
-// value uses, so the mode a value came from is stated where it is read.
-func FileReference(id string) (Reference, error) { return ParseReference(id) }
-
 // String is the reference in its one written form, `<provider>/<model>`.
 func (r Reference) String() string { return r.Provider + "/" + r.Model }
 
-// Inputs is everything a resolution decision reads: the loaded files and the
-// environment's strings, so ModeOf, Select and Resolve share one parameter
-// list. WriteDir is the configuration directory a lacking setting belongs in.
+// Inputs is everything a resolution decision reads — the loaded files — so
+// Select and Resolve share one parameter list. WriteDir is the configuration
+// directory a lacking setting belongs in.
 type Inputs struct {
 	Cfg       Config
 	Providers Providers
 	Faults    []ProviderFault
 	WriteDir  string
-	Env       Overrides
 }
 
 // Endpoint is one role's resolved endpoint: the entry that supplies it, the
-// model it asks, and what named the entry. APIKeyFile is the path
-// KBASE_API_KEY_FILE names, expanded and unread — the registry reads it — and
-// APIKey is the key the pool entry's own file already supplied.
+// model it asks, and what named the entry. APIKey is the key the pool entry's
+// own file supplied.
 //
 // The three source fields name the layer that supplied each field, for a
 // report that states one; "" where no layer did, as under a flag that named
 // the model itself.
 type Endpoint struct {
-	Role       Role
-	Mode       Mode
-	Provider   string
-	Model      string
-	Rule       string
-	Layer      string
-	BaseURL    string
-	APIKeyFile string
-	Flavor     string
+	Role     Role
+	Provider string
+	Model    string
+	Rule     string
+	Layer    string
+	BaseURL  string
+	Flavor   string
 	// Protocol is the chat wire protocol the entry speaks, its default filled
-	// in — `anthropic` where the entry states none; an environment endpoint is
-	// OpenAI. The vocabulary is this package's, and the model package is handed
-	// the resolved fact rather than the string.
+	// in — `anthropic` where the entry states none. The vocabulary is this
+	// package's, and the model package is handed the resolved fact rather than
+	// the string.
 	Protocol string
 	APIKey   string
 
@@ -163,75 +123,14 @@ type Endpoint struct {
 	TemperatureSource, ThinkingSource     string
 }
 
-// ModeOf is which source supplies inference, decided once per invocation. It
-// reads the loaded configuration and the environment's strings and nothing
-// else: no file, no connection, no stderr. The sources are exclusive — an
-// environment inference variable alongside a [models] value is a refusal, one
-// item per side — and the environment is all or nothing: a role variable
-// without KBASE_API_BASE_URL is a refusal naming the variable set and the one
-// missing, and a base URL alone is the same refusal the other way round. The
-// key file is not a mode: KBASE_API_KEY_FILE flips nothing.
-func ModeOf(in Inputs) (Mode, error) {
-	var variables []string
-	for _, v := range []struct{ name, value string }{
-		{EnvAPIBaseURL, in.Env.BaseURL},
-		{RoleDecision.variable(), in.Env.Decision},
-		{RoleText.variable(), in.Env.Text},
-		{RoleScoring.variable(), in.Env.Scoring},
-	} {
-		if v.value != "" {
-			variables = append(variables, v.name)
-		}
-	}
-	var standing []Role
-	for _, role := range Roles {
-		if role.model(in.Cfg.Models) != "" {
-			standing = append(standing, role)
-		}
-	}
-
-	switch {
-	case len(variables) == 0:
-		return ModeFile, nil
-	case len(standing) > 0:
-		configFile := ConfigPath(in.WriteDir)
-		var refusals result.Refusal
-		for _, name := range variables {
-			refusals = append(refusals, result.Item{Check: CheckProvider, Key: name,
-				Detail: fmt.Sprintf("%s is set while %s names a model: the environment is the whole inference configuration or nothing, so unset %s, or remove the file's [%s] values",
-					name, configFile, name, tableModels)})
-		}
-		for _, role := range standing {
-			refusals = append(refusals, result.Item{Check: CheckProvider, Key: role.key(), Path: configFile,
-				Detail: fmt.Sprintf("%s is set while the environment names inference: the environment is the whole inference configuration or nothing, so remove %s, or unset %s",
-					role.key(), role.key(), role.variable())})
-		}
-		return "", refusals
-	case in.Env.BaseURL == "":
-		var refusals result.Refusal
-		for _, name := range variables {
-			refusals = append(refusals, result.Item{Check: CheckProvider, Key: name,
-				Detail: fmt.Sprintf("%s is set, and %s is unset: the environment supplies an endpoint and a model together or neither, so set %s or unset %s",
-					name, EnvAPIBaseURL, EnvAPIBaseURL, name)})
-		}
-		refusals = append(refusals, result.Item{Check: CheckProvider, Key: EnvAPIBaseURL,
-			Detail: fmt.Sprintf("%s is unset, and %s names a model: the environment supplies an endpoint and a model together or neither, so set %s",
-				EnvAPIBaseURL, strings.Join(variables, ", "), EnvAPIBaseURL)})
-		return "", refusals
-	}
-	return ModeEnvironment, nil
-}
-
-// Resolve is one role's endpoint in a mode. It is pure, as ModeOf is: it reads
-// no file, opens no connection and writes nothing; a refusal's remedy may name
-// the command that fixes it.
+// Resolve is one role's endpoint, from the pool entry its reference names. It
+// is pure: it reads no file, opens no connection and writes nothing; a
+// refusal's remedy may name the command that fixes it.
 //
 // A flag names the role's model where the files name none and overrides the
-// value where they name one; environment mode takes its endpoint and every
-// model from its own variables, so a variable it lacks is refused whatever the
-// flag says.
-func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error) {
-	return ResolveFlag(in, mode, role, flagModel, keyScoringModel, false)
+// value where they name one.
+func Resolve(in Inputs, role Role, flagModel string) (Endpoint, error) {
+	return ResolveFlag(in, role, flagModel, keyScoringModel, false)
 }
 
 // ResolveFlag is Resolve with the flag that supplies a role's model spelled by
@@ -247,22 +146,7 @@ func Resolve(in Inputs, mode Mode, role Role, flagModel string) (Endpoint, error
 // flagKey names a flag: the role the files leave unnamed is then refused by its
 // key as the first remedy and that flag as the other, and never as though the
 // flag had been passed.
-func ResolveFlag(in Inputs, mode Mode, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
-	if mode == ModeEnvironment {
-		return resolveEnvironment(in, role, flagModel)
-	}
-	return resolveFile(in, role, flagModel, flagKey, defaulted)
-}
-
-// configureRemedy is the command that rewrites a config.toml still naming a
-// bare model id into the reference form.
-const configureRemedy = "kbase configure --provider <entry> " + modelMapSyntax
-
-// resolveFile is a role's endpoint from the pool entry its reference names;
-// flagKey is the flag a refusal names where it was the flag that supplied the
-// value, so a verb whose flag is not --scoring-model is pointed at its own, and
-// defaulted says the role is the caller's default rather than one a flag named.
-func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
+func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool) (Endpoint, error) {
 	configured := role.model(in.Cfg.Models)
 	configFile := ConfigPath(in.WriteDir)
 	// The flag names the role's model where the files name none, and overrides
@@ -291,7 +175,7 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 		}
 		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: role.key(), Path: configFile, Remedy: configureRemedy, Detail: detail}}
 	}
-	ref, err := FileReference(value)
+	ref, err := ParseReference(value)
 	if err != nil {
 		if rule == RuleFlag {
 			return Endpoint{}, result.Refusal{{Check: CheckUsage, Key: flagKey,
@@ -316,41 +200,19 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 		}
 		return Endpoint{}, result.Refusal{item}
 	}
-	ep := Endpoint{Role: role, Mode: ModeFile, Provider: ref.Provider, Model: ref.Model, Rule: rule,
+	ep := Endpoint{Role: role, Provider: ref.Provider, Model: ref.Model, Rule: rule,
 		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor(),
 		Protocol:      entry.Protocol(),
 		BaseURLSource: entry.Layer, ModelSource: in.Cfg.ModelLayer(role)}
 	if keyKind(entry) == KeyKindFile {
 		ep.KeySource = entry.Layer
 	}
-	// The key file is no mode: KBASE_API_KEY_FILE replaces the key of whichever
-	// endpoint is in force, and the pool entry's own file is what stands where
-	// it names none.
-	if path := expandHome(in.Env.APIKeyFile); path != "" {
-		ep.APIKeyFile, ep.KeySource = path, LayerSourceEnvironment
-	}
 	return withSampling(in, ep)
 }
 
-// resolveEnvironment is a role's endpoint from the environment's strings.
-func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error) {
-	configured := role.fromEnv(in.Env)
-	if configured == "" {
-		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: role.variable(),
-			Detail: fmt.Sprintf("%s is unset, and the environment mode supplies every model by its own variable", role.variable())}}
-	}
-	ep := Endpoint{Role: role, Mode: ModeEnvironment, Model: configured, BaseURL: in.Env.BaseURL,
-		Flavor: FlavorSystemOne, Protocol: ProviderAPIOpenAI,
-		BaseURLSource: LayerSourceEnvironment, ModelSource: LayerSourceEnvironment}
-	if flagModel != "" {
-		// The flag is the whole of what named the model, and no layer did.
-		ep.Model, ep.ModelSource = flagModel, ""
-	}
-	if path := expandHome(in.Env.APIKeyFile); path != "" {
-		ep.APIKeyFile, ep.KeySource = path, LayerSourceEnvironment
-	}
-	return withSampling(in, ep)
-}
+// configureRemedy is the command that rewrites a config.toml still naming a
+// bare model id into the reference form.
+const configureRemedy = "kbase configure --provider <entry> " + modelMapSyntax
 
 // temperatureMax is the top of the temperature range each chat protocol
 // accepts; the bottom is 0 for both.

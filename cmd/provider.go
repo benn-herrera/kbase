@@ -69,9 +69,9 @@ type providerOptions struct {
 }
 
 // inputs is what a resolution decision reads: the loaded configuration this
-// invocation works from, and the environment's strings.
-func (o providerOptions) inputs(env config.Overrides) config.Inputs {
-	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir, Env: env}
+// invocation works from.
+func (o providerOptions) inputs() config.Inputs {
+	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir}
 }
 
 // warnFaults says what the pool's faults were, one line each. A provider
@@ -92,14 +92,9 @@ func warnFaults(stderr io.Writer, faults []config.ProviderFault) {
 }
 
 // warnCleartextKey writes config.CleartextWarning's line for ep, judged on the
-// key reg dials ep with, and reports whether it wrote one. A key reg cannot
-// read says nothing here: the dial refuses it.
-func warnCleartextKey(stderr io.Writer, reg *modelclient.Registry, ep config.Endpoint) bool {
-	key, err := reg.Key(ep)
-	if err != nil {
-		return false
-	}
-	line := config.CleartextWarning(ep.BaseURL, key)
+// key ep is dialled with, and reports whether it wrote one.
+func warnCleartextKey(stderr io.Writer, ep config.Endpoint) bool {
+	line := config.CleartextWarning(ep.BaseURL, ep.APIKey)
 	if line == "" {
 		return false
 	}
@@ -124,27 +119,12 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 }
 
 // roleRecord is one role's record in a result document, in §7.1's key order:
-// the role, what answered it, where that endpoint came from, and the model
-// this invocation asked for. The pool entry's name, rule and layer stand
-// together or not at all — an environment endpoint has none of them — and
-// back-end is what tells the cases apart, so a reader never infers the source
-// from an absence.
+// the role, the pool entry that answered it with the rule that named the entry
+// and the layer that supplied it, and the model this invocation asked for.
 func roleRecord(ep config.Endpoint) toolresult.Record {
-	record := toolresult.Record{
-		{Key: "role", Value: string(ep.Role)},
-		{Key: "back-end", Value: backEndName(ep)},
-	}
+	record := toolresult.Record{{Key: "role", Value: string(ep.Role)}}
 	record = append(record, providerFields(ep.Provider, ep.Rule, ep.Layer)...)
 	return append(record, toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
-}
-
-// backEndName is what answered ep, as a record states it: the environment the
-// endpoint came from, or a pool entry's provider.
-func backEndName(ep config.Endpoint) string {
-	if ep.Mode == config.ModeEnvironment {
-		return string(config.ModeEnvironment)
-	}
-	return string(config.BackEndProvider)
 }
 
 // rolesField is the roles record: one record per role, in role order.

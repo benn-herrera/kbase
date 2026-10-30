@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"time"
 
@@ -40,10 +39,8 @@ func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 }
 
 func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
-	env := config.EnvOverrides(os.Getenv)
-	s := opts.inputs(env)
 	warnFaults(opts.Stderr, opts.Faults)
-	name, rule, err := config.Select(s, opts.Provider)
+	name, rule, err := config.Select(opts.inputs(), opts.Provider)
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}

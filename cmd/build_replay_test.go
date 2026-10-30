@@ -16,7 +16,6 @@ import (
 	"kbase/internal/asks/call"
 	"kbase/internal/build"
 	"kbase/internal/buildstore"
-	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/model"
@@ -112,7 +111,7 @@ func buildReplayWith(t *testing.T, ctx context.Context, client model.Client, wor
 	opts.Stdout, opts.Stderr, opts.Logger = &stdout, &stderr, log.Discard()
 	opts.AskConcurrency = new(1)
 	opts.NewClient = func(model.Endpoint) model.Client { return client }
-	opts.Provider = buildProvider(scoreProvider(), config.Overrides{}, &stderr)
+	opts.Provider = buildProvider(scoreProvider(), &stderr)
 	code, err := runBuildReplay(ctx, opts)
 	if err != nil {
 		t.Fatalf("runBuildReplay: %v", err)

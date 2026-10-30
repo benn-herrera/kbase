@@ -663,7 +663,6 @@ func stalledBuildRepos(t *testing.T, names ...string) (string, []string) {
 		repos = append(repos, repo)
 	}
 	isolateChildBuild(t, base)
-	unsetInferenceEnv(t)
 	childStubConfig(t, base, provider.URL, config.RoleDecision, config.RoleText)
 	return base, repos
 }

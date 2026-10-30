@@ -177,10 +177,10 @@ func (f fixture) asking(client model.Client) Options {
 	opts.Provider = func() (Provider, error) {
 		return Provider{MultichoiceClient: client, Multichoice: "decision", OverviewClient: client, Overview: "text", Queue: model.NewQueue(2),
 			Roles: []result.Record{
-				{{Key: "role", Value: "decision"}, {Key: "back-end", Value: "provider"},
+				{{Key: "role", Value: "decision"},
 					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
 					{Key: "provider-layer", Value: "repository"}, {Key: "model", Value: "decision"}},
-				{{Key: "role", Value: "text"}, {Key: "back-end", Value: "provider"},
+				{{Key: "role", Value: "text"},
 					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
 					{Key: "provider-layer", Value: "repository"}, {Key: "model", Value: "text"}},
 			}}, nil
@@ -208,7 +208,7 @@ func TestBuildAsksThroughTheLetterSeam(t *testing.T) {
 		t.Fatalf("roles = %v, want decision then text", roles)
 	}
 	for _, role := range roles {
-		want := map[string]any{"back-end": "provider", "provider": "solo", "provider-rule": "config", "provider-layer": "repository"}
+		want := map[string]any{"provider": "solo", "provider-rule": "config", "provider-layer": "repository", "model": role[0].Value}
 		for key, value := range want {
 			if got := roleValue(role, key); got != value {
 				t.Errorf("%s's %s = %v, want %v", role[0].Value, key, got, value)

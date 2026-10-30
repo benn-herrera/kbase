@@ -20,93 +20,6 @@ func keyFile(t *testing.T, key string) string {
 	return p
 }
 
-// TestEnvOverrides: the environment reads each variable into its field,
-// trimmed.
-func TestEnvOverrides(t *testing.T) {
-	getenv := func(name string) string {
-		switch name {
-		case EnvAPIBaseURL:
-			return " http://env.example/v1 "
-		case EnvDecision:
-			return " clef "
-		case EnvText:
-			return "Qwen3.8-27B"
-		case EnvScoring:
-			return " scoring-id "
-		case EnvAPIKeyFile:
-			return "/keys/reaper.txt"
-		default:
-			return ""
-		}
-	}
-	want := Overrides{BaseURL: "http://env.example/v1", Decision: "clef", Text: "Qwen3.8-27B",
-		Scoring: "scoring-id", APIKeyFile: "/keys/reaper.txt"}
-	if got := EnvOverrides(getenv); got != want {
-		t.Errorf("EnvOverrides = %+v, want %+v", got, want)
-	}
-	if got := EnvOverrides(func(string) string { return "" }); got != (Overrides{}) {
-		t.Errorf("EnvOverrides with an empty environment = %+v, want the zero layer", got)
-	}
-}
-
-// TestModeOf: the environment either supplies the whole inference
-// configuration or nothing. With no inference variable set the files do; with
-// the base URL and no file value the environment does; and every other
-// combination is a refusal listing every side the user has to decide between.
-func TestModeOf(t *testing.T) {
-	files := Config{Models: ModelMap{Decision: "p/d", Text: "p/t"}}
-	scoringOnly := Config{Models: ModelMap{Scoring: "p/s"}}
-	for _, tc := range []struct {
-		name string
-		cfg  Config
-		env  Overrides
-		want Mode
-		keys []string // the refusal's keys, in order, where it refuses
-	}{
-		{name: "the files alone", cfg: files, want: ModeFile},
-		{name: "no configuration at all", want: ModeFile},
-		{name: "the environment alone", env: Overrides{BaseURL: "http://env/v1", Decision: "d", Text: "t"}, want: ModeEnvironment},
-		{name: "the key file is no mode", env: Overrides{APIKeyFile: "/keys/k"}, want: ModeFile},
-		{name: "the key file beside a file value", cfg: files, env: Overrides{APIKeyFile: "/keys/k"}, want: ModeFile},
-		{name: "a role variable with no base URL", env: Overrides{Text: "t"},
-			keys: []string{EnvText, EnvAPIBaseURL}},
-		{name: "the base URL alone beside a file value", cfg: files, env: Overrides{BaseURL: "http://env/v1"},
-			keys: []string{EnvAPIBaseURL, "models.decision", "models.text"}},
-		{name: "a role variable beside a file value", cfg: files, env: Overrides{BaseURL: "http://env/v1", Text: "t"},
-			keys: []string{EnvAPIBaseURL, EnvText, "models.decision", "models.text"}},
-		{name: "the scoring variable is an inference variable", cfg: scoringOnly, env: Overrides{BaseURL: "http://env/v1", Scoring: "s"},
-			keys: []string{EnvAPIBaseURL, EnvScoring, "models.scoring"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			mode, err := ModeOf(Inputs{Cfg: tc.cfg, Env: tc.env, WriteDir: dir})
-			if tc.keys == nil {
-				if err != nil || mode != tc.want {
-					t.Fatalf("= %q, %v; want %q", mode, err, tc.want)
-				}
-				return
-			}
-			refusals, ok := err.(result.Refusal)
-			if !ok {
-				t.Fatalf("err = %v, want refusals", err)
-			}
-			var keys []string
-			for _, r := range refusals {
-				keys = append(keys, r.Key)
-				if r.Check != CheckProvider {
-					t.Errorf("%s: check = %q, want %q", r.Key, r.Check, CheckProvider)
-				}
-				if strings.HasPrefix(r.Key, "models.") && r.Path != ConfigPath(dir) {
-					t.Errorf("%s names no config.toml: path %q", r.Key, r.Path)
-				}
-			}
-			if strings.Join(keys, ",") != strings.Join(tc.keys, ",") {
-				t.Errorf("keys = %q, want %q", keys, tc.keys)
-			}
-		})
-	}
-}
-
 // TestSelect: the catalogue verbs' choice is the flag, else the pool's only
 // entry — a role is never chosen this way.
 func TestSelect(t *testing.T) {
@@ -141,9 +54,8 @@ func TestSelect(t *testing.T) {
 	}
 }
 
-// TestReferenceGrammar: one grammar per mode. A file value is
-// provider/model, split at the FIRST slash; an environment value is a bare id
-// of the environment's endpoint, which no parser reads.
+// TestReferenceGrammar: a value is provider/model, split at the FIRST slash,
+// and a bare id is no reference.
 func TestReferenceGrammar(t *testing.T) {
 	for _, tc := range []struct {
 		value    string
@@ -163,9 +75,6 @@ func TestReferenceGrammar(t *testing.T) {
 			t.Errorf("ParseReference(%q) = %+v, %v; want %q/%q ok %t", tc.value, ref, err, tc.provider, tc.model, tc.ok)
 		}
 	}
-	if _, err := FileReference("bare"); err == nil {
-		t.Error("FileReference accepted a bare id")
-	}
 }
 
 // scenario is the configuration Resolve is exercised against: one pool entry
@@ -184,63 +93,32 @@ func scenario(t *testing.T) Inputs {
 	}
 }
 
-// TestResolveFileMode: a role's endpoint is the entry its own reference names,
-// with the model it names and the provenance its record states.
-func TestResolveFileMode(t *testing.T) {
+// TestResolve: a role's endpoint is the entry its own reference names, with
+// the model it names and the provenance its record states.
+func TestResolve(t *testing.T) {
 	in := scenario(t)
-	ep, err := Resolve(in, ModeFile, RoleDecision, "")
+	ep, err := Resolve(in, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Endpoint{Role: RoleDecision, Mode: ModeFile, Provider: "lab", Model: "d3", Rule: RuleConfig,
+	want := Endpoint{Role: RoleDecision, Provider: "lab", Model: "d3", Rule: RuleConfig,
 		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
 		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
 		t.Errorf("= %+v, want %+v", ep, want)
 	}
-	// The key file is no mode: it replaces the key of whichever endpoint is in
-	// force, and the dial reads it.
-	in.Env = Overrides{APIKeyFile: "~/keys/lab.txt"}
-	ep, err = Resolve(in, ModeFile, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	home, _ := os.UserHomeDir()
-	if ep.APIKeyFile != filepath.Join(home, "keys", "lab.txt") || ep.KeySource != LayerSourceEnvironment || ep.Model != "qwen" {
-		t.Errorf("= %+v, want the key file expanded and named environment", ep)
-	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
-	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/judge")
+	ep, err = Resolve(in, RoleScoring, "lab/judge")
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
 		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
 	}
 	// The flag supplies the role the files name no model for: the entry is the
 	// flag's, no layer named the model, and the rule is the flag's.
 	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "", ""
-	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/clef")
+	ep, err = Resolve(in, RoleScoring, "lab/clef")
 	if err != nil || ep.Provider != "lab" || ep.Model != "clef" || ep.Rule != RuleFlag || ep.ModelSource != "" {
 		t.Errorf("= %+v, %v; want the flag to supply lab/clef under its own rule", ep, err)
-	}
-}
-
-// TestResolveEnvironmentMode: the environment's endpoint, its role's bare id,
-// and no pool entry behind it.
-func TestResolveEnvironmentMode(t *testing.T) {
-	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"}}
-	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ep.Provider != "" || ep.Layer != "" || ep.Model != "qwen" || ep.BaseURL != "https://env.example/v1" ||
-		ep.Mode != ModeEnvironment || ep.BaseURLSource != LayerSourceEnvironment || ep.ModelSource != LayerSourceEnvironment || ep.KeySource != "" {
-		t.Errorf("= %+v, want the environment endpoint and the role's bare id", ep)
-	}
-	// A value bearing a slash is the endpoint's model, sent verbatim: nothing
-	// parses it against a provider the environment does not name.
-	ep, err = Resolve(in, ModeEnvironment, RoleText, "org/model")
-	if err != nil || ep.Model != "org/model" || ep.ModelSource != "" {
-		t.Errorf("= %+v, %v; want the flag verbatim", ep, err)
 	}
 }
 
@@ -252,7 +130,6 @@ func TestResolveRefusals(t *testing.T) {
 		name    string
 		mutate  func(*Inputs)
 		role    Role
-		mode    Mode
 		flag    string
 		key     string
 		check   string
@@ -260,23 +137,20 @@ func TestResolveRefusals(t *testing.T) {
 		allowed []string
 		detail  string
 	}{
-		{name: "no value in the file, and no flag", role: RoleScoring, mode: ModeFile,
+		{name: "no value in the file, and no flag", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
 			key:    "models.scoring", path: configFile, detail: "and --scoring-model names no model"},
-		{name: "a bare id", role: RoleScoring, mode: ModeFile,
+		{name: "a bare id", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" },
 			key:    "models.scoring", path: configFile, detail: "<provider>/<model>"},
-		{name: "a provider the pool does not hold", role: RoleScoring, mode: ModeFile,
+		{name: "a provider the pool does not hold", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "elsewhere/clef" },
 			key:    "models.scoring", path: providersFile, allowed: []string{"lab"}},
-		{name: "a provider that faulted out", role: RoleScoring, mode: ModeFile,
+		{name: "a provider that faulted out", role: RoleScoring,
 			key: "models.scoring", path: providersFile, detail: `provider "cloud" failed to load: no baseUrl declared`},
-		{name: "the environment names no model for the role", role: RoleScoring, mode: ModeEnvironment,
-			mutate: func(in *Inputs) { in.Env = Overrides{BaseURL: "https://env/v1"} },
-			key:    EnvScoring},
-		{name: "the flag is not a reference", role: RoleScoring, mode: ModeFile, flag: "clef",
+		{name: "the flag is not a reference", role: RoleScoring, flag: "clef",
 			key: keyScoringModel, check: CheckUsage, detail: "<provider>/<model>"},
-		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring, mode: ModeFile,
+		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
 			flag:   "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"},
 			detail: "--scoring-model names a provider the pool does not hold"},
@@ -286,7 +160,7 @@ func TestResolveRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, tc.mode, tc.role, tc.flag)
+			_, err := Resolve(in, tc.role, tc.flag)
 			refusal, ok := asRefusal(err)
 			if !ok {
 				t.Fatalf("err = %v, want one refusal", err)
@@ -318,7 +192,7 @@ func TestResolveRefusals(t *testing.T) {
 func TestResolveDefaultRefusalNamesTheRoleFirst(t *testing.T) {
 	in := scenario(t)
 	in.Cfg.Models.Scoring = ""
-	_, err := ResolveFlag(in, ModeFile, RoleScoring, "", keyScoringModel, true)
+	_, err := ResolveFlag(in, RoleScoring, "", keyScoringModel, true)
 	refusal, ok := asRefusal(err)
 	if !ok {
 		t.Fatalf("err = %v, want one refusal", err)
@@ -408,7 +282,7 @@ func TestResolveSamplingRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, ModeFile, tc.role, tc.flag)
+			_, err := Resolve(in, tc.role, tc.flag)
 			refusal, ok := asRefusal(err)
 			if !ok {
 				t.Fatalf("err = %v, want one refusal", err)
@@ -428,7 +302,7 @@ func TestResolveSamplingRefusals(t *testing.T) {
 // detail and remedy name the layer that does.
 func TestResolveSamplingNamesTheSupplyingLayer(t *testing.T) {
 	in := samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(2.5)}}, Sources{TextTemperature: LayerSourceGlobal})
-	_, err := Resolve(in, ModeFile, RoleText, "")
+	_, err := Resolve(in, RoleText, "")
 	refusal, ok := asRefusal(err)
 	if !ok {
 		t.Fatalf("err = %v, want one refusal", err)
@@ -460,7 +334,7 @@ func TestResolveSamplingAccepts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := samplingInputs(t, tc.sampling, Sources{TextTemperature: LayerSourceGlobal,
 				ScoringTemperature: LayerSourceGlobal, ScoringThinking: LayerSourceRepository})
-			ep, err := Resolve(in, ModeFile, tc.role, "")
+			ep, err := Resolve(in, tc.role, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -482,7 +356,7 @@ func TestResolveSamplingAccepts(t *testing.T) {
 // unset, and the decision role carries none even where text states its own.
 func TestResolveSamplingUnset(t *testing.T) {
 	in := samplingInputs(t, SamplingTable{}, Sources{})
-	ep, err := Resolve(in, ModeFile, RoleText, "")
+	ep, err := Resolve(in, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,35 +366,11 @@ func TestResolveSamplingUnset(t *testing.T) {
 
 	in = samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(0.5), Thinking: ThinkingHigh}}, Sources{
 		TextTemperature: LayerSourceGlobal, TextThinking: LayerSourceGlobal})
-	ep, err = Resolve(in, ModeFile, RoleDecision, "")
+	ep, err = Resolve(in, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.Temperature != nil || ep.Thinking != "" {
 		t.Errorf("decision endpoint = %+v, want no sampling", ep)
-	}
-}
-
-// TestResolveSamplingInEnvironmentMode: the environment names the endpoint and
-// the model, and the file still says how the role is asked; the endpoint speaks
-// openai, so its range is openai's.
-func TestResolveSamplingInEnvironmentMode(t *testing.T) {
-	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"},
-		WriteDir: t.TempDir()}
-	in.Cfg.Sampling.Text = RoleSampling{Temperature: new(1.8), Thinking: ThinkingMedium}
-	in.Cfg.Sources.TextTemperature, in.Cfg.Sources.TextThinking = LayerSourceRepository, LayerSourceGlobal
-
-	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ep.Temperature == nil || *ep.Temperature != 1.8 || ep.Thinking != ThinkingMedium ||
-		ep.TemperatureSource != LayerSourceRepository || ep.ThinkingSource != LayerSourceGlobal {
-		t.Errorf("endpoint = %+v, want the file's text sampling with its layers", ep)
-	}
-
-	in.Cfg.Sampling.Text.Temperature = new(2.5)
-	if _, err := Resolve(in, ModeEnvironment, RoleText, ""); err == nil {
-		t.Error("an environment-mode role accepted a temperature outside openai's range")
 	}
 }

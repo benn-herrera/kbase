@@ -45,9 +45,6 @@ func buildRoles(t *testing.T) (doc resultDoc, dialled []model.Endpoint) {
 	t.Helper()
 	repo, state := buildRepo(t)
 	cfgDir := t.TempDir()
-	for _, name := range []string{config.EnvAPIBaseURL, config.EnvDecision, config.EnvText, config.EnvScoring, config.EnvAPIKeyFile} {
-		t.Setenv(name, "")
-	}
 	writeValues(t, cfgDir, config.ProvidersFileName, `[lab]
 baseUrl = "http://lab.example/v1"
 
@@ -74,7 +71,7 @@ decisionsFlavor = "decisions"
 	opts.Stderr = &stderr
 	if _, err := runBuild(context.Background(), buildOptions{
 		VolumeRoots: []string{"paper.tex"}, Through: "claims-discovered", StateDir: state, WorkDir: repo,
-		ConfigDir: cfgDir, NewClient: newClient, Provider: buildProvider(opts, config.EnvOverrides(os.Getenv), &stderr),
+		ConfigDir: cfgDir, NewClient: newClient, Provider: buildProvider(opts, &stderr),
 		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
 	}); err != nil {
 		t.Fatalf("build: %v\n%s", err, stderr.String())
@@ -111,7 +108,7 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 		if got == nil {
 			t.Fatalf("no %s record in %v", want.role, roles)
 		}
-		for key, value := range map[string]any{"back-end": "provider", "provider": want.provider,
+		for key, value := range map[string]any{"provider": want.provider,
 			"provider-rule": "config", "provider-layer": "explicit", "model": want.model} {
 			if got[key] != value {
 				t.Errorf("%s's %s = %v, want %v", want.role, key, got[key], value)
@@ -139,7 +136,6 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 // record names that entry; and a key bound for a non-loopback http:// endpoint
 // is one line on the verb's stderr, naming no key.
 func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
-	unsetInferenceEnv(t)
 	cfgDir := t.TempDir()
 	writeValues(t, cfgDir, "key.txt", "secret-key\n")
 	if err := os.Chmod(filepath.Join(cfgDir, "key.txt"), 0o600); err != nil {
@@ -163,7 +159,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 		dialled = append(dialled, e)
 		return modeltest.NewScriptedMock(nil, nil).Client()
 	}
-	p, err := buildProvider(providers, config.EnvOverrides(os.Getenv), &stderr)(modelclient.New(providers.NewClient, nil, "", 0))
+	p, err := buildProvider(providers, &stderr)(modelclient.New(providers.NewClient, nil, "", 0))
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}
@@ -205,7 +201,7 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 			Config:    config.Config{Models: models},
 			Stderr:    &stderr,
 		}
-		_, err := buildProvider(providers, config.Overrides{}, &stderr)(modelclient.New(nil, nil, "", 0))
+		_, err := buildProvider(providers, &stderr)(modelclient.New(nil, nil, "", 0))
 		var refusal toolresult.Refusal
 		if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Key != "models."+string(role) ||
 			refusal[0].Check != config.CheckProvider || !strings.Contains(refusal[0].Detail, `provider "absent"`) {
@@ -257,7 +253,7 @@ func TestBuildDocumentOmitsRolesWithoutInference(t *testing.T) {
 	opts.Stderr = &stderr
 	if _, err := runBuild(context.Background(), buildOptions{
 		VolumeRoots: []string{"paper.tex"}, Through: "spine-seed", StateDir: state, WorkDir: repo,
-		NoInference: true, ConfigDir: cfgDir, Provider: buildProvider(opts, config.EnvOverrides(os.Getenv), &stderr),
+		NoInference: true, ConfigDir: cfgDir, Provider: buildProvider(opts, &stderr),
 		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
 	}); err != nil {
 		t.Fatal(err)

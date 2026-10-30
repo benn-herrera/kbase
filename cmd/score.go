@@ -55,8 +55,8 @@ type scoreOptions struct {
 	Backoff []time.Duration
 
 	// ScoringModel is the --scoring-model flag: a reference overriding the
-	// scoring role's model in file mode, a bare id under the environment's
-	// endpoint. It overrides a configured role and never substitutes for one.
+	// scoring role's model. It overrides a configured role and never
+	// substitutes for one.
 	ScoringModel string
 
 	// Resume is the run to continue; "" starts a fresh one.
@@ -171,13 +171,9 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	// names no model for it refuses before the run's start refresh, with the
 	// run's own keys and nothing written. A dry run asks nothing, so it
 	// resolves no role and refuses nothing for one (§8).
-	var (
-		ep   config.Endpoint
-		mode config.Mode
-	)
-	env := config.EnvOverrides(os.Getenv)
+	var ep config.Endpoint
 	if !opts.DryRun {
-		if ep, mode, err = scoringRole(opts, env); err != nil {
+		if ep, err = scoringRole(opts); err != nil {
 			return refusedOrFailed(runKeys(fields, dir, pass), err)
 		}
 	}
@@ -236,10 +232,8 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		// re-derives the same id from its ledger, and so sends the same key.
 		reg := modelclient.New(opts.NewClient, opts.Logger, run, concurrency)
 		defer reg.CloseAll()
-		inv.BackEnd, inv.Provider, inv.Model = backEndName(ep), ep.Provider, ep.Model
-		if inv.Launch, err = scoringLaunch(opts, reg, ep, concurrency); err != nil {
-			return refusedOrFailed(fields, err)
-		}
+		inv.BackEnd, inv.Provider, inv.Model = string(config.BackEndProvider), ep.Provider, ep.Model
+		inv.Launch = scoringLaunch(opts, reg, ep, concurrency)
 	}
 	// The document is written beside the ledger once its fields name one, before
 	// the run lets go of its locks.
@@ -262,7 +256,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	// the outcome closes on, so a stop the refresh itself takes still says how to
 	// go on.
 	if rep.Unfinished {
-		fields = append(fields, toolresult.Field{Key: "resume", Value: scoreResume(opts, run, dir, mode, env)})
+		fields = append(fields, toolresult.Field{Key: "resume", Value: scoreResume(opts, run, dir)})
 	}
 	// One refresh after the last write, whether the run finished, stopped at
 	// its limit or was cancelled: the index is what the next reader reads. The
@@ -290,21 +284,16 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	return rep.Outcome, fields
 }
 
-// scoringRole is the scoring role this invocation's settings resolve, and the
-// mode they resolved it under: --scoring-model supplying or overriding the
-// model, nothing falling back to another role.
-func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, config.Mode, error) {
-	s := opts.inputs(env)
-	mode, err := config.ModeOf(s)
+// scoringRole is the scoring role this invocation's settings resolve:
+// --scoring-model supplying or overriding the model, nothing falling back to
+// another role.
+func scoringRole(opts scoreOptions) (config.Endpoint, error) {
+	ep, err := config.Resolve(opts.inputs(), config.RoleScoring, opts.ScoringModel)
 	if err != nil {
-		return config.Endpoint{}, mode, err
-	}
-	ep, err := config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel)
-	if err != nil {
-		return config.Endpoint{}, mode, err
+		return config.Endpoint{}, err
 	}
 	warnFaults(opts.Stderr, opts.Faults)
-	return ep, mode, nil
+	return ep, nil
 }
 
 // scoringLaunch is the launch every scoring call goes through: each item
@@ -314,15 +303,11 @@ func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, conf
 // call, so it counts from the call's start and never covers the wait for a
 // token. Each ask's own text carries the instruction, so the system prompt is
 // empty and nothing is said twice.
-func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint, concurrency int) (score.Launch, error) {
-	client, err := reg.Get(ep)
-	if err != nil {
-		return nil, err
-	}
+func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint, concurrency int) score.Launch {
+	client := reg.Get(ep)
 	// A key bound for a non-loopback http:// endpoint is said on stderr once
-	// and the call proceeds, as `build` says it: the key is what this
-	// invocation sends, and the registry is what read it.
-	warnCleartextKey(opts.Stderr, reg, ep)
+	// and the call proceeds, as `build` says it.
+	warnCleartextKey(opts.Stderr, ep)
 	timeout := opts.callTimeout()
 	backoff := opts.Backoff
 	if backoff == nil {
@@ -341,7 +326,7 @@ func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpo
 				return score.Reply{Text: res.Final.Reply, Truncated: res.Final.FinishReason == model.FinishLength}, nil
 			})
 		})
-	}, nil
+	}
 }
 
 // runIDBody is the body of an id kb.MintID mints: the id body's length of its
@@ -415,13 +400,6 @@ func scoreRefresh(root string, src *kb.Source, fields []toolresult.Field, opts s
 // by default is continued the same way without the flag, its header being what
 // says which set it walks.
 //
-// The mode is part of the command too. An environment-mode run has no flag that
-// names its source, so the command carries the mode's settings as assignments
-// before the program: a shell with none of them set asks the same endpoint with
-// the same models rather than falling to the files or refusing. They are
-// printed from the values this invocation read, and no key material is among
-// them — the key is a file, named by its path.
-//
 // --config-dir is carried where it was set: a resumed run reads that directory
 // and no other, so without it the same run id could resolve another reference
 // and ask a different judge under the same records.
@@ -429,7 +407,7 @@ func scoreRefresh(root string, src *kb.Source, fields []toolresult.Field, opts s
 // --rescore-manual is carried where it names a pass: run.yaml does not record
 // it, so the continuing run re-judges the manually-scored values this one did
 // only if the command says so.
-func scoreResume(opts scoreOptions, run, dir string, mode config.Mode, env config.Overrides) string {
+func scoreResume(opts scoreOptions, run, dir string) string {
 	command := []string{"kbase", "score"}
 	if opts.Pass != "" {
 		command = append(command, "--pass", opts.Pass)
@@ -447,28 +425,7 @@ func scoreResume(opts scoreOptions, run, dir string, mode config.Mode, env confi
 	if opts.RescoreManual != "" && opts.RescoreManual != score.RescoreNone {
 		command = append(command, "--rescore-manual", opts.RescoreManual)
 	}
-	if mode == config.ModeEnvironment {
-		command = append(environmentAssignments(env), command...)
-	}
 	return buildstore.ShellJoin(command)
-}
-
-// environmentAssignments is the environment mode's settings as assignments: the
-// endpoint and the role variables, and the key file where it was set.
-func environmentAssignments(env config.Overrides) []string {
-	var out []string
-	for _, setting := range []struct{ name, value string }{
-		{config.EnvAPIBaseURL, env.BaseURL},
-		{config.EnvDecision, env.Decision},
-		{config.EnvText, env.Text},
-		{config.EnvScoring, env.Scoring},
-		{config.EnvAPIKeyFile, env.APIKeyFile},
-	} {
-		if setting.value != "" {
-			out = append(out, setting.name+"="+setting.value)
-		}
-	}
-	return out
 }
 
 // refusalOrFailure is err as a verb's stop: a refusal's own items where err is
@@ -513,13 +470,12 @@ Under --dry-run, which runs no refresh, a KB in an older metadata format is
 refused; kbase refresh saves the conversion.
 
 The scoring role is the KB's declaration of which model judges it: models.scoring
-in config.toml, or KBASE_SCORING with the environment's endpoint. A run whose
-mode names no scoring model and whose flags name none is refused, naming that
-key, before the KB is opened; nothing falls back to the text model.
---scoring-model names the role's model for one run — a <provider>/<model>
-reference in file mode, a bare id under the environment's endpoint — supplying
-the role where the configuration names none and overriding it where it does, and
-is carried by the command that continues a run. --dry-run lists the set and
+in config.toml. A run whose configuration names no scoring model and whose flags
+name none is refused, naming that key, before the KB is opened; nothing falls
+back to the text model. --scoring-model names the role's model for one run — a
+<provider>/<model> reference — supplying the role where the configuration names
+none and overriding it where it does, and is carried by the command that
+continues a run. --dry-run lists the set and
 resolves no role, so a missing one does not refuse it.
 
 The passes are rigor — every claim, analysis and experiment, by id — and
@@ -619,7 +575,7 @@ func init() {
 	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "stop after this many items (default: every item)")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false, "list the set and ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",
-		"model that judges the KB, overriding models.scoring: <provider>/<model> in file mode, a bare id under the environment's endpoint")
+		"model that judges the KB, overriding models.scoring: <provider>/<model>")
 	scoreCmd.Flags().StringVar(&scoreFlagResume, "resume", "", "continue the run with this id")
 	scoreCmd.Flags().StringVar(&scoreFlagRescore, "rescore-manual", score.RescoreNone,
 		"re-judge values marked manually scored: none, rigor, bearing or both")

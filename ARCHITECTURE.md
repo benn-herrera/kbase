@@ -907,17 +907,16 @@ the context stopped the walk — its `cancelled` record naming the first item it
   call path is a `model.Slot`'s `Chat` for the overview call and for each scoring call, and its
   `Decision` for the multichoice asks. A `Slot` is issued only by the invocation's one `model.Queue`, from
   `Go`, and only while one of its N tokens is free. `build` and `score` build the queue from
-  `--ask-concurrency`, else `[asks] concurrency`, else 4, in both inference modes.
+  `--ask-concurrency`, else `[asks] concurrency`, else 4.
   `kbase probe` takes one call on one of the two by its selection, which the next item states; the decision role's model is an id on whichever surface its entry speaks
   (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — multichoice asks go to the `decision`
   role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
-  names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference or in
-  the environment by `KBASE_<ROLE>`; no role falls back to another.
+  names its own endpoint and its own model, in `[models]` as a `<provider>/<model>` reference; no
+  role falls back to another.
 - **`kbase probe` is a diagnostic on the same path.** `cmd/probe.go` resolves one selection through
-  `config.ModeOf` and `config.ResolveFlag` — `--model` supplying a reference and naming itself in a
-  refusal, a role flag (`--decision`, `--text`, `--scoring`) naming the role to resolve and supplying
-  no model, so that role's model comes from the configuration and a refusal names its key alone, and
-  an explicit reference resolved in file mode because a reference is a pool reference — then opens
+  `config.ResolveFlag` — `--model` supplying a reference and naming itself in a refusal, a role flag
+  (`--decision`, `--text`, `--scoring`) naming the role to resolve and supplying no model, so that
+  role's model comes from the configuration and a refusal names its key alone — then opens
   the client through `internal/modelclient`'s registry exactly as `score` does, so the chat path speaks
   whichever chat protocol the entry's `api` names, and the registry is the only site that builds a
   wire client. One call, no backoff, bounded by `--timeout`, and the selection's own surface is
@@ -947,8 +946,8 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `x-api-key`/`anthropic-version` headers and its catalogue shape — and is what an entry silent on
   `api` gets.
   `model.NewClient` is the dispatch, and the protocol reaches it as a value the caller resolved onto
-  `model.Endpoint` from `config.Endpoint.Protocol`, which the configuration fills from the entry
-  (environment mode is `openai`). The body each client sends is its protocol's, never one shaped by
+  `model.Endpoint` from `config.Endpoint.Protocol`, which the configuration fills from the entry.
+  The body each client sends is its protocol's, never one shaped by
   host or provider name. `model.Sampling` is the one sampling type: each client resolves
   `model.Endpoint.Sampling` once, at construction, with `Sampling.Resolved()` — temperature 0 and
   thinking off where the role states none — and `chat()` copies it onto every request, shaping no
@@ -1010,18 +1009,12 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `Refusal`'s path names the file a lacking setting belongs in — the write target's
   `providers.toml` or `config.toml` — so
   a layered configuration says which file to edit.
-- **Resolution is three pure functions, and connection is the registry's.** `config.ModeOf`
-  (`internal/config/resolve.go`) decides once per invocation which source supplies inference; it
-  reads the loaded configuration and the environment's strings and nothing else, and its refusals
-  are the mixed sources, the partial environment and the environment beside a standing `[models]`
-  value. `config.Resolve` answers one role's `Endpoint` in that mode;
-  for `text` and `scoring` it carries `Temperature` and `Thinking` from `[sampling.<role>]` with
-  the layer of each, in either mode, and refuses a temperature outside the protocol's range;
-  it reads no file, opens no
-  connection and writes no stderr, though a refusal's remedy may name the command that fixes it
-  (`kbase configure`) — the
-  key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
-  never by resolution. `config.ResolveFlag` is the same resolution with the flag that supplies a
+- **Resolution is pure, and connection is the registry's.** `config.Resolve`
+  (`internal/config/resolve.go`) answers one role's `Endpoint` from the pool entry its reference
+  names; for `text` and `scoring` it carries `Temperature` and `Thinking` from `[sampling.<role>]`
+  with the layer of each, and refuses a temperature outside the protocol's range; it reads only the
+  loaded configuration — no file, no connection, no stderr — though a refusal's remedy may name the
+  command that fixes it (`kbase configure`). `config.ResolveFlag` is the same resolution with the flag that supplies a
   role's model spelled by the caller, so `probe`'s `--model` is named in a refusal where
   `--scoring-model` would be; the caller names no flag where none supplies a model, as `probe`'s role
   flags supply none, and a role the files leave unnamed then names only its key. `config.Select` is
@@ -1035,13 +1028,13 @@ the context stopped the walk — its `cancelled` record naming the first item it
   resolution rule, and `internal/modelclient`'s `Registry` is the only constructor of a
   `model.Client`: one client per endpoint, wire protocol and resolved sampling — roles whose
   resolved sampling is equal, an unset setting equal to its stated default, share one client and its
-  connection pool — opened on first use, keyed by the entry's name or — in environment mode — by its
-  base URL, by the protocol and by the resolved sampling, and closed together before the verb returns on
-  every outcome. `samplingOf` maps the configuration's `thinking` onto `model.Sampling`.
+  connection pool — opened on first use, keyed by the entry's name, by the protocol and by the
+  resolved sampling, dialled with the key the entry's own file supplied at load, and closed together
+  before the verb returns on every outcome. `samplingOf` maps the configuration's `thinking` onto
+  `model.Sampling`.
   The report's other facts — the pool's entries and faults, the files' presence, `config.toml`'s
-  values, the inference variable names the process sets — come from
-  `internal/config.Report`, which reads no file and no environment of its own: the caller passes the
-  existence probe and `getenv`.
+  values — come from `internal/config.Report`, which reads no file of its own: the caller passes the
+  existence probe.
 - A multichoice ask is one `POST` to the entry's decision surface (a `Slot`'s `Decision`; `decisionsFlavor`,
   SPEC §9.1), one `noul` or `choice` question asked and the answer read by the key it echoes — no
   reply text parsed. Two shapes stand behind that choice. `systemone`, what an entry silent on the
@@ -1586,7 +1579,7 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
   about to ask something. `modelclient` imports `model`, `config`, `result` and `log` and nothing
   else of kbase, and `cmd` alone imports it.
 - `internal/config` imports no kbase package but `atomicfile` and `result`: it holds the grammar,
-  the three roles, the two modes, `ModeOf`, `Resolve`, `Select`, the loaded files and the
+  the three roles, `Resolve`, `Select`, the loaded files and the
   templates, and refuses in `result.Refusal`. It holds configure's rules too, in `Configure`: the
   `--model-map` grammar (`ParseModelMap`), which scoring reference a rewrite keeps, the match of
   each reference against its provider's catalogue, the refusal of an unassigned category and the
@@ -1638,7 +1631,7 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | Ask concurrency | `[asks] concurrency` in `config.toml` (SPEC §9.2), `--ask-concurrency` on `build` and `score`, default `config.DefaultAskConcurrency`, 4; the model calls one invocation has in flight, and the idle connections per host its clients keep; `probe` runs a queue of one |
 | Sampling | `[sampling.text]` and `[sampling.scoring]` in `config.toml` (SPEC §9.2), each `temperature` and `thinking`; the `thinking` vocabulary `config.ThinkingLevels`; unset is temperature 0 and thinking off; the temperature ranges `openai` [0, 2] and `anthropic` [0, 1] |
 | Thinking budgets (Messages) | `low` 1,024, `medium` 4,096, `high` 16,384 tokens, as named constants in `anthropic_client.go` (`thinkingBudgetLow`, `thinkingBudgetMedium`, `thinkingBudgetHigh`); `max_tokens` is the budget plus the answer's allowance (SPEC §9.1) |
-| Model roles | `[models] decision` (the multichoice asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference; `KBASE_DECISION`/`KBASE_TEXT`/`KBASE_SCORING` name a bare id under the environment's endpoint instead (SPEC §9) |
+| Model roles | `[models] decision` (the multichoice asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference (SPEC §9) |
 | Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion` (`format300.Version300`); the stamp key is `kb-format`. `3.0.0` |
 | Format stamp file | `kb.FormatFile` (`format300.FormatFile`): `.index/format.yaml`, the one-key block mapping that holds the stamp, written by `kb.EncodeFormatStamp` and read by no package but `kbload`, which falls back to the superseded entry-point frontmatter where the file does not stand (SPEC §10) |
 | Pending literal | `kb.PendingLiteral`: `*pending*`, the format's one no-number literal, written for a value not yet judged and accepted wherever a value is absent (SPEC §10) |

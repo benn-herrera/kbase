@@ -463,7 +463,6 @@ func TestScoreRefusesADryRunOnAnOlderKB(t *testing.T) {
 // and proceeds — the same line `build` writes, naming the host and never the key.
 // A loopback endpoint says nothing.
 func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
-	unsetInferenceEnv(t)
 	for _, tc := range []struct {
 		name, url string
 		warn      bool
@@ -764,7 +763,6 @@ func (w *scoringWire) promptCacheFields(t *testing.T) []promptCacheField {
 // share one cache entry. Two items of one run, one server, one key — the id the
 // result document names.
 func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
-	unsetInferenceEnv(t)
 	repo := fixtureRepo(t, "score-kb")
 	wire := &scoringWire{}
 	srv := httptest.NewServer(wire.handler())
@@ -797,7 +795,6 @@ func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
 // invocation's did — one provider and one cache entry for the run, across
 // processes.
 func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
-	unsetInferenceEnv(t)
 	repo, state := fixtureRepo(t, "score-kb"), t.TempDir()
 	wire := &scoringWire{}
 	srv := httptest.NewServer(wire.handler())

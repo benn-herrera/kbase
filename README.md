@@ -22,8 +22,8 @@ hardware.
   sheets](#claim-graph-sheets); without it they are not drawn.
 - **A provider configuration**, for builds that spend inference and for scoring runs. A build run with
   `--no-inference` needs none, and so does a `kbase score --dry-run`. A scoring run asks the
-  `scoring` role's endpoint, so `models.scoring` — or `KBASE_SCORING` under the environment's
-  endpoint — must name a model: the role is what declares which model judges the KB.
+  `scoring` role's endpoint, so `models.scoring` must name a model: the role is what declares which
+  model judges the KB.
 - **Go**, to build kbase from source. `just` runs the project's recipes.
 
 Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00README.json`'s
@@ -252,8 +252,8 @@ The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`,
   supports the other end), `target`, `bearing` and `context`.
 - Maintenance never requires git.
 
-**Scoring.** `kbase score` asks the configured scoring model — `models.scoring`,
-or `KBASE_SCORING` under the environment's endpoint — one item at a time, and asks it for the
+**Scoring.** `kbase score` asks the configured scoring model — `models.scoring` — one item at a
+time, and asks it for the
 **faults the text commits**, not for a number: a list of charge lines, each a fault id and the span
 of the item's own text that shows it, or `none`. kbase prices the list with the
 pass's table and writes the result through `set-rigor` or `set-bearing`. The `rigor` pass covers
@@ -268,7 +268,7 @@ the ids and the weights are stated once, in
 value can be checked against its charges.
 
 Every attempt is recorded under `<state-dir>/score/<run>/`: `run.yaml` names the run, the set it walks
-(one pass, or `both`), what answered (`backend`: `provider` or `environment`), the model and the digest
+(one pass, or `both`), what answered (`backend`: `provider`), the model and the digest
 of the ask its judgements answer; `ledger.jsonl` holds a line per attempt with its own item's pass, the
 faults it recorded, the reply where it parsed, the
 value it prices to, the model and the prompt's digest. `--resume <run>` continues a run without
@@ -278,8 +278,7 @@ it lands the values that moved through the same write path and records them in `
 no model asked. A resume under a changed ask — a run older than kbase's current instructions —
 continues under the current ask: the header keeps the digest the run began under, and nothing refuses
 and nothing asks you to choose. `--limit N` stops after N items, and the result carries the `resume`
-command — its flags and, under the environment mode, the variables it read — whenever an item is
-still not `done`. A failed run lists what failed under `failures` — an item and the reason its ledger
+command — its flags — whenever an item is still not `done`. A failed run lists what failed under `failures` — an item and the reason its ledger
 line recorded, or a refresh's own error — and a cancelled one names the item it stopped before. The
 reason names what ended the item's call: `provider-refused` where the endpoint answered with a status
 that is not success, its status and its own words beside it, and `transport-failure` where the
@@ -290,9 +289,8 @@ ledger.
 start — on an older KB that is the write that converts and saves it — and once after its last value
 or the values a resume re-priced, each refresh holding the KB write lock; a dry run does neither.
 
-`--scoring-model` names the model for one run: a `<provider>/<model>` reference in file mode, which
-supplies the role where `models.scoring` names none and overrides it where it does; a bare id under
-the environment's endpoint, where the role's variable must name one too. Every ask is one chat call
+`--scoring-model` names the model for one run: a `<provider>/<model>` reference, which supplies the
+role where `models.scoring` names none and overrides it where it does. Every ask is one chat call
 on that endpoint, re-issued identically up to the transport attempt count while it does not complete,
 pausing 5 s then 30 s between attempts — as long as the item's deadline covers the pause: a pause it
 cannot cover is not waited out, and the item fails at once naming the attempts it made. A status that
@@ -468,7 +466,7 @@ read in its place.
   name replaces the global entry whole, so a repository never inherits a credential for an endpoint
   it chose. Each top-level table is a provider you name, with `baseUrl` (required) and `apiKeyFile`
   — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
-  `~` in `apiKeyFile`, `--config-dir`, `$KBASE_CONFIG_DIR` or `$KBASE_API_KEY_FILE` expands from your
+  `~` in `apiKeyFile`, `--config-dir` or `$KBASE_CONFIG_DIR` expands from your
   home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
   `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `anthropic` (the
   default, the Anthropic Messages protocol) or `openai` (the OpenAI-compatible `chat/completions`
@@ -499,13 +497,9 @@ read in its place.
   a failed dial or listing — writes nothing. A dialled run requires all three roles, except a
   `scoring` value the target file already holds, which it leaves standing.
 
-**Two modes, never merged.** Inference is supplied by the files or by the environment, and by one of
-them only. The environment is `KBASE_API_BASE_URL` plus the role variables `KBASE_DECISION`,
-`KBASE_TEXT` and `KBASE_SCORING` — bare model ids of that endpoint — and it needs no configuration
-directory at all. A role variable beside a `[models]` value is refused, one item per side, and so is a
-role variable without a base URL or a base URL beside file-supplied models: the environment is the
-whole configuration or nothing. `KBASE_API_KEY_FILE` is not a mode — it replaces the key of whichever
-endpoint is in force, and is optional.
+**The files are the whole configuration.** The endpoint, the model and the key each role uses come
+from `providers.toml` and `config.toml` alone; no environment variable supplies any of them. To keep
+a run apart from your own layers, name its directory with `--config-dir` or `$KBASE_CONFIG_DIR`.
 
 Provider selection — `--provider`, else the sole `providers.toml` entry — belongs to `models` and
 `configure` alone: they select an entry to dial, which is not a role. A `--provider` the pool does not
@@ -518,8 +512,7 @@ file. In a build, the claim graph's multichoice asks go to the `decision` role a
 `kbase show-config` reports how all of this resolves, and changes nothing: no KB read, no file
 written, no request made. It states the layers read and what named each; the pool, with each entry's
 layer, key kind, decision surface and any fault; `config.toml`'s merged `[models]` values; the
-inference variables this process sets; the mode;
-the selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
+selected entry and rule; and one record per role, naming the endpoint, the layer that supplied
 each field, the model asked, or what is missing. Gaps are diagnostics in a `done` result, not
 refusals, so one call shows them all.
 
@@ -527,10 +520,9 @@ refusals, so one call shows them all.
 one model one question and reports what came back: the selection asked, the provider, the model, the
 time to the first token, the call's wall time, the finish reason, the reply, and the usage the
 provider reported. A probe asks one selection: `--decision`, `--text` and `--scoring` each ask the
-selection the configuration resolves for that role — `models.<role>` in the file, or the role's own
-variable (`KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING`) in environment mode — and `--model` names
-a reference to reach instead, resolved against the same pool. The four are exclusive; with none of
-them the probe asks the `scoring` role — the selection a run would make, in either mode — so
+selection the configuration resolves for that role — `models.<role>` in the file — and `--model`
+names a reference to reach instead, resolved against the same pool. The four are exclusive; with
+none of them the probe asks the `scoring` role — the selection a run would make — so
 `kbase probe` with no arguments is the heartbeat of a configuration. The document names the selection
 that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
 

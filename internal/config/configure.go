@@ -204,7 +204,7 @@ func keepScoring(manual map[string]Reference, path, fileValue string) (*Referenc
 	if fileValue == "" {
 		return nil, nil
 	}
-	ref, err := FileReference(fileValue)
+	ref, err := ParseReference(fileValue)
 	if err != nil {
 		return nil, result.Refusal{{Check: CheckProvider, Key: RoleScoring.key(), Path: path,
 			Remedy: "kbase configure " + keyModelMap + " " + CategoryScoring + "=<entry>/<id>",
@@ -315,7 +315,7 @@ func ParseModelMap(values []string) (map[string]Reference, error) {
 				err[0].Allowed = categories
 				return nil, err
 			}
-			ref, err := FileReference(id)
+			ref, err := ParseReference(id)
 			if err != nil {
 				return nil, modelMapError(fmt.Sprintf("--model-map %s names %q, and a value is a reference: %s", category, id, modelMapSyntax))
 			}

@@ -25,14 +25,13 @@ root="$(pwd)"
 out="${RESULTS_FIXTURE_OUT_DIR}"
 kbase="${root}/${BIN_DIR}/kbase"
 fixture="${root}/${RESULTS_FIXTURE_DIR}"
-# The inference variables are scrubbed for the whole script: every leg below
-# reads the staged tree and nothing the host exports, except the one that
-# sets them to prove the environment supplies a run.
-unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR
+# The configuration-directory variable is scrubbed for the whole script: every
+# leg below reads the staged tree and no directory the host exports.
+unset KBASE_CONFIG_DIR
 repo="${out}/repo"
 docs="${out}/docs"
-rm -rf "${repo}" "${docs}" "${out}/values" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
-    "${out}/score-state" "${out}/score-env-state" "${out}/probe-config" "${out}/probestub" \
+rm -rf "${repo}" "${docs}" "${out}/values" "${out}/checks.tsv" "${out}/score-config" \
+    "${out}/score-state" "${out}/probe-config" "${out}/probestub" \
     "${out}/probestub.url" "${out}/probestub.log"
 mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
@@ -97,8 +96,8 @@ run add-pairs done add-pairs --values "$(staged add-pairs.yaml)"
 run mark-claim-in-leaf done mark-claim-in-leaf --values "$(staged mark-claim-in-leaf.yaml)"
 run verify done verify
 run score done score --dry-run --pass rigor --state-dir "${root}/${out}/state"
-# Score's role is the KB's own declaration. A file-mode configuration that
-# names decision and text but no scoring refuses before the first item,
+# Score's role is the KB's own declaration. A configuration that names
+# decision and text but no scoring refuses before the first item,
 # naming models.scoring — unless --scoring-model names a model, which
 # supplies the role the files leave unset.
 score_config="${root}/${out}/score-config"
@@ -146,48 +145,6 @@ file_ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${LAST}" | head -n 1)"
 holds 'the run left no ledger' test -n "${file_ledger}" -a -f "${file_ledger}/ledger.jsonl"
 holds 'the ledger does not name the scoring model' grep -qF '"model":"file-scoring"' "${file_ledger}/ledger.jsonl"
 if grep -qF file-text "${file_ledger}/ledger.jsonl"; then printf '  fail: the ledger names the text model\n'; status=1; fi
-# Environment mode with no configuration directory at all: the base URL and
-# the role variables configure the run, its one item fails on the same
-# unreachable endpoint, and the document and the ledger name the scoring
-# model — a different model from text's, which appears nowhere.
-mkdir -p "${out}/score-home"
-env_score="${docs}/$(printf '%02d' "$((n + 1))")-score-env-mode"
-set +e
-( cd "${repo}" && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE "HOME=${out}/score-home" \
-    KBASE_API_BASE_URL=http://127.0.0.1:1/v1 KBASE_DECISION=env-decision KBASE_TEXT=env-text KBASE_SCORING=env-scoring \
-    "${kbase}" score --pass rigor --limit 1 --state-dir "${root}/${out}/score-env-state" ) > "${env_score}.out" 2> "${env_score}.log"
-printf '%s\n' "$?" > "${env_score}.exit"
-go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${root}/${env_score}.out" -result.verb=score \
-    -result.outcome=bounded > "${env_score}.keys.log" 2>&1
-env_score_keys=$?
-set -e
-env_score_ok=0
-[[ "$(cat "${env_score}.exit")" -eq 0 ]] || env_score_ok=1
-[[ "${env_score_keys}" -eq 0 ]] || env_score_ok=1
-n=$((n + 1))
-grep -qx 'outcome: "bounded"' "${env_score}.out" || env_score_ok=1
-grep -qx '    - role: "scoring"' "${env_score}.out" || env_score_ok=1
-grep -qx '      back-end: "environment"' "${env_score}.out" || env_score_ok=1
-grep -qx '      model: "env-scoring"' "${env_score}.out" || env_score_ok=1
-score_ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${env_score}.out" | head -n 1)"
-[[ -n "${score_ledger}" && -f "${score_ledger}/ledger.jsonl" ]] || env_score_ok=1
-grep -qF '"model":"env-scoring"' "${score_ledger}/ledger.jsonl" || env_score_ok=1
-# The text model appears nowhere the run asked: the roles record and the
-# ledger's lines name the scoring model alone. The resume record is the one
-# place it stands, because an environment-mode command re-issues the whole
-# configuration it read, text's variable included.
-if grep -v '^resume:' "${env_score}.out" | grep -qF 'env-text'; then env_score_ok=1; fi
-if grep -qF 'env-text' "${score_ledger}/ledger.jsonl"; then env_score_ok=1; fi
-# 28: an environment-mode run's command re-issues the mode as assignments
-# before the program, so a shell with none of them set asks the same
-# endpoint with the same model.
-grep -q '^resume: "KBASE_API_BASE_URL=http://127.0.0.1:1/v1 KBASE_DECISION=env-decision KBASE_TEXT=env-text KBASE_SCORING=env-scoring kbase score ' \
-    "${env_score}.out" || env_score_ok=1
-printf 'score --pass rigor --limit 1 (environment mode)\tbounded\t%s\t%s\n' \
-    "$([[ "${env_score_ok}" -eq 0 ]] && echo pass || echo fail)" "${env_score}.out" >> "${out}/checks.tsv"
-printf '  %s score in environment mode: want bounded, exit %s\n' \
-    "$([[ "${env_score_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${env_score}.exit")"
-[[ "${env_score_ok}" -eq 0 ]] || status=1
 
 # Probe's decision selection asks the surface its entry declares. The stub
 # answers /systemone and refuses every other path, so a probe that took the
@@ -271,7 +228,7 @@ run verify done verify
 holds 'verify still lists a finding after the remove' grep -qx 'findings: \[\]' "${LAST}"
 run status done status --state-dir "${root}/${out}/state"
 run cancel refused cancel --state-dir "${root}/${out}/state"
-OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files the staging ops and resolve-demoted read, \${ID1} and \${ID2} substituted by the inserted claims' ids in id order and \${ID3} by the analysis's\nthe demoted leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify refused degraded, refresh warning of the cut, verify done with a demoted finding, edges --relation demoted, edge-census, deps \${ID1} and stats showing it, resolve-demoted restore refused dependency-cycle and remove done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: bounded on one failed item, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files the staging ops and resolve-demoted read, \${ID1} and \${ID2} substituted by the inserted claims' ids in id order and \${ID3} by the analysis's\nthe demoted leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify refused degraded, refresh warning of the cut, verify done with a demoted finding, edges --relation demoted, edge-census, deps \${ID1} and stats showing it, resolve-demoted restore refused dependency-cycle and remove done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: bounded on one failed item, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -88,7 +87,7 @@ func configure(ctx context.Context, opts configureOptions) (string, []toolresult
 		timeout = defaultListTimeout
 	}
 	req := config.ConfigureRequest{
-		Inputs:   opts.inputs(config.EnvOverrides(os.Getenv)),
+		Inputs:   opts.inputs(),
 		Provider: opts.Provider,
 		Models:   manual,
 		Create:   opts.Create,

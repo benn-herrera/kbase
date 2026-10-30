@@ -91,12 +91,12 @@ func RunsDir(dir string) string { return filepath.Join(dir, runsDir) }
 // ledger layout's version, and AskSHA256 the ask the run's judgements answered;
 // Create stamps both and no resume rewrites them, so a caller leaves them zero.
 //
-// BackEnd is what answered the run's items — a pool entry or the environment's
-// endpoint — and every header of a run that asked carries it, so a reader never
-// infers the source from an absence. A dry run asks nothing and resolves no back
-// end, so its header carries none: the empty string is not one of the two, and
-// an absent key is how a reader tells a run that asked nothing from one whose
-// back end was unnamed.
+// BackEnd is what answered the run's items — `provider`, a pool entry, for
+// every run this release starts; a run started under an earlier release may
+// record `environment` — and every header of a run that asked carries it, so a
+// reader never infers the source from an absence. A dry run asks nothing and
+// resolves no back end, so its header carries none: an absent key is how a
+// reader tells a run that asked nothing from one whose back end was unnamed.
 type RunHeader struct {
 	Run    string `yaml:"run"`
 	KBRoot string `yaml:"kb_root"`

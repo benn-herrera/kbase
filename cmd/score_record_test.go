@@ -14,10 +14,10 @@ import (
 	"kbase/internal/query"
 )
 
-// TestScoreRecordNamesWhatAnswered: the record names the back end, the provider
-// the scoring role named and the model it asked, in the roles record, in the
-// run's header and in every ledger line — and no field an item's own command
-// once carried stands anywhere.
+// TestScoreRecordNamesWhatAnswered: the record names the provider the scoring
+// role named and the model it asked, in the roles record, in the run's header
+// and in every ledger line, the header and lines naming the back end too — and
+// no field an item's own command once carried stands anywhere.
 func TestScoreRecordNamesWhatAnswered(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client {
@@ -27,11 +27,11 @@ func TestScoreRecordNamesWhatAnswered(t *testing.T) {
 		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	role := roleOf(got.doc, "scoring")
-	if role == nil || role["back-end"] != "provider" || role["provider"] != "solo" ||
+	if role == nil || role["provider"] != "solo" ||
 		role["provider-rule"] != config.RuleConfig || role["model"] != "scoring-model" {
 		t.Fatalf("roles = %v, want the pool entry the role named and the model it asked\n%s", got.doc.Values["roles"], got.stdout)
 	}
-	for _, key := range []string{"harness", "harness-layer"} {
+	for _, key := range []string{"harness", "harness-layer", "back-end"} {
 		if _, ok := role[key]; ok {
 			t.Errorf("the role record names %s: %v", key, role)
 		}
@@ -104,40 +104,31 @@ func TestScoreFailureReasonIsASummary(t *testing.T) {
 }
 
 // TestScoreResumeCarriesTheInvocation: the command that continues a run carries
-// the scoring model and the configuration directory the invocation carried, and
-// an environment-mode run carries the mode's settings as assignments before the
-// program.
+// the scoring model and the configuration directory the invocation carried.
 func TestScoreResumeCarriesTheInvocation(t *testing.T) {
 	opts := scoreOptions{Pass: query.PassRigor, ScoringModel: "org/judge"}
-	got := scoreResume(opts, "run-1", "/state", "", config.Overrides{})
+	got := scoreResume(opts, "run-1", "/state")
 	want := "kbase score --pass rigor --resume run-1 --state-dir /state --scoring-model org/judge"
-	if got != want {
-		t.Errorf("resume = %q, want %q", got, want)
-	}
-	env := config.Overrides{BaseURL: "http://env.example/v1", Decision: "d", Text: "t", Scoring: "s", APIKeyFile: "/keys/k.txt"}
-	got = scoreResume(scoreOptions{Pass: query.PassRigor}, "run-2", "/state", config.ModeEnvironment, env)
-	want = "KBASE_API_BASE_URL=http://env.example/v1 KBASE_DECISION=d KBASE_TEXT=t KBASE_SCORING=s " +
-		"KBASE_API_KEY_FILE=/keys/k.txt kbase score --pass rigor --resume run-2 --state-dir /state"
 	if got != want {
 		t.Errorf("resume = %q, want %q", got, want)
 	}
 	// A --config-dir the invocation was given is carried on: the resumed run
 	// reads that directory and no other, so it resolves the reference the first
 	// run did under the same run id.
-	got = scoreResume(scoreOptions{Pass: query.PassRigor, ConfigDir: "/cfg dir"}, "run-3", "/state", config.ModeFile, config.Overrides{})
+	got = scoreResume(scoreOptions{Pass: query.PassRigor, ConfigDir: "/cfg dir"}, "run-3", "/state")
 	want = "kbase score --pass rigor --resume run-3 --state-dir /state --config-dir '/cfg dir'"
 	if got != want {
 		t.Errorf("resume = %q, want %q", got, want)
 	}
 	// --project-dir is carried where the invocation named one and only then.
-	got = scoreResume(scoreOptions{ProjectDir: "/the/project"}, "run-5", "/state", config.ModeFile, config.Overrides{})
+	got = scoreResume(scoreOptions{ProjectDir: "/the/project"}, "run-5", "/state")
 	want = "kbase score --resume run-5 --state-dir /state --project-dir /the/project"
 	if got != want {
 		t.Errorf("resume = %q, want %q", got, want)
 	}
 	// A run that named no pass walks both, and its resume command names none
 	// either: the header is what says which set the run walks.
-	got = scoreResume(scoreOptions{}, "run-4", "/state", config.ModeFile, config.Overrides{})
+	got = scoreResume(scoreOptions{}, "run-4", "/state")
 	want = "kbase score --resume run-4 --state-dir /state"
 	if got != want {
 		t.Errorf("resume = %q, want %q", got, want)
