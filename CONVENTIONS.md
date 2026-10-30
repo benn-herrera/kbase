@@ -467,7 +467,8 @@ way it names any other truth it moved, so a reader can see which change made it 
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
   `${VERSION}`, `${ID1}` and `${ID2}` (the seeded claims, in id order), `${ID3}` (the staged
   analysis), `${REPO}` (the repository root) and `${STATE_DIR}`, applied to requests as well as
-  responses. A transcript named `gui-*.jsonl` runs GUI mode: the recipe serves it
+  responses. The two seeded claims are alike, and which of them a page hosts depends on the minted
+  ids, so a transcript pins no field of `${ID1}` or `${ID2}` that depends on hosting. A transcript named `gui-*.jsonl` runs GUI mode: the recipe serves it
   with `kbase mcp --project-dir-required` from outside the staged repository, and
   `TestMCPTranscripts` with a server that locates no project, so a call reaches the fixture only by naming
   it, `"project-dir":"${REPO}"`. The detached-build test needs a kbase binary to re-execute:

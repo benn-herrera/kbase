@@ -247,7 +247,7 @@ test-integration-opscript-results: build
     @mkdir -p "{{OPSCRIPT_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" COMPAT_OP_SCRIPT="{{COMPAT_OP_SCRIPT}}" OPSCRIPT_OUT_DIR="{{OPSCRIPT_OUT_DIR}}" tools/scripts/test-integration-opscript-results.sh 2>&1 | tee "{{OPSCRIPT_OUT_DIR}}/log.txt"
 
-[doc("hermetic: stage the results fixture, feed each test-data/fixtures/mcp/*.jsonl transcript to ./bin/kbase mcp over pipes and compare every response line to the expected line, a gui-*.jsonl transcript fed to ./bin/kbase mcp --project-dir-required (GUI mode) from outside the staged repository so each call names its project; evidence under test-data/transient/test-integration-mcp/")]
+[doc("hermetic: stage the results fixture, feed each test-data/fixtures/mcp/*.jsonl transcript to ./bin/kbase mcp over pipes and compare every response line to the expected line, a gui-*.jsonl transcript fed to ./bin/kbase mcp --project-dir-required (GUI mode) from outside the staged repository so each call names its project; then every kbase://help/<command> resource is read and compared byte for byte with ./bin/kbase <command> --help; evidence under test-data/transient/test-integration-mcp/")]
 test-integration-mcp: build
     @mkdir -p "{{MCP_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" MCP_TRANSCRIPT_DIR="{{MCP_TRANSCRIPT_DIR}}" MCP_OUT_DIR="{{MCP_OUT_DIR}}" tools/scripts/test-integration-mcp.sh 2>&1 | tee "{{MCP_OUT_DIR}}/log.txt"

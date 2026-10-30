@@ -5,7 +5,8 @@
 # expected line after placeholder substitution. A transcript named gui-* is fed
 # to `./bin/kbase mcp --project-dir-required` from the evidence directory, not
 # the staged repository. Every transcript runs: none needs a stub child or a
-# provider (build-refused refuses before it starts one).
+# provider (build-refused refuses before it starts one). Then each command's
+# help resource is read and compared with the binary's `<command> --help`.
 #
 # Inputs (environment): BIN_DIR; RESULTS_FIXTURE_DIR, the committed fixture;
 # MCP_TRANSCRIPT_DIR, the transcripts; MCP_OUT_DIR, the evidence directory.
@@ -25,8 +26,8 @@ kbase="${root}/${BIN_DIR}/kbase"
 fixture="${root}/${RESULTS_FIXTURE_DIR}"
 transcripts="${root}/${MCP_TRANSCRIPT_DIR}"
 repo="${out}/repo"
-rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/comparison.tsv"
-mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts" "${out}/staging"
+rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/help" "${out}/comparison.tsv"
+mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts" "${out}/staging" "${out}/help"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
 cp -R "${fixture}/kb-root" "${repo}/"
 mkdir "${repo}/kb-root/b"
@@ -129,7 +130,36 @@ for file in "${transcripts}"/*.jsonl; do
         status=1
     fi
 done
-OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml\nrepo/: per staging op — insert-work-entry, add-rests-on, insert-analysis-entry, add-pairs — ${kbase} <op> --values staging/<file>, <file> from ${RESULTS_FIXTURE_DIR}/values/ with \${ID1} and \${ID2} the claims' ids in id order and \${ID3} the analysis's; result in staging/<op>.out\nrepo/: ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\ncomparison.tsv: per transcript, the response line that differs, or pass" \
+# Each help resource the server lists against what `kbase <name> --help`
+# prints. The shell reads only the URIs, plain tokens (the instructions in the
+# initialize frame name the bare prefix, hence a letter must follow it); the
+# frames are decoded by TestHelpResourcesAreTheBinarysHelp.
+hdir="${out}/help"
+init_frames='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-integration-mcp","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}'
+printf '%s\n{"jsonrpc":"2.0","id":2,"method":"resources/list"}\n' "${init_frames}" > "${hdir}/list.requests.jsonl"
+( cd "${repo}" && "${kbase}" mcp ) < "${hdir}/list.requests.jsonl" > "${hdir}/list.jsonl" 2> "${hdir}/list.log"
+names=()
+while IFS= read -r n; do names+=("${n}"); done < <(grep -o 'kbase://help/[a-z][a-z-]*' "${hdir}/list.jsonl" | sed 's|kbase://help/||' | grep -v -x -e query -e write)
+{
+    printf '%s\n' "${init_frames}"
+    id=1
+    for n in ${names[@]+"${names[@]}"}; do
+        id=$((id + 1))
+        printf '{"jsonrpc":"2.0","id":%d,"method":"resources/read","params":{"uri":"kbase://help/%s"}}\n' "${id}" "${n}"
+    done
+} > "${hdir}/read.requests.jsonl"
+( cd "${repo}" && "${kbase}" mcp ) < "${hdir}/read.requests.jsonl" > "${hdir}/read.jsonl" 2> "${hdir}/read.log"
+for n in ${names[@]+"${names[@]}"}; do
+    ( cd "${repo}" && "${kbase}" "${n}" --help ) > "${hdir}/${n}.txt" 2> "${hdir}/${n}.log"
+done
+if go test -count=1 -run '^TestHelpResourcesAreTheBinarysHelp$' ./cmd -args -help.frames="${hdir}/read.jsonl" -help.dir="${hdir}" > "${hdir}/compare.log" 2>&1; then
+    printf '  pass help resources: %d, each equal to its --help\n' "${#names[@]}"
+else
+    printf '  fail help resources — see help/compare.log\n'
+    status=1
+fi
+OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml\nrepo/: per staging op — insert-work-entry, add-rests-on, insert-analysis-entry, add-pairs — ${kbase} <op> --values staging/<file>, <file> from ${RESULTS_FIXTURE_DIR}/values/ with \${ID1} and \${ID2} the claims' ids in id order and \${ID3} the analysis's; result in staging/<op>.out\nrepo/: ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\nrepo/: ${kbase} mcp < help/list.requests.jsonl > help/list.jsonl (initialize, resources/list); per listed help resource but the query and write families, ${kbase} mcp < help/read.requests.jsonl > help/read.jsonl (one resources/read each) and ${kbase} <name> --help > help/<name>.txt\ngo test -run '^TestHelpResourcesAreTheBinarysHelp\$' ./cmd -args -help.frames=help/read.jsonl -help.dir=help > help/compare.log\ncomparison.tsv: per transcript, the response line that differs, or pass" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-mcp): a response differs from its transcript — see comparison.tsv\n'
