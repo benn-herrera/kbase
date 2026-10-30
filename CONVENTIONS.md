@@ -456,14 +456,17 @@ way it names any other truth it moved, so a reader can see which change made it 
 
 - MCP protocol tests are transcript fixtures, `test-data/fixtures/mcp/*.jsonl`: each request line is
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
-  `${VERSION}`, `${ID1}`, `${ID2}`, `${REPO}` (the repository root) and `${STATE_DIR}`, applied to
-  requests as well as responses. A transcript named `gui-*.jsonl` runs GUI mode: the recipe serves it
+  `${VERSION}`, `${ID1}` and `${ID2}` (the seeded claims, in id order), `${ID3}` (the staged
+  analysis), `${REPO}` (the repository root) and `${STATE_DIR}`, applied to requests as well as
+  responses. A transcript named `gui-*.jsonl` runs GUI mode: the recipe serves it
   with `kbase mcp --project-dir-required` from outside the staged repository, and
   `TestMCPTranscripts` with a server that locates no project, so a call reaches the fixture only by naming
   it, `"project-dir":"${REPO}"`. The detached-build test needs a kbase binary to re-execute:
   `TestMain` runs the test binary as kbase when `KBASE_TEST_RUN_AS_KBASE` is set. The runner stages
-  the results fixture, inserts `seed.yaml`'s entries through `insert-claim-entry`, and requires
-  exactly the expected lines on stdout.
+  the results fixture, inserts `seed.yaml`'s entries through `insert-claim-entry`, then a work, an
+  analysis and an edge of each relation a public op writes through the write ops over the results
+  fixture's `values/` files, their `${ID1}`–`${ID3}` substituted, and requires exactly the expected
+  lines on stdout.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
   `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
   hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool

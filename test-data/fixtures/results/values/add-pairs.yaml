@@ -1,0 +1,8 @@
+# ${ID3} is the staged analysis's id and ${ID2} the higher of the two staged
+# claims' ids, substituted before the op reads the file.
+entry:
+- id: ${ID3}
+  refutes:
+  - id: ${ID2}
+    bearing: 0.4
+    context: A counterexample.

@@ -1,0 +1,8 @@
+# ${ID1} is the lower of the two staged claims' ids, substituted before the
+# op reads the file.
+entry:
+- title: An Analysis
+  rationale: Worked.
+  document: a.md
+  lifts:
+  - id: ${ID1}

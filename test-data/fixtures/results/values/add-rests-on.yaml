@@ -1,0 +1,12 @@
+# ${ID1} and ${ID2} are the two staged claims' ids in id order, substituted
+# before the op reads the file.
+entry:
+- id: ${ID2}
+  rests-on:
+  - id: ${ID1}
+    bearing: 0.8
+  references:
+  - id: ${ID1}
+- id: ${ID1}
+  rests-on:
+  - id: wrk-hilbert1899

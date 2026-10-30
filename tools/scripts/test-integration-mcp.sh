@@ -25,13 +25,12 @@ kbase="${root}/${BIN_DIR}/kbase"
 fixture="${root}/${RESULTS_FIXTURE_DIR}"
 transcripts="${root}/${MCP_TRANSCRIPT_DIR}"
 repo="${out}/repo"
-rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/comparison.tsv"
-mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts"
+rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/comparison.tsv"
+mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts" "${out}/staging"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
 cp -R "${fixture}/kb-root" "${repo}/"
 mkdir "${repo}/kb-root/b"
 ( cd "${repo}" && "${kbase}" insert-claim-entry --values "${transcripts}/seed.yaml" ) > "${out}/insert.out" 2> "${out}/insert.log"
-( cd "${repo}" && "${kbase}" refresh ) > "${out}/refresh.out" 2> "${out}/refresh.log"
 kb_root="$(sed -n 's/^kb-root: "\(.*\)"$/\1/p' "${out}/insert.out")"
 ids=()
 while IFS= read -r id; do ids+=("${id}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${out}/insert.out" | sort)
@@ -42,7 +41,8 @@ fi
 version="$("${kbase}" --version)"
 version="${version##* }"
 # sub <line>: the transcript placeholders, as cmd/mcp_test.go's mcpServer
-# derives them (paths here carry no JSON-escaped characters).
+# derives them (paths here carry no JSON-escaped characters). ${ID3}, the
+# staged analysis, is empty until its insert reports it.
 sub() {
     local s="${1}"
     s="${s//'${KB_ROOT}'/${kb_root}}"
@@ -51,8 +51,32 @@ sub() {
     s="${s//'${VERSION}'/${version}}"
     s="${s//'${ID1}'/${ids[0]}}"
     s="${s//'${ID2}'/${ids[1]}}"
+    s="${s//'${ID3}'/${ids[2]-}}"
     printf '%s' "${s}"
 }
+# stage <op> <values>: one staging write op from the repository over the
+# results fixture's values file, its placeholders substituted; the values as
+# given and the result are kept under staging/.
+stage() {
+    local values="${out}/staging/$(basename "${2}")"
+    printf '%s\n' "$(sub "$(cat "${fixture}/values/${2}")")" > "${values}"
+    ( cd "${repo}" && "${kbase}" "${1}" --values "${values}" ) > "${out}/staging/${1}.out" 2> "${out}/staging/${1}.log" || {
+        printf 'integration(test-integration-mcp): the staging %s failed — see staging/%s.out\n' "${1}" "${1}" >&2
+        exit 1
+    }
+}
+# The edges: one of each relation a public op writes, pending and numeric
+# bearings both.
+stage insert-work-entry insert-work.yaml
+stage add-rests-on add-rests-on.yaml
+stage insert-analysis-entry insert-analysis.yaml
+ids+=("$(sed -n '/^ids:/,/^minted:/s/^    - "\(ana-[a-z0-9]*\)"$/\1/p' "${out}/staging/insert-analysis-entry.out")")
+if [[ -z "${ids[2]}" ]]; then
+    printf 'integration(test-integration-mcp): the staging analysis insert reported no id — see staging/insert-analysis-entry.out\n' >&2
+    exit 1
+fi
+stage add-pairs add-pairs.yaml
+( cd "${repo}" && "${kbase}" refresh ) > "${out}/refresh.out" 2> "${out}/refresh.log"
 status=0
 for file in "${transcripts}"/*.jsonl; do
     name="$(basename "${file}" .jsonl)"
@@ -105,7 +129,7 @@ for file in "${transcripts}"/*.jsonl; do
         status=1
     fi
 done
-OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml; ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\ncomparison.tsv: per transcript, the response line that differs, or pass" \
+OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml\nrepo/: per staging op — insert-work-entry, add-rests-on, insert-analysis-entry, add-pairs — ${kbase} <op> --values staging/<file>, <file> from ${RESULTS_FIXTURE_DIR}/values/ with \${ID1} and \${ID2} the claims' ids in id order and \${ID3} the analysis's; result in staging/<op>.out\nrepo/: ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\ncomparison.tsv: per transcript, the response line that differs, or pass" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-mcp): a response differs from its transcript — see comparison.tsv\n'

@@ -1,0 +1,9 @@
+# ${ID1} and ${ID2} are the two staged claims' ids, substituted before the op
+# reads the file.
+entry:
+- id: ${ID1}
+  document: a.md
+  locator: A
+- id: ${ID2}
+  document: a.md
+  locator: A

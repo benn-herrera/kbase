@@ -1,0 +1,64 @@
+% A whole paper in twenty-odd lines, carrying four properties on purpose.
+% A build needs the paper in a git worktree; that, and the copy of the paper
+% the .bbl form needs, are staging, which test-integration-build-lamb makes.
+% Only the source belongs here.
+%
+% PROPERTY 1 — a colon in the title. pandoc's standalone writer puts the title
+% in the rendering's YAML metadata block, and a YAML scalar containing ": " is
+% quoted: `title: "Mary and Her Lamb: An Account"`. kbase unquotes the block's
+% scalars as it reads them, so the title reaches the volume heading, its
+% directory slug and the entry point's link text as text. A reader that kept
+% the quotes would carry them into all three, and quoted link text is an
+% authority citation's excerpt to the build's citation gate: the entry point's
+% link would fail it as an excerpt with no #anchor, a finding that names no
+% title. Do not remove the colon.
+%
+% PROPERTY 2 — no claim-bearing environment anywhere: no \newtheorem, no
+% theorem-like or other author-declared block. A --no-inference build over it
+% declares no claim and is done with an empty claim graph — no node, no edge —
+% and verify passes.
+%
+% PROPERTY 3 — the paper cites. This is load-bearing: an uncited bibliography
+% exercises nothing, because no Cite element is produced and citeproc resolves
+% nothing. The \cite below makes each citation state kbase records reachable
+% from this one paper, by which bibliography the build offers: resolved with
+% lamb.bib (the citation renders author-year and the volume gains a
+% references leaf), unanswered with only stray.bib, key-only with none.
+%
+% PROPERTY 4 — two bibliography forms travel beside this file, and BOTH are
+% wanted. `lamb.bib` is bibtex's input: with no --bibliography, a build offers
+% pandoc every .bib in the volume root's directory and runs it with
+% --citeproc. `lamb.bbl` is bibtex's OUTPUT — LaTeX markup, only the cited
+% works, already formatted — and is the shape an arXiv tarball usually ships
+% instead. kbase offers pandoc no .bbl as a bibliography, so a .bbl reaches a
+% build only as LaTeX the paper \inputs or inlines, which is a staging concern
+% rather than a property of this file. They are the two halves of the same
+% test, and dropping the one that looks inert removes a path.
+\documentclass{article}
+\title{Mary and Her Lamb: An Account}
+\author{A. Nonymous}
+\begin{document}
+\maketitle
+\begin{abstract}
+We recount the case of Mary, who had a little lamb. No results are claimed.
+\end{abstract}
+
+\section{Introduction}
+Mary had a little lamb. Its fleece was white as snow.
+
+\section{Field Observations}
+Everywhere that Mary went, the lamb was sure to go. The behaviour is
+consistent with earlier accounts of nothing whatsoever \cite{nobody2026}.
+
+\subsection{The Schoolhouse Incident}
+It followed her to school one day, which was against the rule.
+
+\subsection{Reception}
+It made the children laugh and play to see a lamb at school.
+
+\section{Discussion}
+The teacher turned it out, but still it lingered near.
+
+\section{Conclusion}
+It waited patiently about till Mary did appear.
+\end{document}

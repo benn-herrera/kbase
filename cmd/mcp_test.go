@@ -86,10 +86,14 @@ func gitRepo(t *testing.T, repo string) {
 
 // mcpServer stages the results fixture KB with the transcripts' seed values
 // written — two claims alike but for their ids, so a page of them reads the
-// same whichever id is minted lower — and returns the server over it and the
-// transcripts' placeholders: ${KB_ROOT}, ${REPO} (the repository holding it),
-// ${STATE_DIR} (an empty state store beside it), ${VERSION}, and ${ID1},
-// ${ID2} for the seeded claims' ids, in id order.
+// same whichever id is minted lower — then a work, an analysis and one edge of
+// each relation a public op writes, from the results fixture's values files
+// with the claims' and the analysis's ids substituted, as
+// tools/scripts/test-integration-mcp.sh stages it. It returns the server over
+// the KB and the transcripts' placeholders: ${KB_ROOT}, ${REPO} (the
+// repository holding it), ${STATE_DIR} (an empty state store beside it),
+// ${VERSION}, ${ID1}, ${ID2} for the seeded claims' ids, in id order, and
+// ${ID3} for the analysis's.
 func mcpServer(t *testing.T) (mcp.Server, *strings.Replacer) {
 	t.Helper()
 	repo, err := filepath.EvalSymlinks(stageRepo(t, resultsFixture))
@@ -105,27 +109,49 @@ func mcpServer(t *testing.T) (mcp.Server, *strings.Replacer) {
 	if err := os.Mkdir(filepath.Join(repo, "kb-root", "b"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	seed, err := filepath.Abs(filepath.Join(mcpTranscriptDir, "seed.yaml"))
+	kbRoot, claims := stagingOp(t, repo, "insert-claim-entry", filepath.Join(mcpTranscriptDir, "seed.yaml"), strings.NewReplacer())
+	if len(claims) != 2 {
+		t.Fatalf("staging insert: ids %v, want two", claims)
+	}
+	values := filepath.Join(resultsFixture, "values")
+	ids := strings.NewReplacer("${ID1}", claims[0], "${ID2}", claims[1])
+	stagingOp(t, repo, "insert-work-entry", filepath.Join(values, "insert-work.yaml"), ids)
+	stagingOp(t, repo, "add-rests-on", filepath.Join(values, "add-rests-on.yaml"), ids)
+	_, analysis := stagingOp(t, repo, "insert-analysis-entry", filepath.Join(values, "insert-analysis.yaml"), ids)
+	if len(analysis) != 1 {
+		t.Fatalf("staging analysis insert: ids %v, want one", analysis)
+	}
+	ids = strings.NewReplacer("${ID1}", claims[0], "${ID2}", claims[1], "${ID3}", analysis[0])
+	stagingOp(t, repo, "add-pairs", filepath.Join(values, "add-pairs.yaml"), ids)
+	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
+	srv.Instructions = mcp.ServedInstructions(srv.Located)
+	return srv,
+		strings.NewReplacer("${KB_ROOT}", jsonText(t, kbRoot), "${REPO}", jsonText(t, repo),
+			"${STATE_DIR}", jsonText(t, filepath.Join(base, "state")), "${VERSION}", jsonText(t, version.Current),
+			"${ID1}", claims[0], "${ID2}", claims[1], "${ID3}", analysis[0])
+}
+
+// stagingOp runs the write op from repo over the values file with ids'
+// placeholders replaced, and returns the kb-root and the ids its result
+// reports, in id order.
+func stagingOp(t *testing.T, repo, op, valuesFile string, ids *strings.Replacer) (string, []string) {
+	t.Helper()
+	values, err := os.ReadFile(valuesFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	code, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: seed,
+	code, err := runWriteOp(writeOpOptions{Op: op, WorkDir: repo, Stdin: strings.NewReader(ids.Replace(string(values))),
 		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
-	var inserted struct {
+	var res struct {
 		KBRoot string   `yaml:"kb-root"`
 		IDs    []string `yaml:"ids"`
 	}
-	if err != nil || code != 0 || yaml.Unmarshal(out.Bytes(), &inserted) != nil || len(inserted.IDs) != 2 {
-		t.Fatalf("staging insert: exit %d, %v\n%s", code, err, out.String())
+	if err != nil || code != 0 || yaml.Unmarshal(out.Bytes(), &res) != nil {
+		t.Fatalf("staging %s: exit %d, %v\n%s", op, code, err, out.String())
 	}
-	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
-	srv.Instructions = mcp.ServedInstructions(srv.Located)
-	slices.Sort(inserted.IDs)
-	return srv,
-		strings.NewReplacer("${KB_ROOT}", jsonText(t, inserted.KBRoot), "${REPO}", jsonText(t, repo),
-			"${STATE_DIR}", jsonText(t, filepath.Join(base, "state")), "${VERSION}", jsonText(t, version.Current),
-			"${ID1}", inserted.IDs[0], "${ID2}", inserted.IDs[1])
+	slices.Sort(res.IDs)
+	return res.KBRoot, res.IDs
 }
 
 func serveLines(t *testing.T, srv mcp.Server, requests []string) []string {

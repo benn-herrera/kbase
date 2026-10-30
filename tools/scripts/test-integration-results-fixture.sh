@@ -3,7 +3,10 @@
 # status and cancel run by ./bin/kbase over a copy of a committed fixture KB,
 # each result parsed against its subcommand's documented keys and outcome, and
 # probe's decision selection run against a Go stub that answers the decision
-# surface and refuses the chat path.
+# surface and refuses the chat path. The copy is staged through the write ops
+# with an edge of every relation a public op writes; one freehand edit then
+# closes a cycle, which refresh cuts into a demoted record that verify, the
+# edge queries, stats and resolve-demoted are checked over.
 # It needs git and the Go toolchain, which the build already uses — no pandoc,
 # no provider, no adjagent clone — so it joins the omnibus.
 #
@@ -28,7 +31,7 @@ fixture="${root}/${RESULTS_FIXTURE_DIR}"
 unset KBASE_API_BASE_URL KBASE_DECISION KBASE_TEXT KBASE_SCORING KBASE_API_KEY_FILE KBASE_CONFIG_DIR
 repo="${out}/repo"
 docs="${out}/docs"
-rm -rf "${repo}" "${docs}" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
+rm -rf "${repo}" "${docs}" "${out}/values" "${out}/checks.tsv" "${out}/score-config" "${out}/score-home" \
     "${out}/score-state" "${out}/score-env-state" "${out}/probe-config" "${out}/probestub" \
     "${out}/probestub.url" "${out}/probestub.log"
 mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}"
@@ -63,6 +66,36 @@ run verify done verify
 run render-claim-graph unchanged render-claim-graph
 run insert-claim-entry done insert-claim-entry --values "${fixture}/values/insert.yaml"
 run insert-claim-entry unchanged insert-claim-entry --no-refresh --values "${fixture}/values/insert.yaml"
+# The edges every later leg reads: a work, an analysis and one edge of each
+# relation a public op writes, pending and numeric bearings both, from the
+# fixture's values files with the minted ids substituted — ${ID1} and ${ID2}
+# the claims in id order, ${ID3} the analysis once its insert reports it —
+# then both claims marked in a.md, so verify reads the staged KB whole.
+ids=()
+while IFS= read -r i; do ids+=("${i}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/06-insert-claim-entry.out" | sort)
+[[ "${#ids[@]}" -eq 2 ]] || { printf 'integration(results-fixture): the insert reported no two claim ids\n'; exit 1; }
+mkdir -p "${out}/values"
+# staged <file>: the fixture's values file, its ids substituted, under values/;
+# prints the copy's path.
+staged() {
+    sed -e "s/\${ID1}/${ids[0]}/g" -e "s/\${ID2}/${ids[1]}/g" -e "s/\${ID3}/${ids[2]-}/g" \
+        "${fixture}/values/${1}" > "${out}/values/${1}"
+    printf '%s' "${root}/${out}/values/${1}"
+}
+# holds <what> <command...>: a check on the last document; a failure names what.
+holds() {
+    local what="$1"
+    shift
+    "$@" || { printf '  fail: %s\n' "${what}"; status=1; }
+}
+run insert-work-entry done insert-work-entry --values "$(staged insert-work.yaml)"
+run add-rests-on done add-rests-on --values "$(staged add-rests-on.yaml)"
+run insert-analysis-entry done insert-analysis-entry --values "$(staged insert-analysis.yaml)"
+ids+=("$(sed -n '/^ids:/,/^minted:/s/^    - "\(ana-[a-z0-9]*\)"$/\1/p' "${LAST}")")
+[[ -n "${ids[2]}" ]] || { printf 'integration(results-fixture): the analysis insert reported no id\n'; exit 1; }
+run add-pairs done add-pairs --values "$(staged add-pairs.yaml)"
+run mark-claim-in-leaf done mark-claim-in-leaf --values "$(staged mark-claim-in-leaf.yaml)"
+run verify done verify
 run score done score --dry-run --pass rigor --state-dir "${root}/${out}/state"
 # Score's role is the KB's own declaration. A file-mode configuration that
 # names decision and text but no scoring refuses before the first item,
@@ -165,8 +198,7 @@ trap - EXIT
 
 run set-rigor refused set-rigor --values "${fixture}/values/bad-rigor.yaml"
 run render-citation refused render-citation --values "${fixture}/values/cite-nowhere.yaml"
-id="$(sed -n 's/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/06-insert-claim-entry.out" | head -n 1)"
-[[ -n "${id}" ]] || { printf 'integration(results-fixture): the insert reported no id\n'; status=1; }
+id="${ids[0]}"
 run find done find ""
 run find done find "" --limit 1
 run find refused find "" --limit -1
@@ -183,9 +215,43 @@ run show refused show clm-zzzzzz
 run stats done stats
 run edge-census done edge-census
 run edges done edges
+# The demoted relation. One freehand edit of the staged copy's edge records
+# adds supports ${ID1} -> ${ID3}, closing a cycle with the analysis's lifts of
+# ${ID1}: the state a merge leaves. The load is degraded until refresh cuts the
+# cycle, and the cut is the cycle's one supports edge into an analysis — the
+# added edge, whichever claim id is minted lower.
+cut="${ids[0]} → ${ids[2]}"
+printf '%s\n' '- relation: "supports"' "  source: \"${ids[0]}\"" "  target: \"${ids[2]}\"" '  context: ""' \
+    '  bearing: 0.5' '  manually-scored: true' >> "${repo}/kb-root/.index/edges.yaml"
+run verify refused verify
+holds 'verify does not report the cycle as degraded' grep -qx '    - check: "degraded"' "${LAST}"
+run refresh done refresh
+holds 'refresh does not warn of the cut' \
+    grep -qxF "      detail: \"supports ${cut} is demoted, breaking the cycle ${cut} → ${ids[0]}\"" "${LAST}"
+run verify done verify
+holds 'verify lists no demoted finding' grep -qx '    - check: "demoted"' "${LAST}"
+holds 'the demoted finding does not name the cut edge' \
+    grep -qxF "      detail: \"${cut}, demoted from supports: cut by cycle breaking\"" "${LAST}"
+run edges done edges --relation demoted
+holds 'edges lists not one demoted row' grep -qx 'count: 1' "${LAST}"
+holds 'the demoted row is not the cut edge' grep -qxF "    - source: \"${ids[0]}\"" "${LAST}"
+holds 'the demoted row is not the cut edge' grep -qxF "      target: \"${ids[2]}\"" "${LAST}"
+run edge-census done edge-census
+holds 'edge-census counts not one demoted edge' test "$(sed -n '/^    demoted:$/{n;p;}' "${LAST}")" = '        edges: 1'
+run deps done deps "${ids[0]}"
+holds 'deps lists no demoted row out of the source' \
+    test "$(grep -A2 -x '    - relation: "demoted"' "${LAST}" | tail -n 2 | tr -d '\n')" = "      direction: \"out\"      target: \"${ids[2]}\""
+run stats done stats
+holds 'stats counts not one demoted edge' grep -qx '    demoted_edges: 1' "${LAST}"
+run resolve-demoted refused resolve-demoted --values "$(staged resolve-demoted-restore.yaml)"
+holds 'restore is not refused as closing the cycle' grep -qx '    - check: "dependency-cycle"' "${LAST}"
+run resolve-demoted done resolve-demoted --values "$(staged resolve-demoted-remove.yaml)"
+holds 'remove does not report the record removed' grep -qx '      action: "removed"' "${LAST}"
+run verify done verify
+holds 'verify still lists a finding after the remove' grep -qx 'findings: \[\]' "${LAST}"
 run status done status --state-dir "${root}/${out}/state"
 run cancel refused cancel --state-dir "${root}/${out}/state"
-OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files the staging ops and resolve-demoted read, \${ID1} and \${ID2} substituted by the inserted claims' ids in id order and \${ID3} by the analysis's\nthe demoted leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify refused degraded, refresh warning of the cut, verify done with a demoted finding, edges --relation demoted, edge-census, deps \${ID1} and stats showing it, resolve-demoted restore refused dependency-cycle and remove done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model\nscore-env-mode: the same KB with HOME on score-home, KBASE_API_BASE_URL and KBASE_DECISION, KBASE_TEXT, KBASE_SCORING set and no configuration directory; its one item fails on the closed endpoint, the roles record names the environment back end and KBASE_SCORING's id, the ledger's line names it, and the text model appears nowhere the run asked (the resume record re-issues the whole configuration, so it names the mode's variables)\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'

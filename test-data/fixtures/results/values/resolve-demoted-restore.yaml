@@ -1,0 +1,7 @@
+# ${ID3} is the staged analysis's id and ${ID1} the lower of the two staged
+# claims' ids, substituted before the op reads the file: the demoted supports
+# edge from ${ID1} into ${ID3}.
+entry:
+- id: ${ID3}
+  target: ${ID1}
+  action: restore
