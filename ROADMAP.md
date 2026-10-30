@@ -4,10 +4,6 @@ Future intent, not commitment. Design truth lives in [SPEC.md](SPEC.md) and
 [ARCHITECTURE.md](ARCHITECTURE.md); where plans live is in CONVENTIONS.md, "Plan & Execute Process".
 Finished items are deleted, not archived.
 
-## Next
-- **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
-  `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
-
 ## Reader fidelity
 
 - Display names from `\input`-ed preambles.
@@ -16,22 +12,17 @@ Finished items are deleted, not archived.
 - The `-latex_macros` reading: pandoc's LaTeX reader with macro expansion disabled (`-f
   latex-latex_macros`), which may preserve author environment names.
 
+## Exporter
+
+- see [EXPORT_LATEX_BUG](ROADMAP_PLANS/EXPORT_LATEX_BUG.md)
+
 ## Configuration
 
-- **Remove the inert `provider` key from `config.toml` at the next major.** It loads and chooses
-  nothing today, and a file-mode run reports it superseded (SPEC §9). It leaves the schema once the
-  reader-facing examples, `USER_CONVENTIONS.md` and adjagent's `references/scoring.md` have moved off
-  it; until then strict load keeps modelling the key so the file a user has stays loadable and
-  `kbase configure` can rewrite it.
-- **Remove the inert `readerConcurrency` key from `config.toml`'s `[asks]` at the next major.**
-- **Remove the environment inference mode** (`KBASE_API_BASE_URL`, `KBASE_API_KEY_FILE`,
-  `KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING`). Nothing outside this repository uses it; the
-  tests and integration scripts that do move to a scratch `--config-dir`, leaving file mode the one
-  configuration path.
-- **A lockstep schedule for the ask queue, beside the continuous one.** N calls launch together and
-  the next N wait for the slowest, so a local endpoint prefills a whole batch at once instead of
-  admitting calls one by one. Worth it only if measured faster on local inference; a group's first
-  ask still goes alone to warm the prefix cache.
+- A lockstep schedule for the ask queue, beside the continuous one.
+  - N calls launch together and the next N wait for the slowest, so a local endpoint prefills a whole
+    batch at once instead of admitting calls one by one. 
+  - Worth it only if measured faster on local inference; a group's first ask still goes alone to warm
+    the prefix cache.
 
 ## Distribution
 
