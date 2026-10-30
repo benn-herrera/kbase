@@ -1077,8 +1077,8 @@ func TestInputsUsageRefused(t *testing.T) {
 			items, _ := storetest.Field(fields, "refusals").([]result.Item)
 			var keys []string
 			for _, it := range items {
-				if it.Check != buildstore.CheckUsage {
-					t.Errorf("item %+v, want check %s", it, buildstore.CheckUsage)
+				if it.Check != result.CheckUsage {
+					t.Errorf("item %+v, want check %s", it, result.CheckUsage)
 				}
 				keys = append(keys, it.Key)
 			}

@@ -40,7 +40,7 @@ func TestAskConcurrencyTakesTheFlagThenTheKeyThenTheDefault(t *testing.T) {
 			got, err := askConcurrency(tc.flag, tc.key)
 			if tc.refused {
 				var refusal toolresult.Refusal
-				if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != checkUsage || refusal[0].Key != "--ask-concurrency" {
+				if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != toolresult.CheckUsage || refusal[0].Key != "--ask-concurrency" {
 					t.Errorf("askConcurrency = %d, %v; want one usage refusal naming --ask-concurrency", got, err)
 				}
 				return
@@ -59,7 +59,7 @@ func TestBuildAndScoreRefuseAnAskConcurrencyUnderOne(t *testing.T) {
 	refusedKey := func(t *testing.T, doc resultDoc) {
 		t.Helper()
 		items := doc.items(toolresult.RefusalsKey)
-		if doc.Outcome != toolresult.Refused || len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--ask-concurrency" {
+		if doc.Outcome != toolresult.Refused || len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--ask-concurrency" {
 			t.Errorf("outcome %s, refusals %v; want one usage refusal naming --ask-concurrency", doc.Outcome, items)
 		}
 	}

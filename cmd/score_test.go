@@ -507,7 +507,7 @@ func TestScoreResumeRefusesAPath(t *testing.T) {
 	for _, resume := range []string{"../../..", "run-aaaaaa/../../..", "run-1", "..", "/", "run-AAAAAA", "run-aaaaaaa", " run-aaaaaa"} {
 		got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: resume}, nil)
 		items := got.doc.items("refusals")
-		if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--resume" {
+		if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--resume" {
 			t.Errorf("--resume %q = %s, %v; want one usage refusal naming --resume\n%s",
 				resume, got.doc.Outcome, items, got.stdout)
 		}
@@ -568,7 +568,7 @@ func TestScoreRefusals(t *testing.T) {
 		t.Fatalf("--pass other: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	items := got.doc.items("refusals")
-	if len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--pass" ||
+	if len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--pass" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), []string{query.PassRigor, query.PassBearing, query.PassBoth}) {
 		t.Errorf("refusals %v, want one usage refusal naming the passes the flag takes\n%s", items, got.stdout)
 	}

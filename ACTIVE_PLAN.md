@@ -196,7 +196,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | S3: `drop-claim-node` deletes a claim in one call | expert | S2 | landed |
 | S4: `refresh` absorbs `render-claim-graph` | expert | S3 | landed |
 | S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | landed (b57f50e) |
-| Review | — | S5 | burndown: batch A (B1, B3–B5, B7–B11) in progress; C (B12–B15), B (B2, B6) pending |
+| Review | — | S5 | burndown: batch A (B1, B3–B5, B7–B11) landed 430ee48; C (B12–B15) in progress; B (B2, B6) pending |
 
 - **Gate before S1.** The working-tree edit to `ARCHITECTURE.md` §3 is committed:
   `git status --short -- ARCHITECTURE.md` prints nothing.

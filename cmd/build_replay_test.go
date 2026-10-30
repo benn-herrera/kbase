@@ -213,7 +213,7 @@ func TestBuildReplayRefusals(t *testing.T) {
 			doc := parseResult(t, out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-				items[0]["check"] != checkUsage || items[0]["key"] != tc.key {
+				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != tc.key {
 				t.Fatalf("%q: outcome %s, exit %d, refusals %v; want one usage refusal naming %s\n%s", tc.args, doc.Outcome, code, items, tc.key, out)
 			}
 		})

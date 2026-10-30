@@ -205,7 +205,7 @@ func TestScoreReplayWithoutStateDirNeedsAKBRoot(t *testing.T) {
 	doc := parseResult(t, out)
 	items := doc.items(toolresult.RefusalsKey)
 	if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-		items[0]["check"] != checkUsage || items[0]["key"] != "--state-dir" {
+		items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--state-dir" {
 		t.Fatalf("outcome %s, exit %d, refusals %v; want one usage refusal naming --state-dir\n%s", doc.Outcome, code, items, out)
 	}
 }
@@ -309,7 +309,7 @@ func TestScoreReplayRefusals(t *testing.T) {
 			doc := parseResult(t, out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-				items[0]["check"] != checkUsage || items[0]["key"] != tc.key {
+				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != tc.key {
 				t.Fatalf("%q: outcome %s, exit %d, refusals %v; want one usage refusal naming %s\n%s", tc.args, doc.Outcome, code, items, tc.key, out)
 			}
 			if detail, _ := items[0]["detail"].(string); !strings.Contains(detail, tc.detail) {

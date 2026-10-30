@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"kbase/internal/config"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
@@ -226,11 +225,11 @@ func ReferencedByPayload(ix *Index, id string) ([]string, error) {
 func StrengthPayload(ix *Index, sel StrengthSelection) ([]result.Record, []result.Item) {
 	var usage []result.Item
 	if sel.Pending && (sel.Min != nil || sel.Max != nil) {
-		usage = append(usage, result.Item{Check: config.CheckUsage, Key: "--pending",
+		usage = append(usage, result.Item{Check: result.CheckUsage, Key: "--pending",
 			Detail: "--pending lists the claims with no strength, which --min and --max cannot bound"})
 	}
 	if !slices.Contains(StrengthSorts, sel.Sort) {
-		usage = append(usage, result.Item{Check: config.CheckUsage, Key: "--sort", Allowed: StrengthSorts,
+		usage = append(usage, result.Item{Check: result.CheckUsage, Key: "--sort", Allowed: StrengthSorts,
 			Detail: fmt.Sprintf("--sort %q names no order", sel.Sort)})
 	}
 	if usage != nil {
@@ -347,7 +346,8 @@ func StatsPayload(ix *Index) result.Record {
 	dist = append(dist, result.Field{Key: kb.PendingLiteral, Value: bands[kb.UnknownBandSlug]})
 
 	leverage := []result.Record{}
-	for _, wp := range first(ix.WeakPoints(DefaultMaxStrength, DefaultMinDependents), statsRankLimit) {
+	bar := DefaultMaxStrength
+	for _, wp := range first(ix.Strengths(StrengthSelection{Max: &bar, MinDependents: DefaultMinDependents, Sort: SortDependents}), statsRankLimit) {
 		leverage = append(leverage, weakPointRecord(wp))
 	}
 	weakest := []result.Record{}

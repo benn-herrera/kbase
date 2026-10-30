@@ -96,7 +96,7 @@ func OpenReplay(dir, run, pass string, failedOnly bool, limit int) (*Replay, err
 	runDir := filepath.Join(RunsDir(dir), run)
 	captured, err := readLastCaptures(runDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, result.Refusal{{Check: checkUsage, Path: filepath.Join(runDir, capturesFile), Key: buildstore.ReplayKey,
+		return nil, result.Refusal{{Check: result.CheckUsage, Path: filepath.Join(runDir, capturesFile), Key: buildstore.ReplayKey,
 			Detail: "run " + run + " has no " + capturesFile + ": it stands no longer, asked nothing, or was a dry run"}}
 	}
 	if err != nil {
@@ -111,11 +111,11 @@ func OpenReplay(dir, run, pass string, failedOnly bool, limit int) (*Replay, err
 		pass = ""
 	case query.PassRigor, query.PassBearing:
 		if h.Pass != query.PassBoth && h.Pass != pass {
-			return nil, result.Refusal{{Check: checkUsage, Key: "--pass",
+			return nil, result.Refusal{{Check: result.CheckUsage, Key: "--pass",
 				Detail: "run " + run + " walked " + h.Pass + ": --pass " + pass + " selects no call of it"}}
 		}
 	default:
-		return nil, result.Refusal{{Check: checkUsage, Key: "--pass",
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: "--pass",
 			Detail: "--pass takes " + query.PassRigor + ", " + query.PassBearing + " or " + query.PassBoth + ", not " + strconv.Quote(pass)}}
 	}
 	items, err := readAttempts(filepath.Join(runDir, itemsFile))

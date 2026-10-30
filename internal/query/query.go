@@ -211,12 +211,6 @@ func (ix *Index) Strengths(sel StrengthSelection) []ClaimStrength {
 	return out
 }
 
-// WeakPoints is the scored claims under maxStrength with at least minDependents
-// dependents: most dependents first, then lowest strength, then id.
-func (ix *Index) WeakPoints(maxStrength float64, minDependents int) []ClaimStrength {
-	return ix.Strengths(StrengthSelection{Max: &maxStrength, MinDependents: minDependents, Sort: SortDependents})
-}
-
 // Node is the node carrying id, of any kind, or false. Where ids repeat, the
 // last in load order answers.
 func (ix *Index) Node(id string) (kb.NodeRow, bool) {

@@ -28,7 +28,7 @@ relations; it repeats.` + pendingHelp,
 		for _, r := range relations {
 			if !slices.Contains(kb.Relations, r) && !slices.Contains(unknown, r) {
 				unknown = append(unknown, r)
-				usage = append(usage, toolresult.Item{Check: checkUsage, Key: "--relation", Allowed: kb.Relations,
+				usage = append(usage, toolresult.Item{Check: toolresult.CheckUsage, Key: "--relation", Allowed: kb.Relations,
 					Detail: fmt.Sprintf("--relation %q names no relation", r)})
 			}
 		}

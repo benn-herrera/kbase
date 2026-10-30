@@ -101,6 +101,10 @@ func (it Items) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// CheckUsage names a refusal of the invocation itself: a request whose own
+// form is wrong.
+const CheckUsage = "usage"
+
 // Refusal is wrong input or state carried as an error, every offending item
 // named.
 type Refusal []Item

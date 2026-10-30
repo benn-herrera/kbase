@@ -350,7 +350,7 @@ func argumentRefusal(op protocol.Tool, arguments map[string]any) result.Refusal 
 		case f.Unknown:
 			detail = fmt.Sprintf("%q is no argument of %s", f.Key, op.Name)
 		}
-		refusal = append(refusal, result.Item{Check: buildstore.CheckUsage, Key: f.Key, Allowed: allowed, Detail: detail,
+		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: f.Key, Allowed: allowed, Detail: detail,
 			Remedy: "allowed names every argument it takes; its full help, " + HelpURIPrefix + op.Name +
 				", says what it does and, for a write op or render-citation, its keys"})
 	}
@@ -424,7 +424,7 @@ func callProject(args map[string]any, located Located) (Project, error) {
 // noProject is the refusal of a call or read on a server with no located
 // project that names none.
 func noProject() result.Refusal {
-	return result.Refusal{{Check: buildstore.CheckUsage, Key: projectDirProperty,
+	return result.Refusal{{Check: result.CheckUsage, Key: projectDirProperty,
 		Detail: "this server has no project of its own and the call names none",
 		Remedy: "name the project with project-dir: the absolute path of its git worktree root"}}
 }

@@ -59,7 +59,7 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 	// point, a child-list line among them.
 	var usage []toolresult.Item
 	if strings.ContainsAny(opts.Title, "\r\n") {
-		usage = append(usage, toolresult.Item{Check: checkUsage, Key: "--title",
+		usage = append(usage, toolresult.Item{Check: toolresult.CheckUsage, Key: "--title",
 			Detail: "the title is the entry point's one heading line and cannot hold a line break"})
 	}
 	repo, err := kb.RepositoryRoot(opts.WorkDir)

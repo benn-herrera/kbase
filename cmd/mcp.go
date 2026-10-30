@@ -54,7 +54,7 @@ diagnostics go to stderr and --log-file. EOF on stdin ends the server.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("project-dir") {
-				return toolresult.Refusal{{Check: checkUsage, Key: "--project-dir",
+				return toolresult.Refusal{{Check: toolresult.CheckUsage, Key: "--project-dir",
 					Detail: "kbase mcp takes no project; each tool call names its own with project-dir",
 					Remedy: "run `kbase mcp` from inside the project, or `kbase mcp --project-dir-required` where the harness has no project working directory"}}
 			}

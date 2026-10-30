@@ -14,6 +14,7 @@ import (
 	"kbase/internal/export"
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
+	toolresult "kbase/internal/result"
 )
 
 // exportDir is a repository holding a stamped KB of two volumes, the first
@@ -98,7 +99,7 @@ func TestExportLatexRefusesUnknownVolumes(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	for i, name := range []string{"nope", "vol9"} {
-		if items[i]["check"] != checkUsage || items[i]["key"] != "--volume" || !strings.Contains(items[i]["detail"].(string), name) {
+		if items[i]["check"] != toolresult.CheckUsage || items[i]["key"] != "--volume" || !strings.Contains(items[i]["detail"].(string), name) {
 			t.Errorf("item %d %v, want a usage refusal of --volume naming %s", i, items[i], name)
 		}
 	}

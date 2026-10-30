@@ -149,7 +149,7 @@ func TestResolveRefusals(t *testing.T) {
 		{name: "a provider that faulted out", role: RoleScoring,
 			key: "models.scoring", path: providersFile, detail: `provider "cloud" failed to load: no baseUrl declared`},
 		{name: "the flag is not a reference", role: RoleScoring, flag: "clef",
-			key: keyScoringModel, check: CheckUsage, detail: "<provider>/<model>"},
+			key: keyScoringModel, check: result.CheckUsage, detail: "<provider>/<model>"},
 		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
 			flag:   "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"},

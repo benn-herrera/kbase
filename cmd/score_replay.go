@@ -91,16 +91,16 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	}
 	switch {
 	case !slices.Contains(opts.Given, "replay"):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--failed",
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--failed",
 			Detail: "--failed narrows a replay and is given with --replay"})
 	case !replayRunRE.MatchString(opts.Run):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: "--replay names a run's id (" + score.RunKindReal + "-<…> or " + score.RunKindDry + "-<…>), not a path: " + opts.Run})
 	case len(others) > 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: "--replay takes " + replayTakes(scoreReplayFlags) + "; " + strings.Join(others, ", ") + " is a run's"})
 	case opts.Limit < 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	}
 	concurrency, err := askConcurrency(opts.AskConcurrency, opts.Config.Asks.Concurrency)
 	if err != nil {

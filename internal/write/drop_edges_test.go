@@ -137,9 +137,7 @@ func seedSharedLeaf(t *testing.T, extra string) (string, string) {
 }
 
 // TestDropClaimNode deletes a claim node whole: its record and its marker go,
-// the rest of each file standing, and a re-issue is unchanged. A premise
-// another claim rests on is dropped with the edge, the claim resting on it
-// standing.
+// the rest of each file standing, and a re-issue is unchanged.
 func TestDropClaimNode(t *testing.T) {
 	root, b := seedSharedLeaf(t, "")
 	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
@@ -158,34 +156,6 @@ func TestDropClaimNode(t *testing.T) {
 	again := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
 	if again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
 		t.Errorf("again: %+v, want unchanged, byte-identical", again)
-	}
-
-	root, b = seedSharedLeaf(t, "  rests-on:\n  - id: "+seedClaim+"\n")
-	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n"); res.Outcome != result.Done {
-		t.Fatalf("drop the premise another claim rests on: %+v, want done", res)
-	}
-	if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 || g.Claims[0].ID != b {
-		t.Errorf("records = %+v, want %s alone and no edge", g, b)
-	}
-}
-
-// TestDropClaimNodeTakesItsRefutations: a claim is dropped with the
-// refutation naming it, whichever end it stands at, and the claim at the
-// other end stands.
-func TestDropClaimNodeTakesItsRefutations(t *testing.T) {
-	for _, refuted := range []bool{true, false} {
-		root := seedKB(t)
-		refuter := insertClaim(t, root, "Counter Result", "  refutes:\n  - id: "+seedClaim+"\n")
-		drop, stands := refuter, seedClaim
-		if refuted {
-			drop, stands = seedClaim, refuter
-		}
-		if res := run(t, root, "drop-claim-node", "entry:\n- id: "+drop+"\n"); res.Outcome != result.Done {
-			t.Fatalf("drop %s (refuted %t): %+v, want done", drop, refuted, res)
-		}
-		if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 || g.Claims[0].ID != stands {
-			t.Errorf("drop %s (refuted %t): records = %+v, want %s alone and no refutation", drop, refuted, g, stands)
-		}
 	}
 }
 

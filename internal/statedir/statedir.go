@@ -14,9 +14,6 @@ import (
 	"kbase/internal/result"
 )
 
-// checkUsage is the check a refusal names where the request itself is wrong.
-const checkUsage = "usage"
-
 // KeyHexDigits is the key's length: the first 16 hex digits of the SHA-256 of
 // the resolved kb-root/ path.
 const KeyHexDigits = 16
@@ -50,7 +47,7 @@ func Dir(override, kbRoot string) (string, error) {
 		return "", err
 	}
 	if kb.Within(kbRoot, dir) {
-		return "", result.Refusal{{Check: checkUsage, Path: dir, Key: "--state-dir",
+		return "", result.Refusal{{Check: result.CheckUsage, Path: dir, Key: "--state-dir",
 			Detail: fmt.Sprintf("the state directory %s is inside %s; build state is never written there", dir, kbRoot)}}
 	}
 	return dir, nil

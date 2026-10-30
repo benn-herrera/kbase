@@ -265,7 +265,7 @@ func TestShowConfigRefusesAConfigurationThatDoesNotLoad(t *testing.T) {
 		t.Errorf("a refused document carries diagnostics:\n%s", stdout)
 	}
 	items := doc.items(toolresult.RefusalsKey)
-	if len(items) != 1 || items[0]["check"] != checkUsage {
+	if len(items) != 1 || items[0]["check"] != toolresult.CheckUsage {
 		t.Fatalf("refusals = %v, want the load's one usage item", items)
 	}
 	detail, _ := items[0]["detail"].(string)

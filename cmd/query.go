@@ -53,7 +53,7 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 		value int
 	}{{"--limit", opts.Limit}, {"--offset", opts.Offset}} {
 		if f.value < 0 {
-			usage = append(usage, toolresult.Item{Check: checkUsage, Key: f.flag, Detail: f.flag + " counts results and cannot be negative"})
+			usage = append(usage, toolresult.Item{Check: toolresult.CheckUsage, Key: f.flag, Detail: f.flag + " counts results and cannot be negative"})
 		}
 	}
 	if usage != nil {
@@ -91,9 +91,6 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 
 // answered is an answer that always succeeds.
 func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, nil }
-
-// checkUsage names a refusal of the invocation itself.
-const checkUsage = "usage"
 
 // queryReads, queryHelp, queryAnswerHelp, listQueryHelp and valuesHelp are
 // what the queries and the values ops share, never stated in a member's own

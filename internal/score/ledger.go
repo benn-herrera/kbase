@@ -75,9 +75,6 @@ const (
 	RunKindDry = "dry"
 )
 
-// checkUsage is the check a refusal names where the request itself is wrong.
-const checkUsage = "usage"
-
 // checkError names a failure kbase has no narrower class for, as a run read
 // back from its ledger reports a failed item.
 const checkError = buildstore.CheckError
@@ -257,7 +254,7 @@ func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), lines: map[string]Entry{}}
 	have, err := readHeader(l.dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, result.Refusal{{Check: checkUsage, Path: l.dir, Key: "--resume",
+		return nil, result.Refusal{{Check: result.CheckUsage, Path: l.dir, Key: "--resume",
 			Remedy: "start a new run without --resume", Detail: "no run stands here: " + runFile + " is missing"}}
 	}
 	if err != nil {
@@ -296,7 +293,7 @@ func (l *Ledger) refusalFor(have, want RunHeader) error {
 	if have.Format == ledgerFormat && have.KBRoot == want.KBRoot && have.Pass == want.Pass {
 		return nil
 	}
-	return result.Refusal{{Check: checkUsage, Path: l.dir, Key: "--resume",
+	return result.Refusal{{Check: result.CheckUsage, Path: l.dir, Key: "--resume",
 		Remedy: "start a new run without --resume",
 		Detail: fmt.Sprintf("the run here asks %s over %s at ledger format %d; this one asks %s over %s at ledger format %d",
 			have.Pass, have.KBRoot, have.Format, want.Pass, want.KBRoot, ledgerFormat)}}

@@ -614,7 +614,7 @@ func TestBuildReplayRefusesANoInferenceTrail(t *testing.T) {
 func assertReplayRefusal(t *testing.T, err error, path string) {
 	t.Helper()
 	var refusal result.Refusal
-	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != buildstore.CheckUsage || refusal[0].Key != buildstore.ReplayKey || refusal[0].Path != path {
-		t.Errorf("OpenReplay = %v, want one %s refusal keyed %s naming %s", err, buildstore.CheckUsage, buildstore.ReplayKey, path)
+	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != result.CheckUsage || refusal[0].Key != buildstore.ReplayKey || refusal[0].Path != path {
+		t.Errorf("OpenReplay = %v, want one %s refusal keyed %s naming %s", err, result.CheckUsage, buildstore.ReplayKey, path)
 	}
 }

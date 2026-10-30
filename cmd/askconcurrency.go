@@ -34,7 +34,7 @@ func givenAskConcurrency(cmd *cobra.Command, value int) *int {
 func askConcurrency(flag, key *int) (int, error) {
 	switch {
 	case flag != nil && *flag < 1:
-		return 0, toolresult.Refusal{{Check: checkUsage, Key: "--" + askConcurrencyFlag,
+		return 0, toolresult.Refusal{{Check: toolresult.CheckUsage, Key: "--" + askConcurrencyFlag,
 			Detail: "--" + askConcurrencyFlag + " counts model calls in flight and is at least 1"}}
 	case flag != nil:
 		return *flag, nil

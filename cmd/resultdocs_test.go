@@ -94,12 +94,12 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	}
 	run("refused", "show", "clm-zzzzzz")
 	run("refused", "strength", "--max", "half")
-	if items := run("refused", "strength", "--pending", "--max", "0.5").items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage ||
+	if items := run("refused", "strength", "--pending", "--max", "0.5").items("refusals"); len(items) != 1 || items[0]["check"] != toolresult.CheckUsage ||
 		items[0]["key"] != "--pending" {
 		t.Errorf("strength --pending --max 0.5 refusal: %v, want one usage item naming --pending", items)
 	}
 	unknown := run("refused", "edges", "--relation", "nope", "--relation", "nope")
-	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
+	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--relation" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {
 		t.Errorf("edges --relation nope --relation nope refusal: %v, want one item", items)
 	}

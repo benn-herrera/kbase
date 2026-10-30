@@ -92,7 +92,7 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 	case errors.As(err, &unknown):
 		items := make([]toolresult.Item, len(unknown.Names))
 		for i, name := range unknown.Names {
-			items[i] = toolresult.Item{Check: checkUsage, Key: "--volume",
+			items[i] = toolresult.Item{Check: toolresult.CheckUsage, Key: "--volume",
 				Detail: fmt.Sprintf("--volume %s names no volume of the entry point's list", name)}
 		}
 		return refused(fields, items...)

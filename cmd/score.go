@@ -128,19 +128,19 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	}
 	switch {
 	case opts.Pass != "" && !slices.Contains(passes, opts.Pass):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--pass", Allowed: passes,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--pass", Allowed: passes,
 			Detail: "--pass names " + strings.Join(passes, ", ") + "; absent, a run walks both"})
 	case !slices.Contains(score.RescoreManual, rescore):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--rescore-manual", Allowed: score.RescoreManual,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--rescore-manual", Allowed: score.RescoreManual,
 			Detail: "--rescore-manual names " + strings.Join(score.RescoreManual, ", ") + "; absent, a run re-judges no manually-scored value"})
 	case opts.Limit < 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	case opts.Resume != "" && !runIDRE.MatchString(opts.Resume):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--resume",
 			Detail: fmt.Sprintf("--resume names a real run's id (%s-<%d characters of a-z0-9>), not a path: %s",
 				score.RunKindReal, kb.HashLen, opts.Resume)})
 	case opts.DryRun && opts.Resume != "":
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--resume",
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--resume",
 			Detail: "a dry run asks nothing and records nothing to resume: drop --resume, or drop --dry-run to continue run " + opts.Resume})
 	}
 	concurrency, err := askConcurrency(opts.AskConcurrency, opts.Config.Asks.Concurrency)

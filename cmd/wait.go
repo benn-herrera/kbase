@@ -41,7 +41,7 @@ lock and reads no commit trail until that final document.`,
 				return nil
 			}
 			if pid <= 0 {
-				return emit(refused(nil, toolresult.Item{Check: checkUsage, Key: "--pid",
+				return emit(refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--pid",
 					Detail: "--pid is required and must name a run's process, a positive pid"}))
 			}
 			wd, err := invocationDir(cmd)

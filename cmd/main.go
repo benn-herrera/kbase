@@ -172,7 +172,7 @@ func exitStatus(err error, stdout, stderr io.Writer) int {
 	if errors.As(err, &refusal) {
 		outcome, fields = refused(nil, refusal...)
 	} else {
-		outcome, fields = refused(nil, toolresult.Item{Check: checkUsage, Detail: err.Error()})
+		outcome, fields = refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Detail: err.Error()})
 	}
 	if eerr := toolresult.Emit(stdout, outcome, fields...); eerr != nil {
 		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)

@@ -825,8 +825,8 @@ func TestResumeRefusesAnotherRun(t *testing.T) {
 			if !errors.As(err, &ref) {
 				t.Fatalf("Resume(%s) = %v, want a refusal", tc.name, err)
 			}
-			if len(ref) != 1 || ref[0].Check != checkUsage || ref[0].Key != "--resume" || !strings.Contains(ref[0].Detail, tc.want) {
-				t.Errorf("the refusal = %v; want check %s, key --resume, detail naming %q", ref, checkUsage, tc.want)
+			if len(ref) != 1 || ref[0].Check != result.CheckUsage || ref[0].Key != "--resume" || !strings.Contains(ref[0].Detail, tc.want) {
+				t.Errorf("the refusal = %v; want check %s, key --resume, detail naming %q", ref, result.CheckUsage, tc.want)
 			}
 		})
 	}

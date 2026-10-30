@@ -234,7 +234,7 @@ func probeRole(opts probeOptions) (config.Role, string, error) {
 		role, roleFlag = f.role, f.flag
 	}
 	if len(named) > 1 {
-		return "", "", toolresult.Refusal{{Check: config.CheckUsage, Allowed: probeSelections,
+		return "", "", toolresult.Refusal{{Check: toolresult.CheckUsage, Allowed: probeSelections,
 			Detail: fmt.Sprintf("a probe asks one selection, and more than one was named (%s): pass one of %s",
 				strings.Join(named, ", "), strings.Join(probeSelections, ", "))}}
 	}

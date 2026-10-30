@@ -114,7 +114,7 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 					continue
 				}
 				if len(rec.Inputs)+len(it.Inputs) == 0 {
-					return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path,
+					return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path,
 						Detail: fmt.Sprintf("%s group %s, item %s records no template inputs: an earlier kbase wrote it", rec.Kind, rec.Group, it.Item)}}
 				}
 				selected.Items = append(selected.Items, it)
@@ -135,7 +135,7 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 		return nil, err
 	}
 	if !recorded && len(captures) == 0 {
-		return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
 			Detail: "the trail records no ask: it was built without inference, or asked nothing"}}
 	}
 	for _, c := range captures {
@@ -146,14 +146,14 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 			continue
 		}
 		if !c.HasInputs {
-			return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: c.Path,
+			return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: c.Path,
 				Detail: "the overview call's capture records no excerpts: an earlier kbase wrote it"}}
 		}
 		rp.overviews = append(rp.overviews, c)
 		taken++
 	}
 	if len(rp.groups) == 0 && len(rp.overviews) == 0 {
-		return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
 			Detail: "the selection is empty: no recorded ask matches the kind, --failed and --limit given"}}
 	}
 	parent := filepath.Join(trail, replaysDir)
@@ -174,7 +174,7 @@ func replayTrail(stateDir, start string) (string, error) {
 	}
 	path := filepath.Join(stateDir, buildstore.ScratchDir, buildstore.TrailsDir)
 	if len(trails) == 0 {
-		return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail stands in the state store"}}
+		return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail stands in the state store"}}
 	}
 	if start == "" {
 		return trails[0], nil
@@ -187,11 +187,11 @@ func replayTrail(stateDir, start string) (string, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail's start commit begins " + start}}
+		return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail's start commit begins " + start}}
 	case 1:
 		return filepath.Join(path, matches[0]), nil
 	}
-	return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path,
+	return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path,
 		Detail: fmt.Sprintf("%s begins more than one build trail's start commit: %s", start, strings.Join(matches, ", "))}}
 }
 

@@ -58,8 +58,8 @@ func TestOverrideInsideKBRootRefused(t *testing.T) {
 		t.Fatalf("Dir inside kb-root = %v, want a refusal", err)
 	}
 	detail := fmt.Sprintf("the state directory %s is inside %s; build state is never written there", inside, kbRoot)
-	if len(ref) != 1 || ref[0].Check != checkUsage || ref[0].Key != "--state-dir" || ref[0].Path != inside || ref[0].Detail != detail {
-		t.Errorf("the refusal = %v; want one item, check %s, key --state-dir, detail %q", ref, checkUsage, detail)
+	if len(ref) != 1 || ref[0].Check != result.CheckUsage || ref[0].Key != "--state-dir" || ref[0].Path != inside || ref[0].Detail != detail {
+		t.Errorf("the refusal = %v; want one item, check %s, key --state-dir, detail %q", ref, result.CheckUsage, detail)
 	}
 }
 

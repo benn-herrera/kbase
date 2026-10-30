@@ -52,7 +52,6 @@ var OwnedPaths = append([]string{kb.KBDir}, buildrecords.RecordFiles...)
 
 // The refusal and failure classes the build's state names in its items.
 const (
-	CheckUsage    = "usage"
 	CheckWorktree = "worktree"
 	CheckLock     = kb.CheckLock
 	CheckStateDir = "state-dir"

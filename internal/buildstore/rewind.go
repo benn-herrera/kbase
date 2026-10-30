@@ -161,7 +161,7 @@ func targetRefusal(target string, trail []gitledger.Entry, startedAt string) res
 	if startedAt != "" {
 		ids = append(ids, TargetStartedAt)
 	}
-	return result.Refusal{{Check: CheckUsage, Key: "target", Allowed: ids,
+	return result.Refusal{{Check: result.CheckUsage, Key: "target", Allowed: ids,
 		Detail: fmt.Sprintf("target %q names no boundary the trail holds, by stage id or display name", target)}}
 }
 

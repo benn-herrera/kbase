@@ -329,7 +329,7 @@ func operationArguments(t *testing.T, srv mcp.Server, op string) (allowed, missi
 	refusedUnknown := false
 	for _, it := range items {
 		item, _ := it.(map[string]any)
-		if item["check"] != checkUsage {
+		if item["check"] != toolresult.CheckUsage {
 			t.Errorf("%s: refused %v, want a usage refusal", op, item)
 		}
 		key, _ := item["key"].(string)
@@ -656,7 +656,7 @@ func TestMCPRenderCitationWrongTypeIsTheOpsRefusal(t *testing.T) {
 				allowed = append(allowed, name)
 			}
 			slices.Sort(allowed)
-			if item["key"] != tc.key || !slices.Equal(allowed, slices.Sorted(slices.Values(tc.allowed))) || item["check"] == checkUsage {
+			if item["key"] != tc.key || !slices.Equal(allowed, slices.Sorted(slices.Values(tc.allowed))) || item["check"] == toolresult.CheckUsage {
 				t.Errorf("refused %v; want key %s, allowed %v, the op's own refusal rather than a usage one", item, tc.key, tc.allowed)
 			}
 		})
@@ -1260,7 +1260,7 @@ func requireNoProjectRefusal(t *testing.T, what, doc string) {
 		t.Fatalf("%s: %v\n%s; want one refusal", what, err, doc)
 	}
 	item := d.Refusals[0]
-	if item["check"] != checkUsage || item["key"] != "project-dir" ||
+	if item["check"] != toolresult.CheckUsage || item["key"] != "project-dir" ||
 		item["detail"] != "this server has no project of its own and the call names none" ||
 		item["remedy"] != "name the project with project-dir: the absolute path of its git worktree root" {
 		t.Errorf("%s: refused %v, want the usage refusal naming project-dir", what, item)
@@ -1475,7 +1475,7 @@ func TestMCPRefusesProjectDir(t *testing.T) {
 		t.Fatalf("outcome %s, exit %d, %d items; want refused, 1, one item\n%s", d.Outcome, code, len(items), out)
 	}
 	item := items[0]
-	if item["check"] != checkUsage || item["key"] != "--project-dir" ||
+	if item["check"] != toolresult.CheckUsage || item["key"] != "--project-dir" ||
 		item["detail"] != "kbase mcp takes no project; each tool call names its own with project-dir" ||
 		item["remedy"] != "run `kbase mcp` from inside the project, or `kbase mcp --project-dir-required` where the harness has no project working directory" {
 		t.Errorf("the refusal item = %v", item)

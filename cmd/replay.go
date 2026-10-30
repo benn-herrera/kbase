@@ -50,7 +50,7 @@ func replayStateDir(stateDir, workDir string) (string, error) {
 		return "", err
 	}
 	if refusals != nil {
-		return "", toolresult.Refusal{{Check: checkUsage, Key: "--state-dir",
+		return "", toolresult.Refusal{{Check: toolresult.CheckUsage, Key: "--state-dir",
 			Detail: "a replay without --state-dir finds its store through the kb-root at or above the working directory, there is none here, and --state-dir names the store"}}
 	}
 	return statedir.Dir("", root)

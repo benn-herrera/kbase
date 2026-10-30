@@ -451,7 +451,7 @@ func TestProbeRefusesTwoSelections(t *testing.T) {
 			t.Fatalf("%s: outcome %s, exit %d; want refused, %d\n%s", tc.name, doc.Outcome, code, toolresult.ExitCode(toolresult.Refused), stdout)
 		}
 		items := doc.items(toolresult.RefusalsKey)
-		if len(items) != 1 || items[0]["check"] != config.CheckUsage {
+		if len(items) != 1 || items[0]["check"] != toolresult.CheckUsage {
 			t.Fatalf("%s: refusals = %v, want the one usage item", tc.name, items)
 		}
 		if !slices.Equal(anyStrings(items[0]["allowed"]), selectionFlags) {

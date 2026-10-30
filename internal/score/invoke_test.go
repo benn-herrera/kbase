@@ -860,7 +860,7 @@ func TestInvokeRefusesAResumeOfAPrunedRun(t *testing.T) {
 	pruned := resumeOf(t, inv, Report{Run: stood[0]}, askingNothing(t))
 	_, err := Invoke(context.Background(), pruned)
 	var refusal result.Refusal
-	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != checkUsage || refusal[0].Key != "--resume" ||
+	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != result.CheckUsage || refusal[0].Key != "--resume" ||
 		refusal[0].Detail != "no run stands here: run.yaml is missing" {
 		t.Errorf("a resume of the pruned %s = %v, want the missing run.yaml's refusal", stood[0], err)
 	}

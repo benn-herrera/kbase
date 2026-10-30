@@ -353,7 +353,7 @@ func TestRewindRefusesATargetWithNoBoundary(t *testing.T) {
 				t.Fatalf("rewind to %q = %s %v, want refused", target, outcome, fields)
 			}
 			items, _ := storetest.Field(fields, "refusals").([]result.Item)
-			if len(items) != 1 || items[0].Check != CheckUsage || items[0].Key != "target" {
+			if len(items) != 1 || items[0].Check != result.CheckUsage || items[0].Key != "target" {
 				t.Fatalf("refusals = %+v, want one usage item naming target", items)
 			}
 			if want := []string{"start", "document-graph"}; !slices.Equal(items[0].Allowed, want) {

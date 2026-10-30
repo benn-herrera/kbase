@@ -13,6 +13,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
+	toolresult "kbase/internal/result"
 )
 
 // Model ids the fixtures configure with — one per category, in the provider
@@ -296,7 +297,7 @@ func TestConfigureTarget(t *testing.T) {
 	beside := project
 	beside.providerOptions = explicit.providerOptions
 	if _, items, err := configureTarget(beside); err != nil || len(items) != 1 ||
-		items[0].Key != "--project" || items[0].Check != checkUsage {
+		items[0].Key != "--project" || items[0].Check != toolresult.CheckUsage {
 		t.Errorf("--project beside --config-dir = %v, %v; want one usage refusal naming --project", items, err)
 	}
 

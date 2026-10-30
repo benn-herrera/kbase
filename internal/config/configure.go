@@ -223,7 +223,7 @@ func missingReferenceProvider(provider string, in Inputs) result.Refusal {
 	_, _, err := Select(in, provider)
 	var refusal result.Refusal
 	if !errors.As(err, &refusal) || len(refusal) != 1 {
-		return result.Refusal{{Check: CheckUsage, Key: keyModelMap,
+		return result.Refusal{{Check: result.CheckUsage, Key: keyModelMap,
 			Detail: fmt.Sprintf("%s names provider %q, which is not in %s", keyModelMap, provider, ProvidersFileName)}}
 	}
 	refusal[0].Key = keyModelMap
@@ -339,7 +339,7 @@ func categoryNames() []string {
 
 // modelMapError is a --model-map value refused as usage.
 func modelMapError(detail string) result.Refusal {
-	return result.Refusal{{Check: CheckUsage, Key: keyModelMap, Detail: detail}}
+	return result.Refusal{{Check: result.CheckUsage, Key: keyModelMap, Detail: detail}}
 }
 
 // unassignedCategoryItem refuses a category with no reference to write. The

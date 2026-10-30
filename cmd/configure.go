@@ -153,7 +153,7 @@ func configureTarget(opts configureOptions) (string, []toolresult.Item, error) {
 		return opts.WriteDir, nil, nil
 	}
 	if len(opts.Layers) > 0 && opts.Layers[0].Source == config.LayerSourceExplicit {
-		return "", []toolresult.Item{{Check: checkUsage, Key: "--project",
+		return "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: "--project",
 			Detail: "--project and --config-dir name different configuration directories; pass one"}}, nil
 	}
 	if opts.RepoRoot == "" {

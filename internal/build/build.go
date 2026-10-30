@@ -187,7 +187,7 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if opts.Through != "" {
 		var ok bool
 		if through, ok = buildstore.ResolveStage(opts.Through); !ok {
-			return w.result(buildstore.EndingOf("", result.Refusal{{Check: buildstore.CheckUsage, Key: "--through", Allowed: stageIDList(),
+			return w.result(buildstore.EndingOf("", result.Refusal{{Check: result.CheckUsage, Key: "--through", Allowed: stageIDList(),
 				Detail: fmt.Sprintf("--through %q names no stage, by id or display name", opts.Through)}}))
 		}
 	}
@@ -378,7 +378,7 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 	var items result.Refusal
 	for _, root := range w.opts.VolumeRoots {
 		if info, err := os.Stat(root); err != nil || !info.Mode().IsRegular() {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Path: root, Key: "<volume-root>",
+			items = append(items, result.Item{Check: result.CheckUsage, Path: root, Key: "<volume-root>",
 				Detail: fmt.Sprintf("volume root %s is not a file", root)})
 		}
 	}
@@ -610,15 +610,15 @@ func inputsUsage(opts Options) result.Refusal {
 	switch {
 	case opts.Resume:
 		if len(opts.VolumeRoots) > 0 {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "<volume-root>",
+			items = append(items, result.Item{Check: result.CheckUsage, Key: "<volume-root>",
 				Detail: "--resume continues with the volume roots the trail records, and takes none"})
 		}
 		if len(opts.Bibliographies) > 0 {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "--bibliography",
+			items = append(items, result.Item{Check: result.CheckUsage, Key: "--bibliography",
 				Detail: "--resume continues with the --bibliography files the trail records, and takes none"})
 		}
 	case len(opts.VolumeRoots) == 0:
-		items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "<volume-root>",
+		items = append(items, result.Item{Check: result.CheckUsage, Key: "<volume-root>",
 			Detail: "a build names its volume roots, or continues the trail with --resume"})
 	}
 	return items

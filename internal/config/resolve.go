@@ -178,7 +178,7 @@ func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 	ref, err := ParseReference(value)
 	if err != nil {
 		if rule == RuleFlag {
-			return Endpoint{}, result.Refusal{{Check: CheckUsage, Key: flagKey,
+			return Endpoint{}, result.Refusal{{Check: result.CheckUsage, Key: flagKey,
 				Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
 					flagKey, value, ProvidersFileName)}}
 		}
@@ -314,10 +314,6 @@ func providerNames(providers Providers) []string {
 // CheckProvider is the refusal class of a provider choice, which every
 // resolution refusal is unless it names its own.
 const CheckProvider = "provider"
-
-// CheckUsage is the refusal class a flag value that is not the form the flag
-// takes raises.
-const CheckUsage = "usage"
 
 // keyScoringModel is the flag that overrides a role's model, as a refusal names
 // it: a bad value, or a provider the pool lacks, is the flag's fault to state.
