@@ -20,7 +20,7 @@ func edgesCommand() *cobra.Command {
 		Long: `edges lists the index's edge rows — source, relation, target, bearing,
 context, and whether a score run's bearing pass asks about the edge — ordered
 by relation, source and target. --relation narrows the list to the named
-relations; it repeats.`,
+relations; it repeats.` + pendingHelp,
 		Args: cobra.NoArgs,
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		var unknown []string

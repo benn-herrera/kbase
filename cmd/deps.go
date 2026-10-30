@@ -19,7 +19,7 @@ the supporter), the other end, its bearing (null where the pairing carries
 none) and its context (null where the edge records none), in relation order and
 then by the other end. With -i it lists instead the ids of <id>'s dependents,
 the nodes <id>'s strength enters: the targets of its outgoing scoring edges. A
-references or demoted edge makes neither end a dependent.`,
+references or demoted edge makes neither end a dependent.` + pendingHelp,
 		Args: cobra.ExactArgs(1),
 	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.DepsPayload(ix, args[0], inverse))

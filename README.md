@@ -557,8 +557,9 @@ just tap-update  # after a pushed release: the tap formula's url and sha256, com
 `just tag` refuses while tracked files have uncommitted changes, then creates a signed annotated
 tag `v<version>` locally, the version being what the binary reports, and verifies its signature; it
 runs no gates, so vet the tree first, and it pushes nothing. No built binaries are committed;
-`bin/` is gitignored. [USER_CONVENTIONS.md](USER_CONVENTIONS.md) is the operating contract for an
-agent driving the CLI.
+`bin/` is gitignored. An agent driving kbase reads its operating contract from kbase itself:
+`kbase --help` and `kbase <command> --help` on the command line; over MCP, the server's
+instructions, the tools, and each tool's help at `kbase://help/<command>`.
 
 Integration recipes run `./bin/kbase` itself, except the live-fixture recipes, which run the
 fixture's own copy (below), and keep their evidence under `test-data/transient/`.

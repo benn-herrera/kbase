@@ -204,10 +204,12 @@ var buildCmd = &cobra.Command{
 	Long: `build converts LaTeX volume roots — each a paper's top .tex file, never one
 another includes — into a KB, at kb-root/ beside the repository's .git: one
 tree, each volume its own directory, entry-point.md listing every volume in
-path order. A relative volume root or --bibliography resolves against the
-project root, and the build orders each list by full path, whatever order it
-was given in. It walks the build's stages in order through the
-stage --through names (an id or a display name; every stage when absent).
+path order. A volume root is the file 00README.json's toplevel entry names,
+else the sole file containing \documentclass. A relative volume root or
+--bibliography resolves against the project root, and the build orders each
+list by full path, whatever order it was given in. It walks the build's
+stages in order through the stage --through names (an id or a display name;
+every stage when absent).
 Each stage's boundary is a commit in the repository, its subject
 "kb-build: <stage> | <display>", scoped to the paths the build owns, and
 records the inputs; the start boundary also records started-at, the commit the
@@ -216,8 +218,10 @@ build began from. A build is given volume roots only over an empty trail;
 holds, with the inputs it records. A build resumes from any recorded boundary,
 not only the last: status names each stage's commit, so reset the repository
 to one and run build --resume; a build over other inputs starts over from
-started-at. The rewind-build MCP tool and the kbase://build-trail resource
-print the commands for either.
+started-at, and a --no-inference build that finished never runs its dropped
+rows — build --resume over it is unchanged — so a build with inference starts
+over from started-at. The rewind-build MCP tool and the kbase://build-trail
+resource print the commands for either.
 --no-inference drops every row that spends inference and walks the rest;
 without it, the claim graph's multichoice asks go to the endpoint [models] decision
 names and the overview passage to the one [models] text names — each value a

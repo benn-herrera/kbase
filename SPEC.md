@@ -2328,7 +2328,9 @@ changes nothing.
   built; the path is absolute. In GUI mode that opening is one line instead: name the project with
   `project-dir` on each tool call. A TUI-mode server that located no project opens with neither.
   The `kbase` skill is named as the workflow, `show-config` as the tool reporting
-  configuration, and `kbase://help/<command>` as a tool's full help. It forbids a session to read or
+  configuration, and `kbase://help/<command>` as a tool's full help. It states what two outcomes (§7)
+  ask of the caller: a `retry` call is re-issued unchanged later, and a `failed` call is not
+  re-issued, since re-issuing will not fix it. It forbids a session to read or
   write kbase's records and derived files — anything
   under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
   exists; it names the query tools as what reports what the records hold, the write tools as what

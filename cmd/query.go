@@ -101,6 +101,11 @@ in an older metadata format answers as converted, its result saying so, and a KB
 whose load is degraded is refused, with "` + index.RefreshRemedy + `" as the remedy.
 Its result is one YAML document on stdout, the answer under "` + query.ResultsKey + `".`
 
+// pendingHelp closes the Long of each query whose result carries a rigor or a
+// bearing.
+const pendingHelp = `
+A rigor or bearing that reads *pending* is unscored, not low.`
+
 const listQueryHelp = `
 A list answer is returned --limit results at a time from --offset, with
 "count" the whole answer's length and "truncated" whether results lie past

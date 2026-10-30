@@ -52,7 +52,7 @@ Each is a dispatch. Rating decides the model (project `AGENTS.md`).
 | 1 | **The store and the verb.** `internal/auth`: the on-disk blob (AES-GCM under a key compiled into the binary, nonce per write, file mode 0600 under the config dir), read and write; then `kbase auth add <provider>` — prompt on the tty with echo off, refuse without a tty, print `stored` and nothing about the key, and `kbase auth rm <provider>`. The refusal path is the tested one. | expert |
 | 2 | **Resolution.** `clients.key` (`cmd/provider.go:149`) consults the store when no path is set: `apiKeyFile` wins where a path is given, then the store, then nothing. A missing entry is the refusal that names `kbase auth add`, naming the provider. | expert |
 | 3 | **Reporting.** `show-config` records that a key came from the store, by name and never by value; the provenance receipt likewise. | mechanical |
-| 4 | **Contract.** SPEC §9.3's provider and key-file text (from `SPEC.md:1069` and `:1236`), `CONVENTIONS`, `USER_CONVENTIONS`, README's setup, and the skill line above for adjagent. | tech-writer seat |
+| 4 | **Contract.** SPEC §9.3's provider and key-file text (from `SPEC.md:1069` and `:1236`), `CONVENTIONS`, README's setup, and the skill line above for adjagent. | tech-writer seat |
 
 ## Acceptance
 

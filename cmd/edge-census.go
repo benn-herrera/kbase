@@ -20,7 +20,7 @@ run's bearing pass asks about that relation, and for each scoring relation —
 ` + strings.Join(scoring[:len(scoring)-1], ", ") + " and " + scoring[len(scoring)-1] + ` — counts the edges at each bearing,
 ascending, then the pending ones, then those whose pairing carries none. The
 edge counts are structural; the bearing counts read the bearings the index
-holds; neither reads the derivation.`,
+holds; neither reads the derivation.` + pendingHelp,
 		Args: cobra.NoArgs,
 	}, false, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
 		return answered(query.EdgeCensusPayload(ix))

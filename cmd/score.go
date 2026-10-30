@@ -551,8 +551,11 @@ kind are kept, and a run's start removes the older ones of its kind whole.
 --dry-run writes the run's records of the set, asks nothing, writes no KB and
 cannot be resumed. --resume continues a real run,
 leaving every item it already landed and re-asking the ones that failed or were
-not reached; a fresh run asks everything again. --limit stops after that many
-items, and the result carries the command that continues the run.
+not reached; a fresh run asks everything again. A landed value whose
+recorded charges the running kbase prices differently is re-priced by the
+resume, no model asked, and the move recorded in repriced.yaml. --limit stops
+after that many items, and the result carries the command that continues the
+run.
 
 A value a person supplied — through set-rigor, set-bearing or an
 insert-*-entry op that gives a rigor or bearing — is marked manually scored; the

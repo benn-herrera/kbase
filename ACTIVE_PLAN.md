@@ -171,7 +171,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | Package | Rating | Depends on | Status |
 |---|---|---|---|
 | S1: measure the served surface; serve each command's help as a resource | expert | Gate | landed |
-| U: retire `USER_CONVENTIONS.md` onto the served surface | expert | S1 | pending |
+| U: retire `USER_CONVENTIONS.md` onto the served surface | expert | S1 | landed |
 | P1: move environment-configured tests onto configuration directories | expert | U | pending |
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | pending |
 | P3: remove the environment inference mode | expert | P2; P1's evidence green | pending |
@@ -362,7 +362,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 **Done**
 
 - `just edit-gate`, `just test`, `just test-integration` and `just measure-mcp-surface`.
-- `git grep -n USER_CONVENTIONS` prints nothing.
+- `git grep -n USER_CONVENTIONS -- ':!ACTIVE_PLAN.md' ':!ACTIVE_DESIGN.md'` prints nothing.
 
 ---
 

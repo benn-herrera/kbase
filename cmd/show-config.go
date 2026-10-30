@@ -283,7 +283,13 @@ on stdout, and change nothing.
 
 Configuration is read from layers: <repository>/` + config.RepositoryDirName + ` over
 ~/.config/kbase, or the one directory --config-dir or KBASE_CONFIG_DIR names,
-which isolates the run from any repository's own. The document names every
+which isolates the run from any repository's own; outside a worktree there
+is no repository layer. A higher layer's pool entry replaces a same-named
+lower one whole, where a config.toml value overrides that one field alone.
+The decision role asks its entry's decision surface on the entry's base URL
+whatever the entry's chat protocol, so an entry whose api is anthropic, on a
+server with no OpenAI-shaped decision surface, fails that call with its own
+status. The document names every
 layer read, in precedence order, with whether its directory and each of its
 files stand; every pool entry the merge produced with the layer it came from,
 the chat protocol and decision surface it speaks, the kind of key it supplies
