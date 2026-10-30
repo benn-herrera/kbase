@@ -550,14 +550,15 @@ just             # list recipes
 just edit-gate   # cheap gate: run after every change
 just checkpoint  # full suite: run at checkpoints
 just test        # unit tests (VERBOSE=1 for per-test output)
-just tag         # checkpoint, release-shape check, then signed tag v<version>; local only
+just tag         # signed tag v<version> of a vetted tree; local only
+just tap-update  # after a pushed release: the tap formula's url and sha256, committed in the tap
 ```
 
-`just tag` refuses while tracked files have uncommitted changes, runs `just checkpoint` and
-`just test-dist-no-replay`, then creates a signed annotated tag `v<version>` locally, the version
-being what the binary reports; it pushes nothing. No built binaries are committed; `bin/` is
-gitignored. [USER_CONVENTIONS.md](USER_CONVENTIONS.md) is the operating contract for an agent
-driving the CLI.
+`just tag` refuses while tracked files have uncommitted changes, then creates a signed annotated
+tag `v<version>` locally, the version being what the binary reports, and verifies its signature; it
+runs no gates, so vet the tree first, and it pushes nothing. No built binaries are committed;
+`bin/` is gitignored. [USER_CONVENTIONS.md](USER_CONVENTIONS.md) is the operating contract for an
+agent driving the CLI.
 
 Integration recipes run `./bin/kbase` itself, except the live-fixture recipes, which run the
 fixture's own copy (below), and keep their evidence under `test-data/transient/`.

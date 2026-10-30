@@ -24,9 +24,11 @@ hermetic `just test-integration` omnibus and says so in its docstring.
 kbase is distributed through the Homebrew tap `benn-herrera/kbase`, whose formula is maintained in
 the sibling clone `homebrew-kbase/` (`just tap`). The formula builds a tagged release from source
 with no build tag, so what users receive is the release shape `test-dist-no-replay` vets.
-`just tag` tags a release: refused while tracked files have uncommitted changes, it runs
-`checkpoint` and `test-dist-no-replay`, then creates a signed annotated tag `v<version>` locally
-and pushes it nowhere. Windows has no distributed binary; it builds from source.
+`just tag` tags a release: refused while tracked files have uncommitted changes, it creates a signed
+annotated tag `v<version>` locally and pushes it nowhere; the tree is vetted before it, by
+`checkpoint` and the integration gates, and the tag runs none. After the release is pushed,
+`just tap-update` points the formula at its tarball and commits the change in the tap. Windows has
+no distributed binary; it builds from source.
 
 **No built binaries live in the repo.** `bin/` is a gitignored build product. Never commit build
 outputs or publish releases.

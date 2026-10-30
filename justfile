@@ -160,7 +160,7 @@ TAP_URL := "git@github.com:benn-herrera/homebrew-kbase.git"
 tap:
     @TAP_DIR="{{TAP_DIR}}" TAP_URL="{{TAP_URL}}" tools/scripts/tap.sh
 
-[doc("after a release is pushed: point the tap's formula at the v<version> source tarball and its sha256; refuses until GitHub serves it; commits nothing")]
+[doc("after a release is pushed: point the tap's formula at the v<version> source tarball and its sha256; refuses until GitHub serves it; commits the formula change in the tap; pushes nothing")]
 tap-update:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -172,7 +172,7 @@ tap-update:
         -e "s|^  url \".*\"|  url \"${url}\"|" \
         -e "s|^  sha256 \".*\"|  sha256 \"${sha}\"|" \
         "${f}"
-    git -C "{{TAP_DIR}}" diff -- Formula/kbase.rb
+    git -C "{{TAP_DIR}}" commit -m "kbase ${ver}" -- Formula/kbase.rb
 
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
@@ -289,7 +289,7 @@ clean:
 _tag-clean:
     @git diff --quiet HEAD || { echo "tag: tracked files have uncommitted changes — commit them, then tag" >&2; exit 1; }
 
-[doc("NEEDS a signing key git tag -s can use (gpg, or ssh where gpg.format says so): refused while tracked files have uncommitted changes, then runs checkpoint and test-dist-no-replay, then creates a signed annotated tag v<version> locally, <version> being what go run ./cmd --version prints, refused unless it is <major>.<minor>.<patch>; pushes nothing")]
+[doc("NEEDS a signing key git tag -s can use (gpg, or ssh where gpg.format says so): refused while tracked files have uncommitted changes, then creates a signed annotated tag v<version> locally and verifies its signature, <version> being what go run ./cmd --version prints, refused unless it is <major>.<minor>.<patch>; runs no gates, so vet the tree first; pushes nothing")]
 tag: _tag-clean
     @ver="v$(go run ./cmd --version)"; [[ "${ver}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag: version ${ver} is not v<major>.<minor>.<patch>" >&2; exit 1; }; GPG_TTY=$(tty) git tag -s "${ver}" -m "release ${ver}"; git tag -v "${ver}"
 
