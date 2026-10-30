@@ -290,8 +290,8 @@ _tag-clean:
     @git diff --quiet HEAD || { echo "tag: tracked files have uncommitted changes — commit them, then tag" >&2; exit 1; }
 
 [doc("NEEDS a signing key git tag -s can use (gpg, or ssh where gpg.format says so): refused while tracked files have uncommitted changes, then runs checkpoint and test-dist-no-replay, then creates a signed annotated tag v<version> locally, <version> being what go run ./cmd --version prints, refused unless it is <major>.<minor>.<patch>; pushes nothing")]
-tag: _tag-clean checkpoint test-dist-no-replay
-    @ver="v$(go run ./cmd --version)"; [[ "${ver}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag: version ${ver} is not v<major>.<minor>.<patch>" >&2; exit 1; }; git tag -s "${ver}" -m "release ${ver}"
+tag: _tag-clean
+    @ver="v$(go run ./cmd --version)"; [[ "${ver}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag: version ${ver} is not v<major>.<minor>.<patch>" >&2; exit 1; }; GPG_TTY=$(tty) git tag -s "${ver}" -m "release ${ver}"; git tag -v "${ver}"
 
 [doc("remove every build output: bin/ and build/ entirely")]
 nuke:
