@@ -153,6 +153,29 @@ func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	}
 }
 
+// TestRunModelsDialsTheEntrysProtocol: the catalogue is listed over the chat
+// protocol the selected entry speaks — Messages where the entry is silent on
+// `api`, the OpenAI-compatible protocol where it states `openai`.
+func TestRunModelsDialsTheEntrysProtocol(t *testing.T) {
+	compat := provider("compat", "http://compat.example/v1")
+	compat.API = config.ProviderAPIOpenAI
+	for _, tc := range []struct {
+		entry config.Provider
+		want  model.Protocol
+	}{
+		{provider("silent", "http://silent.example/v1"), model.ProtocolAnthropic},
+		{compat, model.ProtocolOpenAI},
+	} {
+		got := run(t, modelsOptions{providerOptions: providerOptions{
+			Providers: config.Providers{tc.entry.Name: tc.entry},
+			Provider:  tc.entry.Name,
+		}}, modeltest.NewScriptedMock(nil, catalogue("only")))
+		if len(got.endpoints) != 1 || got.endpoints[0].Protocol != tc.want {
+			t.Errorf("%s: endpoints = %+v, want one speaking protocol %v", tc.entry.Name, got.endpoints, tc.want)
+		}
+	}
+}
+
 // TestRunModelsEmptyCatalogue: a provider serving nothing is not an error —
 // the list is empty and the summary reports count=0.
 func TestRunModelsEmptyCatalogue(t *testing.T) {

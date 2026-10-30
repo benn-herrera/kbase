@@ -392,12 +392,17 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 func (cl class) render(closed closedText) (string, error) { return cl.ask(closed.numbered()) }
 
 // graphOf is the loaded index as the run's passages read it: every node by id,
-// and each hosted node's host.
+// each hosted node's host, and every lifts edge.
 func graphOf(ix *query.Index) graph {
 	nodes := ix.Nodes()
-	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts()}
+	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts(), lifts: map[liftPair]bool{}}
 	for _, n := range nodes {
 		g.nodes[n.ID] = n
+	}
+	for _, e := range ix.Edges() {
+		if e.Relation == kb.RelationLifts {
+			g.lifts[liftPair{analysis: e.Source, claim: e.Target}] = true
+		}
 	}
 	return g
 }

@@ -311,7 +311,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 		}
 		answers1, entries, groups1, wall1, err := askCull(ctx, opts, 1, first, g, say, pos)
 		if err != nil {
-			return nil, askStop(err)
+			return nil, askStopWriting(opts.AskRecords, groups1, err)
 		}
 
 		targets := cullTargets(answers1, prose, pos)
@@ -327,7 +327,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 		}
 		answers2, entries2, groups2, wall2, err := askCull(ctx, opts, 2, second, g, say, pos)
 		if err != nil {
-			return nil, askStop(err)
+			return nil, askStopWriting(opts.AskRecords, slices.Concat(groups1, groups2), err)
 		}
 		if err := asks.WriteGroupRecords(opts.AskRecords, slices.Concat(groups1, groups2)); err != nil {
 			return nil, err
@@ -410,7 +410,7 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 	}
 	records, err := batch.Wait()
 	if err != nil {
-		return nil, nil, nil, 0, err
+		return nil, nil, records, 0, err
 	}
 	for k, id := range ids {
 		for i, it := range records[k].Items {

@@ -200,22 +200,26 @@ func (r *leafReading) askedParagraphs(obligated []paragraph) []askedParagraph {
 	return out
 }
 
-// derivedTitle is the title a yes mints under: the paragraph's first sentence
-// that could open a claim (its first where none could), as the page shows it,
-// on one line, cut at the last word boundary within titleMaxChars, and
-// suffixed with its position where the leaf already carries that title.
+// opener is the sentence a prose claim's title is drawn from: the span's first
+// that could open a claim, its first where none could. The span is not empty.
+func opener(s span, fences []MathFence) sentence {
+	for _, x := range s {
+		if opensAClaim(x, fences) {
+			return x
+		}
+	}
+	return s[0]
+}
+
+// derivedTitle is the title a yes mints under: the paragraph's opener, as the
+// page shows it, on one line, cut at the last word boundary within
+// titleMaxChars, and suffixed with its position where the leaf already carries
+// that title.
 func derivedTitle(a askedParagraph, fences []MathFence, taken map[string]bool) string {
 	if len(a.span) == 0 {
 		return fmt.Sprintf("(¶%d)", a.position)
 	}
-	opener := a.span[0]
-	for _, s := range a.span {
-		if opensAClaim(s, fences) {
-			opener = s
-			break
-		}
-	}
-	words := kb.NormalizeSpace(pageText(opener.text))
+	words := kb.NormalizeSpace(pageText(opener(a.span, fences).text))
 	if r := []rune(words); len(r) > titleMaxChars {
 		cut := string(r[:titleMaxChars])
 		if i := strings.LastIndex(cut, " "); i >= 0 {

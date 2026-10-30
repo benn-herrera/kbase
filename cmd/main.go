@@ -26,6 +26,11 @@ import (
 // the precedence it participates in.
 var flagConfigDir string
 
+// flagProjectDir backs the persistent --project-dir flag. invocationDir
+// validates it as a worktree root; build and score carry it, absolute, into
+// the command that continues the run.
+var flagProjectDir string
+
 // flagLogLevel and flagLogFile back the persistent logging flags.
 var (
 	flagLogLevel string
@@ -109,6 +114,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagConfigDir, "config-dir", "",
 		"the only configuration directory read (default: $"+config.EnvConfigDir+", else <repository>/"+config.RepositoryDirName+" over ~/.config/kbase)")
 
+	rootCmd.PersistentFlags().StringVar(&flagProjectDir, "project-dir", "",
+		"the project root: the git worktree root that holds kb-root/ or will (default: found from the working directory)")
+
 	// Diagnostics are off by default in all but name: a verb's own summary
 	// and warnings are the CLI's output, and the log is the channel you
 	// turn up when that is not enough. --log-file tees, it does not
@@ -152,7 +160,14 @@ func exitStatus(err error, stdout, stderr io.Writer) int {
 		return int(code)
 	}
 	fmt.Fprintf(stderr, "error: %v\n", err)
-	outcome, fields := refused(nil, toolresult.Item{Check: checkUsage, Detail: err.Error()})
+	var refusal toolresult.Refusal
+	var outcome string
+	var fields []toolresult.Field
+	if errors.As(err, &refusal) {
+		outcome, fields = refused(nil, refusal...)
+	} else {
+		outcome, fields = refused(nil, toolresult.Item{Check: checkUsage, Detail: err.Error()})
+	}
 	if eerr := toolresult.Emit(stdout, outcome, fields...); eerr != nil {
 		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)
 	}

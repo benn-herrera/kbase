@@ -9,51 +9,69 @@ import (
 	"kbase/internal/mcp/protocol"
 )
 
-// Server is the MCP server over the command tree under Root, each tool and
-// resource finding its KB from Dir.
+// Located is the project a server located from where it started — its git
+// worktree root — or none, and where none whether the server locates none by
+// its mode, every call naming its project. The zero value is none, with
+// calls free to omit the project.
+type Located struct {
+	root     string
+	found    bool
+	required bool
+}
+
+// LocatedAt is the located project whose git worktree root is root.
+func LocatedAt(root string) Located { return Located{root: root, found: true} }
+
+// ProjectRequired is the located project of a server whose every call names
+// its project: none.
+func ProjectRequired() Located { return Located{required: true} }
+
+// Root is the located project's git worktree root, and whether there is one.
+func (l Located) Root() (string, bool) { return l.root, l.found }
+
+// Required is whether every call must name its project.
+func (l Located) Required() bool { return l.required }
+
+// Server is the MCP server over the command tree under Root. A call runs in
+// the project it names, else in Located; the resources read Located.
 type Server struct {
 	// Version and Instructions are what initialize reports.
 	Version, Instructions string
 	Root                  *cobra.Command
-	Dir                   string
+	Located               Located
 	// Stderr takes a command tool's diagnostics.
 	Stderr  io.Writer
 	Logger  log.Logger
 	Globals Globals
 	// WriteOp and RenderError are Calls' fields of the same name.
-	WriteOp     func(op string, values []byte, out io.Writer) error
+	WriteOp     func(dir, op string, values []byte, out io.Writer) error
 	RenderError func(err error, out, stderr io.Writer)
 	// Launches is the launch of each command whose tool starts it as a
 	// process of its own.
 	Launches map[*cobra.Command]Launch
-	// Listed is the tools no command stands behind, each made for the
-	// directory served.
-	Listed []func(dir string) protocol.Tool
+	// Listed is the tools no command stands behind.
+	Listed []ProjectTool
 	// Resources is the resource families, listed in order. At most one offers
 	// a subscription.
 	Resources []ResourceFamily
 }
 
-// serving is what one Serve binds its launches and resources to: the
-// directory served, the build it launched last, and its logger.
+// serving is what one Serve binds its launches and resources to: the located
+// project, the build it launched last, and its logger.
 type serving struct {
-	dir  string
-	last *lastBuild
-	lg   log.Logger
+	located Located
+	last    *lastBuild
+	lg      log.Logger
 }
 
 // Serve serves s over in and out until EOF on in.
 func (s Server) Serve(in io.Reader, out io.Writer) error {
-	sv := serving{dir: s.Dir, last: newLastBuild(s.Dir), lg: s.Logger}
-	detached := make(map[*cobra.Command]func(*cobra.Command) (protocol.Tool, error), len(s.Launches))
+	sv := serving{located: s.Located, last: newLastBuild(s.Located), lg: s.Logger}
+	detached := make(map[*cobra.Command]func(*cobra.Command) (ProjectTool, error), len(s.Launches))
 	for cmd, l := range s.Launches {
-		detached[cmd] = func(cmd *cobra.Command) (protocol.Tool, error) { return launchTool(cmd, l, sv, s.Globals) }
+		detached[cmd] = func(cmd *cobra.Command) (ProjectTool, error) { return launchTool(cmd, l, sv, s.Globals) }
 	}
-	listed := make([]protocol.Tool, len(s.Listed))
-	for i, tool := range s.Listed {
-		listed[i] = tool(s.Dir)
-	}
-	tools, err := Tools(s.Root, s.Dir, s.Stderr, Calls{WriteOp: s.WriteOp, RenderError: s.RenderError, Detached: detached, Listed: listed})
+	tools, err := Tools(s.Root, s.Located, s.Stderr, Calls{WriteOp: s.WriteOp, RenderError: s.RenderError, Detached: detached, Listed: s.Listed})
 	if err != nil {
 		return err
 	}

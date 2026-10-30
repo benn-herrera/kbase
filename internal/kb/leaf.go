@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -65,6 +66,34 @@ func MarkerLines(text string) map[string]int {
 		}
 	}
 	return out
+}
+
+// LineMarker is one node id a statement marker on a line names, and the byte
+// span [Start, End) of the whole marker. Ids named by one marker share its span.
+type LineMarker struct {
+	ID         string
+	Start, End int
+}
+
+// LineMarkers is every statement marker on one line, in order.
+func LineMarkers(line string) []LineMarker {
+	var out []LineMarker
+	for _, m := range statementMarkerRE.FindAllStringSubmatchIndex(line, -1) {
+		for _, id := range NodeIDs(line[m[2]:m[3]]) {
+			out = append(out, LineMarker{id, m[0], m[1]})
+		}
+	}
+	return out
+}
+
+// markedSpanRE is one statement marker with the spaces and tabs before it.
+var markedSpanRE = regexp.MustCompile(`[ \t]*` + statementMarkerRE.String())
+
+// StripLineMarkers is line with every statement marker removed, each taking
+// the spaces and tabs before it; nothing else changes. A marker naming several
+// ids is removed in one cut.
+func StripLineMarkers(line string) string {
+	return markedSpanRE.ReplaceAllString(line, "")
 }
 
 // MarkerSite is one statement marker: the kb-root-relative path of the leaf

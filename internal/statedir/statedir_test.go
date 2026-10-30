@@ -63,6 +63,18 @@ func TestOverrideInsideKBRootRefused(t *testing.T) {
 	}
 }
 
+// TestRelativeOverrideIsTheProjectRoots: a relative override names a directory
+// beside kb-root/, wherever the process stands.
+func TestRelativeOverrideIsTheProjectRoots(t *testing.T) {
+	repo := t.TempDir()
+	kbRoot := filepath.Join(repo, kb.KBDir)
+	t.Chdir(t.TempDir())
+	got, err := Dir("store", kbRoot)
+	if want := filepath.Join(repo, "store"); err != nil || got != want {
+		t.Errorf("Dir(store) = %q, %v; want %q", got, err, want)
+	}
+}
+
 // TestKeyResolvesTheUnbuiltTree: one KB root named through a link before
 // kb-root/ exists and by its resolved path once it does is one 16-digit key.
 func TestKeyResolvesTheUnbuiltTree(t *testing.T) {

@@ -182,7 +182,7 @@ func TestBuildResultsParse(t *testing.T) {
 		t.Errorf("status = %v", status.Values)
 	}
 	run("refused", "cancel", "--state-dir", state)
-	done := run("done", "build", "paper.tex", "--no-inference", "--state-dir", state)
+	done := run("done", "build", "--resume", "--no-inference", "--state-dir", state)
 	if _, ok := done.Values["resume"]; ok {
 		t.Errorf("a finished build carries resume: %v", done.Values)
 	}

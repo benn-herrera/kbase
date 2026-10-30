@@ -85,8 +85,8 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 	fields := append(providerFields(ep.Provider, ep.Rule, ep.Layer),
 		toolresult.Field{Key: "selection", Value: probeSelectionName(opts, ep)},
 		toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
-	// The registry is scoring's client path, so the probe speaks whatever wire
-	// shape the endpoint's entry names.
+	// The registry is scoring's client path, so the probe speaks the wire shape
+	// the registry gives the selection's role.
 	reg := modelclient.New(opts.NewClient, opts.Logger, "", probeAskConcurrency)
 	defer reg.CloseAll()
 	client, err := reg.Get(ep)
@@ -94,6 +94,14 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 		return outcome, f
 	}
 	warnCleartextKey(opts.Stderr, reg, ep)
+	if !opts.Decision {
+		// The effective sampling is stated whether or not the call is
+		// answered: a failure is read against the sampling that met it.
+		sampling := model.SamplingOf(client)
+		fields = append(fields,
+			toolresult.Field{Key: "temperature", Value: *sampling.Temperature},
+			toolresult.Field{Key: "thinking", Value: sampling.Thinking.String()})
+	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = defaultListTimeout
@@ -128,8 +136,9 @@ const probeAskConcurrency = 1
 // surface answers it: --decision names the decision role, whose asks are
 // decision calls on whichever surface its entry declares, and a chat request
 // to that selection is the mismatch a probe exists to find. Every other
-// selection is asked the one chat turn. No backoff: a heartbeat re-issues at
-// once, so the deadline is spent on attempts rather than on pauses.
+// selection is asked the one chat turn, carrying the sampling client sends.
+// No backoff: a heartbeat re-issues at once, so the deadline is spent on
+// attempts rather than on pauses.
 func probeAsk(ctx context.Context, slot *model.Slot, client model.Client, ep config.Endpoint, opts probeOptions, timeout time.Duration) ([]toolresult.Field, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -150,7 +159,9 @@ func probeAsk(ctx context.Context, slot *model.Slot, client model.Client, ep con
 		prompt = probePrompt
 	}
 	res, err := slot.Chat(callCtx, client, model.ChatRequest{Model: ep.Model, Prompt: prompt})
-	if err != nil {
+	// An answer cut off at the completion cap before any text is still the
+	// selection answering, so it is reported rather than failed.
+	if err != nil && res.Final.Outcome != model.ChatTruncatedEmpty {
 		return nil, err
 	}
 	return probeAnswer(res.Final, time.Since(started)), nil
@@ -336,9 +347,12 @@ var probeCmd = &cobra.Command{
 	Use:   "probe",
 	Short: "ask one model one question, as a heartbeat of a model selection",
 	Long: `Ask one model one question and report what came back: the outcome, the
-selection and model asked, the time to the first token, the call's wall time,
-the finish reason, the reply, and the tokens the provider reported. One call,
-one turn: no tools, no history, no system prompt of its own, and no KB.
+selection and model asked, the temperature and thinking a chat call sent (its
+role's sampling, the scoring role's for --model), the time to the first
+token, the call's wall time, the finish reason, the reply, and the tokens the
+provider reported. An answer cut off at the completion cap before any text is
+reported as done, with finish reason length and an empty reply. One call, one
+turn: no tools, no history, no system prompt of its own, and no KB.
 
 A probe asks one selection. Without any of --model, --decision, --text or
 --scoring it asks the configured scoring role — the selection a run would make,
@@ -356,10 +370,10 @@ The call goes through the same registry a scoring run's asks go through, so the
 endpoint is reached over the wire shape its pool entry names. A decision
 selection is asked a decision call on the surface its entry declares, as a
 run's multichoice asks are: a surface that reports no first token and no finish
-reason, which the document states as zero and null. An entry whose api is
-anthropic speaks no decision surface, and refuses rather than taking a chat
-request. Nothing is read from a KB and no state directory is read or written:
-the probe prints its document and exits. Its result is one YAML document on
+reason, which the document states as zero and null. A decision selection
+always asks the OpenAI-shaped decision surface on its entry's base URL,
+whatever the entry's api. Nothing is read from a KB and no state directory is
+read or written: the probe prints its document and exits. Its result is one YAML document on
 stdout.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

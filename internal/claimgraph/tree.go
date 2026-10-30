@@ -3,7 +3,6 @@ package claimgraph
 import (
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -12,10 +11,6 @@ import (
 )
 
 var (
-	// markerRE is one marker the write API appended to a line, with the space
-	// separating it from the content it follows.
-	markerRE = regexp.MustCompile(`[ \t]*` + regexp.QuoteMeta(kb.StatementMarkerOpener) + `.*?-->`)
-
 	// anchorRE is a rewritten cross-reference's three attributes, in the
 	// contract's order: href, type, label. The type is read as whatever the
 	// attribute holds.
@@ -55,7 +50,15 @@ func anchorLabels(referenceType, label string) []string {
 }
 
 // stripMarkers is text with every marker the write API appended removed.
-func stripMarkers(text string) string { return markerRE.ReplaceAllString(text, "") }
+// Lines are split on "\n" alone, so a trailing empty line stays and offsets
+// into the result are offsets into the original lines.
+func stripMarkers(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = kb.StripLineMarkers(l)
+	}
+	return strings.Join(lines, "\n")
+}
 
 // unquote is text with each line's blockquote markers removed, line count
 // kept, so an offset into it names the same line of the original.

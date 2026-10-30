@@ -24,13 +24,13 @@ const (
 	ProviderTypeInference = "inference"
 
 	// ProviderAPIOpenAI is the OpenAI-compatible HTTP protocol: chat on
-	// `chat/completions`, plus the decision surfaces. The default.
+	// `chat/completions`, plus the decision surfaces.
 	ProviderAPIOpenAI = "openai"
 
 	// ProviderAPIAnthropic is the Anthropic Messages protocol: chat on
-	// `POST <baseUrl>/messages` and models on `GET <baseUrl>/models`. It has
-	// no decision surface, so an entry speaking it can serve the text and
-	// scoring roles but not the decision role's multichoice asks.
+	// `POST <baseUrl>/messages` and models on `GET <baseUrl>/models`. The
+	// default. It has no decision surface; the decision role asks the
+	// OpenAI-shaped one on the same base URL, whatever an entry's api.
 	ProviderAPIAnthropic = "anthropic"
 
 	// FlavorSystemOne is the decision surface kbase's multichoice asks have
@@ -66,10 +66,10 @@ type Provider struct {
 	Type string `toml:"type"`
 
 	// API is the wire protocol chat uses. Optional; empty means
-	// ProviderAPIOpenAI. `openai` speaks the OpenAI-compatible
-	// chat-completions surface and carries the decision surfaces;
-	// `anthropic` speaks the Messages protocol for chat and has no decision
-	// surface.
+	// ProviderAPIAnthropic. `openai` speaks the OpenAI-compatible
+	// chat-completions surface; `anthropic` speaks the Messages protocol.
+	// The decision role uses the OpenAI-shaped decision surface whatever API
+	// says.
 	API string `toml:"api"`
 
 	// DecisionsFlavor is which decision surface this endpoint's server
@@ -131,12 +131,12 @@ func (p Provider) Kind() string {
 }
 
 // Protocol returns the normalized wire protocol, defaulting to
-// ProviderAPIOpenAI when unstated.
+// ProviderAPIAnthropic when unstated.
 func (p Provider) Protocol() string {
 	if a := strings.ToLower(strings.TrimSpace(p.API)); a != "" {
 		return a
 	}
-	return ProviderAPIOpenAI
+	return ProviderAPIAnthropic
 }
 
 // Flavor returns the normalized decision surface this entry's server speaks,

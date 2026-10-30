@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # LIVE: ./bin/kbase build without --no-inference over the Slice-1 paper
 # BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository, asking the
-# provider CONFIG names; then a second build through claims-discovered
-# configured by the environment alone, a third naming no configuration
-# directory, and a score run configured by the environment alone. Counts land
-# in comparison.yaml.
+# provider the resolved configuration names; then a second build through
+# claims-discovered configured by the environment alone, a third naming no
+# configuration directory, and a score run configured by the environment
+# alone. Counts land in comparison.yaml.
 #
 # Inputs (environment): BIN_DIR; ARXIV_DIR, the unpacked corpus;
 # BUILD_ARXIV_SPECIAL_ID, the paper built; BUILD_LIVE_ARXIV_OUT_DIR, the
-# evidence directory; CONFIG, the live configuration directory (absolute or
-# relative to the repository root).
+# evidence directory; CONFIG, a configuration directory (absolute or relative
+# to the repository root) every kbase call is then given as --config-dir, or
+# empty: no call passes --config-dir and kbase resolves configuration as
+# always. The legs' values come from the resolved configuration's show-config.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
@@ -19,13 +21,18 @@ cd "${script_dir}/../.." || exit 1
 : "${ARXIV_DIR:?ARXIV_DIR is not set: the unpacked corpus}"
 : "${BUILD_ARXIV_SPECIAL_ID:?BUILD_ARXIV_SPECIAL_ID is not set: the paper to build}"
 : "${BUILD_LIVE_ARXIV_OUT_DIR:?BUILD_LIVE_ARXIV_OUT_DIR is not set: the evidence directory}"
-: "${CONFIG:?CONFIG is not set: the live configuration directory}"
+: "${CONFIG?CONFIG is not set: a configuration directory, or empty for the resolved configuration}"
 
 root="$(pwd)"
 out="${BUILD_LIVE_ARXIV_OUT_DIR}"
 kbase="${root}/${BIN_DIR}/kbase"
+# cfg is the flag every kbase call carries; empty, no call names a directory.
 config="${CONFIG}"
-[[ "${config}" == /* ]] || config="${root}/${config}"
+cfg=()
+if [[ -n "${config}" ]]; then
+    [[ "${config}" == /* ]] || config="${root}/${config}"
+    cfg=(--config-dir "${config}")
+fi
 id="${BUILD_ARXIV_SPECIAL_ID}"
 pandoc_version="$(pandoc --version | head -n 1)"
 printf 'pandoc: %s\n' "${pandoc_version}"
@@ -52,16 +59,29 @@ yaml_str() { local s="${1//\\/\\\\}"; printf '"%s"' "${s//\"/\\\"}"; }
 ok() { "$@" > /dev/null 2>&1 && echo 0 || echo 1; }
 count() { find "$1" -type f -name "$2" 2>/dev/null | wc -l | tr -d ' '; }
 
-# The endpoint first: an unreachable provider fails here, by name, and no
-# build is started against it. The fixture's pool holds two entries and its
-# config.toml's provider key is superseded, so the entry is named.
-provider="$(sed -n 's/^provider *= *"\(.*\)".*/\1/p' "${config}/config.toml" | head -n 1)"
-capture "${out}/models" "${root}" "${kbase}" models --config-dir "${config}" --provider "${provider}"
-if [[ "$(rc "${out}/models")" -ne 0 ]]; then
-    printf 'integration(test-integration-build-live-arxiv): provider %s, named in %s/config.toml, is unreachable — see %s\n' \
-        "${provider:-(none named)}" "${CONFIG}" "${out}/models.out"
-    exit 1
-fi
+# doc_get <document> <section> <key> <value> <field>: <field> of each record in
+# the top-level <section> list whose <key> is <value>, one per line, unquoted
+# (a null prints empty). A record opens on its "    - " line; its fields stand
+# at six spaces.
+doc_get() {
+    awk -v sec="$2" -v mk="$3" -v mv="$4" -v f="$5" '
+        function flush() { if (hit && (f in rec)) print rec[f]; delete rec; hit = 0 }
+        /^[^ ]/ { flush(); in_sec = ($0 == sec ":"); next }
+        !in_sec { next }
+        {
+            line = $0
+            if (line ~ /^    - /) { flush(); line = "      " substr(line, 7) }
+            if (match(line, /^      [A-Za-z-]+: /)) {
+                k = substr(line, 7, RLENGTH - 8)
+                v = substr(line, RLENGTH + 1)
+                if (v == "null") v = ""
+                gsub(/^"|"$/, "", v)
+                rec[k] = v
+                if (k == mk && v == mv) hit = 1
+            }
+        }
+        END { flush() }' "$1"
+}
 
 name="$(printf '%s' "${id}" | tr '/' '_')"
 dir="${out}/${name}"
@@ -80,29 +100,47 @@ git -C "${repo}" -c user.name=arxiv -c user.email=arxiv@invalid commit -qm "sour
 volume_root="$(ARXIV_VOLUME_DIR="${repo}" tools/scripts/arxiv-volume-root.sh)"
 printf '%s\n' "${id}"
 
-# The fixture's config.toml is in the old grammar — bare model ids beside a
-# superseded provider key — and file-mode resolution refuses a bare id. The
-# file-mode legs read a reference-shaped copy in this run's directory: the
-# same pool and keys, and three references naming that pool's entry. The
-# environment leg below still reads the fixture's bare ids, which is what
-# the environment names.
-toml_get() { awk -v t="[$2]" -v k="$3" '/^\[/ { in_t = ($0 == t) } in_t && $1 == k { sub(/^[^=]*= *"/, ""); sub(/".*/, ""); print; exit }' "$1"; }
-base_url="$(toml_get "${config}/providers.toml" "${provider}" baseUrl)"
-key_file="$(toml_get "${config}/providers.toml" "${provider}" apiKeyFile)"
-[[ -z "${key_file}" || "${key_file}" == /* ]] || key_file="${config}/${key_file}"
-decision="$(toml_get "${config}/config.toml" models decision)"
-text="$(toml_get "${config}/config.toml" models text)"
-# The fixture declares no scoring model; the decision model judges the KB.
+# The configuration the build will read, as the staged repository resolves it:
+# the legs' values come from this document. The decision role names the
+# provider, the endpoint and the layer that supplied the provider; that
+# layer's directory is the source the layered leg copies. The text role names
+# the text model. The scoring model is the decision model, which judges the KB.
+sc="${out}/show-config-source"
+capture "${sc}" "${repo}" "${kbase}" show-config ${cfg[@]+"${cfg[@]}"}
+refuse() { printf 'integration(test-integration-build-live-arxiv): %s — see %s.out\n' "$1" "${sc}" >&2; exit 1; }
+[[ "$(rc "${sc}")" -eq 0 ]] || refuse "show-config failed"
+provider="$(doc_get "${sc}.out" roles role decision provider)"
+decision="$(doc_get "${sc}.out" roles role decision model)"
+text="$(doc_get "${sc}.out" roles role text model)"
+base_url="$(doc_get "${sc}.out" roles role decision base-url)"
+provider_layer="$(doc_get "${sc}.out" roles role decision provider-layer)"
+[[ -n "${provider}" && -n "${decision}" && -n "${text}" && -n "${base_url}" && -n "${provider_layer}" ]] \
+    || refuse "the decision and text roles do not both resolve to a provider and a model"
+source_dir="$(doc_get "${sc}.out" layers source "${provider_layer}" path)"
+[[ -d "${source_dir}" ]] || refuse "the layer that supplied ${provider} (${provider_layer}) has no directory ('${source_dir}')"
+key_file="$(doc_get "${sc}.out" providers name "${provider}" key-file)"
+case "${key_file}" in
+    "" | /*) ;;
+    "~/"*) key_file="${HOME}/${key_file:2}" ;;
+    *) key_file="${source_dir}/${key_file}" ;;
+esac
 scoring="${decision}"
-file_config="${dir}/file-config"
-mkdir -p "${file_config}"
-cp "${config}/providers.toml" "${file_config}/providers.toml"
-cp -R "${config}/api_keys" "${file_config}/api_keys"
-printf '%s\n' '[models]' "decision = \"${provider}/${decision}\"" "text = \"${provider}/${text}\"" "scoring = \"${provider}/${scoring}\"" \
-    > "${file_config}/config.toml"
+source_names=()
+while IFS= read -r source_name; do source_names+=("${source_name}"); done \
+    < <(doc_get "${sc}.out" providers layer "${provider_layer}" name)
+printf 'config: %s from %s (layer %s); decision %s, text %s\n' "${provider}" "${source_dir}" "${provider_layer}" "${decision}" "${text}"
+
+# The endpoint next: an unreachable role fails here, by name, and no build is
+# started against it.
+capture "${out}/probe-decision" "${repo}" "${kbase}" probe --decision ${cfg[@]+"${cfg[@]}"}
+if [[ "$(rc "${out}/probe-decision")" -ne 0 ]]; then
+    printf 'integration(test-integration-build-live-arxiv): the decision role (provider %s) is unreachable — see %s/probe-decision.out\n' \
+        "${provider}" "${out}" >&2
+    exit 1
+fi
 
 # the build, asking, to completion
-capture "${ck}/kbase-build" "${repo}" "${kbase}" build "${volume_root}" --config-dir "${file_config}" --state-dir "${state}" --log-level info
+capture "${ck}/kbase-build" "${repo}" "${kbase}" build "${volume_root}" ${cfg[@]+"${cfg[@]}"} --state-dir "${state}" --log-level info
 check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build.out" && echo 0 || echo 1)" \
     "exit $(rc "${ck}/kbase-build"), $(grep -m1 '^outcome:' "${ck}/kbase-build.out" || echo 'no outcome')" "${ck}/kbase-build.out"
 check no-row-dropped "$(ok test -z "$(git -C "${repo}" log --format=%b --grep='^kb-build: ' | grep -- '--no-inference')")" \
@@ -125,7 +163,7 @@ set -e
 # The same server and model configured by the environment alone: no
 # --config-dir, the configuration directory absent, through the node pass
 # so the build asks. The environment names bare ids, as it does by
-# definition; the fixture's own values are what it carries.
+# definition; the resolved configuration's own values are what it carries.
 env_repo="${dir}/env-repo"
 no_config="${root}/${dir}/no-config"
 mkdir -p "${env_repo}"
@@ -142,13 +180,15 @@ check build-env "$([[ "$(rc "${ck}/kbase-build-env")" -eq 0 ]] && grep -qx 'outc
     "configured by KBASE_API_BASE_URL, KBASE_DECISION=${decision}, KBASE_TEXT=${text} and KBASE_API_KEY_FILE alone: exit $(rc "${ck}/kbase-build-env"), $(grep -m1 '^outcome:' "${ck}/kbase-build-env.out" || echo 'no outcome'), $(count "${root}/${dir}/env-state/scratch/trails" '*.capture.jsonl') captures, ${warned} cleartext warning(s) (${expect_warning} expected), no configuration directory" \
     "${ck}/kbase-build-env.out"
 
-# The layering proof, which names no configuration directory at all: every
-# leg above passes --config-dir, which is single-layer mode. The global
-# layer is the fixture's pool copied into this leg's own home — its
-# apiKeyFile paths resolve beside the file, so its keys travel with it —
+# The layering proof, which names no configuration directory at all: a
+# --config-dir, where given, is single-layer mode. The global layer is the
+# providers.toml and api_keys/ of the layer that supplied the provider, copied
+# into this leg's own home — a relative apiKeyFile resolves beside the file,
+# so its keys travel with it —
 # and the repository layer is what configure --create --project writes,
-# dialing reaper out of that pool and writing a reference for each category
-# — decision and text from the fixture, scoring from its decision model.
+# dialing the resolved provider out of that pool and writing a reference for
+# each category — decision and text from the resolved roles, scoring from the
+# decision model.
 # The build then takes its endpoint from the global file and its three
 # references from the repository's, with the operator's own
 # ~/.config/kbase read by neither: HOME is this leg's directory, and the
@@ -158,12 +198,14 @@ layered="${root}/${dir}/layered"
 layered_home="${layered}/home"
 layered_repo="${layered}/repo"
 mkdir -p "${layered_home}/.config/kbase" "${layered_repo}"
-cp "${config}/providers.toml" "${layered_home}/.config/kbase/providers.toml"
+cp "${source_dir}/providers.toml" "${layered_home}/.config/kbase/providers.toml"
 # A relative apiKeyFile resolves beside its providers.toml, so the keys it
-# names travel with it or both entries drop; owner-only, because a key file
+# names travel with it or its entries drop; owner-only, because a key file
 # any other account can read is reported as a warning fault.
-cp -R "${config}/api_keys" "${layered_home}/.config/kbase/api_keys"
-chmod 0600 "${layered_home}/.config/kbase/api_keys/reaper.txt" "${layered_home}/.config/kbase/api_keys/imp.txt"
+if [[ -d "${source_dir}/api_keys" ]]; then
+    cp -R "${source_dir}/api_keys" "${layered_home}/.config/kbase/api_keys"
+    find "${layered_home}/.config/kbase/api_keys" -type f -exec chmod 0600 {} +
+fi
 # The build commits its boundaries with the ambient git identity, which this
 # home supplies in place of the operator's.
 printf '[user]\n\tname = kbase integration\n\temail = kbase@invalid\n' > "${layered_home}/.gitconfig"
@@ -172,18 +214,18 @@ git -C "${layered_repo}" init -q
 layered_volume_root="$(ARXIV_VOLUME_DIR="${layered_repo}" tools/scripts/arxiv-volume-root.sh)"
 layered_env=(-u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE "HOME=${layered_home}")
 capture "${ck}/kbase-configure-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" configure \
-    --create --project --provider reaper \
-    --model-map "decision=reaper/${decision},text=reaper/${text},scoring=reaper/${scoring}"
+    --create --project --provider "${provider}" \
+    --model-map "decision=${provider}/${decision},text=${provider}/${text},scoring=${provider}/${scoring}"
 layered_refs=0
 [[ "$(rc "${ck}/kbase-configure-layered")" -eq 0 ]] || layered_refs=1
 grep -qx 'outcome: "done"' "${ck}/kbase-configure-layered.out" || layered_refs=1
 grep -q '^    - ".*/\.kbase/config\.toml"$' "${ck}/kbase-configure-layered.out" || layered_refs=1
-grep -qxF "    decision: \"reaper/${decision}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
-grep -qxF "    text: \"reaper/${text}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
-grep -qxF "    scoring: \"reaper/${scoring}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
+grep -qxF "    decision: \"${provider}/${decision}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
+grep -qxF "    text: \"${provider}/${text}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
+grep -qxF "    scoring: \"${provider}/${scoring}\"" "${ck}/kbase-configure-layered.out" || layered_refs=1
 if grep -q '^provider *=' "${layered_repo}/.kbase/config.toml"; then layered_refs=1; fi
 check configure-layered "${layered_refs}" \
-    "reaper dialed from the global pool; three references written into the repository layer, and no provider key: exit $(rc "${ck}/kbase-configure-layered")" \
+    "${provider} dialed from the global pool; three references written into the repository layer, and no provider key: exit $(rc "${ck}/kbase-configure-layered")" \
     "${ck}/kbase-configure-layered.out"
 capture "${ck}/kbase-build-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" build "${layered_volume_root}" \
     --state-dir "${layered}/state" --log-level info
@@ -202,42 +244,51 @@ grep -qx 'outcome: "done"' "${layered_show}.out" || layered_pool=1
 [[ "$(grep -cxF '      source: "global"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
 [[ "$(grep -cxF '      source: "repository"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
 grep -qxF "    - path: \"${layered_home}/.config/kbase\"" "${layered_show}.out" || layered_pool=1
-# the merged pool: the fixture's two entries out of the global file, the
+# the merged pool: the source layer's entries out of the global file, the
 # template's [local] out of the repository one, every entry usable
-[[ "$(grep -c '^    - name: ' "${layered_show}.out")" -eq 3 ]] || layered_pool=1
-[[ "$(grep -cxF '      usable: true' "${layered_show}.out")" -eq 3 ]] || layered_pool=1
-[[ "$(grep -cxF '      layer: "global"' "${layered_show}.out")" -eq 2 ]] || layered_pool=1
+pool_size=$(( ${#source_names[@]} + 1 ))
+[[ "$(grep -c '^    - name: ' "${layered_show}.out")" -eq "${pool_size}" ]] || layered_pool=1
+[[ "$(grep -cxF '      usable: true' "${layered_show}.out")" -eq "${pool_size}" ]] || layered_pool=1
+[[ "$(grep -cxF '      layer: "global"' "${layered_show}.out")" -eq "${#source_names[@]}" ]] || layered_pool=1
 [[ "$(grep -cxF '      layer: "repository"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
-for entry in imp local reaper; do
+for entry in "${source_names[@]}" local; do
     grep -qxF "    - name: \"${entry}\"" "${layered_show}.out" || layered_pool=1
 done
 [[ "$(grep -cxF 'diagnostics: []' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
 check layered-pool "${layered_pool}" \
-    "3 pool entries, imp and reaper global and local repository, all usable, no diagnostics; the global layer is ${layered_home}/.config/kbase" \
+    "${pool_size} pool entries, ${source_names[*]} global and local repository, all usable, no diagnostics; the global layer is ${layered_home}/.config/kbase" \
     "${layered_show}.out"
 # The repository's config.toml names three references, and the document
 # reports them verbatim; each role's record names the entry it asked, the
 # rule, the layer, and the layer that supplied each field: the endpoint and
 # the key from the global pool entry, the model from the repository's file.
 layered_sources=0
-grep -qxF "    decision: \"reaper/${decision}\"" "${layered_show}.out" || layered_sources=1
-grep -qxF "    text: \"reaper/${text}\"" "${layered_show}.out" || layered_sources=1
-grep -qxF "    scoring: \"reaper/${scoring}\"" "${layered_show}.out" || layered_sources=1
+grep -qxF "    decision: \"${provider}/${decision}\"" "${layered_show}.out" || layered_sources=1
+grep -qxF "    text: \"${provider}/${text}\"" "${layered_show}.out" || layered_sources=1
+grep -qxF "    scoring: \"${provider}/${scoring}\"" "${layered_show}.out" || layered_sources=1
 for role in decision text scoring; do
     grep -qxF "    - role: \"${role}\"" "${layered_show}.out" || layered_sources=1
 done
-[[ "$(grep -cxF '      provider: "reaper"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
+[[ "$(grep -cxF "      provider: \"${provider}\"" "${layered_show}.out")" -eq 3 ]] || layered_sources=1
 [[ "$(grep -cxF '      provider-rule: "config"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
 [[ "$(grep -cxF '      provider-layer: "global"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
 [[ "$(grep -cxF "      base-url: \"${base_url}\"" "${layered_show}.out")" -eq 3 ]] || layered_sources=1
 [[ "$(grep -cxF '        base-url: "global"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
 [[ "$(grep -cxF '        model: "repository"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
-[[ "$(grep -cxF '        key: "global"' "${layered_show}.out")" -eq 3 ]] || layered_sources=1
-grep -qxF "      model: \"Qwen3.5-9B\"" "${layered_show}.out" || layered_sources=1
-[[ "$(grep -cxF "      model: \"${decision}\"" "${layered_show}.out")" -eq 2 ]] || layered_sources=1
+key_expect=3
+[[ -n "${key_file}" ]] || key_expect=0
+[[ "$(grep -cxF '        key: "global"' "${layered_show}.out")" -eq "${key_expect}" ]] || layered_sources=1
+# decision and scoring name the decision model; text names its own, and the
+# one model where the two coincide
+if [[ "${text}" == "${decision}" ]]; then
+    [[ "$(grep -cxF "      model: \"${decision}\"" "${layered_show}.out")" -eq 3 ]] || layered_sources=1
+else
+    [[ "$(grep -cxF "      model: \"${decision}\"" "${layered_show}.out")" -eq 2 ]] || layered_sources=1
+    [[ "$(grep -cxF "      model: \"${text}\"" "${layered_show}.out")" -eq 1 ]] || layered_sources=1
+fi
 grep -qxF 'environment: []' "${layered_show}.out" || layered_sources=1
 check layered-sources "${layered_sources}" \
-    "three role records, each reaper out of the global pool with its model from the repository's file: base-url and key global, model repository; decision and scoring ${decision}, text ${text}" \
+    "three role records, each ${provider} out of the global pool with its model from the repository's file: base-url and key global, model repository; decision and scoring ${decision}, text ${text}" \
     "${layered_show}.out"
 
 # The environment mode configures a score run with no configuration
@@ -282,7 +333,7 @@ check score-env "${score_ok}" \
     [[ -f "${dir}/counts.yaml" ]] && sed 's/^/  /' "${dir}/counts.yaml"
 } > "${out}/comparison.yaml"
 
-OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="${kbase} models --config-dir <config> --provider <the fixture's provider> into models.*\n<id>/file-config: the fixture's providers.toml and api_keys with a config.toml naming three references (decision and text from the fixture, scoring from its decision model), because the fixture's own [models] values are bare ids the file mode refuses\non ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore):\n(cd <id>/repo && ${kbase} build <volume-root> --config-dir <id>/file-config --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_DECISION=<config's models.decision> KBASE_TEXT=<config's models.text> KBASE_API_KEY_FILE=<its apiKeyFile> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider reaper --model-map decision=reaper/<config's models.decision>,text=reaper/<config's models.text>,scoring=reaper/<its decision model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the fixture's providers.toml and its api_keys, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE HOME=<id>/score-home KBASE_API_BASE_URL=<the provider's baseUrl> KBASE_DECISION=<config's models.decision> KBASE_TEXT=<config's models.text> KBASE_SCORING=<its decision model> [KBASE_API_KEY_FILE=<its apiKeyFile>] ${kbase} score --pass rigor --limit 1 --state-dir <id>/score-state) into <id>/checks/kbase-score-env.*: environment mode with no configuration directory, one item asked on the scoring model, the ledger naming it and no line naming the text model" \
+OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the environment or layered legs, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, models, base URL, key file and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/env-repo && env KBASE_CONFIG_DIR=<id>/no-config KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_API_KEY_FILE=<the provider's key file> ${kbase} build <volume-root> --through claims-discovered --state-dir <id>/env-state --log-level info) into <id>/checks/kbase-build-env.*\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=<id>/layered/home ${kbase} configure --create --project --provider <the decision role's provider> --model-map decision=<provider>/<the decision role's model>,text=<provider>/<the text role's model>,scoring=<provider>/<the decision role's model>; ${kbase} build <volume-root> --state-dir <id>/layered/state --log-level info; ${kbase} show-config) into <id>/checks/kbase-configure-layered.*, kbase-build-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure wrote, the repository layer)\n(cd <id>/repo && env -u KBASE_CONFIG_DIR -u KBASE_API_KEY_FILE HOME=<id>/score-home KBASE_API_BASE_URL=<the decision role's base URL> KBASE_DECISION=<the decision role's model> KBASE_TEXT=<the text role's model> KBASE_SCORING=<the decision role's model> [KBASE_API_KEY_FILE=<the provider's key file>] ${kbase} score --pass rigor --limit 1 --state-dir <id>/score-state) into <id>/checks/kbase-score-env.*: environment mode with no configuration directory, one item asked on the scoring model, the ledger naming it and no line naming the text model" \
     tools/scripts/write-evidence.sh
 printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
 if [[ "${status}" -ne 0 ]]; then

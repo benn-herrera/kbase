@@ -165,6 +165,21 @@ func indexedEdges(t *testing.T, src *kb.Source) map[string]kb.EdgeRow {
 // TestRigorText: the call carries one line per numbered slice of the node's
 // title and statement, the heading mark on a line of its own, and nothing the
 // claim's section holds outside its own block.
+func TestLineText(t *testing.T) {
+	const marker = "<!-- claim-rigor: clm-aaaaaa -->"
+	for _, c := range []struct{ name, line, want string }{
+		{"nested quote, marker only", "> > " + marker, ""},
+		{"nested quote, words", "> > Words.", "Words."},
+		{"tab after quote, marker after words", ">\tWords. " + marker, "Words."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := lineText(c.line); got != c.want {
+				t.Errorf("lineText(%q) = %q, want %q", c.line, got, c.want)
+			}
+		})
+	}
+}
+
 func TestRigorText(t *testing.T) {
 	src := testKB(t)
 	g := testGraph(t, src)
@@ -565,6 +580,156 @@ func TestBlockExtent(t *testing.T) {
 			first, last := blockExtent(tc.lines, tc.at)
 			if first != tc.first || last != tc.last {
 				t.Errorf("extent = %d..%d, want %d..%d", first, last, tc.first, tc.last)
+			}
+		})
+	}
+}
+
+// TestStatementBySplitForm: the two split forms give the statements
+// they state, and a leaf holding neither gives what it always did.
+func TestStatementBySplitForm(t *testing.T) {
+	m := kb.StatementMarker
+	leaf := "[↑ Vol](index.md)\n\n# A\n\n" +
+		"## Blockquote\n\n" +
+		"> **Lemma.**\n> " + m("ana-aaaaaa") + "\n> The display line. " + m("clm-aaaaaa") + "\n> 1. An item.\n\n" +
+		"## Prose\n\n" +
+		"S1. S2 opens. " + m("clm-bbbbbb") + " S3. " + m("ana-bbbbbb") + "\n\n" +
+		"## Hand\n\n" +
+		"S1. S2 opens. <!--claim-rigor:  clm-cccccc--> S3. " + m("ana-cccccc") + "\n\n" +
+		"## Migration\n\n" +
+		"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd") + "\n\n" +
+		"## Alone\n\n" +
+		m("ana-eeeeee") + "\n\nProse of the section.\n\n" +
+		"## Earlier\n\n" +
+		"> The display line. " + m("clm-ffffff") + "\n>\n> A second paragraph.\n\n" +
+		"## Proof\n\n" +
+		"> **proof**\n> " + m("ana-hhhhhh") + "\n> *Proof.* We have\n> ``` math\n> x = 1 \\label{eq:g} " + m("clm-iiiiii") + "\n> ```\n\n" +
+		"## Proved\n\n" +
+		"> The proved display. " + m("clm-hhhhhh") + "\n\n" +
+		"## Mixed\n\n" +
+		"> **Theorem 4.**\n> " + m("ana-jjjjjj") + "\n> Iota holds here. " + m("clm-jjjjjj") + " " + m("ana-kkkkkk") + "\n\n" +
+		"After the quote.\n\n" +
+		"## Later opener\n\n" +
+		"Lead in.\nThe third opening sentence holds here. " + m("clm-llllll") + " More follows.\nAnd a third line. " + m("ana-llllll") + "\n\n" +
+		"## Opener ending its line\n\n" +
+		"The fourth opening sentence holds here. " + m("clm-mmmmmm") + "\nMore follows on the next line. " + m("ana-mmmmmm") + "\n\n" +
+		"## Migration pair\n\n" +
+		"Every flow holds. " + m("clm-nnnnnn") + " " + m("ana-nnnnnn") + "\nA second line.\n\n" +
+		"## Unlifted\n\n" +
+		"T1. T2 opens. " + m("clm-oooooo") + " T3.\n\n" +
+		"## Tight list\n\n" +
+		"- Item one holds.\n- Item two opens here. " + m("clm-pppppp") + " More. " + m("ana-pppppp") + "\n\n" +
+		"## One marker\n\n" +
+		"Both named here. <!-- claim-rigor: clm-qqqqqq ana-qqqqqq --> And more.\n\n" +
+		"## Fenced paragraph\n\nR1 holds. " + m("clm-rrrrrr") + " R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3. " + m("ana-rrrrrr") + "\n"
+	src := refreshedKB(t, map[string]string{
+		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
+		"vol/a.md":     leaf,
+	}, kb.Graph{
+		Claims: []kb.ClaimNode{
+			{ID: "clm-rrrrrr", Title: "C12", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-aaaaaa", Title: "C1", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-bbbbbb", Title: "C2", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-cccccc", Title: "C2 by hand", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-dddddd", Title: "C3", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-ffffff", Title: "C4", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-hhhhhh", Title: "H10", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-iiiiii", Title: "E10", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-jjjjjj", Title: "CI", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-llllll", Title: "C5", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-mmmmmm", Title: "C6", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-nnnnnn", Title: "C7", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-oooooo", Title: "C8", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-pppppp", Title: "C9", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-qqqqqq", Title: "C11", Rigor: rigor(0.5), Rationale: "r."},
+		},
+		Analyses: []kb.AnalysisNode{
+			{ID: "ana-rrrrrr", Title: "A12", Rationale: "r."},
+			{ID: "ana-aaaaaa", Title: "A1", Rationale: "r."},
+			{ID: "ana-bbbbbb", Title: "A2", Rationale: "r."},
+			{ID: "ana-cccccc", Title: "A2 by hand", Rationale: "r."},
+			{ID: "ana-dddddd", Title: "A3", Rationale: "r."},
+			{ID: "ana-eeeeee", Title: "A4", Rationale: "r."},
+			{ID: "ana-hhhhhh", Title: "A10", Rationale: "r."},
+			{ID: "ana-jjjjjj", Title: "AI", Rationale: "r."},
+			{ID: "ana-kkkkkk", Title: "AJ", Rationale: "r."},
+			{ID: "ana-llllll", Title: "A5", Rationale: "r."},
+			{ID: "ana-mmmmmm", Title: "A6", Rationale: "r."},
+			{ID: "ana-nnnnnn", Title: "A7", Rationale: "r."},
+			{ID: "ana-pppppp", Title: "A9", Rationale: "r."},
+			{ID: "ana-qqqqqq", Title: "A11", Rationale: "r."},
+		},
+		Scorable: []kb.ScorableEdge{
+			{Relation: kb.RelationLifts, Source: "ana-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-bbbbbb", Target: "clm-bbbbbb", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-cccccc", Target: "clm-cccccc", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-dddddd", Target: "clm-dddddd", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-eeeeee", Target: "clm-ffffff", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-hhhhhh", Target: "clm-hhhhhh", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-jjjjjj", Target: "clm-jjjjjj", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-kkkkkk", Target: "clm-jjjjjj", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-llllll", Target: "clm-llllll", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-mmmmmm", Target: "clm-mmmmmm", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-nnnnnn", Target: "clm-nnnnnn", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-pppppp", Target: "clm-pppppp", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-qqqqqq", Target: "clm-qqqqqq", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-rrrrrr", Target: "clm-rrrrrr", Bearing: kb.Bearing{Pending: true}},
+		},
+	})
+	g := testGraph(t, src)
+	// open is a fragment of the line the passage opens on.
+	cases := []struct {
+		name, id, open, want string
+	}{
+		{"claim in a blockquote with a blank analysis line", "clm-aaaaaa", "The display line.", "The display line."},
+		{"analysis on the blank quoted line", "ana-aaaaaa", "> **Lemma.**",
+			"> **Lemma.**\n> " + m("ana-aaaaaa") + "\n> The display line. " + m("clm-aaaaaa") + "\n> 1. An item."},
+		{"claim marker with text after it", "clm-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens."},
+		{"analysis on that line", "ana-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens. S3."},
+		{"hand-typed claim marker", "clm-cccccc", "clm-cccccc", "S1. S2 opens."},
+		{"analysis beside it", "ana-cccccc", "clm-cccccc", "S1. S2 opens. S3."},
+		{"migration claim", "clm-dddddd", "Theorem 2.",
+			"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd")},
+		{"migration analysis", "ana-dddddd", "Theorem 2.",
+			"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd")},
+		{"analysis alone after the heading", "ana-eeeeee", m("ana-eeeeee"), m("ana-eeeeee") + "\n\nProse of the section."},
+		{"claim of an earlier build", "clm-ffffff", "The display line. " + m("clm-ffffff"),
+			"> The display line. " + m("clm-ffffff") + "\n>\n> A second paragraph."},
+		{"equation in a proof another claim's analysis splits", "clm-iiiiii", "**proof**",
+			"> **proof**\n> " + m("ana-hhhhhh") + "\n> *Proof.* We have\n> ``` math\n> x = 1 \\label{eq:g} " + m("clm-iiiiii") + "\n> ```"},
+		{"analysis marked on a text line of a split blockquote", "ana-kkkkkk", "**Theorem 4.**",
+			"> **Theorem 4.**\n> " + m("ana-jjjjjj") + "\n> Iota holds here. " + m("clm-jjjjjj") + " " + m("ana-kkkkkk") + "\n\nAfter the quote."},
+		{"prose claim opening on a later line", "clm-llllll", "Lead in.", "Lead in.\nThe third opening sentence holds here."},
+		{"its analysis, the paragraph", "ana-llllll", "Lead in.",
+			"Lead in.\nThe third opening sentence holds here. More follows.\nAnd a third line."},
+		{"prose claim ending its line", "clm-mmmmmm", "The fourth opening sentence", "The fourth opening sentence holds here."},
+		{"its analysis, the two lines", "ana-mmmmmm", "The fourth opening sentence",
+			"The fourth opening sentence holds here.\nMore follows on the next line."},
+		{"migration pair in a paragraph, the claim", "clm-nnnnnn", "Every flow holds.",
+			"Every flow holds. " + m("clm-nnnnnn") + " " + m("ana-nnnnnn") + "\nA second line."},
+		{"migration pair in a paragraph, the analysis", "ana-nnnnnn", "Every flow holds.",
+			"Every flow holds. " + m("clm-nnnnnn") + " " + m("ana-nnnnnn") + "\nA second line."},
+		{"claim marker with text after it and no lifting analysis", "clm-oooooo", "T1. T2 opens.",
+			"T1. T2 opens. " + m("clm-oooooo") + " T3."},
+		{"prose claim in a tight list", "clm-pppppp", "Item two opens here.", "- Item two opens here."},
+		{"its analysis, the list item", "ana-pppppp", "Item two opens here.", "- Item two opens here. More."},
+		{"claim and its analysis named by one marker", "clm-qqqqqq", "Both named here.",
+			"Both named here. <!-- claim-rigor: clm-qqqqqq ana-qqqqqq --> And more."},
+		{"claim before a fence with a blank line", "clm-rrrrrr", "R1 holds.", "R1 holds."},
+		{"its analysis, the paragraph through the fence", "ana-rrrrrr", "R1 holds.",
+			"R1 holds. R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := statementPassages(src, g, g.nodes[c.id])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].text != c.want {
+				t.Fatalf("statementPassages(%s) = %+v, want one passage %q", c.id, got, c.want)
+			}
+			if want := lineIn(t, src, "vol/a.md", c.open); got[0].line != want {
+				t.Errorf("passage opens on line %d, want %d", got[0].line, want)
 			}
 		})
 	}

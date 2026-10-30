@@ -8,7 +8,35 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/buildstore/storetest"
+	"kbase/internal/kb"
 )
+
+func TestOperationLockPathFollowsAGitFile(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "wt")
+	gitdir := filepath.Join(base, "main", ".git", "worktrees", "wt")
+	for _, tc := range []struct{ name, dotGit, want string }{
+		{"a .git directory", "", filepath.Join(repo, ".git", OperationLockFile)},
+		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, OperationLockFile)},
+		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, OperationLockFile)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.RemoveAll(repo); err != nil {
+				t.Fatal(err)
+			}
+			if tc.dotGit == "" {
+				if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				storetest.WriteFile(t, filepath.Join(repo, ".git"), tc.dotGit)
+			}
+			if got := OperationLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
+				t.Errorf("OperationLockPath = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
 
 // TestAnswerCacheCountsTheTrailDirectories: the answer cache's entries and
 // bytes are the regular files of every trail directory's answers; a directory

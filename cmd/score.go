@@ -74,6 +74,10 @@ type scoreOptions struct {
 	// carries so a resume reads the same one.
 	ConfigDir string
 
+	// ProjectDir is the --project-dir flag made absolute, "" where it was not
+	// given; the command continuing the run carries it.
+	ProjectDir string
+
 	// AskConcurrency is the --ask-concurrency flag, nil where it was not
 	// given.
 	AskConcurrency *int
@@ -440,6 +444,9 @@ func scoreResume(opts scoreOptions, run, dir string, mode config.Mode, env confi
 	if opts.ConfigDir != "" {
 		command = append(command, "--config-dir", opts.ConfigDir)
 	}
+	if opts.ProjectDir != "" {
+		command = append(command, "--project-dir", opts.ProjectDir)
+	}
 	if opts.ScoringModel != "" {
 		command = append(command, "--scoring-model", opts.ScoringModel)
 	}
@@ -539,7 +546,7 @@ ledger.jsonl holds a line per attempt with the charges a reply recorded, the
 reply itself where it parsed, the value it prices to, the model and the prompt's
 digest, captures.jsonl holds each call made — the closed text, the prompt sent
 and the reply returned, a failed attempt's included — and items.jsonl lists the
-set. A run's id is run-<id>, a --dry-run's dry-<id>; the newest ` + strconv.Itoa(score.KeptRuns) + ` runs of each
+set. A run's id is run-<id>, a --dry-run's dry-<id>; the newest ` + strconv.Itoa(buildstore.KeptRuns) + ` runs of each
 kind are kept, and a run's start removes the older ones of its kind whole.
 --dry-run writes the run's records of the set, asks nothing, writes no KB and
 cannot be resumed. --resume continues a real run,
@@ -569,6 +576,14 @@ is one YAML document on stdout.`,
 		if err != nil {
 			return err
 		}
+		projectDir, err := absIfSet(flagProjectDir)
+		if err != nil {
+			return err
+		}
+		configDir, err := absIfSet(flagConfigDir)
+		if err != nil {
+			return err
+		}
 		opts, err := loadVerbContext(wd)
 		if err != nil {
 			return err
@@ -584,7 +599,7 @@ is one YAML document on stdout.`,
 		}
 		code, err := verb(scoreOptions{providerOptions: opts, Ctx: ctx, Pass: scoreFlagPass, Limit: scoreFlagLimit,
 			DryRun: scoreFlagDryRun, ScoringModel: scoreFlagScoringModel,
-			Resume: scoreFlagResume, RescoreManual: scoreFlagRescore, StateDir: scoreFlagStateDir, ConfigDir: flagConfigDir,
+			Resume: scoreFlagResume, RescoreManual: scoreFlagRescore, StateDir: scoreFlagStateDir, ConfigDir: configDir, ProjectDir: projectDir,
 			AskConcurrency: givenAskConcurrency(cmd, scoreFlagAskConc), WorkDir: wd,
 			Stdout: cmd.OutOrStdout(), Logger: processLog.logger})
 		if err != nil {

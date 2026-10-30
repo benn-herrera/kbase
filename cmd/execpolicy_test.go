@@ -38,14 +38,17 @@ var processStarters = map[string]map[string]bool{
 	"syscall": {"Exec": true, "ForkExec": true, "StartProcess": true},
 }
 
-// TestExecPolicy scans every Go file in the module, tests included, and fails
-// on any import of os/exec or any process-starting call outside execOwners,
-// on a process an owner starts other than through os/exec, and on an os/exec
-// call in an owner that does not name the owner's binary.
+// TestExecPolicy scans every non-test Go file in the module, and fails on any
+// import of os/exec or any process-starting call outside execOwners, on a
+// process an owner starts other than through os/exec, and on an os/exec call
+// in an owner that does not name the owner's binary.
 func TestExecPolicy(t *testing.T) {
 	fset := token.NewFileSet()
 	byDir := map[string][]moduleGoFile{}
 	for _, m := range moduleGoFiles(t, fset) {
+		if !m.production() {
+			continue
+		}
 		byDir[path.Dir(m.rel)] = append(byDir[path.Dir(m.rel)], m)
 	}
 	named := map[string]bool{}

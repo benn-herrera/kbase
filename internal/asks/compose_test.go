@@ -144,6 +144,22 @@ func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	}
 }
 
+// sharedPrefix is the longest run of whole lines every prompt opens with.
+func sharedPrefix(prompts []string) string {
+	if len(prompts) == 0 {
+		return ""
+	}
+	common := prompts[0]
+	for _, p := range prompts[1:] {
+		n := 0
+		for n < len(common) && n < len(p) && common[n] == p[n] {
+			n++
+		}
+		common = common[:n]
+	}
+	return common[:strings.LastIndex(common, "\n")+1]
+}
+
 // keys is m's keys, sorted.
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))

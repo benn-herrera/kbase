@@ -24,7 +24,9 @@ func newAnthropicTestEndpoint(baseURL string) Endpoint {
 
 // anthropicStreamSSE is one complete Messages event sequence: usage on
 // message_start, a ping, a thinking delta, two text deltas, the stop reason and
-// output tokens on message_delta, and the closing message_stop.
+// output tokens on message_delta, and the closing message_stop. It carries
+// cache-usage fields and a ping that modeltest.MessagesStream does not, and this
+// in-package test cannot import modeltest (modeltest imports model).
 const anthropicStreamSSE = `event: message_start
 data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","usage":{"input_tokens":25,"cache_read_input_tokens":7,"cache_creation_input_tokens":3}}}
 
@@ -128,12 +130,10 @@ func TestAnthropicSendsTheMessagesRequest(t *testing.T) {
 
 			c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
 			_, err := streamed(context.Background(), c, Request{
-				Model:              "claude-x",
-				Messages:           []Message{{Role: "system", Content: tc.system}, {Role: "user", Content: tc.prompt}},
-				Temperature:        0,
-				ChatTemplateKwargs: map[string]any{"enable_thinking": false},
-				Reasoning:          &Reasoning{Enabled: false},
-				PromptCacheKey:     "run-abcdefgh",
+				Model:          "claude-x",
+				Messages:       []Message{{Role: "system", Content: tc.system}, {Role: "user", Content: tc.prompt}},
+				Sampling:       Sampling{}.Resolved(),
+				PromptCacheKey: "run-abcdefgh",
 			})
 			if err != nil {
 				t.Fatalf("consultStream: %v", err)
@@ -193,33 +193,52 @@ func TestAnthropicSendsTheMessagesRequest(t *testing.T) {
 			if v := wire["stream"]; string(v) != "true" {
 				t.Errorf("stream: got %s, want true", v)
 			}
-			// Thinking is disabled explicitly: omitting the field leaves it
-			// at the server's default.
-			if v := wire["thinking"]; string(v) != `{"type":"disabled"}` {
-				t.Errorf("thinking = %s, want {\"type\":\"disabled\"}", v)
-			}
-			// Temperature 0 is inside the protocol's range, so it is sent.
-			if v, ok := wire["temperature"]; !ok || string(v) != "0" {
-				t.Errorf("temperature = %s (present %t), want 0", v, ok)
-			}
 		})
 	}
 }
 
-// TestAnthropicTemperatureOutsideTheRangeIsOmitted: the Messages protocol
-// accepts a temperature only in [0,1], so a value outside it is left unsent
-// rather than clamped — the second flavour's rule, Request.Temperature being
-// always wired by the OpenAI client.
-func TestAnthropicTemperatureOutsideTheRangeIsOmitted(t *testing.T) {
+// TestAnthropicUnsetSamplingSendsTheBaselineBody: an endpoint stating no
+// sampling sends exactly this body, with temperature 0 and thinking off in the
+// protocol's own fields.
+func TestAnthropicUnsetSamplingSendsTheBaselineBody(t *testing.T) {
+	const want = `{"model":"claude-x","max_tokens":256,"system":"the system","messages":[{"role":"user","content":"the prompt"}],"temperature":0,"stream":true,"thinking":{"type":"disabled"}}`
+	var raw []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", mimeEventStream)
+		_, _ = w.Write([]byte(anthropicStreamSSE))
+	}))
+	defer srv.Close()
+
+	c := NewAnthropicClient(Endpoint{BaseURL: srv.URL, Protocol: ProtocolAnthropic})
+	if _, err := chat(context.Background(), c, "claude-x", "the system", "the prompt", nil, nil); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if string(raw) != want {
+		t.Errorf("body:\n got %s\nwant %s", raw, want)
+	}
+}
+
+// TestAnthropicSamplingMapsOntoTheWire: a thinking level is sent as the
+// protocol's enabled thinking with a budget of at least the protocol's minimum,
+// growing with the level, `max_tokens` growing by that budget over the answer's
+// allowance; thinking off sends the disabled field. Every request carries the
+// role's temperature, or kbase's default where the role states none, whatever
+// the thinking level.
+func TestAnthropicSamplingMapsOntoTheWire(t *testing.T) {
+	const minBudget = 1024 // the Messages protocol's smallest budget_tokens
+	shortBudgets := map[Thinking]int{}
 	for _, tc := range []struct {
-		name        string
-		temperature float64
-		wantSent    bool
+		name     string
+		sampling Sampling
+		prompt   string
 	}{
-		{"zero", 0, true},
-		{"one", 1, true},
-		{"above one", 1.5, false},
-		{"below zero", -0.5, false},
+		{"low, a short ask", Sampling{Thinking: new(ThinkingLow)}, "hi"},
+		{"medium, a short ask", Sampling{Thinking: new(ThinkingMedium)}, "hi"},
+		{"high, a short ask", Sampling{Thinking: new(ThinkingHigh)}, "hi"},
+		{"high, a long ask", Sampling{Thinking: new(ThinkingHigh)}, strings.Repeat("y", 4040)},
+		{"high with a temperature", Sampling{Temperature: new(0.4), Thinking: new(ThinkingHigh)}, "hi"},
+		{"off with a temperature", Sampling{Temperature: new(0.4), Thinking: new(ThinkingOff)}, "hi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var raw []byte
@@ -230,20 +249,61 @@ func TestAnthropicTemperatureOutsideTheRangeIsOmitted(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := NewAnthropicClient(newAnthropicTestEndpoint(srv.URL))
-			req := chatRequest("claude-x")
-			req.Temperature = tc.temperature
-			if _, err := streamed(context.Background(), c, req); err != nil {
-				t.Fatalf("consultStream: %v", err)
+			c := NewAnthropicClient(Endpoint{BaseURL: srv.URL, Protocol: ProtocolAnthropic, Sampling: tc.sampling})
+			if _, err := chat(context.Background(), c, "claude-x", "be brief", tc.prompt, nil, nil); err != nil {
+				t.Fatalf("chat: %v", err)
 			}
 			var wire map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &wire); err != nil {
-				t.Fatalf("unmarshal: %v", err)
+				t.Fatalf("unmarshal %s: %v", raw, err)
 			}
-			if _, ok := wire["temperature"]; ok != tc.wantSent {
-				t.Errorf("temperature %v sent = %t, want %t: %s", tc.temperature, ok, tc.wantSent, raw)
+			var sent struct {
+				MaxTokens int `json:"max_tokens"`
+				Thinking  struct {
+					Type         string `json:"type"`
+					BudgetTokens int    `json:"budget_tokens"`
+				} `json:"thinking"`
+			}
+			if err := json.Unmarshal(raw, &sent); err != nil {
+				t.Fatalf("unmarshal %s: %v", raw, err)
+			}
+			level := *tc.sampling.Thinking
+			budget := sent.Thinking.BudgetTokens
+			switch {
+			case level == ThinkingOff && string(wire["thinking"]) != `{"type":"disabled"}`:
+				t.Errorf("thinking = %s, want {\"type\":\"disabled\"}", wire["thinking"])
+			case level != ThinkingOff && (sent.Thinking.Type != "enabled" || budget < minBudget):
+				t.Errorf("thinking = %s, want enabled with budget_tokens ≥ %d", wire["thinking"], minBudget)
+			}
+			answer := maxTokensFor(Request{Messages: []Message{{Role: "system", Content: "be brief"}, {Role: "user", Content: tc.prompt}}})
+			if sent.MaxTokens-budget != answer {
+				t.Errorf("max_tokens %d − budget_tokens %d = %d, want the answer's allowance %d", sent.MaxTokens, budget, sent.MaxTokens-budget, answer)
+			}
+			if tc.prompt == "hi" {
+				shortBudgets[level] = budget
+			}
+			wantTemperature := DefaultTemperature
+			if tc.sampling.Temperature != nil {
+				wantTemperature = *tc.sampling.Temperature
+			}
+			var temperature *float64
+			if v, ok := wire["temperature"]; ok {
+				if err := json.Unmarshal(v, &temperature); err != nil {
+					t.Fatalf("temperature %s: %v", v, err)
+				}
+			}
+			if temperature == nil || *temperature != wantTemperature {
+				t.Errorf("temperature = %s beside thinking %s, want %v", wire["temperature"], wire["thinking"], wantTemperature)
+			}
+			for _, field := range []string{"reasoning_effort", "reasoning", "chat_template_kwargs"} {
+				if _, ok := wire[field]; ok {
+					t.Errorf("%s sent to a Messages endpoint: %s", field, raw)
+				}
 			}
 		})
+	}
+	if low, medium, high := shortBudgets[ThinkingLow], shortBudgets[ThinkingMedium], shortBudgets[ThinkingHigh]; !(low < medium && medium < high) {
+		t.Errorf("budgets low %d, medium %d, high %d: want strictly increasing", low, medium, high)
 	}
 }
 
@@ -447,9 +507,8 @@ func TestAnthropicListModels(t *testing.T) {
 	}
 }
 
-// TestAnthropicDecisionRefuses: the decision surfaces are OpenAI-shaped, so a
-// Messages endpoint asked for a multichoice ask refuses — naming the provider and the
-// role rather than answering in a shape this protocol never spoke.
+// TestAnthropicDecisionRefuses: the decision method is a guard nothing in
+// kbase reaches; it refuses, naming the provider.
 func TestAnthropicDecisionRefuses(t *testing.T) {
 	c := NewAnthropicClient(Endpoint{Name: "claude", BaseURL: "http://claude.example/v1", Protocol: ProtocolAnthropic})
 	_, err := c.decision(context.Background(), DecisionRequest{
@@ -460,7 +519,7 @@ func TestAnthropicDecisionRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("a Messages endpoint answered a decision ask")
 	}
-	for _, want := range []string{`provider "claude"`, "decision role", "Messages"} {
+	for _, want := range []string{`provider "claude"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal = %q, want it to name %q", err, want)
 		}

@@ -26,6 +26,21 @@ import (
 // document carries are measurements rather than a stub's same-instant reply.
 func probeWire(t *testing.T) (*httptest.Server, func() [][]byte) {
 	t.Helper()
+	return probeStreamWire(t, func(_ http.ResponseWriter, flush func(string)) {
+		time.Sleep(5 * time.Millisecond)
+		flush("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		time.Sleep(15 * time.Millisecond)
+		flush("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		flush("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n" +
+			"data: [DONE]\n\n")
+	})
+}
+
+// probeStreamWire answers each request with what answer writes — a status on
+// w, or a stream each piece of which is flushed as it is written — and keeps
+// the body it read.
+func probeStreamWire(t *testing.T, answer func(w http.ResponseWriter, flush func(string))) (*httptest.Server, func() [][]byte) {
+	t.Helper()
 	var mu sync.Mutex
 	var bodies [][]byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,18 +49,12 @@ func probeWire(t *testing.T) (*httptest.Server, func() [][]byte) {
 		bodies = append(bodies, body)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
-		flush := func(s string) {
+		answer(w, func(s string) {
 			_, _ = w.Write([]byte(s))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-		}
-		time.Sleep(5 * time.Millisecond)
-		flush("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
-		time.Sleep(15 * time.Millisecond)
-		flush("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
-		flush("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":1,\"total_tokens\":41}}\n\n" +
-			"data: [DONE]\n\n")
+		})
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func() [][]byte {
@@ -91,7 +100,8 @@ func probeRoleWire(t *testing.T, role config.Role) (*httptest.Server, func() []s
 func probeFixture(t *testing.T, baseURL, otherURL string) string {
 	t.Helper()
 	dir := t.TempDir()
-	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[local]\nbaseUrl = %q\n\n[other]\nbaseUrl = %q\n", baseURL, otherURL))
+	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[local]\nbaseUrl = %q\napi = %q\n\n[other]\nbaseUrl = %q\napi = %q\n",
+		baseURL, config.ProviderAPIOpenAI, otherURL, config.ProviderAPIOpenAI))
 	writeValues(t, dir, config.ConfigFileName, "[models]\nscoring = \"local/judge\"\n")
 	return dir
 }
@@ -105,7 +115,7 @@ func probeRolesFixture(t *testing.T, urls map[config.Role]string) string {
 	dir := t.TempDir()
 	var providers, models strings.Builder
 	for _, role := range config.Roles {
-		fmt.Fprintf(&providers, "[%s]\nbaseUrl = %q\n\n", role, urls[role])
+		fmt.Fprintf(&providers, "[%s]\nbaseUrl = %q\napi = %q\n\n", role, urls[role], config.ProviderAPIOpenAI)
 		fmt.Fprintf(&models, "%s = \"%s/%s\"\n", role, role, role)
 	}
 	writeValues(t, dir, config.ProvidersFileName, providers.String())
@@ -225,6 +235,97 @@ func TestProbeAsksOneBareTurn(t *testing.T) {
 			}
 			if body.Tools != nil || !body.Stream {
 				t.Errorf("tools %v, stream %t; want no tools and a streamed call", body.Tools, body.Stream)
+			}
+		})
+	}
+}
+
+// TestProbeSendsAndReportsTheRoleSampling: a chat probe sends its role's
+// sampling — the scoring role's where --model names the selection — and its
+// document reports the temperature and thinking that went on the wire,
+// whether the call was answered or declined. An
+// answer cut off at the completion cap before any text is an answer: done, its
+// finish reason and empty reply reported, on the one request it took.
+func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
+	unsetInferenceEnv(t)
+	answered := func(_ http.ResponseWriter, flush func(string)) {
+		flush("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: [DONE]\n\n")
+	}
+	cutOff := func(_ http.ResponseWriter, flush func(string)) {
+		flush("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":8,\"total_tokens\":48}}\n\n" +
+			"data: [DONE]\n\n")
+	}
+	declined := func(w http.ResponseWriter, _ func(string)) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"unknown model"}}`))
+	}
+	for _, tc := range []struct {
+		name     string
+		flags    []string
+		sampling string
+		answer   func(w http.ResponseWriter, flush func(string))
+		// temperature is the configured value the document must report, nil
+		// where none is configured and only agreement with the wire is checked.
+		temperature      any
+		thinking, effort string
+		outcome          string
+		// finishReason and reply are nil where the document carries no answer.
+		finishReason, reply any
+	}{
+		{"--text sends the text role's", []string{"--text"},
+			"[sampling.text]\ntemperature = 0.3\nthinking = \"low\"\n", answered,
+			0.3, "low", "low", toolresult.Done, "stop", "ok"},
+		{"--model sends the scoring role's", []string{"--model", "local/other"},
+			"[sampling.text]\nthinking = \"high\"\n\n[sampling.scoring]\nthinking = \"medium\"\n", answered,
+			nil, "medium", "medium", toolresult.Done, "stop", "ok"},
+		{"an answer cut off before any text is done", []string{"--text"}, "", cutOff,
+			nil, "off", "", toolresult.Done, "length", ""},
+		{"a declined call reports what it sent", []string{"--text"},
+			"[sampling.text]\ntemperature = 0.3\nthinking = \"low\"\n", declined,
+			0.3, "low", "low", toolresult.Failed, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bodies := probeStreamWire(t, tc.answer)
+			dir := t.TempDir()
+			writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[local]\napi = \"openai\"\nbaseUrl = %q\n", srv.URL))
+			writeValues(t, dir, config.ConfigFileName,
+				"[models]\ntext = \"local/writer\"\nscoring = \"local/judge\"\n\n"+tc.sampling)
+
+			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), append([]string{"--config-dir", dir}, tc.flags...)...)
+			if doc.Outcome != tc.outcome || (code == 0) != (tc.outcome == toolresult.Done) {
+				t.Fatalf("outcome %s, exit %d; want %s\n%s", doc.Outcome, code, tc.outcome, stdout)
+			}
+			seen := bodies()
+			if len(seen) != 1 {
+				t.Fatalf("%d requests, want the one call", len(seen))
+			}
+			var body struct {
+				Temperature     *float64 `json:"temperature"`
+				ReasoningEffort string   `json:"reasoning_effort"`
+			}
+			if err := json.Unmarshal(seen[0], &body); err != nil {
+				t.Fatalf("the request is no JSON body: %v\n%s", err, seen[0])
+			}
+			wire := "absent"
+			if body.Temperature != nil {
+				wire = fmt.Sprint(*body.Temperature)
+			}
+			if fmt.Sprint(doc.Values["temperature"]) != wire {
+				t.Errorf("document temperature %v, wire %s; want the value sent", doc.Values["temperature"], wire)
+			}
+			if tc.temperature != nil && doc.Values["temperature"] != tc.temperature {
+				t.Errorf("temperature = %v, want the configured %v", doc.Values["temperature"], tc.temperature)
+			}
+			if doc.Values["thinking"] != tc.thinking || body.ReasoningEffort != tc.effort {
+				t.Errorf("document thinking %v, wire reasoning_effort %q; want %s and %q",
+					doc.Values["thinking"], body.ReasoningEffort, tc.thinking, tc.effort)
+			}
+			if doc.Values["finish-reason"] != tc.finishReason || doc.Values["reply"] != tc.reply {
+				t.Errorf("finish reason %v, reply %#v; want %v and %#v",
+					doc.Values["finish-reason"], doc.Values["reply"], tc.finishReason, tc.reply)
 			}
 		})
 	}
@@ -712,34 +813,20 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 	}
 }
 
-// TestProbeDecisionRefusesAProviderThatSpeaksNoDecisionSurface: --decision on an
-// entry whose api is anthropic meets the client's refusal — the Messages
-// protocol has no decision surface, and the remedy is an entry whose api is
-// openai — instead of a chat request the server would answer with its own 400.
-func TestProbeDecisionRefusesAProviderThatSpeaksNoDecisionSurface(t *testing.T) {
+// TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface: --decision on an
+// entry whose api is anthropic still asks the OpenAI-shaped decision surface on
+// the entry's base URL.
+func TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface(t *testing.T) {
 	unsetInferenceEnv(t)
-	srv, requests := anthropicProbeWire(t)
-	dir := t.TempDir()
-	writeValues(t, dir, config.ProvidersFileName, fmt.Sprintf("[claude]\nbaseUrl = %q\napi = \"anthropic\"\n", srv.URL))
-	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"claude/d3\"\n")
+	srv, served := probeDecisionWire(t, "/systemone")
+	dir := probeDecisionConfig(t, srv.URL, "api = \"anthropic\"\n")
 
 	doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--decision")
-	if doc.Outcome != toolresult.Failed || code != toolresult.ExitCode(toolresult.Failed) {
-		t.Fatalf("outcome %s, exit %d; want failed, %d\n%s", doc.Outcome, code, toolresult.ExitCode(toolresult.Failed), stdout)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 	}
-	items := doc.items(toolresult.FailuresKey)
-	if len(items) != 1 {
-		t.Fatalf("failures = %v, want the one item", items)
-	}
-	detail, _ := items[0]["detail"].(string)
-	for _, want := range []string{"Anthropic Messages protocol", "no decision surface", "entry whose api is openai"} {
-		if !strings.Contains(detail, want) {
-			t.Errorf("failure = %q, want it to carry %q", detail, want)
-		}
-	}
-	if seen := requests(); len(seen) != 0 {
-		t.Errorf("%d requests reached the Messages endpoint, want none: the refusal is the client's",
-			len(seen))
+	if seen, _ := served(); !slices.Equal(seen, []string{"/systemone"}) {
+		t.Errorf("requests %v, want the one decision call on /systemone", seen)
 	}
 }
 

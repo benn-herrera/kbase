@@ -80,8 +80,6 @@ assertion, an unstated bridge or an unstated condition is charged as that fault,
 
 ## The answer
 
-One line per occurrence, an id from the list above and the line it cites.
-
 @!score-answer-occurrences!@
 
 The evidence for a bearing fault may lie at either end, so the line cited is in either end's title

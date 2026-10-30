@@ -23,6 +23,7 @@ func Status(opts buildstore.MonitorOptions) (string, []result.Field) {
 	if outcome != "" {
 		return outcome, fields
 	}
+	opts.StateDir = stateDir
 	placement := []result.Field{{Key: "state-dir", Value: stateDir}}
 	live, h, err := buildstore.HolderOf(stateDir)
 	if err != nil {

@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/kb"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
 	"kbase/internal/write"
@@ -48,7 +50,8 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 	fields := []toolresult.Field{{Key: "kb-root", Value: root}}
 	var values []byte
 	if opts.ValuesFile != "" {
-		values, err = os.ReadFile(opts.ValuesFile)
+		file := kb.ProjectPath(filepath.Dir(root), opts.ValuesFile)
+		values, err = os.ReadFile(file)
 	} else {
 		values, err = io.ReadAll(opts.Stdin)
 	}

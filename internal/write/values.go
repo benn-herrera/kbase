@@ -245,6 +245,15 @@ func checkPath(n *yaml.Node, field string) (any, *valueError) {
 	return text, nil
 }
 
+// checkPositive is a whole number from 1.
+func checkPositive(n *yaml.Node, field string) (any, *valueError) {
+	var v int
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!int" || n.Decode(&v) != nil || v < 1 {
+		return nil, refuse(field, n, "expected a whole number from 1, got %s", strings.TrimSpace(typename(n)+" "+n.Value))
+	}
+	return v, nil
+}
+
 func checkOneOf(vocabulary []string, what string) check {
 	return func(n *yaml.Node, field string) (any, *valueError) {
 		text, err := requireString(n, field, "a string")
@@ -718,6 +727,15 @@ var opFields = map[string][]field{
 		{"id", checkHostedID, true},
 		{"target", checkHostedID, true},
 	},
+	SplitClaim: {
+		{"id", checkClaimID, true},
+		{"title", checkProse, true},
+		{"rationale", checkProse, true},
+		{"document", checkPath, true},
+		{"line", checkPositive, true},
+		{"statement-end", checkPositive, false},
+		{"statement-line", checkPositive, false},
+	},
 	"drop-claim-node": {
 		{"id", checkClaimID, true},
 	},
@@ -745,6 +763,9 @@ func (e entry) str(key string) string     { return optionalString(e.Values, key)
 func (e entry) score(key string) *float64 { return optionalScore(e.Values, key) }
 func (e entry) list(key string) []string  { v, _ := e.Values[key].([]string); return v }
 func (e entry) has(key string) bool       { _, ok := e.Values[key]; return ok }
+
+// count is the whole number checkPositive read at key, 0 where absent.
+func (e entry) count(key string) int { n, _ := e.Values[key].(int); return n }
 
 func (e entry) restsOn(key string) []restsOnValue {
 	var out []restsOnValue

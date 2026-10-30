@@ -23,9 +23,13 @@ const KeyHexDigits = 16
 
 // Dir is the state directory for the KB at kbRoot: override, else
 // $XDG_STATE_HOME/kbase/<key>, $XDG_STATE_HOME defaulting to
-// ~/.local/state. A directory inside kb-root/ is refused.
+// ~/.local/state. A relative override is the project root's, the directory
+// holding kb-root/. A directory inside kb-root/ is refused.
 func Dir(override, kbRoot string) (string, error) {
 	dir := override
+	if dir != "" {
+		dir = kb.ProjectPath(filepath.Dir(kbRoot), dir)
+	}
 	if dir == "" {
 		key, err := Key(kbRoot)
 		if err != nil {

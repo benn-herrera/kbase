@@ -18,12 +18,18 @@ import (
 // boundary commits one, and returns the commit.
 func (f fixture) boundary(t *testing.T, stage string) string {
 	t.Helper()
+	return f.boundaryWithBody(t, stage, "")
+}
+
+// boundaryWithBody is boundary with the commit's body as given.
+func (f fixture) boundaryWithBody(t *testing.T, stage, body string) string {
+	t.Helper()
 	s, ok := ResolveStage(stage)
 	if !ok {
 		t.Fatalf("%q names no stage", stage)
 	}
 	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, s.ID+".md"), "# "+s.Display+"\n")
-	commit, err := f.ledger(t).Record(s.ID, s.Display, "")
+	commit, err := f.ledger(t).Record(s.ID, s.Display, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +161,7 @@ func TestRewindTargetsABoundary(t *testing.T) {
 	if got := storetest.Field(fields, "commands").([]string); !slices.Equal(got, want) {
 		t.Errorf("commands = %q, want %q", got, want)
 	}
-	if keys, want := storetest.FieldKeys(fields), []string{"kb-root", "state-dir", "head", "boundaries", "dirty", "commands", "target"}; !slices.Equal(keys, want) {
+	if keys, want := storetest.FieldKeys(fields), []string{"kb-root", "state-dir", "head", "boundaries", "started-at", "dirty", "commands", "target"}; !slices.Equal(keys, want) {
 		t.Errorf("fields = %q, want %q in that order", keys, want)
 	}
 	if storetest.Carries(fields, "resume-note") {
@@ -354,6 +360,63 @@ func TestRewindRefusesATargetWithNoBoundary(t *testing.T) {
 				t.Errorf("allowed = %q, want the boundary ids %q", items[0].Allowed, want)
 			}
 		})
+	}
+}
+
+// TestRewindWithoutStartedAt: a trail whose start boundary records no
+// started-at names it null, and started-at is no target.
+func TestRewindWithoutStartedAt(t *testing.T) {
+	f := newTrailFixture(t)
+	f.boundary(t, "start")
+	outcome, fields := f.rewind(t, "")
+	if outcome != result.Done || !storetest.Carries(fields, "started-at") || storetest.Field(fields, "started-at") != nil {
+		t.Fatalf("rewind = %s %v, want started-at present and null", outcome, fields)
+	}
+	outcome, fields = f.rewind(t, "started-at")
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Key != "target" || slices.Contains(items[0].Allowed, "started-at") {
+		t.Errorf("rewind to started-at = %s %+v, want refused with started-at not allowed", outcome, items)
+	}
+}
+
+// TestRewindTargetsStartedAt: a start boundary recording started-at names the
+// clean state before the build; targeting it resets there alone, discarding
+// every boundary, and says a build after it is fresh.
+func TestRewindTargetsStartedAt(t *testing.T) {
+	f := newTrailFixture(t)
+	before, err := f.ledger(t).Commit("before the build", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.boundaryWithBody(t, "start", Inputs{VolumeRoots: []string{"/papers/paper.tex"}}.Body(before))
+	f.boundary(t, "document-graph")
+	f.recordRun(t, result.Bounded, []string{"kbase", "build", "--resume", "--state-dir", f.state})
+
+	outcome, fields := f.rewind(t, "")
+	started, _ := storetest.Field(fields, "started-at").(result.Record)
+	if outcome != result.Done || recordValue(started, "commit") != before || recordValue(started, "label") == nil {
+		t.Fatalf("rewind = %s %v, want started-at naming %s with a label", outcome, fields, before)
+	}
+
+	outcome, fields = f.rewind(t, "started-at")
+	if outcome != result.Done {
+		t.Fatalf("rewind to started-at = %s %v", outcome, fields)
+	}
+	if got, want := storetest.Field(fields, "commands").([]string), []string{"git reset --hard " + before}; !slices.Equal(got, want) {
+		t.Errorf("commands = %q, want the reset line alone, %q", got, want)
+	}
+	target, _ := storetest.Field(fields, "target").(result.Record)
+	if got := recordValue(target, "discards"); got != 2 {
+		t.Errorf("discards = %v, want every boundary, 2", got)
+	}
+	if note, _ := storetest.Field(fields, "resume-note").(string); !strings.Contains(note, "fresh") {
+		t.Errorf("resume-note = %q, want the sentence that a build after the reset is fresh", note)
+	}
+
+	_, fields = f.rewind(t, "nonsense")
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if len(items) != 1 || !slices.Equal(items[0].Allowed, []string{"start", "document-graph", "started-at"}) {
+		t.Errorf("refusals = %+v, want started-at allowed after the boundary ids", items)
 	}
 }
 

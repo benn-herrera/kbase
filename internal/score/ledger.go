@@ -66,10 +66,6 @@ const (
 // that captures the output of a run started in its own process.
 const CapturePrefix = "score-"
 
-// KeptRuns is how many runs of each kind — real or dry — the state directory
-// keeps: the run an invocation names and the newest others.
-const KeptRuns = 16
-
 // The kinds of run: the prefix kb.MintID gives a run's id, which is the kind a
 // run directory is counted under.
 const (
@@ -704,100 +700,26 @@ func RunByPID(dir string, pid int) (string, error) {
 // records a start this kbase cannot read is skipped: it left no record of when
 // it started, and is no error. No run standing is "" and "".
 func NewestRun(dir string) (run, started string, err error) {
-	starts, err := dirStarts(RunsDir(dir), runFile)
+	starts, err := buildstore.DirStarts(RunsDir(dir), runFile)
 	if err != nil || len(starts) == 0 {
 		return "", "", err
 	}
-	newest := slices.MaxFunc(starts, compareStarts)
-	return newest.name, newest.started, nil
-}
-
-// dirStart is one directory under a parent and the start its header records.
-type dirStart struct {
-	name, started string
-	at            time.Time
-}
-
-// compareStarts orders two directories oldest first: by start, and equal starts
-// by name, the later name newer.
-func compareStarts(a, b dirStart) int {
-	if c := a.at.Compare(b.at); c != 0 {
-		return c
-	}
-	return strings.Compare(a.name, b.name)
-}
-
-// dirStarts is every directory under parent whose header — the file of that name
-// inside it — records a start this kbase reads, in the parent's listing order. A
-// directory whose header is absent, does not read as YAML, or records a start
-// that does not parse left no record of when it started and is left out. No
-// parent standing is no directory.
-func dirStarts(parent, header string) ([]dirStart, error) {
-	entries, err := os.ReadDir(parent)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []dirStart
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(parent, e.Name(), header))
-		if err != nil {
-			continue
-		}
-		var h struct {
-			Started string `yaml:"started"`
-		}
-		if yaml.Unmarshal(b, &h) != nil {
-			continue
-		}
-		at, err := time.Parse(time.RFC3339, h.Started)
-		if err != nil {
-			continue
-		}
-		out = append(out, dirStart{name: e.Name(), started: h.Started, at: at})
-	}
-	return out, nil
+	newest := slices.MaxFunc(starts, buildstore.CompareStarts)
+	return newest.Name, newest.Started, nil
 }
 
 // PruneRuns keeps, of the runs in the state directory dir, the run keep names —
-// created or resumed — and the newest KeptRuns-1 others of its kind, and
-// removes the rest of that kind whole. A run's kind is its id's prefix, so a
-// dry run never removes a real run nor a real run a dry one. It also keeps the
-// newest KeptRuns captures under the state store's reports, by name.
+// created or resumed — and the newest buildstore.KeptRuns-1 others of its kind,
+// and removes the rest of that kind whole. A run's kind is its id's prefix, so
+// a dry run never removes a real run nor a real run a dry one. It also keeps
+// the newest buildstore.KeptRuns captures under the state store's reports, by
+// name.
 func PruneRuns(dir, keep string) error {
-	if err := pruneByStart(RunsDir(dir), runFile, keep); err != nil {
-		return err
-	}
-	return buildstore.PruneCaptures(filepath.Join(dir, buildstore.ReportsDir), CapturePrefix, KeptRuns)
-}
-
-// pruneByStart keeps, of the directories under parent of keep's kind, keep and
-// the newest KeptRuns-1 others in compareStarts' order, and removes the rest
-// whole. A directory dirStarts leaves out has no start to order by, and stands.
-func pruneByStart(parent, header, keep string) error {
-	starts, err := dirStarts(parent, header)
+	err := buildstore.PruneByStart(RunsDir(dir), runFile, keep, buildstore.KeptRuns, func(n string) bool { return runKind(n) == runKind(keep) })
 	if err != nil {
 		return err
 	}
-	kind := runKind(keep)
-	var others []dirStart
-	for _, s := range starts {
-		if s.name != keep && runKind(s.name) == kind {
-			others = append(others, s)
-		}
-	}
-	slices.SortFunc(others, compareStarts)
-	for _, s := range others[:max(0, len(others)-(KeptRuns-1))] {
-		if err := os.RemoveAll(filepath.Join(parent, s.name)); err != nil {
-			return fmt.Errorf("remove run %s: %w", s.name, err)
-		}
-	}
-	return nil
+	return buildstore.PruneCaptures(filepath.Join(dir, buildstore.ReportsDir), CapturePrefix, buildstore.KeptRuns)
 }
 
 // runKind is a run directory's kind: its name's prefix, before the first hyphen.

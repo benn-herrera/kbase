@@ -38,6 +38,7 @@ func cancelScore(opts buildstore.MonitorOptions) (string, []toolresult.Field) {
 	if outcome != "" {
 		return outcome, fields
 	}
+	opts.StateDir = dir
 	placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
 	live, h, err := buildstore.HolderOf(dir)
 	if err != nil {

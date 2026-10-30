@@ -218,7 +218,7 @@ func References(ctx context.Context, opts Options) (Report, error) {
 		record, held, groups, wall, err := askPlanned(ctx, record, g, statementOf, body, opts)
 		findings := unmarkedFindings(planned, record, g, held, groups, wall)
 		if err != nil {
-			return findings, askStop(err)
+			return findings, askStopWriting(opts.AskRecords, groups, err)
 		}
 		if err := asks.WriteGroupRecords(opts.AskRecords, groups); err != nil {
 			return findings, err
@@ -243,7 +243,7 @@ func References(ctx context.Context, opts Options) (Report, error) {
 // letter, a defaulted one none. It writes nothing, and returns the record,
 // how many planned pairs it already held, this run's groups and the batch's
 // elapsed time. A call that never completes stops it, the record as it was
-// given and no group. Each source's group is a unit of progress and each
+// given and the groups it asked. Each source's group is a unit of progress and each
 // defaulted pair a fallback, both heard once the batch has drained.
 func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, statement func(ClaimNode) string, body func(document string) string, opts Options) (buildrecords.UnmarkedRecord, int, []asks.GroupRecord, time.Duration, error) {
 	pending := unanswered(rec)
@@ -277,7 +277,7 @@ func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *Authore
 	}
 	groups, err := batch.Wait()
 	if err != nil {
-		return rec, held, nil, 0, err
+		return rec, held, groups, 0, err
 	}
 	for i, id := range sources {
 		source, _ := g.node(id)

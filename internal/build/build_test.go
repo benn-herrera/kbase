@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -128,6 +129,12 @@ func (f fixture) options() Options {
 	return Options{VolumeRoots: []string{filepath.Join(f.repo, "paper.tex")}, NoInference: true, StateDir: f.state, WorkDir: f.repo}
 }
 
+// resuming is opts as --resume gives them: no inputs, the trail's taken.
+func resuming(opts Options) Options {
+	opts.Resume, opts.VolumeRoots, opts.Bibliographies = true, nil, nil
+	return opts
+}
+
 func (f fixture) build(t *testing.T, opts Options) (string, []result.Field) {
 	t.Helper()
 	if opts.now == nil {
@@ -145,6 +152,20 @@ func (f fixture) ledger(t *testing.T) *gitledger.Repo {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// record records a boundary of stage as a build records one, its body the
+// inputs the trail's newest boundary records, so a resume over it continues.
+func (f fixture) record(t *testing.T, stage, display string) {
+	t.Helper()
+	trail, err := f.ledger(t).Trail()
+	if err != nil || len(trail) == 0 {
+		t.Fatalf("no trail to extend: %v", err)
+	}
+	in, _ := buildstore.RecordedInputs(trail[0].Body)
+	if _, err := f.ledger(t).Record(stage, display, in.Body("")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // startTrailDir is the per-trail directory of the repository's trail: named by
@@ -292,7 +313,7 @@ func TestBuildEndToEnd(t *testing.T) {
 		bodies[e.Stage] = e.Body
 	}
 	for _, s := range stageIDs("") {
-		if in, ok := recordedInputs(bodies[s]); !ok || !slices.Equal(in.roots, []string{"paper.tex"}) || in.bibliographies != nil {
+		if in, ok := buildstore.RecordedInputs(bodies[s]); !ok || !slices.Equal(in.VolumeRoots, f.options().VolumeRoots) || in.Bibliographies != nil {
 			t.Errorf("%s body = %q, want it to record the one volume root and no bibliography", s, bodies[s])
 		}
 	}
@@ -325,18 +346,10 @@ func TestBuildEndToEnd(t *testing.T) {
 	}
 	sameModuloIDs(t, f.repo, reference(t))
 
-	if outcome, fields := f.build(t, f.options()); outcome != result.Unchanged {
-		t.Errorf("a re-run over a finished build = %s %v, want unchanged", outcome, fields)
+	if outcome, fields := f.build(t, resuming(f.options())); outcome != result.Unchanged {
+		t.Errorf("a resume over a finished build = %s %v, want unchanged", outcome, fields)
 	} else if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
 		t.Errorf("an unchanged build = %v, want neither through nor resume: it entered no stage", fields)
-	}
-	opts := f.options()
-	opts.VolumeRoots = append(opts.VolumeRoots, filepath.Join(f.repo, "more.tex"))
-	storetest.WriteFile(t, opts.VolumeRoots[1], paper)
-	if outcome, fields := f.build(t, opts); outcome != result.Refused || details(fields, "refusals") == nil {
-		t.Errorf("a re-run over a finished build with another volume root = %s %v, want refused", outcome, fields)
-	} else if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
-		t.Errorf("a refusal before the walk = %v, want neither through nor resume: it recorded no boundary", fields)
 	}
 }
 
@@ -349,11 +362,9 @@ func TestStampLeavesAnAuthoredDocument(t *testing.T) {
 	}
 	const authored = "# The project's own conventions\n"
 	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, kbdocs.ConventionsFile), authored)
-	if _, err := f.ledger(t).Record("authored", "the project's own conventions", ""); err != nil {
-		t.Fatal(err)
-	}
+	f.record(t, "authored", "the project's own conventions")
 	opts.Through = ""
-	if outcome, fields := f.build(t, opts); outcome != result.Done {
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
 	files := snapshot(t, f.repo)
@@ -363,6 +374,99 @@ func TestStampLeavesAnAuthoredDocument(t *testing.T) {
 	if files["kb-root/AGENTS.md"] == "" || files["kb-root/CLAUDE.md"] != "@AGENTS.md\n" {
 		t.Error("the absent readiness documents were not stamped beside it")
 	}
+}
+
+// TestBuildSplitsProvedClaims: the paper's lemma and theorem are each one
+// display line with a proof, so the analysis split gives each an analysis
+// marked on its proof's blank quoted line, lifting it at pending. Between the
+// depends-attributed and analyses-split boundaries only kb-root/ files change.
+func TestBuildSplitsProvedClaims(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "depends-attributed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build through depends-attributed = %s %v", outcome, fields)
+	}
+	kbRoot := filepath.Join(f.repo, kb.KBDir)
+	attributed := snapshot(t, f.repo)
+	before, err := kb.LoadGraph(kb.OnDisk(kbRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = "analyses-split"
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Bounded {
+		t.Fatalf("build through analyses-split = %s %v", outcome, fields)
+	}
+	split := snapshot(t, f.repo)
+	for p, text := range split {
+		if !strings.HasPrefix(p, kb.KBDir+"/") && attributed[p] != text {
+			t.Errorf("%s changed between the depends-attributed and analyses-split boundaries", p)
+		}
+	}
+	after, err := kb.LoadGraph(kb.OnDisk(kbRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	titles := map[string]string{}
+	for _, n := range before.Claims {
+		titles[n.ID] = n.Title
+	}
+	analysisOf := map[string]string{}
+	for _, e := range after.Scorable {
+		if kind, _ := kb.NodeIDKind(e.Source); e.Relation == kb.RelationLifts && kind == kb.NodeKindAnalysis {
+			if !e.Bearing.Pending || e.ManuallyScored {
+				t.Errorf("lift %s → %s = %+v, manually scored %t, want pending and false", e.Source, e.Target, e.Bearing, e.ManuallyScored)
+			}
+			analysisOf[e.Target] = e.Source
+		}
+	}
+	words := map[string]string{}
+	for claim := range analysisOf {
+		switch {
+		case strings.HasPrefix(titles[claim], "Lemma"):
+			words[claim] = "Obvious."
+		case strings.HasPrefix(titles[claim], "Theorem"):
+			words[claim] = "Apply Lemma"
+		}
+	}
+	if len(after.Analyses) != 2 || len(analysisOf) != 2 || len(words) != 2 {
+		t.Fatalf("analyses %+v lifting %v, want one for each of the lemma and the theorem", after.Analyses, analysisOf)
+	}
+	for _, n := range after.Analyses {
+		if n.Rigor != nil || n.ManuallyScored {
+			t.Errorf("analysis %s rigor %v, manually scored %t, want pending and false", n.ID, n.Rigor, n.ManuallyScored)
+		}
+	}
+	for claim, ana := range analysisOf {
+		if quote := markedQuote(split, ana); !strings.Contains(quote, words[claim]) {
+			t.Errorf("%s's analysis is marked in the quote %q, want its proof's, holding %q", titles[claim], quote, words[claim])
+		}
+	}
+}
+
+// markedQuote is the blockquote of a kb-root/ document of files whose blank
+// quoted line carries id's statement marker, "" where none does.
+func markedQuote(files map[string]string, id string) string {
+	for p, text := range files {
+		if !strings.HasPrefix(p, kb.KBDir+"/") {
+			continue
+		}
+		at, ok := kb.MarkerLines(text)[id]
+		lines := kb.SplitLines(text)
+		if !ok || lines[at] != "> "+kb.StatementMarker(id) {
+			continue
+		}
+		first, last := at, at
+		for first > 0 && strings.HasPrefix(lines[first-1], ">") {
+			first--
+		}
+		for last+1 < len(lines) && strings.HasPrefix(lines[last+1], ">") {
+			last++
+		}
+		return strings.Join(lines[first:last+1], "\n")
+	}
+	return ""
 }
 
 func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
@@ -380,6 +484,9 @@ func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
 	}
 	if got := g.trailStages(t); len(got) != 0 {
 		t.Errorf("the refused build recorded %q", got)
+	}
+	if head, err := g.ledger(t).Head(); err != nil || head != "" {
+		t.Errorf("the refused build on a branch with no commit left HEAD at %q (%v), want none: it refused before making its start commit", head, err)
 	}
 }
 
@@ -476,7 +583,7 @@ func TestOperationLockHeldBeforeItsStateDirIsWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
-	held, err := filelock.Acquire(operationLockPath(kbRoot), 0)
+	held, err := filelock.Acquire(buildstore.OperationLockPath(kbRoot), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,33 +631,6 @@ func TestStatusSeesABuildWaitingOutAWriter(t *testing.T) {
 	}
 }
 
-func TestOperationLockPathFollowsAGitFile(t *testing.T) {
-	base := t.TempDir()
-	repo := filepath.Join(base, "wt")
-	gitdir := filepath.Join(base, "main", ".git", "worktrees", "wt")
-	for _, tc := range []struct{ name, dotGit, want string }{
-		{"a .git directory", "", filepath.Join(repo, ".git", operationLockFile)},
-		{"a relative gitdir", "gitdir: ../main/.git/worktrees/wt\n", filepath.Join(gitdir, operationLockFile)},
-		{"an absolute gitdir", "gitdir: " + gitdir + "\n", filepath.Join(gitdir, operationLockFile)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := os.RemoveAll(repo); err != nil {
-				t.Fatal(err)
-			}
-			if tc.dotGit == "" {
-				if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				storetest.WriteFile(t, filepath.Join(repo, ".git"), tc.dotGit)
-			}
-			if got := operationLockPath(filepath.Join(repo, kb.KBDir)); got != tc.want {
-				t.Errorf("operationLockPath = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
@@ -561,7 +641,7 @@ func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 	stray := filepath.Join(f.repo, kb.KBDir, "stray.md")
 	storetest.WriteFile(t, stray, "a hand edit\n")
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != checkDirtyPaths || items[0].Path != "kb-root/stray.md" {
 		t.Errorf("a build over unaccounted dirt = %s %v, want refused naming it", outcome, fields)
 	}
@@ -595,11 +675,9 @@ func TestSpineStampsTheFormat(t *testing.T) {
 		t.Errorf("the stamp is not in the spine's boundary: dirty %q, %v", dirty, err)
 	}
 	storetest.WriteFile(t, stampFile, "kb-format: \"3.1.0\"\n")
-	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
-		t.Fatal(err)
-	}
+	f.record(t, "spine-seed", "claim-graph spine seeded")
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != "kb-format" {
 		t.Errorf("a resume over a KB stamped 3.1.0 = %s %v, want refused naming the format", outcome, fields)
 	}
@@ -617,11 +695,9 @@ func TestResumeOverADegradedKBRefused(t *testing.T) {
 	}
 	dangling := kb.Graph{References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb"}}}
 	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, filepath.FromSlash(kb.GraphEdgesFile)), string(kb.EncodeEdges(dangling)))
-	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
-		t.Fatal(err)
-	}
+	f.record(t, "spine-seed", "claim-graph spine seeded")
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckDegraded || items[0].Remedy != index.RefreshRemedy {
 		t.Errorf("a resume over a degraded KB = %s %v, want refused, one %s item with remedy %q", outcome, fields, kb.CheckDegraded, index.RefreshRemedy)
@@ -670,7 +746,7 @@ func TestKillAndResume(t *testing.T) {
 		t.Errorf("status after the kill = %+v, want interrupted in claims-declared", state)
 	}
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
@@ -698,8 +774,8 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 	if got := storetest.Field(fields, "cancelled").(result.Record); got[0].Value != "claims-declared" || got[1].Value != "declared.build" {
 		t.Errorf("cancelled = %v, want claims-declared at declared.build", got)
 	}
-	if resume, _ := storetest.Field(fields, "resume").(string); !storetest.Carries(fields, "through") || !strings.HasPrefix(resume, "kbase build ") {
-		t.Errorf("a cancelled build's through = %v and resume = %q, want both: an identical re-issue continues it", storetest.Field(fields, "through"), resume)
+	if resume, _ := storetest.Field(fields, "resume").(string); !storetest.Carries(fields, "through") || !strings.HasPrefix(resume, "kbase build --resume") {
+		t.Errorf("a cancelled build's through = %v and resume = %q, want both: a resume continues it", storetest.Field(fields, "through"), resume)
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
 		t.Errorf("trail after the cancel = %q, want every stage before the one in flight", got)
@@ -707,13 +783,13 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 	if _, err := os.Stat(buildstore.HolderPath(f.state)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the holder lock file stands after the cancel: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.repo, ".git", operationLockFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(f.repo, ".git", buildstore.OperationLockFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the repository's operation lock stands after the cancel: %v", err)
 	}
 	if s := statusOf(t, f); s.state != buildstore.StateCancelled || s.current != "claims-declared" || s.done != 0 || s.resume == "" {
 		t.Errorf("status after the cancel = %+v", s)
 	}
-	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
+	if outcome, fields := f.build(t, resuming(f.options())); outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
 	sameModuloIDs(t, f.repo, reference(t))
@@ -730,7 +806,7 @@ func TestMissingRecordsAreRegenerated(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts.Through = ""
-	if outcome, fields := f.build(t, opts); outcome != result.Done {
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Done {
 		t.Fatalf("resume without records = %s %v", outcome, fields)
 	}
 	sameModuloIDs(t, f.repo, reference(t))
@@ -748,7 +824,7 @@ func TestMissingRecordsOverAChangedSourceFail(t *testing.T) {
 	}
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "Some other prose.", 1))
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	if items := details(fields, "failures"); outcome != result.Failed || len(items) != 1 || !strings.Contains(items[0], "kb-root/a-small-paper/introduction.md") {
 		t.Errorf("resume over a changed source = %s %v, want failed naming the first differing path", outcome, fields)
 	}
@@ -837,7 +913,7 @@ func TestRefusalInsideDocumentGraphCarriesThroughAndResume(t *testing.T) {
 	if through, _ := storetest.Field(fields, "through").(string); through != buildstore.Stages[len(buildstore.Stages)-1].ID {
 		t.Errorf("through = %q, want the bound the build was given, %s", through, buildstore.Stages[len(buildstore.Stages)-1].ID)
 	}
-	if resume, _ := storetest.Field(fields, "resume").(string); !strings.HasPrefix(resume, "kbase build ") {
+	if resume, _ := storetest.Field(fields, "resume").(string); !strings.HasPrefix(resume, "kbase build --resume") {
 		t.Errorf("resume = %q, want the command that continues the refused walk", resume)
 	}
 	if stages, _ := storetest.Field(fields, "stages").([]result.Record); len(stages) != 2 || stages[0][1].Value == nil ||
@@ -896,6 +972,7 @@ func TestStaleIndexLockRefusedByName(t *testing.T) {
 	}
 	lock := filepath.Join(f.repo, ".git", "index.lock")
 	storetest.WriteFile(t, lock, "")
+	opts = resuming(opts)
 	opts.Through = ""
 	outcome, fields := f.build(t, opts)
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
@@ -910,88 +987,14 @@ func TestStaleIndexLockRefusedByName(t *testing.T) {
 	}
 }
 
-func TestInputsRefusal(t *testing.T) {
-	trail := inputs{roots: []string{"a.tex", "b.tex"}, bibliographies: []string{"x.bib", "y.bib"}}
-	for _, tc := range []struct {
-		name   string
-		given  inputs
-		key    string
-		change string
-	}{
-		{"the same inputs", trail, "", ""},
-		{"a volume root added", inputs{[]string{"a.tex", "b.tex", "c.tex"}, trail.bibliographies}, "<volume-root>", "added c.tex"},
-		{"a volume root removed", inputs{[]string{"b.tex"}, trail.bibliographies}, "<volume-root>", "removed a.tex"},
-		{"the bibliographies reordered", inputs{trail.roots, []string{"y.bib", "x.bib"}}, "--bibliography", "the same paths in another order"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			items := inputsRefusal("/repo", trail, tc.given)
-			if tc.key == "" {
-				if len(items) != 0 {
-					t.Errorf("refusal = %+v, want none", items)
-				}
-				return
-			}
-			if len(items) != 1 || items[0].Check != checkInputs || items[0].Key != tc.key || items[0].Path != "/repo" ||
-				!strings.HasSuffix(items[0].Detail, ": "+tc.change) || items[0].Remedy == "" {
-				t.Errorf("refusal = %+v, want one inputs item keyed %s ending %q", items, tc.key, tc.change)
-			}
-		})
-	}
-	if in, ok := recordedInputs(trail.body()); !ok ||
-		!slices.Equal(in.roots, trail.roots) || !slices.Equal(in.bibliographies, trail.bibliographies) {
-		t.Errorf("recorded inputs read back as %+v (%t), want %+v", in, ok, trail)
-	}
-	for _, body := range []string{"", "note: something", "--no-inference: this build spent no model call"} {
-		if _, ok := recordedInputs(body); ok {
-			t.Errorf("a body recording no inputs, %q, reads as recording some", body)
-		}
-	}
-}
-
-// TestInputsSpelledOtherwise: a volume root and a bibliography spelled
-// absolute, relative to the working directory, through a symlinked parent or
-// a symlinked repository root record as one repository-relative form, so a
-// resume spelling them otherwise than the launch raises no inputs refusal.
-func TestInputsSpelledOtherwise(t *testing.T) {
-	base := t.TempDir()
-	repo := filepath.Join(base, "repo")
-	storetest.WriteFile(t, filepath.Join(repo, "papers", "paper.tex"), paper)
-	storetest.WriteFile(t, filepath.Join(repo, "refs.bib"), "")
-	link := filepath.Join(base, "link")
-	if err := os.Symlink(repo, link); err != nil {
-		t.Fatal(err)
-	}
-	recorded := inputs{roots: []string{"papers/paper.tex"}, bibliographies: []string{"refs.bib"}}
-	for _, c := range []struct{ name, root, workDir, volumeRoot, bibliography string }{
-		{"absolute", repo, base, filepath.Join(repo, "papers", "paper.tex"), filepath.Join(repo, "refs.bib")},
-		{"relative", repo, filepath.Join(repo, "papers"), "paper.tex", "../refs.bib"},
-		{"through a symlinked parent", repo, base, filepath.Join("link", "papers", "paper.tex"), filepath.Join(link, "refs.bib")},
-		{"from a symlinked working directory", repo, filepath.Join(link, "papers"), "paper.tex", "../refs.bib"},
-		{"the repository root through a symlink", link, repo, "papers/paper.tex", "refs.bib"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w := &walk{repo: &gitledger.Repo{Root: c.root}, opts: Options{WorkDir: c.workDir,
-				VolumeRoots: []string{c.volumeRoot}, Bibliographies: []string{c.bibliography}}}
-			given := w.inputs()
-			if !slices.Equal(given.roots, recorded.roots) || !slices.Equal(given.bibliographies, recorded.bibliographies) {
-				t.Errorf("inputs = %+v, want %+v", given, recorded)
-			}
-			trail, _ := recordedInputs(recorded.body())
-			if items := inputsRefusal(repo, trail, given); len(items) != 0 {
-				t.Errorf("refusal = %+v, want none", items)
-			}
-		})
-	}
-}
-
-// TestResumeWithOtherInputsRefused: a resume given a volume root the trail
-// does not record is refused before anything is restored or committed; a
-// trail whose newest boundary records no inputs resumes, and its next
-// boundary records them.
-func TestResumeWithOtherInputsRefused(t *testing.T) {
+// TestBuildOverATrailRefused: a build given volume roots over a standing trail
+// is refused before anything is restored or committed, naming the resume and
+// the start-over commit rewind-build names; a resume given none then walks to
+// the end, every boundary recording the same absolute inputs.
+func TestBuildOverATrailRefused(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
-	opts.Through = "spine-seed"
+	opts.Through = buildstore.StageSpineSeed
 	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
@@ -999,39 +1002,331 @@ func TestResumeWithOtherInputsRefused(t *testing.T) {
 	storetest.WriteFile(t, stray, "a hand edit\n")
 	before := snapshot(t, f.repo)
 
-	more := filepath.Join(f.repo, "more.tex")
-	storetest.WriteFile(t, more, paper)
-	opts.Through = ""
-	opts.VolumeRoots = append(opts.VolumeRoots, more)
 	outcome, fields := f.build(t, opts)
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "<volume-root>" ||
-		items[0].Path != f.ledger(t).Root || !strings.Contains(items[0].Detail, "added more.tex") {
-		t.Fatalf("a resume with another volume root = %s %+v, want refused naming it", outcome, items)
+		items[0].Path != f.ledger(t).Root || !strings.Contains(items[0].Detail, opts.VolumeRoots[0]) {
+		t.Fatalf("a build over a trail = %s %+v, want refused naming the inputs the trail records", outcome, items)
+	}
+	if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
+		t.Errorf("a refusal before the walk = %v, want neither through nor resume: it recorded no boundary", fields)
+	}
+	_, rewound := buildstore.Rewind(buildstore.RewindOptions{RepoRoot: f.repo, StateDir: f.state})
+	started, _ := storetest.Field(rewound, buildstore.TargetStartedAt).(result.Record)
+	startedAt, _ := roleValue(started, "commit").(string)
+	if startedAt == "" || !strings.Contains(items[0].Remedy, "`kbase build --resume`") ||
+		!strings.Contains(items[0].Remedy, "`git reset --hard "+startedAt+"`") {
+		t.Errorf("remedy = %q, want the resume and a reset to rewind-build's started-at %q", items[0].Remedy, startedAt)
 	}
 	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
 		t.Errorf("the refusal touched the owned paths")
 	}
-	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
+	if got := f.trailStages(t); !slices.Equal(got, stageIDs(buildstore.StageSpineSeed)) {
 		t.Errorf("trail after the refusal = %q", got)
 	}
 
 	if err := os.Remove(stray); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.ledger(t).Record("spine-seed", "claim-graph spine seeded", ""); err != nil {
-		t.Fatal(err)
-	}
-	opts.Through = "claims-declared"
-	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
-		t.Fatalf("a resume over a trail recording no inputs = %s %v, want it walked", outcome, fields)
+	opts.Through = ""
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Done {
+		t.Fatalf("a resume = %s %v, want it walked to the end", outcome, fields)
 	}
 	trail, err := f.ledger(t).Trail()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in, ok := recordedInputs(trail[0].Body); !ok || !slices.Equal(in.roots, []string{"paper.tex", "more.tex"}) {
-		t.Errorf("the next boundary's body = %q, want it to record both volume roots", trail[0].Body)
+	for _, e := range trail {
+		if in, ok := buildstore.RecordedInputs(e.Body); !ok || !slices.Equal(in.VolumeRoots, opts.VolumeRoots) || in.Bibliographies != nil {
+			t.Errorf("%s body = %q, want it to record the volume root %s", e.Stage, e.Body, opts.VolumeRoots[0])
+		}
+	}
+}
+
+// TestResumeFromDocumentGraph: a resume over a trail ending before the spine is
+// seeded, when the KB carries no format stamp yet, walks to the end.
+func TestResumeFromDocumentGraph(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = buildstore.StageDocumentGraph
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	if outcome, fields := f.build(t, resuming(f.options())); outcome != result.Done {
+		t.Errorf("a resume from %s = %s %v, want done", buildstore.StageDocumentGraph, outcome, fields)
+	}
+}
+
+// TestInputsUsageRefused: a resume given inputs, and a build given neither
+// inputs nor --resume, are usage refusals naming the argument, before any
+// state store is resolved or created.
+func TestInputsUsageRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*Options)
+		keys []string
+	}{
+		{"a resume given both", func(o *Options) { o.Resume, o.Bibliographies = true, []string{"refs.bib"} }, []string{"<volume-root>", "--bibliography"}},
+		{"neither inputs nor a resume", func(o *Options) { o.VolumeRoots = nil }, []string{"<volume-root>"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			opts := f.options()
+			tc.edit(&opts)
+			outcome, fields := f.build(t, opts)
+			items, _ := storetest.Field(fields, "refusals").([]result.Item)
+			var keys []string
+			for _, it := range items {
+				if it.Check != buildstore.CheckUsage {
+					t.Errorf("item %+v, want check %s", it, buildstore.CheckUsage)
+				}
+				keys = append(keys, it.Key)
+			}
+			if outcome != result.Refused || !slices.Equal(keys, tc.keys) {
+				t.Errorf("build = %s %+v, want refused naming %q", outcome, items, tc.keys)
+			}
+			if storetest.Carries(fields, "state-dir") {
+				t.Errorf("a usage refusal = %v, want no state-dir", fields)
+			}
+			if _, err := os.Stat(f.state); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the usage refusal created the state store: %v", err)
+			}
+		})
+	}
+}
+
+// TestResumeNeedsACoherentTrail: a resume over an empty trail is refused
+// naming the trail; one whose newest boundary records no inputs is refused
+// naming the start-over commit, the start boundary's parent, or a fresh clone
+// where start is a root commit.
+func TestResumeNeedsACoherentTrail(t *testing.T) {
+	f := newFixture(t)
+	outcome, fields := f.build(t, resuming(f.options()))
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckTrail || items[0].Key != "--resume" {
+		t.Errorf("a resume over an empty trail = %s %+v, want refused with check trail", outcome, items)
+	}
+
+	for _, rooted := range []bool{false, true} {
+		g := newFixture(t)
+		parent := ""
+		if !rooted {
+			var err error
+			if parent, err = g.ledger(t).Commit("before the build", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		storetest.WriteFile(t, filepath.Join(g.repo, kb.KBDir, "start.md"), "# start\n")
+		if _, err := g.ledger(t).Record(buildstore.StageStart, "build started", ""); err != nil {
+			t.Fatal(err)
+		}
+		outcome, fields := g.build(t, resuming(g.options()))
+		items, _ := storetest.Field(fields, "refusals").([]result.Item)
+		want := "rebuild in a fresh clone"
+		if !rooted {
+			want = "`git reset --hard " + parent + "`"
+		}
+		if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "--resume" ||
+			!strings.Contains(items[0].Remedy, want) || strings.Contains(items[0].Remedy, "--resume") {
+			t.Errorf("a resume over a trail recording no inputs (start a root commit: %t) = %s %+v, want refused naming %q", rooted, outcome, items, want)
+		}
+	}
+}
+
+// TestRelativeInputsResolveAgainstTheRepositoryRoot: a relative volume root
+// names a path under the repository root, wherever the search for it started,
+// and the trail records it absolute.
+func TestRelativeInputsResolveAgainstTheRepositoryRoot(t *testing.T) {
+	f := newFixture(t)
+	sub := filepath.Join(f.repo, "notes")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	opts := f.options()
+	opts.VolumeRoots, opts.WorkDir, opts.Through = []string{"paper.tex"}, sub, buildstore.StageStart
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	trail, err := f.ledger(t).Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(f.ledger(t).Root, "paper.tex")
+	if in, _ := buildstore.RecordedInputs(trail[0].Body); !slices.Equal(in.VolumeRoots, []string{want}) {
+		t.Errorf("start body = %q, want it to record %s", trail[0].Body, want)
+	}
+}
+
+// TestResumeTakesItsInputsFromTheTrail: a resume over a trail recording
+// relative volume roots and bibliographies joins them to the repository root,
+// reads them in the order recorded rather than sorted, and discovers no other
+// bibliography; a fresh build given the same paths sorts them, so where two
+// bibliographies define one key the two builds cite it differently.
+func TestResumeTakesItsInputsFromTheTrail(t *testing.T) {
+	cited := strings.NewReplacer("Some opening prose.", `Some opening prose \cite{shared}.`)
+	second := strings.NewReplacer(`\title{A Small Paper}`, `\title{A Second Paper}`).Replace(cited.Replace(paper))
+	const extraAuthor = "Gamma"
+	files := map[string]string{
+		"one/paper.tex":  cited.Replace(paper),
+		"two/second.tex": second,
+		"one/refs.bib":   "@article{shared, author={Alpha, Ann}, title={First}, journal={J}, year={2001}}\n",
+		"two/refs.bib":   "@article{shared, author={Beta, Bea}, title={Second}, journal={J}, year={2002}}\n",
+		// Discovered, this file would sort last and its definition win.
+		"two/zz-extra.bib": "@article{shared, author={" + extraAuthor + ", Gil}, title={Third}, journal={J}, year={2003}}\n",
+	}
+	withFiles := func() fixture {
+		f := newFixture(t)
+		for p, text := range files {
+			storetest.WriteFile(t, filepath.Join(f.repo, filepath.FromSlash(p)), text)
+		}
+		return f
+	}
+	// read is what a build reached: whether its entry point lists the second
+	// volume before the first, and every line of kb-root/ carrying the
+	// citation, sorted. It fails where any file shows the author of the
+	// bibliography neither build is given.
+	read := func(f fixture, name string) (secondFirst bool, citation string) {
+		t.Helper()
+		var lines []string
+		for p, text := range snapshot(t, f.repo) {
+			if !strings.HasPrefix(p, kb.KBDir+"/") {
+				continue
+			}
+			if strings.Contains(text, extraAuthor) {
+				t.Errorf("%s: %s shows %s, the author of a bibliography it was not given", name, p, extraAuthor)
+			}
+			if p == kb.KBDir+"/"+kb.EntryPointFile {
+				second, first := strings.Index(text, "[A Second Paper]"), strings.Index(text, "[A Small Paper]")
+				if second < 0 || first < 0 {
+					t.Fatalf("%s: entry point = %q, want it to list both volumes", name, text)
+				}
+				secondFirst = second < first
+			}
+			for _, line := range strings.Split(text, "\n") {
+				if strings.Contains(line, `data-cites="shared"`) {
+					lines = append(lines, line)
+				}
+			}
+		}
+		if len(lines) == 0 {
+			t.Fatalf("%s: no line of kb-root/ carries the citation", name)
+		}
+		slices.Sort(lines)
+		return secondFirst, strings.Join(lines, "\n")
+	}
+
+	a := withFiles()
+	storetest.WriteFile(t, filepath.Join(a.repo, kb.KBDir, ".gitkeep"), "")
+	body := strings.Join([]string{"volume-root: two/second.tex", "volume-root: one/paper.tex",
+		"bibliography: two/refs.bib", "bibliography: one/refs.bib"}, "\n")
+	if _, err := a.ledger(t).Record(buildstore.StageStart, "build started", body); err != nil {
+		t.Fatal(err)
+	}
+	opts := resuming(a.options())
+	opts.Through = buildstore.StageDocumentGraph
+	if outcome, fields := a.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("a resume over the recorded trail = %s %v, want bounded", outcome, fields)
+	}
+
+	b := withFiles()
+	opts = b.options()
+	opts.Through = buildstore.StageDocumentGraph
+	opts.VolumeRoots = []string{filepath.Join(b.repo, "two", "second.tex"), filepath.Join(b.repo, "one", "paper.tex")}
+	opts.Bibliographies = []string{filepath.Join(b.repo, "two", "refs.bib"), filepath.Join(b.repo, "one", "refs.bib")}
+	if outcome, fields := b.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("a fresh build = %s %v, want bounded", outcome, fields)
+	}
+	// The volume titles sort as the recorded order does, so the fresh build's
+	// listing is what shows the resume's comes from the trail.
+	aSecondFirst, aCitation := read(a, "the resume")
+	bSecondFirst, bCitation := read(b, "the fresh build")
+	if !aSecondFirst || bSecondFirst {
+		t.Errorf("entry point lists second.tex's volume first: resumed %t, fresh %t; want the resume in the recorded order and the fresh build sorted", aSecondFirst, bSecondFirst)
+	}
+	if aCitation == bCitation {
+		t.Errorf("the citation resumed and built fresh = %q, want them to differ: the bibliographies are read in another order", aCitation)
+	}
+}
+
+// TestBuildStartsFromACommit: on a branch with no commit a build first makes
+// an empty commit off the trail, the start boundary's parent, which a reset
+// to empties the owned paths; on a branch with one, it starts from HEAD.
+func TestBuildStartsFromACommit(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = buildstore.StageDocumentGraph
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	repo := f.ledger(t)
+	trail, err := repo.Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, startedAt := buildstore.StartedAt(trail)
+	if parent, err := repo.Parent(start.Commit); err != nil || startedAt == "" || parent != startedAt {
+		t.Errorf("started-at = %q, want the start boundary's parent %q (%v)", startedAt, parent, err)
+	}
+	if slices.ContainsFunc(trail, func(e gitledger.Entry) bool { return e.Commit == startedAt }) {
+		t.Errorf("the trail lists started-at %s", startedAt)
+	}
+	if parent, err := repo.Parent(startedAt); err != nil || parent != "" {
+		t.Errorf("started-at's parent = %q (%v), want none: it is the branch's first commit", parent, err)
+	}
+	_, rewound := buildstore.Rewind(buildstore.RewindOptions{RepoRoot: f.repo, StateDir: f.state, Target: buildstore.TargetStartedAt})
+	target, _ := storetest.Field(rewound, "target").(result.Record)
+	commands, _ := storetest.Field(rewound, "commands").([]string)
+	if want := []string{"git reset --hard " + startedAt}; !slices.Equal(commands, want) || roleValue(target, "discards") != len(trail) {
+		t.Errorf("rewind to started-at = %v, want commands %q discarding %d", rewound, want, len(trail))
+	}
+	if err := repo.Restore(startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, kb.KBDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("kb-root/ after a restore to started-at: %v, want it gone", err)
+	}
+
+	g := newFixture(t)
+	head, err := g.ledger(t).Commit("before the build", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts = g.options()
+	opts.Through = buildstore.StageStart
+	if outcome, fields := g.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	trail, err = g.ledger(t).Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, startedAt = buildstore.StartedAt(trail)
+	if parent, _ := g.ledger(t).Parent(start.Commit); startedAt != head || parent != head {
+		t.Errorf("started-at = %q, start's parent %q, want both the commit made before the build, %s", startedAt, parent, head)
+	}
+}
+
+// TestPandocRefusalMakesNoStartCommit: on a branch with no commit, a build
+// whose pandoc preflight refuses leaves the branch with no commit; the empty
+// commit a fresh build starts from comes after every refusal.
+func TestPandocRefusalMakesNoStartCommit(t *testing.T) {
+	f := newFixture(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	outcome, fields := f.build(t, f.options())
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkPandoc {
+		t.Errorf("a build with no pandoc = %s %+v, want refused naming pandoc", outcome, items)
+	}
+	if head, err := f.ledger(t).Head(); err != nil || head != "" {
+		t.Errorf("HEAD after the refusal = %q (%v), want no commit", head, err)
 	}
 }
 
@@ -1045,14 +1340,12 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
 		t.Fatalf("build = %s %v", outcome, fields)
 	}
-	if _, err := f.ledger(t).Record("depends-attributed", "dependency attribution", ""); err != nil {
-		t.Fatal(err)
-	}
+	f.record(t, "depends-attributed", "dependency attribution")
 	storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, "stray.md"), "a hand edit\n")
 	before := snapshot(t, f.repo)
 
 	opts.Through = ""
-	outcome, fields := f.build(t, opts)
+	outcome, fields := f.build(t, resuming(opts))
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
 	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckTrail || items[0].Path != f.ledger(t).Root ||
 		!strings.Contains(items[0].Detail, "depends-attributed") || !strings.Contains(items[0].Detail, "claims-culled") {
@@ -1067,9 +1360,9 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 }
 
 // TestResumeCarriesEveryLaunchFlag: a walk refused inside its first stage hands
-// out the command that continues it, restating the bibliographies,
-// --no-inference, --ask-concurrency, the store and the configuration
-// directory, and leaving the bound off.
+// out the command that continues it, --resume restating --no-inference,
+// --ask-concurrency, the store and the configuration directory, and leaving
+// the bound and the inputs, which the trail records, off.
 func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
@@ -1083,19 +1376,28 @@ func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 		t.Fatalf("build = %s %v, want refused inside %s", outcome, fields, buildstore.StageDocumentGraph)
 	}
 	resume, _ := storetest.Field(fields, "resume").(string)
-	for _, want := range []string{"--bibliography " + opts.Bibliographies[0], "--no-inference", "--ask-concurrency 3",
-		"--state-dir " + f.state, "--config-dir " + opts.ConfigDir} {
+	if !strings.HasPrefix(resume, "kbase build --resume ") {
+		t.Errorf("resume = %q, want kbase build --resume", resume)
+	}
+	for _, want := range []string{"--no-inference", "--ask-concurrency 3", "--state-dir " + f.state, "--config-dir " + opts.ConfigDir} {
 		if !strings.Contains(resume, want) {
 			t.Errorf("resume = %q, want it to carry %q", resume, want)
 		}
 	}
-	if strings.Contains(resume, "--through") {
-		t.Errorf("resume = %q carries the bound", resume)
+	for _, not := range []string{"--through", "--bibliography", "paper.tex"} {
+		if strings.Contains(resume, not) {
+			t.Errorf("resume = %q carries %s", resume, not)
+		}
 	}
-	// A launch that named no --ask-concurrency is continued without it, so the
-	// resumed build reads the configuration's value as the launch did.
-	if argv := (&walk{opts: Options{VolumeRoots: []string{"/paper.tex"}}}).resumeCommand(); slices.Contains(argv, "--ask-concurrency") {
+	// A launch that named no --ask-concurrency or --project-dir is continued
+	// without them, so the resumed build reads the configuration's value and
+	// finds its project as the launch did.
+	if argv := (&walk{}).resumeCommand(); slices.Contains(argv, "--ask-concurrency") || slices.Contains(argv, "--project-dir") {
 		t.Errorf("resume = %q names a flag the launch did not", argv)
+	}
+	// --project-dir is carried where the launch named one.
+	if resume := strings.Join((&walk{opts: Options{ProjectDir: "/the/project"}}).resumeCommand(), " "); !strings.Contains(resume, "--project-dir /the/project") {
+		t.Errorf("resume = %q, want it to carry --project-dir", resume)
 	}
 }
 
@@ -1194,7 +1496,7 @@ func TestStatusAtEveryState(t *testing.T) {
 	}
 
 	opts.Through = ""
-	if outcome, _ := f.build(t, opts); outcome != result.Done {
+	if outcome, _ := f.build(t, resuming(opts)); outcome != result.Done {
 		t.Fatal(outcome)
 	}
 	if s := statusOf(t, f); s.state != buildstore.StateFinished || s.recorded != len(buildstore.Stages) || s.current != "" || s.resume != "" {

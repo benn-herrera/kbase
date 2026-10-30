@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,18 +49,13 @@ lock and reads no commit trail until that final document.`,
 				return err
 			}
 			opts := buildstore.MonitorOptions{StateDir: stateDir, WorkDir: wd, Logger: processLog.logger}
-			// status resolves a relative --state-dir against the working
-			// directory; buildstore.Locate would resolve it against the repository
-			// root.
-			if opts.StateDir != "" && !filepath.IsAbs(opts.StateDir) {
-				if opts.StateDir, err = filepath.Abs(opts.StateDir); err != nil {
-					return err
-				}
-			}
 			kbRoot, dir, outcome, fields := buildstore.Locate(opts)
 			if outcome != "" {
 				return emit(outcome, fields)
 			}
+			// The run removes the operation lock when it ends, so the final
+			// document reads the store located here rather than resolving again.
+			opts.StateDir = dir
 			placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
 			// A score run's pid is recorded in its run directory; where the pid
 			// names one, wait polls that run and reports the document it wrote.
@@ -88,7 +82,7 @@ lock and reads no commit trail until that final document.`,
 			return emit(buildstore.Status(opts))
 		},
 	}
-	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
+	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: the store the operation lock names, else $XDG_STATE_HOME/kbase/<key>)")
 	cmd.Flags().IntVar(&pid, "pid", 0, "the process id of the build run to wait for (required)")
 	return cmd
 }

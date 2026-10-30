@@ -2,8 +2,10 @@
 # The MCP transcripts over the delivered binary: the results fixture staged as
 # cmd/mcp_test.go stages it, each test-data/fixtures/mcp/*.jsonl fed to
 # `./bin/kbase mcp` over real pipes and every response line compared to the
-# expected line after placeholder substitution. Every transcript runs: none
-# needs a stub child or a provider (build-refused refuses before it starts one).
+# expected line after placeholder substitution. A transcript named gui-* is fed
+# to `./bin/kbase mcp --project-dir-required` from the evidence directory, not
+# the staged repository. Every transcript runs: none needs a stub child or a
+# provider (build-refused refuses before it starts one).
 #
 # Inputs (environment): BIN_DIR; RESULTS_FIXTURE_DIR, the committed fixture;
 # MCP_TRANSCRIPT_DIR, the transcripts; MCP_OUT_DIR, the evidence directory.
@@ -72,8 +74,16 @@ for file in "${transcripts}"/*.jsonl; do
             printf '%s\n' "$(sub "${lines[$((i + 1))]}")" >> "${tdir}/expected.jsonl"
         fi
     done
+    # A gui- transcript runs GUI mode: no located project, so it is served from
+    # outside the staged repository and each call names its own.
+    serve_dir="${repo}"
+    mode=()
+    if [[ "${name}" == gui-* ]]; then
+        serve_dir="${out}"
+        mode=(--project-dir-required)
+    fi
     set +e
-    "${kbase}" mcp --kb-root "${kb_root}" < "${tdir}/requests.jsonl" > "${tdir}/actual.jsonl" 2> "${tdir}/mcp.log"
+    ( cd "${serve_dir}" && "${kbase}" mcp ${mode[@]+"${mode[@]}"} ) < "${tdir}/requests.jsonl" > "${tdir}/actual.jsonl" 2> "${tdir}/mcp.log"
     printf '%s\n' "$?" > "${tdir}/mcp.exit"
     set -e
     bad=0
@@ -95,7 +105,7 @@ for file in "${transcripts}"/*.jsonl; do
         status=1
     fi
 done
-OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml; ${kbase} refresh\nper transcript: ${kbase} mcp --kb-root ${kb_root} < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\ncomparison.tsv: per transcript, the response line that differs, or pass" \
+OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml; ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\ncomparison.tsv: per transcript, the response line that differs, or pass" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-mcp): a response differs from its transcript — see comparison.tsv\n'

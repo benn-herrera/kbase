@@ -897,11 +897,11 @@ func TestNewestRunOrdersEqualStartsAsThePruneDoes(t *testing.T) {
 }
 
 // TestPruneRunsKeepsTheNewestOfEachKind: an invocation keeps the run it names and
-// the newest KeptRuns-1 others of its own kind, by run.yaml's start with equal
-// starts ordered by name, and removes the rest of that kind; another kind's runs
-// and a directory with no readable start stand.
+// the newest buildstore.KeptRuns-1 others of its own kind, by run.yaml's start
+// with equal starts ordered by name, and removes the rest of that kind; another
+// kind's runs and a directory with no readable start stand.
 func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
-	tied := series("run", KeptRuns, 10)
+	tied := series("run", buildstore.KeptRuns, 10)
 	tied[1].started = tied[0].started
 	for _, tc := range []struct {
 		name     string
@@ -911,19 +911,19 @@ func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
 	}{
 		{
 			name:     "a seventeenth real run removes the oldest real run",
-			standing: series("run", KeptRuns, 0),
+			standing: series("run", buildstore.KeptRuns, 0),
 			keep:     "run-new",
 			removed:  []string{"run-000000"},
 		},
 		{
 			name:     "a seventeenth dry run removes the oldest dry run and no real run",
-			standing: append(series("run", KeptRuns, 0), series("dry", KeptRuns, 100)...),
+			standing: append(series("run", buildstore.KeptRuns, 0), series("dry", buildstore.KeptRuns, 100)...),
 			keep:     "dry-new",
 			removed:  []string{"dry-000000"},
 		},
 		{
 			name:     "resuming the oldest of seventeen keeps it and removes the second-oldest",
-			standing: series("run", KeptRuns+1, 0),
+			standing: series("run", buildstore.KeptRuns+1, 0),
 			keep:     "run-000000",
 			removed:  []string{"run-000001"},
 		},
@@ -935,7 +935,7 @@ func TestPruneRunsKeepsTheNewestOfEachKind(t *testing.T) {
 		},
 		{
 			name: "a directory without a readable run.yaml stands",
-			standing: append(series("run", KeptRuns, 10),
+			standing: append(series("run", buildstore.KeptRuns, 10),
 				standing{name: "run-absent"}, standing{name: "run-garbage", started: "garbage"}),
 			keep:    "run-new",
 			removed: []string{"run-000000"},

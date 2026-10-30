@@ -147,13 +147,20 @@ type Endpoint struct {
 	APIKeyFile string
 	Flavor     string
 	// Protocol is the chat wire protocol the entry speaks, its default filled
-	// in — `openai` where the entry states none; an environment endpoint is
+	// in — `anthropic` where the entry states none; an environment endpoint is
 	// OpenAI. The vocabulary is this package's, and the model package is handed
 	// the resolved fact rather than the string.
 	Protocol string
 	APIKey   string
 
+	// Temperature and Thinking are the role's sampling as the files state it,
+	// unset where no layer does: nil and "", never kbase's default filled in.
+	// The decision role carries neither.
+	Temperature *float64
+	Thinking    string
+
 	BaseURLSource, ModelSource, KeySource string
+	TemperatureSource, ThinkingSource     string
 }
 
 // ModeOf is which source supplies inference, decided once per invocation. It
@@ -322,7 +329,7 @@ func resolveFile(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 	if path := expandHome(in.Env.APIKeyFile); path != "" {
 		ep.APIKeyFile, ep.KeySource = path, LayerSourceEnvironment
 	}
-	return ep, nil
+	return withSampling(in, ep)
 }
 
 // resolveEnvironment is a role's endpoint from the environment's strings.
@@ -341,6 +348,44 @@ func resolveEnvironment(in Inputs, role Role, flagModel string) (Endpoint, error
 	}
 	if path := expandHome(in.Env.APIKeyFile); path != "" {
 		ep.APIKeyFile, ep.KeySource = path, LayerSourceEnvironment
+	}
+	return withSampling(in, ep)
+}
+
+// temperatureMax is the top of the temperature range each chat protocol
+// accepts; the bottom is 0 for both.
+func temperatureMax(protocol string) float64 {
+	switch protocol {
+	case ProviderAPIAnthropic:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// withSampling gives the text and scoring roles' endpoint the sampling the
+// files state, with the layer of each value, and refuses what the endpoint's
+// chat protocol would reject. The refusal's path is the write target's
+// config.toml, the file a setting belongs in, while its detail and remedy name
+// the layer that states the value, the only one removing it works in.
+func withSampling(in Inputs, ep Endpoint) (Endpoint, error) {
+	role := ep.Role
+	if role != RoleText && role != RoleScoring {
+		return ep, nil
+	}
+	s := in.Cfg.samplingOf(role)
+	ep.Temperature, ep.Thinking = s.Temperature, s.Thinking
+	ep.TemperatureSource, ep.ThinkingSource = in.Cfg.SamplingLayer(role)
+	if ep.Temperature == nil {
+		return ep, nil
+	}
+
+	key := "sampling." + string(role) + ".temperature"
+	t, limit := *ep.Temperature, temperatureMax(ep.Protocol)
+	if !(t >= 0 && t <= limit) {
+		return Endpoint{}, result.Refusal{{Check: CheckProvider, Key: key, Path: ConfigPath(in.WriteDir),
+			Detail: fmt.Sprintf("%s, from the %s layer, is %g, outside the 0 to %g the %q chat protocol accepts", key, ep.TemperatureSource, t, limit, ep.Protocol),
+			Remedy: fmt.Sprintf("set %s within 0 to %g, or remove it from the %s layer for kbase's default 0", key, limit, ep.TemperatureSource)}}
 	}
 	return ep, nil
 }

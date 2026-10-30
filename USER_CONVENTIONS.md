@@ -63,6 +63,7 @@ read `kbase <command> --help`.
 ```
 kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
             [--through <stage>] [--state-dir DIR]
+kbase build --resume [--no-inference] [--through <stage>] [--state-dir DIR]
 ```
 
 - `<volume-root>` is a paper's top `.tex` file: the one `00README.json`'s `toplevel` names, else the
@@ -79,12 +80,11 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
   `provider`, `provider-rule`, `provider-layer`, `model` — absent under `--no-inference`), `through`,
   `no-inference`, `resumed`, `restored`, `stages` (each `stage`, `commit`, `dropped`, `report`), and
   `resume`. `through` and `stages` are absent from a result whose invocation walked no stage;
-  `resume` is absent unless an identical re-issue continues
-  the work: present only where the run recorded a boundary, so of the outcomes `cancelled`, `failed`
-  and `refused`, only a run that walked a stage supplies one. A `bounded` result
-  carries no `resume`: the run is finished at the bound, so re-issuing its command is not what
-  continues it. Resuming past the bound is a reset to an earlier boundary and a re-issue — see
-  *Monitoring, cancelling and resuming a build*.
+  `resume` is absent unless `kbase build --resume` continues the work: present only where the run
+  recorded a boundary, so of the outcomes `cancelled`, `failed` and `refused`, only a run that
+  walked a stage supplies one. A `bounded` result carries no `resume`: the run is finished at the
+  bound, though `kbase build --resume` continues it past the bound. To resume from an earlier
+  boundary, reset to it first — see *Monitoring, cancelling and resuming a build*.
   Per-stage findings are in the `report` file, not stdout.
 
 ## Monitoring, cancelling and resuming a build
@@ -104,15 +104,21 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
   command anyway, and says why.
 - Position comes from the `kb-build:` commit trail: each stage boundary is a commit, and an
   interrupted stage's uncommitted work is reset to the last stage commit and the stage re-run.
-  To resume from an earlier boundary, reset the repository to it and re-issue the build with the
-  newest boundary's inputs — the same volume roots and `--bibliography` files, in the same order;
-  other inputs are refused (`check: inputs`). Over MCP, the `rewind-build` tool and the
-  `kbase://build-trail` resource report the trail, and for a `target` (a stage id or display name)
-  the exact `git reset --hard` and re-issue commands, with `discards` counting the boundaries newer
-  than it. Running the reset is yours: the tool changes nothing, and a dirty worktree is reported in
-  `dirty` rather than refused. A `bounded` run's recorded command is printed there even though
-  `status` withholds it, because after a reset to an earlier boundary there are stages left to walk
-  — the case that suppression excludes.
+  `kbase build --resume` takes no inputs: it continues with the volume roots and `--bibliography`
+  files the trail records, in the order recorded. To resume from an earlier boundary, reset the
+  repository to it, then run `kbase build --resume`. A `bounded` run continues the same way.
+- A build given volume roots over a standing trail is refused (`check: inputs`); the remedy names
+  `kbase build --resume` and the start-over commit. To build over other inputs, start over from
+  `started-at`, the commit the build began from: use `rewind-build`'s `started-at` target, or
+  `git reset --hard <started-at>`. The build after that is fresh and names its own volume roots. A
+  full build after a `--no-inference` build starts over the same way.
+- Over MCP, the `rewind-build` tool and the `kbase://build-trail` resource report the trail. For a
+  `target` (a stage id or display name) `rewind-build` returns the `git reset --hard` command
+  followed by `kbase build --resume`, with `discards` counting the boundaries newer than it; for the
+  `started-at` target it returns the reset alone. Running the reset is yours: the tool changes
+  nothing, and a dirty worktree is reported in `dirty` rather than refused. A `bounded` run's
+  recorded command is printed there even though `status` withholds it, because after a reset to an
+  earlier boundary there are stages left to walk — the case that suppression excludes.
 
 ## Maintaining a KB
 
@@ -241,8 +247,8 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
 `config.toml`.
 
 - An entry's keys are `baseUrl` (required), `apiKeyFile` (the only way an entry supplies a key),
-  `type` (`inference` where unstated), `api` (the chat protocol: `openai` where unstated, or
-  `anthropic` for the Messages API) and `decisionsFlavor` (the
+  `type` (`inference` where unstated), `api` (the chat protocol: `anthropic`, the Messages API,
+  where unstated, or `openai`) and `decisionsFlavor` (the
   decision surface, `systemone` where silent).
 - `config.toml`'s `[models]` holds `decision`, `text` and `scoring`, and each value is a
   **reference**: a `providers.toml` entry name, then the model id that entry serves, split at the
@@ -293,7 +299,8 @@ read, and nothing is refused for that. Two files are read from each layer: `prov
   default) or `decisions`. It names a wire shape, not a model — the decision category's id stays in
   `config.toml` — and chat is the entry's `api`'s, which the flavour does not touch. Any other value
   drops the entry the way a wrong `type` or `api` does. The decision surfaces are OpenAI-shaped, so
-  the `decision` role's entry must speak `api = "openai"`: a Messages endpoint asked for a multichoice ask
-  refuses, naming the provider and the role.
+  the `decision` role always asks one on its entry's base URL, whatever the entry's `api`: an
+  `anthropic` entry serves the `decision` role only where its server also speaks that surface, and a
+  Messages-only server fails the call with its own status.
 - `kbase show-config` states each entry's effective `api` and `decisions-flavor`, so an entry silent
-  on either reads `openai` and `systemone`.
+  on either reads `anthropic` and `systemone`.

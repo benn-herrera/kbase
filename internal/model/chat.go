@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -14,8 +15,8 @@ const ChatAttempts = 3
 
 // How one request of a chat call ended.
 const (
-	// ChatOK is a stream that reached [DONE] — an empty reply and one cut off
-	// at the completion cap included.
+	// ChatOK is a stream that reached [DONE] — an empty reply, and one cut off
+	// at the completion cap with answer text, included.
 	ChatOK = "ok"
 	// ChatProviderRefused is a request the provider answered with a status that
 	// is not success: it read the request and declined it, so the path to it,
@@ -30,6 +31,11 @@ const (
 	// written: a server aborting a request answers so, its error message as the
 	// reply, where a call that ran reports the prompt it read.
 	ChatServedNothing = "served-nothing"
+	// ChatTruncatedEmpty is a stream that reached [DONE] with the completion
+	// cap as its finish reason and no answer text: the request leaves the
+	// answer no room, so an identical re-send is cut off the same way and the
+	// call ends on this attempt.
+	ChatTruncatedEmpty = "truncated-empty"
 )
 
 // ErrChatIncomplete is a chat call none of whose attempts completed.
@@ -58,27 +64,24 @@ type ChatAttempt struct {
 	FirstToken time.Duration
 }
 
-// chat puts prompt to modelID under system as one tool-less chat request —
-// temperature 0, thinking disabled by the provider's own `reasoning` control
-// (with `chat_template_kwargs` sent beside it for servers that speak the
-// tokenizer extension), the usage chunk requested — re-issued
-// identically while it does not complete, up to ChatAttempts, pausing before
-// each re-issue for the next of backoff, its last repeating; with no backoff
-// it re-issues at once, and a pause the context's deadline cannot cover ends
-// the call at once with no further attempt. A provider that answered with a
+// chat puts prompt to modelID under system as one tool-less chat request,
+// carrying the sampling c sends (Client.sampling) for c's protocol to map onto
+// its own fields — re-issued identically while it does not complete, up to
+// ChatAttempts, pausing before each re-issue for the next of backoff, its last
+// repeating; with no backoff it re-issues at once, and a pause the context's
+// deadline cannot cover ends the call at once with no further attempt. A provider that answered with a
 // status that is not success is re-issued only where the status is retryable
 // (retryableStatus): any other is the request itself being wrong, and the call
-// ends on the one attempt that met it. observe, where set, is handed each
+// ends on the one attempt that met it, as does an answer cut off at the
+// completion cap before any answer text. observe, where set, is handed each
 // attempt as it ends. It returns the completed attempt, or the last one with
 // an error wrapping ErrChatIncomplete; a cancelled ctx returns its error at
 // once.
 func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
 	req := Request{
-		Model:              modelID,
-		Messages:           []Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}},
-		Temperature:        0,
-		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
-		Reasoning:          &Reasoning{Enabled: false},
+		Model:    modelID,
+		Messages: []Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}},
+		Sampling: c.sampling(),
 	}
 	var last ChatAttempt
 	for attempt := 1; attempt <= ChatAttempts; attempt++ {
@@ -110,6 +113,10 @@ func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 		}
 		if last.Outcome == ChatOK {
 			return last, nil
+		}
+		// An answer cut off before any text is cut off the same way again.
+		if last.Outcome == ChatTruncatedEmpty {
+			return last, gaveUp(attempt, last)
 		}
 		// A provider that read the request and declined it on a status that
 		// will not change will decline it again.
@@ -172,6 +179,8 @@ func chatOnce(ctx context.Context, c Client, req Request) (ChatAttempt, error) {
 		a.Outcome, a.Error = ChatTransportFailure, "the stream ended short of [DONE]"
 	case resp.UsageReported && resp.Usage.PromptTokens == 0 && resp.Usage.CompletionTokens == 0:
 		a.Outcome = ChatServedNothing
+	case resp.Truncated() && strings.TrimSpace(resp.Content) == "":
+		a.Outcome, a.Error = ChatTruncatedEmpty, "the answer reached the completion cap before any answer text"
 	default:
 		a.Outcome = ChatOK
 	}

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # LIVE: a build over a caller-named fixture repository, never a path this file
-# knows. The arguments are the volume roots relative to the fixture and, where
-# wanted, a build flag such as --through; they go to ./bin/kbase build as
-# given, run from the fixture. Everything the run writes but the fixture's own
+# knows. The build reads the fixture's own .kbase/*.toml; no configuration
+# directory is passed. Before the build, the fixture's own kbase
+# (.kbase/kbase) probe --decision and probe --text run
+# from the fixture, and either failing stops the run naming its role. The
+# arguments go to the fixture's own kbase build as given, run from the
+# fixture: MODE staged takes at least one, the volume roots relative to the
+# fixture and, where wanted, a build flag such as --through; MODE resume
+# takes build flags only, after --resume. Everything the run writes but the fixture's own
 # tree lands in one timestamped scratch directory: the state store, each
 # command's capture, the counts and the log. A build bounded by --through skips
 # the checks that read a finished KB, each recorded as skipped.
@@ -13,12 +18,12 @@
 # MODE resume: the fixture's commit trail's newest stage is equations-minted (a
 # trail that reaches further is refused), with the prior run's state directory
 # STATE_DIR so its answer cache and records are found. The build resumes at the
-# trail's next stage, references-found; kb-root/ is left as the trail has it.
+# trail's next stage, references-found, by build --resume; kb-root/ is left as
+# the trail has it.
 # The checks and the output directory are the staged form's.
 #
-# Inputs (environment): BIN_DIR; MODE, staged or resume; FIXTURE_DIR, the
-# fixture repository; CONFIG, the configuration directory (absolute or relative
-# to the repository root); INVOCATION_DIR, the directory the recipe was invoked
+# Inputs (environment): MODE, staged or resume; FIXTURE_DIR, the
+# fixture repository; INVOCATION_DIR, the directory the recipe was invoked
 # from, which FIXTURE_DIR and STATE_DIR are relative to; STATE_DIR, the prior
 # run's state directory (MODE resume only).
 set -euo pipefail
@@ -26,10 +31,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 cd "${script_dir}/../.." || exit 1
 
-: "${BIN_DIR:?BIN_DIR is not set: the build output directory}"
 : "${MODE:?MODE is not set: staged or resume}"
 : "${FIXTURE_DIR:?FIXTURE_DIR is not set: the fixture repository}"
-: "${CONFIG:?CONFIG is not set: the configuration directory}"
 : "${INVOCATION_DIR:?INVOCATION_DIR is not set: the directory the recipe was invoked from}"
 
 dir="${FIXTURE_DIR}"
@@ -59,13 +62,10 @@ mkdir -p "${out}"
 # The body both modes run; its stdout and stderr are the run's log.
 function run_build() {
     mode="${MODE}"
-    config="${CONFIG}"
     label=test-integration-build-live-fixture
     [[ "${mode}" == staged ]] || label="${label}-${mode}"
     root="$(pwd -P)"
-    kbase="${root}/${BIN_DIR}/kbase"
-    [[ "${config}" == /* ]] || config="${root}/${config}"
-    if [[ "$#" -eq 0 ]]; then
+    if [[ "${mode}" == staged && "$#" -eq 0 ]]; then
         printf 'error: name at least one volume root, relative to %s.\n' "${dir}" >&2
         exit 1
     fi
@@ -76,6 +76,11 @@ function run_build() {
     dir="$(cd "${dir}" && pwd -P)"
     if [[ "${dir}" == "${root}" ]]; then
         printf 'error: %s is this repository — the build is for a fixture copy only.\n' "${dir}" >&2
+        exit 1
+    fi
+    kbase="${dir}/.kbase/kbase"
+    if [[ ! -x "${kbase}" ]]; then
+        printf 'error: %s is not executable — stage the fixture with just prep-test-integration-fixture first.\n' "${kbase}" >&2
         exit 1
     fi
     if ! staged="$(git -C "${dir}" rev-parse -q --verify 'refs/tags/staged^{commit}')"; then
@@ -100,8 +105,8 @@ function run_build() {
         where="HEAD ${head_rev} (staged ${staged}), state ${state}"
     fi
     pandoc_version="$(pandoc --version | head -n 1)"
-    printf 'fixture: %s at %s\nbuild arguments: %s\nconfig: %s\nout: %s\n%s\n' \
-        "${dir}" "${where}" "$*" "${config}" "${out}" "${pandoc_version}"
+    printf 'fixture: %s at %s\nbuild arguments: %s\nout: %s\n%s\n' \
+        "${dir}" "${where}" "$*" "${out}" "${pandoc_version}"
     ck="${out}/checks"
     mkdir -p "${ck}"
     # capture <stem> <dir> <command...>: run the command in dir, stdout to
@@ -131,41 +136,29 @@ function run_build() {
     # count: a bounded build leaves no scratch/ to search.
     count() { { find "$1" -type f -name "$2" 2>/dev/null || true; } | wc -l | tr -d ' '; }
 
-    # The endpoint first: an unreachable provider fails here, by name, and no
-    # build is started against it. The fixture's pool holds two entries, so the
-    # catalogue verb is told which one the fixture's key names.
-    provider="$(sed -n 's/^provider *= *"\(.*\)".*/\1/p' "${config}/config.toml" | head -n 1)"
-    if [[ -z "${provider}" ]]; then
-        printf 'error: %s/config.toml names no provider, so the endpoint to check cannot be chosen.\n' "${config}" >&2
-        exit 1
-    fi
-    capture "${out}/models" "${root}" "${kbase}" models --config-dir "${config}" --provider "${provider}"
-    if [[ "$(rc "${out}/models")" -ne 0 ]]; then
-        printf 'integration(%s): provider %s, named in %s/config.toml, is unreachable — see %s\n' \
-            "${label}" "${provider}" "${config}" "${out}/models.out"
-        exit 1
-    fi
+    # The configuration the build will read is the fixture's own .kbase/*.toml.
+    capture "${out}/show-config" "${dir}" "${kbase}" show-config
+    printf 'config: the fixture'"'"'s own .kbase/*.toml, as %s.out reports\n' "${out}/show-config"
 
-    # The fixture's config.toml is in the old grammar — bare model ids beside a
-    # superseded provider key — and file-mode resolution refuses a bare id. The
-    # build reads a reference-shaped copy in this run's directory: the same pool
-    # and keys, and three references naming the entry that key names.
-    toml_get() { awk -v t="[$2]" -v k="$3" '/^\[/ { in_t = ($0 == t) } in_t && $1 == k { sub(/^[^=]*= *"/, ""); sub(/".*/, ""); print; exit }' "$1"; }
-    decision="$(toml_get "${config}/config.toml" models decision)"
-    text="$(toml_get "${config}/config.toml" models text)"
-    file_config="${out}/file-config"
-    mkdir -p "${file_config}"
-    cp "${config}/providers.toml" "${file_config}/providers.toml"
-    [[ ! -d "${config}/api_keys" ]] || cp -R "${config}/api_keys" "${file_config}/api_keys"
-    # The fixture declares no scoring model; the decision model judges the KB.
-    printf '%s\n' '[models]' "decision = \"${provider}/${decision}\"" "text = \"${provider}/${text}\"" "scoring = \"${provider}/${decision}\"" \
-        > "${file_config}/config.toml"
+    # The endpoint first: an unreachable role fails here, by name, and no build
+    # is started against it. The roles probed are the ones the build dials.
+    for role in decision text; do
+        capture "${out}/probe-${role}" "${dir}" "${kbase}" probe "--${role}"
+        if [[ "$(rc "${out}/probe-${role}")" -ne 0 ]]; then
+            printf 'integration(%s): the %s role is unreachable — see %s\n' \
+                "${label}" "${role}" "${out}/probe-${role}.out"
+            exit 1
+        fi
+    done
 
     # the build, asking: from a fresh kb-root/, or resuming over the trail's
+    resume_flag=()
     if [[ "${mode}" == staged ]]; then
         command rm -rf "${dir}/kb-root"
+    else
+        resume_flag=(--resume)
     fi
-    capture "${ck}/kbase-build" "${dir}" "${kbase}" build "$@" --config-dir "${file_config}" --state-dir "${state}" --log-level info
+    capture "${ck}/kbase-build" "${dir}" "${kbase}" build ${resume_flag[@]+"${resume_flag[@]}"} "$@" --state-dir "${state}" --log-level info
     outcome="$(sed -n 's/^outcome: "\(.*\)"$/\1/p' "${ck}/kbase-build.out" | head -n 1)"
     check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 && ( "${outcome}" == done || "${outcome}" == bounded ) ]] && echo 0 || echo 1)" \
         "exit $(rc "${ck}/kbase-build"), outcome ${outcome:-none}" "${ck}/kbase-build.out"

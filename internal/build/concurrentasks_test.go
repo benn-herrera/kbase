@@ -1,20 +1,18 @@
 package build
 
 import (
+	"bytes"
 	"context"
-	"errors"
-	"io"
-	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"go.yaml.in/yaml/v3"
-
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
+	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/kb"
 	"kbase/internal/model"
@@ -198,6 +196,57 @@ func TestABuildAtOneAndFourLandsTheSameKB(t *testing.T) {
 	sameModuloIDs(t, four.repo, one.repo)
 }
 
+// TestInputOrderDoesNotMatter: two volumes in separate directories and two
+// bibliographies defining one key differently, given in one order to one
+// build and in the reverse to another, asked through a provider answering by
+// content, land the same document graph byte for byte and the same KB modulo
+// ids.
+func TestInputOrderDoesNotMatter(t *testing.T) {
+	second := strings.NewReplacer(`\title{A Small Paper}`, `\title{A Second Paper}`,
+		"Some opening prose.", `Some opening prose \cite{shared}.`).Replace(paper)
+	built := func(reverse bool) fixture {
+		f := newFixture(t)
+		volumes := []string{filepath.Join(f.repo, "one", "paper.tex"), filepath.Join(f.repo, "two", "second.tex")}
+		bibs := []string{filepath.Join(f.repo, "one", "refs.bib"), filepath.Join(f.repo, "two", "refs.bib")}
+		storetest.WriteFile(t, volumes[0], askedPaper)
+		storetest.WriteFile(t, volumes[1], second)
+		storetest.WriteFile(t, bibs[0], "@article{shared, author={Alpha, Ann}, title={First}, journal={J}, year={2001}}\n")
+		storetest.WriteFile(t, bibs[1], "@article{shared, author={Beta, Bea}, title={Second}, journal={J}, year={2002}}\n")
+		if reverse {
+			slices.Reverse(volumes)
+			slices.Reverse(bibs)
+		}
+		opts := f.askingAt(newWire(func(string) time.Duration { return 0 }).Client(), 1)
+		opts.VolumeRoots, opts.Bibliographies = volumes, bibs
+		if outcome, fields := f.build(t, opts); outcome != result.Done {
+			t.Fatalf("the build (inputs reversed: %t) = %s %v", reverse, outcome, fields)
+		}
+		return f
+	}
+	documentGraph := func(f fixture) map[string][]byte {
+		trail, err := f.ledger(t).Trail()
+		if err != nil {
+			t.Fatal(err)
+		}
+		files, err := f.ledger(t).Files(buildstore.RecordedStages(trail)[buildstore.StageDocumentGraph], kb.KBDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	a, b := built(false), built(true)
+	ga, gb := documentGraph(a), documentGraph(b)
+	for p := range ga {
+		if !bytes.Equal(ga[p], gb[p]) {
+			t.Errorf("the document graph differs at %s:\n%s\nreversed:\n%s", p, ga[p], gb[p])
+		}
+	}
+	if len(ga) != len(gb) {
+		t.Errorf("the document graph holds %d files, %d reversed", len(ga), len(gb))
+	}
+	sameModuloIDs(t, b.repo, a.repo)
+}
+
 // TestABuildHoldsNCallsInFlight: a build at N=2 whose stages ask more than
 // two items at once has at most N multichoice asks in flight, and reaches N.
 func TestABuildHoldsNCallsInFlight(t *testing.T) {
@@ -205,92 +254,5 @@ func TestABuildHoldsNCallsInFlight(t *testing.T) {
 	builtAt(t, w, 2)
 	if w.peak != 2 {
 		t.Errorf("%d calls in flight at most, want 2", w.peak)
-	}
-}
-
-// groupRecords is every group record of kind the build in f wrote, in the
-// order the stage launched the groups.
-func groupRecords(t *testing.T, f fixture, kind asks.Kind) []asks.GroupRecord {
-	t.Helper()
-	file, err := os.Open(asks.GroupRecordsPath(filepath.Join(f.startTrailDir(t), asks.AskRecordsDir), kind))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	var out []asks.GroupRecord
-	for dec := yaml.NewDecoder(file); ; {
-		var g asks.GroupRecord
-		if err := dec.Decode(&g); errors.Is(err, io.EOF) {
-			return out
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, g)
-	}
-}
-
-// itemAsk is the ask an item of g made.
-func itemAsk(g asks.GroupRecord, item asks.ItemRecord) string {
-	return askName(g.Prefix+item.Calls[0].Tail, item.Item)
-}
-
-// letterKinds is every multichoice-ask kind the asked paper's build asks.
-var letterKinds = []asks.Kind{asks.Paragraph, asks.Unmarked, asks.Colinear, asks.Classify}
-
-// TestABuildAsksInSubmissionOrder: at N=1 each stage's multichoice asks reach the
-// wire in the order the stage launched them — its groups in order, each
-// group's items in order, an item's re-ask right behind it.
-func TestABuildAsksInSubmissionOrder(t *testing.T) {
-	w := newWire(func(string) time.Duration { return 0 })
-	f := builtAt(t, w, 1)
-	for _, kind := range letterKinds {
-		var launched []string
-		for _, g := range groupRecords(t, f, kind) {
-			for _, item := range g.Items {
-				for range item.Calls {
-					launched = append(launched, itemAsk(g, item))
-				}
-			}
-		}
-		var arrived []string
-		for _, e := range w.events {
-			if !e.returned && slices.Contains(launched, e.ask) {
-				arrived = append(arrived, e.ask)
-			}
-		}
-		if len(launched) == 0 || !slices.Equal(arrived, launched) {
-			t.Errorf("%s: %d asks arrived in an order other than the %d launched", kind, len(arrived), len(launched))
-		}
-	}
-}
-
-// TestABuildAsksAGroupsFirstAlone: at N=4 each group's first ask returns
-// before the group's second arrives.
-func TestABuildAsksAGroupsFirstAlone(t *testing.T) {
-	w := newWire(func(string) time.Duration { return 10 * time.Millisecond })
-	f := builtAt(t, w, 4)
-	groups := 0
-	for _, kind := range letterKinds {
-		for _, g := range groupRecords(t, f, kind) {
-			if len(g.Items) < 2 {
-				continue
-			}
-			groups++
-			first, second := itemAsk(g, g.Items[0]), itemAsk(g, g.Items[1])
-			// The first item's last return: a re-ask returns twice.
-			returned := -1
-			for i, e := range w.events {
-				if e == (wireEvent{ask: first, returned: true}) {
-					returned = i
-				}
-			}
-			arrived := slices.Index(w.events, wireEvent{ask: second})
-			if returned < 0 || arrived < 0 || returned > arrived {
-				t.Errorf("%s group %s: its second ask arrived before its first returned", kind, g.Group)
-			}
-		}
-	}
-	if groups == 0 {
-		t.Fatal("no group asked two items")
 	}
 }

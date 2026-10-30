@@ -88,32 +88,33 @@ func scoreStarted(stateDir string, pid int) (bool, []result.Field, error) {
 
 // launchTool is cmd run by l as this executable in a process of its own,
 // returning once the run has started or exited.
-func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (protocol.Tool, error) {
+func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (ProjectTool, error) {
 	positionals, schema, err := CommandSchema(cmd)
 	if err != nil {
-		return protocol.Tool{}, err
+		return ProjectTool{}, err
 	}
-	call := func(args map[string]any) (string, map[string]any, bool, error) {
+	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
 		var out bytes.Buffer
-		if err := l.start(cmd.Name(), positionals, args, s, globals, &out); err != nil {
+		if err := l.start(cmd.Name(), positionals, args, p, s, globals, &out); err != nil {
 			return "", nil, false, err
 		}
 		return ToolResult(out.Bytes())
 	}
-	return protocol.Tool{Name: cmd.Name(), InputSchema: schema, Call: call}, nil
+	return ProjectTool{Tool: protocol.Tool{Name: cmd.Name(), InputSchema: schema}, Run: call}, nil
 }
 
-// start starts `<this executable> verb <args>` from the repository s.dir is in —
-// in its own process group, stdin closed, stdout and stderr captured under the
-// state store's reports, the environment and globals inherited — and writes on
-// out the start document once the run has started, the run's own document
-// where it exits first, or a failure naming the state store where it does
-// neither within buildstore.StartWait. A relative state-dir is the repository
-// root's, as the volume roots are in the run's working directory.
-func (l Launch) start(verb string, positionals []Positional, args map[string]any, s serving, globals Globals, out io.Writer) error {
+// start starts `<this executable> verb <args>` from the root of the project p
+// — in its own process group, stdin closed, stdout and stderr captured under
+// the state store's reports, the environment and globals inherited, and
+// --project-dir where the call named p — and writes on out the start document
+// once the run has started, the run's own document where it exits first, or a
+// failure naming the state store where it does neither within
+// buildstore.StartWait. A relative state-dir is the project root's, as the
+// volume roots are in the run's working directory.
+func (l Launch) start(verb string, positionals []Positional, args map[string]any, p Project, s serving, globals Globals, out io.Writer) error {
 	args = maps.Clone(args)
 	stateFlag, _ := args[stateDirFlag].(string)
-	kbRoot, stateDir, outcome, fields := buildstore.Locate(buildstore.MonitorOptions{StateDir: stateFlag, WorkDir: s.dir, Logger: s.lg})
+	kbRoot, stateDir, outcome, fields := buildstore.Locate(buildstore.MonitorOptions{StateDir: stateFlag, WorkDir: p.Root, Logger: s.lg, DefaultStore: true})
 	if outcome != "" {
 		return result.Emit(out, outcome, fields...)
 	}
@@ -124,6 +125,11 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 	argv := []string{verb}
 	for _, f := range flags {
 		argv = append(argv, "--"+f.Name+"="+f.Value)
+	}
+	var waitProject []string
+	if p.Named {
+		waitProject = []string{"--project-dir", p.Root}
+		argv = append(argv, "--project-dir="+p.Root)
 	}
 	for _, global := range []struct {
 		name, value string
@@ -171,7 +177,7 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 	}
 	pid := child.Process.Pid
 	if l.recorded {
-		s.last.launched(stateDir, pid)
+		s.last.launched(p.Root, stateDir, pid)
 	}
 	s.lg.Info("mcp: "+verb+" started", "pid", pid, "stdout", stdout.Name(), "stderr", stderrPath)
 	// Waiting reaps the child; the goroutine ends when it exits, whether or
@@ -206,53 +212,60 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 				return err
 			}
 			if started {
-				fields := append(append(placement, done...), result.Field{Key: "wait",
-					Value: buildstore.ShellJoin([]string{exe, "wait", "--state-dir", stateDir, "--pid", strconv.Itoa(pid)})})
+				wait := append(append([]string{exe, "wait"}, waitProject...), "--state-dir", stateDir, "--pid", strconv.Itoa(pid))
+				fields := append(append(placement, done...), result.Field{Key: "wait", Value: buildstore.ShellJoin(wait)})
 				return result.Emit(out, result.Done, fields...)
 			}
 		}
 	}
 }
 
-// lastBuild is the build a server started last: the state store
-// buildstore.Locate resolved for it and the pid the launch recorded, so the
-// build resource and its watcher follow the launch rather than a store some
-// later argument names. The record is the process's, so a restarted server has
-// launched none.
+// lastBuild is the build a server started last: the project it ran in, the
+// state store buildstore.Locate resolved for it and the pid the launch
+// recorded, so the build resource and its watcher follow the launch rather
+// than a store some later argument names. The record is the process's, so a
+// restarted server has launched none.
 type lastBuild struct {
-	served string
+	located Located
 
 	mu       sync.Mutex
+	project  string
 	dir      string
 	pid      int
 	fallback string
 	resolved bool
 }
 
-// newLastBuild is the record of a server over the directory served that has
-// launched no build yet.
-func newLastBuild(served string) *lastBuild { return &lastBuild{served: served} }
+// newLastBuild is the record of a server with the located project, or none,
+// that has launched no build yet.
+func newLastBuild(located Located) *lastBuild { return &lastBuild{located: located} }
 
-// launched records the store a build was started in and the pid that runs it.
-func (l *lastBuild) launched(dir string, pid int) {
+// launched records the project a build was started in, its state store and
+// the pid that runs it.
+func (l *lastBuild) launched(project, dir string, pid int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.dir, l.pid = dir, pid
+	l.project, l.dir, l.pid = project, dir, pid
 }
 
-// store is the state store the resource reads and the watcher follows, and the
-// pid of the build this server started there — zero where it started none. It
-// is the launched store, else the one the served repository's build resolves,
-// which is read once because resolving it asks git.
-func (l *lastBuild) store() (dir string, pid int) {
+// store is the project and state store the resource reads and the watcher
+// follows, and the pid of the build this server started there — zero where it
+// started none. It is the launch's, else the located project and the store its
+// build resolves, which is read once because resolving it asks git; ok is
+// false where the server launched none and located no project.
+func (l *lastBuild) store() (project, dir string, pid int, ok bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.dir != "" {
-		return l.dir, l.pid
+		return l.project, l.dir, l.pid, true
+	}
+	root, ok := l.located.Root()
+	if !ok {
+		return "", "", 0, false
 	}
 	if !l.resolved {
-		_, l.fallback, _, _ = buildstore.Locate(buildstore.MonitorOptions{WorkDir: l.served})
+		_, l.fallback, _, _ = buildstore.Locate(buildstore.MonitorOptions{WorkDir: root, DefaultStore: true})
 		l.resolved = true
 	}
-	return l.fallback, 0
+	return root, l.fallback, 0, true
 }

@@ -123,7 +123,8 @@ func TestOpenAIClientHappyPath(t *testing.T) {
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
 	resp, err := streamed(context.Background(), c, Request{
-		Model: "test-model",
+		Model:    "test-model",
+		Sampling: Sampling{}.Resolved(),
 		Messages: []Message{
 			{Role: "system", Content: "be brief"},
 			{Role: "user", Content: "hi"},
@@ -175,7 +176,7 @@ func TestOpenAIClientBaseURLTrailingSlash(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL + "/"))
-	if _, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+	if _, err := streamed(context.Background(), c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 		t.Fatalf("consultStream: %v", err)
 	}
 	if gotPath != "/chat/completions" {
@@ -194,7 +195,7 @@ func TestOpenAIClientNoAPIKeyOmitsAuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(Endpoint{Name: "nokey", BaseURL: srv.URL})
-	if _, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+	if _, err := streamed(context.Background(), c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
 		t.Fatalf("consultStream: %v", err)
 	}
 	if sawAuth {
@@ -215,7 +216,7 @@ func TestOpenAIClientHTTPErrorWraps(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 500, got nil")
 	}
@@ -253,7 +254,7 @@ func TestOpenAIClientContextCancellation(t *testing.T) {
 	}()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := streamed(ctx, c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(ctx, c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from cancellation, got nil")
 	}
@@ -274,7 +275,7 @@ func TestOpenAIClientErrorBodyIsBounded(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error from 502, got nil")
 	}
@@ -294,7 +295,7 @@ func TestOpenAIClientErrorScrubsAPIKey(t *testing.T) {
 	defer srv.Close()
 
 	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	_, err := streamed(context.Background(), c, Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}})
+	_, err := streamed(context.Background(), c, Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -312,7 +313,7 @@ func TestOpenAIClientErrorScrubsAPIKey(t *testing.T) {
 func TestOpenAIClientEmptyBaseURLErrors(t *testing.T) {
 	c := NewOpenAIClient(Endpoint{Name: "x"})
 	ctx := context.Background()
-	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "x"}}}
+	req := Request{Model: "m", Sampling: Sampling{}.Resolved(), Messages: []Message{{Role: "user", Content: "x"}}}
 
 	calls := map[string]func() error{
 		"consultStream": func() error { _, err := c.consultStream(ctx, req); return err },
@@ -392,63 +393,91 @@ func TestOpenAIClientListModelsErrorScrubs(t *testing.T) {
 	}
 }
 
-// chatRequest is the request chat makes, with one user turn.
-func chatRequest(modelID string) Request {
-	return Request{Model: modelID, Messages: []Message{{Role: "user", Content: "hi"}},
-		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
-		Reasoning:          &Reasoning{Enabled: false}}
-}
-
-// TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty: an empty/nil map must
-// not emit a `chat_template_kwargs: null` or `: {}` field on the wire —
-// some providers reject the field's mere presence.
-func TestOpenAIClientChatTemplateKwargsOmittedWhenEmpty(t *testing.T) {
-	var rawBody []byte
+// TestOpenAIUnsetSamplingSendsTheBaselineBody: an endpoint stating no sampling
+// sends exactly this body, with temperature 0 and thinking off in the
+// protocol's own fields.
+func TestOpenAIUnsetSamplingSendsTheBaselineBody(t *testing.T) {
+	const want = `{"model":"m","messages":[{"role":"system","content":"the system"},{"role":"user","content":"the prompt"}],"temperature":0,"chat_template_kwargs":{"enable_thinking":false},"reasoning":{"enabled":false},"stream":true,"stream_options":{"include_usage":true}}`
+	var raw []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rawBody, _ = io.ReadAll(r.Body)
+		raw, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", mimeEventStream)
 		_, _ = w.Write([]byte(sseDone))
 	}))
 	defer srv.Close()
 
-	c := NewOpenAIClient(newTestEndpoint(srv.URL))
-	// Built bare so ChatTemplateKwargs stays nil.
-	req := Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
-	if _, err := streamed(context.Background(), c, req); err != nil {
-		t.Fatalf("consultStream: %v", err)
+	if _, err := chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
+		t.Fatalf("chat: %v", err)
 	}
-	if strings.Contains(string(rawBody), "chat_template_kwargs") {
-		t.Errorf("chat_template_kwargs should be omitted when empty; got body: %s", rawBody)
+	if string(raw) != want {
+		t.Errorf("body:\n got %s\nwant %s", raw, want)
 	}
 }
 
-// TestEncodeRequestReasoning: the provider's own thinking control rides every
-// chat body in one spelling — `{"enabled":false}`. A request carrying none
-// omits the field rather than sending a null or an empty object: the control
-// is the caller's, and a server that does not know the field must not be
-// handed one.
-func TestEncodeRequestReasoning(t *testing.T) {
-	req := chatRequest("m")
-	const want = `{"enabled":false}`
-	body, err := encodeRequest(req)
-	if err != nil {
-		t.Fatalf("encodeRequest: %v", err)
-	}
-	var wire map[string]json.RawMessage
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatalf("unmarshal %s: %v", body, err)
-	}
-	if got, present := wire["reasoning"]; !present || string(got) != want {
-		t.Errorf("reasoning = %s (present %t), want %s", got, present, want)
-	}
+// chatRequest is the request chat makes for an endpoint stating no sampling,
+// with one user turn.
+func chatRequest(modelID string) Request {
+	return Request{Model: modelID, Messages: []Message{{Role: "user", Content: "hi"}},
+		Sampling: Sampling{}.Resolved()}
+}
 
-	bare := req
-	bare.Reasoning = nil
-	body, err = encodeRequest(bare)
-	if err != nil {
-		t.Fatalf("encodeRequest with no reasoning: %v", err)
-	}
-	if strings.Contains(string(body), "reasoning") {
-		t.Errorf("reasoning should be omitted when unset; got body: %s", body)
+// TestOpenAISamplingMapsOntoTheWire: the role's temperature is sent as set;
+// thinking off sends the baseline thinking fields, and a level is sent three
+// ways at once — `reasoning_effort`, `reasoning.effort` with no `enabled`, and
+// `chat_template_kwargs.enable_thinking` true.
+func TestOpenAISamplingMapsOntoTheWire(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		sampling        Sampling
+		wantTemperature string
+		wantKwargs      string
+		wantReasoning   string
+		wantEffort      string // "" where reasoning_effort must be absent
+	}{
+		{"off with a temperature", Sampling{Temperature: new(0.7), Thinking: new(ThinkingOff)},
+			"0.7", `{"enable_thinking":false}`, `{"enabled":false}`, ""},
+		{"low", Sampling{Thinking: new(ThinkingLow)},
+			"0", `{"enable_thinking":true}`, `{"effort":"low"}`, `"low"`},
+		{"medium", Sampling{Thinking: new(ThinkingMedium)},
+			"0", `{"enable_thinking":true}`, `{"effort":"medium"}`, `"medium"`},
+		{"high with a temperature", Sampling{Temperature: new(1.3), Thinking: new(ThinkingHigh)},
+			"1.3", `{"enable_thinking":true}`, `{"effort":"high"}`, `"high"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", mimeEventStream)
+				_, _ = w.Write([]byte(sseDone))
+			}))
+			defer srv.Close()
+
+			c := NewOpenAIClient(Endpoint{BaseURL: srv.URL, Sampling: tc.sampling})
+			if _, err := chat(context.Background(), c, "m", "the system", "the prompt", nil, nil); err != nil {
+				t.Fatalf("chat: %v", err)
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &wire); err != nil {
+				t.Fatalf("unmarshal %s: %v", raw, err)
+			}
+			for _, f := range []struct{ field, want string }{
+				{"temperature", tc.wantTemperature},
+				{"chat_template_kwargs", tc.wantKwargs},
+				{"reasoning", tc.wantReasoning},
+				{"reasoning_effort", tc.wantEffort},
+			} {
+				got, present := wire[f.field]
+				if f.want == "" {
+					if present {
+						t.Errorf("%s sent as %s, want it absent", f.field, got)
+					}
+					continue
+				}
+				if string(got) != f.want {
+					t.Errorf("%s = %s (present %t), want %s", f.field, got, present, f.want)
+				}
+			}
+		})
 	}
 }
 

@@ -940,13 +940,18 @@ end
 -- paragraph so the body runs in beside the head. Otherwise (a proof, which
 -- prints its own head and end mark; a LaTeX environment such as minipage)
 -- its body is written as it stands, the label span's id kept as a label.
--- Any other blockquote stays a quote.
+-- Any other blockquote stays a quote. A line of HTML comments alone in the
+-- quote (a statement marker on its blank line) is no body: it is dropped
+-- before the first body paragraph is read.
 local function rewrite_blockquote(bq)
-  local label_name, id = label_line(bq.content[1])
+  local content = bq.content:filter(function(b)
+    return not (b.t == 'RawBlock' and b.format:match('^html') and b.text:gsub('<!%-%-.-%-%->', ''):match('^%s*$'))
+  end)
+  local label_name, id = label_line(content[1])
   if not label_name then
     return nil
   end
-  local blocks = bq.content:clone()
+  local blocks = content:clone()
   blocks:remove(1)
   local first = blocks[1]
   local name, title, after

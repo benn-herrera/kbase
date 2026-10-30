@@ -27,6 +27,11 @@ const AddBuildEdges = "add-build-edges"
 // no subcommand.
 const DemoteClaimEdge = "demote-claim-edge"
 
+// SplitClaim is the build's analysis split: a claim's argument carried by a
+// minted analysis that lifts it, with the claim's premises moved onto the
+// analysis. Only the build issues it, so it is no subcommand.
+const SplitClaim = "split-claim"
+
 // ResolveDemoted removes a demoted record or restores the edge it replaced.
 const ResolveDemoted = "resolve-demoted"
 
@@ -72,6 +77,7 @@ var writeOps = map[string]opSpec{
 	"drop-claim-edges":        {edit: &recordEdit{apply: dropClaimEdges}},
 	"drop-inbound-edges":      {edit: &recordEdit{apply: dropInboundEdges}},
 	DemoteClaimEdge:           {edit: &recordEdit{apply: demoteEdge}, buildOnly: true, overDegraded: true},
+	SplitClaim:                {edit: &recordEdit{apply: splitClaim, machine: true}, buildOnly: true},
 	"drop-claim-node":         {edit: &recordEdit{apply: refuseStrandedClaim, finish: dropClaimNodes}},
 }
 

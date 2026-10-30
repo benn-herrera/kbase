@@ -23,17 +23,17 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-// TestAskConcurrencyTakesTheFlagThenTheKeyThenTwo: N is --ask-concurrency
-// where the invocation gave it, else [asks] concurrency, else 2; a flag under
+// TestAskConcurrencyTakesTheFlagThenTheKeyThenTheDefault: N is --ask-concurrency
+// where the invocation gave it, else [asks] concurrency, else the default; a flag under
 // 1 is a usage refusal naming the flag, whatever the key says.
-func TestAskConcurrencyTakesTheFlagThenTheKeyThenTwo(t *testing.T) {
+func TestAskConcurrencyTakesTheFlagThenTheKeyThenTheDefault(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		flag, key *int
 		want      int
 		refused   bool
 	}{
-		{"neither", nil, nil, 2, false},
+		{"neither", nil, nil, config.DefaultAskConcurrency, false},
 		{"the key", nil, new(3), 3, false},
 		{"the flag over the key", new(5), new(3), 5, false},
 		{"the flag alone", new(1), nil, 1, false},

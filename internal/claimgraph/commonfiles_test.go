@@ -4,16 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
 	"kbase/internal/log"
+	"kbase/internal/result"
 )
 
 // discoveryParagraph is the one paragraph of each discovery leaf: every leaf
@@ -86,6 +92,131 @@ func commonFiles(t *testing.T, root, repo string) map[string][]byte {
 	return out
 }
 
+// askingStage is a stage that puts multichoice asks, the kind it asks, and a
+// seed it asks over.
+type askingStage struct {
+	name  string
+	kind  asks.Kind
+	seed  func(t *testing.T) (string, string, Options)
+	stage func(context.Context, Options) (Report, error)
+}
+
+// askingStages is every stage that puts multichoice asks.
+var askingStages = []askingStage{
+	{"claims-discovered", asks.Paragraph, func(t *testing.T) (string, string, Options) {
+		return seedDiscoveryLeaves(t, []string{"a", "b"}, "a", "b")
+	}, Discovered},
+	{"references-found", asks.Unmarked, func(t *testing.T) (string, string, Options) {
+		root, repo, opts := seedCullStage(t, nil)
+		if err := WriteUnmarked(repo, buildrecords.UnmarkedRecord{}); err != nil {
+			t.Fatal(err)
+		}
+		return root, repo, opts
+	}, References},
+	{"claims-culled", asks.Colinear, func(t *testing.T) (string, string, Options) { return seedCullStage(t, nil) }, Culled},
+	{"depends-attributed", asks.Classify, func(t *testing.T) (string, string, Options) {
+		root, repo, opts := seedCullStage(t, nil)
+		if err := WriteCull(repo, buildrecords.CullRecord{Links: []buildrecords.CullLink{{A: cullA, B: cullD, Harvest: harvestUnmarked}}}); err != nil {
+			t.Fatal(err)
+		}
+		return root, repo, opts
+	}, Depends},
+}
+
+// TestAStoppedStageLeavesItsGroupRecords: each stage whose batch stops on a
+// call that never completes reports the stop, and leaves its group records
+// with that ask recorded failed; where they cannot be written, the stage
+// reports the stop and fails on the write.
+func TestAStoppedStageLeavesItsGroupRecords(t *testing.T) {
+	never := func(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
+		return asks.Reply{}, asks.IncompleteError{Subject: q.Group + "->" + q.Item, Detail: "no reply arrived"}
+	}
+	inferenceStop := askStop(asks.IncompleteError{}).(*stop).check
+	stopped := func(t *testing.T, report Report) {
+		t.Helper()
+		if !slices.ContainsFunc(report.Failures(), func(it result.Item) bool { return it.Check == inferenceStop }) {
+			t.Errorf("the stage reported %+v, want the inference stop", report.Failures())
+		}
+	}
+	groupRecords := func(t *testing.T, opts Options, kind asks.Kind) []asks.GroupRecord {
+		t.Helper()
+		f, err := os.Open(asks.GroupRecordsPath(opts.AskRecords, kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		var recs []asks.GroupRecord
+		for dec := yaml.NewDecoder(f); ; {
+			var r asks.GroupRecord
+			if err := dec.Decode(&r); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			recs = append(recs, r)
+		}
+		return recs
+	}
+	for _, tc := range askingStages {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, opts := tc.seed(t)
+			opts.Launch = readerLaunch(never)
+			report, err := tc.stage(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopped(t, report)
+			recs := groupRecords(t, opts, tc.kind)
+			if len(recs) == 0 || len(recs[0].Items) == 0 || recs[0].Items[0].Outcome != asks.Failed {
+				t.Errorf("the stage left %+v, want its first ask recorded failed", recs)
+			}
+		})
+		t.Run(tc.name+" unwritable", func(t *testing.T) {
+			_, _, opts := tc.seed(t)
+			opts.Launch = readerLaunch(never)
+			blocker := filepath.Join(t.TempDir(), "a-file")
+			if err := os.WriteFile(blocker, nil, 0o666); err != nil {
+				t.Fatal(err)
+			}
+			opts.AskRecords = filepath.Join(blocker, "asks")
+			report, err := tc.stage(context.Background(), opts)
+			stopped(t, report)
+			if err == nil {
+				t.Error("the stage's records could not be written, and it returned no error")
+			}
+		})
+	}
+	// askCull names a group for its pass: p<pass>-<claim>.
+	const pass1, pass2 = "p1-", "p2-"
+	// The first pass answering that the first shown adds nothing culls A into
+	// B and B into D, so A's root is not its target and the second pass asks.
+	t.Run("claims-culled stopped in its second pass", func(t *testing.T) {
+		_, _, opts := seedCullStage(t, nil)
+		opts.Launch = readerLaunch(func(ctx context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
+			if strings.HasPrefix(q.Group, pass2) {
+				return never(ctx, q)
+			}
+			return asks.Reply{Text: asks.LetterFirstAddsNothing}, nil
+		})
+		report, err := Culled(context.Background(), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stopped(t, report)
+		var first, second, failed bool
+		for _, rec := range groupRecords(t, opts, asks.Colinear) {
+			first = first || strings.HasPrefix(rec.Group, pass1)
+			if strings.HasPrefix(rec.Group, pass2) {
+				second = true
+				failed = failed || slices.ContainsFunc(rec.Items, func(it asks.ItemRecord) bool { return it.Outcome == asks.Failed })
+			}
+		}
+		if !first || !second || !failed {
+			t.Errorf("the records hold a first-pass group %t, a second-pass group %t, a second-pass item failed %t; want all three", first, second, failed)
+		}
+	})
+}
+
 // TestAStageWritesNoCommonFileWhileItAsks: at every ask of each inference
 // stage, every build record and both kb-root/.index/ record files hold the
 // bytes they held before the stage, and its group records are not yet
@@ -94,30 +225,7 @@ func TestAStageWritesNoCommonFileWhileItAsks(t *testing.T) {
 	answer := func(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
 		return asks.Reply{Text: q.Offered[0]}, nil
 	}
-	for _, tc := range []struct {
-		name  string
-		seed  func(t *testing.T) (string, string, Options)
-		stage func(context.Context, Options) (Report, error)
-	}{
-		{"claims-discovered", func(t *testing.T) (string, string, Options) {
-			return seedDiscoveryLeaves(t, []string{"a", "b"}, "a", "b")
-		}, Discovered},
-		{"references-found", func(t *testing.T) (string, string, Options) {
-			root, repo, opts := seedCullStage(t, nil)
-			if err := WriteUnmarked(repo, buildrecords.UnmarkedRecord{}); err != nil {
-				t.Fatal(err)
-			}
-			return root, repo, opts
-		}, References},
-		{"claims-culled", func(t *testing.T) (string, string, Options) { return seedCullStage(t, nil) }, Culled},
-		{"depends-attributed", func(t *testing.T) (string, string, Options) {
-			root, repo, opts := seedCullStage(t, nil)
-			if err := WriteCull(repo, buildrecords.CullRecord{Links: []buildrecords.CullLink{{A: cullA, B: cullD, Harvest: harvestUnmarked}}}); err != nil {
-				t.Fatal(err)
-			}
-			return root, repo, opts
-		}, Depends},
-	} {
+	for _, tc := range askingStages {
 		t.Run(tc.name, func(t *testing.T) {
 			root, repo, opts := tc.seed(t)
 			before := commonFiles(t, root, repo)

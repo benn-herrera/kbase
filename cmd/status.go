@@ -33,7 +33,7 @@ func monitorCommand(use, short, long string, verb func(buildstore.MonitorOptions
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
+	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: the store the operation lock names, else $XDG_STATE_HOME/kbase/<key>)")
 	return cmd
 }
 

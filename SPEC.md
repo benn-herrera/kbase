@@ -152,6 +152,8 @@ the `.index/` files — the two record files — concatenated in sorted path ord
 ```
 kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
             [--through <stage>] [--state-dir DIR] [--ask-concurrency N]
+kbase build --resume [--no-inference] [--through <stage>] [--state-dir DIR]
+            [--ask-concurrency N]
 ```
 
 A value of `--ask-concurrency` under 1 is a usage refusal naming `--ask-concurrency`, and `build`'s
@@ -160,31 +162,59 @@ A value of `--ask-concurrency` under 1 is a usage refusal naming `--ask-concurre
 **Output and placement.** The KB is written only at `<git root>/kb-root/`. Build state is never
 written into `kb-root/`.
 
-**Fresh versus resume** is derived from the `kb-build:` commit trail (§6), never configured. A build
-against a populated `kb-root/` with no `kb-build:` commit trail is refused. `build` refuses outside
-a git worktree, naming `git init`. It refuses if the kbase-owned paths it commits are dirty and the
-dirt is not an interrupted stage's own uncommitted work (§6), and only then. A build over a
-non-empty trail is given the inputs its newest boundary records (§6) — the same volume roots and the
-same `--bibliography` files, each in the same order — or it is refused before anything is restored
-or written: one item per differing input, `check: inputs`, `key` `<volume-root>` or
-`--bibliography`, `path` the repository root, `detail` naming what the trail records and what the
-run was given (the paths added and removed, or the same paths in another order), remedy "resume with
-the inputs the trail records, or start over from a commit before the trail". A finished build re-run
-with other inputs is refused so, not `unchanged`. A newest boundary that records no inputs, written
-before boundaries carried them, is not compared. A trail that records a stage while leaving an
-earlier stage in walk order unrecorded was written by a build walking another stage order, and a
-build over it is refused before anything is restored or written: one item, `check: trail`, `path`
-the repository root, `detail` naming the recorded stage and the unrecorded one before it, remedy
-"start over from a commit before the trail".
+**Fresh versus resume** is derived from the `kb-build:` commit trail (§6), never configured.
+`kbase build <volume-root>...` starts a build over an empty trail; `kbase build --resume` continues
+the trail. A build against a populated `kb-root/` with no `kb-build:` commit trail is refused.
+`build` refuses outside a git worktree, naming `git init`. It refuses if the kbase-owned paths it
+commits are dirty and the dirt is not an interrupted stage's own uncommitted work (§6), and only
+then.
+
+**Inputs.** A relative volume root or `--bibliography` resolves against the project root. A build
+orders its volume roots, and its `--bibliography` files where given, by full path as text, whatever
+order they were given in; every stage reads them in that order and the trail records it (§6).
+`--resume` takes no inputs: it continues with the volume roots and `--bibliography` files the
+trail's newest boundary records, in the order recorded. Before it resolves a state store, `build`
+refuses, `check: usage`, a `--resume` given a volume root (`key` `<volume-root>`) or a
+`--bibliography` (`key` `--bibliography`), one item per argument kind, and a build given neither
+volume roots nor `--resume` (`key` `<volume-root>`).
+
+**Starting over.** A trail's start-over commit is the `started-at` its `start` boundary records
+(§6); for a trail that records none, the parent of its `start` boundary; for one whose `start` is a
+root commit, none. A remedy writes the commit out as its hash, shown here as `<started-at>`.
+
+A build given volume roots over a non-empty trail is refused before anything is restored or
+written: one item, `check: inputs`, `key` `<volume-root>`, `path` the repository root, `detail`
+naming the inputs the trail records, remedy "continue with `kbase build --resume`, or start over:
+`rewind-build`'s `started-at` target, or `git reset --hard <started-at>`" — without the
+`rewind-build` clause where the trail records no `started-at`, and with "rebuild in a fresh clone"
+in place of the start-over clause where there is no start-over commit. A different input set is a
+fresh build, reached only by starting over; kbase has no command that rewinds. A finished build
+re-run with volume roots is refused so; `kbase build --resume` over a finished trail is
+`unchanged`.
+
+`--resume` needs a coherent trail. Over an empty trail it is refused: `check: trail`, `key`
+`--resume`, `path` the repository root, remedy `kbase build <volume-root>...`. Over a trail whose
+newest boundary records no inputs it is refused: `check: inputs`, `key` `--resume`, `path` the
+repository root, remedy "start over: `git reset --hard <started-at>`", or "rebuild in a fresh
+clone" where there is no start-over commit. A trail that records a stage while leaving an earlier
+stage in walk order unrecorded was written by a build walking another stage order, and a build over
+it is refused before anything is restored or written: one item, `check: trail`, `path` the
+repository root, `detail` naming the recorded stage and the unrecorded one before it, remedy "start
+over from a commit before the trail".
 
 **Determinism.** The same inputs and pandoc version give a byte-identical document graph: the tree
 `document-graph` writes and the records. The claim-graph stages mint fresh node ids on every build —
 unique within the KB, now and going forward — so a build is reproducible modulo
-ids from `claims-declared` on, and no consumer may read anything into an id's value.
+ids from `claims-declared` on, and no consumer may read anything into an id's value. The order in
+which volume roots and `--bibliography` files are given does not affect the result: the same set
+gives the same document graph, and the same KB modulo ids.
 
 **`--no-inference`** is first-class. It drops the rows that spend inference, still walks and records
 every stage, and states the rows it dropped. The run is a real KB built without those rows, not a
-stopped walk. Which rows drop follows the classification on the row (ARCHITECTURE §4), never a stage
+stopped walk. A trail a `--no-inference` build finished is a finished trail: `kbase build --resume`
+over it is `unchanged`, and its dropped rows never run on it. A build that wants them starts over
+from the trail's `started-at` (`rewind-build`'s `started-at` target, or `git reset --hard
+<started-at>`) and is a fresh build without `--no-inference`. Which rows drop follows the classification on the row (ARCHITECTURE §4), never a stage
 id. A row that spends inference in part is not dropped: its asks are skipped and the rest of the row
 still runs, as for `depends-attributed`.
 
@@ -214,7 +244,7 @@ probabilities over that set, not by reply text (§9).
 
 **Bibliographies.** With no `--bibliography`, the build passes every `.bib` in any volume root's
 directory, in sorted path order, one set offered to every volume; `--bibliography` given replaces
-that set. **Degradation, not refusal.** An unreadable bibliography: the build continues without it
+that set, read in path order (above). **Degradation, not refusal.** An unreadable bibliography: the build continues without it
 and reports the file.
 
 **Under `--no-inference`** no `README.md` is written: the overview call is the dropped row, and the
@@ -224,14 +254,18 @@ README is assembled around its passage.
 status` and `kbase cancel` (§6) observe and stop it.
 
 **What a build produces**: Markdown leaves; the index, up-link and cross-reference structure;
-load-bearing forms; the claim graph's node and edge records; the register pages. The build's stages
-and what each does are in ARCHITECTURE, "Stage table"; how each computes its product is
-ARCHITECTURE's.
+load-bearing forms; the claim graph's node and edge records, among them an analysis for each claim
+whose bounds hold text beyond its statement proper; the register pages. The build's stages and what
+each does are in ARCHITECTURE, "Stage table"; how each computes its product is ARCHITECTURE's.
 
 **A build marks every claim.** Every claim a build mints is hosted in the call that mints it: its
 statement marker (§10) stands in its leaf, a leaf's only claim and an equation included — an
 equation's at the end of the line inside its display-maths fence that carries its `\label{…}`,
-never on the fence's closing line; a block claim's on its locator's line.
+never on the fence's closing line; a block claim's on its locator's line. The analysis split
+(below) moves a prose claim's marker to just after the sentence its title is drawn from, on the line
+that sentence ends on. It hosts each analysis it mints by a marker on the first blank line of the
+blockquote that is its statement, or at the end of the last line of its claim's paragraph (§10).
+Where either line closes a fenced block, the marker goes at the end of the line before it.
 
 **A build records no judgement.** Every scoring edge a build writes carries `*pending*` as its
 bearing, and no stage writes a `rigor` or any other number into a score; every value a build writes
@@ -272,6 +306,32 @@ containment directed the pair, *mention* otherwise. The stage writes every edge 
 cycles included; last, the cycle walk (§10) demotes one edge of each cycle those edges close, each
 cut a warning in the stage's report, before the stage's refresh and verify.
 
+**Analysis split (`analyses-split`).** The stage walks between `depends-attributed` and
+`phase-3a`. It asks no model, so it runs in full under `--no-inference`.
+
+A claim's bounds are its own block or paragraph and the proof blocks that establish it. A proof
+establishes the claims its opening names or, where its opening names none, the claim whose block it
+follows. A claim's statement proper is the line the build titles it by: a block claim's display
+line, or a prose claim's paragraph up to and including the sentence its title is drawn from.
+
+A claim whose bounds hold text beyond its statement proper is split into the claim, which narrows
+to its statement proper, and an analysis. An equation node is never split, and neither is a claim
+whose bounds are its statement proper alone. The analysis's statement is the claim's own block or
+paragraph where that holds text beyond the statement proper. Otherwise it is the first proof, in
+reading order, that establishes the claim. Another proof establishing it is no part of this
+analysis's statement; its text is a statement only where it is the first proof of some other claim
+it establishes. A claim whose analysis's statement would be a blockquote holding no blank line is
+left unsplit, there being no line to mark the analysis on; the stage's report counts each such
+claim as `unsplit-no-blank-line`.
+
+The claim keeps its record, every edge out of it and every `references` edge into it. The analysis
+is minted with the claim's title, rigor `*pending*` and a rationale stating the split. Every
+`supports` and `founds` edge into the claim moves onto the analysis. So does every `demoted` record
+into the claim that replaced a `supports` edge, each with its source, context, bearing and
+`manually-scored` unchanged. One `lifts` edge runs from the analysis to the claim, bearing
+`*pending*`, `manually-scored: false`. Every path through a split claim before the stage runs
+through its analysis after it, so the stage closes no cycle and cuts nothing.
+
 **Records and inference.** The reader and placement facts the claim graph needs travel as records in
 the build state store, not in `kb-root/` (ARCHITECTURE, "Records"). Each inference pass is one
 closed-set decision per call under its embedded template (ARCHITECTURE, "Inference seams"); no stage
@@ -287,8 +347,12 @@ answered from its prompt alone.
 **Git holds the recoverable record.** Each stage boundary is a commit in the user's repository, with
 subject `kb-build: <stage-id> | <display name>` and a structured body. Every boundary's body ends
 with the build's inputs: a `volume-root: <path>` line per volume root, then a `bibliography: <path>`
-line per `--bibliography`, each in the order given, the path repository-relative with forward
-slashes. A commit carries `kb-root/` and the tracked build records, at the repository root:
+line per `--bibliography`, each in the order the build reads them (§5), each path absolute. The
+`start` boundary's body also records `started-at: <commit>`, the commit the build began from: the
+clean, ready-to-build state a fresh build over other inputs starts again from. On a branch with no
+commit, a fresh build first makes one empty commit, subject `kb-start: the repository before the
+build` — outside `kb-build:`, so no part of the trail — after every refusal it can give and before
+its `start` stage, and records that commit as `started-at`. A commit carries `kb-root/` and the tracked build records, at the repository root:
 the node-pass record `kb-build-node-pass.yaml`, the unmarked record
 `kb-build-unmarked.yaml`, the classification record `kb-build-classification.yaml` and the cull
 record `kb-build-cull.yaml`, YAML at `1.0.0` (§10). The cull record holds `about`; `entries`, one
@@ -322,8 +386,10 @@ lives at `$XDG_STATE_HOME/kbase/<key>/`, where `<key>` is the first 16 hex digit
 the absolute, symlink-resolved `kb-root/` path, overridable with `--state-dir`; it holds paid-for
 inference and survives `git clean`. **The operation lock is in the repository's git directory**,
 `kbase-operation.lock`, recording the state-dir: a repository carries one run at a time — a build or
-a scoring run, never both — whatever `--state-dir` each names. A second run is `refused` with `check: lock`,
-`path` the running run's state-dir, and no remedy, its `detail` naming the holder's verb and pid: "a
+a scoring run, never both — whatever `--state-dir` each names. Given no `--state-dir`, `status`,
+`cancel`, `wait` and `rewind-build` read the store the operation lock names while its file stands
+and names one, else the default store; a new run never adopts it. A second run is `refused` with
+`check: lock`, `path` the running run's state-dir, and no remedy, its `detail` naming the holder's verb and pid: "a
 build (pid 4321) is running; its state-dir is …", or "a score run (pid 4321) is running; …". Where
 the operation lock is held but names no state-dir yet, the second run gets `retry`; where it names
 one whose holder record is not yet written, the refusal says a run is starting. Every lock is
@@ -477,7 +543,7 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 
 | Subcommand | Keys |
 |---|---|
-| `build` | `state-dir`; `roles` (one record per role the build resolved, in role order — `decision`, then `text` — in the role record's shape below; absent where it resolved none, as under `--no-inference`); `through` (absent where this invocation walked no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store); absent where this invocation walked no stage); `resume` (absent where an identical re-issue continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that walked no stage, and a `refused` run that recorded no boundary) |
+| `build` | `state-dir`; `roles` (one record per role the build resolved, in role order — `decision`, then `text` — in the role record's shape below; absent where it resolved none, as under `--no-inference`); `through` (absent where this invocation walked no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (row ids), `report` (path to the stage's full findings in the state store); absent where this invocation walked no stage); `resume` (`kbase build --resume` and the flags the invocation carried that a resume still needs — `--no-inference` where given, `--ask-concurrency` where given, `--state-dir`, `--config-dir` and `--project-dir` where given, `--config-dir` written absolute — never the inputs or `--through`; absent where an identical re-issue continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that walked no stage, and a `refused` run that recorded no boundary) |
 | `status` | `state-dir`; `state` (§6's vocabulary, `interrupted` included); `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` (absent for `finished`, `running` and `bounded`; read from the run §6 names) |
 | `cancel` | `state-dir`; `pid`; `resume` (absent where the record's command does not read as a `kbase build` invocation, §6) |
 | `init` | `written` (every path this call wrote — the spine, the two empty record files, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
@@ -490,11 +556,11 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `show`, `stats`, `edge-census` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `show` adds `manually_scored` (§8) after `rigor` on a claim, an analysis and an experiment; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `rigor_manual`, `rigor_model`, `bearing_manual` and `bearing_model` (the records whose type carries `manually-scored`, `*pending*` values included, counted by the flag), then `strength_bands` and its two ranked sections, whose records carry `strength`; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none); `edge-census`' mapping carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`, and on `supports`, `lifts` and `refutes` `manual` and `model` after `edges`, the rows at that bearing counted by their `manually-scored` flag; numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows) |
 | `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (the sheets the volume-count rule drops; `[]` when none); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
-| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key` — the layer that supplied that field, one of `layers`' four names, null where the field is unset) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
+| `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `environment` (the inference variable names this process sets, sorted); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `mode` (`file` or `environment`, the source this invocation's inference comes from; null where the sources are mixed or the environment is partial, each role's `detail` and the diagnostics carrying the reason); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve or the mode is undecided) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
-| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
+| `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s; absent where the environment supplies the endpoint); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `temperature`, `thinking` (chat selections only: the effective settings — `temperature` a number; `thinking` `off`, `low`, `medium` or `high`); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
-| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the walk's order — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
+| `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the walk's order — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run, carrying `--project-dir` where given, and `--config-dir` written absolute; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
 
 A `status` read over a score run reports §6's score shape in place of the build keys above.
 
@@ -511,6 +577,7 @@ omitted where it does not apply:
 | `provider-layer` | the layer that supplied the entry: `explicit`, `environment`, `repository` or `global` |
 | `model` | the model id this invocation asked for; null where no source named one |
 | `base-url`, `sources` | `show-config` alone: the endpoint, and the layer that supplied each field |
+| `temperature`, `thinking` | `show-config` alone, chat roles: the role's sampling settings, null where unset (§9.2) |
 | `detail` | `show-config` alone: why the role does not resolve, where it does not |
 
 `provider`, `provider-rule` and `provider-layer` stand together or not at all: no pool entry supplied
@@ -774,8 +841,9 @@ kbase export-latex [--out DIR] [--volume NAME]...
 ```
 
 Writes a LaTeX project from the KB's current state into `--out` (default `latex-export/` beside
-`kb-root/`; a relative `--out` resolves against the working directory). Every KB file is read through the one loader (§10's stamp rules apply); nothing under
-`kb-root/` is written. `--volume` is repeatable, each naming a volume directory under `kb-root/`;
+`kb-root/`; a relative `--out` resolves against the project root (§9)). Every KB file is read
+through the one loader (§10's stamp rules apply); nothing under `kb-root/` is written. `--volume`
+is repeatable, each naming a volume directory under `kb-root/`;
 the named volumes export in entry-point order, and a `--volume` naming no volume in the entry
 point's list is a usage refusal (§7). The out directory may be any directory, the author's own
 LaTeX project included: kbase owns only its `gen-tex/` subdirectory and writes nothing else there
@@ -948,7 +1016,8 @@ as a person's decision.
 with a status that is not success: the request was carried, read and declined, and the reason
 carries that status and the provider's own words beside it. `transport-failure` — the
 connection, the name, the certificate or the stream failed, and no answer of the provider's was
-had. A reason states the one that happened: the first calls for the request to be looked at, the
+had. `truncated-empty` — the provider answered, and the answer reached the completion cap before
+any answer text: the request leaves it no room, and it is not sent again. A reason states the one that happened: the first calls for the request to be looked at, the
 second for the path to the provider.
 
 **Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
@@ -977,15 +1046,15 @@ chat protocol that endpoint's entry names (§9.1): `openai` speaks `chat/complet
 speaks the Messages protocol. Every ask a run sends to an `openai` endpoint carries the run's id as
 its `prompt_cache_key`, so a run's asks reach one provider and share one cache entry; the Messages
 protocol has no such field, so a run whose endpoint speaks it sends no key. Messages requires a
-completion cap, and no other request is capped: the cap is `max(256, ceil(characters / 4))` over the
+completion cap, and no other request is capped: the answer's allowance is `max(256, ceil(characters / 4))` over the
 characters of the ask's messages and system text — four characters per token because the ask is plain
-prose and no LaTeX is ever sent. Thinking is disabled on a Messages endpoint by sending the
-protocol's thinking field as disabled (`thinking: {type: disabled}`), kbase's `reasoning` control
-being OpenAI-surface only, and thinking text is never part of a reply on either protocol. A call
+prose and no LaTeX is ever sent. The call carries the scoring role's sampling settings (§9.2) in its
+protocol's fields (§9.1), and thinking text is never part of a reply on either protocol. A call
 that does not complete is re-issued identically up to the transport attempt count, pausing 5 s then
 30 s between attempts (ARCHITECTURE §12). What fails the item at once, on the one attempt that met
 it, is a provider's answer carrying a status that is not retryable — any non-2xx other than 429 and
-the 5xx class — and a reply the parse refuses. `--resume` is how a user asks a failed item again.
+the 5xx class — an answer that reached the completion cap before any answer text, which an
+identical re-send would cut off the same way, and a reply the parse refuses. `--resume` is how a user asks a failed item again.
 
 **The ledger and resume.** A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
 `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
@@ -1136,15 +1205,18 @@ or the default named it, and the reference where `--model` did.
 
 A chat selection is one tool-less chat request through the registry a scoring run's asks take, so
 an endpoint is reached over the wire shape its pool entry names: no tools, no history, an empty
-system prompt, and `--prompt` in place of the default one-word check. A `--decision` selection is
+system prompt, and `--prompt` in place of the default one-word check. It carries its role's sampling
+settings (§9.2) — the `scoring` role's where `--model` names the selection — and the document
+reports the effective settings, `temperature` and `thinking`. A `--decision` selection is
 one decision call on the surface its entry's `decisionsFlavor` names, with no system message, and
 its `--prompt` in place of the default predicate. `--timeout` bounds the call (default `30s`); a
 call that does not complete is re-issued at once up to the attempt count, so that deadline is spent
 on attempts rather than on pauses (§12). The document reports what a ledger cannot — the selection,
 the provider, the model, the time to the first token, the call's wall time, the finish reason, the
 reply, and the usage the provider reported — and its outcome follows the call: `done` where it
-completed, `failed` where it did not, with the attempt's own outcome and the provider's words in the
-failure. It reads no KB and reads or writes no state directory: it prints its document and exits,
+completed, or where a chat answer was cut off at the completion cap before any answer text
+(`finish-reason` `length`, `reply` empty); `failed` otherwise, with the attempt's own outcome and the
+provider's words in the failure. It reads no KB and reads or writes no state directory: it prints its document and exits,
 and no MCP tool binds it (§11).
 
 Result keys: §7.
@@ -1211,6 +1283,15 @@ written.
 away) and `-h`/`--help`; the root command also accepts `-v`/`--version`, which prints exactly the
 version string and a newline. A directory `--config-dir` or `$KBASE_CONFIG_DIR` names is the only
 one read, the flag before the variable; otherwise configuration is read from the two layers above.
+`--project-dir PATH` (the project root: the git worktree root that holds `kb-root/` or will; the
+subcommand's search for the repository starts there instead of the working directory; a path that
+is no git worktree root is refused, `check: worktree`, `key: --project-dir`, `path` the absolute
+path)
+
+A relative path a subcommand takes — a volume root, `--bibliography`, `--state-dir`, `export-latex
+--out`, `--values` — resolves against the project root; `--config-dir` and `--log-file` resolve
+against the working directory, whatever `--project-dir` names, and a printed `resume` writes
+`--config-dir` absolute.
 
 **Provider commands.** `kbase models [--provider NAME] [--timeout DURATION]` lists the selected
 provider's model identifiers, sorted ascending, in its result document (§7). `kbase configure
@@ -1257,7 +1338,10 @@ says the model ids went unchecked; with `--provider` the ordinary path runs — 
 catalogue, warn on an id the catalogue does not offer. A refusal writes nothing, and so does a dial or
 catalogue failure.
 
-**The two modes.** Inference comes from exactly one of two sources, and never from both. An
+**The two modes.** Inference — the endpoint and the model each role asks — comes from exactly one of two
+sources, and never from both. How a role is asked is not part of that choice: `[asks]
+concurrency` and `[sampling]` (§9.2) are read from `config.toml` in either mode, and an
+environment-mode role speaks `openai`. An
 integrator configures a build — or a scoring run — from the invoking environment with no
 configuration directory at all; a run in file mode has no inference variable set.
 
@@ -1311,7 +1395,7 @@ baseUrl = "..."        # required
 apiKeyFile = "..."     # path to a key file, resolved relative to this file's
                         # own directory if relative; an entry's only key field
 type = "inference"     # optional; the only accepted value, also the default
-api = "openai"         # optional; "openai" (also the default) or "anthropic" —
+api = "anthropic"      # optional; "anthropic" (also the default) or "openai" —
                        # the chat protocol this server speaks
 decisionsFlavor = "systemone"  # optional; "systemone" (also the default) or
                                # "decisions" — the decision surface this
@@ -1325,17 +1409,34 @@ key-file read failure faults just that entry the same way. An absent `providers.
 pool, not a load error.
 
 **The chat protocol.** `api` names the wire protocol chat uses, chosen per server; it is a two-value
-field. `openai` is the OpenAI-compatible `chat/completions` surface — what an entry silent on `api`
-gets — and `anthropic` is the Anthropic Messages surface, `POST <baseUrl>/messages`. The two differ
-in more than a path. Messages requires a `max_tokens` cap, which kbase estimates as
-`max(256, ceil(characters / 4))` over the ask's messages and system text (§8). It takes the system
-prompt as a top-level `system` string rather than a turn, so a system message is lifted out of
-`messages`. It accepts `temperature` only in [0,1], so a value outside that range is omitted rather
-than clamped. It has no `prompt_cache_key`, `chat_template_kwargs` or `reasoning` field: none is
-sent, and thinking is disabled by sending the protocol's thinking field as `{type: disabled}`. Its
+field. `anthropic` is the Anthropic Messages surface, `POST <baseUrl>/messages` — what an entry
+silent on `api` gets — and `openai` is the OpenAI-compatible `chat/completions` surface. The two
+differ in more than a path. Over the OpenAI-compatible protocol a thinking level is an effort hint
+that the server may exceed without bound; a Messages request carries `budget_tokens` and a
+`max_tokens` ceiling, and the ceiling bounds thinking even where a server overruns the budget.
+Messages requires a `max_tokens` cap: kbase's allowance for the answer is
+`max(256, ceil(characters / 4))` over the ask's messages and system text (§8), and a role
+whose `thinking` is not `off` (§9.2) adds its thinking budget — 1,024 tokens for `low`, 4,096
+for `medium`, 16,384 for `high` — sent as `thinking: {type: enabled, budget_tokens: <budget>}`;
+thinking `off` is sent as `thinking: {type: disabled}`, the field's absence leaving it at the
+server's default. Messages takes the system prompt as a top-level `system` string rather
+than a turn, so a system message is lifted out of `messages`. `temperature` is the role's, 0
+where unset, and is sent whatever the thinking level. Anthropic's own endpoint rejects a
+temperature beside thinking. It has no
+`prompt_cache_key`, `chat_template_kwargs`, `reasoning` or `reasoning_effort` field, and
+none is sent. This mapping targets servers that implement the Messages protocol — oMLX,
+LiteLLM-style proxies, OpenRouter; Anthropic's own newer models may reject `budget_tokens`,
+`temperature` or `thinking: {type: disabled}`. An `openai` request carries the role's
+`temperature`, 0 where unset; thinking `off` sends
+`chat_template_kwargs: {enable_thinking: false}` and `reasoning: {enabled: false}`, and a
+level sends it three ways at once — `reasoning_effort: <level>`,
+`reasoning: {effort: <level>}` and `chat_template_kwargs: {enable_thinking: true}` — since a
+server reads whichever of them it speaks. A Messages entry's
 catalogue is `GET <baseUrl>/models`, whose `created_at` is RFC 3339. `decisionsFlavor` is unaffected
-by `api`, and the decision surfaces are OpenAI-shaped: the `decision` role's entry must speak
-`openai`, and a Messages endpoint asked for a multichoice ask refuses, naming the provider and the role.
+by `api`, and the decision surfaces are OpenAI-shaped: the `decision` role's multichoice asks
+always use the OpenAI-shaped decision surface on its entry's base URL, authenticated as an `openai`
+entry is, whatever the entry's `api`. A server that speaks only Messages has no such surface, and the
+decision call fails with that server's HTTP status.
 
 **The decision surface.** `decisionsFlavor` names the wire shape the decision call uses, chosen per
 server: it changes nothing about chat, which `api` alone decides, and it binds
@@ -1366,8 +1467,13 @@ text = "<entry>/<id>"          # the overview passage
 scoring = "<entry>/<id>"       # kbase score's asks; required for score, in every mode
 
 [asks]
-concurrency = 2                # optional; model calls one build or score has in flight at once, across every role
+concurrency = 4                # optional; model calls one build or score has in flight at once, across every role
 readerConcurrency              # SUPERSEDED — loads, and chooses nothing; removed at the next major
+
+[sampling.text]                # optional; the overview passage's sampling
+temperature = 0.0              # optional; a number
+thinking = "off"               # optional; off | low | medium | high
+[sampling.scoring]             # optional; kbase score's asks' sampling, the same two keys
 ```
 
 **A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider
@@ -1380,13 +1486,23 @@ endpoint instead (§9), and one form of value is never read as the other.
 
 A category left unset resolves to "not configured" — no defaulting, no guessing, and no role falls
 back to another. `concurrency` is how many model calls one invocation of `build` or `score` has in
-flight at once, across every role; absent, it is 2, and `--ask-concurrency` overrides it for that
+flight at once, across every role; absent, it is 4, and `--ask-concurrency` overrides it for that
 invocation. A value under 1 fails the load, naming `asks.concurrency`. Calls start in the order the
 invocation submits them. `readerConcurrency` is superseded: it loads and chooses nothing, a file-mode
 `build` or `score` says so in one line on stderr naming `asks.concurrency`, and it leaves the schema
 at the next major ([ROADMAP.md](ROADMAP.md)). There is no `[dev]` table; an old `[dev]` key fails strict load (§9.3). A
 `[models]` table spelling `heavy`/`light` — the superseded category names — fails strict load as
 unmodeled keys (§9.3); the remedy is a hand edit.
+
+**Sampling is per chat role.** `[sampling.text]` and `[sampling.scoring]` each take
+`temperature` and `thinking`, both optional. A key left unset is kbase's default —
+temperature 0 and thinking off — never the provider's. They merge field by field like every
+`config.toml` value, each keeping the layer that supplied it. There is no
+`[sampling.decision]`: the decision role's closed-set probabilities take no sampling, and a
+`sampling.decision` key fails strict load as unmodeled (§9.3). A `thinking` value other than
+the four fails the load, naming `sampling.<role>.thinking` and the four. Resolving a role
+refuses, naming `sampling.<role>.temperature`, a temperature outside the range its entry's
+chat protocol accepts — 0 to 2 for `openai`, 0 to 1 for `anthropic`.
 
 ### 9.3 Strict-load contract
 
@@ -1444,13 +1560,13 @@ rather than by dialling.
 The report states the layers this invocation read, in precedence order, each with its path, the
 source that named it — `explicit` (a flag), `environment` (`$KBASE_CONFIG_DIR`), `repository` or
 `global` — and whether the directory and each of its three files stand; `config.toml`'s merged
-`[models]` values, null where a category is unset; every pool entry in name order with the layer
+`[models]` values, null where a category is unset, and its `[sampling]` values, null where unset; every pool entry in name order with the layer
 that supplied it and the decision surface it speaks — its default filled in, so an entry silent on
 the flavour reads `systemone` — including a provider a dropping fault removed (unusable, with the
 fault's reason); the inference variable names this process sets (§9, "The two modes"); the mode, or
 null where the sources are mixed; the pool entry the selection names and the rule that named it, or
 why no entry was named; one record per role — the endpoint it resolves to, the layer that supplied
-each field, or why it does not resolve.
+each field, a chat role's sampling settings, or why it does not resolve.
 
 The sources vocabulary is `layers`': `repository` or `global` for a value a file holds, `explicit` or
 `environment` for one read from the one directory a flag or `$KBASE_CONFIG_DIR` named, and
@@ -1620,11 +1736,26 @@ path order for the walk; both are `verify`'s `statement marker` fault, never ref
 neither degrades the load. A claim's statement is the block its marker sits in, or, where the marker
 ends a heading's line, the section that heading opens, from the line after it to the next heading as
 deep or shallower; an analysis's or an experiment's is the section the marker sits in, from the
-nearest heading above it to the next heading as deep or shallower. The inserts place an analysis's or an experiment's marker on a new
-line directly after the host's first heading; `mark-claim-in-leaf` places or moves any node's
-marker at the end of the line its locator names (§8). A marker is never on a fenced block's opening
-or closing line (a display-maths fence included), so a locator naming either line is refused, naming
-the locator.
+nearest heading above it to the next heading as deep or shallower. Two marker forms read otherwise.
+The build's analysis split (§5) places both, through its build-only `split-claim`. In the first, an
+analysis's marker stands on a blank line of a blockquote, a line holding only the `>` prefix and
+markers. The analysis's statement is that blockquote, its whole quoted run. A claim that analysis
+lifts, its marker in the same blockquote, has for its statement the text of its marker's line before
+the marker; any other claim marked in that blockquote has that blockquote for its statement, as
+above. The second form stands in a paragraph: the run of lines around a marker's line that hold text
+once the `>` prefix and markers are removed, all quoted or none, holding no heading line, and in
+which only the first line may open a list item. In it, a claim's marker is followed by text other
+than markers, and after that text stands the marker of an analysis that lifts the claim. The claim's
+statement is the paragraph up to its marker. The analysis's statement is the whole paragraph.
+Markers and `>` prefixes are removed from both. A paragraph of one line is the form's simplest case.
+No public write op places the first form; `mark-claim-in-leaf`, which places a marker at the end of
+a line, can place the second, and a marker placed into either form, by an op or by hand, reads by
+it. A claim and an analysis whose markers stand side by side with no text between them, as the
+format migration writes them, are in neither form. The inserts place an analysis's or an
+experiment's marker on a new line directly after the host's first heading; `mark-claim-in-leaf`
+places or moves any node's marker at the end of the line its locator names (§8). A marker is never
+on a fenced block's opening or closing line (a display-maths fence included), so a locator naming
+either line is refused, naming the locator.
 
 **Register pages.** A claim, an analysis and an experiment is rendered on the register page of the
 volume its host lies in, `<volume>/claim-rigor.md`, a volume being a top-level directory of
@@ -1965,23 +2096,25 @@ document is the channel and stderr is the server's log; `status` and `cancel` lo
 carry it. A `3.1.0` and a `4.0.0` KB are refused `check: kb-format`.
 
 **The `demoted` relation**, added at `1.0.0`. An edge class only the build's cycle walk and
-`refresh`'s repair of a degraded load write: a scoring edge one of them cuts to break a cycle is
-replaced by a `demoted` record that keeps it whole — its `source`, `target` and `context`, and as
-`replaced-relation`, `bearing` and `manually-scored` the replaced edge's relation and values — in
-the replaced edge's direction. `replaced-relation` is `supports`, `lifts` or `refutes`: a `founds`
-source, a work or an axiom, has no incoming scoring edge, so it closes no cycle. A `demoted` record
-stands outside the premise walk and the acyclicity check exactly as `references` does and carries
-no strength. The build writes cuts through two build-only write ops, `add-build-edges` and
-`demote-claim-edge`, neither a subcommand nor among the public ops, so the public write surface
-cannot create one. `demote-claim-edge` replaces each standing scoring edge of a pair with its
-`demoted` record; where that record already stands it removes the edge standing beside it, where
-only `demoted` records stand it leaves the pair as it stands, and a pair with neither is refused.
-`resolve-demoted` (§8) removes a `demoted` record or restores the edge it replaced exactly, refusing
-a restore that would close a cycle (`check: dependency-cycle`, the entry number and the path) and a
-restore where neither a `demoted` record nor the replaced edge stands. `verify` lists every `demoted`
-record under `findings` (§7) with outcome `done`; `deps` reports it as a row of its own relation, out
-of its source; `stats` counts them as `demoted_edges`, after `edges`, which counts every row; the
-sheet draws each as a cut (§3); and its target's register entry lists it.
+`refresh`'s repair of a degraded load write, and only the build's analysis split (§5) moves: a
+scoring edge one of them cuts to break a cycle is replaced by a `demoted` record that keeps it whole
+— its `source`, `target` and `context`, and as `replaced-relation`, `bearing` and `manually-scored`
+the replaced edge's relation and values — in the replaced edge's direction. `replaced-relation` is
+`supports`, `lifts` or `refutes`: a `founds` source, a work or an axiom, has no incoming scoring
+edge, so it closes no cycle. A `demoted` record stands outside the premise walk and the acyclicity
+check exactly as `references` does and carries no strength. The build writes cuts through two
+build-only write ops, `add-build-edges` and `demote-claim-edge`, and moves one onto the analysis it
+splits from a claim through a third, `split-claim`. None is a subcommand or among the public ops,
+so the public write surface cannot create one. `demote-claim-edge` replaces each standing scoring
+edge of a pair with its `demoted` record; where that record already stands it removes the edge
+standing beside it, where only `demoted` records stand it leaves the pair as it stands, and a pair
+with neither is refused. `resolve-demoted` (§8) removes a `demoted` record or restores the edge it
+replaced exactly, refusing a restore that would close a cycle (`check: dependency-cycle`, the entry
+number and the path) and a restore where neither a `demoted` record nor the replaced edge stands.
+`verify` lists every `demoted` record under `findings` (§7) with outcome `done`; `deps` reports it
+as a row of its own relation, out of its source; `stats` counts them as `demoted_edges`, after
+`edges`, which counts every row; the sheet draws each as a cut (§3); and its target's register entry
+lists it.
 
 **Cycles: cut as the walk finds them.** One walk serves the build's ring row, the degraded load's
 resolution and `refresh`'s repair, so all three cut the same edges.
@@ -2011,10 +2144,10 @@ restore that still closes a cycle.
 
 ## 11. The MCP server
 
-`kbase mcp --kb-root <path>` serves one KB to any external agent harness that speaks the Model
-Context Protocol, over stdio JSON-RPC. It is the subcommands, bound: every tool but one is one
-subcommand, with the same arguments and the same result, so an external agent harness without MCP
-loses nothing but convenience. The exception is `rewind-build`, the one listed tool — it has no
+`kbase mcp` serves kbase to any external agent harness that speaks the Model Context Protocol, over
+stdio JSON-RPC. It is the subcommands, bound: every tool but one is one subcommand, with the same
+arguments and the same result, so an external agent harness without MCP loses nothing but
+convenience. The exception is `rewind-build`, the one listed tool — it has no
 subcommand behind it, reports position that `status` and the commit trail already state, and
 changes nothing.
 
@@ -2022,10 +2155,18 @@ changes nothing.
   `wait` — a tool call would hold the turn for the build's or score run's duration — and less
   `probe`, a diagnostic whose tool would let an agent poll a model at will; plus
   `rewind-build`, which no subcommand stands behind. A tool's input schema is derived from its command's arguments and flags (the global flags
-  excluded; the server carries its own), and a duration flag's argument is the Go duration string
-  the command line spells (`30s`). A write op's schema is one entry: the op's closed vocabulary (§8)
-  as properties, no others allowed; a call writes that one entry, and `--no-refresh` is not
-  offered. A refusal over MCP carries `entry` as `1` and no
+  excluded — the server carries its own — but for `project-dir`, below), and a duration flag's
+  argument is the Go duration string the command line spells (`30s`). A write op's schema is one
+  entry: the op's closed vocabulary (§8) as properties, no others allowed; a call writes that one
+  entry, and `--no-refresh` is not offered. Every tool's schema, a write op's included, carries one
+  more property, `project-dir`: the project the call runs in, the git worktree root that holds
+  `kb-root/` or will. The schema is rendered per mode (below): in TUI mode the property is
+  optional, and a call that omits it runs in the server's located project; in GUI mode it is listed
+  in `required`, and its description says only what it names. A call runs in the project it names where it names one, else in
+  the server's located project; a call with neither is `refused`, `check: usage`, `key:
+  project-dir`. A `project-dir` that is no git worktree root is `refused`, `check: worktree`, `key:
+  project-dir`, `path` the absolute path; a relative one resolves against the server's working
+  directory. A refusal over MCP carries `entry` as `1` and no
   `line` or `column`; its `key` keeps the CLI spelling (§7), or, where no command stands behind the
   tool, is the schema property name (`target` on `rewind-build`). Arguments that fail the tool's
   schema (a missing required key, a wrong type, an unknown key) are JSON-RPC `-32602` errors, not
@@ -2039,10 +2180,16 @@ changes nothing.
   exactly when the document's exit code (§7) is not 0, so a refusal reaches the model as an error
   carrying its items and remedy while `bounded` and a completed `cancel` do not. List queries take
   `limit` and `offset` with §7's semantics.
-- **`--kb-root`** names a kb-root directory, or a repository root (a directory holding `.git`) with
-  or without a `kb-root/` in it. Any other path is a usage refusal (§7) before the server serves.
-- **`build` is detached.** The tool starts `kbase build` as its own process, from the repository
-  root, in its own process group, with no stdin, configured as the server is (the environment,
+- **Two modes.** In TUI mode, `kbase mcp`, for a harness that runs kbase from inside the project,
+  the server locates its project by searching upward from its working directory for the repository
+  root, and a tool call naming no `project-dir` runs there; a server whose search finds no
+  repository has no located project. In GUI mode, `kbase mcp --project-dir-required`, for a harness
+  that serves many projects from one place, the server locates none: every call must name
+  `project-dir`. The server takes no project flag: the global `--project-dir` given to `mcp` is a
+  usage refusal (§7) before it serves. Startup never fails for want of a project.
+- **`build` is detached.** The tool starts `kbase build` as its own process, from the root of the
+  call's project, passing `--project-dir` where the call named one, in its own process group, with
+  no stdin, configured as the server is (the environment,
   `--config-dir`, `--log-level` and `--log-file`, §9). The build's stdout and stderr are captured as
   files in the state store's `reports/` (§6). The tool waits until the build's progress record shows
   it has entered a stage, or until it exits, for at most 40 s, and returns by what happened first.
@@ -2050,8 +2197,9 @@ changes nothing.
   waits that write out before its first stage; the build is visible to `status` while it waits:
   - *entered a stage* — outcome `done` with `kb-root`, `state-dir`, `pid`, `resume` and `wait`, the
     `resume` absent where the record's command does not read as a `kbase build` invocation (§6).
-    `wait` is the exact shell command `kbase wait --state-dir <store> --pid <pid>`, shell-joined as
-    `status` joins its `resume` (§6): it returns when the run is over and prints that store's
+    `wait` is the exact shell command `kbase wait [--project-dir <root>] --state-dir <store> --pid
+    <pid>`, carrying `--project-dir` where the call named one, shell-joined as `status` joins its
+    `resume` (§6): it returns when the run is over and prints that store's
     `status` document, so a session whose client does not subscribe to `kbase://build` runs it in
     the background and is woken when it exits. `status` and `cancel` follow it;
   - *exited* — the build's own document, `isError` set by its outcome (§7);
@@ -2063,16 +2211,18 @@ changes nothing.
   `--config-dir` and `--log-file` stay relative to the server's working directory. Where `status`
   would refuse (no git worktree, or a `--state-dir` inside `kb-root/`), the tool returns that
   refusal and starts no process. The capture files are not removed.
-- **`score` is detached.** The tool starts `kbase score` as its own process, from the repository
-  root, in its own process group, with no stdin, configured as the server is (the environment,
+- **`score` is detached.** The tool starts `kbase score` as its own process, from the root of the
+  call's project, passing `--project-dir` where the call named one, in its own process group, with
+  no stdin, configured as the server is (the environment,
   `--config-dir`, `--log-level` and `--log-file`, §9). The run's stdout and stderr are captured as
   files in the state store's `reports/` (§6). The tool waits until the run's ledger and pid stand,
   or until it exits, for at most 40 s, and returns by what happened first. The bound is the KB
   write-lock wait (30 s, §8) plus 10 s, because a run starting during a write waits that write out
   before its first refresh; the run is visible to `status` while it waits:
   - *started* — outcome `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait`.
-    `wait` is the exact shell command `kbase wait --state-dir <store> --pid <pid>`, shell-joined as
-    `status` joins its `resume` (§6): it returns when the run is over and prints that run's
+    `wait` is the exact shell command `kbase wait [--project-dir <root>] --state-dir <store> --pid
+    <pid>`, carrying `--project-dir` where the call named one, shell-joined as `status` joins its
+    `resume` (§6): it returns when the run is over and prints that run's
     document, so a session whose client does not subscribe to a run's progress runs it in the
     background and is woken when it exits. `status` and `cancel` follow it;
   - *exited* — the run's own document, `isError` set by its outcome (§7);
@@ -2089,8 +2239,9 @@ changes nothing.
   repository stands at. `dirty` is `false` on a clean worktree, else the changed paths of the whole
   worktree — not only the paths a build owns — the first 20 named and the rest counted in a final
   `+N more`; it is a warning of what a reset would lose, never a refusal. The document's keys come in
-  this order: `outcome`, `kb-root`, `state-dir`, `head`, `boundaries`, `dirty`, `commands`, then
-  `target` where one was named, then `resume-note` where the document has a sentence to add. That
+  this order: `outcome`, `kb-root`, `state-dir`, `head`, `boundaries`, `started-at`, `dirty`,
+  `commands`, then `target` where one was named, then `resume-note` where the document has a
+  sentence to add. That
   order is the document's own, because no flag table exists to derive it from, and both arguments —
   `target` and `state-dir` — are optional.
   `commands` is `git reset --hard <commit>` followed by the run's recorded command, shell-joined as
@@ -2099,7 +2250,12 @@ changes nothing.
   that leaves `commands` the reset line alone, and `resume-note` says the record's command could not
   be confirmed as a kbase invocation. With no `target` the reset line names no commit. A `target` is a
   stage id or display name, resolved as `--through` resolves one, and names that stage's boundary in
-  the trail, with `discards` counting the boundaries newer than it. A `bounded` run's recorded
+  the trail, with `discards` counting the boundaries newer than it. `started-at` is the commit the
+  trail's `start` boundary records (§6), with `label` "the clean, ready-to-build state before the
+  build", and null where the trail records none. A `target` of `started-at` names it: `commands` is
+  the reset line alone, since a build after that reset is fresh and names its own volume roots;
+  `discards` counts every boundary; and `allowed` lists `started-at` where it is recorded. A
+  `bounded` run's recorded
   command is printed here although `status` withholds it, because after a reset to an earlier
   boundary there are stages left to walk — the case that suppression excludes — and `resume-note`
   says so. Outcomes: `done` (0); `refused` (1) for a `target` no boundary carries — `check: usage`,
@@ -2122,11 +2278,14 @@ changes nothing.
   document, not as a list fault. A fourth resource, `kbase://build`, is one `application/yaml`
   document: the document the `status` tool returns (§6), for the state store the `build` tool last
   launched from this server — the store that launch resolved, so a relative `state-dir` argument is
-  the repository root's — and for the served repository's default store where this server launched
-  none. It is listed always, as the trail is: a read before any build answers that document with
-  `state: none`, and a served directory that is no worktree answers `status`'s refusal document. It
-  does not fail. `resources/subscribe` and `resources/unsubscribe` take and drop a subscription to
-  it, held for the connection's life. `kbase://build` is the only URI a client may subscribe to:
+  the repository root's, read in that launch's project — and for the default store of the server's
+  located project where this server launched none. It is listed always, as the trail is: a read
+  before any build answers that document with `state: none`, and the server's located project,
+  where it is no worktree, answers `status`'s refusal document. It does not fail. A server with no located project
+  lists no sheet, and its `kbase://build-trail`, and its `kbase://build` until it launches a build,
+  answer the refusal a call naming no project gets (`check: usage`, `key: project-dir`).
+  `resources/subscribe` and `resources/unsubscribe` take and drop a subscription to it, held for
+  the connection's life. `kbase://build` is the only URI a client may subscribe to:
   another URI the server lists is `-32602` and one it does not list is `-32002`, and a missing `uri`
   is `-32602`; a second subscribe to one already held changes nothing, and an unsubscribe of one not
   held is answered and changes nothing. While it is subscribed, the server sends
@@ -2157,11 +2316,13 @@ changes nothing.
 - **Protocol.** One MCP revision, the one the server implements, pinned as one constant
   (ARCHITECTURE §12); an initialise naming another revision is answered with the server's for the
   client to decide; calls are answered one at a time, in order; EOF on stdin ends the server.
-- **Instructions.** `initialize` carries `instructions`: what the server serves, where it is, and
-  what carries a session on from there. Over a repository whose `kb-root/` stands it names the KB's
-  path; over one whose `kb-root/` is yet to be made it names the repository's and says the KB can be
-  built; where no repository holds the served directory the field is absent. Either path is
-  absolute, the `kbase` skill is named as the workflow, and `show-config` as the tool reporting
+- **Instructions.** `initialize` always carries `instructions`, in both modes and whether or not the
+  server located a project: what the server serves, and the rules every session keeps. Where it
+  located a project, they open with where it is: over a repository whose `kb-root/` stands, the
+  KB's path; over one whose `kb-root/` is yet to be made, the repository's, saying the KB can be
+  built; the path is absolute. In GUI mode that opening is one line instead: name the project with
+  `project-dir` on each tool call. A TUI-mode server that located no project opens with neither.
+  The `kbase` skill is named as the workflow, and `show-config` as the tool reporting
   configuration. It forbids a session to read or write kbase's records and derived files — anything
   under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
   exists; it names the query tools as what reports what the records hold, the write tools as what
@@ -2175,13 +2336,17 @@ changes nothing.
   is how values are judged or re-judged. Reading a document's prose stays open, and so does reading a
   sheet as an MCP resource. Every tool it names is one the server serves. The text is an embedded
   file of the binary.
-- **Registration** is the external agent harness's: one server entry naming the command
-  `kbase mcp --kb-root <absolute path>`. README gives the entry for two external agent harnesses as
-  examples.
+- **Registration** is the external agent harness's: one server entry, `kbase mcp` (TUI mode) or
+  `kbase mcp --project-dir-required` (GUI mode). README gives entries for two external agent
+  harnesses as examples.
 
 ---
 
 ## 12. Interim releases
+
+**0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
+the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an
+entry that relied on the old default states it (§9.1).
 
 **0.8.0 — KB format `3.0.0`: the graph as records.** A KB's nodes and edges are records in two
 authored files, `.index/nodes.yaml` and `.index/edges.yaml`, and everything else is derived at load

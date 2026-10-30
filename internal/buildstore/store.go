@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"go.yaml.in/yaml/v3"
+
 	"kbase/internal/asks"
 	"kbase/internal/filelock"
 	"kbase/internal/result"
@@ -74,6 +76,30 @@ type Holder struct {
 
 // HolderPath is the state store's holder lock at dir.
 func HolderPath(dir string) string { return filepath.Join(dir, lockFile) }
+
+// OperationLockFile is the operation lock in the repository's git directory,
+// so a build and a scoring run over one KB exclude each other whatever their
+// state directories and the working tree gains no file. It records the
+// holder's state directory; the store's holder record carries the pid, the
+// start and the verb status and cancel read.
+const OperationLockFile = "kbase-operation.lock"
+
+// OperationLockPath is the operation lock of the KB at kbRoot. A .git file is
+// followed to the worktree's own git directory, read rather than asked of git,
+// since a maintenance verb that checks the lock never requires git.
+func OperationLockPath(kbRoot string) string {
+	repo := filepath.Dir(kbRoot)
+	dir := filepath.Join(repo, ".git")
+	if text, err := os.ReadFile(dir); err == nil {
+		if target, ok := strings.CutPrefix(strings.TrimSpace(string(text)), "gitdir:"); ok {
+			dir = strings.TrimSpace(target)
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(repo, dir)
+			}
+		}
+	}
+	return filepath.Join(dir, OperationLockFile)
+}
 
 // ReadHolder is the holder record in the store at dir; the zero record where
 // none stands. The kind is required: it says which verb owns the run, and a
@@ -293,6 +319,88 @@ func PruneCaptures(reports, prefix string, keep int) error {
 			if err := os.Remove(filepath.Join(reports, stem+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("remove the capture %s: %w", stem, err)
 			}
+		}
+	}
+	return nil
+}
+
+// KeptRuns is how many directories of one kind a start-ordered prune keeps:
+// the scoring runs of each kind — real or dry — in the state directory, the
+// development replays of a scoring run's replays/ and those of a build trail's
+// replays/. The directory an invocation names is one of them.
+const KeptRuns = 16
+
+// DirStart is one directory under a parent and the start its header records.
+type DirStart struct {
+	Name, Started string
+	At            time.Time
+}
+
+// CompareStarts orders two directories oldest first: by start, and equal starts
+// by name, the later name newer.
+func CompareStarts(a, b DirStart) int {
+	if c := a.At.Compare(b.At); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Name, b.Name)
+}
+
+// DirStarts is every directory under parent whose header — the file of that name
+// inside it — records a start this kbase reads, in the parent's listing order. A
+// directory whose header is absent, does not read as YAML, or records a start
+// that does not parse left no record of when it started and is left out. No
+// parent standing is no directory.
+func DirStarts(parent, header string) ([]DirStart, error) {
+	entries, err := os.ReadDir(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []DirStart
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(parent, e.Name(), header))
+		if err != nil {
+			continue
+		}
+		var h struct {
+			Started string `yaml:"started"`
+		}
+		if yaml.Unmarshal(b, &h) != nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, h.Started)
+		if err != nil {
+			continue
+		}
+		out = append(out, DirStart{Name: e.Name(), Started: h.Started, At: at})
+	}
+	return out, nil
+}
+
+// PruneByStart keeps, of the directories under parent that sameKind accepts,
+// keep and the newest kept-1 others in CompareStarts' order, and removes the
+// rest whole. A directory DirStarts leaves out has no start to order by, and
+// stands.
+func PruneByStart(parent, header, keep string, kept int, sameKind func(name string) bool) error {
+	starts, err := DirStarts(parent, header)
+	if err != nil {
+		return err
+	}
+	var others []DirStart
+	for _, s := range starts {
+		if s.Name != keep && sameKind(s.Name) {
+			others = append(others, s)
+		}
+	}
+	slices.SortFunc(others, CompareStarts)
+	for _, s := range others[:max(0, len(others)-(kept-1))] {
+		if err := os.RemoveAll(filepath.Join(parent, s.Name)); err != nil {
+			return fmt.Errorf("remove %s: %w", s.Name, err)
 		}
 	}
 	return nil

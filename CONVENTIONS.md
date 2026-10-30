@@ -21,15 +21,14 @@ this file, is the reference for available actions. Key habits: `just edit-gate` 
 `just checkpoint` at checkpoints, and anything LIVE (provider + network) is excluded from the
 hermetic `just test-integration` omnibus and says so in its docstring.
 
-`just dist` cross-compiles every target from one host (pure Go, no extra toolchain setup needed) and
-stages the signed distro tarball and installer. Run it on a tree that has passed `just checkpoint`: a
-cross-build is what users receive, so the gate is a precondition of the release, not a step the
-recipe runs. `just dist --tag` also runs a lightweight, local `git tag v<version>` once every stage,
-signing included, has succeeded; it pushes nothing. It refuses before building anything if that tag
-already exists or tracked files have uncommitted changes.
+kbase is distributed through the Homebrew tap `benn-herrera/kbase`, whose formula is maintained in
+the sibling clone `homebrew-kbase/` (`just tap`). The formula builds a tagged release from source
+with no build tag, so what users receive is the release shape `test-dist-no-replay` vets.
+`just tag` tags a release: refused while tracked files have uncommitted changes, it runs
+`checkpoint` and `test-dist-no-replay`, then creates a signed annotated tag `v<version>` locally
+and pushes it nowhere. Windows has no distributed binary; it builds from source.
 
-**No built binaries live in the repo.** `bin/` and `dist/` are gitignored build products;
-distribution is the `just dist` tarball attached to a GitHub release by the user. Never commit build
+**No built binaries live in the repo.** `bin/` is a gitignored build product. Never commit build
 outputs or publish releases.
 
 **Test data layout.** `test-data/fixtures/` holds version-controlled test data we author, own, and
@@ -56,15 +55,15 @@ them. Working rules for packages that carry over:
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a
   reference back; an environment-supplied id is a bare id of the environment's endpoint, which nothing
   parses. No site splits an id or concatenates a reference by hand.
-- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey, IdleConns}` is the
-  transport-level slice of a provider — `Protocol` saying which chat surface its entry speaks
-  (`openai` unless the entry says `anthropic`), `Decisions` whether it speaks the Decisions shape
-  (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
+- **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey, IdleConns, Sampling}` is the
+  transport-level slice of a provider — `Protocol` saying which client the registry builds
+  (the chat protocol the role's endpoint speaks, and always `openai` for the `decision` role), `Decisions` whether it speaks the Decisions shape (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
   ask of it carries, and `IdleConns` the idle connections per host its client keeps (the invocation's
-  concurrency; zero leaves the defaults) — and the one mapping from configuration's vocabulary onto `Protocol` and
-  `Decisions` (`chatProtocol`, `decisionsSurface`) lives in `internal/modelclient`. The chat asks — the overview and each scoring call — go through
+  concurrency; zero leaves the defaults) — and the one mapping from configuration's vocabulary onto `Protocol`,
+  `Decisions` and `Sampling` (`chatProtocol`, `decisionsSurface`, `samplingOf`) lives in `internal/modelclient`. The chat asks — the overview and each scoring call — go through
   a `Slot`'s `Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
-  attempt count (ARCHITECTURE §12). An attempt's outcome is the classification of what ended it, and
+  attempt count (ARCHITECTURE §12); an attempt cut off at the completion cap with no answer text is
+  `ChatTruncatedEmpty` and ends the call on that attempt. An attempt's outcome is the classification of what ended it, and
   the two failures are not interchangeable: an endpoint that answered with a non-2xx status refused
   the request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
   body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
@@ -98,17 +97,17 @@ single source. Working habits they impose:
 
 ## House Rules
 
-- **The exec monopoly (I1) is enforced by an AST-scan test** over every Go file
+- **The exec monopoly (I1) is enforced by an AST-scan test** over every non-test Go file
   (`cmd/execpolicy_test.go`), and ARCHITECTURE §11's dependency rules by `cmd/importpolicy_test.go`
   over the transitive import graph. Reach pandoc, git or `dot` through the owning package, never
   beside it. The one self-exec owner is a file, not a package: `internal/mcp/launch.go` alone may
   exec the kbase binary, and the test fails on any other file that does. Four owners are the whole
   list — pandoc, git, `dot` and that self-exec — and a process started anywhere else fails the
   test. The policy scans share one module walk (`cmd/modulescan_test.go`), so they agree on which
-  files are the module's source. The scan reads test files as source too — the trap: a package
-  test that compiles its output under `pdflatex` has nothing wrong in it and fails the tree. A
-  verification needing a binary no package owns is never a package test: it is a runner recipe
-  (recipes exec freely). Evidence gathered for the change at hand is not a verification but a
+  files are the module's source. The monopoly binds the shipped code: the scan skips test files,
+  and a test may start the processes its fixtures need. A test needing a binary the environment
+  does not guarantee still belongs in a runner recipe, under "Testing"'s tool-dependency rule.
+  Evidence gathered for the change at hand is not a verification but a
   probe — a script run by hand in scratch, its log cited in the report, with no durable home. A
   probe whose finding must keep holding becomes a verification: the check lands in a recipe. A
   probe whose result a commit or plan cites keeps its command in the commit message, so a later
@@ -171,18 +170,20 @@ single source. Working habits they impose:
   Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings asserted in
   code.
 - **Dev-only diagnostics are compiled out of the shipped binary.** A diagnostic for developing kbase
-  itself — today `score --replay` — lives in files carrying `//go:build !kbasedist`, code and tests
-  alike; `just dist` builds with `-tags kbasedist`, so the release binary does not contain it. The
-  untagged code reaches it only through a hook its tagged file sets. Its flags carry the flag-level
-  `kbase.mcp` = `excluded` annotation, so dev and dist builds serve one MCP tool table. SPEC states
-  nothing of it; ARCHITECTURE does. The trap: an untagged reference to tagged code, which builds by
-  default and breaks only the dist build — `edit-gate` vets with the tag for that reason, and
-  `test-dist-no-replay`, in the hermetic omnibus and run first by `test-dist`, runs
-  `TestDistBuildHasNoReplay` (`cmd/dist_test.go`, tagged `kbasedist`).
+  itself — today `score --replay` and `build --replay` — lives in files carrying `//go:build kbasedev`,
+  code and tests alike; the untagged build is what users receive and it carries none of that code. What
+  those diagnostics read is not dev-only: every build writes its trail, ledger and captures whatever
+  built it. A developer opts in with `-tags kbasedev` (`just build`). The untagged code reaches it only
+  through a hook its tagged file sets, which is nil without the tag. Its flags carry the flag-level
+  `kbase.mcp` = `excluded` annotation, so dev and release builds serve one MCP tool table. SPEC states
+  nothing of it; ARCHITECTURE does. The trap: an untagged reference to tagged code, which now breaks
+  the default build — the one everyone runs — where under the old polarity it broke only the rare
+  dist-tagged build. That is why `edit-gate` vets both polarities, and why `test-dist-no-replay`, in
+  the hermetic omnibus, runs `TestDistBuildHasNoReplay`
+  (`cmd/dist_test.go`, tagged `!kbasedev`) on the untagged build.
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
-  outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores `kbase mcp
-  --kb-root`, so the tool reads the server's directory instead of the served KB.
-  `cmd/invocationdir_test.go` enforces it.
+  outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores the project
+  an MCP call or `--project-dir` names. `cmd/invocationdir_test.go` enforces it.
 - **Never enumerate what you will accept in a field kbase does not fill.** pandoc fills the
   reference macro type and Div classes; an author fills metadata keys. Read such a field whole and
   branch only on the values you must act on, passing everything else downstream under its own name.
@@ -369,6 +370,14 @@ file is one power-cycle from gone.
   - The burndown list is written to a separate `<plan>_REVIEW_BURNDOWN.md` and gets the same
     prompt engineer review and revision pass as any other document containing agent instructions.
 
+### Plan work rating and dispatch
+- Every plan rates each dispatch **mechanical** or **expert**
+  - The rating decides the model: a mechanical dispatch runs on a stepped-down model, an expert one inherits the coordinator's model. 
+  - Rate what the dispatch must decide, not how much it types
+    - mechanical: a package whose work is settled by the plan's own text — a rename, a transcription, a test that mirrors a stated rule
+    - expert: one that must choose between defensible options, diagnose behaviour, or write model-facing prose
+- Mechanical tasks are dispatched to a stepped-down model as specified in the global AGENTS.md or CLAUDE.md
+
 ### Plan dispatchability
 A work package is dispatchable only when the following conditions have been met
 
@@ -449,14 +458,17 @@ way it names any other truth it moved, so a reader can see which change made it 
 - MCP protocol tests are transcript fixtures, `test-data/fixtures/mcp/*.jsonl`: each request line is
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
   `${VERSION}`, `${ID1}`, `${ID2}`, `${REPO}` (the repository root) and `${STATE_DIR}`, applied to
-  requests as well as responses. The detached-build test needs a kbase binary to re-execute:
+  requests as well as responses. A transcript named `gui-*.jsonl` runs GUI mode: the recipe serves it
+  with `kbase mcp --project-dir-required` from outside the staged repository, and
+  `TestMCPTranscripts` with a server that locates no project, so a call reaches the fixture only by naming
+  it, `"project-dir":"${REPO}"`. The detached-build test needs a kbase binary to re-execute:
   `TestMain` runs the test binary as kbase when `KBASE_TEST_RUN_AS_KBASE` is set. The runner stages
   the results fixture, inserts `seed.yaml`'s entries through `insert-claim-entry`, and requires
   exactly the expected lines on stdout.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
   `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
   hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
-  dependency — pandoc, python3, expect, the adjagent clone — leaves the omnibus the same way, what needs no
+  dependency — pandoc, python3, the adjagent clone — leaves the omnibus the same way, what needs no
   tool staying in it as a recipe of its own.
 - A script is checked where it stands: after changing one, `bash -n tools/scripts/<name>.sh`, and
   `just edit-gate` runs `bash -n` over every `tools/scripts/*.sh`, so a syntax error fails the gate
@@ -480,8 +492,8 @@ way it names any other truth it moved, so a reader can see which change made it 
   integration test passes `--state-dir` under that directory to each command that uses the state
   store, so nothing reaches the user's real `$XDG_STATE_HOME`; a command that never touches the
   store (`refresh`, `verify`, the queries) takes no such flag. `build` refuses an unknown `--through`,
-  a `--state-dir` inside `kb-root/` and a `--ask-concurrency` under 1 before it resolves and creates
-  its state store, and those refusals carry no `state-dir`; its later refusals follow the store. Every
+  `--resume` given inputs, no inputs without `--resume`, a `--state-dir` inside `kb-root/` and a
+  `--ask-concurrency` under 1 before it resolves and creates its state store, and those refusals carry no `state-dir`; its later refusals follow the store. Every
   recipe invocation of `build` takes `--state-dir`, refused outcomes included.
 - A scratch copy of a fixture repository under this repository needs its own `.git` (an empty
   directory serves) before kbase runs over it. The trap: kbase resolves the repository root at the

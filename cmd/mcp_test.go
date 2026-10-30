@@ -25,6 +25,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/gitledger"
 	"kbase/internal/kb"
+	"kbase/internal/kbdocs"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
@@ -104,8 +105,12 @@ func mcpServer(t *testing.T) (mcp.Server, *strings.Replacer) {
 	if err := os.Mkdir(filepath.Join(repo, "kb-root", "b"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	seed, err := filepath.Abs(filepath.Join(mcpTranscriptDir, "seed.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out bytes.Buffer
-	code, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: filepath.Join(mcpTranscriptDir, "seed.yaml"),
+	code, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: seed,
 		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
 	var inserted struct {
 		KBRoot string   `yaml:"kb-root"`
@@ -114,11 +119,8 @@ func mcpServer(t *testing.T) (mcp.Server, *strings.Replacer) {
 	if err != nil || code != 0 || yaml.Unmarshal(out.Bytes(), &inserted) != nil || len(inserted.IDs) != 2 {
 		t.Fatalf("staging insert: exit %d, %v\n%s", code, err, out.String())
 	}
-	kbRoot := filepath.Join(repo, "kb-root")
-	srv := servedServer(rootCmd, kbRoot, &bytes.Buffer{}, log.Discard())
-	if srv.Instructions, err = mcp.ServedInstructions(kbRoot); err != nil {
-		t.Fatal(err)
-	}
+	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
+	srv.Instructions = mcp.ServedInstructions(srv.Located)
 	slices.Sort(inserted.IDs)
 	return srv,
 		strings.NewReplacer("${KB_ROOT}", jsonText(t, inserted.KBRoot), "${REPO}", jsonText(t, repo),
@@ -152,7 +154,9 @@ func jsonText(t *testing.T, s string) string {
 
 // TestMCPTranscripts runs every transcript — request lines each followed by
 // its expected response line, or by noResponse — through the server over
-// the results fixture, and requires exactly the expected lines on stdout.
+// the results fixture, and requires exactly the expected lines on stdout. A
+// transcript named gui-* is served as kbase mcp --project-dir-required
+// serves: a server that locates no project, so each call names the fixture.
 func TestMCPTranscripts(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(mcpTranscriptDir, "*.jsonl"))
 	if err != nil || len(files) == 0 {
@@ -169,6 +173,10 @@ func TestMCPTranscripts(t *testing.T) {
 				t.Fatalf("%d lines: a transcript pairs each request with its response", len(lines))
 			}
 			srv, placeholders := mcpServer(t)
+			if strings.HasPrefix(filepath.Base(file), "gui-") {
+				srv = servedServer(rootCmd, mcp.ProjectRequired(), &bytes.Buffer{}, log.Discard())
+				srv.Instructions = mcp.ServedInstructions(srv.Located)
+			}
 			var requests, want []string
 			for i := 0; i < len(lines); i += 2 {
 				requests = append(requests, placeholders.Replace(lines[i]))
@@ -210,6 +218,12 @@ type listedTool struct {
 func listTools(t *testing.T) []listedTool {
 	t.Helper()
 	srv, _ := mcpServer(t)
+	return toolsListedBy(t, srv)
+}
+
+// toolsListedBy is what srv's tools/list answers.
+func toolsListedBy(t *testing.T, srv mcp.Server) []listedTool {
+	t.Helper()
 	got := serveLines(t, srv, []string{`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`})
 	if len(got) != 1 {
 		t.Fatalf("tools/list: %d lines", len(got))
@@ -256,6 +270,9 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 		}
 	}
 	var names, gotReadOnly []string
+	// projectDir is the project-dir property the first tool carries, which
+	// every other tool must carry alike.
+	var projectDir map[string]any
 	for _, tool := range listTools(t) {
 		names = append(names, tool.Name)
 		if tool.Annotations["readOnlyHint"] {
@@ -270,10 +287,24 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 				t.Errorf("%s: required %q is no property", tool.Name, key)
 			}
 		}
+		// project-dir is the one global flag a tool takes: the project the
+		// call runs in, optional on every tool, described alike.
 		for key := range s.Properties {
-			if rootCmd.PersistentFlags().Lookup(key) != nil {
+			if key != "project-dir" && rootCmd.PersistentFlags().Lookup(key) != nil {
 				t.Errorf("%s: takes the global flag %q", tool.Name, key)
 			}
+		}
+		property, ok := s.Properties["project-dir"]
+		description, _ := property["description"].(string)
+		switch {
+		case !ok || property["type"] != "string" || description == "":
+			t.Errorf("%s: project-dir is %v, want a described string property", tool.Name, property)
+		case slices.Contains(s.Required, "project-dir"):
+			t.Errorf("%s: requires project-dir", tool.Name)
+		case projectDir == nil:
+			projectDir = property
+		case !maps.Equal(property, projectDir):
+			t.Errorf("%s: project-dir is %v, unlike the other tools' %v", tool.Name, property, projectDir)
 		}
 		if tool.Name == listedToolName {
 			// No command stands behind this one, so its description is its
@@ -282,8 +313,8 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 			if !strings.Contains(tool.Description, "read-only") {
 				t.Errorf("%s: description %q does not state that it is read-only", tool.Name, tool.Description)
 			}
-			if keys := slices.Sorted(maps.Keys(s.Properties)); !slices.Equal(keys, []string{"state-dir", "target"}) {
-				t.Errorf("%s: takes %v, want state-dir and target", tool.Name, keys)
+			if keys := slices.Sorted(maps.Keys(s.Properties)); !slices.Equal(keys, []string{"project-dir", "state-dir", "target"}) {
+				t.Errorf("%s: takes %v, want project-dir, state-dir and target", tool.Name, keys)
 			}
 			continue
 		}
@@ -293,8 +324,8 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 			t.Error(err)
 		} else {
 			for _, p := range declared {
-				if !slices.Contains(s.Required, p.Name) {
-					t.Errorf("%s: positional %q is not required", tool.Name, p.Name)
+				if slices.Contains(s.Required, p.Name) == p.Optional {
+					t.Errorf("%s: positional %q required %v, want %v", tool.Name, p.Name, !p.Optional, p.Optional)
 				}
 			}
 		}
@@ -361,14 +392,14 @@ func TestMCPRequiredFlags(t *testing.T) {
 			t.Error("score: --pass is required, which its verb does not refuse a run without")
 		}
 	})
-	t.Run("every flag not excluded from MCP derives", func(t *testing.T) {
+	t.Run("every flag not excluded from MCP derives, beside project-dir", func(t *testing.T) {
 		properties := tools["score"].InputSchema.Properties
 		for _, name := range []string{"replay", "failed"} {
 			if _, ok := properties[name]; ok {
 				t.Errorf("score: the development flag --%s is a property of the tool", name)
 			}
 		}
-		var flags []string
+		flags := []string{"project-dir"}
 		scoreCmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
 			if f.Name == "help" || mcp.ExcludedFlag(f) {
 				return
@@ -406,7 +437,8 @@ func TestMCPBuildAndScoreTakeAskConcurrency(t *testing.T) {
 
 // TestMCPWriteOpSchemas reads each write op's vocabulary off its own
 // refusal — every key it allows, every required key it misses — and
-// requires the tool's schema to be exactly that.
+// requires the tool's schema to be exactly that, plus the optional
+// project-dir every tool carries.
 func TestMCPWriteOpSchemas(t *testing.T) {
 	const unknown = "not-a-values-key"
 	seen := 0
@@ -419,7 +451,7 @@ func TestMCPWriteOpSchemas(t *testing.T) {
 		var allowed, required []string
 		for _, r := range res.Refusals {
 			if r.Key == unknown {
-				allowed = r.Allowed
+				allowed = append(slices.Clone(r.Allowed), "project-dir")
 			} else {
 				required = append(required, r.Key)
 			}
@@ -492,9 +524,11 @@ func TestCommandsDeclarePositionals(t *testing.T) {
 			continue
 		}
 		variadic := len(declared) > 0 && declared[len(declared)-1].Variadic
+		optional := variadic && declared[len(declared)-1].Optional
 		for k := range len(declared) + 3 {
 			accepted := c.ValidateArgs(make([]string, k)) == nil
-			if want := k == len(declared) || variadic && k > len(declared); accepted != want {
+			want := k == len(declared) || variadic && k > len(declared) || optional && k == len(declared)-1
+			if accepted != want {
 				t.Errorf("%s: %d positionals accepted %v; its usage line %q declares %d", c.Name(), k, accepted, c.Use, len(declared))
 			}
 		}
@@ -547,13 +581,12 @@ func callToolResult(t *testing.T, srv mcp.Server, name string, args map[string]a
 	return text, result.Structured, result.IsError
 }
 
-// TestMCPBuildStartsDetached starts a build through the tool against a
-// provider that never answers, so the build stays in flight: the tool
-// returns the start document while the build runs on, status reads it
-// running under the pid the tool named, and cancel stops it resumably. The
-// server's --log-file reaches the build: this test process opens no log, so
-// the file exists only if the build opened it.
-func TestMCPBuildStartsDetached(t *testing.T) {
+// stalledBuildRepos stages repositories named by names under one isolated
+// base, each holding the transcripts' paper, for builds against a provider
+// that never answers, so a build started there stays in flight. It returns the
+// base and the repositories, in names' order.
+func stalledBuildRepos(t *testing.T, names ...string) (string, []string) {
+	t.Helper()
 	if _, err := pandoc.Preflight(context.Background()); err != nil {
 		t.Skipf("pandoc is not usable here: %v", err)
 	}
@@ -570,22 +603,39 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	}))
 	t.Cleanup(provider.Close)
 	t.Cleanup(func() { close(release) })
-
-	repo := filepath.Join(base, "repo")
-	gitRepo(t, repo)
 	paper, err := os.ReadFile(filepath.Join(mcpTranscriptDir, "paper.tex"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeValues(t, repo, "paper.tex", string(paper))
+	var repos []string
+	for _, name := range names {
+		repo := filepath.Join(base, name)
+		gitRepo(t, repo)
+		writeValues(t, repo, "paper.tex", string(paper))
+		repos = append(repos, repo)
+	}
 	isolateChildBuild(t, base)
 	t.Setenv(config.EnvAPIBaseURL, provider.URL)
 	t.Setenv(config.EnvDecision, "m")
 	t.Setenv(config.EnvText, "m")
+	return base, repos
+}
+
+// TestMCPBuildStartsDetached starts a build through the tool against a
+// provider that never answers, so the build stays in flight: the tool
+// returns the start document while the build runs on, status reads it
+// running under the pid the tool named, and cancel stops it resumably. The
+// server's --log-file reaches the build: this test process opens no log, so
+// the file exists only if the build opened it. A call naming no project-dir
+// hands out wait and resume lines without one; a call naming another project
+// builds there, and both lines carry --project-dir.
+func TestMCPBuildStartsDetached(t *testing.T) {
+	base, repos := stalledBuildRepos(t, "repo", "other")
+	repo, other := repos[0], repos[1]
 	savedLevel, savedFile := flagLogLevel, flagLogFile
 	t.Cleanup(func() { flagLogLevel, flagLogFile = savedLevel, savedFile })
 	flagLogLevel, flagLogFile = "debug", filepath.Join(base, "build.log")
-	srv := servedServer(rootCmd, repo, &bytes.Buffer{}, log.Discard())
+	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 	state := filepath.Join(base, "state")
 	monitor := map[string]any{"state-dir": state}
 
@@ -593,7 +643,8 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	t.Cleanup(func() { callTool(t, srv, "cancel", monitor) })
 	pid, _ := start["pid"].(float64)
 	resume, _ := start["resume"].(string)
-	if isError || start["outcome"] != "done" || start["state-dir"] != state || pid <= 0 || !strings.Contains(resume, "--state-dir") {
+	if isError || start["outcome"] != "done" || start["state-dir"] != state || pid <= 0 || !strings.Contains(resume, "--state-dir") ||
+		strings.Contains(resume, "--project-dir") {
 		t.Fatalf("build: isError %v, %v", isError, start)
 	}
 	exe, err := os.Executable()
@@ -603,6 +654,25 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	wantWait := buildstore.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
 	if wait, _ := start["wait"].(string); wait != wantWait {
 		t.Errorf("build: wait = %q, want the exact command %q", wait, wantWait)
+	}
+
+	otherState := filepath.Join(base, "other-state")
+	otherMonitor := map[string]any{"state-dir": otherState, "project-dir": other}
+	elsewhere, isError := callTool(t, srv, "build", map[string]any{"project-dir": other,
+		"volume-root": []any{filepath.Join(other, "paper.tex")}, "state-dir": otherState})
+	t.Cleanup(func() { callTool(t, srv, "cancel", otherMonitor) })
+	otherPID, _ := elsewhere["pid"].(float64)
+	otherResume, _ := elsewhere["resume"].(string)
+	if isError || elsewhere["outcome"] != "done" || elsewhere["kb-root"] != filepath.Join(other, "kb-root") || otherPID <= 0 ||
+		!strings.Contains(otherResume, buildstore.ShellJoin([]string{"--project-dir", other})) {
+		t.Fatalf("build naming %s: isError %v, %v", other, isError, elsewhere)
+	}
+	wantWait = buildstore.ShellJoin([]string{exe, "wait", "--project-dir", other, "--state-dir", otherState, "--pid", strconv.Itoa(int(otherPID))})
+	if wait, _ := elsewhere["wait"].(string); wait != wantWait {
+		t.Errorf("build naming %s: wait = %q, want the exact command %q", other, wait, wantWait)
+	}
+	if cancel, isError := callTool(t, srv, "cancel", otherMonitor); isError || cancel["pid"] != otherPID {
+		t.Errorf("cancel naming %s: isError %v, %v", other, isError, cancel)
 	}
 	if status, _ := callTool(t, srv, "status", monitor); status["state"] != "running" || status["pid"] != pid {
 		t.Errorf("status after the start: %v, want running under pid %v", status, pid)
@@ -626,6 +696,49 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	}
 }
 
+// TestMCPBuildResourceReadsTheLaunchesProject: a server with no located project
+// launches a build in the project a call names, and kbase://build, read in the
+// same session, then reads that build's status there, its default store
+// included.
+func TestMCPBuildResourceReadsTheLaunchesProject(t *testing.T) {
+	_, repos := stalledBuildRepos(t, "repo")
+	repo := repos[0]
+	srv := servedServer(rootCmd, mcp.Located{}, &bytes.Buffer{}, log.Discard())
+	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"project-dir": repo}) })
+	build, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "build",
+		"arguments": map[string]any{"project-dir": repo, "volume-root": []any{filepath.Join(repo, "paper.tex")}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := serveLines(t, srv, []string{string(build),
+		`{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"` + mcp.BuildURI + `"}}`})
+	var started struct {
+		Result struct {
+			Structured map[string]any `json:"structuredContent"`
+			IsError    bool           `json:"isError"`
+		} `json:"result"`
+	}
+	var read struct {
+		Result struct {
+			Contents []struct{ Text string } `json:"contents"`
+		} `json:"result"`
+	}
+	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &started) != nil || json.Unmarshal([]byte(lines[1]), &read) != nil ||
+		len(read.Result.Contents) != 1 {
+		t.Fatalf("build, then a read of %s: %q", mcp.BuildURI, lines)
+	}
+	start := started.Result.Structured
+	pid, _ := start["pid"].(float64)
+	if started.Result.IsError || start["outcome"] != toolresult.Done || pid <= 0 {
+		t.Fatalf("build naming %s: isError %v, %v", repo, started.Result.IsError, start)
+	}
+	var status map[string]any
+	if err := yaml.Unmarshal([]byte(read.Result.Contents[0].Text), &status); err != nil || status["state"] != "running" ||
+		status["pid"] != int(pid) || status["state-dir"] != start["state-dir"] {
+		t.Errorf("%s reads %v, %v; want the build running under pid %v in %v", mcp.BuildURI, err, status, pid, start["state-dir"])
+	}
+}
+
 // TestMCPResourcesAreTheSheetsOnDisk lists the staged KB's sheets through the
 // server, requires exactly the claim-graph sheets on disk, and reads each
 // back byte-identical.
@@ -633,7 +746,8 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 	srv, _ := mcpServer(t)
 	// The server offers the sheets and the model guidance; this test is the
 	// sheets, which the guidance's own test leaves alone.
-	kbRoot := srv.Dir
+	repo, _ := srv.Located.Root()
+	kbRoot := filepath.Join(repo, "kb-root")
 	var want []string
 	for _, pattern := range []string{"*.svg", "*/claim-graph.svg"} {
 		matches, err := filepath.Glob(filepath.Join(kbRoot, pattern))
@@ -767,7 +881,7 @@ func TestMCPModelHintsResource(t *testing.T) {
 	if src, err := servedKB(broken); !errors.As(err, &refusal) || src != nil {
 		t.Errorf("a KB that will not open: the sheet family opened %v, %v; want its refusal", src, err)
 	}
-	apart := servedServer(rootCmd, broken, &bytes.Buffer{}, log.Discard())
+	apart := servedServer(rootCmd, mcp.LocatedAt(broken), &bytes.Buffer{}, log.Discard())
 	if together := listedBy(apart); !slices.Equal(together, want) {
 		t.Errorf("a KB that will not open: the composite listed %v; want %v", together, want)
 	}
@@ -783,12 +897,41 @@ func TestMCPModelHintsResource(t *testing.T) {
 		t.Errorf("with a KB that will not open, %s reads back %+v", mcp.ModelHintsURI, guidance.Contents)
 	}
 
-	// A directory holding no KB lists no sheet and raises no fault: the
-	// guidance, and the trail, which reports the repository it cannot find,
-	// are what it lists.
-	nowhere := t.TempDir()
-	if together := listedBy(servedServer(rootCmd, nowhere, &bytes.Buffer{}, log.Discard())); !slices.Equal(together, want) {
-		t.Errorf("outside a KB the composite answered %v; want %v", together, want)
+	// A server with no located project lists no sheet and raises no fault: the
+	// guidance, the trail and the build state are what it lists, and the two
+	// project-scoped ones read the refusal of a call naming no project.
+	nowhere := servedServer(rootCmd, mcp.Located{}, &bytes.Buffer{}, log.Discard())
+	if together := listedBy(nowhere); !slices.Equal(together, want) {
+		t.Errorf("with no located project the composite answered %v; want %v", together, want)
+	}
+	for _, uri := range []string{mcp.BuildTrailURI, mcp.BuildURI} {
+		var read struct {
+			Contents []struct{ Text string } `json:"contents"`
+		}
+		serveOne(t, nowhere, "resources/read", map[string]any{"uri": uri}, &read)
+		if len(read.Contents) != 1 {
+			t.Fatalf("%s with no located project reads %+v", uri, read.Contents)
+		}
+		requireNoProjectRefusal(t, uri, read.Contents[0].Text)
+	}
+}
+
+// requireNoProjectRefusal requires doc to be the refusal of a call on a server
+// with no located project that names none.
+func requireNoProjectRefusal(t *testing.T, what, doc string) {
+	t.Helper()
+	var d struct {
+		Outcome  string
+		Refusals []map[string]any
+	}
+	if err := yaml.Unmarshal([]byte(doc), &d); err != nil || d.Outcome != toolresult.Refused || len(d.Refusals) != 1 {
+		t.Fatalf("%s: %v\n%s; want one refusal", what, err, doc)
+	}
+	item := d.Refusals[0]
+	if item["check"] != checkUsage || item["key"] != "project-dir" ||
+		item["detail"] != "this server has no project of its own and the call names none" ||
+		item["remedy"] != "name the project with project-dir: the absolute path of its git worktree root" {
+		t.Errorf("%s: refused %v, want the usage refusal naming project-dir", what, item)
 	}
 }
 
@@ -834,7 +977,7 @@ func trailRepo(t *testing.T) (string, string) {
 // refusal, and a dirty tree is reported rather than refused.
 func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 	repo, last := trailRepo(t)
-	srv := servedServer(rootCmd, repo, &bytes.Buffer{}, log.Discard())
+	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 
 	doc, structured, isError := callToolResult(t, srv, listedToolName, map[string]any{})
 	if isError || structured["outcome"] != "done" || structured["head"] != last {
@@ -902,56 +1045,226 @@ func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 	}
 }
 
-// TestMCPKBRootNamesAKBRoot serves a --kb-root naming a repository root,
-// with or without its kb-root/, or that kb-root/ itself, and refuses any
-// other path before serving.
-func TestMCPKBRootNamesAKBRoot(t *testing.T) {
-	repo := stageRepo(t, resultsFixture)
-	bare := t.TempDir()
-	gitRepo(t, bare)
-	if err := os.Mkdir(filepath.Join(bare, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rootCmd.SetIn(nil) })
+// TestMCPCallRunsInItsProject: a call runs in the project its project-dir
+// names, else in the server's located project; with neither it is refused
+// naming project-dir, and a project-dir that is no git worktree root is
+// refused as no worktree. Each tool kind is held to it: a command, a write op
+// and the listed tool.
+func TestMCPCallRunsInItsProject(t *testing.T) {
+	srvA, _ := mcpServer(t)
+	a, _ := srvA.Located.Root()
+	b, last := trailRepo(t)
+	none := servedServer(rootCmd, mcp.Located{}, &bytes.Buffer{}, log.Discard())
+
 	for _, tc := range []struct {
-		name, path string
-		serves     bool
+		name   string
+		srv    mcp.Server
+		args   map[string]any
+		kbRoot string
 	}{
-		{"the kb-root", filepath.Join(repo, "kb-root"), true},
-		{"the repository root holding it", repo, true},
-		{"a directory inside the repository", filepath.Join(repo, "values"), false},
-		{"a file inside the kb-root", filepath.Join(repo, "kb-root", "a.md"), false},
-		{"a path that does not exist", filepath.Join(repo, "absent"), false},
-		{"a repository root with no kb-root yet", bare, true},
-		{"a directory inside a repository with no kb-root", filepath.Join(bare, "sub"), false},
+		{"a call naming another project runs there", srvA, map[string]any{"project-dir": b}, filepath.Join(b, "kb-root")},
+		{"a call naming none runs in the located project", srvA, map[string]any{}, filepath.Join(a, "kb-root")},
+		{"a server with none runs a call where it names", none, map[string]any{"project-dir": a}, filepath.Join(a, "kb-root")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rootCmd.SetIn(strings.NewReader(""))
-			out, code := kbase(t, t.TempDir(), "mcp", "--kb-root", tc.path)
-			if tc.serves {
-				if code != 0 || out != "" {
-					t.Errorf("exit %d, stdout %q; want it served until EOF", code, out)
-				}
-				return
-			}
-			var doc struct {
-				Outcome  string
-				Refusals []map[string]any
-			}
-			if err := yaml.Unmarshal([]byte(out), &doc); err != nil || code != 1 || doc.Outcome != "refused" || len(doc.Refusals) != 1 ||
-				doc.Refusals[0]["check"] != "usage" || doc.Refusals[0]["key"] != "--kb-root" {
-				t.Errorf("exit %d: %s; want one usage refusal of --kb-root", code, out)
+			if stats, isError := callTool(t, tc.srv, "stats", tc.args); isError || stats["kb-root"] != tc.kbRoot {
+				t.Errorf("stats: isError %v, %v; want kb-root %s", isError, stats, tc.kbRoot)
 			}
 		})
 	}
+
+	t.Run("a server with none refuses a call naming none", func(t *testing.T) {
+		doc, _, isError := callToolResult(t, none, "stats", map[string]any{})
+		if !isError {
+			t.Errorf("stats: not an error result\n%s", doc)
+		}
+		requireNoProjectRefusal(t, "stats", doc)
+	})
+
+	t.Run("a project-dir that is no worktree root is refused", func(t *testing.T) {
+		sub := filepath.Join(b, "kb-root")
+		stats, isError := callTool(t, srvA, "stats", map[string]any{"project-dir": sub})
+		items, _ := stats["refusals"].([]any)
+		if !isError || stats["outcome"] != toolresult.Refused || len(items) != 1 {
+			t.Fatalf("stats naming %s: isError %v, %v; want one refusal", sub, isError, stats)
+		}
+		if item, _ := items[0].(map[string]any); item["check"] != checkWorktree || item["key"] != "project-dir" || item["path"] != sub {
+			t.Errorf("stats naming %s refused %v, want the worktree refusal of project-dir", sub, item)
+		}
+	})
+
+	t.Run("a write op naming another project writes there", func(t *testing.T) {
+		inserted, isError := callTool(t, srvA, "insert-claim-entry", map[string]any{"project-dir": b,
+			"title": "B's result", "rigor": 0.5, "rationale": "Shown.", "document": "a.md", "locator": "B"})
+		ids, _ := inserted["ids"].([]any)
+		if isError || inserted["outcome"] != toolresult.Done || inserted["kb-root"] != filepath.Join(b, "kb-root") || len(ids) != 1 {
+			t.Fatalf("insert-claim-entry: isError %v, %v", isError, inserted)
+		}
+		for _, tc := range []struct {
+			project string
+			args    map[string]any
+			found   bool
+		}{{"B", map[string]any{"project-dir": b, "id": ids[0]}, true}, {"A", map[string]any{"id": ids[0]}, false}} {
+			if shown, isError := callTool(t, srvA, "show", tc.args); isError == tc.found {
+				t.Errorf("show %v in %s: isError %v, %v; want it found %v", ids[0], tc.project, isError, shown, tc.found)
+			}
+		}
+	})
+
+	t.Run("rewind-build naming another project reports its trail", func(t *testing.T) {
+		trail, isError := callTool(t, srvA, listedToolName, map[string]any{"project-dir": b})
+		if isError || trail["outcome"] != toolresult.Done || trail["head"] != last || trail["kb-root"] != filepath.Join(b, "kb-root") {
+			t.Errorf("%s naming %s: isError %v, %v; want its trail at %s", listedToolName, b, isError, trail, last)
+		}
+	})
 }
 
-// TestMCPInitializeNamesWhatItServes drives initialize over the three states
-// the served directory can be in. Every answer is held to the same properties:
-// the form its state chooses, naming an absolute path, and no tool name in it
-// but show-config — build occurring only in the phrase saying the KB can be
-// built. The transcripts pin the serving state's bytes; the other two states
-// are asserted here.
+// TestMCPRefusesProjectDir: kbase mcp given the global --project-dir is a
+// usage refusal of that flag before it serves, whatever the path names.
+func TestMCPRefusesProjectDir(t *testing.T) {
+	resetProjectDir(t)
+	repo := realPath(t, t.TempDir())
+	gitRepo(t, repo)
+	t.Cleanup(func() { rootCmd.SetIn(nil) })
+	rootCmd.SetIn(strings.NewReader(""))
+	out, code := kbase(t, t.TempDir(), "--project-dir", repo, "mcp")
+	d := parseResult(t, out)
+	items := d.items(toolresult.RefusalsKey)
+	if d.Outcome != toolresult.Refused || code != 1 || len(items) != 1 {
+		t.Fatalf("outcome %s, exit %d, %d items; want refused, 1, one item\n%s", d.Outcome, code, len(items), out)
+	}
+	item := items[0]
+	if item["check"] != checkUsage || item["key"] != "--project-dir" ||
+		item["detail"] != "kbase mcp takes no project; each tool call names its own with project-dir" ||
+		item["remedy"] != "run `kbase mcp` from inside the project, or `kbase mcp --project-dir-required` where the harness has no project working directory" {
+		t.Errorf("the refusal item = %v", item)
+	}
+}
+
+// TestMCPProjectRequiredLocatesNoProject: kbase mcp --project-dir-required
+// started inside a repository whose KB has sheets locates no project there. A
+// call omitting project-dir fails the schema that requires it, naming it; one
+// naming the empty project reaches the no-project refusal behind the schema;
+// no sheet is listed; and the build trail reads that same refusal.
+func TestMCPProjectRequiredLocatesNoProject(t *testing.T) {
+	srv, _ := mcpServer(t)
+	repo, _ := srv.Located.Root()
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stats","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"stats","arguments":{"project-dir":""}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"resources/list"}`,
+		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"` + mcp.BuildTrailURI + `"}}`,
+	}
+	t.Cleanup(func() { rootCmd.SetIn(nil) })
+	rootCmd.SetIn(strings.NewReader(strings.Join(requests, "\n") + "\n"))
+	out, code := kbase(t, repo, "mcp", "--project-dir-required")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	type response struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	responses := map[int]response{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var resp struct {
+			ID int `json:"id"`
+			response
+		}
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			t.Fatalf("response %q: %v", line, err)
+		}
+		responses[resp.ID] = resp.response
+	}
+	if len(responses) != len(requests) {
+		t.Fatalf("%d responses for %d requests:\n%s", len(responses), len(requests), out)
+	}
+
+	if e := responses[1].Error; e == nil || e.Code != -32602 || !strings.Contains(e.Message, `"project-dir"`) {
+		t.Errorf("stats omitting project-dir answered %+v; want -32602 naming project-dir", responses[1])
+	}
+
+	var call struct {
+		Content []struct{ Text string } `json:"content"`
+		IsError bool                    `json:"isError"`
+	}
+	if err := json.Unmarshal(responses[2].Result, &call); err != nil || len(call.Content) != 1 || !call.IsError {
+		t.Fatalf("stats naming the empty project: %+v; want one error result", responses[2])
+	}
+	requireNoProjectRefusal(t, "stats", call.Content[0].Text)
+
+	var listed struct {
+		Resources []protocol.Resource `json:"resources"`
+	}
+	if err := json.Unmarshal(responses[3].Result, &listed); err != nil || len(listed.Resources) == 0 {
+		t.Fatalf("resources/list: %+v", responses[3])
+	}
+	for _, r := range listed.Resources {
+		if strings.HasPrefix(r.URI, mcp.SheetURIPrefix) {
+			t.Errorf("resources/list lists the sheet %s of the directory the server started in", r.URI)
+		}
+	}
+
+	var read struct {
+		Contents []struct{ Text string } `json:"contents"`
+	}
+	if err := json.Unmarshal(responses[4].Result, &read); err != nil || len(read.Contents) != 1 {
+		t.Fatalf("%s: %+v", mcp.BuildTrailURI, responses[4])
+	}
+	requireNoProjectRefusal(t, mcp.BuildTrailURI, read.Contents[0].Text)
+}
+
+// TestMCPProjectDirSchemaPerMode: every tool's project-dir is optional on a
+// server that may locate a project of its own, and its description there
+// carries sentences about that project after what the property names. On a
+// server whose every call names its project the property is required and
+// its description is what it names alone. The rest of the schema is alike.
+func TestMCPProjectDirSchemaPerMode(t *testing.T) {
+	located, _ := mcpServer(t)
+	optional := map[string]listedTool{}
+	for _, tool := range toolsListedBy(t, located) {
+		optional[tool.Name] = tool
+	}
+	requiring := toolsListedBy(t, servedServer(rootCmd, mcp.ProjectRequired(), &bytes.Buffer{}, log.Discard()))
+	if len(requiring) != len(optional) {
+		t.Fatalf("%d tools where the project is required, %d where it is optional", len(requiring), len(optional))
+	}
+	for _, req := range requiring {
+		opt, ok := optional[req.Name]
+		if !ok {
+			t.Errorf("%s is listed only where the project is required", req.Name)
+			continue
+		}
+		if !slices.Contains(req.InputSchema.Required, "project-dir") {
+			t.Errorf("%s: required %v lacks project-dir where every call names its project", req.Name, req.InputSchema.Required)
+		}
+		if slices.Contains(opt.InputSchema.Required, "project-dir") {
+			t.Errorf("%s: required %v holds project-dir where the server may locate its own", req.Name, opt.InputSchema.Required)
+		}
+		others := slices.DeleteFunc(slices.Clone(req.InputSchema.Required), func(k string) bool { return k == "project-dir" })
+		if !slices.Equal(others, opt.InputSchema.Required) {
+			t.Errorf("%s: required %v beside project-dir, %v where it is optional", req.Name, others, opt.InputSchema.Required)
+		}
+		meaning, _ := req.InputSchema.Properties["project-dir"]["description"].(string)
+		described, _ := opt.InputSchema.Properties["project-dir"]["description"].(string)
+		if meaning == "" || !strings.HasPrefix(described, meaning+" ") || len(described) <= len(meaning)+1 {
+			t.Errorf("%s: project-dir described %q where required, %q where optional; want the optional one to be the required one followed by its own sentences",
+				req.Name, meaning, described)
+		}
+	}
+}
+
+// TestMCPInitializeNamesWhatItServes drives initialize through kbase mcp over
+// the states a server can start in. Every answer carries the instructions and
+// ends with them — the guidance, then the session rule — and what opens them
+// is the state's: the KB's absolute path, the repository's, nothing where the
+// server located no project, and under --project-dir-required a line naming
+// project-dir and no path. No tool name is in an answer but show-config, and
+// build occurs only in the phrase its state chooses. The transcripts pin the
+// serving state's bytes.
 func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 	bound := map[string]bool{}
 	for _, tool := range listTools(t) {
@@ -972,58 +1285,85 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 	}
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}` + "\n"
 
-	repo := stageRepo(t, resultsFixture)
+	repo := realPath(t, stageRepo(t, resultsFixture))
 	kbRoot := filepath.Join(repo, "kb-root")
-	unbuilt := filepath.Join(t.TempDir(), "repo")
+	unbuilt := filepath.Join(realPath(t, t.TempDir()), "repo")
 	if err := os.MkdirAll(unbuilt, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	gitRepo(t, unbuilt)
+	nowhere := realPath(t, t.TempDir())
 
 	t.Cleanup(func() { rootCmd.SetIn(nil) })
+	// instructions is what initialize answers from a server started in dir.
+	instructions := func(t *testing.T, dir string, args ...string) string {
+		t.Helper()
+		rootCmd.SetIn(strings.NewReader(request))
+		out, code := kbase(t, dir, args...)
+		if code != 0 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+		var resp struct {
+			Result struct {
+				Instructions *string `json:"instructions"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &resp); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+		if resp.Result.Instructions == nil {
+			t.Fatal("no instructions")
+		}
+		return *resp.Result.Instructions
+	}
+	// rules is what every answer ends with: the answer of a server that
+	// located no project, which opens with nothing.
+	rules := instructions(t, nowhere, "mcp")
+	if !strings.HasSuffix(rules, kbdocs.SessionRule()) {
+		t.Fatalf("instructions %q with no located project do not end with the session rule", rules)
+	}
+
 	for _, tc := range []struct {
-		name, wantPrefix string
-		args             []string
-		wantPath         string
-		builds           int
+		name, dir string
+		args      []string
+		// wantOpening is what the opening begins with; none where empty
+		// and namesProjectDir false.
+		wantOpening     string
+		namesProjectDir bool
+		// buildPhrase is the one phrase build may occur in, if any.
+		buildPhrase string
 	}{
-		{name: "a repository holding kb-root/", args: []string{"mcp", "--kb-root", repo},
-			wantPrefix: "kbase serves the knowledge base at ", wantPath: kbRoot},
-		{name: "the kb-root/ itself", args: []string{"mcp", "--kb-root", kbRoot},
-			wantPrefix: "kbase serves the knowledge base at ", wantPath: kbRoot},
-		{name: "a repository whose kb-root/ is yet to be made", args: []string{"mcp", "--kb-root", unbuilt},
-			wantPrefix: "kbase is registered for ", wantPath: unbuilt, builds: 1},
-		{name: "no repository", args: []string{"mcp"}},
+		{name: "a repository holding kb-root/", dir: repo, args: []string{"mcp"},
+			wantOpening: "kbase serves the knowledge base at " + kbRoot},
+		{name: "a repository whose kb-root/ is yet to be made", dir: unbuilt, args: []string{"mcp"},
+			wantOpening: "kbase is registered for " + unbuilt, buildPhrase: "can build its knowledge base"},
+		{name: "no repository", dir: nowhere, args: []string{"mcp"}},
+		{name: "project-dir required, inside a repository", dir: repo, args: []string{"mcp", "--project-dir-required"},
+			namesProjectDir: true, buildPhrase: "a build makes it"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rootCmd.SetIn(strings.NewReader(request))
-			out, code := kbase(t, t.TempDir(), tc.args...)
-			if code != 0 {
-				t.Fatalf("exit %d: %s", code, out)
+			text := instructions(t, tc.dir, tc.args...)
+			if !strings.HasSuffix(text, kbdocs.SessionRule()) {
+				t.Errorf("instructions %q do not end with the session rule", text)
 			}
-			var resp struct {
-				Result struct {
-					Instructions *string `json:"instructions"`
-				} `json:"result"`
+			opening, ok := strings.CutSuffix(text, rules)
+			if !ok {
+				t.Fatalf("instructions %q do not end with the guidance and the rules %q", text, rules)
 			}
-			if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &resp); err != nil {
-				t.Fatalf("%s: %v", out, err)
-			}
-			if tc.wantPath == "" {
-				if resp.Result.Instructions != nil {
-					t.Errorf("instructions %q where no repository holds the directory, want none", *resp.Result.Instructions)
+			opening = strings.TrimSuffix(opening, " ")
+			switch {
+			case tc.wantOpening != "":
+				if !strings.HasPrefix(opening, tc.wantOpening) {
+					t.Errorf("opening %q, want the form beginning %q", opening, tc.wantOpening)
 				}
-				return
-			}
-			if resp.Result.Instructions == nil {
-				t.Fatalf("no instructions, want the form beginning %q", tc.wantPrefix+tc.wantPath)
-			}
-			text := *resp.Result.Instructions
-			if !filepath.IsAbs(tc.wantPath) {
-				t.Fatalf("the path this case expects, %q, is not absolute", tc.wantPath)
-			}
-			if !strings.HasPrefix(text, tc.wantPrefix+tc.wantPath) {
-				t.Errorf("instructions %q, want the form beginning %q", text, tc.wantPrefix+tc.wantPath)
+			case tc.namesProjectDir:
+				if !slices.Contains(instructionsTokens(opening), "project-dir") || strings.Contains(text, repo) {
+					t.Errorf("opening %q, want one naming project-dir and no path", opening)
+				}
+			default:
+				if opening != "" {
+					t.Errorf("opening %q where the server located no project, want none", opening)
+				}
 			}
 			if strings.Contains(text, "`") {
 				t.Errorf("instructions %q carry a backtick", text)
@@ -1038,11 +1378,15 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 					t.Errorf("instructions %q name the command %q, which the server does not serve", text, token)
 				}
 			}
-			if builds != tc.builds {
-				t.Errorf("instructions %q say build %d times, want %d", text, builds, tc.builds)
+			wantBuilds := 0
+			if tc.buildPhrase != "" {
+				wantBuilds = 1
 			}
-			if builds == 1 && strings.Count(text, "can build its knowledge base") != 1 {
-				t.Errorf("instructions %q say build outside the phrase about building the KB", text)
+			if builds != wantBuilds {
+				t.Errorf("instructions %q say build %d times, want %d", text, builds, wantBuilds)
+			}
+			if builds == 1 && strings.Count(text, tc.buildPhrase) != 1 {
+				t.Errorf("instructions %q say build outside the phrase %q", text, tc.buildPhrase)
 			}
 		})
 	}

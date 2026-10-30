@@ -93,6 +93,22 @@ func askStop(err error) error {
 	return err
 }
 
+// askStopWriting is askStop(err), the group records the stopped batch
+// returned written to dir first. An error writing them rides on the stop as
+// its fault and never replaces it.
+func askStopWriting(dir string, records []asks.GroupRecord, err error) error {
+	st := askStop(err)
+	if werr := asks.WriteGroupRecords(dir, records); werr != nil {
+		var s *stop
+		if errors.As(st, &s) {
+			s.fault = werr
+			return st
+		}
+		return errors.Join(st, werr)
+	}
+	return st
+}
+
 // askTotals is a stage's multichoice asks in the zero form: wall-seconds sums its
 // calls' wall time, stage-wall-seconds is wall, the ask batch's elapsed time.
 func askTotals(records []asks.GroupRecord, wall time.Duration) result.Record {
@@ -101,7 +117,7 @@ func askTotals(records []asks.GroupRecord, wall time.Duration) result.Record {
 	if t.Calls > 0 {
 		perCall = t.WallSeconds / float64(t.Calls)
 	}
-	return recordOf(field("items", t.Items), field("answered", t.Answered), field("re-asked", t.Reasked), field("defaulted", t.Defaulted),
+	return recordOf(field("items", t.Items), field("answered", t.Answered), field("re-asked", t.Reasked), field("defaulted", t.Defaulted), field("failed", t.Failed),
 		field("calls", t.Calls), field("unmeasured", t.Unmeasured), field("thinking-blocks", t.ThinkingBlocks), field("output-tokens", t.OutputTokens),
 		field("seconds-per-call", fmt.Sprintf("%.2f", perCall)), field("wall-seconds", fmt.Sprintf("%.1f", t.WallSeconds)),
 		field("stage-wall-seconds", fmt.Sprintf("%.1f", wall.Seconds())), field("api-seconds", fmt.Sprintf("%.1f", t.APISeconds)), field("warm-cache-read", fmt.Sprintf("%d/%d", t.WarmCacheReadTokens, t.WarmPromptTokens)))
@@ -172,7 +188,7 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 		}
 		groups, err = batch.Wait()
 		if err != nil {
-			return findings, askStop(err)
+			return findings, askStopWriting(opts.AskRecords, groups, err)
 		}
 		for _, p := range paths {
 			held := record.Leaves[p]
@@ -310,7 +326,7 @@ func runStage(opts Options, gated bool, body func(t *Tree, recs []records.Record
 	}
 	var r Report
 	if info, err := os.Stat(filepath.Join(opts.KBRoot, kb.IndexDir)); err != nil || !info.IsDir() {
-		r.Findings = append(r.Findings, (&stop{"spine", filepath.Base(opts.KBRoot) + "/" + kb.IndexDir + "/ does not exist; the spine seed creates it"}).finding())
+		r.Findings = append(r.Findings, (&stop{check: "spine", detail: filepath.Base(opts.KBRoot) + "/" + kb.IndexDir + "/ does not exist; the spine seed creates it"}).finding())
 		return r, nil
 	}
 	recs, err := records.Read(opts.Records)
@@ -326,7 +342,7 @@ func runStage(opts Options, gated bool, body func(t *Tree, recs []records.Record
 	var s *stop
 	if errors.As(err, &s) {
 		r.Findings = append(r.Findings, s.finding())
-		return r, nil
+		return r, s.fault
 	}
 	if err != nil {
 		return r, err
@@ -561,7 +577,7 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 		findings = append(findings, candidateFindings(a)...)
 		c, err := classify(ctx, w.repoRoot, a.candidates, statements(t, g, &inv), opts)
 		if err != nil {
-			return findings, askStop(err)
+			return findings, err
 		}
 		findings = append(findings, classificationFindings(c, opts.asking())...)
 		f, err := w.writeEdges("pass-3-add-rests-on", c.edges, c.refs)

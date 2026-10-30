@@ -334,3 +334,35 @@ func TestLoadRefusesTheStack(t *testing.T) {
 		t.Errorf("a refused load returned a partial configuration: %+v", loaded)
 	}
 }
+
+// TestLoadMergesSampling: each sampling field overlays on its own, so the
+// repository layer's thinking overrides the global one while the global
+// temperature is kept, and every value names the layer that supplied it.
+func TestLoadMergesSampling(t *testing.T) {
+	globalDir, repoDir := t.TempDir(), t.TempDir()
+	writeFile(t, globalDir, ConfigFileName, "[sampling.text]\ntemperature = 0.7\nthinking = \"low\"\n\n[sampling.scoring]\nthinking = \"high\"\n")
+	writeFile(t, repoDir, ConfigFileName, "[sampling.text]\nthinking = \"medium\"\n\n[sampling.scoring]\ntemperature = 0.2\n")
+
+	cfg := mustLoad(t, []Layer{
+		{Path: repoDir, Source: LayerSourceRepository},
+		{Path: globalDir, Source: LayerSourceGlobal},
+	}).Cfg
+	if tt := cfg.Sampling.Text.Temperature; tt == nil || *tt != 0.7 || cfg.Sampling.Text.Thinking != "medium" {
+		t.Errorf("text sampling = %+v, want the global 0.7 under the repository's medium", cfg.Sampling.Text)
+	}
+	if st := cfg.Sampling.Scoring.Temperature; st == nil || *st != 0.2 || cfg.Sampling.Scoring.Thinking != "high" {
+		t.Errorf("scoring sampling = %+v, want the repository 0.2 over the global high", cfg.Sampling.Scoring)
+	}
+	for _, tc := range []struct {
+		role                  Role
+		temperature, thinking string
+	}{
+		{RoleText, LayerSourceGlobal, LayerSourceRepository},
+		{RoleScoring, LayerSourceRepository, LayerSourceGlobal},
+		{RoleDecision, "", ""},
+	} {
+		if temperature, thinking := cfg.SamplingLayer(tc.role); temperature != tc.temperature || thinking != tc.thinking {
+			t.Errorf("SamplingLayer(%s) = %q, %q; want %q, %q", tc.role, temperature, thinking, tc.temperature, tc.thinking)
+		}
+	}
+}

@@ -447,13 +447,19 @@ func TestFilterTheorems(t *testing.T) {
 
 > An ordinary quote.
 
+> **Lemma**
+> <!-- claim-rigor: ana-aaaaaa -->
+> **Lemma 3** (Marked). Split body. <!-- claim-rigor: clm-aaaaaa -->
+
 See <a data-reference-type="ref" data-reference="thm:big">1</a>, <a data-reference-type="ref" data-reference="rmk:HomAB">7</a> and <a data-reference-type="ref" data-reference="rem:g-normalization">14</a>.
 
 ` + excerpt(t, "theorem-rremark.md") + "\n" + excerpt(t, "proof.md") + "\n" + excerpt(t, "remark-emphasised.md") + "\n" + excerpt(t, "minipage.md") + "\n" + excerpt(t, "theorem-bare-number.md")
 	tables := fixtureTables()
-	tables.Theorems = append(tables.Theorems, "rremark", "proof", "Remark", "minipage", "PAR")
+	tables.Theorems = append(tables.Theorems, "rremark", "proof", "Remark", "minipage", "PAR", "Lemma")
 	latex, findings := runFilter(t, stream, tables, true)
 	wantContains(t, latex,
+		`\begin{kb-lemma}[{Marked}] Split body.`,
+		"\\end{kb-lemma}",
 		`\begin{kb-theorem}[{Big One}]\label{v1-thm:big} \emph{Body text} cites \cite{k1}.`,
 		`\begin{kb-theorem}[{Range {]}a, b{]}}] Half-open.`,
 		"\\end{kb-theorem}",
@@ -469,7 +475,7 @@ See <a data-reference-type="ref" data-reference="thm:big">1</a>, <a data-referen
 		`\begin{kb-par} \emph{We will be interested in the following cosimplicial dg-modules over \(K\):}`,
 		"\\end{kb-par}")
 	wantAbsent(t, latex, "Theorem 1", "Theorem 2", "Main Result 2", "Remark 7", "\\begin{quote}\n\\emph{Proof.}",
-		"\\begin{quote}\nNotes:", "\\begin{quote}\n\\protect", "kb-proof", "kb-remark", "kb-minipage", `\begin{proof}`, "ifcsname")
+		"\\begin{quote}\nNotes:", "\\begin{quote}\n\\protect", "kb-proof", "kb-remark", "kb-minipage", `\begin{proof}`, "ifcsname", "ana-aaaaaa", "claim-rigor")
 	wantReferencesLabelled(t, latex)
 	preamble, _, ok := strings.Cut(latex, `\begin{document}`)
 	if !ok {

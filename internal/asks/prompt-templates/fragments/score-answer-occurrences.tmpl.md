@@ -1,3 +1,8 @@
+Each charge is one line of the reply: an id from the list above, a colon, and the number of the line
+it cites — `<id>: <line>`, and nothing else on the line. A fault first showing on the line framed
+`18|` is answered `<id>: 18`, the fault's id written where `<id>` stands. The frame's bar is never
+part of an answer.
+
 Charge every occurrence you can point at — not the worst one, and not one per kind. Two occurrences
 of one id are two charges, on two different lines.
 

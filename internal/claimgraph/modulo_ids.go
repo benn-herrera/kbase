@@ -35,10 +35,10 @@ type ModuloIDsCheck struct {
 	Differences []string
 }
 
-// CompareModuloIDs compares two KBs as data, every claim named by its title
-// and hosting leaf rather than by its id: claim records, edge records by their
-// endpoints so named, works, claim count per leaf, and the build records, as
-// data and byte for byte (recordBytes). Ids
+// CompareModuloIDs compares two KBs as data, every claim and analysis named by
+// its title and hosting leaf rather than by its id: claim and analysis
+// records, edge records by their endpoints so named, works, claim count per
+// leaf, and the build records, as data and byte for byte (recordBytes). Ids
 // are minted at random, so this is the equality two builds of the same inputs
 // owe each other. A claim the cull removed is named by the claim it was culled
 // into. The cull record is compared where both sides hold one, since only a
@@ -56,7 +56,7 @@ func CompareModuloIDs(a, b ComparedKB) ([]ModuloIDsCheck, error) {
 		return ModuloIDsCheck{Name: name, Counts: [2]int{na, nb}, Differences: diffs}
 	}
 	checks := []ModuloIDsCheck{
-		sized("claim records by (title, host)", len(av.entries), len(bv.entries), multisetDiff(a.Name, b.Name, av.entries, bv.entries)),
+		sized("claim and analysis records by (kind, title, host)", len(av.entries), len(bv.entries), multisetDiff(a.Name, b.Name, av.entries, bv.entries)),
 		sized("edge records by endpoint title and host", len(av.edges), len(bv.edges), multisetDiff(a.Name, b.Name, av.edges, bv.edges)),
 		sized("works", len(av.works), len(bv.works), multisetDiff(a.Name, b.Name, av.works, bv.works)),
 		sized("claim count per leaf", len(av.counts), len(bv.counts), mapDiff(a.Name, b.Name, av.counts, bv.counts)),
@@ -270,8 +270,10 @@ func firstLineDifference(nx, ny string, x, y []byte) string {
 }
 
 // moduloIDsView is one KB as CompareModuloIDs reads it: every claim record by
-// id with its title and its host, read off its statement marker, every work
-// record, every edge record, and per leaf the claims it hosts.
+// id with its title and its host, read off its statement marker, the names of
+// every claim and analysis record, every work record, every edge record, and
+// per leaf the claims it hosts. Only claims are keyed by id: the build records
+// the renaming rewrites name no other node.
 type moduloIDsView struct {
 	claims  map[string]claimKey
 	entries []string
@@ -281,12 +283,17 @@ type moduloIDsView struct {
 }
 
 // claimKey names a claim by what both sides give it: title and host, or, for a
-// claim the cull removed, the name of the claim it was culled into.
-type claimKey struct{ title, host, into string }
+// claim the cull removed, the name of the claim it was culled into. An
+// analysis is named by its kind besides, since it shares the title and host of
+// the claim it was split from.
+type claimKey struct{ kind, title, host, into string }
 
 func (k claimKey) String() string {
 	if k.into != "" {
 		return "culled into " + k.into
+	}
+	if k.kind != "" {
+		return fmt.Sprintf("%s: %s | %s", k.kind, k.title, k.host)
 	}
 	return fmt.Sprintf("%s | %s", k.title, k.host)
 }
@@ -328,11 +335,20 @@ func readModuloIDsView(kbRoot string) (moduloIDsView, error) {
 			v.counts[k.host]++
 		}
 	}
+	analyses := map[string]claimKey{}
+	for _, n := range g.Analyses {
+		k := claimKey{kind: kb.NodeKindAnalysis, title: n.Title, host: rows.Hosts[n.ID]}
+		analyses[n.ID] = k
+		v.entries = append(v.entries, k.String())
+	}
 	for _, w := range g.Works {
 		v.works = append(v.works, fmt.Sprintf("%s | %s | %s", w.ID, w.Title, w.Rationale))
 	}
 	name := func(id string) string {
 		if k, ok := v.claims[id]; ok {
+			return k.String()
+		}
+		if k, ok := analyses[id]; ok {
 			return k.String()
 		}
 		return id

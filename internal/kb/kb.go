@@ -73,6 +73,15 @@ func RepositoryRoot(dir string) (string, error) {
 	}
 }
 
+// ProjectPath is p as a path a subcommand takes: an absolute one cleaned, a
+// relative one joined to the project root.
+func ProjectPath(root, p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(root, p)
+}
+
 // ResolvePath is p with every symlink of its longest existing prefix resolved
 // and the rest kept as written, as Python's non-strict resolve has it: p
 // resolved where it resolves, else as given.

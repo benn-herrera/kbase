@@ -215,9 +215,9 @@ func TestMCPBuildEndNotification(t *testing.T) {
 		t.Errorf("%d notifications after the read, want exactly one for the run", len(p.notifications))
 	}
 
-	// The same command again: a resumed run — a new pid, a new start — which
-	// announces once more.
-	if again, isError := call("build", buildArgs()); isError {
+	// The build resumed over its finished trail: a new run — a new pid, a new
+	// start — which announces once more.
+	if again, isError := call("build", map[string]any{"resume": true, "no-inference": true, "state-dir": *notifyState}); isError {
 		t.Fatalf("the second build answered %v", again)
 	}
 	p.awaited(t, 2)

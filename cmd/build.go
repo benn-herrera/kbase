@@ -22,11 +22,18 @@ import (
 type buildOptions struct {
 	VolumeRoots    []string
 	Bibliographies []string
-	Through        string
-	StateDir       string
-	NoInference    bool
-	// ConfigDir is the --config-dir flag, "" where it was not given.
+	// Resume is the --resume flag: continue the trail with the inputs it
+	// records.
+	Resume      bool
+	Through     string
+	StateDir    string
+	NoInference bool
+	// ConfigDir is the --config-dir flag made absolute, "" where it was not
+	// given.
 	ConfigDir string
+	// ProjectDir is the --project-dir flag made absolute, "" where it was not
+	// given.
+	ProjectDir string
 	// AskConcurrency is the --ask-concurrency flag, nil where it was not
 	// given; ConfiguredConcurrency is [asks] concurrency as the loaded
 	// configuration states it, nil where it states none.
@@ -62,22 +69,34 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 // model calls in flight, the registry its clients are opened through, and the
 // walk.
 func buildRun(ctx context.Context, opts buildOptions) (string, []toolresult.Field) {
-	concurrency, err := askConcurrency(opts.AskConcurrency, opts.ConfiguredConcurrency)
+	reg, provider, err := buildModels(opts)
 	if err != nil {
 		return refusedOrFailed(nil, err)
 	}
-	queue := model.NewQueue(concurrency)
-	reg := modelclient.New(opts.NewClient, opts.Logger, "", concurrency)
 	defer reg.CloseAll()
 	named := 0
 	if opts.AskConcurrency != nil {
 		named = *opts.AskConcurrency
 	}
 	return build.Run(ctx, build.Options{
-		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Through: opts.Through,
-		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, AskConcurrency: named,
-		WorkDir: opts.WorkDir, Provider: providerFor(opts, reg, queue), Logger: opts.Logger,
+		VolumeRoots: opts.VolumeRoots, Bibliographies: opts.Bibliographies, Resume: opts.Resume, Through: opts.Through,
+		StateDir: opts.StateDir, NoInference: opts.NoInference, ConfigDir: opts.ConfigDir, ProjectDir: opts.ProjectDir,
+		AskConcurrency: named,
+		WorkDir:        opts.WorkDir, Provider: provider, Logger: opts.Logger,
 	})
+}
+
+// buildModels is where an invocation's build or replay sends its model calls:
+// the registry its clients are opened through, which the caller closes, and
+// the Provider seam over it, every role's calls on one queue as wide as the
+// ask concurrency.
+func buildModels(opts buildOptions) (*modelclient.Registry, func() (build.Provider, error), error) {
+	concurrency, err := askConcurrency(opts.AskConcurrency, opts.ConfiguredConcurrency)
+	if err != nil {
+		return nil, nil, err
+	}
+	reg := modelclient.New(opts.NewClient, opts.Logger, "", concurrency)
+	return reg, providerFor(opts, reg, model.NewQueue(concurrency)), nil
 }
 
 // providerFor is the build's Provider seam over the registry the verb opened,
@@ -117,6 +136,7 @@ func (c exitCode) Error() string { return fmt.Sprintf("exit %d", int(c)) }
 
 var (
 	flagBibliographies []string
+	flagResume         bool
 	flagThrough        string
 	flagStateDir       string
 	flagNoInference    bool
@@ -162,7 +182,7 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 			return client, ep.Model, nil
 		}
 		var provider build.Provider
-		if provider.LettersClient, provider.Letters, err = role(config.RoleDecision); err != nil {
+		if provider.MultichoiceClient, provider.Multichoice, err = role(config.RoleDecision); err != nil {
 			return build.Provider{}, err
 		}
 		if provider.OverviewClient, provider.Overview, err = role(config.RoleText); err != nil {
@@ -173,20 +193,31 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 	}
 }
 
+// buildReplay is the build's development replay entry: given the invoked
+// command and its positionals, the verb its flags select in place of a build,
+// or nil where they select none. It is nil in a build that carries no replay.
+var buildReplay func(cmd *cobra.Command, args []string) func(context.Context, buildOptions) (int, error)
+
 var buildCmd = &cobra.Command{
-	Use:   "build <volume-root>...",
+	Use:   "build [<volume-root>...]",
 	Short: "build the KB from LaTeX volume roots into <git root>/kb-root",
 	Long: `build converts LaTeX volume roots — each a paper's top .tex file, never one
 another includes — into a KB, at kb-root/ beside the repository's .git: one
 tree, each volume its own directory, entry-point.md listing every volume in
-the order given. It walks the build's stages in order through the
+path order. A relative volume root or --bibliography resolves against the
+project root, and the build orders each list by full path, whatever order it
+was given in. It walks the build's stages in order through the
 stage --through names (an id or a display name; every stage when absent).
 Each stage's boundary is a commit in the repository, its subject
-"kb-build: <stage> | <display>", scoped to the paths the build owns; an
-invocation resumes from the last boundary the commit trail holds. A build
-resumes from any recorded boundary, not only the last: status names each
-stage's commit, so reset the repository to one and re-issue the build, and the
-kbase://build-trail MCP resource prints the commands.
+"kb-build: <stage> | <display>", scoped to the paths the build owns, and
+records the inputs; the start boundary also records started-at, the commit the
+build began from. A build is given volume roots only over an empty trail;
+--resume takes none and continues from the last boundary the commit trail
+holds, with the inputs it records. A build resumes from any recorded boundary,
+not only the last: status names each stage's commit, so reset the repository
+to one and run build --resume; a build over other inputs starts over from
+started-at. The rewind-build MCP tool and the kbase://build-trail resource
+print the commands for either.
 --no-inference drops every row that spends inference and walks the rest;
 without it, the claim graph's multichoice asks go to the endpoint [models] decision
 names and the overview passage to the one [models] text names — each value a
@@ -204,9 +235,19 @@ scratch/ — lives in --state-dir, by default $XDG_STATE_HOME/kbase/<key>.
 SIGINT or SIGTERM (kbase cancel) stops it resumably. Its result is one YAML
 document on stdout, naming each stage walked, its boundary commit and its
 report, and the command that resumes the build where it did not finish.`,
-	Args: cobra.MinimumNArgs(1),
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)
+		if err != nil {
+			return err
+		}
+		// The configuration directory is where the flag was typed, the one
+		// config.Layers reads, so the resume command names it absolute.
+		configDir, err := absIfSet(flagConfigDir)
+		if err != nil {
+			return err
+		}
+		projectDir, err := absIfSet(flagProjectDir)
 		if err != nil {
 			return err
 		}
@@ -216,13 +257,21 @@ report, and the command that resumes the build where it did not finish.`,
 		}
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		code, err := runBuild(ctx, buildOptions{
+		verb := runBuild
+		if buildReplay != nil {
+			if replay := buildReplay(cmd, args); replay != nil {
+				verb = replay
+			}
+		}
+		code, err := verb(ctx, buildOptions{
 			VolumeRoots:           args,
 			Bibliographies:        flagBibliographies,
+			Resume:                flagResume,
 			Through:               flagThrough,
 			StateDir:              flagStateDir,
 			NoInference:           flagNoInference,
-			ConfigDir:             flagConfigDir,
+			ConfigDir:             configDir,
+			ProjectDir:            projectDir,
 			AskConcurrency:        givenAskConcurrency(cmd, flagAskConcurrency),
 			ConfiguredConcurrency: providers.Config.Asks.Concurrency,
 			WorkDir:               wd,
@@ -243,7 +292,8 @@ report, and the command that resumes the build where it did not finish.`,
 
 func init() {
 	buildCmd.Flags().StringArrayVar(&flagBibliographies, "bibliography", nil,
-		"a .bib citations resolve against; repeat per file, in the order that decides a key two files define (default: every .bib beside any volume root, sorted)")
+		"a .bib citations resolve against; repeat per file, the files read in path order (default: every .bib beside any volume root, sorted)")
+	buildCmd.Flags().BoolVar(&flagResume, "resume", false, "continue the build the commit trail records, with the inputs it records")
 	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id or display name (default: every stage)")
 	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
 	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "drop every row that spends inference and walk the rest")

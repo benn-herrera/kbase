@@ -76,6 +76,10 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 				{Key: config.CategoryText, Value: stringOrNull(facts.Models.Text)},
 				{Key: config.CategoryScoring, Value: stringOrNull(facts.Models.Scoring)},
 			}},
+			{Key: "sampling", Value: toolresult.Record{
+				{Key: config.CategoryText, Value: samplingRecord(facts.Sampling.Text)},
+				{Key: config.CategoryScoring, Value: samplingRecord(facts.Sampling.Scoring)},
+			}},
 		}},
 		{Key: "environment", Value: facts.Environment},
 		{Key: "selection", Value: selectionRecord(s, opts.Provider)},
@@ -154,6 +158,24 @@ func stringOrNull(s string) any {
 	return s
 }
 
+// temperatureOrNull is a temperature the report states as given, or null where
+// no layer states one.
+func temperatureOrNull(t *float64) any {
+	if t == nil {
+		return nil
+	}
+	return *t
+}
+
+// samplingRecord is one chat role's sampling as config.toml states it, null
+// where unset.
+func samplingRecord(s config.RoleSampling) toolresult.Record {
+	return toolresult.Record{
+		{Key: "temperature", Value: temperatureOrNull(s.Temperature)},
+		{Key: "thinking", Value: stringOrNull(s.Thinking)},
+	}
+}
+
 // selectionRecord is which pool entry the selection rules named and which rule
 // named it — or, where none was named, the selection's own reason, so an
 // environment endpoint reads as an endpoint with no pool entry behind it
@@ -205,12 +227,23 @@ func resolvedRoles(reg *modelclient.Registry, s config.Inputs, mode config.Mode,
 			}
 			continue
 		}
+		sources := toolresult.Record{
+			{Key: "base-url", Value: stringOrNull(ep.BaseURLSource)},
+			{Key: "model", Value: stringOrNull(ep.ModelSource)},
+			{Key: "key", Value: stringOrNull(ep.KeySource)}}
+		var sampling []toolresult.Field
+		if ep.Role != config.RoleDecision {
+			sources = append(sources,
+				toolresult.Field{Key: "temperature", Value: stringOrNull(ep.TemperatureSource)},
+				toolresult.Field{Key: "thinking", Value: stringOrNull(ep.ThinkingSource)})
+			sampling = []toolresult.Field{
+				{Key: "temperature", Value: temperatureOrNull(ep.Temperature)},
+				{Key: "thinking", Value: stringOrNull(ep.Thinking)}}
+		}
 		record := roleRecord(ep)
 		record = append(record, toolresult.Field{Key: "base-url", Value: ep.BaseURL},
-			toolresult.Field{Key: "sources", Value: toolresult.Record{
-				{Key: "base-url", Value: stringOrNull(ep.BaseURLSource)},
-				{Key: "model", Value: stringOrNull(ep.ModelSource)},
-				{Key: "key", Value: stringOrNull(ep.KeySource)}}})
+			toolresult.Field{Key: "sources", Value: sources})
+		record = append(record, sampling...)
 		records = append(records, record)
 		if ep.APIKeyFile != "" && !preflighted[ep.APIKeyFile] {
 			preflighted[ep.APIKeyFile] = true

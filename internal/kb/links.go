@@ -40,6 +40,9 @@ var (
 	// BlockquotePrefix is one line's leading blockquote markers: indent, >
 	// and an optional space, once per nesting level.
 	BlockquotePrefix = regexp.MustCompile(`^(?:[ \t]{0,3}>[ \t]?)+`)
+	// ListItemRE is a line, its blockquote prefix and leading space removed,
+	// that opens a list item: a bullet, or a number closed by `.` or `)`.
+	ListItemRE = PyRE(`^(?:[-*+]\s|\d+[.)]\s)`)
 	// closerTail is what a closing fence may carry and still close: the
 	// emphasis delimiter of the statement it sits in.
 	closerTail = regexp.MustCompile(`^[*_]*$`)

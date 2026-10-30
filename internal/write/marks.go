@@ -23,6 +23,11 @@ func appendMarker(document string, at int, marker string) string {
 	return spliceLines(document, at, at+1, []string{marked})
 }
 
+// unmarkLine is line with every occurrence of marker taken off, with the space before it.
+func unmarkLine(line, marker string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(line, " "+marker, ""), marker, "")
+}
+
 // unmarked is document without id's statement marker: every occurrence is
 // taken from its line, and a line the marker leaves without prose goes with it.
 func unmarked(document, id string) string {
@@ -36,7 +41,7 @@ func unmarked(document, id string) string {
 			kept = append(kept, l)
 			continue
 		}
-		if body := strings.ReplaceAll(strings.ReplaceAll(l, " "+marker, ""), marker, ""); kb.Strip(body) != "" {
+		if body := unmarkLine(l, marker); kb.Strip(body) != "" {
 			kept = append(kept, body)
 		}
 	}

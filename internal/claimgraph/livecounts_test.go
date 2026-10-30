@@ -14,6 +14,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
+	"kbase/internal/kb"
 )
 
 var (
@@ -23,11 +24,12 @@ var (
 )
 
 // TestLiveBuildCounts reads what a build that asked wrote — its node-pass,
-// unmarked and classification records, and the stage reports its result
-// names — and writes the counts the live recipe reports: counts.yaml;
-// nodepass.json, the record's verdicts and claims per leaf; and a copy of the
-// node-pass record (kb-build-node-pass.yaml) and the planned pairs
-// (unmarked-plan.json). It skips unless the live recipe names a repository.
+// unmarked and classification records, its node and edge records, and the
+// stage reports its result names — and writes the counts the live recipe
+// reports: counts.yaml; nodepass.json, the record's verdicts and claims per
+// leaf; and a copy of the node-pass record (kb-build-node-pass.yaml) and the
+// planned pairs (unmarked-plan.json). It skips unless the live recipe names a
+// repository.
 func TestLiveBuildCounts(t *testing.T) {
 	if *liveRepo == "" {
 		t.Skip("no -claimgraph.repo: the live build recipe runs this")
@@ -95,6 +97,7 @@ func TestLiveBuildCounts(t *testing.T) {
 	slices.Sort(demoted)
 	candidates := resultFinding(t, *liveResult, "stage-D-candidates")
 	unmarkedAsks := resultFinding(t, *liveResult, "stage-U-asks")
+	split := splitCounts(t)
 
 	unmarkedLetters := map[string]int{}
 	unmarkedOutcomes := map[string]int{}
@@ -146,6 +149,7 @@ func TestLiveBuildCounts(t *testing.T) {
 		"candidates-by-outcome": zero([]string{string(asks.Answered), string(asks.Reasked), ClassifyDefaulted, ClassifyDrafted}, classified),
 		"rings-demoted-edges":   len(demoted),
 		"demoted":               demoted,
+		"split":                 split,
 	}
 	b, err := yaml.Marshal(map[string]any{"counts": counts})
 	if err != nil {
@@ -178,6 +182,48 @@ func TestLiveBuildCounts(t *testing.T) {
 	if missing := unanswered(um); len(missing) > 0 {
 		t.Errorf("%d planned pairs carry no outcome: %q", len(missing), pairs(missing))
 	}
+	if split["premises-into-lifted-claims"] > 0 {
+		t.Errorf("split counts %v: a premise still enters a claim an analysis lifts", split)
+	}
+	if n := split["analyses"]; n != split["lifts-from-analyses"] || n != split["split-claims-reported"] {
+		t.Errorf("split counts %v, want analyses, their lifts and the split claims the stage reported equal", split)
+	}
+}
+
+// splitCounts is what the analysis split left in the built records, beside the
+// number of splits its stage report states.
+func splitCounts(t *testing.T) map[string]int {
+	t.Helper()
+	g, err := kb.LoadGraph(builtTree(filepath.Join(*liveRepo, kb.KBDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported, _ := resultFinding(t, *liveResult, "analyses-split")["analyses"].(int)
+	lifted := map[string]bool{}
+	lifts, premises := 0, 0
+	for _, e := range g.Scorable {
+		if kind, _ := kb.NodeIDKind(e.Source); e.Relation == kb.RelationLifts && kind == kb.NodeKindAnalysis {
+			lifted[e.Target] = true
+			lifts++
+		}
+	}
+	for _, e := range g.Scorable {
+		if e.Relation == kb.RelationSupports && lifted[e.Target] {
+			premises++
+		}
+	}
+	for _, e := range g.Founds {
+		if lifted[e.Target] {
+			premises++
+		}
+	}
+	for _, e := range g.Demoted {
+		if e.ReplacedRelation == kb.RelationSupports && lifted[e.Target] {
+			premises++
+		}
+	}
+	return map[string]int{"analyses": len(g.Analyses), "lifts-from-analyses": lifts, "split-claims-reported": reported,
+		"premises-into-lifted-claims": premises}
 }
 
 func writeJSON(t *testing.T, path string, v any) {

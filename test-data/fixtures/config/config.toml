@@ -1,6 +1,0 @@
-provider = "reaper"
-#provider = "imp"
-[models]
-decision = "clef"
-#decision = "clef-flash"
-text = "Qwen3.5-9B"

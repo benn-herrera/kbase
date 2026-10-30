@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -33,6 +32,9 @@ var fileNameUnsafeRE = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 const (
 	fileStemMaxChars = 150
 	promptHashChars  = 12
+
+	// overviewName is the overview call's name: its capture files' stem.
+	overviewName = "overview"
 )
 
 // overviewBackoff is the pause before each re-issue of an overview call that
@@ -95,7 +97,8 @@ func (c *Caller) PassageLaunch(q *model.Queue, modelID string) asks.PassageLaunc
 				if err != nil {
 					return "", err
 				}
-				reply, err := c.ask(ctx, slot, held, modelID, asks.OverviewSystem, prompt, attempt, c.overviewBackoff, "overview")
+				reply, err := c.ask(ctx, slot, held, modelID, asks.OverviewSystem, prompt, attempt, c.overviewBackoff, overviewName,
+					&overviewInputs{Excerpts: excerpts, Rejected: rejected})
 				return reply.Text, err
 			})
 		})
@@ -186,7 +189,7 @@ func (c *Caller) decide(ctx context.Context, slot *model.Slot, held *heldFiles, 
 	cl.record(decisionCaptureRequest{
 		Type: "request", Model: modelID, StateSHA256: stateHash,
 		Question: decisionQuestionCapture{
-			Key: q.Question.Key, Type: q.Question.Type,
+			Key: q.Question.Key, Type: q.Question.Type, TrueLetter: q.Question.TrueLetter,
 			Instructions: q.Question.Instructions, Criteria: q.Question.Criteria,
 		},
 		Attempt:     q.Attempt,
@@ -314,6 +317,7 @@ type decisionCaptureRequest struct {
 type decisionQuestionCapture struct {
 	Key          string            `json:"key"`
 	Type         string            `json:"type"`
+	TrueLetter   string            `json:"true-letter,omitempty"`
 	Instructions string            `json:"instructions"`
 	Criteria     map[string]string `json:"criteria"`
 }
@@ -342,16 +346,7 @@ type decisionCaptureAttempt struct {
 // sorted key order, so the digest is deterministic across map iteration
 // orders.
 func decisionDigest(modelID string, q asks.MultichoiceQuestion) string {
-	keys := make([]string, 0, len(q.Question.Criteria))
-	for k := range q.Question.Criteria {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := []string{modelID, q.Question.Key, q.Question.Type, q.Question.Instructions, q.Question.TrueLetter}
-	for _, k := range keys {
-		parts = append(parts, k, q.Question.Criteria[k])
-	}
-	return digest(append(parts, q.State, strconv.Itoa(q.Attempt))...)
+	return asks.Digest(append(append([]string{modelID, q.Question.Key}, asks.QuestionParts(q.Question)...), q.State, strconv.Itoa(q.Attempt))...)
 }
 
 // captureLog composes a call's capture in memory, one JSON line per record;
@@ -402,17 +397,27 @@ func mustMarshal(v any) []byte {
 }
 
 // captureRequest opens a capture: what was asked, by digest, never the
-// endpoint or its key, and how long the call's item waited for its token —
-// time outside every attempt's duration-ms.
+// endpoint or its key, the effective temperature and thinking level, and how
+// long the call's item waited for its token — time outside every attempt's
+// duration-ms.
 type captureRequest struct {
-	Type           string  `json:"type"`
-	Model          string  `json:"model"`
-	System         string  `json:"system"`
-	PromptSHA256   string  `json:"prompt-sha256"`
-	Attempt        int     `json:"ask-attempt"`
-	Temperature    float64 `json:"temperature"`
-	EnableThinking bool    `json:"enable-thinking"`
-	TokenWaitMS    int64   `json:"token-wait-ms"`
+	Type         string   `json:"type"`
+	Model        string   `json:"model"`
+	System       string   `json:"system"`
+	PromptSHA256 string   `json:"prompt-sha256"`
+	Excerpts     *string  `json:"excerpts,omitempty"`
+	Rejected     []string `json:"rejected-lines,omitempty"`
+	Attempt      int      `json:"ask-attempt"`
+	Temperature  float64  `json:"temperature"`
+	Thinking     string   `json:"thinking"`
+	TokenWaitMS  int64    `json:"token-wait-ms"`
+}
+
+// overviewInputs are the inputs asks.OverviewPrompt renders, recorded in the
+// overview call's capture.
+type overviewInputs struct {
+	Excerpts string
+	Rejected []string
 }
 
 // captureAttempt is one request of the call, as it ended.
@@ -431,30 +436,36 @@ type captureAttempt struct {
 	Reply            string `json:"reply"`
 }
 
-func digest(parts ...string) string {
-	h := sha256.New()
-	for _, p := range parts {
-		fmt.Fprintf(h, "%d:%s", len(p), p)
-	}
-	return hex.EncodeToString(h.Sum(nil))
+// answerPath is where the answer to an ask is cached: named by the digest of
+// the model, the system prompt, the prompt, the ask's attempt and the client's
+// resolved sampling, so the same ask finds its answer and a re-ask of an
+// identical prompt does not.
+func (c *Caller) answerPath(modelID, system, prompt string, attempt int, sampling model.Sampling) string {
+	parts := append([]string{modelID, system, prompt, strconv.Itoa(attempt)}, samplingKey(sampling)...)
+	return filepath.Join(c.answers(), asks.Digest(parts...)+".txt")
 }
 
-// answerPath is where the answer to an ask is cached: named by the digest of
-// the model, the system prompt, the prompt and the ask's attempt, so the same
-// ask finds its answer and a re-ask of an identical prompt does not.
-func (c *Caller) answerPath(modelID, system, prompt string, attempt int) string {
-	return filepath.Join(c.answers(), digest(modelID, system, prompt, strconv.Itoa(attempt))+".txt")
+// samplingKey is the answer-cache key's parts for resolved sampling. kbase's
+// default sampling contributes no key parts, so the key of a default-sampled
+// ask is the digest of model, system, prompt and attempt alone; any other
+// sampling contributes the temperature and the thinking level.
+func samplingKey(sampling model.Sampling) []string {
+	if *sampling.Temperature == model.DefaultTemperature && *sampling.Thinking == model.ThinkingOff {
+		return nil
+	}
+	return []string{"temperature=" + strconv.FormatFloat(*sampling.Temperature, 'g', -1, 64), "thinking=" + sampling.Thinking.String()}
 }
 
 // ask is prompt under the named system fragment: the answer cached for these
 // exact inputs where one stands, else the call through slot, its every
 // attempt captured, the capture and the answer held in held.
-func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, modelID, systemName, prompt string, attempt int, backoff []time.Duration, name string) (asks.Reply, error) {
+func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, modelID, systemName, prompt string, attempt int, backoff []time.Duration, name string, inputs *overviewInputs) (asks.Reply, error) {
 	system, err := asks.System(systemName)
 	if err != nil {
 		return asks.Reply{}, err
 	}
-	answer := c.answerPath(modelID, system, prompt, attempt)
+	sampling := model.SamplingOf(c.client)
+	answer := c.answerPath(modelID, system, prompt, attempt, sampling)
 	switch cached, err := os.ReadFile(answer); {
 	case err == nil:
 		return asks.Reply{Text: string(cached)}, nil
@@ -462,14 +473,18 @@ func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, mod
 		return asks.Reply{}, err
 	}
 
-	promptHash := digest(prompt)
+	promptHash := asks.Digest(prompt)
 	stem := fileNameUnsafeRE.ReplaceAllString(name, "_")
 	stem = stem[:min(len(stem), fileStemMaxChars)]
 	captures := c.captures()
 	capturePath := filepath.Join(captures, fmt.Sprintf("%s-%s-%d.capture.jsonl", stem, promptHash[:promptHashChars], attempt))
 	cl := newCaptureLog()
-	cl.record(captureRequest{Type: "request", Model: modelID, System: systemName, PromptSHA256: promptHash, Attempt: attempt,
-		TokenWaitMS: slot.Waited().Milliseconds()})
+	request := captureRequest{Type: "request", Model: modelID, System: systemName, PromptSHA256: promptHash, Attempt: attempt,
+		Temperature: *sampling.Temperature, Thinking: sampling.Thinking.String(), TokenWaitMS: slot.Waited().Milliseconds()}
+	if inputs != nil {
+		request.Excerpts, request.Rejected = &inputs.Excerpts, inputs.Rejected
+	}
+	cl.record(request)
 	res, err := slot.Chat(ctx, c.client, model.ChatRequest{Model: modelID, System: system, Prompt: prompt, Backoff: backoff})
 	thinking := 0
 	for _, a := range res.Attempts {
@@ -488,7 +503,11 @@ func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, mod
 	captureErr := cl.holdIn(held, captures, capturePath)
 	switch {
 	case errors.Is(err, model.ErrChatIncomplete):
-		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. Capture: %s", err, res.Final.Error, capturePath)}
+		captured := "Capture: " + capturePath
+		if captureErr != nil {
+			captured = captureErr.Error()
+		}
+		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. %s", err, res.Final.Error, captured)}
 	case err != nil:
 		return asks.Reply{}, err
 	case captureErr != nil:

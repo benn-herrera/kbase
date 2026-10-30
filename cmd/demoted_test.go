@@ -18,8 +18,8 @@ const ringPaper = "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n\\title
 	"\\begin{lemma}\\label{lem:b}\nEvery gadget is a widget.\n\\end{lemma}\n\\begin{proof}\nBy Lemma~\\ref{lem:a}.\n\\end{proof}\n" +
 	"\\end{document}\n"
 
-// demotedRecords is every demoted record of the KB, as the loader reads it.
-func demotedRecords(t *testing.T, repo string) []kb.DemotedEdge {
+// graphRecords is the KB's records, as the loader reads them.
+func graphRecords(t *testing.T, repo string) kb.Graph {
 	t.Helper()
 	src, err := kbload.Open(filepath.Join(repo, kb.KBDir))
 	if err != nil {
@@ -29,12 +29,14 @@ func demotedRecords(t *testing.T, repo string) []kb.DemotedEdge {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return g.Demoted
+	return g
 }
 
 // TestDemotedRing builds a paper with a ring without inference and follows
-// its cut edge through verify, stats and resolve-demoted: restoring it would
-// close the ring again, and removing it resolves it.
+// its cut edge, which the analysis split moved onto the analysis of the lemma
+// it entered, through verify, stats and resolve-demoted: restoring it would
+// close the ring again, through both lemmas' analyses, and removing it
+// resolves it.
 func TestDemotedRing(t *testing.T) {
 	repo, state := buildRepoWith(t, ringPaper)
 	run := func(want string, args ...string) resultDoc {
@@ -48,7 +50,8 @@ func TestDemotedRing(t *testing.T) {
 	}
 	run("done", "build", "paper.tex", "--no-inference", "--state-dir", state)
 
-	cuts := demotedRecords(t, repo)
+	g := graphRecords(t, repo)
+	cuts := g.Demoted
 	if len(cuts) != 1 || cuts[0].ReplacedRelation != kb.RelationSupports {
 		t.Fatalf("demoted records %+v, want one supports edge cut from the ring", cuts)
 	}
@@ -70,9 +73,20 @@ func TestDemotedRing(t *testing.T) {
 	resolve := func(name, action string) string {
 		return writeValues(t, values, name, "entry:\n- id: "+b+"\n  target: "+a+"\n  action: "+action+"\n")
 	}
+	lifted := map[string]string{}
+	for _, e := range g.Scorable {
+		if e.Relation == kb.RelationLifts {
+			lifted[e.Source] = e.Target
+		}
+	}
+	analysisOf := map[string]string{}
+	for ana, claim := range lifted {
+		analysisOf[claim] = ana
+	}
+	ring := a + " → " + analysisOf[a] + " → " + lifted[b] + " → " + b + " → " + a
 	cycle := run("refused", "resolve-demoted", "--values", resolve("restore.yaml", "restore")).items("refusals")
-	if len(cycle) != 1 || cycle[0]["check"] != "dependency-cycle" || !strings.Contains(cycle[0]["detail"].(string), a+" → "+b+" → "+a) {
-		t.Errorf("a restore closing the ring: %v", cycle)
+	if len(lifted) != 2 || len(cycle) != 1 || cycle[0]["check"] != "dependency-cycle" || !strings.Contains(cycle[0]["detail"].(string), ring) {
+		t.Errorf("a restore closing the ring: %v, want the cycle %s", cycle, ring)
 	}
 	removed := run("done", "resolve-demoted", "--values", resolve("remove.yaml", "remove"))
 	if r := removed.items("resolved"); len(r) != 1 || r[0]["action"] != "removed" {

@@ -17,11 +17,14 @@ import (
 
 // Client is one endpoint's surface. Its two inference methods are unexported,
 // so no package but this one can put a request on the wire: a call goes
-// through a Slot, and only Queue.Go issues one. A test double outside this
-// package becomes a Client through ClientFuncs.
+// through a Slot, and only Queue.Go issues one. sampling is the resolved
+// Sampling every chat request it is handed carries, read outside this package
+// through SamplingOf. A test double outside this package becomes a Client
+// through ClientFuncs.
 type Client interface {
 	consultStream(ctx context.Context, req Request) (StreamReader, error)
 	decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
+	sampling() Sampling
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
 
@@ -86,6 +89,10 @@ type Endpoint struct {
 	// rather than redialling all past net/http's default of two. Zero or less
 	// leaves the defaults.
 	IdleConns int
+	// Sampling is the temperature and thinking level this endpoint's chat
+	// calls ask for, a nil field being kbase's default. The client resolves it
+	// once, at construction; how its protocol sends it is the encoder's.
+	Sampling Sampling
 }
 
 // NewClient constructs the chat client the endpoint's protocol names: the
@@ -111,52 +118,26 @@ type ModelInfo struct {
 	OwnedBy string // free-form ownership string; "" if absent
 }
 
-// Request is one chat invocation, as the pipeline's asks shape it. The two
-// protocols read different halves of it: the OpenAI client sends no completion
-// cap (the server's own applies) and reads ChatTemplateKwargs, Reasoning and
-// PromptCacheKey; the Messages client derives its required cap from the text
-// (maxTokensFor) and sends none of those three, which that protocol has no
+// Request is one chat invocation, as the pipeline's asks shape it. Each
+// protocol's encoder maps it onto that protocol's fields: the OpenAI client
+// sends no completion cap (the server's own applies) and reads PromptCacheKey;
+// the Messages client derives its required cap from the text (maxTokensFor)
+// and the thinking level, and sends no cache key, which that protocol has no
 // field for.
 type Request struct {
 	Model    string
 	Messages []Message
 
-	// Temperature is the sampling temperature, wired on the wire by the
-	// OpenAI client always. 0 means deterministic (greedy decode); it is NOT
-	// a "use server default" sentinel. The Messages client sends it only
-	// inside that protocol's [0,1] range — see encodeAnthropicRequest.
-	Temperature float64
-
-	// ChatTemplateKwargs is the de-facto OpenAI-API extension for passing
-	// chat-template-level kwargs through to the underlying tokenizer. It is
-	// sent beside Reasoning, for servers that speak the tokenizer extension;
-	// a provider that ignores it is not a reason to shape a request
-	// differently, because Reasoning covers that case. Encoded as
-	// `chat_template_kwargs` in the JSON wire format. Empty/nil → field
-	// omitted entirely.
-	ChatTemplateKwargs map[string]any
-
-	// Reasoning is the provider's own reasoning control, encoded as the
-	// `reasoning` object. It is what disables thinking on a provider that
-	// ignores chat-template-level toggles — OpenRouter, for one — and a
-	// server that speaks only the tokenizer extension ignores it. Every chat
-	// request carries it; there is no per-provider selection. Nil → field
-	// omitted entirely.
-	Reasoning *Reasoning
+	// Sampling is the client's resolved sampling; neither field is nil
+	// (Client.sampling). Each protocol's encoder decides what of it the wire
+	// carries.
+	Sampling Sampling
 
 	// PromptCacheKey is sent as `prompt_cache_key`, and omitted entirely
 	// where empty. The client is what sets it, from the key it was built
 	// with: one client serves one run, and every ask that run makes carries
 	// the same key. A caller does not set it.
 	PromptCacheKey string
-}
-
-// Reasoning is the `reasoning` request object: the provider's own control
-// over thinking, as the OpenAI-compatible surfaces that support it take it.
-// Only the one switch kbase sets is represented — kbase always asks for
-// thinking off.
-type Reasoning struct {
-	Enabled bool `json:"enabled"`
 }
 
 // FinishLength is the finish reason that says a generation hit its completion

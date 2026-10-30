@@ -66,7 +66,11 @@ type Entry struct {
 // Trail is every boundary commit reachable from HEAD, newest first. A branch
 // with no commits has an empty trail.
 func (r *Repo) Trail() ([]Entry, error) {
-	if _, err := r.run("rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+	head, err := r.Head()
+	if err != nil {
+		return nil, err
+	}
+	if head == "" {
 		return nil, nil
 	}
 	out, err := r.run("log", "--grep=^"+Prefix, "--format=%H%x1f%s%x1f%b%x1e")
@@ -90,9 +94,26 @@ func (r *Repo) Trail() ([]Entry, error) {
 func (r *Repo) Head() (string, error) {
 	out, err := r.run("rev-parse", "--verify", "--quiet", "HEAD")
 	if err != nil {
-		return "", nil
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return "", nil
+		}
+		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// Parent is commit's first parent, "" where commit is a root commit.
+func (r *Repo) Parent(commit string) (string, error) {
+	out, err := r.run("rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) < 2 {
+		return "", nil
+	}
+	return fields[1], nil
 }
 
 // Record commits the owned paths as the boundary of stage, its subject

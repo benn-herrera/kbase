@@ -2,7 +2,6 @@ package model_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -274,40 +273,22 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	}
 }
 
-func TestChatRequestShape(t *testing.T) {
-	srv, seen := sseServer(t, sseAnswered)
-	if _, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil); err != nil {
-		t.Fatal(err)
+// TestSamplingOfReportsWhatIsSent: SamplingOf returns a copy, so a caller
+// writing through its temperature changes nothing the client sends.
+func TestSamplingOfReportsWhatIsSent(t *testing.T) {
+	c := model.NewOpenAIClient(model.Endpoint{})
+	first := model.SamplingOf(c)
+	if first.Temperature == nil {
+		t.Fatal("an openai client stating nothing sends no temperature")
 	}
-	var body struct {
-		MaxTokens   *int             `json:"max_tokens"`
-		Model       string           `json:"model"`
-		Messages    []map[string]any `json:"messages"`
-		Temperature *float64         `json:"temperature"`
-		Kwargs      map[string]any   `json:"chat_template_kwargs"`
-		Reasoning   map[string]any   `json:"reasoning"`
-		Stream      bool             `json:"stream"`
-		Options     map[string]any   `json:"stream_options"`
-		Tools       any              `json:"tools"`
+	sent := *first.Temperature
+	*first.Temperature = 9
+	again := model.SamplingOf(c)
+	if again.Temperature == nil {
+		t.Fatal("after a caller's write the client sends no temperature")
 	}
-	if err := json.Unmarshal(seen()[0], &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Model != "m" || len(body.Messages) != 2 || body.Messages[0]["role"] != "system" || body.Messages[0]["content"] != "the system" ||
-		body.Messages[1]["role"] != "user" || body.Messages[1]["content"] != "the prompt" {
-		t.Errorf("messages = %+v", body.Messages)
-	}
-	if body.Temperature == nil || *body.Temperature != 0 || body.Kwargs["enable_thinking"] != false || len(body.Kwargs) != 1 {
-		t.Errorf("temperature %v, chat_template_kwargs %v", body.Temperature, body.Kwargs)
-	}
-	if len(body.Reasoning) != 1 || body.Reasoning["enabled"] != false {
-		t.Errorf("reasoning = %v, want the provider's control with enabled false", body.Reasoning)
-	}
-	if !body.Stream || body.Options["include_usage"] != true || body.Tools != nil {
-		t.Errorf("stream %t, stream_options %v, tools %v", body.Stream, body.Options, body.Tools)
-	}
-	if body.MaxTokens != nil {
-		t.Errorf("max_tokens %d sent; the request must carry none", *body.MaxTokens)
+	if *again.Temperature != sent {
+		t.Errorf("temperature after a caller's write = %g, want %g", *again.Temperature, sent)
 	}
 }
 
@@ -596,6 +577,65 @@ func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
 			}
 			if got.FirstToken <= 0 || got.FirstToken > got.Duration {
 				t.Errorf("FirstToken = %v over a call of %v, want a moment inside it", got.FirstToken, got.Duration)
+			}
+		})
+	}
+}
+
+const (
+	sseCutOffEmpty = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":8,\"total_tokens\":48}}\n\n" +
+		"data: [DONE]\n\n"
+	sseCutOffBlank = "data: {\"choices\":[{\"delta\":{\"content\":\" \\n\"}}]}\n\n" + sseCutOffEmpty
+	sseCutOffText  = "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n" + sseCutOffEmpty
+)
+
+// TestChatDoesNotResendAnAnswerCutOffBeforeAnyText: an answer that reached the
+// completion cap with no text would be cut off the same way again, so the call
+// ends on its first attempt, with no pause, and an answer with text stands.
+func TestChatDoesNotResendAnAnswerCutOffBeforeAnyText(t *testing.T) {
+	anthropicAt := func(url string) model.Client {
+		return model.NewAnthropicClient(model.Endpoint{BaseURL: url, Protocol: model.ProtocolAnthropic})
+	}
+	for _, tc := range []struct {
+		name   string
+		client func(string) model.Client
+		body   string
+		want   string
+
+		wantReasoned bool
+	}{
+		{"openai, no content", openAIAt, sseCutOffEmpty, model.ChatTruncatedEmpty, false},
+		{"openai, whitespace only", openAIAt, sseCutOffBlank, model.ChatTruncatedEmpty, false},
+		{"anthropic, no text", anthropicAt, modeltest.MessagesStream("", "", "max_tokens"), model.ChatTruncatedEmpty, false},
+		{"openai, text before the cap", openAIAt, sseCutOffText, model.ChatOK, false},
+		{"openai, reasoning only", openAIAt,
+			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"pondering\"}}]}\n\n" + sseCutOffEmpty,
+			model.ChatTruncatedEmpty, true},
+		{"anthropic, thinking only", anthropicAt, modeltest.MessagesStream("pondering", "", "max_tokens"),
+			model.ChatTruncatedEmpty, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := sseServer(t, tc.body)
+
+			res, err := slotChat(t, context.Background(), tc.client(srv.URL), "s", "p", []time.Duration{time.Hour})
+			if n := len(seen()); n != 1 || len(res.Attempts) != 1 {
+				t.Fatalf("%d requests, %d attempts; want one of each", n, len(res.Attempts))
+			}
+			if got := lastAttempt(res).Outcome; got != tc.want {
+				t.Errorf("outcome = %q, want %q", got, tc.want)
+			}
+			if got := lastAttempt(res).Reasoned; got != tc.wantReasoned {
+				t.Errorf("Reasoned = %v, want %v", got, tc.wantReasoned)
+			}
+			if tc.want == model.ChatOK {
+				if err != nil {
+					t.Errorf("Chat = %v, want the cut-off answer with text to stand", err)
+				}
+				return
+			}
+			if !errors.Is(err, model.ErrChatIncomplete) {
+				t.Errorf("Chat = %v, want an incomplete call", err)
 			}
 		})
 	}

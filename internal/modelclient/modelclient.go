@@ -16,6 +16,17 @@ import (
 	"kbase/internal/result"
 )
 
+// openedKey identifies an open client: the endpoint it dials (the entry's name,
+// or "base:" and the base URL in environment mode), the wire protocol it speaks
+// and its resolved sampling — defaults filled in, so a setting left unset and
+// one stating its default key alike.
+type openedKey struct {
+	endpoint    string
+	protocol    model.Protocol
+	temperature float64
+	thinking    model.Thinking
+}
+
 // NewClientFunc constructs the model client for an endpoint. It is the seam
 // that lets a verb be exercised without a network — production passes
 // model.NewClient, tests pass a factory returning a test double's
@@ -23,9 +34,9 @@ import (
 type NewClientFunc func(model.Endpoint) model.Client
 
 // Registry is the registry of the model clients one verb opens: at most one per
-// endpoint, opened on first use and closed together before the verb returns.
-// It is the only constructor of a model.Client in kbase, and it derives no
-// deadline — each caller bounds its own call.
+// endpoint, wire protocol and resolved sampling, opened on first use and closed
+// together before the verb returns. It is the only constructor of a model.Client in kbase, and
+// it derives no deadline — each caller bounds its own call.
 type Registry struct {
 	newClient NewClientFunc
 	// promptCacheKey is what every client the registry opens stamps on the
@@ -35,7 +46,7 @@ type Registry struct {
 	promptCacheKey string
 	// idleConns is what every client the registry opens keeps idle per host.
 	idleConns int
-	opened    map[string]model.Client
+	opened    map[openedKey]model.Client
 	// lg takes a close that failed. A close error is never raised: the verb
 	// has usually written its result by then.
 	lg log.Logger
@@ -52,16 +63,28 @@ func New(seam NewClientFunc, lg log.Logger, promptCacheKey string, idleConns int
 	if lg == nil {
 		lg = log.Discard()
 	}
-	return &Registry{newClient: seam, promptCacheKey: promptCacheKey, idleConns: idleConns, opened: map[string]model.Client{}, lg: lg}
+	return &Registry{newClient: seam, promptCacheKey: promptCacheKey, idleConns: idleConns, opened: map[openedKey]model.Client{}, lg: lg}
 }
 
-// Get is the client for ep, opened on first use: two roles naming one pool
-// entry share a client and its connection pool, and an environment-mode
-// endpoint shares by base URL, which is all it has.
+// Get is the client for ep, opened on first use: roles naming one pool entry,
+// speaking one wire protocol and resolving to equal sampling — an unset
+// setting equal to its stated default — share a client and its connection
+// pool, and an environment-mode endpoint shares by base URL, which is all it
+// has. A role whose resolved sampling differs gets its own client, since a
+// client asks for one sampling on every call.
+// The decision role always speaks the OpenAI protocol, the only one carrying
+// the decision surfaces; every other role speaks the protocol its entry's `api`
+// names.
 func (r *Registry) Get(ep config.Endpoint) (model.Client, error) {
-	key := ep.Provider
-	if key == "" {
-		key = "base:" + ep.BaseURL
+	protocol := chatProtocol(ep.Protocol)
+	if ep.Role == config.RoleDecision {
+		protocol = model.ProtocolOpenAI
+	}
+	sampling := samplingOf(ep)
+	resolved := sampling.Resolved()
+	key := openedKey{endpoint: ep.Provider, protocol: protocol, temperature: *resolved.Temperature, thinking: *resolved.Thinking}
+	if key.endpoint == "" {
+		key.endpoint = "base:" + ep.BaseURL
 	}
 	if client, ok := r.opened[key]; ok {
 		return client, nil
@@ -71,7 +94,8 @@ func (r *Registry) Get(ep config.Endpoint) (model.Client, error) {
 		return nil, err
 	}
 	client := r.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: apiKey,
-		Protocol: chatProtocol(ep.Protocol), Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns})
+		Protocol: protocol, Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns,
+		Sampling: sampling})
 	r.opened[key] = client
 	return client, nil
 }
@@ -108,10 +132,10 @@ func (r *Registry) CloseAll() {
 			continue
 		}
 		if err := closer.Close(); err != nil {
-			r.lg.Warn("a model client was not closed cleanly", "endpoint", key, "error", err)
+			r.lg.Warn("a model client was not closed cleanly", "endpoint", key.endpoint, "error", err)
 		}
 	}
-	r.opened = map[string]model.Client{}
+	r.opened = map[openedKey]model.Client{}
 }
 
 // Catalogue is the model ids entry's provider lists, in the order it listed
@@ -163,4 +187,24 @@ func chatProtocol(api string) model.Protocol {
 		return model.ProtocolAnthropic
 	}
 	return model.ProtocolOpenAI
+}
+
+// samplingOf is the sampling ep's role states, in the model package's
+// vocabulary, a field left nil where the role states none. As chatProtocol is
+// for `api`: the thinking level is configuration's — it refuses one it does
+// not know at load — and model.Thinking is model's, so the one mapping between
+// the two lives here.
+func samplingOf(ep config.Endpoint) model.Sampling {
+	s := model.Sampling{Temperature: ep.Temperature}
+	switch ep.Thinking {
+	case config.ThinkingOff:
+		s.Thinking = new(model.ThinkingOff)
+	case config.ThinkingLow:
+		s.Thinking = new(model.ThinkingLow)
+	case config.ThinkingMedium:
+		s.Thinking = new(model.ThinkingMedium)
+	case config.ThinkingHigh:
+		s.Thinking = new(model.ThinkingHigh)
+	}
+	return s
 }

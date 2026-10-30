@@ -41,7 +41,7 @@ mkfifo "${out}/requests.fifo" "${out}/frames.fifo"
     env HOME="${out}/home" XDG_STATE_HOME="${out}/xdg" KBASE_CONFIG_DIR="${out}/config" \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/home/.gitconfig" \
         GIT_AUTHOR_NAME=mcp GIT_AUTHOR_EMAIL=mcp@invalid GIT_COMMITTER_NAME=mcp GIT_COMMITTER_EMAIL=mcp@invalid \
-        "${kbase}" mcp --kb-root "${out}/repo" < "${out}/requests.fifo" > "${out}/frames.fifo" 2> "${out}/mcp.log"
+        "${kbase}" mcp < "${out}/requests.fifo" > "${out}/frames.fifo" 2> "${out}/mcp.log"
 ) &
 server=$!
 set +e
@@ -52,7 +52,7 @@ go test -count=1 -timeout 300s -run '^TestMCPBuildEndNotification$' ./cmd -args 
 code=$?
 set -e
 wait "${server}" || true
-OUT_DIR="${out}" RECIPE="test-integration-mcp-build" INVOCATION="cp ${MCP_TRANSCRIPT_DIR}/paper.tex repo/; git init repo/ and one commit (identity fixed in the environment, global config quarantined to home/.gitconfig); mkfifo requests.fifo frames.fifo\nrepo/: ${kbase} mcp --kb-root repo/ < requests.fifo > frames.fifo 2> mcp.log, whose build tool launched two builds with no inference into state/\ngo test -count=1 -timeout 300s -run '^TestMCPBuildEndNotification$' ./cmd -args -notify.repo=repo -notify.state-dir=state -notify.requests=requests.fifo -notify.frames=frames.fifo > test.log: initialize, build, subscribe, send nothing until the end's notification arrives, then a second build and a subscription taken again\npass is test.log's exit 0; a frame that is not the one owing, an end announced twice, or a build that never ends fails it" \
+OUT_DIR="${out}" RECIPE="test-integration-mcp-build" INVOCATION="cp ${MCP_TRANSCRIPT_DIR}/paper.tex repo/; git init repo/ and one commit (identity fixed in the environment, global config quarantined to home/.gitconfig); mkfifo requests.fifo frames.fifo\nrepo/: ${kbase} mcp < requests.fifo > frames.fifo 2> mcp.log, whose build tool launched two builds with no inference into state/\ngo test -count=1 -timeout 300s -run '^TestMCPBuildEndNotification$' ./cmd -args -notify.repo=repo -notify.state-dir=state -notify.requests=requests.fifo -notify.frames=frames.fifo > test.log: initialize, build, subscribe, send nothing until the end's notification arrives, then a second build and a subscription taken again\npass is test.log's exit 0; a frame that is not the one owing, an end announced twice, or a build that never ends fails it" \
     tools/scripts/write-evidence.sh
 if [[ "${code}" -ne 0 ]]; then
     printf 'integration(test-integration-mcp-build): the notification never arrived as expected — see %s\n' "${out}/test.log"

@@ -129,7 +129,7 @@ func TestRootLoggingFlagFailures(t *testing.T) {
 // them — is refused with its own result document; a verb's own exit code
 // passes through with nothing more written.
 func TestExitStatus(t *testing.T) {
-	_, _, usage := executeRoot(t, "build")
+	_, _, usage := executeRoot(t, "build", "--no-such-flag")
 	for _, tc := range []struct {
 		name     string
 		err      error

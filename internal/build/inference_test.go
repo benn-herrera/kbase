@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -174,7 +175,7 @@ func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
 	opts.Provider = func() (Provider, error) {
-		return Provider{LettersClient: client, Letters: "decision", OverviewClient: client, Overview: "text", Queue: model.NewQueue(2),
+		return Provider{MultichoiceClient: client, Multichoice: "decision", OverviewClient: client, Overview: "text", Queue: model.NewQueue(2),
 			Roles: []result.Record{
 				{{Key: "role", Value: "decision"}, {Key: "back-end", Value: "provider"},
 					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
@@ -418,7 +419,8 @@ const settledRingPaper = "\\documentclass{article}\n\\newtheorem{lemma}{Lemma}\n
 // of a ring close a two-cycle, and the ring row cuts the edge the walk closes
 // it on. The walk starts at the lemma read first, so the second lemma's
 // supports edge into the first is demoted and the first's into the second
-// stands.
+// stands. Each lemma's proof then hosts its analysis, and both records enter
+// the analysis of the lemma they entered.
 func TestNoInferenceCutsTheSettledRing(t *testing.T) {
 	f := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), settledRingPaper)
@@ -435,18 +437,25 @@ func TestNoInferenceCutsTheSettledRing(t *testing.T) {
 		t.Fatalf("claim records = %+v, want the two lemmas", claims)
 	}
 	ids := []string{claims[0].ID, claims[1].ID}
+	analysisOf := map[string]string{}
 	for _, e := range g.Scorable {
-		if e.Relation == kb.RelationSupports {
+		switch e.Relation {
+		case kb.RelationSupports:
 			supports = append(supports, e.Source+" -> "+e.Target)
+		case kb.RelationLifts:
+			analysisOf[e.Target] = e.Source
 		}
 	}
 	for _, d := range g.Demoted {
 		demoted = append(demoted, d.ReplacedRelation+" "+d.Source+" -> "+d.Target)
 	}
-	if want := []string{ids[0] + " -> " + ids[1]}; !slices.Equal(supports, want) {
+	if len(analysisOf) != 2 || analysisOf[ids[0]] == "" || analysisOf[ids[1]] == "" {
+		t.Fatalf("lifts %v, want each lemma lifted by the analysis its proof hosts", analysisOf)
+	}
+	if want := []string{ids[0] + " -> " + analysisOf[ids[1]]}; !slices.Equal(supports, want) {
 		t.Errorf("supports edges = %q, want %q", supports, want)
 	}
-	if want := []string{kb.RelationSupports + " " + ids[1] + " -> " + ids[0]}; !slices.Equal(demoted, want) {
+	if want := []string{kb.RelationSupports + " " + ids[1] + " -> " + analysisOf[ids[0]]}; !slices.Equal(demoted, want) {
 		t.Errorf("demoted records = %q, want %q", demoted, want)
 	}
 }
@@ -568,7 +577,7 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	}
 
 	resumed := newAnswering(script)
-	outcome, fields := f.build(t, f.asking(resumed.Client()))
+	outcome, fields := f.build(t, resuming(f.asking(resumed.Client())))
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
@@ -579,6 +588,58 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 		t.Errorf("the resume asked %d times, want %d: every ask but the %d the cache holds", resumed.count(), want, len(cached))
 	}
 	sameModuloIDs(t, f.repo, whole.repo)
+}
+
+// TestFullBuildAfterANoInferenceOneStartsOver: a trail a --no-inference build
+// finished is finished, so a resume asking a model is unchanged and asks
+// nothing; reset to started-at, a build with inference walks every stage and
+// drops no row.
+func TestFullBuildAfterANoInferenceOneStartsOver(t *testing.T) {
+	f := newFixture(t)
+	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
+	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
+		t.Fatalf("--no-inference build = %s %v", outcome, fields)
+	}
+	client := newAnswering(script)
+	if outcome, fields := f.build(t, resuming(f.asking(client.Client()))); outcome != result.Unchanged || storetest.Carries(fields, "stages") || client.count() != 0 {
+		t.Fatalf("a resume asking a model over the finished trail = %s %v after %d asks, want unchanged and none", outcome, fields, client.count())
+	}
+
+	trail, err := f.ledger(t).Trail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, startedAt := buildstore.StartedAt(trail)
+	reset := exec.Command("git", "reset", "--hard", startedAt)
+	reset.Dir = f.repo
+	if out, err := reset.CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard %s: %v\n%s", startedAt, err, out)
+	}
+
+	outcome, fields := f.build(t, f.asking(client.Client()))
+	if outcome != result.Done {
+		t.Fatalf("a build after the reset = %s %v", outcome, fields)
+	}
+	stages, _ := storetest.Field(fields, "stages").([]result.Record)
+	if len(stages) != len(buildstore.Stages) {
+		t.Errorf("the build walked %d stages, want every one, %d", len(stages), len(buildstore.Stages))
+	}
+	for _, s := range stages {
+		if dropped, _ := s[2].Value.([]string); len(dropped) != 0 {
+			t.Errorf("%s dropped %q, want no row dropped", s[0].Value, dropped)
+		}
+	}
+	if trail, err = f.ledger(t).Trail(); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range trail {
+		if strings.Contains(e.Body, "--no-inference:") {
+			t.Errorf("%s body = %q, want no dropped rows named", e.Stage, e.Body)
+		}
+	}
+	if client.count() == 0 {
+		t.Error("the build after the reset asked the model nothing")
+	}
 }
 
 func TestBibliographiesBesideTheVolumeRoots(t *testing.T) {

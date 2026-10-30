@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"kbase/internal/asks"
@@ -40,34 +39,10 @@ func writeReport(path string, report result.Record) error {
 	return atomicfile.Write(path, b.Bytes(), nil)
 }
 
-// operationLockFile is the operation lock in the repository's git directory,
-// so a build and a scoring run over one KB exclude each other whatever their
-// state directories and the working tree gains no file. It records the
-// holder's state directory; the store's holder record carries the pid, the
-// start and the verb status and cancel read.
-const operationLockFile = "kbase-operation.lock"
-
-// operationLockPath is the operation lock of the KB at kbRoot. A .git file is
-// followed to the worktree's own git directory, read rather than asked of git,
-// since a maintenance verb that checks the lock never requires git.
-func operationLockPath(kbRoot string) string {
-	repo := filepath.Dir(kbRoot)
-	dir := filepath.Join(repo, ".git")
-	if text, err := os.ReadFile(dir); err == nil {
-		if target, ok := strings.CutPrefix(strings.TrimSpace(string(text)), "gitdir:"); ok {
-			dir = strings.TrimSpace(target)
-			if !filepath.IsAbs(dir) {
-				dir = filepath.Join(repo, dir)
-			}
-		}
-	}
-	return filepath.Join(dir, operationLockFile)
-}
-
 // takeOperationLock is the repository's operation lock, recording stateDir; a
 // live holder is refused, naming the run and its state directory.
 func takeOperationLock(kbRoot, stateDir string) (*filelock.Lock, error) {
-	path := operationLockPath(kbRoot)
+	path := buildstore.OperationLockPath(kbRoot)
 	l, err := filelock.Acquire(path, buildstore.LockWait)
 	if errors.Is(err, filelock.ErrHeld) {
 		items, err := runningRefusal(path)
@@ -109,7 +84,7 @@ func Hold(kbRoot, stateDir string, kind buildstore.Kind, run string, now time.Ti
 // while a run — a build or a score run — holds the operation lock: the run
 // writes kb-root/ without the write lock; nil where none does.
 func RunningOperation(kbRoot string) ([]result.Item, error) {
-	path := operationLockPath(kbRoot)
+	path := buildstore.OperationLockPath(kbRoot)
 	held, err := filelock.Held(path)
 	if err != nil || !held {
 		return nil, err
@@ -313,40 +288,57 @@ func pruneTrails(dir, current string) error {
 			return err
 		}
 	}
-	scratch := filepath.Join(dir, buildstore.ScratchDir)
-	trails := filepath.Join(scratch, buildstore.TrailsDir)
-	entries, err := os.ReadDir(trails)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	trails, err := listTrails(dir)
+	if err != nil {
 		return err
 	}
-	type trail struct {
-		path string
-		mod  time.Time
-	}
-	var others []trail
-	for _, e := range entries {
-		path := filepath.Join(trails, e.Name())
-		if !e.IsDir() || path == current {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			return err
-		}
-		others = append(others, trail{path, info.ModTime()})
-	}
-	slices.SortFunc(others, func(a, b trail) int { return b.mod.Compare(a.mod) })
-	for _, t := range others[min(keptBuilds, len(others)):] {
-		if err := os.RemoveAll(t.path); err != nil {
+	others := slices.DeleteFunc(trails, func(path string) bool { return path == current })
+	for _, path := range others[min(keptBuilds, len(others)):] {
+		if err := os.RemoveAll(path); err != nil {
 			return err
 		}
 	}
+	scratch := filepath.Join(dir, buildstore.ScratchDir)
 	for _, flat := range []string{asks.AnswersDir, asks.AskRecordsDir, asks.CapturesDir} {
 		if err := os.RemoveAll(filepath.Join(scratch, flat)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// listTrails is the trail directories under the store at dir's scratch,
+// newest first by modification time; none where no trails directory stands.
+func listTrails(dir string) ([]string, error) {
+	trails := filepath.Join(dir, buildstore.ScratchDir, buildstore.TrailsDir)
+	entries, err := os.ReadDir(trails)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	type trail struct {
+		path string
+		mod  time.Time
+	}
+	var all []trail
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, trail{filepath.Join(trails, e.Name()), info.ModTime()})
+	}
+	slices.SortStableFunc(all, func(a, b trail) int { return b.mod.Compare(a.mod) })
+	paths := make([]string, len(all))
+	for i, t := range all {
+		paths[i] = t.path
+	}
+	return paths, nil
 }
 
 // pruneBuildCaptures keeps, under the store at dir's ReportsDir, the newest

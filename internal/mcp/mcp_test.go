@@ -17,10 +17,12 @@ func TestDeclaredPositionals(t *testing.T) {
 		wantErr   bool
 	}{
 		{"none", "verb", []Positional{}, false},
-		{"one", "verb <paper>", []Positional{{"paper", false}}, false},
-		{"a variadic last", "verb <paper> <roots>...", []Positional{{"paper", false}, {"roots", true}}, false},
+		{"one", "verb <paper>", []Positional{{"paper", false, false}}, false},
+		{"a variadic last", "verb <paper> <roots>...", []Positional{{"paper", false, false}, {"roots", true, false}}, false},
+		{"an optional variadic last", "verb <paper> [<roots>...]", []Positional{{"paper", false, false}, {"roots", true, true}}, false},
 		{"a bare word", "verb paper", nil, true},
 		{"an optional in brackets", "verb [<paper>]", nil, true},
+		{"an optional variadic before the last", "verb [<roots>...] <paper>", nil, true},
 		{"a variadic before the last", "verb <roots>... <paper>", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,12 +38,12 @@ func TestDeclaredPositionals(t *testing.T) {
 }
 
 // TestCommandSchema: the positionals are required string properties, a
-// variadic one an array; every local flag of a carried type is an optional
+// variadic one an array and an optional variadic one not required; every local flag of a carried type is an optional
 // property described by its usage; an excluded flag and a persistent one are
 // no property; and a flag no tool argument carries, or one named as a
 // positional, is an error.
 func TestCommandSchema(t *testing.T) {
-	cmd := &cobra.Command{Use: "verb <paper> <roots>..."}
+	cmd := &cobra.Command{Use: "verb <paper> [<roots>...]"}
 	cmd.Flags().Bool("dry", false, "dry usage")
 	cmd.Flags().String("name", "", "name usage")
 	cmd.Flags().Int("limit", 0, "limit usage")
@@ -56,7 +58,7 @@ func TestCommandSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []Positional{{"paper", false}, {"roots", true}}; !reflect.DeepEqual(positionals, want) {
+	if want := []Positional{{"paper", false, false}, {"roots", true, true}}; !reflect.DeepEqual(positionals, want) {
 		t.Errorf("positionals %+v, want %+v", positionals, want)
 	}
 	strs := &protocol.Property{Type: "string"}
@@ -71,7 +73,7 @@ func TestCommandSchema(t *testing.T) {
 			"tag":     {Type: "array", Items: strs, Description: "tag usage"},
 			"timeout": {Type: "string", Description: "timeout usage"},
 		},
-		Required: []string{"paper", "roots"},
+		Required: []string{"paper"},
 	}
 	if !reflect.DeepEqual(schema, want) {
 		t.Errorf("schema %+v\nwant %+v", schema, want)
@@ -99,7 +101,7 @@ func TestCommandSchema(t *testing.T) {
 // array item; a bool and a number spelled as the command line spells them; an
 // absent argument nothing.
 func TestCommandLine(t *testing.T) {
-	positionals := []Positional{{"paper", false}, {"roots", true}}
+	positionals := []Positional{{"paper", false, false}, {"roots", true, false}}
 	for _, tc := range []struct {
 		name      string
 		args      map[string]any

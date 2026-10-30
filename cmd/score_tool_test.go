@@ -66,7 +66,7 @@ func scoreToolProvider(t *testing.T, mode string) {
 func scoreToolServer(t *testing.T, repo, base string) mcp.Server {
 	t.Helper()
 	isolateChildBuild(t, base)
-	return servedServer(rootCmd, repo, &bytes.Buffer{}, log.Discard())
+	return servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 }
 
 // scoreToolStart calls the score tool and requires the start document: the run's

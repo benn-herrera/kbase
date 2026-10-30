@@ -44,7 +44,7 @@ func TestBuildConfiguredByEnvironmentAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provider = %v", err)
 	}
-	if p.Letters != "Some-Decision" || p.Overview != "Some-Text" {
+	if p.Multichoice != "Some-Decision" || p.Overview != "Some-Text" {
 		t.Errorf("provider = %+v, want each role's own variable on it", p)
 	}
 	// One environment endpoint serves both roles, so it is dialled once.

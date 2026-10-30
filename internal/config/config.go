@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -43,6 +45,9 @@ type Config struct {
 	// Asks is how the build puts its multichoice asks.
 	Asks AsksConfig `toml:"asks"`
 
+	// Sampling is how the text and scoring roles are asked.
+	Sampling SamplingTable `toml:"sampling"`
+
 	// Sources names the layer that supplied each merged model id — one of
 	// LayerSourceRepository, LayerSourceGlobal, LayerSourceExplicit or
 	// LayerSourceEnvironment. It is set by Load's merge, never read from a
@@ -68,7 +73,7 @@ const keyConcurrency = "asks.concurrency"
 // DefaultAskConcurrency is how many model calls an invocation has in flight
 // at once where neither --ask-concurrency nor [asks] concurrency names a
 // number.
-const DefaultAskConcurrency = 2
+const DefaultAskConcurrency = 4
 
 // ModelMap is the [models] table: the role→model resolution, written by
 // `kbase configure` or by hand. A value is a file-mode reference,
@@ -114,11 +119,68 @@ func (c Config) ModelLayer(role Role) string {
 	return ""
 }
 
+// The thinking levels a role may be asked at. The vocabulary is kbase's; each
+// chat client maps a level onto what its protocol takes.
+const (
+	ThinkingOff    = "off"
+	ThinkingLow    = "low"
+	ThinkingMedium = "medium"
+	ThinkingHigh   = "high"
+)
+
+// ThinkingLevels is every thinking level, in the order a message lists them.
+var ThinkingLevels = []string{ThinkingOff, ThinkingLow, ThinkingMedium, ThinkingHigh}
+
+// SamplingTable is the [sampling] table: one sub-table per chat role that is
+// asked with sampling. The decision role has none, so a [sampling.decision]
+// key fails the strict load as unmodeled.
+type SamplingTable struct {
+	Text    RoleSampling `toml:"text"`
+	Scoring RoleSampling `toml:"scoring"`
+}
+
+// RoleSampling is one role's sampling. A field left unset is kbase's default —
+// temperature 0, thinking off — and never the provider's.
+type RoleSampling struct {
+	// Temperature is nil where no layer states one.
+	Temperature *float64 `toml:"temperature"`
+	// Thinking is one of ThinkingLevels, or "" where no layer states one.
+	Thinking string `toml:"thinking"`
+}
+
+// SamplingLayer is the layer that supplied the role's temperature and its
+// thinking, "" for each that no layer did and for the decision role.
+func (c Config) SamplingLayer(role Role) (temperature, thinking string) {
+	switch role {
+	case RoleText:
+		return c.Sources.TextTemperature, c.Sources.TextThinking
+	case RoleScoring:
+		return c.Sources.ScoringTemperature, c.Sources.ScoringThinking
+	}
+	return "", ""
+}
+
+// samplingOf is the role's sampling as the files state it: the zero value for
+// the decision role.
+func (c Config) samplingOf(role Role) RoleSampling {
+	switch role {
+	case RoleText:
+		return c.Sampling.Text
+	case RoleScoring:
+		return c.Sampling.Scoring
+	}
+	return RoleSampling{}
+}
+
 // Sources names the layer that supplied each model id the merge took: the
 // configuration layer — explicit, environment, repository or global — the
-// config.toml value came from. A role no layer supplied carries "".
+// config.toml value came from. A role no layer supplied carries "". The
+// sampling fields name the layer of each [sampling] value the same way.
 type Sources struct {
 	Decision, Text, Scoring string
+
+	TextTemperature, TextThinking       string
+	ScoringTemperature, ScoringThinking string
 }
 
 // LoadConfig reads config.toml at path. A nonexistent file yields a zero
@@ -150,6 +212,11 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if n := cfg.Asks.Concurrency; n != nil && *n < 1 {
 		return Config{}, fmt.Errorf("config: %s: %s is a whole number of model calls, at least 1", path, keyConcurrency)
+	}
+	for _, role := range []Role{RoleText, RoleScoring} {
+		if level := cfg.samplingOf(role).Thinking; md.IsDefined("sampling", string(role), "thinking") && !slices.Contains(ThinkingLevels, level) {
+			return Config{}, fmt.Errorf("config: %s: sampling.%s.thinking is one of %s", path, role, strings.Join(ThinkingLevels, ", "))
+		}
 	}
 	return cfg, nil
 }

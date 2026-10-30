@@ -13,9 +13,11 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/buildstore"
+	"kbase/internal/buildstore/storetest"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
+	"kbase/internal/statedir"
 )
 
 // heldRun opens a run in the store at state whose process is pid, records its
@@ -86,6 +88,60 @@ func decoded(t *testing.T, doc string) map[string]any {
 		t.Fatalf("decoding the document: %v\n%s", err, doc)
 	}
 	return d
+}
+
+// TestStatusFollowsTheOperationLock: given no state-dir, status reads the
+// store the operation lock names, else the default store; a state-dir given
+// is read as given.
+func TestStatusFollowsTheOperationLock(t *testing.T) {
+	base := t.TempDir()
+	storetest.GitEnv(t, base)
+	repo := filepath.Join(base, "repo")
+	storetest.MakeRepo(t, repo)
+	kbRoot := filepath.Join(repo, kb.KBDir)
+	defaultStore, err := statedir.Dir("", kbRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := func(t *testing.T) string {
+		t.Helper()
+		other := t.TempDir()
+		release, err := build.Hold(kbRoot, other, buildstore.KindBuild, "", time.Now())
+		if err != nil {
+			t.Fatalf("hold a non-default store: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := release(); err != nil {
+				t.Errorf("release the store: %v", err)
+			}
+		})
+		return other
+	}
+	for _, tc := range []struct {
+		name      string
+		stage     func(t *testing.T) (want string)
+		stateDir  bool
+		wantState string
+	}{
+		{"follows", hold, false, buildstore.StateRunning},
+		{"explicit wins", func(t *testing.T) string { hold(t); return defaultStore }, true, buildstore.StateNone},
+		{"empty lock", func(t *testing.T) string {
+			storetest.WriteFile(t, buildstore.OperationLockPath(kbRoot), "")
+			return defaultStore
+		}, false, buildstore.StateNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := tc.stage(t)
+			opts := buildstore.MonitorOptions{WorkDir: repo}
+			if tc.stateDir {
+				opts.StateDir = want
+			}
+			outcome, fields := Status(opts)
+			if got, state := storetest.Field(fields, "state-dir"), storetest.Field(fields, "state"); got != want || state != tc.wantState {
+				t.Errorf("status = %s, state-dir %v, state %v; want %s, %s\n%v", outcome, got, state, want, tc.wantState, fields)
+			}
+		})
+	}
 }
 
 // TestReadRunOverlaysTheResultFilesOnTheLedger: a run that was killed before its

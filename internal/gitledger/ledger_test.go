@@ -143,6 +143,63 @@ func TestHead(t *testing.T) {
 	}
 }
 
+// unreadableRepo is a fresh repository whose .git cannot be read, with the
+// mode restored at cleanup.
+func unreadableRepo(t *testing.T) *Repo {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 directory")
+	}
+	r := newRepo(t)
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(r.Root))
+	gitDir := filepath.Join(r.Root, ".git")
+	if err := os.Chmod(gitDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(gitDir, 0o755) })
+	return r
+}
+
+func TestHeadReportsAnUnreadableRepository(t *testing.T) {
+	r := unreadableRepo(t)
+	if head, err := r.Head(); err == nil {
+		t.Errorf("Head with an unreadable .git = %q, nil, want an error", head)
+	}
+}
+
+func TestTrailReportsAnUnreadableRepository(t *testing.T) {
+	r := unreadableRepo(t)
+	if trail, err := r.Trail(); err == nil {
+		t.Errorf("Trail with an unreadable .git = %v, nil, want an error", trail)
+	}
+}
+
+func TestParent(t *testing.T) {
+	r := newRepo(t)
+	write(t, r, "kb-root/a.md", "a\n")
+	root, err := r.Record("start", "build started", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := r.Record("document-graph", "document tree derived", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, commit, want string }{
+		{"non-root commit", child, root},
+		{"root commit", root, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, err := r.Parent(tc.commit); err != nil || got != tc.want {
+				t.Errorf("Parent(%s) = %q, %v, want %q", tc.commit, got, err, tc.want)
+			}
+		})
+	}
+	if got, err := r.Parent(strings.Repeat("0", 40)); err == nil {
+		t.Errorf("Parent of an unknown hash = %q, nil, want an error", got)
+	}
+}
+
 // TestCommitPlainSubjectIsOffTheTrail: Commit is Record's commit with a
 // plain subject — the first commit of an unborn branch rides the same
 // pathspec scoping, the commit holds the owned paths only, nothing the user

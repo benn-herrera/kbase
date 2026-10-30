@@ -35,6 +35,7 @@ var Stages = []Stage{
 	{"references-found", "unmarked references found"},
 	{"claims-culled", "co-linear claims culled"},
 	{"depends-attributed", "dependency attribution"},
+	{"analyses-split", "analyses split"},
 	{"phase-3a", "validation gate"},
 	{"overview-drafted", "overview drafted"},
 }
@@ -91,6 +92,7 @@ var Steps = []Step{
 	{ID: "unmarked.build", Stage: "references-found", spendsOwnInference: true},
 	{ID: "cull.build", Stage: "claims-culled", spendsOwnInference: true},
 	{ID: "depends.attribute", Stage: "depends-attributed", spendsInferenceInPart: true},
+	{ID: "split.build", Stage: "analyses-split"},
 	{ID: "p3a.gate", Stage: "phase-3a"},
 	{ID: "p3a.stamp", Stage: "phase-3a"},
 	{ID: "ov.docs", Stage: "overview-drafted", system: asks.OverviewSystem},

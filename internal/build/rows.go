@@ -83,9 +83,9 @@ func kbRootGuard(kbRoot string) error {
 	return nil
 }
 
-// bibliographies is the set every volume is offered: the build's own, or,
-// given none, every .bib in a directory a volume root sits in, in sorted path
-// order.
+// bibliographies is the set every volume is offered: the build's own, in the
+// walk's path order, or, given none, every .bib in a directory a volume root
+// sits in, in sorted path order.
 func (w *walk) bibliographies() ([]string, error) {
 	if w.opts.Bibliographies != nil {
 		return w.opts.Bibliographies, nil
@@ -112,7 +112,8 @@ func (w *walk) bibliographies() ([]string, error) {
 	return beside, nil
 }
 
-// documentGraph builds the tree and writes its records into the state store.
+// documentGraph builds the tree from the volume roots in the walk's path
+// order, and writes its records into the state store.
 func documentGraph(w *walk) (result.Record, error) {
 	bibs, err := w.bibliographies()
 	if err != nil {
@@ -197,7 +198,8 @@ func documentGraphFailure(err error) error {
 }
 
 // ensureRecords regenerates the document graph's records where the state
-// store has lost them: the document graph re-run into scratch, its tree
+// store has lost them: the document graph re-run into scratch over the inputs
+// the trail records, in their recorded order, its tree
 // required byte-identical to the one the document-graph boundary committed.
 func (w *walk) ensureRecords() error {
 	if kb.IsFile(records.Path(w.stateDir)) {
@@ -285,7 +287,7 @@ func claimGraph(stage func(context.Context, claimgraph.Options) (claimgraph.Repo
 	return func(w *walk) (result.Record, error) {
 		progress, flush := w.unitProgress()
 		report, err := stage(w.ctx, claimgraph.Options{KBRoot: w.kbRoot, RepoRoot: w.repo.Root, Records: records.Path(w.stateDir), Logger: w.opts.Logger,
-			Launch: w.letters, AskRecords: filepath.Join(w.trailDir, asks.AskRecordsDir),
+			Launch: w.multichoice, AskRecords: filepath.Join(w.trailDir, asks.AskRecordsDir),
 			Progress: progress})
 		if ferr := flush(); ferr != nil {
 			if err != nil {
@@ -382,6 +384,21 @@ func (w *walk) source() (*kb.Source, error) { return kbload.Open(w.kbRoot) }
 // and once more where the reply cannot be used.
 const overviewAsks = 2
 
+// overviewRejected is the judgement of an overview reply the document cannot
+// take: one holding lines a passage may not, or empty.
+const overviewRejected asks.Outcome = "rejected"
+
+// judgeOverview is reply as the overview reads it: the passage, the lines a
+// passage may not hold, and asks.Answered where the passage is usable, else
+// overviewRejected.
+func judgeOverview(reply string) (passage string, rejected []string, judged asks.Outcome) {
+	passage, rejected = kb.Strip(reply), kbdocs.NotProse(reply)
+	if passage == "" || len(rejected) > 0 {
+		return passage, rejected, overviewRejected
+	}
+	return passage, rejected, asks.Answered
+}
+
 // overview writes the overview document: the passage asked for from excerpts
 // of the tree, a reply holding a construct the document cannot take asked
 // for once more with those lines quoted, and the template filled around it.
@@ -413,8 +430,8 @@ func overview(w *walk) (result.Record, error) {
 				askErr = err
 				break
 			}
-			passage, rejected = kb.Strip(reply), kbdocs.NotProse(reply)
-			if passage != "" && len(rejected) == 0 {
+			var judged asks.Outcome
+			if passage, rejected, judged = judgeOverview(reply); judged == asks.Answered {
 				break
 			}
 		}

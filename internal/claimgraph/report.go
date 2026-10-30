@@ -90,12 +90,15 @@ func (r Report) Records() []result.Record {
 // what that comparison found.
 type stop struct {
 	check, detail string
+	// fault is another failure that came with the stop, such as group
+	// records left unwritten; nil for a bare stop.
+	fault error
 }
 
 func (e *stop) Error() string { return e.check + ": " + e.detail }
 
 func stopf(check, format string, args ...any) *stop {
-	return &stop{check, fmt.Sprintf(format, args...)}
+	return &stop{check: check, detail: fmt.Sprintf(format, args...)}
 }
 
 func (e *stop) finding() Finding {

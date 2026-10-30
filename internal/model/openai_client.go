@@ -40,12 +40,15 @@ var _ Client = (*OpenAIClient)(nil)
 // construct the two wire clients directly, and NewClient is what dispatches. A
 // zero Endpoint yields a client whose first call produces a clear error.
 func NewOpenAIClient(e Endpoint) *OpenAIClient {
+	e.Sampling = e.Sampling.Resolved()
 	return &OpenAIClient{
 		endpoint:       e,
 		http:           newHTTPTransport(e.IdleConns),
 		promptCacheKey: e.PromptCacheKey,
 	}
 }
+
+func (c *OpenAIClient) sampling() Sampling { return c.endpoint.Sampling }
 
 // Close releases the client's idle connections. A verb that opened a client
 // calls it before it returns, on every outcome.
@@ -201,17 +204,32 @@ type wireMessage struct {
 }
 
 // wireRequest is the chat-completions request body. Temperature is always
-// serialized — no `omitempty`: 0 is deterministic decode, not a "use server
-// default" sentinel.
+// sent.
 type wireRequest struct {
-	Model              string             `json:"model"`
-	Messages           []wireMessage      `json:"messages"`
-	Temperature        float64            `json:"temperature"`
-	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"`
-	Reasoning          *Reasoning         `json:"reasoning,omitempty"`
-	PromptCacheKey     string             `json:"prompt_cache_key,omitempty"`
-	Stream             bool               `json:"stream,omitempty"`
-	StreamOptions      *wireStreamOptions `json:"stream_options,omitempty"`
+	Model              string                 `json:"model"`
+	Messages           []wireMessage          `json:"messages"`
+	Temperature        float64                `json:"temperature"`
+	ChatTemplateKwargs wireChatTemplateKwargs `json:"chat_template_kwargs"`
+	Reasoning          wireReasoning          `json:"reasoning"`
+	ReasoningEffort    string                 `json:"reasoning_effort,omitempty"`
+	PromptCacheKey     string                 `json:"prompt_cache_key,omitempty"`
+	Stream             bool                   `json:"stream,omitempty"`
+	StreamOptions      *wireStreamOptions     `json:"stream_options,omitempty"`
+}
+
+// wireChatTemplateKwargs is the de-facto extension passing chat-template
+// kwargs through to the server's tokenizer, for servers that switch thinking
+// there rather than by `reasoning`.
+type wireChatTemplateKwargs struct {
+	EnableThinking bool `json:"enable_thinking"`
+}
+
+// wireReasoning is the `reasoning` object, the provider's own thinking
+// control: `{"enabled":false}` turns thinking off, and a level is sent as
+// `effort` alone, the provider inferring that thinking is on.
+type wireReasoning struct {
+	Enabled *bool  `json:"enabled,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 }
 
 // wireStreamOptions is the `stream_options` request block, valid only on a
@@ -319,16 +337,28 @@ type wireModel struct {
 // it). `prompt_cache_key` is written where the request carries one and
 // omitted otherwise: a server that rejects the field must not receive an
 // empty one from a caller sending no key.
+//
+// The temperature is always sent. The thinking level is sent three ways at
+// once, since a server reads whichever it speaks: thinking off as
+// `chat_template_kwargs.enable_thinking` false and `reasoning.enabled` false; a
+// level as `enable_thinking` true, `reasoning.effort` and `reasoning_effort`.
 func encodeRequest(req Request) ([]byte, error) {
+	thinking := *req.Sampling.Thinking
 	wr := wireRequest{
 		Model:              req.Model,
 		Messages:           make([]wireMessage, 0, len(req.Messages)),
-		Temperature:        req.Temperature,
-		ChatTemplateKwargs: req.ChatTemplateKwargs,
-		Reasoning:          req.Reasoning,
+		Temperature:        *req.Sampling.Temperature,
+		ChatTemplateKwargs: wireChatTemplateKwargs{EnableThinking: thinking != ThinkingOff},
 		PromptCacheKey:     req.PromptCacheKey,
 		Stream:             true,
 		StreamOptions:      &wireStreamOptions{IncludeUsage: true},
+	}
+	if thinking == ThinkingOff {
+		enabled := false
+		wr.Reasoning = wireReasoning{Enabled: &enabled}
+	} else {
+		wr.Reasoning = wireReasoning{Effort: thinking.String()}
+		wr.ReasoningEffort = thinking.String()
 	}
 	for _, m := range req.Messages {
 		wr.Messages = append(wr.Messages, wireMessage{Role: m.Role, Content: m.Content})

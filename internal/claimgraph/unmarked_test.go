@@ -245,9 +245,12 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 	if !errors.As(askStop(err), &s) || s.check != "inference-failed" {
 		t.Errorf("the stage's stop = %v, want inference-failed", askStop(err))
 	}
-	if held != 0 || len(groups) != 0 || total != 2 || len(units) != 0 || len(fallbacks) != 0 || len(stopped.Pairs) != 0 {
-		t.Errorf("held %d, %d groups, units %q of %d, fallbacks %+v, pairs %+v; want two units announced and nothing of the stopped batch taken",
-			held, len(groups), units, total, fallbacks, stopped.Pairs)
+	if held != 0 || total != 2 || len(units) != 0 || len(fallbacks) != 0 || len(stopped.Pairs) != 0 {
+		t.Errorf("held %d, units %q of %d, fallbacks %+v, pairs %+v; want two units announced and nothing of the stopped batch taken",
+			held, units, total, fallbacks, stopped.Pairs)
+	}
+	if len(groups) != 2 || groups[1].Items[0].Item != "clm-t4" || groups[1].Items[0].Outcome != asks.Failed {
+		t.Errorf("the stopped asks returned %+v; want both groups, clm-s2->clm-t4 recorded failed", groups)
 	}
 	if after, err := os.ReadFile(filepath.Join(repo, buildrecords.UnmarkedFile)); err != nil || !bytes.Equal(after, before) {
 		t.Errorf("the stopped asks changed the record on disk (%v):\n%s", err, after)

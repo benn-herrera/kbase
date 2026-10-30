@@ -20,7 +20,6 @@ const labelPrefix = "S"
 
 var (
 	headingRE    = kb.PyRE(`^#{1,6}\s`)
-	listItemRE   = kb.PyRE(`^(?:[-*+]\s|\d+[.)]\s)`)
 	tokenRE      = kb.PyRE(`\S+`)
 	terminatorRE = regexp.MustCompile("[.!?][\"')\\]*_`»”’]* ")
 	// opensSentenceRE is what may open the next sentence: a lowercase letter
@@ -223,7 +222,7 @@ func groups(lines []string, first int, fenceOf map[int]int, excluded map[int]boo
 		case headingRE.MatchString(line):
 			flush()
 			out = append(out, group{groupHeading, []int{n}, true})
-		case listItemRE.MatchString(line):
+		case kb.ListItemRE.MatchString(line):
 			flush()
 			opens = true
 			prose = append(prose, n)

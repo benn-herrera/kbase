@@ -1,4 +1,4 @@
-//go:build !kbasedist
+//go:build kbasedev
 
 package score
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/query"
 	"kbase/internal/result"
 )
@@ -428,7 +429,7 @@ func TestReplayCountsNoChangeWithoutALedgerLine(t *testing.T) {
 func TestReplayKeepsTheNewestReplays(t *testing.T) {
 	dir := t.TempDir()
 	l := replayable(t, dir)
-	stood := series(replayKind, KeptRuns, 0)
+	stood := series(replayKind, buildstore.KeptRuns, 0)
 	for _, s := range stood {
 		at := filepath.Join(l.Dir(), replaysDir, s.name)
 		if err := os.MkdirAll(at, 0o777); err != nil {

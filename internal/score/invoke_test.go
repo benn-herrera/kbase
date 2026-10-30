@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
@@ -823,8 +824,8 @@ func standingRuns(t *testing.T, state string) []string {
 // of older real ones it removes the oldest dry run and no real run.
 func TestInvokeDryRunPrunesDryRunsAlone(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
-	reals := standRuns(t, state, series(RunKindReal, KeptRuns, 0))
-	dry := standRuns(t, state, series(RunKindDry, KeptRuns, 100))
+	reals := standRuns(t, state, series(RunKindReal, buildstore.KeptRuns, 0))
+	dry := standRuns(t, state, series(RunKindDry, buildstore.KeptRuns, 100))
 	inv := invocation(t, root, state, query.PassRigor, true, nil)
 	if !strings.HasPrefix(inv.Run, RunKindDry+"-") {
 		t.Fatalf("RunID minted %q for a dry run, want a %s- id", inv.Run, RunKindDry)
@@ -844,7 +845,7 @@ func TestInvokeDryRunPrunesDryRunsAlone(t *testing.T) {
 // --resume, and prunes nothing.
 func TestInvokeRefusesAResumeOfAPrunedRun(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
-	stood := standRuns(t, state, series(RunKindReal, KeptRuns, 0))
+	stood := standRuns(t, state, series(RunKindReal, buildstore.KeptRuns, 0))
 	ask, _ := replying(t, "none")
 	inv := invocation(t, root, state, query.PassRigor, false, ask)
 	if rep := invoked(t, inv); rep.Outcome != result.Done {

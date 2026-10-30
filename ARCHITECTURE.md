@@ -21,7 +21,7 @@ Violating any is a blocking defect.
 
 | # | Invariant |
 |---|---|
-| I1 | Exactly one package execs pandoc (checks version and `pandoc-api-version`, with named errors); exactly one execs git; exactly one execs Graphviz `dot`; exactly one execs kbase itself (the MCP server's detached build and detached score runs, `internal/mcp/launch.go`). The exec-policy test names each owner. |
+| I1 | Exactly one package execs pandoc (checks version and `pandoc-api-version`, with named errors); exactly one execs git; exactly one execs Graphviz `dot`; exactly one execs kbase itself (the MCP server's detached build and detached score runs, `internal/mcp/launch.go`). The exec-policy test names each owner and scans the shipped code: the monopoly binds non-test files, and a test may start the processes its fixtures need. |
 | I2 | The claim-graph inventory's reader and placement facts come from records, never recovered from leaf markup; its page-defined readings (§5.5) come from the leaf through the page readers; otherwise only stage-A conformance (the link relation, through `kb`), the prose and the statement-marker machinery (the marker reader `kb.MarkerLines` and the hosts the load derives from it, the write ops' placing and moving of a marker, a scoring text's statement), and the sheet (a claim's kind, at its marker) read leaf lines, and maintenance ops read only the metadata layer: the node and edge records, the statement markers and the format stamp. |
 | I3 | There are two pre-passes, in one registry, each naming the reader-level hole it fills and emitting a census. |
 | I4 | System compatibility per SPEC §3; byte equality only where a named reader needs it; presentation is untested. |
@@ -30,7 +30,7 @@ Violating any is a blocking defect.
 | I7 | Every prompt template and fragment is an embedded file. No prompt prose originates in code. Each call's system prompt is the fragment named for it. |
 | I8 | One metadata format version is read and written (SPEC §10). Every KB file is read through `kb.Source`, built for a command's read of a KB by `internal/kbload` alone — the build's stage machinery reads the tree its own stages wrote through `kb.OnDisk` (`docgraph`'s `writtenTree`, `claimgraph`'s `builtTree`); `kbload` is the one importer of `internal/formats`' root from outside the tree, which converts an older KB at load — a map of repository-relative paths to bytes in, the same out, plus the obsolete paths; no file I/O; a tree of packages that import each other and no kbase package outside it, so maintenance of a package outside it can never change what an old KB converts to — and the result is written only by the next natural write, which drains the obsolete paths after a successful full save, minus what that save wrote. The tree also holds the live format's one definition, `internal/formats/format300`, which imports no kbase package and which `kb` alone imports and re-exports. |
 | I9 | The MCP server binds subcommands and adds no operation: a command declares its binding with the cobra annotation `kbase.mcp` = `bound` or `excluded`, and the tool table is built from the `bound` commands of the command tree plus one tool listed by name — `rewind-build`, which reports the build's commit trail and changes nothing, the whole exception; the table's test derives its expectation from the same annotations plus that name and asserts the set for equality, so a second listed tool fails as a missing command does; its stdout carries JSON-RPC frames and nothing else; no tool performs inference in the call, `models` and `configure` reaching only the provider's catalogue — `models` reading it, `configure` dialling it to check a model map; `build` and `score` through it are the detached subcommands. A command that reads or writes KB content or metadata is bound; only process control (`mcp`, `wait`), environment diagnostics (`probe`) and cobra's own `help` and `completion` are CLI-only. |
-| I10 | Every ask whose answer a build or a scoring run recorded leaves, for as long as its records are retained, what re-asking it under the binary's embedded templates and re-reading its reply as the run read it needs. A build leaves it through its commit trail, its records and the answer cache's keying on the composed ask, so re-running a stage from its boundary re-renders every ask; a scoring run leaves it through its `captures.jsonl` (§6, Scoring). `probe` is a diagnostic and outside it. |
+| I10 | Every ask whose answer a build or a scoring run recorded leaves, for as long as its records are retained, what re-asking it under the binary's embedded templates and re-reading its reply as the run read it needs. A build leaves it through its commit trail, its records and the answer cache's keying on the composed ask, so re-running a stage from its boundary re-renders every ask; and its trail's group records hold each multichoice ask's template inputs — those its group shares once, the rest per item — and its `prompt-sha256`, and each overview call's capture holds its `excerpts` and, on a retry, its `rejected-lines`, so a recorded ask re-renders without the source tree; a scoring run leaves it through its `captures.jsonl` (§6, Scoring). `probe` is a diagnostic and outside it. |
 | I11 | While an ask batch's asks are in flight, the only file written is one per result, unique to it, in the state store — a build's answer and capture per call, a score run's result per item — written by the item that made the call, after it has released its token; every file more than one result lands in is written after the ask batch has drained. An ask batch is a build stage's asks (each cull pass and the overview its own), a score walk or a replay walk. |
 | I12 | Every model call an invocation makes — a multichoice ask, the overview call, a scoring ask, a probe — is made through a `model.Slot`, which only the invocation's one `model.Queue` issues, from `Go`, and only while one of its N tokens is free; nothing else bounds model calls in flight. An item holds its token across all of its calls and releases it before it writes a file. Within one consumer, items take their tokens in the order the consumer launches them. The methods that put a request on the wire are unexported, so the compiler holds every other package to a slot. |
 
@@ -64,8 +64,8 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 
 | Stage | Does |
 |---|---|
-| `start` | pandoc and git preflight; populated-`kb-root/` refusal; operation lock |
-| `document-graph` | The tree from the volume roots |
+| `start` | pandoc and git preflight; populated-`kb-root/` refusal; operation lock; records `started-at` and the inputs, absolute and in path order, that every later stage reads (SPEC §5, §6) |
+| `document-graph` | The tree from the volume roots, in path order |
 | `spine-seed` | Seeds the format stamp where the tree carries none, then writes the two record files, empty, over that tree (`build.seedSpine`) |
 | `claims-declared` | Claim-graph pass over author-declared claims |
 | `claims-discovered` | Claim-graph pass over discovered claims |
@@ -73,6 +73,7 @@ The build walks these stages in order. A stage boundary is a commit (§8).
 | `references-found` | Unmarked references found: adjacency links made by rule between consecutive non-equation claims of a leaf, unasked; per source claim, the proximity slots — nearest in its own paper by locality (same document, same directory, same paper), then by places apart in the sequence of every claim by reading position and id — then the wildcard slots, best by TF-IDF cosine less the proximity picks, counts in §12, no pool holding a marked pair or an adjacency link; each source's shortlist is its own, so a pair both ends pick is asked both ways, and a proximity slot its paper cannot fill stays empty; one multichoice ask per planned pair, a yes in either direction one undirected link for the cull; writes nothing under `kb-root/` |
 | `claims-culled` | The co-linearity cull (`Culled`, `internal/claimgraph/cull.go`): one `Colinear` ask per link with a prose end — marked pairs, unmarked yeses and adjacency links, unordered, computed over the tree `references-found` read — grouped by the earlier claim in reading order (`p1-<id>`); one confirming ask per culled claim whose root is not its target, grouped by root (`p2-<root>`); the survivor rule and re-pointing in the pure `cullTargets`, `cullRoots`, `finalCulls` and `PlanCull`; culls issued through `IssueCulls` with no bridge and no claim-to-claim edge; the cull record written once, after the issue. Its row spends its own inference and is dropped under `--no-inference` (SPEC §5) |
 | `depends-attributed` | Dependency edges attributed: the marked candidates and the cull record's links, each link oriented later claim to earlier (an equation node always the target) and skipped where a marked pair joins its claims; one multichoice ask per candidate; every answer's edge written in one `add-build-edges` batch, cycles included; then the ring row (`claimgraph.ringRow`): `index.BreakCycles` walks the records in the tree's hosted order and each edge it cuts is issued through `demote-claim-edge`, its warning in the stage report (SPEC §5, §10), before the gate |
+| `analyses-split` | Analyses split (`Split`, `internal/claimgraph/split.go`): each claim whose bounds (`claimBodies`, `bindProofClaims`) hold text beyond its statement proper — a block claim's display line, or a prose claim's paragraph through the sentence `opener` picks for its title — gets one analysis. The analysis is hosted on the first blank quoted line of the claim's own block, or at the end of its paragraph's last line, with the claim's marker moved to just after that sentence on the line it ends on (`split-claim`'s `statement-line` and `statement-end`), or, where the claim's own text holds nothing more, on the first blank quoted line of its first bound proof in reading order (`readingOrder`); a claim whose host block has no blank line is left unsplit and counted (`unsplit-no-blank-line`). It is titled with the claim's title rebased to the analysis's register page. Every split is issued in one `split-claim` batch. The stage asks nothing, so no row drops under `--no-inference`, and it writes no build record (SPEC §6) |
 | `phase-3a` | `refresh`, `verify`, and the readiness stamp |
 | `overview-drafted` | The overview document |
 
@@ -426,23 +427,32 @@ the `manually-scored` flag each rigor and bearing is written with (SPEC §8): `P
 zero value, marks every value its caller supplied manual, so an internal caller that names none
 never lets a run overwrite a person's value; `ProvenanceMachine` writes `false`. `claimgraph`'s
 write runner, `internal/score`'s landing (`landValues`, which writes every value as `ProvenanceMachine`, a landing and a re-price alike) and the build-only
-`add-build-edges` (a `recordEdit` marked `machine`) write as the machine. It is an options field and
-never a values key, a flag or a schema property: `TestNoSurfaceNamesTheProvenanceOrCreate`
-(`cmd/mcp_test.go`) asserts no command flag and no tool property names it. No build path writes a
-judgement: `add-build-edges` writes `*pending*` on every edge it adds and no number anywhere, so a
-claim a build attaches an edge to reads unchanged until that edge is scored.
+`add-build-edges` and `split-claim` (each a `recordEdit` marked `machine`) write as the machine. It
+is an options field and never a values key, a flag or a schema property:
+`TestNoSurfaceNamesTheProvenanceOrCreate` (`cmd/mcp_test.go`) asserts no command flag and no tool
+property names it. No build path writes a judgement: `add-build-edges` writes `*pending*` on every
+edge it adds and no number anywhere, and `split-claim` writes `*pending*` on the analysis's rigor
+and its lift, so a claim a build attaches an edge to reads unchanged until that edge is scored.
 
 Input, idempotence (I6) and the trailing refresh are SPEC §8; byte equality is
-SPEC §3. Two ops are build-only:
+SPEC §3. Three ops are build-only:
 `add-build-edges` (`write.AddBuildEdges`), which writes `add-rests-on`'s lists without its cycle
-refusal, and `demote-claim-edge` (`write.DemoteClaimEdge`), which replaces each standing scoring edge
-of a pair with the `kb.DemotedEdge` that keeps it whole. Both are absent from `write.Ops()`, have no
-subcommand and run over a degraded load, so the public write surface cannot create a `demoted`
-record. The build's cuts reach the records through `demote-claim-edge`, from the ring row at the
-tail of the dependency-attribution stage. `resolve-demoted` is a public op. `index.DependsGraph.Path`
-is the path finder over the scoring edges (`index.GraphDependsGraph`); every public op that adds a
-scoring edge, through the batch's `closesCycle`, and `resolve-demoted`'s restore refuse an edge it
-finds closing a cycle, naming the path.
+refusal; `demote-claim-edge` (`write.DemoteClaimEdge`), which replaces each standing scoring edge of
+a pair with the `kb.DemotedEdge` that keeps it whole; and `split-claim` (`write.SplitClaim`). Per
+claim, `split-claim` mints an analysis and appends its marker to a given line of a given leaf, and
+where given a `statement-end` moves the claim's marker to that byte offset of line
+`statement-line`, or of its own line where none is given. It adopts instead the analysis already
+lifting the claim. It moves every `supports` and `founds` record into the claim, and every `demoted`
+record that replaced a `supports` edge into it, onto that analysis, and adds the analysis's `lifts`
+of the claim at `*pending*`. All three are absent from
+`write.Ops()` and have no subcommand, so the public write surface cannot create or move a `demoted`
+record. The first two run over a degraded load. The build's cuts reach the records through
+`demote-claim-edge`, from the ring row at the tail of the dependency-attribution stage. The analysis
+split reaches them through `split-claim`, from the `analyses-split` stage. `resolve-demoted` is a
+public op. `index.DependsGraph.Path` is the path finder over the scoring edges
+(`index.GraphDependsGraph`); every public op that adds a scoring edge, through the batch's
+`closesCycle`, and `resolve-demoted`'s restore refuse an edge it finds closing a cycle, naming the
+path.
 
 **The node vocabulary.** `kb.NodeKinds` is five words — `claim`, `analysis`, `experiment`, `axiom`,
 `work` — and nothing else is a `node_type` or a `target_kind`. `kb.BearingLegal(relation, sourceKind,
@@ -599,13 +609,20 @@ around a subject of any size; the shelf's `asks.Lint` covers every file as it do
 **The closed text and its guard.** `internal/score/text.go`'s two unexported renderers assemble every
 character a call may see. `rigorText` renders a node's title and its statement: a claim's statement
 is the block its statement marker sits in, or the section under the heading its marker ends, in the
-leaf hosting it; an analysis's or an experiment's
-is the section its marker sits in, at its canonical anchor in the leaf its `CanonicalPath` names. A
-claim no leaf marks renders its title alone, and a work renders its title alone — its record's
-`rationale` is never sent. A claim's `CanonicalPath` names its register page, which is never
-opened. `bearingText` renders the source's and the target's statements by that same rule, then the
-edge's authored `context` from the row `Index.Edge(ScoringEdge)` answers. Each end's label opens a
-line of its own, and
+leaf hosting it; an analysis's or an experiment's is the section its marker sits in, at its canonical
+anchor in the leaf its `CanonicalPath` names. The two split forms of SPEC §10 come first. They are
+read with `kb.LineMarkers` and the `lifts` edges of the loaded index. An analysis whose marker
+stands on a blank quoted line renders that blockquote (`blockExtent`). The claim it lifts, marked in
+that blockquote, renders its marker's line before the marker, and any other claim marked there
+renders the blockquote. In a paragraph (`paragraphExtent`: the lines around a marker that hold text,
+holding no heading, and opening a list item only on its first line, as `internal/claimgraph`'s
+render cuts paragraphs), a claim whose marker is followed by text and then by the marker of an
+analysis lifting it renders the paragraph up to its marker. That analysis renders the paragraph.
+Markers and `>` prefixes are removed from both. A claim no leaf marks renders its title alone, and a
+work renders its title alone — its record's `rationale` is never sent. A claim's `CanonicalPath`
+names its register page, which is never opened. `bearingText` renders the source's and the target's
+statements by that same rule, then the edge's authored `context` from the row
+`Index.Edge(ScoringEdge)` answers. Each end's label opens a line of its own, and
 so does the context's, so no numbered line begins with frame text. `assemble` wraps every passage at
 word boundaries to `wrapWidth` — 100 columns — keeping the passage's own line breaks and rewriting
 nothing, and numbers the lines lying in a passage with an `end`, from 1 over the whole text;
@@ -739,8 +756,9 @@ directory's kind is its name's prefix (`runKind`), so the two are counted apart;
 named, and counted, as a real run. `score.PruneRuns(dir, run)` keeps the run the invocation names —
 created or resumed — and the newest `KeptRuns-1` other directories of its kind, ordered by the
 `started` each `run.yaml` records, equal starts by name with the later name newer, and removes the
-rest of that kind whole with `os.RemoveAll`, captures and replays with them. `dirStarts` is the one
-per-directory read of that start and `compareStarts` the one ordering, both shared with `NewestRun`,
+rest of that kind whole with `os.RemoveAll`, captures and replays with them, through
+`buildstore.PruneByStart`. `buildstore.DirStarts` is the one per-directory read of that start and
+`buildstore.CompareStarts` the one ordering, both shared with `NewestRun`,
 so `status`'s newest run and the prune's agree; a directory whose `run.yaml` is absent or unreadable
 yields none and stands. `score.Invoke` calls the prune once the run's ledger has opened — after `Create`
 on the dry path, after `Create` or `Resume` on the real one — so the run it keeps stands, and an
@@ -816,19 +834,28 @@ the run's identity and a `wait` command instead of holding the turn for the walk
 binary's embedded templates and reports what the runtime would have done, so a change to a scoring
 template is `edit → just build → replay` over the items that failed. SPEC states nothing of it.
 Its code and tests are `cmd/score_replay.go` and `internal/score/replay.go` with their test files,
-each carrying `//go:build !kbasedist`. `cmd/score.go` reaches it only through the package-level
-`scoreReplay` hook, which the tagged file's `init` sets and which is nil under `kbasedist`; that
+each carrying `//go:build kbasedev`. `cmd/score.go` reaches it only through the package-level
+`scoreReplay` hook, which the tagged file's `init` sets and which is nil in the default build; that
 `init` also declares `--replay` and `--failed`, each annotated `kbase.mcp` = `excluded` through
-`mcp.ExcludeFlag` (§12), so dev and dist builds serve one tool table. The dist build passes
-`-tags kbasedist` (`tools/scripts/build-dist.sh`); default builds and `go test ./...` include the
-replay, `edit-gate` vets with the tag, and `test-dist-no-replay` runs `TestDistBuildHasNoReplay`
-(`cmd/dist_test.go`), which asserts both flags absent.
+`mcp.ExcludeFlag` (§12), so dev and release builds serve one tool table. The default build is the
+release shape and excludes the replay's code; dev builds pass `-tags kbasedev`, as `just build`,
+`just test` and `just test-race` do. What it reads is not dev-only: a run's ledger and captures are
+written by `internal/score/ledger.go`, untagged, so a replay compiled into a dev build reads the
+records a released kbase wrote. `edit-gate` vets both polarities, and `test-dist-no-replay` runs
+`TestDistBuildHasNoReplay` (`cmd/dist_test.go`) on the untagged build, which asserts both flags
+absent and the hook nil, and the same of the build's development replay (§8).
 
 `scoreReplayRun` takes `--pass`, `--failed`, `--limit`, `--scoring-model`, `--state-dir`, `--timeout`,
 `--ask-concurrency` and `--config-dir` beside `--replay`. Any other score flag with it is a usage refusal naming `--replay`,
 `--failed` without `--replay` one naming `--failed`, and a `--replay` value outside
 `^(run|dry)-<id>$` (the alphabet and length `runIDRE` uses) one naming `--replay`. It opens no KB and
-takes no KB, operation or holder lock; a run in progress may be replayed. `score.OpenReplay` selects
+takes no KB, operation or holder lock; a run in progress may be replayed. With `--state-dir` it needs
+no KB root and works from any directory; without it, it finds the store through the kb-root at or
+above the working directory and is refused, `check: usage`, `key: --state-dir`, where there is none.
+Both development replays, this one and the build's (§8), resolve their store through
+`replayStateDir` in `cmd/replay.go`, beside `replayTakes`, which names the flags a replay takes in
+its refusal. A relative `--state-dir` resolves against the project root where the working directory
+has one, and against the working directory where it has none. `score.OpenReplay` selects
 every item with a capture, in the order of the run's `items.jsonl`, each by its last capture;
 `--pass rigor` or `--pass bearing` narrows the selection to that pass's calls — refused where the run
 did not run it — and `--pass both` or no flag takes the run's whole list; `--failed` selects only
@@ -856,11 +883,11 @@ Setup computes the digest and `replay.yaml` before creating anything, and create
 replay's directory with `os.Mkdir`, never `MkdirAll`: a run the prune removed fails the replay rather
 than being recreated without a `run.yaml`, which no prune would ever remove. After writing
 `replay.yaml`, `Walk` keeps itself and the newest `KeptRuns-1` other replays of the run's `replays/`
-by `replay.yaml`'s `started`, through the `pruneByStart` the run prune uses, and after the walk a
+by `replay.yaml`'s `started`, through `buildstore.PruneByStart`, which the run prune also uses, and after the walk a
 replay whose directory no longer stands ends `failed` naming it. An item whose run records no ledger
 line compares against an `original` with status `""` and is not counted in `changed`.
 
-The result document is one SPEC §7 YAML document with the keys `outcome`, `kb-root`, `state-dir`,
+The result document is one SPEC §7 YAML document with the keys `outcome`, `state-dir`,
 `run`, `replay`, `dir` (the replay directory, absolute), `counts` (`total`, `done`, `failed`) and
 `changed` (an integer: the items whose status or value differs from the original's), then the closing
 record the outcome names. The outcome is `done` when every selected item was asked, `cancelled` when
@@ -875,7 +902,7 @@ the context stopped the walk — its `cancelled` record naming the first item it
   call path is a `model.Slot`'s `Chat` for the overview call and for each scoring call, and its
   `Decision` for the multichoice asks. A `Slot` is issued only by the invocation's one `model.Queue`, from
   `Go`, and only while one of its N tokens is free. `build` and `score` build the queue from
-  `--ask-concurrency`, else `[asks] concurrency`, else 2, in both inference modes.
+  `--ask-concurrency`, else `[asks] concurrency`, else 4, in both inference modes.
   `kbase probe` takes one call on one of the two by its selection, which the next item states; the decision role's model is an id on whichever surface its entry speaks
   (`decisionsFlavor`, SPEC §9.1), and kbase's three roles apply — multichoice asks go to the `decision`
   role, the overview call to `text`, and `kbase score`'s asks to `scoring` (SPEC §9). Each role
@@ -899,41 +926,57 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `first-token-ms` zero and `finish-reason` null. It opens no `kb.Source`, resolves no state
   directory and takes no lock: the call is one item on a queue of one (`model.NewQueue(1)`, no
   flag), and the decision path is `probeEndpoint` → `Registry.Get` → the item's `Slot.Decision` →
-  the result document, the chat path the same through `Slot.Chat` (SPEC §8). The call's deadline and
-  its `wall-ms` clock start inside the item, so neither counts a wait for a token.
+  the result document, the chat path the same through `Slot.Chat` (SPEC §8). A chat selection's
+  client is the registry's for its role, so the call carries that role's sampling — the `scoring`
+  role's for `--model` — and the document reports the effective settings, `model.SamplingOf(client)`; where the call ends
+  `truncated-empty`, the chat path reports `ChatResult.Final` as the answer rather than failing. The
+  call's deadline and its `wall-ms` clock start inside the item, so neither counts a wait for a token.
 - Every chat call is one tool-less chat request answered from its prompt alone. The transport keeps
   at least N idle connections per host, N being the invocation's concurrency, so its connections are
   reused rather than redialled (`model.Endpoint.IdleConns`, set by `modelclient`'s registry). `internal/model`
-  holds two implementations of that request, and the endpoint entry's `api` selects which one the
-  registry builds: `model.OpenAIClient` (`openai_client.go`) speaks the OpenAI-compatible
-  `chat/completions` surface and is what an entry silent on `api` gets, and `model.AnthropicClient`
-  (`anthropic_client.go`) speaks the Anthropic Messages surface — `POST <baseUrl>/messages`, with
-  its own event sequence, its `x-api-key`/`anthropic-version` headers and its catalogue shape.
+  holds two implementations of that request, and the registry builds the one the endpoint entry's
+  `api` selects — for the `decision` role always the OpenAI one, which alone carries the decision
+  surfaces: `model.OpenAIClient` (`openai_client.go`) speaks the OpenAI-compatible
+  `chat/completions` surface, and `model.AnthropicClient` (`anthropic_client.go`) speaks the
+  Anthropic Messages surface — `POST <baseUrl>/messages`, with its own event sequence, its
+  `x-api-key`/`anthropic-version` headers and its catalogue shape — and is what an entry silent on
+  `api` gets.
   `model.NewClient` is the dispatch, and the protocol reaches it as a value the caller resolved onto
   `model.Endpoint` from `config.Endpoint.Protocol`, which the configuration fills from the entry
   (environment mode is `openai`). The body each client sends is its protocol's, never one shaped by
-  host or provider name. On the OpenAI surface: temperature 0 always; thinking disabled by the
-  provider's own `reasoning: {enabled: false}` control, with
-  `chat_template_kwargs.enable_thinking: false` sent beside it for servers that speak the
-  tokenizer extension, since a provider that ignores one control reads the other; the usage chunk
-  requested; and no completion cap, the server's own applying. On the Messages surface: no
-  `reasoning`, `chat_template_kwargs` or `prompt_cache_key` field exists, so thinking is disabled by
-  sending the protocol's own `thinking: {type: disabled}`, the field's absence leaving it at the
-  server's default, and a run's cache key has no home; `temperature` is sent only inside that
-  protocol's [0,1]; the system turn is lifted to the top-level `system` string; and the protocol's
-  required `max_tokens` is `max(256, ceil(characters / 4))` over the ask's messages and system text.
+  host or provider name. `model.Sampling` is the one sampling type: each client resolves
+  `model.Endpoint.Sampling` once, at construction, with `Sampling.Resolved()` — temperature 0 and
+  thinking off where the role states none — and `chat()` copies it onto every request, shaping no
+  field of either protocol. Each protocol's wire rules live only in its body encoder
+  (`encodeRequest`, `encodeAnthropicRequest`). `model.SamplingOf` returns a copy of the resolved
+  sampling — the effective settings — so no caller can alter what a client sends.
+  On the OpenAI surface: the role's temperature; thinking off as the provider's own
+  `reasoning: {enabled: false}` control with `chat_template_kwargs.enable_thinking: false` beside
+  it, and a level as `reasoning_effort: <level>`, `reasoning: {effort: <level>}` and
+  `chat_template_kwargs.enable_thinking: true` at once, since a server reads whichever control it
+  speaks; the usage chunk requested; and no completion cap, the server's own applying. On the
+  Messages surface: no `reasoning`, `reasoning_effort`, `chat_template_kwargs` or
+  `prompt_cache_key` field exists, so a run's cache key has no home; thinking off is sent as the
+  protocol's own `thinking: {type: disabled}`, the field's absence leaving it at the server's
+  default, and a level as `thinking: {type: enabled, budget_tokens: <budget>}` (§12); the role's
+  temperature is sent whatever the thinking level, a server that rejects the pair failing the call
+  like any request it refuses; the system turn is lifted to the top-level `system` string; and the
+  protocol's required `max_tokens` is the thinking budget, where thinking is on, plus the
+  answer's allowance, `max(256, ceil(characters / 4))` over the ask's messages and system text.
   A call that does not complete is re-issued identically up to the attempt count, pausing where its
   caller's backoff says (§12), and a pause the call's context cannot cover is not waited out — the
   call gives up at once, its reason naming the attempts it made; a provider's non-2xx status ends it
   on the attempt that met it unless
-  the status is a 429 or a 5xx (§12); both wire clients report a non-2xx as the same
+  the status is a 429 or a 5xx (§12); an attempt cut off at the completion cap before any answer
+  text ends the call on that attempt; both wire clients report a non-2xx as the same
   `model.StatusError`, so that classification is shared rather than re-decided per protocol. A
   scoring run's clients are built with the run's id, which the OpenAI client stamps on every
   request it sends as
   `prompt_cache_key` — one key per run, so its asks reach one upstream and share one cache entry; a
   verb that names no run builds its clients with none, and
   the field is then omitted from the body rather than sent empty. Each
-  attempt's outcome names what ended it — `ok`, `served-nothing`, `provider-refused` where the
+  attempt's outcome names what ended it — `ok`, `served-nothing`, `truncated-empty` where the answer reached the completion cap before any
+  answer text, `provider-refused` where the
   provider answered with a status that is not success, `transport-failure` where no answer of the
   provider's was had — and records whether the call reasoned, from a reasoning delta on the stream
   or from a usage block reporting reasoning tokens spent, so a call that thought without streaming
@@ -966,7 +1009,10 @@ the context stopped the walk — its `cancelled` record naming the first item it
   (`internal/config/resolve.go`) decides once per invocation which source supplies inference; it
   reads the loaded configuration and the environment's strings and nothing else, and its refusals
   are the mixed sources, the partial environment and the environment beside a standing `[models]`
-  value. `config.Resolve` answers one role's `Endpoint` in that mode; it reads no file, opens no
+  value. `config.Resolve` answers one role's `Endpoint` in that mode;
+  for `text` and `scoring` it carries `Temperature` and `Thinking` from `[sampling.<role>]` with
+  the layer of each, in either mode, and refuses a temperature outside the protocol's range;
+  it reads no file, opens no
   connection and writes no stderr, though a refusal's remedy may name the command that fixes it
   (`kbase configure`) — the
   key file `KBASE_API_KEY_FILE` names is opened by the registry, and by `show-config`'s preflight,
@@ -982,8 +1028,11 @@ the context stopped the walk — its `cancelled` record naming the first item it
   than one side to state; `internal/build`'s launch refusal reads the key and path of a one-item
   refusal. No other site applies a selection or a
   resolution rule, and `internal/modelclient`'s `Registry` is the only constructor of a
-  `model.Client`: one client per endpoint, opened on first use, keyed by the entry's name or — in
-  environment mode — by its base URL, and closed together before the verb returns on every outcome.
+  `model.Client`: one client per endpoint, wire protocol and resolved sampling — roles whose
+  resolved sampling is equal, an unset setting equal to its stated default, share one client and its
+  connection pool — opened on first use, keyed by the entry's name or — in environment mode — by its
+  base URL, by the protocol and by the resolved sampling, and closed together before the verb returns on
+  every outcome. `samplingOf` maps the configuration's `thinking` onto `model.Sampling`.
   The report's other facts — the pool's entries and faults, the files' presence, `config.toml`'s
   values, the inference variable names the process sets — come from
   `internal/config.Report`, which reads no file and no environment of its own: the caller passes the
@@ -1000,17 +1049,27 @@ the context stopped the walk — its `cancelled` record naming the first item it
   value and so takes the seam's re-ask-then-default path. Under either surface an answer naming a
   question kbase did not ask is refused. The request is re-issued identically up to the chat attempt
   count on a transport error or retry-class 5xx, with no streaming and no incomplete-stream path.
-  Both surfaces are OpenAI-shaped, so an endpoint whose `api` is `anthropic` has none: asked for a
-  multichoice ask it refuses, naming the provider and the role, rather than answering in a shape it never
-  spoke. The system-prompt sentence above is scoped to the overview call; a decision call has no
-  system message.
+  Both surfaces are OpenAI-shaped, so the registry gives the `decision` role an `OpenAIClient`
+  whatever its entry's `api`: an entry whose `api` is `anthropic` keeps its Messages client for chat
+  and gains an OpenAI one, on the same base URL and key, for decisions. A Messages-only server has no
+  decision surface, and the call fails with that server's status. The system-prompt sentence above
+  is scoped to the overview call; a decision call has no system message.
 - Each inference pass is built as plumbing reaching the model only through `internal/asks`' multichoice-ask
   seam, injected — nothing in `claimgraph` knows a network exists. `internal/asks` holds the embedded
-  templates and fragments, the composer, the caller (system fragment, per-call captures and the
-  answer cache under the state store's `scratch/`, each written once, after the item that made the
+  templates and fragments, the composer, the caller (system fragment, per-call captures — a chat
+  capture's request record carrying the effective settings, `temperature` and `thinking`, the
+  values `model.SamplingOf` reports; a decision capture's question carrying its `true-letter` where it has one, and the overview
+  capture's request its `excerpts` and, on a retry, its `rejected-lines` — the inputs
+  `asks.OverviewPrompt` renders — and the answer cache under the state store's `scratch/`, each written once, after the item that made the
   call has released its token, the answers into the current build trail's directory), and the multichoice-ask seam: every claim-graph
   inference is one decision answered by one letter from a closed set the build offers, an unreadable
   reply asked once more and then defaulted to the item's mechanical draft, recorded as defaulted.
+  Each kind composes its state through `MultichoiceItem.Compose`, its kind's template rendered from
+  the item's template inputs, and `asks.RecordedItems` builds items from a group record through the
+  same constructor. A batch that stops still returns its records — an item whose call never
+  completed recorded `failed`, one cancelled or never launched absent — as, after a stop, is a
+  group with no asked item; a finished batch records every group it was given — and the stage writes them
+  before it stops; a batch made by `asks.NewReplayBatch` records such an item and carries on.
   Templates (`*.tmpl.md`) and fragments are embedded files (I7). A template change is an experiment
   with a measured result.
 - Prompts are `@!slot!@` templates; a call's system prompt is the fragment named for it
@@ -1024,7 +1083,7 @@ the context stopped the walk — its `cancelled` record naming the first item it
 - No prompt originates in an in-code string.
 - The overview passage is written from excerpts composed mechanically from the tree, checked for
   structure and re-asked once through the
-  `overview-correction` fragment.
+  `overview-correction` fragment; a call ending `truncated-empty` fails the stage without that re-ask.
 
 ---
 
@@ -1039,12 +1098,14 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
 
 - **Fresh versus resume** is read from the commit trail alone (SPEC §6); nothing in the state store
   is authoritative for position.
-- **Inputs on resume.** `walk.body` ends every boundary's body with the run's inputs (SPEC §6), from
-  `Options.VolumeRoots` and `Options.Bibliographies`, each path made repository-relative with the
-  path and the root both symlink-resolved. `run` compares this run's inputs with the newest trail
-  entry's as soon as it reads the trail — before the launch checks, the `unchanged` and `bounded`
-  exits and any restore — and refuses a difference (SPEC §5); an entry recording no inputs is not
-  compared.
+- **Inputs.** `build.Run`, once it has found the repository, makes a fresh build's volume roots and
+  `--bibliography` files absolute against the repository root and puts them in path order before
+  anything reads them: the launch checks, `walk.body`, the document graph and the records'
+  regeneration. Every boundary records them, and `start` also records `started-at`, the HEAD before
+  it — on a branch with no commit, an empty `kb-start:` commit made for it; the line keys and their
+  readers are `internal/buildstore`'s. `--resume` takes the inputs from the newest trail entry in
+  the order recorded, never re-sorted. `run` refuses, as soon as it reads the trail, a build given
+  inputs over a non-empty trail and a `--resume` over an incoherent one (SPEC §5).
 - **Resume over an interrupted stage.** A stage writes its build records and its `kb-root/` work once
   its asks have all returned, so a stop during the asks leaves those paths as the boundary left them,
   and a kill during that write leaves them partial; either way it is uncommitted. A resume restores those paths to the last stage commit and
@@ -1056,9 +1117,9 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
   pays again. Each build record an inference stage writes is written once, after its asks; resume reads
   none of them for position. The progress record accounts for the dirt an interrupted
   stage leaves; the
-  dirty-path refusal (SPEC §5) applies to dirt it cannot account for. The resume command carries
-  every flag the launch carried but the bound, `--through`: resuming past it is what resuming is
-  for. It is emitted only where an identical re-issue continues the work: a `bounded` run is
+  dirty-path refusal (SPEC §5) applies to dirt it cannot account for. The resume command is `kbase
+  build --resume` with every flag the launch carried but the bound, `--through`, and the inputs;
+  `--config-dir` is written absolute: resuming past the bound is what resuming is for. It is emitted only where an identical re-issue continues the work: a `bounded` run is
   handed none, being finished at the bound — re-issuing its command is not what continues it; the
   trail document is what a reader uses to reset and re-issue. A refusal that
   recorded no boundary leaves nothing to continue. It is also emitted only where the
@@ -1092,7 +1153,10 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
   start refresh. The *holder lock* is in the state store, its record carrying the holder's pid, its
   start, the verb that owns the run (`Kind`) and, for a scoring run, the run id; `status` reads
   liveness from it and the run it names, `wait` reads whether the run it waits for still holds it,
-  and `cancel` signals its holder. A clean exit removes the file, cancel included, so a standing lock
+  and `cancel` signals its holder. Given no `--state-dir`, the monitors — `status`, `cancel`, `wait`,
+  `rewind-build` — resolve their store through `buildstore.MonitorOptions.Open`, which reads the
+  store the operation lock names while its file stands and names one, else the default; the MCP
+  launch and the `kbase://build` fallback keep the default. A clean exit removes the file, cancel included, so a standing lock
   file is not by itself evidence of a live holder. A record naming no known `kind` is a store another
   version wrote: `buildstore.ReadHolder` refuses it (`check: state-dir`, `path` the record), and
   nothing reads it as a build's. A second builder on the same state-dir is `refused`; where only
@@ -1112,8 +1176,10 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
   `.stdout.yaml` and `.stderr.log`, ordered by name — and removes the rest; it reads no progress
   record to do so. Once its launch checks pass and before its first stage, a build prunes `scratch/trails/`,
   one directory per build trail named by the commit of the newest `start` entry of the trail the walk
-  stands on, holding `answers/`, `asks/` and `captures/`: it keeps the current trail's directory, marked with the
-  current time, and the newest `keptBuilds` (§12) others by modification time, and removes the rest
+  stands on, holding `answers/`, `asks/`, `captures/` and `replays/`: it keeps the current trail's
+  directory — on a resume created if absent and stamped with the current time; a fresh build's
+  directory is created by its first ask, so its time is when it last gained a subdirectory — and
+  the newest `keptBuilds` (§12) others by modification time, and removes the rest
   whole, with the undivided `scratch/answers/`, `scratch/asks/` and `scratch/captures/` an earlier kbase wrote. At the
   same point, a fresh build whose `progress.jsonl` holds more than `progressRotateLines` (§12) lines
   moves every line before its own run event to `progress-<UTC timestamp>.jsonl`, leaves its run
@@ -1130,13 +1196,84 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
   named by the result's `stages[].report`; also the captures of a build the MCP server starts,
   `build-<UTC timestamp>-<random>.stdout.yaml` and `.stderr.log`), `scratch/` —
   `trails/<start-commit>/`, one per build trail, holding `answers/`
-  (the answer cache, content-addressed by model, system prompt and prompt, written through
+  (the answer cache, content-addressed by model, system prompt and prompt and the call's sampling
+  settings where they are not kbase's default, written through
   `atomicfile`; an ask's attempt ordinal is part of the key so a re-ask reaches the model),
   `asks/` (the multichoice-ask group records, one file per stage, `<kind>.yaml`, one YAML document per
-  group) and `captures/` (every call's request, reply and usage), `regenerate/` (the records regeneration on
+  group: the group's shared template inputs once, each item's own inputs, its `prompt-sha256`
+  (`asks.AskDigest` of the state and the question), its outcome (`answered`, `re-asked`,
+  `defaulted`, `failed`) and its calls; written by a stage whose batch stopped as well as by one that
+  finished), `captures/` (every call's request, reply and usage) and `replays/<replay-id>/` (a
+  development replay of the trail, below), `regenerate/` (the records regeneration on
   resume), `score/<run>/` (a scoring run's `run.yaml`, `items.jsonl`, `ledger.jsonl` and
   `captures.jsonl`, `results/` — one file per answered item, `<walk index>.json`, until the walk's
   end or the next resume folds it — and a development replay's `replays/<replay-id>/`; §6, Scoring).
+- **The build's development replay.** `build.OpenReplay` and `Replay.Walk`
+  (`internal/build/replay.go`, tagged `//go:build kbasedev` as §6's scoring replay is) re-ask one
+  trail's recorded asks under the binary's embedded templates and question files, from the inputs
+  the trail records (I10), so a prompt, a question file or a model can be refined against one build
+  without re-running it. The trail is the one a hex prefix of its start commit names, or, given
+  none, the trail directory with the newest modification time, listed by `listTrails`, the listing
+  `pruneTrails` orders by. `OpenReplay` reads each kind's `asks/<kind>.yaml`
+  (`asks.ReadGroupRecords`) and the overview captures (`call.ReadOverviewCaptures`) and selects in
+  walk order — the multichoice kinds in `asks.Kinds` order, groups in file order and items in
+  record order, then the overview calls by ask attempt — narrowed to one kind or to `overview`, to
+  the items recorded `failed` or `defaulted` and the overview calls `failed` or `rejected`, and to
+  the first N. It refuses, `check: usage`, `key: --replay`, a store with no trail directory and a
+  prefix matching none or more than one (`path` `scratch/trails`), a trail recording no group
+  record and no overview capture (`path` the trail), an empty selection (`path` the trail), and a selected record or capture carrying no
+  inputs (`path` that file). The replay's support code is likewise tagged `//go:build kbasedev`,
+  in `internal/asks/replay.go` and `internal/asks/call/overview_captures.go`. The replay takes no
+  lock. Its items are rebuilt by
+  `asks.RecordedItems` and asked as one `asks.NewReplayBatch` on the decision role, then each
+  overview call as its own item on the text role, through `call.New` pointed at the replay's
+  directory, every call on the invocation's queue; `MultichoiceItem.Compose` and
+  `asks.OverviewPrompt` stay the only composition sites, the build's own. A call that never
+  completes is a `failed` row and the walk carries on. It writes only under
+  `trails/<start-commit>/replays/<replay-id>/`, the id minted `replay-<id>`: `replay.yaml`
+  (`replay`, `trail`, `decision_model`, `text_model`, `started`); its own `answers/` and
+  `captures/`, in the trail's shapes; `asks/<kind>.yaml`, its own group records; and
+  `comparison.jsonl`, one row per replayed item or overview call — `kind`, `group`, `item` (an
+  overview row's `group` `""` and `item` `overview`), `attempt` (an overview row's alone),
+  `original` and `replay` (each `outcome`, `choice` and `confidence`: a multichoice item's as its
+  record holds them; an overview call's outcome `failed` where its capture's last attempt did not
+  complete, else the overview stage's judgement of its reply, `answered` or `rejected`, and its
+  choice and confidence null) and `prompt_changed` (the re-rendered prompt's digest differs from
+  the recorded `prompt-sha256`). It never writes the trail's `answers/`, `asks/` or `captures/`,
+  nor `kb-root/`. Setup creates `replays/`, the replay's directory and its subdirectories with
+  `os.Mkdir`, never `MkdirAll`, so a trail the prune removed fails setup rather than standing
+  again, and restores the trail directory's modification time, which is the current-trail marker
+  and the prune's order. After writing `replay.yaml`, it keeps itself and the newest `KeptRuns-1`
+  (§12) other replays of its trail's `replays/` by `replay.yaml`'s `started`, through
+  `buildstore.PruneByStart`; pruning removes only entries of `replays/`, so the trail directory's
+  time does not move. Once the walk drains, a replay whose `replay.yaml` no longer stands — a
+  prune removed it, and its in-flight calls' own writes may have recreated parts of it — removes
+  its directory — and its trail's `replays/` and the trail directory where they hold nothing
+  else — and ends `failed`; otherwise it writes its group records and `comparison.jsonl`, on
+  every exit after it asked anything. `ReplayResult` counts the selected rows (`total`), those
+  replayed to an outcome other than `failed` (`done`) and those `failed`, and as `changed` the rows
+  whose outcome or choice differs from the original's. Its outcome is `done` when every selected
+  row was asked, `cancelled` when the context stopped the walk — naming the first row it did not
+  ask — and `failed` for a fault of the replay itself: a store write, a compose error, or the
+  replay directory removed under the walk.
+
+  The verb is `kbase build --replay [<start-commit>]`, in `cmd/build_replay.go`, reached from
+  `cmd/build.go` only through the `buildReplay` hook that file's `init` sets; the tag, the hook
+  pattern, `mcp.ExcludeFlag` and `test-dist-no-replay` are as for score's replay (§6). The `init`
+  declares `--replay` (a boolean), `--kind`, `--failed` and `--limit`, each excluded from MCP.
+  Beside `--replay` it takes `--kind` (`paragraph`, `unmarked`, `colinear`, `classify` or
+  `overview`), `--failed`, `--limit N`, `--state-dir`, `--ask-concurrency` and `--config-dir`; the
+  store resolves as §6 states for both replays. Each refusal is `check: usage`: `--kind`,
+  `--failed` or `--limit` without `--replay`, naming that flag; any other of build's own flags
+  beside `--replay`, read from `LocalNonPersistentFlags`, naming `--replay`; more than one
+  positional, or one not matching `^[0-9a-f]+$`, naming `--replay`; a `--kind` outside the five,
+  naming `--kind`; a negative `--limit`, naming `--limit`; and the store's and `OpenReplay`'s
+  refusals above. Models and sampling come from configuration through the build's own Provider
+  seam and queue (`buildModels`, `cmd/build.go`): the decision role answers the multichoice asks
+  and the text role the overview calls. The result document, verb `build`, carries `outcome`,
+  `state-dir`, `trail` (the start commit), `replay`, `dir` (the replay directory, absolute),
+  `counts` (`total`, `done`, `failed`) and `changed`, then the closing record its outcome names, a
+  `cancelled` record holding the `kind`, `group` and `item` of the first row not asked.
 - **Progress units** are leaves for the node pass, source groups for `references-found`, the ask
   groups of each of its two passes for `claims-culled` (each pass announcing its own total), ask
   groups for classification; a defaulted item is a `fallback` event. A stage's `units` event is written
@@ -1194,14 +1331,11 @@ hermetic gate is `just test-integration`, whose eight members — `test-integrat
 process produced: the first seven run `./bin/kbase` over fixtures they stage, judging the result
 document against the verb's keys, the tree it wrote, the transcript it served, or — for the parity
 recipe — the frozen answers the 2.0.1 binary gave over the KB the conversion reads, each moved only
-by a rule naming a designed outcome of the conversion; `test-dist-no-replay` judges the dist build's
-command tree for the compiled-out replay. Each of the first seven runs the script of its own name
-under `tools/scripts/`, and each writes its log under `test-data/transient/<recipe>/`. Recipes
-needing pandoc, python3, expect or a provider stand outside the gate and run by name —
-`test-integration-mcp-build`, the MCP notification probe that builds a paper, among them, and
-`test-dist`, which runs `test-dist-no-replay` and then `tools/scripts/build-dist.sh` against stub
-`go`, `gpg`, `curl`, `uname` and `git`, answering the installer's trust prompt over a pty, and judges the
-release layout it stages and the installer's behaviour.
+by a rule naming a designed outcome of the conversion; `test-dist-no-replay` judges the default
+build's command tree for the compiled-out replay. Each of the first seven runs the script of its own name
+under `tools/scripts/`, and each writes its log under `test-data/transient/<recipe>/`. The recipes
+the rule in CONVENTIONS.md "Testing" keeps out of the gate run by name —
+`test-integration-mcp-build`, the MCP notification probe that builds a paper, among them.
 
 ---
 
@@ -1252,7 +1386,7 @@ internal/index            `Derive` (the derived rows in memory), the degraded lo
                           claim-id link check, the path finder (`DependsGraph.Path`)
 internal/write            render / values / store / ops over the records and the
                           statement markers, provenance, the build-only
-                          `add-build-edges` and `demote-claim-edge`
+                          `add-build-edges`, `demote-claim-edge` and `split-claim`
 internal/atomicfile       the one atomic file writer
 internal/query
 internal/sheet            DOT emitter, `dot` invocation: `Derive`'s rows, the leaves,
@@ -1270,7 +1404,7 @@ internal/kbdocs           readiness stamp and restamp, README assembly, the sess
                           (`SessionRule`)
 internal/claimgraph       conform, inventory (records + page-defined readings),
                           identify, attribute, shortlist, unmarked, order, cull,
-                          elision (the cull's issuer), equation sites, classify,
+                          split, elision (the cull's issuer), equation sites, classify,
                           equation(s), endcap, hand_named, assemble, write, gate,
                           the four build records
 internal/asks             embedded templates + fragments, composer, caller
@@ -1281,7 +1415,8 @@ internal/gitledger        git checkpoint seam (I1), by exec
 internal/filelock         the one advisory file lock (the KB write lock, the operation
                           lock in the git directory, the state store's holder lock)
 internal/build            the walk and its steps' behaviour, the state store's writers,
-                          resume, --no-inference, --through, progress and cancel
+                          resume, --no-inference, --through, progress and cancel,
+                          and the development replay (`kbasedev`)
 internal/buildstore       the build's state, read: the store's layout, holder record and
                           progress record, the stage vocabulary and the step table's
                           shape, status and the reading (holder lock, progress record,
@@ -1292,7 +1427,7 @@ internal/score            the score passes' closed text, its guard and the passa
                           made of, the parse, the runner, the run's entry (`Invoke`) and
                           its landing through `write`, the run's ledger, its captures,
                           its re-pricing and the retention of runs, and the development
-                          replay (`!kbasedist`); imports not `model`; imported by cmd and
+                          replay (`kbasedev`); imports not `model`; imported by cmd and
                           internal/mcp alone
 internal/statedir         the state directory of one KB: the override, else
                           $XDG_STATE_HOME/kbase/<key>, never inside kb-root/;
@@ -1331,14 +1466,16 @@ internal/mcp/protocol     (SPEC §11) JSON-RPC framing, dispatch, the Tool, Sche
 internal/mcp              the MCP exposure of the command tree: the `kbase.mcp` and
                           `kbase.readOnly` annotations, the tool table derived from the
                           bound commands, a call run as its command's RunE, the
-                          invocation directory a call names, the resources, the build
+                          project a call runs in, the resources, the build
                           watcher, and the detached build and score launches
                           (`launch.go`, the one self-exec owner, I1), and the
                           instructions `initialize` reports; imported by cmd alone
 internal/modelclient      the client registry (`Registry`, one `model.Client` per
-                          endpoint) and the mapping of configuration's `api` and flavour
-                          onto `model`'s protocol and decision surface (`chatProtocol`,
-                          `decisionsSurface`); imports `model`, `config`, `result` and
+                          endpoint, wire protocol and sampling settings) and the
+                          mapping of configuration's `api`, flavour and sampling
+                          onto `model`'s protocol, decision surface and sampling
+                          (`chatProtocol`, `decisionsSurface`, `samplingOf`);
+                          imports `model`, `config`, `result` and
                           `log`; imported by cmd alone
 kept: config, model (the `Queue` and its `Slot`, the only exported entry to inference), log,
       version
@@ -1471,8 +1608,9 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
   held-around-the-run write lock is `write.LockKB`).
 - Only `internal/latex/pandoc` execs pandoc; only `internal/gitledger` execs git; only `internal/sheet`
   execs `dot`; and only `internal/mcp/launch.go` (file-level) execs kbase itself. Those four are the
-  exec policy's whole list (`cmd/execpolicy_test.go`): a process started anywhere else, or a listed
-  owner starting a binary other than its own, fails the test.
+  exec policy's whole list (`cmd/execpolicy_test.go`): a process started anywhere else in non-test
+  code, or a listed owner starting a binary other than its own, fails the test; test files are out
+  of its scope.
 - `internal/export` imports `kb` and `atomicfile`, and nothing else of kbase; the verb opens the
   KB and supplies every pandoc call — the preflight and the one `pandoc.RunDefaults` call — as a
   function value `export.Run` calls.
@@ -1488,9 +1626,11 @@ The dependency rules are enforced by an import-policy test over the transitive i
 |---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6) |
 | Query default `--limit` | 50 results; chosen so a default-limit result from each list query fits within personant's 8 KB tool-result cap over the six corpus fixtures |
-| Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, and every transport failure and incomplete stream is re-issued; the build's multichoice asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts, and a pause the call's deadline cannot cover is not waited out — the call gives up at once, naming the attempts it made |
+| Transport attempts | 3 per call; a provider's non-2xx status ends the call on its first attempt unless it is a 429 or a 5xx, an answer cut off at the completion cap before any answer text ends the call on its first attempt, and every transport failure and incomplete stream is re-issued; the build's multichoice asks re-issue at once, its overview call and `kbase score`'s each ask pause 5 s then 30 s between attempts, and a pause the call's deadline cannot cover is not waited out — the call gives up at once, naming the attempts it made |
 | Cached-token totals | `AskTotals.WarmCacheReadTokens` (and `CachedTokens`) report 0 on every decision call: the SystemOne surface's `usage` has no cached-token field, so the zero is the API's, not a regression |
-| Ask concurrency | `[asks] concurrency` in `config.toml` (SPEC §9.2), `--ask-concurrency` on `build` and `score`, default `config.DefaultAskConcurrency`, 2; the model calls one invocation has in flight, and the idle connections per host its clients keep; `probe` runs a queue of one |
+| Ask concurrency | `[asks] concurrency` in `config.toml` (SPEC §9.2), `--ask-concurrency` on `build` and `score`, default `config.DefaultAskConcurrency`, 4; the model calls one invocation has in flight, and the idle connections per host its clients keep; `probe` runs a queue of one |
+| Sampling | `[sampling.text]` and `[sampling.scoring]` in `config.toml` (SPEC §9.2), each `temperature` and `thinking`; the `thinking` vocabulary `config.ThinkingLevels`; unset is temperature 0 and thinking off; the temperature ranges `openai` [0, 2] and `anthropic` [0, 1] |
+| Thinking budgets (Messages) | `low` 1,024, `medium` 4,096, `high` 16,384 tokens, as named constants in `anthropic_client.go` (`thinkingBudgetLow`, `thinkingBudgetMedium`, `thinkingBudgetHigh`); `max_tokens` is the budget plus the answer's allowance (SPEC §9.1) |
 | Model roles | `[models] decision` (the multichoice asks, on whichever surface its entry speaks), `[models] text` (the overview call) and `[models] scoring` (`kbase score`'s asks) in `config.toml`, each a `<provider>/<model>` reference; `KBASE_DECISION`/`KBASE_TEXT`/`KBASE_SCORING` name a bare id under the environment's endpoint instead (SPEC §9) |
 | Metadata format version | The one version read and written (SPEC §10), `kb.FormatVersion` (`format300.Version300`); the stamp key is `kb-format`. `3.0.0` |
 | Format stamp file | `kb.FormatFile` (`format300.FormatFile`): `.index/format.yaml`, the one-key block mapping that holds the stamp, written by `kb.EncodeFormatStamp` and read by no package but `kbload`, which falls back to the superseded entry-point frontmatter where the file does not stand (SPEC §10) |
@@ -1499,9 +1639,9 @@ The dependency rules are enforced by an import-policy test over the transitive i
 | MCP protocol version | `protocol.ProtocolVersion`: the MCP revision the server implements (SPEC §11): `2025-11-25`, confirmed, not chosen, by the owner's live check |
 | KB write-lock wait | `write.LockWait`: 30 s, how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8) |
 | State-store format | `StoreFormat` in `internal/buildstore`: 1, the integer in `<state-dir>/format` (SPEC §6, §8) |
-| Builds kept | `keptBuilds` in `internal/build`: 5, the build trails, beside the current one, whose directories — answers, group records and call captures — survive pruning, and the captured builds, beside the newest, that survive it (§8) |
+| Builds kept | `keptBuilds` in `internal/build`: 5, the build trails, beside the current one, whose directories — answers, group records, call captures and the trail's development replays — survive pruning, and are pruned with them, and the captured builds, beside the newest, that survive it (§8) |
 | Progress rotation | `progressRotateLines` in `internal/build`: 500, the lines a fresh build's `progress.jsonl` may hold before it is rotated, about five builds; `keptProgressFiles`: 15, the rotated files kept (§8) |
-| Runs kept | `KeptRuns` in `internal/score/ledger.go`: 16, the scoring runs of each kind (`run-`, `dry-`) that survive pruning, and the replays of a run's `replays/` (§6, Scoring; §8) |
+| Runs kept | `KeptRuns` in `internal/buildstore`: 16, the scoring runs of each kind (`run-`, `dry-`) that survive pruning, the replays of a run's `replays/`, and the development replays of a build trail's `replays/` (§6, Scoring; §8) |
 | Scoring wrap width | `wrapWidth` in `internal/score/text.go`: 100 columns, the width each passage of the closed text is wrapped to before its lines are numbered (§6, Scoring) |
 | Operation lock path | `<git dir>/kbase-operation.lock` (SPEC §6, ARCHITECTURE §8) |
 | Detached-build start wait | `buildstore.StartWait` = `write.LockWait` + 10 s (40 s): how long the `build` tool waits for the child's progress record to show a stage entered, or for the child to exit, before returning; derived so a build waiting out a write is not reported as stuck (SPEC §11) |
@@ -1568,7 +1708,8 @@ below. A tool's schema is derived from the command's `Use` line positionals and 
 which is no argument of the tool; `score`'s `--replay` and `--failed` are such flags, and an
 argument naming one is refused by `internal/mcp/protocol` as outside the schema. A command's
 read-only standing is the cobra annotation `kbase.readOnly`, read when the table is built. A command
-tool's `required` is its positionals alone: no bound flag is required today, `score`'s `--pass`
+tool's `required` is its positionals alone, less an optional variadic one, which its `Use` line
+spells `[<name>...]`: no bound flag is required today, `score`'s `--pass`
 among them, a run walking both passes unless it is told otherwise. A flag that becomes required
 declares `kbase.required`, and the derivation lists it among `required` (CONVENTIONS); `wait`'s
 `--pid` is outside the derivation, `wait` declaring `excluded` (§11).
@@ -1576,13 +1717,29 @@ declares `kbase.required`, and the derivation lists it among `required` (CONVENT
 `cmd/surface.go` adds every command to the tree, one `AddCommand` per family, its binding and
 read-only hint on that line (`readOnlyTool`, `readWriteTool`, `cliOnly`), and declares beside them
 the MCP-only surfaces: `rewind-build`, the resource families and the detached launches. It names
-neither the served directory nor a launch record for them: `mcp.Server.Serve` binds each to the
-directory it serves and to the one record of the build it launched last, which the build launch
-writes and the `kbase://build` resource and its watcher read.
+neither a project nor a launch record for them: `mcp.Server.Serve` binds the resources to the
+server's located project and to the one record of the build it launched last, which the build
+launch writes and the `kbase://build` resource and its watcher read.
+
+A call's project is applied in one place. `mcp.Tools` wraps every tool, derived and listed, in
+`inProject`: the wrapper adds the `project-dir` property to the schema, and on each call
+`callProject` resolves the project — the `project-dir` the call names, which `buildstore.ProjectRoot`
+requires to be a git worktree root (the same check `--project-dir` gets on the command line),
+else the located project — removes `project-dir` from the arguments, and hands the inner tool the
+project. No tool closes over a directory: a command tool sets it as the call's invocation
+directory, a write op passes it to `Calls.WriteOp`, a launch starts its child there, and
+`rewind-build` reads its trail. The located project is `mcp.Located`, whose zero value is the
+explicit none: `cmd/mcp.go` sets it from `kb.RepositoryRoot` of the invocation directory only
+where that finds a repository, so no reader ever passes `""` to a path function that would read it as
+the working directory. With none, a call naming no project and the project-scoped resources
+answer the usage refusal keyed `project-dir`. `lastBuild` records the project a build was launched
+in beside its store and pid, so `kbase://build` reads a launch's status in that launch's project;
+before any launch it reads the located project's default store, or answers that refusal where
+there is none.
 
 `rewind-build` is the one tool no command stands behind (I9), so it states for itself what the
-derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional), the
-document key order SPEC §11 gives it in place of a subcommand table's, and the schema property name
+derivation would have supplied: a hand-written schema (`target` and `state-dir`, both optional; a
+`target` names a stage boundary or `started-at`), the document key order SPEC §11 gives it in place of a subcommand table's, and the schema property name
 as its refusal key in place of a flag spelling. It reports the build's commit trail and mutates
 nothing, which is what makes the exception affordable — the derivation buys a schema from flags, one
 implementation and one test path, all of which an operation listed by hand would forgo.
@@ -1596,17 +1753,19 @@ key's. A
 refusal keeps `entry: 1` and drops `line` and `column`; its `key` keeps the CLI spelling. Every
 other tool runs the command's RunE with its flags reset and its output captured to a buffer. The
 buffer is the result text; decoded once more, the YAML document is the `structuredContent`; the
-document's outcome gives `isError` (`result.IsError`). A RunE starts from `invocationDir(cmd)`,
-never `os.Getwd()`, or `--kb-root` is ignored.
+document's outcome gives `isError` (`result.IsError`). A RunE starts from `invocationDir(cmd)` —
+the call's project over MCP, else `--project-dir`, else the working directory — never
+`os.Getwd()`.
 
 `internal/mcp/protocol` holds newline-delimited JSON-RPC over stdio, `initialize`, `ping`,
 `tools/list` and `tools/call`, the `Tool`, `Schema` and `Property` types, and the frame checks
 (`jsonrpc`, `id`, `method`, known tool, object arguments). Arguments failing the schema (missing,
 wrong type, unknown key) are JSON-RPC `-32602` errors, not refusal documents. `Serve` takes the
 server version, the instructions `initialize` reports, the tool table and the resources from its
-caller, and imports `log` only. The instructions are `mcp.ServedInstructions`' opening sentence for the
-served directory's state, followed by the embedded `internal/mcp/instructions.txt` and then the
-session rule, `kbdocs.SessionRule`, which the stamped `AGENTS.md` carries through its `session-rule`
+caller, and imports `log` only. The instructions are `mcp.ServedInstructions`' opening, which
+varies by mode — the located project's state in TUI mode, none where it located no project, the
+`project-dir` line in GUI mode — followed, always, by the embedded `internal/mcp/instructions.txt`
+and then the session rule, `kbdocs.SessionRule`, which the stamped `AGENTS.md` carries through its `session-rule`
 slot: the text a session reads. `resources/list` and `resources/read` serve the resources `internal/mcp` supplies: the
 sheets, under `kbase://sheet/<kb-root-relative path>`, and the model guidance, at
 `kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB.
@@ -1622,14 +1781,22 @@ missing `uri` `-32602`; `initialize` advertises `resources`, and its `subscribe`
 hold one. A fourth resource, `kbase://build`, is stated below with the build tool whose launch it
 follows.
 
-`--kb-root` is resolved before serving: a kb-root directory, or a repository root (holding `.git`)
-with or without `kb-root/`; any other path is a usage refusal.
+The server runs in one of two modes, chosen in `cmd/mcp.go` before serving (SPEC §11). In TUI
+mode, `kbase mcp`, the located project is `kb.RepositoryRoot` of `invocationDir`, or none. In GUI
+mode, `kbase mcp --project-dir-required`, it is `mcp.ProjectRequired()`: none, marked so that
+`inProject` lists `project-dir` in each schema's `required` with `projectDirMeaning` alone as its
+description, where TUI mode gives `projectDirDescription`, that text followed by the sentences on
+the server's own project. The `callProject`
+refusal stays behind that schema for a call whose `project-dir` is empty. The global
+`--project-dir` given to `mcp` is a usage refusal keyed `--project-dir` before serving; startup
+never fails for want of a project.
 
 The `build` tool (`internal/mcp/launch.go`, the one self-exec owner under I1, file-level, enforced
 by the exec-policy test) re-executes the kbase binary as `kbase build …`. The child runs from the
-repository root, with the server's environment, in its own process group (detach flags per platform
-in `internal/mcp/detach_unix.go` and `internal/mcp/detach_windows.go`), stdin unset, and the
-server's `--config-dir`, `--log-level` and `--log-file` passed through. Every path the child is
+root of the call's project, with the server's environment, in its own process group (detach flags
+per platform in `internal/mcp/detach_unix.go` and `internal/mcp/detach_windows.go`), stdin unset,
+the server's `--config-dir`, `--log-level` and `--log-file` passed through, and `--project-dir`
+where the call named one, so the child's recorded `resume` carries it. Every path the child is
 given is absolute, because its working directory is not the server's: a relative `state-dir`
 argument is resolved against the repository root, while the server's `--config-dir` and
 `--log-file` stay relative to the server's working directory. Its stdout and stderr are files in
@@ -1641,7 +1808,7 @@ the operation and holder locks and emits its first progress event before it wait
 
 | Child, within `buildstore.StartWait` | Result |
 |---|---|
-| Entered a stage | `done` with `kb-root`, `state-dir`, `pid`, `resume` and `wait` (`resume` only where the record's command reads as a `kbase build` invocation, SPEC §6; `wait` the run's background command, `buildstore.ShellJoin` of the executable with `wait --state-dir <store> --pid <pid>`) |
+| Entered a stage | `done` with `kb-root`, `state-dir`, `pid`, `resume` and `wait` (`resume` only where the record's command reads as a `kbase build` invocation, SPEC §6; `wait` the run's background command, `buildstore.ShellJoin` of the executable with `wait [--project-dir <root>] --state-dir <store> --pid <pid>`, `--project-dir` where the call named one) |
 | Exited first | The child's own document; `isError` from its outcome |
 | Neither | `failed`, an item naming the state directory and that the child is still starting |
 
@@ -1649,15 +1816,15 @@ Before starting, the tool runs `status`'s preconditions: no worktree, or a `--st
 `kb-root/`, returns the refusal `status` gives and starts no process.
 
 The `score` tool re-executes the kbase binary as `kbase score …` by the same detachment: the child
-runs from the repository root, in its own process group, with the server's environment,
-`--config-dir`, `--log-level` and `--log-file`, and its stdout and stderr are files in the state
+runs from the root of the call's project, in its own process group, with the server's environment,
+`--config-dir`, `--log-level` and `--log-file`, `--project-dir` where the call named one, and its stdout and stderr are files in the state
 store's `reports/`, `score-<UTC timestamp>-<random>.stdout.yaml` and `.stderr.log`, which `score.PruneRuns` keeps the newest `KeptRuns` of (§8). It waits on the
 run's records and returns when the run's ledger and pid stand (the run's directory written, its pid
 file reading back) or the child exits, bounded by `buildstore.StartWait` (40 s):
 
 | Child, within `buildstore.StartWait` | Result |
 |---|---|
-| Ledger and pid stand | `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait` (`wait` the run's background command, `buildstore.ShellJoin` of the executable with `wait --state-dir <store> --pid <pid>`) |
+| Ledger and pid stand | `done` with `kb-root`, `state-dir`, `pid`, `run`, `ledger` and `wait` (`wait` the run's background command, `buildstore.ShellJoin` of the executable with `wait [--project-dir <root>] --state-dir <store> --pid <pid>`, `--project-dir` where the call named one) |
 | Exited first | The child's own document; `isError` from its outcome |
 | Neither | `failed`, an item naming the state directory and that the run has neither opened its ledger nor exited |
 
@@ -1670,10 +1837,10 @@ pid, the run, the start stamp and the kind `score`), so a run in flight is visib
 tool returned.
 
 `kbase://build` (SPEC §11) is the build's state as the `status` tool reports it, for the store the
-tool last launched: `internal/mcp` records the store `buildstore.Locate` resolved and the pid
-the launch started, so a later launch retargets the resource and the watcher, and a process that
-launched none follows the served repository's default store, which `buildstore.Locate` resolves
-once because resolving it asks git. The resource's document is the `status` tool's, score-aware:
+tool last launched: `internal/mcp` records the launch's project, the store `buildstore.Locate`
+resolved and the pid the launch started, so a later launch retargets the resource and the watcher,
+and a process that launched none follows the located project's default store, which
+`buildstore.Locate` resolves once because resolving it asks git. The resource's document is the `status` tool's, score-aware:
 `statusDocument` renders `score.Status`'s outcome and fields as the verb does — the score run's own
 document where the store's holder record names one or its newest run is one, the build's otherwise
 (§8) — so a read costs the `git log` a `status` call costs. The watcher's reading does not: it is

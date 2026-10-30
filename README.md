@@ -9,6 +9,9 @@ hardware.
 ![Volume Graph](readme-assets/kb-volume-graph.png)
 ![Claim Graph](readme-assets/kb-claim-graph.png)
 
+## Developer
+<https://keyoxide.org/wkd/benn@bennherrera.dev>
+
 ## Requirements and Supported Platforms
 
 ### Requirements
@@ -27,73 +30,25 @@ Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00RE
 `toplevel` entry names, else the sole file containing `\documentclass`.
 
 ### Platforms
-- macOS (run and dev)
-- Linux (binary can be built from macOS, dev experience untested, your mileage may vary)
-- Windows (binary can be built from macOS, dev experience untested, your mileage will absolutely vary)
+- macOS (run and dev; installed through the Homebrew tap)
+- Linux (installed through the Homebrew tap; dev experience untested, your mileage may vary)
+- Windows (no distributed binary: build from source; dev experience untested, your mileage will absolutely vary)
 
 ## Installation
 
-Each release is published on the GitHub releases page as four artifacts: the archive
-`kbase-v<version>.tgz`, its detached signature, the installer `install-kbase-v<version>.sh`, and the
-installer's own detached signature. The archive holds one binary per platform, each again with its
-own signature, beside this README, `CONVENTIONS.md` and `LICENSE`.
-
-### With the installer
-
-Download the installer and its signature into an empty directory and run it there:
+### Homebrew (macOS and Linux)
 
 ```sh
-base=https://github.com/benn-herrera/kbase/releases/download/v<version>
-curl -LO "$base/install-kbase-v<version>.sh" -LO "$base/install-kbase-v<version>.sh.asc"
-bash install-kbase-v<version>.sh
+brew tap benn-herrera/kbase
+brew install kbase
 ```
 
-The installer reads the platform from `uname -s` and `uname -m` and refuses any but macOS arm64,
-Linux amd64, and Windows amd64 under Git Bash or MSYS, naming both values it read. It needs `gpg` on
-`PATH`. It then:
+The formula builds kbase from the tagged release's source and puts it on `PATH`, with the tools it
+needs; the [tap's README](https://github.com/benn-herrera/homebrew-kbase) lists them.
 
-1. Locates the signing key (`benn@bennherrera.dev`) through WKD, downloads the installer's own
-   `.asc` where it is missing, and reads that signature for the key that made it.
-2. Looks that key up in your keyring. It refuses where the signature names no key, where the key is
-   not in the keyring, and where gpg lists no fingerprint or user ID for it, naming the key and where
-   it is published.
-3. Where the key is in the keyring but not ultimately trusted, prints the user ID, the fingerprint,
-   the key URL and the policy URL, and asks:
+### Windows
 
-   ```
-   Choice [y/o/N]:
-   ```
-
-   `y` records ultimate ownertrust for the fingerprint, so later installs with this key ask nothing.
-   `o` records nothing and verifies this run, leaving the keyring untouched and gpg flagging each
-   signature as untrusted. Any other answer, an empty one included, installs nothing. With no
-   terminal on stdin — the way `curl … | bash` runs it — the installer refuses instead of asking and
-   prints the two commands that establish the trust by hand.
-4. Verifies its own signature against the script it is running, downloads the archive and its
-   signature into the working directory if they are not already there, and verifies them.
-5. Extracts `kbase-v<version>/` where it does not already stand, verifies each of the three binaries
-   against its `.asc`, and copies the platform's binary to `kbase` (`kbase.exe` on Windows) inside
-   that directory, clearing macOS's quarantine attribute from it.
-
-A failed `gpg --verify` stops the script where it stands: it never reaches the extraction after a
-failed archive signature, and never reaches the copy after a failed binary signature. A signature
-made by a key outside your keyring fails the same way, at whichever file it signs. Nothing is
-installed outside the directory you ran the installer in.
-
-### Verifying by hand
-
-Every signature is detached: gpg verifies it, and the installer is only doing that for you. To check
-the archive and unpack it yourself, in place of steps 4 and 5:
-
-```sh
-gpg --verify kbase-v<version>.tgz.asc kbase-v<version>.tgz
-tar xzf kbase-v<version>.tgz
-gpg --verify kbase-v<version>/kbase-darwin-arm64.asc kbase-v<version>/kbase-darwin-arm64
-```
-
-The binaries in the archive are `kbase-darwin-arm64`, `kbase-linux-amd64` and
-`kbase-windows-amd64.exe`, each with an `.asc` beside it. Copy the one for your platform to `kbase`
-(or `kbase.exe`), and put it on `PATH`.
+No binary is distributed for Windows. Build it from source.
 
 ### From source
 
@@ -179,8 +134,8 @@ kbase build <volume-root>... [--bibliography FILE]... [--no-inference]
   unchanged until you judge that edge with `set-bearing`.
 
 Stages, in order: `start`, `document-graph`, `spine-seed`, `claims-declared`, `claims-discovered`,
-`equations-minted`, `references-found`, `claims-culled`, `depends-attributed`, `phase-3a`,
-`overview-drafted`. What each does is in [ARCHITECTURE.md](ARCHITECTURE.md) §4.
+`equations-minted`, `references-found`, `claims-culled`, `depends-attributed`, `analyses-split`,
+`phase-3a`, `overview-drafted`. What each does is in [ARCHITECTURE.md](ARCHITECTURE.md) §4.
 
 `claims-culled` asks, for each pair of linked claims with a prose end, whether one adds nothing to
 the other; a prose claim that adds nothing is removed, and its links pass to the claim it was culled
@@ -188,26 +143,43 @@ into. It adds no edge: `depends-attributed` asks every surviving link its direct
 `--no-inference` it is walked without asks. It records its verdicts and the surviving links in
 `kb-build-cull.yaml`.
 
+`analyses-split` splits each claim whose text runs past the line it is titled by. The claim keeps
+that line. A new analysis carries the rest: the claim's own block or paragraph, or, where that holds
+nothing more, the proof that establishes it. The claim's premises and cited works move onto the
+analysis, and the analysis lifts the claim, its bearing left for you to judge. It asks no model.
+
 ### Resuming and monitoring
 
 Each stage boundary is a commit in your repository, with subject `kb-build: <stage-id> | <display
-name>`. Run `kbase build` again with the same arguments and it resumes from the last boundary on the
-commit trail. After an interrupted stage, it restores the paths the build owns to the last stage
-commit and re-runs that stage.
+name>`. `kbase build <volume-root>...` starts a build; `kbase build --resume` continues it from the
+last boundary on the commit trail, and takes no volume roots or `--bibliography`. After an
+interrupted stage, it restores the paths the build owns to the last stage commit and re-runs that
+stage.
 
-To go back further, reset the repository to an earlier boundary and re-issue the build from there.
+The build owns its inputs. A relative volume root or `--bibliography` resolves against the project
+root, and the build orders each list by full path, whatever order you gave it in, so the order you
+give does not change the result. Every boundary's body ends with a `volume-root:` line per volume
+root, then a `bibliography:` line per `--bibliography` file, each absolute and in that order; the
+`start` boundary also records `started-at:`, the commit the build began from. On a branch with no
+commit, the build first makes an empty `kb-start:` commit to start from. A resume continues with
+the inputs the newest boundary records.
+
+A build given volume roots over a trail is refused (`check: inputs`). The remedy names both routes:
+continue with `kbase build --resume`, or start over from `started-at` — `rewind-build`'s
+`started-at` target, or `git reset --hard <started-at>`, with the hash written out. A different
+input set is a fresh build, reached only by starting over. So is a full build after a
+`--no-inference` one: `kbase build --resume` over the finished trail is `unchanged`, and the dropped
+rows run only in a build that starts over from `started-at` without `--no-inference`.
+
+To go back to an earlier boundary, reset the repository to it and run `kbase build --resume`.
 `kbase status` names each stage's commit; over [MCP](#using-kbase-from-an-agent-harness-mcp) the
-`rewind-build` tool and the `kbase://build-trail` resource report the whole trail and, for a
-boundary you name, print both commands — the `git reset --hard` and the recorded re-issue — ready to
-run. The reset is yours: the tool reports it and changes nothing. It discards every boundary newer
-than the one you reset to, which the document counts as `discards`. A dirty worktree does not stop
-it; `dirty` lists what the reset would lose.
-
-A resume must be given the inputs the trail's newest boundary records: the commit body ends with a
-`volume-root:` line per volume root, then a `bibliography:` line per `--bibliography` file, in the
-order given. A boundary written before inputs were recorded is not compared. Otherwise the resume is
-refused (`check: inputs`); resume with the recorded inputs, or start over from a commit before the
-trail.
+`rewind-build` tool and the `kbase://build-trail` resource report the whole trail, and `started-at`,
+the clean, ready-to-build state before the build. For a boundary you name they print both commands
+— the `git reset --hard` and the recorded resume — ready to run; for the `started-at` target, the
+reset alone, after which a build is fresh and names its own volume roots. The reset is yours: the
+tool reports it and changes nothing. It discards every boundary newer than the one you reset to,
+which the document counts as `discards`. A dirty worktree does not stop it; `dirty` lists what the
+reset would lose.
 
 `build` runs in the foreground (through the [MCP server](#using-kbase-from-an-agent-harness-mcp) it
 is detached). From the repository, in a second shell:
@@ -386,29 +358,36 @@ reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 
 ### Using kbase from an agent harness (MCP)
 
-`kbase mcp` serves one KB to any agent harness that speaks the Model Context Protocol, over stdio.
+`kbase mcp` serves kbase to any agent harness that speaks the Model Context Protocol, over stdio.
 Every tool is one subcommand, with the same arguments and the same result — except `rewind-build`,
 which reports the build's commit trail and has no subcommand behind it.
 
-The server entry is the same for every harness: command `kbase`, arguments:
+The server entry is command `kbase` with one of two argument lists. A harness that runs kbase from
+inside the project uses TUI mode, where the server finds its project from the working directory:
 
 ```json
-["mcp", "--kb-root", "<absolute path>"]
+["mcp"]
 ```
 
-`--kb-root` is a kb-root directory, or a repository root (holding `.git`) with or without
-`kb-root/`; any other path is refused before serving.
+A harness that serves many projects from one place, with no project working directory, uses GUI
+mode, where every tool call names its project with `project-dir`:
+
+```json
+["mcp", "--project-dir-required"]
+```
+
+`kbase mcp` takes no `--project-dir`; given one, it is refused before serving.
 
 Two examples. Claude Code, in `.mcp.json`:
 
 ```json
-{"mcpServers": {"kbase": {"command": "kbase", "args": ["mcp", "--kb-root", "<abs>"]}}}
+{"mcpServers": {"kbase": {"command": "kbase", "args": ["mcp"]}}}
 ```
 
 opencode, in `opencode.json`:
 
 ```json
-{"mcp": {"kbase": {"type": "local", "command": ["kbase", "mcp", "--kb-root", "<abs>"], "enabled": true}}}
+{"mcp": {"kbase": {"type": "local", "command": ["kbase", "mcp"], "enabled": true}}}
 ```
 
 These are examples; any MCP-capable harness adds its own equivalent entry.
@@ -425,6 +404,12 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
   oldest first, and for a `target` you name — a stage id or display name — returns the
   `git reset --hard` and the recorded re-issue command, with `discards` counting the boundaries the
   reset removes. It is read-only; running the reset is yours.
+- **Every tool takes `project-dir`:** the absolute path of the git worktree root of the project the
+  call runs in. In TUI mode it is optional: a call that omits it runs in the server's own project,
+  and on a server with no project of its own it is refused, naming `project-dir`. In GUI mode it
+  is required. A path that is not a git
+  worktree root is refused. Where a `build` or `score` call names it, the `wait` and `resume`
+  commands it hands back carry `--project-dir`.
 - **`build` is detached.** It starts the build as its own process and returns once the build has
   entered a stage or has exited, waiting at most 40 s. On entering a stage it returns the
   `state-dir`, `pid`, `resume` command and `wait`, the exact background command that returns when
@@ -485,10 +470,13 @@ read in its place.
   — an entry supplies its key no other way, and a relative path resolves beside the file. A leading
   `~` in `apiKeyFile`, `--config-dir`, `$KBASE_CONFIG_DIR` or `$KBASE_API_KEY_FILE` expands from your
   home directory; `~user` does not. kbase warns if a key file is group- or world-readable;
-  `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `openai` (the
-  default, the OpenAI-compatible `chat/completions` surface) or `anthropic` (the Anthropic Messages
-  protocol); a Messages endpoint has no decision surface, so the `decision` role's entry must be an
-  OpenAI one. An entry's `decisionsFlavor` names which decision surface its server speaks —
+  `chmod 600` it. An entry's `api` names the chat protocol its server speaks — `anthropic` (the
+  default, the Anthropic Messages protocol) or `openai` (the OpenAI-compatible `chat/completions`
+  surface), which an entry selects with `api = "openai"`. Use Messages for any role whose thinking
+  is on: it caps the thinking a reply may spend, where the OpenAI-compatible protocol only hints at
+  an effort the server may exceed without bound. The `decision` role always asks the OpenAI-shaped
+  decision surface on its entry's base URL, whatever `api` says, so an `anthropic` entry serves it
+  only where its server also speaks that surface. An entry's `decisionsFlavor` names which decision surface its server speaks —
   `systemone` (the default) or `decisions` — and changes nothing about chat, which `api` decides, and
   nothing about the model, which is still `config.toml`'s `models.decision`.
 - **`config.toml`** holds the choices: `[models]` `decision`, `text` and `scoring`, each a
@@ -548,8 +536,12 @@ them the probe asks the `scoring` role — the selection a run would make, in ei
 that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
-`warn`), `--log-file`. The root command also takes `-v`/`--version`. `kbase mcp` without `--kb-root`
-finds the KB from the working directory, as every subcommand does.
+`warn`), `--log-file`, `--project-dir` (the git worktree root that holds `kb-root/`; the search for
+the repository starts there instead of the working directory). A relative path a subcommand takes
+resolves against the project root; `--config-dir` and `--log-file` resolve against the working
+directory. The root command also takes `-v`/`--version`. `kbase mcp` finds its project from the
+working directory, as every subcommand does, unless run in GUI mode (`--project-dir-required`); it
+refuses `--project-dir`.
 
 ## Development
 
@@ -558,25 +550,28 @@ just             # list recipes
 just edit-gate   # cheap gate: run after every change
 just checkpoint  # full suite: run at checkpoints
 just test        # unit tests (VERBOSE=1 for per-test output)
-just dist        # cross-build every target and stage the signed distro; run checkpoint first
-just dist --tag  # the same, then git tag v<version> locally
+just tag         # checkpoint, release-shape check, then signed tag v<version>; local only
 ```
 
-`just dist` writes four artifacts to `dist/`: the tarball `kbase-v<version>.tgz`, its detached
-signature `kbase-v<version>.tgz.asc`, the installer `install-kbase-v<version>.sh` and its signature
-`install-kbase-v<version>.sh.asc`. It runs no checkpoint of its own: a cross-build is what users
-receive, so the gate is a precondition of the release, not a step the recipe runs. `just dist --tag`
-also runs a lightweight, local `git tag v<version>` once every stage, signing included, has
-succeeded; it pushes nothing. It refuses before building anything if that tag already exists or
-tracked files have uncommitted changes. No built binaries
-are committed; `bin/` and `dist/` are gitignored. The tarball unpacks to `kbase-v<version>/` holding
-this README, [USER_CONVENTIONS.md](USER_CONVENTIONS.md) as `CONVENTIONS.md` — the operating contract
-for an agent driving the CLI — the LICENSE, and one binary per platform, each with its own `.asc`.
-[Installation](#installation) is what a user does with them.
+`just tag` refuses while tracked files have uncommitted changes, runs `just checkpoint` and
+`just test-dist-no-replay`, then creates a signed annotated tag `v<version>` locally, the version
+being what the binary reports; it pushes nothing. No built binaries are committed; `bin/` is
+gitignored. [USER_CONVENTIONS.md](USER_CONVENTIONS.md) is the operating contract for an agent
+driving the CLI.
 
-Integration recipes run `./bin/kbase` itself and keep their evidence under `test-data/transient/`.
-Recipes that need pandoc or a live provider are excluded from `just test-integration` and say so in
-`just --list`.
+Integration recipes run `./bin/kbase` itself, except the live-fixture recipes, which run the
+fixture's own copy (below), and keep their evidence under `test-data/transient/`.
+A recipe excluded from `just test-integration` says so, and what it needs, in `just --list`.
+
+`just prep-test-integration-fixture <dir>` stages a fixture repository. It resets the repository to
+its `cleared` tag, installs the agent set for both harnesses, and copies `bin/kbase` to
+`<dir>/.kbase/kbase`; it also copies `tools/harness.sh` to `<dir>/.kbase/harness.sh`. The fixture's root `.gitignore` at `cleared` must ignore `.kbase/`, which also
+keeps its test configuration out of its history; staging refuses one that does not, before it
+changes anything. The live
+fixture recipes run that copy. A harness session over a staged fixture finds kbase on `PATH`:
+start it from the fixture as `PATH=$(pwd)/.kbase:${PATH} claude` (or `opencode`), or
+as `.kbase/harness.sh <harness>`, which does that and shows the `kbase` it resolves. No recipe
+starts one.
 
 ## Contract documents
 

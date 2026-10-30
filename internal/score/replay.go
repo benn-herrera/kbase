@@ -1,4 +1,4 @@
-//go:build !kbasedist
+//go:build kbasedev
 
 package score
 
@@ -18,6 +18,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/atomicfile"
+	"kbase/internal/buildstore"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
@@ -95,7 +96,7 @@ func OpenReplay(dir, run, pass string, failedOnly bool, limit int) (*Replay, err
 	runDir := filepath.Join(RunsDir(dir), run)
 	captured, err := readLastCaptures(runDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, result.Refusal{{Check: checkUsage, Path: filepath.Join(runDir, capturesFile), Key: "--replay",
+		return nil, result.Refusal{{Check: checkUsage, Path: filepath.Join(runDir, capturesFile), Key: buildstore.ReplayKey,
 			Detail: "run " + run + " has no " + capturesFile + ": it stands no longer, asked nothing, or was a dry run"}}
 	}
 	if err != nil {
@@ -259,9 +260,10 @@ func judgementOf(e Entry) judgement {
 // anything.
 // Each call renders its captured closed text through this binary's template for
 // the capture's class and is parsed against that closed text, priced, and landed
-// nowhere. At its start the replay keeps itself and the newest KeptRuns-1 others
-// of its run's replays/, as a run keeps runs. A per-item failure is counted, not
-// returned: the error is a fault of the replay itself — among them a run
+// nowhere. At its start the replay keeps itself and the newest
+// buildstore.KeptRuns-1 others of its run's replays/, as a run keeps runs. A
+// per-item failure is counted, not returned: the error is a fault of the
+// replay itself — among them a run
 // directory that no longer stands, which the replay never recreates, and a
 // replay directory removed under the walk.
 func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (ReplayResult, error) {
@@ -285,7 +287,7 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (Repl
 	if err := atomicfile.Write(filepath.Join(rp.dir, replayFile), b, nil); err != nil {
 		return ReplayResult{}, err
 	}
-	if err := pruneByStart(filepath.Dir(rp.dir), replayFile, rp.id); err != nil {
+	if err := buildstore.PruneByStart(filepath.Dir(rp.dir), replayFile, rp.id, buildstore.KeptRuns, func(n string) bool { return runKind(n) == runKind(rp.id) }); err != nil {
 		return ReplayResult{}, fmt.Errorf("prune the replays: %w", err)
 	}
 

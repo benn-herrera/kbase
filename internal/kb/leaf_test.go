@@ -6,6 +6,46 @@ import (
 	"testing"
 )
 
+func TestLineMarkers(t *testing.T) {
+	cases := []struct {
+		name, line string
+		want       []LineMarker
+	}{
+		{"none", "plain text", nil},
+		{"hand-spaced", "a <!--claim-rigor:  clm-aaaaaa--> b", []LineMarker{{"clm-aaaaaa", 2, 33}}},
+		{"two markers", "x <!-- claim-rigor: clm-aaaaaa --> <!-- claim-rigor: ana-bbbbbb -->",
+			[]LineMarker{{"clm-aaaaaa", 2, 34}, {"ana-bbbbbb", 35, 67}}},
+		{"one marker, two ids", "a <!-- claim-rigor: clm-aaaaaa ana-bbbbbb -->",
+			[]LineMarker{{"clm-aaaaaa", 2, 45}, {"ana-bbbbbb", 2, 45}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := LineMarkers(c.line)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("LineMarkers(%q) = %v, want %v", c.line, got, c.want)
+			}
+		})
+	}
+}
+
+func TestStripLineMarkers(t *testing.T) {
+	cases := []struct{ name, line, want string }{
+		{"mid-line", "a <!-- claim-rigor: clm-aaaaaa --> b", "a b"},
+		{"tab before", "a\t<!-- claim-rigor: clm-aaaaaa -->", "a"},
+		{"hand-spaced", "a <!--claim-rigor:  clm-aaaaaa-->", "a"},
+		{"several ids", "a <!-- claim-rigor: clm-aaaaaa ana-bbbbbb -->", "a"},
+		{"two markers", "x <!-- claim-rigor: clm-aaaaaa --> <!-- claim-rigor: ana-bbbbbb -->", "x"},
+		{"none", "plain", "plain"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StripLineMarkers(c.line); got != c.want {
+				t.Errorf("StripLineMarkers(%q) = %q, want %q", c.line, got, c.want)
+			}
+		})
+	}
+}
+
 func TestHosts(t *testing.T) {
 	g := Graph{
 		Claims:      []ClaimNode{{ID: "clm-aaaaaa"}, {ID: "clm-bbbbbb"}},

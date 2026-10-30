@@ -60,7 +60,7 @@ func (w *buildWatch) watch(ctx context.Context, updated func()) {
 // read is one reading of the store, announcing a run that ended since the last
 // one announced.
 func (w *buildWatch) read(updated func()) {
-	dir, launched := w.last.store()
+	_, dir, launched, _ := w.last.store()
 	if dir == "" {
 		w.atStart = false
 		return

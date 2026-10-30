@@ -11,6 +11,7 @@ import (
 
 	"kbase/internal/build"
 	"kbase/internal/export"
+	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
@@ -61,8 +62,8 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 	switch {
 	case out == "":
 		out = filepath.Join(filepath.Dir(root), exportOutDefault)
-	case !filepath.IsAbs(out):
-		out = filepath.Join(opts.WorkDir, out)
+	default:
+		out = kb.ProjectPath(filepath.Dir(root), out)
 	}
 	src, refusals, err := openKB(root)
 	if err != nil {

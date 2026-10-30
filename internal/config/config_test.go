@@ -171,26 +171,6 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 	}
 }
 
-// TestLoadConfigFixture: the committed fixture is what a hand-written
-// config.toml looks like, so strict decoding must accept it. Only
-// config.toml is read here — the fixture providers.toml names a key file,
-// and no test reads a credential.
-func TestLoadConfigFixture(t *testing.T) {
-	path := filepath.Join("..", "..", "test-data", "fixtures", "config", ConfigFileName)
-	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatalf("the committed fixture no longer loads: %v", err)
-	}
-	if cfg.Provider == "" {
-		t.Error("fixture config.toml names no provider")
-	}
-	for _, category := range []string{CategoryDecision, CategoryText} {
-		if _, ok := cfg.ModelFor(category); !ok {
-			t.Errorf("fixture config.toml leaves the %s category unmapped", category)
-		}
-	}
-}
-
 func TestLoadConfigMalformed(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, "[models\nbroken")
 	if _, err := LoadConfig(path); err == nil {
@@ -224,5 +204,75 @@ func TestModelFor(t *testing.T) {
 				t.Errorf("ModelFor(%q) = (%q, %v), want (%q, %v)", tc.category, got, ok, tc.want, tc.wantOK)
 			}
 		})
+	}
+}
+
+// TestLoadConfigEveryThinkingLevel: each level of the vocabulary loads.
+func TestLoadConfigEveryThinkingLevel(t *testing.T) {
+	for _, level := range ThinkingLevels {
+		t.Run(level, func(t *testing.T) {
+			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, "[sampling.text]\nthinking = \""+level+"\"\n"))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if got := cfg.Sampling.Text.Thinking; got != level {
+				t.Errorf("thinking = %q, want %q", got, level)
+			}
+		})
+	}
+}
+
+// TestLoadConfigSampling: a thinking value outside the vocabulary and a
+// temperature that is no number are refused at load, a role the schema does not
+// model fails strict load, and an integer temperature loads as the number it
+// is.
+func TestLoadConfigSampling(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want []string // substrings of the refusal; none means it loads
+	}{
+		{"unknown level", "[sampling.text]\nthinking = \"max\"\n",
+			[]string{"sampling.text.thinking", "off, low, medium, high"}},
+		{"unknown level on scoring", "[sampling.scoring]\nthinking = \"Low\"\n",
+			[]string{"sampling.scoring.thinking", "off, low, medium, high"}},
+		{"the decision role takes no sampling", "[sampling.decision]\ntemperature = 0.5\n",
+			[]string{"sampling.decision.temperature", "unknown key"}},
+		{"temperature is no number", "[sampling.text]\ntemperature = \"hot\"\n", []string{"parse", ConfigFileName}},
+		{"an explicit empty level", "[sampling.text]\nthinking = \"\"\n",
+			[]string{"sampling.text.thinking", "off, low, medium, high"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("LoadConfig: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("LoadConfig accepted it")
+			}
+			for _, s := range tc.want {
+				if !strings.Contains(err.Error(), s) {
+					t.Errorf("error %q lacks %q", err, s)
+				}
+			}
+		})
+	}
+
+	if _, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, "[sampling.text]\nthinking = \"max\"\n")); err == nil || strings.Contains(err.Error(), `"max"`) {
+		t.Errorf("error %v, want the bad value not echoed", err)
+	}
+
+	cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, "[sampling.scoring]\ntemperature = 1\n"))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.Sampling.Scoring.Temperature; got == nil || *got != 1.0 {
+		t.Errorf("temperature = %v, want 1.0 from the integer 1", got)
+	}
+	if cfg.Sampling.Text.Temperature != nil || cfg.Sampling.Text.Thinking != "" {
+		t.Errorf("text sampling = %+v, want it unset", cfg.Sampling.Text)
 	}
 }

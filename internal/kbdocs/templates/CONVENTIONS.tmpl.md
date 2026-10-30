@@ -57,13 +57,13 @@ Every subcommand but `help`, `completion` and `mcp` writes one YAML document to 
 exit table. kbase's prose contract stays in its source repository and is not installed into a
 consuming project, so no document under this project root holds it.
 
-Where the harness has MCP, the `kbase` MCP server (`kbase mcp --kb-root <path>`) offers kbase's
-subcommands as tools, under the same names and returning the same documents, so what this file says
-of a subcommand holds for its tool; a write op's values are its tool's arguments, one entry per
-call. `rewind-build` is the one exception: no subcommand stands behind it; read-only, it reports the
-build's trail and changes nothing. A document whose exit code is not 0, a refusal among them,
-arrives as a tool error carrying the same items and remedy, and the tool list implies no order of
-work.
+Where the harness has MCP, the `kbase` MCP server (`kbase mcp`; a call names its project with
+`project-dir` where the server's instructions ask) offers kbase's subcommands as tools, under the
+same names and returning the same documents, so what this file says of a subcommand holds for its
+tool; a write op's values are its tool's arguments, one entry per call. `rewind-build` is the one
+exception: no subcommand stands behind it; read-only, it reports the build's trail and changes
+nothing. A document whose exit code is not 0, a refusal among them, arrives as a tool error carrying
+the same items and remedy, and the tool list implies no order of work.
 
 ## Authored versus derived
 

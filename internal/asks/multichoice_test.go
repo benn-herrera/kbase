@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -128,9 +128,6 @@ func TestAskGroupDecisionRules(t *testing.T) {
 	if reask != s.asked["S2-S3"][0] {
 		t.Errorf("the re-ask is not the identical question: %q then %q", s.asked["S2-S3"][0], reask)
 	}
-	if !strings.HasSuffix(rec.Prefix, "\n") || !strings.Contains(rec.Prefix, "the leaf") || strings.Contains(rec.Prefix, ": text") {
-		t.Errorf("the group's prefix is not its shared context: %q", rec.Prefix)
-	}
 	if tot := Totals([]GroupRecord{rec}); tot.Items != 3 || tot.Answered != 1 || tot.Reasked != 1 || tot.Defaulted != 1 || tot.Calls != 5 || tot.Unmeasured != 5 {
 		t.Errorf("totals = %+v", tot)
 	}
@@ -238,16 +235,15 @@ func TestWriteGroupRecordsIsOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	dec := yaml.NewDecoder(f)
 	var got []GroupRecord
-	for {
-		var rec GroupRecord
-		if err := dec.Decode(&rec); err == io.EOF {
+	for dec := yaml.NewDecoder(f); ; {
+		var r GroupRecord
+		if err := dec.Decode(&r); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
 			t.Fatal(err)
 		}
-		got = append(got, rec)
+		got = append(got, r)
 	}
 	letter := func(r GroupRecord) string {
 		if len(r.Items) != 1 || r.Items[0].Choice == nil {
@@ -269,5 +265,213 @@ func TestWriteGroupRecordsIsOneFile(t *testing.T) {
 		if _, err := os.Stat(GroupRecordsPath(tc.dir, Paragraph)); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s: a records file stands (%v), want nothing written", tc.name, err)
 		}
+	}
+}
+
+// serialLaunch is a Launch over read holding one item in flight: an item
+// launches once the one before it has returned, and not at all where the
+// batch stopped meanwhile.
+func serialLaunch(read MultichoiceReader) Launch {
+	token := make(chan struct{}, 1)
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(MultichoiceReader) func(error)) error {
+		select {
+		case token <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			<-token
+			return err
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			after := item(read)
+			<-token
+			if after != nil {
+				after(nil)
+			}
+		}()
+		return nil
+	}
+}
+
+// heard is a reader double that keeps every question it is put and answers
+// each by script, as scripted does, or with the first offered letter where
+// it has no script.
+type heard struct {
+	scripted
+	mu    sync.Mutex
+	asked []MultichoiceQuestion
+}
+
+func (h *heard) read(ctx context.Context, q MultichoiceQuestion) (Reply, error) {
+	h.mu.Lock()
+	h.asked = append(h.asked, q)
+	h.mu.Unlock()
+	if h.replies == nil {
+		return Reply{Text: q.Offered[0]}, nil
+	}
+	return h.scripted.read(ctx, q)
+}
+
+// stateOf is the state of the first question h was put for item.
+func (h *heard) stateOf(t *testing.T, item string) string {
+	t.Helper()
+	for _, q := range h.asked {
+		if q.Item == item {
+			return q.State
+		}
+	}
+	t.Fatalf("%s was never asked", item)
+	return ""
+}
+
+// askedBatch is the one group of items, of kind, asked through a batch new
+// makes over launch, and Wait's error.
+func askedBatch(t *testing.T, newBatch func(context.Context, Launch) *Batch, launch Launch, kind Kind, items []MultichoiceItem) (GroupRecord, error) {
+	t.Helper()
+	b := newBatch(context.Background(), launch)
+	_ = b.AskGroup(kind, "g", items) // a stop is Wait's to report
+	recs, err := b.Wait()
+	if len(recs) != 1 {
+		t.Fatalf("Wait returned %d group records, %v; want the one group", len(recs), err)
+	}
+	return recs[0], err
+}
+
+// itemsOf is a group of asks of kind, of more than one item.
+func itemsOf(t *testing.T, kind Kind) []MultichoiceItem {
+	t.Helper()
+	src := Claim{ID: "clm-aaaaaa", Title: "Theorem 1", Document: "v/a.md", Locator: "**Theorem 1**."}
+	lemma := Claim{ID: "clm-bbbbbb", Title: "Lemma 2", Document: "v/b.md"}
+	eq := Claim{ID: "clm-cccccc", Title: "(1)", Document: "v/b.md"}
+	switch kind {
+	case Paragraph:
+		return paragraphItems("S1", "S2", "S3")
+	case Unmarked:
+		return UnmarkedAsks("v/a.md", "S1: We study the map.\n", src, "The map has a fixed point.", []UnmarkedItem{
+			{Target: lemma, Statement: "The map is a contraction."}, {Target: eq, Statement: "$$ x = y $$"}})
+	case Colinear:
+		return ColinearAsks([]ColinearItem{
+			{Key: lemma.ID, First: src, FirstText: "The map has a fixed point.", Second: lemma, SecondText: "So it is unique."},
+			{Key: eq.ID, First: lemma, FirstText: "The map is a contraction.", Second: eq, SecondText: "x = y"}})
+	case Classify:
+		return ClassifyAsks(src, "The map has a fixed point.", []ClassifyItem{
+			{Target: lemma, Statement: "lemma", Passages: []string{"zeta", "alpha"}, Offered: []string{LetterSupportedBy, LetterInSupportOf, LetterMention}},
+			{Target: eq, Statement: "x = y", Passages: []string{"zeta"}, Offered: []string{LetterSupportedBy, LetterMention}}})
+	}
+	t.Fatalf("no items of kind %s", kind)
+	return nil
+}
+
+// TestAGroupRecordsSharedInputsOnce: a leaf's paragraph asks record the
+// leaf's inputs once, in the group's, and each paragraph's in its item's.
+func TestAGroupRecordsSharedInputsOnce(t *testing.T) {
+	h := &heard{}
+	rec, err := askedBatch(t, NewBatch, readerLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := keys(rec.Inputs); !slices.Equal(got, []string{"body", "document"}) {
+		t.Errorf("the group's inputs are keyed %q, want body and document", got)
+	}
+	for _, it := range rec.Items {
+		if got := keys(it.Inputs); !slices.Equal(got, []string{"paragraph", "paragraph-text"}) {
+			t.Errorf("%s's inputs are keyed %q, want paragraph and paragraph-text", it.Item, got)
+		}
+	}
+}
+
+func TestAskDigestCoversTheQuestionAndTheState(t *testing.T) {
+	q := Question{Key: "S1", Type: "noul", TrueLetter: LetterClaim, Instructions: "decide", Criteria: map[string]string{"true": "yes", "false": "no"}}
+	base := AskDigest("state", q)
+	instructions, trueLetter, key := q, q, q
+	instructions.Instructions = "decide again"
+	trueLetter.TrueLetter = LetterNotClaim
+	key.Key = "S2"
+	for _, tc := range []struct {
+		name   string
+		digest string
+		differ bool
+	}{
+		{"the instructions", AskDigest("state", instructions), true},
+		{"the true letter", AskDigest("state", trueLetter), true},
+		{"the state", AskDigest("another state", q), true},
+		{"the key", AskDigest("state", key), false},
+	} {
+		if (tc.digest != base) != tc.differ {
+			t.Errorf("changing only %s: digest differs %t, want %t", tc.name, tc.digest != base, tc.differ)
+		}
+	}
+}
+
+// TestAStoppedBatchRecordsWhatItAsked: one item at a time, the second's call
+// never completing. A build's batch stops on it and records the first
+// answered, the second failed with its inputs and digest and no call, and
+// the third, never launched, not at all.
+func TestAStoppedBatchRecordsWhatItAsked(t *testing.T) {
+	h := &heard{scripted: scripted{replies: map[string][]string{"S1": {LetterClaim}, "S3": {LetterClaim}}}}
+	rec, err := askedBatch(t, NewBatch, serialLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
+	var incomplete IncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("Wait = %v; want a stop", err)
+	}
+	var got []Outcome
+	for _, it := range rec.Items {
+		got = append(got, it.Outcome)
+	}
+	if want := []Outcome{Answered, Failed}; !slices.Equal(got, want) {
+		t.Fatalf("recorded %q, want %q", got, want)
+	}
+	failed := rec.Items[1]
+	if failed.Choice != nil || failed.Confidence != nil || len(failed.Calls) != 0 || len(failed.Inputs) == 0 ||
+		failed.PromptSHA256 != AskDigest(h.stateOf(t, failed.Item), paragraphItems(failed.Item)[0].Question) {
+		t.Errorf("the failed item = %+v; want no choice, no confidence, no call, its inputs and its prompt-sha256", failed)
+	}
+	if tot := Totals([]GroupRecord{rec}); tot.Items != 2 || tot.Answered != 1 || tot.Failed != 1 {
+		t.Errorf("Totals = items %d, answered %d, failed %d; want 2, 1, 1", tot.Items, tot.Answered, tot.Failed)
+	}
+}
+
+// TestAFailedReAskKeepsItsCompletedCall: an item whose first ask decided no
+// letter and whose re-ask never completed is failed, with the one call that
+// completed.
+func TestAFailedReAskKeepsItsCompletedCall(t *testing.T) {
+	h := &heard{scripted: scripted{replies: map[string][]string{"S1": {"?"}}}}
+	rec, err := askedBatch(t, NewBatch, serialLaunch(h.read), Paragraph, paragraphItems("S1"))
+	var incomplete IncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("Wait = %v, want the re-ask that never completed", err)
+	}
+	if it := rec.Items[0]; it.Outcome != Failed || len(it.Calls) != 1 || it.Choice != nil {
+		t.Errorf("the item = %s with %d calls, choice %v; want failed with one call and no choice", it.Outcome, len(it.Calls), it.Choice)
+	}
+}
+
+func TestAFinishedBatchRecordsEveryGroup(t *testing.T) {
+	read := (&scripted{replies: map[string][]string{"P1": {"A"}, "P3": {"A"}}}).read
+	b := NewBatch(context.Background(), readerLaunch(read))
+	for _, g := range []struct {
+		leaf  string
+		items []MultichoiceItem
+	}{{"g1", paragraphItems("P1")}, {"g2", nil}, {"g3", paragraphItems("P3")}} {
+		if err := b.AskGroup(Paragraph, g.leaf, g.items); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs, err := b.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range recs {
+		got = append(got, r.Group)
+	}
+	if !slices.Equal(got, []string{"g1", "g2", "g3"}) {
+		t.Fatalf("records for groups %v, want [g1 g2 g3]", got)
+	}
+	if len(recs[1].Items) != 0 {
+		t.Fatalf("g2 holds %d items, want none", len(recs[1].Items))
 	}
 }

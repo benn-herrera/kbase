@@ -23,4 +23,6 @@ if [[ -z "${pkg}" || "${pkg}" == "." || "${pkg}" == "..." ]]; then
     exit 1
 fi
 mkdir -p "${UNIT_TEST_OUT_DIR}"
-go test ${VERBOSE:+-v} "./${pkg}/..." 2>&1 | tee "${UNIT_TEST_OUT_DIR}/test-pkg_${pkg//\//-}_log.txt"
+# -tags kbasedev: the development replays and their tests are tagged, so an
+# untagged run of this package would skip them and report success.
+go test -tags kbasedev ${VERBOSE:+-v} "./${pkg}/..." 2>&1 | tee "${UNIT_TEST_OUT_DIR}/test-pkg_${pkg//\//-}_log.txt"

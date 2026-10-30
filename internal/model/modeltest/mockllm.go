@@ -9,6 +9,7 @@ package modeltest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -364,6 +365,42 @@ func (r *mockStreamReader) Final() model.Response {
 func (r *mockStreamReader) Close() error {
 	r.closed = true
 	return nil
+}
+
+// MessagesStream is a complete Anthropic Messages event sequence: a thinking
+// block when thinking is non-empty, then a text block when text is non-empty
+// (blocks indexed from 0 in that order), ended by stopReason.
+func MessagesStream(thinking, text, stopReason string) string {
+	var b strings.Builder
+	event := func(name string, data any) {
+		j, err := json.Marshal(data)
+		if err != nil {
+			panic(err) // the payloads are string maps; marshalling cannot fail
+		}
+		fmt.Fprintf(&b, "event: %s\ndata: %s\n\n", name, j)
+	}
+	type obj = map[string]any
+	event("message_start", obj{"type": "message_start", "message": obj{
+		"id": "msg_1", "role": "assistant", "usage": obj{"input_tokens": 5}}})
+	index := 0
+	block := func(kind, deltaKind, field, content string) {
+		event("content_block_start", obj{"type": "content_block_start", "index": index,
+			"content_block": obj{"type": kind, field: ""}})
+		event("content_block_delta", obj{"type": "content_block_delta", "index": index,
+			"delta": obj{"type": deltaKind, field: content}})
+		event("content_block_stop", obj{"type": "content_block_stop", "index": index})
+		index++
+	}
+	if thinking != "" {
+		block("thinking", "thinking_delta", "thinking", thinking)
+	}
+	if text != "" {
+		block("text", "text_delta", "text", text)
+	}
+	event("message_delta", obj{"type": "message_delta", "delta": obj{"stop_reason": stopReason},
+		"usage": obj{"output_tokens": 1}})
+	event("message_stop", obj{"type": "message_stop"})
+	return b.String()
 }
 
 // splitForChunks slices s into n near-equal pieces by rune count. The

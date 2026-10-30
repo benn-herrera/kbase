@@ -41,10 +41,11 @@ type Entry struct {
 // merged choices, and which inference variables the process supplies. It
 // carries no key material and no variable value.
 type Facts struct {
-	Layers      []Layer  // in precedence order, each with its existence probed
-	Models      ModelMap // the merged role values
-	Entries     []Entry  // one per usable pool entry and per dropped provider, sorted by name
-	Environment []string // the inference variable names set, sorted
+	Layers      []Layer       // in precedence order, each with its existence probed
+	Models      ModelMap      // the merged role values
+	Sampling    SamplingTable // the merged sampling values
+	Entries     []Entry       // one per usable pool entry and per dropped provider, sorted by name
+	Environment []string      // the inference variable names set, sorted
 }
 
 // Report describes configuration loaded from layers. It reads no file and no
@@ -53,7 +54,7 @@ type Facts struct {
 // this process having to be the one that holds it.
 func Report(cfg Config, providers Providers, faults []ProviderFault, layers []Layer,
 	exists func(string) bool, getenv func(string) string) Facts {
-	f := Facts{Models: cfg.Models}
+	f := Facts{Models: cfg.Models, Sampling: cfg.Sampling}
 	for _, layer := range layers {
 		layer.Exists = exists(layer.Path)
 		layer.ProvidersExists = exists(ProvidersPath(layer.Path))

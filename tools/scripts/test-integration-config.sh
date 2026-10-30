@@ -16,7 +16,12 @@
 # names, ~ alone, an entry's apiKeyFile (which must expand rather than join to
 # the configuration directory), ~user and a/~/b staying literal, and a home the
 # lookup cannot give or one that is not absolute, which leaves the spelling
-# alone. The last leg calls the verb over MCP from a directory holding no KB,
+# alone. Three sampling legs stage a configuration directory each: settings on an
+# openai entry (done, the text role reporting temperature and thinking with the
+# layer that supplied each, the scoring role null), a [sampling.decision] table
+# holding a key (refused by strict load, naming sampling.decision.temperature),
+# and temperature 1.5 on an anthropic text entry (done, one diagnostic naming
+# sampling.text.temperature). The last leg calls the verb over MCP from a directory holding no KB,
 # which is what a verb resolving no KB must answer.
 # It needs git only to stage the layered leg's repository; no pandoc, no
 # provider and no corpus.
@@ -36,7 +41,7 @@ kbase="${root}/${BIN_DIR}/kbase"
 dirs="${out}/configs"
 docs="${out}/docs"
 work="${out}/work"
-rm -rf "${dirs}" "${docs}" "${work}" "${out}/home" "${out}/layered" "${out}/literal" "${out}/configure" "${out}/mcp.requests.jsonl" "${out}/mcp.actual.jsonl" "${out}/mcp.log" "${out}/mcp.exit" "${out}/config.tsv"
+rm -rf "${dirs}" "${docs}" "${work}" "${out}/home" "${out}/layered" "${out}/literal" "${out}/configure" "${out}/sampling" "${out}/mcp.requests.jsonl" "${out}/mcp.actual.jsonl" "${out}/mcp.log" "${out}/mcp.exit" "${out}/config.tsv"
 mkdir -p "${dirs}/pool" "${dirs}/both" "${docs}" "${work}"
 file_key='sk-file-MUST-NOT-APPEAR'
 # The home every invocation runs under, so the global layer is this staged
@@ -610,9 +615,9 @@ report "${outside_stem}" "${outside_ok}" "configure --create --project outside a
 refsdir="${cdir}/refsdir"
 mkdir -p "${refsdir}"
 printf '%s\n' '# kept note' 'provider = "local"' '' '[models]' 'decision = "d3"   # the letter asks' 'text = "qwen"' \
-    '' '[asks]' 'concurrency = 2' > "${refsdir}/config.toml"
+    '' '[asks]' 'concurrency = 4' > "${refsdir}/config.toml"
 printf '%s\n' '# kept note' '' '[models]' 'decision = "local/d3"  # the letter asks' 'text = "local/qwen"' \
-    'scoring = "local/clef"' '' '[asks]' 'concurrency = 2' > "${out}/refs-expected.toml"
+    'scoring = "local/clef"' '' '[asks]' 'concurrency = 4' > "${out}/refs-expected.toml"
 refs_stem="${docs}/23-configure-references"
 set +e
 ( cd "${work}" && env "${scrub[@]}" "${kbase}" configure --create --config-dir "${refsdir}" \
@@ -641,6 +646,57 @@ for role in decision text scoring; do
 done
 [[ "$(role_field "${refs_show}.out" scoring model)" == clef ]] || refs_show_ok=1
 report "${refs_show}" "${refs_show_ok}" "show-config over the references configure wrote" "every role resolved, no diagnostics"
+# 17. sampling. Settings on an openai entry come back done with no diagnostic,
+#     and the text role reports both values and the layer that supplied each;
+#     a [sampling.decision] table holding a key fails the strict load, naming
+#     the key; a temperature outside the anthropic range is a diagnostic, not
+#     a stop.
+sampdir="${out}/sampling"
+mkdir -p "${sampdir}/openai" "${sampdir}/decision" "${sampdir}/anthropic"
+printf '%s\n' '[oa]' 'baseUrl = "http://oa.example/v1"' 'api = "openai"' > "${sampdir}/openai/providers.toml"
+printf '%s\n' '[models]' 'decision = "oa/d"' 'text = "oa/t"' 'scoring = "oa/s"' '' \
+    '[sampling.text]' 'temperature = 0.3' 'thinking = "low"' > "${sampdir}/openai/config.toml"
+cp "${sampdir}/openai/providers.toml" "${sampdir}/decision/providers.toml"
+printf '%s\n' '[models]' 'decision = "oa/d"' 'text = "oa/t"' 'scoring = "oa/s"' '' \
+    '[sampling.decision]' 'temperature = 0.5' > "${sampdir}/decision/config.toml"
+printf '%s\n' '[msg]' 'baseUrl = "http://msg.example/v1"' 'api = "anthropic"' > "${sampdir}/anthropic/providers.toml"
+printf '%s\n' '[models]' 'decision = "msg/d"' 'text = "msg/t"' 'scoring = "msg/s"' '' \
+    '[sampling.text]' 'temperature = 1.5' > "${sampdir}/anthropic/config.toml"
+samp_run() {
+    local name="$1" stem="${docs}/$2"
+    set +e
+    ( cd "${work}" && env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE \
+        HOME="${home}" "${kbase}" show-config --config-dir "${sampdir}/${name}" ) > "${stem}.out" 2> "${stem}.log"
+    printf '%s\n' "$?" > "${stem}.exit"
+    set -e
+}
+samp_stem="${docs}/25-sampling-openai"
+samp_run openai 25-sampling-openai
+samp_ok=0
+[[ "$(cat "${samp_stem}.exit")" -eq 0 ]] || samp_ok=1
+grep -qx 'outcome: "done"' "${samp_stem}.out" || samp_ok=1
+[[ "$(diagnostics "${samp_stem}")" == 0 ]] || samp_ok=1
+[[ "$(role_field "${samp_stem}.out" text temperature)" == 0.3 ]] || samp_ok=1
+[[ "$(role_field "${samp_stem}.out" text thinking)" == low ]] || samp_ok=1
+[[ "$(role_source "${samp_stem}.out" text temperature)" == explicit ]] || samp_ok=1
+[[ "$(role_source "${samp_stem}.out" text thinking)" == explicit ]] || samp_ok=1
+[[ "$(role_field "${samp_stem}.out" scoring temperature)" == null ]] || samp_ok=1
+report "${samp_stem}" "${samp_ok}" "show-config with sampling on an openai entry" "done, the text role reports both values and their layer"
+samp_stem="${docs}/26-sampling-decision"
+samp_run decision 26-sampling-decision
+samp_ok=0
+[[ "$(cat "${samp_stem}.exit")" -eq 1 ]] || samp_ok=1
+grep -qx 'outcome: "refused"' "${samp_stem}.out" || samp_ok=1
+[[ "$(item_field "${samp_stem}.out" refusals detail)" == *'unknown key \"sampling.decision.temperature\"'* ]] || samp_ok=1
+report "${samp_stem}" "${samp_ok}" "show-config over a [sampling.decision] table" "refused by strict load, naming sampling.decision.temperature"
+samp_stem="${docs}/27-sampling-anthropic-range"
+samp_run anthropic 27-sampling-anthropic-range
+samp_ok=0
+[[ "$(cat "${samp_stem}.exit")" -eq 0 ]] || samp_ok=1
+grep -qx 'outcome: "done"' "${samp_stem}.out" || samp_ok=1
+[[ "$(diagnostics "${samp_stem}")" == 1 ]] || samp_ok=1
+[[ "$(item_field "${samp_stem}.out" diagnostics key)" == sampling.text.temperature ]] || samp_ok=1
+report "${samp_stem}" "${samp_ok}" "show-config with temperature 1.5 on an anthropic entry" "done, one diagnostic naming sampling.text.temperature"
 # The same report over MCP, from a directory holding no KB: the tool binds
 # the verb (I9), and a verb that resolves no KB answers there.
 printf '%s\n' \
@@ -665,7 +721,7 @@ mcp_ok=0
 printf 'tools/call show-config\t-\t%s\t%s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/mcp.actual.jsonl" >> "${out}/config.tsv"
 printf '  %s tools/call show-config over MCP: exit %s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/mcp.exit")"
 [[ "${mcp_ok}" -eq 0 ]] || status=1
-OUT_DIR="${out}" RECIPE="test-integration-config" INVOCATION="three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=${CONFIG_OUT_DIR}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, mode file, exactly one layer naming the directory with its source and whether it and each of its two files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the superseded provider key said once on stderr, and for the roles record: provider, model, back-end and the layer that supplied the model and the key\none run over both with the flag route sets KBASE_TEXT=fixture-env-text (NN-07-both-flag.out): the two sources are exclusive, so the document reports mode null, no role back-end, and one item per side — the variable and each standing [models] key (models.decision, models.text, models.scoring)\none run with KBASE_API_BASE_URL and the three role variables and no configuration directory (07b-environment-mode.out): checked for mode environment, no diagnostics, and every role naming the environment back end, the environment's base URL and its own variable's id\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providersExists and configExists, the superseded provider key said once on stderr, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty Home, and the configuration legs run under it — the five inference variables and KBASE_CONFIG_DIR unset, HOME on configure/home. docs/15-configure-create-project.out is configure --create --project from configure/repo/nested, checked for outcome done, null provider, both repository paths listed written, the unchecked-ids line on stderr and a live [local] in the created providers.toml; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists/providersExists/configExists true, selection local by sole-entry, and the three diagnostics a blank [models] table leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over the created pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is the same configure again, checked for unchanged with an empty written list; docs/18b-configure-existing-file.out and docs/18c-harnesses-leftover.out put back the harnesses.toml an older kbase seeded and check that configure writes nothing over it and show-config reports the layer's two files and nothing of that one, a file nothing reads; docs/19-configure-unknown-provider.out is configure --create --project --provider nosuch, checked for one provider refusal naming the absolute configure/repo/.kbase/providers.toml, key --provider, remedy kbase configure --create, and both files unchanged by cksum; docs/20-configure-conflict.out is the same flags plus --config-dir, checked for one usage refusal keyed --project with no directory created; docs/21-configure-config-dir.out is configure --create --config-dir into an empty directory, checked for both files written there; docs/22-configure-outside-worktree.out is configure --create --project from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-references.out is configure --create over an empty directory with --model-map decision=local/d3,text=local/qwen,scoring=local/clef, checked for three references written and no provider key; docs/24-configure-references-show.out is show-config over that directory, checked for no diagnostics and every role on the reference's entry and model\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count" \
+OUT_DIR="${out}" RECIPE="test-integration-config" INVOCATION="three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env -u KBASE_API_BASE_URL -u KBASE_DECISION -u KBASE_TEXT -u KBASE_SCORING -u KBASE_API_KEY_FILE HOME=${CONFIG_OUT_DIR}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, mode file, exactly one layer naming the directory with its source and whether it and each of its two files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the superseded provider key said once on stderr, and for the roles record: provider, model, back-end and the layer that supplied the model and the key\none run over both with the flag route sets KBASE_TEXT=fixture-env-text (NN-07-both-flag.out): the two sources are exclusive, so the document reports mode null, no role back-end, and one item per side — the variable and each standing [models] key (models.decision, models.text, models.scoring)\none run with KBASE_API_BASE_URL and the three role variables and no configuration directory (07b-environment-mode.out): checked for mode environment, no diagnostics, and every role naming the environment back end, the environment's base URL and its own variable's id\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providersExists and configExists, the superseded provider key said once on stderr, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty Home, and the configuration legs run under it — the five inference variables and KBASE_CONFIG_DIR unset, HOME on configure/home. docs/15-configure-create-project.out is configure --create --project from configure/repo/nested, checked for outcome done, null provider, both repository paths listed written, the unchecked-ids line on stderr and a live [local] in the created providers.toml; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists/providersExists/configExists true, selection local by sole-entry, and the three diagnostics a blank [models] table leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over the created pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is the same configure again, checked for unchanged with an empty written list; docs/18b-configure-existing-file.out and docs/18c-harnesses-leftover.out put back the harnesses.toml an older kbase seeded and check that configure writes nothing over it and show-config reports the layer's two files and nothing of that one, a file nothing reads; docs/19-configure-unknown-provider.out is configure --create --project --provider nosuch, checked for one provider refusal naming the absolute configure/repo/.kbase/providers.toml, key --provider, remedy kbase configure --create, and both files unchanged by cksum; docs/20-configure-conflict.out is the same flags plus --config-dir, checked for one usage refusal keyed --project with no directory created; docs/21-configure-config-dir.out is configure --create --config-dir into an empty directory, checked for both files written there; docs/22-configure-outside-worktree.out is configure --create --project from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-references.out is configure --create over an empty directory with --model-map decision=local/d3,text=local/qwen,scoring=local/clef, checked for three references written and no provider key; docs/24-configure-references-show.out is show-config over that directory, checked for no diagnostics and every role on the reference's entry and model\nsampling/: three configuration directories, each read by one show-config --config-dir <dir> from work/ with the five inference variables unset and HOME on home/: docs/25-sampling-openai.out over an openai entry whose config.toml states [sampling.text] temperature 0.3 and thinking low, checked for exit 0, done, no diagnostics, the text role's temperature 0.3 and thinking low each sourced explicit, and the scoring role's temperature null; docs/26-sampling-decision.out over a config.toml holding [sampling.decision] temperature 0.5, checked for exit 1, refused, and a refusal naming unknown key sampling.decision.temperature; docs/27-sampling-anthropic-range.out over an anthropic entry whose [sampling.text] states temperature 1.5, checked for exit 0, done, and exactly one diagnostic keyed sampling.text.temperature\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-config): a config check failed — see config.tsv\n'

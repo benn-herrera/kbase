@@ -45,6 +45,15 @@ const (
 // from being cut off by an estimate that rounds down to a handful of tokens.
 const maxTokensFloor = 256
 
+// The thinking budget a Messages request grants each level, in tokens, sent as
+// `thinking.budget_tokens` and added to the answer's own allowance in
+// `max_tokens`, which the budget is spent from.
+const (
+	thinkingBudgetLow    = 1024
+	thinkingBudgetMedium = 4096
+	thinkingBudgetHigh   = 16384
+)
+
 // AnthropicClient is a thin client for the Anthropic Messages protocol.
 //
 // Construction is intentionally cheap, as OpenAIClient's is: the underlying
@@ -59,8 +68,11 @@ var _ Client = (*AnthropicClient)(nil)
 // NewAnthropicClient constructs an AnthropicClient for e. A zero Endpoint
 // yields a client whose first call produces a clear error.
 func NewAnthropicClient(e Endpoint) *AnthropicClient {
+	e.Sampling = e.Sampling.Resolved()
 	return &AnthropicClient{endpoint: e, http: newHTTPTransport(e.IdleConns)}
 }
+
+func (c *AnthropicClient) sampling() Sampling { return c.endpoint.Sampling }
 
 // Close releases the client's idle connections, as OpenAIClient.Close does.
 func (c *AnthropicClient) Close() error {
@@ -143,18 +155,15 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return out, nil
 }
 
-// decision refuses. kbase's decision surfaces are OpenAI-shaped — the
-// SystemOne and Decisions shapes in decision.go — and the Messages protocol has
-// no equivalent, so an endpoint whose `api` is anthropic cannot answer a multichoice
-// ask. The refusal names the provider and the role rather than borrowing a
-// shape this protocol never spoke: the remedy is a different entry for that
-// role, not a different request.
+// decision refuses: the Messages protocol has no decision surface. The registry
+// gives the decision role an OpenAIClient whatever its entry's api, so nothing
+// in kbase reaches this.
 func (c *AnthropicClient) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
 	name := c.endpoint.Name
 	if name == "" {
 		name = c.endpoint.BaseURL
 	}
-	return DecisionResponse{}, fmt.Errorf("provider %q speaks the Anthropic Messages protocol, which has no decision surface: the decision role's multichoice asks are answered by the OpenAI-shaped surfaces (systemone, decisions), so that role needs an entry whose api is openai",
+	return DecisionResponse{}, fmt.Errorf("provider %q speaks the Anthropic Messages protocol, which has no decision surface",
 		name)
 }
 
@@ -207,22 +216,22 @@ type wireAnthropicMessage struct {
 
 // wireAnthropicRequest is the Messages request body. max_tokens is required by
 // the protocol; system is the lifted system text and is omitted where there is
-// none; temperature is a pointer because the protocol's range decides whether
-// the field is sent at all.
+// none.
 type wireAnthropicRequest struct {
 	Model       string                 `json:"model"`
 	MaxTokens   int                    `json:"max_tokens"`
 	System      string                 `json:"system,omitempty"`
 	Messages    []wireAnthropicMessage `json:"messages"`
-	Temperature *float64               `json:"temperature,omitempty"`
+	Temperature float64                `json:"temperature"`
 	Stream      bool                   `json:"stream,omitempty"`
 	Thinking    wireAnthropicThinking  `json:"thinking"`
 }
 
-// wireAnthropicThinking is the protocol's thinking control; kbase only ever
-// sends type "disabled".
+// wireAnthropicThinking is the protocol's thinking control: type "disabled",
+// or "enabled" with the tokens thinking may spend.
 type wireAnthropicThinking struct {
-	Type string `json:"type"`
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // encodeAnthropicRequest serializes a Request to the Messages wire format.
@@ -230,36 +239,37 @@ type wireAnthropicThinking struct {
 // Three departures from the OpenAI body this package also speaks, each a fact
 // about THIS protocol:
 //
-//   - `max_tokens` is required, and is estimated from the ask (maxTokensFor).
+//   - `max_tokens` is required: the answer's allowance, estimated from the ask
+//     (maxTokensFor), plus the thinking budget where thinking is on.
 //   - A system message is not a turn: the protocol takes the system prompt as
 //     the top-level `system` string, so system turns are lifted there in order
 //     — joined as paragraphs — and every other turn keeps its role in
 //     `messages`.
-//   - `temperature` is accepted only in [0,1], so it is sent inside that range
-//     and omitted outside it. A value the protocol cannot carry is left unsent
-//     rather than clamped: clamping would answer the caller's setting with a
-//     different one. This is the second flavour's rule — Request.Temperature is
-//     always wired for the OpenAI client.
+//   - Thinking is the protocol's own `thinking` field: `{"type":"disabled"}`
+//     for off, since the field's absence would leave it at the server's
+//     default, which is not off on every server behind this protocol; and
+//     `{"type":"enabled","budget_tokens":B}` for a level.
 //
-// Nothing else from the Request is sent. `prompt_cache_key`,
-// `chat_template_kwargs` and `reasoning` are OpenAI-surface fields with no
-// Messages equivalent. Thinking is disabled by sending the protocol's own
-// thinking field as `{"type":"disabled"}`: the field's absence would leave it at
-// the server's default, which is not off on every server behind this protocol.
+// `temperature` is sent on every request, thinking or not. Anthropic's own
+// endpoint rejects it beside a thinking level, and a server that does fails the
+// call like any other request it refuses. Nothing else from the Request is
+// sent: `prompt_cache_key`, `chat_template_kwargs`, `reasoning` and
+// `reasoning_effort` are OpenAI-surface fields with no Messages equivalent.
 func encodeAnthropicRequest(req Request) ([]byte, error) {
 	wr := wireAnthropicRequest{
-		Model:     req.Model,
-		MaxTokens: maxTokensFor(req),
-		Stream:    true,
-		Thinking:  wireAnthropicThinking{Type: "disabled"},
+		Model:       req.Model,
+		MaxTokens:   maxTokensFor(req),
+		Temperature: *req.Sampling.Temperature,
+		Stream:      true,
+		Thinking:    wireAnthropicThinking{Type: "disabled"},
 		// An empty array, never null: the protocol requires the list, and a
 		// request carrying no turns at all should be refused by the server
 		// as an empty conversation rather than as a malformed body.
 		Messages: make([]wireAnthropicMessage, 0, len(req.Messages)),
 	}
-	if req.Temperature >= 0 && req.Temperature <= 1 {
-		temperature := req.Temperature
-		wr.Temperature = &temperature
+	if budget := thinkingBudget(*req.Sampling.Thinking); budget > 0 {
+		wr.Thinking = wireAnthropicThinking{Type: "enabled", BudgetTokens: budget}
+		wr.MaxTokens += budget
 	}
 	var system []string
 	for _, m := range req.Messages {
@@ -291,6 +301,20 @@ func maxTokensFor(req Request) int {
 		return n
 	}
 	return maxTokensFloor
+}
+
+// thinkingBudget is the tokens a Messages request grants thinking at level t:
+// none where thinking is off.
+func thinkingBudget(t Thinking) int {
+	switch t {
+	case ThinkingLow:
+		return thinkingBudgetLow
+	case ThinkingMedium:
+		return thinkingBudgetMedium
+	case ThinkingHigh:
+		return thinkingBudgetHigh
+	}
+	return 0
 }
 
 // wireAnthropicUsage is the usage block a message_start event carries. A message_delta event carries output_tokens

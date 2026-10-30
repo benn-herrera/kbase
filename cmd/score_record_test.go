@@ -129,6 +129,12 @@ func TestScoreResumeCarriesTheInvocation(t *testing.T) {
 	if got != want {
 		t.Errorf("resume = %q, want %q", got, want)
 	}
+	// --project-dir is carried where the invocation named one and only then.
+	got = scoreResume(scoreOptions{ProjectDir: "/the/project"}, "run-5", "/state", config.ModeFile, config.Overrides{})
+	want = "kbase score --resume run-5 --state-dir /state --project-dir /the/project"
+	if got != want {
+		t.Errorf("resume = %q, want %q", got, want)
+	}
 	// A run that named no pass walks both, and its resume command names none
 	// either: the header is what says which set the run walks.
 	got = scoreResume(scoreOptions{}, "run-4", "/state", config.ModeFile, config.Overrides{})

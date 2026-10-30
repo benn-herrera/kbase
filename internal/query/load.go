@@ -75,6 +75,10 @@ func fromRows(src *kb.Source, rows index.Rows) *Index {
 // here rather than deriving the index a second time.
 func (ix *Index) Nodes() []kb.NodeRow { return slices.Clone(ix.nodes) }
 
+// Edges is the index's edge records in file order. A caller reading the graph
+// reads them here rather than deriving the index a second time.
+func (ix *Index) Edges() []kb.EdgeRow { return slices.Clone(ix.edges) }
+
 // Hosts is the leaf hosting each claim, analysis and experiment that carries a
 // statement marker, by id, as the load derived it.
 func (ix *Index) Hosts() map[string]string { return maps.Clone(ix.hosts) }

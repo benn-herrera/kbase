@@ -9,7 +9,6 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
-	"kbase/internal/mcp/protocol"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
@@ -100,28 +99,28 @@ func init() {
 	}
 }
 
-// servedServer is the server over the command tree under root, each tool and
-// resource finding its KB from dir: a write op runs through runWriteOp, an
-// error no verb documented is refused as exitStatus refuses it, build and score
-// start detached with the server's global flags, rewind-build stands beside the
+// servedServer is the server over the command tree under root with the
+// located project, or none: a write op runs through runWriteOp, an error no
+// verb documented is refused as exitStatus refuses it, build and score start
+// detached with the server's global flags, rewind-build stands beside the
 // derived tools, and the resources are the sheets, the model guidance, the
 // build trail and the build's state, in that order.
-func servedServer(root *cobra.Command, dir string, stderr io.Writer, lg log.Logger) mcp.Server {
+func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg log.Logger) mcp.Server {
 	return mcp.Server{
 		Version: version.Current,
 		Root:    root,
-		Dir:     dir,
+		Located: located,
 		Stderr:  stderr,
 		Logger:  lg,
 		Globals: mcp.Globals{ConfigDir: flagConfigDir, LogLevel: flagLogLevel, LogFile: flagLogFile},
-		WriteOp: func(op string, values []byte, out io.Writer) error {
+		WriteOp: func(dir, op string, values []byte, out io.Writer) error {
 			_, err := runWriteOp(writeOpOptions{Op: op, WorkDir: dir, Stdin: bytes.NewReader(values),
 				ArgumentEntry: true, Stdout: out, Stderr: stderr, Logger: lg})
 			return err
 		},
 		RenderError: func(err error, out, stderr io.Writer) { exitStatus(err, out, stderr) },
 		Launches:    map[*cobra.Command]mcp.Launch{buildCmd: mcp.BuildLaunch(), scoreCmd: mcp.ScoreLaunch()},
-		Listed:      []func(dir string) protocol.Tool{mcp.RewindBuildTool},
+		Listed:      []mcp.ProjectTool{mcp.RewindBuildTool()},
 		Resources: []mcp.ResourceFamily{mcp.SheetResources(servedKB), mcp.ModelHintsResource(),
 			mcp.BuildTrailResource(), mcp.BuildResource()},
 	}

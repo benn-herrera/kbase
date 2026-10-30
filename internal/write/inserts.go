@@ -344,6 +344,40 @@ func (b *recordBatch) markAtLocator(document, locator, id string) error {
 	return nil
 }
 
+// markAtLine appends a node's marker to the 1-based line of the leaf document
+// names.
+func (b *recordBatch) markAtLine(document string, line int, id string) error {
+	subject, l, err := b.leaf(document)
+	if err != nil {
+		return err
+	}
+	l.text = appendMarker(l.text, line-1, kb.StatementMarker(id))
+	b.marked(subject, l, id)
+	return nil
+}
+
+// moveMarker takes id's marker off the line it stands on in the leaf document
+// names and puts it back after the first end bytes of the 1-based line, as
+// that line stands with the marker off; a line of 0 means the marker's own
+// line. The caller passes an end that lies before every other marker on the
+// target line.
+func (b *recordBatch) moveMarker(document, id string, line, end int) error {
+	subject, l, err := b.leaf(document)
+	if err != nil {
+		return err
+	}
+	at := kb.MarkerLines(l.text)[id]
+	marker := kb.StatementMarker(id)
+	l.text = spliceLines(l.text, at, at+1, []string{unmarkLine(kb.SplitLines(l.text)[at], marker)})
+	if line > 0 {
+		at = line - 1
+	}
+	target := kb.SplitLines(l.text)[at]
+	l.text = spliceLines(l.text, at, at+1, []string{target[:end] + " " + marker + target[end:]})
+	b.marked(subject, l, id)
+	return nil
+}
+
 // markAfterHeading places an analysis's or an experiment's marker on a new
 // line directly after the first heading of the leaf document names, so the
 // node's statement is that heading's section.

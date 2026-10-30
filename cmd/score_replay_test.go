@@ -1,4 +1,4 @@
-//go:build !kbasedist
+//go:build kbasedev
 
 package main
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/query"
@@ -160,7 +161,7 @@ func TestScoreReplayCancelledNamesTheFirstItemNotAsked(t *testing.T) {
 func TestScoreReplayDocumentKeys(t *testing.T) {
 	repo, state, run := replayedRun(t)
 	doc, _ := replayIn(t, repo, state, scoreReplayOptions{Run: run}, func() model.Client { return scoring(replayedReplies...) })
-	if want := []string{"outcome", "kb-root", "state-dir", "run", "replay", "dir", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
+	if want := []string{"outcome", "state-dir", "run", "replay", "dir", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
 		t.Errorf("keys %q, want %q", doc.Keys, want)
 	}
 	if got := mappingKeys(doc.Nodes["counts"]); !slices.Equal(got, []string{"total", "done", "failed", "skipped"}) {
@@ -170,6 +171,42 @@ func TestScoreReplayDocumentKeys(t *testing.T) {
 	if replay, _ := doc.Values["replay"].(string); !filepath.IsAbs(dir) || filepath.Base(dir) != replay ||
 		filepath.Dir(dir) != filepath.Join(state, "score", run, "replays") {
 		t.Errorf("dir %q, replay %v; want the replay's own directory under the run's replays/, absolute", dir, doc.Values["replay"])
+	}
+}
+
+// TestScoreReplayNeedsNoKBRootWithStateDir: a replay naming its store with
+// --state-dir completes from a working directory that has no kb-root/.
+func TestScoreReplayNeedsNoKBRootWithStateDir(t *testing.T) {
+	_, state, run := replayedRun(t)
+	doc, stdout := replayIn(t, t.TempDir(), state, scoreReplayOptions{Run: run}, func() model.Client { return scoring(replayedReplies...) })
+	if doc.Outcome != toolresult.Done || doc.Values["run"] != run {
+		t.Fatalf("the replay: outcome %s, run %v; want done over %s\n%s", doc.Outcome, doc.Values["run"], run, stdout)
+	}
+}
+
+// TestRelativeStateDirOfReplayIsTheProjectRoots: from a subdirectory, score
+// --replay resolves a relative --state-dir against the repository root, as
+// every other verb does. The wait leg of this is in `projectdir_test.go`.
+func TestRelativeStateDirOfReplayIsTheProjectRoots(t *testing.T) {
+	resetProjectDir(t)
+	repo := realPath(t, maintenanceRepo(t))
+	gitRepo(t, repo)
+	out, _ := kbase(t, filepath.Join(repo, kb.KBDir), "score", "--replay", "run-aaaaaa", "--state-dir", "store")
+	want := filepath.Join(repo, "store")
+	if got := parseResult(t, out).Values["state-dir"]; got != want {
+		t.Errorf("state-dir = %v, want %s\n%s", got, want, out)
+	}
+}
+
+// TestScoreReplayWithoutStateDirNeedsAKBRoot: a replay with no --state-dir from
+// a working directory with no kb-root/ is refused naming --state-dir.
+func TestScoreReplayWithoutStateDirNeedsAKBRoot(t *testing.T) {
+	out, code := kbase(t, t.TempDir(), "score", "--replay", "run-aaaaaa")
+	doc := parseResult(t, out)
+	items := doc.items(toolresult.RefusalsKey)
+	if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
+		items[0]["check"] != checkUsage || items[0]["key"] != "--state-dir" {
+		t.Fatalf("outcome %s, exit %d, refusals %v; want one usage refusal naming --state-dir\n%s", doc.Outcome, code, items, out)
 	}
 }
 

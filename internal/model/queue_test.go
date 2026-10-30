@@ -336,10 +336,11 @@ func TestSlotWaitedReportsTheWait(t *testing.T) {
 // TestOnlyASlotReachesTheWire: no exported name in package model reaches a
 // client's inference but Slot's Chat and Decision. Client exports only
 // ListModels and is sealed by its unexported methods; a type implementing it
-// exports only ListModels and Close; and no other exported function or method
-// takes a Client.
+// exports only ListModels and Close; and the exported functions that take a
+// Client are the Slot's two calls, which reach the wire, and SamplingOf, which
+// reads a client's effective sampling and makes no call.
 func TestOnlyASlotReachesTheWire(t *testing.T) {
-	takesClient := map[string]bool{"Slot.Chat": true, "Slot.Decision": true}
+	takesClient := map[string]bool{"Slot.Chat": true, "Slot.Decision": true, "SamplingOf": true}
 	clientMethods := map[string]bool{"ListModels": true, "Close": true}
 	implementers := map[string]bool{"OpenAIClient": true, "AnthropicClient": true, "ClientFuncs": true}
 

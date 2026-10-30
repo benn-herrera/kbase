@@ -26,6 +26,13 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 # [asks]
 # concurrency = %d        # model calls one build or score has in flight at once,
 #                        # across every role; a whole number, at least 1.
+
+# [sampling.text]          # the overview passage; [sampling.scoring] takes the
+#                          # same two keys for kbase score. Unset: temperature 0,
+#                          # thinking "off" — kbase's default, not the server's.
+# temperature = 0          # 0 to 2 on an "openai" entry; 0 to 1 on an "anthropic"
+#                          # one
+# thinking = "off"         # off | low | medium | high
 `
 
 // providersTemplate is what a providers.toml that does not exist yet is
@@ -44,8 +51,8 @@ const providersTemplate = `# Each provider is one top-level table. The names are
 baseUrl = "http://lab-server.local:8000/v1"
 # apiKeyFile = "~/.api_keys/lab-server.txt"  # relative paths resolve beside this file
 # type = "inference"  # optional; the only kind kbase can use
-# api = "openai"      # optional; the chat protocol: "openai" (the default) or
-#                     # "anthropic", the Messages API
+# api = "anthropic"   # optional; the chat protocol: "anthropic" (the default),
+#                     # the Messages API, or "openai"
 # decisionsFlavor = "systemone"  # optional; which decision surface this server
 #                                # speaks: "systemone" (the default) or
 #                                # "decisions"

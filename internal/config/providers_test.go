@@ -259,20 +259,21 @@ func TestProviderValidateDefaults(t *testing.T) {
 		name       string
 		provider   Provider
 		wantOK     bool
+		wantAPI    string
 		wantFlavor string
 	}{
-		{"both absent", Provider{BaseURL: "http://x/v1"}, true, ""},
-		{"both explicit", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference, API: ProviderAPIOpenAI}, true, ""},
-		{"type only", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference}, true, ""},
-		{"api only", Provider{BaseURL: "http://x/v1", API: ProviderAPIOpenAI}, true, ""},
-		{"normalized spelling", Provider{BaseURL: "http://x/v1", Type: " Inference ", API: "OpenAI"}, true, ""},
-		{"decisions flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorDecisions}, true, FlavorDecisions},
-		{"flavour, normalized spelling", Provider{BaseURL: "http://x/v1", DecisionsFlavor: " Decisions "}, true, FlavorDecisions},
-		{"systemone flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorSystemOne}, true, FlavorSystemOne},
-		{"wrong type", Provider{BaseURL: "http://x/v1", Type: "search"}, false, ""},
-		{"wrong api", Provider{BaseURL: "http://x/v1", API: "exa"}, false, ""},
-		{"unknown decisionsFlavor", Provider{BaseURL: "http://x/v1", DecisionsFlavor: "systemtwo"}, false, ""},
-		{"no baseUrl", Provider{Type: ProviderTypeInference}, false, ""},
+		{"both absent", Provider{BaseURL: "http://x/v1"}, true, "", ""},
+		{"both explicit", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference, API: ProviderAPIOpenAI}, true, ProviderAPIOpenAI, ""},
+		{"type only", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference}, true, "", ""},
+		{"api only", Provider{BaseURL: "http://x/v1", API: ProviderAPIOpenAI}, true, ProviderAPIOpenAI, ""},
+		{"normalized spelling", Provider{BaseURL: "http://x/v1", Type: " Inference ", API: "OpenAI"}, true, ProviderAPIOpenAI, ""},
+		{"decisions flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorDecisions}, true, "", FlavorDecisions},
+		{"flavour, normalized spelling", Provider{BaseURL: "http://x/v1", DecisionsFlavor: " Decisions "}, true, "", FlavorDecisions},
+		{"systemone flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorSystemOne}, true, "", FlavorSystemOne},
+		{"wrong type", Provider{BaseURL: "http://x/v1", Type: "search"}, false, "", ""},
+		{"wrong api", Provider{BaseURL: "http://x/v1", API: "exa"}, false, "", ""},
+		{"unknown decisionsFlavor", Provider{BaseURL: "http://x/v1", DecisionsFlavor: "systemtwo"}, false, "", ""},
+		{"no baseUrl", Provider{Type: ProviderTypeInference}, false, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.provider.Validate()
@@ -285,8 +286,13 @@ func TestProviderValidateDefaults(t *testing.T) {
 			if k := tc.provider.Kind(); k != ProviderTypeInference {
 				t.Errorf("Kind() = %q, want %q", k, ProviderTypeInference)
 			}
-			if a := tc.provider.Protocol(); a != ProviderAPIOpenAI {
-				t.Errorf("Protocol() = %q, want %q", a, ProviderAPIOpenAI)
+			// An entry silent on the protocol speaks the Messages protocol.
+			wantAPI := tc.wantAPI
+			if wantAPI == "" {
+				wantAPI = ProviderAPIAnthropic
+			}
+			if a := tc.provider.Protocol(); a != wantAPI {
+				t.Errorf("Protocol() = %q, want %q", a, wantAPI)
 			}
 			// An entry silent on the flavour speaks the SystemOne surface.
 			wantFlavor := tc.wantFlavor
@@ -463,8 +469,8 @@ apiKeyFile = "not-here.key"
 	}
 }
 
-// TestProviderValidateProtocols: `api` is a two-value field — openai, the
-// default, and anthropic, the Messages protocol — and an entry naming anything
+// TestProviderValidateProtocols: `api` is a two-value field — anthropic, the
+// Messages protocol and the default, and openai — and an entry naming anything
 // else is refused listing both.
 func TestProviderValidateProtocols(t *testing.T) {
 	for _, tc := range []struct {
@@ -513,5 +519,29 @@ api = "anthropic"
 	}
 	if entry, ok := got["claude"]; !ok || entry.Protocol() != ProviderAPIAnthropic {
 		t.Errorf("pool = %+v, want the anthropic entry", got)
+	}
+}
+
+// TestLoadProvidersProtocolDefault: an entry silent on `api` loads speaking the
+// Messages protocol, and `api = "openai"` is what selects the OpenAI-compatible
+// one.
+func TestLoadProvidersProtocolDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := writeProviders(t, dir, `
+[silent]
+baseUrl = "http://silent.example/v1"
+
+[compat]
+baseUrl = "http://compat.example/v1"
+api = "openai"
+`)
+	got, faults, err := LoadProviders(path)
+	if err != nil || len(faults) != 0 {
+		t.Fatalf("LoadProviders = %v, %v; want both entries loaded", faults, err)
+	}
+	for name, want := range map[string]string{"silent": ProviderAPIAnthropic, "compat": ProviderAPIOpenAI} {
+		if p := got[name].Protocol(); p != want {
+			t.Errorf("%s speaks %q, want %q", name, p, want)
+		}
 	}
 }

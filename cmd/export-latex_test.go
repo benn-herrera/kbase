@@ -259,7 +259,7 @@ func readExportReport(t *testing.T, gen string) []export.Finding {
 }
 
 // TestMCPExportLatexTool: export-latex is a writing tool whose arguments are
-// its flags.
+// its flags and the project-dir every tool takes.
 func TestMCPExportLatexTool(t *testing.T) {
 	for _, tool := range listTools(t) {
 		if tool.Name != "export-latex" {
@@ -269,8 +269,8 @@ func TestMCPExportLatexTool(t *testing.T) {
 			t.Errorf("export-latex is marked read-only")
 		}
 		if tool.InputSchema.Properties["out"]["type"] != "string" || tool.InputSchema.Properties["volume"]["type"] != "array" ||
-			len(tool.InputSchema.Properties) != 2 {
-			t.Errorf("export-latex schema %+v, want out and volume", tool.InputSchema)
+			len(tool.InputSchema.Properties) != 3 {
+			t.Errorf("export-latex schema %+v, want out, volume and project-dir", tool.InputSchema)
 		}
 		return
 	}

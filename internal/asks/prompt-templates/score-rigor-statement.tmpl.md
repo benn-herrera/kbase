@@ -82,8 +82,6 @@ not display.
 
 ## The answer
 
-One line per occurrence, an id from the list above and the line it cites.
-
 @!score-answer-occurrences!@
 
 The line cited is in the node's title or in its statement. A statement fault's site is the line that

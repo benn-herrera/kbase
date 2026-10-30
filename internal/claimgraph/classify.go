@@ -50,7 +50,8 @@ func held(e buildrecords.CandidateEntry, ok, asking bool) bool {
 // where opts cannot ask every candidate takes its draft. The groups are one
 // ask batch; once it has drained, the classification record is written once
 // with them all, and a resumed run asks only what the record does not hold. A
-// call that never completes stops it with nothing written. A run that asks
+// call that never completes stops it with nothing written but the group
+// records of what it asked. A run that asks
 // reports each source's group as a unit of progress, and each candidate
 // defaulted as a fallback, once the batch has drained.
 func classify(ctx context.Context, repoRoot string, candidates []candidate, statement func(ClaimNode) string, opts Options) (classification, error) {
@@ -101,7 +102,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 			}
 		}
 		if out.asked, err = batch.Wait(); err != nil {
-			return out, err
+			return out, askStopWriting(opts.AskRecords, out.asked, err)
 		}
 		out.wall = batch.Elapsed()
 	}

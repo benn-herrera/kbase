@@ -24,7 +24,8 @@ type RewindOptions struct {
 	RepoRoot string
 	// StateDir overrides the state store's location.
 	StateDir string
-	// Target is the boundary to reset to, by stage id or display name.
+	// Target is the boundary to reset to, by stage id or display name, or
+	// started-at for the commit the build began from.
 	Target string
 }
 
@@ -47,6 +48,12 @@ func Rewind(opts RewindOptions) (string, []result.Field) {
 		return MonitorEnd(fields, err)
 	}
 	fields = append(fields, result.Field{Key: "boundaries", Value: trailBoundaries(trail)})
+	_, startedAt := StartedAt(trail)
+	var started any
+	if startedAt != "" {
+		started = result.Record{{Key: "commit", Value: startedAt}, {Key: "label", Value: startedAtLabel}}
+	}
+	fields = append(fields, result.Field{Key: TargetStartedAt, Value: started})
 	// An out-of-order trail is refused as build refuses it. The trail's own
 	// reading sees only committed stages, so this names a gap in walk order and
 	// nothing else.
@@ -58,10 +65,11 @@ func Rewind(opts RewindOptions) (string, []result.Field) {
 		return MonitorEnd(fields, err)
 	}
 	fields = append(fields, result.Field{Key: "dirty", Value: dirtyField(dirty)})
-	at := -1
+	var target rewindTarget
+	ok := false
 	if opts.Target != "" {
-		if at = targetBoundary(opts.Target, trail); at < 0 {
-			return MonitorEnd(fields, targetRefusal(opts.Target, trail))
+		if target, ok = targetBoundary(opts.Target, trail, startedAt); !ok {
+			return MonitorEnd(fields, targetRefusal(opts.Target, trail, startedAt))
 		}
 	}
 	run, ended, err := standingRun(dir)
@@ -69,25 +77,45 @@ func Rewind(opts RewindOptions) (string, []result.Field) {
 		return MonitorEnd(fields, err)
 	}
 	reset := "git reset --hard " + unresolvedCommit
-	if at >= 0 {
-		reset = "git reset --hard " + trail[at].Commit
+	if ok {
+		reset = "git reset --hard " + target.commit
 	}
 	commands := []string{reset}
 	command, confirmed := RecordedCommand(run.Resume)
-	if confirmed {
+	if confirmed && target.stage != TargetStartedAt {
 		commands = append(commands, command)
 	}
 	fields = append(fields, result.Field{Key: "commands", Value: commands})
-	if at >= 0 {
+	if ok {
 		fields = append(fields, result.Field{Key: "target", Value: result.Record{
-			{Key: "stage", Value: trail[at].Stage}, {Key: "commit", Value: trail[at].Commit},
-			{Key: "discards", Value: at},
+			{Key: "stage", Value: target.stage}, {Key: "commit", Value: target.commit},
+			{Key: "discards", Value: target.discards},
 		}})
 	}
-	if note := resumeNote(dir, run.Resume, ended); note != "" {
+	note := resumeNote(dir, run.Resume, ended)
+	if target.stage == TargetStartedAt {
+		note = startedAtNote
+	}
+	if note != "" {
 		fields = append(fields, result.Field{Key: "resume-note", Value: note})
 	}
 	return result.Done, fields
+}
+
+// TargetStartedAt is the target naming the commit the build began from, and
+// the document's key for it.
+const TargetStartedAt = "started-at"
+
+const (
+	startedAtLabel = "the clean, ready-to-build state before the build"
+	startedAtNote  = "a build after this reset is fresh and names its own volume roots"
+)
+
+// rewindTarget is where a target resets to, and how many boundaries the reset
+// discards.
+type rewindTarget struct {
+	stage, commit string
+	discards      int
 }
 
 // trailBoundaries is the trail's boundaries as the document lists them, oldest
@@ -103,23 +131,35 @@ func trailBoundaries(trail []gitledger.Entry) []result.Record {
 	return records
 }
 
-// targetBoundary is the trail's index of the boundary a target names, -1 where
-// it names none: a target resolves as --through resolves it, and names the
-// newest boundary of that stage.
-func targetBoundary(target string, trail []gitledger.Entry) int {
+// targetBoundary is where a target resets to; ok is false where it names
+// nothing. started-at names the commit the build began from, where the trail
+// records one, and discards every boundary; any other target resolves as
+// --through resolves it, and names the newest boundary of that stage.
+func targetBoundary(target string, trail []gitledger.Entry, startedAt string) (rewindTarget, bool) {
+	if target == TargetStartedAt {
+		return rewindTarget{stage: TargetStartedAt, commit: startedAt, discards: len(trail)}, startedAt != ""
+	}
 	s, ok := ResolveStage(target)
 	if !ok {
-		return -1
+		return rewindTarget{}, false
 	}
-	return slices.IndexFunc(trail, func(e gitledger.Entry) bool { return e.Stage == s.ID })
+	at := slices.IndexFunc(trail, func(e gitledger.Entry) bool { return e.Stage == s.ID })
+	if at < 0 {
+		return rewindTarget{}, false
+	}
+	return rewindTarget{stage: trail[at].Stage, commit: trail[at].Commit, discards: at}, true
 }
 
 // targetRefusal is the usage refusal naming a target no boundary carries, the
-// boundary ids the trail holds as the closed set it comes from.
-func targetRefusal(target string, trail []gitledger.Entry) result.Refusal {
+// boundary ids the trail holds, then started-at where it records one, as the
+// closed set it comes from.
+func targetRefusal(target string, trail []gitledger.Entry, startedAt string) result.Refusal {
 	ids := make([]string, len(trail))
 	for i, e := range trail {
 		ids[len(trail)-1-i] = e.Stage
+	}
+	if startedAt != "" {
+		ids = append(ids, TargetStartedAt)
 	}
 	return result.Refusal{{Check: CheckUsage, Key: "target", Allowed: ids,
 		Detail: fmt.Sprintf("target %q names no boundary the trail holds, by stage id or display name", target)}}

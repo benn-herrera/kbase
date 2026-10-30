@@ -2,6 +2,7 @@ package buildstore
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,6 +36,9 @@ type MonitorOptions struct {
 	StateDir string
 	WorkDir  string
 	Logger   log.Logger
+	// DefaultStore is the default store, never the running run's: for
+	// placing a new run.
+	DefaultStore bool
 }
 
 func (o MonitorOptions) repo() (*gitledger.Repo, error) {
@@ -50,13 +54,23 @@ func (o MonitorOptions) repo() (*gitledger.Repo, error) {
 }
 
 // Open is the repository, kb-root/ and the state store, a store newer than
-// this kbase refused.
+// this kbase refused. Given no StateDir, the store is the one the operation
+// lock names while its file stands and names one — a lock left by a crash
+// names the run the repository last held — else the default store.
 func (o MonitorOptions) Open() (repo *gitledger.Repo, kbRoot, dir string, err error) {
 	if repo, err = o.repo(); err != nil {
 		return nil, "", "", err
 	}
 	kbRoot = filepath.Join(repo.Root, kb.KBDir)
-	if dir, err = statedir.Dir(o.StateDir, kbRoot); err != nil {
+	override := o.StateDir
+	if override == "" && !o.DefaultStore {
+		named, err := os.ReadFile(OperationLockPath(kbRoot))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return repo, kbRoot, "", err
+		}
+		override = string(named)
+	}
+	if dir, err = statedir.Dir(override, kbRoot); err != nil {
 		return repo, kbRoot, dir, err
 	}
 	_, err = StoreVersion(dir)
@@ -355,19 +369,30 @@ func ShellJoin(argv []string) string {
 	return strings.Join(words, " ")
 }
 
-// Locate is the kb-root and the state store a build started from
-// opts.WorkDir works in, a relative opts.StateDir being the repository
-// root's; outcome is "" there, else it and fields are the document saying why
-// there are none.
-func Locate(opts MonitorOptions) (kbRoot, dir, outcome string, fields []result.Field) {
-	if opts.StateDir != "" && !filepath.IsAbs(opts.StateDir) {
-		repo, err := opts.repo()
-		if err != nil {
-			outcome, fields = MonitorEnd(nil, err)
-			return "", "", outcome, fields
-		}
-		opts.StateDir = filepath.Join(repo.Root, opts.StateDir)
+// ProjectRoot is path made absolute against the working directory, where it
+// is a git worktree root. Any other path is refused, check worktree, under
+// key.
+func ProjectRoot(path, key string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
 	}
+	root, err := kb.RepositoryRoot(abs)
+	if err != nil {
+		return "", err
+	}
+	if root != abs {
+		return "", result.Refusal{{Check: CheckWorktree, Key: key, Path: abs,
+			Detail: abs + " is not a git worktree root",
+			Remedy: "name the directory that holds .git and kb-root/, not kb-root/ or a subdirectory"}}
+	}
+	return abs, nil
+}
+
+// Locate is the kb-root and the state store a build started from
+// opts.WorkDir works in; outcome is "" there, else it and fields are the
+// document saying why there are none.
+func Locate(opts MonitorOptions) (kbRoot, dir, outcome string, fields []result.Field) {
 	_, kbRoot, dir, err := opts.Open()
 	if err != nil {
 		outcome, fields = MonitorEnd(nil, err)

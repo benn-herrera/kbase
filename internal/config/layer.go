@@ -163,19 +163,27 @@ func takeConfig(cfg *Config, over Config, source string) {
 	if cfg.Provider == "" {
 		cfg.Provider = over.Provider
 	}
-	take := func(value *string, layer *string, over string) {
-		if *value == "" && over != "" {
-			*value, *layer = over, source
-		}
-	}
-	take(&cfg.Models.Decision, &cfg.Sources.Decision, over.Models.Decision)
-	take(&cfg.Models.Text, &cfg.Sources.Text, over.Models.Text)
-	take(&cfg.Models.Scoring, &cfg.Sources.Scoring, over.Models.Scoring)
+	takeStated(&cfg.Models.Decision, &cfg.Sources.Decision, over.Models.Decision, source)
+	takeStated(&cfg.Models.Text, &cfg.Sources.Text, over.Models.Text, source)
+	takeStated(&cfg.Models.Scoring, &cfg.Sources.Scoring, over.Models.Scoring, source)
+	takeStated(&cfg.Sampling.Text.Temperature, &cfg.Sources.TextTemperature, over.Sampling.Text.Temperature, source)
+	takeStated(&cfg.Sampling.Text.Thinking, &cfg.Sources.TextThinking, over.Sampling.Text.Thinking, source)
+	takeStated(&cfg.Sampling.Scoring.Temperature, &cfg.Sources.ScoringTemperature, over.Sampling.Scoring.Temperature, source)
+	takeStated(&cfg.Sampling.Scoring.Thinking, &cfg.Sources.ScoringThinking, over.Sampling.Scoring.Thinking, source)
 	if cfg.Asks.ReaderConcurrency == nil {
 		cfg.Asks.ReaderConcurrency = over.Asks.ReaderConcurrency
 	}
 	if cfg.Asks.Concurrency == nil {
 		cfg.Asks.Concurrency = over.Asks.Concurrency
+	}
+}
+
+// takeStated sets *value and *layer from over and source where *value is still
+// T's zero value and over is not: the first layer to state a field keeps it.
+func takeStated[T comparable](value *T, layer *string, over T, source string) {
+	var zero T
+	if *value == zero && over != zero {
+		*value, *layer = over, source
 	}
 }
 

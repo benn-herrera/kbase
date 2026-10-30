@@ -41,21 +41,32 @@ type boundFamily struct {
 }
 
 // SheetResources offers the claim-graph sheets of the KB open finds from the
-// served directory. open returns no source where no KB is found yet, and a
-// result.Refusal where the KB found will not open.
+// located project, and none where the server located none. open returns no
+// source where no KB is found yet, and a result.Refusal where the KB found
+// will not open.
 func SheetResources(open func(dir string) (*kb.Source, error)) ResourceFamily {
 	return ResourceFamily{prefix: SheetURIPrefix, bind: func(s serving) (protocol.Resources, *protocol.Subscription) {
-		return sheetResources{dir: s.dir, open: open}, nil
+		return sheetResources{located: s.located, open: open}, nil
 	}}
 }
 
 type sheetResources struct {
-	dir  string
-	open func(dir string) (*kb.Source, error)
+	located Located
+	open    func(dir string) (*kb.Source, error)
+}
+
+// source is the located project's KB: none where there is no located project
+// or no KB is found there yet.
+func (r sheetResources) source() (*kb.Source, error) {
+	root, ok := r.located.Root()
+	if !ok {
+		return nil, nil
+	}
+	return r.open(root)
 }
 
 func (r sheetResources) List() ([]protocol.Resource, error) {
-	src, err := r.open(r.dir)
+	src, err := r.source()
 	if err != nil || src == nil {
 		return nil, err
 	}
@@ -71,12 +82,12 @@ func (r sheetResources) List() ([]protocol.Resource, error) {
 }
 
 func (r sheetResources) Read(sheet protocol.Resource) (string, error) {
-	src, err := r.open(r.dir)
+	src, err := r.source()
 	if err != nil {
 		return "", err
 	}
 	if src == nil {
-		return "", fmt.Errorf("no KB is found from %s", r.dir)
+		return "", errors.New("no KB is found in the server's located project")
 	}
 	data, err := src.ReadFile(src.KBPath(strings.TrimPrefix(sheet.URI, SheetURIPrefix)))
 	return string(data), err
@@ -103,35 +114,36 @@ func (modelHintsResource) Read(protocol.Resource) (string, error) {
 }
 
 // RewindBuildTool is the one tool no subcommand stands behind: the build's
-// commit trail of the repository dir is in, and for a target boundary the
-// commands that reset the repository to it and re-issue the build. It reads
-// the tree, the state store and history, and writes none of them.
-func RewindBuildTool(dir string) protocol.Tool {
-	return protocol.Tool{
+// commit trail of the call's project and the commit the build began from, and
+// for a target the commands that reset the repository there. It reads the
+// tree, the state store and history, and writes none of them.
+func RewindBuildTool() ProjectTool {
+	tool := protocol.Tool{
 		Name: "rewind-build",
-		Description: "Every stage boundary of a build is a commit in the repository; this tool lists " +
-			"them itself, no separate query, and for a target boundary, commands that reset the " +
-			"repository to it and re-issue the build. A build rewound to one resumes by re-issuing " +
-			"`build` with the newest boundary's inputs — the same volume roots and `--bibliography` " +
-			"files, same order; other inputs refused (`check: inputs`); read-only, it changes nothing.",
+		Description: "Lists every stage boundary of the build, each a commit, and started-at, the " +
+			"clean, ready-to-build commit the build began from; read-only, it changes nothing. Given a " +
+			"target, it returns the commands that put the repository there: for a boundary, a reset to " +
+			"it then `kbase build --resume`, which continues with the inputs the trail records; for " +
+			"started-at, the reset alone, after which a build is fresh and names its own volume roots.",
 		InputSchema: protocol.Schema{
 			Properties: map[string]protocol.Property{
-				"target":     {Type: "string", Description: "the boundary to reset to, by stage id or display name"},
-				stateDirFlag: {Type: "string", Description: "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)"},
+				"target":     {Type: "string", Description: "where to reset to: a stage id or display name, or started-at for the clean state before the build"},
+				stateDirFlag: {Type: "string", Description: "the build's state store (default: the store the operation lock names, else $XDG_STATE_HOME/kbase/<key>)"},
 			},
 			Required: []string{},
 		},
 		ReadOnly: true,
-		Call: func(args map[string]any) (string, map[string]any, bool, error) {
-			target, _ := args["target"].(string)
-			stateDir, _ := args[stateDirFlag].(string)
-			doc, err := rewindDocument(buildstore.RewindOptions{RepoRoot: dir, StateDir: stateDir, Target: target})
-			if err != nil {
-				return "", nil, false, err
-			}
-			return ToolResult([]byte(doc))
-		},
 	}
+	run := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
+		target, _ := args["target"].(string)
+		stateDir, _ := args[stateDirFlag].(string)
+		doc, err := rewindDocument(buildstore.RewindOptions{RepoRoot: p.Root, StateDir: stateDir, Target: target})
+		if err != nil {
+			return "", nil, false, err
+		}
+		return ToolResult([]byte(doc))
+	}
+	return ProjectTool{Tool: tool, Run: run}
 }
 
 // rewindDocument is buildstore.Rewind's document rendered: the one document the
@@ -145,15 +157,15 @@ func rewindDocument(opts buildstore.RewindOptions) (string, error) {
 	return out.String(), nil
 }
 
-// BuildTrailResource serves the build trail of the repository the served
-// directory is in, as the rewind-build tool reports it with no target named.
+// BuildTrailResource serves the build trail of the located project, as the
+// rewind-build tool reports it with no target named.
 func BuildTrailResource() ResourceFamily {
 	return ResourceFamily{prefix: BuildTrailURI, bind: func(s serving) (protocol.Resources, *protocol.Subscription) {
-		return buildTrailResource{s.dir}, nil
+		return buildTrailResource{s.located}, nil
 	}}
 }
 
-type buildTrailResource struct{ dir string }
+type buildTrailResource struct{ located Located }
 
 // List offers the trail whether or not a state store or a boundary exists: the
 // document says what the repository holds, and reading it is how a caller
@@ -162,14 +174,20 @@ func (buildTrailResource) List() ([]protocol.Resource, error) {
 	return []protocol.Resource{{URI: BuildTrailURI, Name: "Build trail", MimeType: "application/yaml"}}, nil
 }
 
+// Read is the trail's document, and where the server located no project the
+// refusal a call naming none answers with.
 func (r buildTrailResource) Read(protocol.Resource) (string, error) {
-	return rewindDocument(buildstore.RewindOptions{RepoRoot: r.dir})
+	root, ok := r.located.Root()
+	if !ok {
+		return refusalDocument(noProject())
+	}
+	return rewindDocument(buildstore.RewindOptions{RepoRoot: root})
 }
 
 // BuildResource serves the build's state as the status tool reports it, for
-// the store of the build the server launched last — the served repository's
-// default store where it launched none — and the subscription that announces
-// each run's end.
+// the store of the build the server launched last, read in that launch's
+// project — the located project's default store where it launched none — and
+// the subscription that announces each run's end.
 func BuildResource() ResourceFamily {
 	return ResourceFamily{prefix: BuildURI, bind: func(s serving) (protocol.Resources, *protocol.Subscription) {
 		return buildResource{s.last}, buildSubscription(s.last, s.lg)
@@ -185,11 +203,15 @@ func (buildResource) List() ([]protocol.Resource, error) {
 }
 
 // Read is the status document for the store, and it never fails: a store no
-// build wrote holds no run and reads state none, and a served directory no
-// worktree holds reads the refusal status answers with.
+// build wrote holds no run and reads state none, a project no worktree holds
+// reads the refusal status answers with, and a server that launched no build
+// and located no project reads the refusal a call naming none answers with.
 func (r buildResource) Read(protocol.Resource) (string, error) {
-	dir, _ := r.last.store()
-	return statusDocument(buildstore.MonitorOptions{StateDir: dir, WorkDir: r.last.served})
+	project, dir, _, ok := r.last.store()
+	if !ok {
+		return refusalDocument(noProject())
+	}
+	return statusDocument(buildstore.MonitorOptions{StateDir: dir, WorkDir: project})
 }
 
 // statusDocument is score.Status's document rendered: the one document the

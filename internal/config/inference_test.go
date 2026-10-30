@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,7 +204,7 @@ func TestResolveFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Endpoint{Role: RoleDecision, Mode: ModeFile, Provider: "lab", Model: "d3", Rule: RuleConfig,
-		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIOpenAI,
+		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
 		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
 		t.Errorf("= %+v, want %+v", ep, want)
@@ -372,5 +373,165 @@ func TestCleartextWarning(t *testing.T) {
 		if (got != "") != tc.warns || strings.Contains(got, "secret-key") || strings.Contains(got, "\n") {
 			t.Errorf("%s: %q, want warning %t, one line naming no key", tc.name, got, tc.warns)
 		}
+	}
+}
+
+// samplingInputs is scenario with an openai entry "lab" and an anthropic entry
+// "msg"; text asks lab and scoring asks msg. It states the sampling given, each
+// field from the layer the sources name.
+func samplingInputs(t *testing.T, sampling SamplingTable, sources Sources) Inputs {
+	t.Helper()
+	in := scenario(t)
+	lab := in.Providers["lab"]
+	lab.API = ProviderAPIOpenAI
+	in.Providers["lab"] = lab
+	in.Providers["msg"] = Provider{Name: "msg", BaseURL: "https://msg.example/v1", API: ProviderAPIAnthropic, Layer: LayerSourceRepository}
+	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "msg/clef", LayerSourceRepository
+	in.Cfg.Sampling = sampling
+	in.Cfg.Sources.TextTemperature, in.Cfg.Sources.TextThinking = sources.TextTemperature, sources.TextThinking
+	in.Cfg.Sources.ScoringTemperature, in.Cfg.Sources.ScoringThinking = sources.ScoringTemperature, sources.ScoringThinking
+	return in
+}
+
+// TestResolveSamplingRefusals: a temperature outside the range the entry's
+// chat protocol accepts refuses the role by the key that is wrong, in the write
+// target's config.toml.
+func TestResolveSamplingRefusals(t *testing.T) {
+	fromRepo := Sources{TextTemperature: LayerSourceRepository, ScoringTemperature: LayerSourceRepository, ScoringThinking: LayerSourceRepository}
+	for _, tc := range []struct {
+		name     string
+		role     Role
+		sampling SamplingTable
+		mutate   func(*Inputs)
+		flag     string
+		key      string
+	}{
+		{"openai above its range", RoleText, SamplingTable{Text: RoleSampling{Temperature: new(2.5)}}, nil, "", "sampling.text.temperature"},
+		{"openai below zero", RoleText, SamplingTable{Text: RoleSampling{Temperature: new(-0.1)}}, nil, "", "sampling.text.temperature"},
+		{"openai NaN", RoleText, SamplingTable{Text: RoleSampling{Temperature: new(math.NaN())}}, nil, "", "sampling.text.temperature"},
+		{"anthropic above its range", RoleScoring, SamplingTable{Scoring: RoleSampling{Temperature: new(1.5)}}, nil, "", "sampling.scoring.temperature"},
+		{"the model flag moves scoring onto anthropic", RoleScoring,
+			SamplingTable{Scoring: RoleSampling{Temperature: new(1.5)}},
+			func(in *Inputs) { in.Cfg.Models.Scoring = "lab/clef" }, "msg/other", "sampling.scoring.temperature"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := samplingInputs(t, tc.sampling, fromRepo)
+			if tc.mutate != nil {
+				tc.mutate(&in)
+			}
+			_, err := Resolve(in, ModeFile, tc.role, tc.flag)
+			refusal, ok := asRefusal(err)
+			if !ok {
+				t.Fatalf("err = %v, want one refusal", err)
+			}
+			if refusal.Key != tc.key || refusal.Check != CheckProvider || refusal.Path != ConfigPath(in.WriteDir) {
+				t.Errorf("refusal = %+v, want %s in %s", refusal, tc.key, ConfigPath(in.WriteDir))
+			}
+			if !strings.Contains(refusal.Detail, tc.key) || !strings.Contains(refusal.Detail, LayerSourceRepository) || refusal.Remedy == "" {
+				t.Errorf("detail %q, remedy %q: want the key and the layer named and a remedy", refusal.Detail, refusal.Remedy)
+			}
+		})
+	}
+}
+
+// TestResolveSamplingNamesTheSupplyingLayer: the refusal's path is the write
+// target's config.toml even where a lower layer states the value, and its
+// detail and remedy name the layer that does.
+func TestResolveSamplingNamesTheSupplyingLayer(t *testing.T) {
+	in := samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(2.5)}}, Sources{TextTemperature: LayerSourceGlobal})
+	_, err := Resolve(in, ModeFile, RoleText, "")
+	refusal, ok := asRefusal(err)
+	if !ok {
+		t.Fatalf("err = %v, want one refusal", err)
+	}
+	if refusal.Path != ConfigPath(in.WriteDir) {
+		t.Errorf("path = %q, want the write target's %q", refusal.Path, ConfigPath(in.WriteDir))
+	}
+	if !strings.Contains(refusal.Detail, "global layer") || !strings.Contains(refusal.Remedy, "global layer") {
+		t.Errorf("detail %q, remedy %q: want the global layer named", refusal.Detail, refusal.Remedy)
+	}
+}
+
+// TestResolveSamplingAccepts: the top of openai's range, and on anthropic
+// thinking alone, a temperature beside thinking off and a temperature beside a
+// thinking level, resolve and reach the endpoint with their layers.
+func TestResolveSamplingAccepts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		role     Role
+		sampling SamplingTable
+	}{
+		{"openai at 2", RoleText, SamplingTable{Text: RoleSampling{Temperature: new(2.0)}}},
+		{"anthropic thinking, no temperature", RoleScoring, SamplingTable{Scoring: RoleSampling{Thinking: ThinkingLow}}},
+		{"anthropic thinking off, temperature 0.4", RoleScoring,
+			SamplingTable{Scoring: RoleSampling{Temperature: new(0.4), Thinking: ThinkingOff}}},
+		{"anthropic thinking low, temperature 0.4", RoleScoring,
+			SamplingTable{Scoring: RoleSampling{Temperature: new(0.4), Thinking: ThinkingLow}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := samplingInputs(t, tc.sampling, Sources{TextTemperature: LayerSourceGlobal,
+				ScoringTemperature: LayerSourceGlobal, ScoringThinking: LayerSourceRepository})
+			ep, err := Resolve(in, ModeFile, tc.role, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.sampling.Text
+			if tc.role == RoleScoring {
+				want = tc.sampling.Scoring
+			}
+			if (ep.Temperature == nil) != (want.Temperature == nil) || ep.Temperature != nil && *ep.Temperature != *want.Temperature || ep.Thinking != want.Thinking {
+				t.Errorf("endpoint carries %v, %q; want %v, %q", ep.Temperature, ep.Thinking, want.Temperature, want.Thinking)
+			}
+			if want.Temperature != nil && ep.TemperatureSource != LayerSourceGlobal || want.Thinking != "" && ep.ThinkingSource != LayerSourceRepository {
+				t.Errorf("sources %q, %q, want the layers that stated the values", ep.TemperatureSource, ep.ThinkingSource)
+			}
+		})
+	}
+}
+
+// TestResolveSamplingUnset: an unstated setting leaves the endpoint's fields
+// unset, and the decision role carries none even where text states its own.
+func TestResolveSamplingUnset(t *testing.T) {
+	in := samplingInputs(t, SamplingTable{}, Sources{})
+	ep, err := Resolve(in, ModeFile, RoleText, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.Temperature != nil || ep.Thinking != "" || ep.TemperatureSource != "" || ep.ThinkingSource != "" {
+		t.Errorf("endpoint = %+v, want no sampling", ep)
+	}
+
+	in = samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(0.5), Thinking: ThinkingHigh}}, Sources{
+		TextTemperature: LayerSourceGlobal, TextThinking: LayerSourceGlobal})
+	ep, err = Resolve(in, ModeFile, RoleDecision, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.Temperature != nil || ep.Thinking != "" {
+		t.Errorf("decision endpoint = %+v, want no sampling", ep)
+	}
+}
+
+// TestResolveSamplingInEnvironmentMode: the environment names the endpoint and
+// the model, and the file still says how the role is asked; the endpoint speaks
+// openai, so its range is openai's.
+func TestResolveSamplingInEnvironmentMode(t *testing.T) {
+	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"},
+		WriteDir: t.TempDir()}
+	in.Cfg.Sampling.Text = RoleSampling{Temperature: new(1.8), Thinking: ThinkingMedium}
+	in.Cfg.Sources.TextTemperature, in.Cfg.Sources.TextThinking = LayerSourceRepository, LayerSourceGlobal
+
+	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.Temperature == nil || *ep.Temperature != 1.8 || ep.Thinking != ThinkingMedium ||
+		ep.TemperatureSource != LayerSourceRepository || ep.ThinkingSource != LayerSourceGlobal {
+		t.Errorf("endpoint = %+v, want the file's text sampling with its layers", ep)
+	}
+
+	in.Cfg.Sampling.Text.Temperature = new(2.5)
+	if _, err := Resolve(in, ModeEnvironment, RoleText, ""); err == nil {
+		t.Error("an environment-mode role accepted a temperature outside openai's range")
 	}
 }

@@ -1,8 +1,8 @@
 // Package mcp is the MCP server over the command tree: the kbase.mcp and
 // kbase.readOnly annotations a command and a flag declare, the tool table
 // derived from the bound commands, a call run as its command's RunE, the
-// invocation directory a call names, the resources, the build watcher, and the
-// detached build and score launches. What a call reaches beyond the command
+// project a call runs in, the resources, the build watcher, and the detached
+// build and score launches. What a call reaches beyond the command
 // tree is the caller's, handed in as function values.
 package mcp
 
@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -21,6 +22,7 @@ import (
 	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/mcp/protocol"
 	"kbase/internal/result"
 	"kbase/internal/write"
@@ -108,10 +110,12 @@ func ResetFlags(cmd *cobra.Command) error {
 }
 
 // Positional is one positional argument a command declares in its Use line:
-// <Name>, or <Name>... where it repeats.
+// <Name>, or <Name>... where it repeats. The last one may be optional,
+// spelled [<Name>...].
 type Positional struct {
 	Name     string
 	Variadic bool
+	Optional bool
 }
 
 // DeclaredPositionals is the positionals cmd's Use line declares, in order.
@@ -119,11 +123,17 @@ func DeclaredPositionals(cmd *cobra.Command) ([]Positional, error) {
 	words := strings.Fields(cmd.Use)[1:]
 	declared := make([]Positional, 0, len(words))
 	for i, w := range words {
-		name, variadic := strings.CutSuffix(w, "...")
-		if !strings.HasPrefix(name, "<") || !strings.HasSuffix(name, ">") || variadic && i != len(words)-1 {
+		name := w
+		optional := false
+		if inner, ok := strings.CutSuffix(strings.TrimPrefix(w, "["), "]"); strings.HasPrefix(w, "[") && ok {
+			name, optional = inner, true
+		}
+		name, variadic := strings.CutSuffix(name, "...")
+		last := i == len(words)-1
+		if !strings.HasPrefix(name, "<") || !strings.HasSuffix(name, ">") || variadic && !last || optional && !(variadic && last) {
 			return nil, fmt.Errorf("%s: %q in its usage line is not a positional <name>", cmd.Name(), w)
 		}
-		declared = append(declared, Positional{strings.Trim(name, "<>"), variadic})
+		declared = append(declared, Positional{strings.Trim(name, "<>"), variadic, optional})
 	}
 	return declared, nil
 }
@@ -137,51 +147,149 @@ var flagSchemaTypes = map[string]protocol.Property{
 	"duration": {Type: "string"},
 }
 
+// Project is the project a call runs in: its git worktree root, and whether
+// the call named it rather than falling back to the server's.
+type Project struct {
+	Root  string
+	Named bool
+}
+
+// ProjectTool is a tool whose Run takes the project each call runs in. Its
+// Tool's Call is unset: Tools sets it.
+type ProjectTool struct {
+	Tool protocol.Tool
+	Run  func(p Project, args map[string]any) (string, map[string]any, bool, error)
+}
+
 // Calls is what a tool call reaches beyond the command tree, supplied by the
 // caller of Tools.
 type Calls struct {
-	// WriteOp runs the write op op over the values document values, writing
-	// its result document on out.
-	WriteOp func(op string, values []byte, out io.Writer) error
+	// WriteOp runs the write op op over the values document values in the
+	// project at dir, writing its result document on out.
+	WriteOp func(dir, op string, values []byte, out io.Writer) error
 	// RenderError writes on out the result document for err, an error a
 	// command's RunE returned without writing one, and on stderr its line.
 	RenderError func(err error, out, stderr io.Writer)
 	// Detached is the tool of each command it keys, in place of one that runs
 	// the command's RunE.
-	Detached map[*cobra.Command]func(*cobra.Command) (protocol.Tool, error)
+	Detached map[*cobra.Command]func(*cobra.Command) (ProjectTool, error)
 	// Listed is the tools no command stands behind, after the derived ones.
-	Listed []protocol.Tool
+	Listed []ProjectTool
 }
 
 // Tools is the tool table: one tool per command under root its binding
-// declares bound, each resolving its KB from dir, and after them calls.Listed.
-func Tools(root *cobra.Command, dir string, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
+// declares bound, and after them calls.Listed, each served by inProject.
+func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
 	var tools []protocol.Tool
 	for _, cmd := range root.Commands() {
 		if cmd.Annotations[BindingAnnotation] != Bound {
 			continue
 		}
-		var tool protocol.Tool
+		var tool ProjectTool
 		var err error
 		if fields, ok := write.OpVocabulary(cmd.Name()); ok {
 			tool = writeOpTool(cmd.Name(), fields, calls.WriteOp)
 		} else if detached, ok := calls.Detached[cmd]; ok {
 			tool, err = detached(cmd)
 		} else {
-			tool, err = commandTool(cmd, dir, stderr, calls.RenderError)
+			tool, err = commandTool(cmd, stderr, calls.RenderError)
 		}
 		if err != nil {
 			return nil, err
 		}
-		tool.Description = cmd.Short
-		tool.ReadOnly = cmd.Annotations[ReadOnlyAnnotation] == "true"
-		tools = append(tools, tool)
+		tool.Tool.Description = cmd.Short
+		tool.Tool.ReadOnly = cmd.Annotations[ReadOnlyAnnotation] == "true"
+		tools = append(tools, inProject(tool, located))
 	}
-	return append(tools, calls.Listed...), nil
+	for _, tool := range calls.Listed {
+		tools = append(tools, inProject(tool, located))
+	}
+	return tools, nil
+}
+
+// projectDirProperty is the argument naming the project a call runs in, which
+// every tool's schema carries.
+const projectDirProperty = "project-dir"
+
+// projectDirMeaning is what the project-dir property names, whatever the
+// server's mode.
+const projectDirMeaning = "Absolute path of the project this call acts on: its git worktree root, " +
+	"the directory holding .git, where kb-root/ is or will be. Never kb-root/ itself or a subdirectory."
+
+// projectDirDescription is the project-dir property's description on a
+// server that may locate a project of its own.
+const projectDirDescription = projectDirMeaning + " Omit it for this server's own project, the one " +
+	"its instructions locate, and name it only for another project. Where the instructions locate " +
+	"none, a call that omits it is refused."
+
+// inProject is t as the server serves it: its schema carries project-dir,
+// optional where the server may locate a project of its own and required where
+// every call names its project, and a call runs t in the project callProject
+// finds, with project-dir removed from its arguments, or answers callProject's
+// refusal. Where project-dir is required the protocol's schema check stops a
+// call that omits it, so only an empty one reaches that refusal.
+func inProject(t ProjectTool, located Located) protocol.Tool {
+	tool := t.Tool
+	tool.InputSchema.Properties = maps.Clone(tool.InputSchema.Properties)
+	description := projectDirDescription
+	if located.Required() {
+		description = projectDirMeaning
+		tool.InputSchema.Required = append(slices.Clone(tool.InputSchema.Required), projectDirProperty)
+	}
+	tool.InputSchema.Properties[projectDirProperty] = protocol.Property{Type: "string", Description: description}
+	tool.Call = func(args map[string]any) (string, map[string]any, bool, error) {
+		p, err := callProject(args, located)
+		var refusal result.Refusal
+		if errors.As(err, &refusal) {
+			doc, err := refusalDocument(refusal)
+			if err != nil {
+				return "", nil, false, err
+			}
+			return ToolResult([]byte(doc))
+		}
+		if err != nil {
+			return "", nil, false, err
+		}
+		args = maps.Clone(args)
+		delete(args, projectDirProperty)
+		return t.Run(p, args)
+	}
+	return tool
+}
+
+// callProject is the project a call runs in: the one its project-dir names,
+// else the server's located project. A call with neither is refused, and so is
+// a project-dir that is no git worktree root.
+func callProject(args map[string]any, located Located) (Project, error) {
+	if named, _ := args[projectDirProperty].(string); named != "" {
+		root, err := buildstore.ProjectRoot(named, projectDirProperty)
+		return Project{Root: root, Named: true}, err
+	}
+	if root, ok := located.Root(); ok {
+		return Project{Root: root}, nil
+	}
+	return Project{}, noProject()
+}
+
+// noProject is the refusal of a call or read on a server with no located
+// project that names none.
+func noProject() result.Refusal {
+	return result.Refusal{{Check: buildstore.CheckUsage, Key: projectDirProperty,
+		Detail: "this server has no project of its own and the call names none",
+		Remedy: "name the project with project-dir: the absolute path of its git worktree root"}}
+}
+
+// refusalDocument is the refused result document carrying refusal.
+func refusalDocument(refusal result.Refusal) (string, error) {
+	var out bytes.Buffer
+	if err := result.Emit(&out, result.Refused, result.Field{Key: result.RefusalsKey, Value: []result.Item(refusal)}); err != nil {
+		return "", fmt.Errorf("rendering the refusal: %w", err)
+	}
+	return out.String(), nil
 }
 
 // writeOpTool is op over one entry: the arguments are the entry.
-func writeOpTool(op string, fields []write.OpField, run func(op string, values []byte, out io.Writer) error) protocol.Tool {
+func writeOpTool(op string, fields []write.OpField, run func(dir, op string, values []byte, out io.Writer) error) ProjectTool {
 	schema := protocol.Schema{Properties: map[string]protocol.Property{}, Required: []string{}}
 	for _, f := range fields {
 		schema.Properties[f.Name] = protocol.Property{}
@@ -189,22 +297,22 @@ func writeOpTool(op string, fields []write.OpField, run func(op string, values [
 			schema.Required = append(schema.Required, f.Name)
 		}
 	}
-	call := func(args map[string]any) (string, map[string]any, bool, error) {
+	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
 		values, err := json.Marshal(map[string]any{"entry": []any{args}})
 		if err != nil {
 			return "", nil, false, err
 		}
 		var out bytes.Buffer
-		if err := run(op, values, &out); err != nil {
+		if err := run(p.Root, op, values, &out); err != nil {
 			return "", nil, false, err
 		}
 		return ToolResult(out.Bytes())
 	}
-	return protocol.Tool{Name: op, InputSchema: schema, Call: call}
+	return ProjectTool{Tool: protocol.Tool{Name: op, InputSchema: schema}, Run: call}
 }
 
 // CommandSchema is cmd's positionals and its tool's input schema: the
-// positionals are the required arguments, and each of the command's own flags
+// positionals are the required arguments save an optional variadic one, and each of the command's own flags
 // not excluded from MCP follows as a property the schema does not require.
 func CommandSchema(cmd *cobra.Command) ([]Positional, protocol.Schema, error) {
 	positionals, err := DeclaredPositionals(cmd)
@@ -218,7 +326,9 @@ func CommandSchema(cmd *cobra.Command) ([]Positional, protocol.Schema, error) {
 			property = protocol.Property{Type: "array", Items: &protocol.Property{Type: "string"}}
 		}
 		schema.Properties[p.Name] = property
-		schema.Required = append(schema.Required, p.Name)
+		if !p.Optional {
+			schema.Required = append(schema.Required, p.Name)
+		}
 	}
 	cmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
 		if err != nil || f.Name == "help" || ExcludedFlag(f) {
@@ -241,19 +351,19 @@ func CommandSchema(cmd *cobra.Command) ([]Positional, protocol.Schema, error) {
 
 // commandTool is cmd run as its RunE runs it, its positionals and flags
 // taken from the arguments.
-func commandTool(cmd *cobra.Command, dir string, stderr io.Writer, renderError func(err error, out, stderr io.Writer)) (protocol.Tool, error) {
+func commandTool(cmd *cobra.Command, stderr io.Writer, renderError func(err error, out, stderr io.Writer)) (ProjectTool, error) {
 	positionals, schema, err := CommandSchema(cmd)
 	if err != nil {
-		return protocol.Tool{}, err
+		return ProjectTool{}, err
 	}
-	call := func(args map[string]any) (string, map[string]any, bool, error) {
+	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
 		var out bytes.Buffer
-		if err := runCommandTool(cmd, positionals, args, dir, &out, stderr, renderError); err != nil {
+		if err := runCommandTool(cmd, positionals, args, p.Root, &out, stderr, renderError); err != nil {
 			return "", nil, false, err
 		}
 		return ToolResult(out.Bytes())
 	}
-	return protocol.Tool{Name: cmd.Name(), InputSchema: schema, Call: call}, nil
+	return ProjectTool{Tool: protocol.Tool{Name: cmd.Name(), InputSchema: schema}, Run: call}, nil
 }
 
 // runCommandTool runs cmd over args from dir, its result document on out,

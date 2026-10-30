@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -156,6 +157,33 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 			refusal[0].Check != config.CheckProvider || !strings.Contains(refusal[0].Detail, `provider "absent"`) {
 			t.Errorf("%s's absent provider = %v, want a refusal keyed models.%s naming %q", role, err, role, "absent")
 		}
+	}
+}
+
+// TestBuildResumeNamesTheConfigDirAbsolute: a relative --config-dir is the
+// directory where the flag was typed, so a build refused after recording a
+// boundary hands out a resume naming it absolute.
+func TestBuildResumeNamesTheConfigDirAbsolute(t *testing.T) {
+	repo, state := buildRepoWith(t, "\\documentclass{article}\n\\title{A Paper}\n\\begin{document}\n\\maketitle\n"+
+		"\\section{Results}\n\\input{missing.tex}\nSome prose.\n\\end{document}\n")
+	cfgDir := filepath.Join(repo, "cfg")
+	if err := os.Mkdir(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := kbase(t, repo, "build", "paper.tex", "--config-dir", "cfg", "--no-inference", "--state-dir", state)
+	doc := checkDocument(t, "build", out)
+	resume, _ := doc.Values["resume"].(string)
+	if doc.Outcome != toolresult.Refused || !strings.HasPrefix(resume, "kbase build --resume ") {
+		t.Fatalf("build = %s, resume %q; want refused inside a stage with a resume\n%s", doc.Outcome, resume, out)
+	}
+	_, named, found := strings.Cut(resume, "--config-dir ")
+	named, _, _ = strings.Cut(named, " ")
+	typed, err := os.Stat(cfgDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Stat(named); !found || !filepath.IsAbs(named) || err != nil || !os.SameFile(got, typed) {
+		t.Errorf("resume = %q names --config-dir %q, want %s absolute", resume, named, cfgDir)
 	}
 }
 

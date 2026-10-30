@@ -100,7 +100,7 @@ func TestResumeRotatesNothing(t *testing.T) {
 	}
 	prefillProgress(t, f.state, progressRotateLines+1)
 	opts.Through = ""
-	if outcome, fields := f.build(t, opts); outcome != result.Done {
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
 	if rotated := rotatedProgress(t, f.state); len(rotated) != 0 {

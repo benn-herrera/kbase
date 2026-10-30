@@ -1,10 +1,8 @@
 # test/coverage droppings
 cover.out
 
-# build output for built debug and dist executables
+# build output
 bin/
-# temp directory for assembling dist tarballs
-dist/
 
 # integration-test working data (pinned corpus clones etc.)
 # most test data will be pulled from cloud git repos.
@@ -32,3 +30,6 @@ mad-design/
 mad-review/
 guest-session/
 __pycache__/
+
+# custom homebrew tap repo location
+homebrew-kbase/

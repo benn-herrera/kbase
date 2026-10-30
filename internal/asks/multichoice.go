@@ -3,9 +3,14 @@ package asks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"sync"
 	"time"
 
@@ -105,31 +110,45 @@ func Decide(reply Reply, offered []string) (string, bool) {
 	return "", false
 }
 
-// Outcome is how an item's letter was reached; a defaulted item has none.
+// Outcome is how an item's letter was reached; a defaulted item has none,
+// and a failed one is an item whose call never completed.
 type Outcome string
 
 const (
 	Answered  Outcome = "answered"
 	Reasked   Outcome = "re-asked"
 	Defaulted Outcome = "defaulted"
+	Failed    Outcome = "failed"
 )
 
-// MultichoiceItem is one item of a multichoice-ask group: its name, its letters, its
-// question, and the composed state. A group's constructor fills these; the
-// item's name and question key the answer cache and the records.
+// MultichoiceItem is one item of a multichoice-ask group: its name, its
+// letters, its question, and the template inputs its state is composed from.
+// The item's name and question key the answer cache and the records.
 type MultichoiceItem struct {
 	Item     string
 	Offered  []string
 	Question Question
-	Compose  func() (string, error)
+	Inputs   map[string]string
+
+	template string
+	// loadErr is the error of loading the item's question file, deferred to
+	// Compose so the ask fails at its call site.
+	loadErr error
 }
 
-// CallRecord is one call: the state past the group's shared prefix, what the
-// answer decided, and what it cost. A decision call carries no free-text
-// reply — Reply is empty and the confidence map carries the answer — and the
-// letter is nil where no offered letter was decided.
+// Compose is the item's state: its kind's template rendered from its inputs.
+func (m MultichoiceItem) Compose() (string, error) {
+	if m.loadErr != nil {
+		return "", m.loadErr
+	}
+	return render(load, m.template, m.Inputs, nil, nil)
+}
+
+// CallRecord is one call: what the answer decided and what it cost. A decision
+// call carries no free-text reply — Reply is empty and the confidence map
+// carries the answer — and the letter is nil where no offered letter was
+// decided.
 type CallRecord struct {
-	Tail        string             `yaml:"tail"`
 	Reply       string             `yaml:"reply"`
 	Confidence  map[string]float64 `yaml:"confidence"`
 	Choice      *string            `yaml:"choice"`
@@ -137,23 +156,55 @@ type CallRecord struct {
 	Stats       *CallStats         `yaml:"stats"`
 }
 
-// ItemRecord is one item's outcome and its calls.
+// ItemRecord is one item's template inputs past its group's, the AskDigest
+// of its state and question, its outcome and its completed calls. A failed
+// item has no choice and no confidence.
 type ItemRecord struct {
-	Item       string             `yaml:"item"`
-	Offered    []string           `yaml:"offered"`
-	Choice     *string            `yaml:"choice"`
-	Outcome    Outcome            `yaml:"outcome"`
-	Confidence map[string]float64 `yaml:"confidence"`
-	Calls      []CallRecord       `yaml:"calls"`
+	Item         string             `yaml:"item"`
+	Offered      []string           `yaml:"offered"`
+	Inputs       map[string]string  `yaml:"inputs"`
+	PromptSHA256 string             `yaml:"prompt-sha256"`
+	Choice       *string            `yaml:"choice"`
+	Outcome      Outcome            `yaml:"outcome"`
+	Confidence   map[string]float64 `yaml:"confidence"`
+	Calls        []CallRecord       `yaml:"calls"`
 }
 
-// GroupRecord is one group's asks: the prefix every prompt in it opens with,
-// once, and every item in the order given.
+// GroupRecord is one group's asks: the template inputs every recorded item
+// shares, once; and every recorded item in the order given.
 type GroupRecord struct {
-	Kind   Kind         `yaml:"kind"`
-	Group  string       `yaml:"group"`
-	Prefix string       `yaml:"prefix"`
-	Items  []ItemRecord `yaml:"items"`
+	Kind   Kind              `yaml:"kind"`
+	Group  string            `yaml:"group"`
+	Inputs map[string]string `yaml:"inputs"`
+	Items  []ItemRecord      `yaml:"items"`
+}
+
+// Digest is the length-prefixed SHA-256 of parts, in hex: the answer cache's
+// key and a record's prompt-sha256.
+func Digest(parts ...string) string {
+	h := sha256.New()
+	for _, p := range parts {
+		fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// AskDigest is the digest of a multichoice ask's question — its type,
+// instructions, true letter and criteria in sorted key order — and its
+// state. The question's key is not part of it.
+func AskDigest(state string, q Question) string {
+	return Digest(append(QuestionParts(q), state)...)
+}
+
+// QuestionParts is the question's serialization for digests: its type,
+// instructions, true letter and each criterion's key and value in sorted key
+// order. The question's key is not part of it.
+func QuestionParts(q Question) []string {
+	parts := []string{q.Type, q.Instructions, q.TrueLetter}
+	for _, k := range slices.Sorted(maps.Keys(q.Criteria)) {
+		parts = append(parts, k, q.Criteria[k])
+	}
+	return parts
 }
 
 // Launch starts one item of an ask batch. It blocks until the item may start
@@ -208,22 +259,6 @@ func resolve(ctx context.Context, reader MultichoiceReader, q MultichoiceQuestio
 	return []askCall{first, second}, err
 }
 
-// sharedPrefix is the longest run of whole lines every prompt opens with.
-func sharedPrefix(prompts []string) string {
-	if len(prompts) == 0 {
-		return ""
-	}
-	common := prompts[0]
-	for _, p := range prompts[1:] {
-		n := 0
-		for n < len(common) && n < len(p) && common[n] == p[n] {
-			n++
-		}
-		common = common[:n]
-	}
-	return common[:strings.LastIndex(common, "\n")+1]
-}
-
 // Batch is one ask batch: the groups one stage launches, in order and from
 // the goroutine that runs the stage, before it waits for them all. Its first
 // error by arrival stops it — no further item is launched, and the calls in
@@ -235,6 +270,9 @@ type Batch struct {
 	launch Launch
 	wg     sync.WaitGroup
 	groups []*launchedGroup
+	// carryOn is whether a call that never completes leaves its item failed
+	// and the batch running, rather than stopping it.
+	carryOn bool
 
 	started time.Time
 	elapsed time.Duration
@@ -243,14 +281,25 @@ type Batch struct {
 // launchedGroup is one group of a batch and its items' result cells, each
 // written by its own item alone and read once the batch has drained.
 type launchedGroup struct {
-	kind  Kind
-	group string
-	items []MultichoiceItem
-	calls [][]askCall
+	kind    Kind
+	group   string
+	items   []MultichoiceItem
+	results []itemResult
 }
 
-// NewBatch is an empty ask batch whose items launch would start under ctx.
-// Every batch is ended by its Wait.
+// itemResult is what one launched item left: its composed state, the calls
+// that completed, and whether one never did. An item with neither a call nor
+// a failure was never asked.
+type itemResult struct {
+	state  string
+	calls  []askCall
+	failed bool
+}
+
+func (r itemResult) recorded() bool { return r.failed || len(r.calls) > 0 }
+
+// NewBatch is an empty ask batch whose items launch would start under ctx. A
+// call that never completes stops it. Every batch is ended by its Wait.
 func NewBatch(ctx context.Context, launch Launch) *Batch {
 	bctx, stop := context.WithCancelCause(ctx)
 	return &Batch{ctx: bctx, stop: stop, launch: launch, started: time.Now()}
@@ -269,7 +318,7 @@ func (b *Batch) Elapsed() time.Duration { return b.elapsed }
 // Where b has stopped it returns b's error, and the stage launches nothing
 // more.
 func (b *Batch) AskGroup(kind Kind, group string, items []MultichoiceItem) error {
-	g := &launchedGroup{kind: kind, group: group, items: items, calls: make([][]askCall, len(items))}
+	g := &launchedGroup{kind: kind, group: group, items: items, results: make([]itemResult, len(items))}
 	b.groups = append(b.groups, g)
 	for i, entry := range items {
 		state, err := entry.Compose()
@@ -282,11 +331,22 @@ func (b *Batch) AskGroup(kind Kind, group string, items []MultichoiceItem) error
 		first := MultichoiceQuestion{Kind: kind, Group: group, Item: entry.Item, State: state, Question: q, Offered: entry.Offered, Attempt: 1}
 		item := func(reader MultichoiceReader) func(error) {
 			calls, err := resolve(b.ctx, reader, first)
-			if err != nil {
+			var incomplete IncompleteError
+			switch {
+			case errors.As(err, &incomplete):
+				// The call that never completed is resolve's last, and left
+				// no askCall to record.
+				g.results[i] = itemResult{state: state, calls: calls[:len(calls)-1], failed: true}
+				if b.carryOn {
+					return b.written
+				}
+				b.stop(err)
+				return nil
+			case err != nil:
 				b.stop(err)
 				return nil
 			}
-			g.calls[i] = calls
+			g.results[i] = itemResult{state: state, calls: calls}
 			return b.written
 		}
 		var alone sync.WaitGroup
@@ -321,54 +381,89 @@ func (b *Batch) err() error {
 	return context.Cause(b.ctx)
 }
 
-// Wait waits for every item b launched, then returns the record of each of
-// its groups in the order they were launched — or, where b stopped, its first
-// error by arrival and no record. It writes no file: the stage writes the
-// records through WriteGroupRecords.
+// Wait waits for every item b launched, then returns the record of each group
+// in launch order and, where b stopped, its first error by arrival. A finished
+// batch records every group it was given, one launched with no items as a
+// record with none. After a stop, a record holds the items that were asked: an
+// item whose call never completed is recorded failed; one cancelled by a
+// sibling's stop or never launched is absent, as is a group with no asked
+// item. It writes no file: the stage writes the records through
+// WriteGroupRecords.
 func (b *Batch) Wait() ([]GroupRecord, error) {
 	b.wg.Wait()
 	b.elapsed = time.Since(b.started)
 	defer b.stop(nil)
-	if err := b.err(); err != nil {
-		return nil, err
+	var records []GroupRecord
+	for _, g := range b.groups {
+		if rec, ok := g.record(); ok || b.err() == nil {
+			records = append(records, rec)
+		}
 	}
-	records := make([]GroupRecord, len(b.groups))
-	for i, g := range b.groups {
-		records[i] = g.record()
-	}
-	return records, nil
+	return records, b.err()
 }
 
-// record is g's record, its items in the order given.
-func (g *launchedGroup) record() GroupRecord {
-	rec := GroupRecord{Kind: g.kind, Group: g.group}
-	var states []string
-	for _, calls := range g.calls {
-		for _, c := range calls {
-			states = append(states, c.state)
+// record is g's record, its asked items in the order given; false, with the
+// group's kind and name only, where none was asked. The inputs every asked
+// item shares go to the group, the rest to each item.
+func (g *launchedGroup) record() (GroupRecord, bool) {
+	var asked []int
+	for i, r := range g.results {
+		if r.recorded() {
+			asked = append(asked, i)
 		}
 	}
-	rec.Prefix = sharedPrefix(states)
-	for i, entry := range g.items {
-		calls := g.calls[i]
-		last := calls[len(calls)-1]
-		outcome := Answered
-		switch {
-		case last.letter == nil:
-			outcome = Defaulted
-		case len(calls) > 1:
-			outcome = Reasked
+	if len(asked) == 0 {
+		return GroupRecord{Kind: g.kind, Group: g.group}, false
+	}
+	inputs := make([]map[string]string, len(asked))
+	for j, i := range asked {
+		inputs[j] = g.items[i].Inputs
+	}
+	shared, own := splitInputs(inputs)
+	rec := GroupRecord{Kind: g.kind, Group: g.group, Inputs: shared}
+	for j, i := range asked {
+		entry, r := g.items[i], g.results[i]
+		item := ItemRecord{Item: entry.Item, Offered: entry.Offered, Inputs: own[j], PromptSHA256: AskDigest(r.state, entry.Question), Outcome: Failed}
+		if !r.failed {
+			last := r.calls[len(r.calls)-1]
+			item.Choice, item.Confidence, item.Outcome = last.letter, last.reply.Confidence, Answered
+			switch {
+			case last.letter == nil:
+				item.Outcome = Defaulted
+			case len(r.calls) > 1:
+				item.Outcome = Reasked
+			}
 		}
-		item := ItemRecord{Item: entry.Item, Offered: entry.Offered, Choice: last.letter, Outcome: outcome, Confidence: last.reply.Confidence}
-		for _, c := range calls {
+		for _, c := range r.calls {
 			item.Calls = append(item.Calls, CallRecord{
-				Tail: c.state[len(rec.Prefix):], Reply: "", Confidence: c.reply.Confidence, Choice: c.letter,
+				Reply: "", Confidence: c.reply.Confidence, Choice: c.letter,
 				WallSeconds: c.wall.Seconds(), Stats: c.reply.Stats,
 			})
 		}
 		rec.Items = append(rec.Items, item)
 	}
-	return rec
+	return rec, true
+}
+
+// splitInputs is the entries every map of inputs holds with one value, and
+// each map's remaining entries, in order.
+func splitInputs(inputs []map[string]string) (map[string]string, []map[string]string) {
+	shared := map[string]string{}
+	for k, v := range inputs[0] {
+		if !slices.ContainsFunc(inputs, func(m map[string]string) bool { w, ok := m[k]; return !ok || w != v }) {
+			shared[k] = v
+		}
+	}
+	own := make([]map[string]string, len(inputs))
+	for j, m := range inputs {
+		own[j] = map[string]string{}
+		for k, v := range m {
+			if _, ok := shared[k]; !ok {
+				own[j][k] = v
+			}
+		}
+	}
+	return shared, own
 }
 
 // GroupRecordsPath is the file under dir holding a stage's group records of
@@ -407,6 +502,7 @@ func WriteGroupRecords(dir string, records []GroupRecord) error {
 // every sum beside it leaves out.
 type AskTotals struct {
 	Items, Answered, Reasked, Defaulted   int
+	Failed                                int
 	Calls, Unmeasured                     int
 	ThinkingBlocks, OutputTokens          int
 	WallSeconds, APISeconds               float64
@@ -427,6 +523,8 @@ func Totals(records []GroupRecord) AskTotals {
 				t.Reasked++
 			case Defaulted:
 				t.Defaulted++
+			case Failed:
+				t.Failed++
 			}
 			for _, c := range item.Calls {
 				t.Calls++

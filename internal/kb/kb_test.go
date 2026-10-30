@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+// TestProjectPath: a relative path joins to the root, an absolute one is
+// cleaned and ignores it.
+func TestProjectPath(t *testing.T) {
+	for _, tc := range []struct{ name, p, want string }{
+		{"relative", "sub/x.tex", "/root/sub/x.tex"},
+		{"relative with dots", "./sub/../x.tex", "/root/x.tex"},
+		{"absolute", "/a/./b", "/a/b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ProjectPath("/root", filepath.FromSlash(tc.p)); got != filepath.FromSlash(tc.want) {
+				t.Errorf("ProjectPath(/root, %q) = %q, want %q", tc.p, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestResolvePath: the existing prefix is resolved through its symlinks, the
 // missing rest kept as written; a path nothing of which resolves is as given.
 func TestResolvePath(t *testing.T) {

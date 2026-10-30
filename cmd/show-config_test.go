@@ -475,22 +475,22 @@ decisionsFlavor = "decisions"
 }
 
 // TestShowConfigReportsTheProtocol: every usable entry states the chat protocol
-// it resolves to — `openai` where the entry is silent, `anthropic` where it names
-// the Messages protocol — and a dropped provider, which has no entry to
-// describe, states none.
+// it resolves to — `anthropic` where the entry is silent, `openai` where it names
+// the OpenAI-compatible protocol — and a dropped provider, which has no entry
+// to describe, states none.
 func TestShowConfigReportsTheProtocol(t *testing.T) {
 	unsetInferenceEnv(t)
 	dir := t.TempDir()
 	writeValues(t, dir, config.ProvidersFileName, `[silent]
 baseUrl = "http://silent.example/v1"
 
-[messages]
-baseUrl = "http://messages.example/v1"
-api = "anthropic"
+[compat]
+baseUrl = "http://compat.example/v1"
+api = "openai"
 
 [broken]
 `)
-	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"silent/dec-1\"\ntext = \"messages/text-1\"\nscoring = \"silent/score-1\"\n")
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"silent/dec-1\"\ntext = \"compat/text-1\"\nscoring = \"silent/score-1\"\n")
 
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
@@ -501,13 +501,75 @@ api = "anthropic"
 		name, _ := p["name"].(string)
 		entries[name] = p
 	}
-	if got := entries["silent"]["api"]; got != config.ProviderAPIOpenAI {
-		t.Errorf("an entry silent on the protocol reports %v, want %s", got, config.ProviderAPIOpenAI)
+	if got := entries["silent"]["api"]; got != config.ProviderAPIAnthropic {
+		t.Errorf("an entry silent on the protocol reports %v, want %s", got, config.ProviderAPIAnthropic)
 	}
-	if got := entries["messages"]["api"]; got != config.ProviderAPIAnthropic {
-		t.Errorf("an entry naming anthropic reports %v, want %s", got, config.ProviderAPIAnthropic)
+	if got := entries["compat"]["api"]; got != config.ProviderAPIOpenAI {
+		t.Errorf("an entry naming openai reports %v, want %s", got, config.ProviderAPIOpenAI)
 	}
 	if got, ok := entries["broken"]["api"]; ok {
 		t.Errorf("the dropped entry states a protocol (%v): %v", got, entries["broken"])
+	}
+}
+
+// TestShowConfigReportsTheSamplingAndItsLayers: a repository layer stating a
+// thinking level over a global layer stating a temperature reports the merged
+// values under config.sampling, each chat role's own values with the layer that
+// supplied each, null for the role no layer states, and none for the decision
+// role, which is not asked with sampling.
+func TestShowConfigReportsTheSamplingAndItsLayers(t *testing.T) {
+	unsetInferenceEnv(t)
+	home := t.TempDir()
+	global := filepath.Join(home, ".config", "kbase")
+	repo := t.TempDir()
+	for _, dir := range []string{global, filepath.Join(repo, config.RepositoryDirName), filepath.Join(repo, ".git")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeValues(t, global, config.ProvidersFileName, "[local]\nbaseUrl = \"http://local.example/v1\"\n")
+	writeValues(t, global, config.ConfigFileName,
+		"[models]\ndecision = \"local/dec-1\"\ntext = \"local/text-1\"\nscoring = \"local/score-1\"\n\n[sampling.text]\ntemperature = 0.3\n")
+	writeValues(t, filepath.Join(repo, config.RepositoryDirName), config.ConfigFileName, "[sampling.text]\nthinking = \"low\"\n")
+	t.Setenv("HOME", home)
+
+	doc, stdout, _, code := runShowConfigVerb(t, repo)
+	if code != 0 || doc.Outcome != toolresult.Done {
+		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
+	}
+	cfg, _ := doc.Values["config"].(map[string]any)
+	sampling, _ := cfg["sampling"].(map[string]any)
+	if want := (map[string]any{"temperature": 0.3, "thinking": "low"}); !reflect.DeepEqual(sampling["text"], want) {
+		t.Errorf("config.sampling.text = %v, want %v", sampling["text"], want)
+	}
+	if want := (map[string]any{"temperature": nil, "thinking": nil}); !reflect.DeepEqual(sampling["scoring"], want) {
+		t.Errorf("config.sampling.scoring = %v, want %v", sampling["scoring"], want)
+	}
+
+	text := roleOf(doc, "text")
+	sources, _ := text["sources"].(map[string]any)
+	if text["temperature"] != 0.3 || text["thinking"] != "low" ||
+		sources["temperature"] != config.LayerSourceGlobal || sources["thinking"] != config.LayerSourceRepository {
+		t.Errorf("text = %v, want both values and the layers global and repository", text)
+	}
+	scoring := roleOf(doc, "scoring")
+	sources, _ = scoring["sources"].(map[string]any)
+	for _, k := range []string{"temperature", "thinking"} {
+		if v, ok := scoring[k]; !ok || v != nil {
+			t.Errorf("scoring %s = %v (present %t), want null", k, v, ok)
+		}
+		if v, ok := sources[k]; !ok || v != nil {
+			t.Errorf("scoring sources %s = %v (present %t), want null", k, v, ok)
+		}
+	}
+	decision := roleOf(doc, "decision")
+	sources, _ = decision["sources"].(map[string]any)
+	for _, k := range []string{"temperature", "thinking"} {
+		if _, ok := decision[k]; ok {
+			t.Errorf("decision carries %s: %v", k, decision)
+		}
+		if _, ok := sources[k]; ok {
+			t.Errorf("decision sources carries %s: %v", k, sources)
+		}
 	}
 }

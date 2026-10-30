@@ -1,4 +1,4 @@
-//go:build !kbasedist
+//go:build kbasedev
 
 package main
 
@@ -10,15 +10,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
-	"kbase/internal/statedir"
 )
 
 // scoreReplayOptions is the replay's input: the score verb's options it shares,
@@ -38,26 +37,13 @@ type scoreReplayOptions struct {
 	Given []string
 }
 
-// replayFlags is score's own flags a replay takes beside --replay; any other of
-// them is a run's and is refused with it.
-var replayFlags = []string{"replay", "pass", "failed", "limit", "scoring-model", "state-dir", "timeout", "ask-concurrency"}
+// scoreReplayFlags is score's own flags a replay takes beside --replay; any
+// other of them is a run's and is refused with it.
+var scoreReplayFlags = []string{"replay", "pass", "failed", "limit", "scoring-model", "state-dir", "timeout", "ask-concurrency"}
 
 // replayRunRE is the shape of the run --replay names: a real or a dry run's id
 // as kb.MintID mints it, never a path.
 var replayRunRE = regexp.MustCompile(`^(` + score.RunKindReal + `|` + score.RunKindDry + `)-` + runIDBody + `$`)
-
-// replayTakes is the flags a replay takes beside --replay as its refusal names
-// them: replayFlags, and the persistent --config-dir.
-func replayTakes() string {
-	var names []string
-	for _, name := range replayFlags {
-		if name != "replay" {
-			names = append(names, "--"+name)
-		}
-	}
-	names = append(names, "--config-dir")
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
 
 var (
 	scoreFlagReplay string
@@ -71,12 +57,7 @@ func init() {
 	mcp.ExcludeFlag(scoreCmd.Flags().Lookup("replay"))
 	mcp.ExcludeFlag(scoreCmd.Flags().Lookup("failed"))
 	scoreReplay = func(cmd *cobra.Command) func(scoreOptions) (int, error) {
-		var given []string
-		cmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
-			if f.Changed {
-				given = append(given, f.Name)
-			}
-		})
+		given := changedLocalFlags(cmd)
 		if !slices.Contains(given, "replay") && !slices.Contains(given, "failed") {
 			return nil
 		}
@@ -105,7 +86,7 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	}
 	var others []string
 	for _, name := range opts.Given {
-		if !slices.Contains(replayFlags, name) {
+		if !slices.Contains(scoreReplayFlags, name) {
 			others = append(others, "--"+name)
 		}
 	}
@@ -114,11 +95,11 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--failed",
 			Detail: "--failed narrows a replay and is given with --replay"})
 	case !replayRunRE.MatchString(opts.Run):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--replay",
+		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
 			Detail: "--replay names a run's id (" + score.RunKindReal + "-<…> or " + score.RunKindDry + "-<…>), not a path: " + opts.Run})
 	case len(others) > 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--replay",
-			Detail: "--replay takes " + replayTakes() + "; " + strings.Join(others, ", ") + " is a run's"})
+		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+			Detail: "--replay takes " + replayTakes(scoreReplayFlags) + "; " + strings.Join(others, ", ") + " is a run's"})
 	case opts.Limit < 0:
 		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	}
@@ -130,19 +111,11 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	root, refusals, err := kbRootFrom(opts.WorkDir)
+	dir, err := replayStateDir(opts.StateDir, opts.WorkDir)
 	if err != nil {
-		return failed(nil, err)
+		return refusedOrFailed(nil, err)
 	}
-	if refusals != nil {
-		return refused(nil, refusals...)
-	}
-	fields = []toolresult.Field{{Key: "kb-root", Value: root}}
-	dir, err := statedir.Dir(opts.StateDir, root)
-	if outcome, f, stop := refusalOrFailure(fields, err); stop {
-		return outcome, f
-	}
-	fields = append(fields, toolresult.Field{Key: "state-dir", Value: dir}, toolresult.Field{Key: "run", Value: opts.Run})
+	fields = []toolresult.Field{{Key: "state-dir", Value: dir}, {Key: "run", Value: opts.Run}}
 
 	rp, err := score.OpenReplay(dir, opts.Run, opts.Pass, opts.Failed, opts.Limit)
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {

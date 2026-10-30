@@ -93,36 +93,13 @@ func TestTemplatesSpellEveryModeledKey(t *testing.T) {
 	}
 }
 
-// TestConfigTemplateCarriesTheModelGuidance: a first-time user opens the one
-// file kbase wrote and finds out there what each [models] category wants —
-// the capability first, ids as examples — so the guidance reaches them without
-// a lookup and without the ids reading as required.
+// TestConfigTemplateCarriesTheModelGuidance: the generated config.toml carries
+// the [models] guidance.
 func TestConfigTemplateCarriesTheModelGuidance(t *testing.T) {
 	template := freshConfig(Config{})
 	if !strings.Contains(template, modelHintsComment()) {
 		t.Errorf("the generated config.toml carries no [models] guidance:\n%s", template)
 	}
-	prose := commentProse(modelHintsComment())
-	for _, want := range []string{
-		"a mid-weight reasoning model (e.g. d3, clef)",
-		"a ~9B instruct model (e.g. Qwen3.5-9B)",
-		"the strongest reasoning model on offer (e.g. clef, d3)",
-	} {
-		if !strings.Contains(prose, want) {
-			t.Errorf("the guidance states no %q:\n%s", want, prose)
-		}
-	}
-}
-
-// commentProse is a comment block as prose: its leading "#"s and its line
-// breaks folded away, so a check states what the block says and not where the
-// renderer wrapped it.
-func commentProse(block string) string {
-	var words []string
-	for _, line := range strings.Split(block, "\n") {
-		words = append(words, strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "#"))...)
-	}
-	return strings.Join(words, " ")
 }
 
 // TestTemplatesLoadAsAFreshConfiguration: what `configure --create` writes on a

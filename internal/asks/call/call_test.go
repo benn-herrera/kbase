@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +20,7 @@ import (
 	"kbase/internal/asks"
 	"kbase/internal/log"
 	"kbase/internal/model"
+	"kbase/internal/model/modeltest"
 )
 
 // trailDir is the one trail directory a test's scratch holds.
@@ -386,6 +389,54 @@ func TestAnItemsFilesExistOnlyOnceItsAfterRuns(t *testing.T) {
 	}
 }
 
+// TestAnOverviewCutOffBeforeAnyTextIsNotAskedAgain: an overview answer that
+// reached the completion cap with no text fails the ask on its one request,
+// and leaves its capture, with the attempt's outcome, but no answer.
+func TestAnOverviewCutOffBeforeAnyTextIsNotAskedAgain(t *testing.T) {
+	scratch := t.TempDir()
+	mock := modeltest.NewScriptedMock([]model.Response{{Content: "", FinishReason: "length"}}, nil)
+	mock.RecordCalls = true
+	var got error
+	var wg sync.WaitGroup
+	err := newCaller(mock, scratch).PassageLaunch(model.NewQueue(1), "m")(context.Background(), &wg, func(passage func(context.Context, string, []string, int) (string, error)) func(error) {
+		_, got = passage(context.Background(), "excerpts", nil, 1)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	var incomplete asks.IncompleteError
+	if !errors.As(got, &incomplete) {
+		t.Fatalf("ask = %v, want an asks.IncompleteError", got)
+	}
+	if n := len(mock.Calls()); n != 1 {
+		t.Errorf("the model saw %d requests, want 1", n)
+	}
+	if answers, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*")); len(answers) != 0 {
+		t.Errorf("answers held = %v, want none", answers)
+	}
+	paths, _ := filepath.Glob(filepath.Join(trailCaptures(scratch), "*.capture.jsonl"))
+	if len(paths) != 1 {
+		t.Fatalf("captures = %q, want one", paths)
+	}
+	b, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempt struct {
+		Type    string `json:"type"`
+		Outcome string `json:"outcome"`
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("capture = %s, want a request line and one attempt line", b)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &attempt); err != nil || attempt.Type != "attempt" || attempt.Outcome != model.ChatTruncatedEmpty {
+		t.Errorf("attempt line = %s, want outcome %q (%v)", lines[1], model.ChatTruncatedEmpty, err)
+	}
+}
+
 // TestDecideReturnsItsContextsEnd: a call whose ctx ends while it is in
 // flight — its batch stopped by a sibling — returns that ending, never an
 // incomplete call that would read as its own inference failure.
@@ -478,5 +529,153 @@ func TestACaptureRecordsItsTokenWait(t *testing.T) {
 	}
 	if first >= second {
 		t.Errorf("S1 took a free token and records a %dms wait, S2 records %dms", first, second)
+	}
+}
+
+// overview asks the overview of "excerpts" through client, its answers and
+// captures in scratch's one trail, and returns the passage.
+func overview(t *testing.T, client model.Client, scratch string) (string, error) {
+	t.Helper()
+	var passage string
+	var got error
+	var wg sync.WaitGroup
+	launch := New(client, func() string { return trailDir(scratch) }, log.Discard()).PassageLaunch(model.NewQueue(1), "m")
+	err := launch(context.Background(), &wg, func(ask func(context.Context, string, []string, int) (string, error)) func(error) {
+		passage, got = ask(context.Background(), "excerpts", nil, 1)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	return passage, got
+}
+
+// sampled is a scripted client answering "the passage" that sends sampling s.
+func sampled(s model.Sampling) (*modeltest.MockClient, model.Client) {
+	mock := modeltest.NewScriptedMock([]model.Response{{Content: "the passage", FinishReason: "stop"}}, nil)
+	mock.RecordCalls = true
+	client := mock.Client().(*model.ClientFuncs)
+	client.Sampling = s
+	return mock, client
+}
+
+// TestACaptureRecordsTheSamplingSent: a chat capture's request line carries the
+// effective temperature and thinking level — kbase's defaults for a client
+// stating none, a Messages client's included.
+func TestACaptureRecordsTheSamplingSent(t *testing.T) {
+	defaultTemperature, err := json.Marshal(model.DefaultTemperature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		client          func(t *testing.T) model.Client
+		wantTemperature string
+		wantThinking    string
+	}{
+		{"stated", func(*testing.T) model.Client {
+			_, c := sampled(model.Sampling{Temperature: new(0.7), Thinking: new(model.ThinkingLow)})
+			return c
+		}, "0.7", `"low"`},
+		{"unset", func(*testing.T) model.Client {
+			_, c := sampled(model.Sampling{})
+			return c
+		}, string(defaultTemperature), `"off"`},
+		{"messages with thinking high", func(t *testing.T) model.Client {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, modeltest.MessagesStream("", "the passage", "end_turn"))
+			}))
+			t.Cleanup(srv.Close)
+			c := model.NewAnthropicClient(model.Endpoint{BaseURL: srv.URL, Protocol: model.ProtocolAnthropic,
+				Sampling: model.Sampling{Thinking: new(model.ThinkingHigh)}})
+			t.Cleanup(func() { _ = c.Close() })
+			return c
+		}, string(defaultTemperature), `"high"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scratch := t.TempDir()
+			if _, err := overview(t, tc.client(t), scratch); err != nil {
+				t.Fatal(err)
+			}
+			paths, _ := filepath.Glob(filepath.Join(trailCaptures(scratch), "*.capture.jsonl"))
+			if len(paths) != 1 {
+				t.Fatalf("captures = %q, want one", paths)
+			}
+			b, err := os.ReadFile(paths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(strings.SplitN(string(b), "\n", 2)[0]), &request); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(request["temperature"]); got != tc.wantTemperature {
+				t.Errorf("temperature = %q, want %s", got, tc.wantTemperature)
+			}
+			if got := string(request["thinking"]); got != tc.wantThinking {
+				t.Errorf("thinking = %q, want %s", got, tc.wantThinking)
+			}
+		})
+	}
+}
+
+// TestAnAnswerCachedBeforeSamplingStillAnswersAnUnsetAsk: an answer at the
+// default-sampling key — the digest of model, system, prompt and attempt —
+// answers, with no request, an ask whose sampling is unset or the stated
+// default; a non-default level misses it and asks.
+func TestDecisionDigestIsStable(t *testing.T) {
+	q := asks.MultichoiceQuestion{
+		State:   "st",
+		Attempt: 1,
+		Question: asks.Question{
+			Key: "k", Type: "ty", Instructions: "ins", TrueLetter: "T",
+			Criteria: map[string]string{"b": "two", "a": "one"},
+		},
+	}
+	want := asks.Digest("m", "k", "ty", "ins", "T", "a", "one", "b", "two", "st", "1")
+	if got := decisionDigest("m", q); got != want {
+		t.Fatalf("decisionDigest = %s, want %s", got, want)
+	}
+}
+
+func TestAnAnswerCachedBeforeSamplingStillAnswersAnUnsetAsk(t *testing.T) {
+	scratch := t.TempDir()
+	system, err := asks.System(asks.OverviewSystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := asks.OverviewPrompt("excerpts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(trailAnswers(scratch), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	cached := filepath.Join(trailAnswers(scratch), asks.Digest("m", system, prompt, "1")+".txt")
+	if err := os.WriteFile(cached, []byte("the cached passage"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		sampling  model.Sampling
+		want      string
+		wantCalls int
+	}{
+		{"unset", model.Sampling{}, "the cached passage", 0},
+		{"the default stated", model.Sampling{Temperature: new(0.0), Thinking: new(model.ThinkingOff)}, "the cached passage", 0},
+		{"thinking low", model.Sampling{Thinking: new(model.ThinkingLow)}, "the passage", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, client := sampled(tc.sampling)
+			got, err := overview(t, client, scratch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want || len(mock.Calls()) != tc.wantCalls {
+				t.Errorf("passage %q after %d request(s), want %q after %d", got, len(mock.Calls()), tc.want, tc.wantCalls)
+			}
+		})
 	}
 }
