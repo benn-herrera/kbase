@@ -82,8 +82,9 @@ type Reply struct {
 type MultichoiceReader func(ctx context.Context, q MultichoiceQuestion) (Reply, error)
 
 // IncompleteError is a call that never completed: no answer arrived, so no
-// re-ask can be spent on one. It is the one thing that stops a stage.
-type IncompleteError struct{ Subject, Detail string }
+// re-ask can be spent on one. It is the one thing that stops a stage. Remedy
+// is the command that lets the call through, "" where its failure names none.
+type IncompleteError struct{ Subject, Detail, Remedy string }
 
 func (e IncompleteError) Error() string { return e.Subject + ": " + e.Detail }
 

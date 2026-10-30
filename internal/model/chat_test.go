@@ -187,17 +187,21 @@ func TestChatNamesAProviderRefusal(t *testing.T) {
 
 // TestChatReissuesOnlyARetryableStatus: a status that may be the provider's
 // moment — 429 and the 5xx class — is re-issued to the attempt count; every
-// other answered status ends the call on the one attempt that met it.
+// other answered status ends the call on the one attempt that met it. Either
+// way the call's error carries the last attempt's StatusError, and only 401
+// and 403 read as a refused key.
 func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 	for _, tc := range []struct {
-		code     int
-		requests int
+		code       int
+		requests   int
+		refusedKey bool
 	}{
-		{http.StatusBadRequest, 1},
-		{http.StatusUnauthorized, 1},
-		{http.StatusNotFound, 1},
-		{http.StatusTooManyRequests, model.ChatAttempts},
-		{http.StatusServiceUnavailable, model.ChatAttempts},
+		{http.StatusBadRequest, 1, false},
+		{http.StatusUnauthorized, 1, true},
+		{http.StatusForbidden, 1, true},
+		{http.StatusNotFound, 1, false},
+		{http.StatusTooManyRequests, model.ChatAttempts, false},
+		{http.StatusServiceUnavailable, model.ChatAttempts, false},
 	} {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			srv, requests := statusServer(t, tc.code)
@@ -206,6 +210,10 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 			got, observed := lastAttempt(res), res.Attempts
 			if !errors.Is(err, model.ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
+			}
+			var se model.StatusError
+			if !errors.As(err, &se) || se.Code != tc.code || se.RefusedKey() != tc.refusedKey {
+				t.Errorf("Chat = %v, want it to carry the StatusError of %d, a refused key %v", err, tc.code, tc.refusedKey)
 			}
 			if got.Outcome != model.ChatProviderRefused {
 				t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatProviderRefused)

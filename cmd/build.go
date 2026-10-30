@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -122,10 +123,15 @@ func refused(fields []toolresult.Field, items ...toolresult.Item) (string, []too
 // checkError names a failure kbase has no narrower class for.
 const checkError = buildstore.CheckError
 
-// failed is a failure of err, after fields.
+// failed is a failure of err, after fields, carrying the remedy err names
+// where the provider refused a call for its key.
 func failed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
-	return toolresult.Failed, append(fields, toolresult.Field{Key: toolresult.FailuresKey,
-		Value: []toolresult.Item{{Check: checkError, Detail: err.Error()}}})
+	item := toolresult.Item{Check: checkError, Detail: err.Error()}
+	var refused modelclient.KeyRefusedError
+	if errors.As(err, &refused) {
+		item.Remedy = refused.Remedy
+	}
+	return toolresult.Failed, append(fields, toolresult.Field{Key: toolresult.FailuresKey, Value: []toolresult.Item{item}})
 }
 
 // exitCode carries a non-zero exit out of a verb that has already written
@@ -154,26 +160,26 @@ func buildProvider(p providerOptions, stderr io.Writer) func(reg *modelclient.Re
 		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
 		warned := map[string]bool{}
-		role := func(r config.Role) (model.Client, string, error) {
+		role := func(r config.Role) (model.Client, string, string, error) {
 			ep, err := config.Resolve(s, r, "")
 			if err != nil {
-				return nil, "", err
+				return nil, "", "", err
 			}
 			// One line per endpoint, however many roles reach it.
 			if !warned[ep.BaseURL] {
 				warned[ep.BaseURL] = warnCleartextKey(stderr, ep)
 			}
 			records = append(records, roleRecord(ep))
-			return reg.Get(ep), ep.Model, nil
+			return reg.Get(ep), ep.Provider, ep.Model, nil
 		}
 		var (
 			provider build.Provider
 			err      error
 		)
-		if provider.MultichoiceClient, provider.Multichoice, err = role(config.RoleDecision); err != nil {
+		if provider.MultichoiceClient, provider.MultichoiceProvider, provider.Multichoice, err = role(config.RoleDecision); err != nil {
 			return build.Provider{}, err
 		}
-		if provider.OverviewClient, provider.Overview, err = role(config.RoleText); err != nil {
+		if provider.OverviewClient, provider.OverviewProvider, provider.Overview, err = role(config.RoleText); err != nil {
 			return build.Provider{}, err
 		}
 		provider.Roles = records

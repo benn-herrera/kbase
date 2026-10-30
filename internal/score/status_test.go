@@ -1,6 +1,7 @@
 package score
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -160,7 +161,7 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	}{
 		{landedAgain, Entry{Status: StatusFailed, Reply: "the provider closed the connection", Started: at, Ended: at}},
 		{answered, Entry{Status: StatusDone, Value: "0.40", Faults: []Charge{}, Started: at, Ended: at}},
-		{outside, Entry{Status: StatusFailed, Reply: "no reply", Started: at, Ended: at}},
+		{outside, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through", Started: at, Ended: at}},
 	} {
 		if err := l.writeResult(i, resultRecord{Line: l.line(r.it, r.e)}); err != nil {
 			t.Fatal(err)
@@ -179,6 +180,15 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	}
 	if len(st.Failures) != 2 {
 		t.Errorf("failures %+v, want the overridden item and the outside one", st.Failures)
+	}
+	// A failure item carries the remedy its line recorded, and one whose line
+	// names none carries none.
+	remedies := map[string]string{}
+	for _, f := range st.Failures {
+		remedies[strings.SplitN(f.Detail, ":", 2)[0]] = f.Remedy
+	}
+	if want := map[string]string{"clm-aaaaaa": "", "clm-cccccc": "the command that lets the call through"}; !maps.Equal(remedies, want) {
+		t.Errorf("failure remedies %v, want %v", remedies, want)
 	}
 }
 

@@ -5,6 +5,7 @@ package modelclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -107,9 +108,33 @@ func (r *Registry) CloseAll() {
 
 // Catalogue is the model ids entry's provider lists, in the order it listed
 // them: callers that show them to a human sort first; callers that classify
-// them do not care.
+// them do not care. A listing the provider refused for its key is a
+// KeyRefusedError.
 func (r *Registry) Catalogue(ctx context.Context, entry config.Provider) ([]string, error) {
-	return catalogueIDs(ctx, r.Get(entryEndpoint(entry)))
+	ids, err := catalogueIDs(ctx, r.Get(entryEndpoint(entry)))
+	return ids, KeyRefused(err, entry.Name)
+}
+
+// KeyRefusedError is a call the provider refused for its key, a missing one
+// or a wrong one, and Remedy the command that stores one for the pool entry
+// dialled. Its text is the call's error.
+type KeyRefusedError struct {
+	Err    error
+	Remedy string
+}
+
+func (e KeyRefusedError) Error() string { return e.Err.Error() }
+
+func (e KeyRefusedError) Unwrap() error { return e.Err }
+
+// KeyRefused is err as a KeyRefusedError naming provider where the provider
+// refused the call for its key, and err unchanged otherwise, nil included.
+func KeyRefused(err error, provider string) error {
+	var se model.StatusError
+	if !errors.As(err, &se) || !se.RefusedKey() {
+		return err
+	}
+	return KeyRefusedError{Err: err, Remedy: config.AuthAddRemedy(provider)}
 }
 
 // entryEndpoint is a pool entry as the registry takes it, for a verb that dials

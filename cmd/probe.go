@@ -119,7 +119,7 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 	}
 	wg.Wait()
 	if callErr != nil {
-		return failed(fields, callErr)
+		return failed(fields, modelclient.KeyRefused(callErr, ep.Provider))
 	}
 	return toolresult.Done, append(fields, answer...)
 }

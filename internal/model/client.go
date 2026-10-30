@@ -12,6 +12,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -331,3 +332,9 @@ type StatusError struct {
 }
 
 func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }
+
+// RefusedKey reports whether the provider refused the request for its
+// credential: 401 or 403, a missing key and a wrong one alike.
+func (e StatusError) RefusedKey() bool {
+	return e.Code == http.StatusUnauthorized || e.Code == http.StatusForbidden
+}

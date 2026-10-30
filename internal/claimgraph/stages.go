@@ -88,9 +88,15 @@ const checkDefaulted = "defaulted"
 func askStop(err error) error {
 	var incomplete asks.IncompleteError
 	if errors.As(err, &incomplete) {
-		return stopf("inference-failed", "%s", incomplete.Error())
+		return inferenceStop(incomplete)
 	}
 	return err
+}
+
+// inferenceStop is the stage stopping on the call that never completed, with
+// the remedy that call's failure names.
+func inferenceStop(incomplete asks.IncompleteError) *stop {
+	return &stop{check: "inference-failed", detail: incomplete.Error(), remedy: incomplete.Remedy}
 }
 
 // askStopWriting is askStop(err), the group records the stopped batch

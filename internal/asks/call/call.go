@@ -23,6 +23,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
+	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
 )
@@ -44,21 +45,35 @@ var overviewBackoff = []time.Duration{5 * time.Second, 30 * time.Second}
 // Caller puts composed prompts to one provider. Safe for concurrent use over
 // distinct prompts.
 type Caller struct {
-	client          model.Client
+	client model.Client
+	// provider is the pool entry client dials, which a remedy names.
+	provider        string
 	trail           func() string
 	overviewBackoff []time.Duration
 	lg              log.Logger
 }
 
-// New is a Caller over client keeping its answers and captures in the trail
-// directory trail returns, asked at every call.
-func New(client model.Client, trail func() string, lg log.Logger) *Caller {
+// New is a Caller over client, which dials the pool entry provider, keeping
+// its answers and captures in the trail directory trail returns, asked at
+// every call.
+func New(client model.Client, provider string, trail func() string, lg log.Logger) *Caller {
 	return &Caller{
 		client:          client,
+		provider:        provider,
 		trail:           trail,
 		overviewBackoff: overviewBackoff,
 		lg:              lg,
 	}
+}
+
+// keyRemedy is the remedy a failed call's err names: where the provider
+// refused the call for its key, the command that stores one for it; else "".
+func (c *Caller) keyRemedy(err error) string {
+	var se model.StatusError
+	if errors.As(err, &se) && se.RefusedKey() {
+		return config.AuthAddRemedy(c.provider)
+	}
+	return ""
 }
 
 func (c *Caller) answers() string { return filepath.Join(c.trail(), asks.AnswersDir) }
@@ -229,7 +244,8 @@ func (c *Caller) decide(ctx context.Context, slot *model.Slot, held *heldFiles, 
 	case err != nil:
 		// Decision has re-issued identically to its attempt count; a call
 		// past it never completed, and no answer is assumed for one.
-		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath)}
+		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath),
+			Remedy: c.keyRemedy(err)}
 	case captureErr != nil:
 		return nil, captureErr
 	}
@@ -507,7 +523,8 @@ func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, mod
 		if captureErr != nil {
 			captured = captureErr.Error()
 		}
-		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. %s", err, res.Final.Error, captured)}
+		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. %s", err, res.Final.Error, captured),
+			Remedy: c.keyRemedy(err)}
 	case err != nil:
 		return asks.Reply{}, err
 	case captureErr != nil:

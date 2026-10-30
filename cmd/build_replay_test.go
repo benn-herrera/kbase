@@ -54,7 +54,7 @@ func replayFixtureClient() *model.ClientFuncs {
 func writeReplayTrail(t *testing.T, state string) (string, int) {
 	t.Helper()
 	trail := filepath.Join(state, buildstore.ScratchDir, buildstore.TrailsDir, replayStart)
-	caller := call.New(replayFixtureClient(), func() string { return trail }, log.Discard())
+	caller := call.New(replayFixtureClient(), "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
 	batch := asks.NewBatch(ctx, caller.Launch(queue, "decision"))

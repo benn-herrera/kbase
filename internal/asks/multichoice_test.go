@@ -32,7 +32,7 @@ func (s *scripted) read(_ context.Context, q MultichoiceQuestion) (Reply, error)
 	s.asked[q.Item] = append(s.asked[q.Item], q.State)
 	n := len(s.asked[q.Item])
 	if n > len(s.replies[q.Item]) {
-		return Reply{}, IncompleteError{q.Item, "no reply arrived"}
+		return Reply{}, IncompleteError{Subject: q.Item, Detail: "no reply arrived"}
 	}
 	return Reply{Text: s.replies[q.Item][n-1]}, nil
 }
@@ -165,10 +165,10 @@ func TestABatchReportsTheFailingItemNotACancelledSibling(t *testing.T) {
 		case "S2", "S4":
 			inFlight.Done()
 			<-ctx.Done()
-			return Reply{}, IncompleteError{q.Item, "cancelled"}
+			return Reply{}, IncompleteError{Subject: q.Item, Detail: "cancelled"}
 		case "S3":
 			inFlight.Wait()
-			return Reply{}, IncompleteError{q.Item, "no reply arrived"}
+			return Reply{}, IncompleteError{Subject: q.Item, Detail: "no reply arrived"}
 		}
 		return Reply{Text: "A"}, nil
 	}
@@ -193,7 +193,7 @@ func TestAOneItemGroupDoesNotHoldUpTheNextGroup(t *testing.T) {
 		case <-secondStarted:
 			return Reply{Text: "A"}, nil
 		case <-time.After(2 * time.Second):
-			return Reply{}, IncompleteError{q.Item, "the second group never started while this ask was in flight"}
+			return Reply{}, IncompleteError{Subject: q.Item, Detail: "the second group never started while this ask was in flight"}
 		}
 	}
 	b := NewBatch(context.Background(), readerLaunch(read))

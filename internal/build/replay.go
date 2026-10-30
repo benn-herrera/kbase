@@ -287,7 +287,7 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 		return res, fmt.Errorf("prune the replays: %w", err)
 	}
 
-	batch := asks.NewReplayBatch(ctx, call.New(p.MultichoiceClient, rp.Dir, lg).Launch(p.Queue, p.Multichoice))
+	batch := asks.NewReplayBatch(ctx, call.New(p.MultichoiceClient, p.MultichoiceProvider, rp.Dir, lg).Launch(p.Queue, p.Multichoice))
 	for _, g := range rp.groups {
 		if err := batch.AskGroup(g.rec.Kind, g.rec.Group, g.items); err != nil {
 			break
@@ -296,7 +296,7 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 	recs, walkErr := batch.Wait()
 	overviews := make([]overviewReplayed, len(rp.overviews))
 	if walkErr == nil {
-		walkErr = rp.askOverviews(ctx, call.New(p.OverviewClient, rp.Dir, lg).PassageLaunch(p.Queue, p.Overview), overviews)
+		walkErr = rp.askOverviews(ctx, call.New(p.OverviewClient, p.OverviewProvider, rp.Dir, lg).PassageLaunch(p.Queue, p.Overview), overviews)
 	}
 
 	// An item in flight when a prune removed the replay may have recreated

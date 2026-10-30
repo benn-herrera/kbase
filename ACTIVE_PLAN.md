@@ -99,7 +99,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | landed |
 | C2 | expert | provider names: the name pattern at load and in the store, case-only collisions refused, key files named in lowercase | C | landed |
 | D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | landed |
-| E | expert | a 401 or 403 from the provider fails with the piped `kbase auth add` remedy | D | in progress |
+| E | expert | a 401 or 403 from the provider fails with the piped `kbase auth add` remedy | D | landed |
+| E2 | mechanical | the remedy's key source is generic: `<command-that-prints-the-key>` | E | in progress |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
 
 **Order:** one package at a time, A through F, with one agent editing the tree at once.
@@ -561,6 +562,19 @@ dialling.
   and stream.
 
 **Done-line:** `just test-integration`, then `just checkpoint`.
+
+---
+
+### E2 — the remedy's key source is generic (mechanical)
+
+**Work:** `config.AuthAddRemedy` (`internal/config/resolve.go`) returns
+`<command-that-prints-the-key> | kbase auth add <provider>`, the name filled in. `auth add`'s help
+shows that line first and keeps the clipboard line. Every text quoting `<key-manager> --print-key`
+moves with it: `git grep -n 'key-manager' -- ':!ACTIVE_PLAN.md'` lists them (code, tests,
+`tools/scripts/test-integration-auth.sh`, SPEC, ARCHITECTURE, README, ACTIVE_DESIGN decisions 2
+and 6).
+
+**Done-line:** `just edit-gate`, `just test`, `just test-integration`.
 
 ---
 

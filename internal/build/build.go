@@ -112,17 +112,19 @@ type Options struct {
 	now func() time.Time
 }
 
-// Provider is where a build's model calls go: one client and the model it is
-// asked for, per role — the multichoice asks and the overview passage reach their
-// own endpoints independently — the invocation's one queue every call of
-// every role takes a slot of, and the provenance its result states, one
-// record per role in role order.
+// Provider is where a build's model calls go: one client, the pool entry it
+// dials and the model it is asked for, per role — the multichoice asks and the
+// overview passage reach their own endpoints independently — the invocation's
+// one queue every call of every role takes a slot of, and the provenance its
+// result states, one record per role in role order.
 type Provider struct {
-	MultichoiceClient model.Client
-	Multichoice       string
-	OverviewClient    model.Client
-	Overview          string
-	Queue             *model.Queue
+	MultichoiceClient   model.Client
+	MultichoiceProvider string
+	Multichoice         string
+	OverviewClient      model.Client
+	OverviewProvider    string
+	Overview            string
+	Queue               *model.Queue
 
 	// Roles is the build's result record of where each role's asks went, one
 	// per role the build resolved, in role order.
@@ -408,8 +410,8 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 		} else {
 			w.roles = p.Roles
 			trail := func() string { return w.trailDir }
-			w.multichoice = call.New(p.MultichoiceClient, trail, w.opts.Logger).Launch(p.Queue, p.Multichoice)
-			w.passage = call.New(p.OverviewClient, trail, w.opts.Logger).PassageLaunch(p.Queue, p.Overview)
+			w.multichoice = call.New(p.MultichoiceClient, p.MultichoiceProvider, trail, w.opts.Logger).Launch(p.Queue, p.Multichoice)
+			w.passage = call.New(p.OverviewClient, p.OverviewProvider, trail, w.opts.Logger).PassageLaunch(p.Queue, p.Overview)
 		}
 	}
 	if len(items) > 0 {

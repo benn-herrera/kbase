@@ -455,7 +455,8 @@ or `retry`); `pid`;
 `started`; `run`; `pass`; `counts` (`total`, `done`, `failed`, `skipped`, `remaining`, read from the
 run's `items.jsonl`, the status `ledger.jsonl` last records for each, and, while the run walks, each
 answered item's result file); `scored` (the items whose
-value landed); `failures` (each failed item and the reason its line recorded); and `resume` (the command
+value landed); `failures` (each failed item and the reason its line recorded, with the `remedy` the
+line records where it records one, §8); and `resume` (the command
 continuing the run, where an item is not `done`). It is the run's own records re-read, not a second
 document: `wait` prints the result document the run wrote beside its ledger. A store no live run
 holds, and whose record names no score run, reports its newest run, whichever verb it was: the later
@@ -531,7 +532,7 @@ or `key`:
 | `key` | The setting the item is about: a values key, spelled as its configuration file spells it, or a flag or positional argument, spelled as `--help` spells it; an item refusing a value given for a named thing may carry that value as given, as the auth verbs carry the provider name |
 | `line`, `column` | 1-based position in the values document or in `path` |
 | `allowed` | The closed set the value must come from |
-| `remedy` | The command that clears the item, where one exists (e.g. `kbase refresh`, `git init`) |
+| `remedy` | The command that clears the item, where one exists (e.g. `kbase refresh`, `git init`); a word in angle brackets is what the one running it supplies, as `<key-manager>` is the command that prints the user's key (§9) |
 | `detail` | One sentence |
 
 A refusal lists every offending item. A usage error is one item with `check: usage`. A
@@ -1015,7 +1016,8 @@ carries that status and the provider's own words beside it. `transport-failure` 
 connection, the name, the certificate or the stream failed, and no answer of the provider's was
 had. `truncated-empty` — the provider answered, and the answer reached the completion cap before
 any answer text: the request leaves it no room, and it is not sent again. A reason states the one that happened: the first calls for the request to be looked at, the
-second for the path to the provider.
+second for the path to the provider. A `provider-refused` 401 or 403 is the provider refusing the
+call's key, and its failure item carries the remedy that stores one (§9, "A refused key").
 
 **Landing.** A rigor answer becomes `set-rigor` with the node's id; a bearing answer becomes
 `set-bearing` with the source as `id`, the edge's `target` and `relation`, and the bearing. The run
@@ -1066,7 +1068,10 @@ what answered it.
 carried before the attempt (`before`, absent where the record held none), the reply, `faults`
 (the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
 lines a reply recorded beside a retired `flt-pending`), `backend` (as the header's; a line written
-under an earlier release may read `environment`), the model, the prompt's digest and the attempt's bounds —
+under an earlier release may read `environment`), the model, the prompt's digest, `remedy` (on a
+failed attempt whose call the provider refused for its key, the command that stores one, §9;
+absent otherwise, and absent from every line written before the field, which reads under the same
+ledger format) and the attempt's bounds —
 appended after the item's write and its validation, never before. A run writes its captures and then
 its ledger lines once, in the set's order, when its walk ends — on completion, on `--limit`, on
 cancellation and on a failure that stops it. `faults` is `[]` for one reply
@@ -1141,7 +1146,8 @@ operation lock (§6), or a KB that no longer opens when the end refresh re-reads
 **The closing record.** A `failed` run closes on `failures`. Where the walk itself failed, it holds one
 `check: error` item per item the ledger records `failed`, `detail` the item as the document names it
 and the reason its line recorded — `<node id>: <reason>`, or `<relation> <source> → <target>:
-<reason>` — in the walk's order; the reason is the line's reply as a bounded, control-stripped
+<reason>` — in the walk's order, with the `remedy` the line records where it records one; the
+reason is the line's reply as a bounded, control-stripped
 summary, the ledger's line being the one place a reply stands whole; a run a refresh stopped closes
 on one `check: error` item naming the refresh's own error. A `cancelled` run closes on `cancelled`,
 whose `item` is the walk's first item carrying no attempt, and `{}` where
@@ -1209,7 +1215,7 @@ the provider, the model, the time to the first token, the call's wall time, the 
 reply, and the usage the provider reported — and its outcome follows the call: `done` where it
 completed, or where a chat answer was cut off at the completion cap before any answer text
 (`finish-reason` `length`, `reply` empty); `failed` otherwise, with the attempt's own outcome and the
-provider's words in the failure. It reads no KB and reads or writes no state directory: it prints its document and exits,
+provider's words in the failure, and its `remedy` where the provider refused the call's key (§9). It reads no KB and reads or writes no state directory: it prints its document and exits,
 and no MCP tool binds it (§11).
 
 Result keys: §7.
@@ -1321,6 +1327,17 @@ configuration, so a key file whose entry is gone is still removed. A name that b
 provider-name rule (§9.1) is a usage refusal, `key` the name as given and the detail the rule,
 never the name; its `remedy` is `kbase show-config` on `add`, `kbase auth list` on `remove`. A
 refusal of the argument count names no argument given. No result names a key.
+
+**A refused key.** Nothing checks a key before a call. A provider that answers a call 401 or 403
+has refused the call's key — a missing key and a wrong one alike, since `auth add` replaces a
+stored key — and the call fails as any provider refusal does (§8, `provider-refused`). Its failure
+item carries `remedy` `<key-manager> --print-key | kbase auth add <provider>`, `<provider>` the
+pool entry the call dialled: a command the user runs from a shell, or an agent runs against the
+user's key manager, so the key itself never enters a conversation. The items that carry it
+are a build's — the `inference-failed` stop of a claim-graph stage and the overview's `inference`
+failure — a scoring run's `failures` (from the attempt's ledger line, §8), `probe`'s failure, and
+`models`' and `configure`'s failure to list a catalogue. A call ended by any other status carries
+no such remedy.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
 dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is

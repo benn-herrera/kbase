@@ -44,6 +44,18 @@ type Reply struct {
 	Truncated bool
 }
 
+// RemedyError is an Ask's failure that names the command letting the call
+// through, which the failed attempt's line records. Its text is the call's
+// error.
+type RemedyError struct {
+	Err    error
+	Remedy string
+}
+
+func (e RemedyError) Error() string { return e.Err.Error() }
+
+func (e RemedyError) Unwrap() error { return e.Err }
+
 // errTruncatedReply fails an item whose reply reached the completion cap. The
 // lines it did not reach are lost, and where the cut falls between lines the
 // rest would parse as a clean under-charge: an incomplete answer is never a
@@ -344,6 +356,10 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, i
 			return Answer{}, false, true
 		}
 		e.Status, e.Reply = StatusFailed, err.Error()
+		var remedied RemedyError
+		if errors.As(err, &remedied) {
+			e.Remedy = remedied.Remedy
+		}
 		return Answer{}, false, false
 	}
 	c.reply = reply.Text

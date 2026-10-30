@@ -444,7 +444,7 @@ func overview(w *walk) (result.Record, error) {
 	var incomplete asks.IncompleteError
 	switch {
 	case errors.As(askErr, &incomplete):
-		return rec, buildstore.Failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
+		return rec, buildstore.Failure{{Check: checkInference, Remedy: incomplete.Remedy, Detail: "the overview passage was never answered: " + incomplete.Error()}}
 	case askErr != nil:
 		return rec, askErr
 	case writeErr != nil:

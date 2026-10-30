@@ -18,6 +18,7 @@ import (
 	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/claimgraph"
+	"kbase/internal/config"
 	"kbase/internal/kb"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
@@ -175,7 +176,8 @@ func (f fixture) asking(client model.Client) Options {
 	opts := f.options()
 	opts.NoInference = false
 	opts.Provider = func() (Provider, error) {
-		return Provider{MultichoiceClient: client, Multichoice: "decision", OverviewClient: client, Overview: "text", Queue: model.NewQueue(2),
+		return Provider{MultichoiceClient: client, MultichoiceProvider: "solo", Multichoice: "decision",
+			OverviewClient: client, OverviewProvider: "solo", Overview: "text", Queue: model.NewQueue(2),
 			Roles: []result.Record{
 				{{Key: "role", Value: "decision"},
 					{Key: "provider", Value: "solo"}, {Key: "provider-rule", Value: "config"},
@@ -487,6 +489,51 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.repo, kb.KBDir, "README.md")); err == nil {
 		t.Error("a build whose node pass stopped wrote the overview")
+	}
+}
+
+// TestARefusedKeyFailsTheBuildWithTheRemedy: a provider answering a decision
+// ask or the overview call 401 or 403 refused the call's key; the build fails
+// as for any call that never completed, and the failure item carries the
+// command that stores a key for the entry the role dials. A 500 is no refused
+// key and carries none.
+func TestARefusedKeyFailsTheBuildWithTheRemedy(t *testing.T) {
+	refusing := func(code int) error { return model.StatusError{Code: code, Body: `{"error":"refused"}`} }
+	answered := newAnswering(script)
+	for _, tc := range []struct {
+		name   string
+		client model.Client
+		check  string
+		remedy string
+	}{
+		{"decision 401", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
+			return model.DecisionResponse{}, refusing(401)
+		}}, "inference-failed", config.AuthAddRemedy("solo")},
+		{"decision 403", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
+			return model.DecisionResponse{}, refusing(403)
+		}}, "inference-failed", config.AuthAddRemedy("solo")},
+		{"decision 500", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
+			return model.DecisionResponse{}, refusing(500)
+		}}, "inference-failed", ""},
+		{"overview 401", &model.ClientFuncs{Decide: answered.Decision, Stream: func(context.Context, model.Request) (model.StreamReader, error) {
+			return nil, refusing(401)
+		}}, checkInference, config.AuthAddRemedy("solo")},
+		{"overview 403", &model.ClientFuncs{Decide: answered.Decision, Stream: func(context.Context, model.Request) (model.StreamReader, error) {
+			return nil, refusing(403)
+		}}, checkInference, config.AuthAddRemedy("solo")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), askedPaper)
+			outcome, fields := f.build(t, f.asking(tc.client))
+			if outcome != result.Failed {
+				t.Fatalf("build = %s %v, want failed", outcome, fields)
+			}
+			failures, _ := storetest.Field(fields, "failures").([]result.Item)
+			if len(failures) != 1 || failures[0].Check != tc.check || failures[0].Remedy != tc.remedy {
+				t.Errorf("failures = %+v, want one %s item with remedy %q", failures, tc.check, tc.remedy)
+			}
+		})
 	}
 }
 

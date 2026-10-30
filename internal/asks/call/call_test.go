@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"kbase/internal/asks"
+	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
@@ -41,9 +42,13 @@ func trailCaptures(scratch string) string {
 // double is a test client, answering through the model.Client it gives.
 type double interface{ Client() model.Client }
 
-// newCaller is a Caller over d whose answers and captures go to scratch's one trail.
+// callerProvider is the pool entry every test's Caller dials.
+const callerProvider = "lab"
+
+// newCaller is a Caller over d, dialling callerProvider, whose answers and
+// captures go to scratch's one trail.
 func newCaller(d double, scratch string) *Caller {
-	return New(d.Client(), func() string { return trailDir(scratch) }, log.Discard())
+	return New(d.Client(), callerProvider, func() string { return trailDir(scratch) }, log.Discard())
 }
 
 func paragraphItems(names ...string) []asks.MultichoiceItem {
@@ -264,6 +269,54 @@ func TestCallerNamesTheCallThatNeverCompleted(t *testing.T) {
 	}
 	if answers, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*")); len(answers) != 0 {
 		t.Errorf("a failed call cached %q", answers)
+	}
+}
+
+// TestARefusedKeyNamesTheRemedy: a provider answering 401 or 403 refused the
+// call's key, so the call that never completed carries the command that
+// stores a key for the entry the caller dials — over the decision surface and
+// the overview alike; a 500 is no refused key and carries none.
+func TestARefusedKeyNamesTheRemedy(t *testing.T) {
+	for _, tc := range []struct {
+		code   int
+		remedy string
+	}{
+		{http.StatusUnauthorized, config.AuthAddRemedy(callerProvider)},
+		{http.StatusForbidden, config.AuthAddRemedy(callerProvider)},
+		{http.StatusInternalServerError, ""},
+	} {
+		t.Run(http.StatusText(tc.code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.code)
+				_, _ = io.WriteString(w, `{"error":{"message":"refused"}}`)
+			}))
+			t.Cleanup(srv.Close)
+			client := model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL})
+			t.Cleanup(func() { _ = client.Close() })
+			scratch := t.TempDir()
+			c := New(client, callerProvider, func() string { return trailDir(scratch) }, log.Discard())
+			c.overviewBackoff = nil
+
+			_, decided := askGroup(letters(c), paragraphItems("S1"))
+			var passaged error
+			var wg sync.WaitGroup
+			if err := c.PassageLaunch(model.NewQueue(1), "m")(context.Background(), &wg, func(ask func(context.Context, string, []string, int) (string, error)) func(error) {
+				_, passaged = ask(context.Background(), "excerpts", nil, 1)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			wg.Wait()
+			for name, err := range map[string]error{"decision": decided, "overview": passaged} {
+				var incomplete asks.IncompleteError
+				if !errors.As(err, &incomplete) {
+					t.Fatalf("%s = %v, want the call that never completed", name, err)
+				}
+				if incomplete.Remedy != tc.remedy {
+					t.Errorf("%s's remedy = %q, want %q", name, incomplete.Remedy, tc.remedy)
+				}
+			}
+		})
 	}
 }
 
@@ -539,7 +592,7 @@ func overview(t *testing.T, client model.Client, scratch string) (string, error)
 	var passage string
 	var got error
 	var wg sync.WaitGroup
-	launch := New(client, func() string { return trailDir(scratch) }, log.Discard()).PassageLaunch(model.NewQueue(1), "m")
+	launch := New(client, callerProvider, func() string { return trailDir(scratch) }, log.Discard()).PassageLaunch(model.NewQueue(1), "m")
 	err := launch(context.Background(), &wg, func(ask func(context.Context, string, []string, int) (string, error)) func(error) {
 		passage, got = ask(context.Background(), "excerpts", nil, 1)
 		return nil

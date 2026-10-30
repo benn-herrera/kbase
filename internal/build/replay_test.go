@@ -451,7 +451,7 @@ func writeTrail(t *testing.T, state, start string) string {
 		}
 		return model.DecisionResponse{Answers: []model.DecisionAnswer{{Key: q.Key, Type: q.Type, Noul: noul}}}, nil
 	}}
-	caller := call.New(client, func() string { return trail }, log.Discard())
+	caller := call.New(client, "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
 	batch := asks.NewReplayBatch(ctx, caller.Launch(queue, "decision"))

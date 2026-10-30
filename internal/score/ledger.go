@@ -138,6 +138,7 @@ type Entry struct {
 	Faults       []Charge
 	Moot         []Charge
 	Reply        string // the model's reply where it parsed, or the reason on a failed line
+	Remedy       string // on a failed line, the command that lets its call through, where the failure names one
 	Model        string
 	PromptSHA256 string // the digest of the text the call carried
 	Started      string // RFC 3339
@@ -162,6 +163,7 @@ type attempt struct {
 	Value        string    `json:"value,omitempty"`
 	Before       string    `json:"before,omitempty"`
 	Reply        string    `json:"reply,omitempty"`
+	Remedy       string    `json:"remedy,omitempty"`
 	Model        string    `json:"model,omitempty"`
 	PromptSHA256 string    `json:"prompt_sha256,omitempty"`
 	Started      string    `json:"started,omitempty"`
@@ -783,8 +785,7 @@ func ReadRun(dir, run string) (RunStatus, error) {
 			st.Scored = append(st.Scored, a.item())
 		case StatusFailed:
 			st.Counts.Failed++
-			st.Failures = append(st.Failures, result.Item{Check: checkError,
-				Detail: a.item() + ": " + ReplySummary(a.Reply)})
+			st.Failures = append(st.Failures, failureItem(a.item(), a.entry()))
 		case StatusSkipped:
 			st.Counts.Skipped++
 		default:
@@ -877,7 +878,7 @@ func (l *Ledger) readBack() error {
 // failed and keeps no text of the reply, so it carries neither faults nor moot.
 func (l *Ledger) line(it query.Item, e Entry) attempt {
 	a := attempt{Run: l.run, Pass: passOf(it), Backend: l.backEnd, identity: identityOf(it), Status: e.Status,
-		Value: e.Value, Before: e.Before, Reply: e.Reply, Model: e.Model, PromptSHA256: e.PromptSHA256,
+		Value: e.Value, Before: e.Before, Reply: e.Reply, Remedy: e.Remedy, Model: e.Model, PromptSHA256: e.PromptSHA256,
 		Started: e.Started, Ended: e.Ended}
 	if e.Status == StatusDone {
 		faults := e.Faults
@@ -938,7 +939,7 @@ func (id identity) lineKey() string {
 // behind it, which is what Append stored and what a resume reads.
 func (a attempt) entry() Entry {
 	return Entry{Status: a.Status, Value: a.Value, Before: a.Before, Faults: a.faults(), Moot: a.Moot,
-		Reply: a.Reply, Model: a.Model, PromptSHA256: a.PromptSHA256,
+		Reply: a.Reply, Remedy: a.Remedy, Model: a.Model, PromptSHA256: a.PromptSHA256,
 		Started: a.Started, Ended: a.Ended}
 }
 

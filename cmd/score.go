@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -302,7 +303,8 @@ func scoringRole(opts scoreOptions) (config.Endpoint, error) {
 // opens for it. The --timeout deadline is set inside the item, around the
 // call, so it counts from the call's start and never covers the wait for a
 // token. Each ask's own text carries the instruction, so the system prompt is
-// empty and nothing is said twice.
+// empty and nothing is said twice. A call the provider refused for its key
+// fails with the remedy that stores one for ep's entry.
 func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint, concurrency int) score.Launch {
 	client := reg.Get(ep)
 	// A key bound for a non-loopback http:// endpoint is said on stderr once
@@ -320,6 +322,10 @@ func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpo
 				callCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				res, err := slot.Chat(callCtx, client, model.ChatRequest{Model: ep.Model, Prompt: prompt, Backoff: backoff})
+				var se model.StatusError
+				if errors.As(err, &se) && se.RefusedKey() {
+					return score.Reply{}, score.RemedyError{Err: err, Remedy: config.AuthAddRemedy(ep.Provider)}
+				}
 				if err != nil {
 					return score.Reply{}, err
 				}

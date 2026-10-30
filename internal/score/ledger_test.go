@@ -418,6 +418,41 @@ func TestLastIsTheLastLinesEntry(t *testing.T) {
 	}
 }
 
+// TestAFailedLineCarriesItsRemedy: a failed attempt's remedy is the line's
+// `remedy`, read back by a resume; a line naming none — as every line written
+// before the field — carries no key and reads back with none, under the same
+// ledger format.
+func TestAFailedLineCarriesItsRemedy(t *testing.T) {
+	dir := t.TempDir()
+	l := kept(t, dir)
+	refused, other := node(kb.NodeKindClaim, "clm-1"), node(kb.NodeKindClaim, "clm-2")
+	if err := l.Append(refused, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(other, Entry{Status: StatusFailed, Reply: "http 500"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recs := lines(t, filepath.Join(l.Dir(), linesFile))
+	if len(recs) != 2 || recs[0]["remedy"] != "the command that lets the call through" {
+		t.Errorf("the refused line = %v, want its remedy", recs)
+	}
+	if _, carried := recs[1]["remedy"]; carried {
+		t.Errorf("a line naming no remedy carries the key: %v", recs[1])
+	}
+	back := reopened(t, dir)
+	for _, tc := range []struct {
+		it   query.Item
+		want string
+	}{{refused, "the command that lets the call through"}, {other, ""}} {
+		if got, ok := back.Last(tc.it); !ok || got.Remedy != tc.want {
+			t.Errorf("%s read back with remedy %q, %t; want %q", ItemName(tc.it), got.Remedy, ok, tc.want)
+		}
+	}
+}
+
 // TestResumeAfterAnUpdateContinues: a run whose header records an ask other than
 // the one this kbase would put to the model — or which records none, as a run
 // written before the field does — is resumed rather than refused: the lines it

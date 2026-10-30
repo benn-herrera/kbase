@@ -710,7 +710,10 @@ same way and priced nowhere, and `before`, the value its item carried in the ind
 before the attempt wrote: a before/after pair on the line itself, absent where the record held no
 value. `[]` is written for one reply alone, the word `none`, so an empty list always carries the
 model's positive statement that it found no fault. A failed attempt carries neither charge list, and no text:
-its `reply` is the reason, and its `before` stands all the same. `backend` sits on every
+its `reply` is the reason, and its `before` stands all the same, and its `remedy` is the one the
+call's failure named — a provider refusing the call's key (§7) — absent otherwise; the field is
+optional, so a ledger written before it reads under the same format, and the run's failure items
+and `status`'s carry it from the line. `backend` sits on every
 line, because a resumed or mixed run's lines must say what answered each item. `pass` sits on every
 line beside it, naming its own item's class: the header states the set the run walks, and a `both`
 run's lines say which class each judgement came from. `Create` also stamps
@@ -985,10 +988,21 @@ the context stopped the walk — its `cancelled` record naming the first item it
   provider's was had — and records whether the call reasoned, from a reasoning delta on the stream
   or from a usage block reporting reasoning tokens spent, so a call that thought without streaming
   the thought is recorded as having reasoned; the error a call returns carries the last attempt's
-  outcome and its text, which is what a failed item's reason records (SPEC §8).
+  outcome and its text, which is what a failed item's reason records (SPEC §8), and wraps that
+  attempt's `model.StatusError` where it met one.
   `model` makes it, with a system message. This holds for the overview call; the multichoice asks take
   the decision surface instead (next item). A build with a calling row left to walk checks a
   provider is configured before its first stage (SPEC §5).
+- **A refused key is classified where `model` is imported, and travels outward as data.**
+  `StatusError.RefusedKey` (401 or 403) is the one predicate. `asks/call`, `cmd/score.go`'s ask,
+  `cmd/probe.go` and `modelclient` (`KeyRefused`, which `Catalogue` applies) match the call's
+  `StatusError` with `errors.As` and attach `config.AuthAddRemedy`, the name the dialled entry
+  carries filled in, to what travels out: `asks.IncompleteError.Remedy`, which `claimgraph`'s
+  inference stop and the build's overview failure carry onto their items; `score.RemedyError`,
+  whose remedy the attempt's ledger line records; and `modelclient.KeyRefusedError`, which
+  `cmd`'s `failed` reads onto the failure item of `probe`, `models` and `configure`. `asks/call`
+  is told the entry it dials by `call.New`, from `build.Provider`'s per-role entry names. No site
+  recovers a status from a reason's text, and nothing checks a key before the call (SPEC §9).
 - Configuration is read from layers and merged once, before a verb's own work: `config.Layers`
   resolves the directories and `config.Load` reads and merges the two files of each, returning one
   `Loaded` — the pool and its faults, and the choices. They are
@@ -1025,7 +1039,8 @@ the context stopped the walk — its `cancelled` record naming the first item it
   not reported. The nameless directory fault names no entry and becomes a warning `ProviderFault`
   with an empty `Name`, its `Path` the directory, which `warnFaults` writes as the credentials
   store's. `config.Report` is given the store faults too, and reports each from its parts with
-  `config.AuthAddRemedy` — the piped form, also `kbase auth add`'s own input-refusal remedy — as the
+  `config.AuthAddRemedy` — the piped form, also `kbase auth add`'s own input-refusal remedy and a
+  refused key's failure remedy — as the
   remedy where the file does not open; it alone computes a
   `file` key's `upgrade` and the warning that a stored key leaves an `apiKeyFile` unread, so
   `show-config` alone emits them.

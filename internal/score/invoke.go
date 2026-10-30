@@ -220,10 +220,7 @@ func stopped(walked []query.Item, l *Ledger) result.Record {
 }
 
 // failures is what a failed run closes on: one item per item of the walk the
-// ledger records failed, its name and the reason its line recorded in the
-// detail, in the walk's order. The reason is the line's reply as a summary —
-// bounded and stripped of control characters — where the line itself holds it
-// whole.
+// ledger records failed, in the walk's order, each its line's failureItem.
 func failures(walked []query.Item, l *Ledger) []result.Item {
 	out := []result.Item{}
 	for _, it := range walked {
@@ -231,9 +228,17 @@ func failures(walked []query.Item, l *Ledger) []result.Item {
 		if !ok || e.Status != StatusFailed {
 			continue
 		}
-		out = append(out, result.Item{Check: checkError, Detail: ItemName(it) + ": " + ReplySummary(e.Reply)})
+		out = append(out, failureItem(ItemName(it), e))
 	}
 	return out
+}
+
+// failureItem is the item a failed line reports for the item named name: the
+// name and the reason the line recorded in the detail, and the remedy it
+// recorded. The reason is the line's reply as a summary — bounded and
+// stripped of control characters — where the line itself holds it whole.
+func failureItem(name string, e Entry) result.Item {
+	return result.Item{Check: checkError, Remedy: e.Remedy, Detail: name + ": " + ReplySummary(e.Reply)}
 }
 
 // The ops a landing writes through: a node's rigor, and an edge's bearing.

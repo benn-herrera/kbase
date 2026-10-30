@@ -34,3 +34,26 @@ func TestAStopWrappedWithAnUnwrittenRecordFails(t *testing.T) {
 		t.Errorf("the report holds %+v, want the inference stop", r.Failures())
 	}
 }
+
+// TestAnInferenceStopCarriesItsRemedy: the remedy a call that never completed
+// names rides its stop into the stage's finding and the failure item; a call
+// naming none leaves both without one.
+func TestAnInferenceStopCarriesItsRemedy(t *testing.T) {
+	for _, remedy := range []string{"the command that lets the call through", ""} {
+		_, _, opts := seedDiscoveryLeaves(t, []string{"a"}, "a")
+		r, err := runStage(opts, false, func(*Tree, []records.Record, writer) ([]Finding, error) {
+			return nil, askStop(asks.IncompleteError{Subject: "S1", Detail: "http 401", Remedy: remedy})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		failures := r.Failures()
+		if len(failures) != 1 || failures[0].Remedy != remedy || failures[0].Detail != "S1: http 401" {
+			t.Errorf("failures = %+v, want the one stop with remedy %q", failures, remedy)
+		}
+		last := r.Findings[len(r.Findings)-1].Fields
+		if got := slices.ContainsFunc(last, func(f result.Field) bool { return f.Key == "remedy" }); got != (remedy != "") {
+			t.Errorf("the stop's finding %v carries a remedy: %v, want %v", last, got, remedy != "")
+		}
+	}
+}
