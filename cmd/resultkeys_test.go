@@ -68,12 +68,12 @@ func keysFor(verb string) string {
 		return verb
 	case slices.Contains(write.Ops(), verb):
 		return "write-op"
-	case verb == "show" || verb == "stats" || verb == "edge-census":
+	case verb == "show" || verb == "stats":
 		return "mapping-query"
 	case verb == "wait":
 		// wait prints the status document for the store it waited on.
 		return "status"
-	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "weak-points", "edges"}, verb):
+	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength", "subtree", "edges"}, verb):
 		return "list-query"
 	}
 	return verb

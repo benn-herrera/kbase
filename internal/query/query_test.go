@@ -182,37 +182,114 @@ func TestReferencedBy(t *testing.T) {
 	}
 }
 
-// TestStrengthBelowAndWeakPoints: E rests on A, so its strength is A's 0.5
-// whatever its own rigor; it falls below the threshold and, nothing resting
-// on it, is no weak point.
-func TestStrengthBelowAndWeakPoints(t *testing.T) {
+// strengthIndex: A 0.5 supports D and E, B 0.3 and C 0.5 support D, and F,
+// pending, supports D. D rests on pending F, so it is pending too; E rests
+// on A, so its strength is A's 0.5 whatever its own rigor. Dependents: A 2,
+// B 1, C 1, F 1, D and E none.
+func strengthIndex(t *testing.T) *Index {
+	t.Helper()
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C"),
-			claim("clm-dddddd", "D"), claim("clm-eeeeee", "E")},
+			claim("clm-dddddd", "D"), claim("clm-eeeeee", "E"), claim("clm-ffffff", "F")},
 		References: []kb.UnscoredEdge{{Source: "clm-eeeeee", Target: "clm-aaaaaa"}},
 		Scorable: []kb.ScorableEdge{
 			scorable(kb.RelationSupports, "clm-aaaaaa", "clm-dddddd", 1),
 			scorable(kb.RelationSupports, "clm-aaaaaa", "clm-eeeeee", 1),
 			scorable(kb.RelationSupports, "clm-bbbbbb", "clm-dddddd", 1),
 			scorable(kb.RelationSupports, "clm-cccccc", "clm-dddddd", 1),
+			scorable(kb.RelationSupports, "clm-ffffff", "clm-dddddd", 1),
 		},
 	}
-	for id, rigor := range map[string]*float64{"clm-aaaaaa": f(0.5), "clm-bbbbbb": f(0.3), "clm-cccccc": f(0.5), "clm-dddddd": nil, "clm-eeeeee": f(0.9)} {
+	for id, rigor := range map[string]*float64{"clm-aaaaaa": f(0.5), "clm-bbbbbb": f(0.3), "clm-cccccc": f(0.5), "clm-dddddd": nil,
+		"clm-eeeeee": f(0.9), "clm-ffffff": nil} {
 		g = scored(g, id, rigor)
 	}
-	ix := load(t, g)
-	if got, want := ids(ix.StrengthBelow(0.65)), []string{"clm-bbbbbb", "clm-aaaaaa", "clm-cccccc", "clm-eeeeee"}; !slices.Equal(got, want) {
-		t.Errorf("StrengthBelow(0.65) = %v, want %v", got, want)
+	return load(t, g)
+}
+
+// TestStrength: --min is inclusive and --max strict, each sort orders as
+// stated, and --pending lists the claims with no strength under either sort
+// and --min-dependents.
+func TestStrength(t *testing.T) {
+	ix := strengthIndex(t)
+	for _, tc := range []struct {
+		name string
+		sel  StrengthSelection
+		want []string
+	}{
+		{"every scored claim", StrengthSelection{Sort: SortStrength}, []string{"clm-bbbbbb", "clm-aaaaaa", "clm-cccccc", "clm-eeeeee"}},
+		{"max is strict", StrengthSelection{Max: f(0.5), Sort: SortStrength}, []string{"clm-bbbbbb"}},
+		{"min is inclusive", StrengthSelection{Min: f(0.5), Sort: SortStrength}, []string{"clm-aaaaaa", "clm-cccccc", "clm-eeeeee"}},
+		{"both bounds", StrengthSelection{Min: f(0.3), Max: f(0.5), Sort: SortStrength}, []string{"clm-bbbbbb"}},
+		{"by dependents", StrengthSelection{Sort: SortDependents}, []string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc", "clm-eeeeee"}},
+		{"shaky and load-bearing", StrengthSelection{Max: f(0.65), MinDependents: 1, Sort: SortDependents},
+			[]string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc"}},
+		{"min dependents", StrengthSelection{MinDependents: 2, Sort: SortStrength}, []string{"clm-aaaaaa"}},
+		{"pending by id", StrengthSelection{Pending: true, Sort: SortStrength}, []string{"clm-dddddd", "clm-ffffff"}},
+		{"pending by dependents", StrengthSelection{Pending: true, Sort: SortDependents}, []string{"clm-ffffff", "clm-dddddd"}},
+		{"pending with min dependents", StrengthSelection{Pending: true, MinDependents: 1, Sort: SortStrength}, []string{"clm-ffffff"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, usage := StrengthPayload(ix, tc.sel)
+			if usage != nil {
+				t.Fatalf("refused: %v", usage)
+			}
+			var got []string
+			for _, rec := range rows {
+				id, _ := fieldAt(rec, "id")
+				got = append(got, id.(string))
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("strength = %v, want %v", got, tc.want)
+			}
+		})
 	}
-	var got []string
-	for _, wp := range ix.WeakPoints(DefaultMaxStrength, DefaultMinDependents) {
-		got = append(got, wp.Claim.ID)
+}
+
+// TestStrengthRows: a row is the claim's full record with its dependents'
+// count last, and a pending row's strength is null.
+func TestStrengthRows(t *testing.T) {
+	ix := strengthIndex(t)
+	for _, tc := range []struct {
+		sel        StrengthSelection
+		id         string
+		strength   any
+		dependents int
+	}{
+		{StrengthSelection{Sort: SortDependents}, "clm-aaaaaa", 0.5, 2},
+		{StrengthSelection{Pending: true, Sort: SortDependents}, "clm-ffffff", nil, 1},
+	} {
+		rows, _ := StrengthPayload(ix, tc.sel)
+		n, _ := ix.Node(tc.id)
+		want := append(nodeFields[kb.NodeKindClaim](n), result.Field{Key: "dependents", Value: tc.dependents})
+		if got := rows[0]; !reflect.DeepEqual(got, want) {
+			t.Errorf("first row = %v, want %v", got, want)
+		}
+		if got, _ := fieldAt(rows[0], "strength"); got != tc.strength {
+			t.Errorf("%s strength = %v, want %v", tc.id, got, tc.strength)
+		}
 	}
-	if want := []string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc"}; !slices.Equal(got, want) {
-		t.Errorf("WeakPoints = %v, want %v (most distinct dependents, then lowest strength, then id)", got, want)
-	}
-	if wp := ix.WeakPoints(DefaultMaxStrength, 2); len(wp) != 1 || wp[0].Dependents != 2 {
-		t.Errorf("WeakPoints(min 2) = %+v, want clm-aaaaaa with 2", wp)
+}
+
+// TestStrengthRefusesItsUsage: --pending beside a bound, and an order that is
+// not one, are refused as usage naming the flag.
+func TestStrengthRefusesItsUsage(t *testing.T) {
+	ix := strengthIndex(t)
+	for _, tc := range []struct {
+		name string
+		sel  StrengthSelection
+		key  string
+	}{
+		{"pending with min", StrengthSelection{Pending: true, Min: f(0), Sort: SortStrength}, "--pending"},
+		{"pending with max", StrengthSelection{Pending: true, Max: f(1), Sort: SortStrength}, "--pending"},
+		{"no such order", StrengthSelection{Sort: "rigor"}, "--sort"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, usage := StrengthPayload(ix, tc.sel)
+			if rows != nil || len(usage) != 1 || usage[0].Check != "usage" || usage[0].Key != tc.key {
+				t.Errorf("strength = %v, %+v; want one usage item naming %s", rows, usage, tc.key)
+			}
+		})
 	}
 }
 
@@ -404,9 +481,10 @@ func TestShowStrengthenBy(t *testing.T) {
 	if _, at := fieldAt(work, "strengthen_by"); at != -1 {
 		t.Errorf("work record carries strengthen_by: %v", work)
 	}
-	for _, c := range StrengthBelowPayload(load(t, scored(kb.Graph{Claims: []kb.ClaimNode{a}}, a.ID, f(0.1))), 1) {
+	rows, _ := StrengthPayload(load(t, scored(kb.Graph{Claims: []kb.ClaimNode{a}}, a.ID, f(0.1))), StrengthSelection{Sort: SortStrength})
+	for _, c := range rows {
 		if _, at := fieldAt(c, "strengthen_by"); at != -1 {
-			t.Errorf("strength-below record carries strengthen_by: %v", c)
+			t.Errorf("strength record carries strengthen_by: %v", c)
 		}
 	}
 }
@@ -526,7 +604,7 @@ func TestShowAnAxiomCarriesItsRigor(t *testing.T) {
 }
 
 // TestAnUnhostedNodeHasNoCanonicalPathOrAnchor: every surface carrying a node
-// record — show and strength-below — writes an unhosted node's canonical path
+// record — show and strength — writes an unhosted node's canonical path
 // and anchor as null, and a hosted node's as its row holds them.
 func TestAnUnhostedNodeHasNoCanonicalPathOrAnchor(t *testing.T) {
 	g := kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")},
@@ -560,11 +638,12 @@ func TestAnUnhostedNodeHasNoCanonicalPathOrAnchor(t *testing.T) {
 		}
 	}
 	got := map[string][2]any{}
-	for _, rec := range StrengthBelowPayload(ix, 0.5) {
+	rows, _ := StrengthPayload(ix, StrengthSelection{Max: f(0.5), Sort: SortStrength})
+	for _, rec := range rows {
 		got[rec[1].Value.(string)] = canonical(rec)
 	}
 	if want := map[string][2]any{"clm-aaaaaa": {}, "clm-bbbbbb": hosted}; !maps.Equal(got, want) {
-		t.Errorf("strength-below canonical paths and anchors = %#v, want %#v", got, want)
+		t.Errorf("strength canonical paths and anchors = %#v, want %#v", got, want)
 	}
 }
 
@@ -607,13 +686,17 @@ func TestStatsCountsDemotedEdges(t *testing.T) {
 	if counts["edges"] != 4 || counts["demoted_edges"] != 2 {
 		t.Errorf("edges %v, demoted_edges %v; want 4 and 2", counts["edges"], counts["demoted_edges"])
 	}
+	demotedCensus, _ := fieldAt(counts["relations"].(result.Record), kb.RelationDemoted)
+	if want := (result.Record{{Key: "edges", Value: 2}, {Key: "walked", Value: false}}); !reflect.DeepEqual(demotedCensus, want) {
+		t.Errorf("stats' relations demoted = %v, want %v", demotedCensus, want)
+	}
 }
 
-// edgeCensusIndex holds both bearing classes on supports — a number, one whose
+// relationsIndex holds both bearing classes on supports — a number, one whose
 // text sorts after another's (1e-05 after 0.5), and pending — one row each on
 // founds, lifts and references, and none on refutes or demoted. One supports
 // row carries a context.
-func edgeCensusIndex(t *testing.T) *Index {
+func relationsIndex(t *testing.T) *Index {
 	t.Helper()
 	withContext := scorable(kb.RelationSupports, "clm-bbbbbb", "clm-aaaaaa", 0.5)
 	withContext.Context = "step 2"
@@ -635,17 +718,6 @@ func edgeCensusIndex(t *testing.T) *Index {
 	})
 }
 
-// manualCounts is a bearings record whose rows carry their manual and model
-// counts, four values per row.
-func manualCounts(rows ...any) []result.Record {
-	out := []result.Record{}
-	for i := 0; i < len(rows); i += 4 {
-		out = append(out, result.Record{{Key: "bearing", Value: rows[i]}, {Key: "edges", Value: rows[i+1]},
-			{Key: "manual", Value: rows[i+2]}, {Key: "model", Value: rows[i+3]}})
-	}
-	return out
-}
-
 func bearingCounts(pairs ...any) []result.Record {
 	out := []result.Record{}
 	for i := 0; i < len(pairs); i += 2 {
@@ -654,22 +726,29 @@ func bearingCounts(pairs ...any) []result.Record {
 	return out
 }
 
-func TestEdgeCensus(t *testing.T) {
-	got := EdgeCensusPayload(edgeCensusIndex(t))
+// TestStatsRelations: stats' relations stands after bearing_model and before
+// strength_bands, one record per relation in kb.Relations order, its bearings
+// numeric, then pending.
+func TestStatsRelations(t *testing.T) {
+	stats := StatsPayload(relationsIndex(t))
+	got, at := fieldAt(stats, "relations")
+	if _, model := fieldAt(stats, "bearing_model"); at != model+1 || stats[at+1].Key != "strength_bands" {
+		t.Errorf("relations at %d, want right after bearing_model at %d and before strength_bands", at, model)
+	}
 	want := result.Record{
 		{Key: kb.RelationSupports, Value: result.Record{{Key: "edges", Value: 4}, {Key: "walked", Value: true},
-			{Key: "bearings", Value: manualCounts("1e-05", 1, 0, 1, "0.5", 2, 0, 2, kb.PendingLiteral, 1, 0, 1)}}},
+			{Key: "bearings", Value: bearingCounts("1e-05", 1, "0.5", 2, kb.PendingLiteral, 1)}}},
 		{Key: kb.RelationFounds, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false},
 			{Key: "bearings", Value: bearingCounts("0.5", 1)}}},
 		{Key: kb.RelationLifts, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: true},
-			{Key: "bearings", Value: manualCounts("0.8", 1, 0, 1)}}},
+			{Key: "bearings", Value: bearingCounts("0.8", 1)}}},
 		{Key: kb.RelationRefutes, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: true},
 			{Key: "bearings", Value: []result.Record{}}}},
 		{Key: kb.RelationReferences, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false}}},
 		{Key: kb.RelationDemoted, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: false}}},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("edge-census = %v, want %v", got, want)
+		t.Errorf("stats' relations = %v, want %v", got, want)
 	}
 }
 
@@ -692,7 +771,7 @@ func edgeRows(t *testing.T, records []result.Record) []string {
 }
 
 func TestEdges(t *testing.T) {
-	ix := edgeCensusIndex(t)
+	ix := relationsIndex(t)
 	every := []string{
 		"clm-bbbbbb supports clm-aaaaaa=0.5 step 2 true",
 		"clm-cccccc supports clm-aaaaaa=1e-05 <nil> true",
@@ -918,27 +997,5 @@ func TestStatsCountsManualAndModelScores(t *testing.T) {
 	}
 	if want := []string{"rigor_manual=2", "rigor_model=9", "bearing_manual=2", "bearing_model=8"}; !slices.Equal(got, want) {
 		t.Errorf("stats after subtree_aggregates = %q, want %q", got, want)
-	}
-}
-
-// TestEdgeCensusCountsManualAndModelBearings: a bearings record on supports,
-// lifts and refutes counts its manual and model rows after edges; founds'
-// carries no such count.
-func TestEdgeCensusCountsManualAndModelBearings(t *testing.T) {
-	census := EdgeCensusPayload(manualSheetKB(t))
-	bearings := func(relation string) []result.Record {
-		rec, _ := fieldAt(census, relation)
-		b, _ := fieldAt(rec.(result.Record), "bearings")
-		return b.([]result.Record)
-	}
-	for relation, want := range map[string][]result.Record{
-		kb.RelationSupports: manualCounts("1.0", 4, 1, 3),
-		kb.RelationLifts:    manualCounts("0.5", 1, 0, 1, "0.8", 1, 0, 1),
-		kb.RelationRefutes:  manualCounts("0.5", 1, 0, 1),
-		kb.RelationFounds:   bearingCounts("0.5", 1, "0.75", 1, "0.8", 1, "1.0", 3),
-	} {
-		if got := bearings(relation); !reflect.DeepEqual(got, want) {
-			t.Errorf("edge-census %s bearings = %v, want %v", relation, got, want)
-		}
 	}
 }

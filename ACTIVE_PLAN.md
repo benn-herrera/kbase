@@ -159,7 +159,14 @@ These are decided. Packages implement them as stated.
 
 ## Open questions
 
-None.
+- **Stale stamped documents in existing KBs (awaiting the owner).** S2 moved the stamped templates
+  off `edge-census`, S4 moves them off `render-claim-graph`, but `kbdocs.Restamp` rewrites a KB's
+  `AGENTS.md` and `CONVENTIONS.md` only at a format migration, so a KB already at `3.0.0` keeps
+  naming retired commands. CONVENTIONS ("A file kbase generates is regenerated whole") says a new
+  template rewrites them. Readings: (A) a package R — `refresh` restamps both wherever their bytes
+  differ from the current templates' render, SPEC §3/§10 moving with it; (B) leave them until the
+  next format migration and narrow CONVENTIONS to "a new format". The plan runs without R; it is
+  added, or CONVENTIONS narrowed, on the owner's ruling.
 
 ## Skill candidates
 
@@ -175,7 +182,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | P1: move environment-configured tests onto configuration directories | expert | U | landed |
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | landed |
 | P3: remove the environment inference mode | expert | P2; P1's evidence green | landed |
-| S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | pending |
+| S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | landed |
 | S3: `drop-claim-node` deletes a claim in one call | expert | S2 | pending |
 | S4: `refresh` absorbs `render-claim-graph` | expert | S3 | pending |
 | S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | pending |
@@ -212,7 +219,9 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
   - any MCP resource text;
   - the stamped templates under `internal/kbdocs/templates/`;
   - the `config.toml` template text in `internal/config/template.go`.
-- **Tools.** Edits use the edit and write tools. Deletions use `git rm`, and formatting uses
+- **Tools.** Edits use the edit and write tools. A package deletes with `command rm` and lists each
+  deletion in its report; the coordinator stages it with `git rm` at landing, because another
+  committer shares the tree and a staged change rides into their commit. Formatting uses
   `just fmt`.
 - **Instructions fixtures.** An instructions change moves `test-data/fixtures/mcp/initialize.jsonl`
   and `gui-project-dir.jsonl`, which pin the instructions' text.
@@ -1129,7 +1138,8 @@ Only the deletion sequence merges into `drop-claim-node`.
 - **Tests.** `cmd/format_test.go`, `maintenance_test.go`, `resultdocs_test.go`,
   `resultkeys_test.go`, `writelock_test.go`.
 - **MCP.** `internal/mcp/instructions.txt`, `test-data/fixtures/mcp/initialize.jsonl`,
-  `gui-project-dir.jsonl`.
+  `gui-project-dir.jsonl`, `resources.jsonl` (S1's help listing drops
+  `kbase://help/render-claim-graph`).
 - **Templates.** `internal/kbdocs/templates/AGENTS.tmpl.md`, `README.tmpl.md`.
 - **Other.** `tools/scripts/test-integration-results-fixture.sh`, `justfile`.
 - **Docs.** `SPEC.md`, `ARCHITECTURE.md`, `README.md`, `ROADMAP.md`.
@@ -1311,5 +1321,8 @@ After S5 lands:
    with severity, finding, location and guidance.
 3. **Prompt-engineer pass.** The burndown file gets prompt-engineer review, and the architect revises
    it on the findings before dispatch.
-4. **Land and close.** Items land under CONVENTIONS "Coordinator Policy". The outcomes are confirmed
+4. **adjagent change request.** The coordinator writes `../adjagent/KBASE_SKILL_TEXT_CR.md`: every
+   adjagent follow-up the packages and the review reported, each with the adjagent file and line,
+   the kbase change that made it stale, and the served surface that now carries the content.
+5. **Land and close.** Items land under CONVENTIONS "Coordinator Policy". The outcomes are confirmed
    in the contract documents, and this file is replaced by the next plan.

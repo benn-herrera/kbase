@@ -220,8 +220,8 @@ After a build, subcommands operate on the living KB: write ops that insert entri
 `export-latex`, which writes a LaTeX project from the KB through pandoc; `score` asks the configured
 scoring model for the faults each item's text commits, one item at a time, and prices them into the
 KB's rigor and bearing values.
-The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `strength-below`,
-`subtree`, `weak-points`, `stats`, `edge-census` and `edges`. Run `kbase --help` for the list and
+The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `strength`,
+`subtree`, `stats` and `edges`. Run `kbase --help` for the list and
 `kbase <command> --help` for each one.
 
 - Write ops take values as YAML (JSON accepted) on stdin or `--values`. Re-issuing an op leaves

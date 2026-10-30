@@ -27,16 +27,14 @@ func init() {
 	rootCmd.AddCommand(
 		readOnlyTool(citedByCommand()),
 		readOnlyTool(depsCommand()),
-		readOnlyTool(edgeCensusCommand()),
 		readOnlyTool(edgesCommand()),
 		readOnlyTool(findCommand()),
 		readOnlyTool(gatedOnCommand()),
 		readOnlyTool(referencedByCommand()),
 		readOnlyTool(showCommand()),
 		readOnlyTool(statsCommand()),
-		readOnlyTool(strengthBelowCommand()),
+		readOnlyTool(strengthCommand()),
 		readOnlyTool(subtreeCommand()),
-		readOnlyTool(weakPointsCommand()),
 	)
 	// Write ops.
 	rootCmd.AddCommand(

@@ -68,15 +68,15 @@ derivation until it is judged, and a bearing of `0` is a judgement that particip
 ## Current Figures
 
 This file states no counts, because the KB changes after it is written. The current ones come from
-`kbase stats` and `kbase edge-census`, run from the project root that holds this KB.
+`kbase stats`, run from the project root that holds this KB.
 
 `kbase stats` counts the claim graph: one count per node kind — `claims`, `analyses`, `experiments`,
 `axioms`, `works` — then `edges`, every edge of every class, and `demoted_edges` beside it. The claims
 per band are under `strength_bands`: the {pending-literal} band holds the unscored claims, and every
 other band holds scored ones.
 
-`kbase edge-census` splits the edges by relation and, on a scoring relation, counts the edges at
-each bearing; `kbase edges --relation <relation>` lists them. `deps` reports each edge at a node with its
+Under `relations`, `kbase stats` splits the edges by relation and, on a scoring relation, counts the
+edges at each bearing; `kbase edges --relation <relation>` lists them. `deps` reports each edge at a node with its
 `relation` and its `bearing`.
 
 No command counts the documents: `stats` counts the claim graph and `verify` reports faults.

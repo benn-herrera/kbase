@@ -120,6 +120,7 @@ var answerRules = []struct {
 	apply func(a *answerFacts, args []string, doc *yaml.Node) string
 }{
 	{"a converted, unsaved KB's answer carries its migration record after kb-root", (*answerFacts).migrationRecord},
+	{"stats' relations after bearing_model, as 3.0.0 adds it", (*answerFacts).statsRelations},
 	{"manually_scored after a deps record's bearing and a show record's rigor; stats' four flag counts", (*answerFacts).manuallyScored},
 }
 
@@ -572,6 +573,30 @@ func (a *answerFacts) migrationRecord(_ []string, doc *yaml.Node) string {
 		return fmt.Sprintf("the migration record is from %q to %q, not from %s to %s", text(value(m, "from")), text(value(m, "to")), parityFrom, kb.FormatVersion)
 	case a.encode(m) != a.migration:
 		return "the migration record differs from the first answer's"
+	}
+	return ""
+}
+
+// statsRelations removes stats' relations, which stands directly after
+// bearing_model and holds one record per relation in kb.Relations order.
+func (a *answerFacts) statsRelations(args []string, doc *yaml.Node) string {
+	results := value(doc, "results")
+	if args[0] != "stats" || results == nil {
+		return ""
+	}
+	relations := removeAfter(results, "bearing_model", "relations")
+	if relations == nil || relations.Kind != yaml.MappingNode {
+		return "stats' relations is not a mapping directly after bearing_model"
+	}
+	var names []string
+	for i := 0; i < len(relations.Content); i += 2 {
+		if relations.Content[i+1].Kind != yaml.MappingNode {
+			return fmt.Sprintf("stats' relations %s is not a record", relations.Content[i].Value)
+		}
+		names = append(names, relations.Content[i].Value)
+	}
+	if !slices.Equal(names, kb.Relations) {
+		return fmt.Sprintf("stats' relations holds %v, not one record per relation in %v", names, kb.Relations)
 	}
 	return ""
 }

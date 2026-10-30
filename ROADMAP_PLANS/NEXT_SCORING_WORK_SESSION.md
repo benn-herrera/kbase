@@ -72,7 +72,7 @@ this names only what would move.
     attribute per bearing drawn from the column every scoring row already carries, with the DOT
     goldens regenerated.
 15. **The index load does not refuse a text bearing that is neither a number nor `*pending*`**;
-    `edge-census` ranks such text with pending.
+    `stats`' `relations` ranks such text with pending.
 16. **The uncertainty pool and hit list, parked:** the declared categories yield nothing useful,
     and the hit list returns when a scoring pass has run on the fixture and a ranking signal puts
     the author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed

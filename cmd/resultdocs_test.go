@@ -87,13 +87,18 @@ func TestMaintenanceResultsParse(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"deps", ids[0]}, {"deps", ids[0], "-i"}, {"gated-on", ids[0]}, {"cited-by", ids[0]}, {"find", ""},
-		{"referenced-by", ids[0]}, {"strength-below", "--max-strength", "0.5"}, {"subtree", ""}, {"weak-points"},
-		{"show", ids[0]}, {"stats"}, {"edge-census"}, {"edges"}, {"edges", "--relation", kb.RelationFounds},
+		{"referenced-by", ids[0]}, {"strength", "--max", "0.5"}, {"subtree", ""},
+		{"strength", "--sort", "dependents", "--min-dependents", "1", "--max", "0.65"}, {"strength", "--pending"},
+		{"show", ids[0]}, {"stats"}, {"edges"}, {"edges", "--relation", kb.RelationFounds},
 	} {
 		run("done", args...)
 	}
 	run("refused", "show", "clm-zzzzzz")
-	run("refused", "strength-below", "--max-strength", "half")
+	run("refused", "strength", "--max", "half")
+	if items := run("refused", "strength", "--pending", "--max", "0.5").items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage ||
+		items[0]["key"] != "--pending" {
+		t.Errorf("strength --pending --max 0.5 refusal: %v, want one usage item naming --pending", items)
+	}
 	unknown := run("refused", "edges", "--relation", "nope", "--relation", "nope")
 	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {

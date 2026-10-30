@@ -11,18 +11,37 @@ import (
 	"kbase/internal/kb"
 )
 
-// WeakPoint is a scored claim below the weak-points bar with the count of its
-// dependents (DependentsOf).
-type WeakPoint struct {
+// ClaimStrength is a claim with the count of its dependents (DependentsOf).
+type ClaimStrength struct {
 	Claim      kb.NodeRow
 	Dependents int
 }
 
-// Defaults of the weak-points query.
+// The bar and the dependents floor of stats' highest-leverage weak points.
 const (
 	DefaultMaxStrength   = 0.65
 	DefaultMinDependents = 1
 )
+
+// The orders of the strength query.
+const (
+	SortStrength   = "strength"
+	SortDependents = "dependents"
+)
+
+// StrengthSorts is the strength query's orders.
+var StrengthSorts = []string{SortStrength, SortDependents}
+
+// StrengthSelection selects claims by strength: the scored claims at or above
+// Min and strictly below Max, a nil bound not bounding, or under Pending the
+// claims with no strength; either way those with at least MinDependents
+// dependents. Sort is one of StrengthSorts.
+type StrengthSelection struct {
+	Min, Max      *float64
+	MinDependents int
+	Pending       bool
+	Sort          string
+}
 
 // claims is the claim nodes, sorted by id.
 func (ix *Index) claims() []kb.NodeRow {
@@ -159,38 +178,43 @@ func (ix *Index) SubtreeClaims(nodePath string) []string {
 	return append([]string{}, a.SubtreeClaims...)
 }
 
-// StrengthBelow is the scored claims whose strength is under threshold,
-// ascending by strength, then id.
-func (ix *Index) StrengthBelow(threshold float64) []kb.NodeRow {
-	var out []kb.NodeRow
+// Strengths is the claims sel selects. SortStrength orders them by ascending
+// strength, then id; SortDependents by most dependents, then lowest strength,
+// then id. A pending claim has no strength to order by, so among pending
+// claims strength drops out of either order.
+func (ix *Index) Strengths(sel StrengthSelection) []ClaimStrength {
+	var out []ClaimStrength
 	for _, c := range ix.claims() {
-		if c.Strength != nil && *c.Strength < threshold {
-			out = append(out, c)
+		if sel.Pending != (c.Strength == nil) {
+			continue
+		}
+		if c.Strength != nil && (sel.Min != nil && *c.Strength < *sel.Min || sel.Max != nil && *c.Strength >= *sel.Max) {
+			continue
+		}
+		if n := len(ix.DependentsOf(c.ID)); n >= sel.MinDependents {
+			out = append(out, ClaimStrength{Claim: c, Dependents: n})
 		}
 	}
-	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
-		return cmp.Or(cmp.Compare(*a.Strength, *b.Strength), strings.Compare(a.ID, b.ID))
+	strength := func(c ClaimStrength) float64 {
+		if c.Claim.Strength == nil {
+			return 0
+		}
+		return *c.Claim.Strength
+	}
+	slices.SortStableFunc(out, func(a, b ClaimStrength) int {
+		byStrength := cmp.Compare(strength(a), strength(b))
+		if sel.Sort == SortDependents {
+			return cmp.Or(cmp.Compare(b.Dependents, a.Dependents), byStrength, strings.Compare(a.Claim.ID, b.Claim.ID))
+		}
+		return cmp.Or(byStrength, strings.Compare(a.Claim.ID, b.Claim.ID))
 	})
 	return out
 }
 
 // WeakPoints is the scored claims under maxStrength with at least minDependents
 // dependents: most dependents first, then lowest strength, then id.
-func (ix *Index) WeakPoints(maxStrength float64, minDependents int) []WeakPoint {
-	var out []WeakPoint
-	for _, c := range ix.claims() {
-		if c.Strength == nil || *c.Strength >= maxStrength {
-			continue
-		}
-		if n := len(ix.DependentsOf(c.ID)); n >= minDependents {
-			out = append(out, WeakPoint{Claim: c, Dependents: n})
-		}
-	}
-	slices.SortStableFunc(out, func(a, b WeakPoint) int {
-		return cmp.Or(cmp.Compare(b.Dependents, a.Dependents), cmp.Compare(*a.Claim.Strength, *b.Claim.Strength),
-			strings.Compare(a.Claim.ID, b.Claim.ID))
-	})
-	return out
+func (ix *Index) WeakPoints(maxStrength float64, minDependents int) []ClaimStrength {
+	return ix.Strengths(StrengthSelection{Max: &maxStrength, MinDependents: minDependents, Sort: SortDependents})
 }
 
 // Node is the node carrying id, of any kind, or false. Where ids repeat, the

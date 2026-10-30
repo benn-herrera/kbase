@@ -184,13 +184,13 @@ run deps done deps "${id}" -i
 run gated-on done gated-on "${id}"
 run cited-by done cited-by "${id}"
 run referenced-by done referenced-by "${id}"
-run strength-below done strength-below --max-strength 0.5
+run strength done strength --max 0.5
+run strength done strength --sort dependents --min-dependents 1 --max 0.65
+run strength done strength --pending
 run subtree done subtree ""
-run weak-points done weak-points
 run show done show "${id}"
 run show refused show clm-zzzzzz
 run stats done stats
-run edge-census done edge-census
 run edges done edges
 # The demoted relation. One freehand edit of the staged copy's edge records
 # adds supports ${ID1} -> ${ID3}, closing a cycle with the analysis's lifts of
@@ -213,13 +213,12 @@ run edges done edges --relation demoted
 holds 'edges lists not one demoted row' grep -qx 'count: 1' "${LAST}"
 holds 'the demoted row is not the cut edge' grep -qxF "    - source: \"${ids[0]}\"" "${LAST}"
 holds 'the demoted row is not the cut edge' grep -qxF "      target: \"${ids[2]}\"" "${LAST}"
-run edge-census done edge-census
-holds 'edge-census counts not one demoted edge' test "$(sed -n '/^    demoted:$/{n;p;}' "${LAST}")" = '        edges: 1'
 run deps done deps "${ids[0]}"
 holds 'deps lists no demoted row out of the source' \
     test "$(grep -A2 -x '    - relation: "demoted"' "${LAST}" | tail -n 2 | tr -d '\n')" = "      direction: \"out\"      target: \"${ids[2]}\""
 run stats done stats
 holds 'stats counts not one demoted edge' grep -qx '    demoted_edges: 1' "${LAST}"
+holds 'stats relations counts not one demoted edge' test "$(sed -n '/^        demoted:$/{n;p;}' "${LAST}")" = '            edges: 1'
 run resolve-demoted refused resolve-demoted --values "$(staged resolve-demoted-restore.yaml)"
 holds 'restore is not refused as closing the cycle' grep -qx '    - check: "dependency-cycle"' "${LAST}"
 run resolve-demoted done resolve-demoted --values "$(staged resolve-demoted-remove.yaml)"
@@ -228,7 +227,7 @@ run verify done verify
 holds 'verify still lists a finding after the remove' grep -qx 'findings: \[\]' "${LAST}"
 run status done status --state-dir "${root}/${out}/state"
 run cancel refused cancel --state-dir "${root}/${out}/state"
-OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files the staging ops and resolve-demoted read, \${ID1} and \${ID2} substituted by the inserted claims' ids in id order and \${ID3} by the analysis's\nthe demoted leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify refused degraded, refresh warning of the cut, verify done with a demoted finding, edges --relation demoted, edge-census, deps \${ID1} and stats showing it, resolve-demoted restore refused dependency-cycle and remove done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: bounded on one failed item, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files the staging ops and resolve-demoted read, \${ID1} and \${ID2} substituted by the inserted claims' ids in id order and \${ID3} by the analysis's\nthe demoted leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify refused degraded, refresh warning of the cut, verify done with a demoted finding, edges --relation demoted, deps \${ID1} and stats (demoted_edges and its relations) showing it, resolve-demoted restore refused dependency-cycle and remove done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and one failed item whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: bounded on one failed item, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'

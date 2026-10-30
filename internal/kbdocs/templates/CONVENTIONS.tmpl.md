@@ -48,8 +48,7 @@ kbase, a single binary run from the project root, maintains this KB.
 | The op list | `kbase --help`; `kbase <op> --help` |
 | Regenerate derived state | `kbase refresh` |
 | The read-only gate | `kbase verify` |
-| Claim-graph counts | `kbase stats` |
-| Edge counts by relation and bearing | `kbase edge-census` |
+| Claim-graph counts, edges by relation and bearing included | `kbase stats` |
 | The edges of a relation | `kbase edges --relation <relation>` |
 
 Every subcommand but `help`, `completion` and `mcp` writes one YAML document to stdout, its

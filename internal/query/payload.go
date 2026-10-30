@@ -8,13 +8,14 @@ import (
 	"strconv"
 	"strings"
 
+	"kbase/internal/config"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
 
 // Each *Payload function is one query's answer: a list, or one mapping for
-// show, stats and edge-census.
+// show and stats.
 
 // ResultsKey holds a query's answer in its result document.
 const ResultsKey = "results"
@@ -52,10 +53,6 @@ func pageOf[T any](s []T, offset, limit int) ([]T, bool) {
 	}
 	return append([]T{}, s[start:end]...), end < len(s)
 }
-
-// aboveEveryScore is a strength bar every scored claim clears: scores top
-// out at the framework's 1.0.
-const aboveEveryScore = 1.1
 
 func opt(v *float64) any {
 	if v == nil {
@@ -127,7 +124,7 @@ func rigorRecord(n kb.NodeRow) result.Record {
 	return append(identity(n), result.Field{Key: "rigor", Value: opt(n.Rigor)})
 }
 
-func weakPointRecord(wp WeakPoint) result.Record {
+func weakPointRecord(wp ClaimStrength) result.Record {
 	return result.Record{{Key: "id", Value: wp.Claim.ID}, {Key: "strength", Value: displayStrength(wp.Claim.Strength)},
 		{Key: "build_band", Value: wp.Claim.BuildBand}, {Key: "dependents", Value: wp.Dependents}, {Key: "title", Value: wp.Claim.Title}}
 }
@@ -223,14 +220,27 @@ func ReferencedByPayload(ix *Index, id string) ([]string, error) {
 	return nonNil(leaves), err
 }
 
-// StrengthBelowPayload is the full record of each scored claim under
-// threshold.
-func StrengthBelowPayload(ix *Index, threshold float64) []result.Record {
-	out := []result.Record{}
-	for _, c := range ix.StrengthBelow(threshold) {
-		out = append(out, nodeFields[kb.NodeKindClaim](c))
+// StrengthPayload is the full record of each claim sel selects (Strengths),
+// its dependents' count after it. It refuses, as usage, Pending beside a bound
+// and a Sort outside StrengthSorts.
+func StrengthPayload(ix *Index, sel StrengthSelection) ([]result.Record, []result.Item) {
+	var usage []result.Item
+	if sel.Pending && (sel.Min != nil || sel.Max != nil) {
+		usage = append(usage, result.Item{Check: config.CheckUsage, Key: "--pending",
+			Detail: "--pending lists the claims with no strength, which --min and --max cannot bound"})
 	}
-	return out
+	if !slices.Contains(StrengthSorts, sel.Sort) {
+		usage = append(usage, result.Item{Check: config.CheckUsage, Key: "--sort", Allowed: StrengthSorts,
+			Detail: fmt.Sprintf("--sort %q names no order", sel.Sort)})
+	}
+	if usage != nil {
+		return nil, usage
+	}
+	out := []result.Record{}
+	for _, c := range ix.Strengths(sel) {
+		out = append(out, append(nodeFields[kb.NodeKindClaim](c.Claim), result.Field{Key: "dependents", Value: c.Dependents}))
+	}
+	return out, nil
 }
 
 // SubtreePayload is the claims under nodePath.
@@ -280,15 +290,6 @@ func UnknownNode(id string) result.Item {
 	return result.Item{Check: kb.CheckUnknownID, Key: "<id>", Detail: fmt.Sprintf("unknown node id: %s", id)}
 }
 
-// WeakPointsPayload is the scored, load-bearing claims under maxStrength.
-func WeakPointsPayload(ix *Index, maxStrength float64, minDependents int) []result.Record {
-	out := []result.Record{}
-	for _, wp := range ix.WeakPoints(maxStrength, minDependents) {
-		out = append(out, weakPointRecord(wp))
-	}
-	return out
-}
-
 // kindCountKey is a node kind's census key: its plural, analyses for analysis.
 func kindCountKey(kind string) string {
 	if kind == kb.NodeKindAnalysis {
@@ -298,8 +299,9 @@ func kindCountKey(kind string) string {
 }
 
 // StatsPayload is the census — one count per node kind, then each index
-// file's, the demoted edges beside the edge rows — the claims per build band,
-// and the ten weak points and ten lowest-strength claims.
+// file's, the demoted edges beside the edge rows, the manual and model counts
+// and each relation's edges (relationCensus) — the claims per build band, and
+// the ten weak points and ten lowest-strength claims.
 func StatsPayload(ix *Index) result.Record {
 	var out result.Record
 	for _, kind := range kb.NodeKinds {
@@ -331,7 +333,8 @@ func StatsPayload(ix *Index) result.Record {
 		}
 	}
 	out = append(out, result.Field{Key: "rigor_manual", Value: rigor.manual}, result.Field{Key: "rigor_model", Value: rigor.model},
-		result.Field{Key: "bearing_manual", Value: bearing.manual}, result.Field{Key: "bearing_model", Value: bearing.model})
+		result.Field{Key: "bearing_manual", Value: bearing.manual}, result.Field{Key: "bearing_model", Value: bearing.model},
+		result.Field{Key: "relations", Value: relationCensus(ix)})
 
 	bands := map[string]int{}
 	for _, c := range ix.claims() {
@@ -348,8 +351,9 @@ func StatsPayload(ix *Index) result.Record {
 		leverage = append(leverage, weakPointRecord(wp))
 	}
 	weakest := []result.Record{}
-	for _, c := range first(ix.StrengthBelow(aboveEveryScore), statsRankLimit) {
-		weakest = append(weakest, result.Record{{Key: "id", Value: c.ID}, {Key: "strength", Value: displayStrength(c.Strength)}, {Key: "title", Value: c.Title}})
+	for _, c := range first(ix.Strengths(StrengthSelection{Sort: SortStrength}), statsRankLimit) {
+		weakest = append(weakest, result.Record{{Key: "id", Value: c.Claim.ID}, {Key: "strength", Value: displayStrength(c.Claim.Strength)},
+			{Key: "title", Value: c.Claim.Title}})
 	}
 	return append(out, result.Field{Key: "strength_bands", Value: dist}, result.Field{Key: "highest_leverage", Value: leverage},
 		result.Field{Key: "weakest", Value: weakest})
@@ -357,39 +361,25 @@ func StatsPayload(ix *Index) result.Record {
 
 func first[T any](s []T, n int) []T { return s[:min(n, len(s))] }
 
-// EdgeCensusPayload is, for each relation in kb.Relations order, its edge
-// rows' count, whether the bearing pass walks it, and on a scoring relation
-// the rows at each bearing they carry — numbers ascending, then pending, then
-// null — each with, where the relation's records carry a manually-scored
-// value, how many are manually scored and how many model-scored.
-func EdgeCensusPayload(ix *Index) result.Record {
+// relationCensus is, for each relation in kb.Relations order, its edge rows'
+// count, whether the bearing pass walks it, and on a scoring relation the rows
+// at each bearing they carry — numbers ascending, then pending, then null.
+func relationCensus(ix *Index) result.Record {
 	out := result.Record{}
 	for _, relation := range kb.Relations {
 		count := 0
 		atBearing := map[any]int{}
-		flagged := map[any]flagCounts{}
-		carried := false
 		for _, e := range ix.edges {
-			if e.Relation != relation {
-				continue
-			}
-			count++
-			atBearing[e.Bearing]++
-			if e.ManuallyScored != nil {
-				carried = true
-				flagged[e.Bearing] = flagged[e.Bearing].add(*e.ManuallyScored)
+			if e.Relation == relation {
+				count++
+				atBearing[e.Bearing]++
 			}
 		}
 		rec := result.Record{{Key: "edges", Value: count}, {Key: "walked", Value: kb.BearingWalk(relation)}}
 		if kb.Scoring(relation) {
-			bearings := slices.SortedFunc(maps.Keys(atBearing), compareBearings)
 			records := []result.Record{}
-			for _, b := range bearings {
-				r := result.Record{{Key: "bearing", Value: b}, {Key: "edges", Value: atBearing[b]}}
-				if carried {
-					r = append(r, result.Field{Key: "manual", Value: flagged[b].manual}, result.Field{Key: "model", Value: flagged[b].model})
-				}
-				records = append(records, r)
+			for _, b := range slices.SortedFunc(maps.Keys(atBearing), compareBearings) {
+				records = append(records, result.Record{{Key: "bearing", Value: b}, {Key: "edges", Value: atBearing[b]}})
 			}
 			rec = append(rec, result.Field{Key: "bearings", Value: records})
 		}

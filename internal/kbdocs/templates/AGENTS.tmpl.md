@@ -37,7 +37,7 @@ the tree; it was never a distillation of a corpus, so it is the KB's own word, n
 what any corpus says. Its nodes are `claim`, `analysis`, `experiment`, `work` and `axiom`, its
 scoring edges `supports`, `founds`, `lifts` and `refutes` — each from what bears on the argument to
 what it supports — and its unscored edges `references` and `demoted`. For live counts — what is in
-the graph right now — run `kbase stats` for nodes and strength bands, and `kbase edge-census` for
+the graph right now — run `kbase stats` for nodes, strength bands and, under `relations`,
 each relation's edges and, on a scoring relation, how many stand at each bearing;
 `kbase edges --relation <relation>` lists them.
 
