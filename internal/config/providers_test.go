@@ -152,10 +152,10 @@ apiKeyFile = "not-here.key"
 		t.Fatalf("want exactly one fault naming broken, got %+v", faults)
 	}
 	if !strings.Contains(faults[0].Reason, "apiKeyFile") {
-		t.Errorf("fault reason %q does not name the failing field", faults[0].Reason)
+		t.Errorf("fault reason (len %d) does not name the failing field", len(faults[0].Reason))
 	}
 	if strings.Contains(faults[0].Reason, fakeKey) {
-		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
+		t.Error("ProviderFault.Reason carries key material")
 	}
 	if faults[0].Warning {
 		t.Error("a dropped provider was reported as a warning")
@@ -189,7 +189,7 @@ apiKeyFile = "reaper.key"
 		t.Errorf("fault reason %q names neither the path nor the mode", faults[0].Reason)
 	}
 	if strings.Contains(faults[0].Reason, fakeKey) {
-		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
+		t.Error("ProviderFault.Reason carries key material")
 	}
 }
 
@@ -381,11 +381,11 @@ apiKeyPath = "reaper.key"
 	msg := err.Error()
 	for _, want := range []string{"providers:", path, `"local.apiKeyUnsafe"`, `"reaper.url"`, `"reaper.apiKeyPath"`, unknownKeyHint} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("refusal %q does not name %s", msg, want)
+			t.Errorf("refusal (len %d) does not name %s", len(msg), want)
 		}
 	}
 	if strings.Contains(msg, fakeKey) {
-		t.Errorf("refusal carries key material: %q", msg)
+		t.Error("refusal carries key material")
 	}
 }
 
@@ -464,7 +464,7 @@ apiKeyFile = "not-here.key"
 	}
 	for _, f := range faults {
 		if strings.Contains(f.Reason, sentinel) {
-			t.Errorf("ProviderFault.Reason carries key material: %q", f.Reason)
+			t.Errorf("ProviderFault.Reason of %s carries key material", f.Name)
 		}
 	}
 }

@@ -153,7 +153,7 @@ func TestAnthropicSendsTheMessagesRequest(t *testing.T) {
 				}
 			}
 			if got := headers.Get("Authorization"); got != "" {
-				t.Errorf("Authorization sent to a Messages endpoint: %q", got)
+				t.Errorf("Authorization sent to a Messages endpoint (len %d)", len(got))
 			}
 
 			var wire map[string]json.RawMessage
@@ -427,7 +427,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"try later, k
 		}
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into a stream error: %v", err)
+		t.Fatal("API key leaked into a stream error")
 	}
 }
 
@@ -496,7 +496,7 @@ func TestAnthropicListModels(t *testing.T) {
 		t.Errorf("path: got %q, want /models", gotPath)
 	}
 	if got := headers.Get("x-api-key"); got != testAPIKey {
-		t.Errorf("x-api-key: got %q, want the configured key", got)
+		t.Errorf("x-api-key: got len %d, want the configured key", len(got))
 	}
 	want := []ModelInfo{
 		{ID: "claude-a", Created: time.Date(2025, 2, 19, 0, 0, 0, 0, time.UTC).Unix()},

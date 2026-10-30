@@ -167,7 +167,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 		t.Errorf("provider = %+v, want each role's own model", p)
 	}
 	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey != "secret-key" {
-		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", dialled)
+		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", len(dialled))
 	}
 	if len(p.Roles) != 2 {
 		t.Fatalf("roles = %v, want one per role the build asks", p.Roles)
@@ -180,7 +180,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 		}
 	}
 	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "cleartext") || strings.Contains(stderr.String(), "secret-key") {
-		t.Errorf("stderr = %q, want one cleartext line naming no key", stderr.String())
+		t.Errorf("stderr (%d bytes), want one cleartext line naming no key", stderr.Len())
 	}
 }
 

@@ -141,7 +141,7 @@ func TestOpenAIClientHappyPath(t *testing.T) {
 		t.Errorf("path: got %q, want /chat/completions", gotPath)
 	}
 	if gotAuth != "Bearer "+testAPIKey {
-		t.Errorf("auth header missing or wrong: got %q", gotAuth)
+		t.Errorf("auth header missing or wrong: got len %d", len(gotAuth))
 	}
 	if gotUA != userAgent {
 		t.Errorf("user-agent: got %q, want %q", gotUA, userAgent)
@@ -224,7 +224,7 @@ func TestOpenAIClientHTTPErrorWraps(t *testing.T) {
 		t.Errorf("error missing status code: %v", err)
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into 5xx error: %v", err)
+		t.Fatal("API key leaked into 5xx error")
 	}
 }
 
@@ -300,10 +300,10 @@ func TestOpenAIClientErrorScrubsAPIKey(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into error string: %v", err)
+		t.Fatal("API key leaked into error string")
 	}
 	if !strings.Contains(err.Error(), "<redacted>") {
-		t.Errorf("expected <redacted> sentinel in scrubbed error, got: %v", err)
+		t.Errorf("expected <redacted> sentinel in scrubbed error (error len %d)", len(err.Error()))
 	}
 }
 
@@ -389,7 +389,7 @@ func TestOpenAIClientListModelsErrorScrubs(t *testing.T) {
 		t.Errorf("error missing status code: %v", err)
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into error: %v", err)
+		t.Fatal("API key leaked into error")
 	}
 }
 
@@ -636,7 +636,7 @@ func TestOpenAIClientStreamErrorWraps(t *testing.T) {
 		t.Errorf("error missing status code: %v", err)
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into 5xx error: %v", err)
+		t.Fatal("API key leaked into 5xx error")
 	}
 }
 

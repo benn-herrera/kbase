@@ -159,7 +159,8 @@ baseUrl = "http://local.example/v1"
 	}
 	shared := providers["shared"]
 	if shared.BaseURL != "http://shared.example/v2" || shared.APIKeyFile != "" || shared.APIKey != "" {
-		t.Errorf("shared = %+v, want the repository entry whole: its URL, and no key inherited from the global entry", shared)
+		t.Errorf("shared = %+v, want the repository entry whole: its URL, and no key inherited from the global entry",
+			Provider{BaseURL: shared.BaseURL, APIKeyFile: shared.APIKeyFile})
 	}
 	for name, wantLayer := range map[string]string{
 		"shared": LayerSourceRepository, "local": LayerSourceRepository, "inherited": LayerSourceGlobal,

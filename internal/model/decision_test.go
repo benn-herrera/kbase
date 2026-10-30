@@ -162,7 +162,7 @@ func TestSystemOnePayloadShape(t *testing.T) {
 		t.Errorf("method: got %q, want POST", gotMethod)
 	}
 	if gotAuth != "Bearer "+testAPIKey {
-		t.Errorf("auth: got %q, want the bearer key", gotAuth)
+		t.Errorf("auth: got len %d, want the bearer key", len(gotAuth))
 	}
 	if len(bodies) != 1 {
 		t.Fatalf("requests: got %d, want 1", len(bodies))
@@ -303,7 +303,7 @@ func TestSystemOne4xxNoRetry(t *testing.T) {
 		t.Errorf("requests: got %d, want 1 — a 4xx is not re-issued", s.saw())
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into the error: %v", err)
+		t.Fatal("API key leaked into the error")
 	}
 }
 

@@ -156,7 +156,7 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Errorf("the role's diagnostic = %v, want models.scoring in the config file", last)
 	}
 	if strings.Contains(stdout, fileKey) {
-		t.Errorf("the document carries the key %q:\n%s", fileKey, stdout)
+		t.Errorf("the document (%d bytes) carries the key", len(stdout))
 	}
 }
 

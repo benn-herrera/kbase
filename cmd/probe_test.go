@@ -623,8 +623,8 @@ apiKeyFile = "claude.key"
 		t.Errorf("path = %q, want /messages", seen[0].path)
 	}
 	if seen[0].apiKey != testAPIKey || seen[0].version != "2023-06-01" {
-		t.Errorf("auth headers: x-api-key %q, anthropic-version %q; want the entry's key and the protocol version",
-			seen[0].apiKey, seen[0].version)
+		t.Errorf("auth headers: x-api-key matches %t, anthropic-version %q; want the entry's key and the protocol version",
+			seen[0].apiKey == testAPIKey, seen[0].version)
 	}
 	var body struct {
 		Model     string `json:"model"`

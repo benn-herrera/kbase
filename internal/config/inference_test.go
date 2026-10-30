@@ -105,7 +105,9 @@ func TestResolve(t *testing.T) {
 		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
 		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if ep != want {
-		t.Errorf("= %+v, want %+v", ep, want)
+		gotShown, wantShown := ep, want
+		gotShown.APIKey, wantShown.APIKey = "", ""
+		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", gotShown, wantShown, len(ep.APIKey), len(want.APIKey))
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
@@ -234,7 +236,7 @@ func TestCleartextWarning(t *testing.T) {
 	} {
 		got := CleartextWarning(tc.url, tc.key)
 		if (got != "") != tc.warns || strings.Contains(got, "secret-key") || strings.Contains(got, "\n") {
-			t.Errorf("%s: %q, want warning %t, one line naming no key", tc.name, got, tc.warns)
+			t.Errorf("%s: warning of %d bytes, want warning %t, one line naming no key", tc.name, len(got), tc.warns)
 		}
 	}
 }

@@ -93,14 +93,14 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 
 ## Packages
 
-| id | rating | one line | depends on |
-|---|---|---|---|
-| A | mechanical | test failure messages never print a key | none |
-| B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A |
-| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B |
-| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C |
-| E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D |
-| F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E |
+| id | rating | one line | depends on | status |
+|---|---|---|---|---|
+| A | mechanical | test failure messages never print a key | none | landed |
+| B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | in progress |
+| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | pending |
+| D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C | pending |
+| E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D | pending |
+| F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
 
 **Order:** one package at a time, A through F, with one agent editing the tree at once.
 

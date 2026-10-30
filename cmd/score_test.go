@@ -488,10 +488,10 @@ func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
 			}
 			line := config.CleartextWarning(tc.url, testAPIKey)
 			if line == "" || strings.Count(got.stderr, line) != 1 {
-				t.Errorf("stderr = %q, want one line %q", got.stderr, line)
+				t.Errorf("stderr (%d bytes), want one cleartext warning for %s", len(got.stderr), tc.url)
 			}
 			if strings.Contains(got.stderr, testAPIKey) {
-				t.Errorf("stderr names the key: %q", got.stderr)
+				t.Error("stderr names the key")
 			}
 		})
 	}
