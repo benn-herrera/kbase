@@ -159,10 +159,7 @@ single source. Working habits they impose:
   annotation `kbase.mcp.reason`, and the tool-table test fails an exclusion whose reason is empty;
   cobra's own `help` and `completion` are declared `cliOnly` there too. A test fails an
   `AddCommand` outside that file. The table binds only `bound` commands, and the test derives its
-  expectation from the annotations, never from a list, failing a command that declares neither. A
-  bound command's flag that its verb refuses to run without declares `kbase.required`
-  the same way, and the tool's schema lists it among `required`; the trap is a refusal whose flag
-  carries no mark, so a model reading the schema cannot tell the flag must be given.
+  expectation from the annotations, never from a list, failing a command that declares neither.
   The exception is a tool no command stands behind: listed, and only where the tool-table test
   (`cmd/mcp_test.go`) pins the set to the `bound` commands plus exactly those tools and the tool
   returns through `mcp.ToolResult`, so text, structured content and `isError` cannot drift from a

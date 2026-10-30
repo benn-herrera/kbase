@@ -5,7 +5,6 @@ Future intent, not commitment. Design truth lives in [SPEC.md](SPEC.md) and
 Finished items are deleted, not archived.
 
 ## Next
-- **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
 - **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
   `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
 

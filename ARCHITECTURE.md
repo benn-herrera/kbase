@@ -1709,10 +1709,9 @@ which is no argument of the tool; `score`'s `--replay` and `--failed` are such f
 argument naming one is refused by `internal/mcp/protocol` as outside the schema. A command's
 read-only standing is the cobra annotation `kbase.readOnly`, read when the table is built. A command
 tool's `required` is its positionals alone, less an optional variadic one, which its `Use` line
-spells `[<name>...]`: no bound flag is required today, `score`'s `--pass`
-among them, a run walking both passes unless it is told otherwise. A flag that becomes required
-declares `kbase.required`, and the derivation lists it among `required` (CONVENTIONS); `wait`'s
-`--pid` is outside the derivation, `wait` declaring `excluded` (§11).
+spells `[<name>...]`: no bound command refuses for want of a flag, `score`'s `--pass` among them, a
+run walking both passes unless it is told otherwise; `wait`'s `--pid`, the one flag a verb requires,
+is outside the derivation, `wait` declaring `excluded` (§11).
 
 `cmd/surface.go` adds every command to the tree, one `AddCommand` per family, its binding and
 read-only hint on that line (`readOnlyTool`, `readWriteTool`, `cliOnly`), and declares beside them
