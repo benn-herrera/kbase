@@ -240,7 +240,7 @@ The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`,
   derivation until it is judged.
 - Three write ops are kbase's own. `drop-claim-edges` removes a claim's `rests-on` or `references`
   list. `drop-inbound-edges` removes every edge that names it. `drop-claim-node` deletes the node
-  itself, and refuses while an edge or any other line still names it, so run the two edge ops first.
+  with every edge naming it, in one call, and refuses while any other line still names it.
 - A write op ends with a `refresh` unless given `--no-refresh`. `kbase verify` then checks freshness
   and links under `kb-root/`; the citation grammar is checked inside the build.
 - List queries return `--limit` results (default 50; `0` means all) from `--offset`, and report

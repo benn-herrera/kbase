@@ -183,7 +183,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | landed |
 | P3: remove the environment inference mode | expert | P2; P1's evidence green | landed |
 | S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | landed |
-| S3: `drop-claim-node` deletes a claim in one call | expert | S2 | pending |
+| S3: `drop-claim-node` deletes a claim in one call | expert | S2 | landed |
 | S4: `refresh` absorbs `render-claim-graph` | expert | S3 | pending |
 | S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | pending |
 | Review | — | S5 | pending |
@@ -1077,9 +1077,11 @@ Only the deletion sequence merges into `drop-claim-node`.
   the node, all-or-nothing under one lock. A re-issue is `unchanged`.
 - **Each site.**
   - Delete `refuseStrandedClaim` (`internal/write/marks.go:93`–`113`), which is wholly the edge
-    check, and the `apply` field at `internal/write/ops.go:81`.
-  - The prose checks are `refuseRemainingMentions`, called from `dropClaimNodes`
-    (`internal/write/marks.go:130`). They stay unchanged.
+    check. `recordEdit.apply` is called on every entry without a nil check
+    (`internal/write/records.go:166`), so the field stays: `apply` is the per-entry drop, and
+    `finish` is `refuseRemainingMentions`.
+  - The prose checks are `refuseRemainingMentions` (`internal/write/marks.go:130`). They stay
+    unchanged, run once after every entry's drop, and a refusal still writes nothing.
   - `proseRemedy` (`internal/write/marks.go:178`) is unchanged; its remedy still names ops
     that exist.
   - `IssueCulls` issues `drop-claim-node` alone, one batch over the ids. Its doc comment says so.

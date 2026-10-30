@@ -774,12 +774,11 @@ experiment's `supports` edge into it. A claim no other node names stands. Idempo
 
 ### `drop-claim-node`
 
-Deletes a claim node entirely: its node record, its statement marker in every leaf carrying one,
-every `demoted` record naming it, and its own edges — every `founds` edge and every claim's
-`supports` edge into it, and the `references` and `refutes` edges out of it. Refused, writing
-nothing, where another node's edge record still names the claim — a `supports` edge from it into
-another node, a `references` or `refutes` edge into it, a lift into it or an experiment's support of
-it: run `drop-claim-edges` and `drop-inbound-edges` first; and where, once those removals are
+Deletes a claim node entirely, in one call: its node record, its statement marker in every leaf
+carrying one, every `demoted` record naming it, and every edge record naming it — its own edges
+(every `founds` edge and every claim's `supports` edge into it, and the `references` and `refutes`
+edges out of it) and every edge by which another node names it (those `drop-inbound-edges`
+removes). No prior call is needed. Refused, writing nothing, where, once those removals are
 composed, the node is still named by a line under `kb-root/` outside the register pages, each such
 line named as `path:line`, or by a prose field of another record — a title, `rationale`, `no-edge`,
 a `strengthen-by` item, an edge's `context` — each named by its record file, its record and its
@@ -2319,6 +2318,9 @@ changes nothing.
   lists claims between `--min` and `--max`, sorted by strength or by dependents, or with
   `--pending` the unscored ones (§8); `edge-census`' counts are `stats`' `relations`, without the
   per-bearing manual and model split (§7).
+- **`drop-claim-node` deletes a claim in one call.** It removes every edge naming the claim with the
+  node, so `drop-claim-edges` and `drop-inbound-edges` are no longer needed first; a mention in prose
+  still refuses the drop (§8).
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

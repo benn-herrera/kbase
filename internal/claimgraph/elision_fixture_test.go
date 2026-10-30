@@ -130,8 +130,8 @@ func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
 }
 
 // TestIssueCullsDropsAClaimNamedOnlyByAnotherCull: the one case where the
-// per-op batches accept what culling claim by claim refuses — y named only in
-// x's rationale, y issued first — lands, both records gone.
+// one batch accepts what culling claim by claim refuses — y named only in x's
+// rationale, y issued first — lands, both records gone.
 func TestIssueCullsDropsAClaimNamedOnlyByAnotherCull(t *testing.T) {
 	seed := func() (string, func(op string, values []byte) write.Result) {
 		root := seedElisionLeaves(t, [][]string{{"a", "b", "c", "d"}, {"x", "y"}},
@@ -160,9 +160,9 @@ func TestIssueCullsDropsAClaimNamedOnlyByAnotherCull(t *testing.T) {
 	}
 }
 
-// TestIssueCullsStopsOnRefusal: each op is one batch over every culled id in
-// plan order, and the issuer stops at the first batch whose outcome is
-// neither done nor unchanged, with the batches before it issued.
+// TestIssueCullsStopsOnRefusal: the culls are one drop-claim-node batch over
+// every culled id in plan order, and an outcome neither done nor unchanged is
+// the issuer's error, returned with that outcome.
 func TestIssueCullsStopsOnRefusal(t *testing.T) {
 	var ops []string
 	run := func(op string, values []byte) write.Result {
@@ -177,20 +177,17 @@ func TestIssueCullsStopsOnRefusal(t *testing.T) {
 			ids[i] = e.ID
 		}
 		ops = append(ops, op+" "+strings.Join(ids, ","))
-		if op == "drop-inbound-edges" {
-			return write.Result{Outcome: result.Refused}
-		}
-		return write.Result{Outcome: result.Done}
+		return write.Result{Outcome: result.Refused}
 	}
-	results, err := IssueCulls([]string{"y", "x"}, run)
+	res, err := IssueCulls([]string{"y", "x"}, run)
 	if err == nil {
 		t.Fatal("IssueCulls succeeded over a refused op")
 	}
-	want := []string{"drop-claim-edges y,x", "drop-inbound-edges y,x"}
+	want := []string{"drop-claim-node y,x"}
 	if !slices.Equal(ops, want) {
 		t.Errorf("issued %q, want %q", ops, want)
 	}
-	if len(results) != 1 {
-		t.Errorf("returned %d results, want the 1 before the refusal", len(results))
+	if res.Outcome != result.Refused {
+		t.Errorf("returned outcome %s, want the refusal", res.Outcome)
 	}
 }

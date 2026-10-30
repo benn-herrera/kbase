@@ -90,44 +90,16 @@ func markNode(b *recordBatch, e entry) error {
 	return nil
 }
 
-// refuseStrandedClaim refuses a claim another node's edge record names — the
-// edges drop-inbound-edges removes — since dropping the claim would strand
-// them. Its own edges, the supports and founds edges into it and the
-// references and refutes edges out of it, go with it. No entry's drop lands
-// until dropClaimNodes, so every entry is judged against the records as they
-// stood.
-func refuseStrandedClaim(b *recordBatch, e entry) error {
+// dropClaimNode removes an entry's claim record, every edge and demoted record
+// naming it at either end, and its statement marker. The batch's
+// refuseRemainingMentions runs once every entry's drop is composed.
+func dropClaimNode(b *recordBatch, e entry) error {
 	id := e.str("id")
-	var refusals result.Refusal
-	for _, r := range b.g.Edges() {
-		if inboundEdge(id, r.Relation, r.Source, r.Target) {
-			refusals = append(refusals, result.Item{Key: "id", Entry: e.Index,
-				Remedy: "run kbase drop-claim-edges and kbase drop-inbound-edges first, then re-run",
-				Detail: fmt.Sprintf("%s still names %s, and dropping the node would strand the edge; "+
-					"run drop-claim-edges and drop-inbound-edges first", index.EdgeName(r.Relation, r.Source, r.Target), id)})
-		}
-	}
-	if len(refusals) > 0 {
-		return refusals
-	}
-	return nil
-}
-
-// dropClaimNodes removes each entry's claim record, every edge and demoted
-// record naming it and its statement marker, then refuses a mention left
-// standing.
-func dropClaimNodes(b *recordBatch, entries []entry) error {
-	for _, e := range entries {
-		id := e.str("id")
-		names := func(source, target string) bool { return source == id || target == id }
-		b.dropEdges(func(_, source, target string) bool { return names(source, target) })
-		b.g.Claims = slices.DeleteFunc(b.g.Claims, func(n kb.ClaimNode) bool { return n.ID == id })
-		b.g.Demoted = slices.DeleteFunc(b.g.Demoted, func(d kb.DemotedEdge) bool { return names(d.Source, d.Target) })
-		if err := b.unmarkEverywhere(id); err != nil {
-			return err
-		}
-	}
-	return refuseRemainingMentions(b, entries)
+	names := func(source, target string) bool { return source == id || target == id }
+	b.dropEdges(func(_, source, target string) bool { return names(source, target) })
+	b.g.Claims = slices.DeleteFunc(b.g.Claims, func(n kb.ClaimNode) bool { return n.ID == id })
+	b.g.Demoted = slices.DeleteFunc(b.g.Demoted, func(d kb.DemotedEdge) bool { return names(d.Source, d.Target) })
+	return b.unmarkEverywhere(id)
 }
 
 // recordProse is one prose field of a record: the record file holding it, the

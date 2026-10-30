@@ -8,28 +8,23 @@ import (
 	"kbase/internal/write"
 )
 
-// IssueCulls issues drop-claim-edges, drop-inbound-edges and drop-claim-node —
-// which takes the node's record and its statement marker — through run, each
-// as one batch over ids in order, and returns the outcomes. A batch whose
-// outcome is neither done nor unchanged stops the issue: no retry, no
-// re-planning.
-func IssueCulls(ids []string, run func(op string, values []byte) write.Result) ([]write.Result, error) {
+// IssueCulls issues drop-claim-node — which takes each node's record, every
+// edge and demoted record naming it, and its statement marker — through run,
+// as one batch over ids in order, and returns the outcome. An outcome neither
+// done nor unchanged stops the issue: no retry, no re-planning.
+func IssueCulls(ids []string, run func(op string, values []byte) write.Result) (write.Result, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return write.Result{}, nil
 	}
 	entries := make([]map[string]any, len(ids))
 	for i, id := range ids {
 		entries[i] = map[string]any{"id": id}
 	}
-	var out []write.Result
-	for _, op := range []string{"drop-claim-edges", "drop-inbound-edges", "drop-claim-node"} {
-		res, err := issue(run, op, entries)
-		if err != nil {
-			return out, fmt.Errorf("%s %v: %w", op, ids, err)
-		}
-		out = append(out, res)
+	res, err := issue(run, "drop-claim-node", entries)
+	if err != nil {
+		return res, fmt.Errorf("%v: %w", ids, err)
 	}
-	return out, nil
+	return res, nil
 }
 
 // issue lands one op over its values entries in one batch, refusing an

@@ -137,9 +137,9 @@ func seedSharedLeaf(t *testing.T, extra string) (string, string) {
 }
 
 // TestDropClaimNode deletes a claim node whole: its record and its marker go,
-// the rest of each file standing, and a re-issue is unchanged. A premise the
-// claim rests on goes with it, while a premise another claim rests on it
-// refuses the drop, naming the edge and the two edge ops.
+// the rest of each file standing, and a re-issue is unchanged. A premise
+// another claim rests on is dropped with the edge, the claim resting on it
+// standing.
 func TestDropClaimNode(t *testing.T) {
 	root, b := seedSharedLeaf(t, "")
 	res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n")
@@ -161,42 +161,31 @@ func TestDropClaimNode(t *testing.T) {
 	}
 
 	root, b = seedSharedLeaf(t, "  rests-on:\n  - id: "+seedClaim+"\n")
-	before = snapshot(t, root)
-	res = run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n")
-	if !refusedAt(res, result.Item{Key: "id", Entry: 1}) {
-		t.Errorf("drop the premise another claim rests on: %+v, want one refusal of entry 1's id", res)
+	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n"); res.Outcome != result.Done {
+		t.Fatalf("drop the premise another claim rests on: %+v, want done", res)
 	}
-	if !maps.Equal(before, snapshot(t, root)) {
-		t.Error("a refused drop changed kb-root")
-	}
-	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+b+"\n"); res.Outcome != result.Done {
-		t.Fatalf("drop the claim resting on the seed: %+v, want done", res)
-	}
-	if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 {
-		t.Errorf("records = %+v, want the seed alone and no edge", g)
+	if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 || g.Claims[0].ID != b {
+		t.Errorf("records = %+v, want %s alone and no edge", g, b)
 	}
 }
 
-// TestDropClaimNodeTakesItsRefutations: a claim refuting another is dropped
-// with its refutation, while the claim it refutes cannot be dropped from under
-// the refutation.
+// TestDropClaimNodeTakesItsRefutations: a claim is dropped with the
+// refutation naming it, whichever end it stands at, and the claim at the
+// other end stands.
 func TestDropClaimNodeTakesItsRefutations(t *testing.T) {
-	root := seedKB(t)
-	refuter := insertClaim(t, root, "Counter Result", "  refutes:\n  - id: "+seedClaim+"\n")
-	before := snapshot(t, root)
-	res := run(t, root, "drop-claim-node", "entry:\n- id: "+seedClaim+"\n")
-	if !refusedAt(res, result.Item{Key: "id", Entry: 1}) {
-		t.Errorf("drop the refuted claim: %+v, want one refusal of entry 1's id", res)
-	}
-	if !maps.Equal(before, snapshot(t, root)) {
-		t.Error("a refused drop changed kb-root")
-	}
-	if res := run(t, root, "drop-claim-node", "entry:\n- id: "+refuter+"\n"); res.Outcome != result.Done {
-		t.Fatalf("drop the refuter: %+v, want done", res)
-	}
-	g := records(t, root)
-	if len(g.Scorable) != 0 || slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == refuter }) {
-		t.Errorf("records = %+v, want the refuter and its refutation gone", g)
+	for _, refuted := range []bool{true, false} {
+		root := seedKB(t)
+		refuter := insertClaim(t, root, "Counter Result", "  refutes:\n  - id: "+seedClaim+"\n")
+		drop, stands := refuter, seedClaim
+		if refuted {
+			drop, stands = seedClaim, refuter
+		}
+		if res := run(t, root, "drop-claim-node", "entry:\n- id: "+drop+"\n"); res.Outcome != result.Done {
+			t.Fatalf("drop %s (refuted %t): %+v, want done", drop, refuted, res)
+		}
+		if g := records(t, root); len(g.Scorable) != 0 || len(g.Claims) != 1 || g.Claims[0].ID != stands {
+			t.Errorf("drop %s (refuted %t): records = %+v, want %s alone and no refutation", drop, refuted, g, stands)
+		}
 	}
 }
 
@@ -213,24 +202,37 @@ func TestDropClaimNodeTakesEveryClaimALeafHosts(t *testing.T) {
 	}
 }
 
-// TestDropClaimNodeDemotedRecords: every demoted record naming the node goes
-// with it, at either end, and the records of others stand.
-func TestDropClaimNodeDemotedRecords(t *testing.T) {
+// TestDropClaimNodeTakesEveryRecordNamingIt: in one call the node goes with
+// every edge naming it — its own lists, every other node's edges into it and
+// its own refutation of another — and every demoted record naming it at
+// either end; the records of others stand, and a re-issue is unchanged and
+// byte-identical.
+func TestDropClaimNodeTakesEveryRecordNamingIt(t *testing.T) {
 	pending := kb.Bearing{Pending: true}
-	root := recordKB(t, kb.Graph{
-		Claims: []kb.ClaimNode{{ID: seedClaim, Title: "Seed"}, {ID: dropped, Title: "Dropped"}, {ID: other, Title: "Other"}},
-		Demoted: []kb.DemotedEdge{
-			{Source: dropped, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending},
-			{Source: other, Target: dropped, ReplacedRelation: kb.RelationRefutes, Bearing: pending},
-			{Source: seedClaim, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending},
-		},
-	})
-	if res := runRecordOp(t, root, "drop-claim-node", "entry:\n- id: "+dropped+"\n", ProvenanceCaller); res.Outcome != result.Done {
+	g := dropGraph()
+	g.Demoted = []kb.DemotedEdge{
+		{Source: dropped, Target: isolated, ReplacedRelation: kb.RelationSupports, Bearing: pending},
+		{Source: other, Target: dropped, ReplacedRelation: kb.RelationRefutes, Bearing: pending},
+		{Source: seedClaim, Target: isolated, ReplacedRelation: kb.RelationSupports, Bearing: pending},
+	}
+	root := recordKB(t, g)
+	values := "entry:\n- id: " + dropped + "\n"
+	if res := runRecordOp(t, root, "drop-claim-node", values, ProvenanceCaller); res.Outcome != result.Done {
 		t.Fatalf("drop: %+v, want done", res)
 	}
-	want := []kb.DemotedEdge{{Source: seedClaim, Target: other, ReplacedRelation: kb.RelationSupports, Bearing: pending}}
-	if got := records(t, root).Demoted; !slices.Equal(got, want) {
+	after := records(t, root)
+	if slices.ContainsFunc(after.Claims, func(n kb.ClaimNode) bool { return n.ID == dropped }) {
+		t.Errorf("claims = %+v, want %s gone", after.Claims, dropped)
+	}
+	if got, want := edgeNames(after), []edgeName{{kb.RelationSupports, seedClaim, other}}; !slices.Equal(got, want) {
+		t.Errorf("edges = %v, want %v", got, want)
+	}
+	if got, want := after.Demoted, g.Demoted[2:]; !slices.Equal(got, want) {
 		t.Errorf("demoted = %+v, want %+v", got, want)
+	}
+	before := snapshot(t, root)
+	if again := runRecordOp(t, root, "drop-claim-node", values, ProvenanceCaller); again.Outcome != result.Unchanged || !maps.Equal(before, snapshot(t, root)) {
+		t.Errorf("again: %+v, want unchanged, byte-identical", again)
 	}
 }
 

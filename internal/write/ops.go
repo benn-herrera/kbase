@@ -78,7 +78,7 @@ var writeOps = map[string]opSpec{
 	"drop-inbound-edges":      {edit: &recordEdit{apply: dropInboundEdges}},
 	DemoteClaimEdge:           {edit: &recordEdit{apply: demoteEdge}, buildOnly: true, overDegraded: true},
 	SplitClaim:                {edit: &recordEdit{apply: splitClaim, machine: true}, buildOnly: true},
-	"drop-claim-node":         {edit: &recordEdit{apply: refuseStrandedClaim, finish: dropClaimNodes}},
+	"drop-claim-node":         {edit: &recordEdit{apply: dropClaimNode, finish: refuseRemainingMentions}},
 }
 
 // Ops is every write op a caller may issue, by name, sorted.
