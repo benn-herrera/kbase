@@ -55,6 +55,11 @@ These steer choices the invariants leave open.
 - **No LaTeX parser is written here, partial or whole.** The reader is pandoc.
 - **The kbase and personant integration is the target.** A prior decision that prevents it is
   removed, not designed around.
+- **The served surface is the operating contract.** What an agent needs to drive kbase reaches it
+  from kbase itself: a command's own facts in its help; rules spanning commands in the MCP
+  instructions, kept short because every session carries them; longer guidance as MCP resources,
+  read on demand. A skill carries only what no served surface can —
+  chiefly when to engage kbase at all.
 
 ---
 
